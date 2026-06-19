@@ -1,0 +1,1377 @@
+openapi: 3.1.0
+info:
+  title: Quorum-AI
+  version: 0.2.0
+paths:
+  /v1/query-runs/estimate:
+    post:
+      tags:
+      - query-runs
+      summary: Estimate Query Run
+      operationId: estimate_query_run_v1_query_runs_estimate_post
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/QueryRunEstimateRequest'
+        required: true
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/QueryRunEstimateResponse'
+        '422':
+          description: Validation or model-slot error.
+          content:
+            application/json:
+              schema: &id001
+                oneOf:
+                - $ref: '#/components/schemas/HTTPValidationError'
+                - $ref: '#/components/schemas/ErrorResponse'
+        '401':
+          description: Authentication is required before cost estimation.
+          content:
+            application/json:
+              schema: &id002
+                $ref: '#/components/schemas/ErrorResponse'
+      parameters:
+      - name: X-Account-Id
+        in: header
+        required: false
+        description: Legacy account-scoped authentication fallback used by tests and
+          non-browser clients. Browser-session requests should use the quorum_session
+          cookie.
+        schema:
+          type: string
+          format: uuid
+  /v1/query-runs:
+    post:
+      tags:
+      - query-runs
+      summary: Create Query Run
+      operationId: create_query_run_v1_query_runs_post
+      parameters:
+      - name: x-csrf-token
+        in: header
+        required: false
+        schema:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: X-Csrf-Token
+      - name: X-Account-Id
+        in: header
+        required: false
+        description: Legacy account-scoped authentication fallback used by tests and
+          non-browser clients. Browser-session requests should use the quorum_session
+          cookie.
+        schema:
+          type: string
+          format: uuid
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/QueryRunCreateRequest'
+      responses:
+        '202':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/QueryRunCreateResponse'
+        '422':
+          description: Validation, safety acknowledgement, or model-slot error.
+          content:
+            application/json:
+              schema: *id001
+        '401':
+          description: Authentication is required before query execution.
+          content:
+            application/json:
+              schema: *id002
+        '402':
+          description: Cost confirmation is required, or the estimate exceeds the
+            block threshold.
+          content:
+            application/json:
+              schema: *id002
+        '403':
+          description: A valid CSRF token is required for browser-session requests.
+          content:
+            application/json:
+              schema: *id002
+        '409':
+          description: One query can run at a time for the owning session.
+          content:
+            application/json:
+              schema: *id002
+        '412':
+          description: A BYO OpenRouter key must be configured before execution starts.
+          content:
+            application/json:
+              schema: *id002
+  /v1/query-runs/warnings:
+    post:
+      tags:
+      - query-runs
+      summary: Get Query Run Warnings
+      operationId: get_query_run_warnings_v1_query_runs_warnings_post
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/QueryRunWarningsRequest'
+        required: true
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/QueryRunWarningsResponse'
+        '422':
+          description: Validation error.
+          content:
+            application/json:
+              schema: *id001
+        '401':
+          description: Authentication is required before warning evaluation.
+          content:
+            application/json:
+              schema: *id002
+      parameters:
+      - name: X-Account-Id
+        in: header
+        required: false
+        description: Legacy account-scoped authentication fallback used by tests and
+          non-browser clients. Browser-session requests should use the quorum_session
+          cookie.
+        schema:
+          type: string
+          format: uuid
+  /v1/query-runs/active:
+    get:
+      tags:
+      - query-runs
+      summary: Get Active Query Run
+      operationId: get_active_query_run_v1_query_runs_active_get
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ActiveQueryRunResponse'
+        '401':
+          description: Authentication is required before active query lookup.
+          content:
+            application/json:
+              schema: *id002
+      parameters:
+      - name: X-Account-Id
+        in: header
+        required: false
+        description: Legacy account-scoped authentication fallback used by tests and
+          non-browser clients. Browser-session requests should use the quorum_session
+          cookie.
+        schema:
+          type: string
+          format: uuid
+  /v1/query-runs/{query_run_id}:
+    get:
+      tags:
+      - query-runs
+      summary: Get Query Run Result
+      operationId: get_query_run_result_v1_query_runs__query_run_id__get
+      parameters:
+      - name: query_run_id
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+          title: Query Run Id
+      - name: X-Account-Id
+        in: header
+        required: false
+        description: Legacy account-scoped authentication fallback used by tests and
+          non-browser clients. Browser-session requests should use the quorum_session
+          cookie.
+        schema:
+          type: string
+          format: uuid
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/QueryRunResultResponse'
+        '422':
+          description: Validation error.
+          content:
+            application/json:
+              schema: *id001
+        '401':
+          description: Authentication is required before result lookup.
+          content:
+            application/json:
+              schema: *id002
+        '404':
+          description: Query run does not exist for the authenticated session.
+          content:
+            application/json:
+              schema: *id002
+    delete:
+      tags:
+      - query-runs
+      summary: Cancel Query Run
+      operationId: cancel_query_run_v1_query_runs__query_run_id__delete
+      parameters:
+      - name: query_run_id
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+          title: Query Run Id
+      - name: x-csrf-token
+        in: header
+        required: false
+        schema:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: X-Csrf-Token
+      - name: X-Account-Id
+        in: header
+        required: false
+        description: Legacy account-scoped authentication fallback used by tests and
+          non-browser clients. Browser-session requests should use the quorum_session
+          cookie.
+        schema:
+          type: string
+          format: uuid
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/QueryRunResultResponse'
+        '422':
+          description: Validation error.
+          content:
+            application/json:
+              schema: *id001
+        '401':
+          description: Authentication is required before cancellation.
+          content:
+            application/json:
+              schema: *id002
+        '403':
+          description: A valid CSRF token is required for browser-session requests.
+          content:
+            application/json:
+              schema: *id002
+        '404':
+          description: Query run does not exist for the authenticated session.
+          content:
+            application/json:
+              schema: *id002
+  /v1/provider-keys/openrouter:
+    put:
+      tags:
+      - provider-keys
+      summary: Upsert Openrouter Key
+      operationId: upsert_openrouter_key_v1_provider_keys_openrouter_put
+      parameters:
+      - name: x-csrf-token
+        in: header
+        required: false
+        schema:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: X-Csrf-Token
+      - name: X-Account-Id
+        in: header
+        required: false
+        description: Legacy account-scoped authentication fallback used by tests and
+          non-browser clients. Browser-session requests should use the quorum_session
+          cookie.
+        schema:
+          type: string
+          format: uuid
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ProviderKeyUpsertRequest'
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ProviderKeyStatusResponse'
+        '422':
+          description: Provider key payload validation failed.
+          content:
+            application/json:
+              schema: *id001
+        '401':
+          description: Authentication is required before BYO key management.
+          content:
+            application/json:
+              schema: *id002
+        '403':
+          description: A valid CSRF token is required for browser-session requests.
+          content:
+            application/json:
+              schema: *id002
+    delete:
+      tags:
+      - provider-keys
+      summary: Remove Openrouter Key
+      operationId: remove_openrouter_key_v1_provider_keys_openrouter_delete
+      parameters:
+      - name: x-csrf-token
+        in: header
+        required: false
+        schema:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: X-Csrf-Token
+      - name: X-Account-Id
+        in: header
+        required: false
+        description: Legacy account-scoped authentication fallback used by tests and
+          non-browser clients. Browser-session requests should use the quorum_session
+          cookie.
+        schema:
+          type: string
+          format: uuid
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ProviderKeyStatusResponse'
+        '422':
+          description: Validation error.
+          content:
+            application/json:
+              schema: *id001
+        '401':
+          description: Authentication is required before BYO key management.
+          content:
+            application/json:
+              schema: *id002
+        '403':
+          description: A valid CSRF token is required for browser-session requests.
+          content:
+            application/json:
+              schema: *id002
+  /v1/provider-keys/openrouter/status:
+    get:
+      tags:
+      - provider-keys
+      summary: Get Openrouter Key Status
+      operationId: get_openrouter_key_status_v1_provider_keys_openrouter_status_get
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ProviderKeyStatusResponse'
+        '401':
+          description: Authentication is required before BYO key status lookup.
+          content:
+            application/json:
+              schema: *id002
+      parameters:
+      - name: X-Account-Id
+        in: header
+        required: false
+        description: Legacy account-scoped authentication fallback used by tests and
+          non-browser clients. Browser-session requests should use the quorum_session
+          cookie.
+        schema:
+          type: string
+          format: uuid
+  /:
+    get:
+      tags:
+      - operations
+      summary: Root
+      operationId: root__get
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RootResponse'
+  /health:
+    get:
+      tags:
+      - operations
+      summary: Health
+      operationId: health_health_get
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HealthResponse'
+  /ready:
+    get:
+      tags:
+      - operations
+      summary: Ready
+      operationId: ready_ready_get
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ReadyResponse'
+  /v1/session:
+    get:
+      tags:
+      - session
+      summary: Browser session
+      operationId: browser_session_v1_session_get
+      parameters:
+      - name: quorum_session
+        in: cookie
+        required: false
+        schema:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Quorum Session
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/BrowserSessionResponse'
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+      description: Issue or resume the current browser session and return a CSRF token.
+  /ui:
+    get:
+      tags:
+      - browser-ui
+      summary: Browser Ui
+      operationId: browser_ui_ui_get
+      parameters:
+      - name: quorum_session
+        in: cookie
+        required: false
+        schema:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Quorum Session
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            text/html:
+              schema:
+                type: string
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+      description: Serve the browser UI for the current session.
+  /v1/models/defaults:
+    get:
+      tags:
+      - models
+      summary: Model Defaults
+      operationId: model_defaults_v1_models_defaults_get
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ModelDefaultsResponse'
+        '401':
+          description: Authentication is required before model selection.
+          content:
+            application/json:
+              schema: *id002
+      parameters:
+      - name: X-Account-Id
+        in: header
+        required: false
+        description: Legacy account-scoped authentication fallback used by tests and
+          non-browser clients. Browser-session requests should use the quorum_session
+          cookie.
+        schema:
+          type: string
+          format: uuid
+components:
+  schemas:
+    ActiveQueryRunResponse:
+      properties:
+        query_run_id:
+          anyOf:
+          - type: string
+            format: uuid
+          - type: 'null'
+          title: Query Run Id
+        status:
+          anyOf:
+          - $ref: '#/components/schemas/QueryRunStatus'
+          - type: 'null'
+        correlation_id:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Correlation Id
+        progress:
+          anyOf:
+          - $ref: '#/components/schemas/QueryRunProgress'
+          - type: 'null'
+        model_slots:
+          items:
+            $ref: '#/components/schemas/ModelSlot'
+          type: array
+          title: Model Slots
+        cost_estimate:
+          anyOf:
+          - $ref: '#/components/schemas/CostEstimate'
+          - type: 'null'
+        initial_answers:
+          items:
+            $ref: '#/components/schemas/InitialModelAnswer'
+          type: array
+          title: Initial Answers
+      type: object
+      required:
+      - query_run_id
+      - status
+      - correlation_id
+      - progress
+      - model_slots
+      - cost_estimate
+      - initial_answers
+      title: ActiveQueryRunResponse
+    CitationCoverage:
+      properties:
+        material_claim_count:
+          type: integer
+          minimum: 0.0
+          title: Material Claim Count
+        cited_claim_count:
+          type: integer
+          minimum: 0.0
+          title: Cited Claim Count
+        coverage_ratio:
+          type: string
+          pattern: ^(?!^[-+.]*$)[+-]?0*\d*\.?\d*$
+          title: Coverage Ratio
+        target_ratio:
+          type: string
+          pattern: ^(?!^[-+.]*$)[+-]?0*\d*\.?\d*$
+          title: Target Ratio
+          default: '0.80'
+        target_met:
+          type: boolean
+          title: Target Met
+      type: object
+      required:
+      - material_claim_count
+      - cited_claim_count
+      - coverage_ratio
+      - target_met
+      title: CitationCoverage
+    CostConfirmation:
+      properties:
+        estimated_cost_usd:
+          anyOf:
+          - type: number
+          - type: string
+            pattern: ^(?!^[-+.]*$)[+-]?0*\d*\.?\d*$
+          title: Estimated Cost Usd
+        confirmation_token:
+          type: string
+          title: Confirmation Token
+      type: object
+      required:
+      - estimated_cost_usd
+      - confirmation_token
+      title: CostConfirmation
+    CostEstimate:
+      properties:
+        estimated_cost_usd:
+          type: string
+          pattern: ^(?!^[-+.]*$)[+-]?0*\d*\.?\d*$
+          title: Estimated Cost Usd
+        currency:
+          type: string
+          title: Currency
+          default: USD
+        threshold_action:
+          $ref: '#/components/schemas/CostThresholdAction'
+        normal_cost_threshold_usd:
+          type: string
+          pattern: ^(?!^[-+.]*$)[+-]?0*\d*\.?\d*$
+          title: Normal Cost Threshold Usd
+          default: '0.15'
+        block_cost_threshold_usd:
+          type: string
+          pattern: ^(?!^[-+.]*$)[+-]?0*\d*\.?\d*$
+          title: Block Cost Threshold Usd
+          default: '0.25'
+        confirmation_token:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Confirmation Token
+      type: object
+      required:
+      - estimated_cost_usd
+      - threshold_action
+      title: CostEstimate
+    CostThresholdAction:
+      type: string
+      enum:
+      - allow
+      - require_confirmation
+      - block
+      title: CostThresholdAction
+    DebateOutput:
+      properties:
+        round_number:
+          type: integer
+          maximum: 2.0
+          minimum: 1.0
+          title: Round Number
+        status:
+          $ref: '#/components/schemas/DebateRoundStatus'
+        critique_text:
+          type: string
+          title: Critique Text
+        focus_areas:
+          items:
+            type: string
+          type: array
+          title: Focus Areas
+        contributing_models:
+          items:
+            type: string
+          type: array
+          title: Contributing Models
+        latency_ms:
+          type: integer
+          minimum: 0.0
+          title: Latency Ms
+        provider_notice:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Provider Notice
+      type: object
+      required:
+      - round_number
+      - status
+      - critique_text
+      - focus_areas
+      - contributing_models
+      - latency_ms
+      title: DebateOutput
+    DebateRoundStatus:
+      type: string
+      enum:
+      - completed
+      - skipped_timeout
+      title: DebateRoundStatus
+    FinalSynthesis:
+      properties:
+        status:
+          $ref: '#/components/schemas/SynthesisStatus'
+        consensus:
+          type: string
+          title: Consensus
+        disagreement:
+          type: string
+          title: Disagreement
+        source_support:
+          type: string
+          title: Source Support
+        uncertainty:
+          type: string
+          title: Uncertainty
+        recommendation:
+          type: string
+          title: Recommendation
+        citation_coverage:
+          $ref: '#/components/schemas/CitationCoverage'
+        quality_checks:
+          $ref: '#/components/schemas/SynthesisQualityChecks'
+        high_stakes_notice:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: High Stakes Notice
+        latency_ms:
+          type: integer
+          minimum: 0.0
+          title: Latency Ms
+      type: object
+      required:
+      - status
+      - consensus
+      - disagreement
+      - source_support
+      - uncertainty
+      - recommendation
+      - citation_coverage
+      - quality_checks
+      - latency_ms
+      title: FinalSynthesis
+    HTTPValidationError:
+      properties:
+        detail:
+          items:
+            $ref: '#/components/schemas/ValidationError'
+          type: array
+          title: Detail
+      type: object
+      title: HTTPValidationError
+    InitialAnswerStatus:
+      type: string
+      enum:
+      - completed
+      - failed
+      title: InitialAnswerStatus
+    InitialModelAnswer:
+      properties:
+        slot_number:
+          type: integer
+          maximum: 4.0
+          minimum: 1.0
+          title: Slot Number
+        model_id:
+          type: string
+          title: Model Id
+        answer_text:
+          type: string
+          title: Answer Text
+        sources:
+          items:
+            $ref: '#/components/schemas/SourceReference'
+          type: array
+          title: Sources
+        provider_attempt_order:
+          items:
+            $ref: '#/components/schemas/ProviderPath'
+          type: array
+          title: Provider Attempt Order
+        provider_path:
+          $ref: '#/components/schemas/ProviderPath'
+        fallback_used:
+          type: boolean
+          title: Fallback Used
+        status:
+          $ref: '#/components/schemas/InitialAnswerStatus'
+        latency_ms:
+          type: integer
+          minimum: 0.0
+          title: Latency Ms
+        citation_coverage:
+          $ref: '#/components/schemas/CitationCoverage'
+        error_code:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Error Code
+        provider_notice:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Provider Notice
+      type: object
+      required:
+      - slot_number
+      - model_id
+      - answer_text
+      - sources
+      - provider_attempt_order
+      - provider_path
+      - fallback_used
+      - status
+      - latency_ms
+      - citation_coverage
+      title: InitialModelAnswer
+    ModelDefaultsResponse:
+      properties:
+        model_slots:
+          items:
+            $ref: '#/components/schemas/ModelSlot'
+          type: array
+          title: Model Slots
+      type: object
+      required:
+      - model_slots
+      title: ModelDefaultsResponse
+    ModelSlot:
+      properties:
+        slot_number:
+          type: integer
+          maximum: 4.0
+          minimum: 1.0
+          title: Slot Number
+        model_id:
+          type: string
+          title: Model Id
+        display_label:
+          type: string
+          title: Display Label
+      type: object
+      required:
+      - slot_number
+      - model_id
+      - display_label
+      title: ModelSlot
+    ProviderCredentialSource:
+      type: string
+      enum:
+      - app_owned
+      - not_configured
+      - byo_openrouter
+      title: ProviderCredentialSource
+    ProviderKeyStatusResponse:
+      properties:
+        provider:
+          type: string
+          title: Provider
+        configured:
+          type: boolean
+          title: Configured
+        credential_source:
+          $ref: '#/components/schemas/ProviderCredentialSource'
+        masked_key_suffix:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Masked Key Suffix
+        updated_at:
+          anyOf:
+          - type: string
+            format: date-time
+          - type: 'null'
+          title: Updated At
+      type: object
+      required:
+      - provider
+      - configured
+      - credential_source
+      title: ProviderKeyStatusResponse
+    ProviderKeyUpsertRequest:
+      properties:
+        openrouter_key:
+          type: string
+          maxLength: 4096
+          minLength: 20
+          title: Openrouter Key
+      type: object
+      required:
+      - openrouter_key
+      title: ProviderKeyUpsertRequest
+    ProviderPath:
+      type: string
+      enum:
+      - openrouter_search
+      - fallback_search
+      title: ProviderPath
+    QueryRunCreateRequest:
+      properties:
+        query_text:
+          type: string
+          maxLength: 8000
+          minLength: 1
+          title: Query Text
+        model_slots:
+          items:
+            type: string
+          type: array
+          minItems: 1
+          title: Model Slots
+        safety_acknowledgements:
+          items:
+            $ref: '#/components/schemas/SafetyAcknowledgement'
+          type: array
+          title: Safety Acknowledgements
+        cost_confirmation:
+          anyOf:
+          - $ref: '#/components/schemas/CostConfirmation'
+          - type: 'null'
+      type: object
+      required:
+      - query_text
+      - model_slots
+      title: QueryRunCreateRequest
+    QueryRunCreateResponse:
+      properties:
+        query_run_id:
+          type: string
+          format: uuid
+          title: Query Run Id
+        status:
+          $ref: '#/components/schemas/QueryRunStatus'
+        correlation_id:
+          type: string
+          title: Correlation Id
+        model_slots:
+          items:
+            $ref: '#/components/schemas/ModelSlot'
+          type: array
+          title: Model Slots
+        cost_estimate:
+          $ref: '#/components/schemas/CostEstimate'
+        progress:
+          $ref: '#/components/schemas/QueryRunProgress'
+        initial_answers:
+          items:
+            $ref: '#/components/schemas/InitialModelAnswer'
+          type: array
+          title: Initial Answers
+      type: object
+      required:
+      - query_run_id
+      - status
+      - correlation_id
+      - model_slots
+      - cost_estimate
+      - progress
+      - initial_answers
+      title: QueryRunCreateResponse
+    QueryRunEstimateRequest:
+      properties:
+        query_text:
+          type: string
+          maxLength: 8000
+          minLength: 1
+          title: Query Text
+        model_slots:
+          items:
+            type: string
+          type: array
+          minItems: 1
+          title: Model Slots
+      type: object
+      required:
+      - query_text
+      - model_slots
+      title: QueryRunEstimateRequest
+    QueryRunEstimateResponse:
+      properties:
+        correlation_id:
+          type: string
+          title: Correlation Id
+        cost_estimate:
+          $ref: '#/components/schemas/CostEstimate'
+        model_slots:
+          items:
+            $ref: '#/components/schemas/ModelSlot'
+          type: array
+          title: Model Slots
+        reasons:
+          items:
+            type: string
+          type: array
+          title: Reasons
+      type: object
+      required:
+      - correlation_id
+      - cost_estimate
+      - model_slots
+      - reasons
+      title: QueryRunEstimateResponse
+    QueryRunProgress:
+      properties:
+        current_stage:
+          type: string
+          title: Current Stage
+        stages:
+          items:
+            $ref: '#/components/schemas/QueryRunStageProgress'
+          type: array
+          title: Stages
+      type: object
+      required:
+      - current_stage
+      - stages
+      title: QueryRunProgress
+    QueryRunResultResponse:
+      properties:
+        query_run_id:
+          type: string
+          format: uuid
+          title: Query Run Id
+        status:
+          $ref: '#/components/schemas/QueryRunStatus'
+        correlation_id:
+          type: string
+          title: Correlation Id
+        model_slots:
+          items:
+            $ref: '#/components/schemas/ModelSlot'
+          type: array
+          title: Model Slots
+        cost_estimate:
+          $ref: '#/components/schemas/CostEstimate'
+        elapsed_time_ms:
+          type: integer
+          minimum: 0.0
+          title: Elapsed Time Ms
+        failed_steps:
+          items:
+            type: string
+          type: array
+          title: Failed Steps
+        missing_steps:
+          items:
+            type: string
+          type: array
+          title: Missing Steps
+        progress:
+          $ref: '#/components/schemas/QueryRunProgress'
+        partial_failure_notice:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Partial Failure Notice
+        provider_failure_notices:
+          items:
+            type: string
+          type: array
+          title: Provider Failure Notices
+        result:
+          $ref: '#/components/schemas/ResultProjection'
+        demo_mode:
+          type: boolean
+          title: Demo Mode
+          default: false
+      type: object
+      required:
+      - query_run_id
+      - status
+      - correlation_id
+      - model_slots
+      - cost_estimate
+      - elapsed_time_ms
+      - failed_steps
+      - missing_steps
+      - progress
+      - provider_failure_notices
+      - result
+      title: QueryRunResultResponse
+    QueryRunStageProgress:
+      properties:
+        stage:
+          type: string
+          title: Stage
+        state:
+          $ref: '#/components/schemas/StageState'
+        detail:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Detail
+      type: object
+      required:
+      - stage
+      - state
+      title: QueryRunStageProgress
+    QueryRunStatus:
+      type: string
+      enum:
+      - draft
+      - cost_review
+      - accepted
+      - initial_answers_running
+      - debate_round_1_running
+      - debate_round_2_running
+      - synthesis_running
+      - completed
+      - partial
+      - failed
+      - timed_out
+      - blocked_by_cost
+      - cancelled
+      title: QueryRunStatus
+    QueryRunWarningsRequest:
+      properties:
+        query_text:
+          type: string
+          maxLength: 8000
+          minLength: 1
+          title: Query Text
+      type: object
+      required:
+      - query_text
+      title: QueryRunWarningsRequest
+    QueryRunWarningsResponse:
+      properties:
+        warnings:
+          items:
+            $ref: '#/components/schemas/SafetyWarning'
+          type: array
+          title: Warnings
+      type: object
+      required:
+      - warnings
+      title: QueryRunWarningsResponse
+    ResultProjection:
+      properties:
+        model_answers:
+          items:
+            $ref: '#/components/schemas/InitialModelAnswer'
+          type: array
+          title: Model Answers
+        debate_outputs:
+          items:
+            $ref: '#/components/schemas/DebateOutput'
+          type: array
+          title: Debate Outputs
+        final_synthesis:
+          anyOf:
+          - $ref: '#/components/schemas/FinalSynthesis'
+          - type: 'null'
+      type: object
+      required:
+      - model_answers
+      - debate_outputs
+      - final_synthesis
+      title: ResultProjection
+    SafetyAcknowledgement:
+      properties:
+        warning_type:
+          $ref: '#/components/schemas/WarningType'
+        version:
+          type: string
+          title: Version
+      type: object
+      required:
+      - warning_type
+      - version
+      title: SafetyAcknowledgement
+    SafetyWarning:
+      properties:
+        warning_type:
+          $ref: '#/components/schemas/WarningType'
+        version:
+          type: string
+          title: Version
+        message:
+          type: string
+          title: Message
+        acknowledgement_required:
+          type: boolean
+          title: Acknowledgement Required
+      type: object
+      required:
+      - warning_type
+      - version
+      - message
+      - acknowledgement_required
+      title: SafetyWarning
+    SourceReference:
+      properties:
+        title:
+          type: string
+          title: Title
+        url:
+          type: string
+          title: Url
+        provider:
+          $ref: '#/components/schemas/ProviderPath'
+      type: object
+      required:
+      - title
+      - url
+      - provider
+      title: SourceReference
+    StageState:
+      type: string
+      enum:
+      - pending
+      - running
+      - completed
+      - failed
+      - skipped
+      title: StageState
+    SynthesisQualityChecks:
+      properties:
+        citation_coverage_target_met:
+          type: boolean
+          title: Citation Coverage Target Met
+        false_consensus_preserved:
+          type: boolean
+          title: False Consensus Preserved
+        decision_support_framing_present:
+          type: boolean
+          title: Decision Support Framing Present
+        high_stakes_warning_required:
+          type: boolean
+          title: High Stakes Warning Required
+      type: object
+      required:
+      - citation_coverage_target_met
+      - false_consensus_preserved
+      - decision_support_framing_present
+      - high_stakes_warning_required
+      title: SynthesisQualityChecks
+    SynthesisStatus:
+      type: string
+      enum:
+      - completed
+      - failed
+      title: SynthesisStatus
+    ValidationError:
+      properties:
+        loc:
+          items:
+            anyOf:
+            - type: string
+            - type: integer
+          type: array
+          title: Location
+        msg:
+          type: string
+          title: Message
+        type:
+          type: string
+          title: Error Type
+        input:
+          title: Input
+        ctx:
+          type: object
+          title: Context
+      type: object
+      required:
+      - loc
+      - msg
+      - type
+      title: ValidationError
+    WarningType:
+      type: string
+      enum:
+      - sensitive_data
+      - high_stakes
+      title: WarningType
+    RootResponse:
+      type: object
+      additionalProperties:
+        type: string
+      title: RootResponse
+    HealthResponse:
+      type: object
+      required:
+      - status
+      - service
+      properties:
+        status:
+          type: string
+        service:
+          type: string
+      title: HealthResponse
+    ReadyResponse:
+      type: object
+      required:
+      - status
+      - environment
+      properties:
+        status:
+          type: string
+        environment:
+          type: string
+      title: ReadyResponse
+    BrowserSessionResponse:
+      type: object
+      required:
+      - csrf_token
+      - expires_at
+      properties:
+        csrf_token:
+          type: string
+        expires_at:
+          type: string
+          format: date-time
+      title: BrowserSessionResponse
+    ErrorResponse:
+      type: object
+      required:
+      - detail
+      properties:
+        detail:
+          type: object
+          required:
+          - code
+          - message
+          properties:
+            code:
+              type: string
+              enum:
+              - AUTH_REQUIRED
+              - SESSION_EXPIRED
+              - CSRF_INVALID
+              - PROVIDER_KEY_REQUIRED
+              - ACTIVE_QUERY_EXISTS
+              - INVALID_MODEL_SLOT
+              - COST_CONFIRMATION_REQUIRED
+              - COST_LIMIT_EXCEEDED
+              - QUERY_RUN_NOT_FOUND
+              - VALIDATION_ERROR
+            message:
+              type: string
+            cost_estimate:
+              $ref: '#/components/schemas/CostEstimate'
+            required_warnings:
+              type: array
+              items:
+                $ref: '#/components/schemas/SafetyWarning'
+            slot_errors:
+              type: array
+              items:
+                type: object
+                required:
+                - message
+                properties:
+                  slot_number:
+                    type:
+                    - integer
+                    - 'null'
+                  model_id:
+                    type:
+                    - string
+                    - 'null'
+                  message:
+                    type: string
+      title: ErrorResponse

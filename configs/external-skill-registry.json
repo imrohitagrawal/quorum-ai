@@ -1,0 +1,5 @@
+{
+  "version": "5.2-final",
+  "note": "Registry of approved external skills. Empty by default; add entries through the onboarding process, not by popularity alone.",
+  "skills": []
+}

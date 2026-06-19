@@ -1,0 +1,22 @@
+{
+  "version": "5.2-final",
+  "purpose": "Generic governance for schemas, API contracts, event contracts, traceability contracts, and config contracts.",
+  "major_version_policy": "Within v1, changes should be additive-only unless explicit breaking approval exists.",
+  "additive_examples": [
+    "new optional field",
+    "new enum value when consumers tolerate unknowns",
+    "new event type with backward-compatible handler",
+    "new config key with default"
+  ],
+  "breaking_examples": [
+    "remove field",
+    "rename field",
+    "make optional field required",
+    "tighten constraint",
+    "change semantics",
+    "change ID/timestamp format"
+  ],
+  "id_policy": "Use type-prefixed ULIDs for generated IDs where applicable, e.g. req_01J..., ac_01J..., test_01J...",
+  "timestamp_policy": "Use UTC ISO-8601 timestamps, e.g. 2026-06-16T10:30:00Z.",
+  "environment_policy": "No project/environment-specific values in schemas; put mappings in configs/."
+}

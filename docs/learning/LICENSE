@@ -1,0 +1,55 @@
+Licence
+=======
+
+© 2026 Rohit Agrawal. All rights reserved except as granted below.
+
+The **content of the Aegis Learning Companion** (the Markdown pages, diagrams, and
+images under `docs/learning/`) is licensed under the
+**Creative Commons Attribution–NonCommercial–NoDerivatives 4.0 International
+Licence (CC BY-NC-ND 4.0)**.
+
+Licensor: Rohit Agrawal, 2026.
+
+What this means in plain words
+------------------------------
+
+You are free to **share** — copy and redistribute this material in any medium or
+format — under these terms:
+
+- **Attribution (BY).** You must give appropriate credit to Rohit Agrawal, link
+  back to the canonical source, and link to this licence. You may do so in any
+  reasonable way, but not in a way that suggests the author endorses you or your
+  use.
+- **NonCommercial (NC).** You may not use the material for commercial purposes
+  without prior written permission.
+- **NoDerivatives (ND).** If you remix, transform, translate, or build upon the
+  material, you may not distribute the modified version without prior written
+  permission. Sharing the unmodified whole is fine.
+
+No additional restrictions: you may not apply legal terms or technological
+measures that legally restrict others from doing anything this licence permits.
+
+Authoritative text
+------------------
+
+This summary is **not** the licence. The legally binding terms are the Creative
+Commons CC BY-NC-ND 4.0 legal code:
+
+- Human-readable deed: https://creativecommons.org/licenses/by-nc-nd/4.0/
+- Full legal code:    https://creativecommons.org/licenses/by-nc-nd/4.0/legalcode
+
+How to attribute
+----------------
+
+> "Aegis Learning Companion" by Rohit Agrawal, licensed under CC BY-NC-ND 4.0.
+> Source: the canonical published URL.
+
+For commercial use, translations, or derivative works, please ask first —
+contact details are on the About & credits page.
+
+Scope
+-----
+
+This licence covers the **learning-companion content** under `docs/learning/`.
+Any source code in this project is, or will be, licensed separately under its
+own licence file (see the repository root `LICENSE`).

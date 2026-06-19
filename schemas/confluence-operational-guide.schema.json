@@ -1,0 +1,14 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "ConfluenceOperationalGuide",
+  "type": "object",
+  "required": ["linked_jira", "purpose", "business_problem", "usage_steps", "educational_awareness", "change_history"],
+  "properties": {
+    "linked_jira": {"type": "array", "items": {"type": "string"}},
+    "purpose": {"type": "string"},
+    "business_problem": {"type": "string"},
+    "usage_steps": {"type": "array", "items": {"type": "string"}},
+    "educational_awareness": {"type": "object"},
+    "change_history": {"type": "array", "items": {"type": "string"}}
+  }
+}

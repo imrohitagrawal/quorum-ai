@@ -1,0 +1,66 @@
+{
+  "version": "5.2-final",
+  "purpose": "Policy for admitting external skills into the product factory.",
+  "default_mode": "reviewer-only",
+  "allowed_modes": [
+    "discovery-only",
+    "reviewer-only",
+    "sandbox",
+    "workspace-approved",
+    "local-wrapper",
+    "rejected"
+  ],
+  "required_metadata": [
+    "name",
+    "description",
+    "source_url",
+    "owner",
+    "repo",
+    "path",
+    "version_or_commit",
+    "license",
+    "install_method",
+    "supported_agents",
+    "activation_mode",
+    "trust_tier",
+    "risk_rating",
+    "allowed_operations",
+    "forbidden_operations",
+    "review_owner",
+    "review_date",
+    "validation_command"
+  ],
+  "permission_classes": [
+    "read_repo",
+    "write_repo",
+    "shell",
+    "network",
+    "browser",
+    "mcp",
+    "secrets",
+    "external_write",
+    "deploy",
+    "destructive_git"
+  ],
+  "hard_reject_if": [
+    "asks_for_secrets_without_need",
+    "destructive_git_without_approval",
+    "broad_shell_plus_network_without_sandbox",
+    "unclear_license_for_vendoring",
+    "hidden_binary_or_obfuscated_script",
+    "claims authority over security or source of truth"
+  ],
+  "review_steps": [
+    "provenance",
+    "license",
+    "format",
+    "frontmatter",
+    "trigger_specificity",
+    "script_review",
+    "permission_classification",
+    "policy_conflict",
+    "sample_task_eval",
+    "human_approval"
+  ],
+  "promotion_rule": "A skill can move from reviewer-only to workspace-approved only after an owner records validation evidence and human approval."
+}

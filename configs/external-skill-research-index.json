@@ -1,0 +1,252 @@
+{
+  "version": "5.2-final",
+  "purpose": "External skill research index. Use this to search first, audit second, and only then wrap/build local skills.",
+  "refresh_rule": "Refresh before major adoption; marketplace rank is discovery signal, not trust signal.",
+  "sources": [
+    {
+      "name": "skills.sh",
+      "type": "marketplace",
+      "url": "https://www.skills.sh/",
+      "use_for": [
+        "discovery",
+        "topics",
+        "audits",
+        "install commands"
+      ],
+      "default_mode": "discovery-only",
+      "risk": "medium"
+    },
+    {
+      "name": "Obra Superpowers",
+      "type": "github",
+      "url": "https://github.com/obra/superpowers",
+      "use_for": [
+        "planning",
+        "TDD",
+        "debugging",
+        "git worktrees",
+        "subagents",
+        "verification",
+        "branch finishing"
+      ],
+      "default_mode": "reviewer-or-sandbox",
+      "risk": "medium"
+    },
+    {
+      "name": "Addy Osmani agent-skills",
+      "type": "github",
+      "url": "https://github.com/addyosmani/agent-skills",
+      "use_for": [
+        "define",
+        "plan",
+        "build",
+        "verify",
+        "review",
+        "ship",
+        "code simplification",
+        "context engineering"
+      ],
+      "default_mode": "reviewer-or-local-wrapper",
+      "risk": "low-medium"
+    },
+    {
+      "name": "Paweł Huryn PM Skills",
+      "type": "github",
+      "url": "https://github.com/phuryn/pm-skills",
+      "use_for": [
+        "discovery",
+        "strategy",
+        "prioritization",
+        "launch",
+        "growth",
+        "AI shipping"
+      ],
+      "default_mode": "reviewer-only",
+      "risk": "medium"
+    },
+    {
+      "name": "Dean Peters Product Manager Skills",
+      "type": "github",
+      "url": "https://github.com/deanpeters/Product-Manager-Skills",
+      "use_for": [
+        "PM workflows",
+        "PRD",
+        "stakeholder questions",
+        "roadmap",
+        "product thinking"
+      ],
+      "default_mode": "reviewer-only",
+      "risk": "medium"
+    },
+    {
+      "name": "Erik Holmberg AI PM Toolkit",
+      "type": "github",
+      "url": "https://github.com/erikholmberg/ai-pm-toolkit",
+      "use_for": [
+        "AI PM templates",
+        "AI/ML product framing",
+        "evaluation",
+        "risk prompts"
+      ],
+      "default_mode": "reviewer-only",
+      "risk": "medium"
+    },
+    {
+      "name": "Dr. Marily Nika AI PM education",
+      "type": "course/reference",
+      "url": "https://maven.com/marily-nika",
+      "use_for": [
+        "AI product lifecycle",
+        "AI product evaluation",
+        "product framing",
+        "portfolio thinking"
+      ],
+      "default_mode": "reference-only",
+      "risk": "low"
+    },
+    {
+      "name": "Vercel Labs agent-skills",
+      "type": "github",
+      "url": "https://github.com/vercel-labs/agent-skills",
+      "use_for": [
+        "web design",
+        "React",
+        "Vercel",
+        "composition patterns"
+      ],
+      "default_mode": "reviewer-or-tool-specific",
+      "risk": "low-medium"
+    },
+    {
+      "name": "Wednesday AI Agent Skills",
+      "type": "github",
+      "url": "https://github.com/wednesday-solutions/ai-agent-skills",
+      "use_for": [
+        "repo onboarding",
+        "dependency graph",
+        "AI-aware repo setup",
+        "hooks"
+      ],
+      "default_mode": "sandbox-or-reviewer",
+      "risk": "medium"
+    },
+    {
+      "name": "agentskills/agentskills",
+      "type": "github",
+      "url": "https://github.com/agentskills/agentskills",
+      "use_for": [
+        "open skill format",
+        "packaging rules",
+        "interoperability"
+      ],
+      "default_mode": "format-reference",
+      "risk": "low"
+    },
+    {
+      "name": "UI UX Pro Max",
+      "type": "github",
+      "url": "https://github.com/nextlevelbuilder/ui-ux-pro-max-skill",
+      "use_for": [
+        "UI/UX review",
+        "visual design",
+        "accessibility",
+        "interaction design"
+      ],
+      "default_mode": "reviewer-only",
+      "risk": "medium"
+    },
+    {
+      "name": "Microsoft Azure Skills",
+      "type": "official/community",
+      "url": "https://www.skills.sh/",
+      "use_for": [
+        "Azure AI",
+        "Foundry",
+        "identity",
+        "observability",
+        "cost",
+        "cloud migration"
+      ],
+      "default_mode": "sandbox-or-local-wrapper",
+      "risk": "medium"
+    },
+    {
+      "name": "Supabase Agent Skills",
+      "type": "official/community",
+      "url": "https://github.com/supabase/agent-skills",
+      "use_for": [
+        "Postgres",
+        "RLS",
+        "Supabase client",
+        "auth",
+        "realtime",
+        "edge functions"
+      ],
+      "default_mode": "reviewer-or-local-wrapper",
+      "risk": "low-medium"
+    },
+    {
+      "name": "Firebase Agent Skills",
+      "type": "official/community",
+      "url": "https://www.skills.sh/topic/databases",
+      "use_for": [
+        "Firebase setup",
+        "Firestore",
+        "auth",
+        "security rules"
+      ],
+      "default_mode": "reviewer-or-local-wrapper",
+      "risk": "low-medium"
+    },
+    {
+      "name": "Matt Pocock skills",
+      "type": "github/marketplace",
+      "url": "https://www.skills.sh/",
+      "use_for": [
+        "grill",
+        "PRD",
+        "issues",
+        "TDD",
+        "codebase architecture",
+        "diagnosis"
+      ],
+      "default_mode": "reviewer-only",
+      "risk": "medium"
+    },
+    {
+      "name": "Anthropic skills",
+      "type": "official",
+      "url": "https://www.skills.sh/",
+      "use_for": [
+        "frontend design",
+        "webapp testing",
+        "skill creator",
+        "document formats"
+      ],
+      "default_mode": "reviewer-or-tool-specific",
+      "risk": "low-medium"
+    }
+  ],
+  "topics": [
+    "agent-workflows",
+    "testing",
+    "design-ui",
+    "databases",
+    "react",
+    "nextjs",
+    "mobile",
+    "marketing",
+    "cloud",
+    "security",
+    "content",
+    "browser-automation",
+    "media"
+  ],
+  "selection_questions": [
+    "Does an existing focused skill cover this need?",
+    "Is the source official, reputable, or unverified?",
+    "Does it require shell/network/secrets/browser/MCP/write access?",
+    "Can it be used as reviewer-only instead of authority?",
+    "What local validation proves it helped?"
+  ]
+}

@@ -1,0 +1,167 @@
+{
+  "statuses": [
+    {
+      "name": "Backlog",
+      "code": "10055",
+      "category": "planning",
+      "terminal": false
+    },
+    {
+      "name": "Duplicate",
+      "code": "10059",
+      "category": "terminal",
+      "terminal": true
+    },
+    {
+      "name": "To Do",
+      "code": "10045",
+      "category": "planning",
+      "terminal": false
+    },
+    {
+      "name": "Cancelled",
+      "code": "10058",
+      "category": "terminal",
+      "terminal": true
+    },
+    {
+      "name": "Ready For Dev",
+      "code": "10052",
+      "category": "delivery",
+      "terminal": false
+    },
+    {
+      "name": "In Development",
+      "code": "10046",
+      "category": "delivery",
+      "terminal": false
+    },
+    {
+      "name": "Code Review",
+      "code": "10053",
+      "category": "delivery",
+      "terminal": false
+    },
+    {
+      "name": "Closed",
+      "code": "10049",
+      "category": "terminal",
+      "terminal": true
+    },
+    {
+      "name": "In QA",
+      "code": "10050",
+      "category": "quality",
+      "terminal": false
+    },
+    {
+      "name": "QA Verified",
+      "code": "10051",
+      "category": "quality",
+      "terminal": false
+    },
+    {
+      "name": "Reopened",
+      "code": "10057",
+      "category": "rework",
+      "terminal": false
+    },
+    {
+      "name": "CI Validation",
+      "code": "10054",
+      "category": "quality",
+      "terminal": false
+    },
+    {
+      "name": "QA Ready",
+      "code": "10056",
+      "category": "quality",
+      "terminal": false
+    }
+  ],
+  "default_flow": [
+    "Backlog",
+    "To Do",
+    "Ready For Dev",
+    "In Development",
+    "Code Review",
+    "CI Validation",
+    "QA Ready",
+    "In QA",
+    "QA Verified",
+    "Closed"
+  ],
+  "terminal_statuses": [
+    "Closed",
+    "Cancelled",
+    "Duplicate"
+  ],
+  "recommended_transitions": {
+    "Backlog": [
+      "To Do",
+      "Cancelled",
+      "Duplicate"
+    ],
+    "To Do": [
+      "Backlog",
+      "Ready For Dev",
+      "Cancelled",
+      "Duplicate"
+    ],
+    "Ready For Dev": [
+      "In Development",
+      "Backlog",
+      "Cancelled"
+    ],
+    "In Development": [
+      "Code Review",
+      "Reopened"
+    ],
+    "Code Review": [
+      "In Development",
+      "CI Validation",
+      "Reopened"
+    ],
+    "CI Validation": [
+      "QA Ready",
+      "Reopened"
+    ],
+    "QA Ready": [
+      "In QA",
+      "Reopened"
+    ],
+    "In QA": [
+      "QA Verified",
+      "Reopened"
+    ],
+    "QA Verified": [
+      "Closed",
+      "Reopened"
+    ],
+    "Reopened": [
+      "Ready For Dev",
+      "In Development",
+      "Backlog"
+    ],
+    "Closed": [
+      "Reopened"
+    ],
+    "Cancelled": [],
+    "Duplicate": []
+  },
+  "issue_types": [
+    "Epic",
+    "Task",
+    "Sub-task",
+    "Story",
+    "Bug"
+  ],
+  "rules": [
+    "Cancelled and Duplicate are terminal and must not be reopened by automation.",
+    "Closed may be reopened only by explicit human decision with reason.",
+    "Every Jira item must link to a requirement ID or operational/support evidence.",
+    "Every implementation Jira must include acceptance criteria and test mapping before Ready For Dev.",
+    "CI Validation cannot pass without automated checks and evidence links.",
+    "QA Verified cannot pass without acceptance criteria evidence and regression scope."
+  ]
+}

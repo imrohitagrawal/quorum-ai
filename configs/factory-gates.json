@@ -1,0 +1,159 @@
+{
+  "gates": [
+    {
+      "id": "G0",
+      "name": "Intake",
+      "required_docs": [
+        "PRODUCT_IDEA.md",
+        "docs/03-source-of-truth.md"
+      ],
+      "evidence_required": true,
+      "blocking": true
+    },
+    {
+      "id": "G1",
+      "name": "Discovery",
+      "required_docs": [
+        "docs/01-product-brief.md",
+        "docs/02-stakeholder-map.md",
+        "docs/08-prioritization.md"
+      ],
+      "evidence_required": true,
+      "blocking": true
+    },
+    {
+      "id": "G2",
+      "name": "Living Spec",
+      "required_docs": [
+        "docs/10-functional-requirements.md",
+        "docs/11-non-functional-requirements.md",
+        "docs/12-acceptance-criteria.md",
+        "docs/17-requirement-registry.md",
+        "docs/18-requirement-traceability-matrix.md",
+        "docs/14-learner-spec.md",
+        "docs/15-domain-glossary.md",
+        "docs/16-edge-case-catalog.md"
+      ],
+      "evidence_required": true,
+      "blocking": true
+    },
+    {
+      "id": "G3",
+      "name": "Architecture",
+      "required_docs": [
+        "docs/20-architecture.md",
+        "docs/21-domain-model.md",
+        "docs/22-api-contract.md",
+        "docs/23-data-model.md",
+        "docs/32-ui-state-matrix.md",
+        "docs/33-content-design.md"
+      ],
+      "evidence_required": true,
+      "blocking": true
+    },
+    {
+      "id": "G4",
+      "name": "Security and AI Safety",
+      "required_docs": [
+        "docs/40-threat-model.md",
+        "docs/41-security-controls.md",
+        "docs/42-ai-safety-grounding.md",
+        "docs/43-privacy-data-governance.md",
+        "docs/44-model-risk-register.md",
+        "docs/46-prompt-registry.md"
+      ],
+      "evidence_required": true,
+      "blocking": true
+    },
+    {
+      "id": "G5",
+      "name": "Quality",
+      "required_docs": [
+        "docs/50-test-strategy.md",
+        "docs/51-test-data-strategy.md",
+        "docs/52-contract-testing.md",
+        "docs/53-resilience-testing.md",
+        "docs/54-ac-to-test-map.md",
+        "docs/55-performance-baseline.md",
+        "docs/56-flaky-test-register.md",
+        "docs/57-test-evidence.md"
+      ],
+      "evidence_required": true,
+      "blocking": true
+    },
+    {
+      "id": "G6",
+      "name": "Implementation",
+      "required_docs": [
+        "docs/60-implementation-plan.md",
+        "docs/61-vertical-slice-plan.md",
+        "docs/63-technical-debt-register.md",
+        "docs/64-feature-flag-plan.md"
+      ],
+      "evidence_required": true,
+      "blocking": true
+    },
+    {
+      "id": "G7",
+      "name": "Release",
+      "required_docs": [
+        "docs/70-ci-cd-plan.md",
+        "docs/71-release-plan.md",
+        "docs/72-rollback-plan.md",
+        "docs/73-release-evidence.md",
+        "docs/74-release-checklist.md"
+      ],
+      "evidence_required": true,
+      "blocking": true
+    },
+    {
+      "id": "G8",
+      "name": "Operations",
+      "required_docs": [
+        "docs/80-observability.md",
+        "docs/81-slo.md",
+        "docs/82-alerts.md",
+        "docs/83-runbook.md",
+        "docs/90-production-feedback-loop.md",
+        "docs/88-incident-drill.md",
+        "docs/89-alert-quality-review.md",
+        "docs/95-production-readiness-review.md"
+      ],
+      "evidence_required": true,
+      "blocking": true
+    },
+    {
+      "id": "G2A",
+      "name": "Jira And Decomposition",
+      "required_docs": [
+        "docs/34-jira-issue-authoring.md",
+        "docs/62-delivery-decomposition.md"
+      ],
+      "evidence_required": true,
+      "blocking": true
+    },
+    {
+      "id": "G3A",
+      "name": "Naming And Visual Assets",
+      "required_docs": [
+        "docs/91-product-naming.md",
+        "docs/92-visual-asset-plan.md",
+        "docs/93-demo-gif-storyboards.md",
+        "docs/94-demo-video-storyboard.md"
+      ],
+      "evidence_required": true,
+      "blocking": true
+    },
+    {
+      "id": "G9A",
+      "name": "Confluence Operational Guide",
+      "required_docs": [
+        "docs/35-confluence-operational-guide.md",
+        "docs/36-educational-awareness-section.md",
+        "docs/37-jira-confluence-sync-log.md"
+      ],
+      "evidence_required": true,
+      "blocking": true
+    }
+  ]
+}

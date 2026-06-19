@@ -1,0 +1,38 @@
+{
+  "required_fields": [
+    "issue_type",
+    "summary",
+    "problem_statement",
+    "business_context",
+    "persona_impacted",
+    "current_behaviour",
+    "expected_behaviour",
+    "scope_in",
+    "scope_out",
+    "requirement_ids",
+    "acceptance_criteria",
+    "nfrs",
+    "edge_cases",
+    "negative_scenarios",
+    "dependencies",
+    "security_privacy_impact",
+    "observability_expectations",
+    "test_mapping",
+    "confluence_links",
+    "definition_of_ready",
+    "definition_of_done",
+    "jira_status"
+  ],
+  "allowed_status_config": "configs/jira-statuses.json",
+  "ready_for_dev_required": [
+    "requirement_ids",
+    "acceptance_criteria",
+    "test_mapping",
+    "security_privacy_impact"
+  ],
+  "terminal_statuses": [
+    "Closed",
+    "Cancelled",
+    "Duplicate"
+  ]
+}

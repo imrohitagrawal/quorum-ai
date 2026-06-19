@@ -1,0 +1,26 @@
+---
+description: Apply ORBI / Orbisynth-AI operating model for new AI products, requirements, architecture, implementation, testing, release readiness, and runbooks.
+globs: "**/*"
+alwaysApply: true
+---
+# ORBI AI Operating Model Rule
+
+Follow `AGENTS.md` as the primary repository instruction file.
+
+Use the ORBI operating model to convert `PRODUCT_IDEA.md` into traceable product and engineering artifacts:
+- Problem statement
+- PRD
+- SRS/SSD where needed
+- ADRs
+- Jira-ready breakdown
+- First thin implementation slice
+- Tests and quality gate
+- Release readiness
+- Runbook impact
+- Learning note
+
+Hard boundaries:
+- Do not touch Aegis or CiteVyn assets.
+- Do not store secrets or sensitive data.
+- Keep code small, reviewable, and test-backed.
+- Before coding, identify missing stack decisions and commands.

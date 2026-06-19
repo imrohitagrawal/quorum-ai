@@ -1,0 +1,86 @@
+{
+  "principle": "Use external skills first as governed accelerators; local policy remains final authority.",
+  "driver_reviewer_rule": "Only one local driver owns an artifact; external skills default to reviewer/input unless audited and explicitly promoted. External skills are optional accelerators, not dependencies or authorities.",
+  "sources": [
+    {
+      "name": "Paweł Huryn PM Skills",
+      "stages": [
+        "discovery",
+        "requirements",
+        "prioritization"
+      ],
+      "mode": "reviewer/input",
+      "authority": "low"
+    },
+    {
+      "name": "Dean Peters Product Manager Skills",
+      "stages": [
+        "discovery",
+        "requirements",
+        "prd"
+      ],
+      "mode": "reviewer/input",
+      "authority": "low"
+    },
+    {
+      "name": "Erik Holmberg AI PM Toolkit",
+      "stages": [
+        "AI requirements",
+        "AI evals",
+        "AI risk"
+      ],
+      "mode": "reviewer/input",
+      "authority": "low"
+    },
+    {
+      "name": "Obra Superpowers",
+      "stages": [
+        "orchestration",
+        "agent loops",
+        "execution discipline"
+      ],
+      "mode": "reviewer/input",
+      "authority": "low"
+    },
+    {
+      "name": "Addy Osmani Agent Skills",
+      "stages": [
+        "planning",
+        "build",
+        "test",
+        "review",
+        "ship"
+      ],
+      "mode": "reviewer/input",
+      "authority": "low"
+    },
+    {
+      "name": "UI/UX Pro Max",
+      "stages": [
+        "ux",
+        "ui",
+        "accessibility"
+      ],
+      "mode": "reviewer/input",
+      "authority": "low"
+    }
+  ],
+  "conflict_resolution_order": [
+    "explicit user instruction",
+    "approved Confluence/Jira source of truth",
+    "local policies",
+    "security/privacy/compliance/AI-safety gates",
+    "ADRs and approved architecture",
+    "driver skill output",
+    "reviewer findings",
+    "external skill suggestions"
+  ],
+  "version": "5.2-final",
+  "onboarding_required": true,
+  "onboarding_policy": "configs/skill-onboarding-policy.json",
+  "registry": "configs/external-skill-registry.json",
+  "research_index": "configs/external-skill-research-index.json",
+  "default_activation_mode": "reviewer-only",
+  "do_not_reinvent_rule": "Before creating a local custom skill, search existing skills through skill-research-librarian and external-skill-discovery-advisor.",
+  "legacy_validation_phrase": "External skills are optional accelerators"
+}

@@ -1,0 +1,45 @@
+{
+  "version": "5.1-final",
+  "python_fastapi": [
+    "Pydantic v2 request/response contracts",
+    "thin APIRouter handlers",
+    "services/repositories when complexity justifies",
+    "async I/O safety",
+    "lifespan handlers",
+    "pydantic-settings",
+    "uv",
+    "Ruff",
+    "mypy",
+    "pytest"
+  ],
+  "error_handling": [
+    "validate early",
+    "guard clauses",
+    "HTTPException for expected failures",
+    "secure structured logs",
+    "user-friendly errors without secrets/stack traces"
+  ],
+  "data": [
+    "transactions where consistency matters",
+    "parameterized queries or ORM protections",
+    "avoid N+1",
+    "pagination/streaming for large results"
+  ],
+  "testing": [
+    "unit tests for business logic",
+    "API/integration tests",
+    "success/edge/validation/error paths",
+    "deterministic isolated tests",
+    "do not weaken tests to pass"
+  ],
+  "operations_security": [
+    "no hardcoded secrets",
+    "auth/authz/least privilege",
+    "request IDs",
+    "metrics",
+    "tracing",
+    "timeouts",
+    "retries",
+    "circuit breakers"
+  ]
+}

@@ -1,0 +1,13 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Enterprise Quality Gate",
+  "type": "object",
+  "required": ["id", "name", "required_docs", "evidence_required", "blocking"],
+  "properties": {
+    "id": {"type": "string"},
+    "name": {"type": "string"},
+    "required_docs": {"type": "array", "items": {"type": "string"}},
+    "evidence_required": {"type": "boolean"},
+    "blocking": {"type": "boolean"}
+  }
+}

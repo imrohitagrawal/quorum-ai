@@ -1,0 +1,37 @@
+{
+  "version": "5.1-final",
+  "watermark": {
+    "text": "Quorum-AI",
+    "opacity": "18%-30%",
+    "position": "bottom-right or bottom-center",
+    "must_not_overlap": true,
+    "no_tool_watermark": true
+  },
+  "media_types": [
+    "Mermaid",
+    "Structurizr DSL",
+    "Excalidraw",
+    "SVG",
+    "PNG",
+    "GIF",
+    "MP4",
+    "HTML/CSS visual",
+    "carousel"
+  ],
+  "accessibility": [
+    "alt text",
+    "static fallback for GIF/video",
+    "never rely on color alone",
+    "label/icon pairing",
+    "phone-readable",
+    "safe margins"
+  ],
+  "public_safety": [
+    "no secrets",
+    "no private URLs",
+    "no internal meta-instructions",
+    "no author-intent inside images",
+    "no unsupported claims"
+  ],
+  "critic_gate": "diagram-media-standards-governor and fanatic-critic must validate before publish"
+}

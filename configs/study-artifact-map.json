@@ -1,0 +1,67 @@
+{
+  "version": "5.1-final",
+  "purpose": "Generic Git + Confluence study artifact publishing backbone for any product created by the factory.",
+  "principle": "First find the MVP and most valued outcome; then explain how the project solves the problem with AI, eases work, stays secure/scalable, and meets enterprise standards.",
+  "git_paths": {
+    "study_index": "docs/study/00-study-index.md",
+    "read_first": "docs/study/M0-read-this-first.md",
+    "problem_mvp": "docs/study/M1-problem-and-mvp.md",
+    "ai_work_easing": "docs/study/M2-ai-solution-and-work-easing.md",
+    "security_scale_enterprise": "docs/study/M3-security-scalability-enterprise.md",
+    "glossary": "docs/study/glossary.md",
+    "faq": "docs/97-faq-wiki-plan.md",
+    "technical_article": "docs/98-technical-article-plan.md",
+    "linkedin": "docs/99-linkedin-post-plan.md"
+  },
+  "confluence_page_tree": [
+    {
+      "section": "Project Overview",
+      "source": "docs/study/00-study-index.md"
+    },
+    {
+      "section": "MVP and Problem",
+      "source": "docs/study/M1-problem-and-mvp.md"
+    },
+    {
+      "section": "AI Value and Workflow Ease",
+      "source": "docs/study/M2-ai-solution-and-work-easing.md"
+    },
+    {
+      "section": "Security, Scalability, Enterprise Readiness",
+      "source": "docs/study/M3-security-scalability-enterprise.md"
+    },
+    {
+      "section": "FAQ and Onboarding",
+      "source": "docs/97-faq-wiki-plan.md"
+    },
+    {
+      "section": "Architecture and Media",
+      "source": "docs/92-visual-asset-plan.md"
+    },
+    {
+      "section": "Operations and Release Evidence",
+      "source": "docs/95-production-readiness-review.md"
+    }
+  ],
+  "required_module_blocks": [
+    "Problem solved",
+    "MVP value outcome",
+    "How AI is used",
+    "How work becomes easier",
+    "Security",
+    "Scalability",
+    "Enterprise standard",
+    "Evidence",
+    "Open risks",
+    "Next action"
+  ],
+  "publish_guardrails": [
+    "Git-first docs source",
+    "Confluence mirrors Git",
+    "human confirmation before write",
+    "post-write re-read",
+    "no secrets/private data",
+    "no invented claims",
+    "watermark and alt text for media"
+  ]
+}

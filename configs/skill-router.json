@@ -1,0 +1,463 @@
+{
+  "version": "5.2-final",
+  "purpose": "Deterministic skill routing for Codex Product Factory. The router recommends exactly one driver skill, reviewer skills, blocking gates, conflict rules, and the next Codex prompt based on product state. V5.1 also routes study artifacts, media, FAQ, technical articles, LinkedIn posts, backend guardrails, and industry/integration practice review. V5.2 adds external-skills-first discovery, future skill onboarding, and session continuity.",
+  "selection_order": [
+    "safety_security_privacy_compliance_stop_conditions",
+    "current_phase",
+    "missing_or_placeholder_artifact",
+    "artifact_owner_driver_skill",
+    "risk_triggers",
+    "required_reviewer_skills",
+    "blocking_quality_gates",
+    "conflict_moderator_if_required"
+  ],
+  "conflict_precedence": [
+    "safety_security_privacy_compliance",
+    "explicit_user_approval_within_policy",
+    "approved_jira_confluence_source_of_truth",
+    "local_factory_policies",
+    "adrs_and_architecture_decisions",
+    "driver_skill_owned_output",
+    "reviewer_skill_findings",
+    "external_skill_suggestions"
+  ],
+  "external_skill_rule": "Search existing skills first. External skills default to reviewer-only until audited, registered, and explicitly promoted. Local policy remains final authority.",
+  "orbi_profile_rule": "The ORBI operating model pack is included as an optional profile. It must be activated intentionally; otherwise ORBI-specific Aegis/CiteVyn and Orbisynth rules are not applied to general products.",
+  "phases": [
+    {
+      "id": "idea-intake",
+      "label": "Idea intake and clarification",
+      "evidence": [
+        "PRODUCT_IDEA.md"
+      ],
+      "driver": "idea-intake-clarifier",
+      "reviewers": [
+        "next-action-coach",
+        "fanatic-critic"
+      ],
+      "blocking_gates": [
+        "no-placeholder-gate"
+      ],
+      "triggers": [
+        "raw idea exists",
+        "user provides idea in prompt",
+        "PRODUCT_IDEA.md is vague or incomplete"
+      ],
+      "prompt": "Read PRODUCT_IDEA.md. Ask the smallest useful set of blocking clarifying questions. Do not create requirements, Jira, Confluence, architecture, or code yet."
+    },
+    {
+      "id": "external-skill-governance",
+      "label": "External skill discovery and onboarding readiness",
+      "evidence": [
+        "docs/105-external-skills-first-strategy.md",
+        "docs/106-skill-onboarding-runbook.md",
+        "docs/107-skills-sh-research-snapshot.md",
+        "configs/external-skill-research-index.json",
+        "configs/skill-onboarding-policy.json"
+      ],
+      "driver": "external-skill-discovery-advisor",
+      "reviewers": [
+        "skill-research-librarian",
+        "external-skill-security-auditor",
+        "external-skill-onboarding-manager",
+        "skill-contract-auditor"
+      ],
+      "blocking_gates": [
+        "skill-onboarding-check",
+        "external-skill-security-auditor"
+      ],
+      "triggers": [
+        "new capability needed",
+        "user asks for external skills",
+        "skills.sh or GitHub skill proposed",
+        "avoid reinventing wheel"
+      ],
+      "prompt": "Before creating a local custom skill, search existing external skills. Recommend reuse, wrap, or build with provenance, security risk, activation mode, and validation plan."
+    },
+    {
+      "id": "session-continuity",
+      "label": "Session continuity and handoff",
+      "evidence": [
+        "docs/108-session-management-with-external-skills.md",
+        "docs/session-handoff.md"
+      ],
+      "driver": "session-continuity-manager",
+      "reviewers": [
+        "next-action-coach",
+        "skill-router-orchestrator",
+        "skill-conflict-moderator"
+      ],
+      "blocking_gates": [
+        "make handoff",
+        "make skill-route"
+      ],
+      "triggers": [
+        "multiple tabs",
+        "multiple terminals",
+        "new session",
+        "handoff",
+        "worktree",
+        "context loss"
+      ],
+      "prompt": "Update session handoff with branch, workstream, driver skill, reviewers, blockers, changed files, validation result, and next prompt. Do not rely on chat history alone."
+    },
+    {
+      "id": "problem-statement",
+      "label": "Problem statement",
+      "evidence": [
+        "docs/04-problem-statement.md"
+      ],
+      "driver": "problem-statement-builder",
+      "reviewers": [
+        "product-discovery",
+        "fanatic-critic",
+        "next-action-coach"
+      ],
+      "blocking_gates": [
+        "requirement-quality-gate"
+      ],
+      "triggers": [
+        "clarifying answers available",
+        "problem is not specific",
+        "target user or outcome missing"
+      ],
+      "prompt": "Convert the idea and answers into docs/04-problem-statement.md with user, pain, trigger, current workaround, desired outcome, non-goals, success metrics, assumptions, and open questions."
+    },
+    {
+      "id": "product-discovery",
+      "label": "Discovery, opportunity, and roadmap",
+      "evidence": [
+        "docs/01-product-brief.md",
+        "docs/02-stakeholder-map.md",
+        "docs/08-prioritization.md",
+        "docs/09-roadmap.md"
+      ],
+      "driver": "product-discovery",
+      "reviewers": [
+        "mvp-value-outcome-finder",
+        "stakeholder-discovery",
+        "customer-interview-synthesizer",
+        "opportunity-solution-tree-builder",
+        "experiment-design",
+        "product-prioritization"
+      ],
+      "blocking_gates": [
+        "enterprise-quality-gatekeeper"
+      ],
+      "triggers": [
+        "problem statement approved",
+        "roadmap needed",
+        "business value unclear",
+        "customer evidence missing"
+      ],
+      "prompt": "Create product brief, stakeholder map, opportunity tree, prioritization, and roadmap. Separate evidence, assumptions, risks, and experiments."
+    },
+    {
+      "id": "requirements",
+      "label": "Requirements and acceptance criteria",
+      "evidence": [
+        "docs/10-functional-requirements.md",
+        "docs/11-non-functional-requirements.md",
+        "docs/12-acceptance-criteria.md",
+        "docs/17-requirement-registry.md"
+      ],
+      "driver": "requirements-engineering",
+      "reviewers": [
+        "requirement-quality-gate",
+        "acceptance-criteria-quality-gate",
+        "nfr-measurability-gate",
+        "test-architecture",
+        "security-threat-modeling",
+        "ai-feature-classifier"
+      ],
+      "blocking_gates": [
+        "requirement-quality-gate",
+        "acceptance-criteria-quality-gate",
+        "nfr-measurability-gate"
+      ],
+      "triggers": [
+        "approved problem statement",
+        "FR/NFR/AC missing",
+        "requirements have TBD or vague wording"
+      ],
+      "prompt": "Create testable FRs, measurable NFRs, Given/When/Then acceptance criteria, requirement registry, and traceability IDs."
+    },
+    {
+      "id": "atlassian-artifacts",
+      "label": "Jira and Confluence artifacts",
+      "evidence": [
+        "docs/34-jira-issue-authoring.md",
+        "docs/35-confluence-operational-guide.md",
+        "docs/37-jira-confluence-sync-log.md",
+        "docs/38-atlassian-integration-roadmap.md"
+      ],
+      "driver": "jira-confluence-mcp-integration",
+      "reviewers": [
+        "jira-issue-authoring",
+        "confluence-operational-guide-subagent",
+        "source-of-truth-reconciler",
+        "atlassian-artifact-governance",
+        "jira-confluence-change-capture"
+      ],
+      "blocking_gates": [
+        "traceability-graph-gate",
+        "source-of-truth-reconciler"
+      ],
+      "triggers": [
+        "Jira issue needed",
+        "Confluence guide needed",
+        "Atlassian sync requested",
+        "docs changed after Jira",
+        "Jira changed after docs"
+      ],
+      "prompt": "Prepare Jira-ready issues and Confluence-ready pages from approved requirements. Do not claim external creation unless an authorized Atlassian tool actually performs it. Record sync status and approval needs."
+    },
+    {
+      "id": "architecture-security-ai",
+      "label": "Architecture, UX, security, privacy, and AI safety",
+      "evidence": [
+        "docs/20-architecture.md",
+        "docs/21-domain-model.md",
+        "docs/22-api-contract.md",
+        "docs/23-data-model.md",
+        "docs/30-ux-design.md",
+        "docs/40-threat-model.md",
+        "docs/42-ai-safety-grounding.md"
+      ],
+      "driver": "architecture-design",
+      "reviewers": [
+        "ux-design",
+        "security-threat-modeling",
+        "privacy-compliance",
+        "data-governance",
+        "ai-safety-grounding",
+        "grounding-contract-builder",
+        "prompt-registry-manager",
+        "model-risk-register",
+        "sre-observability",
+        "industry-practices-governor",
+        "software-integration-engineering"
+      ],
+      "blocking_gates": [
+        "owasp-control-mapper",
+        "traceability-graph-gate"
+      ],
+      "triggers": [
+        "architecture missing",
+        "AI/LLM/RAG/agent keyword",
+        "data/privacy/security risk",
+        "UI workflow required"
+      ],
+      "prompt": "Design the first vertical slice with architecture, UX states, threat model, AI safety/grounding, data governance, observability, and ADRs."
+    },
+    {
+      "id": "testing-quality",
+      "label": "Testing, evaluation, and quality evidence",
+      "evidence": [
+        "docs/50-test-strategy.md",
+        "docs/51-test-data-strategy.md",
+        "docs/54-ac-to-test-map.md",
+        "docs/55-performance-baseline.md",
+        "docs/57-test-evidence.md"
+      ],
+      "driver": "test-architecture",
+      "reviewers": [
+        "contract-testing",
+        "resilience-testing",
+        "test-data-engineering",
+        "accessibility-testing",
+        "performance-engineering",
+        "llm-evaluation",
+        "mutation-flaky-test-manager"
+      ],
+      "blocking_gates": [
+        "traceability-graph-gate",
+        "enterprise-quality-gatekeeper"
+      ],
+      "triggers": [
+        "AC exists without tests",
+        "performance or resilience risk",
+        "AI evaluation needed",
+        "UI accessibility required"
+      ],
+      "prompt": "Map every acceptance criterion to tests and evidence. Define unit, integration, contract, E2E, accessibility, performance, security, resilience, and AI eval coverage as applicable."
+    },
+    {
+      "id": "implementation-plan",
+      "label": "Implementation planning and vertical slices",
+      "evidence": [
+        "docs/60-implementation-plan.md",
+        "docs/61-vertical-slice-plan.md",
+        "docs/62-delivery-decomposition.md",
+        "docs/63-technical-debt-register.md",
+        "docs/64-feature-flag-plan.md",
+        "docs/59-backend-engineering-practices.md"
+      ],
+      "driver": "implementation-planning",
+      "reviewers": [
+        "problem-decomposition",
+        "vertical-slice-builder",
+        "repository-architecture",
+        "clean-architecture-enforcer",
+        "database-migration",
+        "idempotency-concurrency",
+        "feature-flag-rollout",
+        "technical-debt-manager",
+        "python-fastapi-backend-guardrails",
+        "software-integration-engineering"
+      ],
+      "blocking_gates": [
+        "enterprise-quality-gatekeeper"
+      ],
+      "triggers": [
+        "approved requirements and architecture",
+        "implementation chunking needed",
+        "feature flag or migration needed"
+      ],
+      "prompt": "Break the approved scope into the smallest safe vertical slices with files, tests, risks, rollback, feature flags, and no unapproved scope."
+    },
+    {
+      "id": "build-release-operate",
+      "label": "Build, release readiness, and operations",
+      "evidence": [
+        "docs/70-ci-cd-plan.md",
+        "docs/71-release-plan.md",
+        "docs/73-release-evidence.md",
+        "docs/80-observability.md",
+        "docs/83-runbook.md",
+        "docs/95-production-readiness-review.md"
+      ],
+      "driver": "release-readiness",
+      "reviewers": [
+        "ci-cd-engineering",
+        "devsecops",
+        "supply-chain-security",
+        "sre-observability",
+        "incident-drill",
+        "support-readiness",
+        "production-readiness-review",
+        "post-release-operations",
+        "industry-practices-governor"
+      ],
+      "blocking_gates": [
+        "production-readiness-review",
+        "release-evidence-gate",
+        "traceability-graph-gate"
+      ],
+      "triggers": [
+        "code complete",
+        "release evidence needed",
+        "operational readiness needed",
+        "production feedback loop needed"
+      ],
+      "prompt": "Collect CI/test/security/performance/release evidence, update runbook/observability/SLO/rollback, and run strict validation before release."
+    },
+    {
+      "id": "study-publish-share",
+      "label": "Study artifacts, knowledge base, FAQ, and public sharing",
+      "evidence": [
+        "docs/96-study-artifact-publishing.md",
+        "docs/study/00-study-index.md",
+        "docs/study/M0-read-this-first.md",
+        "docs/study/M1-problem-and-mvp.md",
+        "docs/study/M2-ai-solution-and-work-easing.md",
+        "docs/study/M3-security-scalability-enterprise.md",
+        "docs/study/glossary.md",
+        "docs/97-faq-wiki-plan.md",
+        "docs/98-technical-article-plan.md",
+        "docs/99-linkedin-post-plan.md",
+        "docs/100-industry-and-integration-practices.md"
+      ],
+      "driver": "study-artifact-publisher",
+      "reviewers": [
+        "mvp-value-outcome-finder",
+        "project-knowledge-base-publisher",
+        "diagram-media-standards-governor",
+        "faq-wiki-generator",
+        "technical-article-writer",
+        "linkedin-technical-post-writer",
+        "industry-practices-governor",
+        "software-integration-engineering",
+        "git-confluence-publish-reviewer",
+        "fanatic-critic"
+      ],
+      "blocking_gates": [
+        "git-confluence-publish-reviewer",
+        "source-of-truth-reconciler",
+        "enterprise-quality-gatekeeper"
+      ],
+      "triggers": [
+        "study artifacts requested",
+        "Confluence project page/module needed",
+        "FAQ requested",
+        "technical article requested",
+        "LinkedIn post requested",
+        "diagram/GIF/video publication requested"
+      ],
+      "prompt": "Create Git-first study artifacts and Confluence-ready page/module drafts. Start from the MVP and most valued outcome. Explain how AI solves the problem, how work becomes easier, how the product is secure/scalable, and how it meets enterprise standards. Do not publish externally until the user approves the exact diff/page payload."
+    }
+  ],
+  "risk_triggers": {
+    "ai_llm_rag_agentic": [
+      "ai-feature-classifier",
+      "grounding-contract-builder",
+      "prompt-registry-manager",
+      "model-risk-register",
+      "llm-evaluation",
+      "prompt-injection-defense"
+    ],
+    "security_privacy_data": [
+      "security-threat-modeling",
+      "privacy-compliance",
+      "data-governance",
+      "owasp-control-mapper",
+      "supply-chain-security"
+    ],
+    "external_skill_or_mcp": [
+      "external-skill-security-auditor",
+      "skill-contract-auditor",
+      "jira-confluence-mcp-integration"
+    ],
+    "ux_customer_loved": [
+      "ux-research-synthesizer",
+      "ux-design",
+      "content-design",
+      "design-system-governance",
+      "accessibility-testing"
+    ],
+    "operations_reliability": [
+      "sre-observability",
+      "performance-engineering",
+      "resilience-testing",
+      "incident-drill",
+      "support-readiness"
+    ],
+    "content_study_publishing": [
+      "mvp-value-outcome-finder",
+      "study-artifact-publisher",
+      "project-knowledge-base-publisher",
+      "diagram-media-standards-governor",
+      "faq-wiki-generator",
+      "technical-article-writer",
+      "linkedin-technical-post-writer",
+      "git-confluence-publish-reviewer"
+    ],
+    "backend_api_python": [
+      "python-fastapi-backend-guardrails",
+      "api-contract-governance",
+      "api-error-model",
+      "test-architecture",
+      "security-threat-modeling"
+    ],
+    "new_external_skill_needed": [
+      "external-skill-discovery-advisor",
+      "skill-research-librarian",
+      "external-skill-security-auditor",
+      "external-skill-onboarding-manager"
+    ],
+    "session_or_parallel_work": [
+      "session-continuity-manager",
+      "skill-conflict-moderator"
+    ]
+  }
+}

@@ -1,0 +1,281 @@
+<!doctype html>
+<html lang="en" data-theme="light">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>{{ app_name }} workspace</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Instrument+Serif:ital@0;1&family=Manrope:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="/static/app.css">
+    <style>
+      /* Inline accessibility-critical rules so the page remains usable
+         even if the external stylesheet fails to load. */
+      :focus-visible { outline: 3px solid var(--focus-ring, #4a6cf7); outline-offset: 3px; }
+      .button, button, .toggle { min-height: 44px; }
+    </style>
+  </head>
+  <body>
+    <a class="skip-link" href="#main-content">Skip to main content</a>
+    <div id="toast-region" class="toast-region" aria-live="polite" aria-atomic="false"></div>
+    <main id="main-content" class="shell" tabindex="-1">
+      <header class="topbar">
+        <div class="brand">
+          <div class="logo" aria-hidden="true">Q</div>
+          <div class="brand-copy">
+            <h1>Quorum AI</h1>
+            <p>Stop hopping between multiple AI chatbots. Get one sourced, synthesized answer you can trust &mdash; and see the cost before you run it</p>
+          </div>
+        </div>
+        <div class="topbar-actions">
+          <span class="status-pill" id="connection-pill" data-state="connecting" aria-live="polite" aria-atomic="true">
+            <span class="status-pill-dot" aria-hidden="true"></span>
+            <span id="connection-pill-text">Connecting</span>
+          </span>
+          <button id="theme-toggle" class="toggle" type="button" aria-label="Toggle dark mode">&#9680;</button>
+        </div>
+      </header>
+
+      <section id="error-region" class="status-banner" data-severity="error" tabindex="-1" role="alert" hidden>
+        <div class="status-banner-icon" aria-hidden="true">!</div>
+        <div class="status-banner-body">
+          <div class="status-banner-title" id="error-region-title">Something went wrong</div>
+          <div class="status-banner-message" id="error-region-message"></div>
+          <div class="status-banner-actions" id="error-region-actions"></div>
+        </div>
+        <button class="status-banner-dismiss" type="button" id="error-region-dismiss" aria-label="Dismiss error">&times;</button>
+      </section>
+
+      <div class="layout">
+        <section class="panel" aria-labelledby="composer-heading">
+          <h2 id="composer-heading">Workspace</h2>
+          <p class="lede">Execution uses server-configured provider access. Results are ephemeral and may be lost on refresh or restart.</p>
+          <div class="stack">
+            <div class="callout callout-warning">
+              <div class="callout-icon" aria-hidden="true">!</div>
+              <div class="callout-body">
+                <strong>Safety reminder.</strong>
+                Do not submit sensitive, private, regulated, or secret information. High-stakes topics remain decision support only.
+              </div>
+            </div>
+            <div class="field">
+              <div class="field-label-row">
+                <label for="query-text">Question</label>
+                <span class="field-meta">
+                  <span id="query-char-count" class="field-meta-counter" aria-live="polite">0 chars</span>
+                  <span class="field-meta-hint" id="query-validation-hint"></span>
+                </span>
+              </div>
+              <textarea
+                id="query-text"
+                name="query_text"
+                placeholder="Ask a source-backed business, technical, or policy question. Press Ctrl+Enter (Cmd+Enter on Mac) to run."
+                aria-describedby="query-validation-hint"
+                maxlength="20000"
+              ></textarea>
+            </div>
+            <fieldset class="field-group">
+              <legend>Model slots</legend>
+              <div class="muted">Choose four different models. Once a model is selected in one slot, it is removed from the other dropdowns.</div>
+              <div id="model-inputs" class="stack">
+                <label class="inline" data-model-slot="1">
+                  <span>Slot 1</span>
+                  <select data-model-slot-select="1" aria-label="Model for slot 1">
+                    <option value="openai/gpt-4o-mini" selected>openai/gpt-4o-mini</option>
+                  </select>
+                </label>
+                <label class="inline" data-model-slot="2">
+                  <span>Slot 2</span>
+                  <select data-model-slot-select="2" aria-label="Model for slot 2">
+                    <option value="anthropic/claude-haiku-4.5" selected>anthropic/claude-haiku-4.5</option>
+                  </select>
+                </label>
+                <label class="inline" data-model-slot="3">
+                  <span>Slot 3</span>
+                  <select data-model-slot-select="3" aria-label="Model for slot 3">
+                    <option value="google/gemini-2.5-flash" selected>google/gemini-2.5-flash</option>
+                  </select>
+                </label>
+                <label class="inline" data-model-slot="4">
+                  <span>Slot 4</span>
+                  <select data-model-slot-select="4" aria-label="Model for slot 4">
+                    <option value="deepseek/deepseek-chat-v3.1" selected>deepseek/deepseek-chat-v3.1</option>
+                  </select>
+                </label>
+              </div>
+            </fieldset>
+            <div id="cost-confirmation" class="callout callout-cost" hidden>
+              <div class="callout-icon" aria-hidden="true">$</div>
+              <div class="callout-body">
+                <div class="callout-title">
+                  Cost review
+                  <button
+                    type="button"
+                    class="info-icon"
+                    data-info-icon
+                    data-info-text="This figure is a local planning estimate based on your query length and selected model slots. It is not a provider quote or invoice — actual cost may differ."
+                    aria-label="What does this cost estimate mean?"
+                  >&#9432;</button>
+                </div>
+                <div class="callout-message" id="cost-confirmation-message"></div>
+                <div class="callout-message cost-secondary" id="cost-confirmation-secondary" hidden></div>
+                <div class="inline cost-confirmation-actions">
+                  <button
+                    id="proceed-run"
+                    class="button button-primary"
+                    type="button"
+                    data-loading-text="Starting..."
+                    disabled
+                  >
+                    <span class="button-label">Proceed with this run</span>
+                    <span class="button-spinner" aria-hidden="true"></span>
+                  </button>
+                  <button
+                    id="cancel-estimate"
+                    class="button button-ghost"
+                    type="button"
+                  >
+                    Cancel
+                  </button>
+                </div>
+              </div>
+            </div>
+            <div class="inline">
+              <button id="run-now" class="button button-primary" type="button" data-loading-text="Starting...">
+                <span class="button-label">Run now</span>
+                <span class="button-spinner" aria-hidden="true"></span>
+              </button>
+              <button id="estimate-run" class="button button-secondary" type="button" data-loading-text="Estimating...">
+                <span class="button-label">Estimate cost</span>
+                <span class="button-spinner" aria-hidden="true"></span>
+              </button>
+            </div>
+            <div class="keyboard-hint muted">
+              <kbd>Ctrl</kbd>+<kbd>Enter</kbd> runs now · <kbd>Esc</kbd> cancels
+            </div>
+          </div>
+        </section>
+
+        <aside class="panel">
+          <h2>Run controls</h2>
+          <div class="stack">
+            <div class="meta-grid">
+              <div class="meta-card" aria-live="polite" aria-atomic="true">
+                <span class="meta-label">Browser session</span>
+                <div id="session-meta" class="meta-value">Managed by secure cookie</div>
+              </div>
+              <div class="meta-card" aria-live="polite" aria-atomic="true">
+                <span class="meta-label">
+                  Run ID
+                  <button
+                    type="button"
+                    class="info-icon"
+                    data-info-icon
+                    data-info-text="A unique audit handle for this run. Copy it and include it if you report an issue — it lets support pull up every log line for this exact request."
+                    aria-label="What is the run ID?"
+                  >&#9432;</button>
+                </span>
+                <button
+                  id="copy-correlation"
+                  type="button"
+                  class="meta-value mono meta-value-copy"
+                  aria-label="Copy run ID"
+                  title="Copy run ID — include it if you report an issue."
+                >
+                  <span id="correlation-meta">Not started</span>
+                </button>
+              </div>
+              <div class="meta-card" aria-live="polite" aria-atomic="true">
+                <span class="meta-label">Current time</span>
+                <div id="time-meta" class="meta-value">Not available yet</div>
+              </div>
+              <div class="meta-card" aria-live="polite" aria-atomic="true">
+                <span class="meta-label">Claims inspected</span>
+                <div id="claim-meta" class="meta-value"></div>
+              </div>
+              <div class="meta-card" data-status-card aria-live="polite" aria-atomic="true">
+                <span class="meta-label">Run status</span>
+                <div id="status-meta" class="meta-value">
+                  <span class="status-pill" data-state="idle">
+                    <span class="status-pill-dot" aria-hidden="true"></span>
+                    <span>Idle</span>
+                  </span>
+                </div>
+              </div>
+            </div>
+            <div class="progress-card" aria-live="polite">
+              <h3>Progress</h3>
+              <div id="progress-list" class="progress-list" aria-live="polite" aria-atomic="true"></div>
+            </div>
+            <div class="result-block" aria-live="polite" aria-atomic="true">
+              <h3>Cost and partial notices</h3>
+              <div id="notice-list" class="muted">No estimate or run yet.</div>
+            </div>
+            <div id="cancel-run-container" class="run-controls-cancel" hidden>
+              <button id="cancel-run" class="button button-danger" type="button">
+                Cancel run
+              </button>
+              <span class="run-controls-cancel-hint">
+                Stop the pipeline. The current stage is marked <strong>skipped</strong> and the active-run slot is freed.
+              </span>
+            </div>
+          </div>
+        </aside>
+      </div>
+
+      <section class="panel" style="margin-top: 20px;">
+        <h2>
+          Model outputs
+          <button
+            type="button"
+            class="info-icon"
+            data-info-icon
+            data-info-text="Each panel shows one model's initial answer text. With no live API key, every panel is a local simulation. With a live API key, the answer text comes from the model — but the synthesis below it is always produced by Quorum's local helpers, not by a model."
+            aria-label="What are the model outputs?"
+          >&#9432;</button>
+        </h2>
+        <div id="demo-mode-banner" class="callout callout-demo-mode" role="alert" aria-live="assertive" hidden>
+          <div class="callout-icon" aria-hidden="true">!</div>
+          <div class="callout-body">
+            <div class="callout-title">Demo mode is active</div>
+            <div class="callout-message" data-demo-mode-target></div>
+          </div>
+        </div>
+        <div id="model-grid" class="model-grid" aria-live="polite" aria-atomic="true"></div>
+      </section>
+
+      <section class="panel" style="margin-top: 20px;">
+        <h2>Debate and synthesis</h2>
+        <div class="stack">
+          <div class="result-block" aria-live="polite" aria-atomic="true">
+            <h3>Debate rounds</h3>
+            <div id="debate-output" class="muted" aria-live="polite" aria-atomic="true">No debate rounds yet.</div>
+          </div>
+          <div class="result-block" aria-live="polite" aria-atomic="true" data-info-icon-host>
+            <h3>
+              Final synthesis
+              <button
+                type="button"
+                class="info-icon"
+                data-info-icon
+                data-info-text="The five sections below (Consensus, Disagreement, Source support, Uncertainty, Recommendation) are produced by Quorum's synthesis helper from a small set of templated rules. They are not generated by any model, regardless of whether a live API key is configured."
+                aria-label="What is the synthesis?"
+              >&#9432;</button>
+            </h3>
+            <div id="synthesis-output" class="muted" aria-live="polite" aria-atomic="true">No synthesis yet.</div>
+          </div>
+        </div>
+      </section>
+    </main>
+    <script id="model-catalog-data" type="application/json">{{ model_catalog_json }}</script>
+    <script>
+      window.DEFAULT_MODEL_IDS = {{ default_model_ids_json }};
+      // Static strings that downstream tests and accessibility scanners
+      // look for in the rendered HTML. The actual implementations live
+      // in ``app.js``; the names here are the contract surface.
+      window.UI_FEATURES = ["renderModelInputs", "Based on current time"];
+    </script>
+    <script src="/static/app.js" defer></script>
+    <div id="info-tooltip" role="tooltip" hidden></div>
+  </body>
+</html>

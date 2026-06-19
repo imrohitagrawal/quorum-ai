@@ -1,0 +1,1126 @@
+"""Query run orchestration, HTTP routes, and in-memory repository.
+
+The application runs exactly one query at a time per ``account_id``. The
+query run is the unit of audit, billing, and observability; every
+contributor records an event with the same ``account_id``/``query_run_id``
+pair so the audit trail is consistent.
+
+Two execution modes:
+
+* **Legacy / test mode** (the existing test fixture uses this): the
+  handler runs the pipeline inline in the request thread and returns the
+  final state in the 202 response. The legacy auth path is gated by a
+  server-side feature flag (``settings.account_legacy_header_enabled``)
+  and is disabled in production. The legacy path is intentional: it lets
+  the existing test suite exercise the full pipeline deterministically
+  without ever touching a thread pool.
+* **Cookie / CSRF mode** (production): the handler validates the session
+  cookie and CSRF token, validates the model slots and the cost
+  threshold, persists the run, and returns 202 with the ``ACCEPTED``
+  state. A background thread then runs the pipeline.
+
+Either way, the pipeline itself is wrapped in a try/except that always
+reaches a terminal state — a bug in the pipeline can never leave a run
+stuck in ``RUNNING`` forever.
+"""
+
+from __future__ import annotations
+
+import contextlib
+from dataclasses import dataclass, field
+from datetime import UTC, datetime, timedelta
+from enum import StrEnum
+from threading import RLock, Thread
+from time import sleep
+from typing import Annotated
+from uuid import UUID, uuid4
+
+from fastapi import APIRouter, Depends, HTTPException, Request, status
+from pydantic import BaseModel, Field
+
+from product_app.auth import SessionContext, enforce_csrf, require_session
+from product_app.config import settings
+from product_app.costs import (
+    CostConfirmation,
+    CostEstimate,
+    CostThresholdAction,
+    cost_estimation_service,
+)
+from product_app.debate import DebateOutput, debate_stub_service
+from product_app.model_slots import (
+    InvalidModelSlotError,
+    ModelSlot,
+    model_slot_event_recorder,
+    validate_model_slots,
+)
+from product_app.provider_keys import ProviderCredentialSource
+from product_app.providers import (
+    InitialAnswerStatus,
+    InitialModelAnswer,
+    ProviderPath,
+    provider_execution_service,
+)
+from product_app.safety import (
+    SafetyAcknowledgement,
+    SafetyWarning,
+    safety_warning_policy,
+)
+from product_app.synthesis import FinalSynthesis, synthesis_stub_service
+
+router = APIRouter(prefix="/v1/query-runs", tags=["query-runs"])
+
+
+#: Terminal-state TTL for finished runs. The repository evicts runs older
+#: than this on every create/get. In production this would be backed by a
+#: real database with a real GC; the in-memory implementation exists only
+#: to make the contract observable in tests and dev.
+QUERY_RUN_TERMINAL_TTL = timedelta(hours=1)
+QUERY_RUN_ACTIVE_TTL = timedelta(minutes=30)
+
+
+class QueryRunStatus(StrEnum):
+    DRAFT = "draft"
+    COST_REVIEW = "cost_review"
+    ACCEPTED = "accepted"
+    INITIAL_ANSWERS_RUNNING = "initial_answers_running"
+    DEBATE_ROUND_1_RUNNING = "debate_round_1_running"
+    DEBATE_ROUND_2_RUNNING = "debate_round_2_running"
+    SYNTHESIS_RUNNING = "synthesis_running"
+    COMPLETED = "completed"
+    PARTIAL = "partial"
+    FAILED = "failed"
+    TIMED_OUT = "timed_out"
+    BLOCKED_BY_COST = "blocked_by_cost"
+    CANCELLED = "cancelled"
+
+
+class StageState(StrEnum):
+    PENDING = "pending"
+    RUNNING = "running"
+    COMPLETED = "completed"
+    FAILED = "failed"
+    SKIPPED = "skipped"
+
+
+TERMINAL_STATUSES = frozenset(
+    {
+        QueryRunStatus.COMPLETED,
+        QueryRunStatus.PARTIAL,
+        QueryRunStatus.FAILED,
+        QueryRunStatus.TIMED_OUT,
+        QueryRunStatus.BLOCKED_BY_COST,
+        QueryRunStatus.CANCELLED,
+    }
+)
+
+ALLOWED_TRANSITIONS: dict[QueryRunStatus, frozenset[QueryRunStatus]] = {
+    QueryRunStatus.DRAFT: frozenset({QueryRunStatus.COST_REVIEW, QueryRunStatus.CANCELLED}),
+    QueryRunStatus.COST_REVIEW: frozenset(
+        {QueryRunStatus.ACCEPTED, QueryRunStatus.BLOCKED_BY_COST, QueryRunStatus.CANCELLED}
+    ),
+    QueryRunStatus.ACCEPTED: frozenset(
+        {
+            QueryRunStatus.INITIAL_ANSWERS_RUNNING,
+            QueryRunStatus.FAILED,
+            QueryRunStatus.PARTIAL,
+            QueryRunStatus.TIMED_OUT,
+            QueryRunStatus.CANCELLED,
+        }
+    ),
+    QueryRunStatus.INITIAL_ANSWERS_RUNNING: frozenset(
+        {
+            QueryRunStatus.DEBATE_ROUND_1_RUNNING,
+            QueryRunStatus.PARTIAL,
+            QueryRunStatus.FAILED,
+            QueryRunStatus.TIMED_OUT,
+            QueryRunStatus.CANCELLED,
+        }
+    ),
+    QueryRunStatus.DEBATE_ROUND_1_RUNNING: frozenset(
+        {
+            QueryRunStatus.DEBATE_ROUND_2_RUNNING,
+            QueryRunStatus.PARTIAL,
+            QueryRunStatus.FAILED,
+            QueryRunStatus.TIMED_OUT,
+            QueryRunStatus.CANCELLED,
+        }
+    ),
+    QueryRunStatus.DEBATE_ROUND_2_RUNNING: frozenset(
+        {
+            QueryRunStatus.SYNTHESIS_RUNNING,
+            QueryRunStatus.PARTIAL,
+            QueryRunStatus.FAILED,
+            QueryRunStatus.TIMED_OUT,
+            QueryRunStatus.CANCELLED,
+        }
+    ),
+    QueryRunStatus.SYNTHESIS_RUNNING: frozenset(
+        {
+            QueryRunStatus.COMPLETED,
+            QueryRunStatus.PARTIAL,
+            QueryRunStatus.FAILED,
+            QueryRunStatus.TIMED_OUT,
+            QueryRunStatus.CANCELLED,
+        }
+    ),
+    QueryRunStatus.COMPLETED: frozenset(),
+    QueryRunStatus.PARTIAL: frozenset(),
+    QueryRunStatus.FAILED: frozenset(),
+    QueryRunStatus.TIMED_OUT: frozenset(),
+    QueryRunStatus.BLOCKED_BY_COST: frozenset(),
+    QueryRunStatus.CANCELLED: frozenset(),
+}
+
+
+class QueryRunStageProgress(BaseModel):
+    stage: str
+    state: StageState
+    detail: str | None = None
+
+
+class QueryRunProgress(BaseModel):
+    current_stage: str
+    stages: list[QueryRunStageProgress]
+
+
+class ResultProjection(BaseModel):
+    model_answers: list[InitialModelAnswer]
+    debate_outputs: list[DebateOutput]
+    final_synthesis: FinalSynthesis | None
+
+
+class QueryRunEstimateRequest(BaseModel):
+    query_text: str = Field(min_length=1, max_length=8_000)
+    model_slots: list[str] = Field(min_length=1)
+
+
+class QueryRunEstimateResponse(BaseModel):
+    correlation_id: str
+    cost_estimate: CostEstimate
+    model_slots: list[ModelSlot]
+    reasons: list[str]
+
+
+class QueryRunCreateRequest(BaseModel):
+    query_text: str = Field(min_length=1, max_length=8_000)
+    model_slots: list[str] = Field(min_length=1)
+    safety_acknowledgements: list[SafetyAcknowledgement] = Field(default_factory=list)
+    cost_confirmation: CostConfirmation | None = None
+
+
+class QueryRunCreateResponse(BaseModel):
+    query_run_id: UUID
+    status: QueryRunStatus
+    correlation_id: str
+    model_slots: list[ModelSlot]
+    cost_estimate: CostEstimate
+    progress: QueryRunProgress
+    initial_answers: list[InitialModelAnswer]
+
+
+class ActiveQueryRunResponse(BaseModel):
+    query_run_id: UUID | None
+    status: QueryRunStatus | None
+    correlation_id: str | None
+    progress: QueryRunProgress | None
+    model_slots: list[ModelSlot]
+    cost_estimate: CostEstimate | None
+    initial_answers: list[InitialModelAnswer]
+
+
+class QueryRunResultResponse(BaseModel):
+    query_run_id: UUID
+    status: QueryRunStatus
+    correlation_id: str
+    model_slots: list[ModelSlot]
+    cost_estimate: CostEstimate
+    elapsed_time_ms: int = Field(ge=0)
+    failed_steps: list[str]
+    missing_steps: list[str]
+    progress: QueryRunProgress
+    partial_failure_notice: str | None = None
+    provider_failure_notices: list[str]
+    result: ResultProjection
+    result_generated_at_utc: datetime
+    #: ``True`` when any model answer was produced by Quorum's local
+    #: simulation helpers (or the fallback search stub) rather than by a
+    #: live model provider. The UI uses this flag to render a prominent
+    #: demo-mode banner and to render stub source links as in-app
+    #: placeholders instead of navigable anchors.
+    demo_mode: bool = False
+    #: Number of model answers produced by a live provider on this run.
+    #: The UI uses this together with ``local_count`` to render a partial
+    #: demo banner ("some answers are live, others are simulated")
+    #: instead of the binary banner that hides whenever
+    #: ``demo_mode is False``.
+    live_count: int = Field(ge=0, default=0)
+    #: Number of model answers produced by Quorum's local simulation
+    #: helpers (LOCAL_SIMULATION or FALLBACK_SEARCH) on this run. The
+    #: sum ``live_count + local_count`` always equals the number of
+    #: initial answers.
+    local_count: int = Field(ge=0, default=0)
+    #: Sum of the four models' ``material_claim_count`` values. The UI
+    #: surfaces this alongside the citation coverage so the user can
+    #: audit the denominator, not just the ratio. ``0`` for runs whose
+    #: initial-answers list is empty (e.g. cost-blocked before any model
+    #: was called).
+    material_claim_count: int = Field(ge=0, default=0)
+
+
+class QueryRunWarningsRequest(BaseModel):
+    query_text: str = Field(min_length=1, max_length=8_000)
+
+
+class QueryRunWarningsResponse(BaseModel):
+    warnings: list[SafetyWarning]
+
+
+class ActiveQueryRunExistsError(Exception):
+    pass
+
+
+class InvalidQueryRunTransitionError(ValueError):
+    pass
+
+
+@dataclass
+class QueryRun:
+    query_run_id: UUID
+    account_id: UUID
+    query_text: str
+    status: QueryRunStatus
+    correlation_id: str
+    created_at: datetime
+    updated_at: datetime
+    started_at: datetime | None
+    model_slots: list[ModelSlot]
+    cost_estimate: CostEstimate
+    progress: list[QueryRunStageProgress] = field(default_factory=list)
+    initial_answers: list[InitialModelAnswer] = field(default_factory=list)
+    debate_outputs: list[DebateOutput] = field(default_factory=list)
+    final_synthesis: FinalSynthesis | None = None
+    failed_steps: list[str] = field(default_factory=list)
+    missing_steps: list[str] = field(default_factory=list)
+
+    @property
+    def is_terminal(self) -> bool:
+        return self.status in TERMINAL_STATUSES
+
+
+class InMemoryQueryRunRepository:
+    """In-memory repository, account-scoped.
+
+    The repository is the single source of truth for the active-run rule
+    (``account_id`` can have at most one non-terminal run at a time) and
+    for the run state machine. It enforces the active-run rule under a
+    lock so two concurrent requests from the same account cannot both
+    create a run.
+    """
+
+    def __init__(self) -> None:
+        self._query_runs: dict[UUID, QueryRun] = {}
+        self._lock = RLock()
+        self._op_counter = 0
+
+    def create(
+        self,
+        *,
+        account_id: UUID,
+        query_text: str,
+        model_slots: list[ModelSlot],
+        cost_estimate: CostEstimate,
+    ) -> QueryRun:
+        with self._lock:
+            self._purge_expired_locked()
+            if self.get_active_for_account(account_id) is not None:
+                raise ActiveQueryRunExistsError
+            query_run_id = uuid4()
+            now = datetime.now(UTC)
+            query_run = QueryRun(
+                query_run_id=query_run_id,
+                account_id=account_id,
+                query_text=query_text,
+                status=QueryRunStatus.ACCEPTED,
+                correlation_id=f"qr_{query_run_id.hex}",
+                created_at=now,
+                updated_at=now,
+                started_at=None,
+                model_slots=model_slots,
+                cost_estimate=cost_estimate,
+                progress=_initial_progress(),
+            )
+            self._query_runs[query_run_id] = query_run
+            return query_run
+
+    def get(self, query_run_id: UUID) -> QueryRun:
+        with self._lock:
+            self._purge_expired_locked()
+            try:
+                return self._query_runs[query_run_id]
+            except KeyError as exc:
+                raise KeyError(query_run_id) from exc
+
+    def get_for_account(self, *, query_run_id: UUID, account_id: UUID) -> QueryRun | None:
+        with self._lock:
+            self._purge_expired_locked()
+            query_run = self._query_runs.get(query_run_id)
+            if query_run is None or query_run.account_id != account_id:
+                return None
+            return query_run
+
+    def get_active_for_account(self, account_id: UUID) -> QueryRun | None:
+        with self._lock:
+            self._purge_expired_locked()
+            for query_run in self._query_runs.values():
+                if query_run.account_id == account_id and not query_run.is_terminal:
+                    return query_run
+            return None
+
+    def transition(
+        self,
+        query_run_id: UUID,
+        next_status: QueryRunStatus,
+        *,
+        failed_steps: list[str] | None = None,
+        missing_steps: list[str] | None = None,
+    ) -> QueryRun:
+        with self._lock:
+            query_run = self._query_runs[query_run_id]
+            if next_status not in ALLOWED_TRANSITIONS[query_run.status]:
+                msg = f"Cannot transition query run from {query_run.status} to {next_status}."
+                raise InvalidQueryRunTransitionError(msg)
+            query_run.status = next_status
+            query_run.updated_at = datetime.now(UTC)
+            if query_run.started_at is None and next_status is not QueryRunStatus.ACCEPTED:
+                query_run.started_at = query_run.updated_at
+            if failed_steps is not None:
+                query_run.failed_steps = failed_steps
+            if missing_steps is not None:
+                query_run.missing_steps = missing_steps
+            return query_run
+
+    def update_status(
+        self,
+        query_run_id: UUID,
+        *,
+        status_value: QueryRunStatus | None = None,
+        stage_name: str | None = None,
+        stage_state: StageState | None = None,
+        detail: str | None = None,
+        failed_steps: list[str] | None = None,
+        missing_steps: list[str] | None = None,
+        mark_started: bool = False,
+    ) -> QueryRun:
+        with self._lock:
+            query_run = self._query_runs[query_run_id]
+            now = datetime.now(UTC)
+            if status_value is not None:
+                query_run.status = status_value
+            query_run.updated_at = now
+            if mark_started and query_run.started_at is None:
+                query_run.started_at = now
+            if stage_name and stage_state:
+                _set_stage_state(query_run.progress, stage_name, stage_state, detail)
+            if failed_steps is not None:
+                query_run.failed_steps = failed_steps
+            if missing_steps is not None:
+                query_run.missing_steps = missing_steps
+            return query_run
+
+    def record_initial_answer(self, query_run_id: UUID, answer: InitialModelAnswer) -> QueryRun:
+        with self._lock:
+            query_run = self._query_runs[query_run_id]
+            query_run.initial_answers = [
+                existing
+                for existing in query_run.initial_answers
+                if existing.slot_number != answer.slot_number
+            ] + [answer]
+            query_run.initial_answers.sort(key=lambda item: item.slot_number)
+            query_run.updated_at = datetime.now(UTC)
+            return query_run
+
+    def record_initial_answers(
+        self,
+        query_run_id: UUID,
+        initial_answers: list[InitialModelAnswer],
+    ) -> QueryRun:
+        last: QueryRun | None = None
+        for answer in initial_answers:
+            last = self.record_initial_answer(query_run_id, answer)
+        if last is None:
+            return self._query_runs[query_run_id]
+        return last
+
+    def record_debate_outputs(
+        self,
+        query_run_id: UUID,
+        debate_outputs: list[DebateOutput],
+    ) -> QueryRun:
+        with self._lock:
+            query_run = self._query_runs[query_run_id]
+            query_run.debate_outputs = debate_outputs
+            query_run.updated_at = datetime.now(UTC)
+            return query_run
+
+    def record_final_synthesis(
+        self,
+        query_run_id: UUID,
+        final_synthesis: FinalSynthesis,
+    ) -> QueryRun:
+        with self._lock:
+            query_run = self._query_runs[query_run_id]
+            query_run.final_synthesis = final_synthesis
+            query_run.updated_at = datetime.now(UTC)
+            return query_run
+
+    def clear(self) -> None:
+        with self._lock:
+            self._query_runs.clear()
+            self._op_counter = 0
+
+    def _purge_expired_locked(self) -> None:
+        self._op_counter += 1
+        if self._op_counter % 1024 != 0:
+            return
+        now = datetime.now(UTC)
+        expired: list[UUID] = []
+        for query_run_id, query_run in self._query_runs.items():
+            age = now - query_run.updated_at
+            terminal_expired = query_run.is_terminal and age > QUERY_RUN_TERMINAL_TTL
+            active_expired = not query_run.is_terminal and age > QUERY_RUN_ACTIVE_TTL
+            if terminal_expired or active_expired:
+                expired.append(query_run_id)
+        for query_run_id in expired:
+            self._query_runs.pop(query_run_id, None)
+
+
+query_run_repository = InMemoryQueryRunRepository()
+
+
+# -- routes ------------------------------------------------------------------
+
+
+@router.post("/estimate", response_model=QueryRunEstimateResponse)
+def estimate_query_run(
+    payload: QueryRunEstimateRequest,
+    session: Annotated[SessionContext, Depends(require_session)],
+) -> QueryRunEstimateResponse:
+    model_slots = _validated_model_slots(payload.model_slots)
+    estimate = cost_estimation_service.estimate(
+        query_text=payload.query_text,
+        model_slots=model_slots,
+        account_id=session.account_id,
+    )
+    cost_estimation_service.record_guardrail_event(
+        account_id=session.account_id,
+        query_run_id=None,
+        estimated_cost_usd=estimate.estimated_cost_usd,
+        threshold_action=estimate.threshold_action,
+        confirmed=False,
+    )
+    return QueryRunEstimateResponse(
+        correlation_id=f"estimate_{uuid4().hex}",
+        cost_estimate=estimate,
+        model_slots=model_slots,
+        reasons=_estimate_reasons(estimate),
+    )
+
+
+@router.post("", response_model=QueryRunCreateResponse, status_code=status.HTTP_202_ACCEPTED)
+def create_query_run(
+    payload: QueryRunCreateRequest,
+    request: Request,
+    session: Annotated[SessionContext, Depends(require_session)],
+) -> QueryRunCreateResponse:
+    enforce_csrf(request, session)
+    model_slots = _validated_model_slots(payload.model_slots)
+    required_warnings = safety_warning_policy.required_warnings_for_query(payload.query_text)
+    missing_acknowledgements = safety_warning_policy.missing_acknowledgements(
+        required_warnings=required_warnings,
+        acknowledgements=payload.safety_acknowledgements,
+    )
+    if missing_acknowledgements:
+        safety_warning_policy.record_warning_impression(
+            account_id=session.account_id,
+            query_run_id=None,
+            warnings=required_warnings,
+        )
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+            detail={
+                "code": "VALIDATION_ERROR",
+                "message": "Required safety acknowledgements are missing.",
+                "required_warnings": [
+                    warning.model_dump(mode="json") for warning in missing_acknowledgements
+                ],
+            },
+        )
+
+    cost_estimate = cost_estimation_service.estimate(
+        query_text=payload.query_text,
+        model_slots=model_slots,
+        account_id=session.account_id,
+    )
+    cost_decision = cost_estimation_service.evaluate_confirmation(
+        estimate=cost_estimate,
+        confirmation=payload.cost_confirmation,
+        account_id=session.account_id,
+    )
+    if cost_estimate.threshold_action is CostThresholdAction.BLOCK:
+        cost_estimation_service.record_guardrail_event(
+            account_id=session.account_id,
+            query_run_id=None,
+            estimated_cost_usd=cost_estimate.estimated_cost_usd,
+            threshold_action=cost_estimate.threshold_action,
+            confirmed=False,
+        )
+        raise HTTPException(
+            status_code=status.HTTP_402_PAYMENT_REQUIRED,
+            detail={
+                "code": "COST_LIMIT_EXCEEDED",
+                "message": "Estimated query cost exceeds the hard ceiling for this slice.",
+                "cost_estimate": cost_estimate.model_dump(mode="json"),
+            },
+        )
+    if (
+        cost_estimate.threshold_action is CostThresholdAction.REQUIRE_CONFIRMATION
+        and not cost_decision.confirmed
+    ):
+        cost_estimation_service.record_guardrail_event(
+            account_id=session.account_id,
+            query_run_id=None,
+            estimated_cost_usd=cost_estimate.estimated_cost_usd,
+            threshold_action=cost_estimate.threshold_action,
+            confirmed=False,
+        )
+        raise HTTPException(
+            status_code=status.HTTP_402_PAYMENT_REQUIRED,
+            detail={
+                "code": "COST_CONFIRMATION_REQUIRED",
+                "message": "Estimated query cost requires explicit confirmation.",
+                "cost_estimate": cost_estimate.model_dump(mode="json"),
+            },
+        )
+
+    try:
+        query_run = query_run_repository.create(
+            account_id=session.account_id,
+            query_text=payload.query_text,
+            model_slots=model_slots,
+            cost_estimate=cost_estimate,
+        )
+    except ActiveQueryRunExistsError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail={
+                "code": "ACTIVE_QUERY_EXISTS",
+                "message": "One query can run at a time for this account.",
+            },
+        ) from exc
+
+    safety_warning_policy.record_acknowledgement(
+        account_id=session.account_id,
+        query_run_id=query_run.query_run_id,
+        acknowledgements=payload.safety_acknowledgements,
+    )
+    model_slot_event_recorder.record(
+        event_type="model_slot_selection_recorded",
+        account_id=session.account_id,
+        query_run_id=query_run.query_run_id,
+        model_slots=tuple((slot.slot_number, slot.model_id) for slot in query_run.model_slots),
+    )
+    cost_estimation_service.record_guardrail_event(
+        account_id=session.account_id,
+        query_run_id=query_run.query_run_id,
+        estimated_cost_usd=query_run.cost_estimate.estimated_cost_usd,
+        threshold_action=query_run.cost_estimate.threshold_action,
+        # ``confirmed`` indicates whether the caller supplied a
+        # confirmation token for a require-confirmation request. For
+        # ALLOW the caller never needed to confirm, so we always
+        # record ``False`` in that case.
+        confirmed=(
+            cost_decision.confirmed
+            and query_run.cost_estimate.threshold_action is CostThresholdAction.REQUIRE_CONFIRMATION
+        ),
+    )
+
+    # Legacy/test path runs inline so the test suite can assert against
+    # the final state synchronously. Production / cookie path runs in a
+    # background thread that cannot block the request response.
+    if session.legacy:
+        _execute_query_run(query_run.query_run_id, session.account_id)
+        query_run = query_run_repository.get(query_run.query_run_id)
+    else:
+        Thread(
+            target=_execute_query_run_safely,
+            args=(query_run.query_run_id, session.account_id),
+            daemon=True,
+        ).start()
+    return QueryRunCreateResponse(
+        query_run_id=query_run.query_run_id,
+        status=query_run.status,
+        correlation_id=query_run.correlation_id,
+        model_slots=query_run.model_slots,
+        cost_estimate=query_run.cost_estimate,
+        progress=_progress_model(query_run),
+        initial_answers=query_run.initial_answers,
+    )
+
+
+@router.post("/warnings", response_model=QueryRunWarningsResponse)
+def get_query_run_warnings(
+    payload: QueryRunWarningsRequest,
+    session: Annotated[SessionContext, Depends(require_session)],
+) -> QueryRunWarningsResponse:
+    warnings = safety_warning_policy.required_warnings_for_query(payload.query_text)
+    safety_warning_policy.record_warning_impression(
+        account_id=session.account_id,
+        query_run_id=None,
+        warnings=warnings,
+    )
+    return QueryRunWarningsResponse(warnings=warnings)
+
+
+@router.get("/active", response_model=ActiveQueryRunResponse)
+def get_active_query_run(
+    session: Annotated[SessionContext, Depends(require_session)],
+) -> ActiveQueryRunResponse:
+    query_run = query_run_repository.get_active_for_account(session.account_id)
+    if query_run is None:
+        return ActiveQueryRunResponse(
+            query_run_id=None,
+            status=None,
+            correlation_id=None,
+            progress=None,
+            model_slots=[],
+            cost_estimate=None,
+            initial_answers=[],
+        )
+    return ActiveQueryRunResponse(
+        query_run_id=query_run.query_run_id,
+        status=query_run.status,
+        correlation_id=query_run.correlation_id,
+        progress=_progress_model(query_run),
+        model_slots=query_run.model_slots,
+        cost_estimate=query_run.cost_estimate,
+        initial_answers=query_run.initial_answers,
+    )
+
+
+@router.get("/{query_run_id}", response_model=QueryRunResultResponse)
+def get_query_run_result(
+    query_run_id: UUID,
+    session: Annotated[SessionContext, Depends(require_session)],
+) -> QueryRunResultResponse:
+    query_run = query_run_repository.get_for_account(
+        query_run_id=query_run_id,
+        account_id=session.account_id,
+    )
+    if query_run is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail={
+                "code": "QUERY_RUN_NOT_FOUND",
+                "message": "Query run was not found for this account.",
+            },
+        )
+    return _result_response(query_run)
+
+
+@router.delete("/{query_run_id}", response_model=QueryRunResultResponse)
+def cancel_query_run(
+    query_run_id: UUID,
+    request: Request,
+    session: Annotated[SessionContext, Depends(require_session)],
+) -> QueryRunResultResponse:
+    enforce_csrf(request, session)
+    query_run = query_run_repository.get_for_account(
+        query_run_id=query_run_id,
+        account_id=session.account_id,
+    )
+    if query_run is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail={
+                "code": "QUERY_RUN_NOT_FOUND",
+                "message": "Query run was not found for this account.",
+            },
+        )
+    if query_run.is_terminal:
+        # Idempotent: cancelling an already-terminal run returns the
+        # existing state (e.g. a ``COMPLETED`` run that finished a few
+        # milliseconds before the DELETE arrived) rather than overwriting
+        # it with ``CANCELLED``.
+        return _result_response(query_run)
+    # Route the state change through the repository transition so the
+    # ``ALLOWED_TRANSITIONS`` guard rejects any race that promotes a
+    # terminal status back to ``CANCELLED``. The previous
+    # ``update_status`` path bypassed that guard and could overwrite a
+    # concurrent ``COMPLETED`` state.
+    try:
+        cancelled = query_run_repository.transition(
+            query_run_id,
+            QueryRunStatus.CANCELLED,
+        )
+    except InvalidQueryRunTransitionError:
+        # A concurrent pipeline completion won the race. Re-fetch and
+        # return the existing terminal state.
+        refreshed = query_run_repository.get_for_account(
+            query_run_id=query_run_id,
+            account_id=session.account_id,
+        )
+        return _result_response(refreshed or query_run)
+    query_run_repository.update_status(
+        query_run_id,
+        stage_name=_running_stage_name(cancelled.progress),
+        stage_state=StageState.SKIPPED,
+        detail="Cancelled by the user.",
+    )
+    refreshed = query_run_repository.get(query_run_id)
+    return _result_response(refreshed)
+
+
+# -- pipeline ----------------------------------------------------------------
+
+
+def _execute_query_run_safely(query_run_id: UUID, account_id: UUID) -> None:
+    """Thread entry point that always reaches a terminal state."""
+    try:
+        _execute_query_run(query_run_id=query_run_id, account_id=account_id)
+    except BaseException as exc:  # noqa: BLE001 - the contract is "never stuck"
+        with contextlib.suppress(Exception):
+            # Last resort: nothing to do if the repository itself is dead.
+            query_run_repository.update_status(
+                query_run_id,
+                status_value=QueryRunStatus.FAILED,
+                stage_name=_running_stage_name(query_run_repository.get(query_run_id).progress),
+                stage_state=StageState.FAILED,
+                detail=f"Unhandled pipeline error: {type(exc).__name__}.",
+                failed_steps=["pipeline"],
+                missing_steps=[
+                    stage.stage
+                    for stage in query_run_repository.get(query_run_id).progress
+                    if stage.state is StageState.PENDING
+                ],
+            )
+
+
+def _execute_query_run(query_run_id: UUID, account_id: UUID) -> None:
+    query_run = query_run_repository.get(query_run_id)
+    openrouter_key = settings.openrouter_api_key or ""
+    credential_source = ProviderCredentialSource.APP_OWNED
+    if settings.openrouter_live_execution_enabled and not settings.openrouter_api_key:
+        query_run_repository.update_status(
+            query_run_id,
+            status_value=QueryRunStatus.FAILED,
+            stage_name="initial_answers",
+            stage_state=StageState.FAILED,
+            detail=("Live execution is enabled but no server-side key is configured."),
+            failed_steps=["initial_answers", "debate_round_1", "debate_round_2", "synthesis"],
+            missing_steps=["initial_answers", "debate_round_1", "debate_round_2", "synthesis"],
+        )
+        _mark_remaining_stages(query_run_id, ["debate_round_1", "debate_round_2", "synthesis"])
+        return
+    query_run_repository.update_status(
+        query_run_id,
+        status_value=QueryRunStatus.INITIAL_ANSWERS_RUNNING,
+        stage_name="initial_answers",
+        stage_state=StageState.RUNNING,
+        detail="Running four initial model calls.",
+        mark_started=True,
+    )
+    for model_slot in query_run.model_slots:
+        if _should_stop(query_run_id):
+            return
+        answer = provider_execution_service.produce_initial_answer(
+            account_id=account_id,
+            query_run_id=query_run_id,
+            query_text=query_run.query_text,
+            model_slot=model_slot,
+            credential_source=credential_source,
+            openrouter_key=openrouter_key,
+        )
+        query_run_repository.record_initial_answer(query_run_id, answer)
+        sleep(settings.stage_delay_ms / 1000)
+
+    refreshed = query_run_repository.get(query_run_id)
+    if not any(
+        answer.status is InitialAnswerStatus.COMPLETED for answer in refreshed.initial_answers
+    ):
+        query_run_repository.update_status(
+            query_run_id,
+            status_value=QueryRunStatus.PARTIAL,
+            stage_name="initial_answers",
+            stage_state=StageState.FAILED,
+            detail="No usable initial model answers completed.",
+            failed_steps=["initial_answers", "debate_round_1", "debate_round_2", "synthesis"],
+            missing_steps=["debate_round_1", "debate_round_2", "synthesis"],
+        )
+        _mark_remaining_stages(query_run_id, ["debate_round_1", "debate_round_2", "synthesis"])
+        return
+    query_run_repository.update_status(
+        query_run_id,
+        status_value=QueryRunStatus.DEBATE_ROUND_1_RUNNING,
+        stage_name="initial_answers",
+        stage_state=StageState.COMPLETED,
+        detail="Initial model answers collected.",
+    )
+    query_run_repository.update_status(
+        query_run_id,
+        stage_name="debate_round_1",
+        stage_state=StageState.RUNNING,
+        detail="Running debate round 1.",
+    )
+    sleep(settings.stage_delay_ms / 1000)
+    if _should_stop(query_run_id):
+        return
+    debate_result = debate_stub_service.run_debate_rounds(
+        account_id=account_id,
+        query_run_id=query_run_id,
+        query_text=query_run.query_text,
+        initial_answers=refreshed.initial_answers,
+        openrouter_key=openrouter_key,
+    )
+    query_run_repository.record_debate_outputs(query_run_id, debate_result.debate_outputs)
+    if not debate_result.debate_outputs:
+        query_run_repository.update_status(
+            query_run_id,
+            status_value=QueryRunStatus.PARTIAL,
+            stage_name="debate_round_1",
+            stage_state=StageState.FAILED,
+            detail="Debate could not start because initial answers were unavailable.",
+            failed_steps=debate_result.failed_steps,
+            missing_steps=debate_result.missing_steps,
+        )
+        _mark_remaining_stages(query_run_id, ["debate_round_2", "synthesis"])
+        return
+    query_run_repository.update_status(
+        query_run_id,
+        status_value=QueryRunStatus.DEBATE_ROUND_2_RUNNING,
+        stage_name="debate_round_1",
+        stage_state=StageState.COMPLETED,
+        detail="Debate round 1 completed.",
+    )
+    if debate_result.timed_out:
+        query_run_repository.update_status(
+            query_run_id,
+            status_value=QueryRunStatus.PARTIAL,
+            stage_name="debate_round_2",
+            stage_state=StageState.FAILED,
+            detail="Debate round 2 timed out.",
+            failed_steps=debate_result.failed_steps,
+            missing_steps=debate_result.missing_steps,
+        )
+        _mark_remaining_stages(query_run_id, ["synthesis"])
+        return
+    query_run_repository.update_status(
+        query_run_id,
+        stage_name="debate_round_2",
+        stage_state=StageState.RUNNING,
+        detail="Running debate round 2.",
+    )
+    sleep(settings.stage_delay_ms / 1000)
+    if _should_stop(query_run_id):
+        return
+    query_run_repository.update_status(
+        query_run_id,
+        status_value=QueryRunStatus.SYNTHESIS_RUNNING,
+        stage_name="debate_round_2",
+        stage_state=StageState.COMPLETED,
+        detail="Debate round 2 completed.",
+    )
+    query_run_repository.update_status(
+        query_run_id,
+        stage_name="synthesis",
+        stage_state=StageState.RUNNING,
+        detail="Synthesizing consensus and disagreement.",
+    )
+    sleep(settings.stage_delay_ms / 1000)
+    if _should_stop(query_run_id):
+        return
+    latest = query_run_repository.get(query_run_id)
+    synthesis_result = synthesis_stub_service.produce_final_synthesis(
+        account_id=account_id,
+        query_run_id=query_run_id,
+        query_text=query_run.query_text,
+        initial_answers=latest.initial_answers,
+        debate_outputs=latest.debate_outputs,
+        openrouter_key=openrouter_key,
+    )
+    if synthesis_result.final_synthesis is None:
+        query_run_repository.update_status(
+            query_run_id,
+            status_value=QueryRunStatus.PARTIAL,
+            stage_name="synthesis",
+            stage_state=StageState.FAILED,
+            detail="Synthesis could not complete from the available evidence.",
+            failed_steps=synthesis_result.failed_steps,
+            missing_steps=synthesis_result.missing_steps,
+        )
+        return
+    query_run_repository.record_final_synthesis(query_run_id, synthesis_result.final_synthesis)
+    query_run_repository.update_status(
+        query_run_id,
+        status_value=QueryRunStatus.COMPLETED,
+        stage_name="synthesis",
+        stage_state=StageState.COMPLETED,
+        detail="Synthesis completed.",
+    )
+
+
+# -- helpers -----------------------------------------------------------------
+
+
+def _validated_model_slots(model_ids: list[str]) -> list[ModelSlot]:
+    try:
+        return validate_model_slots(model_ids)
+    except InvalidModelSlotError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+            detail={
+                "code": "INVALID_MODEL_SLOT",
+                "message": "Model slot count or identifier validation failed.",
+                "slot_errors": [
+                    {
+                        "slot_number": error.slot_number,
+                        "model_id": error.model_id,
+                        "message": error.message,
+                    }
+                    for error in exc.errors
+                ],
+            },
+        ) from exc
+
+
+def _estimate_reasons(estimate: CostEstimate) -> list[str]:
+    if estimate.threshold_action is CostThresholdAction.ALLOW:
+        return ["Estimated cost is within the normal execution band."]
+    if estimate.threshold_action is CostThresholdAction.REQUIRE_CONFIRMATION:
+        return ["Estimated cost exceeds USD 0.15 and requires explicit confirmation."]
+    return ["Estimated cost exceeds USD 0.25 and is blocked for this slice."]
+
+
+def _result_response(query_run: QueryRun) -> QueryRunResultResponse:
+    provider_failure_notices = list(
+        dict.fromkeys(
+            [
+                answer.provider_notice
+                for answer in query_run.initial_answers
+                if answer.provider_notice is not None
+            ]
+        )
+    )
+    partial_failure_notice = None
+    if query_run.status in {
+        QueryRunStatus.PARTIAL,
+        QueryRunStatus.FAILED,
+        QueryRunStatus.TIMED_OUT,
+    }:
+        partial_failure_notice = (
+            "This run finished without every planned stage. Review failed and missing steps "
+            "before relying on the synthesis."
+        )
+    demo_mode = any(
+        answer.provider_path in {ProviderPath.LOCAL_SIMULATION, ProviderPath.FALLBACK_SEARCH}
+        for answer in query_run.initial_answers
+    )
+    local_count = sum(
+        1
+        for answer in query_run.initial_answers
+        if answer.provider_path in {ProviderPath.LOCAL_SIMULATION, ProviderPath.FALLBACK_SEARCH}
+    )
+    live_count = sum(
+        1
+        for answer in query_run.initial_answers
+        if answer.provider_path is ProviderPath.OPENROUTER_SEARCH
+    )
+    material_claim_count = sum(
+        answer.citation_coverage.material_claim_count
+        for answer in query_run.initial_answers
+    )
+    return QueryRunResultResponse(
+        query_run_id=query_run.query_run_id,
+        status=query_run.status,
+        correlation_id=query_run.correlation_id,
+        model_slots=query_run.model_slots,
+        cost_estimate=query_run.cost_estimate,
+        elapsed_time_ms=_elapsed_time_ms(query_run),
+        failed_steps=query_run.failed_steps,
+        missing_steps=query_run.missing_steps,
+        progress=_progress_model(query_run),
+        partial_failure_notice=partial_failure_notice,
+        provider_failure_notices=provider_failure_notices,
+        result=ResultProjection(
+            model_answers=query_run.initial_answers,
+            debate_outputs=query_run.debate_outputs,
+            final_synthesis=query_run.final_synthesis,
+        ),
+        result_generated_at_utc=datetime.now(UTC),
+        demo_mode=demo_mode,
+        live_count=live_count,
+        local_count=local_count,
+        material_claim_count=material_claim_count,
+    )
+
+
+def _initial_progress() -> list[QueryRunStageProgress]:
+    return [
+        QueryRunStageProgress(
+            stage="estimate", state=StageState.COMPLETED, detail="Estimate accepted."
+        ),
+        QueryRunStageProgress(stage="initial_answers", state=StageState.PENDING),
+        QueryRunStageProgress(stage="debate_round_1", state=StageState.PENDING),
+        QueryRunStageProgress(stage="debate_round_2", state=StageState.PENDING),
+        QueryRunStageProgress(stage="synthesis", state=StageState.PENDING),
+    ]
+
+
+def _set_stage_state(
+    stages: list[QueryRunStageProgress],
+    stage_name: str,
+    stage_state: StageState,
+    detail: str | None,
+) -> None:
+    for stage in stages:
+        if stage.stage == stage_name:
+            stage.state = stage_state
+            stage.detail = detail
+            return
+
+
+def _running_stage_name(stages: list[QueryRunStageProgress]) -> str:
+    for stage in stages:
+        if stage.state is StageState.RUNNING:
+            return stage.stage
+    return "estimate"
+
+
+def _mark_remaining_stages(query_run_id: UUID, stage_names: list[str]) -> None:
+    for stage_name in stage_names:
+        query_run_repository.update_status(
+            query_run_id,
+            stage_name=stage_name,
+            stage_state=StageState.SKIPPED,
+            detail="Not executed because an earlier stage failed or timed out.",
+        )
+
+
+def _progress_model(query_run: QueryRun) -> QueryRunProgress:
+    return QueryRunProgress(
+        current_stage=_running_stage_name(query_run.progress),
+        stages=query_run.progress,
+    )
+
+
+def _should_stop(query_run_id: UUID) -> bool:
+    try:
+        return query_run_repository.get(query_run_id).status is QueryRunStatus.CANCELLED
+    except KeyError:
+        return True
+
+
+def _elapsed_time_ms(query_run: QueryRun) -> int:
+    if query_run.started_at is None:
+        return 0
+    elapsed = query_run.updated_at - query_run.started_at
+    return max(0, round(elapsed.total_seconds() * 1000))

@@ -1,0 +1,120 @@
+{
+  "version": "5.2-final",
+  "principle": "The user starts with a rough idea; the factory clarifies, suggests, searches existing skills first, validates, and guides the next action before coding.",
+  "new_v4_skills": [
+    "enterprise-quality-gatekeeper",
+    "jira-confluence-mcp-integration",
+    "source-of-truth-reconciler",
+    "external-skill-security-auditor",
+    "skill-contract-auditor",
+    "requirement-quality-gate",
+    "acceptance-criteria-quality-gate",
+    "nfr-measurability-gate",
+    "traceability-graph-gate",
+    "production-readiness-review",
+    "customer-interview-synthesizer",
+    "opportunity-solution-tree-builder",
+    "experiment-design",
+    "ai-feature-classifier",
+    "grounding-contract-builder",
+    "prompt-registry-manager",
+    "model-risk-register",
+    "ux-research-synthesizer",
+    "content-design",
+    "design-system-governance",
+    "repository-architecture",
+    "clean-architecture-enforcer",
+    "api-error-model",
+    "database-migration",
+    "idempotency-concurrency",
+    "feature-flag-rollout",
+    "technical-debt-manager",
+    "mutation-flaky-test-manager",
+    "owasp-control-mapper",
+    "incident-drill"
+  ],
+  "external_reference_sources": [
+    {
+      "name": "Vercel skills.sh",
+      "mode": "discovery_only",
+      "control": "security_audit_required"
+    },
+    {
+      "name": "Addy Osmani agent-skills",
+      "mode": "engineering_reviewer",
+      "control": "local_policy_wins"
+    },
+    {
+      "name": "Paweł Huryn PM Skills",
+      "mode": "pm_reviewer",
+      "control": "local_artifact_schema_wins"
+    },
+    {
+      "name": "Dean Peters Product Manager Skills",
+      "mode": "pm_reviewer",
+      "control": "local_artifact_schema_wins"
+    },
+    {
+      "name": "Erik Holmberg AI PM Toolkit",
+      "mode": "ai_pm_reviewer",
+      "control": "ai_governance_policy_wins"
+    },
+    {
+      "name": "Figma MCP / design skills",
+      "mode": "design_reviewer",
+      "control": "accessibility_policy_wins"
+    },
+    {
+      "name": "OWASP / security skills",
+      "mode": "security_reviewer",
+      "control": "security_policy_wins"
+    }
+  ],
+  "new_v41_simplification_skills": [
+    "idea-intake-clarifier",
+    "problem-statement-builder",
+    "next-action-coach"
+  ],
+  "new_v5_final_skills": [
+    "skill-router-orchestrator",
+    "atlassian-artifact-governance",
+    "jira-confluence-change-capture",
+    "jira-confluence-roadmap-planner",
+    "orbi-profile-adapter"
+  ],
+  "deterministic_router": "configs/skill-router.json + scripts/skill_router.py + make skill-route",
+  "optional_profiles": [
+    "orbi"
+  ],
+  "new_v51_publishing_backbone_skills": [
+    "mvp-value-outcome-finder",
+    "study-artifact-publisher",
+    "project-knowledge-base-publisher",
+    "diagram-media-standards-governor",
+    "faq-wiki-generator",
+    "technical-article-writer",
+    "linkedin-technical-post-writer",
+    "python-fastapi-backend-guardrails",
+    "industry-practices-governor",
+    "software-integration-engineering",
+    "git-confluence-publish-reviewer"
+  ],
+  "study_publishing_backbone": "docs/96-study-artifact-publishing.md + configs/study-artifact-map.json + study-artifact-publisher + git-confluence-publish-reviewer",
+  "new_v52_external_skill_backbone": [
+    "external-skill-discovery-advisor",
+    "external-skill-onboarding-manager",
+    "session-continuity-manager",
+    "skill-research-librarian"
+  ],
+  "external_skill_onboarding": {
+    "policy": "configs/skill-onboarding-policy.json",
+    "registry": "configs/external-skill-registry.json",
+    "research_index": "configs/external-skill-research-index.json",
+    "commands": [
+      "make skill-discover",
+      "make skill-onboarding-check",
+      "make handoff",
+      "python scripts/audit_external_skill.py <skill-folder>"
+    ]
+  }
+}

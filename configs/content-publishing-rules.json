@@ -1,0 +1,35 @@
+{
+  "version": "5.1-final",
+  "style": [
+    "simple mature human English",
+    "engineering-first",
+    "evidence-backed",
+    "no hype",
+    "no fake data",
+    "no copied posts/diagrams",
+    "no virality promises"
+  ],
+  "technical_article": [
+    "research summary",
+    "angle",
+    "title options",
+    "opening options",
+    "final article",
+    "diagram plan",
+    "checklist",
+    "sources used"
+  ],
+  "linkedin": [
+    "hook",
+    "problem",
+    "common mistake",
+    "end-to-end view",
+    "practical framework",
+    "visual",
+    "tradeoff",
+    "takeaway",
+    "comment question",
+    "3 relevant hashtags"
+  ],
+  "positioning": "The author is positioned as an end-to-end engineering professional; AI/QA/DevOps/observability/performance/platform are strengths, not the entire identity."
+}

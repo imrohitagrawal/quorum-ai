@@ -1,0 +1,35 @@
+{
+  "version": "4.0",
+  "systems": [
+    "repo",
+    "jira",
+    "confluence",
+    "ci",
+    "observability"
+  ],
+  "authoritative_order": [
+    "explicit_user_instruction",
+    "approved_jira",
+    "approved_confluence",
+    "repo_living_spec",
+    "adr",
+    "code"
+  ],
+  "mandatory_links": [
+    "requirement_id",
+    "jira_key",
+    "confluence_page_id",
+    "test_id",
+    "pr_id",
+    "release_evidence_id"
+  ],
+  "sync_log": "docs/37-jira-confluence-sync-log.md",
+  "change_requires": [
+    "owner",
+    "reason",
+    "source",
+    "target",
+    "traceability_update",
+    "validation_result"
+  ]
+}

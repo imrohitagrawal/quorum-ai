@@ -1,0 +1,25 @@
+.venv/
+__pycache__/
+*.pyc
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+.env
+.env.*
+!.env.example
+.DS_Store
+dist/
+build/
+*.egg-info/
+
+# Agent / IDE / working-notes state (local only)
+.agents/
+.codex/
+.claude/
+.vscode/
+.idea/
+*.swp
+HANDOFF-*.md
+

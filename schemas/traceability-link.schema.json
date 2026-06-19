@@ -1,0 +1,16 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Traceability Link",
+  "type": "object",
+  "required": ["requirement_id", "acceptance_criteria_id", "test_id", "jira_key", "evidence"],
+  "properties": {
+    "requirement_id": {"type": "string", "pattern": "^FR-[0-9]{3}$|^NFR-[0-9]{3}$"},
+    "acceptance_criteria_id": {"type": "string", "pattern": "^AC-[0-9]{3}$"},
+    "test_id": {"type": "string", "pattern": "^TEST-[0-9]{3}$"},
+    "jira_key": {"type": "string"},
+    "confluence_page": {"type": "string"},
+    "pr": {"type": "string"},
+    "evidence": {"type": "string"},
+    "owner": {"type": "string"}
+  }
+}

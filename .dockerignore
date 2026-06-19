@@ -1,0 +1,48 @@
+# Secrets — never bake into the build context
+.env
+.env.*
+*.pem
+*.key
+secrets/
+credentials/
+
+# Local virtualenvs and caches
+.venv/
+venv/
+__pycache__/
+*.pyc
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.uv-cache/
+
+# Build outputs
+build/
+dist/
+*.egg-info/
+.coverage
+htmlcov/
+
+# Tests and dev artifacts
+tests/
+
+# Docs (architecture docs; not needed in the image)
+docs/
+*.md
+!README.md
+LICENSE
+Makefile
+
+# VCS, IDE, agent state
+.git/
+.gitignore
+.agents/
+.codex/
+.claude/
+.vscode/
+.idea/
+*.swp
+.DS_Store
+
+# Working notes
+HANDOFF-*.md

@@ -1,0 +1,89 @@
+# AI Safety And Grounding
+
+## 2026-06-17 correction
+
+- Source-backed answering still prefers OpenRouter first and must surface visible fallback usage when fallback evidence is used.
+- Partial, failed, or timed-out stages must remain explicit in the final result rather than being collapsed into false certainty.
+
+## Scope
+
+Quorum AI is an AI-assisted decision-support product. It compares four model outputs, asks models to critique disagreement, and synthesizes a final answer. It must reduce hallucination risk through transparency and grounding, but it must not claim guaranteed factual correctness or automated decision authority.
+
+## Source Traceability
+
+- FR-003: Query input safety warnings.
+- FR-006: Search-backed initial model answers.
+- FR-008: Two debate and critique rounds.
+- FR-009: Final synthesis with confidence structure.
+- FR-010: Timeout and partial-result recovery.
+- FR-013: Query result presentation.
+- NFR-003: Citation coverage.
+- NFR-007: Sensitive data minimization.
+- NFR-008: High-stakes decision-support boundary.
+
+## Grounding rules
+
+| Rule | Requirement |
+|---|---|
+| Source-first factual claims | When source-backed search succeeds, material factual claims in model answers and synthesis must show visible source links. |
+| OpenRouter-first search | OpenRouter search-backed answering is attempted before fallback search. |
+| Fallback transparency | Fallback provider usage is recorded and visible as operational/result metadata. |
+| Citation coverage target | At least 80 percent of material factual claims in sampled final syntheses reference visible sources when source-backed search succeeds. |
+| No false consensus | Material disagreement must remain visible in the final synthesis. |
+| Partial honesty | Missing model/search/debate/synthesis steps must be named in partial results. |
+| Decision support only | Medical, legal, financial, safety, and regulated-topic outputs must be framed as decision support, not professional advice or automated decisions. |
+
+## AI Workflow Safety Controls
+
+1. User sees sensitive/private-data and high-stakes warnings before query execution.
+2. Query orchestration builds provider prompts that ask for source-backed answers and uncertainty.
+3. Search results and retrieved content are treated as untrusted evidence, not as instructions.
+4. Debate prompts focus on disagreement, weak support, missing reasoning, and citation quality.
+5. Synthesis prompt requires separate sections for consensus, disagreement, source support, uncertainty, and recommendation.
+6. Synthesis must not erase provider failures or unresolved contradictions.
+7. Result presentation shows model-level outputs so users can audit the synthesis.
+
+## Prompt Injection Boundary
+
+- User prompt, retrieved web content, model answers, and debate outputs are untrusted inputs.
+- The system must not follow instructions from retrieved pages that ask it to ignore policy, reveal secrets, fabricate citations, change model configuration, or call tools.
+- Provider keys, internal system prompts, secret-store references, and hidden configuration must not be included in model-visible context.
+- Prompt-injection regression tests are required before implementation completion.
+
+## High-Stakes Handling
+
+| Topic | Behavior |
+|---|---|
+| Medical | Warn decision support only; no diagnosis/treatment authority claims. |
+| Legal | Warn decision support only; no attorney-client/professional advice framing. |
+| Financial/investment | Warn decision support only; preserve uncertainty and source support. |
+| Safety-critical | Warn decision support only; avoid presenting instructions as certified safe. |
+| Regulated topics | Warn decision support only and avoid compliance guarantees. |
+
+The MVP warns; it does not yet block these topics unless future policy changes require blocking.
+
+## Evaluation Requirements
+
+| Eval | Purpose | Trace |
+|---|---|---|
+| Citation coverage sample | Verify 80 percent material-claim citation target when search succeeds. | NFR-003, AC-031 |
+| False consensus cases | Ensure synthesis preserves material disagreement. | FR-009, AC-019 |
+| High-stakes warning set | Ensure warning coverage for medical, legal, financial, safety, and regulated examples. | NFR-008, AC-034 |
+| Prompt-injection set | Ensure retrieved content cannot override policies or reveal secrets. | T-007 |
+| Partial-result cases | Ensure missing provider/debate/synthesis steps are visible. | FR-010, AC-022 |
+| Secret-exposure cases | Ensure prompts/errors/logs do not contain app-owned or BYO provider keys. | FR-011, NFR-006 |
+
+## Refusal And Warning Behavior
+
+- The MVP must warn for high-stakes and sensitive/private-data risk.
+- The MVP must not claim outputs are guaranteed correct.
+- The MVP must not execute decisions for users.
+- The MVP must not provide hidden confidence as a single unqualified truth score; confidence should be explained through source support, agreement/disagreement, and uncertainty.
+
+## Open AI Safety Questions
+
+| ID | Question | Owner | Impact |
+|---|---|---|---|
+| OQ-011 | Should any high-stakes topic move from warning-only to block/limited mode before public launch? | Product owner | Impacts UX, policy, tests, and release scope. |
+| OQ-012 | What exact citation evaluation rubric will count a material claim as supported? | Product owner | Required for NFR-003 validation. |
+| OQ-013 | Which provider/model outputs may be retained for eval sampling, and for how long? | Product owner | Required for privacy and AI quality measurement. |

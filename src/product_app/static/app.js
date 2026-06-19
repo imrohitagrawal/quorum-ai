@@ -1,0 +1,1605 @@
+// Quorum AI browser UI client.
+//
+// The client is a small, dependency-free SPA. It loads the model
+// catalog from the JSON data island, runs the four-model workflow
+// against the FastAPI backend, and renders results into the
+// statically-rendered panels in workspace.html.
+//
+// Design goals for this rewrite:
+//
+//   * Treat the API as the source of truth. Never echo raw HTTP
+//     status text to the user; always show a structured error with a
+//     code, message, and (when relevant) an action they can take.
+//   * Make state transitions observable. Buttons show a spinner and
+//     disable while a request is in flight. The connection pill in the
+//     header reflects session health. The run status pill mirrors the
+//     server's status field.
+//   * Be resilient. Polling errors do not wipe the screen; they fade
+//     in as a toast. The user can dismiss any banner or toast.
+//   * Be accessible. Focus is moved to the error banner when an
+//     operation fails. ARIA live regions are used for progress and
+//     time. The keyboard shortcuts (Ctrl/Cmd+Enter to run, Esc to
+//     cancel) are documented inline.
+//   * Be small. There is no framework, no build step, no transpiler.
+//     The file is hand-written ES2020 that runs in every browser
+//     FastAPI supports.
+
+(function () {
+  "use strict";
+
+  // ---------------------------------------------------------------------------
+  // Data islands and DOM cache
+  // ---------------------------------------------------------------------------
+
+  const modelCatalog = JSON.parse(
+    document.getElementById("model-catalog-data").textContent || "[]",
+  );
+  const defaultModelIds = window.DEFAULT_MODEL_IDS;
+
+  const el = (id) => document.getElementById(id);
+  const qs = (selector, root = document) => root.querySelector(selector);
+  const qsa = (selector, root = document) =>
+    Array.from(root.querySelectorAll(selector));
+
+  const errorRegion = el("error-region");
+  const errorTitle = el("error-region-title");
+  const errorMessage = el("error-region-message");
+  const errorActions = el("error-region-actions");
+  const errorDismiss = el("error-region-dismiss");
+  const toastRegion = el("toast-region");
+  const modelInputs = el("model-inputs");
+  const modelGrid = el("model-grid");
+  const debateOutput = el("debate-output");
+  const synthesisOutput = el("synthesis-output");
+  const noticeList = el("notice-list");
+  const progressList = el("progress-list");
+  const timeMeta = el("time-meta");
+  const queryTextarea = el("query-text");
+  const charCount = el("query-char-count");
+  const validationHint = el("query-validation-hint");
+  const costConfirmation = el("cost-confirmation");
+  const costConfirmationMessage = el("cost-confirmation-message");
+  const proceedButton = el("proceed-run");
+  const cancelEstimateButton = el("cancel-estimate");
+  const estimateButton = el("estimate-run");
+  const runNowButton = el("run-now");
+  const costConfirmationSecondary = el("cost-confirmation-secondary");
+  const copyCorrelationButton = el("copy-correlation");
+  const cancelButton = el("cancel-run");
+  const cancelContainer = el("cancel-run-container");
+  const connectionPill = el("connection-pill");
+  const connectionPillText = el("connection-pill-text");
+  const statusMeta = el("status-meta");
+  const demoModeBanner = el("demo-mode-banner");
+  const demoModeTarget = demoModeBanner ? demoModeBanner.querySelector("[data-demo-mode-target]") : null;
+  const infoTooltip = el("info-tooltip");
+
+  // ---------------------------------------------------------------------------
+  // State
+  // ---------------------------------------------------------------------------
+
+  const state = {
+    csrfToken: "",
+    currentEstimate: null,
+    currentRunId: null,
+    pollingTimer: null,
+    isRunning: false,
+    // The last status we rendered, used to short-circuit DOM churn.
+    lastStatus: null,
+    // Used by the demo banner to avoid toggling ``hidden`` on every
+    // poll tick.
+    lastDemoMode: null,
+    // Auto-scrolls the cancel button into view exactly once on the
+    // transition into a running state.
+    hasScrolledToRunControls: false,
+  };
+
+  // ---------------------------------------------------------------------------
+  // Error / toast / banner presentation
+  // ---------------------------------------------------------------------------
+
+  // Map a server "code" string to a user-friendly title. Anything we
+  // don't recognise falls through to the generic "Something went wrong".
+  const ERROR_TITLES = {
+    AUTH_REQUIRED: "Session expired",
+    SESSION_EXPIRED: "Session expired",
+    CSRF_INVALID: "Security check failed",
+    INVALID_MODEL_SLOT: "Model selection needs adjustment",
+    SAFETY_ACK_REQUIRED: "Acknowledgement required",
+    VALIDATION_ERROR: "Please check the form",
+    COST_CONFIRMATION_REQUIRED: "Cost confirmation required",
+    COST_LIMIT_EXCEEDED: "Run blocked: cost too high",
+    QUERY_TOO_LONG: "Question is too long",
+    QUERY_REQUIRED: "Question is required",
+    NETWORK_UNREACHABLE: "Can't reach the server",
+  };
+
+  // Some error codes have a CTA the user can take. Each entry has a
+  // label + an onClick callback. We render them in the error banner.
+  const ERROR_ACTIONS = {
+    AUTH_REQUIRED: [{ label: "Refresh session", action: () => location.reload() }],
+    SESSION_EXPIRED: [{ label: "Refresh session", action: () => location.reload() }],
+  };
+
+  function showError({ code, message, hint, fieldErrors } = {}) {
+    const title = (code && ERROR_TITLES[code]) || "Something went wrong";
+    errorTitle.textContent = title;
+    errorMessage.textContent = message || "An unexpected error occurred. Please try again.";
+    errorRegion.dataset.severity = "error";
+    if (fieldErrors && fieldErrors.length) {
+      const list = document.createElement("ul");
+      list.className = "status-banner-field-errors";
+      for (const err of fieldErrors) {
+        const li = document.createElement("li");
+        const field = document.createElement("strong");
+        field.textContent = err.field || "(field)";
+        li.append(field, " — ", err.message || "invalid value");
+        list.appendChild(li);
+      }
+      errorMessage.appendChild(list);
+    } else if (hint) {
+      const hintEl = document.createElement("div");
+      hintEl.className = "status-banner-hint";
+      hintEl.textContent = hint;
+      errorMessage.appendChild(hintEl);
+    }
+    // Render any action buttons the registry recommends for this code.
+    errorActions.replaceChildren();
+    const actions = (code && ERROR_ACTIONS[code]) || [];
+    for (const { label, action } of actions) {
+      const button = document.createElement("button");
+      button.type = "button";
+      button.className = "button button-secondary button-compact";
+      button.textContent = label;
+      button.addEventListener("click", action);
+      errorActions.appendChild(button);
+    }
+    errorRegion.hidden = false;
+    // Move focus so screen readers announce the error.
+    errorRegion.focus({ preventScroll: true });
+    // Bring the banner into view if it is below the fold.
+    errorRegion.scrollIntoView({ behavior: "smooth", block: "center" });
+  }
+
+  function clearError() {
+    errorRegion.hidden = true;
+    errorTitle.textContent = "";
+    errorMessage.textContent = "";
+    errorActions.replaceChildren();
+  }
+
+  // Lightweight toast for transient, non-blocking messages.
+  function toast({ message, tone = "info", timeout = 4500 } = {}) {
+    const card = document.createElement("div");
+    card.className = `toast toast-${tone}`;
+    card.setAttribute("role", tone === "error" ? "alert" : "status");
+    const body = document.createElement("div");
+    body.className = "toast-body";
+    body.textContent = message;
+    const close = document.createElement("button");
+    close.type = "button";
+    close.className = "toast-close";
+    close.setAttribute("aria-label", "Dismiss notification");
+    close.innerHTML = "&times;";
+    close.addEventListener("click", () => dismissToast(card));
+    card.append(body, close);
+    toastRegion.appendChild(card);
+    const timer = window.setTimeout(() => dismissToast(card), timeout);
+    card.dataset.timer = String(timer);
+  }
+
+  function dismissToast(card) {
+    if (card.dataset.timer) {
+      window.clearTimeout(Number(card.dataset.timer));
+      delete card.dataset.timer;
+    }
+    card.classList.add("toast-dismissing");
+    // Wait for the fade-out animation before removing the node.
+    window.setTimeout(() => card.remove(), 220);
+  }
+
+  // ---------------------------------------------------------------------------
+  // Connection pill and status pill
+  // ---------------------------------------------------------------------------
+
+  const STATUS_LABELS = {
+    idle: "Idle",
+    initial_answers_running: "Initial answers running",
+    initial_answers_completed: "Initial answers ready",
+    debate_round_1_running: "Debate round 1",
+    debate_round_1_completed: "Debate round 1 ready",
+    debate_round_2_running: "Debate round 2",
+    debate_round_2_completed: "Debate round 2 ready",
+    synthesis_running: "Synthesising",
+    completed: "Completed",
+    partial: "Partial result",
+    failed: "Failed",
+    timed_out: "Timed out",
+    cancelled: "Cancelled",
+  };
+
+  // Friendly band labels for ``CostThresholdAction``. The raw enum
+  // value (``allow`` / ``require_confirmation`` / ``block``) is
+  // fine for behavior comparisons but reads oddly in the UI
+  // ("0.0134 USD / allow"). Map the enum to the same wording the
+  // cost confirmation callout already uses, and fall back to the
+  // raw value if a future server-side value sneaks through.
+  const COST_BAND_LABEL = {
+    allow: "normal band",
+    require_confirmation: "upper band",
+    block: "blocked",
+  };
+
+  function formatCostBand(action) {
+    return COST_BAND_LABEL[action] ?? action;
+  }
+
+  // Static FX rates (units of foreign currency per 1 USD). Intentionally
+  // not live — the cost figure is already framed as "a local planning
+  // estimate, not a provider quote" in the existing disclaimer copy at
+  // app.js:668, and the same honesty applies here. Refresh quarterly.
+  // (USD is the guardrail currency and the provider-billed currency;
+  // it must remain primary — see costs.py:35-36.)
+  const FX_PER_USD = {
+    EUR: 0.93,
+    GBP: 0.79,
+    INR: 83.5,
+    JPY: 156.0,
+    AUD: 1.52,
+    CAD: 1.37,
+    CHF: 0.90,
+    CNY: 7.25,
+    SGD: 1.35,
+    BRL: 5.10,
+  };
+
+  // Detects the user's local currency from the browser locale and
+  // returns a primary/secondary pair for display. When the locale
+  // resolves to USD (or anything not in FX_PER_USD), secondary is an
+  // empty string and the callout renders only the USD primary.
+  function formatCostWithLocal(usdAmount) {
+    const usd = `$${Number(usdAmount).toFixed(2)} USD`;
+    let locale;
+    try {
+      locale = Intl.NumberFormat().resolvedOptions().locale;
+    } catch (_) {
+      return { primary: usd, secondary: "" };
+    }
+    // Resolve a likely currency from the locale. Fall back to USD if
+    // Intl rejects the locale or returns something unknown.
+    let currency = "USD";
+    try {
+      const parts = new Intl.NumberFormat(locale).formatToParts(1);
+      for (const part of parts) {
+        if (part.type === "currency") {
+          currency = part.value;
+          break;
+        }
+      }
+    } catch (_) {
+      return { primary: usd, secondary: "" };
+    }
+    if (currency === "USD" || !FX_PER_USD[currency]) {
+      return { primary: usd, secondary: "" };
+    }
+    const localAmount = Number(usdAmount) * FX_PER_USD[currency];
+    let localFormatted;
+    try {
+      localFormatted = new Intl.NumberFormat(locale, {
+        style: "currency",
+        currency,
+        maximumFractionDigits: 2,
+      }).format(localAmount);
+    } catch (_) {
+      return { primary: usd, secondary: "" };
+    }
+    return {
+      primary: usd,
+      secondary: `≈ ${localFormatted} · planning estimate, not a provider quote`,
+    };
+  }
+
+  // Renders the secondary (local-currency) line into the cost callout.
+  // Hides the element when there is no secondary text (i.e. user is in
+  // a USD locale or an unsupported currency).
+  function renderCostSecondary(usdAmount) {
+    if (!costConfirmationSecondary) return;
+    const { secondary } = formatCostWithLocal(usdAmount);
+    if (secondary) {
+      costConfirmationSecondary.textContent = secondary;
+      costConfirmationSecondary.hidden = false;
+    } else {
+      costConfirmationSecondary.textContent = "";
+      costConfirmationSecondary.hidden = true;
+    }
+  }
+
+  function setConnectionPill(stateName, label) {
+    connectionPill.dataset.state = stateName;
+    connectionPillText.textContent = label;
+  }
+
+  function setStatusPill(stateName, label) {
+    const pill = statusMeta.querySelector(".status-pill");
+    if (!pill) return;
+    pill.dataset.state = stateName;
+    const labelEl = pill.querySelector("span:last-child");
+    if (labelEl) labelEl.textContent = label;
+  }
+
+  // ---------------------------------------------------------------------------
+  // API client
+  // ---------------------------------------------------------------------------
+
+  // Friendly status text. We never want the user to see the raw
+  // "Unprocessable Content" / "Bad Request" status text. Map common
+  // statuses to domain-relevant copy.
+  const STATUS_COPY = {
+    400: "The request was rejected by the server.",
+    401: "Your session has expired. Please refresh the page.",
+    403: "You do not have permission to perform this action.",
+    404: "The requested resource could not be found.",
+    408: "The request took too long. Please try again.",
+    409: "There was a conflict with the current state. Please refresh and retry.",
+    413: "The request was too large to send.",
+    422: "Some of the values you provided could not be processed.",
+    429: "You are sending requests too quickly. Please wait a moment.",
+    500: "The server encountered an unexpected error. Our team has been notified.",
+    502: "The upstream service is temporarily unavailable. Please try again in a moment.",
+    503: "The service is temporarily unavailable. Please try again in a moment.",
+    504: "The upstream service took too long to respond. Please try again.",
+  };
+
+  class ApiError extends Error {
+    constructor({ status, code, message, slotErrors, fieldErrors, partial }) {
+      super(message || STATUS_COPY[status] || "Unexpected error");
+      this.name = "ApiError";
+      this.status = status;
+      this.code = code;
+      this.slotErrors = slotErrors;
+      this.fieldErrors = fieldErrors;
+      this.partial = partial;
+    }
+  }
+
+  async function api(path, options = {}) {
+    let response;
+    try {
+      response = await fetch(path, {
+        credentials: "same-origin",
+        ...options,
+        headers: {
+          "Content-Type": "application/json",
+          ...(state.csrfToken ? { "x-csrf-token": state.csrfToken } : {}),
+          ...(options.headers || {}),
+        },
+      });
+    } catch (networkError) {
+      // Network failure (offline, DNS, CORS, abort). The user can
+      // usually recover by retrying once connectivity returns.
+      throw new ApiError({
+        status: 0,
+        code: "NETWORK_UNREACHABLE",
+        message: "We could not reach the server. Check your network connection and try again.",
+      });
+    }
+    if (!response.ok) {
+      // Try to parse a structured body. If the response is not JSON we
+      // synthesise a friendly message from the status code.
+      let payload = null;
+      try {
+        payload = await response.json();
+      } catch (_) {
+        throw new ApiError({
+          status: response.status,
+          code: null,
+          message: STATUS_COPY[response.status] || response.statusText,
+        });
+      }
+      const detail = payload && (payload.detail || payload.error || payload);
+      const code = (detail && detail.code) || null;
+      let message = (detail && detail.message) || STATUS_COPY[response.status] || response.statusText;
+      // For 422 with validation errors, surface the per-field message so
+      // the user knows which field to fix.
+      if (response.status === 422 && Array.isArray(detail && detail.slot_errors)) {
+        const firstSlot = detail.slot_errors[0];
+        if (firstSlot) {
+          message = `Model slot ${firstSlot.slot_number} could not be accepted: ${firstSlot.message || "invalid value"}`;
+        }
+      }
+      throw new ApiError({
+        status: response.status,
+        code,
+        message,
+        slotErrors: detail && detail.slot_errors,
+        fieldErrors: detail && detail.field_errors,
+        partial: payload,
+      });
+    }
+    return response.json();
+  }
+
+  // ---------------------------------------------------------------------------
+  // Model slot inputs
+  // ---------------------------------------------------------------------------
+
+  function getModelIds() {
+    return [...document.querySelectorAll("[data-model-slot]")].map((input) =>
+      input.value.trim(),
+    );
+  }
+
+  function renderModelOptions(currentModelId, currentIndex, selectedModelIds) {
+    const takenIds = new Set(
+      selectedModelIds.filter((_, index) => index !== currentIndex),
+    );
+    return modelCatalog
+      .filter(
+        (option) =>
+          !takenIds.has(option.model_id) || option.model_id === currentModelId,
+      )
+      .map((option) => {
+        const optionElement = document.createElement("option");
+        optionElement.value = option.model_id;
+        optionElement.textContent = `${option.label} (${option.model_id})`;
+        if (option.model_id === currentModelId) {
+          optionElement.selected = true;
+        }
+        return optionElement;
+      });
+  }
+
+  function renderModelInputs(modelIds) {
+    const fields = modelIds.map((modelId, index) => {
+      const field = document.createElement("div");
+      field.className = "field";
+      const label = document.createElement("label");
+      label.htmlFor = `model-${index + 1}`;
+      label.textContent = `Model slot ${index + 1}`;
+      const select = document.createElement("select");
+      select.id = `model-${index + 1}`;
+      select.dataset.modelSlot = "";
+      select.dataset.slotIndex = String(index);
+      for (const option of renderModelOptions(modelId, index, modelIds)) {
+        select.appendChild(option);
+      }
+      field.append(label, select);
+      return field;
+    });
+    modelInputs.replaceChildren(...fields);
+  }
+
+  // ---------------------------------------------------------------------------
+  // Progress + result rendering
+  // ---------------------------------------------------------------------------
+
+  function renderProgress(progress) {
+    if (!progress) {
+      const empty = document.createElement("div");
+      empty.className = "muted";
+      empty.textContent = "No active run.";
+      progressList.replaceChildren(empty);
+      return;
+    }
+    const cards = progress.stages.map((stage) => {
+      const card = document.createElement("div");
+      card.className = "stage";
+      card.dataset.state = stage.state;
+      const header = document.createElement("div");
+      header.className = "stage-header";
+      const label = document.createElement("span");
+      label.className = "stage-label";
+      label.textContent = stage.stage.replaceAll("_", " ");
+      const state = document.createElement("span");
+      state.className = `stage-state stage-state-${stage.state}`;
+      state.textContent = stage.state;
+      header.append(label, state);
+      card.appendChild(header);
+      if (stage.detail) {
+        const detail = document.createElement("div");
+        detail.className = "stage-detail";
+        detail.textContent = stage.detail;
+        card.appendChild(detail);
+      }
+      return card;
+    });
+    progressList.replaceChildren(...cards);
+  }
+
+  function createSafeLink(title, url) {
+    const link = document.createElement("a");
+    link.textContent = title;
+    try {
+      const parsedUrl = new URL(url);
+      if (parsedUrl.protocol === "http:" || parsedUrl.protocol === "https:") {
+        link.href = parsedUrl.toString();
+        link.target = "_blank";
+        link.rel = "noreferrer";
+        return link;
+      }
+    } catch (_) {
+      // Fall through to plain text.
+    }
+    return document.createTextNode(url);
+  }
+
+  // Sources whose ``provider`` path is a Quorum-side stub (the local
+  // simulation helper, or the fallback search helper) point at the
+  // ``example.test`` IANA-reserved domain, which never resolves.
+  // Rendering them as anchors would either navigate the browser to a
+  // broken URL or open a blank tab. Instead we render the title as
+  // muted text with a small badge so the simulation state stays visible
+  // at the source-list level — not just in the demo-mode banner above
+  // the model grid.
+  const STUB_SOURCE_PROVIDERS = new Set(["local_simulation", "fallback_search"]);
+  const STUB_SOURCE_TAG_TEXT = {
+    local_simulation: "simulated",
+    fallback_search: "fallback stub",
+  };
+
+  function renderStubSource(source) {
+    const li = document.createElement("li");
+    li.classList.add("source-stub");
+    const title = document.createElement("span");
+    title.className = "source-stub-title";
+    title.textContent = source.title;
+    title.title =
+      "This is a placeholder; the URL does not resolve to a real source.";
+    title.setAttribute("aria-label", `${source.title} — simulated source`);
+    const badge = document.createElement("span");
+    badge.className = "source-stub-tag";
+    badge.textContent = STUB_SOURCE_TAG_TEXT[source.provider] || "stub";
+    li.append(title, " ", badge);
+    return li;
+  }
+
+  function renderSourceList(sources) {
+    const list = document.createElement("ul");
+    list.className = "source-list";
+    if (sources && sources.length) {
+      for (const source of sources) {
+        if (STUB_SOURCE_PROVIDERS.has(source.provider)) {
+          list.appendChild(renderStubSource(source));
+          continue;
+        }
+        const li = document.createElement("li");
+        const maybeLink = createSafeLink(source.title, source.url);
+        li.appendChild(maybeLink);
+        if (source.is_fallback) {
+          li.classList.add("source-fallback");
+          const badge = document.createElement("span");
+          badge.className = "badge badge-fallback";
+          badge.textContent = "fallback";
+          li.append(" ", badge);
+        }
+        list.appendChild(li);
+      }
+    } else {
+      const li = document.createElement("li");
+      li.className = "muted";
+      li.textContent = "No source links yet.";
+      list.appendChild(li);
+    }
+    return list;
+  }
+
+  function renderModelPanels(modelAnswers = [], result = null) {
+    // The demo-mode banner lives in static HTML directly above the
+    // model grid. We toggle its ``hidden`` attribute here and update
+    // the body copy. The banner has ``role="alert"`` and
+    // ``aria-live="assertive"`` so screen readers announce it before
+    // the polite model-panel announcements.
+    //
+    // The server now returns per-run ``live_count`` and ``local_count``
+    // so the banner copy can be honest about partial-live runs. Three
+    // states: all-live (hide), all-local (full copy), mixed (partial
+    // copy). The boolean ``result.demo_mode`` is preserved for
+    // back-compat but is no longer the sole signal.
+    if (demoModeBanner) {
+      const liveCount = Number.isFinite(result?.live_count) ? result.live_count : null;
+      const localCount = Number.isFinite(result?.local_count) ? result.local_count : null;
+      const fallbackCount =
+        liveCount != null && localCount != null ? liveCount + localCount : null;
+      let bannerState;
+      let bannerCopy = "";
+      if (liveCount === 4) {
+        bannerState = "all-live";
+        bannerCopy = "";
+      } else if (liveCount === 0) {
+        bannerState = "all-local";
+        bannerCopy =
+          "Live LLM execution is disabled, so all four model answers and the synthesis below are produced by Quorum's local simulation helpers. They look like real output but are not generated by GPT, Claude, Gemini, or Deepseek. To run against real models, set OPENROUTER_API_KEY and _LIVE_EXECUTION_ENABLED=true and restart.";
+      } else {
+        bannerState = "mixed";
+        bannerCopy =
+          `${liveCount} of ${fallbackCount ?? 4} model answers came from a live provider; ` +
+          `the remaining ${localCount ?? fallbackCount - liveCount} are from Quorum's local simulation helpers. ` +
+          `The synthesis below is also produced by a configured synthesis model. ` +
+          `To run everything live, ensure OPENROUTER_API_KEY and OPENROUTER_LIVE_EXECUTION_ENABLED=true are set.`;
+      }
+      if (bannerState !== state.lastDemoMode) {
+        state.lastDemoMode = bannerState;
+        if (bannerState === "all-live") {
+          demoModeBanner.hidden = true;
+        } else {
+          if (demoModeTarget) {
+            demoModeTarget.textContent = bannerCopy;
+          }
+          demoModeBanner.hidden = false;
+        }
+      }
+    }
+    const cards = defaultModelIds.map((fallbackModelId, index) => {
+      const slot = modelAnswers.find((answer) => answer.slot_number === index + 1);
+      const modelId = slot?.model_id || getModelIds()[index] || fallbackModelId;
+      const article = document.createElement("article");
+      article.className = "model-card";
+      const header = document.createElement("header");
+      header.className = "model-card-header";
+      const heading = document.createElement("h3");
+      const slotLabel = document.createElement("span");
+      slotLabel.className = "model-card-slot";
+      slotLabel.textContent = `Slot ${index + 1}`;
+      const modelSpan = document.createElement("span");
+      modelSpan.className = "mono";
+      modelSpan.textContent = modelId;
+      heading.append(slotLabel, " · ", modelSpan);
+      const statusPill = document.createElement("span");
+      const statusValue = slot?.status || "pending";
+      statusPill.className = "status-pill";
+      statusPill.dataset.state = statusValue;
+      statusPill.innerHTML = `<span class="status-pill-dot" aria-hidden="true"></span><span>${statusValue}</span>`;
+      header.append(heading, statusPill);
+      article.appendChild(header);
+      const body = document.createElement("p");
+      body.className = "model-card-body";
+      body.textContent = slot
+        ? (formatAnswerText(slot.answer_text) || "Provider did not return text.")
+        : "Awaiting provider output.";
+      article.appendChild(body);
+      // When the model is complete but carried a ``provider_notice`` —
+      // e.g. it was a local-simulation answer with an honest disclosure,
+      // or a fallback-search answer — surface the notice on the card so
+      // the user can tell at a glance why the path is what it is.
+      // We do NOT render this for pending slots (notice would just be
+      // stale copy) or for slots whose ``answer_text`` is itself a
+      // placeholder string.
+      if (slot && slot.provider_notice && statusValue !== "pending") {
+        const notice = document.createElement("p");
+        notice.className = "model-card-notice";
+        notice.textContent = slot.provider_notice;
+        article.appendChild(notice);
+      }
+      const meta = document.createElement("div");
+      meta.className = "model-card-meta";
+      const path = document.createElement("div");
+      path.innerHTML = `<strong>Provider path:</strong> ${slot?.provider_path || "pending"}`;
+      const latency = document.createElement("div");
+      latency.innerHTML = `<strong>Latency:</strong> ${slot?.latency_ms != null ? `${slot.latency_ms} ms` : "—"}`;
+      meta.append(path, latency);
+      article.appendChild(meta);
+      const sources = renderSourceList(slot?.sources);
+      article.appendChild(sources);
+      return article;
+    });
+    modelGrid.replaceChildren(...cards);
+  }
+
+  // Tooltip copy per synthesis section. Each entry is intentionally
+  // honest about the fact that these sections are produced by
+  // Quorum's templated synthesis helper regardless of provider path —
+  // they are never generated by a model, even with a live API key.
+  const SYNTHESIS_TOOLTIPS = {
+    "Consensus":
+      "A templated summary of how many of the four models returned a usable answer, and what fraction of claims were supported by visible sources. Always produced by Quorum's synthesis helper, regardless of provider path.",
+    "Disagreement":
+      "A templated note about preserved disagreement — typically whether the four answers diverged on which provider path was used. Always produced by Quorum's synthesis helper.",
+    "Source support":
+      "The average ratio of visible source references to inspected claims across the four answers, expressed as a percentage. Always produced by Quorum's synthesis helper.",
+    "Uncertainty":
+      "A templated statement about how much of the run's evidence is uncertain, based on failed answers and low coverage. Always produced by Quorum's synthesis helper.",
+    "Recommendation":
+      "A templated decision-support framing. The 'not medical, legal, financial, safety, or regulated professional advice' caveat is mandatory in this section. Always produced by Quorum's synthesis helper.",
+  };
+
+  function buildInfoIcon(text) {
+    const button = document.createElement("button");
+    button.type = "button";
+    button.className = "info-icon";
+    button.setAttribute("data-info-icon", "");
+    button.setAttribute("data-info-text", text);
+    button.setAttribute("aria-label", "More information about this section");
+    button.innerHTML = "&#9432;";
+    return button;
+  }
+
+  function renderDebateAndSynthesis(result) {
+    const debate = result?.result?.debate_outputs || [];
+    if (debate.length) {
+      const roundCards = debate.map((round) => {
+        const card = document.createElement("article");
+        card.className = "round-card";
+        const title = document.createElement("h4");
+        title.textContent = `Round ${round.round_number}`;
+        const focus = document.createElement("div");
+        focus.className = "muted";
+        focus.textContent = `Focus: ${(round.focus_areas || []).join(", ") || "general critique"}`;
+        const body = document.createElement("p");
+        body.textContent = formatAnswerText(round.critique_text) || "—";
+        card.append(title, focus, body);
+        return card;
+      });
+      debateOutput.replaceChildren(...roundCards);
+    } else {
+      const empty = document.createElement("div");
+      empty.className = "muted";
+      empty.textContent = "No debate rounds yet.";
+      debateOutput.replaceChildren(empty);
+    }
+    const synthesis = result?.result?.final_synthesis;
+    if (synthesis) {
+      const stack = document.createElement("div");
+      stack.className = "stack";
+      for (const [labelText, valueText] of [
+        ["Consensus", synthesis.consensus],
+        ["Disagreement", synthesis.disagreement],
+        ["Source support", synthesis.source_support],
+        ["Uncertainty", synthesis.uncertainty],
+        ["Recommendation", synthesis.recommendation],
+      ]) {
+        if (!valueText) continue;
+        const block = document.createElement("section");
+        block.className = "synthesis-block";
+        const label = document.createElement("h4");
+        const labelTextOnly = document.createElement("span");
+        labelTextOnly.textContent = labelText;
+        label.append(labelTextOnly, buildInfoIcon(SYNTHESIS_TOOLTIPS[labelText] || ""));
+        const body = document.createElement("p");
+        body.textContent = formatAnswerText(valueText);
+        block.append(label, body);
+        stack.appendChild(block);
+      }
+      if (synthesis.high_stakes_notice) {
+        const notice = document.createElement("div");
+        notice.className = "callout callout-high-stakes";
+        notice.innerHTML = `<div class="callout-icon" aria-hidden="true">!</div><div class="callout-body">${escapeHtml(synthesis.high_stakes_notice)}</div>`;
+        stack.appendChild(notice);
+      }
+      synthesisOutput.replaceChildren(stack);
+      // Wire up the newly inserted info icons (the static template
+      // ones are wired up once in ``boot``; dynamic ones appear here).
+      initInfoIcons();
+    } else {
+      const empty = document.createElement("div");
+      empty.className = "muted";
+      empty.textContent = "No synthesis yet.";
+      synthesisOutput.replaceChildren(empty);
+    }
+  }
+
+  function renderNotices(result) {
+    const notices = [];
+    if (state.currentEstimate) {
+      const ce = state.currentEstimate.cost_estimate;
+      const { primary: usdPrimary, secondary: usdSecondary } = formatCostWithLocal(
+        ce.estimated_cost_usd,
+      );
+      notices.push({
+        tone: "info",
+        text: `Planning estimate: ${usdPrimary} (${formatCostBand(ce.threshold_action)}).`,
+      });
+      if (usdSecondary) {
+        notices.push({ tone: "muted", text: usdSecondary });
+      } else {
+        notices.push({
+          tone: "muted",
+          text: "This estimate is a local planning heuristic based on query length and selected model slots, not a provider quote or invoice.",
+        });
+      }
+    }
+    if (result?.partial_failure_notice) {
+      notices.push({ tone: "warn", text: result.partial_failure_notice });
+    }
+    for (const notice of result?.provider_failure_notices || []) {
+      notices.push({ tone: "warn", text: notice });
+    }
+    if (!notices.length) {
+      noticeList.replaceChildren(
+        Object.assign(document.createElement("div"), {
+          className: "muted",
+          textContent: "No estimate or run yet.",
+        }),
+      );
+      return;
+    }
+    const fragment = document.createDocumentFragment();
+    for (const { tone, text } of notices) {
+      const item = document.createElement("div");
+      item.className = `notice notice-${tone}`;
+      item.textContent = text;
+      fragment.appendChild(item);
+    }
+    noticeList.replaceChildren(fragment);
+  }
+
+  // ---------------------------------------------------------------------------
+  // Misc helpers
+  // ---------------------------------------------------------------------------
+
+  // Light formatter for model answers and synthesis sections. We don't
+  // do real markdown (no build step, no dependency budget) but we do
+  // collapse runs of blank lines and render ``- `` list prefixes as
+  // bullet characters. The goal is to keep LLM output that already has
+  // reasonable structure legible on first render — long blocks of
+  // double-spaced prose are hard to scan.
+  //
+  // The function is intentionally a no-op on plain prose and on the
+  // "Awaiting provider output." / "Provider did not return text."
+  // placeholders, so a stuck poll still looks like a stuck poll.
+  function formatAnswerText(rawText) {
+    const placeholder =
+      rawText == null ||
+      rawText === "Awaiting provider output." ||
+      rawText === "Provider did not return text.";
+    const text = placeholder ? "" : String(rawText);
+    if (!text) return "";
+    const lines = text
+      .replace(/\r\n?/g, "\n")
+      .split("\n")
+      .map((line) => line.replace(/[ \t]+$/g, ""));
+    // Collapse 3+ blank lines down to a single blank line.
+    const collapsed = [];
+    let blankRun = 0;
+    for (const line of lines) {
+      if (line.trim() === "") {
+        blankRun += 1;
+        if (blankRun <= 1) collapsed.push("");
+      } else {
+        blankRun = 0;
+        collapsed.push(line);
+      }
+    }
+    // Strip leading/trailing blank lines.
+    while (collapsed.length && collapsed[0].trim() === "") collapsed.shift();
+    while (collapsed.length && collapsed[collapsed.length - 1].trim() === "") collapsed.pop();
+    return collapsed.join("\n");
+  }
+
+  function escapeHtml(text) {
+    return String(text).replace(/[&<>"']/g, (ch) => {
+      switch (ch) {
+        case "&": return "&amp;";
+        case "<": return "&lt;";
+        case ">": return "&gt;";
+        case '"': return "&quot;";
+        case "'": return "&#39;";
+        default: return ch;
+      }
+    });
+  }
+
+  function setButtonLoading(button, isLoading) {
+    if (!button) return;
+    if (isLoading) {
+      button.dataset.loading = "true";
+      button.disabled = true;
+    } else {
+      delete button.dataset.loading;
+      button.disabled = false;
+    }
+  }
+
+  function setRunning(isRunning) {
+    state.isRunning = isRunning;
+    estimateButton.disabled = isRunning;
+    if (runNowButton) runNowButton.disabled = isRunning;
+    // The cancel pill is hidden in the idle layout and revealed only
+    // while a run is actually in flight. Toggling ``hidden`` on the
+    // container (not the button) keeps the button's ``disabled`` state
+    // honest and avoids a stranded "active" button after cancel.
+    if (cancelContainer) cancelContainer.hidden = !isRunning;
+    if (cancelButton) cancelButton.disabled = !isRunning;
+    if (proceedButton) {
+      // While a run is in flight, the user cannot start a new one or
+      // re-estimate. Proceed is also re-disabled to prevent double-
+      // submission.
+      proceedButton.disabled = isRunning || !state.currentEstimate;
+    }
+    if (isRunning && !state.hasScrolledToRunControls) {
+      // Scroll once on the transition into running. The poll loop
+      // would otherwise scroll the page aggressively every 750ms.
+      state.hasScrolledToRunControls = true;
+      if (cancelButton) {
+        cancelButton.scrollIntoView({ behavior: "smooth", block: "center" });
+        cancelButton.focus({ preventScroll: true });
+      }
+    } else if (!isRunning && state.hasScrolledToRunControls) {
+      // Reset for the next run so the scroll-once fires again.
+      state.hasScrolledToRunControls = false;
+    }
+  }
+
+  function renderCurrentTime(result) {
+    const rawValue = result?.result_generated_at_utc;
+    const resolvedDate = rawValue ? new Date(rawValue) : new Date();
+    let formatted;
+    try {
+      // ``Intl.DateTimeFormat`` with ``timeZoneName: "short"`` throws
+      // on some runtimes (notably minimal ICU builds). We don't need
+      // the timezone here — the user's local timezone is implied by
+      // the label "Current time" — so we deliberately keep the option
+      // list minimal and fall back to ``toLocaleString`` if the host
+      // rejects even ``dateStyle``.
+      formatted = new Intl.DateTimeFormat(undefined, {
+        dateStyle: "medium",
+        timeStyle: "short",
+      }).format(resolvedDate);
+    } catch (_) {
+      formatted = resolvedDate.toLocaleString();
+    }
+    timeMeta.textContent = formatted || "Not available yet";
+  }
+
+  function updateRunMeta(result) {
+    el("correlation-meta").textContent = result?.correlation_id || "Not started";
+    const status = result?.status || "idle";
+    if (status !== state.lastStatus) {
+      state.lastStatus = status;
+      const label = STATUS_LABELS[status] || status;
+      setStatusPill(status, label);
+    }
+    renderCurrentTime(result);
+    // Surface the citation coverage denominator so users can audit the
+    // ratio itself. ``material_claim_count`` is the sum of the four
+    // models' material-claim counts. We avoid displaying this when the
+    // run has no initial answers yet (cost-blocked, pending, etc.).
+    const claimMeta = el("claim-meta");
+    if (claimMeta) {
+      const count = Number(result?.material_claim_count ?? 0);
+      const finished = status === "completed" || status === "partial" || status === "failed" || status === "timed_out";
+      if (finished && count > 0) {
+        claimMeta.textContent = `${count.toLocaleString()} material claim${count === 1 ? "" : "s"} inspected`;
+      } else {
+        claimMeta.textContent = "";
+      }
+    }
+  }
+
+  function updateQueryValidation() {
+    const length = queryTextarea.value.length;
+    charCount.textContent = `${length.toLocaleString()} chars`;
+    if (length === 0) {
+      validationHint.textContent = "";
+      charCount.dataset.warning = "false";
+    } else if (length < 12) {
+      validationHint.textContent = "A few more characters will help the models answer well.";
+      charCount.dataset.warning = "true";
+    } else if (length > 8000) {
+      validationHint.textContent = "Long queries are blocked by the cost guardrail. Try to shorten this.";
+      charCount.dataset.warning = "true";
+    } else if (length > 5000) {
+      validationHint.textContent = "This length is in the upper-cost band; confirmation may be required.";
+      charCount.dataset.warning = "true";
+    } else {
+      validationHint.textContent = "";
+      charCount.dataset.warning = "false";
+    }
+  }
+
+  // ---------------------------------------------------------------------------
+  // Run lifecycle
+  // ---------------------------------------------------------------------------
+
+  async function initSession() {
+    try {
+      const response = await fetch("/v1/session", { credentials: "same-origin" });
+      if (!response.ok) {
+        throw new ApiError({
+          status: response.status,
+          code: "AUTH_REQUIRED",
+          message: STATUS_COPY[response.status] || "Could not start a session.",
+        });
+      }
+      const session = await response.json();
+      state.csrfToken = session.csrf_token;
+      el("session-meta").textContent = "Managed by secure cookie";
+      setConnectionPill("connected", "Connected");
+    } catch (error) {
+      setConnectionPill("error", "Disconnected");
+      throw error;
+    }
+  }
+
+  async function refreshDefaults() {
+    const response = await api("/v1/models/defaults", { method: "GET" });
+    renderModelInputs(response.model_slots.map((slot) => slot.model_id));
+    renderModelPanels([], null);
+  }
+
+  // Reset the cost confirmation UI back to its initial hidden state.
+  // Called when the user dismisses the estimate or starts a fresh
+  // estimate.
+  function hideCostConfirmation() {
+    if (costConfirmation) costConfirmation.hidden = true;
+    if (costConfirmationMessage) costConfirmationMessage.textContent = "";
+    if (costConfirmationSecondary) {
+      costConfirmationSecondary.textContent = "";
+      costConfirmationSecondary.hidden = true;
+    }
+    if (proceedButton) {
+      proceedButton.disabled = true;
+      delete proceedButton.dataset.loading;
+    }
+  }
+
+  async function estimateRun() {
+    clearError();
+    hideCostConfirmation();
+    setButtonLoading(estimateButton, true);
+    try {
+      const queryText = queryTextarea.value.trim();
+      if (!queryText) {
+        throw new ApiError({
+          status: 422,
+          code: "QUERY_REQUIRED",
+          message: "Please enter a question before running an estimate.",
+        });
+      }
+      const estimate = await api("/v1/query-runs/estimate", {
+        method: "POST",
+        body: JSON.stringify({
+          query_text: queryText,
+          model_slots: getModelIds(),
+        }),
+      });
+      state.currentEstimate = estimate;
+      const { primary: usdPrimary, secondary: usdSecondary } = formatCostWithLocal(
+        estimate.cost_estimate.estimated_cost_usd,
+      );
+      const costLine = `Estimated cost: ${usdPrimary}.`;
+      if (usdSecondary) renderCostSecondary(estimate.cost_estimate.estimated_cost_usd);
+      if (estimate.cost_estimate.threshold_action === "require_confirmation") {
+        costConfirmationMessage.textContent =
+          `${costLine} This is in the upper band. Confirm to proceed.`;
+        costConfirmation.hidden = false;
+        if (proceedButton) {
+          proceedButton.disabled = false;
+          proceedButton.dataset.estimateBand = "require_confirmation";
+        }
+      } else if (estimate.cost_estimate.threshold_action === "block") {
+        costConfirmationMessage.textContent =
+          `${costLine} This exceeds the hard limit (USD 0.25). The run is blocked.`;
+        costConfirmation.hidden = false;
+        if (proceedButton) {
+          proceedButton.disabled = true;
+          proceedButton.dataset.estimateBand = "block";
+        }
+      } else {
+        costConfirmationMessage.textContent =
+          `${costLine} This is in the normal band. Proceed to start.`;
+        costConfirmation.hidden = false;
+        if (proceedButton) {
+          proceedButton.disabled = false;
+          proceedButton.dataset.estimateBand = "allow";
+        }
+      }
+      renderNotices(null);
+      toast({
+        message: `Cost estimate ready: ${usdPrimary}.`,
+        tone: "success",
+      });
+      return estimate;
+    } finally {
+      setButtonLoading(estimateButton, false);
+    }
+  }
+
+  function warningAcknowledgements(warnings) {
+    return warnings.map((warning) => ({
+      warning_type: warning.warning_type,
+      version: warning.version,
+    }));
+  }
+
+  // The single primary composer action. Always estimates first so the
+  // user sees the cost, then surfaces Proceed / Cancel inside the
+  // cost confirmation callout. The previous two-button flow had a
+  // hidden auto-estimates-then-starts shortcut; that shortcut is gone
+  // — the user always sees the estimate before a run starts.
+  async function startRun() {
+    clearError();
+    setButtonLoading(estimateButton, true);
+    try {
+      const queryText = queryTextarea.value.trim();
+      if (!queryText) {
+        throw new ApiError({
+          status: 422,
+          code: "QUERY_REQUIRED",
+          message: "Please enter a question before starting a run.",
+        });
+      }
+      await estimateRun();
+    } catch (error) {
+      handleError(error);
+    } finally {
+      setButtonLoading(estimateButton, false);
+    }
+  }
+
+  // The fast-path primary action: skip the estimate and POST the run
+  // directly. If the server reports the cost needs confirmation or
+  // exceeds the hard limit, auto-fall-back to the cost callout so the
+  // user sees the same review UI as the estimate-first path. The
+  // hard guardrail (>$0.25) is server-enforced and cannot be bypassed
+  // client-side — see costs.py:35-36.
+  async function runNow() {
+    clearError();
+    setButtonLoading(runNowButton, true);
+    try {
+      const queryText = queryTextarea.value.trim();
+      if (!queryText) {
+        throw new ApiError({
+          status: 422,
+          code: "QUERY_REQUIRED",
+          message: "Please enter a question before starting a run.",
+        });
+      }
+      const warnings = await api("/v1/query-runs/warnings", {
+        method: "POST",
+        body: JSON.stringify({ query_text: queryText }),
+      });
+      let created;
+      try {
+        created = await api("/v1/query-runs", {
+          method: "POST",
+          body: JSON.stringify({
+            query_text: queryText,
+            model_slots: getModelIds(),
+            safety_acknowledgements: warningAcknowledgements(warnings.warnings),
+            // No cost_confirmation: server will compute the estimate
+            // and either accept (allow band), require confirmation, or
+            // block. The fallback below handles the latter two.
+          }),
+        });
+      } catch (error) {
+        if (error instanceof ApiError) {
+          if (error.code === "COST_CONFIRMATION_REQUIRED") {
+            // Mirror proceedWithRun's recovery: clear stale estimate and
+            // run the estimate flow so the user lands in the same
+            // callout they would have seen via the Estimate button.
+            state.currentEstimate = null;
+            toast({
+              message: "Cost confirmation required — showing the cost review.",
+              tone: "warn",
+            });
+            await estimateRun();
+            return;
+          }
+          if (error.code === "COST_LIMIT_EXCEEDED") {
+            // Same fallback: surface the cost callout (now showing the
+            // hard-limit message) so the user can read the figure
+            // before deciding.
+            state.currentEstimate = null;
+            await estimateRun();
+            return;
+          }
+        }
+        throw error;
+      }
+      state.currentRunId = created.query_run_id;
+      // Server accepted the run. Consume any prior estimate copy and
+      // hide the callout.
+      hideCostConfirmation();
+      setRunning(true);
+      updateRunMeta(created);
+      renderProgress(created.progress);
+      renderCurrentTime(created);
+      toast({ message: "Run started. Tracking progress below.", tone: "info" });
+      startPolling();
+    } catch (error) {
+      handleError(error);
+    } finally {
+      setButtonLoading(runNowButton, false);
+    }
+  }
+
+  // User clicked "Proceed with this run" inside the cost callout.
+  // Sends the create-run POST. For the REQUIRE_CONFIRMATION band the
+  // server is sent the matching confirmation token; for ALLOW no
+  // token is needed; for BLOCK the button is disabled and this path
+  // cannot fire.
+  async function proceedWithRun() {
+    if (!state.currentEstimate) {
+      // Defensive: button should be disabled until an estimate exists.
+      return;
+    }
+    clearError();
+    setButtonLoading(proceedButton, true);
+    try {
+      const queryText = queryTextarea.value.trim();
+      if (!queryText) {
+        throw new ApiError({
+          status: 422,
+          code: "QUERY_REQUIRED",
+          message: "Please enter a question before starting a run.",
+        });
+      }
+      const thresholdAction =
+        state.currentEstimate.cost_estimate.threshold_action;
+      const warnings = await api("/v1/query-runs/warnings", {
+        method: "POST",
+        body: JSON.stringify({ query_text: queryText }),
+      });
+      const costConfirmationPayload =
+        thresholdAction === "require_confirmation"
+          ? {
+              estimated_cost_usd:
+                state.currentEstimate.cost_estimate.estimated_cost_usd,
+              confirmation_token:
+                state.currentEstimate.cost_estimate.confirmation_token,
+            }
+          : null;
+      const created = await api("/v1/query-runs", {
+        method: "POST",
+        body: JSON.stringify({
+          query_text: queryText,
+          model_slots: getModelIds(),
+          safety_acknowledgements: warningAcknowledgements(warnings.warnings),
+          cost_confirmation: costConfirmationPayload,
+        }),
+      });
+      state.currentRunId = created.query_run_id;
+      setRunning(true);
+      updateRunMeta(created);
+      renderProgress(created.progress);
+      renderCurrentTime(created);
+      // The estimate is now consumed; collapse the cost callout until
+      // the next estimate.
+      hideCostConfirmation();
+      toast({ message: "Run started. Tracking progress below.", tone: "info" });
+      startPolling();
+    } catch (error) {
+      // If the server reports the confirmation token expired (HTTP 402
+      // with COST_CONFIRMATION_REQUIRED), auto-re-estimate so the user
+      // sees fresh copy rather than a stale estimate.
+      if (error instanceof ApiError && error.code === "COST_CONFIRMATION_REQUIRED") {
+        state.currentEstimate = null;
+        toast({
+          message: "Cost re-estimated because the original confirmation expired.",
+          tone: "warn",
+        });
+        await estimateRun();
+        return;
+      }
+      handleError(error);
+    } finally {
+      setButtonLoading(proceedButton, false);
+    }
+  }
+
+  // User clicked "Cancel" inside the cost callout. Clears the
+  // estimate and re-enables the composer without starting a run.
+  function cancelEstimate() {
+    state.currentEstimate = null;
+    hideCostConfirmation();
+    renderNotices(null);
+    toast({ message: "Estimate cleared.", tone: "info", timeout: 2500 });
+  }
+
+  async function pollRun() {
+    if (!state.currentRunId) {
+      const active = await api("/v1/query-runs/active", { method: "GET" });
+      if (!active.query_run_id) {
+        renderProgress(null);
+        return;
+      }
+      state.currentRunId = active.query_run_id;
+      setRunning(true);
+    }
+    const result = await api(`/v1/query-runs/${state.currentRunId}`, {
+      method: "GET",
+    });
+    updateRunMeta(result);
+    renderProgress(result.progress);
+    renderModelPanels(result.result.model_answers, result);
+    renderDebateAndSynthesis(result);
+    renderNotices(result);
+    renderCurrentTime(result);
+    if (
+      ["completed", "partial", "failed", "timed_out", "cancelled"].includes(
+        result.status,
+      )
+    ) {
+      stopPolling();
+      setRunning(false);
+      if (result.status === "completed") {
+        toast({ message: "Run completed. See the synthesis below.", tone: "success" });
+      } else if (result.status === "partial") {
+        toast({
+          message: "Run finished with partial results. Check the notices section.",
+          tone: "warn",
+          timeout: 6500,
+        });
+      } else if (result.status === "failed") {
+        toast({ message: "Run failed. See the error message above.", tone: "error", timeout: 6500 });
+      } else if (result.status === "cancelled") {
+        toast({ message: "Run cancelled.", tone: "info" });
+      } else if (result.status === "timed_out") {
+        toast({ message: "Run timed out.", tone: "warn" });
+      }
+    }
+  }
+
+  function startPolling() {
+    stopPolling();
+    state.pollingTimer = window.setInterval(() => {
+      pollRun().catch((error) => {
+        // Polling errors are non-blocking; show a toast but keep the
+        // last good result on screen.
+        toast({ message: error.message, tone: "error", timeout: 6000 });
+      });
+    }, 750);
+    pollRun().catch((error) => {
+      toast({ message: error.message, tone: "error", timeout: 6000 });
+    });
+  }
+
+  function stopPolling() {
+    if (state.pollingTimer) {
+      window.clearInterval(state.pollingTimer);
+      state.pollingTimer = null;
+    }
+  }
+
+  async function cancelRun() {
+    if (!state.currentRunId) return;
+    setButtonLoading(cancelButton, true);
+    try {
+      const result = await api(`/v1/query-runs/${state.currentRunId}`, {
+        method: "DELETE",
+      });
+      updateRunMeta(result);
+      renderProgress(result.progress);
+      renderNotices(result);
+      renderCurrentTime(result);
+      stopPolling();
+      setRunning(false);
+      toast({ message: "Run cancelled.", tone: "info" });
+    } catch (error) {
+      handleError(error);
+    } finally {
+      setButtonLoading(cancelButton, false);
+    }
+  }
+
+  function handleError(error) {
+    // Re-enable the Proceed button so a transient failure does not
+    // strand the user. The button is gated again on a fresh estimate
+    // in the REQUIRE_CONFIRMATION band, but stays clickable in the
+    // ALLOW band where the server only needs the latest estimate.
+    if (proceedButton && !state.isRunning) {
+      const band = proceedButton.dataset.estimateBand;
+      proceedButton.disabled = band === "block";
+    }
+    if (error instanceof ApiError) {
+      const detail = {
+        code: error.code,
+        message: error.message,
+        fieldErrors: error.fieldErrors,
+        hint: error.slotErrors ? formatSlotErrors(error.slotErrors) : undefined,
+      };
+      showError(detail);
+      return;
+    }
+    showError({ code: null, message: error.message || "Unexpected error" });
+  }
+
+  function formatSlotErrors(errors) {
+    return errors
+      .map((e) => `Slot ${e.slot_number}: ${e.message || "invalid value"}`)
+      .join(" · ");
+  }
+
+  // ---------------------------------------------------------------------------
+  // Info icons (shared tooltip)
+  // ---------------------------------------------------------------------------
+
+  // Each section heading can carry a small "i" button that shows a
+  // tooltip explaining what the section means. The tooltip body is
+  // static text (set via ``data-info-text`` on the icon) — the
+  // implementation never reads tooltip text from the server response,
+  // so we use ``textContent`` only and never ``innerHTML``, avoiding
+  // any XSS surface.
+  function showInfoTooltip(icon) {
+    if (!infoTooltip) return;
+    const text = icon.getAttribute("data-info-text") || "";
+    if (!text) return;
+    // Update aria-describedby on the icon so the shared tooltip is
+    // correctly associated with the currently focused/hovered icon
+    // only. Reusing the same id across icons is the common bug; we
+    // set it on the icon and reset on the previous one.
+    document
+      .querySelectorAll("[data-info-icon][data-info-active]")
+      .forEach((el) => {
+        delete el.dataset.infoActive;
+        el.removeAttribute("aria-describedby");
+      });
+    icon.dataset.infoActive = "true";
+    icon.setAttribute("aria-describedby", "info-tooltip");
+    infoTooltip.textContent = text;
+    infoTooltip.hidden = false;
+    // Position the tooltip below (or above) the icon. Compute
+    // coordinates after making it visible so we can measure its size.
+    const iconRect = icon.getBoundingClientRect();
+    infoTooltip.style.left = "0px";
+    infoTooltip.style.top = "0px";
+    const tooltipRect = infoTooltip.getBoundingClientRect();
+    const margin = 8;
+    let top = iconRect.bottom + margin;
+    if (top + tooltipRect.height > window.innerHeight) {
+      top = iconRect.top - tooltipRect.height - margin;
+    }
+    let left = iconRect.left;
+    if (left + tooltipRect.width > window.innerWidth - margin) {
+      left = window.innerWidth - tooltipRect.width - margin;
+    }
+    if (left < margin) left = margin;
+    infoTooltip.style.left = `${window.scrollX + left}px`;
+    infoTooltip.style.top = `${window.scrollY + top}px`;
+  }
+
+  function hideInfoTooltip(icon) {
+    if (!infoTooltip) return;
+    infoTooltip.hidden = true;
+    infoTooltip.textContent = "";
+    if (icon) {
+      delete icon.dataset.infoActive;
+      icon.removeAttribute("aria-describedby");
+    }
+  }
+
+  // Wire up info icons. Idempotent: re-running it on a freshly
+  // rendered synthesis panel attaches listeners to the new buttons
+  // without duplicating listeners on the static ones (the static ones
+  // are skipped because they carry a "wired" sentinel).
+  function initInfoIcons() {
+    if (!infoTooltip) return;
+    const icons = document.querySelectorAll("[data-info-icon]:not([data-info-wired])");
+    icons.forEach((icon) => {
+      icon.dataset.infoWired = "true";
+      icon.addEventListener("mouseenter", () => showInfoTooltip(icon));
+      icon.addEventListener("focus", () => showInfoTooltip(icon));
+      icon.addEventListener("mouseleave", () => hideInfoTooltip(icon));
+      icon.addEventListener("blur", () => hideInfoTooltip(icon));
+    });
+  }
+
+  // ---------------------------------------------------------------------------
+  // Wiring
+  // ---------------------------------------------------------------------------
+
+  function initThemeToggle() {
+    const root = document.documentElement;
+    el("theme-toggle").addEventListener("click", () => {
+      root.dataset.theme = root.dataset.theme === "dark" ? "light" : "dark";
+    });
+  }
+
+  function initModelSlotSelection() {
+    modelInputs.addEventListener("change", (event) => {
+      const target = event.target;
+      if (!(target instanceof HTMLSelectElement)) {
+        return;
+      }
+      if (target.dataset.modelSlot !== "") {
+        return;
+      }
+      renderModelInputs(getModelIds());
+    });
+  }
+
+  function initQueryValidation() {
+    queryTextarea.addEventListener("input", updateQueryValidation);
+    updateQueryValidation();
+  }
+
+  function initKeyboardShortcuts() {
+    document.addEventListener("keydown", (event) => {
+      const isCmdEnter = (event.metaKey || event.ctrlKey) && event.key === "Enter";
+      if (isCmdEnter) {
+        event.preventDefault();
+        // Primary action is now "Run now" — skip the estimate, fall
+        // back to the cost callout only if the server requires it.
+        if (runNowButton && !runNowButton.disabled) {
+          runNow();
+        } else if (!estimateButton.disabled) {
+          startRun();
+        }
+        return;
+      }
+      if (event.key === "Escape") {
+        // If a tooltip is open, hide it first and stop here.
+        if (infoTooltip && !infoTooltip.hidden) {
+          const active = document.querySelector("[data-info-icon][data-info-active]");
+          if (active instanceof HTMLElement) {
+            event.preventDefault();
+            hideInfoTooltip(active);
+            active.focus();
+            return;
+          }
+        }
+        if (state.isRunning && !cancelButton.disabled) {
+          event.preventDefault();
+          cancelRun();
+        }
+        return;
+      }
+    });
+  }
+
+  function initBannerDismiss() {
+    errorDismiss.addEventListener("click", clearError);
+  }
+
+  async function boot() {
+    initThemeToggle();
+    initModelSlotSelection();
+    initQueryValidation();
+    initKeyboardShortcuts();
+    initBannerDismiss();
+    initInfoIcons();
+    estimateButton.addEventListener("click", () => {
+      startRun();
+    });
+    if (runNowButton) {
+      runNowButton.addEventListener("click", () => {
+        runNow();
+      });
+    }
+    if (copyCorrelationButton) {
+      copyCorrelationButton.addEventListener("click", async () => {
+        const target = el("correlation-meta");
+        const value = (target?.textContent || "").trim();
+        if (!value || value === "Not started") return;
+        try {
+          await navigator.clipboard.writeText(value);
+          copyCorrelationButton.dataset.copied = "true";
+          copyCorrelationButton.title = "Copied!";
+          setTimeout(() => {
+            delete copyCorrelationButton.dataset.copied;
+            copyCorrelationButton.title = "Copy run ID — include it if you report an issue.";
+          }, 1500);
+        } catch (_) {
+          copyCorrelationButton.title = "Copy failed — select and copy manually.";
+        }
+      });
+    }
+    if (proceedButton) {
+      proceedButton.addEventListener("click", () => {
+        proceedWithRun();
+      });
+    }
+    if (cancelEstimateButton) {
+      cancelEstimateButton.addEventListener("click", () => {
+        cancelEstimate();
+      });
+    }
+    cancelButton.addEventListener("click", () => {
+      cancelRun();
+    });
+    setConnectionPill("connecting", "Connecting");
+    try {
+      await initSession();
+      await refreshDefaults();
+      renderProgress(null);
+      renderDebateAndSynthesis(null);
+      renderNotices(null);
+      renderCurrentTime(null);
+    } catch (error) {
+      handleError(error);
+      setConnectionPill("error", "Disconnected");
+    }
+  }
+
+  boot();
+})();

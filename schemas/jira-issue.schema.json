@@ -1,0 +1,25 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "EnterpriseJiraIssue",
+  "type": "object",
+  "required": [
+    "issue_type",
+    "summary",
+    "problem_statement",
+    "expected_behaviour",
+    "acceptance_criteria",
+    "requirement_ids",
+    "test_mapping",
+    "jira_status"
+  ],
+  "properties": {
+    "issue_type": {"enum": ["Epic", "Story", "Task", "Sub-task", "Bug"]},
+    "summary": {"type": "string", "minLength": 5},
+    "problem_statement": {"type": "string", "minLength": 20},
+    "expected_behaviour": {"type": "string", "minLength": 20},
+    "acceptance_criteria": {"type": "array", "minItems": 1, "items": {"type": "string"}},
+    "requirement_ids": {"type": "array", "minItems": 1, "items": {"type": "string"}},
+    "test_mapping": {"type": "array", "minItems": 1, "items": {"type": "string"}},
+    "jira_status": {"type": "string"}
+  }
+}

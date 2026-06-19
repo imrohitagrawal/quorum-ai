@@ -1,0 +1,20 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Enterprise Skill Contract",
+  "type": "object",
+  "required": ["name", "description", "when_to_use", "inputs", "owned_outputs", "allowed_tools", "forbidden_actions", "procedure", "quality_bar", "validation", "handoff_contract"],
+  "properties": {
+    "name": {"type": "string", "minLength": 3},
+    "description": {"type": "string", "minLength": 20},
+    "when_to_use": {"type": "array", "items": {"type": "string"}},
+    "when_not_to_use": {"type": "array", "items": {"type": "string"}},
+    "inputs": {"type": "array", "items": {"type": "string"}},
+    "owned_outputs": {"type": "array", "items": {"type": "string"}},
+    "allowed_tools": {"type": "array", "items": {"type": "string"}},
+    "forbidden_actions": {"type": "array", "items": {"type": "string"}},
+    "procedure": {"type": "array", "items": {"type": "string"}},
+    "quality_bar": {"type": "array", "items": {"type": "string"}},
+    "validation": {"type": "array", "items": {"type": "string"}},
+    "handoff_contract": {"type": "array", "items": {"type": "string"}}
+  }
+}

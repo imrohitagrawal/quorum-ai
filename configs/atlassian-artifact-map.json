@@ -1,0 +1,39 @@
+{
+  "version": "5.0-final",
+  "system_of_record": {
+    "Confluence": "why, what, decisions, standards, operational guidance, learner spec",
+    "Jira": "executable work, status, owner, acceptance criteria, evidence links",
+    "Git/code": "implementation and automated verification"
+  },
+  "jira_issue_types": [
+    "Epic",
+    "Requirement",
+    "Story",
+    "Task",
+    "Bug",
+    "Spike"
+  ],
+  "confluence_page_types": [
+    "Product brief",
+    "PRD",
+    "Learner spec",
+    "Architecture decision",
+    "Operational guide",
+    "Release readiness",
+    "Runbook",
+    "Learning note"
+  ],
+  "sync_rules": [
+    "No Confluence operational guide is created without a Jira-backed request or documented exception.",
+    "No Jira implementation ticket is Ready for Dev without linked requirement, acceptance criteria, test mapping, risk tier, and owner.",
+    "Confluence content changes that affect scope, behavior, risk, acceptance criteria, release readiness, or operations must create/update Jira work.",
+    "Jira status changes that alter scope or acceptance criteria must update the living spec and Confluence source page.",
+    "Never fabricate Jira keys, Confluence page IDs, approvals, or sync results."
+  ],
+  "free_tier_fallback": "When custom fields or automation are unavailable, put the metadata block in Jira descriptions, use labels, and maintain docs/37-jira-confluence-sync-log.md manually.",
+  "mcp_mode": [
+    "manual-draft",
+    "assisted-mcp-with-human-approval",
+    "automated-ci-sync-after-explicit-approval"
+  ]
+}

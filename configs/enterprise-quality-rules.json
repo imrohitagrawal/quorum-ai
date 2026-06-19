@@ -1,0 +1,58 @@
+{
+  "version": "4.1",
+  "strict_env_var": "FACTORY_STRICT",
+  "placeholder_terms": [
+    "TBD",
+    "Placeholder",
+    "Replace with",
+    "TODO",
+    "lorem ipsum",
+    "dummy value"
+  ],
+  "required_skill_sections": [
+    "When to use",
+    "When not to use",
+    "Inputs",
+    "Owned outputs",
+    "Allowed tools",
+    "Forbidden actions",
+    "Procedure",
+    "Quality bar",
+    "Validation",
+    "Handoff contract",
+    "Stop conditions",
+    "Examples",
+    "Anti-examples"
+  ],
+  "strict_required_docs": [
+    "docs/04-problem-statement.md",
+    "docs/00-factory-console.md",
+    "docs/14-learner-spec.md",
+    "docs/15-domain-glossary.md",
+    "docs/16-edge-case-catalog.md",
+    "docs/32-ui-state-matrix.md",
+    "docs/33-content-design.md",
+    "docs/37-jira-confluence-sync-log.md",
+    "docs/44-model-risk-register.md",
+    "docs/46-prompt-registry.md",
+    "docs/54-ac-to-test-map.md",
+    "docs/55-performance-baseline.md",
+    "docs/56-flaky-test-register.md",
+    "docs/57-test-evidence.md",
+    "docs/63-technical-debt-register.md",
+    "docs/64-feature-flag-plan.md",
+    "docs/74-release-checklist.md",
+    "docs/88-incident-drill.md",
+    "docs/89-alert-quality-review.md",
+    "docs/95-production-readiness-review.md"
+  ],
+  "evidence_keywords": [
+    "Owner:",
+    "Evidence:",
+    "Metric:",
+    "Test:",
+    "Dashboard:",
+    "Decision:",
+    "Risk:"
+  ]
+}
