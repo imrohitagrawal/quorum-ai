@@ -357,6 +357,156 @@ def test_live_response_rejects_online_only_for_400_and_404(
     assert result is None
 
 
+# ---------------------------------------------------------------------------
+# L2: per-slot search toggle — the ``ModelSlot(search=False)`` path.
+# ---------------------------------------------------------------------------
+
+
+def test_per_slot_search_off_skips_online_attempt(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """L2: when ``ModelSlot.search`` is ``False``, the dispatcher must
+    skip the ``:online`` attempt entirely. A single bare-id POST is
+    the only network call; no retry on bare-id failure.
+    """
+    captured_model_ids: list[str] = []
+
+    def fake_urlopen(request, timeout=0):  # noqa: ANN001
+        body = json.loads(request.data.decode())
+        captured_model_ids.append(body["model"])
+        return _FakeResponse(
+            json.dumps(
+                {
+                    "choices": [
+                        {
+                            "message": {
+                                "content": "training-data answer",
+                                "annotations": [],
+                            }
+                        }
+                    ]
+                }
+            ).encode()
+        )
+
+    monkeypatch.setattr("product_app.providers.urlopen", fake_urlopen)
+
+    result = provider_stub_service._call_openrouter_with_optional_search(
+        openrouter_key="sk-or-v1-test",
+        query_text="what is x",
+        model_slot=ModelSlot(
+            slot_number=1,
+            model_id="openai/gpt-4o-mini",
+            search=False,
+        ),
+    )
+
+    # Exactly one POST, to the bare model id, NOT the :online suffix.
+    assert captured_model_ids == ["openai/gpt-4o-mini"], captured_model_ids
+    assert result is not None
+    assert result.answer_text == "training-data answer"
+
+
+def test_per_slot_search_off_returns_none_when_bare_call_fails(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """L2: when ``ModelSlot.search`` is ``False`` and the bare-id POST
+    fails, the dispatcher returns ``None``. There is no retry, and no
+    local-simulation fallback from inside this method — that's the
+    caller's job. The point of this test is to lock down the contract:
+    one POST, one chance, no surprise retries.
+    """
+    from urllib.error import HTTPError
+
+    call_count = 0
+
+    def fake_urlopen(request, timeout=0):  # noqa: ANN001
+        nonlocal call_count
+        call_count += 1
+        raise HTTPError(
+            url=request.full_url,
+            code=500,
+            msg="Server Error",
+            hdrs=None,
+            fp=None,
+        )
+
+    monkeypatch.setattr("product_app.providers.urlopen", fake_urlopen)
+
+    result = provider_stub_service._call_openrouter_with_optional_search(
+        openrouter_key="sk-or-v1-test",
+        query_text="what is x",
+        model_slot=ModelSlot(
+            slot_number=1,
+            model_id="openai/gpt-4o-mini",
+            search=False,
+        ),
+    )
+
+    # Exactly one attempt; no retry.
+    assert call_count == 1
+    assert result is None
+
+
+def test_per_slot_search_off_response_records_search_disabled_notice(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """L2 end-to-end: a slot with ``search=False`` whose bare-id POST
+    returns text records ``provider_path=OPENROUTER_SEARCH`` (per the
+    "reuse OPENROUTER_SEARCH + notice" decision) with a
+    ``provider_notice`` explaining that web search was disabled for
+    this slot. The notice must appear on every search-disabled slot,
+    not just on slots with missing citations.
+    """
+    monkeypatch.setattr(
+        provider_stub_service,
+        "_live_execution_enabled",
+        lambda *, openrouter_key: True,
+    )
+
+    def fake_live(*, openrouter_key, query_text, model_slot):
+        # Bare-id POST returns text but no annotations (the realistic
+        # case for a search-disabled slot — the model answers from
+        # training data).
+        return _FakeLiveResult(
+            answer_text=f"training answer for slot {model_slot.slot_number}",
+            sources=[],
+        )
+
+    monkeypatch.setattr(
+        provider_stub_service,
+        "_live_openrouter_response",
+        fake_live,
+    )
+
+    slots = [
+        ModelSlot(slot_number=1, model_id="openai/gpt-4o-mini", search=False),
+        ModelSlot(slot_number=2, model_id="anthropic/claude-haiku-4.5", search=True),
+    ]
+    answers = provider_stub_service.produce_initial_answers(
+        account_id=uuid4(),
+        query_run_id=uuid4(),
+        query_text="what is x",
+        model_slots=slots,
+    )
+
+    # Slot 1 (search=False): still records as OPENROUTER_SEARCH, with
+    # the "Web search was disabled" notice.
+    assert answers[0].provider_path == ProviderPath.OPENROUTER_SEARCH
+    assert answers[0].provider_notice is not None
+    assert "Web search was disabled" in answers[0].provider_notice
+
+    # Slot 2 (search=True): no search-disabled notice (the existing
+    # "missing citations" notice may or may not fire depending on
+    # whether :online succeeded; we just confirm the search-disabled
+    # notice is NOT present).
+    assert answers[1].provider_path == ProviderPath.OPENROUTER_SEARCH
+    assert not (
+        answers[1].provider_notice is not None
+        and "Web search was disabled" in answers[1].provider_notice
+    )
+
+
 class _FakeResponse:
     """Minimal stand-in for ``http.client.HTTPResponse`` returned by
     ``urlopen``. ``read()`` returns the body bytes; ``__enter__`` /

@@ -51,7 +51,7 @@ from product_app.model_slots import (
     InvalidModelSlotError,
     ModelSlot,
     model_slot_event_recorder,
-    validate_model_slots,
+    validate_model_slots_with_search,
 )
 from product_app.provider_keys import ProviderCredentialSource
 from product_app.providers import (
@@ -192,6 +192,11 @@ class ResultProjection(BaseModel):
 class QueryRunEstimateRequest(BaseModel):
     query_text: str = Field(min_length=1, max_length=8_000)
     model_slots: list[str] = Field(min_length=1)
+    # L2: optional per-slot web-search opt-in. Same length as
+    # ``model_slots`` when provided. ``None`` (the default) means
+    # "use the per-slot default" — which is search-enabled for the
+    # default four-slot demo run.
+    slot_search: list[bool] | None = None
 
 
 class QueryRunEstimateResponse(BaseModel):
@@ -204,6 +209,9 @@ class QueryRunEstimateResponse(BaseModel):
 class QueryRunCreateRequest(BaseModel):
     query_text: str = Field(min_length=1, max_length=8_000)
     model_slots: list[str] = Field(min_length=1)
+    # L2: optional per-slot web-search opt-in. See
+    # ``QueryRunEstimateRequest.slot_search`` for the contract.
+    slot_search: list[bool] | None = None
     safety_acknowledgements: list[SafetyAcknowledgement] = Field(default_factory=list)
     cost_confirmation: CostConfirmation | None = None
 
@@ -505,7 +513,10 @@ def estimate_query_run(
     payload: QueryRunEstimateRequest,
     session: Annotated[SessionContext, Depends(require_session)],
 ) -> QueryRunEstimateResponse:
-    model_slots = _validated_model_slots(payload.model_slots)
+    model_slots = _validated_model_slots(
+        payload.model_slots,
+        slot_search=payload.slot_search,
+    )
     estimate = cost_estimation_service.estimate(
         query_text=payload.query_text,
         model_slots=model_slots,
@@ -533,7 +544,10 @@ def create_query_run(
     session: Annotated[SessionContext, Depends(require_session)],
 ) -> QueryRunCreateResponse:
     enforce_csrf(request, session)
-    model_slots = _validated_model_slots(payload.model_slots)
+    model_slots = _validated_model_slots(
+        payload.model_slots,
+        slot_search=payload.slot_search,
+    )
     required_warnings = safety_warning_policy.required_warnings_for_query(payload.query_text)
     missing_acknowledgements = safety_warning_policy.missing_acknowledgements(
         required_warnings=required_warnings,
@@ -627,7 +641,13 @@ def create_query_run(
         event_type="model_slot_selection_recorded",
         account_id=session.account_id,
         query_run_id=query_run.query_run_id,
-        model_slots=tuple((slot.slot_number, slot.model_id) for slot in query_run.model_slots),
+        # L2: include the per-slot ``search`` flag in the audit-event
+        # tuple so the on-the-wire record reflects the caller's opt-in
+        # decision, not just the slot number and model id.
+        model_slots=tuple(
+            (slot.slot_number, slot.model_id, slot.search)
+            for slot in query_run.model_slots
+        ),
     )
     cost_estimation_service.record_guardrail_event(
         account_id=session.account_id,
@@ -971,9 +991,23 @@ def _execute_query_run(query_run_id: UUID, account_id: UUID) -> None:
 # -- helpers -----------------------------------------------------------------
 
 
-def _validated_model_slots(model_ids: list[str]) -> list[ModelSlot]:
+def _validated_model_slots(
+    model_ids: list[str],
+    *,
+    slot_search: list[bool] | None = None,
+) -> list[ModelSlot]:
+    # L2: thread the optional per-slot ``search`` flag from the request
+    # body through validation. When ``slot_search`` is None, every slot
+    # defaults to ``search=True`` (preserves the four-slot "all on"
+    # default). When provided, the helper enforces length == 4 and
+    # raises ``InvalidModelSlotError`` on a mismatch — caught and
+    # converted to a 422 with the same ``INVALID_MODEL_SLOT`` envelope
+    # the existing handler tests assert on.
     try:
-        return validate_model_slots(model_ids)
+        return validate_model_slots_with_search(
+            model_ids,
+            slot_search=slot_search,
+        )
     except InvalidModelSlotError as exc:
         raise HTTPException(
             status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,

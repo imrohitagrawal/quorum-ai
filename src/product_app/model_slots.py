@@ -65,6 +65,11 @@ class ModelSlotError:
 class ModelSlot(BaseModel):
     slot_number: int = Field(ge=1, le=EXPECTED_SLOT_COUNT)
     model_id: str
+    # L2: per-slot web-search opt-in. Defaults to True so the existing
+    # four-slot "all on" behavior is preserved when callers don't pass
+    # the flag. The provider layer reads this field to decide whether
+    # to attempt the :online suffix on the first POST.
+    search: bool = True
 
 
 @dataclass(frozen=True)
@@ -72,7 +77,12 @@ class ModelSlotSelectionEvent:
     event_type: str
     account_id: UUID
     query_run_id: UUID
-    model_slots: tuple[tuple[int, str], ...]
+    # L2: tuple element expanded from (int, str) to (int, str, bool) so
+    # the recorded event carries the per-slot search flag alongside the
+    # slot number and model id. The flag is part of the slot identity
+    # at the audit-event level — a search-disabled slot is a different
+    # decision than a search-enabled one and we want that on the wire.
+    model_slots: tuple[tuple[int, str, bool], ...]
 
 
 class InMemoryModelSlotEventRecorder:
@@ -88,7 +98,7 @@ class InMemoryModelSlotEventRecorder:
         event_type: str,
         account_id: UUID,
         query_run_id: UUID,
-        model_slots: tuple[tuple[int, str], ...],
+        model_slots: tuple[tuple[int, str, bool], ...],
     ) -> None:
         with self._lock:
             self._events.append(
@@ -123,7 +133,16 @@ def default_model_slots() -> list[ModelSlot]:
     return openrouter_model_catalog_service.default_slots()
 
 
-def validate_model_slots(model_ids: list[str]) -> list[ModelSlot]:
+def _validate_model_id_list(model_ids: list[str]) -> None:
+    """Validate the four model id strings; raise ``InvalidModelSlotError`` on any problem.
+
+    Extracted so that ``validate_model_slots`` and
+    ``validate_model_slots_with_search`` can both use the same
+    length / regex / uniqueness rules without duplication. L2 added
+    the second helper to thread a per-slot ``search`` flag through the
+    request body; this function is the single source of truth for the
+    "is the model id list well-formed?" check.
+    """
     errors: list[ModelSlotError] = []
     if len(model_ids) != EXPECTED_SLOT_COUNT:
         errors.append(
@@ -160,7 +179,58 @@ def validate_model_slots(model_ids: list[str]) -> list[ModelSlot]:
     if errors:
         raise InvalidModelSlotError(errors)
 
-    return [ModelSlot(slot_number=i + 1, model_id=model_id) for i, model_id in enumerate(model_ids)]
+
+def validate_model_slots(model_ids: list[str]) -> list[ModelSlot]:
+    """Validate ``model_ids`` and return four ``ModelSlot`` records with ``search=True``.
+
+    L2: every slot defaults to ``search=True`` — the "all four slots
+    try :online" behavior is preserved. Callers that want per-slot
+    opt-out should use ``validate_model_slots_with_search``.
+    """
+    _validate_model_id_list(model_ids)
+    return [
+        ModelSlot(slot_number=i + 1, model_id=model_id, search=True)
+        for i, model_id in enumerate(model_ids)
+    ]
+
+
+def validate_model_slots_with_search(
+    model_ids: list[str],
+    *,
+    slot_search: list[bool] | None = None,
+) -> list[ModelSlot]:
+    """Validate ``model_ids`` and a parallel ``slot_search`` list.
+
+    L2: the request body now carries an optional ``slot_search: list[bool]``
+    alongside ``model_slots: list[str]``. When ``slot_search`` is ``None``,
+    every slot defaults to ``search=True`` (same as ``validate_model_slots``).
+    When provided, it must have the same length as ``model_ids`` and each
+    element is a bool that overrides the per-slot default.
+
+    Invalid lengths raise the same ``InvalidModelSlotError`` envelope the
+    existing request-validation tests assert on.
+    """
+    _validate_model_id_list(model_ids)
+    if slot_search is not None and len(slot_search) != len(model_ids):
+        raise InvalidModelSlotError(
+            [
+                ModelSlotError(
+                    slot_number=0,
+                    model_id=None,
+                    message=(
+                        "slot_search length must match model_slots length "
+                        f"({len(model_ids)} expected, {len(slot_search)} given)."
+                    ),
+                ),
+            ],
+        )
+    flags: list[bool] = (
+        list(slot_search) if slot_search is not None else [True] * len(model_ids)
+    )
+    return [
+        ModelSlot(slot_number=i + 1, model_id=model_id, search=flags[i])
+        for i, model_id in enumerate(model_ids)
+    ]
 
 
 model_slot_event_recorder = InMemoryModelSlotEventRecorder()
@@ -244,6 +314,9 @@ class OpenRouterModelCatalogService:
         return tuple(cheapest[v] for v in DEFAULT_VENDORS if v in cheapest)
 
     def default_slots(self) -> list[ModelSlot]:
+        # L2: defaults are search-enabled (``ModelSlot.search`` defaults
+        # to True), so the demo run on the workspace page still gets
+        # four real :online web searches unless the caller opts out.
         return [
             ModelSlot(slot_number=index + 1, model_id=model_id)
             for index, model_id in enumerate(self.default_model_ids())

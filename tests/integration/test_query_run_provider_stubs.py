@@ -101,3 +101,47 @@ def test_completed_query_run_result_returns_visible_initial_answer_sources() -> 
         "https://example.test/local-demo/"
     )
     assert query_run_repository.get_active_for_account(account_id) is None
+
+
+# ---------------------------------------------------------------------------
+# L2: per-slot search toggle — end-to-end request flow.
+# ---------------------------------------------------------------------------
+
+
+def test_request_with_slot_search_per_slot_flags_reach_provider_layer() -> None:
+    """L2: when the request body carries ``slot_search=[true, false, true, false]``,
+    the four ``ModelSlot`` records stored on the run must reflect those
+    flags. The integration test pins the round-trip from request body
+    to response body, which is the contract the workspace UI will
+    rely on when L5 adds the per-slot "search on/off" badge.
+    """
+    client = TestClient(app)
+    account_id = uuid4()
+
+    body = acknowledged_request("Compare durable options")
+    body["slot_search"] = [True, False, True, False]
+
+    response = client.post(
+        "/v1/query-runs",
+        json=body,
+        headers={"X-Account-Id": str(account_id)},
+    )
+
+    assert response.status_code == 202
+    slots = response.json()["model_slots"]
+    assert len(slots) == 4
+    # The 4-tuple of search flags round-trips in slot order.
+    assert [slot["search"] for slot in slots] == [True, False, True, False]
+    # The 4-tuple of model ids is unchanged.
+    assert [slot["model_id"] for slot in slots] == DEFAULT_MODEL_IDS
+
+    # The same flags also surface on the GET-result projection.
+    # ``QueryRunResultResponse.model_slots`` is at the top level, not
+    # inside ``result`` — see src/product_app/query_runs.py:243.
+    result_response = client.get(
+        f"/v1/query-runs/{response.json()['query_run_id']}",
+        headers={"X-Account-Id": str(account_id)},
+    )
+    assert result_response.status_code == 200
+    result_slots = result_response.json()["model_slots"]
+    assert [slot["search"] for slot in result_slots] == [True, False, True, False]

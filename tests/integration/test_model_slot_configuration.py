@@ -89,7 +89,9 @@ def test_replacement_model_slots_are_persisted_with_query_run() -> None:
     assert event.event_type == "model_slot_selection_recorded"
     assert event.account_id == account_id
     assert event.query_run_id == query_run_id
-    assert event.model_slots == tuple(enumerate(selected_models, start=1))
+    assert event.model_slots == tuple(
+        (i, mid, True) for i, mid in enumerate(selected_models, start=1)
+    )
     assert not hasattr(event, "query_text")
 
 
@@ -114,3 +116,76 @@ def test_invalid_model_slot_is_rejected_before_query_run_creation() -> None:
     assert response.json()["detail"]["code"] == "INVALID_MODEL_SLOT"
     assert response.json()["detail"]["slot_errors"][0]["slot_number"] == 2
     assert query_run_repository.get_active_for_account(account_id) is None
+
+
+# ---------------------------------------------------------------------------
+# L2: per-slot search toggle — request validation.
+# ---------------------------------------------------------------------------
+
+
+def test_invalid_slot_search_length_is_rejected() -> None:
+    """L2: a ``slot_search`` list whose length doesn't match the four-slot
+    model list is rejected with the same ``INVALID_MODEL_SLOT`` 422
+    envelope the existing invalid-model test asserts on.
+    """
+    client = TestClient(app)
+    account_id = uuid4()
+
+    body = acknowledged_request(
+        [
+            "openai/gpt-4o-mini",
+            "anthropic/claude-haiku-4.5",
+            "google/gemini-2.5-flash",
+            "deepseek/deepseek-chat-v3.1",
+        ],
+    )
+    body["slot_search"] = [True, False]  # length 2, expected 4
+
+    response = client.post(
+        "/v1/query-runs",
+        json=body,
+        headers={"X-Account-Id": str(account_id)},
+    )
+
+    assert response.status_code == 422
+    assert response.json()["detail"]["code"] == "INVALID_MODEL_SLOT"
+    assert any(
+        "slot_search length" in err["message"]
+        for err in response.json()["detail"]["slot_errors"]
+    )
+    assert query_run_repository.get_active_for_account(account_id) is None
+
+
+def test_slot_search_all_false_creates_search_disabled_slots() -> None:
+    """L2: a request with ``slot_search=[false, false, false, false]`` is
+    valid; every ``ModelSlot`` round-trips with ``search=False`` and
+    the audit event records the new 3-tuple shape with the right flag.
+    """
+    client = TestClient(app)
+    account_id = uuid4()
+
+    selected_models = [
+        "openai/gpt-4o-mini",
+        "anthropic/claude-haiku-4.5",
+        "google/gemini-2.5-flash",
+        "deepseek/deepseek-chat-v3.1",
+    ]
+    body = acknowledged_request(selected_models)
+    body["slot_search"] = [False, False, False, False]
+
+    response = client.post(
+        "/v1/query-runs",
+        json=body,
+        headers={"X-Account-Id": str(account_id)},
+    )
+
+    assert response.status_code == 202
+    slots = response.json()["model_slots"]
+    assert [slot["search"] for slot in slots] == [False, False, False, False]
+
+    # The event recorder gets the new 3-tuple shape.
+    event = model_slot_event_recorder.list_events()[-1]
+    assert event.event_type == "model_slot_selection_recorded"
+    assert event.model_slots == tuple(
+        (i, mid, False) for i, mid in enumerate(selected_models, start=1)
+    )

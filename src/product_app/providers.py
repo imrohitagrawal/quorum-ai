@@ -240,6 +240,26 @@ class ProviderExecutionService:
         # was rejected, but the answer itself is real.
         if live_response is not None and live_response.answer_text:
             sources = live_response.sources or []
+            # L2: the ``provider_notice`` branches in priority order.
+            # 1) If the caller opted this slot out of web search, the
+            #    search-disabled fact is the most important for the user
+            #    to know — even if the bare-id POST returned citations.
+            # 2) Otherwise, the existing "missing citations, :online was
+            #    unavailable" notice fires when sources are empty.
+            # 3) Otherwise, no notice (clean search hit with sources).
+            if not model_slot.search:
+                search_disabled_notice = (
+                    "Web search was disabled for this slot; the answer "
+                    "reflects the model's training-data response, not a "
+                    "live web search."
+                )
+            elif not live_response.sources:
+                search_disabled_notice = (
+                    "Live answer returned without citation annotations; coverage may "
+                    "be below the 80% target because :online web search was unavailable."
+                )
+            else:
+                search_disabled_notice = None
             return self._completed_answer(
                 account_id=account_id,
                 query_run_id=query_run_id,
@@ -251,12 +271,7 @@ class ProviderExecutionService:
                 provider_path=ProviderPath.OPENROUTER_SEARCH,
                 provider_attempt_order=provider_attempt_order,
                 fallback_used=False,
-                provider_notice=(
-                    "Live answer returned without citation annotations; coverage may "
-                    "be below the 80% target because :online web search was unavailable."
-                    if not live_response.sources
-                    else None
-                ),
+                provider_notice=search_disabled_notice,
             )
 
         # No live response, or live response returned no usable text.
@@ -453,6 +468,21 @@ class ProviderExecutionService:
         model_slot: ModelSlot,
     ) -> LiveProviderResult | None:
         bare_model_id = model_slot.model_id
+
+        # L2: per-slot search opt-out. When ``model_slot.search`` is
+        # False, we skip the ``:online`` attempt entirely — one bare-id
+        # POST, no retry on failure. The result still records as
+        # ``OPENROUTER_SEARCH`` (see ``produce_initial_answer``), with
+        # a ``provider_notice`` that tells the user web search was
+        # disabled. This is the "cheaper, faster, training-data only"
+        # path some users will pick for cost control.
+        if not model_slot.search:
+            return self._post_openrouter(
+                openrouter_key=openrouter_key,
+                query_text=query_text,
+                model_id=bare_model_id,
+            )
+
         online_model_id = f"{bare_model_id}:online"
 
         # First attempt: with ``:online`` for web search.
