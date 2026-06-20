@@ -1247,6 +1247,57 @@
     }));
   }
 
+  // L5c: developer-only "magic" phrases that flip the pipeline into
+  // a forced-failure / forced-fallback / forced-timeout path. These
+  // are useful in tests but should never appear in a real query by
+  // accident. We surface a warn toast on the first run attempt and
+  // require a second click before the request fires so the user is
+  // not silently routed onto a degraded path.
+  //
+  // The exact strings here mirror the constants in
+  // ``product_app.providers`` and ``product_app.debate``. They are
+  // case-insensitive matches against the user query text.
+  const MAGIC_TRIGGER_PHRASES = [
+    "force provider failure",
+    "force fallback search",
+    "force debate timeout",
+  ];
+
+  function magicPhrasesIn(queryText) {
+    const lowered = (queryText || "").toLowerCase();
+    const hits = [];
+    for (const phrase of MAGIC_TRIGGER_PHRASES) {
+      if (lowered.includes(phrase)) hits.push(phrase);
+    }
+    return hits;
+  }
+
+  // Returns ``true`` if the user has already confirmed a magic
+  // phrase on this run, OR if there are no magic phrases in the
+  // query. Sets a flag on the button so the second click is the
+  // one that fires the request. The flag is cleared once the
+  // run starts so the user gets the warning again on the next run.
+  function checkMagicPhraseAck(queryText, button) {
+    const phrases = magicPhrasesIn(queryText);
+    if (!phrases.length) return true;
+    if (button && button.dataset.magicAck === "true") {
+      delete button.dataset.magicAck;
+      return true;
+    }
+    if (button) {
+      button.dataset.magicAck = "true";
+    }
+    const list = phrases.map((p) => `"${p}"`).join(", ");
+    toast({
+      message:
+        `This query contains a phrase that may trigger a test fallback ` +
+        `(${list}). Click again to proceed; the run will not be live.`,
+      tone: "warn",
+      timeout: 8000,
+    });
+    return false;
+  }
+
   // The single primary composer action. Always estimates first so the
   // user sees the cost, then surfaces Proceed / Cancel inside the
   // cost confirmation callout. The previous two-button flow had a
@@ -1289,6 +1340,9 @@
           code: "QUERY_REQUIRED",
           message: "Please enter a question before starting a run.",
         });
+      }
+      if (!checkMagicPhraseAck(queryText, runNowButton)) {
+        return;
       }
       const warnings = await api("/v1/query-runs/warnings", {
         method: "POST",
@@ -1360,16 +1414,19 @@
       return;
     }
     clearError();
+    const queryText = queryTextarea.value.trim();
+    if (!queryText) {
+      throw new ApiError({
+        status: 422,
+        code: "QUERY_REQUIRED",
+        message: "Please enter a question before starting a run.",
+      });
+    }
+    if (!checkMagicPhraseAck(queryText, proceedButton)) {
+      return;
+    }
     setButtonLoading(proceedButton, true);
     try {
-      const queryText = queryTextarea.value.trim();
-      if (!queryText) {
-        throw new ApiError({
-          status: 422,
-          code: "QUERY_REQUIRED",
-          message: "Please enter a question before starting a run.",
-        });
-      }
       const thresholdAction =
         state.currentEstimate.cost_estimate.threshold_action;
       const warnings = await api("/v1/query-runs/warnings", {
