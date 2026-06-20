@@ -828,7 +828,9 @@
     for (const notice of result?.provider_failure_notices || []) {
       notices.push({ tone: "warn", text: notice });
     }
-    if (!notices.length) {
+    const failedSteps = result?.failed_steps || [];
+    const missingSteps = result?.missing_steps || [];
+    if (!notices.length && !failedSteps.length && !missingSteps.length) {
       noticeList.replaceChildren(
         Object.assign(document.createElement("div"), {
           className: "muted",
@@ -844,7 +846,49 @@
       item.textContent = text;
       fragment.appendChild(item);
     }
+    // L5b: render the per-stage diagnostic block when any stage
+    // failed or was skipped. The block is collapsed by default so
+    // a healthy run doesn't draw attention to an empty list.
+    if (failedSteps.length || missingSteps.length) {
+      fragment.appendChild(renderStageDiagnostics(failedSteps, missingSteps));
+    }
     noticeList.replaceChildren(fragment);
+  }
+
+  // L5b: a small <details> block listing the stages that failed or
+  // were skipped. The summary shows the headline counts; the body
+  // lists the actual stage names. Empty stages are omitted so a
+  // run with only missing steps (no failed) doesn't render an
+  // empty "failed" list.
+  function renderStageDiagnostics(failedSteps, missingSteps) {
+    const details = document.createElement("details");
+    details.className = "stage-diagnostics";
+    const summary = document.createElement("summary");
+    const failedLabel = `${failedSteps.length} stage${failedSteps.length === 1 ? "" : "s"} failed`;
+    const missingLabel = `${missingSteps.length} missing`;
+    summary.textContent = `${failedLabel} · ${missingLabel}`;
+    details.appendChild(summary);
+    const list = document.createElement("ul");
+    if (failedSteps.length) {
+      for (const stage of failedSteps) {
+        const li = document.createElement("li");
+        const tag = document.createElement("strong");
+        tag.textContent = "failed";
+        li.append(tag, " — ", stage);
+        list.appendChild(li);
+      }
+    }
+    if (missingSteps.length) {
+      for (const stage of missingSteps) {
+        const li = document.createElement("li");
+        const tag = document.createElement("strong");
+        tag.textContent = "missing";
+        li.append(tag, " — ", stage);
+        list.appendChild(li);
+      }
+    }
+    details.appendChild(list);
+    return details;
   }
 
   // ---------------------------------------------------------------------------
