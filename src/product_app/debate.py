@@ -411,11 +411,16 @@ class DebateOrchestrationService:
         lines.append("User query (do NOT repeat in your response):")
         lines.append(query_text)
         lines.append("")
-        lines.append("Four model answers (slot, model id, status, first 200 chars):")
+        lines.append("Four model answers (model name, status, first 200 chars):")
         for answer in initial_answers:
             excerpt = (answer.answer_text or "").strip().replace("\n", " ")[:200]
+            # ``display_name`` is the catalog's short label
+            # ("Claude Haiku 4.5"). Falling back to ``model_id`` keeps
+            # the prompt well-formed even if the catalog is unaware
+            # of the model.
+            label = answer.display_name or answer.model_id
             lines.append(
-                f"- slot {answer.slot_number} ({answer.model_id}, {answer.status.value}): "
+                f"- {label} ({answer.status.value}): "
                 f"{excerpt}"
             )
         if prior_round is not None:

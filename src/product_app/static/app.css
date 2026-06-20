@@ -1005,7 +1005,8 @@ kbd {
 .model-grid {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: var(--space-4);
+  gap: var(--space-5);
+  margin-top: var(--space-5);
 }
 
 .model-card {
@@ -1015,60 +1016,119 @@ kbd {
   background: var(--panel-strong);
   display: flex;
   flex-direction: column;
-  gap: var(--space-3);
+  gap: var(--space-4);
   min-height: 280px;
+  box-shadow: var(--shadow-sm);
+  transition: box-shadow var(--duration-base) var(--bezier), transform var(--duration-base) var(--bezier);
   transition: box-shadow var(--duration-base) var(--bezier);
 }
 
-.model-card:hover { box-shadow: var(--shadow-md); }
+.model-card:hover {
+  box-shadow: var(--shadow-md);
+  transform: translateY(-1px);
+}
 
 .model-card-header {
   display: flex;
-  align-items: center;
+  align-items: flex-start;
   justify-content: space-between;
   gap: var(--space-3);
 }
 
 .model-card h3 {
   margin: 0;
-  font-size: 0.95rem;
-  font-weight: 600;
+  font-size: 1rem;
+  font-weight: 700;
   display: flex;
-  align-items: center;
-  gap: var(--space-2);
-  flex-wrap: wrap;
+  flex-direction: column;
+  gap: 2px;
   min-width: 0;
+  line-height: 1.3;
+}
+
+.model-card-title {
+  color: var(--ink);
+  font-family: var(--font-serif);
+  font-weight: 400;
+  font-size: 1.18rem;
+  letter-spacing: -0.01em;
 }
 
 .model-card-slot {
-  font-weight: 700;
-  text-transform: uppercase;
-  font-size: 0.75rem;
-  letter-spacing: 0.06em;
+  font-family: var(--font-mono);
+  font-weight: 500;
+  text-transform: none;
+  font-size: 0.74rem;
+  letter-spacing: 0;
   color: var(--muted);
+  overflow-wrap: anywhere;
 }
 
 .model-card-body {
   margin: 0;
   flex: 1;
-  line-height: 1.55;
-  font-size: 0.95rem;
+  line-height: 1.65;
+  font-size: 0.96rem;
   color: var(--ink);
   display: flex;
   flex-direction: column;
-  gap: var(--space-2);
+  gap: var(--space-3);
 }
+
+/* Markdown-flavored prose that LLM output produces. Only the bits the
+   formatter actually emits are styled — if a future LLM output does
+   not include a particular element, the relevant rule is a no-op. */
+.q-prose p { margin: 0 0 var(--space-3); }
+.q-prose p:last-child { margin-bottom: 0; }
+.q-prose h4, .q-prose h5, .q-prose h6 {
+  margin: var(--space-4) 0 var(--space-2);
+  font-family: var(--font-serif);
+  font-weight: 400;
+  letter-spacing: -0.01em;
+  color: var(--ink);
+  line-height: 1.3;
+}
+.q-prose h4 { font-size: 1.05rem; }
+.q-prose h5 { font-size: 0.98rem; }
+.q-prose h6 { font-size: 0.92rem; color: var(--muted); }
+.q-prose ul, .q-prose ol {
+  margin: 0 0 var(--space-3);
+  padding-left: var(--space-5);
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.q-prose ul { list-style: disc; }
+.q-prose ol { list-style: decimal; }
+.q-prose li::marker { color: var(--accent); }
+.q-prose code {
+  font-family: var(--font-mono);
+  font-size: 0.85em;
+  padding: 1px 6px;
+  border-radius: 6px;
+  background: var(--accent-soft);
+  color: var(--accent-strong);
+}
+.q-prose strong { font-weight: 700; color: var(--ink); }
+.q-prose em { font-style: italic; }
+.q-prose a {
+  color: var(--accent-strong);
+  text-decoration: underline;
+  text-decoration-thickness: 1px;
+  text-underline-offset: 3px;
+}
+.q-prose a:hover { color: var(--accent); }
 
 .round-card-body {
   display: flex;
   flex-direction: column;
-  gap: var(--space-2);
+  gap: var(--space-3);
 }
 
 .synthesis-block-body {
   display: flex;
   flex-direction: column;
-  gap: var(--space-2);
+  gap: var(--space-3);
 }
 
 .model-card-meta {
@@ -1082,6 +1142,17 @@ kbd {
 }
 
 .model-card-meta strong { color: var(--ink); }
+
+.model-card-notice {
+  margin: 0;
+  padding: var(--space-3) var(--space-4);
+  background: var(--warning-soft);
+  color: var(--warning);
+  border-radius: var(--radius-sm);
+  font-size: 0.85rem;
+  line-height: 1.5;
+  border-left: 3px solid var(--warning);
+}
 
 .source-list {
   margin: 0;
@@ -1118,35 +1189,126 @@ kbd {
 
 /* ----- Debate and synthesis ------------------------------------------- */
 
-.round-card, .synthesis-block {
-  padding: var(--space-4);
+.round-card {
+  padding: var(--space-5);
   border-radius: var(--radius-md);
   border: 1px solid var(--line);
   background: var(--panel-strong);
   display: flex;
   flex-direction: column;
-  gap: var(--space-2);
+  gap: var(--space-3);
+  position: relative;
+  overflow: hidden;
+  box-shadow: var(--shadow-sm);
+}
+.round-card::before {
+  content: "";
+  position: absolute;
+  left: 0; top: 0; bottom: 0;
+  width: 4px;
+  background: var(--accent);
+}
+.round-card[data-round="1"]::before { background: #1f4f9a; }
+.round-card[data-round="2"]::before { background: var(--accent); }
+.round-card[data-round="3"]::before { background: var(--success); }
+.round-card[data-round="4"]::before { background: #6b3fa0; }
+
+.round-card-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-3);
+  flex-wrap: wrap;
 }
 
-.round-card h4, .synthesis-block h4 {
+.round-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+  padding: 4px 10px;
+  border-radius: 999px;
+  background: var(--accent-soft);
+  color: var(--accent-strong);
+  font-size: 0.78rem;
+  font-weight: 700;
+  letter-spacing: 0.02em;
+  text-transform: none;
+}
+.round-pill::before {
+  content: "";
+  width: 6px; height: 6px;
+  border-radius: 50%;
+  background: currentColor;
+}
+
+.round-focus {
+  font-size: 0.85rem;
+  color: var(--muted);
+  font-style: italic;
+}
+
+.synthesis-block {
+  padding: var(--space-5);
+  border-radius: var(--radius-md);
+  border: 1px solid var(--line);
+  background: var(--panel-strong);
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+  position: relative;
+}
+.synthesis-block[data-section="Consensus"] {
+  border-color: rgba(31, 79, 154, 0.25);
+  background: linear-gradient(180deg, rgba(31, 79, 154, 0.04), transparent 60%), var(--panel-strong);
+}
+.synthesis-block[data-section="Disagreement"] {
+  border-color: rgba(154, 46, 31, 0.25);
+  background: linear-gradient(180deg, rgba(154, 46, 31, 0.04), transparent 60%), var(--panel-strong);
+}
+.synthesis-block[data-section="Source support"] {
+  border-color: rgba(15, 123, 101, 0.25);
+  background: linear-gradient(180deg, rgba(15, 123, 101, 0.04), transparent 60%), var(--panel-strong);
+}
+.synthesis-block[data-section="Uncertainty"] {
+  border-color: rgba(148, 96, 23, 0.30);
+  background: linear-gradient(180deg, rgba(241, 179, 111, 0.06), transparent 60%), var(--panel-strong);
+}
+.synthesis-block[data-section="Recommendation"] {
+  border-color: rgba(214, 102, 63, 0.30);
+  background: linear-gradient(180deg, rgba(214, 102, 63, 0.05), transparent 60%), var(--panel-strong);
+  box-shadow: var(--shadow-sm);
+}
+
+.synthesis-block h4 {
   margin: 0;
-  font-size: 0.95rem;
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  font-family: var(--font-serif);
+  font-size: 1.18rem;
+  font-weight: 400;
+  letter-spacing: -0.01em;
+  text-transform: none;
+  color: var(--ink);
+}
+
+.synthesis-block-label {
+  font-size: 0.7rem;
   font-weight: 700;
   text-transform: uppercase;
-  letter-spacing: 0.05em;
+  letter-spacing: 0.08em;
   color: var(--muted);
-}
-
-.round-card p, .synthesis-block p {
-  margin: 0;
-  line-height: 1.55;
-  color: var(--ink);
+  font-family: var(--font-sans);
+  display: block;
+  margin-bottom: 2px;
 }
 
 .result-block h3 {
   margin: 0;
-  font-size: 1rem;
+  font-size: 1.25rem;
   font-weight: 700;
+  font-family: var(--font-serif);
+  letter-spacing: -0.01em;
 }
 
 /* ----- Misc ------------------------------------------------------------ */
@@ -1238,16 +1400,9 @@ main:focus { outline: none; }
 }
 
 .answer-section-body {
-  line-height: 1.55;
+  line-height: 1.65;
   color: var(--ink);
-  font-size: 0.95rem;
-}
-
-.answer-section-body p {
-  margin: 0 0 var(--space-2);
-}
-.answer-section-body p:last-child {
-  margin-bottom: 0;
+  font-size: 0.96rem;
 }
 
 /* Copy button — small, neutral, sits under the body. */
@@ -1259,14 +1414,16 @@ main:focus { outline: none; }
   background: transparent;
   border: 1px solid var(--line);
   border-radius: 999px;
-  padding: 2px 10px;
+  padding: 4px 12px;
   cursor: pointer;
   letter-spacing: 0.02em;
+  font-weight: 600;
   transition: color 120ms ease, border-color 120ms ease, background 120ms ease;
 }
 .answer-section-copy:hover:not(:disabled) {
-  color: var(--ink);
-  border-color: var(--accent-soft);
+  color: var(--accent-strong);
+  border-color: var(--accent);
+  background: var(--accent-soft);
 }
 .answer-section-copy:focus-visible {
   outline: 2px solid var(--focus-ring, #4a6cf7);
@@ -1279,6 +1436,7 @@ main:focus { outline: none; }
 .answer-section-copy[data-copied="true"] {
   color: var(--success, #16a34a);
   border-color: var(--success, #16a34a);
+  background: var(--success-soft);
 }
 
 /* Per-stage <details> block for failed/missing steps. */

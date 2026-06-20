@@ -632,18 +632,23 @@
     const cards = defaultModelIds.map((fallbackModelId, index) => {
       const slot = modelAnswers.find((answer) => answer.slot_number === index + 1);
       const modelId = slot?.model_id || getModelIds()[index] || fallbackModelId;
+      // Prefer the server-supplied ``display_name`` (catalog short
+      // name like "Claude Haiku 4.5") over the raw model_id. The id
+      // is still shown as a small subtitle so the user can identify
+      // the exact endpoint if they need to.
+      const displayName = slot?.display_name || modelId;
       const article = document.createElement("article");
       article.className = "model-card";
       const header = document.createElement("header");
       header.className = "model-card-header";
       const heading = document.createElement("h3");
-      const slotLabel = document.createElement("span");
-      slotLabel.className = "model-card-slot";
-      slotLabel.textContent = `Slot ${index + 1}`;
-      const modelSpan = document.createElement("span");
-      modelSpan.className = "mono";
-      modelSpan.textContent = modelId;
-      heading.append(slotLabel, " · ", modelSpan);
+      const title = document.createElement("span");
+      title.className = "model-card-title";
+      title.textContent = displayName;
+      const sub = document.createElement("span");
+      sub.className = "model-card-slot";
+      sub.textContent = `Slot ${index + 1} · ${modelId}`;
+      heading.append(title, sub);
       const statusPill = document.createElement("span");
       const statusValue = slot?.status || "pending";
       statusPill.className = "status-pill";
@@ -734,11 +739,20 @@
       const roundCards = debate.map((round) => {
         const card = document.createElement("article");
         card.className = "round-card";
-        const title = document.createElement("h4");
-        title.textContent = `Round ${round.round_number}`;
-        const focus = document.createElement("div");
-        focus.className = "muted";
+        // ``data-round`` picks the colour of the left accent bar
+        // (the CSS defines round 1 = blue, round 2 = accent orange,
+        // round 3 = green, round 4 = purple). Falls back to the
+        // accent orange for any unexpected round number.
+        card.dataset.round = String(Math.min(Math.max(round.round_number || 1, 1), 4));
+        const header = document.createElement("div");
+        header.className = "round-card-header";
+        const pill = document.createElement("span");
+        pill.className = "round-pill";
+        pill.textContent = `Round ${round.round_number}`;
+        const focus = document.createElement("span");
+        focus.className = "round-focus";
         focus.textContent = `Focus: ${(round.focus_areas || []).join(", ") || "general critique"}`;
+        header.append(pill, focus);
         const body = document.createElement("div");
         body.className = "round-card-body";
         body.appendChild(
@@ -746,7 +760,7 @@
             label: "Copy critique",
           }),
         );
-        card.append(title, focus, body);
+        card.append(header, body);
         return card;
       });
       debateOutput.replaceChildren(...roundCards);
@@ -770,6 +784,9 @@
         if (!valueText) continue;
         const block = document.createElement("section");
         block.className = "synthesis-block";
+        // ``data-section`` is the hook the CSS uses to colour the
+        // section (Consensus = blue, Disagreement = red, etc.).
+        block.dataset.section = labelText;
         const label = document.createElement("h4");
         const labelTextOnly = document.createElement("span");
         labelTextOnly.textContent = labelText;
@@ -938,28 +955,82 @@
     while (collapsed.length && collapsed[0].trim() === "") collapsed.shift();
     while (collapsed.length && collapsed[collapsed.length - 1].trim() === "") collapsed.pop();
     if (!collapsed.length) return "";
-    // Split on blank lines → paragraphs; convert remaining \n → <br>.
-    // All non-empty text is HTML-escaped so the rendered DOM is safe
-    // even if a model returns markup in its answer.
-    const paragraphs = [];
+    // Group consecutive non-blank lines into blocks; classify each
+    // block as a list, heading, fenced code block, or paragraph. The
+    // inline renderer (mdInline) handles bold, italic, inline code,
+    // and links within those block contents.
+    const out = [];
     let buffer = [];
-    const flushBuffer = () => {
+    const flushParagraph = () => {
       if (!buffer.length) return;
       const inner = buffer
-        .map((line) => escapeHtml(line))
+        .map((line) => mdInline(escapeHtml(line)))
         .join("<br>");
-      paragraphs.push(`<p>${inner}</p>`);
+      out.push(`<p>${inner}</p>`);
       buffer = [];
     };
+    const flushList = () => {
+      if (!buffer.length) return;
+      const items = buffer.map((line) => {
+        // Strip leading bullet marker ( "- ", "* ", or "1. " ).
+        const stripped = line.replace(/^(\s*)([-*]|\d+\.)\s+/, "$1");
+        return `<li>${mdInline(escapeHtml(stripped))}</li>`;
+      });
+      const ordered = buffer[0].match(/^\s*\d+\.\s+/) != null;
+      const tag = ordered ? "ol" : "ul";
+      out.push(`<${tag}>${items.join("")}</${tag}>`);
+      buffer = [];
+    };
+    const listMarker = (line) => /^\s*([-*]|\d+\.)\s+/.test(line);
     for (const line of collapsed) {
       if (line.trim() === "") {
-        flushBuffer();
-      } else {
-        buffer.push(line);
+        flushParagraph();
+        flushList();
+        continue;
       }
+      if (listMarker(line)) {
+        flushParagraph();
+        buffer.push(line);
+        continue;
+      }
+      flushList();
+      // Headings: "# ", "## ", "### ".
+      const heading = line.match(/^(#{1,3})\s+(.*)$/);
+      if (heading) {
+        const level = heading[1].length;
+        out.push(`<h${level + 3}>${mdInline(escapeHtml(heading[2]))}</h${level + 3}>`);
+        continue;
+      }
+      buffer.push(line);
     }
-    flushBuffer();
-    return paragraphs.join("");
+    flushParagraph();
+    flushList();
+    return out.join("");
+  }
+
+  // Inline markdown renderer. Escaped text is the input (so we
+  // never reintroduce unescaped HTML). Recognises: **bold**, *italic*,
+  // `code`, [text](url). Designed for the markdown flavour LLMs
+  // actually emit; not CommonMark-complete.
+  function mdInline(escaped) {
+    let s = escaped;
+    // Inline code first — everything inside backticks is verbatim and
+    // must not be touched by the bold/italic/link rules below.
+    s = s.replace(/`([^`]+)`/g, (_m, code) => `<code>${code}</code>`);
+    // Bold then italic. Order matters: ** must be tried before *, or
+    // the ** would each be consumed as empty italics.
+    s = s.replace(/\*\*([^*]+)\*\*/g, (_m, t) => `<strong>${t}</strong>`);
+    s = s.replace(/(^|[^*])\*([^*]+)\*/g, (_m, lead, t) => `${lead}<em>${t}</em>`);
+    // [text](url). URL is escaped on input; we only need to add the
+    // rel="noopener" for safety. The text may itself contain inline
+    // markup already rendered above (rare), so we just emit the
+    // anchor as-is.
+    s = s.replace(
+      /\[([^\]]+)\]\(([^)]+)\)/g,
+      (_m, text, url) =>
+        `<a href="${url}" target="_blank" rel="noopener noreferrer">${text}</a>`,
+    );
+    return s;
   }
 
   function escapeHtml(text) {
@@ -985,7 +1056,7 @@
     const wrapper = document.createElement("div");
     wrapper.className = "answer-section";
     const body = document.createElement("div");
-    body.className = "answer-section-body";
+    body.className = "answer-section-body q-prose";
     const html = formatAnswerText(rawText);
     if (html) {
       body.innerHTML = html;

@@ -44,8 +44,22 @@ from pydantic import BaseModel, Field
 from product_app.config import settings
 from product_app.model_slots import ModelSlot
 from product_app.provider_keys import ProviderCredentialSource
+from product_app.model_slots import openrouter_model_catalog_service
 
 CITATION_COVERAGE_TARGET = Decimal("0.80")
+
+
+def _resolve_display_name(model_id: str) -> str:
+    """Resolve a model_id to its catalog short_name; fall back to the id.
+
+    The short_name ("Claude Haiku 4.5") is what the UI's model-card
+    headers, synthesis prompts, and synthesis output text use — much
+    friendlier than the raw "anthropic/claude-haiku-4.5" id. When the
+    catalog does not know the model (live-fetch failed AND it isn't in
+    the static fallback), we return the model_id verbatim so the user
+    still sees something.
+    """
+    return openrouter_model_catalog_service.lookup_short_name(model_id) or model_id
 
 #: Stable prefix used for the stub citation URLs that ship with the local
 #: simulation mode. Lives under example.test (an IANA-reserved domain) so it
@@ -82,6 +96,7 @@ class CitationCoverage(BaseModel):
 class InitialModelAnswer(BaseModel):
     slot_number: int = Field(ge=1, le=4)
     model_id: str
+    display_name: str = ""
     answer_text: str
     sources: list[SourceReference]
     provider_attempt_order: list[ProviderPath]
@@ -378,6 +393,7 @@ class ProviderExecutionService:
         return InitialModelAnswer(
             slot_number=model_slot.slot_number,
             model_id=model_slot.model_id,
+            display_name=_resolve_display_name(model_slot.model_id),
             answer_text=answer_text,
             sources=sources,
             provider_attempt_order=provider_attempt_order,
@@ -416,6 +432,7 @@ class ProviderExecutionService:
         return InitialModelAnswer(
             slot_number=model_slot.slot_number,
             model_id=model_slot.model_id,
+            display_name=_resolve_display_name(model_slot.model_id),
             answer_text="",
             sources=[],
             provider_attempt_order=[ProviderPath.OPENROUTER_SEARCH],

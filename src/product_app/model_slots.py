@@ -319,6 +319,32 @@ class OpenRouterModelCatalogService:
             for entry in self._entries()
         )
 
+    def lookup_short_name(self, model_id: str) -> str | None:
+        """Return the catalog's short display name for ``model_id``.
+
+        Used by the synthesis prompt builder and the UI model-card
+        headers to label answers with a human-readable name
+        ("Claude Haiku 4.5") rather than the raw model id
+        ("anthropic/claude-haiku-4.5"). Returns ``None`` when the
+        model is not in the catalog — callers should fall back to
+        the model_id verbatim in that case.
+
+        We prefer the static-fallback catalog over the live catalog
+        for *display* purposes even when the live catalog has the
+        model, because the static list carries curated, friendly
+        names ("Claude 3 Haiku") whereas the live catalog often
+        only has the URL slug ("claude-3-haiku"). The live catalog
+        is the source of truth for *what models exist*; this method
+        only cares about how to render the name to the user.
+        """
+        for entry in _CATALOG_FALLBACK_ENTRIES:
+            if entry.model_id == model_id:
+                return entry.short_name
+        for entry in self._entries():
+            if entry.model_id == model_id:
+                return entry.short_name
+        return None
+
     def default_model_ids(self) -> tuple[str, ...]:
         """Return the four default model ids: cheapest per family.
 
