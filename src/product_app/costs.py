@@ -201,6 +201,34 @@ class CostEstimationService:
             COST_DISPLAY_QUANTUM, rounding=ROUND_HALF_UP
         )
         threshold_action, reasons = self._threshold_for(estimated)
+        # C8: cumulative-spend guard. A user can issue many small
+        # queries that each stay below ``HARD_LIMIT_USD`` but together
+        # blow the budget. The hard limit is per-account-per-window;
+        # we approximate "window" as the in-memory event ring buffer
+        # (capacity ``InMemoryCostEventRecorder.MAX_EVENTS``). When a
+        # new estimate, added to the cumulative recorded spend for
+        # this account, would push the total past the hard limit,
+        # the request is BLOCKed even if the new estimate alone would
+        # ALLOW. This is defense-in-depth — the upstream provider
+        # also bills and rate-limits — but it prevents a single
+        # client from exhausting the demo budget via repeated small
+        # calls.
+        if account_id is not None and cost_event_recorder is not None:
+            cumulative = self._cumulative_spend_for(account_id)
+            if cumulative + estimated > HARD_LIMIT_USD:
+                return CostEstimate(
+                    estimated_cost_usd=estimated,
+                    threshold_action=CostThresholdAction.BLOCK,
+                    confirmation_token=None,
+                    reasons=[
+                        "Estimated cost is above the USD 0.25 hard limit for this account.",
+                        (
+                            "Cumulative spend for this account is "
+                            f"{cumulative.quantize(COST_DISPLAY_QUANTUM)} USD; "
+                            "no further queries can be accepted until the window resets."
+                        ),
+                    ],
+                )
         confirmation_token: str | None = None
         if threshold_action is not CostThresholdAction.BLOCK:
             # Mint a token whenever the estimate is at all confirmable. The
@@ -362,6 +390,31 @@ class CostEstimationService:
             + model_output_cost
             + inner_call_cost
         )
+
+    def _cumulative_spend_for(self, account_id: UUID) -> Decimal:
+        """Sum the ``estimated_cost_usd`` of every cost event recorded
+        for ``account_id``. The recorder holds at most
+        ``MAX_EVENTS`` events, so this is a sliding-window total,
+        not an unbounded account lifetime. The intent is to detect
+        the immediate-budget-exhaustion case (a user issuing many
+        queries in quick succession), not to enforce a monthly cap.
+
+        Only ``cost_guardrail_accepted`` events count — these are
+        the events where the estimate was charged. ``BLOCK`` events
+        were never billed, and ``REQUIRE_CONFIRMATION`` events are
+        also not charged because the request was abandoned or the
+        user cancelled.
+        """
+        total = Decimal("0")
+        if cost_event_recorder is None:
+            return total
+        for event in cost_event_recorder.list_events():
+            if event.account_id != account_id:
+                continue
+            if event.event_type != "cost_guardrail_accepted":
+                continue
+            total += event.estimated_cost_usd
+        return total
 
     def _threshold_for(self, estimated: Decimal) -> tuple[CostThresholdAction, list[str]]:
         if estimated > HARD_LIMIT_USD:
