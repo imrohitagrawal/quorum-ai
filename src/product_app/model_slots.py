@@ -156,6 +156,26 @@ def _validate_model_id_list(model_ids: list[str]) -> None:
         raise InvalidModelSlotError(errors)
 
     seen: dict[str, int] = {}
+    # C11: cross-check model ids against the live catalog. The
+    # catalog is the authoritative source of "what models exist on
+    # the upstream provider" — a model id not in the catalog will
+    # fail downstream at the provider call, so we surface that
+    # failure here as a validation error with a clear message. The
+    # cross-check is best-effort: if the catalog is unreachable
+    # (network error, parse error, empty response), the validator
+    # falls through to the shape check only — a transient catalog
+    # outage must not block every slot pick. The shape check alone
+    # already rejects truly malformed ids.
+    known_ids: set[str] | None = None
+    try:
+        from product_app.catalog_fetcher import openrouter_catalog_fetcher
+
+        known_ids = {
+            entry.model_id for entry in openrouter_catalog_fetcher.list_models()
+        }
+    except Exception:  # noqa: BLE001 - catalog failures must not break validation
+        known_ids = None
+
     for index, model_id in enumerate(model_ids, start=1):
         if not isinstance(model_id, str) or not model_id or not _MODEL_ID_RE.match(model_id):
             errors.append(
@@ -163,6 +183,22 @@ def _validate_model_id_list(model_ids: list[str]) -> None:
                     slot_number=index,
                     model_id=model_id if isinstance(model_id, str) else None,
                     message=(f"Model id '{model_id}' is not a valid vendor/model identifier."),
+                ),
+            )
+            continue
+        # Only enforce the catalog cross-check when the catalog is
+        # available. When ``known_ids`` is ``None`` (catalog
+        # unreachable), the shape check is the only guarantee —
+        # this matches the prior behaviour and keeps the validator
+        # functional during catalog outages.
+        if known_ids is not None and model_id not in known_ids:
+            errors.append(
+                ModelSlotError(
+                    slot_number=index,
+                    model_id=model_id,
+                    message=(
+                        f"Model id '{model_id}' is not in the  catalog."
+                    ),
                 ),
             )
             continue
