@@ -23,6 +23,7 @@ from product_app.catalog_fetcher import (
     ModelCatalogEntry,
     OpenRouterCatalogFetcher,
     _FALLBACK_CATALOG as _CATALOG_FALLBACK_ENTRIES,
+    _vendor_for,
     openrouter_catalog_fetcher,
 )
 EXPECTED_SLOT_COUNT = 4
@@ -267,6 +268,28 @@ def _supports_online(entry: ModelCatalogEntry) -> bool:
     return entry.vendor in ONLINE_CAPABLE_VENDORS
 
 
+#: Step A: model-id suffixes that identify unauthenticated preview
+#: variants on . These variants cost $0 and do not
+#: authenticate against the demo ``OPENROUTER_API_KEY`` — calling
+#: them returns HTTP 401/402, which collapses every default slot
+#: into ``local_simulation``. The catalog's cheapest-per-vendor
+#: pool ranks ``:free`` first because $0 < any paid rate, so we
+#: must filter these explicitly before picking defaults.
+_UNAUTHENTICATED_VARIANT_SUFFIXES: frozenset[str] = frozenset({":free", ":preview"})
+
+
+def _is_unauthenticated_variant(model_id: str) -> bool:
+    """True if ``model_id`` carries a ``:free`` / ``:preview`` suffix.
+
+    Pure string check; matches the suffix after the last ``:`` so
+    ids like ``openai/gpt-4o-mini:free`` are caught without
+    breaking ids that legitimately contain colons (e.g. version
+    strings inside the model id itself).
+    """
+    lowered = model_id.lower()
+    return any(lowered.endswith(suffix) for suffix in _UNAUTHENTICATED_VARIANT_SUFFIXES)
+
+
 FALLBACK_CATALOG_OPTIONS: tuple[ModelCatalogOption, ...] = tuple(
     ModelCatalogOption(model_id=entry.model_id, label=entry.name)
     for entry in _CATALOG_FALLBACK_ENTRIES
@@ -300,18 +323,40 @@ class OpenRouterModelCatalogService:
         """Return the four default model ids: cheapest per family.
 
         Returns the cheapest online-capable model from each of the
-        four default vendors. If a vendor is missing from the
-        catalog entirely (live or fallback), it is omitted.
+        four default vendors. The candidate pool is filtered to
+        exclude ``:free`` and ``:preview`` model-id suffixes (Step A)
+        because those variants do not authenticate against the demo
+         key — they cost $0 because they are unauthenticated
+        previews. If filtering empties a vendor's pool, that vendor's
+        entry in the static ``DEFAULT_MODEL_IDS`` tuple is used as
+        the safety net so the UI still shows a usable default.
+
+        If a vendor is missing from the catalog entirely (live or
+        fallback) AND has no static-default entry, it is omitted.
         """
         candidates = [
             entry for entry in self._entries()
             if entry.vendor in ONLINE_CAPABLE_VENDORS
+            and not _is_unauthenticated_variant(entry.model_id)
         ]
         cheapest = OpenRouterCatalogFetcher.cheapest_per_vendor(
             candidates,
             vendors=DEFAULT_VENDORS,
         )
-        return tuple(cheapest[v] for v in DEFAULT_VENDORS if v in cheapest)
+        # Static safety net: if filtering emptied a vendor's pool,
+        # fall back to the corresponding entry in ``DEFAULT_MODEL_IDS``
+        # so the user still gets four payable model slots. This is
+        # what the plan calls "the static list is the safety net".
+        fallback_by_vendor = {
+            _vendor_for(model_id): model_id for model_id in DEFAULT_MODEL_IDS
+        }
+        resolved: list[str] = []
+        for vendor in DEFAULT_VENDORS:
+            if vendor in cheapest:
+                resolved.append(cheapest[vendor])
+            elif vendor in fallback_by_vendor:
+                resolved.append(fallback_by_vendor[vendor])
+        return tuple(resolved)
 
     def default_slots(self) -> list[ModelSlot]:
         # L2: defaults are search-enabled (``ModelSlot.search`` defaults
