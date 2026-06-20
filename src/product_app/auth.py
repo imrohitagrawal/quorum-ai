@@ -270,10 +270,11 @@ def require_session(request: Request) -> SessionContext:
 def enforce_csrf(request: Request, session: SessionContext) -> None:
     """Validate the CSRF token attached to the request.
 
-    The CSRF token must match the session's CSRF token. We accept it in
-    either the ``X-CSRF-Token`` header (preferred, used by the
-    JavaScript client) or the ``csrf_token`` form field (used by older
-    clients and the test suite).
+    The CSRF token must match the session's CSRF token. We accept it
+    via the ``X-CSRF-Token`` or ``X-CSRF`` header only. Query-string
+    submission is intentionally NOT supported: it would leak the
+    token via the ``Referer`` header and through reverse-proxy
+    access logs.
 
     Legacy sessions (those issued via the ``X-Account-Id`` header) are
     only available when ``settings.account_legacy_header_enabled`` is
@@ -303,7 +304,6 @@ def enforce_csrf(request: Request, session: SessionContext) -> None:
     presented = (
         request.headers.get(CSRF_HEADER_NAME)
         or request.headers.get("X-CSRF")
-        or request.query_params.get("csrf_token")
     )
     if not presented or not secrets.compare_digest(presented, session.csrf_token):
         raise HTTPException(
@@ -364,17 +364,32 @@ def issue_or_resume_session(presented_session_id: str | None) -> SessionIssueRes
     caller can move on with a freshly minted session. The legacy
     ``X-Account-Id`` header is *not* consulted here; that path lives in
     ``require_session`` and is used by the legacy X-Account-Id tests.
+
+    On a successful resume, the CSRF token is rotated. The rotation
+    narrows the window in which a leaked CSRF token can be reused:
+    a token issued for the previous ``/v1/session`` call is no
+    longer valid after the next call. The ``session_id`` itself is
+    not rotated because it is the cookie's identifier and changing
+    it would force every active client to drop their cookie.
     """
     _enforce_production_guards(require_legacy_disabled=True)
     if presented_session_id:
         existing = session_repository.get(presented_session_id)
         if existing is not None and not existing.is_expired(now=datetime.now(UTC)):
-            session_repository.touch(presented_session_id)
+            # C10: rotate CSRF on resume. The fresh token replaces
+            # the one previously issued for this session. See
+            # ``InMemorySessionRepository.rotate_csrf``.
+            rotated = session_repository.rotate_csrf(presented_session_id)
+            if rotated is None:
+                # Race: the session expired between ``get`` and
+                # ``rotate_csrf``. Fall through to issuing a new
+                # session.
+                return issue_session()
             return SessionIssueResponse(
-                account_id=existing.account_id,
-                session_id=existing.session_id,
-                csrf_token=existing.csrf_token,
-                expires_at=existing.last_used_at + SESSION_TTL,
+                account_id=rotated.account_id,
+                session_id=rotated.session_id,
+                csrf_token=rotated.csrf_token,
+                expires_at=rotated.last_used_at + SESSION_TTL,
                 session_expires_in_seconds=int(SESSION_TTL.total_seconds()),
             )
     return issue_session()
