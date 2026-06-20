@@ -1,0 +1,52 @@
+name: Tests
+
+# Runs the full pytest suite on every push and pull request. The
+# suite is the same one developers run locally via ``make test``,
+# so a green run here matches a green run on a developer's machine.
+# No external services are required: the tests are hermetic (mocked
+# catalog, in-process FastAPI test client, no live  calls).
+#
+# Concurrency cancels in-flight runs on the same ref so a force-
+# push doesn't pile up redundant CI minutes.
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    name: pytest (Python 3.12)
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v5
+        with:
+          version: "latest"
+          enable-cache: true
+
+      - name: Set up Python
+        run: uv python install 3.12
+
+      - name: Install dependencies
+        run: uv sync --all-extras --dev
+
+      - name: Run tests
+        env:
+          # The app boots without a real  API key. The
+          # readiness probe will see ``OPENROUTER_API_KEY`` empty
+          # and report ``offline_by_no_key``; that's the correct
+          # state for CI and is itself covered by the unit tests
+          # at tests/unit/test_readiness.py.
+          OPENROUTER_LIVE_EXECUTION_ENABLED: "false"
+          QUORUM_RUNTIME_ENVIRONMENT: "ci"
+        run: make test
