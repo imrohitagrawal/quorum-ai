@@ -651,11 +651,26 @@
       statusPill.innerHTML = `<span class="status-pill-dot" aria-hidden="true"></span><span>${statusValue}</span>`;
       header.append(heading, statusPill);
       article.appendChild(header);
-      const body = document.createElement("p");
+      const body = document.createElement("div");
       body.className = "model-card-body";
-      body.textContent = slot
-        ? (formatAnswerText(slot.answer_text) || "Provider did not return text.")
-        : "Awaiting provider output.";
+      if (slot) {
+        body.appendChild(
+          renderAnswerSection(slot.answer_text, { label: "Copy answer" }),
+        );
+        if (!slot.answer_text) {
+          // Surface the existing placeholder copy when the slot is
+          // empty so the user understands the card isn't broken.
+          const placeholder = document.createElement("p");
+          placeholder.className = "muted";
+          placeholder.textContent = "Provider did not return text.";
+          body.appendChild(placeholder);
+        }
+      } else {
+        const placeholder = document.createElement("p");
+        placeholder.className = "muted";
+        placeholder.textContent = "Awaiting provider output.";
+        body.appendChild(placeholder);
+      }
       article.appendChild(body);
       // When the model is complete but carried a ``provider_notice`` —
       // e.g. it was a local-simulation answer with an honest disclosure,
@@ -724,8 +739,13 @@
         const focus = document.createElement("div");
         focus.className = "muted";
         focus.textContent = `Focus: ${(round.focus_areas || []).join(", ") || "general critique"}`;
-        const body = document.createElement("p");
-        body.textContent = formatAnswerText(round.critique_text) || "—";
+        const body = document.createElement("div");
+        body.className = "round-card-body";
+        body.appendChild(
+          renderAnswerSection(round.critique_text, {
+            label: "Copy critique",
+          }),
+        );
         card.append(title, focus, body);
         return card;
       });
@@ -754,8 +774,13 @@
         const labelTextOnly = document.createElement("span");
         labelTextOnly.textContent = labelText;
         label.append(labelTextOnly, buildInfoIcon(SYNTHESIS_TOOLTIPS[labelText] || ""));
-        const body = document.createElement("p");
-        body.textContent = formatAnswerText(valueText);
+        const body = document.createElement("div");
+        body.className = "synthesis-block-body";
+        body.appendChild(
+          renderAnswerSection(valueText, {
+            label: `Copy ${labelText.toLowerCase()}`,
+          }),
+        );
         block.append(label, body);
         stack.appendChild(block);
       }
@@ -826,12 +851,18 @@
   // Misc helpers
   // ---------------------------------------------------------------------------
 
-  // Light formatter for model answers and synthesis sections. We don't
-  // do real markdown (no build step, no dependency budget) but we do
-  // collapse runs of blank lines and render ``- `` list prefixes as
-  // bullet characters. The goal is to keep LLM output that already has
-  // reasonable structure legible on first render — long blocks of
-  // double-spaced prose are hard to scan.
+  // Light formatter for model answers, debate rounds, and synthesis
+  // sections (L5a). We don't do real markdown (no build step, no
+  // dependency budget) but we do split on blank lines into paragraphs
+  // and convert single newlines into ``<br>`` so LLM output that
+  // already has reasonable structure stays legible on first render —
+  // long blocks of double-spaced prose collapse to a wall of text,
+  // which is hard to scan.
+  //
+  // Returns an HTML string. The caller is responsible for inserting
+  // it with ``innerHTML`` — escaping is handled internally via the
+  // existing ``escapeHtml`` helper so a hostile answer cannot inject
+  // script tags through the response payload.
   //
   // The function is intentionally a no-op on plain prose and on the
   // "Awaiting provider output." / "Provider did not return text."
@@ -843,6 +874,7 @@
       rawText === "Provider did not return text.";
     const text = placeholder ? "" : String(rawText);
     if (!text) return "";
+    // Normalise line endings and strip trailing whitespace per line.
     const lines = text
       .replace(/\r\n?/g, "\n")
       .split("\n")
@@ -859,10 +891,31 @@
         collapsed.push(line);
       }
     }
-    // Strip leading/trailing blank lines.
     while (collapsed.length && collapsed[0].trim() === "") collapsed.shift();
     while (collapsed.length && collapsed[collapsed.length - 1].trim() === "") collapsed.pop();
-    return collapsed.join("\n");
+    if (!collapsed.length) return "";
+    // Split on blank lines → paragraphs; convert remaining \n → <br>.
+    // All non-empty text is HTML-escaped so the rendered DOM is safe
+    // even if a model returns markup in its answer.
+    const paragraphs = [];
+    let buffer = [];
+    const flushBuffer = () => {
+      if (!buffer.length) return;
+      const inner = buffer
+        .map((line) => escapeHtml(line))
+        .join("<br>");
+      paragraphs.push(`<p>${inner}</p>`);
+      buffer = [];
+    };
+    for (const line of collapsed) {
+      if (line.trim() === "") {
+        flushBuffer();
+      } else {
+        buffer.push(line);
+      }
+    }
+    flushBuffer();
+    return paragraphs.join("");
   }
 
   function escapeHtml(text) {
@@ -876,6 +929,55 @@
         default: return ch;
       }
     });
+  }
+
+  // L5a: render an answer body + Copy button. The body is a div
+  // containing the ``formatAnswerText`` HTML; the Copy button writes
+  // the raw text to the clipboard. Returns a DocumentFragment the
+  // caller can append to any container. The button is disabled when
+  // the source text is empty / placeholder.
+  function renderAnswerSection(rawText, { label = "Copy section" } = {}) {
+    const fragment = document.createDocumentFragment();
+    const wrapper = document.createElement("div");
+    wrapper.className = "answer-section";
+    const body = document.createElement("div");
+    body.className = "answer-section-body";
+    const html = formatAnswerText(rawText);
+    if (html) {
+      body.innerHTML = html;
+    } else {
+      body.classList.add("muted");
+      body.textContent = "—";
+    }
+    const copyButton = document.createElement("button");
+    copyButton.type = "button";
+    copyButton.className = "answer-section-copy";
+    copyButton.textContent = label;
+    copyButton.setAttribute("aria-label", label);
+    if (!html || !rawText) {
+      copyButton.disabled = true;
+    }
+    copyButton.addEventListener("click", async () => {
+      const value = rawText || "";
+      if (!value) return;
+      try {
+        await navigator.clipboard.writeText(value);
+        copyButton.dataset.copied = "true";
+        copyButton.textContent = "Copied";
+        window.setTimeout(() => {
+          delete copyButton.dataset.copied;
+          copyButton.textContent = label;
+        }, 1500);
+      } catch (_) {
+        copyButton.textContent = "Copy failed";
+        window.setTimeout(() => {
+          copyButton.textContent = label;
+        }, 1500);
+      }
+    });
+    wrapper.append(body, copyButton);
+    fragment.appendChild(wrapper);
+    return fragment;
   }
 
   function setButtonLoading(button, isLoading) {
