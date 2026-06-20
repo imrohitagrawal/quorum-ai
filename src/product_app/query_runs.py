@@ -511,8 +511,13 @@ query_run_repository = InMemoryQueryRunRepository()
 @router.post("/estimate", response_model=QueryRunEstimateResponse)
 def estimate_query_run(
     payload: QueryRunEstimateRequest,
+    request: Request,
     session: Annotated[SessionContext, Depends(require_session)],
 ) -> QueryRunEstimateResponse:
+    # The estimate endpoint writes an audit event
+    # (``record_guardrail_event``) and is therefore a state-mutating
+    # action — it must enforce CSRF like the create and delete routes.
+    enforce_csrf(request, session)
     model_slots = _validated_model_slots(
         payload.model_slots,
         slot_search=payload.slot_search,
@@ -690,8 +695,13 @@ def create_query_run(
 @router.post("/warnings", response_model=QueryRunWarningsResponse)
 def get_query_run_warnings(
     payload: QueryRunWarningsRequest,
+    request: Request,
     session: Annotated[SessionContext, Depends(require_session)],
 ) -> QueryRunWarningsResponse:
+    # The warnings endpoint writes an audit event
+    # (``record_warning_impression``) and is therefore a state-mutating
+    # action — it must enforce CSRF like the create and delete routes.
+    enforce_csrf(request, session)
     warnings = safety_warning_policy.required_warnings_for_query(payload.query_text)
     safety_warning_policy.record_warning_impression(
         account_id=session.account_id,

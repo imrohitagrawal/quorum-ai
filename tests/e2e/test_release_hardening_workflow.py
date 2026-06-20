@@ -57,6 +57,7 @@ def test_core_query_workflow_with_env_configured_access(
     warnings_response = client.post(
         "/v1/query-runs/warnings",
         json={"query_text": query_text},
+        headers=headers,
     )
     assert warnings_response.status_code == 200
     warning_types = {warning["warning_type"] for warning in warnings_response.json()["warnings"]}
