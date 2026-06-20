@@ -3,8 +3,17 @@ services:
     build: .
     ports:
       - "127.0.0.1:8000:8000"
+    # C12: pin env_file to the repo-root ``.env`` so the path is
+    # unambiguous. The previous ``.env.example`` entry was a
+    # template, not the real file — running ``docker compose up``
+    # then fell back to a partial config (the  key was
+    # missing, the live-execution flag defaulted to false, and the
+    # session secret was a random per-process value). Pinning to
+    # ``.env`` makes the dependency explicit: the operator is
+    # responsible for copying ``.env.example`` to ``.env`` and
+    # filling in the secrets before running this compose.
     env_file:
-      - .env.example
+      - ./.env
     healthcheck:
       test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/health').read()"]
       interval: 10s
