@@ -167,17 +167,28 @@ async def validation_exception_handler(
 
 
 def _render_workspace_html() -> str:
-    """Render the workspace page with the catalog and default model ids."""
+    """Render the workspace page with the catalog and default model ids.
+
+    Both JSON data islands must be ``</``-escaped before being inserted
+    into the HTML template, even though they are embedded inside
+    ``<script>`` blocks. The escape prevents a JSON value containing
+    ``</script>`` (or any other HTML-breaking sequence) from being
+    interpreted as a script tag boundary by the browser. The model
+    catalog is user-controllable in principle (it comes from the
+     API); the default model id list is server-controlled,
+    but we escape it anyway as defense-in-depth.
+    """
     template = (TEMPLATES_DIR / "workspace.html").read_text(encoding="utf-8")
     default_ids = [slot.model_id for slot in default_model_slots()]
     catalog_options = openrouter_model_catalog_service.list_model_options()
     catalog_json = json.dumps(
         [option.model_dump(mode="json") for option in catalog_options],
     ).replace("<", "\\u003c")
+    default_ids_json = json.dumps(default_ids).replace("<", "\\u003c")
     return (
         template.replace("{{ app_name }}", escape(settings.app_name))
         .replace("{{ model_catalog_json }}", catalog_json)
-        .replace("{{ default_model_ids_json }}", json.dumps(default_ids))
+        .replace("{{ default_model_ids_json }}", default_ids_json)
     )
 
 
