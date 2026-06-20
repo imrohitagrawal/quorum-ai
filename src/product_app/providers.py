@@ -41,7 +41,7 @@ from uuid import UUID
 
 from pydantic import BaseModel, Field
 
-from product_app.config import settings
+from product_app.config import RuntimeEnvironment, settings
 from product_app.model_slots import ModelSlot
 from product_app.provider_keys import ProviderCredentialSource
 from product_app.model_slots import openrouter_model_catalog_service
@@ -650,6 +650,15 @@ class ProviderExecutionService:
         query_text: str,
         model_slot: ModelSlot,
     ) -> bool:
+        # Magic phrases (``"force provider failure"`` etc.) are test-only
+        # knobs. They are gated on ``runtime_environment == LOCAL`` so a
+        # production or staging deployment cannot have its results
+        # degraded by a user submitting a query that happens to contain
+        # the phrase. The ``model_id`` marker path is not gated because
+        # callers cannot influence ``model_id`` — it is operator-curated
+        # via the slot picker.
+        if settings.runtime_environment is not RuntimeEnvironment.LOCAL:
+            return self._PROVIDER_FAILURE_MODEL_MARKER in model_slot.model_id
         lowered_query = query_text.lower()
         return (
             self._FORCE_PROVIDER_FAILURE_PHRASE in lowered_query
@@ -657,6 +666,10 @@ class ProviderExecutionService:
         )
 
     def _should_force_fallback(self, *, query_text: str, model_slot: ModelSlot) -> bool:
+        # See ``_should_force_provider_failure`` for the rationale on
+        # gating the user-query phrase to ``runtime_environment=LOCAL``.
+        if settings.runtime_environment is not RuntimeEnvironment.LOCAL:
+            return self._FALLBACK_MODEL_MARKER in model_slot.model_id
         lowered_query = query_text.lower()
         return (
             self._FORCE_FALLBACK_PHRASE in lowered_query

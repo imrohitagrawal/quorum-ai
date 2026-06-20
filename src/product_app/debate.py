@@ -28,7 +28,7 @@ from uuid import UUID
 
 from pydantic import BaseModel, Field
 
-from product_app.config import settings
+from product_app.config import RuntimeEnvironment, settings
 from product_app.model_slots import ModelSlot
 from product_app.providers import (
     InitialAnswerStatus,
@@ -302,6 +302,13 @@ class DebateOrchestrationService:
     def _should_skip_round_two(self, *, elapsed_ms: float, query_text: str) -> bool:
         if elapsed_ms > self._hard_timeout_ms:
             return True
+        # Magic phrase ``"force debate timeout"`` is a test-only knob.
+        # See ``providers._should_force_provider_failure`` for the
+        # rationale on gating the user-query phrase to
+        # ``runtime_environment=LOCAL``. The hard-timeout path is not
+        # gated — it is a real production safety.
+        if settings.runtime_environment is not RuntimeEnvironment.LOCAL:
+            return False
         return "force debate timeout" in query_text.lower()
 
     def _build_round_one_text(
