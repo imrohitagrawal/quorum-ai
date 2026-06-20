@@ -72,3 +72,45 @@ def test_provider_secret_values_do_not_leak_into_responses_or_events(
     assert "sk-or-v1-secret-value-that-must-not-leak" not in serialized_events
     assert "secret_" not in serialized_events
     assert "OPENROUTER_API_KEY" not in serialized_events
+
+
+def test_cumulative_cost_block_does_not_leak_account_secrets(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """C8 added a cumulative-spend guard that returns a 402-style
+    BLOCK when an account exceeds the per-window budget. The BLOCK
+    reason must NOT include the ``openrouter_api_key`` value (it
+    never should, but a regression that interpolated the secret
+    into a debug message would surface here).
+    """
+    from decimal import Decimal
+    from product_app.costs import cost_event_recorder
+
+    monkeypatch.setattr(
+        "product_app.query_runs.settings.openrouter_api_key",
+        "sk-or-v1-secret-value-that-must-not-leak",
+    )
+    account = uuid4()
+    # Burn the budget.
+    cost_event_recorder.clear()
+    cost_event_recorder.record(
+        event_type="cost_guardrail_accepted",
+        account_id=account,
+        query_run_id=None,
+        estimated_cost_usd=Decimal("0.30"),
+        threshold_action="allow",
+        confirmed=False,
+    )
+    client = TestClient(app)
+    headers = {"X-Account-Id": str(account)}
+    response = client.post(
+        "/v1/query-runs/estimate",
+        json={
+            "query_text": "x" * 5000,
+            "model_slots": DEFAULT_MODEL_IDS,
+        },
+        headers=headers,
+    )
+    body = response.text
+    assert "sk-or-v1-secret-value-that-must-not-leak" not in body
+    assert "secret_" not in body

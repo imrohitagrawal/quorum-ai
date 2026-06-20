@@ -30,7 +30,6 @@ to avoid hitting the network.
 from __future__ import annotations
 
 import json
-import logging
 import re
 from dataclasses import dataclass
 from decimal import Decimal
@@ -41,8 +40,6 @@ from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
 
 from product_app.config import settings
-
-_LOG = logging.getLogger("quorum.catalog")
 
 #: Public catalog endpoint. The endpoint is unauthenticated and free;
 #: we hit it once per TTL window, not per request.
