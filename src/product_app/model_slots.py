@@ -28,11 +28,27 @@ from product_app.catalog_fetcher import (
 )
 EXPECTED_SLOT_COUNT = 4
 
-#: Static fallback defaults, used when the live catalog fetch fails
-#: AND by the test suite as a deterministic 4-id fixture. Production
-#: code paths call ``default_model_slots()`` which delegates to the
-#: live catalog service; the static list is the last-resort safety
-#: net, not the primary source.
+#: Authoritative default model ids, in slot order (1, 2, 3, 4).
+#:
+#: Why this list is the source of truth (not the live catalog):
+#:
+#: 1. The demo ``OPENROUTER_API_KEY`` authenticates a *fixed set* of
+#:    model ids. The catalog keeps growing; new models appear under
+#:    the same vendor prefix every quarter. Some authenticate, some
+#:    do not — and the catalog has no way to tell us which.
+#: 2. The catalog's cheapest-per-vendor logic returns whatever is
+#:    cheapest today, not what is known to work. The four ids here
+#:    have been observed to authenticate with the demo key and to
+#:    support the ``:online`` web-search suffix.
+#: 3. ``default_model_ids()`` is called on every page load and on
+#:    every ``/v1/query-runs`` POST that does not override the slot
+#:    list. A wrong default cascades: every slot returns
+#:    ``local_simulation`` and the demo is over before it starts.
+#:
+#: The live catalog is still consulted as a *drift* check — if a
+#: model in this tuple is no longer in the catalog, ``default_model_ids``
+#: surfaces the stale-id diagnostic without silently swapping in a
+#: different model. Operator action is required to change the list.
 DEFAULT_MODEL_IDS: tuple[str, ...] = (
     "openai/gpt-4o-mini",
     "anthropic/claude-haiku-4.5",
@@ -290,6 +306,14 @@ class ModelCatalogOption(BaseModel):
 
 class ModelDefaultsResponse(BaseModel):
     model_slots: list[ModelSlot]
+    #: Ids from the static ``DEFAULT_MODEL_IDS`` tuple that the live
+    #:  catalog no longer lists. Empty when the catalog is
+    #: unreachable, when every static default is still in the catalog,
+    #: or when the catalog service has not yet been consulted.
+    #: Surfaced for operator diagnostics — the UI can show a small
+    #: warning when this is non-empty, but the four returned slots
+    #: are unchanged.
+    stale_model_ids: list[str] = Field(default_factory=list)
 
 
 #: Vendor prefixes whose models we trust to support the ``:online``
@@ -382,43 +406,70 @@ class OpenRouterModelCatalogService:
         return None
 
     def default_model_ids(self) -> tuple[str, ...]:
-        """Return the four default model ids: cheapest per family.
+        """Return the four default model ids for the workspace.
 
-        Returns the cheapest online-capable model from each of the
-        four default vendors. The candidate pool is filtered to
-        exclude ``:free`` and ``:preview`` model-id suffixes (Step A)
-        because those variants do not authenticate against the demo
-         key — they cost $0 because they are unauthenticated
-        previews. If filtering empties a vendor's pool, that vendor's
-        entry in the static ``DEFAULT_MODEL_IDS`` tuple is used as
-        the safety net so the UI still shows a usable default.
+        ``DEFAULT_MODEL_IDS`` is the source of truth. The live catalog
+        is consulted only as a *drift* check: if a default id is no
+        longer in the catalog, the id is still returned (so the demo
+        keeps working against the model the operator has actually
+        paid for) but the staleness surfaces in the
+        ``default_diagnostics`` field on the response so the operator
+        can see the model has been removed from the upstream catalog.
 
-        If a vendor is missing from the catalog entirely (live or
-        fallback) AND has no static-default entry, it is omitted.
+        Why the static list is primary, not the catalog:
+
+        * The cheapest-per-vendor catalog pick is a *display* affordance
+          (a fresh new model appears in the UI), not an *execution*
+          affordance. New cheap models often do not authenticate with
+          the demo ``OPENROUTER_API_KEY`` or do not support the
+          ``:online`` web-search suffix.
+        * The ``:free`` / ``:preview`` suffix filter (Step A) catches
+          a known failure mode but does not catch "new paid model that
+          the demo key cannot reach". That class of drift is invisible
+          to a suffix filter and silent to a cheapest-pick — the only
+          way to be honest about which models work is to name them
+          explicitly.
+        * A static list is auditable: an operator can ``git diff`` the
+          tuple and see exactly which models are being called, in
+          what order, with no dependency on what the catalog happens
+          to return today.
+
+        Catalog consultation is best-effort: if the catalog is
+        unreachable (network error, parse error, empty response),
+        the static list is still returned and no diagnostic is
+        surfaced — the offline-mode UX is the same as before.
         """
-        candidates = [
-            entry for entry in self._entries()
-            if entry.vendor in ONLINE_CAPABLE_VENDORS
-            and not _is_unauthenticated_variant(entry.model_id)
-        ]
-        cheapest = OpenRouterCatalogFetcher.cheapest_per_vendor(
-            candidates,
-            vendors=DEFAULT_VENDORS,
-        )
-        # Static safety net: if filtering emptied a vendor's pool,
-        # fall back to the corresponding entry in ``DEFAULT_MODEL_IDS``
-        # so the user still gets four payable model slots. This is
-        # what the plan calls "the static list is the safety net".
-        fallback_by_vendor = {
-            _vendor_for(model_id): model_id for model_id in DEFAULT_MODEL_IDS
-        }
+        catalog_ids: set[str] | None = None
+        stale_ids: list[str] = []
+        try:
+            catalog_ids = {entry.model_id for entry in self._entries()}
+        except Exception:  # noqa: BLE001 — drift check is best-effort
+            catalog_ids = None
+
         resolved: list[str] = []
-        for vendor in DEFAULT_VENDORS:
-            if vendor in cheapest:
-                resolved.append(cheapest[vendor])
-            elif vendor in fallback_by_vendor:
-                resolved.append(fallback_by_vendor[vendor])
+        for model_id in DEFAULT_MODEL_IDS:
+            resolved.append(model_id)
+            if catalog_ids is not None and model_id not in catalog_ids:
+                stale_ids.append(model_id)
+        if stale_ids:
+            # Make the drift visible to the route layer without
+            # changing the returned defaults. The route layer logs
+            # the diagnostic and (optionally) surfaces it to the UI.
+            self._last_drift_diagnostic = tuple(stale_ids)
+        else:
+            self._last_drift_diagnostic = ()
         return tuple(resolved)
+
+    @property
+    def last_drift_diagnostic(self) -> tuple[str, ...]:
+        """Ids in ``DEFAULT_MODEL_IDS`` that were not found in the catalog.
+
+        Populated by the most recent call to ``default_model_ids``.
+        Empty when the catalog was unreachable or all ids matched.
+        Intended for startup logging and operator-side diagnostic
+        endpoints; the route layer does not surface it to the user.
+        """
+        return getattr(self, "_last_drift_diagnostic", ())
 
     def default_slots(self) -> list[ModelSlot]:
         # L2: defaults are search-enabled (``ModelSlot.search`` defaults

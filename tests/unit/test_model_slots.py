@@ -93,14 +93,15 @@ def test_model_slot_validator_rejects_duplicate_model_ids() -> None:
 
 
 # ---------------------------------------------------------------------------
-# Step A: :free / :preview variant filtering for default model selection.
+# Step A (revised): DEFAULT_MODEL_IDS is the source of truth for
+# default model selection. The live catalog is consulted only as a
+# drift check — it must not displace a curated default with a cheaper
+# model the demo key does not authenticate against.
 #
-# The catalog's cheapest-per-vendor logic returns $0 models first
-# because they cost nothing. Those :free / :preview variants do not
-# authenticate against the demo key, so they collapse every default
-# slot into local_simulation. The fix filters those suffixes out
-# before picking defaults; if filtering empties a vendor's pool, the
-# static DEFAULT_MODEL_IDS tuple is the safety net.
+# The :free / :preview suffix filter remains in the codebase
+# (defense-in-depth, and used by future catalog-driven UI surfaces)
+# but it does not gate default selection: the four ids in
+# DEFAULT_MODEL_IDS are returned regardless of catalog contents.
 # ---------------------------------------------------------------------------
 
 
@@ -126,62 +127,124 @@ def test_is_unauthenticated_variant_detects_free_and_preview_suffixes() -> None:
     assert _is_unauthenticated_variant("deepseek/deepseek-chat-v3.1") is False
 
 
-def test_default_model_ids_excludes_free_and_preview_variants(
+def test_default_model_ids_returns_static_defaults_when_catalog_lists_free_variants(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """A live catalog containing :free / :preview variants must not
-    have those variants selected as defaults. The cheapest paid-tier
-    model per vendor is what we want."""
+    """A catalog full of :free variants must NOT cause :free ids to be
+    picked. The static ``DEFAULT_MODEL_IDS`` tuple is the source of
+    truth and is returned unchanged.
+    """
     catalog = [
         _make_entry("openai/gpt-4o-mini:free", "openai", input_price="0"),
-        _make_entry("openai/gpt-4o-mini", "openai", input_price="0.00015"),
         _make_entry("anthropic/claude-haiku-4.5:preview", "anthropic", input_price="0"),
-        _make_entry("anthropic/claude-haiku-4.5", "anthropic", input_price="0.001"),
-        _make_entry("google/gemini-2.5-flash", "google", input_price="0.0003"),
-        _make_entry("deepseek/deepseek-chat-v3.1", "deepseek", input_price="0.00014"),
+        _make_entry("google/gemini-2.5-flash:free", "google", input_price="0"),
+        _make_entry("deepseek/deepseek-chat-v3.1:free", "deepseek", input_price="0"),
     ]
     service = OpenRouterModelCatalogService()
 
-    def fake_entries() -> list[ModelCatalogEntry]:
-        return list(catalog)
+    monkeypatch.setattr(service, "_entries", lambda: list(catalog))
 
-    monkeypatch.setattr(service, "_entries", fake_entries)
-
-    defaults = service.default_model_ids()
-    assert defaults == (
-        "openai/gpt-4o-mini",
-        "anthropic/claude-haiku-4.5",
-        "google/gemini-2.5-flash",
-        "deepseek/deepseek-chat-v3.1",
-    )
+    assert service.default_model_ids() == DEFAULT_MODEL_IDS
+    # The catalog lists only :free variants, so the four static
+    # defaults are NOT in the catalog — every static id is reported
+    # as drift. The defaults are still returned (the operator chose
+    # them explicitly), but the drift diagnostic surfaces that the
+    # catalog now carries a different set of model ids under those
+    # vendor prefixes.
+    assert set(service.last_drift_diagnostic) == set(DEFAULT_MODEL_IDS)
 
 
-def test_default_model_ids_falls_back_to_static_when_filter_empties_a_vendor(
+def test_default_model_ids_returns_static_defaults_when_catalog_is_empty(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """If the catalog only contains :free variants for a vendor (so
-    filtering empties the vendor's pool), the static
-    ``DEFAULT_MODEL_IDS`` tuple provides that vendor's entry as a
-    safety net. The catalog stays the primary source for the other
-    vendors."""
+    """An unreachable / empty catalog must not break default selection.
+
+    ``_entries()`` raising is the documented offline-mode path; the
+    static list is the offline default.
+    """
+
+    def _explode() -> list[ModelCatalogEntry]:
+        raise RuntimeError("catalog is down for the test")
+
+    service = OpenRouterModelCatalogService()
+    monkeypatch.setattr(service, "_entries", _explode)
+
+    assert service.default_model_ids() == DEFAULT_MODEL_IDS
+    # Drift diagnostic stays empty when the catalog is unreachable —
+    # "we don't know if these are stale" is not the same as "stale".
+    assert service.last_drift_diagnostic == ()
+
+
+def test_default_model_ids_reports_drift_when_a_static_id_missing_from_catalog(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Catalog drift: a static default has been removed from the live
+    catalog. The id is STILL returned as a default — the operator has
+    chosen these four models explicitly — but the drift surfaces in
+    ``last_drift_diagnostic`` so the operator can act.
+    """
+    # Google Gemini 2.5 Flash has been removed from the catalog;
+    # a newer "gemini-3.1-flash-lite" is the cheapest google entry.
     catalog = [
-        _make_entry("openai/gpt-4o-mini:free", "openai", input_price="0"),
+        _make_entry("openai/gpt-4o-mini", "openai", input_price="0.00015"),
         _make_entry("anthropic/claude-haiku-4.5", "anthropic", input_price="0.001"),
-        _make_entry("google/gemini-2.5-flash", "google", input_price="0.0003"),
+        _make_entry("google/gemini-3.1-flash-lite", "google", input_price="0.00000025"),
         _make_entry("deepseek/deepseek-chat-v3.1", "deepseek", input_price="0.00014"),
     ]
     service = OpenRouterModelCatalogService()
+    monkeypatch.setattr(service, "_entries", lambda: list(catalog))
 
-    def fake_entries() -> list[ModelCatalogEntry]:
-        return list(catalog)
+    # Static defaults are returned unchanged.
+    assert service.default_model_ids() == DEFAULT_MODEL_IDS
+    # And the drift is surfaced for operator diagnostics.
+    assert service.last_drift_diagnostic == ("google/gemini-2.5-flash",)
 
-    monkeypatch.setattr(service, "_entries", fake_entries)
 
-    defaults = service.default_model_ids()
-    # OpenAI falls back to the static default; the rest come from the
-    # catalog. The order matches ``DEFAULT_VENDORS``.
-    assert defaults[0] == "openai/gpt-4o-mini"
-    assert defaults[1] == "anthropic/claude-haiku-4.5"
-    assert defaults[2] == "google/gemini-2.5-flash"
-    assert defaults[3] == "deepseek/deepseek-chat-v3.1"
-    assert len(defaults) == 4
+def test_default_model_ids_no_drift_when_catalog_lists_all_static_ids(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Happy path: the catalog still has every static default. No
+    drift diagnostic, defaults are the static list.
+    """
+    catalog = [
+        _make_entry(model_id, vendor, input_price="0.0001")
+        for model_id, vendor in (
+            ("openai/gpt-4o-mini", "openai"),
+            ("anthropic/claude-haiku-4.5", "anthropic"),
+            ("google/gemini-2.5-flash", "google"),
+            ("deepseek/deepseek-chat-v3.1", "deepseek"),
+        )
+    ]
+    # Plus some unrelated catalog drift that must not affect defaults.
+    catalog.append(_make_entry("openai/gpt-oss-20b", "openai", input_price="0.0000001"))
+
+    service = OpenRouterModelCatalogService()
+    monkeypatch.setattr(service, "_entries", lambda: list(catalog))
+
+    assert service.default_model_ids() == DEFAULT_MODEL_IDS
+    assert service.last_drift_diagnostic == ()
+
+
+def test_default_model_ids_ignores_cheapest_paid_competitor_in_catalog(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The exact catalog-drift scenario Step A was supposed to catch:
+    a brand-new cheap paid-tier model exists per vendor (e.g.
+    ``openai/gpt-mini-latest`` at $0.00000075/tok) but the demo key
+    has not been validated against it. The static defaults MUST
+    survive this drift.
+    """
+    catalog = [
+        _make_entry("openai/gpt-mini-latest", "openai", input_price="0.00000075"),
+        _make_entry("anthropic/claude-haiku-latest", "anthropic", input_price="0.000001"),
+        _make_entry("google/gemini-3.1-flash-lite", "google", input_price="0.00000025"),
+        _make_entry("deepseek/deepseek-v4-flash", "deepseek", input_price="0.00000009"),
+    ]
+    service = OpenRouterModelCatalogService()
+    monkeypatch.setattr(service, "_entries", lambda: list(catalog))
+
+    # None of these are in the static defaults; all four are reported
+    # as drift so the operator knows the catalog has moved on. But the
+    # four ids returned for /v1/models/defaults are the static ones.
+    assert service.default_model_ids() == DEFAULT_MODEL_IDS
+    assert set(service.last_drift_diagnostic) == set(DEFAULT_MODEL_IDS)

@@ -267,4 +267,8 @@ def browser_ui(
 def model_defaults(
     _: Annotated[SessionContext, Depends(require_session)],
 ) -> ModelDefaultsResponse:
-    return ModelDefaultsResponse(model_slots=default_model_slots())
+    from product_app.model_slots import openrouter_model_catalog_service
+
+    slots = default_model_slots()
+    stale = list(openrouter_model_catalog_service.last_drift_diagnostic)
+    return ModelDefaultsResponse(model_slots=slots, stale_model_ids=stale)
