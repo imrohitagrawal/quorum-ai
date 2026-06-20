@@ -20,6 +20,7 @@ import hashlib
 import hmac
 import os
 import secrets
+import warnings
 from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
@@ -179,8 +180,28 @@ class CostEstimationService:
         binding_secret: str | None = None,
         now_provider: Callable[[], datetime] | None = None,
     ) -> None:
+        # C13: surface a warning when the binding secret is auto-
+        # generated because ``QUORUM_TOKEN_SECRET`` is not set.
+        # The auto-generated secret is a per-process value: every
+        # restart rotates it, which invalidates every outstanding
+        # confirmation token. In production this would also break
+        # any multi-instance deployment (different processes
+        # generate different secrets, so a token minted by one
+        # process cannot be verified by another). The warning makes
+        # the misconfiguration visible at startup instead of
+        # surfacing as a confusing token-invalid error later.
+        env_secret = os.environ.get("QUORUM_TOKEN_SECRET")
+        if env_secret is None and binding_secret is None:
+            warnings.warn(
+                "QUORUM_TOKEN_SECRET is not set; generating a random "
+                "per-process binding secret. Confirmation tokens will "
+                "not survive a restart and any multi-instance deployment "
+                "will fail. Set QUORUM_TOKEN_SECRET in the environment to "
+                "fix this.",
+                stacklevel=2,
+            )
         self._binding_secret = (
-            binding_secret or os.environ.get("QUORUM_TOKEN_SECRET") or secrets.token_hex(32)
+            binding_secret or env_secret or secrets.token_hex(32)
         ).encode()
         self._tokens: dict[str, _BoundToken] = {}
         self._lock = RLock()
