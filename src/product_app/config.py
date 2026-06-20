@@ -75,6 +75,20 @@ class Settings(BaseSettings):
     # COST_OUTPUT_TOKEN_MULTIPLIER env var.
     cost_output_token_multiplier: float = 3.0
 
+    # L3: debate and synthesis are LLM calls now (L4), so the estimate
+    # needs to price them too. ``cost_inner_call_multiplier`` scales
+    # the per-call inner cost; the per-call cost itself is
+    # ``max_output_rate × query_tokens × multiplier / 1000``. The
+    # result is capped at ``cost_inner_call_cap_usd`` so very long
+    # queries don't push the total estimate over the $0.25 hard limit
+    # on the default model mix. The default values land a 500–600-char
+    # research query in the existing ``$0.03–$0.30`` band and keep a
+    # 5K-char query in ``require_confirmation`` (≤ $0.25). Operators
+    # can tune both via ``COST_INNER_CALL_MULTIPLIER`` and
+    # ``COST_INNER_CALL_CAP_USD``.
+    cost_inner_call_multiplier: float = 1.5
+    cost_inner_call_cap_usd: float = 0.05
+
     # --- LLM-driven debate + synthesis ----------------------------------
     # Both stages now call a live model. Defaults: Haiku 4.5 for the
     # debate rounds (cheap, fast, good at critique) and gpt-4o-mini for

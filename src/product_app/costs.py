@@ -56,6 +56,18 @@ _DEFAULT_PRICE_PER_1K_OUTPUT = Decimal("0.002")
 DEBATE_FIXED_COST_USD = Decimal("0.012")
 SYNTHESIS_FIXED_COST_USD = Decimal("0.015")
 
+#: L3: debate + synthesis inner-call cost is now proportional to the
+#: max output rate in the selected model mix, scaled by the configured
+#: ``cost_inner_call_multiplier`` and capped at
+#: ``cost_inner_call_cap_usd`` (both via :data:`product_app.config.settings`).
+#: The flat ``DEBATE_FIXED_COST_USD`` and ``SYNTHESIS_FIXED_COST_USD``
+#: constants above remain for backward compatibility (re-exported by
+#: ``_estimate_total`` callers and referenced by some tests) but are
+#: no longer summed into the estimate; the proportional term replaces
+#: them. The cap exists so a 5K-char query on the default model mix
+#: doesn't tip over the $0.25 hard limit just because the inner-call
+#: cost scales with query length.
+
 QUERY_COST_PER_1K_CHARS_USD = Decimal("0.00002")
 #: Per-character base processing charge. The debate pipeline scans the
 #: query text once and the cost grows linearly with character count.
@@ -322,13 +334,33 @@ class CostEstimationService:
             )
             for slot in model_slots
         )
+        # L3 - proportional inner-call cost. Debate and synthesis are
+        # also LLM calls now (L4), so the estimate must price them.
+        # Per-call cost: ``max_output_rate × output_tokens / 1000``,
+        # scaled by ``cost_inner_call_multiplier``. Three inner calls
+        # total (2 debate rounds + 1 synthesis), capped at
+        # ``cost_inner_call_cap_usd`` so very long queries don't push
+        # the total estimate over the $0.25 hard limit on the default
+        # model mix. The cap is the saturation point: real debate and
+        # synthesis outputs don't grow linearly with query length
+        # because the inner steps process a bounded context (the 4
+        # initial answers + the query) regardless of how long the
+        # query is.
+        max_output_rate = max(
+            (_price(slot.model_id)[1] for slot in model_slots),
+            default=_DEFAULT_PRICE_PER_1K_OUTPUT,
+        )
+        inner_multiplier = Decimal(str(settings.cost_inner_call_multiplier))
+        inner_cap = Decimal(str(settings.cost_inner_call_cap_usd))
+        inner_per_call = inner_multiplier * max_output_rate * output_tokens / Decimal(1000)
+        inner_call_cost = min(inner_per_call * Decimal(3), inner_cap)
+
         return (
             query_cost
             + processing_cost
             + model_input_cost
             + model_output_cost
-            + DEBATE_FIXED_COST_USD
-            + SYNTHESIS_FIXED_COST_USD
+            + inner_call_cost
         )
 
     def _threshold_for(self, estimated: Decimal) -> tuple[CostThresholdAction, list[str]]:
