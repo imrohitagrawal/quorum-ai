@@ -36,6 +36,7 @@ from math import ceil
 from threading import RLock
 from time import perf_counter
 from urllib.error import HTTPError, URLError
+from urllib.parse import urlparse
 from urllib.request import Request, urlopen
 from uuid import UUID
 
@@ -748,6 +749,63 @@ def _extract_message_content(payload: object) -> str:
     return ""
 
 
+#: C7: hosts that must never appear in a citation URL. The list is
+#: read at import time and is intentionally small — these are the
+#: hosts that would either (a) reflect content back to the user in a
+#: way that confuses the source-support display, or (b) point at
+#: internal network resources that the demo deployment is not
+#: supposed to expose via the public response.
+_SOURCE_URL_HOST_DENYLIST: frozenset[str] = frozenset(
+    {
+        "localhost",
+        "127.0.0.1",
+        "0.0.0.0",
+        "169.254.169.254",  # AWS / GCP metadata service
+        "metadata.google.internal",
+        "::1",
+    }
+)
+
+
+def _sanitize_source_url(url: str) -> str | None:
+    """Return ``url`` with its fragment stripped and a permissive
+    host check applied. Returns ``None`` if the URL must be dropped.
+
+    The fragment strip is for two reasons:
+
+    1. ``#`` is the route hash on the SPA; if it leaks into a
+       citation URL the browser will scroll the iframe/page to a
+       non-existent anchor.
+    2. Fragments can be used to smuggle javascript: into a
+       previously-validated URL when the consumer does not expect
+       them (e.g. a downstream tab opens the URL and the fragment
+       is interpreted as a script).
+
+    The host denylist is defense-in-depth: a crafted LLM response
+    that includes a metadata-service URL would otherwise let a
+    user click through to a privileged resource. Citations are
+    always public web sources; anything pointing at loopback or
+    metadata services is not a real citation.
+    """
+    if not isinstance(url, str) or not url:
+        return None
+    if not url.startswith(("http://", "https://")):
+        return None
+    # Strip fragment — everything after the first '#'.
+    fragment_idx = url.find("#")
+    if fragment_idx != -1:
+        url = url[:fragment_idx]
+    # Host check on the netloc.
+    try:
+        parsed = urlparse(url)
+    except ValueError:
+        return None
+    host = parsed.hostname or ""
+    if host.lower() in _SOURCE_URL_HOST_DENYLIST:
+        return None
+    return url
+
+
 def _extract_citations(payload: object) -> list[SourceReference]:
     if not isinstance(payload, dict):
         return []
@@ -769,14 +827,15 @@ def _extract_citations(payload: object) -> list[SourceReference]:
             continue
         raw_url = annotation.get("url") or annotation.get("source") or ""
         title = annotation.get("title") or f" citation {index}"
-        if not isinstance(raw_url, str) or not raw_url.startswith(("http://", "https://")):
+        sanitized = _sanitize_source_url(raw_url)
+        if sanitized is None:
             continue
         if not isinstance(title, str):
             title = f" citation {index}"
         references.append(
             SourceReference(
                 title=title,
-                url=raw_url,
+                url=sanitized,
                 provider=ProviderPath.OPENROUTER_SEARCH,
                 is_fallback=False,
             ),
