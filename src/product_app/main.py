@@ -41,6 +41,11 @@ from product_app.query_runs import (
     _ip_rate_limiter,
     router as query_runs_router,
 )
+from product_app.readiness import (
+    ReadinessReport,
+    current_readiness,
+    run_startup_probe,
+)
 
 TEMPLATES_DIR = Path(__file__).parent / "templates"
 STATIC_DIR = Path(__file__).parent / "static"
@@ -48,6 +53,14 @@ STATIC_DIR = Path(__file__).parent / "static"
 app = FastAPI(title=settings.app_name, version="0.2.0")
 app.include_router(query_runs_router)
 app.mount("/static", StaticFiles(directory=str(STATIC_DIR)), name="static")
+
+# Smoke-probe: log a WARNING at startup if the app is running in
+# offline mode without the operator realizing it (no API key, or
+# the live-execution flag is off). The result is also exposed on
+# the ``/ready`` endpoint as ``live_readiness`` so an external
+# monitor (load balancer, ops dashboard) can see the state without
+# log access. Best-effort: a failing probe does NOT block startup.
+current_readiness = run_startup_probe()
 
 
 # --- Security headers -------------------------------------------------------
@@ -184,15 +197,18 @@ def _render_workspace_html() -> str:
     """
     template = (TEMPLATES_DIR / "workspace.html").read_text(encoding="utf-8")
     default_ids = [slot.model_id for slot in default_model_slots()]
+    stale_ids = list(openrouter_model_catalog_service.last_drift_diagnostic)
     catalog_options = openrouter_model_catalog_service.list_model_options()
     catalog_json = json.dumps(
         [option.model_dump(mode="json") for option in catalog_options],
     ).replace("<", "\\u003c")
     default_ids_json = json.dumps(default_ids).replace("<", "\\u003c")
+    stale_ids_json = json.dumps(stale_ids).replace("<", "\\u003c")
     return (
         template.replace("{{ app_name }}", escape(settings.app_name))
         .replace("{{ model_catalog_json }}", catalog_json)
         .replace("{{ default_model_ids_json }}", default_ids_json)
+        .replace("{{ stale_model_ids_json }}", stale_ids_json)
     )
 
 
@@ -217,8 +233,23 @@ def health() -> dict[str, str]:
 
 
 @app.get("/ready", tags=["operations"])
-def ready() -> dict[str, str]:
-    return {"status": "ready", "environment": settings.runtime_environment.value}
+def ready() -> dict[str, object]:
+    payload: dict[str, object] = {
+        "status": "ready",
+        "environment": settings.runtime_environment.value,
+    }
+    # Re-run the probe on each /ready hit. The probe is cheap (a
+    # couple of settings reads + one best-effort catalog lookup) and
+    # always reflects the *current* state, not a snapshot from app
+    # start. The startup-time ``current_readiness`` snapshot is
+    # still used for the boot banner — that's logged once.
+    report = run_startup_probe()
+    payload["live_readiness"] = {
+        "state": report.state,
+        "reasons": list(report.reasons),
+        "catalog_drift_ids": list(report.catalog_drift_ids),
+    }
+    return payload
 
 
 @app.get("/v1/session", tags=["session"])

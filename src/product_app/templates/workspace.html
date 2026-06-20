@@ -46,6 +46,15 @@
         <button class="status-banner-dismiss" type="button" id="error-region-dismiss" aria-label="Dismiss error">&times;</button>
       </section>
 
+      <section id="drift-region" class="status-banner" data-severity="warning" tabindex="-1" role="status" hidden>
+        <div class="status-banner-icon" aria-hidden="true">i</div>
+        <div class="status-banner-body">
+          <div class="status-banner-title">Catalog drift</div>
+          <div class="status-banner-message" id="drift-region-message"></div>
+        </div>
+        <button class="status-banner-dismiss" type="button" id="drift-region-dismiss" aria-label="Dismiss drift warning">&times;</button>
+      </section>
+
       <div class="layout">
         <section class="panel" aria-labelledby="composer-heading">
           <h2 id="composer-heading">Workspace</h2>
@@ -270,6 +279,7 @@
     <script id="model-catalog-data" type="application/json">{{ model_catalog_json }}</script>
     <script>
       window.DEFAULT_MODEL_IDS = {{ default_model_ids_json }};
+      window.STALE_MODEL_IDS = {{ stale_model_ids_json }};
       // Static strings that downstream tests and accessibility scanners
       // look for in the rendered HTML. The actual implementations live
       // in ``app.js``; the names here are the contract surface.

@@ -46,6 +46,9 @@
   const errorMessage = el("error-region-message");
   const errorActions = el("error-region-actions");
   const errorDismiss = el("error-region-dismiss");
+  const driftRegion = el("drift-region");
+  const driftMessage = el("drift-region-message");
+  const driftDismiss = el("drift-region-dismiss");
   const toastRegion = el("toast-region");
   const modelInputs = el("model-inputs");
   const modelGrid = el("model-grid");
@@ -166,6 +169,32 @@
     errorTitle.textContent = "";
     errorMessage.textContent = "";
     errorActions.replaceChildren();
+  }
+
+  // Render the catalog-drift banner. The server passes
+  // ``window.STALE_MODEL_IDS`` at page-load time: a non-empty array
+  // means one or more of the four static default model ids is no
+  // longer in the live  catalog. The banner tells the operator
+  // the demo will still call them, but the catalog has moved on.
+  function renderDriftBanner() {
+    if (!driftRegion || !driftMessage) return;
+    const stale = Array.isArray(window.STALE_MODEL_IDS) ? window.STALE_MODEL_IDS : [];
+    if (stale.length === 0) {
+      driftRegion.hidden = true;
+      return;
+    }
+    driftMessage.textContent =
+      `These static default model ids are not in the current  catalog: ` +
+      stale.join(", ") +
+      `. The app will still call them, but they may have been renamed, ` +
+      `deprecated, or moved to a different model id. Update DEFAULT_MODEL_IDS ` +
+      `in product_app/model_slots.py if you want to follow the catalog.`;
+    driftRegion.hidden = false;
+  }
+  if (driftDismiss) {
+    driftDismiss.addEventListener("click", () => {
+      driftRegion.hidden = true;
+    });
   }
 
   // Lightweight toast for transient, non-blocking messages.
@@ -1871,6 +1900,7 @@
     initKeyboardShortcuts();
     initBannerDismiss();
     initInfoIcons();
+    renderDriftBanner();
     estimateButton.addEventListener("click", () => {
       startRun();
     });
