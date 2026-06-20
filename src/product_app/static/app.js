@@ -1027,8 +1027,23 @@
     // anchor as-is.
     s = s.replace(
       /\[([^\]]+)\]\(([^)]+)\)/g,
-      (_m, text, url) =>
-        `<a href="${url}" target="_blank" rel="noopener noreferrer">${text}</a>`,
+      (_m, text, url) => {
+        // URL scheme allow-list: only http(s) and mailto (and relative
+        // URLs, i.e. those starting with no scheme) become anchors.
+        // Everything else — javascript:, data:, vbscript:, file:,
+        // etc. — is rendered as plain text with no href, so a
+        // crafted LLM response cannot smuggle a script execution
+        // vector into the page via a markdown link.
+        const trimmed = url.trim();
+        const safe =
+          /^https?:/i.test(trimmed) ||
+          /^mailto:/i.test(trimmed) ||
+          !/^[a-z][a-z0-9+.-]*:/i.test(trimmed);
+        if (!safe) {
+          return `${text} (${url})`;
+        }
+        return `<a href="${url}" target="_blank" rel="noopener noreferrer">${text}</a>`;
+      },
     );
     return s;
   }
