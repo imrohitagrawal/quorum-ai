@@ -49,8 +49,14 @@ def test_synthesis_stub_returns_required_sections_and_quality_checks() -> None:
     assert "visible source references" in synthesis.source_support
     assert synthesis.uncertainty
     assert "decision support only" in synthesis.recommendation
-    assert synthesis.citation_coverage.target_met
-    assert synthesis.quality_checks.citation_coverage_target_met
+    # L5d: with the honest heuristic the four ~218-char stub
+    # answers each yield 2 material claims → 8 total; 4 cited
+    # produces a 0.50 coverage ratio, which is below the 0.80
+    # target. Assert the honest ratio rather than the boolean.
+    assert synthesis.citation_coverage.material_claim_count >= 4
+    assert synthesis.citation_coverage.cited_claim_count == 4
+    assert not synthesis.citation_coverage.target_met
+    assert not synthesis.quality_checks.citation_coverage_target_met
     assert synthesis.quality_checks.false_consensus_preserved
     assert synthesis.quality_checks.decision_support_framing_present
     event = synthesis_event_recorder.list_events()[0]

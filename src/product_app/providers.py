@@ -32,6 +32,7 @@ import json
 from dataclasses import dataclass
 from decimal import Decimal
 from enum import StrEnum
+from math import ceil
 from threading import RLock
 from time import perf_counter
 from urllib.error import HTTPError, URLError
@@ -362,7 +363,16 @@ class ProviderExecutionService:
         # provider. Fallback citations are real sources, but they are not
         # the model's own research, so we exclude them from the coverage
         # metric to avoid inflating the score.
-        material_claim_count = 1
+        #
+        # L5d: ``material_claim_count`` is now an honest heuristic
+        # rather than a constant 1. We estimate one material claim per
+        # ~200 characters of answer text (industry rule-of-thumb:
+        # roughly one factual assertion per paragraph). For a 500-char
+        # answer this gives 2-3 claims; with a single citation the
+        # coverage ratio is 33-50%, which surfaces as ``target_met =
+        # false`` — the honest number. The ``max(1, …)`` floor keeps
+        # zero-length / placeholder answers valid for the calculator.
+        material_claim_count = estimate_material_claim_count(answer_text)
         primary_source_count = sum(1 for source in sources if not source.is_fallback)
         cited_claim_count = 1 if primary_source_count > 0 else 0
         return InitialModelAnswer(
@@ -414,7 +424,7 @@ class ProviderExecutionService:
             status=InitialAnswerStatus.FAILED,
             latency_ms=duration_ms,
             citation_coverage=calculate_citation_coverage(
-                material_claim_count=1,
+                material_claim_count=estimate_material_claim_count(""),
                 cited_claim_count=0,
             ),
             error_code="PROVIDER_UNAVAILABLE",
@@ -742,6 +752,30 @@ def _extract_citations(payload: object) -> list[SourceReference]:
             ),
         )
     return references
+
+
+#: L5d: characters-per-material-claim heuristic. Industry rule of
+#: thumb is one factual assertion per ~150-250 characters of
+#: generated text (i.e. one per short paragraph). 200 is a
+#: defensible mid-point: short enough to make coverage honest
+#: (a 600-char answer gets 3 claims; a single citation is 33%),
+#: long enough that a 200-char answer still gets 1 claim.
+MATERIAL_CLAIM_CHAR_DENOMINATOR = 200
+
+
+def estimate_material_claim_count(answer_text: str) -> int:
+    """Estimate the number of material claims in ``answer_text``.
+
+    The estimate is a heuristic — true claim extraction would need
+    an LLM call. ``max(1, ceil(len / 200))`` gives a defensible
+    number that matches the plan's "500-token answer → 2-3 material
+    claims" target. The floor of 1 keeps the citation-coverage
+    calculator valid for empty / placeholder answers.
+    """
+    text = (answer_text or "").strip()
+    if not text:
+        return 1
+    return max(1, ceil(len(text) / MATERIAL_CLAIM_CHAR_DENOMINATOR))
 
 
 def calculate_citation_coverage(

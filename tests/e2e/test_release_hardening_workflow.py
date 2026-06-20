@@ -83,7 +83,10 @@ def test_core_query_workflow_with_env_configured_access(
     assert len(result_body["result"]["debate_outputs"]) == 2
     assert result_body["result"]["final_synthesis"]["high_stakes_notice"] is not None
     assert result_body["result"]["final_synthesis"]["quality_checks"] == {
-        "citation_coverage_target_met": True,
+        # L5d: with the honest heuristic the four ~218-char stub
+        # answers yield 2 material claims each → 8 total. With 4
+        # cited that is 0.50 coverage, below the 0.80 target.
+        "citation_coverage_target_met": False,
         "false_consensus_preserved": True,
         "decision_support_framing_present": True,
         "high_stakes_warning_required": True,

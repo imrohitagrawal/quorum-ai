@@ -10,6 +10,7 @@ from product_app.providers import (
     ProviderPath,
     SourceReference,
     calculate_citation_coverage,
+    estimate_material_claim_count,
     provider_event_recorder,
     provider_stub_service,
 )
@@ -92,6 +93,44 @@ def test_citation_coverage_scores_against_target() -> None:
     assert passing.target_met
     assert failing.coverage_ratio == Decimal("0.6")
     assert not failing.target_met
+
+
+def test_estimate_material_claim_count_uses_200_char_heuristic() -> None:
+    # L5d: the estimator must (a) floor at 1, (b) cap to one
+    # claim per 200 chars, and (c) never return 0 even for
+    # empty / placeholder input. These cases are the contract
+    # that the rest of the citation-coverage math depends on.
+    empty = estimate_material_claim_count("")
+    short = estimate_material_claim_count("x" * 100)
+    medium = estimate_material_claim_count("x" * 200)
+    long_ = estimate_material_claim_count("x" * 600)
+    boundary = estimate_material_claim_count("x" * 201)
+    weird = estimate_material_claim_count("   \n  \t  ")  # whitespace only
+
+    assert empty == 1, "empty text must floor at 1"
+    assert short == 1, "100-char text is 1 claim (200-char denominator)"
+    assert medium == 1, "200-char text is exactly 1 claim"
+    assert long_ == 3, "600-char text is 3 claims (ceil(600/200))"
+    assert boundary == 2, "201-char text rounds up to 2 claims"
+    assert weird == 1, "whitespace-only text floors at 1"
+
+
+def test_estimate_material_claim_count_with_real_stub_text_returns_2() -> None:
+    # L5d: the local-simulation stub answer is exactly 218 chars
+    # long, which yields 2 material claims. This locks in the
+    # integration-test expectation that the stub text produces
+    # coverage_ratio = 0.50 (2 claims, 1 citation), not the
+    # dishonest 1.0 (1 claim, 1 citation).
+    slot = validate_model_slots(
+        [
+            "openai/gpt-4o-mini",
+            "anthropic/claude-haiku-4.5",
+            "google/gemini-2.5-flash",
+            "deepseek/deepseek-chat-v3.1",
+        ]
+    )[0]
+    stub = provider_stub_service._local_simulation_text(model_slot=slot)
+    assert estimate_material_claim_count(stub) == 2
 
 
 def test_provider_stub_returns_openrouter_path_when_live_response_succeeds(
