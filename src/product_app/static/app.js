@@ -653,7 +653,17 @@
       const statusValue = slot?.status || "pending";
       statusPill.className = "status-pill";
       statusPill.dataset.state = statusValue;
-      statusPill.innerHTML = `<span class="status-pill-dot" aria-hidden="true"></span><span>${statusValue}</span>`;
+      // C15: build the pill content with createElement + textContent
+      // instead of innerHTML. The status value is server-controlled
+      // today, but the innerHTML path is one forgotten escape call
+      // away from an XSS. The DOM-construction form is safe by
+      // construction.
+      const dot = document.createElement("span");
+      dot.className = "status-pill-dot";
+      dot.setAttribute("aria-hidden", "true");
+      const label = document.createElement("span");
+      label.textContent = statusValue;
+      statusPill.append(dot, label);
       header.append(heading, statusPill);
       article.appendChild(header);
       const body = document.createElement("div");
@@ -693,9 +703,22 @@
       const meta = document.createElement("div");
       meta.className = "model-card-meta";
       const path = document.createElement("div");
-      path.innerHTML = `<strong>Provider path:</strong> ${slot?.provider_path || "pending"}`;
+      // C15: use createElement + textContent for the meta line.
+      // The previous innerHTML form relied on the developer to
+      // remember to escape the user-influenced ``provider_path``
+      // value. The DOM-construction form is safe by construction.
+      const pathLabel = document.createElement("strong");
+      pathLabel.textContent = "Provider path: ";
+      const pathValue = document.createElement("span");
+      pathValue.textContent = slot?.provider_path || "pending";
+      path.append(pathLabel, pathValue);
       const latency = document.createElement("div");
-      latency.innerHTML = `<strong>Latency:</strong> ${slot?.latency_ms != null ? `${slot.latency_ms} ms` : "—"}`;
+      const latencyLabel = document.createElement("strong");
+      latencyLabel.textContent = "Latency: ";
+      const latencyValue = document.createElement("span");
+      latencyValue.textContent =
+        slot?.latency_ms != null ? `${slot.latency_ms} ms` : "—";
+      latency.append(latencyLabel, latencyValue);
       meta.append(path, latency);
       article.appendChild(meta);
       const sources = renderSourceList(slot?.sources);
@@ -804,7 +827,18 @@
       if (synthesis.high_stakes_notice) {
         const notice = document.createElement("div");
         notice.className = "callout callout-high-stakes";
-        notice.innerHTML = `<div class="callout-icon" aria-hidden="true">!</div><div class="callout-body">${escapeHtml(synthesis.high_stakes_notice)}</div>`;
+        // C15: build the callout with createElement + textContent.
+        // The previous innerHTML form escaped the body but mixed
+        // literal markup with the escaped user data. The DOM
+        // form is safer and easier to read.
+        const icon = document.createElement("div");
+        icon.className = "callout-icon";
+        icon.setAttribute("aria-hidden", "true");
+        icon.textContent = "!";
+        const body = document.createElement("div");
+        body.className = "callout-body";
+        body.textContent = synthesis.high_stakes_notice;
+        notice.append(icon, body);
         stack.appendChild(notice);
       }
       synthesisOutput.replaceChildren(stack);
