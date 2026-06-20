@@ -30,7 +30,7 @@ import contextlib
 from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
 from enum import StrEnum
-from threading import RLock, Thread
+from threading import BoundedSemaphore, RLock, Thread
 from time import sleep
 from typing import Annotated
 from uuid import UUID, uuid4
@@ -505,6 +505,59 @@ class InMemoryQueryRunRepository:
 query_run_repository = InMemoryQueryRunRepository()
 
 
+# --- Concurrency guardrails -------------------------------------------------
+# C9: limit the number of in-flight query runs to prevent thread-exhaustion
+# DoS. Each run spawns up to 11 sequential LLM calls; an unbounded number
+# of concurrent runs can starve the worker pool. The cap is generous
+# (16) so a small burst of legitimate users is not affected, but a
+# hostile client cannot exhaust the process.
+_MAX_CONCURRENT_RUNS = 16
+_run_semaphore = BoundedSemaphore(_MAX_CONCURRENT_RUNS)
+
+
+# C9: per-IP rate limiter on ``/v1/session``. Each new session mints a
+# new account id; without a limiter, a script can create thousands of
+# sessions per second and bloat the in-memory ``session_repository``.
+# The limiter is a simple token bucket: 30 requests per IP per minute.
+# 429 is returned when the bucket is empty.
+class _InMemoryIpRateLimiter:
+    """Naive per-IP token bucket. Single-process only.
+
+    For multi-instance deployments, swap this for a Redis-backed
+    limiter. The interface (``allow(ip) -> bool``) is the same so the
+    rest of the application does not change.
+    """
+
+    CAPACITY = 30
+    REFILL_PER_MINUTE = 30
+
+    def __init__(self) -> None:
+        self._buckets: dict[str, tuple[float, float]] = {}
+        self._lock = RLock()
+
+    def allow(self, *, ip: str, now_epoch: float) -> bool:
+        with self._lock:
+            tokens, last = self._buckets.get(ip, (float(self.CAPACITY), now_epoch))
+            elapsed_minutes = max(0.0, (now_epoch - last) / 60.0)
+            tokens = min(
+                float(self.CAPACITY),
+                tokens + elapsed_minutes * self.REFILL_PER_MINUTE,
+            )
+            if tokens < 1.0:
+                self._buckets[ip] = (tokens, now_epoch)
+                return False
+            tokens -= 1.0
+            self._buckets[ip] = (tokens, now_epoch)
+            return True
+
+    def clear(self) -> None:
+        with self._lock:
+            self._buckets.clear()
+
+
+_ip_rate_limiter = _InMemoryIpRateLimiter()
+
+
 # -- routes ------------------------------------------------------------------
 
 
@@ -676,11 +729,36 @@ def create_query_run(
         _execute_query_run(query_run.query_run_id, session.account_id)
         query_run = query_run_repository.get(query_run.query_run_id)
     else:
-        Thread(
-            target=_execute_query_run_safely,
-            args=(query_run.query_run_id, session.account_id),
-            daemon=True,
-        ).start()
+        # C9: do not spawn a thread if the in-flight run cap is
+        # already at capacity. Returning 503 with a clear error
+        # message lets the client retry after a backoff. We hold
+        # the semaphore briefly to perform this check, then release
+        # it (the actual run will re-acquire it). The non-blocking
+        # ``acquire(blocking=False)`` is intentional: we don't want
+        # to queue requests and run them all sequentially if the
+        # process is already saturated.
+        if not _run_semaphore.acquire(blocking=False):
+            raise HTTPException(
+                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                detail={
+                    "code": "RUN_CAPACITY_EXCEEDED",
+                    "message": (
+                        "Quorum is at capacity for concurrent query runs. "
+                        "Retry after a short backoff."
+                    ),
+                },
+            )
+        try:
+            Thread(
+                target=_execute_query_run_with_semaphore_release,
+                args=(query_run.query_run_id, session.account_id),
+                daemon=True,
+            ).start()
+        except RuntimeError:
+            # Threading failure (e.g. on shutdown). Release the
+            # semaphore so it doesn't leak.
+            _run_semaphore.release()
+            raise
     return QueryRunCreateResponse(
         query_run_id=query_run.query_run_id,
         status=query_run.status,
@@ -833,6 +911,23 @@ def _execute_query_run_safely(query_run_id: UUID, account_id: UUID) -> None:
                     if stage.state is StageState.PENDING
                 ],
             )
+
+
+def _execute_query_run_with_semaphore_release(
+    query_run_id: UUID, account_id: UUID
+) -> None:
+    """Thread entry point that also releases the run-cap semaphore.
+
+    The semaphore is acquired in the request handler (so the 503
+    response can be returned synchronously) and released here after
+    the run reaches a terminal state. Using a ``try/finally`` means
+    the semaphore is released even if the run raises an unhandled
+    exception, which prevents the cap from leaking on a crash.
+    """
+    try:
+        _execute_query_run_safely(query_run_id=query_run_id, account_id=account_id)
+    finally:
+        _run_semaphore.release()
 
 
 def _execute_query_run(query_run_id: UUID, account_id: UUID) -> None:

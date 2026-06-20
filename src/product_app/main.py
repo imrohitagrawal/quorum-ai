@@ -15,6 +15,7 @@ configuration surface and ``product_app.auth`` for the session model.
 from __future__ import annotations
 
 import json
+import time
 from html import escape
 from pathlib import Path
 from typing import Annotated
@@ -36,7 +37,10 @@ from product_app.model_slots import (
     default_model_slots,
     openrouter_model_catalog_service,
 )
-from product_app.query_runs import router as query_runs_router
+from product_app.query_runs import (
+    _ip_rate_limiter,
+    router as query_runs_router,
+)
 
 TEMPLATES_DIR = Path(__file__).parent / "templates"
 STATIC_DIR = Path(__file__).parent / "static"
@@ -219,8 +223,25 @@ def ready() -> dict[str, str]:
 
 @app.get("/v1/session", tags=["session"])
 def browser_session(
+    request: Request,
     session_id: str | None = Cookie(default=None, alias="quorum_session"),
 ) -> JSONResponse:
+    # C9: per-IP rate limit on session creation. Without this a
+    # script can mint thousands of sessions per second and bloat the
+    # in-memory ``session_repository``. The ``/health`` and ``/``
+    # endpoints are deliberately NOT rate-limited — those are
+    # operational checks used by load balancers and the demo banner.
+    client_ip = (request.client.host if request.client else "unknown") or "unknown"
+    if not _ip_rate_limiter.allow(ip=client_ip, now_epoch=time.time()):
+        return JSONResponse(
+            status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+            content={
+                "detail": {
+                    "code": "RATE_LIMITED",
+                    "message": "Too many session requests from this IP. Retry later.",
+                },
+            },
+        )
     session = issue_or_resume_session(session_id)
     response = JSONResponse(
         {
