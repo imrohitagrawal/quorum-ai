@@ -30,7 +30,7 @@ from product_app.auth import (
     issue_or_resume_session,
     require_session,
 )
-from product_app.config import settings
+from product_app.config import RuntimeEnvironment, settings
 from product_app.model_slots import (
     ModelDefaultsResponse,
     default_model_slots,
@@ -44,6 +44,55 @@ STATIC_DIR = Path(__file__).parent / "static"
 app = FastAPI(title=settings.app_name, version="0.2.0")
 app.include_router(query_runs_router)
 app.mount("/static", StaticFiles(directory=str(STATIC_DIR)), name="static")
+
+
+# --- Security headers -------------------------------------------------------
+# A small middleware that sets the security headers the app should ship
+# with by default. FastAPI does not configure any of these out of the
+# box, so the response that goes back to a browser carries only the
+# framework defaults (which include ``Server: uvicorn`` — also
+# overridden here).
+#
+# CORS posture: there is intentionally no CORSMiddleware in this app.
+# FastAPI's default behaviour (no ``Access-Control-Allow-Origin``) is
+# the safest posture for a same-origin SPA — the browser will block
+# cross-origin reads without an explicit allow-list. If a deployment
+# ever needs cross-origin access (e.g. a separate docs domain),
+# configure it via a reverse proxy in front of uvicorn so the
+# ``allow_origins`` decision is a deployment-time policy, not a code
+# change.
+#
+# CSP ``script-src 'unsafe-inline'``: required because the ``/ui``
+# HTML payload inlines a ``<script>`` block that injects the session
+# csrf token. The current ``str.replace`` rendering path cannot apply
+# a per-response nonce. The TODO is to migrate to a Jinja2
+# template (or a separate static JS file that reads the cookie) so
+# the inline script can be nonced and ``unsafe-inline`` removed.
+
+_CSP_POLICY = (
+    "default-src 'self'; "
+    "script-src 'self' 'unsafe-inline'; "
+    "style-src 'self' 'unsafe-inline'; "
+    "img-src 'self' data:; "
+    "connect-src 'self'; "
+    "frame-ancestors 'none'"
+)
+
+_HSTS_HEADER = "max-age=31536000; includeSubDomains"
+
+
+@app.middleware("http")
+async def _security_headers_middleware(request: Request, call_next):  # type: ignore[no-untyped-def]
+    response = await call_next(request)
+    response.headers.setdefault("X-Content-Type-Options", "nosniff")
+    response.headers.setdefault("X-Frame-Options", "DENY")
+    response.headers.setdefault("Referrer-Policy", "no-referrer")
+    response.headers.setdefault("Content-Security-Policy", _CSP_POLICY)
+    if settings.runtime_environment is RuntimeEnvironment.PRODUCTION:
+        response.headers.setdefault("Strict-Transport-Security", _HSTS_HEADER)
+    # Replace the default ``Server: uvicorn`` with a neutral value.
+    response.headers["server"] = settings.app_name
+    return response
 
 
 # Map Pydantic ``type`` strings to the application-level error codes the
