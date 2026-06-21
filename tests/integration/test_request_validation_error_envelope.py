@@ -49,7 +49,7 @@ def test_estimate_with_too_long_query_returns_typed_envelope() -> None:
         "/v1/query-runs/estimate",
         headers=_ack_headers(account_id, csrf),
         json={
-            "query_text": "x" * 8500,
+            "query_text": "x" * 20500,
             "model_slots": DEFAULT_MODEL_IDS,
         },
     )
@@ -57,7 +57,7 @@ def test_estimate_with_too_long_query_returns_typed_envelope() -> None:
     body = response.json()
     assert isinstance(body["detail"], dict)
     assert body["detail"]["code"] == "QUERY_TOO_LONG"
-    assert "maximum is 8000 characters" in body["detail"]["message"]
+    assert "maximum is 20000 characters" in body["detail"]["message"]
     field_errors = body["detail"]["field_errors"]
     assert isinstance(field_errors, list)
     assert any(

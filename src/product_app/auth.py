@@ -23,6 +23,8 @@ from __future__ import annotations
 
 import hashlib
 import secrets
+import threading
+import time as _time_module
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from enum import StrEnum
@@ -33,16 +35,53 @@ from uuid import UUID, uuid4
 from fastapi import Depends, HTTPException, Request, status
 from pydantic import BaseModel
 
-from product_app.config import settings
+from product_app.config import RuntimeEnvironment, settings
 
 #: Session lifetime. Renewed on every successful ``/v1/session`` call.
 SESSION_TTL = timedelta(hours=2)
 
-#: Cookie name. We use a single, opaque, ``__Host-``-prefixed name in
-#: production, and a non-prefixed name in dev/test for the legacy
-#: ``X-Account-Id`` path to work.
-SESSION_COOKIE_NAME = "quorum_session"
+#: Cookie name. In production and staging we use the ``__Host-`` prefix
+#: for defense in depth: the browser will refuse to set the cookie unless
+#: ``Secure`` is true, ``Path=/``, and the ``Domain`` attribute is absent.
+#: In local/dev we drop the prefix so the cookie works over plain HTTP
+#: without TLS termination. The :func:`get_session_cookie_name` helper
+#: picks the right name based on the current runtime environment.
+_SESSION_COOKIE_NAME_PREFIXED = "__Host-quorum_session"
+_SESSION_COOKIE_NAME_UNPREFIXED = "quorum_session"
 CSRF_HEADER_NAME = "X-CSRF-Token"
+
+
+def get_session_cookie_name() -> str:
+    """Return the session cookie name appropriate for the current environment.
+
+    The ``__Host-`` prefix forces the browser to require ``Secure``,
+    ``Path=/``, and no ``Domain`` attribute. That is the right posture
+    in production and staging, but it breaks local dev over plain HTTP.
+    """
+    if settings.runtime_environment == "local":
+        return _SESSION_COOKIE_NAME_UNPREFIXED
+    return _SESSION_COOKIE_NAME_PREFIXED
+
+
+def get_session_cookie_from_request(request: Request) -> str | None:
+    """Read the session cookie from a request, handling both prefixed and
+    unprefixed names for backwards compatibility during migration.
+    """
+    # Try the current environment's cookie name first
+    current_name = get_session_cookie_name()
+    value = request.cookies.get(current_name)
+    if value:
+        return value
+    # Fall back to the other name for migration compatibility
+    if current_name == _SESSION_COOKIE_NAME_PREFIXED:
+        return request.cookies.get(_SESSION_COOKIE_NAME_UNPREFIXED)
+    return request.cookies.get(_SESSION_COOKIE_NAME_PREFIXED)
+
+
+#: Backwards-compatible module-level constant. Resolved at import time
+#: using the *current* settings; tests that need a specific environment
+#: should call :func:`get_session_cookie_name` directly.
+SESSION_COOKIE_NAME = get_session_cookie_name()
 
 #: Inert CSRF token used in the legacy ``X-Account-Id`` path. The legacy
 #: path never validates CSRF (see ``enforce_csrf``), so the value just
@@ -141,6 +180,33 @@ class InMemorySessionRepository:
 session_repository = InMemorySessionRepository()
 
 
+# SEC-H3: background GC thread for in-memory state. The previous
+# design only purged expired sessions on ``create`` or ``get`` — an
+# idle process that receives no requests would never garbage-collect
+# and grow unbounded. A daemon thread runs every 60 seconds, which
+# is short enough to bound memory in long-running processes and
+# cheap enough (one O(n) pass on a typically-small dict) to run
+# constantly.
+def _start_gc_thread() -> threading.Thread:
+    """Start a daemon thread that periodically purges expired sessions."""
+    def _gc_loop() -> None:
+        while True:
+            try:
+                # Use a private method that runs the purge
+                # without taking a write lock if possible.
+                session_repository._purge_expired_locked()
+            except Exception:
+                pass  # Don't crash the daemon on GC errors
+            _time_module.sleep(60.0)
+
+    t = threading.Thread(target=_gc_loop, daemon=True, name="session-gc")
+    t.start()
+    return t
+
+
+_start_gc_thread()
+
+
 class SessionIssueResponse(BaseModel):
     account_id: UUID
     session_id: str
@@ -150,12 +216,13 @@ class SessionIssueResponse(BaseModel):
 
 
 def _enforce_production_guards(*, require_legacy_disabled: bool) -> None:
-    if settings.runtime_environment == "production":
+    if settings.runtime_environment != RuntimeEnvironment.LOCAL:
         if not settings.session_cookie_secure:
             raise HTTPException(
                 status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
                 detail=(
-                    "Refusing to start in production: SESSION_COOKIE_SECURE must be true. "
+                    "Refusing to start in " + settings.runtime_environment.value
+                    + ": SESSION_COOKIE_SECURE must be true. "
                     "Set the SESSION_COOKIE_SECURE environment variable to true and restart."
                 ),
             )
@@ -163,7 +230,8 @@ def _enforce_production_guards(*, require_legacy_disabled: bool) -> None:
             raise HTTPException(
                 status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
                 detail=(
-                    "Refusing to start in production: ACCOUNT_LEGACY_HEADER_ENABLED must be false. "
+                    "Refusing to start in " + settings.runtime_environment.value
+                    + ": ACCOUNT_LEGACY_HEADER_ENABLED must be false. "
                     "The X-Account-Id header is not part of the production auth contract."
                 ),
             )
@@ -196,7 +264,7 @@ def require_session(request: Request) -> SessionContext:
     present does it consult the legacy ``X-Account-Id`` header, and only
     when the legacy path is allowed by configuration.
     """
-    session_id = request.cookies.get(SESSION_COOKIE_NAME)
+    session_id = get_session_cookie_from_request(request)
     if session_id:
         session = session_repository.get(session_id)
         if session is None:
@@ -347,7 +415,7 @@ def attach_session_cookie(response: object, session: SessionIssueResponse) -> No
     if set_cookie is None:
         return
     set_cookie(
-        key=SESSION_COOKIE_NAME,
+        key=get_session_cookie_name(),
         value=session.session_id,
         max_age=int(SESSION_TTL.total_seconds()),
         httponly=True,

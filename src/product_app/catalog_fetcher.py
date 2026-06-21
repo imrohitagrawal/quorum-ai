@@ -34,7 +34,7 @@ import re
 from collections.abc import Callable, Iterable
 from dataclasses import dataclass
 from decimal import Decimal
-from threading import RLock
+from threading import Event, RLock
 from time import monotonic
 from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
@@ -299,6 +299,10 @@ class OpenRouterCatalogFetcher:
         self._lock = RLock()
         self._cache_entries: list[ModelCatalogEntry] | None = None
         self._cache_expires_at: float = 0.0
+        # PERF-P0: single-flight coordination. Multiple concurrent
+        # callers all wait on the same ``_refresh_event``; only one
+        # thread performs the actual fetch.
+        self._refresh_event: Event | None = None
 
     # -- public ------------------------------------------------------------
 
@@ -309,22 +313,77 @@ class OpenRouterCatalogFetcher:
         timeout, network down) or on an empty catalog response. The
         caller decides what to do — the fetcher is a data source,
         not a policy layer.
+
+        PERF-P0: single-flight semantics. Multiple concurrent callers
+        on a cold cache no longer serialize through ``_refresh_cache``
+        (which holds the lock during a network round-trip); instead,
+        only one thread performs the fetch while the rest wait on
+        an event. After the in-flight fetch completes, all waiters
+        see the populated cache immediately.
         """
         with self._lock:
             if self._cache_valid():
                 return list(self._cache_entries or [])
-            self._refresh_cache()
-            return list(self._cache_entries or [])
+            # First caller starts the fetch; subsequent callers wait
+            # on the event. The Event is cleared by the fetcher
+            # thread once it has populated the cache.
+            if self._refresh_event is None:
+                self._refresh_event = Event()
+                is_fetcher = True
+            else:
+                is_fetcher = False
+                event = self._refresh_event
+
+        if not is_fetcher:
+            # Wait outside the lock so the fetcher can populate the
+            # cache without deadlocking on other waiters.
+            event.wait(timeout=self._fetch_timeout_seconds + 5.0)
+            with self._lock:
+                if self._cache_valid():
+                    return list(self._cache_entries or [])
+            # Fall through: event timed out, become the fetcher
+            with self._lock:
+                self._refresh_event = Event()
+                is_fetcher = True
+
+        # We are the fetcher. The lock is released during the
+        # network round-trip via the new ``_refresh_cache_concurrent``
+        # method that takes the lock only to publish results.
+        try:
+            fetched = self._fetch_remote()
+            if not fetched:
+                raise RuntimeError(" catalog returned 0 models")
+            with self._lock:
+                self._cache_entries = fetched
+                self._cache_expires_at = monotonic() + self._cache_ttl_seconds
+            return list(fetched)
+        finally:
+            with self._lock:
+                if self._refresh_event is not None:
+                    self._refresh_event.set()
+                    self._refresh_event = None
+
+    def prewarm(self) -> None:
+        """Pre-fetch the catalog in the background.
+
+        Called at startup so the first user request doesn't pay the
+        cold-cache latency (4-second timeout in the worst case). The
+        fetch happens in a daemon thread; failures are swallowed
+        because the regular ``list_models`` will retry on first use.
+        """
+        import threading
+
+        def _do_prewarm() -> None:
+            try:
+                self.list_models()
+            except Exception:
+                pass  # The next caller will retry
+
+        t = threading.Thread(target=_do_prewarm, daemon=True, name="catalog-prewarm")
+        t.start()
 
     def _cache_valid(self) -> bool:
         return self._cache_entries is not None and monotonic() < self._cache_expires_at
-
-    def _refresh_cache(self) -> None:
-        fetched = self._fetch_remote()
-        if not fetched:
-            raise RuntimeError(" catalog returned 0 models")
-        self._cache_entries = fetched
-        self._cache_expires_at = monotonic() + self._cache_ttl_seconds
 
     def list_models_sync(self) -> list[ModelCatalogEntry]:
         """Sync alias for ``list_models``. Kept for callers that are not async-aware."""
@@ -393,7 +452,7 @@ class OpenRouterCatalogFetcher:
             url=url,
             headers={
                 "Accept": "application/json",
-                "User-Agent": "quorum-ai/0.1 (+https://quorum.example.test)",
+                "User-Agent": "quorum-ai/0.1 (+http://localhost:18084)",
             },
             method="GET",
         )

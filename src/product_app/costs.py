@@ -22,7 +22,7 @@ import os
 import secrets
 import warnings
 from collections.abc import Callable
-from dataclasses import dataclass
+from dataclasses import asdict, dataclass
 from datetime import UTC, datetime, timedelta
 from decimal import ROUND_HALF_UP, Decimal
 from enum import StrEnum
@@ -33,7 +33,8 @@ from pydantic import BaseModel, Field
 
 from product_app.catalog_fetcher import openrouter_catalog_fetcher
 from product_app.config import settings
-from product_app.model_slots import ModelSlot
+from product_app.feedback_store import record_event as _record_feedback_event
+from product_app.model_slots import ModelSlot, openrouter_model_catalog_service
 
 SOFT_THRESHOLD_USD = Decimal("0.15")
 HARD_LIMIT_USD = Decimal("0.25")
@@ -132,19 +133,25 @@ class InMemoryCostEventRecorder:
         threshold_action: CostThresholdAction,
         confirmed: bool,
     ) -> None:
+        event = CostGuardrailEvent(
+            event_type=event_type,
+            account_id=account_id,
+            query_run_id=query_run_id,
+            estimated_cost_usd=estimated_cost_usd,
+            threshold_action=threshold_action,
+            confirmed=confirmed,
+        )
         with self._lock:
-            self._events.append(
-                CostGuardrailEvent(
-                    event_type=event_type,
-                    account_id=account_id,
-                    query_run_id=query_run_id,
-                    estimated_cost_usd=estimated_cost_usd,
-                    threshold_action=threshold_action,
-                    confirmed=confirmed,
-                ),
-            )
+            self._events.append(event)
             if len(self._events) > self.MAX_EVENTS:
                 del self._events[: len(self._events) - self.MAX_EVENTS]
+        _record_feedback_event(
+            recorder="cost",
+            event_type=event.event_type,
+            account_id=event.account_id,
+            query_run_id=event.query_run_id,
+            payload=asdict(event),
+        )
 
     def list_events(self) -> list[CostGuardrailEvent]:
         with self._lock:
@@ -354,14 +361,10 @@ class CostEstimationService:
         multiplier = Decimal(str(settings.cost_output_token_multiplier))
         output_tokens = input_tokens * multiplier
         # We approximate each model as receiving the full query text.
-        # Per-model prices come from the live catalog. A model id not
-        # in the catalog (newly released, offline) falls back to the
-        # generic per-1K default — that single fallback keeps the
-        # guardrail functional without a stale curated pricing dict.
-        prices = {
-            entry.model_id: (entry.input_price_per_1k, entry.output_price_per_1k)
-            for entry in openrouter_catalog_fetcher.list_models()
-        }
+        # PERF-P1: use the cached price index instead of rebuilding
+        # the dict on every estimate call. The index is built once
+        # per cache miss and looked up in O(1) per model id.
+        prices = openrouter_model_catalog_service.price_index()
 
         def _price(model_id: str) -> tuple[Decimal, Decimal]:
             return prices.get(

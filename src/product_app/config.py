@@ -11,6 +11,7 @@ defaults that the auth layer refuses to bypass.
 
 from __future__ import annotations
 
+import os
 from enum import StrEnum
 
 from pydantic import Field
@@ -42,7 +43,7 @@ class Settings(BaseSettings):
     openrouter_api_key: str = Field(default="", repr=False)
     openrouter_live_execution_enabled: bool = False
     openrouter_api_base_url: str = "https://openrouter.ai/api/v1"
-    openrouter_app_url: str = "https://quorum.example.test"
+    openrouter_app_url: str = "http://localhost:18084"
     openrouter_app_title: str = "Quorum AI"
     openrouter_timeout_seconds: float = 8.0
 
@@ -52,9 +53,10 @@ class Settings(BaseSettings):
     session_cookie_secure: bool = False
     # Legacy X-Account-Id header is the path the existing test fixture
     # uses. It is *only* available when this flag is true AND the runtime
-    # environment is not "production". The auth layer enforces both
-    # conditions; setting the flag in production is a startup error.
-    account_legacy_header_enabled: bool = True
+    # environment is "local". The auth layer enforces both conditions;
+    # setting the flag in non-local environments is a startup error.
+    # Defaults to False for security; explicitly enable only in local dev.
+    account_legacy_header_enabled: bool = False
 
     # --- Pipeline tuning ------------------------------------------------
     # Synthetic per-stage delay used by the test suite to make state
@@ -117,14 +119,30 @@ settings = Settings()
 
 def validate_production_environment() -> None:
     """Refuse to start in a misconfigured production environment."""
-    if settings.runtime_environment is not RuntimeEnvironment.PRODUCTION:
+    if settings.runtime_environment is RuntimeEnvironment.LOCAL:
         return
     if not settings.session_cookie_secure:
         raise RuntimeError(
-            "Refusing to start: runtime_environment=production requires SESSION_COOKIE_SECURE=true."
+            "Refusing to start: runtime_environment=" + settings.runtime_environment.value
+            + " requires SESSION_COOKIE_SECURE=true."
         )
     if settings.account_legacy_header_enabled:
         raise RuntimeError(
-            "Refusing to start: runtime_environment=production requires "
-            "ACCOUNT_LEGACY_HEADER_ENABLED=false."
+            "Refusing to start: runtime_environment=" + settings.runtime_environment.value
+            + " requires ACCOUNT_LEGACY_HEADER_ENABLED=false. "
+            "The X-Account-Id header is not part of the production auth contract."
+        )
+    # SEC-H2: enforce QUORUM_TOKEN_SECRET in non-local environments.
+    # An auto-generated per-process secret breaks multi-instance
+    # deployments (token minted by instance A cannot be verified by
+    # instance B) and invalidates all outstanding tokens on every
+    # restart. Warning alone is insufficient: a misconfigured deploy
+    # should fail loudly at startup, not silently invalidate tokens
+    # later.
+    quorum_token_secret = os.environ.get("QUORUM_TOKEN_SECRET", "")
+    if not quorum_token_secret:
+        raise RuntimeError(
+            "Refusing to start: runtime_environment=" + settings.runtime_environment.value
+            + " requires QUORUM_TOKEN_SECRET to be set to a stable, "
+            "non-empty value. Generate one with: openssl rand -hex 32"
         )

@@ -16,12 +16,14 @@ client is acknowledging an out-of-date copy of the warning. The
 from __future__ import annotations
 
 import re
-from dataclasses import dataclass
+from dataclasses import asdict, dataclass
 from enum import StrEnum
 from threading import RLock
 from uuid import UUID
 
 from pydantic import BaseModel
+
+from product_app.feedback_store import record_event as _record_feedback_event
 
 WARNING_VERSION = "2026-06-17"
 
@@ -104,20 +106,26 @@ class InMemoryWarningEventRecorder:
         acknowledged: bool,
         warning_types: tuple[WarningType, ...] = (),
     ) -> None:
+        event = WarningEvent(
+            event_type=event_type,
+            account_id=account_id,
+            query_run_id=query_run_id,
+            warning_type=warning_type,
+            warning_version=warning_version,
+            acknowledged=acknowledged,
+            warning_types=warning_types,
+        )
         with self._lock:
-            self._events.append(
-                WarningEvent(
-                    event_type=event_type,
-                    account_id=account_id,
-                    query_run_id=query_run_id,
-                    warning_type=warning_type,
-                    warning_version=warning_version,
-                    acknowledged=acknowledged,
-                    warning_types=warning_types,
-                ),
-            )
+            self._events.append(event)
             if len(self._events) > self.MAX_EVENTS:
                 del self._events[: len(self._events) - self.MAX_EVENTS]
+        _record_feedback_event(
+            recorder="safety",
+            event_type=event.event_type,
+            account_id=event.account_id,
+            query_run_id=event.query_run_id,
+            payload=asdict(event),
+        )
 
     def list_events(self) -> list[WarningEvent]:
         with self._lock:
