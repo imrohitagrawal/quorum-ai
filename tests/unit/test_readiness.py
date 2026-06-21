@@ -132,7 +132,11 @@ def test_probe_reports_live_with_drift_when_catalog_missing_an_id(
     # The diagnostic surfaces drift so the operator can act.
     assert report.state == "live"
     assert report.catalog_drift_ids == ("google/gemini-2.0-flash-lite",)
-    assert any("not in the live" in r.lower() for r in report.reasons)
+    # Operator-facing message in the /ready JSON response. The UI
+    # banner builds its own plain message from catalog_drift_ids;
+    # this operator-facing text is consumed by monitoring systems
+    # and startup logs only.
+    assert any("not in current" in r.lower() for r in report.reasons)
 
 
 def test_probe_reports_offline_by_no_key_when_flag_on_but_no_key(

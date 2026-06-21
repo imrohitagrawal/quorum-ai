@@ -183,13 +183,12 @@
     errorActions.replaceChildren();
   }
 
-  // Render the catalog-drift banner. ``renderDriftBanner`` is a pure
-  // renderer: it reads from ``state.lastStaleModelIds`` and toggles the
-  // region. The page-load literal ``window.STALE_MODEL_IDS`` is
-  // treated as a seed — it is copied into the cache below so the first
-  // paint of the banner is correct before any client-initiated fetch
-  // completes. ``refreshReadiness`` (and the periodic catalog refresh
-  // in ``refreshDefaults``) re-seeds the cache from the live payload.
+  // Render the catalog-drift banner. ``renderDriftBanner`` builds a
+  // user-facing message from the stale model id list — it does NOT
+  // use the operator-facing ``reasons`` text from the /ready payload,
+  // which may contain internal references (file paths, module names).
+  // The message is intentionally plain: the user only needs to know
+  // that a default model may not work and what to do about it.
   function renderDriftBanner() {
     if (!driftRegion || !driftMessage) return;
     const stale = Array.isArray(state.lastStaleModelIds)
@@ -199,12 +198,13 @@
       driftRegion.hidden = true;
       return;
     }
+    const names = stale.join(", ");
+    const action = stale.length === 1
+      ? "Choose a different model from the dropdown, or contact support."
+      : "Choose different models from the dropdowns, or contact support.";
     driftMessage.textContent =
-      `These static default model ids are not in the current  catalog: ` +
-      stale.join(", ") +
-      `. The app will still call them, but they may have been renamed, ` +
-      `deprecated, or moved to a different model id. Update DEFAULT_MODEL_IDS ` +
-      `in product_app/model_slots.py if you want to follow the catalog.`;
+      `The default model${stale.length > 1 ? "s" : ""} (${names}) may not be ` +
+      `available right now. ${action}`;
     driftRegion.hidden = false;
   }
   if (driftDismiss) {

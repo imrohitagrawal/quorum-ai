@@ -917,6 +917,15 @@ kbd {
   background: var(--danger-soft);
 }
 
+/* The HTML ``hidden`` attribute sets ``display: none``, but our
+   ``display: flex`` rule above wins. Use ``!important`` so the
+   hide-when-idle behavior actually hides the container. Without
+   this, the cancel button is visible (and clickable) when no run
+   is in flight, which the user has flagged. */
+.run-controls-cancel[hidden] {
+  display: none !important;
+}
+
 .run-controls-cancel-hint {
   font-size: 0.85rem;
   color: var(--muted);
