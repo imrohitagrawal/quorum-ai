@@ -5,6 +5,7 @@ __pycache__/
 .mypy_cache/
 .ruff_cache/
 .coverage
+.coverage *
 htmlcov/
 .env
 .env.*
@@ -22,4 +23,8 @@ build/
 .idea/
 *.swp
 HANDOFF-*.md
+
+# Local verification artifacts
+.playwright-mcp/
+quorum-final-run.png
 
