@@ -28,3 +28,7 @@ HANDOFF-*.md
 .playwright-mcp/
 quorum-final-run.png
 
+# Local data + feedback audit outputs (kept on disk, not in git)
+.data/
+feedback/audit-*.json
+

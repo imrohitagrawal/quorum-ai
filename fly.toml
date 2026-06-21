@@ -1,0 +1,79 @@
+# Fly.io configuration for Quorum-AI
+#
+# Deploy: `fly deploy`
+# Secrets: `fly secrets set OPENROUTER_API_KEY=... QUORUM_TOKEN_SECRET=...`
+#
+# This config assumes a single-instance deployment (no scaling).
+# The in-memory state (sessions, query runs) is documented as MVP
+# design and is intentional. When you need multiple instances,
+# add Fly Postgres + Upstash Redis and refactor the repositories
+# in src/product_app/auth.py and src/product_app/query_runs.py.
+
+app = "quorum-ai"
+primary_region = "iad"  # US East (Virginia) - adjust to nearest region
+kill_signal = "SIGINT"
+kill_timeout = "5s"
+
+[build]
+  dockerfile = "Dockerfile"
+
+[env]
+  # Production environment variables baked into the image.
+  # Secrets go in `fly secrets set`, not here.
+  APP_NAME = "Quorum-AI"
+  ENVIRONMENT = "production"
+  LOG_LEVEL = "INFO"
+  RUNTIME_ENVIRONMENT = "production"
+  SESSION_COOKIE_SECURE = "true"
+  ACCOUNT_LEGACY_HEADER_ENABLED = "false"
+  OPENROUTER_APP_URL = "https://quorum-ai.fly.dev"
+  OPENROUTER_LIVE_EXECUTION_ENABLED = "false"  # Operator must enable after setting OPENROUTER_API_KEY
+
+[experimental]
+  # Required for single-instance state to be stable across deploys.
+  # Without this, restart wipes in-memory sessions.
+  auto_rollback = true
+
+[[services]]
+  protocol = "tcp"
+  internal_port = 8000
+  processes = ["app"]
+
+  [[services.ports]]
+    port = 80
+    handlers = ["http"]
+    force_https = true
+
+  [[services.ports]]
+    port = 443
+    handlers = ["tls", "http"]
+
+  [services.concurrency]
+    type = "connections"
+    hard_limit = 100
+    soft_limit = 80
+
+  [[services.tcp_checks]]
+    interval = "15s"
+    timeout = "2s"
+    grace_period = "10s"
+
+  [[services.http_checks]]
+    interval = "30s"
+    timeout = "5s"
+    grace_period = "20s"
+    method = "get"
+    path = "/ready"
+    protocol = "http"
+
+[[vm]]
+  size = "shared-cpu-1x"
+  memory = "512mb"
+
+[deploy]
+  release_command = "echo 'Release deploy complete - no migrations needed (in-memory state)'"
+  strategy = "rolling"
+
+[metrics]
+  port = 8000
+  path = "/metrics"

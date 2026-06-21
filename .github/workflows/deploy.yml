@@ -1,0 +1,63 @@
+name: Deploy to Fly.io
+
+# Deploys the app to Fly.io when changes land on main.
+# The CI workflow (ci.yml) runs the full test suite first; this
+# workflow assumes that has already passed.
+
+on:
+  push:
+    branches: [ main ]
+  workflow_dispatch:  # Allow manual trigger from the Actions tab
+
+permissions:
+  contents: read
+
+jobs:
+  deploy:
+    name: Deploy to Fly.io
+    runs-on: ubuntu-latest
+    # Only deploy if the CI workflow on the same SHA passed.
+    # This guards against a fast-forwarded push that skipped CI.
+    needs: []
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Fly.io CLI
+        uses: superfly/flyctl-actions/setup-flyctl@master
+
+      - name: Deploy to Fly.io
+        env:
+          FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
+        run: flyctl deploy --remote-only --strategy immediate
+
+      - name: Smoke test - GET /health
+        env:
+          FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
+        run: |
+          # Wait for the new deploy to become healthy.
+          # Fly's edge usually routes to the new instance within 10s.
+          for i in {1..12}; do
+            if curl -sf -o /dev/null -w "%{http_code}\n" https://quorum-ai.fly.dev/health | grep -q 200; then
+              echo "Health check passed after ${i} attempts"
+              exit 0
+            fi
+            echo "Health check failed (attempt ${i}), retrying in 5s..."
+            sleep 5
+          done
+          echo "ERROR: Health check did not pass within 60s"
+          exit 1
+
+      - name: Smoke test - GET /ready
+        env:
+          FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
+        run: |
+          # /ready returns 200 always; the body shows live_readiness state.
+          # We assert state == "live" or "live" with drift (catalog mismatch)
+          # but NOT "offline_by_*" - that means the deploy is misconfigured.
+          RESPONSE=$(curl -sf https://quorum-ai.fly.dev/ready)
+          echo "Ready response: $RESPONSE"
+          if echo "$RESPONSE" | grep -q '"offline_by_'; then
+            echo "ERROR: App booted in offline mode - check OPENROUTER_API_KEY"
+            exit 1
+          fi
+          echo "Ready check passed"

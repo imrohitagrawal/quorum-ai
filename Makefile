@@ -4,7 +4,7 @@ PYTHON ?= $(shell if command -v python3 >/dev/null 2>&1; then command -v python3
 UV_CACHE_DIR ?= $(CURDIR)/.uv-cache
 RELOAD ?= 0
 
-.PHONY: check-python publishing-check skill-onboarding-check skill-discover handoff check-breaking apply-orbi-profile skill-route start next capture-idea validate validate-strict quality format format-check lint type-check test test-report security-scan ci-evidence run docker-build
+.PHONY: check-python publishing-check skill-onboarding-check skill-discover handoff check-breaking apply-orbi-profile skill-route start next capture-idea validate validate-strict quality format format-check lint type-check test test-report security-scan ci-evidence run docker-build feedback-audit
 
 check-python:
 	@if [ -z "$(PYTHON)" ]; then 		echo "ERROR: Python 3 is required. Install python3, or set PYTHON=/path/to/python3."; 		exit 127; 	fi
@@ -56,6 +56,11 @@ run:
 
 docker-build:
 	docker build -t quorum-ai:local .
+
+feedback-audit:
+	@if [ -z "$$OPENROUTER_API_KEY" ]; then 		echo "OPENROUTER_API_KEY is required for the audit LLM call."; 		echo "Without it, the audit runs in local-only mode (statistics only)."; 		echo "Set OPENROUTER_LIVE_EXECUTION_ENABLED=true and OPENROUTER_API_KEY to enable findings."; 	fi
+	mkdir -p feedback
+	UV_CACHE_DIR=$(UV_CACHE_DIR) PYTHONPATH=src uv run python -m product_app.feedback_audit --output-dir feedback/
 
 skill-route: check-python
 	$(PYTHON) scripts/skill_router.py

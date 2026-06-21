@@ -14,6 +14,11 @@ dependencies = [
   "fastapi>=0.115.0,<1.0",
   "uvicorn[standard]>=0.30.0,<1.0",
   "pydantic-settings>=2.4.0,<3.0",
+  # Sentry for error tracking in production. Optional - the app
+  # boots without SENTRY_DSN set (it's a no-op). When the DSN is
+  # present, exceptions and performance traces are reported to
+  # the Sentry project configured for this deployment.
+  "sentry-sdk[fastapi]>=2.0.0,<3.0",
 ]
 
 [project.optional-dependencies]
