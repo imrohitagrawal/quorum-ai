@@ -12,7 +12,8 @@ can correlate without consulting any other table.
 from __future__ import annotations
 
 import re
-from dataclasses import dataclass
+from dataclasses import asdict, dataclass
+from decimal import Decimal
 from threading import RLock
 from uuid import UUID
 
@@ -26,6 +27,7 @@ from product_app.catalog_fetcher import (
     ModelCatalogEntry,
     openrouter_catalog_fetcher,
 )
+from product_app.feedback_store import record_event as _record_feedback_event
 
 EXPECTED_SLOT_COUNT = 4
 
@@ -149,17 +151,23 @@ class InMemoryModelSlotEventRecorder:
         query_run_id: UUID,
         model_slots: tuple[tuple[int, str, bool], ...],
     ) -> None:
+        event = ModelSlotSelectionEvent(
+            event_type=event_type,
+            account_id=account_id,
+            query_run_id=query_run_id,
+            model_slots=model_slots,
+        )
         with self._lock:
-            self._events.append(
-                ModelSlotSelectionEvent(
-                    event_type=event_type,
-                    account_id=account_id,
-                    query_run_id=query_run_id,
-                    model_slots=model_slots,
-                ),
-            )
+            self._events.append(event)
             if len(self._events) > self.MAX_EVENTS:
                 del self._events[: len(self._events) - self.MAX_EVENTS]
+        _record_feedback_event(
+            recorder="model_slot",
+            event_type=event.event_type,
+            account_id=event.account_id,
+            query_run_id=event.query_run_id,
+            payload=asdict(event),
+        )
 
     def list_events(self) -> list[ModelSlotSelectionEvent]:
         with self._lock:
@@ -437,14 +445,46 @@ class OpenRouterModelCatalogService:
         only has the URL slug ("claude-3-haiku"). The live catalog
         is the source of truth for *what models exist*; this method
         only cares about how to render the name to the user.
+
+        PERF-P1: O(1) lookup via a precomputed dict instead of two
+        linear scans over the catalog (was O(n) per call). The dict
+        is lazily built and cached on first access.
         """
-        for entry in _CATALOG_FALLBACK_ENTRIES:
-            if entry.model_id == model_id:
-                return entry.short_name
-        for entry in self._entries():
-            if entry.model_id == model_id:
-                return entry.short_name
-        return None
+        return self._short_name_index().get(model_id)
+
+    def _short_name_index(self) -> dict[str, str]:
+        """Return a model_id -> short_name index, cached on first call.
+
+        Iterates the fallback catalog first (preferred for display
+        names) and then the live catalog. Build cost is O(n) but the
+        result is cached, so subsequent lookups are O(1).
+        """
+        if self._short_name_cache is None:
+            index: dict[str, str] = {}
+            for entry in _CATALOG_FALLBACK_ENTRIES:
+                index[entry.model_id] = entry.short_name
+            for entry in self._entries():
+                # Don't overwrite fallback-curated names with the
+                # raw URL slug from the live catalog.
+                if entry.model_id not in index:
+                    index[entry.model_id] = entry.short_name
+            self._short_name_cache = index
+        return self._short_name_cache
+
+    _short_name_cache: dict[str, str] | None = None
+
+    def price_index(self) -> dict[str, tuple[Decimal, Decimal]]:
+        """Return a model_id -> (input_price, output_price) per-1K index.
+
+        PERF-P1: O(1) price lookups for cost estimation. Previously
+        the cost service called ``list_models()`` and built a
+        per-request dict on every estimate call. Now callers fetch
+        the index once and look up in O(1).
+        """
+        return {
+            entry.model_id: (entry.input_price_per_1k, entry.output_price_per_1k)
+            for entry in self._entries()
+        }
 
     def default_model_ids(self) -> tuple[str, ...]:
         """Return the four default model ids for the workspace.

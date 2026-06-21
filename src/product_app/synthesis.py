@@ -18,7 +18,8 @@ calls so a single failure does not poison the rest of the synthesis.
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from concurrent.futures import ThreadPoolExecutor
+from dataclasses import asdict, dataclass
 from enum import StrEnum
 from threading import RLock
 from time import perf_counter
@@ -27,6 +28,7 @@ from uuid import UUID
 from pydantic import BaseModel
 
 from product_app.config import settings
+from product_app.feedback_store import record_event as _record_feedback_event
 from product_app.debate import DebateOutput
 from product_app.providers import (
     CitationCoverage,
@@ -157,21 +159,29 @@ class InMemorySynthesisEventRecorder:
         false_consensus_preserved: bool,
         high_stakes_warning_required: bool,
     ) -> None:
+        event = SynthesisEvent(
+            event_type=event_type,
+            account_id=account_id,
+            query_run_id=query_run_id,
+            status=status,
+            duration_ms=duration_ms,
+            citation_coverage_ratio=citation_coverage_ratio,
+            false_consensus_preserved=false_consensus_preserved,
+            high_stakes_warning_required=high_stakes_warning_required,
+        )
         with self._lock:
-            self._events.append(
-                SynthesisEvent(
-                    event_type=event_type,
-                    account_id=account_id,
-                    query_run_id=query_run_id,
-                    status=status,
-                    duration_ms=duration_ms,
-                    citation_coverage_ratio=citation_coverage_ratio,
-                    false_consensus_preserved=false_consensus_preserved,
-                    high_stakes_warning_required=high_stakes_warning_required,
-                ),
-            )
+            self._events.append(event)
             if len(self._events) > self.MAX_EVENTS:
                 del self._events[: len(self._events) - self.MAX_EVENTS]
+        # Feedback audit: append to the durable store for the nightly
+        # audit job. Best-effort; failures are logged by the store.
+        _record_feedback_event(
+            recorder="synthesis",
+            event_type=event.event_type,
+            account_id=event.account_id,
+            query_run_id=event.query_run_id,
+            payload=asdict(event),
+        )
 
     def list_events(self) -> list[SynthesisEvent]:
         with self._lock:
@@ -240,35 +250,51 @@ class SynthesisOrchestrationService:
             coverage_ratio=coverage.coverage_ratio,
         )
 
-        consensus_section, _ = self._build_consensus(
+        # PERF-P0: parallelize the 5 synthesis section calls. The
+        # ``_build_*`` methods each make an LLM call; previously they
+        # ran serially (5x per-call latency). They share the same
+        # ``user_prompt`` and read-only ``initial_answers``, so they
+        # are safe to run concurrently.
+        consensus_future = _synthesis_section_pool.submit(
+            self._build_consensus,
             initial_answers=initial_answers,
             coverage=coverage,
             openrouter_key=openrouter_key,
             user_prompt=user_prompt,
         )
-        disagreement_section, _ = self._build_disagreement(
+        disagreement_future = _synthesis_section_pool.submit(
+            self._build_disagreement,
             initial_answers=initial_answers,
             openrouter_key=openrouter_key,
             user_prompt=user_prompt,
         )
-        source_section, _ = self._build_source_support(
+        source_future = _synthesis_section_pool.submit(
+            self._build_source_support,
             initial_answers=initial_answers,
             openrouter_key=openrouter_key,
             user_prompt=user_prompt,
         )
-        uncertainty_section, _ = self._build_uncertainty(
+        uncertainty_future = _synthesis_section_pool.submit(
+            self._build_uncertainty,
             initial_answers=initial_answers,
             debate_outputs=debate_outputs,
             openrouter_key=openrouter_key,
             user_prompt=user_prompt,
         )
-        recommendation_section, _ = self._build_recommendation(
+        recommendation_future = _synthesis_section_pool.submit(
+            self._build_recommendation,
             initial_answers=initial_answers,
             coverage=coverage,
             failed_count=failed_count,
             openrouter_key=openrouter_key,
             user_prompt=user_prompt,
         )
+
+        consensus_section, _ = consensus_future.result()
+        disagreement_section, _ = disagreement_future.result()
+        source_section, _ = source_future.result()
+        uncertainty_section, _ = uncertainty_future.result()
+        recommendation_section, _ = recommendation_future.result()
 
         false_consensus_preserved = self._is_false_consensus_preserved(
             initial_answers=initial_answers,
@@ -609,4 +635,15 @@ class SynthesisOrchestrationService:
 
 synthesis_event_recorder = InMemorySynthesisEventRecorder()
 synthesis_stub_service = SynthesisOrchestrationService()
+
+# PERF-P0: thread pool for parallel synthesis section calls. The
+# synthesis stage makes 5 LLM calls (consensus, disagreement,
+# source_support, uncertainty, recommendation). Running them in
+# parallel via the shared pool cuts wall-clock latency from 5x to
+# ~1x the per-call latency. Pool size of 20 = max_concurrent_runs
+# (16) * sections per run (5) / 4 to give steady-state headroom.
+_synthesis_section_pool = ThreadPoolExecutor(
+    max_workers=20, thread_name_prefix="synthesis-section"
+)
+
 synthesis_orchestration_service = synthesis_stub_service

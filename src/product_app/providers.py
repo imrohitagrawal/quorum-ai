@@ -30,7 +30,7 @@ from __future__ import annotations
 
 import json
 import re
-from dataclasses import dataclass
+from dataclasses import asdict, dataclass
 from decimal import Decimal
 from enum import StrEnum
 from math import ceil
@@ -44,6 +44,7 @@ from uuid import UUID
 from pydantic import BaseModel, Field
 
 from product_app.config import RuntimeEnvironment, settings
+from product_app.feedback_store import record_event as _record_feedback_event
 from product_app.model_slots import ModelSlot, openrouter_model_catalog_service
 from product_app.provider_keys import ProviderCredentialSource
 
@@ -150,22 +151,28 @@ class InMemoryProviderEventRecorder:
         source_count: int,
         credential_source: ProviderCredentialSource,
     ) -> None:
+        event = ProviderCallEvent(
+            event_type=event_type,
+            account_id=account_id,
+            query_run_id=query_run_id,
+            model_id=model_id,
+            provider_path=provider_path,
+            duration_ms=duration_ms,
+            fallback_used=fallback_used,
+            source_count=source_count,
+            credential_source=credential_source,
+        )
         with self._lock:
-            self._events.append(
-                ProviderCallEvent(
-                    event_type=event_type,
-                    account_id=account_id,
-                    query_run_id=query_run_id,
-                    model_id=model_id,
-                    provider_path=provider_path,
-                    duration_ms=duration_ms,
-                    fallback_used=fallback_used,
-                    source_count=source_count,
-                    credential_source=credential_source,
-                ),
-            )
+            self._events.append(event)
             if len(self._events) > self.MAX_EVENTS:
                 del self._events[: len(self._events) - self.MAX_EVENTS]
+        _record_feedback_event(
+            recorder="provider",
+            event_type=event.event_type,
+            account_id=event.account_id,
+            query_run_id=event.query_run_id,
+            payload=asdict(event),
+        )
 
     def list_events(self) -> list[ProviderCallEvent]:
         with self._lock:

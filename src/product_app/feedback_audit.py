@@ -871,7 +871,9 @@ def _parse_args() -> argparse.Namespace:
 
 
 def main() -> int:
-    logging.basicConfig(level=os.environ.get("LOG_LEVEL", "INFO"))
+    from product_app.logging_config import setup_json_logging
+
+    setup_json_logging(os.environ.get("LOG_LEVEL", "INFO"))
     args = _parse_args()
     report_path, json_path = run_audit(
         window_hours=args.window_hours,

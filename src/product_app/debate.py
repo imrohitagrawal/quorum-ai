@@ -20,7 +20,7 @@ thread — debate failures degrade gracefully to a partial result.
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import asdict, dataclass
 from enum import StrEnum
 from threading import RLock
 from time import perf_counter
@@ -29,6 +29,7 @@ from uuid import UUID
 from pydantic import BaseModel, Field
 
 from product_app.config import RuntimeEnvironment, settings
+from product_app.feedback_store import record_event as _record_feedback_event
 from product_app.model_slots import ModelSlot
 from product_app.providers import (
     InitialAnswerStatus,
@@ -123,21 +124,27 @@ class InMemoryDebateEventRecorder:
         status: DebateRoundStatus,
         timed_out: bool,
     ) -> None:
+        event = DebateRoundEvent(
+            event_type=event_type,
+            account_id=account_id,
+            query_run_id=query_run_id,
+            round_number=round_number,
+            focus_areas=focus_areas,
+            duration_ms=duration_ms,
+            status=status,
+            timed_out=timed_out,
+        )
         with self._lock:
-            self._events.append(
-                DebateRoundEvent(
-                    event_type=event_type,
-                    account_id=account_id,
-                    query_run_id=query_run_id,
-                    round_number=round_number,
-                    focus_areas=focus_areas,
-                    duration_ms=duration_ms,
-                    status=status,
-                    timed_out=timed_out,
-                ),
-            )
+            self._events.append(event)
             if len(self._events) > self.MAX_EVENTS:
                 del self._events[: len(self._events) - self.MAX_EVENTS]
+        _record_feedback_event(
+            recorder="debate",
+            event_type=event.event_type,
+            account_id=event.account_id,
+            query_run_id=event.query_run_id,
+            payload=asdict(event),
+        )
 
     def list_events(self) -> list[DebateRoundEvent]:
         with self._lock:
