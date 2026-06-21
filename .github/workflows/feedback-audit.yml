@@ -1,0 +1,42 @@
+name: Feedback Audit
+on:
+  schedule:
+    # 03:57 UTC daily. Off the :00 mark so we don't collide with other
+    # services that schedule on the hour.
+    - cron: '57 3 * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  feedback-audit:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - uses: astral-sh/setup-uv@v4
+      - name: Install dependencies
+        run: uv sync --all-extras
+      - name: Run feedback audit
+        env:
+          OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
+          OPENROUTER_LIVE_EXECUTION_ENABLED: 'true'
+          OPENROUTER_API_BASE_URL: ''
+          AUDIT_MODEL_ID: 'anthropic/claude-haiku-4.5'
+        run: |
+          mkdir -p feedback
+          uv run python -m product_app.feedback_audit --output-dir feedback/
+      - name: Commit audit report
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add feedback/audit-*.md || true
+          if git diff --cached --quiet; then
+            echo "No new audit report to commit"
+          else
+            git commit -m "feedback audit: $(date -u +%Y-%m-%d)"
+            git push
+          fi
