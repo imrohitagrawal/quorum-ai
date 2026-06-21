@@ -20,13 +20,19 @@ def start_session(client: TestClient) -> dict[str, str]:
 
 
 def wait_for_terminal_result(client: TestClient, query_run_id: UUID) -> dict[str, Any]:
-    for _ in range(20):
+    # Poll up to ~12s. The env-configured test path runs four parallel
+    # live  calls (each with up to 8s timeout) plus two debate
+    # rounds plus synthesis. On CI without a working live key,
+    # each live call resolves fast (auth failure returns immediately),
+    # but in environments where the call hangs near the timeout the
+    # workflow can take 2-3s to settle — well above the prior 1s cap.
+    for _ in range(60):
         result = client.get(f"/v1/query-runs/{query_run_id}")
         result.raise_for_status()
         body: dict[str, Any] = result.json()
         if body["status"] in {"completed", "partial", "failed", "timed_out", "cancelled"}:
             return body
-        sleep(0.05)
+        sleep(0.2)
     raise AssertionError("query run did not reach a terminal state in time")
 
 

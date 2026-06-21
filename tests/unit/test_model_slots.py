@@ -45,8 +45,8 @@ def test_model_slot_validator_accepts_four_openrouter_style_model_ids() -> None:
     model_slots = validate_model_slots(
         [
             "openai/gpt-4o-mini",
-            "anthropic/claude-haiku-4.5",
-            "google/gemini-2.5-flash",
+            "anthropic/claude-3-haiku",
+            "google/gemini-2.0-flash-lite",
             "meta-llama/llama-3.1-8b-instruct",
         ],
     )
@@ -68,7 +68,7 @@ def test_model_slot_validator_rejects_malformed_model_id() -> None:
             [
                 "openai/gpt-4o-mini",
                 "not a model",
-                "google/gemini-2.5-flash",
+                "google/gemini-2.0-flash-lite",
                 "deepseek/deepseek-chat-v3.1",
             ],
         )
@@ -82,7 +82,7 @@ def test_model_slot_validator_rejects_duplicate_model_ids() -> None:
         validate_model_slots(
             [
                 "openai/gpt-4o-mini",
-                "anthropic/claude-haiku-4.5",
+                "anthropic/claude-3-haiku",
                 "openai/gpt-4o-mini",
                 "deepseek/deepseek-chat-v3.1",
             ],
@@ -136,8 +136,8 @@ def test_default_model_ids_returns_static_defaults_when_catalog_lists_free_varia
     """
     catalog = [
         _make_entry("openai/gpt-4o-mini:free", "openai", input_price="0"),
-        _make_entry("anthropic/claude-haiku-4.5:preview", "anthropic", input_price="0"),
-        _make_entry("google/gemini-2.5-flash:free", "google", input_price="0"),
+        _make_entry("anthropic/claude-3-haiku:preview", "anthropic", input_price="0"),
+        _make_entry("google/gemini-2.0-flash-lite:free", "google", input_price="0"),
         _make_entry("deepseek/deepseek-chat-v3.1:free", "deepseek", input_price="0"),
     ]
     service = OpenRouterModelCatalogService()
@@ -183,11 +183,11 @@ def test_default_model_ids_reports_drift_when_a_static_id_missing_from_catalog(
     chosen these four models explicitly — but the drift surfaces in
     ``last_drift_diagnostic`` so the operator can act.
     """
-    # Google Gemini 2.5 Flash has been removed from the catalog;
+    # Google Gemini 2.0 Flash Lite has been removed from the catalog;
     # a newer "gemini-3.1-flash-lite" is the cheapest google entry.
     catalog = [
         _make_entry("openai/gpt-4o-mini", "openai", input_price="0.00015"),
-        _make_entry("anthropic/claude-haiku-4.5", "anthropic", input_price="0.001"),
+        _make_entry("anthropic/claude-3-haiku", "anthropic", input_price="0.00025"),
         _make_entry("google/gemini-3.1-flash-lite", "google", input_price="0.00000025"),
         _make_entry("deepseek/deepseek-chat-v3.1", "deepseek", input_price="0.00014"),
     ]
@@ -197,7 +197,7 @@ def test_default_model_ids_reports_drift_when_a_static_id_missing_from_catalog(
     # Static defaults are returned unchanged.
     assert service.default_model_ids() == DEFAULT_MODEL_IDS
     # And the drift is surfaced for operator diagnostics.
-    assert service.last_drift_diagnostic == ("google/gemini-2.5-flash",)
+    assert service.last_drift_diagnostic == ("google/gemini-2.0-flash-lite",)
 
 
 def test_default_model_ids_no_drift_when_catalog_lists_all_static_ids(
@@ -210,8 +210,8 @@ def test_default_model_ids_no_drift_when_catalog_lists_all_static_ids(
         _make_entry(model_id, vendor, input_price="0.0001")
         for model_id, vendor in (
             ("openai/gpt-4o-mini", "openai"),
-            ("anthropic/claude-haiku-4.5", "anthropic"),
-            ("google/gemini-2.5-flash", "google"),
+            ("anthropic/claude-3-haiku", "anthropic"),
+            ("google/gemini-2.0-flash-lite", "google"),
             ("deepseek/deepseek-chat-v3.1", "deepseek"),
         )
     ]

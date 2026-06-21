@@ -76,7 +76,8 @@ def test_debate_live_path_uses_llm_critique_when_key_and_flag_set(
     round text. We mock the provider call so the test does not hit
     the network.
     """
-    from product_app import config, debate as debate_mod
+    from product_app import config
+    from product_app import debate as debate_mod
     from product_app.providers import LiveProviderResult
 
     calls: list[str] = []
@@ -135,7 +136,8 @@ def test_debate_falls_back_to_template_when_live_execution_disabled(
     to the templated critique. Otherwise the test suite / staging
     environments would silently hit the network.
     """
-    from product_app import config, debate as debate_mod
+    from product_app import config
+    from product_app import debate as debate_mod
 
     called = {"count": 0}
 

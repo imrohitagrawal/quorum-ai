@@ -213,7 +213,7 @@ def test_provider_stub_relaxes_sources_gate_when_live_text_present_without_citat
     )
 
     def fake_live(*, openrouter_key, query_text, model_slot):
-        return _FakeLiveResult(answer_text=f"answer only, no citations", sources=[])
+        return _FakeLiveResult(answer_text="answer only, no citations", sources=[])
 
     monkeypatch.setattr(
         provider_stub_service,

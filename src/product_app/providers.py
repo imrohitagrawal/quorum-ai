@@ -29,6 +29,7 @@ text, or any model output that the user did not consent to expose.
 from __future__ import annotations
 
 import json
+import re
 from dataclasses import dataclass
 from decimal import Decimal
 from enum import StrEnum
@@ -43,9 +44,8 @@ from uuid import UUID
 from pydantic import BaseModel, Field
 
 from product_app.config import RuntimeEnvironment, settings
-from product_app.model_slots import ModelSlot
+from product_app.model_slots import ModelSlot, openrouter_model_catalog_service
 from product_app.provider_keys import ProviderCredentialSource
-from product_app.model_slots import openrouter_model_catalog_service
 
 CITATION_COVERAGE_TARGET = Decimal("0.80")
 
@@ -337,7 +337,19 @@ class ProviderExecutionService:
             provider_attempt_order=provider_attempt_order,
             fallback_used=False,
             provider_notice=(
-                "Local demo mode is active because OpenRouter live execution is "
+                # Distinguish "live mode is off" (operator choice) from
+                # "live was attempted but returned no usable answer"
+                # (e.g. an image-only model like
+                # google/gemini-3.1-flash-image). The prior copy collapsed
+                # both into a single "live execution is disabled"
+                # message, which blamed the operator when the actual
+                # cause was the model returning no text. Be honest.
+                "Live execution returned no usable answer for this slot, so "
+                "the response below was produced by Quorum's local simulation "
+                "helpers. It is not a real-model answer."
+                if (live_response is None or not (live_response.answer_text or "").strip())
+                and self._live_execution_enabled(openrouter_key=openrouter_key)
+                else "Local demo mode is active because  live execution is "
                 "disabled. These results are simulated and do not come from a "
                 "live provider."
             ),
@@ -539,7 +551,7 @@ class ProviderExecutionService:
         model_id: str,
         system_prompt: str | None = None,
         max_tokens: int | None = None,
-    ) -> "LiveProviderResult | _SearchRejected | None":
+    ) -> LiveProviderResult | _SearchRejected | None:
         # ``_post_openrouter`` accepts a custom system prompt and
         # ``max_tokens`` cap. The debate and synthesis services use
         # this overload to constrain token spend per call; the search
@@ -568,7 +580,7 @@ class ProviderExecutionService:
         model_id: str,
         messages: list[dict[str, str]],
         max_tokens: int | None = None,
-    ) -> "LiveProviderResult | _SearchRejected | None":
+    ) -> LiveProviderResult | _SearchRejected | None:
         payload: dict[str, object] = {
             "model": model_id,
             "messages": messages,
@@ -606,7 +618,10 @@ class ProviderExecutionService:
         except json.JSONDecodeError:
             return None
         content = _extract_message_content(parsed)
-        citations = _extract_citations(parsed)
+        # Pass ``content`` in so ``_extract_citations`` reuses the already
+        # extracted message text for its inline-link fallback instead of
+        # walking the choices/message tree a second time.
+        citations = _extract_citations(parsed, content=content)
         if not content:
             return None
         return LiveProviderResult(answer_text=content, sources=citations)
@@ -806,7 +821,20 @@ def _sanitize_source_url(url: str) -> str | None:
     return url
 
 
-def _extract_citations(payload: object) -> list[SourceReference]:
+def _extract_citations(
+    payload: object,
+    *,
+    content: str | None = None,
+) -> list[SourceReference]:
+    """Pull SourceReferences from a parsed chat-completions response.
+
+    ``content`` is the already-extracted message text. When supplied it is
+    used for the inline-markdown-link fallback; otherwise
+    ``_extract_message_content`` is called on ``payload``. Callers that
+    already extracted the content for the answer text (i.e.
+    ``_post_openrouter``) should pass it in to avoid walking the
+    choices/message tree twice per live call.
+    """
     if not isinstance(payload, dict):
         return []
     references: list[SourceReference] = []
@@ -821,7 +849,7 @@ def _extract_citations(payload: object) -> list[SourceReference]:
         return references
     annotations = message.get("annotations") or message.get("citations") or []
     if not isinstance(annotations, list):
-        return references
+        annotations = []
     for index, annotation in enumerate(annotations, start=1):
         if not isinstance(annotation, dict):
             continue
@@ -840,7 +868,49 @@ def _extract_citations(payload: object) -> list[SourceReference]:
                 is_fallback=False,
             ),
         )
+    # Workstream-2: parse inline markdown links from the message content as
+    # a fallback. Some providers (and bare-id POSTs without :online) emit
+    # sources only as ``[anchor text](https://...)`` in the answer rather
+    # than in the ``annotations`` block. Without this fallback those
+    # citations would be invisible to the synthesis / source-support UI.
+    # Skip when the annotations block already produced citations: a
+    # second scan over the full content would just re-discover URLs the
+    # ``seen_urls`` dedup would then drop, and per-match sanitization is
+    # wasted work.
+    if not references:
+        content_text = content if content is not None else _extract_message_content(payload)
+        seen: set[str] = set()
+        for match in _INLINE_MARKDOWN_LINK_RE.finditer(content_text):
+            anchor, raw_url = match.group(1).strip(), match.group(2).strip()
+            sanitized = _sanitize_source_url(raw_url)
+            if sanitized is None or sanitized in seen:
+                continue
+            seen.add(sanitized)
+            references.append(
+                SourceReference(
+                    title=anchor,
+                    url=sanitized,
+                    provider=ProviderPath.OPENROUTER_SEARCH,
+                    is_fallback=False,
+                ),
+            )
     return references
+
+
+#: Workstream-2: capture ``[anchor](https://...)`` style inline markdown
+#: links. The URL class is ``[^\s)]+`` — non-whitespace, non-``)`` — so
+#: the first ``)`` in the URL stops the capture and the closing
+#: ``)`` of the markdown link syntax matches literally. This mirrors
+#: the behaviour of most markdown renderers for raw URLs: a URL with
+#: unbalanced ``)`` (e.g. a Wikipedia ``/wiki/Python_(programming_language)``
+#: written without ``%29`` escaping) will be truncated at the first
+#: ``)``; URLs with balanced parens that are *themselves* wrapped in
+#: extra parens (e.g. ``[Foo](https://example.com/foo_(bar))``) are
+#: also captured up to the inner ``)``. The single source of truth
+#: for "is this URL allowed?" is ``_sanitize_source_url`` (http(s)
+#: scheme + host denylist) — the regex only governs the
+#: shape of the markdown link, not the URL semantics.
+_INLINE_MARKDOWN_LINK_RE = re.compile(r"\[([^\]]+)\]\((https?://[^\s)]+)\)")
 
 
 #: L5d: characters-per-material-claim heuristic. Industry rule of

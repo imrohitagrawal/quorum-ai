@@ -53,7 +53,6 @@ def test_csrf_query_string_is_not_accepted() -> None:
     # /v1/session is a GET — there is no CSRF check on GET.
     # We need to POST to a CSRF-protected endpoint with the token
     # in the query string to assert it's blocked.
-    from product_app.safety import WARNING_VERSION, WarningType
 
     bad = client.post(
         f"/v1/query-runs/warnings?csrf_token={csrf}",  # token via query
@@ -93,7 +92,6 @@ def test_session_resume_rotates_csrf() -> None:
     )
 
     # Old token must NOT work anymore.
-    from product_app.safety import WARNING_VERSION, WarningType
     response = client.post(
         "/v1/query-runs/warnings",
         headers={"x-csrf-token": csrf_initial},  # old token

@@ -13,7 +13,7 @@ import warnings
 
 
 def test_warning_emitted_when_secret_unset(
-    monkeypatch: "pytest.MonkeyPatch",
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """Constructing ``CostEstimationService`` without an env-supplied
     or call-supplied secret emits a warning.
@@ -32,7 +32,7 @@ def test_warning_emitted_when_secret_unset(
 
 
 def test_no_warning_when_env_supplied(
-    monkeypatch: "pytest.MonkeyPatch",
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """If ``QUORUM_TOKEN_SECRET`` is set in the environment, no
     warning fires — the configuration is correct.
@@ -50,7 +50,7 @@ def test_no_warning_when_env_supplied(
 
 
 def test_no_warning_when_binding_secret_supplied(
-    monkeypatch: "pytest.MonkeyPatch",
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """If the caller passes ``binding_secret=`` explicitly, no
     warning fires — the caller is opting in to the explicit value.

@@ -24,10 +24,9 @@ from product_app.catalog_fetcher import (
     DEFAULT_VENDORS,
     OpenRouterCatalogFetcher,
     _parse_catalog_response,
-    _vendor_for,
     _short_name_for,
+    _vendor_for,
 )
-
 
 # ---------------------------------------------------------------------------
 # Helpers

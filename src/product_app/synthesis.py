@@ -49,10 +49,15 @@ HIGH_STAKES_NOTICE_FRAGMENT = (
     "financial, safety, or regulated professional advice."
 )
 
-#: Token cap per synthesis section. The plan calls for ~400 tokens of
-#: output per section; we round to 500 to leave a small safety margin
-#: for leading phrases the model tends to emit.
-SYNTHESIS_SECTION_MAX_TOKENS = 500
+#: Token cap per synthesis section. Workstream-2 raised this from 500
+#: to 800 so each section has room to enumerate up to four models with
+#: quoted phrases, attribution, and the decision-support caveat without
+#: the model truncating mid-sentence. The plan's "~400 tokens of output
+#: per section" target is still met on well-formed answers; the extra
+#: budget is the safety margin the older value used to leave for the
+#: prompt's leading phrase — a margin that turned out to be too tight
+#: for the model to finish the citation-coverage / failed-count lines.
+SYNTHESIS_SECTION_MAX_TOKENS = 800
 
 
 # System prompts for the five synthesis sections. Each prompt is
@@ -82,14 +87,18 @@ _UNCERTAINTY_PROMPT = (
     "honest. Do not pad. Output is shown to the user as 'Uncertainty'."
 )
 _RECOMMENDATION_PROMPT = (
-    "Given the consensus, disagreement, sources, and uncertainty above, "
-    "produce a one-paragraph recommendation. End with a one-sentence "
-    "decision-support caveat: 'This summary is decision support only and "
-    "is not medical, legal, financial, safety, or regulated professional "
-    "advice.' If `failed_count > 0`, mention that explicitly. If "
-    "citation coverage is below 80%, recommend waiting for a human "
-    "review before acting. Otherwise recommend acting on the consensus "
-    "pending source audit. Output is shown to the user as 'Recommendation'."
+    "Write a one-paragraph recommendation using the consensus, "
+    "disagreement, sources, and uncertainty above. Hard rules:\n"
+    "1. Always end with this sentence verbatim: 'This summary is "
+    "decision support only and is not medical, legal, financial, "
+    "safety, or regulated professional advice.'\n"
+    "2. If `failed_count > 0`, lead with that fact in the first "
+    "sentence — do not bury it.\n"
+    "3. If citation coverage is below 80%, recommend pausing for "
+    "human review before any action.\n"
+    "4. Otherwise recommend acting on the consensus pending a "
+    "human source audit.\n"
+    "Output is shown to the user as 'Recommendation'."
 )
 
 
@@ -344,9 +353,14 @@ class SynthesisOrchestrationService:
         )
         lines.append(f"Failed model count: {failed_count}.")
         lines.append("")
-        lines.append("Four model answers (model name, status, first 250 chars):")
+        lines.append("Four model answers (model name, status, first 600 chars):")
         for answer in initial_answers:
-            excerpt = (answer.answer_text or "").strip().replace("\n", " ")[:250]
+            # Workstream-2: bumped from 250 to 600 chars per answer.
+            # 250 was too short to capture the model's full stance and
+            # any inline citation links; the synthesis could only see
+            # a sliver of the answer and the disagreement section had
+            # nothing concrete to quote.
+            excerpt = (answer.answer_text or "").strip().replace("\n", " ")[:600]
             sources_str = ", ".join(
                 f"{s.title} ({s.url})" for s in (answer.sources or [])[:3]
             )
@@ -365,7 +379,11 @@ class SynthesisOrchestrationService:
             lines.append("")
             lines.append("Debate rounds (round 1 then round 2 critique):")
             for round_output in debate_outputs:
-                excerpt = (round_output.critique_text or "").strip().replace("\n", " ")[:300]
+                # Workstream-2: bumped from 300 to 700 chars per debate round.
+                # The critique lines are what the uncertainty section leans
+                # on; 300 was cutting off the actual claim in the middle of
+                # the sentence, leaving the model to fill in the gap.
+                excerpt = (round_output.critique_text or "").strip().replace("\n", " ")[:700]
                 lines.append(
                     f"- round {round_output.round_number}: {excerpt}"
                 )

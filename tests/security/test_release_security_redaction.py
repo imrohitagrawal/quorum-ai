@@ -84,6 +84,7 @@ def test_cumulative_cost_block_does_not_leak_account_secrets(
     into a debug message would surface here).
     """
     from decimal import Decimal
+
     from product_app.costs import cost_event_recorder
 
     monkeypatch.setattr(

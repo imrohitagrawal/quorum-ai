@@ -31,11 +31,11 @@ from __future__ import annotations
 
 import json
 import re
+from collections.abc import Callable, Iterable
 from dataclasses import dataclass
 from decimal import Decimal
 from threading import RLock
 from time import monotonic
-from typing import Callable, Iterable
 from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
 

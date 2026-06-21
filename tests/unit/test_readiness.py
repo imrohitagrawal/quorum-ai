@@ -22,7 +22,7 @@ report offline-mode (or live-with-warning) so the app still starts.
 
 from __future__ import annotations
 
-from typing import Iterator
+from collections.abc import Iterator
 
 import pytest
 
@@ -120,18 +120,18 @@ def test_probe_reports_live_with_drift_when_catalog_missing_an_id(
         monkeypatch,
         [
             "openai/gpt-4o-mini",
-            "anthropic/claude-haiku-4.5",
+            "anthropic/claude-3-haiku",
             "deepseek/deepseek-chat-v3.1",
-            # google/gemini-2.5-flash deliberately omitted
+            # google/gemini-2.0-flash-lite deliberately omitted
         ],
     )
 
     report = run_startup_probe()
 
-    # State stays live — the demo will still call google/gemini-2.5-flash.
+    # State stays live — the demo will still call google/gemini-2.0-flash-lite.
     # The diagnostic surfaces drift so the operator can act.
     assert report.state == "live"
-    assert report.catalog_drift_ids == ("google/gemini-2.5-flash",)
+    assert report.catalog_drift_ids == ("google/gemini-2.0-flash-lite",)
     assert any("not in the live" in r.lower() for r in report.reasons)
 
 

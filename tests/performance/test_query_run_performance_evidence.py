@@ -61,10 +61,13 @@ def test_stubbed_workflow_meets_local_performance_and_observability_contract() -
     # Even with live execution disabled, the synthesis code still
     # iterates through all five sections and attempts the live call
     # for each. The previous 500ms budget no longer reflects the new
-    # pipeline shape. 1500ms is a generous ceiling that still
-    # distinguishes "we forgot to run a stage" from "the pipeline
-    # ran end-to-end."
-    assert elapsed_ms < 1500
+    # pipeline shape. Workstream-2 then raised the per-answer excerpt
+    # cap from 250 to 600 chars and the per-debate-round cap from
+    # 300 to 700 chars, so the user_prompt is roughly 2× larger and
+    # the synthesis round-trip now takes measurably longer. 2000ms
+    # is a generous ceiling that still distinguishes "we forgot to
+    # run a stage" from "the pipeline ran end-to-end."
+    assert elapsed_ms < 2000
     assert result_response.json()["elapsed_time_ms"] >= 0
 
     provider_events = provider_event_recorder.list_events()

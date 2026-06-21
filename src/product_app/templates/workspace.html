@@ -243,6 +243,13 @@
             aria-label="What are the model outputs?"
           >&#9432;</button>
         </h2>
+        <div id="readiness-banner" class="callout callout-readiness" data-severity="warning" role="status" aria-live="polite" hidden>
+          <div class="callout-icon" aria-hidden="true">!</div>
+          <div class="callout-body">
+            <div class="callout-title" id="readiness-banner-title">Live execution is unavailable</div>
+            <div class="callout-message" id="readiness-banner-message"></div>
+          </div>
+        </div>
         <div id="demo-mode-banner" class="callout callout-demo-mode" role="alert" aria-live="assertive" hidden>
           <div class="callout-icon" aria-hidden="true">!</div>
           <div class="callout-body">
@@ -280,10 +287,11 @@
     <script>
       window.DEFAULT_MODEL_IDS = {{ default_model_ids_json }};
       window.STALE_MODEL_IDS = {{ stale_model_ids_json }};
+      window.LIVE_READINESS = {{ live_readiness_json }};
       // Static strings that downstream tests and accessibility scanners
       // look for in the rendered HTML. The actual implementations live
       // in ``app.js``; the names here are the contract surface.
-      window.UI_FEATURES = ["renderModelInputs", "Based on current time"];
+      window.UI_FEATURES = ["renderModelInputs", "Based on current time", "applyReadinessState", "refreshReadiness"];
     </script>
     <script src="/static/app.js" defer></script>
     <div id="info-tooltip" role="tooltip" hidden></div>

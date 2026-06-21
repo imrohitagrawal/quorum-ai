@@ -18,9 +18,8 @@ from uuid import uuid4
 import pytest
 
 from product_app.costs import (
-    CostEstimationService,
     HARD_LIMIT_USD,
-    InMemoryCostEventRecorder,
+    CostEstimationService,
     cost_event_recorder,
 )
 from product_app.model_slots import ModelSlot
@@ -137,7 +136,7 @@ def test_hard_limit_constant_unchanged() -> None:
     """The hard $0.25 limit must not change — the cumulative guard
     is additive protection on top of the per-estimate cap.
     """
-    assert HARD_LIMIT_USD == Decimal("0.25")
+    assert Decimal("0.25") == HARD_LIMIT_USD
 
 
 def _slot() -> ModelSlot:

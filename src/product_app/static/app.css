@@ -611,6 +611,29 @@ select {
 }
 .callout-info .callout-icon { background: var(--info); color: white; }
 
+/* Workstream 3 — UI honesty. The readiness banner shares the
+   palette of callout-warning / callout-info but the colour is
+   driven by ``data-severity`` so the renderer can flip it without
+   swapping the class. The base palette matches callout-warning so
+   the default (warning) reads correctly before the renderer has
+   run. */
+.callout-readiness[data-severity="warning"] {
+  background: var(--warning-soft);
+  border-color: rgba(241, 179, 111, 0.40);
+}
+.callout-readiness[data-severity="warning"] .callout-icon {
+  background: var(--warning);
+  color: white;
+}
+.callout-readiness[data-severity="info"] {
+  background: var(--info-soft);
+  border-color: rgba(31, 79, 154, 0.28);
+}
+.callout-readiness[data-severity="info"] .callout-icon {
+  background: var(--info);
+  color: white;
+}
+
 .callout-cost {
   background: var(--accent-soft);
   border-color: rgba(214, 102, 63, 0.30);

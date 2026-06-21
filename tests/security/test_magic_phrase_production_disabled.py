@@ -10,18 +10,13 @@ provider stub fixtures) are NOT gated — operators curate those.
 
 from __future__ import annotations
 
-from types import SimpleNamespace
-from uuid import uuid4
-
 import pytest
 
 from product_app.config import RuntimeEnvironment
-from product_app.debate import DebateOrchestrationService
-from product_app.debate import debate_event_recorder
+from product_app.debate import DebateOrchestrationService, debate_event_recorder
 from product_app.model_slots import ModelSlot
 from product_app.providers import (
     ProviderExecutionService,
-    ProviderPath,
     provider_event_recorder,
 )
 from product_app.query_runs import query_run_repository

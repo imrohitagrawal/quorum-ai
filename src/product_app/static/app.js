@@ -49,6 +49,9 @@
   const driftRegion = el("drift-region");
   const driftMessage = el("drift-region-message");
   const driftDismiss = el("drift-region-dismiss");
+  const readinessRegion = el("readiness-banner");
+  const readinessTitle = el("readiness-banner-title");
+  const readinessMessage = el("readiness-banner-message");
   const toastRegion = el("toast-region");
   const modelInputs = el("model-inputs");
   const modelGrid = el("model-grid");
@@ -95,6 +98,15 @@
     // Auto-scrolls the cancel button into view exactly once on the
     // transition into a running state.
     hasScrolledToRunControls: false,
+    // Workstream 3: live-readiness snapshot. ``lastReadiness`` is the
+    // most recent ``/ready`` payload (state, reasons, drift ids).
+    // ``lastStaleModelIds`` is the most recent ``stale_model_ids`` from
+    // ``/v1/models/defaults``. Both are seeded from the page-load
+    // ``window.LIVE_READINESS`` and ``window.STALE_MODEL_IDS``
+    // literals so the pre-run banners can render before the first
+    // client-initiated fetch completes.
+    lastReadiness: null,
+    lastStaleModelIds: null,
   };
 
   // ---------------------------------------------------------------------------
@@ -171,14 +183,18 @@
     errorActions.replaceChildren();
   }
 
-  // Render the catalog-drift banner. The server passes
-  // ``window.STALE_MODEL_IDS`` at page-load time: a non-empty array
-  // means one or more of the four static default model ids is no
-  // longer in the live  catalog. The banner tells the operator
-  // the demo will still call them, but the catalog has moved on.
+  // Render the catalog-drift banner. ``renderDriftBanner`` is a pure
+  // renderer: it reads from ``state.lastStaleModelIds`` and toggles the
+  // region. The page-load literal ``window.STALE_MODEL_IDS`` is
+  // treated as a seed — it is copied into the cache below so the first
+  // paint of the banner is correct before any client-initiated fetch
+  // completes. ``refreshReadiness`` (and the periodic catalog refresh
+  // in ``refreshDefaults``) re-seeds the cache from the live payload.
   function renderDriftBanner() {
     if (!driftRegion || !driftMessage) return;
-    const stale = Array.isArray(window.STALE_MODEL_IDS) ? window.STALE_MODEL_IDS : [];
+    const stale = Array.isArray(state.lastStaleModelIds)
+      ? state.lastStaleModelIds
+      : [];
     if (stale.length === 0) {
       driftRegion.hidden = true;
       return;
@@ -195,6 +211,166 @@
     driftDismiss.addEventListener("click", () => {
       driftRegion.hidden = true;
     });
+  }
+
+  // Seed the readiness and drift caches from the page-load data
+  // islands. The islands are populated server-side by
+  // ``_render_workspace_html`` (see ``product_app.main``). A bad /
+  // missing island must not break boot — we fall back to an empty
+  // snapshot and let the first ``refreshReadiness`` call fill in the
+  // real values.
+  function seedReadinessFromPageLoad() {
+    const seed = window.LIVE_READINESS;
+    if (seed && typeof seed === "object") {
+      state.lastReadiness = {
+        state: typeof seed.state === "string" ? seed.state : null,
+        reasons: Array.isArray(seed.reasons) ? seed.reasons.slice() : [],
+        catalog_drift_ids: Array.isArray(seed.catalog_drift_ids)
+          ? seed.catalog_drift_ids.slice()
+          : [],
+      };
+    }
+    if (Array.isArray(window.STALE_MODEL_IDS)) {
+      state.lastStaleModelIds = window.STALE_MODEL_IDS.slice();
+    }
+  }
+
+  // Render the pre-run honesty banner. The banner is a *deployment*
+  // disclosure: it tells the user the answers they will see are
+  // templated, before they have to run a query to find out. The
+  // per-run partial-live disclosure stays in
+  // ``renderModelPanels`` (it owns ``#demo-mode-banner``). Two
+  // surfaces, two distinct signals.
+  function applyReadinessState() {
+    // The drift banner is the sibling of the readiness banner; both
+    // are driven by the same cache so they cannot disagree.
+    renderDriftBanner();
+    if (!readinessRegion || !readinessTitle || !readinessMessage) return;
+    const readiness = state.lastReadiness;
+    // No snapshot yet (probe never ran): keep the banner hidden. The
+    // first ``refreshReadiness`` call will fill the cache and
+    // re-trigger this renderer.
+    if (!readiness || !readiness.state) {
+      readinessRegion.hidden = true;
+      readinessTitle.textContent = "Live execution is unavailable";
+      readinessMessage.textContent = "";
+      return;
+    }
+    const stateName = readiness.state;
+    if (stateName === "live") {
+      // No offline disclosure. If there is drift we still show the
+      // drift banner (the surface above the composer) but the
+      // readiness banner itself is hidden — the model answers will
+      // come from real providers, and the drift banner is the
+      // dedicated place to flag catalog drift.
+      readinessRegion.hidden = true;
+      readinessTitle.textContent = "Live execution is unavailable";
+      readinessMessage.textContent = "";
+      return;
+    }
+    let severity;
+    let title;
+    let body;
+    if (stateName === "offline_by_no_key") {
+      severity = "warning";
+      title = "Live execution is unavailable";
+      body =
+        "This deployment has OPENROUTER_LIVE_EXECUTION_ENABLED=true but " +
+        "OPENROUTER_API_KEY is not set. Every model answer and the " +
+        "synthesis below will come from Quorum's local simulation " +
+        "helpers. They look like real output but are not generated by " +
+        "GPT, Claude, Gemini, or Deepseek. Ask the operator to set the " +
+        "API key and restart, or set the flag to false to acknowledge " +
+        "offline mode.";
+    } else if (stateName === "offline_by_config") {
+      // Deliberate operator choice — info severity, not warning.
+      severity = "info";
+      title = "Live execution is turned off";
+      body =
+        "OPENROUTER_LIVE_EXECUTION_ENABLED is not set to true. Every " +
+        "model answer and the synthesis below will come from Quorum's " +
+        "local simulation helpers. They look like real output but are " +
+        "not generated by GPT, Claude, Gemini, or Deepseek. This is a " +
+        "deliberate offline / dev mode.";
+    } else {
+      // Unknown state value (server might add a new one in the
+      // future). Stay honest: render the raw state, keep the
+      // warning severity.
+      severity = "warning";
+      title = "Live-readiness state is unrecognised";
+      body =
+        `The /ready endpoint reported an unknown state ` +
+        `("${stateName}"). Treat model answers as unverified until the ` +
+        `operator confirms the deployment is configured correctly.`;
+    }
+    // If we are in an offline state and the probe also flagged
+    // catalog drift, surface it here too so the user does not have
+    // to scroll up to the drift banner. The live path returns
+    // earlier so this branch only runs for offline_*, where the
+    // drill-down is genuinely useful.
+    const drift = Array.isArray(readiness.catalog_drift_ids)
+      ? readiness.catalog_drift_ids
+      : [];
+    if (drift.length > 0) {
+      body +=
+        ` Catalog drift: the following static default model ids are ` +
+        `no longer in the live  catalog — ${drift.join(", ")}. The app ` +
+        `will still call them, but they may have been renamed or moved.`;
+    }
+    readinessRegion.dataset.severity = severity;
+    readinessTitle.textContent = title;
+    readinessMessage.textContent = body;
+    readinessRegion.hidden = false;
+  }
+
+  // Pull the current readiness snapshot from the server. The /ready
+  // endpoint re-runs the probe on every hit so the response reflects
+  // the *current* settings, not a boot snapshot. We also refresh the
+  // /v1/models/defaults payload so the drift diagnostic stays in
+  // sync with the live catalog. Best-effort: any error is logged to a
+  // toast and the cached snapshot is preserved, so a flaky probe
+  // cannot wipe a known-good banner.
+  async function refreshReadiness() {
+    let nextReadiness = null;
+    let nextStale = null;
+    try {
+      const ready = await api("/ready", { method: "GET" });
+      const live = ready && ready.live_readiness;
+      if (live && typeof live === "object") {
+        nextReadiness = {
+          state: typeof live.state === "string" ? live.state : null,
+          reasons: Array.isArray(live.reasons) ? live.reasons.slice() : [],
+          catalog_drift_ids: Array.isArray(live.catalog_drift_ids)
+            ? live.catalog_drift_ids.slice()
+            : [],
+        };
+      }
+    } catch (error) {
+      // Keep the previous snapshot; surface a non-blocking toast so
+      // the operator knows the probe is unreachable.
+      toast({
+        message: `Live-readiness probe failed: ${error.message || "unknown error"}`,
+        tone: "warn",
+        timeout: 5000,
+      });
+    }
+    try {
+      // /v1/models/defaults requires a session cookie. If the session
+      // bootstrap has not completed yet (we are called from boot
+      // before initSession), fall back to the page-load seed and try
+      // again on the next refresh tick.
+      const defaults = await api("/v1/models/defaults", { method: "GET" });
+      if (Array.isArray(defaults && defaults.stale_model_ids)) {
+        nextStale = defaults.stale_model_ids.slice();
+      }
+    } catch (_) {
+      // Session not yet issued, or transient error. Leave the cache
+      // alone — renderDriftBanner / applyReadinessState will fall
+      // back to the page-load seed.
+    }
+    if (nextReadiness) state.lastReadiness = nextReadiness;
+    if (nextStale) state.lastStaleModelIds = nextStale;
+    applyReadinessState();
   }
 
   // Lightweight toast for transient, non-blocking messages.
@@ -462,20 +638,41 @@
     const takenIds = new Set(
       selectedModelIds.filter((_, index) => index !== currentIndex),
     );
-    return modelCatalog
-      .filter(
-        (option) =>
-          !takenIds.has(option.model_id) || option.model_id === currentModelId,
-      )
-      .map((option) => {
-        const optionElement = document.createElement("option");
-        optionElement.value = option.model_id;
-        optionElement.textContent = `${option.label} (${option.model_id})`;
-        if (option.model_id === currentModelId) {
-          optionElement.selected = true;
-        }
-        return optionElement;
-      });
+    // The curated default for this slot may not appear in the live
+    // catalog — e.g. ``google/gemini-2.0-flash-lite`` and
+    // ``anthropic/claude-3-haiku`` are fallback entries, while the
+    // live catalog's first ``google/`` row is now an image model
+    // (gemini-3.1-flash-image) that returns no text. If we just
+    // iterated the catalog and marked the first match selected, the
+    // browser would silently fall back to the catalog's first row
+    // for the slot's vendor and the demo would target an image
+    // model. Inject the curated default as a synthetic option so the
+    // select is unambiguously anchored to the id the validator
+    // already approved.
+    const catalogHasDefault = modelCatalog.some(
+      (option) => option.model_id === currentModelId,
+    );
+    const options = [];
+    if (!catalogHasDefault) {
+      const synthetic = document.createElement("option");
+      synthetic.value = currentModelId;
+      synthetic.textContent = `${currentModelId} (curated default — not in live catalog)`;
+      synthetic.selected = true;
+      options.push(synthetic);
+    }
+    for (const option of modelCatalog) {
+      if (takenIds.has(option.model_id) && option.model_id !== currentModelId) {
+        continue;
+      }
+      const optionElement = document.createElement("option");
+      optionElement.value = option.model_id;
+      optionElement.textContent = `${option.label} (${option.model_id})`;
+      if (option.model_id === currentModelId) {
+        optionElement.selected = true;
+      }
+      options.push(optionElement);
+    }
+    return options;
   }
 
   function renderModelInputs(modelIds) {
@@ -624,37 +821,51 @@
     // states: all-live (hide), all-local (full copy), mixed (partial
     // copy). The boolean ``result.demo_mode`` is preserved for
     // back-compat but is no longer the sole signal.
+    //
+    // Pre-run (``refreshDefaults`` calls this with ``result = null``
+    // before any query has been issued) we hide the banner outright
+    // — there are no live/local counts yet, so the mixed branch would
+    // render "null of null model answers" which is dishonest copy.
+    // The pre-run disclosure is the job of the readiness banner.
     if (demoModeBanner) {
-      const liveCount = Number.isFinite(result?.live_count) ? result.live_count : null;
-      const localCount = Number.isFinite(result?.local_count) ? result.local_count : null;
-      const fallbackCount =
-        liveCount != null && localCount != null ? liveCount + localCount : null;
-      let bannerState;
-      let bannerCopy = "";
-      if (liveCount === 4) {
-        bannerState = "all-live";
-        bannerCopy = "";
-      } else if (liveCount === 0) {
-        bannerState = "all-local";
-        bannerCopy =
-          "Live LLM execution is disabled, so all four model answers and the synthesis below are produced by Quorum's local simulation helpers. They look like real output but are not generated by GPT, Claude, Gemini, or Deepseek. To run against real models, set OPENROUTER_API_KEY and _LIVE_EXECUTION_ENABLED=true and restart.";
-      } else {
-        bannerState = "mixed";
-        bannerCopy =
-          `${liveCount} of ${fallbackCount ?? 4} model answers came from a live provider; ` +
-          `the remaining ${localCount ?? fallbackCount - liveCount} are from Quorum's local simulation helpers. ` +
-          `The synthesis below is also produced by a configured synthesis model. ` +
-          `To run everything live, ensure OPENROUTER_API_KEY and OPENROUTER_LIVE_EXECUTION_ENABLED=true are set.`;
-      }
-      if (bannerState !== state.lastDemoMode) {
-        state.lastDemoMode = bannerState;
-        if (bannerState === "all-live") {
+      if (result == null) {
+        if (!state.lastDemoMode || state.lastDemoMode !== "pre-run") {
+          state.lastDemoMode = "pre-run";
           demoModeBanner.hidden = true;
+        }
+        // Fall through to render the (empty) model grid below.
+      } else {
+        const liveCount = Number.isFinite(result.live_count) ? result.live_count : null;
+        const localCount = Number.isFinite(result.local_count) ? result.local_count : null;
+        const fallbackCount =
+          liveCount != null && localCount != null ? liveCount + localCount : null;
+        let bannerState;
+        let bannerCopy = "";
+        if (liveCount === 4) {
+          bannerState = "all-live";
+          bannerCopy = "";
+        } else if (liveCount === 0) {
+          bannerState = "all-local";
+          bannerCopy =
+            "Live LLM execution is disabled, so all four model answers and the synthesis below are produced by Quorum's local simulation helpers. They look like real output but are not generated by GPT, Claude, Gemini, or Deepseek. To run against real models, set OPENROUTER_API_KEY and _LIVE_EXECUTION_ENABLED=true and restart.";
         } else {
-          if (demoModeTarget) {
-            demoModeTarget.textContent = bannerCopy;
+          bannerState = "mixed";
+          bannerCopy =
+            `${liveCount} of ${fallbackCount ?? 4} model answers came from a live provider; ` +
+            `the remaining ${localCount ?? fallbackCount - liveCount} are from Quorum's local simulation helpers. ` +
+            `The synthesis below is also produced by a configured synthesis model. ` +
+            `To run everything live, ensure OPENROUTER_API_KEY and OPENROUTER_LIVE_EXECUTION_ENABLED=true are set.`;
+        }
+        if (bannerState !== state.lastDemoMode) {
+          state.lastDemoMode = bannerState;
+          if (bannerState === "all-live") {
+            demoModeBanner.hidden = true;
+          } else {
+            if (demoModeTarget) {
+              demoModeTarget.textContent = bannerCopy;
+            }
+            demoModeBanner.hidden = false;
           }
-          demoModeBanner.hidden = false;
         }
       }
     }
@@ -1307,6 +1518,15 @@
 
   async function refreshDefaults() {
     const response = await api("/v1/models/defaults", { method: "GET" });
+    // Re-seed the drift cache from the live payload so the drift
+    // banner reflects the current catalog, not the boot-time
+    // snapshot. The banner is rendered by the next ``applyReadinessState``
+    // call (or by an explicit ``renderDriftBanner`` if the readiness
+    // probe is not due yet).
+    if (Array.isArray(response.stale_model_ids)) {
+      state.lastStaleModelIds = response.stale_model_ids.slice();
+      renderDriftBanner();
+    }
     renderModelInputs(response.model_slots.map((slot) => slot.model_id));
     renderModelPanels([], null);
   }
@@ -1900,7 +2120,13 @@
     initKeyboardShortcuts();
     initBannerDismiss();
     initInfoIcons();
-    renderDriftBanner();
+    // Workstream 3: seed the readiness + drift caches from the
+    // page-load data islands and render the banners. This paints
+    // the offline / drift disclosure before the first
+    // session-initiated fetch completes, so a misconfigured
+    // deployment does not flash a clean composer on first paint.
+    seedReadinessFromPageLoad();
+    applyReadinessState();
     estimateButton.addEventListener("click", () => {
       startRun();
     });
@@ -1948,6 +2174,12 @@
       renderDebateAndSynthesis(null);
       renderNotices(null);
       renderCurrentTime(null);
+      // Pull the live readiness snapshot. ``/ready`` is
+      // unauthenticated so this works even if the session bootstrap
+      // were to fail. Best-effort: errors are logged to a toast
+      // inside ``refreshReadiness`` and the page-load seed stays
+      // visible.
+      await refreshReadiness();
     } catch (error) {
       handleError(error);
       setConnectionPill("error", "Disconnected");

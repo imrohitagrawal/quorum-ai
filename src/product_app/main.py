@@ -39,10 +39,11 @@ from product_app.model_slots import (
 )
 from product_app.query_runs import (
     _ip_rate_limiter,
+)
+from product_app.query_runs import (
     router as query_runs_router,
 )
 from product_app.readiness import (
-    ReadinessReport,
     current_readiness,
     run_startup_probe,
 )
@@ -204,11 +205,25 @@ def _render_workspace_html() -> str:
     ).replace("<", "\\u003c")
     default_ids_json = json.dumps(default_ids).replace("<", "\\u003c")
     stale_ids_json = json.dumps(stale_ids).replace("<", "\\u003c")
+    # The readiness snapshot is seeded at template-render time so the
+    # client can render the pre-run honesty banner without a round-trip.
+    # ``run_startup_probe`` re-reads settings on every call, so the value
+    # here reflects the current process environment (not a stale boot
+    # snapshot from a different request). Drift ids are folded in so the
+    # client does not have to merge the two islands.
+    report = run_startup_probe()
+    readiness_payload = {
+        "state": report.state,
+        "reasons": list(report.reasons),
+        "catalog_drift_ids": list(report.catalog_drift_ids),
+    }
+    live_readiness_json = json.dumps(readiness_payload).replace("<", "\\u003c")
     return (
         template.replace("{{ app_name }}", escape(settings.app_name))
         .replace("{{ model_catalog_json }}", catalog_json)
         .replace("{{ default_model_ids_json }}", default_ids_json)
         .replace("{{ stale_model_ids_json }}", stale_ids_json)
+        .replace("{{ live_readiness_json }}", live_readiness_json)
     )
 
 

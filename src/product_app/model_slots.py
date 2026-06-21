@@ -19,16 +19,38 @@ from uuid import UUID
 from pydantic import BaseModel, Field
 
 from product_app.catalog_fetcher import (
+    _FALLBACK_CATALOG as _CATALOG_FALLBACK_ENTRIES,
+)
+from product_app.catalog_fetcher import (
     DEFAULT_VENDORS,
     ModelCatalogEntry,
-    OpenRouterCatalogFetcher,
-    _FALLBACK_CATALOG as _CATALOG_FALLBACK_ENTRIES,
-    _vendor_for,
     openrouter_catalog_fetcher,
 )
+
 EXPECTED_SLOT_COUNT = 4
 
 #: Authoritative default model ids, in slot order (1, 2, 3, 4).
+#:
+#: Pre-launch cheap tier — the cheapest paid model in each of the
+#: four vendor families that the demo ``OPENROUTER_API_KEY`` is known
+#: to authenticate. The cheapest *paid* id per vendor is selected,
+#: not the absolute cheapest (which would be ``:free`` / ``:preview``
+#: variants that do not authenticate and collapse every slot into
+#: ``local_simulation``). Per-slot prices are intentionally not
+#: capped at any single threshold — the four-vendor minimum is
+#: bounded by whichever vendor's cheapest paid tier is most
+#: expensive. Current per-slot input rates (USD per 1K tokens):
+#:
+#: | Slot | Model id                          | Input $/1K |
+#: |------|-----------------------------------|------------|
+#: | 1    | ``openai/gpt-4o-mini``            | 0.000150   |
+#: | 2    | ``anthropic/claude-3-haiku``      | 0.000250   |
+#: | 3    | ``google/gemini-2.0-flash-lite``  | 0.000075   |
+#: | 4    | ``deepseek/deepseek-chat-v3.1``   | 0.000140   |
+#:
+#: Combined input cost is **$0.000615 / 1K** tokens. The $0.25
+#: per-run hard cap at ``costs.py:35-36`` is unchanged; this list
+#: only lowers the *average* cost, not the spend ceiling.
 #:
 #: Why this list is the source of truth (not the live catalog):
 #:
@@ -48,13 +70,23 @@ EXPECTED_SLOT_COUNT = 4
 #: The live catalog is still consulted as a *drift* check — if a
 #: model in this tuple is no longer in the catalog, ``default_model_ids``
 #: surfaces the stale-id diagnostic without silently swapping in a
-#: different model. Operator action is required to change the list.
+#: different model. The drift diagnostic is informational: the
+#: curated default is still used by the validator and the demo,
+#: because the operator explicitly chose it. Operator action is
+#: only required if the id has actually been deprecated upstream.
 DEFAULT_MODEL_IDS: tuple[str, ...] = (
-    "openai/gpt-4o-mini",
-    "anthropic/claude-haiku-4.5",
-    "google/gemini-2.5-flash",
-    "deepseek/deepseek-chat-v3.1",
+    "openai/gpt-4o-mini",                 # cheapest paid OpenAI
+    "anthropic/claude-3-haiku",           # cheapest paid Anthropic
+    "google/gemini-2.0-flash-lite",       # cheapest paid Google
+    "deepseek/deepseek-chat-v3.1",        # DeepSeek's paid tier
 )
+
+#: Curated-default id set, computed once at module load. The validator
+#: starts the cross-check from this whitelist and unions the live
+#: catalog ids on top — see ``_validate_model_id_list``. Hoisted out
+#: of the per-call path so the validator doesn't rebuild a 4-element
+#: set on every request.
+_DEFAULT_MODEL_ID_SET: frozenset[str] = frozenset(DEFAULT_MODEL_IDS)
 
 # A model id must contain at least one slash, only letters, digits, dots,
 # dashes, underscores, or colons in each segment, and may not contain
@@ -179,18 +211,32 @@ def _validate_model_id_list(model_ids: list[str]) -> None:
     # failure here as a validation error with a clear message. The
     # cross-check is best-effort: if the catalog is unreachable
     # (network error, parse error, empty response), the validator
-    # falls through to the shape check only — a transient catalog
-    # outage must not block every slot pick. The shape check alone
-    # already rejects truly malformed ids.
-    known_ids: set[str] | None = None
+    # falls back to the curated-default whitelist (see below) — a
+    # transient catalog outage must not block the curated defaults,
+    # and the shape check alone already rejects truly malformed ids.
+    #
+    # ``DEFAULT_MODEL_IDS`` is whitelisted: those ids are the source
+    # of truth (the operator has explicitly chosen them and observed
+    # them to authenticate with the demo key). The catalog may not
+    # list a curated default if the upstream catalog is stale, a new
+    # cheap-tier id has not yet propagated, or a free-tier preview is
+    # the only variant under that prefix. Curated defaults must
+    # always pass validation; the C11 cross-check is for caller-
+    # supplied ids that have not been audited.
+    #
+    # On catalog outage the validator accepts curated defaults and
+    # rejects non-curated caller-supplied ids (with a "not in the
+    # catalog" message). This is stricter than the original C11
+    # shape-check-only fallback but is correct given the whitelist
+    # policy — the curated whitelist is the only signal available
+    # when the live catalog is down.
+    known_ids: set[str] = _DEFAULT_MODEL_ID_SET
     try:
-        from product_app.catalog_fetcher import openrouter_catalog_fetcher
-
-        known_ids = {
+        known_ids |= {
             entry.model_id for entry in openrouter_catalog_fetcher.list_models()
         }
     except Exception:  # noqa: BLE001 - catalog failures must not break validation
-        known_ids = None
+        pass
 
     for index, model_id in enumerate(model_ids, start=1):
         if not isinstance(model_id, str) or not model_id or not _MODEL_ID_RE.match(model_id):
@@ -202,12 +248,7 @@ def _validate_model_id_list(model_ids: list[str]) -> None:
                 ),
             )
             continue
-        # Only enforce the catalog cross-check when the catalog is
-        # available. When ``known_ids`` is ``None`` (catalog
-        # unreachable), the shape check is the only guarantee —
-        # this matches the prior behaviour and keeps the validator
-        # functional during catalog outages.
-        if known_ids is not None and model_id not in known_ids:
+        if model_id not in known_ids:
             errors.append(
                 ModelSlotError(
                     slot_number=index,
