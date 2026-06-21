@@ -147,12 +147,16 @@ def run_startup_probe() -> ReadinessReport:
         drift = ()
 
     if drift:
+        # Operator-facing message: this goes into the ``reasons`` field
+        # of the ``/ready`` JSON response (and the startup log). It is
+        # NOT shown to end users — the UI banner builds its own plain
+        # message from the ``catalog_drift_ids`` field. Keeping the
+        # operator-facing text detailed (and end-user-facing text plain)
+        # is the split.
         reasons.append(
-            "The following static default model ids are NOT in the live "
-            "  catalog: " + ", ".join(drift) + ". The app will still "
-            "call them, but the operator should verify they remain valid "
-            "(they may have been renamed, deprecated, or moved behind a "
-            "different model id)."
+            "Default model ids not in current  catalog: "
+            + ", ".join(drift)
+            + ". May have been renamed, deprecated, or moved."
         )
 
     report = ReadinessReport(

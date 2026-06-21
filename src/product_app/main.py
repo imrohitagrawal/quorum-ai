@@ -20,18 +20,21 @@ from html import escape
 from pathlib import Path
 from typing import Annotated
 
-from fastapi import Cookie, Depends, FastAPI, Request, status
+from fastapi import Depends, FastAPI, Request, status
 from fastapi.exceptions import RequestValidationError
-from fastapi.responses import HTMLResponse, JSONResponse
+from fastapi.responses import HTMLResponse, JSONResponse, PlainTextResponse, Response
 from fastapi.staticfiles import StaticFiles
 
 from product_app.auth import (
     SessionContext,
     attach_session_cookie,
+    get_session_cookie_from_request,
     issue_or_resume_session,
     require_session,
 )
-from product_app.config import RuntimeEnvironment, settings
+from product_app.config import RuntimeEnvironment, settings, validate_production_environment
+from product_app.feedback_store import FeedbackStore, configure as configure_feedback_store
+from product_app.logging_config import setup_json_logging
 from product_app.model_slots import (
     ModelDefaultsResponse,
     default_model_slots,
@@ -48,12 +51,68 @@ from product_app.readiness import (
     run_startup_probe,
 )
 
+# Structured JSON logging for production log aggregators.
+# Called once at module load so every subsequent log line (including
+# the feedback-store fallback below) is emitted as a single JSON object.
+setup_json_logging(settings.log_level)
+
 TEMPLATES_DIR = Path(__file__).parent / "templates"
 STATIC_DIR = Path(__file__).parent / "static"
+
+
+def _redact_sentry_event(event: dict, _hint: dict) -> dict:
+    """Strip any user-supplied data from a Sentry event before sending.
+
+    Defense-in-depth: even though we don't set send_default_pii, this
+    ensures that if a future change accidentally includes request
+    bodies, query text is still redacted.
+    """
+    if "request" in event and "data" in event["request"]:
+        event["request"]["data"] = "[REDACTED]"
+    if "extra" in event:
+        for key in list(event["extra"].keys()):
+            if "query" in key.lower() or "prompt" in key.lower():
+                event["extra"][key] = "[REDACTED]"
+    return event
+
+
+# Sentry: error tracking in production. This is a no-op when
+# SENTRY_DSN is not set, so local dev and tests run unaffected.
+# When the DSN is present (set via `fly secrets set SENTRY_DSN=...`),
+# unhandled exceptions and performance traces are reported to the
+# Sentry project. The integration also enriches events with the
+# FastAPI request context (path, method, headers).
+import os
+
+SENTRY_DSN = os.environ.get("SENTRY_DSN")
+if SENTRY_DSN:
+    import sentry_sdk
+
+    sentry_sdk.init(
+        dsn=SENTRY_DSN,
+        # Sample 10% of transactions for performance monitoring.
+        # Higher rates eat into the Sentry quota without proportional
+        # signal; 10% is enough to spot regressions.
+        traces_sample_rate=0.1,
+        # Sample 100% of error events - we want to see every crash.
+        sample_rate=1.0,
+        environment=settings.runtime_environment.value,
+        # Don't send the user's query text or any LLM response content.
+        before_send=_redact_sentry_event,
+        # PII is not enabled - we never want to send user data to Sentry.
+        send_default_pii=False,
+    )
+
 
 app = FastAPI(title=settings.app_name, version="0.2.0")
 app.include_router(query_runs_router)
 app.mount("/static", StaticFiles(directory=str(STATIC_DIR)), name="static")
+
+# SEC-H2: enforce production configuration at startup. This catches
+# misconfigured deploys (missing QUORUM_TOKEN_SECRET, insecure cookies,
+# legacy header enabled) before they start serving traffic. The guard
+# returns immediately for the "local" environment.
+validate_production_environment()
 
 # Smoke-probe: log a WARNING at startup if the app is running in
 # offline mode without the operator realizing it (no API key, or
@@ -62,6 +121,30 @@ app.mount("/static", StaticFiles(directory=str(STATIC_DIR)), name="static")
 # monitor (load balancer, ops dashboard) can see the state without
 # log access. Best-effort: a failing probe does NOT block startup.
 current_readiness = run_startup_probe()
+
+# PERF-P0: pre-warm the model catalog in the background so the
+# first user request doesn't pay the cold-cache latency. Failures
+# are swallowed; the next call to ``list_models`` will retry.
+from product_app.model_slots import openrouter_catalog_fetcher
+
+openrouter_catalog_fetcher.prewarm()
+
+# Feedback audit storage. The store is append-only and powers the
+# nightly feedback_audit job. The on-disk path defaults to
+# ``.data/feedback_events.sqlite3``; the audit job reads the same
+# path via the ``FEEDBACK_DB_PATH`` env var. In dev and tests the
+# store is optional — the in-memory recorders continue to work
+# without it. A failed open is logged and the app continues
+# without persistence (the audit job will simply see no data).
+try:
+    configure_feedback_store(FeedbackStore.from_env())
+except Exception as exc:  # noqa: BLE001 - persistence is optional
+    import logging
+
+    logging.getLogger(__name__).warning(
+        "feedback_store: could not open SQLite sink, persistence disabled: %s",
+        exc,
+    )
 
 
 # --- Security headers -------------------------------------------------------
@@ -239,6 +322,7 @@ def root() -> dict[str, str]:
         "model_defaults": "/v1/models/defaults",
         "query_run_estimate": "/v1/query-runs/estimate",
         "query_runs": "/v1/query-runs",
+        "feedback_audit": "/feedback/audit",
     }
 
 
@@ -270,7 +354,6 @@ def ready() -> dict[str, object]:
 @app.get("/v1/session", tags=["session"])
 def browser_session(
     request: Request,
-    session_id: str | None = Cookie(default=None, alias="quorum_session"),
 ) -> JSONResponse:
     # C9: per-IP rate limit on session creation. Without this a
     # script can mint thousands of sessions per second and bloat the
@@ -288,6 +371,7 @@ def browser_session(
                 },
             },
         )
+    session_id = get_session_cookie_from_request(request)
     session = issue_or_resume_session(session_id)
     response = JSONResponse(
         {
@@ -300,9 +384,8 @@ def browser_session(
 
 
 @app.get("/ui", response_class=HTMLResponse, tags=["browser-ui"])
-def browser_ui(
-    session_id: str | None = Cookie(default=None, alias="quorum_session"),
-) -> HTMLResponse:
+def browser_ui(request: Request) -> HTMLResponse:
+    session_id = get_session_cookie_from_request(request)
     session = issue_or_resume_session(session_id)
     response = HTMLResponse(_render_workspace_html())
     attach_session_cookie(response, session)
@@ -318,3 +401,52 @@ def model_defaults(
     slots = default_model_slots()
     stale = list(openrouter_model_catalog_service.last_drift_diagnostic)
     return ModelDefaultsResponse(model_slots=slots, stale_model_ids=stale)
+
+
+# --- Feedback audit surface -------------------------------------------------
+# The nightly feedback audit produces a Markdown report at
+# ``feedback/audit-YYYY-MM-DD.md``. The route below serves the most recent
+# report as plain text so the operator can curl the running app and see what
+# the AI auditor is saying. The route is intentionally unauthenticated —
+# the audit is about *operational* state, not user data, and the report
+# never contains query text, account ids, or session tokens. Production
+# deployments can put the route behind a reverse-proxy allowlist if they
+# want to keep it off the public internet.
+
+_FEEDBACK_DIR = Path(__file__).resolve().parents[2] / "feedback"
+
+
+def _latest_feedback_report() -> Path | None:
+    """Return the most recently written audit report, or None."""
+    if not _FEEDBACK_DIR.exists():
+        return None
+    candidates = sorted(_FEEDBACK_DIR.glob("audit-*.md"), reverse=True)
+    return candidates[0] if candidates else None
+
+
+@app.get("/feedback/audit", tags=["operations"], response_class=PlainTextResponse)
+def latest_feedback_audit() -> Response:
+    """Return the most recent feedback audit report as plain text.
+
+    The route is a thin wrapper around the file the audit job writes;
+    it does NOT run the audit on demand (that is a separate, scheduled
+    job). Returns 404 when no audit has been written yet so a fresh
+    deploy does not 500.
+    """
+    report_path = _latest_feedback_report()
+    if report_path is None:
+        return JSONResponse(
+            status_code=status.HTTP_404_NOT_FOUND,
+            content={
+                "detail": {
+                    "code": "AUDIT_NOT_FOUND",
+                    "message": "No feedback audit report has been written yet. "
+                    "The nightly cron job runs `python -m product_app.feedback_audit`.",
+                },
+            },
+        )
+    body = report_path.read_text(encoding="utf-8")
+    return PlainTextResponse(
+        content=body,
+        headers={"X-Audit-Date": report_path.stem.replace("audit-", "")},
+    )
