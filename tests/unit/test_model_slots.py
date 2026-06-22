@@ -248,3 +248,25 @@ def test_default_model_ids_ignores_cheapest_paid_competitor_in_catalog(
     # four ids returned for /v1/models/defaults are the static ones.
     assert service.default_model_ids() == DEFAULT_MODEL_IDS
     assert set(service.last_drift_diagnostic) == set(DEFAULT_MODEL_IDS)
+
+
+def test_short_name_cache_is_per_instance(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The ``_short_name_cache`` attribute lives on each instance, not
+    the class. Two independently-created services must not share a
+    cache — under concurrent reads from a 16-worker ``ThreadPoolExecutor``,
+    a class-level ``None`` sentinel would cause all threads to
+    redundantly build the same index.
+    """
+    catalog = [_make_entry("openai/gpt-4o-mini", "openai")]
+    service_a = OpenRouterModelCatalogService()
+    service_b = OpenRouterModelCatalogService()
+    monkeypatch.setattr(service_a, "_entries", lambda: list(catalog))
+    monkeypatch.setattr(service_b, "_entries", lambda: list(catalog))
+
+    service_a.lookup_short_name("openai/gpt-4o-mini")
+    assert service_a._short_name_cache is not None
+    # service_b has never called ``lookup_short_name`` so its cache
+    # must still be ``None`` — proving the cache is per-instance.
+    assert service_b._short_name_cache is None

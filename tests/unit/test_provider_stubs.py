@@ -397,6 +397,46 @@ def test_live_response_rejects_online_only_for_400_and_404(
     assert result is None
 
 
+def test_live_response_logs_warning_on_non_benign_http_error(
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """A 401 from the upstream provider must surface in logs at WARNING.
+
+    Silent ``None`` returns from ``_post_messages`` masked revoked keys
+    and rate limits — operators could not see that the demo key had
+    been disabled. The fix logs a structured WARNING with the status
+    code, URL, and model id so operators can detect the failure mode.
+    """
+    from urllib.error import HTTPError
+
+    def fake_urlopen(request, timeout=0):  # noqa: ANN001
+        raise HTTPError(url=request.full_url, code=401, msg="Unauthorized", hdrs=None, fp=None)
+
+    monkeypatch.setattr("product_app.providers.urlopen", fake_urlopen)
+
+    with caplog.at_level("WARNING", logger="product_app.providers"):
+        result = provider_stub_service._call_openrouter_with_optional_search(
+            openrouter_key="sk-or-v1-test",
+            query_text="compare vendors",
+            model_slot=ModelSlot(slot_number=1, model_id="openai/gpt-4o-mini"),
+        )
+
+    assert result is None
+    warning_records = [r for r in caplog.records if r.levelname == "WARNING"]
+    assert any("upstream_provider_http_error" in r.getMessage() for r in warning_records)
+    # The structured ``extra`` payload must carry the status code so
+    # Sentry / log search can group on it.
+    warning_with_extra = next(
+        r for r in warning_records if r.getMessage() == "upstream_provider_http_error"
+    )
+    assert getattr(warning_with_extra, "status_code", None) == 401
+    # ``_call_openrouter_with_optional_search`` appends ``:online``
+    # before calling ``_post_messages``, so the logged model_id
+    # includes the suffix.
+    assert getattr(warning_with_extra, "model_id", None) == "openai/gpt-4o-mini:online"
+
+
 # ---------------------------------------------------------------------------
 # L2: per-slot search toggle — the ``ModelSlot(search=False)`` path.
 # ---------------------------------------------------------------------------

@@ -423,6 +423,9 @@ class OpenRouterModelCatalogService:
     raises. The service decides what "degraded mode" means.
     """
 
+    def __init__(self) -> None:
+        self._short_name_cache: dict[str, str] | None = None
+
     def _entries(self) -> list[ModelCatalogEntry]:
         try:
             entries = openrouter_catalog_fetcher.list_models()
@@ -478,8 +481,6 @@ class OpenRouterModelCatalogService:
                     index[entry.model_id] = entry.short_name
             self._short_name_cache = index
         return self._short_name_cache
-
-    _short_name_cache: dict[str, str] | None = None
 
     def price_index(self) -> dict[str, tuple[Decimal, Decimal]]:
         """Return a model_id -> (input_price, output_price) per-1K index.

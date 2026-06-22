@@ -29,6 +29,7 @@ text, or any model output that the user did not consent to expose.
 from __future__ import annotations
 
 import json
+import logging
 import re
 from dataclasses import asdict, dataclass
 from decimal import Decimal
@@ -47,6 +48,8 @@ from product_app.config import RuntimeEnvironment, settings
 from product_app.feedback_store import record_event as _record_feedback_event
 from product_app.model_slots import ModelSlot, openrouter_model_catalog_service
 from product_app.provider_keys import ProviderCredentialSource
+
+_LOGGER = logging.getLogger(__name__)
 
 CITATION_COVERAGE_TARGET = Decimal("0.80")
 
@@ -654,8 +657,19 @@ class ProviderExecutionService:
             # suffix; the caller retries with the bare model id.
             # All other HTTP errors (401, 429, 5xx) bubble up as
             # ``None`` so the local-simulation fallback fires.
+            # Log non-benign errors at WARNING so a revoked key or
+            # rate limit is visible to operators (detection gap if
+            # we silently return).
             if exc.code in (400, 404) and model_id.endswith(":online"):
                 return _SEARCH_REJECTED
+            _LOGGER.warning(
+                "upstream_provider_http_error",
+                extra={
+                    "status_code": exc.code,
+                    "url": exc.url,
+                    "model_id": model_id,
+                },
+            )
             return None
         except (URLError, TimeoutError):
             return None
