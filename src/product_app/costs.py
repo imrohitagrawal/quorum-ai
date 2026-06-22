@@ -38,6 +38,15 @@ from product_app.model_slots import ModelSlot, openrouter_model_catalog_service
 
 SOFT_THRESHOLD_USD = Decimal("0.15")
 HARD_LIMIT_USD = Decimal("0.25")
+#: Per-account daily cap (USD). Defense-in-depth: the per-call
+#: thresholds catch immediate over-spend, the in-memory cumulative
+#: check catches rapid-fire same-window over-spend, but neither bounds
+#: long-term accumulation. A patient attacker could trickle out one
+#: $0.001 query per minute and accumulate unbounded daily cost. The
+#: daily cap reads from the durable SQLite feedback store (not the
+#: bounded in-memory ring buffer) and rejects any estimate that, when
+#: added to the account's 24h spend, would exceed this value.
+DAILY_CAP_USD = Decimal("0.10")
 
 #: Quantization step for ``CostEstimate.estimated_cost_usd``. The
 #: internal arithmetic runs at full Decimal precision, but every
@@ -257,6 +266,40 @@ class CostEstimationService:
                         ),
                     ],
                 )
+        # Daily-cap guard. Defense-in-depth: even if a user stays
+        # under the per-call thresholds AND under the in-memory
+        # cumulative check, a patient attacker could trickle out one
+        # $0.001 query per minute and accumulate unbounded daily
+        # spend. The daily cap is the long-term safety net: a single
+        # account can never spend more than ``DAILY_CAP_USD`` in any
+        # 24-hour rolling window, regardless of how the cumulative
+        # check behaves. Reads from the durable SQLite feedback
+        # store (not the in-memory ring buffer — that is bounded to
+        # ``MAX_EVENTS``).
+        if account_id is not None:
+            from product_app.feedback_store import get_store  # local import to avoid cycles
+
+            store = get_store()
+            if store is not None:
+                already_spent = store.daily_spend_for(account_id)
+                if already_spent + estimated > DAILY_CAP_USD:
+                    return CostEstimate(
+                        estimated_cost_usd=estimated,
+                        threshold_action=CostThresholdAction.BLOCK,
+                        confirmation_token=None,
+                        reasons=[
+                            (
+                                f"Estimated cost would exceed the USD "
+                                f"{DAILY_CAP_USD} daily cap for this account."
+                            ),
+                            (
+                                "Account has spent "
+                                f"{already_spent.quantize(COST_DISPLAY_QUANTUM)} "
+                                "USD in the last 24 hours; no further queries "
+                                "can be accepted until the window resets."
+                            ),
+                        ],
+                    )
         confirmation_token: str | None = None
         if threshold_action is not CostThresholdAction.BLOCK:
             # Mint a token whenever the estimate is at all confirmable. The

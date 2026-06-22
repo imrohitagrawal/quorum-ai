@@ -1,6 +1,14 @@
+from datetime import UTC, datetime, timedelta
 from decimal import Decimal
+from uuid import UUID
 
-from product_app.costs import CostConfirmation, CostThresholdAction, cost_estimation_service
+from product_app.costs import (
+    CostConfirmation,
+    CostEstimationService,
+    CostThresholdAction,
+    cost_estimation_service,
+)
+from product_app.feedback_store import configure_for_tests
 from product_app.model_slots import validate_model_slots
 
 DEFAULT_MODEL_IDS = [
@@ -127,3 +135,100 @@ def test_cost_estimate_includes_output_tokens_in_band() -> None:
         f"expected estimate in $0.03–$0.30 band for a typical 500-char "
         f"research query on the default model mix; got ${cost}"
     )
+
+
+def test_daily_cap_blocks_after_threshold() -> None:
+    """Once the account's 24h spend + new estimate exceeds the daily
+    cap, the estimate is BLOCKed even if the new estimate alone is in
+    the ALLOW band."""
+    model_slots = validate_model_slots(DEFAULT_MODEL_IDS)
+    account_id = UUID("00000000-0000-0000-0000-000000000001")
+
+    with configure_for_tests() as store:
+        # Pre-populate: account is at the daily cap ($0.10). Any
+        # non-zero estimate pushes the running total strictly over.
+        store.record(
+            recorder="cost",
+            event_type="cost_guardrail_accepted",
+            account_id=account_id,
+            query_run_id=None,
+            recorded_at=datetime.now(UTC),
+            payload={"estimated_cost_usd": "0.1"},
+        )
+
+        service = CostEstimationService()
+        estimate = service.estimate(
+            query_text="hi",
+            model_slots=model_slots,
+            account_id=account_id,
+            query_run_id=None,
+        )
+
+        assert estimate.threshold_action is CostThresholdAction.BLOCK
+        assert "daily cap" in estimate.reasons[0].lower()
+        assert estimate.confirmation_token is None
+
+
+def test_daily_cap_resets_after_window() -> None:
+    """Events older than 24h must not count toward the daily cap."""
+    model_slots = validate_model_slots(DEFAULT_MODEL_IDS)
+    account_id = UUID("00000000-0000-0000-0000-000000000002")
+
+    with configure_for_tests() as store:
+        # Pre-populate with an event 25 hours ago — outside the window.
+        store.record(
+            recorder="cost",
+            event_type="cost_guardrail_accepted",
+            account_id=account_id,
+            query_run_id=None,
+            recorded_at=datetime.now(UTC) - timedelta(hours=25),
+            payload={"estimated_cost_usd": "0.50"},
+        )
+
+        service = CostEstimationService()
+        estimate = service.estimate(
+            query_text="hi",
+            model_slots=model_slots,
+            account_id=account_id,
+            query_run_id=None,
+        )
+
+        assert estimate.threshold_action is not CostThresholdAction.BLOCK
+
+
+def test_daily_cap_is_per_account() -> None:
+    """One account hitting its cap must not block a different account."""
+    model_slots = validate_model_slots(DEFAULT_MODEL_IDS)
+    account_a = UUID("00000000-0000-0000-0000-000000000003")
+    account_b = UUID("00000000-0000-0000-0000-000000000004")
+
+    with configure_for_tests() as store:
+        # Account A is at the cap. Any non-zero estimate pushes the
+        # total strictly over, triggering the daily-cap BLOCK.
+        store.record(
+            recorder="cost",
+            event_type="cost_guardrail_accepted",
+            account_id=account_a,
+            query_run_id=None,
+            recorded_at=datetime.now(UTC),
+            payload={"estimated_cost_usd": "0.1"},
+        )
+
+        service = CostEstimationService()
+        # Account A: would push over the daily cap → BLOCK.
+        estimate_a = service.estimate(
+            query_text="hi",
+            model_slots=model_slots,
+            account_id=account_a,
+            query_run_id=None,
+        )
+        assert estimate_a.threshold_action is CostThresholdAction.BLOCK
+
+        # Account B: independent ledger, no events on file → ALLOW.
+        estimate_b = service.estimate(
+            query_text="hi",
+            model_slots=model_slots,
+            account_id=account_b,
+            query_run_id=None,
+        )
+        assert estimate_b.threshold_action is not CostThresholdAction.BLOCK

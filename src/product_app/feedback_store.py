@@ -230,6 +230,48 @@ class FeedbackStore:
             cursor = self._conn.execute("SELECT COUNT(*) AS n FROM events")
             return int(cursor.fetchone()["n"])
 
+    def daily_spend_for(
+        self,
+        account_id: UUID,
+        *,
+        now: datetime | None = None,
+    ) -> Decimal:
+        """Sum the ``estimated_cost_usd`` from cost events for ``account_id``
+        recorded in the last 24 hours.
+
+        The daily cap reads from here. The in-memory ring buffer is bounded
+        to ``MAX_EVENTS`` (~1024), so it cannot be the source of truth for
+        a daily total — a busy day could push old events out of the buffer.
+        The SQLite sink is durable and append-only.
+
+        Only ``cost_guardrail_accepted`` events count (these are the events
+        where the estimate was actually charged). ``BLOCK`` events were
+        never billed; ``REQUIRE_CONFIRMATION`` events were also not charged
+        because the user abandoned or cancelled.
+
+        Args:
+            account_id: The account to sum over.
+            now: Override for test determinism. Defaults to
+                ``datetime.now(UTC)``.
+
+        Returns:
+            Total spend in USD as ``Decimal``. Zero if no events in window.
+        """
+        cutoff = (now or datetime.now(UTC)) - timedelta(hours=24)
+        total = Decimal("0")
+        with self._lock:
+            cursor = self._conn.execute(
+                "SELECT payload FROM events "
+                "WHERE recorder = 'cost' AND event_type = 'cost_guardrail_accepted' "
+                "AND account_id = ? AND recorded_at >= ?",
+                (str(account_id), cutoff.isoformat()),
+            )
+            for row in cursor:
+                payload = json.loads(row["payload"])
+                raw = payload.get("estimated_cost_usd", "0")
+                total += Decimal(str(raw))
+        return total
+
     def close(self) -> None:
         with self._lock:
             self._conn.close()
