@@ -46,7 +46,7 @@ HARD_LIMIT_USD = Decimal("0.25")
 #: daily cap reads from the durable SQLite feedback store (not the
 #: bounded in-memory ring buffer) and rejects any estimate that, when
 #: added to the account's 24h spend, would exceed this value.
-DAILY_CAP_USD = Decimal("0.10")
+DAILY_CAP_USD = Decimal("0.20")
 
 #: Quantization step for ``CostEstimate.estimated_cost_usd``. The
 #: internal arithmetic runs at full Decimal precision, but every

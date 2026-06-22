@@ -146,7 +146,7 @@ def test_daily_cap_blocks_after_threshold() -> None:
     account_id = UUID("00000000-0000-0000-0000-000000000001")
 
     with configure_for_tests() as store:
-        # Pre-populate: account is at the daily cap ($0.10). Any
+        # Pre-populate: account is at the daily cap ($0.20). Any
         # non-zero estimate pushes the running total strictly over.
         store.record(
             recorder="cost",
@@ -154,7 +154,7 @@ def test_daily_cap_blocks_after_threshold() -> None:
             account_id=account_id,
             query_run_id=None,
             recorded_at=datetime.now(UTC),
-            payload={"estimated_cost_usd": "0.1"},
+            payload={"estimated_cost_usd": "0.2"},
         )
 
         service = CostEstimationService()
@@ -212,7 +212,7 @@ def test_daily_cap_is_per_account() -> None:
             account_id=account_a,
             query_run_id=None,
             recorded_at=datetime.now(UTC),
-            payload={"estimated_cost_usd": "0.1"},
+            payload={"estimated_cost_usd": "0.2"},
         )
 
         service = CostEstimationService()

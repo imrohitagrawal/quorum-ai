@@ -53,7 +53,7 @@ def test_cumulative_under_limit_passes() -> None:
     service = CostEstimationService()
     account = uuid4()
     # Two previous accepted events, each well below the hard limit
-    # and well below the daily cap (USD 0.10). Use 0.04 + 0.04 = 0.08
+    # and well below the daily cap (USD 0.20). Use 0.04 + 0.04 = 0.08
     # so the cumulative check (binding at HARD_LIMIT_USD = 0.25) is
     # the constraint under test, not the daily cap.
     _record_accepted(account_id=account, estimated_cost_usd=Decimal("0.04"))

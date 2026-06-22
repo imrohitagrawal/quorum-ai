@@ -62,37 +62,50 @@ def test_high_cost_query_requires_confirmation_before_creation() -> None:
 
     response = client.post(
         "/v1/query-runs",
-        json=acknowledged_request("x" * 5_200),
+        json=acknowledged_request("x" * 4_000),
         headers={"X-Account-Id": str(account_id)},
     )
 
-    # The new USD 0.10 daily cap fires before the soft-threshold band
-    # is reachable for a fresh account on the default model mix (a
-    # 5,200-char query estimates ~USD 0.24, which is over both the
-    # daily cap and the soft-threshold band). The request is BLOCKed
-    # by the daily cap, not by the hard limit, and no confirmation
-    # token is minted. This still verifies the "high-cost query is
-    # refused" intent of the original test.
+    # 4,000 chars estimates ~USD 0.1984 — in the soft band (above the
+    # USD 0.15 soft threshold) and under the USD 0.20 daily cap, so
+    # the per-call soft threshold is the binding constraint and the
+    # create endpoint mints a confirmation token.
     assert response.status_code == 402
     body = response.json()
-    assert body["detail"]["code"] == "COST_LIMIT_EXCEEDED"
-    assert body["detail"]["cost_estimate"]["threshold_action"] == "block"
+    assert body["detail"]["code"] == "COST_CONFIRMATION_REQUIRED"
+    assert body["detail"]["cost_estimate"]["threshold_action"] == "require_confirmation"
     assert Decimal(body["detail"]["cost_estimate"]["estimated_cost_usd"]) > Decimal("0.15")
-    assert body["detail"]["cost_estimate"]["confirmation_token"] is None
     assert query_run_repository.get_active_for_account(account_id) is None
-    assert cost_event_recorder.list_events()[0].event_type == "cost_guardrail_blocked"
+    assert cost_event_recorder.list_events()[0].event_type == "cost_confirmation_required"
 
 
 def test_high_cost_query_accepts_matching_confirmation_token() -> None:
-    # The new USD 0.10 daily cap is below the USD 0.15 soft-threshold
-    # band on the default model mix, so a fresh account never reaches
-    # ``require_confirmation`` and no confirmation token is ever
-    # minted by the create endpoint. The end-to-end roundtrip
-    # exercised by this test is no longer reachable — the same code
-    # path is covered by ``test_over_limit_query_is_blocked_even_with_confirmation_shape``,
-    # which supplies a user-provided token and confirms the system
-    # refuses to honour it when the estimate is over the cap.
-    pytest.skip("Daily cap blocks before soft-threshold band on default model mix.")
+    client = TestClient(app)
+    account_id = uuid4()
+    request_body = acknowledged_request("x" * 4_000)
+    confirmation_response = client.post(
+        "/v1/query-runs",
+        json=request_body,
+        headers={"X-Account-Id": str(account_id)},
+    )
+    cost_estimate = confirmation_response.json()["detail"]["cost_estimate"]
+
+    accepted_response = client.post(
+        "/v1/query-runs",
+        json={
+            **request_body,
+            "cost_confirmation": {
+                "estimated_cost_usd": cost_estimate["estimated_cost_usd"],
+                "confirmation_token": cost_estimate["confirmation_token"],
+            },
+        },
+        headers={"X-Account-Id": str(account_id)},
+    )
+
+    assert accepted_response.status_code == 202
+    assert accepted_response.json()["cost_estimate"]["threshold_action"] == "require_confirmation"
+    assert cost_event_recorder.list_events()[-1].event_type == "cost_guardrail_accepted"
+    assert cost_event_recorder.list_events()[-1].confirmed
 
 
 def test_over_limit_query_is_blocked_even_with_confirmation_shape() -> None:
