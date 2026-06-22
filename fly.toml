@@ -14,9 +14,6 @@ primary_region = "iad"  # US East (Virginia) - adjust to nearest region
 kill_signal = "SIGINT"
 kill_timeout = "5s"
 
-[build]
-  dockerfile = "Dockerfile"
-
 [env]
   # Production environment variables baked into the image.
   # Secrets go in `fly secrets set`, not here.

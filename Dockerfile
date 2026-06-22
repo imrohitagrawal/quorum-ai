@@ -18,7 +18,11 @@ ENV PATH="/opt/venv/bin:$PATH" \
     PYTHONUNBUFFERED=1 \
     PYTHONDONTWRITEBYTECODE=1 \
     # Tell uv where the venv lives (matches builder stage)
-    UV_SYSTEM_PYTHON=1
+    UV_SYSTEM_PYTHON=1 \
+    # Make the in-container Python importable from /app/src.
+    # The source tree is copied to /app/src in the builder stage.
+    # Without this, uvicorn fails with ModuleNotFoundError: No module named 'product_app'.
+    PYTHONPATH="/app/src"
 
 WORKDIR /app
 
