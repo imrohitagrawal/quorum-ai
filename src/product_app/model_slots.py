@@ -29,6 +29,14 @@ from product_app.catalog_fetcher import (
 )
 from product_app.feedback_store import record_event as _record_feedback_event
 
+__all__ = [
+    "EXPECTED_SLOT_COUNT",
+    "default_model_slots",
+    "openrouter_catalog_fetcher",
+    "openrouter_model_catalog_service",
+    "ModelDefaultsResponse",
+]
+
 EXPECTED_SLOT_COUNT = 4
 
 #: Authoritative default model ids, in slot order (1, 2, 3, 4).
@@ -238,7 +246,7 @@ def _validate_model_id_list(model_ids: list[str]) -> None:
     # shape-check-only fallback but is correct given the whitelist
     # policy — the curated whitelist is the only signal available
     # when the live catalog is down.
-    known_ids: set[str] = _DEFAULT_MODEL_ID_SET
+    known_ids: set[str] = set(_DEFAULT_MODEL_ID_SET)
     try:
         known_ids |= {
             entry.model_id for entry in openrouter_catalog_fetcher.list_models()

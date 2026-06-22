@@ -12,6 +12,7 @@ from product_app.providers import (
     calculate_citation_coverage,
     estimate_material_claim_count,
     provider_event_recorder,
+    provider_execution_service,
     provider_stub_service,
 )
 
@@ -544,6 +545,45 @@ def test_per_slot_search_off_response_records_search_disabled_notice(
         answers[1].provider_notice is not None
         and "Web search was disabled" in answers[1].provider_notice
     )
+
+
+def test_cancelled_answer_has_expected_shape() -> None:
+    """The cancelled stub mirrors ``_failed_answer`` so downstream
+    debate/synthesis can consume a cancelled slot identically to a
+    provider-failed one. This test guards the field shape so a
+    future change to ``InitialModelAnswer`` forces a coordinated
+    update at the helper site instead of a silent field-by-field
+    rewrite in ``query_runs._produce_one_initial_answer``.
+
+    The distinguishing fields versus ``_failed_answer`` are
+    ``error_code="CANCELLED"`` (so the audit layer can tell
+    "user clicked cancel" from "provider 5xx") and ``latency_ms=0``
+    (no work was attempted).
+    """
+    slot = ModelSlot(slot_number=2, model_id="anthropic/claude-haiku-4.5", search=True)
+    answer = provider_execution_service.cancelled_answer(slot)
+
+    # Identity fields carry through from the slot.
+    assert answer.slot_number == 2
+    assert answer.model_id == "anthropic/claude-haiku-4.5"
+    # FAILED status with empty answer and zero latency — no work was done.
+    assert answer.status.value == "failed"
+    assert answer.answer_text == ""
+    assert answer.sources == []
+    assert answer.latency_ms == 0
+    # Mirrors _failed_answer's OPENROUTER_SEARCH provider_path.
+    assert answer.provider_path == ProviderPath.OPENROUTER_SEARCH
+    assert answer.provider_attempt_order == [ProviderPath.OPENROUTER_SEARCH]
+    assert answer.fallback_used is False
+    # The distinguishing marker: error_code distinguishes cancellation
+    # from provider failure, and the notice names cancellation explicitly.
+    assert answer.error_code == "CANCELLED"
+    assert answer.provider_notice is not None
+    assert "Cancelled" in answer.provider_notice
+    # Empty answer produces zero-claim coverage.
+    assert answer.citation_coverage.material_claim_count == 0
+    assert answer.citation_coverage.cited_claim_count == 0
+    assert answer.citation_coverage.coverage_ratio == Decimal("0")
 
 
 class _FakeResponse:

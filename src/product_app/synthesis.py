@@ -20,6 +20,7 @@ from __future__ import annotations
 
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import asdict, dataclass
+from decimal import Decimal
 from enum import StrEnum
 from threading import RLock
 from time import perf_counter
@@ -28,8 +29,8 @@ from uuid import UUID
 from pydantic import BaseModel
 
 from product_app.config import settings
-from product_app.feedback_store import record_event as _record_feedback_event
 from product_app.debate import DebateOutput
+from product_app.feedback_store import record_event as _record_feedback_event
 from product_app.providers import (
     CitationCoverage,
     InitialAnswerStatus,
@@ -352,7 +353,7 @@ class SynthesisOrchestrationService:
         initial_answers: list[InitialModelAnswer],
         debate_outputs: list[DebateOutput],
         failed_count: int,
-        coverage_ratio,
+        coverage_ratio: Decimal,
     ) -> str:
         """Build a compact, deterministic prompt that fits within the
         per-section token budget. We summarise each model answer and
@@ -360,8 +361,6 @@ class SynthesisOrchestrationService:
         should already have the user's question in mind from the
         debate rounds.
         """
-        from decimal import Decimal
-
         lines: list[str] = []
         lines.append("User query (do NOT repeat verbatim in your response):")
         # The orchestrator passes the query in via the caller, but
@@ -464,8 +463,8 @@ class SynthesisOrchestrationService:
             )
         else:
             templated = (
-                "Models disagree on the supporting evidence. The disagreement is preserved explicitly "
-                "to avoid an unsupported consensus."
+                "Models disagree on the supporting evidence. The disagreement is preserved "
+                "explicitly to avoid an unsupported consensus."
             )
         live = self._call_synthesis_model(
             openrouter_key=openrouter_key,

@@ -458,7 +458,8 @@ class OpenRouterCatalogFetcher:
         )
         try:
             with urlopen(request, timeout=timeout) as response:
-                return response.read().decode("utf-8")
+                raw_bytes: bytes = response.read()
+                return raw_bytes.decode("utf-8")
         except HTTPError as exc:
             raise RuntimeError(f"Catalog HTTP {exc.code} {exc.reason}") from exc
         except (URLError, TimeoutError) as exc:

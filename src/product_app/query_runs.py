@@ -27,13 +27,13 @@ stuck in ``RUNNING`` forever.
 from __future__ import annotations
 
 import contextlib
+import time as _time_module
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
 from enum import StrEnum
 from threading import BoundedSemaphore, RLock, Thread
 from time import sleep
-import time as _time_module
 from typing import Annotated
 from uuid import UUID, uuid4
 
@@ -1093,15 +1093,12 @@ def _execute_query_run(query_run_id: UUID, account_id: UUID) -> None:
     # the parallelism already provides visible stage transitions.
     def _produce_one_initial_answer(model_slot: ModelSlot) -> InitialModelAnswer:
         if _should_stop(query_run_id):
-            # Return a stub FAILED answer when cancelled mid-flight
-            return InitialModelAnswer(
-                model_slot=model_slot,
-                status=InitialAnswerStatus.FAILED,
-                content="",
-                elapsed_ms=0,
-                sources=[],
-                notes="Cancelled before model call started.",
-            )
+            # Return a stub FAILED answer when cancelled mid-flight.
+            # ``cancelled_answer`` mirrors the field shape of
+            # ``_failed_answer`` so the downstream debate/synthesis
+            # path can consume a cancelled slot identically to a
+            # provider-failed one — see its docstring.
+            return provider_execution_service.cancelled_answer(model_slot)
         return provider_execution_service.produce_initial_answer(
             account_id=account_id,
             query_run_id=query_run_id,

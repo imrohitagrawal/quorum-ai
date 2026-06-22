@@ -472,6 +472,46 @@ class ProviderExecutionService:
             ),
         )
 
+    def cancelled_answer(self, model_slot: ModelSlot) -> InitialModelAnswer:
+        """Build a stub ``InitialModelAnswer`` for a slot cancelled before
+        the model call started.
+
+        Mirrors the shape of ``_failed_answer`` (same field set, same
+        empty ``sources``, same ``OPENROUTER_SEARCH`` provider path) so
+        downstream debate/synthesis code can consume a cancelled answer
+        identically to a provider-failed one. The differences are:
+
+        * ``error_code="CANCELLED"`` lets the audit / drift layer
+          distinguish "user clicked cancel" from "provider returned 5xx".
+        * ``latency_ms=0`` — no work was attempted, so no time elapsed.
+        * ``provider_notice`` is a short cancellation string rather than
+          the provider-failure boilerplate.
+
+        Kept as a thin helper so the call site in ``query_runs.py`` does
+        not have to hand-roll an ``InitialModelAnswer`` constructor —
+        field drift between the two failure constructors is a known
+        footgun (each new ``InitialModelAnswer`` field would otherwise
+        have to be added in two places).
+        """
+        return InitialModelAnswer(
+            slot_number=model_slot.slot_number,
+            model_id=model_slot.model_id,
+            display_name=_resolve_display_name(model_slot.model_id),
+            answer_text="",
+            sources=[],
+            provider_attempt_order=[ProviderPath.OPENROUTER_SEARCH],
+            provider_path=ProviderPath.OPENROUTER_SEARCH,
+            fallback_used=False,
+            status=InitialAnswerStatus.FAILED,
+            latency_ms=0,
+            citation_coverage=calculate_citation_coverage(
+                material_claim_count=0,
+                cited_claim_count=0,
+            ),
+            error_code="CANCELLED",
+            provider_notice="Cancelled before model call started.",
+        )
+
     def _live_openrouter_response(
         self,
         *,
@@ -501,11 +541,14 @@ class ProviderExecutionService:
         variants. That keeps the per-call latency bounded and makes the
         failure mode predictable.
         """
-        return self._call_openrouter_with_optional_search(
+        result = self._call_openrouter_with_optional_search(
             openrouter_key=openrouter_key,
             query_text=query_text,
             model_slot=model_slot,
         )
+        if result is None or isinstance(result, _SearchRejected):
+            return None
+        return result
 
     def _call_openrouter_with_optional_search(
         self,
@@ -513,7 +556,7 @@ class ProviderExecutionService:
         openrouter_key: str,
         query_text: str,
         model_slot: ModelSlot,
-    ) -> LiveProviderResult | None:
+    ) -> LiveProviderResult | _SearchRejected | None:
         bare_model_id = model_slot.model_id
 
         # L2: per-slot search opt-out. When ``model_slot.search`` is
@@ -540,14 +583,11 @@ class ProviderExecutionService:
         )
         if online_result is _SEARCH_REJECTED:
             #  re-try without the ``:online`` suffix.
-            bare_result = self._post_openrouter(
+            return self._post_openrouter(
                 openrouter_key=openrouter_key,
                 query_text=query_text,
                 model_id=bare_model_id,
             )
-            if bare_result is None or bare_result is _SEARCH_REJECTED:
-                return None
-            return bare_result
         return online_result
 
     def _post_openrouter(
@@ -663,7 +703,7 @@ class ProviderExecutionService:
             system_prompt=system_prompt,
             max_tokens=max_tokens,
         )
-        if result is _SEARCH_REJECTED:
+        if result is None or isinstance(result, _SearchRejected):
             return None
         return result
 
