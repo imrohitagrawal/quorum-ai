@@ -95,6 +95,16 @@
     // Used by the demo banner to avoid toggling ``hidden`` on every
     // poll tick.
     lastDemoMode: null,
+    // PR-0 / Bug 8: the "Current time" card freezes at the run
+    // start time and only changes on a terminal transition. We
+    // track which transition we're on so a poll tick in the middle
+    // of a run does not overwrite the start time. The server's
+    // ``result_generated_at_utc`` is regenerated on every poll
+    // (it's the "now" the response was assembled at), so we can't
+    // just trust the value — we have to gate the update on a
+    // status transition.
+    runStartTime: null,
+    runTimeFinalized: false,
     // Auto-scrolls the cancel button into view exactly once on the
     // transition into a running state.
     hasScrolledToRunControls: false,
@@ -189,6 +199,15 @@
   // which may contain internal references (file paths, module names).
   // The message is intentionally plain: the user only needs to know
   // that a default model may not work and what to do about it.
+  //
+  // PR-0 / Bug 9: the banner used to flag the *stale defaults*
+  // regardless of which model the user actually had selected. After
+  // the user moved slot 3 off the drifted default onto a working
+  // model, the banner stayed up telling them their new selection
+  // was broken. The fix is to intersect the stale set with the
+  // currently *selected* model ids — if none of the user's four
+  // picks is drifted, hide the banner. ``driftDismiss`` still
+  // closes it manually for the session.
   function renderDriftBanner() {
     if (!driftRegion || !driftMessage) return;
     const stale = Array.isArray(state.lastStaleModelIds)
@@ -198,12 +217,31 @@
       driftRegion.hidden = true;
       return;
     }
-    const names = stale.join(", ");
-    const action = stale.length === 1
+    // Only show the banner for stale models the user is actually
+    // running. ``getModelIds`` may read from the static template
+    // before ``refreshDefaults`` has rebuilt the dropdowns; in
+    // that case we still want to flag the static defaults (the
+    // pre-rebuild state is what the user sees on first paint).
+    let selectedIds = [];
+    try {
+      selectedIds = getModelIds();
+    } catch (_) {
+      selectedIds = [];
+    }
+    const staleSet = new Set(stale);
+    const activeStale = selectedIds.filter(
+      (modelId) => staleSet.has(modelId),
+    );
+    if (activeStale.length === 0) {
+      driftRegion.hidden = true;
+      return;
+    }
+    const names = activeStale.join(", ");
+    const action = activeStale.length === 1
       ? "Choose a different model from the dropdown, or contact support."
       : "Choose different models from the dropdowns, or contact support.";
     driftMessage.textContent =
-      `The default model${stale.length > 1 ? "s" : ""} (${names}) may not be ` +
+      `The default model${activeStale.length > 1 ? "s" : ""} (${names}) may not be ` +
       `available right now. ${action}`;
     driftRegion.hidden = false;
   }
@@ -462,8 +500,33 @@
   // returns a primary/secondary pair for display. When the locale
   // resolves to USD (or anything not in FX_PER_USD), secondary is an
   // empty string and the callout renders only the USD primary.
+  //
+  // PR-0 / Bug 3: the old fixed ``.toFixed(2)`` rounded any
+  // sub-cent cost to ``"$0.00 USD"`` (e.g. ``0.0023`` displayed as
+  // free). Use a magnitude-aware decimal count: 4 dp below 1¢, 3 dp
+  // below $1, 2 dp otherwise. Strip trailing zeros so the display
+  // stays compact (e.g. ``$0.0023`` not ``$0.00230``).
+  function formatUsd(usdAmount) {
+    const num = Number(usdAmount);
+    if (!Number.isFinite(num)) return "$0.00 USD";
+    let decimals;
+    if (num < 0.01) {
+      decimals = 4;
+    } else if (num < 1) {
+      decimals = 3;
+    } else {
+      decimals = 2;
+    }
+    // ``toFixed`` returns a string with trailing zeros; strip them so
+    // ``0.0023`` is shown as ``"$0.0023"`` rather than ``"$0.00230"``.
+    const fixed = num.toFixed(decimals);
+    const trimmed = fixed.replace(/\.?0+$/, "");
+    const withCents = trimmed.includes(".") ? trimmed : `${trimmed}.00`;
+    return `$${withCents} USD`;
+  }
+
   function formatCostWithLocal(usdAmount) {
-    const usd = `$${Number(usdAmount).toFixed(2)} USD`;
+    const usd = formatUsd(usdAmount);
     let locale;
     try {
       locale = Intl.NumberFormat().resolvedOptions().locale;
@@ -493,7 +556,7 @@
       localFormatted = new Intl.NumberFormat(locale, {
         style: "currency",
         currency,
-        maximumFractionDigits: 2,
+        maximumFractionDigits: 4,
       }).format(localAmount);
     } catch (_) {
       return { primary: usd, secondary: "" };
@@ -638,17 +701,21 @@
     const takenIds = new Set(
       selectedModelIds.filter((_, index) => index !== currentIndex),
     );
-    // The curated default for this slot may not appear in the live
-    // catalog — e.g. ``google/gemini-2.0-flash-lite`` and
-    // ``anthropic/claude-3-haiku`` are fallback entries, while the
-    // live catalog's first ``google/`` row is now an image model
-    // (gemini-3.1-flash-image) that returns no text. If we just
-    // iterated the catalog and marked the first match selected, the
-    // browser would silently fall back to the catalog's first row
-    // for the slot's vendor and the demo would target an image
-    // model. Inject the curated default as a synthetic option so the
-    // select is unambiguously anchored to the id the validator
-    // already approved.
+    // PR-0 / Bug 10: vendor-scoped filtering. The defaults are
+    // curated so each slot targets a different vendor family
+    // (openai / anthropic / google / deepseek). If we showed the
+    // entire catalog and only filtered out the exact other slots'
+    // selected ids, slot 1 and slot 3 both showed the openai
+    // fallbacks (gpt-4.1, o3) as their first non-selected options
+    // — confusing because the user picked google for slot 3, not
+    // "any other openai model." Restrict each dropdown to the
+    // vendor prefix of the slot's currently selected model id
+    // (``openai/``, ``anthropic/``, etc.) so the visible options
+    // always belong to the family the slot is supposed to pick
+    // from. The "curated default — not in live catalog" synthetic
+    // option is preserved for the case where the live catalog
+    // no longer lists the default.
+    const vendorPrefix = currentModelId.split("/", 1)[0];
     const catalogHasDefault = modelCatalog.some(
       (option) => option.model_id === currentModelId,
     );
@@ -661,6 +728,13 @@
       options.push(synthetic);
     }
     for (const option of modelCatalog) {
+      // Vendor scope: only show models from the slot's vendor
+      // family. The exact mutual-exclusion check is preserved as
+      // a belt-and-braces guard, but the vendor filter does the
+      // heavy lifting.
+      if (!option.model_id.startsWith(`${vendorPrefix}/`)) {
+        continue;
+      }
       if (takenIds.has(option.model_id) && option.model_id !== currentModelId) {
         continue;
       }
@@ -1425,9 +1499,57 @@
     }
   }
 
+  // PR-0 / Bug 8: the "Current time" card is now a state machine.
+  // It starts at "Not started", freezes at the run start time, and
+  // is replaced with the completion time when the run reaches a
+  // terminal state. The polling tick in the middle of a run does
+  // not touch the displayed time. The transition wrapper is
+  // called from ``updateRunMeta`` / ``pollRun`` so the
+  // "completion" update happens exactly once.
+  function setRunStartTime(rawValue) {
+    if (!rawValue) return;
+    state.runStartTime = rawValue;
+    state.runTimeFinalized = false;
+    renderCurrentTime({ result_generated_at_utc: rawValue });
+  }
+
+  function finalizeRunTime(rawValue) {
+    if (!rawValue) return;
+    state.runTimeFinalized = true;
+    renderCurrentTime({ result_generated_at_utc: rawValue });
+  }
+
+  function resetRunTime() {
+    state.runStartTime = null;
+    state.runTimeFinalized = false;
+    timeMeta.textContent = "Not started";
+  }
+
   function renderCurrentTime(result) {
-    const rawValue = result?.result_generated_at_utc;
-    const resolvedDate = rawValue ? new Date(rawValue) : new Date();
+    // PR-0 / Bug 8: the "Current time" meta-card used to read the
+    // wall-clock at the moment ``boot()`` ran and to re-render on
+    // every poll tick. The user saw the page-load time advance
+    // second-by-second, which they read as "the app is showing
+    // when I loaded the page" — not the run time. The fix is
+    // semantic: the card is the *run* time, frozen at the run
+    // start, replaced with the completion time when the run
+    // reaches a terminal state. Empty when no run is in flight or
+    // has ever been.
+    //
+    // ``runStartTime`` is captured on the run-create response and
+    // ``runTimeFinalized`` flips on the first terminal transition.
+    // A poll-tick call after the start is captured is a no-op; a
+    // poll-tick call after the finalize is a no-op. Only the
+    // explicit ``setRunStartTime`` / ``finalizeRunTime`` wrappers
+    // mutate the displayed text once the run is in flight.
+    const target = state.runTimeFinalized
+      ? state.runStartTime
+      : (state.runStartTime ?? (result && result.result_generated_at_utc));
+    if (!target) {
+      timeMeta.textContent = "Not started";
+      return;
+    }
+    const resolvedDate = new Date(target);
     let formatted;
     try {
       // ``Intl.DateTimeFormat`` with ``timeZoneName: "short"`` throws
@@ -1443,7 +1565,7 @@
     } catch (_) {
       formatted = resolvedDate.toLocaleString();
     }
-    timeMeta.textContent = formatted || "Not available yet";
+    timeMeta.textContent = formatted || "Not started";
   }
 
   function updateRunMeta(result) {
@@ -1454,7 +1576,12 @@
       const label = STATUS_LABELS[status] || status;
       setStatusPill(status, label);
     }
-    renderCurrentTime(result);
+    // PR-0 / Bug 8: ``renderCurrentTime`` is no longer called
+    // here. The "Current time" card has its own state machine
+    // (frozen-at-start, finalized-on-terminal) and is updated by
+    // the ``setRunStartTime`` / ``finalizeRunTime`` wrappers from
+    // ``runNow`` / ``proceedWithRun`` / ``pollRun``. A status
+    // update in the middle of a run is not a time change.
     // Surface the citation coverage denominator so users can audit the
     // ratio itself. ``material_claim_count`` is the sum of the four
     // models' material-claim counts. We avoid displaying this when the
@@ -1572,37 +1699,63 @@
         estimate.cost_estimate.estimated_cost_usd,
       );
       const costLine = `Estimated cost: ${usdPrimary}.`;
-      if (usdSecondary) renderCostSecondary(estimate.cost_estimate.estimated_cost_usd);
-      if (estimate.cost_estimate.threshold_action === "require_confirmation") {
-        costConfirmationMessage.textContent =
-          `${costLine} This is in the upper band. Confirm to proceed.`;
-        costConfirmation.hidden = false;
-        if (proceedButton) {
-          proceedButton.disabled = false;
-          proceedButton.dataset.estimateBand = "require_confirmation";
+      // PR-0 / Bug 2: the success-path DOM operations used to live
+      // inline. If any of them threw (e.g. an unexpectedly-shaped
+      // response made formatCostWithLocal fail), the throw would
+      // jump straight to the finally, skipping the cost callout
+      // and leaving the button briefly in the loading state before
+      // the finally reset it. Wrap the callout rendering in its
+      // own try/catch so a single broken callout render surfaces
+      // an error message in the callout area instead of leaving
+      // the screen blank. The button is always reset by the outer
+      // finally regardless.
+      try {
+        if (usdSecondary) renderCostSecondary(estimate.cost_estimate.estimated_cost_usd);
+        if (estimate.cost_estimate.threshold_action === "require_confirmation") {
+          costConfirmationMessage.textContent =
+            `${costLine} This is in the upper band. Confirm to proceed.`;
+          costConfirmation.hidden = false;
+          if (proceedButton) {
+            proceedButton.disabled = false;
+            proceedButton.dataset.estimateBand = "require_confirmation";
+          }
+        } else if (estimate.cost_estimate.threshold_action === "block") {
+          costConfirmationMessage.textContent =
+            `${costLine} This exceeds the hard limit (USD 0.25). The run is blocked.`;
+          costConfirmation.hidden = false;
+          if (proceedButton) {
+            proceedButton.disabled = true;
+            proceedButton.dataset.estimateBand = "block";
+          }
+        } else {
+          costConfirmationMessage.textContent =
+            `${costLine} This is in the normal band. Proceed to start.`;
+          costConfirmation.hidden = false;
+          if (proceedButton) {
+            proceedButton.disabled = false;
+            proceedButton.dataset.estimateBand = "allow";
+          }
         }
-      } else if (estimate.cost_estimate.threshold_action === "block") {
-        costConfirmationMessage.textContent =
-          `${costLine} This exceeds the hard limit (USD 0.25). The run is blocked.`;
-        costConfirmation.hidden = false;
+        renderNotices(null);
+        toast({
+          message: `Cost estimate ready: ${usdPrimary}.`,
+          tone: "success",
+        });
+      } catch (renderError) {
+        // The estimate itself succeeded — the response is valid —
+        // but rendering the callout blew up. Show the error in the
+        // callout so the user can see what happened and reset the
+        // proceed button so the next estimate isn't blocked.
+        if (costConfirmation) {
+          costConfirmationMessage.textContent =
+            `Got the estimate (${usdPrimary}) but could not render the cost review. ` +
+            `${renderError && renderError.message ? renderError.message : "Unknown error."}`;
+          costConfirmation.hidden = false;
+        }
         if (proceedButton) {
           proceedButton.disabled = true;
-          proceedButton.dataset.estimateBand = "block";
-        }
-      } else {
-        costConfirmationMessage.textContent =
-          `${costLine} This is in the normal band. Proceed to start.`;
-        costConfirmation.hidden = false;
-        if (proceedButton) {
-          proceedButton.disabled = false;
-          proceedButton.dataset.estimateBand = "allow";
         }
       }
-      renderNotices(null);
-      toast({
-        message: `Cost estimate ready: ${usdPrimary}.`,
-        tone: "success",
-      });
       return estimate;
     } finally {
       setButtonLoading(estimateButton, false);
@@ -1698,6 +1851,19 @@
   // user sees the same review UI as the estimate-first path. The
   // hard guardrail (>$0.25) is server-enforced and cannot be bypassed
   // client-side — see costs.py:35-36.
+  //
+  // PR-0 / Bug 4 (Option A): when the server returns
+  // ``COST_CONFIRMATION_REQUIRED`` from the run-create call, the
+  // fast-path silently fell back to the estimate callout and the
+  // user had to click "Proceed" themselves. The fast path should
+  // still be a single click when possible, so we estimate, then
+  // immediately re-fire the create-run with the fresh
+  // ``confirmation_token`` if the user has not yet blocked the
+  // run. The user sees a brief "Cost review" callout (less than a
+  // second) and the run starts without a second click. We only do
+  // this when the band is ``require_confirmation`` — the
+  // ``block`` band surfaces the callout as a read-only refusal
+  // and the user clicks Cancel.
   async function runNow() {
     clearError();
     setButtonLoading(runNowButton, true);
@@ -1733,21 +1899,39 @@
       } catch (error) {
         if (error instanceof ApiError) {
           if (error.code === "COST_CONFIRMATION_REQUIRED") {
-            // Mirror proceedWithRun's recovery: clear stale estimate and
-            // run the estimate flow so the user lands in the same
-            // callout they would have seen via the Estimate button.
+            // PR-0 / Bug 4: the user clicked "Run now" expecting a
+            // single-click start. The server wants confirmation, so
+            // run the estimate and then chain the proceed with the
+            // fresh token. The callout flashes briefly before the
+            // run actually starts. The user does not have to click
+            // anything for an upper-band query.
             state.currentEstimate = null;
             toast({
-              message: "Cost confirmation required — showing the cost review.",
+              message: "Cost confirmation required — auto-confirming with the latest estimate.",
               tone: "warn",
             });
-            await estimateRun();
+            const estimate = await estimateRun();
+            if (estimate && state.currentEstimate) {
+              const band =
+                state.currentEstimate.cost_estimate.threshold_action;
+              if (band === "require_confirmation") {
+                // Re-fire the create-run with the confirmation token.
+                // ``proceedWithRun`` reads ``state.currentEstimate`` and
+                // posts the same payload the manual Proceed button
+                // would have, so the behaviour is identical to a
+                // two-click flow.
+                await proceedWithRun();
+              }
+              // For the allow band the run already started; for the
+              // block band the callout is now showing the refusal and
+              // the user clicks Cancel.
+            }
             return;
           }
           if (error.code === "COST_LIMIT_EXCEEDED") {
             // Same fallback: surface the cost callout (now showing the
             // hard-limit message) so the user can read the figure
-            // before deciding.
+            // before deciding. No auto-proceed — the run is blocked.
             state.currentEstimate = null;
             await estimateRun();
             return;
@@ -1762,7 +1946,11 @@
       setRunning(true);
       updateRunMeta(created);
       renderProgress(created.progress);
-      renderCurrentTime(created);
+      // PR-0 / Bug 8: capture the run start time once, here, on the
+      // first run-create response. Subsequent poll ticks will not
+      // overwrite the displayed time until the run reaches a
+      // terminal state.
+      setRunStartTime(created.result_generated_at_utc);
       toast({ message: "Run started. Tracking progress below.", tone: "info" });
       startPolling();
     } catch (error) {
@@ -1824,7 +2012,9 @@
       setRunning(true);
       updateRunMeta(created);
       renderProgress(created.progress);
-      renderCurrentTime(created);
+      // PR-0 / Bug 8: capture the run start time once. See
+      // ``runNow`` for the full rationale.
+      setRunStartTime(created.result_generated_at_utc);
       // The estimate is now consumed; collapse the cost callout until
       // the next estimate.
       hideCostConfirmation();
@@ -1860,6 +2050,15 @@
 
   async function pollRun() {
     if (!state.currentRunId) {
+      // PR-0 / Bug 6: guard against stale null renders when a run is
+      // already in flight. If the user has already clicked Run Now or
+      // Proceed, the run id is in module-scope state and the active-
+      // query check is redundant. A failed or empty response from
+      // the active endpoint should never clobber the progress display
+      // with "No active run." while a run is live.
+      if (state.isRunning) {
+        return;
+      }
       const active = await api("/v1/query-runs/active", { method: "GET" });
       if (!active.query_run_id) {
         renderProgress(null);
@@ -1867,6 +2066,14 @@
       }
       state.currentRunId = active.query_run_id;
       setRunning(true);
+      // PR-0 / Bug 8: when ``pollRun`` rehydrates the active run on
+      // a fresh page load, capture its start time so the
+      // "Current time" card is not stuck on "Not started" while the
+      // run is still in flight. The poll response carries the
+      // server's ``result_generated_at_utc`` which is acceptable as
+      // an approximation of the run start (the run is in progress
+      // and the user just navigated back to the tab).
+      setRunStartTime(active.result_generated_at_utc);
     }
     const result = await api(`/v1/query-runs/${state.currentRunId}`, {
       method: "GET",
@@ -1876,6 +2083,11 @@
     renderModelPanels(result.result.model_answers, result);
     renderDebateAndSynthesis(result);
     renderNotices(result);
+    // PR-0 / Bug 8: ``renderCurrentTime`` is now idempotent for an
+    // in-flight run. The displayed time is only set on the first
+    // ``setRunStartTime`` call (runNow / proceedWithRun / pollRun
+    // rehydration) and frozen until ``finalizeRunTime`` flips it
+    // to the completion time.
     renderCurrentTime(result);
     if (
       ["completed", "partial", "failed", "timed_out", "cancelled"].includes(
@@ -1884,6 +2096,11 @@
     ) {
       stopPolling();
       setRunning(false);
+      // PR-0 / Bug 8: replace the displayed time with the
+      // completion time on the first terminal transition. Polling
+      // has already stopped, so this is the last time we touch
+      // the card for this run.
+      finalizeRunTime(result.result_generated_at_utc);
       if (result.status === "completed") {
         toast({ message: "Run completed. See the synthesis below.", tone: "success" });
       } else if (result.status === "partial") {
@@ -1933,7 +2150,10 @@
       updateRunMeta(result);
       renderProgress(result.progress);
       renderNotices(result);
-      renderCurrentTime(result);
+      // PR-0 / Bug 8: cancel is a terminal transition; finalize
+      // the run time once so the card shows the cancel time
+      // rather than the start time.
+      finalizeRunTime(result.result_generated_at_utc);
       stopPolling();
       setRunning(false);
       toast({ message: "Run cancelled.", tone: "info" });
@@ -2052,8 +2272,26 @@
 
   function initThemeToggle() {
     const root = document.documentElement;
-    el("theme-toggle").addEventListener("click", () => {
+    const button = el("theme-toggle");
+    // PR-0 / Bug 12: the glyph used to stay ``◐`` regardless of
+    // theme. The button now swaps between ☀ (light, meaning
+    // "click to go dark") and ☾ (dark, meaning "click to go
+    // light") so the affordance matches the state. We seed the
+    // glyph from the current ``data-theme`` so the first paint is
+    // already consistent — important on browsers that re-hydrate
+    // the page mid-session.
+    const setGlyph = () => {
+      const isDark = root.dataset.theme === "dark";
+      button.textContent = isDark ? "☾" : "☀";
+      button.setAttribute(
+        "aria-label",
+        isDark ? "Switch to light theme" : "Switch to dark theme",
+      );
+    };
+    setGlyph();
+    button.addEventListener("click", () => {
       root.dataset.theme = root.dataset.theme === "dark" ? "light" : "dark";
+      setGlyph();
     });
   }
 
@@ -2067,6 +2305,11 @@
         return;
       }
       renderModelInputs(getModelIds());
+      // PR-0 / Bug 9: re-evaluate the drift banner against the
+      // new selection. If the user just moved off the drifted
+      // default, the banner should disappear on this change
+      // rather than waiting for the next ``/ready`` poll.
+      renderDriftBanner();
     });
   }
 
@@ -2173,7 +2416,10 @@
       renderProgress(null);
       renderDebateAndSynthesis(null);
       renderNotices(null);
-      renderCurrentTime(null);
+      // PR-0 / Bug 8: on a fresh page load with no run in flight,
+      // the "Current time" card should read "Not started" rather
+      // than the wall-clock at the moment ``boot()`` ran.
+      resetRunTime();
       // Pull the live readiness snapshot. ``/ready`` is
       // unauthenticated so this works even if the session bootstrap
       // were to fail. Best-effort: errors are logged to a toast

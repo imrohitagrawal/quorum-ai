@@ -26,8 +26,8 @@ from collections.abc import Iterator
 
 import pytest
 
-from product_app import readiness
 from product_app.catalog_fetcher import ModelCatalogEntry
+from product_app.config import settings
 from product_app.model_slots import DEFAULT_MODEL_IDS, openrouter_model_catalog_service
 from product_app.readiness import run_startup_probe
 
@@ -43,16 +43,16 @@ def reset_settings(
     must restore the original values so later tests see the real
     environment, not the test's residue.
     """
-    original_flag = readiness.settings.openrouter_live_execution_enabled
-    original_key = readiness.settings.openrouter_api_key
+    original_flag = settings.openrouter_live_execution_enabled
+    original_key = settings.openrouter_api_key
     yield
     monkeypatch.setattr(
-        readiness.settings,
+        settings,
         "openrouter_live_execution_enabled",
         original_flag,
     )
     monkeypatch.setattr(
-        readiness.settings,
+        settings,
         "openrouter_api_key",
         original_key,
     )
@@ -60,10 +60,10 @@ def reset_settings(
 
 def _set_live(monkeypatch: pytest.MonkeyPatch, *, enabled: bool, key: str) -> None:
     monkeypatch.setattr(
-        readiness.settings, "openrouter_live_execution_enabled", enabled
+        settings, "openrouter_live_execution_enabled", enabled
     )
     monkeypatch.setattr(
-        readiness.settings, "openrouter_api_key", key
+        settings, "openrouter_api_key", key
     )
 
 
@@ -223,3 +223,54 @@ def test_probe_reasons_never_include_api_key_value(
         assert secret_value not in reason, (
             f"API key value leaked into reason: {reason!r}"
         )
+
+
+# PR-0 / Bug 11: ``catalog_loaded`` is the new field that
+# distinguishes "the catalog subsystem is healthy" from "the catalog
+# fetch succeeded but contains drifted defaults." The /status
+# endpoint surfaces it as ``model_catalog_loaded``.
+
+
+def test_catalog_loaded_true_when_catalog_fetch_succeeds(
+    monkeypatch: pytest.MonkeyPatch, reset_settings: None
+) -> None:
+    """PR-0 / Bug 11: catalog_loaded=True when the probe successfully
+    fetched the live catalog — even if some defaults are drifted.
+    """
+    _set_live(monkeypatch, enabled=True, key="sk-or-v1-fake-key-for-tests-only")
+    # Catalog missing google/gemini-2.0-flash-lite (drift), but the
+    # fetch itself succeeded.
+    _set_catalog(
+        monkeypatch,
+        [
+            "openai/gpt-4o-mini",
+            "anthropic/claude-3-haiku",
+            "deepseek/deepseek-chat-v3.1",
+        ],
+    )
+
+    report = run_startup_probe()
+
+    assert report.catalog_loaded is True
+    assert report.catalog_drift_ids == ("google/gemini-2.0-flash-lite",)
+
+
+def test_catalog_loaded_false_when_catalog_fetch_fails(
+    monkeypatch: pytest.MonkeyPatch, reset_settings: None
+) -> None:
+    """PR-0 / Bug 11: catalog_loaded=False when the live catalog
+    fetch raises. Drift list is empty because we do not know.
+    """
+    _set_live(monkeypatch, enabled=True, key="sk-or-v1-fake-key-for-tests-only")
+
+    def _raise() -> list[ModelCatalogEntry]:
+        raise RuntimeError("upstream 502")
+
+    monkeypatch.setattr(
+        openrouter_model_catalog_service, "_entries", _raise
+    )
+
+    report = run_startup_probe()
+
+    assert report.catalog_loaded is False
+    assert report.catalog_drift_ids == ()

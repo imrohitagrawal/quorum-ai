@@ -25,8 +25,8 @@ from decimal import Decimal
 import pytest
 from fastapi.testclient import TestClient
 
-from product_app import readiness
 from product_app.catalog_fetcher import ModelCatalogEntry
+from product_app.config import settings
 from product_app.main import app
 from product_app.model_slots import (
     DEFAULT_MODEL_IDS,
@@ -41,9 +41,9 @@ def client() -> TestClient:
 
 def _set_live(*, enabled: bool, key: str, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(
-        readiness.settings, "openrouter_live_execution_enabled", enabled
+        settings, "openrouter_live_execution_enabled", enabled
     )
-    monkeypatch.setattr(readiness.settings, "openrouter_api_key", key)
+    monkeypatch.setattr(settings, "openrouter_api_key", key)
 
 
 def _set_catalog(
@@ -213,3 +213,55 @@ def test_workspace_html_no_drift_when_catalog_matches_defaults(
     literal = html[start:end].strip()
     stale = json.loads(literal)
     assert stale == []
+
+
+# PR-0 / Bug 11: ``/status`` previously derived
+# ``model_catalog_loaded`` from ``not catalog_drift_ids``, so a single
+# drifted default flipped the field to ``False`` even when the catalog
+# fetch had succeeded. The fix introduces a distinct ``catalog_loaded``
+# boolean on the readiness report. These tests pin the new contract
+# on the ``/status`` endpoint.
+
+
+def test_status_model_catalog_loaded_true_even_with_drift(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Catalog fetch succeeded (one drift) — /status reports loaded=true.
+
+    The bug was: with any drifted default, the field flipped to False
+    even though the catalog subsystem was perfectly healthy.
+    """
+    _set_live(enabled=True, key="sk-or-v1-fake-key-for-tests-only", monkeypatch=monkeypatch)
+    _set_catalog(
+        monkeypatch,
+        [
+            "openai/gpt-4o-mini",
+            "anthropic/claude-3-haiku",
+            "deepseek/deepseek-chat-v3.1",
+            # google/gemini-2.0-flash-lite deliberately omitted
+        ],
+    )
+
+    response = client.get("/status")
+
+    body = response.json()
+    assert body["model_catalog_loaded"] is True
+    # Drift is still surfaced separately — operators who want
+    # "is the catalog healthy?" look at model_catalog_loaded;
+    # operators who want "any drift at all?" look at the
+    # catalog_drift_ids in /ready or /v1/models/defaults.
+
+
+def test_status_model_catalog_loaded_true_when_no_drift(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Catalog fetch succeeded with no drift — /status reports loaded=true.
+    The trivial case that worked before, must keep working after.
+    """
+    _set_live(enabled=True, key="sk-or-v1-fake-key-for-tests-only", monkeypatch=monkeypatch)
+    _set_catalog(monkeypatch, list(DEFAULT_MODEL_IDS))
+
+    response = client.get("/status")
+
+    body = response.json()
+    assert body["model_catalog_loaded"] is True

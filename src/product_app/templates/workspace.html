@@ -90,25 +90,25 @@
                 <label class="inline" data-model-slot="1">
                   <span>Slot 1</span>
                   <select data-model-slot-select="1" aria-label="Model for slot 1">
-                    <option value="openai/gpt-4o-mini" selected>openai/gpt-4o-mini</option>
+                    <option value="{{ model_slot_1_value }}" {{ model_slot_1_selected }}>{{ model_slot_1_value }}</option>
                   </select>
                 </label>
                 <label class="inline" data-model-slot="2">
                   <span>Slot 2</span>
                   <select data-model-slot-select="2" aria-label="Model for slot 2">
-                    <option value="anthropic/claude-haiku-4.5" selected>anthropic/claude-haiku-4.5</option>
+                    <option value="{{ model_slot_2_value }}" {{ model_slot_2_selected }}>{{ model_slot_2_value }}</option>
                   </select>
                 </label>
                 <label class="inline" data-model-slot="3">
                   <span>Slot 3</span>
                   <select data-model-slot-select="3" aria-label="Model for slot 3">
-                    <option value="google/gemini-2.5-flash" selected>google/gemini-2.5-flash</option>
+                    <option value="{{ model_slot_3_value }}" {{ model_slot_3_selected }}>{{ model_slot_3_value }}</option>
                   </select>
                 </label>
                 <label class="inline" data-model-slot="4">
                   <span>Slot 4</span>
                   <select data-model-slot-select="4" aria-label="Model for slot 4">
-                    <option value="deepseek/deepseek-chat-v3.1" selected>deepseek/deepseek-chat-v3.1</option>
+                    <option value="{{ model_slot_4_value }}" {{ model_slot_4_selected }}>{{ model_slot_4_value }}</option>
                   </select>
                 </label>
               </div>
@@ -196,7 +196,7 @@
               </div>
               <div class="meta-card" aria-live="polite" aria-atomic="true">
                 <span class="meta-label">Current time</span>
-                <div id="time-meta" class="meta-value">Not available yet</div>
+                <div id="time-meta" class="meta-value">Not started</div>
               </div>
               <div class="meta-card" aria-live="polite" aria-atomic="true">
                 <span class="meta-label">Claims inspected</span>

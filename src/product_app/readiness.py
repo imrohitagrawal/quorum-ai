@@ -68,6 +68,17 @@ class ReadinessReport:
     catalog_drift_ids: tuple[str, ...] = ()
     checked_at_process_start: bool = True
     extras: dict[str, str] = field(default_factory=dict)
+    # PR-0 / Bug 11: ``catalog_loaded`` is true iff the startup
+    # probe successfully fetched the live model catalog. It is
+    # distinct from ``catalog_drift_ids``: a catalog can be loaded
+    # AND have drifted defaults (e.g. the provider dropped a
+    # default model id). The ``/status`` endpoint was conflating
+    # the two — it reported ``model_catalog_loaded: false`` whenever
+    # any default was drifted, which made the field useless for
+    # "is the catalog subsystem healthy?" diagnostics. Operators
+    # who want "any drift at all?" should look at
+    # ``catalog_drift_ids`` directly.
+    catalog_loaded: bool = False
 
 
 def _live_flag_set() -> bool:
@@ -128,10 +139,12 @@ def run_startup_probe() -> ReadinessReport:
     # probe's view of "which models exist" consistent with what the
     # workspace UI will show on the next request.
     drift: tuple[str, ...] = ()
+    catalog_loaded = False
     try:
         catalog_ids = {
             entry.model_id for entry in openrouter_model_catalog_service._entries()
         }
+        catalog_loaded = True
         drift = tuple(
             model_id for model_id in DEFAULT_MODEL_IDS if model_id not in catalog_ids
         )
@@ -163,6 +176,7 @@ def run_startup_probe() -> ReadinessReport:
         state=state,
         reasons=tuple(reasons),
         catalog_drift_ids=drift,
+        catalog_loaded=catalog_loaded,
     )
 
     # Log at WARNING when degraded so the operator sees it in the

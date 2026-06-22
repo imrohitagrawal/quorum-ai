@@ -174,8 +174,14 @@ except Exception as exc:  # noqa: BLE001 - persistence is optional
 _CSP_POLICY = (
     "default-src 'self'; "
     "script-src 'self' 'unsafe-inline'; "
-    "style-src 'self' 'unsafe-inline'; "
+    # PR-0 / Bug 1: allow the Google Fonts stylesheet so the design
+    # fonts (Instrument Serif, Manrope) load on first paint instead
+    # of silently falling back to system fonts. The CSS is fetched
+    # from ``fonts.googleapis.com``; the font binaries are served from
+    # ``fonts.gstatic.com`` and need their own ``font-src`` allow.
+    "style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; "
     "img-src 'self' data:; "
+    "font-src 'self' https://fonts.gstatic.com; "
     "connect-src 'self'; "
     "frame-ancestors 'none'"
 )
@@ -302,13 +308,38 @@ def _render_workspace_html() -> str:
         "catalog_drift_ids": list(report.catalog_drift_ids),
     }
     live_readiness_json = json.dumps(readiness_payload).replace("<", "\\u003c")
-    return (
+    # PR-0 / Bug 7: inject the actual default model ids into the
+    # static ``<option>`` elements so the dropdowns reflect the
+    # real defaults from the very first paint, before the JS
+    # ``refreshDefaults`` call rebuilds them. ``model_slot_1``
+    # through ``model_slot_4`` are four separate placeholders so a
+    # missing default (rare but possible) doesn't blank the entire
+    # dropdown. The server injects both the ``value`` and the
+    # ``selected`` attribute on the first ``<option>`` of each
+    # ``<select>``; the JS still rebuilds the full list a few
+    # hundred ms later, but the user no longer sees a flash of
+    # wrong values during the rebuild.
+    rendered = (
         template.replace("{{ app_name }}", escape(settings.app_name))
         .replace("{{ model_catalog_json }}", catalog_json)
         .replace("{{ default_model_ids_json }}", default_ids_json)
         .replace("{{ stale_model_ids_json }}", stale_ids_json)
         .replace("{{ live_readiness_json }}", live_readiness_json)
     )
+    for slot_index in range(4):
+        default_id = escape(default_ids[slot_index])
+        # ``model_slot_N_value`` sets the value attribute on the first
+        # option; ``model_slot_N_selected`` toggles the ``selected``
+        # attribute. We carry both because the JS reads the existing
+        # ``value`` as the source of truth on rebuild, and the
+        # ``selected`` attribute is what the browser uses on the very
+        # first paint.
+        rendered = rendered.replace(
+            "{{ model_slot_" + str(slot_index + 1) + "_value }}", default_id
+        ).replace(
+            "{{ model_slot_" + str(slot_index + 1) + "_selected }}", "selected"
+        )
+    return rendered
 
 
 @app.get("/", tags=["operations"])
@@ -399,7 +430,7 @@ def status_snapshot() -> dict[str, object]:
         "feedback_db": feedback_db,
         "feedback_events_total": feedback_events_total,
         "latest_audit": latest_audit,
-        "model_catalog_loaded": not bool(report.catalog_drift_ids),
+        "model_catalog_loaded": report.catalog_loaded,
         "sentry": sentry_state,
         "uptime_seconds": round(uptime_seconds, 1),
     }
