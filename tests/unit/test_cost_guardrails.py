@@ -1,5 +1,6 @@
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
+from unittest import mock
 from uuid import UUID
 
 from product_app.costs import (
@@ -232,3 +233,37 @@ def test_daily_cap_is_per_account() -> None:
             query_run_id=None,
         )
         assert estimate_b.threshold_action is not CostThresholdAction.BLOCK
+
+
+def test_block_event_captures_to_sentry() -> None:
+    """When the guardrail BLOCKs, ``record_guardrail_event`` must
+    emit a Sentry message so operators can see the rejection rate.
+    ALLOW and REQUIRE_CONFIRMATION must not be captured — that
+    would exhaust the Sentry free quota within a day."""
+    service = CostEstimationService()
+    account_id = UUID("00000000-0000-0000-0000-000000000005")
+    with mock.patch("sentry_sdk.capture_message") as capture:
+        service.record_guardrail_event(
+            account_id=account_id,
+            query_run_id=None,
+            estimated_cost_usd=Decimal("0.30"),
+            threshold_action=CostThresholdAction.BLOCK,
+            confirmed=False,
+        )
+    assert capture.called
+    # The capture carries a "cost_guardrail_blocked:" prefix in the
+    # message so Sentry alerts can filter on it directly.
+    args, kwargs = capture.call_args
+    assert "cost_guardrail_blocked" in args[0]
+    assert kwargs.get("level") == "warning"
+
+    # And: a non-BLOCK event does NOT trigger a Sentry capture.
+    with mock.patch("sentry_sdk.capture_message") as capture_allow:
+        service.record_guardrail_event(
+            account_id=account_id,
+            query_run_id=None,
+            estimated_cost_usd=Decimal("0.01"),
+            threshold_action=CostThresholdAction.ALLOW,
+            confirmed=False,
+        )
+    assert not capture_allow.called

@@ -382,6 +382,33 @@ class CostEstimationService:
             threshold_action=threshold_action,
             confirmed=confirmed,
         )
+        # Surface BLOCK events to Sentry so a rate of rejected
+        # estimates (per-call, cumulative, or daily cap) is visible
+        # to operators. ALLOW and REQUIRE_CONFIRMATION events are
+        # normal traffic and would just spam the Sentry quota.
+        if threshold_action is CostThresholdAction.BLOCK:
+            import sentry_sdk  # local import to avoid loading the SDK in tests
+            try:
+                with sentry_sdk.push_scope() as scope:
+                    scope.set_tag("event_type", event_type)
+                    scope.set_extra("account_id", str(account_id))
+                    scope.set_extra("estimated_cost_usd", str(estimated_cost_usd))
+                    if query_run_id is not None:
+                        scope.set_extra("query_run_id", str(query_run_id))
+                    sentry_sdk.capture_message(
+                        f"cost_guardrail_blocked:{event_type}",
+                        level="warning",
+                    )
+            except Exception as exc:  # noqa: BLE001 — Sentry must never crash the request
+                # If Sentry isn't configured (DSN not set, network
+                # down, etc.) or any other failure happens, log and
+                # continue. The cost guardrail event is already
+                # persisted to the feedback store; Sentry is a
+                # notification channel, not the source of truth.
+                import logging
+                logging.getLogger(__name__).debug(
+                    "Sentry capture failed for cost_guardrail_blocked: %s", exc
+                )
 
     # -- internals --------------------------------------------------------
 
