@@ -66,6 +66,10 @@ kill_timeout = "5s"
     path = "/ready"
     protocol = "http"
 
+  min_machines_running = 0
+  auto_stop_machines = "stop"
+  auto_start_machines = true
+
 [[vm]]
   size = "shared-cpu-1x"
   memory = "512mb"
