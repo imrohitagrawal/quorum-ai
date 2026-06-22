@@ -1,0 +1,12 @@
+{
+  "app": "Quorum-AI",
+  "version": "0.2.0",
+  "environment": "local",
+  "live_execution": true,
+  "feedback_db": "connected (.data/feedback_events.sqlite3)",
+  "feedback_events_total": 3760,
+  "latest_audit": null,
+  "model_catalog_loaded": false,
+  "sentry": "active",
+  "uptime_seconds": 3213.1
+}

@@ -113,6 +113,13 @@ class Settings(BaseSettings):
     # --- Logging --------------------------------------------------------
     log_level: str = "INFO"
 
+    # --- Observability ---------------------------------------------------
+    # Sentry DSN. Empty when Sentry is not configured; the Sentry init
+    # block in main.py is gated on a non-empty value so local dev and
+    # tests run unaffected. Set via SENTRY_DSN in .env or the deploy
+    # environment.
+    sentry_dsn: str = ""
+
 
 settings = Settings()
 

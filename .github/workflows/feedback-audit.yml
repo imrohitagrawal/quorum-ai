@@ -29,13 +29,27 @@ jobs:
         run: |
           mkdir -p feedback
           uv run python -m product_app.feedback_audit --output-dir feedback/
+      - name: Generate STATUS.md
+        # Render the runtime snapshot (status.json + STATUS.md) so an
+        # operator can curl ``/status`` and see the same fields in a
+        # human-readable table. Runs after the audit so the ``Latest
+        # audit`` row points at the report just written.
+        run: uv run python -m product_app.feedback_audit --status-only --output-dir feedback/
+      - name: Upload status snapshot
+        uses: actions/upload-artifact@v4
+        with:
+          name: quorum-status-snapshot
+          path: |
+            feedback/STATUS.md
+            feedback/status.json
+          if-no-files-found: warn
       - name: Commit audit report
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
-          git add feedback/audit-*.md || true
+          git add feedback/audit-*.md feedback/STATUS.md feedback/status.json || true
           if git diff --cached --quiet; then
-            echo "No new audit report to commit"
+            echo "No new audit or status to commit"
           else
             git commit -m "feedback audit: $(date -u +%Y-%m-%d)"
             git push

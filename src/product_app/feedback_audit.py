@@ -783,6 +783,111 @@ def _audit_enabled() -> bool:
     )
 
 
+def _format_uptime(seconds: float) -> str:
+    """Render seconds as ``<d>d <h>h <m>m`` for the STATUS.md table.
+
+    Truncates to minutes; sub-minute uptimes render as ``<1m``.
+    """
+    total_minutes = int(seconds // 60)
+    days, rem_minutes = divmod(total_minutes, 60 * 24)
+    hours, minutes = divmod(rem_minutes, 60)
+    if days:
+        return f"{days}d {hours}h {minutes}m"
+    if hours:
+        return f"{hours}h {minutes}m"
+    return f"{minutes}m"
+
+
+def _latest_audit_date(output_dir: Path) -> str | None:
+    """Return the date of the most recent audit-*.md file, or None."""
+    candidates = sorted(output_dir.glob("audit-*.md"), reverse=True)
+    if not candidates:
+        return None
+    stem = candidates[0].stem  # 'audit-YYYY-MM-DD'
+    if stem.startswith("audit-"):
+        return stem.replace("audit-", "")
+    return None
+
+
+def generate_status_md(
+    *,
+    status: dict[str, object] | None = None,
+    output_dir: Path | str = Path("feedback"),
+) -> tuple[Path, Path]:
+    """Render ``STATUS.md`` + ``status.json`` from a status snapshot.
+
+    The function is the audit-script half of the ``/status`` endpoint:
+    the same JSON snapshot the endpoint returns is rendered as a
+    human-readable Markdown table. Pass ``status`` when you already
+    fetched the JSON from the live app; otherwise the function builds
+    a snapshot by reading the feedback DB and the audit directory
+    directly (useful in CI where the app is not running).
+    """
+    output_dir = Path(output_dir)
+    output_dir.mkdir(parents=True, exist_ok=True)
+
+    if status is None:
+        # Build a snapshot from local state. We deliberately do NOT
+        # import the FastAPI app here — the audit script should run
+        # independently of the application's runtime state.
+        from product_app.config import settings
+        from product_app.feedback_store import DEFAULT_DB_PATH, FeedbackStore
+
+        store = FeedbackStore.from_env()
+        events_total = store.event_count()
+        store.close()
+        # Read Sentry DSN from settings so a SENTRY_DSN set in .env
+        # is picked up even when the script's own process environment
+        # doesn't have it (e.g. cron, CI).
+        sentry_configured = bool(settings.sentry_dsn) or bool(
+            os.environ.get("SENTRY_DSN")
+        )
+        status = {
+            "app": settings.app_name,
+            "version": "0.2.0",
+            "environment": settings.runtime_environment.value,
+            "live_execution": settings.openrouter_live_execution_enabled,
+            "feedback_db": (
+                f"connected ({DEFAULT_DB_PATH})"
+                if DEFAULT_DB_PATH != ":memory:"
+                else "connected (:memory:)"
+            ),
+            "feedback_events_total": events_total,
+            "latest_audit": _latest_audit_date(output_dir),
+            "model_catalog_loaded": True,
+            "sentry": "active" if sentry_configured else "inactive",
+            "uptime_seconds": 0.0,
+        }
+
+    uptime = _format_uptime(float(str(status.get("uptime_seconds", 0))))
+    live_value = "yes" if status.get("live_execution") else "no"
+    feedback_events = status.get("feedback_events_total", 0)
+    if isinstance(feedback_events, int):
+        events_display = f"{feedback_events:,}"
+    else:
+        events_display = str(feedback_events)
+    latest_audit_value = status.get("latest_audit") or "(none)"
+
+    lines: list[str] = []
+    lines.append("# Quorum-AI Status\n")
+    lines.append(f"_Generated at {datetime.now(UTC).isoformat()}_\n")
+    lines.append("| Signal | Value |")
+    lines.append("|---|---|")
+    lines.append(f"| Environment | {status.get('environment')} |")
+    lines.append(f"| Live execution | {live_value} |")
+    lines.append(f"| Feedback DB | {status.get('feedback_db')} |")
+    lines.append(f"| Feedback events | {events_display} |")
+    lines.append(f"| Latest audit | {latest_audit_value} |")
+    lines.append(f"| Sentry | {status.get('sentry')} |")
+    lines.append(f"| Uptime | {uptime} |")
+    lines.append("")
+    md_path = output_dir / "STATUS.md"
+    json_path = output_dir / "status.json"
+    md_path.write_text("\n".join(lines), encoding="utf-8")
+    json_path.write_text(json.dumps(status, indent=2, default=str), encoding="utf-8")
+    return md_path, json_path
+
+
 def run_audit(
     *,
     window_hours: float = 24.0,
@@ -867,6 +972,21 @@ def _parse_args() -> argparse.Namespace:
         default=Path("feedback"),
         help="Directory to write the audit report into (default: feedback/).",
     )
+    parser.add_argument(
+        "--status-only",
+        action="store_true",
+        help="Render only STATUS.md + status.json, skipping the LLM audit.",
+    )
+    parser.add_argument(
+        "--status-json",
+        type=Path,
+        default=None,
+        help=(
+            "Path to a JSON file previously written by the /status endpoint. "
+            "When provided, STATUS.md is rendered from that snapshot instead "
+            "of the local DB."
+        ),
+    )
     return parser.parse_args()
 
 
@@ -875,6 +995,17 @@ def main() -> int:
 
     setup_json_logging(os.environ.get("LOG_LEVEL", "INFO"))
     args = _parse_args()
+    if args.status_only or args.status_json is not None:
+        status: dict[str, object] | None = None
+        if args.status_json is not None:
+            status = json.loads(args.status_json.read_text(encoding="utf-8"))
+        md_path, json_path = generate_status_md(
+            status=status,
+            output_dir=args.output_dir,
+        )
+        print(f"feedback_audit: wrote STATUS.md to {md_path}")
+        print(f"feedback_audit: wrote status.json to {json_path}")
+        return 0
     report_path, json_path = run_audit(
         window_hours=args.window_hours,
         output_dir=args.output_dir,

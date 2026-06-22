@@ -15,15 +15,18 @@ configuration surface and ``product_app.auth`` for the session model.
 from __future__ import annotations
 
 import json
+import os
 import time
 from html import escape
 from pathlib import Path
-from typing import Annotated
+from typing import Annotated, Any
 
+import sentry_sdk
 from fastapi import Depends, FastAPI, Request, status
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import HTMLResponse, JSONResponse, PlainTextResponse, Response
 from fastapi.staticfiles import StaticFiles
+from sentry_sdk.types import Event as SentryEvent
 
 from product_app.auth import (
     SessionContext,
@@ -33,21 +36,18 @@ from product_app.auth import (
     require_session,
 )
 from product_app.config import RuntimeEnvironment, settings, validate_production_environment
-from product_app.feedback_store import FeedbackStore, configure as configure_feedback_store
+from product_app.feedback_store import FeedbackStore, get_store
+from product_app.feedback_store import configure as configure_feedback_store
 from product_app.logging_config import setup_json_logging
 from product_app.model_slots import (
     ModelDefaultsResponse,
     default_model_slots,
+    openrouter_catalog_fetcher,
     openrouter_model_catalog_service,
 )
-from product_app.query_runs import (
-    _ip_rate_limiter,
-)
-from product_app.query_runs import (
-    router as query_runs_router,
-)
+from product_app.query_runs import _ip_rate_limiter
+from product_app.query_runs import router as query_runs_router
 from product_app.readiness import (
-    current_readiness,
     run_startup_probe,
 )
 
@@ -60,7 +60,9 @@ TEMPLATES_DIR = Path(__file__).parent / "templates"
 STATIC_DIR = Path(__file__).parent / "static"
 
 
-def _redact_sentry_event(event: dict, _hint: dict) -> dict:
+def _redact_sentry_event(
+    event: SentryEvent, _hint: dict[str, Any]
+) -> SentryEvent | None:
     """Strip any user-supplied data from a Sentry event before sending.
 
     Defense-in-depth: even though we don't set send_default_pii, this
@@ -82,12 +84,8 @@ def _redact_sentry_event(event: dict, _hint: dict) -> dict:
 # unhandled exceptions and performance traces are reported to the
 # Sentry project. The integration also enriches events with the
 # FastAPI request context (path, method, headers).
-import os
-
-SENTRY_DSN = os.environ.get("SENTRY_DSN")
+SENTRY_DSN = settings.sentry_dsn or os.environ.get("SENTRY_DSN", "")
 if SENTRY_DSN:
-    import sentry_sdk
-
     sentry_sdk.init(
         dsn=SENTRY_DSN,
         # Sample 10% of transactions for performance monitoring.
@@ -108,6 +106,11 @@ app = FastAPI(title=settings.app_name, version="0.2.0")
 app.include_router(query_runs_router)
 app.mount("/static", StaticFiles(directory=str(STATIC_DIR)), name="static")
 
+# Monotonic start reference for /status uptime. Captured after the
+# app is constructed so the value reflects "when the process began
+# serving", not the import time of any module.
+_APP_START_MONOTONIC = time.monotonic()
+
 # SEC-H2: enforce production configuration at startup. This catches
 # misconfigured deploys (missing QUORUM_TOKEN_SECRET, insecure cookies,
 # legacy header enabled) before they start serving traffic. The guard
@@ -125,8 +128,6 @@ current_readiness = run_startup_probe()
 # PERF-P0: pre-warm the model catalog in the background so the
 # first user request doesn't pay the cold-cache latency. Failures
 # are swallowed; the next call to ``list_models`` will retry.
-from product_app.model_slots import openrouter_catalog_fetcher
-
 openrouter_catalog_fetcher.prewarm()
 
 # Feedback audit storage. The store is append-only and powers the
@@ -349,6 +350,59 @@ def ready() -> dict[str, object]:
         "catalog_drift_ids": list(report.catalog_drift_ids),
     }
     return payload
+
+
+@app.get("/status", tags=["operations"])
+def status_snapshot() -> dict[str, object]:
+    """Runtime snapshot of the app's current state.
+
+    The ``/status`` endpoint is the operator's single page for
+    observability: environment, live-execution readiness, feedback DB
+    health, Sentry state, and process uptime. No authentication is
+    required — the endpoint never surfaces query text, account ids,
+    or session tokens.
+    """
+    # Use the live probe rather than the boot-time snapshot so /status
+    # reflects current state, not "the state at process start".
+    report = run_startup_probe()
+    # Feedback DB state
+    store = get_store()
+    feedback_db: str
+    feedback_events_total: int
+    if store is None:
+        feedback_db = "disconnected"
+        feedback_events_total = 0
+    else:
+        try:
+            feedback_events_total = store.event_count()
+            db_path = getattr(store, "_db_path", "")
+            feedback_db = f"connected ({db_path})" if db_path else "connected"
+        except Exception:  # noqa: BLE001 - status must not 500
+            feedback_db = "disconnected"
+            feedback_events_total = 0
+    # Latest audit date
+    latest_report = _latest_feedback_report()
+    latest_audit = (
+        latest_report.stem.replace("audit-", "") if latest_report else None
+    )
+    # Sentry state
+    sentry_client = sentry_sdk.get_client()
+    sentry_state = "active" if sentry_client.is_active() else "inactive"
+    # Uptime since module load
+    uptime_seconds = time.monotonic() - _APP_START_MONOTONIC
+
+    return {
+        "app": settings.app_name,
+        "version": "0.2.0",
+        "environment": settings.runtime_environment.value,
+        "live_execution": report.state in ("live",),
+        "feedback_db": feedback_db,
+        "feedback_events_total": feedback_events_total,
+        "latest_audit": latest_audit,
+        "model_catalog_loaded": not bool(report.catalog_drift_ids),
+        "sentry": sentry_state,
+        "uptime_seconds": round(uptime_seconds, 1),
+    }
 
 
 @app.get("/v1/session", tags=["session"])
