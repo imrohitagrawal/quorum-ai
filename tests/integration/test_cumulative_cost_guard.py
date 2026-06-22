@@ -52,15 +52,18 @@ def test_cumulative_under_limit_passes() -> None:
     """
     service = CostEstimationService()
     account = uuid4()
-    # Two previous accepted events, each well below the hard limit.
-    _record_accepted(account_id=account, estimated_cost_usd=Decimal("0.05"))
-    _record_accepted(account_id=account, estimated_cost_usd=Decimal("0.05"))
+    # Two previous accepted events, each well below the hard limit
+    # and well below the daily cap (USD 0.10). Use 0.04 + 0.04 = 0.08
+    # so the cumulative check (binding at HARD_LIMIT_USD = 0.25) is
+    # the constraint under test, not the daily cap.
+    _record_accepted(account_id=account, estimated_cost_usd=Decimal("0.04"))
+    _record_accepted(account_id=account, estimated_cost_usd=Decimal("0.04"))
     estimate = service.estimate(
         query_text="short query",
         model_slots=[_slot() for _ in range(4)],
         account_id=account,
     )
-    # 0.05 + 0.05 = 0.10 cumulative; new estimate alone is well under 0.25.
+    # 0.04 + 0.04 = 0.08 cumulative; new estimate alone is well under 0.25.
     # We expect ALLOW (not BLOCK on cumulative).
     assert estimate.threshold_action.value == "allow"
 
