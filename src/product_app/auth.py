@@ -21,6 +21,7 @@ unchanged.
 
 from __future__ import annotations
 
+import contextlib
 import hashlib
 import secrets
 import threading
@@ -191,12 +192,11 @@ def _start_gc_thread() -> threading.Thread:
     """Start a daemon thread that periodically purges expired sessions."""
     def _gc_loop() -> None:
         while True:
-            try:
-                # Use a private method that runs the purge
-                # without taking a write lock if possible.
+            # Use a private method that runs the purge
+            # without taking a write lock if possible.
+            # Don't crash the daemon on GC errors.
+            with contextlib.suppress(Exception):
                 session_repository._purge_expired_locked()
-            except Exception:
-                pass  # Don't crash the daemon on GC errors
             _time_module.sleep(60.0)
 
     t = threading.Thread(target=_gc_loop, daemon=True, name="session-gc")

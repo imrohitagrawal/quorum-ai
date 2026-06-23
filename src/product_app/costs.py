@@ -31,7 +31,6 @@ from uuid import UUID, uuid4
 
 from pydantic import BaseModel, Field
 
-from product_app.catalog_fetcher import openrouter_catalog_fetcher
 from product_app.config import settings
 from product_app.feedback_store import record_event as _record_feedback_event
 from product_app.model_slots import ModelSlot, openrouter_model_catalog_service

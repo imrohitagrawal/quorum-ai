@@ -1499,57 +1499,31 @@
     }
   }
 
-  // PR-0 / Bug 8: the "Current time" card is now a state machine.
-  // It starts at "Not started", freezes at the run start time, and
+  // PR-0 / Bug 8: the "Current time" card is a state machine. It
+  // starts at "Not started", freezes at the run start time, and
   // is replaced with the completion time when the run reaches a
   // terminal state. The polling tick in the middle of a run does
-  // not touch the displayed time. The transition wrapper is
-  // called from ``updateRunMeta`` / ``pollRun`` so the
-  // "completion" update happens exactly once.
-  function setRunStartTime(rawValue) {
-    if (!rawValue) return;
-    state.runStartTime = rawValue;
-    state.runTimeFinalized = false;
-    renderCurrentTime({ result_generated_at_utc: rawValue });
-  }
-
-  function finalizeRunTime(rawValue) {
-    if (!rawValue) return;
-    state.runTimeFinalized = true;
-    renderCurrentTime({ result_generated_at_utc: rawValue });
-  }
-
-  function resetRunTime() {
-    state.runStartTime = null;
-    state.runTimeFinalized = false;
-    timeMeta.textContent = "Not started";
-  }
-
-  function renderCurrentTime(result) {
-    // PR-0 / Bug 8: the "Current time" meta-card used to read the
-    // wall-clock at the moment ``boot()`` ran and to re-render on
-    // every poll tick. The user saw the page-load time advance
-    // second-by-second, which they read as "the app is showing
-    // when I loaded the page" — not the run time. The fix is
-    // semantic: the card is the *run* time, frozen at the run
-    // start, replaced with the completion time when the run
-    // reaches a terminal state. Empty when no run is in flight or
-    // has ever been.
-    //
-    // ``runStartTime`` is captured on the run-create response and
-    // ``runTimeFinalized`` flips on the first terminal transition.
-    // A poll-tick call after the start is captured is a no-op; a
-    // poll-tick call after the finalize is a no-op. Only the
-    // explicit ``setRunStartTime`` / ``finalizeRunTime`` wrappers
-    // mutate the displayed text once the run is in flight.
-    const target = state.runTimeFinalized
-      ? state.runStartTime
-      : (state.runStartTime ?? (result && result.result_generated_at_utc));
-    if (!target) {
+  // not touch the displayed time. Only the explicit
+  // ``setRunStartTime`` / ``finalizeRunTime`` / ``resetRunTime``
+  // wrappers drive the card. ``updateRunTimeCard`` is the single
+  // entry point that mutates the visible text.
+  function updateRunTimeCard(transition, rawValue) {
+    if (transition === "reset") {
+      state.runStartTime = null;
+      state.runTimeFinalized = false;
       timeMeta.textContent = "Not started";
       return;
     }
-    const resolvedDate = new Date(target);
+    if (!rawValue) return;
+    if (transition === "start") {
+      state.runStartTime = rawValue;
+      state.runTimeFinalized = false;
+    } else if (transition === "finalize") {
+      state.runTimeFinalized = true;
+    } else {
+      return;
+    }
+    const resolvedDate = new Date(rawValue);
     let formatted;
     try {
       // ``Intl.DateTimeFormat`` with ``timeZoneName: "short"`` throws
@@ -1568,6 +1542,18 @@
     timeMeta.textContent = formatted || "Not started";
   }
 
+  function setRunStartTime(rawValue) {
+    updateRunTimeCard("start", rawValue);
+  }
+
+  function finalizeRunTime(rawValue) {
+    updateRunTimeCard("finalize", rawValue);
+  }
+
+  function resetRunTime() {
+    updateRunTimeCard("reset", null);
+  }
+
   function updateRunMeta(result) {
     el("correlation-meta").textContent = result?.correlation_id || "Not started";
     const status = result?.status || "idle";
@@ -1576,12 +1562,12 @@
       const label = STATUS_LABELS[status] || status;
       setStatusPill(status, label);
     }
-    // PR-0 / Bug 8: ``renderCurrentTime`` is no longer called
-    // here. The "Current time" card has its own state machine
-    // (frozen-at-start, finalized-on-terminal) and is updated by
-    // the ``setRunStartTime`` / ``finalizeRunTime`` wrappers from
-    // ``runNow`` / ``proceedWithRun`` / ``pollRun``. A status
-    // update in the middle of a run is not a time change.
+    // PR-0 / Bug 8: the "Current time" card has its own state
+    // machine (frozen-at-start, finalized-on-terminal) and is
+    // updated by the ``setRunStartTime`` / ``finalizeRunTime``
+    // wrappers from ``runNow`` / ``proceedWithRun`` / ``pollRun``.
+    // A status update in the middle of a run is not a time
+    // change, so we do not touch the time card from here.
     // Surface the citation coverage denominator so users can audit the
     // ratio itself. ``material_claim_count`` is the sum of the four
     // models' material-claim counts. We avoid displaying this when the
@@ -2083,12 +2069,12 @@
     renderModelPanels(result.result.model_answers, result);
     renderDebateAndSynthesis(result);
     renderNotices(result);
-    // PR-0 / Bug 8: ``renderCurrentTime`` is now idempotent for an
-    // in-flight run. The displayed time is only set on the first
-    // ``setRunStartTime`` call (runNow / proceedWithRun / pollRun
-    // rehydration) and frozen until ``finalizeRunTime`` flips it
-    // to the completion time.
-    renderCurrentTime(result);
+    // PR-0.1 / F1+F2: the "Current time" card is now driven
+    // exclusively by ``setRunStartTime`` / ``finalizeRunTime`` /
+    // ``resetRunTime``. The poll tick is intentionally a no-op for
+    // the time card — Bug 8's contract (frozen-at-start,
+    // replaced-on-terminal) must hold even when ``runStartTime``
+    // is null on a poll response.
     if (
       ["completed", "partial", "failed", "timed_out", "cancelled"].includes(
         result.status,
@@ -2301,7 +2287,14 @@
       if (!(target instanceof HTMLSelectElement)) {
         return;
       }
-      if (target.dataset.modelSlot !== "") {
+      // PR-0.1 / F3: the model-slot selects are the only ``<select>``
+      // children of ``modelInputs`` and they all have ids
+      // ``model-1`` .. ``model-4`` (set by ``renderModelInputs``).
+      // Filter on the id prefix rather than the ``data-model-slot``
+      // attribute so a future rename of the dataset key cannot
+      // silently break Bug 9's drift re-evaluation or Bug 10's
+      // mutual-exclusion re-render.
+      if (!target.id.startsWith("model-")) {
         return;
       }
       renderModelInputs(getModelIds());

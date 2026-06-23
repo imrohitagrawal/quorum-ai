@@ -11,6 +11,7 @@ can correlate without consulting any other table.
 
 from __future__ import annotations
 
+import contextlib
 import re
 from dataclasses import asdict, dataclass
 from decimal import Decimal
@@ -247,12 +248,11 @@ def _validate_model_id_list(model_ids: list[str]) -> None:
     # policy — the curated whitelist is the only signal available
     # when the live catalog is down.
     known_ids: set[str] = set(_DEFAULT_MODEL_ID_SET)
-    try:
+    # Catalog failures must not break validation.
+    with contextlib.suppress(Exception):  # noqa: BLE001
         known_ids |= {
             entry.model_id for entry in openrouter_catalog_fetcher.list_models()
         }
-    except Exception:  # noqa: BLE001 - catalog failures must not break validation
-        pass
 
     for index, model_id in enumerate(model_ids, start=1):
         if not isinstance(model_id, str) or not model_id or not _MODEL_ID_RE.match(model_id):

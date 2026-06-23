@@ -29,6 +29,7 @@ to avoid hitting the network.
 
 from __future__ import annotations
 
+import contextlib
 import json
 import re
 from collections.abc import Callable, Iterable
@@ -374,10 +375,9 @@ class OpenRouterCatalogFetcher:
         import threading
 
         def _do_prewarm() -> None:
-            try:
+            # The next caller will retry.
+            with contextlib.suppress(Exception):
                 self.list_models()
-            except Exception:
-                pass  # The next caller will retry
 
         t = threading.Thread(target=_do_prewarm, daemon=True, name="catalog-prewarm")
         t.start()
