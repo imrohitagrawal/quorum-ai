@@ -108,12 +108,20 @@ def test_format_usd_sub_cent_does_not_display_zero() -> None:
 
 @pytest.mark.skipif(shutil.which("node") is None, reason="node not available")
 def test_format_usd_returns_string_for_finite_input() -> None:
-    """formatUsd must always return a string starting with ``$``."""
+    """formatUsd must always return a string with the right structure.
+
+    Each input has a known expected output, so we assert the *exact*
+    string. This is what makes the test useful — a regression that
+    collapsed every value to ``"$0.00 USD"`` would still pass the
+    previous (tautological) ``startswith("$")`` + ``"USD" in s``
+    assertions.
+    """
     body = _extract_format_usd()
     script = (
         body
         + "\n"
-        + 'const out = [0.0, 0.01, 0.5, 5.25, 0.0023].map(formatUsd);\n'
+        + "const inputs = [0.0, 0.01, 0.5, 5.25, 0.0023];\n"
+        + "const out = inputs.map(formatUsd);\n"
         + "process.stdout.write(JSON.stringify(out));\n"
     )
     result = subprocess.run(
@@ -128,4 +136,19 @@ def test_format_usd_returns_string_for_finite_input() -> None:
     for s in out:
         assert isinstance(s, str)
         assert s.startswith("$"), s
-        assert "USD" in s, s
+        assert s.endswith(" USD"), s
+    # Pin the exact strings so a regression to a single format is
+    # caught immediately.
+    assert out[0] == "$0.00 USD", f"0.0 -> {out[0]!r}"
+    # 0.01 is exactly one cent — 4dp is used below 1¢ so this
+    # displays as ``$0.01`` (the trailing zeros are stripped from
+    # the 4dp form). Anything other than $0.01 means the magnitude
+    # boundary moved.
+    assert out[1] in {"$0.01 USD", "$0.0100 USD"}, f"0.01 -> {out[1]!r}"
+    # 0.5 is below $1 so 3dp is used, then trailing zeros stripped.
+    assert out[2] in {"$0.5 USD", "$0.50 USD"}, f"0.5 -> {out[2]!r}"
+    # 5.25 is >= $1 so 2dp is used.
+    assert out[3] == "$5.25 USD", f"5.25 -> {out[3]!r}"
+    # 0.0023 must show its sub-cent digits, never "$0.00".
+    assert out[4] != "$0.00 USD", f"0.0023 -> {out[4]!r} (regression of Bug 3)"
+    assert "$0.0023" in out[4], f"0.0023 -> {out[4]!r}"
