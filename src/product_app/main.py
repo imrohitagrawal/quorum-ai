@@ -102,7 +102,19 @@ if SENTRY_DSN:
     )
 
 
-app = FastAPI(title=settings.app_name, version="0.2.0")
+app = FastAPI(
+    title=settings.app_name,
+    version="0.2.0",
+    description=(
+        "Quorum-AI runs your question against four LLMs in parallel, "
+        "has them debate, and returns a single answer with explicit "
+        "consensus, disagreement, source support, uncertainty, and "
+        "recommendation. Cost is shown before the run starts; nothing "
+        "executes without confirmation. Results are ephemeral. "
+        "Open the workspace UI at /ui; health and readiness live at "
+        "/health and /ready; the operator snapshot is at /status."
+    ),
+)
 app.include_router(query_runs_router)
 app.mount("/static", StaticFiles(directory=str(STATIC_DIR)), name="static")
 

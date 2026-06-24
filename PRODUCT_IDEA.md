@@ -64,3 +64,14 @@ It is acceptable to write `I do not know` here. The factory must convert unknown
 ## Instructions to Codex
 
 When I say `Start product factory`, first read this file. Do not start coding. Ask the smallest useful set of clarifying questions needed to build the problem statement and first vertical slice. If a detail is not essential for the next decision, record it as an assumption or later question instead of blocking progress.
+
+---
+
+## Decision record (PR-1, 2026-06-23)
+
+The brand, lede, and supporting copy decisions for the live product are
+now owned by [docs/PRODUCT_BRIEF.md](docs/PRODUCT_BRIEF.md). This file
+remains as the **raw idea** that seeded the product; the brief is the
+source of truth for every user-visible string on the workspace and the
+OpenAPI surface. Rename decision (PR-1): keep `Quorum-AI`. See the
+brief for the justification.

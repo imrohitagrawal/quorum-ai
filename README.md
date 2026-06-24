@@ -1,10 +1,10 @@
 # Quorum-AI
 
-> Stop hopping between multiple AI chatbots. Get one sourced, synthesized answer you can trust — and see the cost before you run it.
+> One question. Four models. One answer you can verify.
 
-Quorum-AI orchestrates several frontier LLMs (OpenAI, Anthropic, Google, DeepSeek) behind a single query interface. It runs each model independently, has them critique one another, then synthesizes a final answer with explicit consensus, disagreement, source support, uncertainty, and recommendation fields. Cost is shown before the run starts; nothing executes without confirmation.
+Quorum-AI runs your question against four LLMs in parallel, has them critique one another, and returns a single answer with explicit consensus, disagreement, source support, uncertainty, and recommendation. Cost is shown before the run starts; nothing executes without confirmation. Results are ephemeral.
 
-This repo is the working multi-model backend. The product brief, architecture, and requirements live in [docs/](docs/); the dev history behind the security/quality pass is in this README and in the [plan file](.claude/plans/is-there-a-better-floating-adleman.md).
+The product brief that drives the brand, lede, and copy decisions lives at [docs/PRODUCT_BRIEF.md](docs/PRODUCT_BRIEF.md). The architecture, requirements, and ops docs are in [docs/](docs/); the dev history behind the security/quality pass is in this README and in the [plan file](.claude/plans/is-there-a-better-floating-adleman.md).
 
 ---
 

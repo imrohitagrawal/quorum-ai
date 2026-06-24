@@ -2,6 +2,33 @@
 
 ## Unreleased
 
+### Changed
+
+- **PR-1: copy, lede, and product rename decision.** Brand lede is
+  now "One question. Four models. One answer you can verify." (was
+  "Stop hopping between multiple AI chatbots..."). Workspace lede is
+  now a two-sentence data + cost statement (was the unclear
+  "server-configured provider access" copy). The OpenAPI description
+  is now a user-facing paragraph pointing at the workspace, health,
+  readiness, and status endpoints. **No product rename in this PR**;
+  we keep `Quorum-AI`. The decision and full justification are in
+  [docs/PRODUCT_BRIEF.md](docs/PRODUCT_BRIEF.md).
+- **PR-1: synthesis tooltips and demo-mode banner copy tightened.**
+  All five synthesis tooltips end with the same caveat
+  ("Templated by Quorum; no model generates this.") so the AI-honesty
+  story is consistent across the surface. The pre-run readiness
+  banner and post-run demo-mode banner no longer leak the operator
+  env-var names (`OPENROUTER_API_KEY`,
+  `OPENROUTER_LIVE_EXECUTION_ENABLED`) into user-facing copy — the
+  user sees the outcome, not the config knob.
+- **PR-1: copy test contract.** Added
+  `tests/integration/test_workspace_html_copy.py` to pin the
+  workspace HTML brand/workspace lede strings, the display name, the
+  OpenAPI `info.title`/`info.description`, the absence of operator
+  env-var names in user-facing HTML, and the per-section synthesis
+  tooltip caveat. The next refactor that touches copy will fail this
+  suite unless it also updates the brief.
+
 ### Fixed
 
 - **Cancel race on completed runs.** DELETE on a run that has
