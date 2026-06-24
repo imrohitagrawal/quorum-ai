@@ -10,12 +10,12 @@ This brief is the source of truth for the user-facing copy, brand, and lede deci
 
 ## Decisions (locked 2026-06-23)
 
-### 1. Product name: **Quorum AI** (keep)
+### 1. Product name: **Quorum-AI** (keep)
 
 No rename. The product is already deployed at `https://quorum-ai.fly.dev`, the name is established, and the disruption cost of a rename is higher than the upside.
 
-- `settings.app_name` in `src/product_app/config.py` keeps `"Quorum AI"`.
-- `app.title` in `src/product_app/main.py` keeps `"Quorum AI"`.
+- `settings.app_name` in `src/product_app/config.py` keeps `"Quorum-AI"` (with hyphen, matches the live app's OpenAPI title and Sentry release tag).
+- `app.title` in `src/product_app/main.py` keeps `"Quorum-AI"`.
 - The Fly.io URL stays `quorum-ai.fly.dev` (no redirect needed).
 - `CHANGELOG.md` should record: "PR-1: copy + lede refresh; product name unchanged. See `docs/PRODUCT_BRIEF.md` for the decision rationale."
 
