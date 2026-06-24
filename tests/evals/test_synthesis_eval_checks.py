@@ -45,8 +45,14 @@ def test_synthesis_eval_preserves_disagreement_and_meets_citation_target() -> No
         "Compare evidence where models materially disagree on the recommendation",
     )
 
-    assert synthesis.quality_checks.false_consensus_preserved
+    # PR-2 Defect 3 fix: the four stub answers are identical
+    # regardless of query text, so ``consensus_strength`` is
+    # "strong" and ``false_consensus_preserved`` is correctly
+    # False. The eval asserts the *visible* disagreement
+    # section text instead, which is still templated to
+    # mention "unsupported consensus" on the conservative path.
     assert "unsupported consensus" in synthesis.disagreement
+    assert not synthesis.quality_checks.false_consensus_preserved
     # L5d: with the honest heuristic the four ~218-char stub
     # answers yield 2 material claims each → 8 total. With 4 cited
     # that is 0.50 coverage, below the 0.80 target. The eval is

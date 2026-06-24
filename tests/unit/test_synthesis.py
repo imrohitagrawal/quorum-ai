@@ -57,13 +57,18 @@ def test_synthesis_stub_returns_required_sections_and_quality_checks() -> None:
     assert synthesis.citation_coverage.cited_claim_count == 4
     assert not synthesis.citation_coverage.target_met
     assert not synthesis.quality_checks.citation_coverage_target_met
-    assert synthesis.quality_checks.false_consensus_preserved
+    # PR-2 Defect 3 fix: with all four stub answers being
+    # identical, the consensus strength is "strong", so
+    # ``false_consensus_preserved`` is now correctly False.
+    # The old substring check on the templated disagreement
+    # text was a false positive — see ``docs/SYNTHESIS_AUDIT.md``.
+    assert not synthesis.quality_checks.false_consensus_preserved
     assert synthesis.quality_checks.decision_support_framing_present
     event = synthesis_event_recorder.list_events()[0]
     assert event.account_id == account_id
     assert event.query_run_id == query_run_id
     assert event.status is SynthesisStatus.COMPLETED
-    assert event.false_consensus_preserved
+    assert not event.false_consensus_preserved
     assert not hasattr(event, "query_text")
     assert not hasattr(event, "provider_key")
 
@@ -160,12 +165,19 @@ def test_synthesis_live_path_uses_llm_text_when_key_and_flag_set(
     )
 
     assert result.final_synthesis is not None
-    # All five sections use LLM text.
+    # All five sections use LLM text (under the cap so the
+    # truncation step is a no-op for "Live LLM section text.").
     assert result.final_synthesis.consensus == "Live LLM section text."
     assert result.final_synthesis.disagreement == "Live LLM section text."
     assert result.final_synthesis.source_support == "Live LLM section text."
     assert result.final_synthesis.uncertainty == "Live LLM section text."
-    assert result.final_synthesis.recommendation == "Live LLM section text."
+    # Recommendation gets the decision-support caveat appended
+    # by ``truncate_recommendation`` because the LLM text does
+    # not include the verbatim sentence. PR-2 Item 1 + Item 6:
+    # the caveat is now always present in the recommendation
+    # section, regardless of which path produced the text.
+    assert result.final_synthesis.recommendation.startswith("Live LLM section text.")
+    assert "decision support only" in result.final_synthesis.recommendation
     # Five section calls total.
     assert len(calls) == 5
 

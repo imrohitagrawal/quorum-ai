@@ -94,7 +94,10 @@ def test_core_query_workflow_with_env_configured_access(
         # answers yield 2 material claims each → 8 total. With 4
         # cited that is 0.50 coverage, below the 0.80 target.
         "citation_coverage_target_met": False,
-        "false_consensus_preserved": True,
+        # PR-2 Defect 3 fix: stub answers are identical, so
+        # ``consensus_strength`` is "strong" and
+        # ``false_consensus_preserved`` is correctly False.
+        "false_consensus_preserved": False,
         "decision_support_framing_present": True,
         "high_stakes_warning_required": True,
     }

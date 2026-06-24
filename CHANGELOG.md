@@ -29,6 +29,17 @@
   tooltip caveat. The next refactor that touches copy will fail this
   suite unless it also updates the brief.
 
+### Added
+
+- **Synthesis audit (`docs/SYNTHESIS_AUDIT.md`).** PR-2 precursor.
+  Captures the current synthesis output for 3 query types
+  (short factual, long opinion, high-stakes), names 8 specific
+  defects with example outputs, and traces the 5 failure modes
+  end-to-end through `produce_final_synthesis`. Gating document
+  for the C2 behavioral changes; see the audit for the full
+  defect table and the proposed consensus-strength
+  classification.
+
 ### Fixed
 
 - **Cancel race on completed runs.** DELETE on a run that has

@@ -86,7 +86,10 @@ def test_result_endpoint_projects_model_answers_debate_cost_elapsed_and_synthesi
     assert synthesis["citation_coverage"]["cited_claim_count"] == 4
     assert synthesis["citation_coverage"]["target_met"] is False
     assert synthesis["quality_checks"]["citation_coverage_target_met"] is False
-    assert synthesis["quality_checks"]["false_consensus_preserved"] is True
+    # PR-2 Defect 3 fix: stub answers are identical, so
+    # ``consensus_strength`` is "strong" and
+    # ``false_consensus_preserved`` is now correctly False.
+    assert synthesis["quality_checks"]["false_consensus_preserved"] is False
     # Honest-notice contract: with the test env having
     # OPENROUTER_LIVE_EXECUTION_ENABLED=true but the live call
     # failing in CI, each per-slot notice names the live failure
