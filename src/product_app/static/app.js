@@ -137,6 +137,8 @@
     QUERY_TOO_LONG: "Question is too long",
     QUERY_REQUIRED: "Question is required",
     NETWORK_UNREACHABLE: "Can't reach the server",
+    RUN_FAILED: "Run failed",
+    TIMEOUT: "Run timed out",
   };
 
   // Some error codes have a CTA the user can take. Each entry has a
@@ -241,8 +243,9 @@
       ? "Choose a different model from the dropdown, or contact support."
       : "Choose different models from the dropdowns, or contact support.";
     driftMessage.textContent =
-      `The default model${activeStale.length > 1 ? "s" : ""} (${names}) may not be ` +
-      `available right now. ${action}`;
+      `One or more configured default models are no longer in the catalog. ` +
+      `Your selections still work — this just means the defaults you see on a fresh ` +
+      `page may differ from what was last cached.`;
     driftRegion.hidden = false;
   }
   if (driftDismiss) {
@@ -460,6 +463,23 @@
     cancelled: "Cancelled",
   };
 
+  // Error classification system for failed runs
+  const ERROR_TYPES = {
+    // Recoverable - show banner with retry hint
+    CONNECTION_TIMEOUT: { recoverable: true, message: "Connection timed out. Please try again." },
+    RATE_LIMITED: { recoverable: true, message: "Rate limit exceeded. Wait a moment and retry." },
+    NETWORK_ERROR: { recoverable: true, message: "Network error. Check your connection." },
+    PROVIDER_TIMEOUT: { recoverable: true, message: "Provider request timed out. Please try again." },
+
+    // Unrecoverable - show error code + contact support
+    INVALID_API_KEY: { errorCode: "E1001" },
+    INSUFFICIENT_BALANCE: { errorCode: "E1002" },
+    API_KEY_MISSING: { errorCode: "E1003" },
+    PERMISSION_DENIED: { errorCode: "E1004" },
+    CATALOG_UNAVAILABLE: { errorCode: "E1005" },
+    MODEL_NOT_FOUND: { errorCode: "E1006" },
+  };
+
   // Friendly band labels for ``CostThresholdAction``. The raw enum
   // value (``allow`` / ``require_confirmation`` / ``block``) is
   // fine for behavior comparisons but reads oddly in the UI
@@ -474,6 +494,27 @@
 
   function formatCostBand(action) {
     return COST_BAND_LABEL[action] ?? action;
+  }
+
+  function getErrorType(errorCode) {
+    // Handle error codes from different sources
+    if (typeof errorCode === 'string') {
+      // Clean error codes (remove "E" prefix if present)
+      const cleanCode = errorCode.replace(/^E/i, '');
+
+      // Map to our standard codes
+      for (const [key, type] of Object.entries(ERROR_TYPES)) {
+        if (type.errorCode === `E${cleanCode}` || type.errorCode === cleanCode) {
+          return type;
+        }
+      }
+
+      // Default to unrecoverable if unknown code
+      return { errorCode: `E${cleanCode}` };
+    }
+
+    // If no error code, treat as network error (most common)
+    return ERROR_TYPES.NETWORK_ERROR;
   }
 
   // Static FX rates (units of foreign currency per 1 USD). Intentionally
@@ -962,6 +1003,15 @@
       sub.className = "model-card-slot";
       sub.textContent = `Slot ${index + 1} · ${modelId}`;
       heading.append(title, sub);
+      // Model card info icon - explains what this card represents
+      const modelCardInfo = document.createElement("button");
+      modelCardInfo.type = "button";
+      modelCardInfo.className = "info-icon";
+      modelCardInfo.setAttribute("data-info-icon", "");
+      modelCardInfo.setAttribute("data-info-text", "This shows one model's initial answer. After all four models respond, each model is asked to revise its answer after reading the others — the refined version replaces this card.");
+      modelCardInfo.setAttribute("aria-label", "What is this card?");
+      modelCardInfo.innerHTML = "&#9432;";
+      heading.append(modelCardInfo);
       const statusPill = document.createElement("span");
       const statusValue = slot?.status || "pending";
       statusPill.className = "status-pill";
@@ -994,10 +1044,19 @@
           body.appendChild(placeholder);
         }
       } else {
-        const placeholder = document.createElement("p");
-        placeholder.className = "muted";
-        placeholder.textContent = "Awaiting provider output.";
-        body.appendChild(placeholder);
+        // Check if run failed - show error state instead of pending
+        const statusValue = result?.status;
+        if (statusValue && ['failed', 'timed_out', 'cancelled'].includes(statusValue)) {
+          const errorPlaceholder = document.createElement("p");
+          errorPlaceholder.className = "error-placeholder";
+          errorPlaceholder.textContent = "Models did not respond — see error details above.";
+          body.appendChild(errorPlaceholder);
+        } else {
+          const placeholder = document.createElement("p");
+          placeholder.className = "muted";
+          placeholder.textContent = "Awaiting provider output.";
+          body.appendChild(placeholder);
+        }
       }
       article.appendChild(body);
       // When the model is complete but carried a ``provider_notice`` —
@@ -1103,7 +1162,13 @@
     } else {
       const empty = document.createElement("div");
       empty.className = "muted";
-      empty.textContent = "No debate rounds yet.";
+      // Distinguish between "not run yet" and "run failed"
+      if (result?.status && ['failed', 'timed_out', 'cancelled'].includes(result.status)) {
+        empty.textContent = "Debate could not run — see error details above.";
+        empty.className = "error-placeholder";
+      } else {
+        empty.textContent = "Debate rounds will appear here after models respond.";
+      }
       debateOutput.replaceChildren(empty);
     }
     const synthesis = result?.result?.final_synthesis;
@@ -1161,7 +1226,13 @@
     } else {
       const empty = document.createElement("div");
       empty.className = "muted";
-      empty.textContent = "No synthesis yet.";
+      // Distinguish between "not run yet" and "run failed"
+      if (result?.status && ['failed', 'timed_out', 'cancelled'].includes(result.status)) {
+        empty.textContent = "Synthesis could not be generated — see error details above.";
+        empty.className = "error-placeholder";
+      } else {
+        empty.textContent = "Final synthesis will appear here after debate.";
+      }
       synthesisOutput.replaceChildren(empty);
     }
   }
@@ -1198,7 +1269,7 @@
       noticeList.replaceChildren(
         Object.assign(document.createElement("div"), {
           className: "muted",
-          textContent: "No estimate or run yet.",
+          textContent: "No cost estimate or run yet — enter a question above.",
         }),
       );
       return;
@@ -2095,11 +2166,47 @@
           timeout: 6500,
         });
       } else if (result.status === "failed") {
-        toast({ message: "Run failed. See the error message above.", tone: "error", timeout: 6500 });
+        // Show error banner for failed runs using server-provided info
+        const failedSteps = result.failed_steps || [];
+        const partialNotice = result.partial_failure_notice || '';
+        const failedStepsText = failedSteps.length > 0
+          ? `Failed at: ${failedSteps.join(', ').replace(/_/g, ' ')}`
+          : '';
+
+        // Build a user-friendly message based on failed steps
+        let errorMessage = 'Run failed. ';
+        if (failedSteps.includes('initial_answers')) {
+          errorMessage += 'Models could not provide initial answers. ';
+        } else if (failedSteps.includes('debate_round_1') || failedSteps.includes('debate_round_2')) {
+          errorMessage += 'Debate could not complete. ';
+        } else if (failedSteps.includes('synthesis')) {
+          errorMessage += 'Final synthesis could not be generated. ';
+        }
+
+        if (partialNotice) {
+          errorMessage += partialNotice;
+        } else {
+          errorMessage += 'Please try again or contact support if the problem persists.';
+        }
+
+        showError({
+          code: 'RUN_FAILED',
+          message: errorMessage,
+          hint: failedStepsText
+            ? `Technical details: ${failedStepsText}`
+            : 'Check the notices section for more information.',
+        });
+
+        toast({ message: "Run failed. See error banner above.", tone: "error", timeout: 8000 });
+      } else if (result.status === "timed_out") {
+        showError({
+          code: 'TIMEOUT',
+          message: "Run timed out. The request took too long to process.",
+          hint: "Try simplifying your question or wait a moment and retry."
+        });
+        toast({ message: "Run timed out. See error banner above.", tone: "warn", timeout: 6500 });
       } else if (result.status === "cancelled") {
         toast({ message: "Run cancelled.", tone: "info" });
-      } else if (result.status === "timed_out") {
-        toast({ message: "Run timed out.", tone: "warn" });
       }
     }
   }

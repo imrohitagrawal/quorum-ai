@@ -239,6 +239,18 @@ a { color: var(--accent); text-underline-offset: 2px; }
   overflow: hidden;
 }
 
+.brand-lede {
+  font-weight: 600;
+  color: var(--ink);
+  -webkit-line-clamp: 1;
+}
+
+.brand-workflow {
+  font-size: 0.85rem;
+  color: var(--muted);
+  -webkit-line-clamp: 3;
+}
+
 .topbar-actions {
   display: flex;
   align-items: center;
@@ -882,7 +894,7 @@ kbd {
 .status-pill[data-state="idle"] { background: var(--line); color: var(--muted); }
 .status-pill[data-state="completed"] { background: var(--success-soft); color: var(--success); }
 .status-pill[data-state="failed"] { background: var(--danger-soft); color: var(--danger); }
-.status-pill[data-state="timed_out"] { background: var(--warning-soft); color: var(--warning); }
+.status-pill[data-state="timed_out"] { background: var(--danger-soft); color: var(--danger); }
 .status-pill[data-state="cancelled"] { background: var(--line); color: var(--muted); }
 .status-pill[data-state="partial"] { background: var(--warning-soft); color: var(--warning); }
 
@@ -1347,6 +1359,13 @@ kbd {
 
 .mono { font-family: var(--font-mono); font-size: 0.9rem; overflow-wrap: anywhere; }
 .muted { color: var(--muted); }
+
+.error-placeholder {
+  color: var(--danger-soft);
+  font-style: italic;
+  border-left: 3px solid var(--danger);
+  padding-left: 8px;
+}
 
 /* ----- Focus ---------------------------------------------------------- */
 
