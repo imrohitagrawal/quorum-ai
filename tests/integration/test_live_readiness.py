@@ -104,7 +104,7 @@ def test_ready_endpoint_includes_drift_when_a_static_default_is_missing(
     payload = response.json()
 
     drift = payload["live_readiness"]["catalog_drift_ids"]
-    assert drift == ["google/gemini-2.0-flash-lite"]
+    assert drift == ["google/gemini-2.5-flash-lite"]
 
 
 def test_ready_endpoint_reasons_never_leak_api_key(
@@ -138,7 +138,7 @@ def test_models_defaults_endpoint_returns_stale_model_ids(
         [
             "openai/gpt-4o-mini",
             "anthropic/claude-3-haiku",
-            # google/gemini-2.0-flash-lite missing
+            # google/gemini-2.5-flash-lite missing
             "deepseek/deepseek-chat-v3.1",
         ],
     )
@@ -161,7 +161,7 @@ def test_models_defaults_endpoint_returns_stale_model_ids(
         DEFAULT_MODEL_IDS
     )
     # And drift is surfaced alongside.
-    assert payload["stale_model_ids"] == ["google/gemini-2.0-flash-lite"]
+    assert payload["stale_model_ids"] == ["google/gemini-2.5-flash-lite"]
 
 
 def test_workspace_html_embeds_stale_model_ids_for_drift_banner(
@@ -175,7 +175,7 @@ def test_workspace_html_embeds_stale_model_ids_for_drift_banner(
         [
             "openai/gpt-4o-mini",
             "anthropic/claude-3-haiku",
-            # google/gemini-2.0-flash-lite missing
+            # google/gemini-2.5-flash-lite missing
             "deepseek/deepseek-chat-v3.1",
         ],
     )
@@ -196,7 +196,7 @@ def test_workspace_html_embeds_stale_model_ids_for_drift_banner(
     end = html.index(";", start)
     literal = html[start:end].strip()
     stale = json.loads(literal)
-    assert stale == ["google/gemini-2.0-flash-lite"]
+    assert stale == ["google/gemini-2.5-flash-lite"]
 
 
 def test_workspace_html_no_drift_when_catalog_matches_defaults(
@@ -238,7 +238,7 @@ def test_status_model_catalog_loaded_true_even_with_drift(
             "openai/gpt-4o-mini",
             "anthropic/claude-3-haiku",
             "deepseek/deepseek-chat-v3.1",
-            # google/gemini-2.0-flash-lite deliberately omitted
+            # google/gemini-2.5-flash-lite deliberately omitted
         ],
     )
 

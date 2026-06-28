@@ -125,7 +125,7 @@ def test_bug10_render_model_options_vendor_scopes_to_current_vendor() -> None:
         + "  {model_id: 'anthropic/claude-3-haiku', label: 'Haiku'},\n"
         + "  {model_id: 'anthropic/claude-sonnet-4.5', label: 'Sonnet'},\n"
         + "  {model_id: 'google/gemini-2.5-flash', label: 'Gemini Flash'},\n"
-        + "  {model_id: 'google/gemini-2.0-flash-lite', label: 'Gemini Lite'},\n"
+        + "  {model_id: 'google/gemini-2.5-flash-lite', label: 'Gemini Lite'},\n"
         + "  {model_id: 'deepseek/deepseek-chat-v3.1', label: 'DeepSeek V3.1'},\n"
         + "];\n"
         + "const out = renderModelOptions(\n"
