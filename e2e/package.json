@@ -1,0 +1,19 @@
+{
+  "name": "quorum-e2e",
+  "version": "1.0.0",
+  "private": true,
+  "scripts": {
+    "test": "playwright test",
+    "test:ui": "playwright test --ui",
+    "test:headed": "playwright test --headed",
+    "test:debug": "playwright test --debug",
+    "test:report": "playwright show-report",
+    "test:clean": "rm -rf test-results/ reports/"
+  },
+  "devDependencies": {
+    "@playwright/test": "^1.42.0"
+  },
+  "dependencies": {
+    "@axe-core/playwright": "^4.9.0"
+  }
+}
