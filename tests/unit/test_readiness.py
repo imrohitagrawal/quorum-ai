@@ -122,16 +122,16 @@ def test_probe_reports_live_with_drift_when_catalog_missing_an_id(
             "openai/gpt-4o-mini",
             "anthropic/claude-3-haiku",
             "deepseek/deepseek-chat-v3.1",
-            # google/gemini-2.0-flash-lite deliberately omitted
+            # google/gemini-2.5-flash-lite deliberately omitted
         ],
     )
 
     report = run_startup_probe()
 
-    # State stays live — the demo will still call google/gemini-2.0-flash-lite.
+    # State stays live — the demo will still call google/gemini-2.5-flash-lite.
     # The diagnostic surfaces drift so the operator can act.
     assert report.state == "live"
-    assert report.catalog_drift_ids == ("google/gemini-2.0-flash-lite",)
+    assert report.catalog_drift_ids == ("google/gemini-2.5-flash-lite",)
     # Operator-facing message in the /ready JSON response. The UI
     # banner builds its own plain message from catalog_drift_ids;
     # this operator-facing text is consumed by monitoring systems
@@ -238,7 +238,7 @@ def test_catalog_loaded_true_when_catalog_fetch_succeeds(
     fetched the live catalog — even if some defaults are drifted.
     """
     _set_live(monkeypatch, enabled=True, key="sk-or-v1-fake-key-for-tests-only")
-    # Catalog missing google/gemini-2.0-flash-lite (drift), but the
+    # Catalog missing google/gemini-2.5-flash-lite (drift), but the
     # fetch itself succeeded.
     _set_catalog(
         monkeypatch,
@@ -252,7 +252,7 @@ def test_catalog_loaded_true_when_catalog_fetch_succeeds(
     report = run_startup_probe()
 
     assert report.catalog_loaded is True
-    assert report.catalog_drift_ids == ("google/gemini-2.0-flash-lite",)
+    assert report.catalog_drift_ids == ("google/gemini-2.5-flash-lite",)
 
 
 def test_catalog_loaded_false_when_catalog_fetch_fails(

@@ -56,7 +56,7 @@ EXPECTED_SLOT_COUNT = 4
 #: |------|-----------------------------------|------------|
 #: | 1    | ``openai/gpt-4o-mini``            | 0.000150   |
 #: | 2    | ``anthropic/claude-3-haiku``      | 0.000250   |
-#: | 3    | ``google/gemini-2.0-flash-lite``  | 0.000075   |
+#: | 3    | ``google/gemini-2.5-flash-lite``  | 0.000075   |
 #: | 4    | ``deepseek/deepseek-chat-v3.1``   | 0.000140   |
 #:
 #: Combined input cost is **$0.000615 / 1K** tokens. The $0.25
@@ -88,7 +88,7 @@ EXPECTED_SLOT_COUNT = 4
 DEFAULT_MODEL_IDS: tuple[str, ...] = (
     "openai/gpt-4o-mini",                 # cheapest paid OpenAI
     "anthropic/claude-3-haiku",           # cheapest paid Anthropic
-    "google/gemini-2.0-flash-lite",       # cheapest paid Google
+    "google/gemini-2.5-flash-lite",       # cheapest paid Google
     "deepseek/deepseek-chat-v3.1",        # DeepSeek's paid tier
 )
 

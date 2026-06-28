@@ -135,10 +135,10 @@ _FALLBACK_CATALOG: tuple[ModelCatalogEntry, ...] = (
         output_price_per_1k=Decimal("0.0012"),
     ),
     ModelCatalogEntry(
-        model_id="google/gemini-2.0-flash-lite",
-        name="Google: Gemini 2.0 Flash Lite",
+        model_id="google/gemini-2.5-flash-lite",
+        name="Google: Gemini 2.5 Flash Lite",
         vendor="google",
-        short_name="Gemini 2.0 Flash Lite",
+        short_name="Gemini 2.5 Flash Lite",
         input_price_per_1k=Decimal("0.000075"),
         output_price_per_1k=Decimal("0.0003"),
     ),

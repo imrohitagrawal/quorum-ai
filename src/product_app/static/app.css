@@ -239,6 +239,18 @@ a { color: var(--accent); text-underline-offset: 2px; }
   overflow: hidden;
 }
 
+.brand-lede {
+  font-weight: 600;
+  color: var(--ink);
+  -webkit-line-clamp: 1;
+}
+
+.brand-workflow {
+  font-size: 0.85rem;
+  color: var(--muted);
+  -webkit-line-clamp: 3;
+}
+
 .topbar-actions {
   display: flex;
   align-items: center;
@@ -678,9 +690,10 @@ select {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  width: 24px;
-  height: 24px;
-  min-height: 24px;
+  min-width: 44px;
+  min-height: 44px;
+  width: 44px;
+  height: 44px;
   border-radius: 999px;
   border: 1px solid var(--line);
   background: var(--panel-strong);
@@ -761,6 +774,7 @@ select {
   align-items: center;
   justify-content: center;
   gap: var(--space-2);
+  min-width: 44px;
   min-height: 48px;
   padding: 0 var(--space-5);
   border: 1px solid transparent;
@@ -813,7 +827,7 @@ select {
   outline-offset: 2px;
 }
 
-.button-compact { min-height: 36px; padding: 0 var(--space-4); font-size: 0.85rem; }
+.button-compact { min-width: 44px; min-height: 36px; padding: 0 var(--space-4); font-size: 0.85rem; }
 
 .button-spinner {
   display: none;
@@ -882,7 +896,7 @@ kbd {
 .status-pill[data-state="idle"] { background: var(--line); color: var(--muted); }
 .status-pill[data-state="completed"] { background: var(--success-soft); color: var(--success); }
 .status-pill[data-state="failed"] { background: var(--danger-soft); color: var(--danger); }
-.status-pill[data-state="timed_out"] { background: var(--warning-soft); color: var(--warning); }
+.status-pill[data-state="timed_out"] { background: var(--danger-soft); color: var(--danger); }
 .status-pill[data-state="cancelled"] { background: var(--line); color: var(--muted); }
 .status-pill[data-state="partial"] { background: var(--warning-soft); color: var(--warning); }
 
@@ -1347,6 +1361,13 @@ kbd {
 
 .mono { font-family: var(--font-mono); font-size: 0.9rem; overflow-wrap: anywhere; }
 .muted { color: var(--muted); }
+
+.error-placeholder {
+  color: var(--danger-soft);
+  font-style: italic;
+  border-left: 3px solid var(--danger);
+  padding-left: 8px;
+}
 
 /* ----- Focus ---------------------------------------------------------- */
 

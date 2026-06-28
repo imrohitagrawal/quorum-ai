@@ -47,7 +47,7 @@ def _seed() -> None:
         models = [
             ("openai/gpt-4o-mini", "openrouter_search"),
             ("anthropic/claude-3-haiku", "openrouter_search"),
-            ("google/gemini-2.0-flash-lite", "openrouter_search"),
+            ("google/gemini-2.5-flash-lite", "openrouter_search"),
             ("deepseek/deepseek-chat-v3.1", "openrouter_search"),
         ]
         # Force one model to fall back 30% of the time so the audit has

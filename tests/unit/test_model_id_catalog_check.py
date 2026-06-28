@@ -97,7 +97,7 @@ def test_default_model_ids_pass_validation_when_catalog_lacks_them() -> None:
     """Workstream 1: the curated cheap-tier defaults are whitelisted
     in the C11 catalog cross-check. If the live catalog has not yet
     listed ``anthropic/claude-3-haiku`` or
-    ``google/gemini-2.0-flash-lite`` (a common state right after the
+    ``google/gemini-2.5-flash-lite`` (a common state right after the
     upstream catalog has been slow to propagate new cheap variants),
     ``validate_model_slots`` must still accept the curated defaults
     so the demo does not break on the validator path.

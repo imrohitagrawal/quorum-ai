@@ -121,7 +121,7 @@ def test_parse_catalog_response_handles_empty_or_wrong_shape() -> None:
     [
         ("openai/gpt-4o-mini", "openai", "gpt-4o-mini"),
         ("anthropic/claude-haiku-4.5", "anthropic", "claude-haiku-4.5"),
-        ("google/gemini-2.0-flash-lite", "google", "gemini-2.0-flash-lite"),
+        ("google/gemini-2.5-flash-lite", "google", "gemini-2.5-flash-lite"),
         ("deepseek/deepseek-chat-v3.1", "deepseek", "deepseek-chat-v3.1"),
         ("no-slash", "", "no-slash"),
     ],
@@ -205,7 +205,7 @@ def test_cheapest_per_vendor_picks_lowest_priced_entry() -> None:
         _model(id="openai/gpt-3.5-turbo", prompt="0.00005", completion="0.0001"),
         _model(id="anthropic/claude-3-haiku", prompt="0.00025", completion="0.00125"),
         _model(id="anthropic/claude-haiku-4.5", prompt="0.001", completion="0.005"),
-        _model(id="google/gemini-2.0-flash-lite", prompt="0.000075", completion="0.0003"),
+        _model(id="google/gemini-2.5-flash-lite", prompt="0.000075", completion="0.0003"),
         _model(id="google/gemini-2.5-flash", prompt="0.0003", completion="0.0012"),
         _model(id="deepseek/deepseek-chat-v3.1", prompt="0.00014", completion="0.00028"),
     )))
@@ -213,7 +213,7 @@ def test_cheapest_per_vendor_picks_lowest_priced_entry() -> None:
     assert cheapest == {
         "openai": "openai/gpt-3.5-turbo",
         "anthropic": "anthropic/claude-3-haiku",
-        "google": "google/gemini-2.0-flash-lite",
+        "google": "google/gemini-2.5-flash-lite",
         "deepseek": "deepseek/deepseek-chat-v3.1",
     }
 
@@ -233,7 +233,7 @@ def test_cheapest_per_vendor_skips_vendors_with_no_candidates() -> None:
 
 def test_cheapest_per_vendor_respects_input_vendor_order() -> None:
     entries = _parse_catalog_response(json.loads(_payload(
-        _model(id="google/gemini-2.0-flash-lite", prompt="0.000075", completion="0.0003"),
+        _model(id="google/gemini-2.5-flash-lite", prompt="0.000075", completion="0.0003"),
         _model(id="openai/gpt-4o-mini", prompt="0.00015", completion="0.0006"),
     )))
     # Reverse the input order; result preserves it.
