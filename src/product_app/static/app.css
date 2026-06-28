@@ -774,6 +774,7 @@ select {
   align-items: center;
   justify-content: center;
   gap: var(--space-2);
+  min-width: 44px;
   min-height: 48px;
   padding: 0 var(--space-5);
   border: 1px solid transparent;
@@ -826,7 +827,7 @@ select {
   outline-offset: 2px;
 }
 
-.button-compact { min-height: 36px; padding: 0 var(--space-4); font-size: 0.85rem; }
+.button-compact { min-width: 44px; min-height: 36px; padding: 0 var(--space-4); font-size: 0.85rem; }
 
 .button-spinner {
   display: none;

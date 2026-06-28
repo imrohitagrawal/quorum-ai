@@ -41,8 +41,10 @@ test.describe("Network Mocking", () => {
             cost_estimate: {
               estimated_cost_usd: 0.025,
               breakdown: [
-                { model: "claude-3-5-sonnet", cost: 0.015 },
-                { model: "gpt-4o", cost: 0.01 },
+                { model: "openai/gpt-4o-mini", cost: 0.009 },
+                { model: "anthropic/claude-3-haiku", cost: 0.008 },
+                { model: "google/gemini-2.5-flash-lite", cost: 0.004 },
+                { model: "deepseek/deepseek-chat-v3.1", cost: 0.004 },
               ],
               threshold_action: "proceed",
             },
@@ -52,7 +54,7 @@ test.describe("Network Mocking", () => {
 
       await workspacePage.askQuestion("What is AI?");
       await workspacePage.estimateCostButton.click();
-      await page.waitForTimeout;
+      await page.waitForTimeout(1000);
 
       const costMessage = await page.locator("#cost-confirmation-message").textContent();
       expect(costMessage).toContain("$");
