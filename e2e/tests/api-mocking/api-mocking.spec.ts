@@ -169,7 +169,7 @@ test.describe("Network Mocking", () => {
     });
 
     test("should verify request payload structure", async ({ page }) => {
-      let capturedBody: any = null;
+      let capturedBody: string | null = null;
 
       await page.route("**/v1/query-runs/estimate", async (route) => {
         capturedBody = route.request().postData();
@@ -185,6 +185,9 @@ test.describe("Network Mocking", () => {
         const body = JSON.parse(capturedBody);
         // Should have query_text field
         expect(body).toHaveProperty("query_text");
+      } else {
+        // If no body was captured, the test setup failed
+        expect(capturedBody).not.toBeNull();
       }
     });
   });
