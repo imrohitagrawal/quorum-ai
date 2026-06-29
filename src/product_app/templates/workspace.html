@@ -14,6 +14,11 @@
       :focus-visible { outline: 3px solid var(--focus-ring, #4a6cf7); outline-offset: 3px; }
       :focus { outline: 3px solid var(--focus-ring, #4a6cf7); outline-offset: 3px; }
       .button, button, .toggle, .info-icon { min-width: 44px; min-height: 44px; }
+
+      /* Critical above-the-fold styles */
+      body { font-family: 'Manrope', system-ui, sans-serif; font-size: 16px; line-height: 1.5; background: #fffaf5; color: #10161f; }
+      .panel { background: rgba(255, 255, 255, 0.72); backdrop-filter: blur(24px); }
+      .topbar { background: rgba(255, 255, 255, 0.88); backdrop-filter: blur(24px); }
     </style>
   </head>
   <body>
@@ -22,7 +27,7 @@
     <main id="main-content" class="shell" tabindex="-1">
       <header class="topbar">
         <div class="brand">
-          <div class="logo" aria-hidden="true">Q</div>
+          <div class="logo" aria-label="Quorum AI logo" role="img">Q</div>
           <div class="brand-copy">
             <h1>Quorum AI</h1>
             <p class="brand-lede">Your question. Four expert perspectives. One synthesized truth.</p>

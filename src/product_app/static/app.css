@@ -127,6 +127,10 @@ html[data-theme="dark"] {
 
 html, body { margin: 0; padding: 0; }
 
+html {
+  -webkit-text-size-adjust: 100%;
+}
+
 body {
   min-height: 100vh;
   background: var(--bg);
@@ -790,7 +794,7 @@ select {
 
 .button:hover:not(:disabled) { transform: translateY(-1px); }
 .button:active:not(:disabled) { transform: translateY(0); }
-.button:disabled { cursor: not-allowed; opacity: 0.6; }
+.button:disabled { cursor: not-allowed; opacity: 0.5; background: var(--line) !important; border-color: var(--line) !important; }
 
 .button-primary {
   background: var(--accent);
@@ -827,7 +831,7 @@ select {
   outline-offset: 2px;
 }
 
-.button-compact { min-width: 44px; min-height: 36px; padding: 0 var(--space-4); font-size: 0.85rem; }
+.button-compact { min-width: 44px; min-height: 44px; padding: 0 var(--space-4); font-size: 0.85rem; }
 
 .button-spinner {
   display: none;
@@ -1374,7 +1378,7 @@ kbd {
 :focus-visible {
   outline: 3px solid var(--focus-ring);
   outline-offset: 3px;
-  border-radius: var(--radius-xs);
+  /* Removed border-radius for consistent cross-browser focus rings */
 }
 
 main:focus { outline: none; }
