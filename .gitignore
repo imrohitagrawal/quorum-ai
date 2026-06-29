@@ -16,7 +16,6 @@ build/
 *.egg-info/
 
 # Agent / IDE / working-notes state (local only)
-.agents/
 .codex/
 .claude/
 .vscode/
