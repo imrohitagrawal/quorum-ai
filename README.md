@@ -66,6 +66,22 @@ The `make test` target is also wired into GitHub Actions (see `.github/workflows
 
 ---
 
+## UI/UX Documentation
+
+Comprehensive UI/UX audit and improvement documentation:
+
+- **[UI_UX_Audit_Report.md](UI_UX_Audit_Report.md)** — Complete audit findings with 53 actionable items across 10 priority categories (accessibility, performance, typography, color, forms, animation, navigation, and more). Includes test cases derived from audit findings and success metrics for tracking improvements.
+
+- **[UI_Fix_Plan.md](UI_Fix_Plan.md)** — Detailed 4-phase implementation plan for systematic UI improvements:
+  - Phase 1: Critical Issues (accessibility & performance)
+  - Phase 2: High Priority (layout & typography)
+  - Phase 3: Medium Priority (color & forms)
+  - Phase 4: Low Priority (polish & structure)
+
+These documents enable systematic UI improvements with clear prioritization, ownership, and tracking.
+
+---
+
 ## Architecture (one-screen view)
 
 The full architecture document is at [docs/20-architecture.md](docs/20-architecture.md) with C4 diagrams in [diagrams/](diagrams/). The high-level shape:
