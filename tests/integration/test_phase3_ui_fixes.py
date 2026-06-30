@@ -19,10 +19,12 @@ CSS tokens:
     ``var(--warning-soft)``.
 
 Form validation:
-  • The textarea receives ``aria-invalid="true"`` when a non-empty query
-    is under 12 characters (too short), and ``aria-invalid="false"`` otherwise.
+  • The textarea receives ``aria-invalid="true"`` when query length < 12 chars
+    (including 0 = empty/required), and ``aria-invalid="false"`` otherwise.
   • The CSS rule ``textarea[aria-invalid="true"]`` applies a red border and
     danger-soft box shadow — visible feedback without a page reload.
+  • ``updateQueryValidation()`` is called at boot so pre-filled forms are
+    validated immediately.
 """
 from __future__ import annotations
 
@@ -44,50 +46,65 @@ _REQUIRED_TOKENS = [
     "--success",
     "--success-soft",
     "--warning",
-    "--warning-ink",   # Phase 3 new
+    "--warning-ink",
     "--warning-soft",
     "--danger",
     "--danger-soft",
     "--info",
     "--info-soft",
-    "--debate-4",      # Phase 3 new — replaces raw #6b3fa0 / #a479e3
-    "--focus-ring",     # Phase 3 — darkened to meet WCAG AA
+    "--debate-4",
+    "--focus-ring",
     # Accent
     "--accent",
     "--accent-strong",
-    "--accent-ink",    # Phase 3 — was hardcoded #10161f in .logo
+    "--accent-ink",
 ]
 
-# These raw hex values must NOT appear as dual-value var() fallbacks like
-# ``color: var(--foo, #deadbeef)`` — they must use the token alone.
+# These raw hex values must NOT appear as dual-value var() fallbacks.
 _FORBIDDEN_FALLBACK_HEXES = [
-    "#4a6cf7",   # old --focus-ring fallback in .meta-value-copy:focus-visible
-    "#16a34a",   # old --success fallback in [data-copied] states
-    "#6b7280",   # old --muted fallback in .cost-secondary
-    "#b45309",   # old --warning fallback in .stage-diagnostics summary
+    "#4a6cf7",
+    "#16a34a",
+    "#6b7280",
+    "#b45309",
 ]
 
-# Raw hex values that must NOT appear in component rules (they belong in
-# :root token definitions only, or in cases where no token applies).
+# Raw hex values that must NOT appear in component rules.
 _FORBIDDEN_COMPONENT_HEXES = {
-    # key = CSS class / rule context
-    # value = hex that must not appear in that context
-    ".logo": "#fffdf9",                    # use var(--accent-ink)
-    ".callout-demo-mode": "#fff7e6",       # use var(--warning-soft)
-    ".callout-demo-mode .callout-icon": "#1a1300",  # intentional — --warning-ink equiv
+    ".logo": "#fffdf9",
+    ".callout-demo-mode": "#fff7e6",
 }
 
 
+# ---------------------------------------------------------------------------
+# Helpers
+# ---------------------------------------------------------------------------
+
+def _extract_rule(css: str, selector: str) -> str:
+    """Extract the full {}-block for ``selector`` using brace-counting.
+
+    Uses character-level depth counting so nested {} (e.g. in :root {}) do
+    not cause early termination.
+    """
+    marker = selector
+    start = css.index(marker) + len(marker)
+    depth = 0
+    for i, ch in enumerate(css[start:], start):
+        if ch == "{":
+            depth += 1
+        elif ch == "}":
+            depth -= 1
+            if depth == 0:
+                return css[start:i]
+    return ""
+
+
+# ---------------------------------------------------------------------------
+# Fixtures
+# ---------------------------------------------------------------------------
+
 @pytest.fixture
 def css_text() -> str:
-    """Load app.css once per session.
-
-    pytest rootdir = project root, so ``__file__`` resolves to
-    ``.../tests/integration/test_phase3_ui_fixes.py`` as an absolute path.
-    parents[2] = project root.
-    """
-    from pathlib import Path
-
+    """Load app.css once per session."""
     css_path = (
         Path(__file__).resolve().parents[2]
         / "src/product_app/static/app.css"
@@ -107,13 +124,12 @@ def client() -> TestClient:
 def test_all_required_tokens_defined_in_light_scope(css_text: str) -> None:
     """Every Phase 3 token appears in :root {} (light mode)."""
     for token in _REQUIRED_TOKENS:
-        pattern = rf"^\s*--[\w-]+:"   # rough token def
         assert token in css_text, f"Token {token} not found in app.css"
 
 
 def test_all_required_tokens_defined_in_dark_scope(css_text: str) -> None:
     """Every Phase 3 token appears in html[data-theme] (dark mode)."""
-    dark_block = css_text.split("html[data-theme=\"dark\"]")[1].split("}")[0]
+    dark_block = css_text.split('html[data-theme="dark"]')[1].split("}")[0]
     for token in _REQUIRED_TOKENS:
         assert token in dark_block, f"Token {token} missing from dark mode block"
 
@@ -124,7 +140,6 @@ def test_all_required_tokens_defined_in_dark_scope(css_text: str) -> None:
 
 def test_no_var_fallback_hexes(css_text: str) -> None:
     """No dual-value var() fallbacks of the form var(--foo, #hex)."""
-    import re
     bad = re.findall(r'var\(--[\w-]+,\s*#[0-9a-fA-F]{3,8}\)', css_text)
     assert not bad, f"Found dual-value var() fallbacks: {bad}"
 
@@ -149,20 +164,13 @@ def test_callout_demo_mode_uses_tokens_not_raw_hex(css_text: str) -> None:
 
 
 def test_round4_uses_debate4_token(css_text: str) -> None:
-    """.round-card[data-round="4"] uses var(--debate-4), not a raw hex.
-
-    The selector is a compound rule (``.round-card[data-round="4"]::before``),
-    so we check the raw CSS for the presence of both the raw hex ban and the
-    token usage rather than trying to extract a sub-rule body.
-    """
+    """.round-card[data-round="4"] uses var(--debate-4), not a raw hex."""
     assert '.round-card[data-round="4"]::before' in css_text, (
         ".round-card[data-round='4']::before rule is missing"
     )
-    # Must use var(--debate-4), not a raw hex
     assert 'var(--debate-4)' in css_text, (
         "var(--debate-4) token missing — round 4 must use it instead of a raw hex"
     )
-    # The specific line should reference the token
     assert '.round-card[data-round="4"]::before { background: var(--debate-4); }' in css_text
 
 
@@ -198,7 +206,8 @@ def test_textarea_has_maxlength_attribute(client: TestClient) -> None:
 
 
 def test_app_js_sets_aria_invalid_on_short_query() -> None:
-    """app.js calls setAttribute('aria-invalid', ...) on the textarea."""
+    """app.js calls setAttribute('aria-invalid', ...) on the textarea and calls
+    updateQueryValidation at boot so pre-filled forms have correct state."""
     from pathlib import Path
 
     js_path = (
@@ -210,72 +219,21 @@ def test_app_js_sets_aria_invalid_on_short_query() -> None:
         "app.js must call setAttribute('aria-invalid', ...) on queryTextarea"
     )
     assert "aria-invalid" in js, "aria-invalid attribute logic missing from app.js"
+    assert "updateQueryValidation()" in js, (
+        "updateQueryValidation() must be called at boot, not only on the input event"
+    )
 
 
 def test_css_applies_invalid_state_to_textarea(css_text: str) -> None:
     """./app.css has a rule for textarea[aria-invalid="true"].
 
-    The rule is a compound selector (``textarea:invalid,
-    textarea[aria-invalid="true"]``), so we check the actual rule lines
-    in the CSS rather than extracting a sub-rule body.
+    Uses a character-level brace-counting scan so nested {} (e.g. in
+    :root {}) do not cause early termination.
     """
-    # The selector appears in the CSS
     assert 'textarea[aria-invalid="true"]' in css_text, (
         "Missing CSS rule: textarea[aria-invalid='true']"
     )
-    # The border-color uses var(--danger) — find the line and confirm
-    lines = css_text.splitlines()
-    found = False
-    for i, line in enumerate(lines):
-        if 'textarea[aria-invalid="true"]' in line:
-            # Check the block contains the border-color declaration
-            block = "\n".join(lines[i : i + 5])
-            if "var(--danger)" in block:
-                found = True
-                break
-    assert found, (
-        "textarea[aria-invalid='true'] rule found but does not use var(--danger) border-color"
+    block = _extract_rule(css_text, 'textarea[aria-invalid="true"]')
+    assert "var(--danger)" in block, (
+        "textarea[aria-invalid='true'] rule uses var(--danger) for border-color"
     )
-
-
-# ---------------------------------------------------------------------------
-# Helpers
-# ---------------------------------------------------------------------------
-
-def _css_escape(s: str) -> str:
-    r"""Escape only the regex metacharacters that also appear in CSS selectors.
-
-    ``re.escape()`` would also escape ``[`` and ``]`` (CSS attribute-selector
-    brackets), turning them into ``\[`` and ``\]`` which don't match the literal
-    ``[`` / ``]`` in the CSS source. We escape only the truly problematic set:
-    ``\\ . ^ $ * + ? { } | ( )``.
-    """
-    return re.sub(r'([\\.^$*+?{}|()])', r'\\\1', s)
-
-
-def _extract_rule(css: str, selector: str) -> str:
-    """Return the {...} block body for ``selector`` from flattened CSS.
-
-    Handles selectors that contain pseudo-elements (::before, ::after).
-    Returns the text between the outermost { and }, stripped of both.
-    Returns "" if the selector is not found.
-    """
-    escaped = _css_escape(selector)
-    # Match selector + opening brace
-    pattern = rf"{escaped}\s*\{{"
-    m = re.search(pattern, css)
-    if not m:
-        return ""
-    start = m.end()
-    depth = 1
-    i = start
-    while i < len(css) and depth > 0:
-        ch = css[i]
-        if ch == "{":
-            depth += 1
-        elif ch == "}":
-            depth -= 1
-        i += 1
-    if depth != 0:
-        return ""
-    return css[start : i - 1]

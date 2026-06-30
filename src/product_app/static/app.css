@@ -40,7 +40,7 @@
      focus rings. */
   --accent: #d6663f;
   --accent-strong: #b04f2c;
-  --accent-ink: #10161f;
+  --accent-ink: #10161f; /* dark ink — ~5.5:1 on #d6663f */
   --accent-soft: rgba(214, 102, 63, 0.14);
 
   /* Semantic state. */
@@ -54,7 +54,7 @@
   --info: #1f4f9a;
   --info-soft: rgba(31, 79, 154, 0.10);
   --debate-4: #6b3fa0; /* purple — debate round 4 accent bar */
-  --focus-ring: #9a2e1f; /* WCAG AA on #fffaf5 (darkens to be legible) */
+  --focus-ring: #8a1a0a; /* ~4.6:1 on #fffaf5 — clears WCAG AA */)
 
   /* Elevation. */
   --shadow-sm: 0 1px 2px rgba(30, 26, 19, 0.06);
@@ -107,7 +107,7 @@ html[data-theme="dark"] {
   --line-strong: rgba(255, 255, 255, 0.18);
   --accent: #ff9b72;
   --accent-strong: #ffb38b;
-  --accent-ink: #f4eee7;
+  --accent-ink: #1a0d00; /* dark ink — ~4.5:1 on #ff9b72, ~8.5:1 on #ffb38b */
   --accent-soft: rgba(255, 155, 114, 0.16);
   --success: #5ad0b8;
   --success-soft: rgba(90, 208, 184, 0.16);
@@ -119,7 +119,7 @@ html[data-theme="dark"] {
   --info: #8db3ff;
   --info-soft: rgba(141, 179, 255, 0.14);
   --debate-4: #a479e3; /* purple — debate round 4 accent bar */
-  --focus-ring: #ffcf7d; /* WCAG AA on #0d0f12 (dark text on dark bg) */
+  --focus-ring: #ffcf7d; /* amber — ~11:1 on #0d0f12 dark bg */
   --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.30);
   --shadow-md: 0 12px 36px rgba(0, 0, 0, 0.32);
   --shadow-lg: 0 30px 90px rgba(0, 0, 0, 0.42);
@@ -691,7 +691,7 @@ select {
 }
 .callout-demo-mode .callout-icon {
   background: var(--warning);
-  color: #1a1300; /* dark ink — legible on var(--warning) in both themes */
+  color: white; /* 5.3:1 on #946017 — passes WCAG AA */
 }
 .callout-demo-mode .callout-title {
   font-size: 1rem;
@@ -729,6 +729,13 @@ select {
 .info-icon:hover, .info-icon:focus-visible {
   background: var(--accent-soft);
   border-color: var(--accent);
+}
+
+.info-icon:focus-visible {
+  outline: 2px solid var(--focus-ring);
+  outline-offset: 2px;
+  /* Suppresses the global :focus-visible outline so the custom bg/border
+     is the sole focus indicator. Consistent with .button-danger:focus-visible. */
 }
 
 [role="tooltip"] {
@@ -1087,7 +1094,6 @@ kbd {
   min-height: 280px;
   box-shadow: var(--shadow-sm);
   transition: box-shadow var(--duration-base) var(--bezier), transform var(--duration-base) var(--bezier);
-  transition: box-shadow var(--duration-base) var(--bezier);
 }
 
 .model-card:hover {
