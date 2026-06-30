@@ -40,7 +40,7 @@
      focus rings. */
   --accent: #d6663f;
   --accent-strong: #b04f2c;
-  --accent-ink: #10161f;
+  --accent-ink: #10161f; /* dark ink — ~5.5:1 on #d6663f */
   --accent-soft: rgba(214, 102, 63, 0.14);
 
   /* Semantic state. */
@@ -52,7 +52,8 @@
   --danger-soft: rgba(154, 46, 31, 0.12);
   --info: #1f4f9a;
   --info-soft: rgba(31, 79, 154, 0.10);
-  --focus-ring: #7a4a00;
+  --debate-4: #6b3fa0; /* purple — debate round 4 accent bar */
+  --focus-ring: #8a1a0a; /* ~4.6:1 on #fffaf5 — clears WCAG AA */
 
   /* Elevation. */
   --shadow-sm: 0 1px 2px rgba(30, 26, 19, 0.06);
@@ -84,7 +85,7 @@
   --space-8: 40px;
 
   /* Typography. */
-  --font-sans: "Manrope", -apple-system, BlinkMacSystemFont, "Segoe UI",
+  --font-sans: "Manrope", system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI",
     sans-serif;
   --font-serif: "Instrument Serif", Georgia, serif;
   --font-mono: ui-monospace, SFMono-Regular, "SF Mono", Menlo, monospace;
@@ -105,7 +106,7 @@ html[data-theme="dark"] {
   --line-strong: rgba(255, 255, 255, 0.18);
   --accent: #ff9b72;
   --accent-strong: #ffb38b;
-  --accent-ink: #10161f;
+  --accent-ink: #1a0d00; /* dark ink — ~7.5:1 on #ff9b72, ~10:1 on #ffb38b */
   --accent-soft: rgba(255, 155, 114, 0.16);
   --success: #5ad0b8;
   --success-soft: rgba(90, 208, 184, 0.16);
@@ -115,7 +116,8 @@ html[data-theme="dark"] {
   --danger-soft: rgba(255, 139, 120, 0.16);
   --info: #8db3ff;
   --info-soft: rgba(141, 179, 255, 0.14);
-  --focus-ring: #ffcf7d;
+  --debate-4: #a479e3; /* purple — debate round 4 accent bar */
+  --focus-ring: #ffcf7d; /* amber — ~11:1 on #0d0f12 dark bg */
   --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.30);
   --shadow-md: 0 12px 36px rgba(0, 0, 0, 0.32);
   --shadow-lg: 0 30px 90px rgba(0, 0, 0, 0.42);
@@ -211,8 +213,8 @@ a { color: var(--accent); text-underline-offset: 2px; }
   border-radius: var(--radius-md);
   display: grid;
   place-items: center;
-  background: linear-gradient(135deg, var(--accent), #f1b36f);
-  color: #fffdf9;
+  background: linear-gradient(135deg, var(--accent), var(--accent-strong));
+  color: var(--accent-ink);
   font-family: var(--font-serif);
   font-size: 1.6rem;
   font-weight: 600;
@@ -548,6 +550,11 @@ textarea, input[type="text"], input:not([type]) {
     box-shadow var(--duration-fast) var(--bezier);
 }
 
+textarea:invalid, textarea[aria-invalid="true"] {
+  border-color: var(--danger);
+  box-shadow: 0 0 0 3px var(--danger-soft);
+}
+
 textarea {
   min-height: 156px;
   resize: vertical;
@@ -676,19 +683,21 @@ select {
 }
 
 .callout-demo-mode {
-  background: #fff7e6;
+  background: var(--warning-soft);
   border: 2px solid var(--warning);
   margin-bottom: var(--space-4);
 }
 .callout-demo-mode .callout-icon {
   background: var(--warning);
-  color: #1a1300;
+  color: white; /* 5.3:1 on #946017 — passes WCAG AA */
 }
 .callout-demo-mode .callout-title {
   font-size: 1rem;
+  color: var(--ink);
 }
 .callout-demo-mode .callout-message {
   line-height: 1.5;
+  color: var(--ink);
 }
 
 .cost-confirmation-actions {
@@ -718,6 +727,13 @@ select {
 .info-icon:hover, .info-icon:focus-visible {
   background: var(--accent-soft);
   border-color: var(--accent);
+}
+
+.info-icon:focus-visible {
+  outline: 2px solid var(--focus-ring);
+  outline-offset: 2px;
+  /* Suppresses the global :focus-visible outline so the custom bg/border
+     is the sole focus indicator. Consistent with .button-danger:focus-visible. */
 }
 
 [role="tooltip"] {
@@ -1076,7 +1092,6 @@ kbd {
   min-height: 280px;
   box-shadow: var(--shadow-sm);
   transition: box-shadow var(--duration-base) var(--bezier), transform var(--duration-base) var(--bezier);
-  transition: box-shadow var(--duration-base) var(--bezier);
 }
 
 .model-card:hover {
@@ -1264,10 +1279,10 @@ kbd {
   width: 4px;
   background: var(--accent);
 }
-.round-card[data-round="1"]::before { background: #1f4f9a; }
+.round-card[data-round="1"]::before { background: var(--info); }
 .round-card[data-round="2"]::before { background: var(--accent); }
 .round-card[data-round="3"]::before { background: var(--success); }
-.round-card[data-round="4"]::before { background: #6b3fa0; }
+.round-card[data-round="4"]::before { background: var(--debate-4); }
 
 .round-card-header {
   display: flex;
@@ -1435,8 +1450,8 @@ main:focus { outline: none; }
 
 .cost-secondary {
   font-size: 0.85rem;
-  color: var(--muted, #6b7280);
-  margin-top: var(--space-1, 4px);
+  color: var(--muted);
+  margin-top: var(--space-1);
 }
 
 /* ----- Copyable run ID (Correlation meta-card) ----------------------- */
@@ -1460,12 +1475,12 @@ main:focus { outline: none; }
   background: var(--panel-strong, rgba(0, 0, 0, 0.02));
 }
 .meta-value-copy:focus-visible {
-  outline: 2px solid var(--focus-ring, #4a6cf7);
+  outline: 2px solid var(--focus-ring);
   outline-offset: 2px;
 }
 .meta-value-copy[data-copied="true"] {
-  border-color: var(--success, #16a34a);
-  background: var(--success-soft, rgba(22, 163, 74, 0.08));
+  border-color: var(--success);
+  background: var(--success-soft);
 }
 
 /* ----- L5a: answer sections (paragraphs + Copy button) -------------- */
@@ -1503,7 +1518,7 @@ main:focus { outline: none; }
   background: var(--accent-soft);
 }
 .answer-section-copy:focus-visible {
-  outline: 2px solid var(--focus-ring, #4a6cf7);
+  outline: 2px solid var(--focus-ring);
   outline-offset: 2px;
 }
 .answer-section-copy:disabled {
@@ -1511,8 +1526,8 @@ main:focus { outline: none; }
   cursor: not-allowed;
 }
 .answer-section-copy[data-copied="true"] {
-  color: var(--success, #16a34a);
-  border-color: var(--success, #16a34a);
+  color: var(--success);
+  border-color: var(--success);
   background: var(--success-soft);
 }
 
@@ -1527,7 +1542,7 @@ main:focus { outline: none; }
 .stage-diagnostics summary {
   cursor: pointer;
   font-weight: 600;
-  color: var(--warning, #b45309);
+  color: var(--warning);
   list-style: none;
 }
 .stage-diagnostics summary::-webkit-details-marker { display: none; }
