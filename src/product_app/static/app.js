@@ -1657,6 +1657,8 @@
   function updateQueryValidation() {
     const length = queryTextarea.value.length;
     charCount.textContent = `${length.toLocaleString()} chars`;
+    const isInvalid = length > 0 && length < 12;
+    queryTextarea.setAttribute("aria-invalid", isInvalid ? "true" : "false");
     if (length === 0) {
       validationHint.textContent = "";
       charCount.dataset.warning = "false";
