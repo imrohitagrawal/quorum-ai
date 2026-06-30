@@ -1045,8 +1045,8 @@
         }
       } else {
         // Check if run failed - show error state instead of pending
-        const statusValue = result?.status;
-        if (statusValue && ['failed', 'timed_out', 'cancelled'].includes(statusValue)) {
+        const runStatusValue = result?.status;
+        if (runStatusValue && ['failed', 'timed_out', 'cancelled'].includes(runStatusValue)) {
           const errorPlaceholder = document.createElement("p");
           errorPlaceholder.className = "error-placeholder";
           errorPlaceholder.textContent = "Models did not respond — see error details above.";
@@ -1066,7 +1066,7 @@
       // We do NOT render this for pending slots (notice would just be
       // stale copy) or for slots whose ``answer_text`` is itself a
       // placeholder string.
-      if (slot && slot.provider_notice && statusValue !== "pending") {
+      if (slot && slot.provider_notice && runStatusValue !== "pending") {
         const notice = document.createElement("p");
         notice.className = "model-card-notice";
         notice.textContent = slot.provider_notice;
@@ -1657,9 +1657,12 @@
   function updateQueryValidation() {
     const length = queryTextarea.value.length;
     charCount.textContent = `${length.toLocaleString()} chars`;
+    // Empty (0) is invalid (required field). 1–11 chars is too short.
+    const isInvalid = length < 12;
+    queryTextarea.setAttribute("aria-invalid", isInvalid ? "true" : "false");
     if (length === 0) {
-      validationHint.textContent = "";
-      charCount.dataset.warning = "false";
+      validationHint.textContent = "Question is required.";
+      charCount.dataset.warning = "true";
     } else if (length < 12) {
       validationHint.textContent = "A few more characters will help the models answer well.";
       charCount.dataset.warning = "true";
