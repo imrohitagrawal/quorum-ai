@@ -62,6 +62,27 @@
         <button class="status-banner-dismiss" type="button" id="drift-region-dismiss" aria-label="Dismiss drift warning">&times;</button>
       </section>
 
+      <nav class="workflow-progress" aria-label="Workflow progress">
+        <ol class="workflow-steps">
+          <li class="workflow-step" data-step="question">
+            <span class="workflow-step-number" aria-hidden="true">1</span>
+            <span class="workflow-step-label">Question</span>
+          </li>
+          <li class="workflow-step" data-step="models">
+            <span class="workflow-step-number" aria-hidden="true">2</span>
+            <span class="workflow-step-label">Models</span>
+          </li>
+          <li class="workflow-step" data-step="debate">
+            <span class="workflow-step-number" aria-hidden="true">3</span>
+            <span class="workflow-step-label">Debate</span>
+          </li>
+          <li class="workflow-step" data-step="synthesis">
+            <span class="workflow-step-number" aria-hidden="true">4</span>
+            <span class="workflow-step-label">Synthesis</span>
+          </li>
+        </ol>
+      </nav>
+
       <div class="layout">
         <section class="panel" aria-labelledby="composer-heading">
           <h2 id="composer-heading">Workspace</h2>
@@ -89,6 +110,7 @@
                 aria-describedby="query-validation-hint"
                 maxlength="20000"
               ></textarea>
+              <div id="query-error" class="field-error" hidden aria-live="polite"></div>
             </div>
             <fieldset class="field-group">
               <legend>Model slots</legend>

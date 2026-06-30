@@ -63,6 +63,7 @@
   const queryTextarea = el("query-text");
   const charCount = el("query-char-count");
   const validationHint = el("query-validation-hint");
+  const queryError = el("query-error");
   const costConfirmation = el("cost-confirmation");
   const costConfirmationMessage = el("cost-confirmation-message");
   const proceedButton = el("proceed-run");
@@ -76,6 +77,7 @@
   const connectionPill = el("connection-pill");
   const connectionPillText = el("connection-pill-text");
   const statusMeta = el("status-meta");
+  const workflowSteps = qsa(".workflow-step");
   const demoModeBanner = el("demo-mode-banner");
   const demoModeTarget = demoModeBanner ? demoModeBanner.querySelector("[data-demo-mode-target]") : null;
   const infoTooltip = el("info-tooltip");
@@ -819,6 +821,7 @@
       empty.className = "muted";
       empty.textContent = "No active run.";
       progressList.replaceChildren(empty);
+      updateWorkflowProgress(null);
       return;
     }
     const cards = progress.stages.map((stage) => {
@@ -844,6 +847,40 @@
       return card;
     });
     progressList.replaceChildren(...cards);
+
+    // Phase 4: Update workflow progress indicator
+    const runningStage = progress.stages.find(s => s.state === "running");
+    if (runningStage) {
+      updateWorkflowProgress(mapStageToStep(runningStage.stage));
+    }
+  }
+
+  function mapStageToStep(stageName) {
+    if (stageName === "orchestrate_models" || stageName.startsWith("model_")) return "models";
+    if (stageName.startsWith("debate") || stageName === "critique_round_1" || stageName === "critique_round_2") return "debate";
+    if (stageName === "synthesize" || stageName === "final_synthesis") return "synthesis";
+    return "question";
+  }
+
+  // Phase 4: Workflow progress indicator
+  function updateWorkflowProgress(currentStage) {
+    if (!workflowSteps.length) return;
+    // Map stages: question -> models -> debate -> synthesis
+    const stageOrder = ["question", "models", "debate", "synthesis"];
+    const currentIndex = stageOrder.indexOf(currentStage);
+
+    workflowSteps.forEach((step, index) => {
+      const stepName = step.dataset.step;
+      const stepIndex = stageOrder.indexOf(stepName);
+
+      if (stepIndex < currentIndex) {
+        step.dataset.state = "completed";
+      } else if (stepIndex === currentIndex) {
+        step.dataset.state = "active";
+      } else {
+        step.dataset.state = "";
+      }
+    });
   }
 
   function createSafeLink(title, url) {
@@ -1663,18 +1700,28 @@
     if (length === 0) {
       validationHint.textContent = "Question is required.";
       charCount.dataset.warning = "true";
+      // Phase 4: Show inline field error for empty submission
+      if (queryError) {
+        queryError.textContent = "Please enter a question before running.";
+        queryError.hidden = false;
+      }
     } else if (length < 12) {
       validationHint.textContent = "A few more characters will help the models answer well.";
       charCount.dataset.warning = "true";
+      // Hide inline error for short-but-not-empty queries
+      if (queryError) queryError.hidden = true;
     } else if (length > 8000) {
       validationHint.textContent = "Long queries are blocked by the cost guardrail. Try to shorten this.";
       charCount.dataset.warning = "true";
+      if (queryError) queryError.hidden = true;
     } else if (length > 5000) {
       validationHint.textContent = "This length is in the upper-cost band; confirmation may be required.";
       charCount.dataset.warning = "true";
+      if (queryError) queryError.hidden = true;
     } else {
       validationHint.textContent = "";
       charCount.dataset.warning = "false";
+      if (queryError) queryError.hidden = true;
     }
   }
 

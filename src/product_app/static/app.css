@@ -5,6 +5,37 @@
  * JavaScript (app.js) use. The file is hand-written, has no build
  * step, and is loaded as ``app.css`` from the template.
  *
+ * COMPONENT ARCHITECTURE:
+ *
+ *   Layout Components:
+ *     .shell        - Main container with max-width constraint
+ *     .layout       - Two-column grid (workspace + controls)
+ *     .stack       - Vertical spacing container (gap-based)
+ *     .inline       - Horizontal flex container with wrap
+ *
+ *   Panel Components:
+ *     .panel        - Glass-morphism card with translucent background
+ *
+ *   Form Components:
+ *     .field        - Label + input grouping
+ *     .field-group  - Fieldset grouping with border
+ *     .field-label-row - Flex row for label + metadata
+ *     .field-error  - Inline error message styling
+ *
+ *   Button Components:
+ *     .button       - Base button with variants
+ *     .button-primary, .button-secondary, .button-ghost, .button-danger
+ *
+ *   Status Components:
+ *     .status-pill  - Inline status indicator
+ *     .status-banner - Full-width alert/warning banner
+ *     .callout      - Icon + body structured message
+ *
+ *   Data Display:
+ *     .meta-card    - Label + value pair in grid
+ *     .progress-card - Stage progress list container
+ *     .stage        - Individual progress stage card
+ *
  * Design principles:
  *
  *   * Calm by default. No animation runs for more than 240ms.
@@ -592,6 +623,37 @@ select {
 }
 .field-group > legend { font-weight: 700; padding: 0 var(--space-2); margin-left: -8px; }
 
+/* ----- Field error (inline validation) -------------------------------- */
+
+.field-error {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  padding: var(--space-2) var(--space-3);
+  border-radius: var(--radius-xs);
+  background: var(--danger-soft);
+  border: 1px solid var(--danger);
+  font-size: 0.85rem;
+  color: var(--danger);
+}
+
+.field-error[hidden] { display: none; }
+
+.field-error::before {
+  content: "!";
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 18px;
+  height: 18px;
+  border-radius: 999px;
+  background: var(--danger);
+  color: white;
+  font-weight: 700;
+  font-size: 0.75rem;
+  flex-shrink: 0;
+}
+
 /* ----- Callouts (warning, info, cost confirmation) -------------------- */
 
 .callout {
@@ -976,6 +1038,85 @@ kbd {
 .run-controls-cancel-hint strong {
   color: var(--ink);
   font-weight: 600;
+}
+
+/* ----- Workflow progress indicator -------------------------------------- */
+
+.workflow-progress {
+  margin: var(--space-4) 0;
+}
+
+.workflow-steps {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: var(--space-2);
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.workflow-step {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  padding: var(--space-2) var(--space-3);
+  border-radius: var(--radius-xl);
+  background: var(--panel);
+  border: 1px solid var(--line);
+  color: var(--muted);
+  font-size: 0.85rem;
+  transition: background var(--duration-fast) var(--bezier),
+              border-color var(--duration-fast) var(--bezier),
+              color var(--duration-fast) var(--bezier);
+}
+
+.workflow-step[data-state="active"] {
+  background: var(--accent-soft);
+  border-color: var(--accent);
+  color: var(--accent-strong);
+  font-weight: 600;
+}
+
+.workflow-step[data-state="completed"] {
+  background: var(--success-soft);
+  border-color: var(--success);
+  color: var(--success);
+}
+
+.workflow-step[data-state="completed"] .workflow-step-number {
+  background: var(--success);
+  color: white;
+}
+
+.workflow-step[data-state="active"] .workflow-step-number {
+  background: var(--accent);
+  color: var(--accent-ink);
+}
+
+.workflow-step-number {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 22px;
+  border-radius: 999px;
+  background: var(--line);
+  color: var(--muted);
+  font-size: 0.75rem;
+  font-weight: 700;
+  transition: background var(--duration-fast) var(--bezier),
+              color var(--duration-fast) var(--bezier);
+}
+
+.workflow-step-label {
+  display: none;
+}
+
+@media (min-width: 600px) {
+  .workflow-step-label {
+    display: inline;
+  }
 }
 
 /* ----- Meta grid (session, correlation, time, status) ------------------ */
@@ -1562,3 +1703,34 @@ main:focus { outline: none; }
 .stage-diagnostics li {
   margin: 2px 0;
 }
+
+/* ======== COMPONENT ARCHITECTURE MAP ========
+   This section documents reusable component patterns and their locations.
+
+   Core Components (used throughout the app):
+   - .component-button (See .button at line 824)
+   - .component-card (See .panel at line 187, .meta-card at line 1088)
+   - .component-heading (See h1-h6 styles at various points)
+
+   Component Patterns:
+   - Status components: .status-pill, .stage-state-*, callout variants
+   - Layout components: .shell, .layout, .stack, .inline
+   - Form components: .field, .field-group, .button variants
+   - Data components: .meta-card, .progress-card, .result-block
+
+   Theming Tokens (defined in :root section, lines 20-92):
+   - Color tokens: --ink, --accent, --success, etc.
+   - Spacing tokens: --space-1 through --space-8
+   - Shadow tokens: --shadow-sm, --shadow-md, --shadow-lg
+   - Animation tokens: --bezier, --duration-fast/base/slow
+
+   Responsive Breakpoints (used via @media queries):
+   - Mobile-first approach, mainly at line 1514 and above
+   - Safe area handling uses env() for device notches
+
+   Component Reuse Guidelines:
+   1. Always use CSS tokens for colors, spacing, and typography
+   2. Prefer composition (nesting) over inheritance
+   3. Break down large UI patterns into smaller components
+   4. Use semantic names (.field-group instead of .form-section)
+   ============================================= */
