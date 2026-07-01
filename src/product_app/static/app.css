@@ -524,6 +524,11 @@ a { color: var(--accent); text-underline-offset: 2px; }
 
 .panel > h2 { margin-bottom: 0; }
 
+/* Use design tokens instead of inline styles */
+.panel-section {
+  margin-top: var(--space-5);
+}
+
 .lede { margin: 0; color: var(--muted); font-size: 0.95rem; }
 
 .stack { display: grid; gap: var(--space-4); }
@@ -1708,15 +1713,36 @@ main:focus { outline: none; }
    This section documents reusable component patterns and their locations.
 
    Core Components (used throughout the app):
-   - .component-button (See .button at line 824)
-   - .component-card (See .panel at line 187, .meta-card at line 1088)
-   - .component-heading (See h1-h6 styles at various points)
+   - .button (line 859) - Base button with variants (.button-primary, .button-secondary, .button-ghost, .button-danger)
+   - .panel (line 504) - Glass-morphism card component
+   - .meta-card (line 1130) - Label + value pair in grid layout
+   - .field (line 531) - Form field with label + input grouping
 
-   Component Patterns:
-   - Status components: .status-pill, .stage-state-*, callout variants
-   - Layout components: .shell, .layout, .stack, .inline
-   - Form components: .field, .field-group, .button variants
-   - Data components: .meta-card, .progress-card, .result-block
+   Layout Components:
+   - .shell (line 210) - Main container with max-width constraint
+   - .layout (line 498) - Two-column grid (workspace + controls)
+   - .stack (line 529) - Vertical spacing container (gap-based)
+   - .inline (line 613) - Horizontal flex container with wrap
+
+   Form Components:
+   - .field (line 531) - Label + input grouping with validation
+   - .field-group (line 615) - Fieldset wrapper with border
+   - .button variants (.button-primary, .button-secondary, etc.)
+   - .field-error (line 628) - Inline validation error styling
+
+   Status Components:
+   - .status-pill (line 960) - Inline status indicator with dot
+   - .callout (line 659) - Icon + body structured message
+   - .stage (line 1162) - Individual progress stage card
+
+   Workflow Components:
+   - .workflow-progress (line 1045) - 4-step navigation indicator
+   - .workflow-step (line 1049) - Individual workflow step
+
+   Data Display Components:
+   - .meta-card (line 1130) - Label + value pair in grid
+   - .progress-card (line 1176) - Stage progress list container
+   - .result-block (line 1210) - Model output display card
 
    Theming Tokens (defined in :root section, lines 20-92):
    - Color tokens: --ink, --accent, --success, etc.

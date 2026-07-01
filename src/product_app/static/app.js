@@ -852,14 +852,22 @@
     const runningStage = progress.stages.find(s => s.state === "running");
     if (runningStage) {
       updateWorkflowProgress(mapStageToStep(runningStage.stage));
+    } else {
+      // No stage is running — the run has ended.
+      // Show all steps as completed (the run finished successfully).
+      updateWorkflowProgressCompleted();
     }
   }
 
   function mapStageToStep(stageName) {
+    if (!stageName) return null;  // No stage = clear indicator
+
     if (stageName === "orchestrate_models" || stageName.startsWith("model_")) return "models";
-    if (stageName.startsWith("debate") || stageName === "critique_round_1" || stageName === "critique_round_2") return "debate";
+    if (stageName.startsWith("debate") || stageName.startsWith("critique")) return "debate";
     if (stageName === "synthesize" || stageName === "final_synthesis") return "synthesis";
-    return "question";
+
+    // Unknown stage = don't change current step
+    return null;
   }
 
   // Phase 4: Workflow progress indicator
@@ -867,6 +875,18 @@
     if (!workflowSteps.length) return;
     // Map stages: question -> models -> debate -> synthesis
     const stageOrder = ["question", "models", "debate", "synthesis"];
+
+    // Handle null (no active run) — reset to initial state
+    if (currentStage === null) {
+      workflowSteps.forEach((step, index) => {
+        step.dataset.state = index === 0 ? "active" : "";
+        // Update ARIA attributes for accessibility
+        step.setAttribute("aria-selected", index === 0 ? "true" : "false");
+        step.setAttribute("tabindex", index === 0 ? "0" : "-1");
+      });
+      return;
+    }
+
     const currentIndex = stageOrder.indexOf(currentStage);
 
     workflowSteps.forEach((step, index) => {
@@ -875,11 +895,28 @@
 
       if (stepIndex < currentIndex) {
         step.dataset.state = "completed";
+        step.setAttribute("aria-selected", "true");
+        step.setAttribute("tabindex", "0");
       } else if (stepIndex === currentIndex) {
         step.dataset.state = "active";
+        step.setAttribute("aria-selected", "true");
+        step.setAttribute("tabindex", "0");
       } else {
         step.dataset.state = "";
+        step.setAttribute("aria-selected", "false");
+        step.setAttribute("tabindex", "-1");
       }
+    });
+  }
+
+  // Phase 4: Show completed state for finished runs
+  function updateWorkflowProgressCompleted() {
+    if (!workflowSteps.length) return;
+
+    workflowSteps.forEach((step, index) => {
+      step.dataset.state = "completed";
+      step.setAttribute("aria-selected", "true");
+      step.setAttribute("tabindex", "0");
     });
   }
 
@@ -1709,19 +1746,31 @@
       validationHint.textContent = "A few more characters will help the models answer well.";
       charCount.dataset.warning = "true";
       // Hide inline error for short-but-not-empty queries
-      if (queryError) queryError.hidden = true;
+      if (queryError) {
+        queryError.textContent = "";
+        queryError.hidden = true;
+      }
     } else if (length > 8000) {
       validationHint.textContent = "Long queries are blocked by the cost guardrail. Try to shorten this.";
       charCount.dataset.warning = "true";
-      if (queryError) queryError.hidden = true;
+      if (queryError) {
+        queryError.textContent = "";
+        queryError.hidden = true;
+      }
     } else if (length > 5000) {
       validationHint.textContent = "This length is in the upper-cost band; confirmation may be required.";
       charCount.dataset.warning = "true";
-      if (queryError) queryError.hidden = true;
+      if (queryError) {
+        queryError.textContent = "";
+        queryError.hidden = true;
+      }
     } else {
       validationHint.textContent = "";
       charCount.dataset.warning = "false";
-      if (queryError) queryError.hidden = true;
+      if (queryError) {
+        queryError.textContent = "";
+        queryError.hidden = true;
+      }
     }
   }
 

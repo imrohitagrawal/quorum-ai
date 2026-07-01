@@ -62,21 +62,21 @@
         <button class="status-banner-dismiss" type="button" id="drift-region-dismiss" aria-label="Dismiss drift warning">&times;</button>
       </section>
 
-      <nav class="workflow-progress" aria-label="Workflow progress">
-        <ol class="workflow-steps">
-          <li class="workflow-step" data-step="question">
+      <nav class="workflow-progress" aria-label="Workflow: 4-step process (Question, Models, Debate, Synthesis)">
+        <ol class="workflow-steps" role="tablist" aria-orientation="horizontal">
+          <li class="workflow-step" data-step="question" role="tab" tabindex="0" aria-selected="false" aria-controls="workflow-question">
             <span class="workflow-step-number" aria-hidden="true">1</span>
             <span class="workflow-step-label">Question</span>
           </li>
-          <li class="workflow-step" data-step="models">
+          <li class="workflow-step" data-step="models" role="tab" tabindex="-1" aria-selected="false" aria-controls="workflow-models">
             <span class="workflow-step-number" aria-hidden="true">2</span>
             <span class="workflow-step-label">Models</span>
           </li>
-          <li class="workflow-step" data-step="debate">
+          <li class="workflow-step" data-step="debate" role="tab" tabindex="-1" aria-selected="false" aria-controls="workflow-debate">
             <span class="workflow-step-number" aria-hidden="true">3</span>
             <span class="workflow-step-label">Debate</span>
           </li>
-          <li class="workflow-step" data-step="synthesis">
+          <li class="workflow-step" data-step="synthesis" role="tab" tabindex="-1" aria-selected="false" aria-controls="workflow-synthesis">
             <span class="workflow-step-number" aria-hidden="true">4</span>
             <span class="workflow-step-label">Synthesis</span>
           </li>
@@ -110,7 +110,7 @@
                 aria-describedby="query-validation-hint"
                 maxlength="20000"
               ></textarea>
-              <div id="query-error" class="field-error" hidden aria-live="polite"></div>
+              <div id="query-error" class="field-error" hidden role="alert" aria-live="assertive"></div>
             </div>
             <fieldset class="field-group">
               <legend>Model slots</legend>
@@ -261,7 +261,7 @@
         </aside>
       </div>
 
-      <section class="panel" style="margin-top: 20px;">
+      <section class="panel panel-section">
         <h2>Debate and synthesis</h2>
         <div class="stack">
           <div class="result-block" aria-live="polite" aria-atomic="true" data-info-icon-host>
@@ -284,7 +284,7 @@
         </div>
       </section>
 
-      <section class="panel" style="margin-top: 20px;">
+      <section class="panel panel-section">
         <h2>
           Model outputs
           <button
