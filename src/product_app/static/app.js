@@ -119,6 +119,8 @@
     // client-initiated fetch completes.
     lastReadiness: null,
     lastStaleModelIds: null,
+    // Track if user has attempted to submit (gates inline error display)
+    submissionAttempted: false,
   };
 
   // ---------------------------------------------------------------------------
@@ -852,10 +854,23 @@
     const runningStage = progress.stages.find(s => s.state === "running");
     if (runningStage) {
       updateWorkflowProgress(mapStageToStep(runningStage.stage));
-    } else {
-      // No stage is running — the run has ended.
-      // Show all steps as completed (the run finished successfully).
-      updateWorkflowProgressCompleted();
+      return;
+    }
+
+    // No stage is running — the run has ended. Check terminal state.
+    const terminalStates = ["completed", "partial", "failed", "timed_out", "cancelled"];
+    const terminalStage = progress.stages.find(
+      s => terminalStates.includes(s.state)
+    );
+
+    if (terminalStage) {
+      if (terminalStage.state === "completed" || terminalStage.state === "partial") {
+        // Run finished — show all steps as completed
+        updateWorkflowProgressCompleted();
+      } else {
+        // Run failed/timed_out/cancelled — reset to initial state
+        updateWorkflowProgress(null);
+      }
     }
   }
 
@@ -1737,10 +1752,14 @@
     if (length === 0) {
       validationHint.textContent = "Question is required.";
       charCount.dataset.warning = "true";
-      // Phase 4: Show inline field error for empty submission
-      if (queryError) {
+      // Phase 4: Show inline field error only after submission attempt
+      if (state.submissionAttempted && queryError) {
         queryError.textContent = "Please enter a question before running.";
         queryError.hidden = false;
+      } else if (queryError) {
+        // Clear error when user is typing but hasn't submitted yet
+        queryError.textContent = "";
+        queryError.hidden = true;
       }
     } else if (length < 12) {
       validationHint.textContent = "A few more characters will help the models answer well.";
@@ -1981,6 +2000,7 @@
   // hidden auto-estimates-then-starts shortcut; that shortcut is gone
   // — the user always sees the estimate before a run starts.
   async function startRun() {
+    state.submissionAttempted = true;
     clearError();
     setButtonLoading(estimateButton, true);
     try {
@@ -2020,6 +2040,7 @@
   // ``block`` band surfaces the callout as a read-only refusal
   // and the user clicks Cancel.
   async function runNow() {
+    state.submissionAttempted = true;
     clearError();
     setButtonLoading(runNowButton, true);
     try {
@@ -2121,6 +2142,7 @@
   // token is needed; for BLOCK the button is disabled and this path
   // cannot fire.
   async function proceedWithRun() {
+    state.submissionAttempted = true;
     if (!state.currentEstimate) {
       // Defensive: button should be disabled until an estimate exists.
       return;
@@ -2554,12 +2576,42 @@
     errorDismiss.addEventListener("click", clearError);
   }
 
+  function initWorkflowKeyboard() {
+    workflowSteps.forEach((step) => {
+      step.addEventListener("keydown", (event) => {
+        if (event.key !== "ArrowRight" && event.key !== "ArrowLeft" && event.key !== "Home" && event.key !== "End") {
+          return;
+        }
+        const focused = document.activeElement;
+        const steps = Array.from(workflowSteps);
+        const currentIndex = steps.indexOf(focused);
+
+        if (event.key === "ArrowRight") {
+          event.preventDefault();
+          const next = steps[(currentIndex + 1) % steps.length];
+          next.focus();
+        } else if (event.key === "ArrowLeft") {
+          event.preventDefault();
+          const prev = steps[(currentIndex - 1 + steps.length) % steps.length];
+          prev.focus();
+        } else if (event.key === "Home") {
+          event.preventDefault();
+          steps[0].focus();
+        } else if (event.key === "End") {
+          event.preventDefault();
+          steps[steps.length - 1].focus();
+        }
+      });
+    });
+  }
+
   async function boot() {
     initThemeToggle();
     initModelSlotSelection();
     initQueryValidation();
     initKeyboardShortcuts();
     initBannerDismiss();
+    initWorkflowKeyboard();
     initInfoIcons();
     // Workstream 3: seed the readiness + drift caches from the
     // page-load data islands and render the banners. This paints

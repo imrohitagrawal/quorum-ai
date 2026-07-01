@@ -586,7 +586,9 @@ textarea, input[type="text"], input:not([type]) {
     box-shadow var(--duration-fast) var(--bezier);
 }
 
-textarea:invalid, textarea[aria-invalid="true"] {
+/* Uses [aria-invalid="true"] set by app.js — textarea:invalid is dead
+   because the element has no required/minlength/pattern attribute. */
+textarea[aria-invalid="true"] {
   border-color: var(--danger);
   box-shadow: 0 0 0 3px var(--danger-soft);
 }
@@ -640,9 +642,18 @@ select {
   border: 1px solid var(--danger);
   font-size: 0.85rem;
   color: var(--danger);
+  opacity: 1;
+  visibility: visible;
+  transition: opacity var(--duration-fast) var(--bezier),
+              visibility var(--duration-fast) var(--bezier);
 }
 
-.field-error[hidden] { display: none; }
+.field-error[hidden] {
+  display: flex; /* Override to allow animation */
+  opacity: 0;
+  visibility: hidden;
+  pointer-events: none;
+}
 
 .field-error::before {
   content: "!";
@@ -1090,8 +1101,14 @@ kbd {
 }
 
 .workflow-step[data-state="completed"] .workflow-step-number {
+  background: var(--success-soft);
+  color: var(--success);
+}
+
+/* In dark mode the success background is light, so use dark text. */
+html[data-theme="dark"] .workflow-step[data-state="completed"] .workflow-step-number {
   background: var(--success);
-  color: white;
+  color: var(--ink);
 }
 
 .workflow-step[data-state="active"] .workflow-step-number {
@@ -1712,37 +1729,55 @@ main:focus { outline: none; }
 /* ======== COMPONENT ARCHITECTURE MAP ========
    This section documents reusable component patterns and their locations.
 
-   Core Components (used throughout the app):
-   - .button (line 859) - Base button with variants (.button-primary, .button-secondary, .button-ghost, .button-danger)
-   - .panel (line 504) - Glass-morphism card component
-   - .meta-card (line 1130) - Label + value pair in grid layout
-   - .field (line 531) - Form field with label + input grouping
-
    Layout Components:
    - .shell (line 210) - Main container with max-width constraint
    - .layout (line 498) - Two-column grid (workspace + controls)
-   - .stack (line 529) - Vertical spacing container (gap-based)
-   - .inline (line 613) - Horizontal flex container with wrap
+   - .stack (line 534) - Vertical spacing container (gap-based)
+   - .panel (line 504) - Glass-morphism card component
+   - .panel-section (line 528) - Panel with top margin (replaces inline styles)
 
    Form Components:
-   - .field (line 531) - Label + input grouping with validation
-   - .field-group (line 615) - Fieldset wrapper with border
-   - .button variants (.button-primary, .button-secondary, etc.)
-   - .field-error (line 628) - Inline validation error styling
+   - .field (line 536) - Label + input grouping with validation
+   - .field-label-row (line 538) - Flex row for label + metadata
+   - .field-meta (line 547) - Label metadata container
+   - .field-meta-counter (line 555) - Character count display
+   - .field-meta-hint (line 569) - Validation hint text
+   - .field-group (line 622) - Fieldset wrapper with border
+   - .field-error (line 635) - Inline validation error with fade transition
+
+   Button Components:
+   - .button (line 875) - Base button
+   - .button-primary (line 899) - Primary CTA variant
+   - .button-secondary (line 906) - Secondary variant
+   - .button-ghost (line 913) - Ghost/transparent variant
+   - .button-danger (line 920) - Danger/destructive variant
+   - .button-compact (line 934) - Compact sizing
+   - .button-spinner (line 936) - Loading spinner
 
    Status Components:
-   - .status-pill (line 960) - Inline status indicator with dot
-   - .callout (line 659) - Icon + body structured message
-   - .stage (line 1162) - Individual progress stage card
+   - .status-pill (line 976) - Inline status indicator with dot
+   - .callout (line 675) - Icon + body structured message
+   - .callout-warning (line 706) - Warning callout
+   - .callout-info (line 715) - Info callout
+   - .callout-readiness (line 727) - Readiness banner
+   - .callout-cost (line 744) - Cost confirmation
+   - .callout-demo-mode (line 763) - Demo mode indicator
 
    Workflow Components:
-   - .workflow-progress (line 1045) - 4-step navigation indicator
-   - .workflow-step (line 1049) - Individual workflow step
+   - .workflow-progress (line 1061) - 4-step navigation indicator (nav)
+   - .workflow-steps (line 1065) - Ordered list container (tablist)
+   - .workflow-step (line 1075) - Individual step (tab role)
+   - .workflow-step-number (line 1119) - Step number badge
+   - .workflow-step-label (line 1134) - Step text label
 
    Data Display Components:
-   - .meta-card (line 1130) - Label + value pair in grid
-   - .progress-card (line 1176) - Stage progress list container
-   - .result-block (line 1210) - Model output display card
+   - .meta-card (line 1152) - Label + value pair in grid
+   - .progress-card (line 1152) - Stage progress list container
+   - .result-block (line 1152) - Model output display card
+   - .stage (line 1184) - Individual progress stage card
+   - .stage-header (line 1200) - Stage label + state
+   - .stage-state (line 1209) - State badge (running, completed, etc.)
+   - .stage-detail (line 1224) - Additional stage information
 
    Theming Tokens (defined in :root section, lines 20-92):
    - Color tokens: --ink, --accent, --success, etc.
