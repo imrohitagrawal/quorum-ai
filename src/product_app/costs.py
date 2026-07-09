@@ -24,7 +24,7 @@ import warnings
 from collections.abc import Callable
 from dataclasses import asdict, dataclass
 from datetime import UTC, datetime, timedelta
-from decimal import ROUND_HALF_UP, Decimal
+from decimal import ROUND_FLOOR, ROUND_HALF_UP, Decimal
 from enum import StrEnum
 from threading import RLock
 from uuid import UUID, uuid4
@@ -72,7 +72,7 @@ SYNTHESIS_FIXED_COST_USD = Decimal("0.015")
 #: ``cost_inner_call_cap_usd`` (both via :data:`product_app.config.settings`).
 #: The flat ``DEBATE_FIXED_COST_USD`` and ``SYNTHESIS_FIXED_COST_USD``
 #: constants above remain for backward compatibility (re-exported by
-#: ``_estimate_total`` callers and referenced by some tests) but are
+#: ``_estimate_breakdown`` callers and referenced by some tests) but are
 #: no longer summed into the estimate; the proportional term replaces
 #: them. The cap exists so a 5K-char query on the default model mix
 #: doesn't tip over the $0.25 hard limit just because the inner-call
@@ -96,12 +96,52 @@ class CostThresholdAction(StrEnum):
     BLOCK = "block"
 
 
+class CostLineByModel(BaseModel):
+    model_id: str
+    display_name: str
+    usd: Decimal = Field(ge=Decimal("0"))
+    #: Discriminator so consumers distinguish the pseudo "Synthesis writer"
+    #: row from a real model row without matching the magic ``model_id``.
+    #: ``"model"`` for the four model rows, ``"synthesis"`` for the writer.
+    kind: str = "model"
+
+
+class CostLineByStage(BaseModel):
+    #: One of ``initial_answers`` | ``debate_round_1`` | ``debate_round_2`` |
+    #: ``synthesis`` — the same vocabulary as ``progress.stages[].stage`` (see
+    #: ``query_runs._initial_progress``) so a UI can join the two directly.
+    stage: str
+    usd: Decimal = Field(ge=Decimal("0"))
+
+
+class CostBreakdown(BaseModel):
+    """Itemized cost partition for screen 03 (cost gate) and the 05 receipt.
+
+    The estimate is partitioned two independent ways — ``by_model`` and
+    ``by_stage`` — from the *same* underlying arithmetic that produces
+    ``total``. Both lists re-sum to ``total`` exactly after quantization
+    (the reconciliation invariant): every line is apportioned to
+    :data:`COST_DISPLAY_QUANTUM` by :meth:`_reconcile_usd_lines` using a
+    sign-safe largest-remainder rule, so every line is ``>= 0`` and the
+    lines sum to ``total`` exactly.
+    """
+
+    by_model: list[CostLineByModel]
+    by_stage: list[CostLineByStage]
+    total: Decimal = Field(ge=Decimal("0"))
+
+
 class CostEstimate(BaseModel):
     estimated_cost_usd: Decimal = Field(ge=Decimal("0"))
     currency: str = "USD"
     threshold_action: CostThresholdAction
     confirmation_token: str | None
     reasons: list[str]
+    #: Itemized cost partition (by model AND by stage). Optional with a
+    #: ``None`` default so pre-existing ``CostEstimate(...)`` constructions
+    #: (tests, cancel path) keep working; ``estimate()`` always attaches a
+    #: real breakdown to every returned estimate.
+    breakdown: CostBreakdown | None = None
 
 
 class CostConfirmation(BaseModel):
@@ -231,9 +271,13 @@ class CostEstimationService:
         account_id: UUID | None = None,
         query_run_id: UUID | None = None,
     ) -> CostEstimate:
-        estimated = self._estimate_total(query_text=query_text, model_slots=model_slots).quantize(
-            COST_DISPLAY_QUANTUM, rounding=ROUND_HALF_UP
-        )
+        breakdown = self._estimate_breakdown(query_text=query_text, model_slots=model_slots)
+        # ``breakdown.total`` is the quantized grand total (same value the
+        # old ``_estimate_total(...).quantize(...)`` produced). Compute the
+        # breakdown ONCE and attach it to every returned estimate — including
+        # the BLOCK / cumulative / daily-cap early returns — so screens 03/05
+        # always have the itemized partition.
+        estimated = breakdown.total
         threshold_action, reasons = self._threshold_for(estimated)
         # C8: cumulative-spend guard. A user can issue many small
         # queries that each stay below ``HARD_LIMIT_USD`` but together
@@ -254,6 +298,7 @@ class CostEstimationService:
                     estimated_cost_usd=estimated,
                     threshold_action=CostThresholdAction.BLOCK,
                     confirmation_token=None,
+                    breakdown=breakdown,
                     reasons=[
                         "Estimated cost is above the USD 0.25 hard limit for this account.",
                         (
@@ -284,6 +329,7 @@ class CostEstimationService:
                         estimated_cost_usd=estimated,
                         threshold_action=CostThresholdAction.BLOCK,
                         confirmation_token=None,
+                        breakdown=breakdown,
                         reasons=[
                             (
                                 f"Estimated cost would exceed the USD "
@@ -315,6 +361,7 @@ class CostEstimationService:
             threshold_action=threshold_action,
             confirmation_token=confirmation_token,
             reasons=reasons,
+            breakdown=breakdown,
         )
 
     def evaluate_confirmation(
@@ -411,7 +458,16 @@ class CostEstimationService:
 
     # -- internals --------------------------------------------------------
 
-    def _estimate_total(self, *, query_text: str, model_slots: list[ModelSlot]) -> Decimal:
+    def _estimate_breakdown(
+        self, *, query_text: str, model_slots: list[ModelSlot]
+    ) -> CostBreakdown:
+        """Compute the itemized cost partition (by model AND by stage).
+
+        The grand total is *identical* to the pre-B1 ``_estimate_total``
+        arithmetic — this method only exposes structure. Two partitions are
+        derived from the same terms; both re-sum to the (quantized) total
+        after :meth:`_reconcile_usd_lines` distributes the rounding residual.
+        """
         if not model_slots:
             raise ValueError("model_slots must not be empty")
         if len(model_slots) != 4:
@@ -441,12 +497,15 @@ class CostEstimationService:
                 (_DEFAULT_PRICE_PER_1K_INPUT, _DEFAULT_PRICE_PER_1K_OUTPUT),
             )
 
-        model_input_cost = sum(
-            (_price(slot.model_id)[0] * (input_tokens / Decimal(1000))) for slot in model_slots
-        )
-        model_output_cost = sum(
-            (_price(slot.model_id)[1] * (output_tokens / Decimal(1000))) for slot in model_slots
-        )
+        # Per-model initial-answer cost: the model's own input+output
+        # charge. ``sum(initial_i)`` == the old
+        # ``model_input_cost + model_output_cost`` term exactly.
+        initial_per_model: list[Decimal] = [
+            _price(slot.model_id)[0] * (input_tokens / Decimal(1000))
+            + _price(slot.model_id)[1] * (output_tokens / Decimal(1000))
+            for slot in model_slots
+        ]
+        model_input_output_cost = sum(initial_per_model, Decimal("0"))
         # L3 - proportional inner-call cost. Debate and synthesis are
         # also LLM calls now (L4), so the estimate must price them.
         # Per-call cost: ``max_output_rate × output_tokens / 1000``,
@@ -468,7 +527,114 @@ class CostEstimationService:
         inner_per_call = inner_multiplier * max_output_rate * output_tokens / Decimal(1000)
         inner_call_cost = min(inner_per_call * Decimal(3), inner_cap)
 
-        return query_cost + processing_cost + model_input_cost + model_output_cost + inner_call_cost
+        # Grand total — unchanged value vs. the old ``_estimate_total``.
+        raw_total = query_cost + processing_cost + model_input_output_cost + inner_call_cost
+        total = raw_total.quantize(COST_DISPLAY_QUANTUM, rounding=ROUND_HALF_UP)
+
+        # The 3 inner calls (debate r1 + debate r2 + synthesis) are equal
+        # in the underlying formula, so each is one third of the
+        # inner-call cost.
+        stage_inner = inner_call_cost / Decimal(3)
+        base = query_cost + processing_cost  # query + processing overhead
+
+        # --- by_stage: initial + the three equal inner-call stages ------
+        # Stage keys mirror ``progress.stages[].stage`` (see
+        # ``query_runs._initial_progress``) so a UI can join the two.
+        raw_stage: list[tuple[str, Decimal]] = [
+            ("initial_answers", base + model_input_output_cost),
+            ("debate_round_1", stage_inner),
+            ("debate_round_2", stage_inner),
+            ("synthesis", stage_inner),
+        ]
+        stage_usd = self._reconcile_usd_lines([v for _, v in raw_stage], total)
+        by_stage = [
+            CostLineByStage(stage=name, usd=usd)
+            for (name, _), usd in zip(raw_stage, stage_usd, strict=True)
+        ]
+
+        # --- by_model: 4 model rows + a "Synthesis writer" row ----------
+        # Each model row carries its own initial cost plus an equal share
+        # of the query/processing overhead and of the two debate rounds
+        # (round_1 + round_2). The synthesis inner call is its own row.
+        base_share = base / Decimal(4)
+        # Each model row absorbs an equal share of the two debate rounds
+        # (round_1 + round_2 = 2 * stage_inner, split four ways).
+        debate_share = stage_inner / Decimal(2)
+        raw_model: list[tuple[str, str, str, Decimal]] = []
+        for slot, initial_i in zip(model_slots, initial_per_model, strict=True):
+            display_name = (
+                openrouter_model_catalog_service.lookup_short_name(slot.model_id)
+                or slot.model_id
+            )
+            raw_model.append(
+                ("model", slot.model_id, display_name, initial_i + base_share + debate_share)
+            )
+        raw_model.append(("synthesis", "synthesis", "Synthesis writer", stage_inner))
+        model_usd = self._reconcile_usd_lines([v for *_, v in raw_model], total)
+        by_model = [
+            CostLineByModel(model_id=mid, display_name=name, usd=usd, kind=kind)
+            for (kind, mid, name, _), usd in zip(raw_model, model_usd, strict=True)
+        ]
+
+        return CostBreakdown(by_model=by_model, by_stage=by_stage, total=total)
+
+    @staticmethod
+    def _reconcile_usd_lines(raw: list[Decimal], total: Decimal) -> list[Decimal]:
+        """Apportion ``raw`` to whole ``COST_DISPLAY_QUANTUM`` units that sum
+        to ``total`` EXACTLY, sign-safely (largest-remainder / Hamilton).
+
+        ``total`` is assumed already quantized to the quantum. The rule:
+
+        * Floor each raw line DOWN to the quantum (``raw >= 0`` ⇒ floor
+          ``>= 0``), giving the guaranteed-minimum quanta per line.
+        * ``residual_steps = round((total - Σfloors) / quantum)``. If
+          positive, hand out one extra quantum to each of the
+          ``residual_steps`` lines with the LARGEST fractional remainders
+          (ties break to the lowest index). If negative (a rare half-up
+          overshoot upstream), take one quantum back from each of that many
+          lines with the SMALLEST remainders *among lines still > 0*, so no
+          line is ever driven negative.
+
+        The result therefore satisfies both invariants unconditionally:
+        every returned line is ``>= 0`` and ``sum(result) == total``.
+        """
+        quantum = COST_DISPLAY_QUANTUM
+        if not raw:
+            if total != 0:
+                raise ValueError(
+                    f"cannot reconcile an empty line list to non-zero total {total}"
+                )
+            return []
+        # Floor each line to a whole number of quanta; keep the fractional
+        # remainder (in [0, 1) for raw >= 0) to rank apportionment.
+        floor_steps = [
+            (v / quantum).to_integral_value(rounding=ROUND_FLOOR) for v in raw
+        ]
+        remainders = [
+            (v / quantum) - fs for v, fs in zip(raw, floor_steps, strict=True)
+        ]
+        residual = total - sum(fs * quantum for fs in floor_steps)
+        residual_steps = int((residual / quantum).to_integral_value(rounding=ROUND_HALF_UP))
+        steps = list(floor_steps)
+        if residual_steps > 0:
+            # Largest remainder first; tie → lowest index.
+            order = sorted(range(len(steps)), key=lambda i: (-remainders[i], i))
+            for i in order[:residual_steps]:
+                steps[i] += 1
+        elif residual_steps < 0:
+            # Smallest remainder first, only lines still strictly positive.
+            order = sorted(
+                (i for i in range(len(steps)) if steps[i] > 0),
+                key=lambda i: (remainders[i], i),
+            )
+            needed = -residual_steps
+            if needed > len(order):
+                raise ValueError(
+                    "cannot reconcile lines without driving a line negative"
+                )
+            for i in order[:needed]:
+                steps[i] -= 1
+        return [s * quantum for s in steps]
 
     def _cumulative_spend_for(self, account_id: UUID) -> Decimal:
         """Sum the ``estimated_cost_usd`` of every cost event recorded
