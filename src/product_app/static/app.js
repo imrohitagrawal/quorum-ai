@@ -124,6 +124,26 @@
   };
 
   // ---------------------------------------------------------------------------
+  // View switch (Slice 0 scaffold)
+  // ---------------------------------------------------------------------------
+
+  // Show exactly one ``[data-view]`` element and hide its siblings.
+  // Names: "composer", "cost-gate", "live-run", "result". This is a
+  // safe scaffold — later slices fill the placeholder views and wire
+  // real transitions. No-ops gracefully if the view container or the
+  // requested view is absent (e.g. a trimmed template), so it can be
+  // called unconditionally on load.
+  function setView(name) {
+    const views = qsa("[data-view]");
+    if (!views.length) return;
+    const target = views.find((view) => view.dataset.view === name);
+    if (!target) return;
+    for (const view of views) {
+      view.hidden = view !== target;
+    }
+  }
+
+  // ---------------------------------------------------------------------------
   // Error / toast / banner presentation
   // ---------------------------------------------------------------------------
 
@@ -1733,7 +1753,8 @@
     // run has no initial answers yet (cost-blocked, pending, etc.).
     const claimMeta = el("claim-meta");
     if (claimMeta) {
-      const count = Number(result?.material_claim_count ?? 0);
+      const rawCount = result?.material_claim_count ?? 0;
+      const count = Number.isFinite(Number(rawCount)) ? Number(rawCount) : 0;
       const finished = status === "completed" || status === "partial" || status === "failed" || status === "timed_out";
       if (finished && count > 0) {
         claimMeta.textContent = `${count.toLocaleString()} material claim${count === 1 ? "" : "s"} inspected`;
@@ -2606,6 +2627,10 @@
   }
 
   async function boot() {
+    // Slice 0 scaffold: start on the composer view. Later slices drive
+    // ``setView`` from the run lifecycle; for now it just asserts the
+    // initial state and no-ops if the view container is absent.
+    setView("composer");
     initThemeToggle();
     initModelSlotSelection();
     initQueryValidation();
@@ -2670,15 +2695,22 @@
       // the "Current time" card should read "Not started" rather
       // than the wall-clock at the moment ``boot()`` ran.
       resetRunTime();
-      // Pull the live readiness snapshot. ``/ready`` is
-      // unauthenticated so this works even if the session bootstrap
-      // were to fail. Best-effort: errors are logged to a toast
-      // inside ``refreshReadiness`` and the page-load seed stays
-      // visible.
-      await refreshReadiness();
     } catch (error) {
       handleError(error);
       setConnectionPill("error", "Disconnected");
+    }
+    // Pull the live readiness snapshot. ``/ready`` is
+    // unauthenticated so this works even if the session bootstrap
+    // were to fail. Best-effort: errors are logged to a toast
+    // inside ``refreshReadiness`` and the page-load seed stays
+    // visible. This runs outside the session try/catch so the
+    // readiness banner always appears even when session init fails,
+    // but is itself guarded so a throw in ``applyReadinessState``
+    // can never reject ``boot()`` unhandled.
+    try {
+      await refreshReadiness();
+    } catch (error) {
+      handleError(error);
     }
   }
 

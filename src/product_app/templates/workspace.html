@@ -6,19 +6,19 @@
     <title>{{ app_name }} workspace</title>
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-    <link href="https://fonts.googleapis.com/css2?family=Instrument+Serif:ital@0;1&family=Manrope:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+    <link href="https://fonts.googleapis.com/css2?family=Newsreader:ital,opsz,wght@0,6..72,400;0,6..72,500;0,6..72,600;0,6..72,700;1,6..72,400;1,6..72,500&family=Geist:wght@400;500;550;600;650;700&family=Geist+Mono:wght@400;500;600&display=swap" rel="stylesheet">
     <link rel="stylesheet" href="/static/app.css">
     <style>
       /* Inline accessibility-critical rules so the page remains usable
          even if the external stylesheet fails to load. */
-      :focus-visible { outline: 3px solid var(--focus-ring, #8a1a0a); outline-offset: 3px; }
-      :focus { outline: 3px solid var(--focus-ring, #8a1a0a); outline-offset: 3px; }
+      :focus-visible { outline: 3px solid var(--focus-ring, #14171C); outline-offset: 3px; }
+      :focus { outline: 3px solid var(--focus-ring, #14171C); outline-offset: 3px; }
       .button, button, .toggle, .info-icon { min-width: 44px; min-height: 44px; }
 
-      /* Critical above-the-fold styles */
-      body { font-family: 'Manrope', system-ui, sans-serif; font-size: 16px; line-height: 1.5; background: #fffaf5; color: #10161f; }
-      .panel { background: rgba(255, 255, 255, 0.72); backdrop-filter: blur(24px); }
-      .topbar { background: rgba(255, 255, 255, 0.88); backdrop-filter: blur(24px); }
+      /* Critical above-the-fold styles (approved: cool paper #F6F5F2 · ink #14171C · Geist) */
+      body { font-family: 'Geist', system-ui, sans-serif; font-size: 16px; line-height: 1.5; background: #F6F5F2; color: #14171C; }
+      .panel { background: #FFFFFF; }
+      .topbar { background: #F6F5F2; }
     </style>
   </head>
   <body>
@@ -27,11 +27,10 @@
     <main id="main-content" class="shell" tabindex="-1">
       <header class="topbar">
         <div class="brand">
-          <div class="logo" aria-label="Quorum AI logo" role="img">Q</div>
+          <div class="brand-mark" aria-label="Quorum AI logo" role="img">Q</div>
           <div class="brand-copy">
-            <h1>Quorum AI</h1>
-            <p class="brand-lede">Your question. Four expert perspectives. One synthesized truth.</p>
-            <p class="brand-workflow">Four AI models respond. They read each other's answers, debate, and revise. A fifth model writes the final synthesis. Cost shown before you run.</p>
+            <span class="wordmark">Quorum</span>
+            <p class="brand-lede">Four AI models, one sourced answer.</p>
           </div>
         </div>
         <div class="topbar-actions">
@@ -84,8 +83,9 @@
       </nav>
 
       <div class="layout">
+        <div data-view="composer">
         <section class="panel" aria-labelledby="composer-heading">
-          <h2 id="composer-heading">Workspace</h2>
+          <h1 id="composer-heading">Workspace</h1>
           <p class="lede">Results are ephemeral. Cost is shown before each run; nothing executes without your confirmation.</p>
           <div class="stack">
             <div class="callout callout-warning">
@@ -193,6 +193,13 @@
             </div>
           </div>
         </section>
+        </div>
+        <!-- View-switch placeholders (Slice 0 scaffold). Later slices
+             fill these with the cost gate, live run, and result views;
+             ``setView()`` in app.js toggles which one is visible. -->
+        <div data-view="cost-gate" hidden></div>
+        <div data-view="live-run" hidden></div>
+        <div data-view="result" hidden></div>
 
         <aside class="panel">
           <h2>Run controls</h2>

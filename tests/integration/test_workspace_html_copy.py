@@ -40,12 +40,9 @@ def client() -> TestClient:
 
 # --- Brand + workspace lede ---------------------------------------------------
 
-EXPECTED_BRAND_LEDE = "One question. Four models. One answer you can verify."
+EXPECTED_BRAND_LEDE = "Four AI models, one sourced answer."
 
-OLD_BRAND_LEDE = (
-    "Stop hopping between multiple AI chatbots. Get one sourced, "
-    "synthesized answer you can trust"
-)
+OLD_BRAND_LEDE = "Your question. Four expert perspectives. One synthesized truth."
 
 EXPECTED_WORKSPACE_LEDE = (
     "Results are ephemeral. Cost is shown before each run; "

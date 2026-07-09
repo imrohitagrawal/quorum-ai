@@ -51,61 +51,105 @@
 :root {
   color-scheme: light;
 
-  /* Background: a soft layered gradient over a warm paper colour. */
-  --bg: radial-gradient(circle at top, rgba(255, 154, 118, 0.22), transparent 38%),
-    radial-gradient(circle at 80% 20%, rgba(65, 91, 255, 0.13), transparent 30%),
-    linear-gradient(180deg, #fffaf5 0%, #f4efe8 100%);
+  /* ===================================================================
+   * QUORUM APPROVED DESIGN SYSTEM — Release 1 (Light · cool paper).
+   * Three-layer tokens: primitive (raw hex) → semantic (role aliases)
+   * → component (reused via the semantic layer). Source of truth:
+   * docs/design-handoff/ (README + Quorum Final Review.dc.html).
+   *
+   * THE GREEN RULE (non-negotiable): green (#0E6B50) means "minds
+   * agree" — brand mark + agreement/consensus/completed ONLY. Exactly
+   * one large green surface per journey (the verdict band). Money
+   * always moves on ink buttons; running is blue. Never green on
+   * buttons, links, or decoration.
+   * =================================================================== */
 
-  /* Surfaces. The two panel variants differ in translucency so
-     nested content reads correctly. */
-  --panel: rgba(255, 255, 255, 0.72);
-  --panel-strong: rgba(255, 255, 255, 0.88);
+  /* --- Primitive palette (raw values — do not reference in components) */
+  --c-paper: #F6F5F2;
+  --c-surface: #FFFFFF;
+  --c-ink: #14171C;
+  --c-body: #3C4148;
+  --c-secondary: #565C66;
+  --c-muted: #5F6570; /* WCAG-corrected from signed-off #7A8089 (3.65:1) to clear AA (≥4.66:1) on every surface incl. the .pill/--line pair; drives ~30 small-text usages */
+  --c-green: #0E6B50; /* agreement / consensus / completed / brand ONLY */
+  --c-blue: #47689E;  /* sources + running */
+  --c-amber: #8A5F16; /* caution / uncertainty */
+  --c-red: #A83A2A;   /* error / decision-support boundary */
 
-  /* Foreground. */
-  --ink: #10161f;
-  --muted: #5d6776;
-  --line: rgba(16, 22, 31, 0.10);
-  --line-strong: rgba(16, 22, 31, 0.18);
+  /* Borders as an opacity ramp over ink. */
+  --line: rgba(20, 23, 28, 0.07);
+  --line-2: rgba(20, 23, 28, 0.10);
+  --line-strong: rgba(20, 23, 28, 0.14);
+  --line-strong-2: rgba(20, 23, 28, 0.16);
 
-  /* Accent. Used sparingly: the primary CTA, the brand mark, and
-     focus rings. */
-  --accent: #d6663f;
-  --accent-strong: #b04f2c;
-  --accent-ink: #10161f; /* dark ink — ~5.5:1 on #d6663f */
-  --accent-soft: rgba(214, 102, 63, 0.14);
+  /* --- Semantic layer (role aliases used by components) */
+  --paper: var(--c-paper);
+  --bg: var(--c-paper); /* flat cool paper — no gradient */
+  --surface: var(--c-surface);
+  --panel: var(--c-surface);
+  --panel-strong: var(--c-surface);
+  --ink: var(--c-ink);
+  --body: var(--c-body);
+  --text-secondary: var(--c-secondary);
+  --muted: var(--c-muted);
 
-  /* Semantic state. */
-  --success: #0f7b65;
-  --success-soft: rgba(15, 123, 101, 0.12);
-  --warning: #946017;
-  --warning-soft: rgba(241, 179, 111, 0.20);
-  --danger: #9a2e1f;
-  --danger-soft: rgba(154, 46, 31, 0.12);
-  --info: #1f4f9a;
-  --info-soft: rgba(31, 79, 154, 0.10);
-  --debate-4: #6b3fa0; /* purple — debate round 4 accent bar */
-  --focus-ring: #8a1a0a; /* ~4.6:1 on #fffaf5 — clears WCAG AA */
+  /* Money / primary action moves on ink — never green. */
+  --accent: var(--c-ink);
+  --accent-strong: var(--c-ink); /* hover keeps ink (translateY + shadow do the work), never pure black */
+  --accent-ink: var(--c-surface); /* white on ink — ~14:1 */
+  --accent-soft: rgba(20, 23, 28, 0.06);
 
-  /* Elevation. */
-  --shadow-sm: 0 1px 2px rgba(30, 26, 19, 0.06);
-  --shadow-md: 0 12px 36px rgba(30, 26, 19, 0.08);
-  --shadow-lg: 0 30px 90px rgba(30, 26, 19, 0.12);
+  /* Brand mark. The Q tile is the one sanctioned green surface that is
+     THEME-INVARIANT: it stays #0E6B50 with white glyph in BOTH light and
+     dark ("no other logo colorways", dc.html §08). Defined once here and
+     NOT overridden in the dark block, so it never inherits the tonal
+     dark-green (--c-green → #4EC28C). White-on-#0E6B50 = 6.5:1 (AA). */
+  --brand-tile-bg: #0E6B50;
+  --brand-tile-fg: #FFFFFF;
 
-  /* Geometry. */
-  --radius-xs: 10px;
-  --radius-sm: 14px;
-  --radius-md: 18px;
-  --radius-lg: 22px;
-  --radius-xl: 30px;
+  /* Header + inset surfaces (light). Dark overrides these below. */
+  --header-bg: var(--c-paper);
+  --inset: #EFEEEA;
 
-  /* Motion. The bezier is shared everywhere. Durations are
-     conservative: nothing in the UI should run for more than 240ms. */
+  /* Semantic state (role-mapped to the approved palette). */
+  --success: var(--c-green);
+  --success-soft: rgba(14, 107, 80, 0.10);
+  --success-border: rgba(14, 107, 80, 0.45);
+  --warning: var(--c-amber);
+  --warning-soft: rgba(138, 95, 22, 0.10);
+  --danger: var(--c-red);
+  --danger-soft: rgba(168, 58, 42, 0.08);
+  --danger-border: rgba(168, 58, 42, 0.35);
+  --info: var(--c-blue); /* sources + running */
+  --info-soft: rgba(71, 104, 158, 0.10);
+  --debate-4: var(--c-blue);
+  --focus-ring: var(--c-ink); /* ink focus ring — ~13:1 on cool paper */
+
+  /* Elevation (from the handoff shadow scale). */
+  --shadow-sm: 0 1px 2px rgba(20, 23, 28, 0.05);
+  --shadow-md: 0 12px 32px rgba(20, 23, 28, 0.08);
+  --shadow-lg: 0 24px 60px rgba(20, 23, 28, 0.12);
+  --shadow-verdict: 0 16px 40px rgba(14, 107, 80, 0.30);
+  --shadow-cta: 0 6px 16px rgba(20, 23, 28, 0.22);
+  --shadow-cta-hover: 0 10px 22px rgba(20, 23, 28, 0.30);
+
+  /* Geometry — pills 999 · buttons 8–11 · cards 10–18. */
+  --radius-pill: 999px;
+  --radius-btn: 11px;
+  --radius-xs: 8px;
+  --radius-sm: 10px;
+  --radius-md: 14px;
+  --radius-lg: 18px;
+  --radius-xl: 18px;
+
+  /* Motion. Shared bezier; verdict ring is the one long (1.4s) motion. */
   --bezier: cubic-bezier(0.22, 1, 0.36, 1);
   --duration-fast: 120ms;
-  --duration-base: 200ms;
-  --duration-slow: 240ms;
+  --duration-base: 160ms;
+  --duration-slow: 180ms;
+  --duration-verdict: 1.4s;
 
-  /* Spacing scale. Use these in component padding/gap values. */
+  /* Spacing scale. */
   --space-1: 4px;
   --space-2: 8px;
   --space-3: 12px;
@@ -115,43 +159,63 @@
   --space-7: 32px;
   --space-8: 40px;
 
-  /* Typography. */
-  --font-sans: "Manrope", system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI",
+  /* Typography — Newsreader (display/verdict/wordmark-Q) · Geist (UI)
+     · Geist Mono (money/IDs/timings/counters). */
+  --font-sans: "Geist", system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI",
     sans-serif;
-  --font-serif: "Instrument Serif", Georgia, serif;
-  --font-mono: ui-monospace, SFMono-Regular, "SF Mono", Menlo, monospace;
+  --font-serif: "Newsreader", Georgia, serif;
+  --font-mono: "Geist Mono", ui-monospace, SFMono-Regular, "SF Mono", Menlo, monospace;
 }
 
 /* ----- Dark mode ------------------------------------------------------- */
 
 html[data-theme="dark"] {
   color-scheme: dark;
-  --bg: radial-gradient(circle at top, rgba(255, 136, 90, 0.10), transparent 38%),
-    radial-gradient(circle at 80% 20%, rgba(97, 122, 255, 0.12), transparent 30%),
-    linear-gradient(180deg, #171a1f 0%, #0d0f12 100%);
-  --panel: rgba(25, 29, 35, 0.78);
-  --panel-strong: rgba(30, 34, 41, 0.92);
-  --ink: #f4eee7;
-  --muted: #b5bdca;
-  --line: rgba(255, 255, 255, 0.10);
-  --line-strong: rgba(255, 255, 255, 0.18);
-  --accent: #ff9b72;
-  --accent-strong: #ffb38b;
-  --accent-ink: #1a0d00; /* dark ink — ~7.5:1 on #ff9b72, ~10:1 on #ffb38b */
-  --accent-soft: rgba(255, 155, 114, 0.16);
-  --success: #5ad0b8;
-  --success-soft: rgba(90, 208, 184, 0.16);
-  --warning: #f1c178;
-  --warning-soft: rgba(241, 193, 120, 0.18);
-  --danger: #ff8b78;
-  --danger-soft: rgba(255, 139, 120, 0.16);
-  --info: #8db3ff;
-  --info-soft: rgba(141, 179, 255, 0.14);
-  --debate-4: #a479e3; /* purple — debate round 4 accent bar */
-  --focus-ring: #ffcf7d; /* amber — ~11:1 on #0d0f12 dark bg */
+
+  /* Dark primitives — bg #101215 · header #15181D · card #191C22 ·
+     inset #22262D · text #E8EAEE. Semantic colours use the lighter
+     tonal variants (not inverted): green #4EC28C · blue #9FB6DF ·
+     amber #D9A954 · red #DB8070. The verdict band keeps #0E6B50 in
+     both themes (white-on-green passes AA either way). */
+  --c-paper: #101215;
+  --c-surface: #191C22;
+  --c-ink: #E8EAEE;
+  --c-body: #C3C7CE;
+  --c-secondary: #9AA0AA;
+  --c-muted: #8A9099; /* WCAG-corrected from signed-off #737A85 (3.51:1 on inset) to clear AA (≥4.7:1) on every dark surface */
+  --c-green: #4EC28C;
+  --c-blue: #9FB6DF;
+  --c-amber: #D9A954;
+  --c-red: #DB8070;
+
+  --line: rgba(232, 234, 238, 0.07);
+  --line-2: rgba(232, 234, 238, 0.10);
+  --line-strong: rgba(232, 234, 238, 0.14);
+  --line-strong-2: rgba(232, 234, 238, 0.16);
+
+  --bg: var(--c-paper);
+  --header-bg: #15181D;
+  --inset: #22262D;
+
+  /* Primary/money buttons invert to paper-on-ink (light chip on dark). */
+  --accent: var(--c-ink);
+  --accent-strong: var(--c-ink); /* hover keeps the chip colour; translateY + shadow do the work */
+  --accent-ink: var(--c-paper); /* dark text on the light chip */
+  --accent-soft: rgba(232, 234, 238, 0.08);
+
+  --success-soft: rgba(78, 194, 140, 0.14);
+  --success-border: rgba(78, 194, 140, 0.42);
+  --warning-soft: rgba(217, 169, 84, 0.14);
+  --danger-soft: rgba(219, 128, 112, 0.14);
+  --danger-border: rgba(219, 128, 112, 0.35);
+  --info-soft: rgba(159, 182, 223, 0.14);
+  --focus-ring: var(--c-ink); /* light ring on dark bg */
+
   --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.30);
-  --shadow-md: 0 12px 36px rgba(0, 0, 0, 0.32);
-  --shadow-lg: 0 30px 90px rgba(0, 0, 0, 0.42);
+  --shadow-md: 0 12px 32px rgba(0, 0, 0, 0.32);
+  --shadow-lg: 0 24px 60px rgba(0, 0, 0, 0.42);
+  --shadow-cta: 0 6px 16px rgba(0, 0, 0, 0.40);
+  --shadow-cta-hover: 0 10px 22px rgba(0, 0, 0, 0.50);
 }
 
 /* ----- Base ------------------------------------------------------------ */
@@ -208,7 +272,7 @@ a { color: var(--accent); text-underline-offset: 2px; }
 /* ----- Layout ---------------------------------------------------------- */
 
 .shell {
-  width: min(1280px, 80ch, calc(100vw - var(--space-7)));
+  width: min(1280px, calc(100vw - var(--space-7)));
   margin: var(--space-6) auto var(--space-8);
   display: flex;
   flex-direction: column;
@@ -224,11 +288,9 @@ a { color: var(--accent); text-underline-offset: 2px; }
   gap: var(--space-4);
   padding: var(--space-4) var(--space-5);
   border: 1px solid var(--line);
-  border-radius: 999px;
-  background: var(--panel);
-  backdrop-filter: blur(24px);
-  -webkit-backdrop-filter: blur(24px);
-  box-shadow: var(--shadow-lg);
+  border-radius: var(--radius-pill);
+  background: var(--paper);
+  box-shadow: var(--shadow-sm);
 }
 
 .brand {
@@ -238,60 +300,53 @@ a { color: var(--accent); text-underline-offset: 2px; }
   min-width: 0;
 }
 
-.logo {
-  width: 48px;
-  height: 48px;
-  border-radius: var(--radius-md);
+/* Green Q tile — the brand mark. Green is allowed here (the mark is
+   one of the two sanctioned green surfaces); white Q reads on it in
+   both themes. Radius ~8px, Newsreader 700. */
+.brand-mark {
+  width: 30px;
+  height: 30px;
+  border-radius: var(--radius-xs);
   display: grid;
   place-items: center;
-  background: linear-gradient(135deg, var(--accent), var(--accent-strong));
-  color: var(--accent-ink);
+  background: var(--brand-tile-bg);
+  color: var(--brand-tile-fg);
   font-family: var(--font-serif);
-  font-size: 1.6rem;
-  font-weight: 600;
-  flex-shrink: 0;
-  box-shadow: var(--shadow-md);
-  animation: spin 12s linear infinite;
-  transform-origin: center;
-}
-
-.brand-copy { min-width: 0; }
-
-.brand-copy h1 {
-  margin: 0;
-  font-family: var(--font-serif);
-  font-size: clamp(1.9rem, 3.5vw, 2.6rem);
+  font-size: 1.05rem;
   font-weight: 700;
   line-height: 1;
+  flex-shrink: 0;
+}
+
+.brand-copy {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+/* Ink wordmark — Geist 650, ~16px. No "AI" suffix; the mechanism
+   lives in the tagline below. */
+.wordmark {
+  font-family: var(--font-sans);
+  font-size: 1.05rem;
+  font-weight: 650;
   letter-spacing: -0.01em;
+  line-height: 1.1;
+  color: var(--ink);
 }
 
 .brand-copy p {
   margin: var(--space-2) 0 0;
   color: var(--muted);
   font-size: 0.95rem;
-  /* No max-width: the flex parent (.topbar) already constrains the
-     available width. A 52ch cap was actively truncating the tagline
-     to 2 lines at 1440px viewports, hiding "before you run it". The
-     -webkit-line-clamp below is a safety net for extreme widths
-     only (e.g. ultra-narrow windows); the media queries lift it when
-     the topbar wraps to a stacked layout. */
-  display: -webkit-box;
-  -webkit-line-clamp: 2;
-  -webkit-box-orient: vertical;
-  overflow: hidden;
 }
 
 .brand-lede {
-  font-weight: 600;
-  color: var(--ink);
-  -webkit-line-clamp: 1;
-}
-
-.brand-workflow {
+  font-weight: 400;
   font-size: 0.85rem;
-  color: var(--muted);
-  -webkit-line-clamp: 3;
+  color: var(--text-secondary);
+  -webkit-line-clamp: 1;
 }
 
 .topbar-actions {
@@ -503,25 +558,25 @@ a { color: var(--accent); text-underline-offset: 2px; }
 
 .panel {
   padding: var(--space-6);
-  border-radius: var(--radius-xl);
-  border: 1px solid var(--line);
-  background: var(--panel);
-  backdrop-filter: blur(24px);
-  -webkit-backdrop-filter: blur(24px);
-  box-shadow: var(--shadow-lg);
+  border-radius: var(--radius-lg);
+  border: 1px solid var(--line-2);
+  background: var(--surface);
+  box-shadow: var(--shadow-md);
   display: flex;
   flex-direction: column;
   gap: var(--space-4);
 }
 
+.panel h1,
 .panel h2 {
   margin: 0;
   font-family: var(--font-serif);
   font-size: 1.7rem;
-  font-weight: 700;
+  font-weight: 500; /* Newsreader display weight per the approved spec */
   letter-spacing: -0.01em;
 }
 
+.panel > h1,
 .panel > h2 { margin-bottom: 0; }
 
 /* Use design tokens instead of inline styles */
@@ -882,7 +937,7 @@ select {
   min-height: 48px;
   padding: 0 var(--space-5);
   border: 1px solid transparent;
-  border-radius: 999px;
+  border-radius: var(--radius-btn);
   font-weight: 600;
   font-size: 0.95rem;
   cursor: pointer;
@@ -896,26 +951,37 @@ select {
 .button:active:not(:disabled) { transform: translateY(0); }
 .button:disabled { cursor: not-allowed; opacity: 0.5; background: var(--line) !important; border-color: var(--line) !important; }
 
+/* Ink money/primary CTA — never green. Money always moves on ink. */
 .button-primary {
-  background: var(--accent);
+  background: var(--ink);
   color: var(--accent-ink);
-  box-shadow: var(--shadow-sm);
+  border-radius: var(--radius-btn);
+  box-shadow: var(--shadow-cta);
+  transition: transform 0.16s var(--bezier), box-shadow 0.18s var(--bezier),
+    background 0.16s var(--bezier);
 }
-.button-primary:hover:not(:disabled) { background: var(--accent-strong); box-shadow: var(--shadow-md); }
+.button-primary:hover:not(:disabled) {
+  background: var(--accent-strong);
+  transform: translateY(-1px);
+  box-shadow: var(--shadow-cta-hover);
+}
 
+/* Outline secondary — surface fill, ink text, strong hairline. */
 .button-secondary {
-  background: var(--panel-strong);
+  background: var(--surface);
   color: var(--ink);
-  border-color: var(--line);
+  border-color: var(--line-strong-2);
+  border-radius: var(--radius-btn);
 }
-.button-secondary:hover:not(:disabled) { border-color: var(--line-strong); }
+.button-secondary:hover:not(:disabled) { background: var(--paper); border-color: var(--line-strong-2); }
 
 .button-ghost {
   background: transparent;
   color: var(--ink);
-  border-color: var(--line);
+  border-color: transparent;
+  border-radius: var(--radius-btn);
 }
-.button-ghost:hover:not(:disabled) { background: var(--panel); border-color: var(--line-strong); }
+.button-ghost:hover:not(:disabled) { background: var(--accent-soft); }
 
 .button-danger {
   background: transparent;
@@ -978,7 +1044,7 @@ kbd {
   align-items: center;
   gap: var(--space-2);
   padding: 4px var(--space-3);
-  border-radius: 999px;
+  border-radius: var(--radius-pill);
   background: var(--line);
   color: var(--muted);
   font-size: 0.85rem;
@@ -1550,6 +1616,24 @@ html[data-theme="dark"] .workflow-step[data-state="completed"] .workflow-step-nu
 .mono { font-family: var(--font-mono); font-size: 0.9rem; overflow-wrap: anywhere; }
 .muted { color: var(--muted); }
 
+/* Uppercase micro-label (section eyebrows, meta labels). */
+.label-caps {
+  font-family: var(--font-sans);
+  font-weight: 600;
+  font-size: 11.5px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--text-secondary);
+}
+
+/* ----- View switch scaffold (Slice 0) ----------------------------------
+   ``setView(name)`` in app.js flips ``hidden`` on the [data-view]
+   siblings. The visible wrapper is transparent to layout (display:
+   contents) so the composer column keeps its current grid placement;
+   ``hidden`` still wins by specificity so a hidden view is removed. */
+[data-view] { display: contents; }
+[data-view][hidden] { display: none; }
+
 .error-placeholder {
   color: var(--danger-soft);
   font-style: italic;
@@ -1572,9 +1656,7 @@ main:focus { outline: none; }
 @media (max-width: 980px) {
   .layout, .model-grid, .meta-grid { grid-template-columns: 1fr; }
   .topbar { flex-wrap: wrap; }
-  /* When the topbar wraps, allow one extra line on the tagline so it
-     doesn't crowd the actions row, and shrink the font slightly. */
-  .brand-copy p { font-size: 0.85rem; -webkit-line-clamp: 3; }
+  .brand-copy p { font-size: 0.85rem; }
 }
 
 @media (max-width: 600px) {
@@ -1594,8 +1676,7 @@ main:focus { outline: none; }
   }
 
   .panel { padding: var(--space-4); }
-  .brand-copy h1 { font-size: 1.6rem; }
-  .brand-copy p { font-size: 0.8rem; -webkit-line-clamp: 4; }
+  .brand-copy p { font-size: 0.8rem; }
   .toast-region { left: var(--space-3); right: var(--space-3); max-width: none; }
 }
 
