@@ -24,9 +24,28 @@
 1. Read this file + the matching `.dc.html` section + the slice's AC IDs.
 2. Implement in the existing no-build stack (edit app.css / workspace.html / app.js).
 3. Self-verify: `verify` skill (drive the real /ui flow) + `UV_CACHE_DIR=.uv-cache uv run --extra dev pytest` + `cd e2e && npm test`.
-4. Adversarial review panel (isolated subagents, each told to REFUTE):
-   `taste-check` · `code-review` · design-fidelity-vs-dc.html · `accessibility-testing`
-   · `security-review` (money/key slices). Fix confirmed findings; re-verify.
+4. Adversarial review panel (isolated subagents, each told to REFUTE). **Use the
+   PRE-INSTALLED specialized skill for each dimension — do NOT reinvent as a generic
+   reviewer, and do NOT author a new custom skill (the repo library already covers
+   every dimension). MECHANISM: the `.agents/skills/<name>/` skills are NOT
+   Skill-tool-registered this session — the reviewer must `Read`
+   `/home/user/repo/.agents/skills/<name>/SKILL.md` and APPLY its checklist. Only
+   `taste-check` + `uiux-*` + built-ins (`code-review`, `security-review`) are
+   Skill-tool-invokable.**
+   - Backend slices → `code-quality-review` + `python-fastapi-backend-guardrails`;
+     `clean-architecture-enforcer`; `api-contract-governance` + `contract-testing`
+     (response/contract compat); `security-threat-modeling` + `owasp-control-mapper`
+     (money/provider-key boundary); `test-architecture`.
+   - UI slices → `ux-design` + `design-system-governance` + `uiux-*`;
+     `accessibility-testing`; `code-quality-review`; design-fidelity-vs-dc.html.
+   - Every slice → `taste-check` + `fanatic-critic` (ruthless).
+   Fix confirmed findings; re-verify. VERIFY each finding before applying (reviewers err).
+
+### Industrial PR-review gate (run BEFORE opening the PR)
+`enterprise-quality-gatekeeper` → `fanatic-critic` → `nfr-measurability-gate` (AC-035
+a11y + perf) → `devsecops` (secrets/scanning) → `traceability-management` +
+`acceptance-criteria-quality-gate` (AC-001…036 crosswalk) → `production-readiness-review`
+/ `release-readiness` (go/no-go + evidence + rollback in PR body).
 5. **Pause for user review** at the boundary. Commit only on approval.
 6. Update this file (Done/Next), then hand off to the next fresh context.
 
@@ -41,7 +60,7 @@
 ## Slice ledger
 | # | Slice | Status | Notes |
 |---|-------|--------|-------|
-| 0 | Design system + view switch | **DONE — awaiting user sign-off** | Tokens+fonts+components+header+setView scaffold. 4 adversarial reviews run; confirmed fixes applied (brand-tile theme-locked to #0E6B50 both themes; composer h2→h1; dead CSS cleaned; header-bg/inset light counterparts; CTA hover no longer pure-black). 34/34 contract tests green, /ui 200. OPEN: `--muted` #7A8089 fails AA (3.65:1) — deferred to user decision (see below). Pre-existing app.js edits (Number.isFinite guard, boot() reorder) present — keep/revert TBD. |
+| 0 | Design system + view switch | **DONE — committed 3132548** | Tokens+fonts+components+header+setView scaffold. 4 adversarial reviews; all confirmed fixes applied. USER DECISIONS: --muted WCAG-corrected to AA (#5F6570 light / #8A9099 dark, clears AA on every surface incl. pill/line); pre-existing app.js edits KEPT + boot() hardened. 44 contract tests pass; 2 unrelated pre-existing failures untouched (422 backend contract; drift-banner stale-id — both reproduce on clean tree). /ui 200. |
 | B1 | Backend: CostBreakdown | pending | by_model incl. Synthesis-writer row; by_stage query→initial→debate(2/3 split r1=r2)→synthesis(1/3); re-sum-to-total after quantize. |
 | B2 | Backend: agreement + positions + actual cost | pending | per-model positions emitted in debate.py (real when keyed / templated in demo); demo → actual=estimate; demo-mode caveat in UI. |
 | 1 | 02 Composer (draft) | pending | reconcile brand-lede test (pre-existing red) here. |
