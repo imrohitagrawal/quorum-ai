@@ -303,7 +303,58 @@
             </div>
           </section>
         </div>
-        <div data-view="live-run" hidden></div>
+        <div data-view="live-run" hidden>
+          <section class="panel live-run" role="region" aria-labelledby="live-run-heading">
+            <div class="live-run-header">
+              <div class="live-run-header-lead">
+                <h1 id="live-run-heading" class="live-run-heading" tabindex="-1">Live run</h1>
+                <span id="live-status-pill" class="live-status-pill" data-state="running">
+                  <span class="live-status-dot" aria-hidden="true"></span>
+                  <span id="live-status-text" role="status" aria-live="polite">Starting…</span>
+                </span>
+              </div>
+              <div class="live-run-header-meta">
+                <span id="live-elapsed" class="live-elapsed mono" aria-hidden="true">0.0s elapsed</span>
+                <button id="live-stop" class="button live-stop" type="button">Stop run</button>
+              </div>
+            </div>
+            <button
+              id="live-corr"
+              type="button"
+              class="live-corr live-corr-copy mono"
+              aria-label="Copy run ID"
+            ></button>
+
+            <div class="live-query-band">
+              <div class="live-eyebrow">Running query</div>
+              <div id="live-query" class="live-query"></div>
+            </div>
+
+            <div id="live-stage-strip" class="live-stage-strip" aria-hidden="true"></div>
+
+            <div class="live-run-grid">
+              <div class="live-run-main">
+                <div id="live-notices" class="live-notices" hidden>
+                  <div class="live-eyebrow">Run notices</div>
+                  <div id="live-notices-list" class="live-notices-list"></div>
+                </div>
+                <p class="live-debate-caption muted">
+                  Round-level critiques appear here as each debate round completes.
+                  Per-model debate detail is not captured.
+                </p>
+                <div id="live-debate" class="live-debate"></div>
+              </div>
+              <div class="live-run-side">
+                <div class="live-side-section">
+                  <div class="live-eyebrow">Model status</div>
+                  <div id="live-model-status" class="live-model-status"></div>
+                </div>
+                <div id="live-fallback" class="live-fallback" role="status" hidden></div>
+                <div id="live-cap" class="live-cap"></div>
+              </div>
+            </div>
+          </section>
+        </div>
         <div data-view="result" hidden></div>
 
         <aside class="panel">

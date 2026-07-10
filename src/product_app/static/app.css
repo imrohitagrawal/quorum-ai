@@ -126,6 +126,7 @@
   --danger-border: rgba(168, 58, 42, 0.35);
   --info: var(--c-blue); /* sources + running */
   --info-soft: rgba(71, 104, 158, 0.10);
+  --info-glow: rgba(71, 104, 158, 0.18); /* running dot/ring glow — live run */
   --debate-4: var(--c-blue);
   --focus-ring: var(--c-ink); /* ink focus ring — ~13:1 on cool paper */
 
@@ -218,6 +219,7 @@ html[data-theme="dark"] {
   --danger-medium: rgba(219, 128, 112, 0.32); /* active block-band fill */
   --danger-border: rgba(219, 128, 112, 0.35);
   --info-soft: rgba(159, 182, 223, 0.14);
+  --info-glow: rgba(159, 182, 223, 0.22); /* running dot/ring glow — live run */
   --focus-ring: var(--c-ink); /* light ring on dark bg */
 
   --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.30);
@@ -564,6 +566,20 @@ a { color: var(--accent); text-underline-offset: 2px; }
   display: grid;
   grid-template-columns: 1.05fr 0.95fr;
   gap: var(--space-5);
+}
+
+/* Slice 3 (04 Live run): while the live-run view is active the live card goes
+   full width and the persistent "Run controls" aside is hidden — its status /
+   cancel / run-id function is subsumed by the live card. The aside element
+   stays in the DOM (only hidden here), so the existing ``#cancel-run`` /
+   ``#status-meta`` / ``#correlation-meta`` render targets remain valid; the
+   ``.run-controls-cancel[hidden]`` behaviour is untouched. */
+[data-active-view="live-run"] .layout {
+  grid-template-columns: 1fr;
+}
+
+[data-active-view="live-run"] .layout > aside {
+  display: none;
 }
 
 .panel {
@@ -1346,6 +1362,600 @@ kbd {
 .run-controls-cancel-hint strong {
   color: var(--ink);
   font-weight: 600;
+}
+
+/* ----- Slice 3 (04 Live run) ------------------------------------------------
+   GREEN RULE: no green surfaces here — running is blue (--info), done is ink,
+   failed is --danger, caution/fallback is --warning. Green is the verdict only
+   (Slice 4a). All colours are tokens; no raw hex/rgba below. */
+
+.live-run {
+  gap: 0;
+  padding: 0;
+  overflow: hidden;
+}
+
+.live-run-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: var(--space-3);
+  padding: var(--space-4) var(--space-6);
+  border-bottom: 1px solid var(--line);
+  background: var(--surface);
+}
+
+.live-run-header-lead {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  flex-wrap: wrap;
+}
+
+.live-run-heading {
+  margin: 0;
+  font-family: var(--font-serif);
+  font-size: 1.15rem;
+  font-weight: 500;
+  letter-spacing: -0.01em;
+}
+
+.live-run-header-meta {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+}
+
+.live-elapsed {
+  font-size: 0.8rem;
+  color: var(--text-secondary);
+  white-space: nowrap;
+}
+
+/* Running-status pill — blue while running, recoloured on terminal states. */
+.live-status-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+  font-size: 0.82rem;
+  font-weight: 600;
+}
+
+.live-status-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: var(--radius-pill);
+  background: currentColor;
+  flex-shrink: 0;
+}
+
+.live-status-pill[data-state="running"] {
+  color: var(--info);
+}
+
+.live-status-pill[data-state="running"] .live-status-dot {
+  box-shadow: 0 0 0 3px var(--info-glow);
+  animation: pulse 1.6s ease-in-out infinite;
+}
+
+.live-status-pill[data-state="completed"] {
+  color: var(--ink);
+}
+
+.live-status-pill[data-state="partial"] {
+  color: var(--warning);
+}
+
+.live-status-pill[data-state="failed"],
+.live-status-pill[data-state="cancelled"] {
+  color: var(--danger);
+}
+
+/* "Stop run" — red-outline, never a filled danger button (the run is healthy). */
+.live-stop {
+  min-height: 34px;
+  padding: 0 var(--space-4);
+  border-radius: var(--radius-btn);
+  border: 1px solid var(--danger-border);
+  background: var(--surface);
+  color: var(--danger);
+  font-size: 0.8rem;
+  font-weight: 600;
+}
+
+.live-stop:hover {
+  background: var(--danger-soft);
+}
+
+.live-stop[hidden] {
+  display: none;
+}
+
+.live-corr {
+  padding: var(--space-2) var(--space-6) 0;
+  font-size: 0.72rem;
+  color: var(--muted);
+}
+
+.live-corr:empty {
+  display: none;
+}
+
+/* Fix 6: the live run-id is a copy button (the aside copy affordance is hidden
+   during a live run). Reset the button chrome so it reads as the quiet run-id
+   line, with a subtle hover/focus/copied affordance. No green — the copied
+   confirmation uses the running-blue --info, per the live-view green rule. */
+.live-corr-copy {
+  display: block;
+  text-align: left;
+  background: transparent;
+  border: 1px dashed transparent;
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+}
+
+.live-corr-copy:hover {
+  border-color: var(--line);
+}
+
+.live-corr-copy:focus-visible {
+  outline: 2px solid var(--focus-ring);
+  outline-offset: 2px;
+}
+
+.live-corr-copy[data-copied="true"] {
+  border-color: var(--info);
+}
+
+.live-query-band {
+  padding: var(--space-4) var(--space-6);
+  border-bottom: 1px solid var(--line);
+  background: var(--inset);
+}
+
+.live-eyebrow {
+  font-size: 0.68rem;
+  font-weight: 600;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--muted);
+  margin-bottom: var(--space-1);
+}
+
+.live-query {
+  font-family: var(--font-serif);
+  font-size: 1.15rem;
+  font-weight: 500;
+  line-height: 1.35;
+  color: var(--ink);
+}
+
+/* Stage strip — four pipeline stages, honest meta only. */
+.live-stage-strip {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: var(--space-5);
+  padding: var(--space-4) var(--space-6);
+  border-bottom: 1px solid var(--line);
+  background: var(--surface);
+}
+
+.live-stage {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  min-width: 0;
+}
+
+.live-stage-head {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+}
+
+.live-stage-dot {
+  width: 18px;
+  height: 18px;
+  border-radius: var(--radius-pill);
+  display: grid;
+  place-items: center;
+  font-size: 0.62rem;
+  font-weight: 700;
+  flex-shrink: 0;
+  background: var(--accent-soft);
+  color: var(--muted);
+}
+
+.live-stage[data-state="completed"] .live-stage-dot {
+  background: var(--ink);
+  color: var(--accent-ink);
+}
+
+.live-stage[data-state="running"] .live-stage-dot {
+  background: var(--info);
+  color: var(--accent-ink);
+  box-shadow: 0 0 0 3px var(--info-glow);
+}
+
+.live-stage[data-state="failed"] .live-stage-dot {
+  background: var(--danger);
+  color: var(--accent-ink);
+}
+
+.live-stage-label {
+  font-size: 0.8rem;
+  font-weight: 600;
+  color: var(--ink);
+}
+
+.live-stage[data-state="pending"] .live-stage-label,
+.live-stage[data-state="skipped"] .live-stage-label {
+  color: var(--muted);
+}
+
+.live-stage[data-state="running"] .live-stage-label {
+  color: var(--info);
+}
+
+.live-stage-bar {
+  height: 3px;
+  border-radius: var(--radius-pill);
+  background: var(--accent-soft);
+  overflow: hidden;
+}
+
+.live-stage-bar-fill {
+  display: block;
+  height: 100%;
+  width: 0;
+  border-radius: var(--radius-pill);
+  background: var(--accent-soft);
+}
+
+.live-stage[data-state="completed"] .live-stage-bar-fill {
+  width: 100%;
+  background: var(--ink);
+}
+
+.live-stage[data-state="running"] .live-stage-bar-fill {
+  background: var(--info);
+}
+
+.live-stage[data-state="failed"] .live-stage-bar-fill {
+  width: 100%;
+  background: var(--danger);
+}
+
+/* Indeterminate blue bar for running debate/synthesis (no honest fraction). */
+.live-stage-bar[data-indeterminate="true"] .live-stage-bar-fill {
+  width: 40%;
+  animation: live-indeterminate 1.4s ease-in-out infinite;
+}
+
+@keyframes live-indeterminate {
+  0% { transform: translateX(-60%); }
+  100% { transform: translateX(260%); }
+}
+
+.live-stage-meta {
+  font-size: 0.68rem;
+  color: var(--muted);
+}
+
+.live-stage[data-state="running"] .live-stage-meta {
+  color: var(--info);
+}
+
+/* Two-column inner grid: debate lane + sidebar. */
+.live-run-grid {
+  display: grid;
+  grid-template-columns: 1fr 320px;
+}
+
+.live-run-main {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-4);
+  padding: var(--space-6);
+  border-right: 1px solid var(--line);
+}
+
+.live-debate-caption {
+  font-size: 0.78rem;
+  margin: 0;
+}
+
+.live-debate {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-4);
+}
+
+.live-round-card {
+  border: 1px solid var(--line-2);
+  border-radius: var(--radius-md);
+  padding: var(--space-4);
+  background: var(--surface);
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+}
+
+.live-round-card[data-state="running"] {
+  border-color: var(--info);
+  box-shadow: 0 0 0 3px var(--info-glow);
+}
+
+.live-round-placeholder {
+  border-style: dashed;
+  background: var(--inset);
+}
+
+.live-round-header {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  flex-wrap: wrap;
+}
+
+.live-round-pill {
+  font-size: 0.68rem;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  padding: 2px var(--space-2);
+  border-radius: var(--radius-pill);
+  background: var(--accent-soft);
+  color: var(--ink);
+}
+
+.live-round-focus {
+  font-size: 0.75rem;
+  color: var(--text-secondary);
+}
+
+.live-round-state {
+  margin-left: auto;
+  font-size: 0.7rem;
+  font-weight: 600;
+  color: var(--muted);
+}
+
+.live-round-card[data-state="running"] .live-round-state {
+  color: var(--info);
+}
+
+.live-round-card[data-state="failed"] .live-round-state {
+  color: var(--danger);
+}
+
+.live-round-body {
+  margin: 0;
+  font-size: 0.85rem;
+  line-height: 1.6;
+  color: var(--body);
+}
+
+/* Sidebar. */
+.live-run-side {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-5);
+  padding: var(--space-6);
+  background: var(--inset);
+}
+
+.live-side-section {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+}
+
+.live-model-status {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+}
+
+.live-model-row {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  flex-wrap: wrap;
+}
+
+.live-model-avatar {
+  width: 24px;
+  height: 24px;
+  border-radius: var(--radius-pill);
+  display: grid;
+  place-items: center;
+  font-size: 0.62rem;
+  font-weight: 700;
+  flex-shrink: 0;
+  background: var(--accent-soft);
+  color: var(--ink);
+}
+
+.live-model-name {
+  flex: 1;
+  min-width: 0;
+  font-size: 0.8rem;
+  font-weight: 600;
+  color: var(--ink);
+}
+
+.live-model-state {
+  font-size: 0.7rem;
+  font-weight: 600;
+  color: var(--muted);
+}
+
+.live-model-row[data-state="done"] .live-model-state {
+  color: var(--text-secondary);
+}
+
+.live-model-row[data-state="failed"] .live-model-state {
+  color: var(--danger);
+}
+
+.live-model-tag {
+  font-size: 0.66rem;
+  font-weight: 600;
+  padding: 2px var(--space-2);
+  border-radius: var(--radius-pill);
+  background: var(--warning-soft);
+  color: var(--warning);
+}
+
+/* Search-fallback disclosure — amber caution. */
+.live-fallback {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  padding: var(--space-3);
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--warning-border);
+  background: var(--warning-soft);
+}
+
+.live-fallback[hidden] {
+  display: none;
+}
+
+.live-fallback-title {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  font-size: 0.78rem;
+  font-weight: 650;
+  color: var(--warning);
+}
+
+.live-fallback-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: var(--radius-pill);
+  background: var(--warning);
+  flex-shrink: 0;
+}
+
+.live-fallback-body {
+  font-size: 0.76rem;
+  line-height: 1.5;
+  color: var(--body);
+}
+
+/* Approved-cap panel — cap + auto-stop guarantee, no spend bar. */
+.live-cap {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  padding: var(--space-4);
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--line-2);
+  background: var(--surface);
+}
+
+.live-cap-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: var(--space-2);
+}
+
+.live-cap-label {
+  font-size: 0.78rem;
+  font-weight: 650;
+  color: var(--ink);
+}
+
+.live-cap-value {
+  font-size: 0.95rem;
+  font-weight: 600;
+  color: var(--ink);
+}
+
+.live-cap-note {
+  margin: 0;
+  font-size: 0.72rem;
+  line-height: 1.5;
+  color: var(--text-secondary);
+}
+
+.live-cap-note.muted {
+  color: var(--muted);
+}
+
+/* Fix 1: failure notices surfaced inside the live card (the aside #notice-list
+   is hidden during a live run). Amber caution box; individual .notice items
+   carry their own tone colours. */
+.live-notices {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  padding: var(--space-3) var(--space-4);
+  border: 1px solid var(--warning-border);
+  border-radius: var(--radius-sm);
+  background: var(--warning-soft);
+}
+
+.live-notices[hidden] {
+  display: none;
+}
+
+.live-notices-list {
+  display: flex;
+  flex-direction: column;
+}
+
+/* Fix 4: the shared `.mono` utility (font-size: 0.9rem) is declared AFTER this
+   live block at equal specificity, so it clobbers the intended small sizes.
+   These compound selectors (higher specificity) restore the design sizes
+   without touching the shared `.mono` utility other components depend on. */
+.live-stage-meta.mono {
+  font-size: 0.68rem;
+}
+
+.live-model-state.mono {
+  font-size: 0.7rem;
+}
+
+.live-corr.mono {
+  font-size: 0.72rem;
+}
+
+.live-elapsed.mono {
+  font-size: 0.8rem;
+}
+
+.live-cap-value.mono {
+  font-size: 0.95rem;
+}
+
+@media (max-width: 900px) {
+  .live-run-grid {
+    grid-template-columns: 1fr;
+  }
+  .live-run-main {
+    border-right: none;
+    border-bottom: 1px solid var(--line);
+  }
+  .live-stage-strip {
+    grid-template-columns: repeat(2, 1fr);
+  }
+}
+
+/* a11y: disable the live-run pulse + indeterminate motion under
+   prefers-reduced-motion (the readout stays legible, just static). */
+@media (prefers-reduced-motion: reduce) {
+  .live-status-pill[data-state="running"] .live-status-dot {
+    animation: none;
+  }
+  .live-stage-bar[data-indeterminate="true"] .live-stage-bar-fill {
+    animation: none;
+  }
 }
 
 /* ----- Workflow progress indicator -------------------------------------- */

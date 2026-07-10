@@ -79,6 +79,9 @@
   const composerTotalEstimate = el("composer-total-estimate");
   const costConfirmationSecondary = el("cost-confirmation-secondary");
   const copyCorrelationButton = el("copy-correlation");
+  // Slice 3 (04 Live run): the visible live-run heading. Focus lands here when
+  // entering the live view (setRunning focuses the now-hidden #cancel-run).
+  const liveRunHeading = el("live-run-heading");
   const cancelButton = el("cancel-run");
   const cancelContainer = el("cancel-run-container");
   const connectionPill = el("connection-pill");
@@ -148,6 +151,34 @@
     lastStaleModelIds: null,
     // Track if user has attempted to submit (gates inline error display)
     submissionAttempted: false,
+    // Slice 3 (04 Live run): live-run view state.
+    // ``liveQueryText`` is the submitted question, captured at run start so the
+    // running-query band can echo it (the poll payload carries no query_text).
+    // ``lastLiveStatus`` short-circuits SR announcements on the live status
+    // pill. The ``liveElapsed*`` triple drives a local ~1s ticker: on each poll
+    // we store the server ``elapsed_time_ms`` (REAL, whole-run) plus a local
+    // timestamp, and the ticker displays ``base + (now - stamp)``. The ticker
+    // is CLEARED (never runs after the run ends) and frozen at the final
+    // elapsed on any terminal transition.
+    liveQueryText: null,
+    lastLiveStatus: null,
+    liveElapsedBaseMs: 0,
+    liveElapsedStamp: 0,
+    liveElapsedTimer: null,
+    // Slice 3 (04 Live run): per-block render signatures. ``renderLiveRun``
+    // runs every 750ms; without a change guard each helper rebuilds identical
+    // nodes (text-selection loss, animation restart, and — since #live-fallback
+    // is role=status — an SR re-announcement every tick). Each helper stores a
+    // lightweight signature of the exact data it renders and skips the
+    // ``replaceChildren`` when unchanged. ``null`` forces a render (reset per
+    // new run in ``proceedWithRun``). Mirrors the ``lastLiveStatus`` guard.
+    liveSig: {
+      stage: null,
+      debate: null,
+      models: null,
+      fallback: null,
+      notices: null,
+    },
     // Slice 1 (02 Composer): the high-stakes gate. ``highStakesRequired``
     // is set from ``POST /v1/query-runs/warnings`` (a ``high_stakes``
     // warning in the response). While it is true and the user has not
@@ -185,6 +216,14 @@
     for (const view of views) {
       view.hidden = view !== target;
     }
+    // Slice 3 (04 Live run): stamp the active view on the ``<main>`` shell so
+    // CSS can go full-width and hide the persistent "Run controls" aside while
+    // the live-run card is on screen (its status/cancel/run-id function is
+    // subsumed by the live card). The aside element stays in the DOM — it is
+    // only visually hidden via CSS — so the existing ``#cancel-run`` /
+    // ``#status-meta`` render targets remain valid.
+    const shell = document.getElementById("main-content");
+    if (shell) shell.dataset.activeView = name;
   }
 
   // ---------------------------------------------------------------------------
@@ -1016,6 +1055,578 @@
     }
   }
 
+  // ---------------------------------------------------------------------------
+  // Slice 3 (04 Live run)
+  // ---------------------------------------------------------------------------
+  //
+  // ``renderLiveRun`` paints the dedicated live-run view from a poll result
+  // (or the create response, which has no ``.result`` projection — every
+  // nested read is guarded). HONESTY: this view renders ONLY server-backed
+  // fields. There is NO per-model debate stance, NO token streaming, NO
+  // per-stage accrued cost, and NO live spend accrual — those are mock-only
+  // in the pixel spec and have no backing field. Debate is shown at ROUND
+  // granularity; cost is shown as the approved CAP with the real auto-stop
+  // guarantee; model status is pending → done/failed (+ search-fallback tag).
+  // GREEN RULE: nothing here is green (green is the verdict, Slice 4a). Running
+  // is blue (--info); done is ink; failed is --danger; caution is --warning.
+
+  const LIVE_PIPELINE_STAGES = [
+    { key: "initial_answers", label: "Initial answers" },
+    { key: "debate_round_1", label: "Debate round 1" },
+    { key: "debate_round_2", label: "Debate round 2" },
+    { key: "synthesis", label: "Synthesis" },
+  ];
+
+  const LIVE_TERMINAL = new Set([
+    "completed",
+    "partial",
+    "failed",
+    "timed_out",
+    "cancelled",
+  ]);
+
+  const LIVE_ROUND_PLACEHOLDER_STATE = {
+    running: "in progress",
+    pending: "pending",
+    failed: "failed",
+    skipped: "skipped",
+  };
+
+  const LIVE_ROUND_PLACEHOLDER_BODY = {
+    running:
+      "Models are exchanging critiques for this round. The round-level critique appears here once it completes.",
+    pending: "This round has not started yet.",
+    failed: "This round did not complete.",
+    skipped: "This round was skipped.",
+  };
+
+  // Map a run status to the header pill's visible text + colour state. The
+  // state feeds ``data-state`` (CSS colours it): "running" = blue, "completed"
+  // = ink (NOT green — green is the verdict only), "partial" = amber, "failed"/
+  // "cancelled" = red. Text derived honestly from status/round position.
+  function liveStatusPresentation(status) {
+    switch (status) {
+      case "accepted":
+        return { text: "Starting…", state: "running" };
+      case "initial_answers_running":
+        return { text: "Running · initial answers", state: "running" };
+      case "debate_round_1_running":
+        return { text: "Running · debate round 1 of 2", state: "running" };
+      case "debate_round_2_running":
+        return { text: "Running · debate round 2 of 2", state: "running" };
+      case "synthesis_running":
+        return { text: "Running · synthesis", state: "running" };
+      case "completed":
+        return { text: "Completed", state: "completed" };
+      case "partial":
+        return { text: "Partial result", state: "partial" };
+      case "failed":
+        return { text: "Failed", state: "failed" };
+      case "timed_out":
+        return { text: "Timed out", state: "failed" };
+      case "cancelled":
+        return { text: "Cancelled", state: "cancelled" };
+      default:
+        return { text: STATUS_LABELS[status] || "Running", state: "running" };
+    }
+  }
+
+  // Format whole-run elapsed. Sub-minute → "28.7s elapsed"; ≥60s → "1m 05s
+  // elapsed". Driven by the REAL server ``elapsed_time_ms``.
+  function formatElapsed(ms) {
+    if (!Number.isFinite(ms)) return "—";
+    const clamped = Math.max(0, Math.round(ms));
+    // Branch on the ROUNDED ms, not the sub-minute float: [59.95s, 60s) rounds
+    // to 60000ms and must read "1m 00s elapsed", never "60.0s elapsed".
+    if (clamped >= 60000) {
+      const whole = Math.floor(clamped / 1000);
+      const minutes = Math.floor(whole / 60);
+      const seconds = whole % 60;
+      return `${minutes}m ${String(seconds).padStart(2, "0")}s elapsed`;
+    }
+    return `${(clamped / 1000).toFixed(1)}s elapsed`;
+  }
+
+  function tickLiveElapsed() {
+    const elapsedEl = el("live-elapsed");
+    if (!elapsedEl) return;
+    const shown = state.liveElapsedBaseMs + (Date.now() - state.liveElapsedStamp);
+    elapsedEl.textContent = formatElapsed(shown);
+  }
+
+  function startLiveElapsedTicker() {
+    if (state.liveElapsedTimer) return;
+    tickLiveElapsed();
+    state.liveElapsedTimer = window.setInterval(tickLiveElapsed, 1000);
+  }
+
+  // Stop the ticker so it never runs after the run ends. Callers: terminal
+  // renderLiveRun, stopPolling, setRunning(false).
+  function stopLiveElapsedTicker() {
+    if (state.liveElapsedTimer) {
+      window.clearInterval(state.liveElapsedTimer);
+      state.liveElapsedTimer = null;
+    }
+  }
+
+  // Freeze the elapsed readout at the final value and stop ticking.
+  function freezeLiveElapsed(finalMs) {
+    stopLiveElapsedTicker();
+    const elapsedEl = el("live-elapsed");
+    if (elapsedEl && Number.isFinite(finalMs)) {
+      elapsedEl.textContent = formatElapsed(finalMs);
+    }
+  }
+
+  function liveStageDotGlyph(stageState, index) {
+    if (stageState === "completed") return "✓";
+    if (stageState === "failed") return "!";
+    if (stageState === "running") return "●";
+    if (stageState === "skipped") return "–";
+    return String(index + 1); // pending
+  }
+
+  // Honest per-stage meta: initial answers shows the REAL "N/4 answers"
+  // (answers received vs 4) while running/complete; every other stage shows
+  // its state label + the server ``detail`` if any. NO fabricated time/cost.
+  function liveStageMeta(def, stage, stageState, answersReceived) {
+    const detail = stage && stage.detail ? String(stage.detail) : "";
+    if (def.key === "initial_answers") {
+      if (stageState === "running" || stageState === "completed") {
+        const base = `${Math.min(answersReceived, 4)}/4 answers`;
+        return detail ? `${base} · ${detail}` : base;
+      }
+      return detail ? `${stageState} · ${detail}` : stageState;
+    }
+    return detail ? `${stageState} · ${detail}` : stageState;
+  }
+
+  function renderLiveStageStrip(result, answersReceived) {
+    const strip = el("live-stage-strip");
+    if (!strip) return;
+    const stages = (result.progress && result.progress.stages) || [];
+    const byKey = new Map(stages.map((s) => [s.stage, s]));
+    // Fix 3: skip the rebuild when nothing this strip renders has changed.
+    const sig = JSON.stringify({
+      answersReceived,
+      stages: LIVE_PIPELINE_STAGES.map((def) => {
+        const s = byKey.get(def.key);
+        return s ? [s.state, s.detail || ""] : null;
+      }),
+    });
+    if (sig === state.liveSig.stage) return;
+    state.liveSig.stage = sig;
+    const items = LIVE_PIPELINE_STAGES.map((def, index) => {
+      const stage = byKey.get(def.key);
+      const stageState = stage ? stage.state : "pending";
+      const item = document.createElement("div");
+      item.className = "live-stage";
+      item.dataset.state = stageState;
+
+      const head = document.createElement("div");
+      head.className = "live-stage-head";
+      const dot = document.createElement("span");
+      dot.className = "live-stage-dot";
+      dot.setAttribute("aria-hidden", "true");
+      dot.textContent = liveStageDotGlyph(stageState, index);
+      const label = document.createElement("span");
+      label.className = "live-stage-label";
+      label.textContent = def.label;
+      head.append(dot, label);
+
+      const bar = document.createElement("div");
+      bar.className = "live-stage-bar";
+      bar.dataset.state = stageState;
+      const fill = document.createElement("span");
+      fill.className = "live-stage-bar-fill";
+      if (def.key === "initial_answers" && stageState === "running") {
+        // REAL fraction: answers landed out of 4.
+        fill.style.width = `${(Math.min(answersReceived, 4) / 4) * 100}%`;
+      } else if (stageState === "running") {
+        // No honest fraction exists for debate/synthesis — show an
+        // indeterminate blue bar (static under reduced-motion).
+        bar.dataset.indeterminate = "true";
+      }
+      bar.appendChild(fill);
+
+      const meta = document.createElement("div");
+      meta.className = "live-stage-meta mono";
+      meta.textContent = liveStageMeta(def, stage, stageState, answersReceived);
+
+      item.append(head, bar, meta);
+      return item;
+    });
+    strip.replaceChildren(...items);
+  }
+
+  function renderLiveDebateCard(round) {
+    const card = document.createElement("article");
+    card.className = "live-round-card";
+    card.dataset.state = "complete";
+    const header = document.createElement("div");
+    header.className = "live-round-header";
+    const pill = document.createElement("span");
+    pill.className = "live-round-pill";
+    pill.textContent = `Round ${round.round_number}`;
+    const focus = document.createElement("span");
+    focus.className = "live-round-focus";
+    focus.textContent = `Focus: ${
+      (round.focus_areas || []).join(", ") || "general critique"
+    }`;
+    const stateEl = document.createElement("span");
+    stateEl.className = "live-round-state";
+    stateEl.textContent = "complete";
+    header.append(pill, focus, stateEl);
+    const body = document.createElement("p");
+    body.className = "live-round-body";
+    body.textContent = round.critique_text || "";
+    card.append(header, body);
+    return card;
+  }
+
+  function renderLiveDebatePlaceholder(roundNo, stageState) {
+    const card = document.createElement("article");
+    card.className = "live-round-card live-round-placeholder";
+    card.dataset.state = stageState;
+    const header = document.createElement("div");
+    header.className = "live-round-header";
+    const pill = document.createElement("span");
+    pill.className = "live-round-pill";
+    pill.textContent = `Round ${roundNo}`;
+    const stateEl = document.createElement("span");
+    stateEl.className = "live-round-state";
+    stateEl.textContent = LIVE_ROUND_PLACEHOLDER_STATE[stageState] || "pending";
+    header.append(pill, stateEl);
+    const body = document.createElement("p");
+    body.className = "live-round-body muted";
+    body.textContent =
+      LIVE_ROUND_PLACEHOLDER_BODY[stageState] || "This round has not started yet.";
+    card.append(header, body);
+    return card;
+  }
+
+  // Debate at ROUND granularity from ``debate_outputs`` (one critique_text per
+  // round). Rounds not yet written show a pending/running placeholder driven by
+  // the matching ``debate_round_N`` stage state. There is NO per-model debate
+  // data to render.
+  function renderLiveDebate(result) {
+    const host = el("live-debate");
+    if (!host) return;
+    const debate = (result.result && result.result.debate_outputs) || [];
+    const byRound = new Map(debate.map((r) => [r.round_number, r]));
+    const stages = (result.progress && result.progress.stages) || [];
+    const stageByKey = new Map(stages.map((s) => [s.stage, s]));
+    // Fix 3: skip the rebuild when neither the round critiques nor the
+    // debate-round stage states have changed since the last render.
+    const sig = JSON.stringify({
+      debate: debate.map((r) => [
+        r.round_number,
+        r.focus_areas || [],
+        r.critique_text || "",
+      ]),
+      stages: [1, 2].map((n) => {
+        const s = stageByKey.get(`debate_round_${n}`);
+        return s ? s.state : "pending";
+      }),
+    });
+    if (sig === state.liveSig.debate) return;
+    state.liveSig.debate = sig;
+    const cards = [1, 2].map((roundNo) => {
+      const round = byRound.get(roundNo);
+      if (round) return renderLiveDebateCard(round);
+      const stage = stageByKey.get(`debate_round_${roundNo}`);
+      return renderLiveDebatePlaceholder(roundNo, stage ? stage.state : "pending");
+    });
+    host.replaceChildren(...cards);
+  }
+
+  // Honest model status: a slot NOT yet in model_answers = "pending"; present
+  // = "done" (completed, with real latency) or "failed"; a fallback answer is
+  // tagged "search fallback". Nothing else (no "queued"/"responding"/"live").
+  function renderLiveModelStatus(slots, answers) {
+    const host = el("live-model-status");
+    if (!host) return;
+    const bySlot = new Map(answers.map((a) => [a.slot_number, a]));
+    const slotList = slots.length
+      ? slots
+      : defaultModelIds.map((mid, i) => ({ slot_number: i + 1, model_id: mid }));
+    // Fix 3: skip the rebuild when the slot set and every answer field this
+    // row renders are unchanged.
+    const sig = JSON.stringify({
+      slots: slotList.map((s) => [s.slot_number, s.model_id]),
+      answers: answers.map((a) => [
+        a.slot_number,
+        a.model_id,
+        a.display_name,
+        a.status,
+        a.latency_ms,
+        a.fallback_used,
+        a.provider_path,
+      ]),
+    });
+    if (sig === state.liveSig.models) return;
+    state.liveSig.models = sig;
+    const rows = slotList.map((slot) => {
+      const answer = bySlot.get(slot.slot_number);
+      const modelId = (answer && answer.model_id) || slot.model_id;
+      const name = (answer && answer.display_name) || displayNameForModel(modelId);
+      const row = document.createElement("div");
+      row.className = "live-model-row";
+      const avatar = document.createElement("span");
+      avatar.className = "live-model-avatar";
+      avatar.setAttribute("aria-hidden", "true");
+      avatar.textContent = avatarInitialForModel(modelId);
+      const nameEl = document.createElement("span");
+      nameEl.className = "live-model-name";
+      nameEl.textContent = name;
+      const stateEl = document.createElement("span");
+      stateEl.className = "live-model-state mono";
+
+      let stateKey;
+      let stateText;
+      if (!answer) {
+        stateKey = "pending";
+        stateText = "pending";
+      } else if (answer.status === "failed") {
+        stateKey = "failed";
+        stateText = "failed";
+      } else {
+        stateKey = "done";
+        stateText =
+          answer.latency_ms != null ? `done · ${answer.latency_ms} ms` : "done";
+      }
+      row.dataset.state = stateKey;
+      stateEl.textContent = stateText;
+      row.append(avatar, nameEl, stateEl);
+
+      if (
+        answer &&
+        (answer.fallback_used || answer.provider_path === "fallback_search")
+      ) {
+        const tag = document.createElement("span");
+        tag.className = "live-model-tag";
+        tag.textContent = "search fallback";
+        row.appendChild(tag);
+      }
+      return row;
+    });
+    host.replaceChildren(...rows);
+  }
+
+  // Amber search-fallback disclosure — hidden unless some answer used a
+  // fallback. Prefers the server ``provider_notice`` text, else an honest
+  // default (no provider brand names fabricated).
+  function renderLiveFallback(answers) {
+    const host = el("live-fallback");
+    if (!host) return;
+    const fallbackAnswer = answers.find(
+      (a) => a.fallback_used || a.provider_path === "fallback_search",
+    );
+    // Fix 3: this block is role=status — skipping the rebuild when the
+    // disclosure is unchanged avoids an SR re-announcement every poll tick.
+    const sig = JSON.stringify(
+      fallbackAnswer ? [true, fallbackAnswer.provider_notice || ""] : [false],
+    );
+    if (sig === state.liveSig.fallback) return;
+    state.liveSig.fallback = sig;
+    if (!fallbackAnswer) {
+      host.hidden = true;
+      host.replaceChildren();
+      return;
+    }
+    const title = document.createElement("div");
+    title.className = "live-fallback-title";
+    const dot = document.createElement("span");
+    dot.className = "live-fallback-dot";
+    dot.setAttribute("aria-hidden", "true");
+    const titleText = document.createElement("span");
+    titleText.textContent = "Search fallback in use";
+    title.append(dot, titleText);
+    const body = document.createElement("div");
+    body.className = "live-fallback-body";
+    body.textContent =
+      fallbackAnswer.provider_notice ||
+      "Primary search didn't return enough source support for a model, so a fallback search is providing citations. Informational — the run continues, and it's disclosed on the receipt.";
+    host.replaceChildren(title, body);
+    host.hidden = false;
+  }
+
+  // Approved-cap panel. Shows the APPROVED CAP (estimated_cost_usd) labelled as
+  // a cap, the REAL auto-stop guarantee, and the receipt reconciliation note.
+  // NO spend bar, NO accruing "so far" figure — none exists.
+  function renderLiveCap(result) {
+    const host = el("live-cap");
+    if (!host) return;
+    const cap =
+      result.cost_estimate && result.cost_estimate.estimated_cost_usd;
+    const head = document.createElement("div");
+    head.className = "live-cap-head";
+    const label = document.createElement("span");
+    label.className = "live-cap-label";
+    label.textContent = "Approved cap";
+    const value = document.createElement("span");
+    value.className = "live-cap-value mono";
+    value.textContent = cap != null ? formatUsd(cap, { suffix: false }) : "—";
+    head.append(label, value);
+    const guarantee = document.createElement("p");
+    guarantee.className = "live-cap-note";
+    guarantee.textContent =
+      "The run stops itself if spend would pass the approved figure.";
+    const reconcile = document.createElement("p");
+    reconcile.className = "live-cap-note muted";
+    reconcile.textContent = "Final cost reconciles on the receipt.";
+    host.replaceChildren(head, guarantee, reconcile);
+  }
+
+  // Fix 1: surface failure notices inside the live-run card. While the live
+  // view is active the "Run controls" aside (and its ``#notice-list``) is
+  // hidden, so on a partial/failed run the REASON it degraded would otherwise
+  // be invisible. This mirrors the HONESTY-SAFE fields ``renderNotices``
+  // surfaces — never innerHTML, never provider keys/secrets — and shows the
+  // block only when at least one field is non-empty.
+  // Single source of truth for "does the live-run card have failure-disclosure
+  // content to show". Used by ``renderLiveNotices`` (to show/hide the block)
+  // AND by the terminal toast/hint copy, so the copy can never point at a
+  // "run notices" block that is actually hidden.
+  function liveNoticesHaveContent(result) {
+    if (!result) return false;
+    return Boolean(
+      result.partial_failure_notice ||
+        (result.provider_failure_notices &&
+          result.provider_failure_notices.length) ||
+        (result.failed_steps && result.failed_steps.length) ||
+        (result.missing_steps && result.missing_steps.length),
+    );
+  }
+
+  function renderLiveNotices(result) {
+    const host = el("live-notices");
+    const list = el("live-notices-list");
+    if (!host || !list) return;
+    const partialNotice = (result && result.partial_failure_notice) || "";
+    const providerNotices = (result && result.provider_failure_notices) || [];
+    const failedSteps = (result && result.failed_steps) || [];
+    const missingSteps = (result && result.missing_steps) || [];
+    // Fix 3: skip the rebuild when nothing this block renders has changed.
+    const sig = JSON.stringify({
+      partialNotice,
+      providerNotices,
+      failedSteps,
+      missingSteps,
+    });
+    if (sig === state.liveSig.notices) return;
+    state.liveSig.notices = sig;
+    const hasContent = liveNoticesHaveContent(result);
+    if (!hasContent) {
+      host.hidden = true;
+      list.replaceChildren();
+      return;
+    }
+    const fragment = document.createDocumentFragment();
+    if (partialNotice) {
+      const item = document.createElement("div");
+      item.className = "notice notice-warn";
+      item.textContent = partialNotice;
+      fragment.appendChild(item);
+    }
+    for (const notice of providerNotices) {
+      const item = document.createElement("div");
+      item.className = "notice notice-warn";
+      item.textContent = notice;
+      fragment.appendChild(item);
+    }
+    if (failedSteps.length || missingSteps.length) {
+      fragment.appendChild(renderStageDiagnostics(failedSteps, missingSteps));
+    }
+    list.replaceChildren(fragment);
+    host.hidden = false;
+  }
+
+  function renderLiveRun(result) {
+    if (!result) return;
+    const status = result.status || "accepted";
+    const isTerminal = LIVE_TERMINAL.has(status);
+
+    // Header status pill.
+    const pill = el("live-status-pill");
+    const statusText = el("live-status-text");
+    const present = liveStatusPresentation(status);
+    if (pill) pill.dataset.state = present.state;
+    // Only reassign textContent on a real change so the polite live region
+    // announces coarse status transitions, not every 750ms poll tick.
+    if (statusText && present.text !== state.lastLiveStatus) {
+      state.lastLiveStatus = present.text;
+      statusText.textContent = present.text;
+    }
+
+    // Stop button — available while running, removed once terminal.
+    const stopBtn = el("live-stop");
+    if (stopBtn) stopBtn.hidden = isTerminal;
+
+    // Correlation id (the live card subsumes the aside's run-id readout).
+    const corr = el("live-corr");
+    if (corr) {
+      const corrId = result.correlation_id || "";
+      corr.textContent = corrId ? `run ${corrId}` : "";
+      // Fix 6: stash the RAW id so the copy handler copies exactly what is
+      // shown here (without the "run " prefix).
+      if (corrId) {
+        corr.dataset.correlationId = corrId;
+      } else {
+        delete corr.dataset.correlationId;
+      }
+    }
+
+    // Running-query echo. The poll payload carries no query_text, so use the
+    // value captured at run start (falling back to the composer field).
+    const queryEl = el("live-query");
+    if (queryEl) {
+      const queryText =
+        state.liveQueryText ||
+        (queryTextarea ? queryTextarea.value.trim() : "") ||
+        "";
+      queryEl.textContent = queryText || "—";
+    }
+
+    // Live elapsed ticker. Store the REAL server elapsed + a local timestamp;
+    // the ~1s ticker shows base + drift. On terminal, freeze at the final
+    // elapsed and stop ticking (it must never run after the run ends).
+    const elapsedMs = Number.isFinite(result.elapsed_time_ms)
+      ? result.elapsed_time_ms
+      : null;
+    if (isTerminal) {
+      const finalMs =
+        elapsedMs != null
+          ? elapsedMs
+          : state.liveElapsedBaseMs + (Date.now() - state.liveElapsedStamp);
+      freezeLiveElapsed(finalMs);
+    } else {
+      if (elapsedMs != null) {
+        state.liveElapsedBaseMs = elapsedMs;
+        state.liveElapsedStamp = Date.now();
+      }
+      startLiveElapsedTicker();
+    }
+
+    // Guarded reads: ``created`` has no ``.result`` projection; model_answers /
+    // debate_outputs may be undefined; model_slots is present on both.
+    const answers = (result.result && result.result.model_answers) || [];
+    const slots = result.model_slots || [];
+    // HONESTY: a failed slot returned no answer, so it must NOT inflate the
+    // "N/4 answers" text or the initial-answers progress fraction. Count only
+    // slots that actually completed.
+    const answersReceived = answers.filter(
+      (a) => a.status === "completed",
+    ).length;
+
+    renderLiveStageStrip(result, answersReceived);
+    renderLiveDebate(result);
+    renderLiveModelStatus(slots, answers);
+    renderLiveFallback(answers);
+    renderLiveCap(result);
+    renderLiveNotices(result);
+  }
+
   function mapStageToStep(stageName) {
     if (!stageName) return null;  // No stage = clear indicator
 
@@ -1773,6 +2384,11 @@
   function setRunning(isRunning) {
     state.isRunning = isRunning;
     estimateButton.disabled = isRunning;
+    // Slice 3 (04 Live run): the live-elapsed ticker only runs while a run is
+    // in flight. Terminal freezing of the readout is handled by renderLiveRun
+    // (which sets the final value before this clear); here we just guarantee
+    // the interval is gone once the run is no longer running.
+    if (!isRunning) stopLiveElapsedTicker();
     // The cancel pill is hidden in the idle layout and revealed only
     // while a run is actually in flight. Toggling ``hidden`` on the
     // container (not the button) keeps the button's ``disabled`` state
@@ -2235,6 +2851,19 @@
     }
   }
 
+  // Land focus on the live-run heading AND bring it into view. ``setRunning``
+  // may have just smooth-scrolled toward the (now display:none) #cancel-run;
+  // an explicit scrollIntoView here wins (last scroll target) so the h1 is not
+  // left off-screen for a sighted keyboard user. Reduced-motion honoured.
+  function focusLiveHeading() {
+    if (!liveRunHeading) return;
+    liveRunHeading.focus({ preventScroll: true });
+    liveRunHeading.scrollIntoView({
+      behavior: prefersReducedMotion() ? "auto" : "smooth",
+      block: "start",
+    });
+  }
+
   // Post-reveal choreography for the cost gate. Call AFTER ``setView`` so
   // the region is in the rendered accessibility tree. Moves focus into the
   // gate (WCAG 2.4.3 — never strand focus on the now-hidden composer),
@@ -2617,6 +3246,22 @@
         }),
       });
       state.currentRunId = created.query_run_id;
+      // Slice 3 (04 Live run): capture the submitted question so the live-run
+      // running-query band can echo it (the poll payload has no query_text),
+      // and reset the live view's SR/elapsed state for a fresh run.
+      state.liveQueryText = queryText;
+      state.lastLiveStatus = null;
+      // Fix 3: a NEW run must re-render every live block even if its first
+      // payload is byte-identical to the previous run's — reset the guards.
+      state.liveSig = {
+        stage: null,
+        debate: null,
+        models: null,
+        fallback: null,
+        notices: null,
+      };
+      state.liveElapsedBaseMs = 0;
+      state.liveElapsedStamp = Date.now();
       setRunning(true);
       updateRunMeta(created);
       renderProgress(created.progress);
@@ -2627,10 +3272,14 @@
       // The estimate is now consumed; collapse the cost callout until
       // the next estimate.
       hideCostConfirmation();
-      // Leave the cost gate — the run is now live. Slice 3 will swap to a
-      // dedicated live-run view; for now return to the composer so the
-      // gate is not stranded on screen while progress renders below.
-      setView("composer");
+      // Slice 3 (04 Live run): swap to the dedicated live-run view and seed it
+      // from the create response (which has no ``.result`` projection — every
+      // nested read in ``renderLiveRun`` is guarded).
+      setView("live-run");
+      // Fix 2: setRunning(true) above focused the now-hidden #cancel-run;
+      // land focus on the visible live-run heading instead (one h1 per view).
+      focusLiveHeading();
+      renderLiveRun(created);
       toast({ message: "Run started. Tracking progress below.", tone: "info" });
       startPolling();
     } catch (error) {
@@ -2679,6 +3328,11 @@
       }
       state.currentRunId = active.query_run_id;
       setRunning(true);
+      // Fix 11: a run discovered here never went through proceedWithRun, so it
+      // has not switched to the live card. Show it (otherwise we poll a hidden
+      // view) and land focus on the heading, matching the proceed path.
+      setView("live-run");
+      focusLiveHeading();
       // PR-0 / Bug 8: when ``pollRun`` rehydrates the active run on
       // a fresh page load, capture its start time so the
       // "Current time" card is not stuck on "Not started" while the
@@ -2693,6 +3347,7 @@
     });
     updateRunMeta(result);
     renderProgress(result.progress);
+    renderLiveRun(result);
     renderModelPanels(result.result.model_answers, result);
     renderDebateAndSynthesis(result);
     renderNotices(result);
@@ -2709,6 +3364,12 @@
     ) {
       stopPolling();
       setRunning(false);
+      // Slice 3 (04 Live run): stay on the live-run view and render its
+      // terminal state (status pill reflects completed/failed/etc., Stop button
+      // hidden, elapsed frozen). ``renderLiveRun`` already ran above with the
+      // terminal ``result``; the persistent panels below show the detailed
+      // results.
+      // TODO(Slice 4a): transition to the result view on terminal success.
       // PR-0 / Bug 8: replace the displayed time with the
       // completion time on the first terminal transition. Polling
       // has already stopped, so this is the last time we touch
@@ -2718,7 +3379,9 @@
         toast({ message: "Run completed. See the synthesis below.", tone: "success" });
       } else if (result.status === "partial") {
         toast({
-          message: "Run finished with partial results. Check the notices section.",
+          message: liveNoticesHaveContent(result)
+            ? "Run finished with partial results. See the run notices above."
+            : "Run finished with partial results — some steps did not complete.",
           tone: "warn",
           timeout: 6500,
         });
@@ -2751,7 +3414,9 @@
           message: errorMessage,
           hint: failedStepsText
             ? `Technical details: ${failedStepsText}`
-            : 'Check the notices section for more information.',
+            : liveNoticesHaveContent(result)
+              ? 'The run notices above explain what went wrong.'
+              : 'Copy the run ID above and contact support if this persists.',
         });
 
         toast({ message: "Run failed. See error banner above.", tone: "error", timeout: 8000 });
@@ -2787,6 +3452,8 @@
       window.clearInterval(state.pollingTimer);
       state.pollingTimer = null;
     }
+    // Slice 3 (04 Live run): the elapsed ticker must never outlive polling.
+    stopLiveElapsedTicker();
   }
 
   async function cancelRun() {
@@ -2798,6 +3465,9 @@
       });
       updateRunMeta(result);
       renderProgress(result.progress);
+      // Slice 3 (04 Live run): reflect the cancelled state in the live-run
+      // card (pill → "Cancelled", Stop hidden, elapsed frozen).
+      renderLiveRun(result);
       renderNotices(result);
       // PR-0 / Bug 8: cancel is a terminal transition; finalize
       // the run time once so the card shows the cancel time
@@ -3091,22 +3761,44 @@
     estimateButton.addEventListener("click", () => {
       startRun();
     });
+    // Shared run-id clipboard helper (Fix 6): both the aside's #copy-correlation
+    // button and the live card's #live-corr button copy a run id and show the
+    // same copied-title feedback. Extracted so both stay in lockstep.
+    async function copyRunIdToClipboard(button, value, idleTitle) {
+      if (!button || !value) return;
+      try {
+        await navigator.clipboard.writeText(value);
+        button.dataset.copied = "true";
+        button.title = "Copied!";
+        setTimeout(() => {
+          delete button.dataset.copied;
+          button.title = idleTitle;
+        }, 1500);
+      } catch (_) {
+        button.title = "Copy failed — select and copy manually.";
+      }
+    }
     if (copyCorrelationButton) {
-      copyCorrelationButton.addEventListener("click", async () => {
+      copyCorrelationButton.addEventListener("click", () => {
         const target = el("correlation-meta");
         const value = (target?.textContent || "").trim();
         if (!value || value === "Not started") return;
-        try {
-          await navigator.clipboard.writeText(value);
-          copyCorrelationButton.dataset.copied = "true";
-          copyCorrelationButton.title = "Copied!";
-          setTimeout(() => {
-            delete copyCorrelationButton.dataset.copied;
-            copyCorrelationButton.title = "Copy run ID — include it if you report an issue.";
-          }, 1500);
-        } catch (_) {
-          copyCorrelationButton.title = "Copy failed — select and copy manually.";
-        }
+        copyRunIdToClipboard(
+          copyCorrelationButton,
+          value,
+          "Copy run ID — include it if you report an issue.",
+        );
+      });
+    }
+    // Fix 6: the live card's run id is copyable too (the aside copy button is
+    // hidden during a live run). It copies the SAME id shown, stashed on the
+    // button's dataset by ``renderLiveRun``.
+    const liveCorrButton = el("live-corr");
+    if (liveCorrButton) {
+      liveCorrButton.addEventListener("click", () => {
+        const value = (liveCorrButton.dataset.correlationId || "").trim();
+        if (!value) return;
+        copyRunIdToClipboard(liveCorrButton, value, "Copy run ID");
       });
     }
     if (proceedButton) {
@@ -3135,6 +3827,14 @@
     cancelButton.addEventListener("click", () => {
       cancelRun();
     });
+    // Slice 3 (04 Live run): the live card's "Stop run" button reuses the same
+    // cancel path as the aside's cancel button.
+    const liveStopButton = el("live-stop");
+    if (liveStopButton) {
+      liveStopButton.addEventListener("click", () => {
+        cancelRun();
+      });
+    }
     setConnectionPill("connecting", "Connecting");
     try {
       await initSession();
