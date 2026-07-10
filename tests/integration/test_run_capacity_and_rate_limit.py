@@ -52,7 +52,7 @@ def test_session_endpoint_rate_limited_after_burst() -> None:
 
 
 def test_run_semaphore_returns_503_when_exhausted(
-    monkeypatch,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """When the in-flight run semaphore is full, a new
     ``POST /v1/query-runs`` returns 503 with the

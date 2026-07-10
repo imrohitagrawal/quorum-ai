@@ -67,7 +67,7 @@ def test_hsts_present_only_in_production(
     """
     # LOCAL default: no HSTS
     response = client.get("/health")
-    assert "strict-transport-security" not in {k.lower() for k in response.headers.keys()}
+    assert "strict-transport-security" not in {k.lower() for k in response.headers}
 
     # PRODUCTION: HSTS present
     monkeypatch.setattr(

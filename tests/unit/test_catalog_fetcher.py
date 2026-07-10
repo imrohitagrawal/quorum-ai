@@ -33,7 +33,7 @@ from product_app.catalog_fetcher import (
 # ---------------------------------------------------------------------------
 
 
-def _payload(*models: dict) -> str:
+def _payload(*models: dict[str, object]) -> str:
     return json.dumps({"data": list(models)})
 
 
@@ -43,7 +43,7 @@ def _model(
     name: str = "Test Model",
     prompt: str = "0.0001",
     completion: str = "0.0002",
-) -> dict:
+) -> dict[str, object]:
     return {
         "id": id,
         "name": name,
@@ -160,6 +160,7 @@ def test_fetcher_uses_transport_on_first_call_and_caches_on_subsequent() -> None
     assert len(first) == 1
     assert len(second) == 1
     assert transport.call_count == 1, "second call should hit the cache, not the transport"
+    assert transport.last_url is not None
     assert transport.last_url.startswith("https://")
     assert transport.last_timeout == 2.0
 

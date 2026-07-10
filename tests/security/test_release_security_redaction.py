@@ -85,7 +85,7 @@ def test_cumulative_cost_block_does_not_leak_account_secrets(
     """
     from decimal import Decimal
 
-    from product_app.costs import cost_event_recorder
+    from product_app.costs import CostThresholdAction, cost_event_recorder
 
     monkeypatch.setattr(
         "product_app.query_runs.settings.openrouter_api_key",
@@ -99,7 +99,7 @@ def test_cumulative_cost_block_does_not_leak_account_secrets(
         account_id=account,
         query_run_id=None,
         estimated_cost_usd=Decimal("0.30"),
-        threshold_action="allow",
+        threshold_action=CostThresholdAction.ALLOW,
         confirmed=False,
     )
     client = TestClient(app)

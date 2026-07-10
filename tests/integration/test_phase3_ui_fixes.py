@@ -11,7 +11,8 @@ What this suite covers
 CSS tokens:
   • ``--focus-ring`` resolves to a WCAG-AA colour on both light and dark bg.
   • ``--accent-ink`` is dark in light mode, light in dark mode (legible on accent).
-  • ``--warning-ink`` replaced with `color: white` on ``.callout-demo-mode .callout-icon`` for WCAG AA compliance.
+  • ``--warning-ink`` replaced with `color: white` on
+    ``.callout-demo-mode .callout-icon`` for WCAG AA compliance.
   • ``--debate-4`` token replaces the round-4 purple raw hex in both themes.
   • All ``var(--foo, #hex)`` dual-value fallbacks are gone from app.css.
   • The ``#fffdf9`` raw hex in .logo is replaced with ``var(--accent-ink)``.
@@ -86,7 +87,6 @@ def css_text() -> str:
     ``.../tests/integration/test_phase3_ui_fixes.py`` as an absolute path.
     parents[2] = project root.
     """
-    from pathlib import Path
 
     css_path = Path(__file__).resolve().parents[2] / "src/product_app/static/app.css"
     return css_path.read_text()
@@ -105,7 +105,6 @@ def client() -> TestClient:
 def test_all_required_tokens_defined_in_light_scope(css_text: str) -> None:
     """Every Phase 3 token appears in :root {} (light mode)."""
     for token in _REQUIRED_TOKENS:
-        pattern = rf"^\s*--[\w-]+:"  # rough token def
         assert token in css_text, f"Token {token} not found in app.css"
 
 
@@ -220,7 +219,6 @@ def test_textarea_has_maxlength_attribute(client: TestClient) -> None:
 def test_app_js_sets_aria_invalid_on_short_query() -> None:
     """app.js calls setAttribute('aria-invalid', ...) on the textarea and calls
     updateQueryValidation at boot so pre-filled forms have correct state."""
-    from pathlib import Path
 
     js_path = Path(__file__).resolve().parents[2] / "src/product_app/static/app.js"
     js = js_path.read_text()

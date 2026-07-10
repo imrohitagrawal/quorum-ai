@@ -4,8 +4,9 @@ Simple Playwright E2E tests for Quorum-AI workspace
 Run with: python e2e/simple_workspace_tests.py
 """
 
-from playwright.sync_api import sync_playwright
 import re
+
+from playwright.sync_api import sync_playwright
 
 
 def test_workspace_loads():
@@ -142,14 +143,14 @@ def test_keyboard_navigation():
 
         # Tab through elements
         elements = []
-        for i in range(5):
+        for _ in range(5):
             page.keyboard.press("Tab")
             page.wait_for_timeout(100)
             focused = page.locator(":focus")
             try:
                 text = focused.inner_text()
                 elements.append(text[:20] if text else "Element")
-            except:
+            except Exception:
                 elements.append("Element")
 
         print(f"✓ Navigated through elements: {elements}")
@@ -227,7 +228,7 @@ def test_form_interactions():
         new_question = "How does neural network training work?"
         textbox.fill(new_question)
         assert textbox.input_value() == new_question, "Input should accept new text after clear"
-        print(f"✓ Input clears and accepts new text")
+        print("✓ Input clears and accepts new text")
 
         browser.close()
         print("✓ Form interactions test passed")

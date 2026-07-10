@@ -21,12 +21,14 @@ os.environ.setdefault("ENVIRONMENT", "local")
 # that use the cookie path are unaffected.
 os.environ.setdefault("ACCOUNT_LEGACY_HEADER_ENABLED", "true")
 
+from collections.abc import Iterator
+
 import pytest
 
 from product_app.auth import session_repository
 from product_app.query_runs import (
-    _ip_rate_limiter,
     _account_rate_limiter,
+    _ip_rate_limiter,
     query_run_repository,
 )
 
@@ -40,7 +42,7 @@ def _reset_state() -> None:
 
 
 @pytest.fixture(autouse=True)
-def reset_state():
+def reset_state() -> Iterator[None]:
     """Auto-reset all in-memory state between tests."""
     _reset_state()
     yield

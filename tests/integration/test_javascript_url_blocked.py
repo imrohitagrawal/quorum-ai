@@ -28,9 +28,8 @@ def test_javascript_url_not_rendered_as_anchor() -> None:
     path is covered by the live curl smoke test in the demo
     verification step.
     """
-    js_source = (
-        _render_workspace_html,  # touch import for side-effects
-    )
+    # Touch the import so the renderer module is loaded for side-effects.
+    assert _render_workspace_html is not None
     # Read the static JS file directly.
     import pathlib
 

@@ -13,13 +13,14 @@ the demo budget. The recorder keeps a sliding window
 from __future__ import annotations
 
 from decimal import Decimal
-from uuid import uuid4
+from uuid import UUID, uuid4
 
 import pytest
 
 from product_app.costs import (
     HARD_LIMIT_USD,
     CostEstimationService,
+    CostThresholdAction,
     cost_event_recorder,
 )
 from product_app.model_slots import ModelSlot
@@ -31,7 +32,7 @@ def _reset_recorder() -> None:
     cost_event_recorder.clear()
 
 
-def _record_accepted(*, account_id, estimated_cost_usd) -> None:
+def _record_accepted(*, account_id: UUID, estimated_cost_usd: Decimal) -> None:
     """Helper: simulate a successful (accepted) cost event for an
     account, as if a previous estimate was allowed and the run
     completed.
@@ -41,7 +42,7 @@ def _record_accepted(*, account_id, estimated_cost_usd) -> None:
         account_id=account_id,
         query_run_id=None,
         estimated_cost_usd=estimated_cost_usd,
-        threshold_action="allow",
+        threshold_action=CostThresholdAction.ALLOW,
         confirmed=False,
     )
 
@@ -122,7 +123,7 @@ def test_only_accepted_events_count() -> None:
             account_id=account,
             query_run_id=None,
             estimated_cost_usd=Decimal("1.00"),  # each would be > hard limit
-            threshold_action="block",
+            threshold_action=CostThresholdAction.BLOCK,
             confirmed=False,
         )
     estimate = service.estimate(

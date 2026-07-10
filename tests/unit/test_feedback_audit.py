@@ -14,7 +14,11 @@ import pytest
 
 from product_app.feedback_audit import (
     AuditStatistics,
+    CostStats,
+    DebateStats,
     Finding,
+    SafetyStats,
+    SynthesisStats,
     _aggregate_cost,
     _aggregate_provider,
     _aggregate_synthesis,
@@ -104,7 +108,7 @@ def test_record_event_is_noop_when_store_unconfigured() -> None:
 # ---------------------------------------------------------------------------
 
 
-def _provider_event(model_id: str, provider_path: str, duration_ms: int):
+def _provider_event(model_id: str, provider_path: str, duration_ms: int) -> object:
     return type(
         "Row",
         (),
@@ -126,7 +130,7 @@ def _synthesis_event(
     status: str = "completed",
     high_stakes: bool = False,
     false_consensus: bool = True,
-):
+) -> object:
     return type(
         "Row",
         (),
@@ -388,8 +392,7 @@ def test_render_report_with_high_severity_marks_action_required() -> None:
 # ---------------------------------------------------------------------------
 
 
-def _synthesis_event_aggregate():
-    from product_app.feedback_audit import SynthesisStats
+def _synthesis_event_aggregate() -> SynthesisStats:
 
     return SynthesisStats(
         total=0,
@@ -401,8 +404,7 @@ def _synthesis_event_aggregate():
     )
 
 
-def _cost_event_aggregate():
-    from product_app.feedback_audit import CostStats
+def _cost_event_aggregate() -> CostStats:
 
     return CostStats(
         total=0,
@@ -413,14 +415,12 @@ def _cost_event_aggregate():
     )
 
 
-def _safety_event_aggregate():
-    from product_app.feedback_audit import SafetyStats
+def _safety_event_aggregate() -> SafetyStats:
 
     return SafetyStats(total=0, impressions=0, acknowledgements=0)
 
 
-def _debate_event_aggregate():
-    from product_app.feedback_audit import DebateStats
+def _debate_event_aggregate() -> DebateStats:
 
     return DebateStats(
         total=0,

@@ -232,7 +232,7 @@ def test_query_run_live_path_records_all_four_slots_as_openrouter_search(
         model_id: str,
         messages: list[dict[str, str]],
         max_tokens: int | None = None,
-    ):
+    ) -> LiveProviderResult:
         bare_model_id = model_id.replace(":online", "")
         if bare_model_id in DEFAULT_MODEL_IDS:
             slot_number = DEFAULT_MODEL_IDS.index(bare_model_id) + 1
@@ -240,12 +240,13 @@ def test_query_run_live_path_records_all_four_slots_as_openrouter_search(
             return _live_result_for_slot(slot_number)
         # Debate / synthesis call: return a short, opinionated
         # response so the result is still coherent.
+        model_slug = model_id.replace(":", "_").replace("/", "-")
         return LiveProviderResult(
             answer_text=f"Live second-pass analysis for {model_id}.",
             sources=[
                 SourceReference(
                     title=f"Second-pass citation {model_id}",
-                    url=f"https://example.org/second-pass/{model_id.replace(':', '_').replace('/', '-')}",
+                    url=f"https://example.org/second-pass/{model_slug}",
                     provider=ProviderPath.OPENROUTER_SEARCH,
                     is_fallback=False,
                 )
@@ -347,7 +348,7 @@ def test_query_run_live_path_records_search_off_slot_as_openrouter_search_too(
         model_id: str,
         messages: list[dict[str, str]],
         max_tokens: int | None = None,
-    ):
+    ) -> LiveProviderResult:
         # Real live result regardless of ``:online`` suffix.
         return LiveProviderResult(
             answer_text=f"Live answer for {model_id}.",

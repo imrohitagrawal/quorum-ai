@@ -11,6 +11,8 @@ from __future__ import annotations
 
 import warnings
 
+import pytest
+
 
 def test_warning_emitted_when_secret_unset(
     monkeypatch: pytest.MonkeyPatch,

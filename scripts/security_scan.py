@@ -13,12 +13,22 @@ EXCLUDED_DIRS = {
     ".mypy_cache",
     ".pytest_cache",
     ".ruff_cache",
+    ".uv-cache",
     ".venv",
     "__pycache__",
     "build",
     "dist",
     "htmlcov",
 }
+
+# A bare Python identifier or attribute access on the right-hand side of an
+# assignment is a variable / keyword-argument pass-through (for example
+# ``openrouter_key=openrouter_key`` or ``token=confirmation.confirmation_token``),
+# never a hardcoded secret. Real secret literals in Python source are always
+# quoted, so these are safe to ignore in ``.py`` files.
+_PYTHON_PASSTHROUGH_VALUE = re.compile(
+    r"^[A-Za-z_][A-Za-z0-9_]*(?:\.[A-Za-z_][A-Za-z0-9_]*)*\s*[,)]?\s*(?:#.*)?$"
+)
 TEXT_SUFFIXES = {
     ".css",
     ".html",
@@ -93,7 +103,9 @@ def _run_checks() -> list[SecurityFinding]:
                         message="Potential private key material is present.",
                     )
                 )
-            if not relative.startswith("tests/") and _contains_env_secret_assignment(line):
+            if not relative.startswith("tests/") and _contains_env_secret_assignment(
+                line, is_python=relative.endswith(".py")
+            ):
                 findings.append(
                     SecurityFinding(
                         check_id="env_secret_assignment",
@@ -126,20 +138,37 @@ def _iter_text_files() -> list[Path]:
 
 
 def _contains_raw_openrouter_key(line: str) -> bool:
-    return "sk-or-v1-" in line and "test" not in line.casefold()
+    # A real OpenRouter key is ``sk-or-v1-`` followed by a long token (64 hex
+    # chars). Key off that shape so a genuine key is flagged wherever it
+    # appears, while documentation placeholders like ``sk-or-v1-...`` or
+    # ``sk-or-v1-xxx`` (no real key material) are ignored. Deliberately does
+    # NOT gate on surrounding words such as "test"/"placeholder": a real key
+    # could sit on a line that also mentions them, and must still be caught.
+    return re.search(r"sk-or-v1-[A-Za-z0-9]{40,}", line) is not None
 
 
-def _contains_env_secret_assignment(line: str) -> bool:
+def _contains_env_secret_assignment(line: str, *, is_python: bool = False) -> bool:
     if line.lstrip().startswith("#"):
         return False
-    return (
-        re.search(
-            r"(?i)^\s*(api_key|openrouter_key|tavily_key|secret|token)\s*=\s*['\"]?[A-Za-z0-9_\-]{12,}",
-            line,
-        )
-        is not None
-        and "placeholder" not in line.casefold()
+    match = re.search(
+        r"(?i)^\s*(?:api_key|openrouter_key|tavily_key|secret|token)\s*=\s*['\"]?([A-Za-z0-9_\-]{12,})",
+        line,
     )
+    if match is None:
+        return False
+    # A literal placeholder VALUE (e.g. ``api_key = "placeholder-value"``) is not
+    # a real secret. Test the captured value, not the whole line, so a genuine
+    # secret sitting on a line that merely mentions "placeholder" is still caught.
+    if "placeholder" in match.group(1).casefold():
+        return False
+    # In Python source, a keyword-argument / variable pass-through (the value is
+    # a bare identifier or attribute access, not a quoted literal) is not a
+    # hardcoded secret.
+    if is_python:
+        _, _, rhs = line.partition("=")
+        if _PYTHON_PASSTHROUGH_VALUE.match(rhs.strip()):
+            return False
+    return True
 
 
 if __name__ == "__main__":
