@@ -2745,7 +2745,11 @@ html[data-theme="dark"] .landing-preview-caption {
   color: var(--ink);
 }
 .result-receipt-recon[data-state="pending"] .result-receipt-recon-label,
-.result-receipt-recon[data-state="pending"] .result-receipt-recon-value {
+.result-receipt-recon[data-state="pending"] .result-receipt-recon-value,
+/* "estimated": the actual figure is the pre-run estimate, not measured
+   provider billing — muted, no fabricated savings/overage on ink. */
+.result-receipt-recon[data-state="estimated"] .result-receipt-recon-label,
+.result-receipt-recon[data-state="estimated"] .result-receipt-recon-value {
   color: var(--muted);
 }
 

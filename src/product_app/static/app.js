@@ -2307,12 +2307,23 @@
         : NaN;
     const actual = Number(result.actual_cost_usd);
     const hasActual = result.actual_breakdown != null && Number.isFinite(actual);
+    // ``cost_source`` marks whether the "actual" figure is measured provider
+    // billing or the pre-run estimate standing in for it. Today the backend
+    // only ever emits "estimated" (per-call usage capture is not yet plumbed),
+    // so we must NOT present the est→actual delta as a real reconciliation —
+    // that would imply the figure was checked against provider billing. A
+    // "measured" source (future) flows through the delta branches below.
+    const measured = result.cost_source === "measured";
     const label = mkEl("span", "result-receipt-recon-label");
     const value = mkEl("span", "result-receipt-recon-value mono");
     if (!hasActual || !Number.isFinite(approved)) {
       row.dataset.state = "pending";
       label.textContent = "Actual cost";
       value.textContent = "pending";
+    } else if (!measured) {
+      row.dataset.state = "estimated";
+      label.textContent = "Actual cost (estimated)";
+      value.textContent = formatUsd(actual, { suffix: false });
     } else {
       const delta = approved - actual;
       const eps = 0.0005;
