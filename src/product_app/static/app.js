@@ -69,7 +69,14 @@
   const proceedButton = el("proceed-run");
   const cancelEstimateButton = el("cancel-estimate");
   const estimateButton = el("estimate-run");
-  const runNowButton = el("run-now");
+  // Slice 1 (02 Composer): the composer collapses to a single ink CTA
+  // ("See the estimate →", the ``estimate-run`` button), which routes the
+  // run through the separate cost gate. The legacy fast-path "Run now"
+  // button and its ``runNow`` handler are gone; Ctrl/Cmd+Enter falls
+  // through to the estimate-first ``startRun`` flow.
+  const highStakesGate = el("high-stakes-gate");
+  const highStakesAckCheckbox = el("high-stakes-ack");
+  const composerTotalEstimate = el("composer-total-estimate");
   const costConfirmationSecondary = el("cost-confirmation-secondary");
   const copyCorrelationButton = el("copy-correlation");
   const cancelButton = el("cancel-run");
@@ -121,6 +128,23 @@
     lastStaleModelIds: null,
     // Track if user has attempted to submit (gates inline error display)
     submissionAttempted: false,
+    // Slice 1 (02 Composer): the high-stakes gate. ``highStakesRequired``
+    // is set from ``POST /v1/query-runs/warnings`` (a ``high_stakes``
+    // warning in the response). While it is true and the user has not
+    // checked the acknowledgement (``highStakesAck``), the primary CTA
+    // stays disabled. The acknowledgement itself is still sent as
+    // ``safety_acknowledgements[]`` by the existing run flow.
+    highStakesRequired: false,
+    highStakesAck: false,
+    // Per-SLOT USD estimate keyed by slot position (array index),
+    // populated from the estimate response's
+    // ``cost_estimate.breakdown.by_model`` (the ``kind === "synthesis"``
+    // writer row is excluded — it is not a slot). ``by_model`` is emitted
+    // one row per slot in slot order (costs.py loops ``model_slots``), so
+    // keying by position — NOT by model_id — keeps duplicate models in
+    // different slots from collapsing/misattributing. Consumed by
+    // ``renderModelInputs`` to label each slot card.
+    perModelEstimates: [],
   };
 
   // ---------------------------------------------------------------------------
@@ -762,29 +786,26 @@
   }
 
   function renderModelOptions(currentModelId, currentIndex, selectedModelIds) {
-    const takenIds = new Set(
-      selectedModelIds.filter((_, index) => index !== currentIndex),
-    );
-    // PR-0 / Bug 10: vendor-scoped filtering. The defaults are
-    // curated so each slot targets a different vendor family
-    // (openai / anthropic / google / deepseek). If we showed the
-    // entire catalog and only filtered out the exact other slots'
-    // selected ids, slot 1 and slot 3 both showed the openai
-    // fallbacks (gpt-4.1, o3) as their first non-selected options
-    // — confusing because the user picked google for slot 3, not
-    // "any other openai model." Restrict each dropdown to the
-    // vendor prefix of the slot's currently selected model id
-    // (``openai/``, ``anthropic/``, etc.) so the visible options
-    // always belong to the family the slot is supposed to pick
-    // from. The "curated default — not in live catalog" synthetic
-    // option is preserved for the case where the live catalog
-    // no longer lists the default.
-    const vendorPrefix = currentModelId.split("/", 1)[0];
+    // Slice 1 (02 Composer): free model choice from the live catalog.
+    // The approved design ("swap from live catalog", "Duplicates allowed
+    // but visibly flagged") lets any slot pick ANY catalog model. We do
+    // NOT scope a slot's dropdown to a vendor family, and we do NOT
+    // remove a model just because another slot already selected it —
+    // cross-slot duplicates are permitted and ``renderModelInputs``
+    // surfaces a small inline "duplicate" flag when the same model is
+    // chosen in >= 2 slots. ``selectedModelIds``/``currentIndex`` are
+    // retained in the signature for call-site compatibility (and future
+    // cross-slot awareness) even though no filtering is applied.
+    void selectedModelIds;
+    void currentIndex;
     const catalogHasDefault = modelCatalog.some(
       (option) => option.model_id === currentModelId,
     );
     const options = [];
     if (!catalogHasDefault) {
+      // The curated default is no longer in the live catalog: keep it
+      // reachable as a synthetic, pre-selected option so the slot does
+      // not silently jump to a different model.
       const synthetic = document.createElement("option");
       synthetic.value = currentModelId;
       synthetic.textContent = `${currentModelId} (curated default — not in live catalog)`;
@@ -792,16 +813,8 @@
       options.push(synthetic);
     }
     for (const option of modelCatalog) {
-      // Vendor scope: only show models from the slot's vendor
-      // family. The exact mutual-exclusion check is preserved as
-      // a belt-and-braces guard, but the vendor filter does the
-      // heavy lifting.
-      if (!option.model_id.startsWith(`${vendorPrefix}/`)) {
-        continue;
-      }
-      if (takenIds.has(option.model_id) && option.model_id !== currentModelId) {
-        continue;
-      }
+      // Every catalog model is offered for every slot, regardless of
+      // vendor. Duplicates across slots are permitted (and flagged).
       const optionElement = document.createElement("option");
       optionElement.value = option.model_id;
       optionElement.textContent = `${option.label} (${option.model_id})`;
@@ -813,24 +826,105 @@
     return options;
   }
 
+  // Human-friendly display name for a model id. The catalog data island
+  // carries the full label ("OpenAI: GPT-4o mini"); we strip the
+  // "Vendor: " prefix to get the short display name ("GPT-4o mini") the
+  // design uses on the slot cards. Falls back to the raw id.
+  function displayNameForModel(modelId) {
+    const entry = modelCatalog.find((option) => option.model_id === modelId);
+    const label = entry ? entry.label : modelId;
+    const short = label.includes(":")
+      ? label.slice(label.indexOf(":") + 1).trim()
+      : label;
+    return short || modelId;
+  }
+
+  // Avatar initial: first letter of the display name, uppercased.
+  function avatarInitialForModel(modelId) {
+    const name = displayNameForModel(modelId).trim();
+    return (name[0] || "?").toUpperCase();
+  }
+
+  // Per-slot estimate label. Returns a mono "~$0.034" once an estimate
+  // exists for this slot position, otherwise an em-dash placeholder.
+  // Keyed by slot index (not model_id) so two slots with the same model
+  // each show their own positional estimate.
+  function perModelEstimateText(slotIndex) {
+    const usd = Array.isArray(state.perModelEstimates)
+      ? state.perModelEstimates[slotIndex]
+      : undefined;
+    if (usd === undefined || usd === null) return "—";
+    const num = Number(usd);
+    if (!Number.isFinite(num)) return "—";
+    return `~$${num.toFixed(3)}`;
+  }
+
+  // Slice 1 (02 Composer): the four model slots render as a 2x2 grid of
+  // cards — avatar, display name, mono OpenRouter id, per-model mono
+  // estimate, and a compact ▾ swap ``<select>`` (kept as a real select
+  // so the ``aria-label`` + keyboard affordance survive). Duplicates are
+  // allowed but flagged with a small amber "duplicate" pill.
   function renderModelInputs(modelIds) {
-    const fields = modelIds.map((modelId, index) => {
-      const field = document.createElement("div");
-      field.className = "field";
-      const label = document.createElement("label");
-      label.htmlFor = `model-${index + 1}`;
-      label.textContent = `Model slot ${index + 1}`;
+    const counts = {};
+    for (const id of modelIds) counts[id] = (counts[id] || 0) + 1;
+
+    const cards = modelIds.map((modelId, index) => {
+      const card = document.createElement("div");
+      card.className = "model-slot";
+      card.dataset.slotIndex = String(index);
+
+      const avatar = document.createElement("span");
+      avatar.className = "model-slot-avatar";
+      avatar.setAttribute("aria-hidden", "true");
+      avatar.textContent = avatarInitialForModel(modelId);
+
+      const info = document.createElement("div");
+      info.className = "model-slot-info";
+      const nameRow = document.createElement("div");
+      nameRow.className = "model-slot-name";
+      const nameText = document.createElement("span");
+      nameText.textContent = displayNameForModel(modelId);
+      nameRow.appendChild(nameText);
+      if (counts[modelId] > 1) {
+        const dup = document.createElement("span");
+        dup.className = "model-slot-dup";
+        dup.textContent = "duplicate";
+        nameRow.appendChild(dup);
+      }
+      const idEl = document.createElement("div");
+      idEl.className = "model-slot-id mono";
+      idEl.textContent = modelId;
+      info.append(nameRow, idEl);
+
+      const estimate = document.createElement("span");
+      estimate.className = "model-slot-estimate mono";
+      estimate.textContent = perModelEstimateText(index);
+
+      // The swap control: a compact ▾ affordance whose native <select>
+      // is overlaid transparently so a click opens the vendor-scoped
+      // model list. ``id`` (``model-N``) and ``data-model-slot`` are
+      // preserved for the change handler and ``getModelIds``; the
+      // ``aria-label`` names the control for assistive tech.
+      const swap = document.createElement("span");
+      swap.className = "model-slot-swap";
+      const caret = document.createElement("span");
+      caret.className = "model-slot-swap-caret";
+      caret.setAttribute("aria-hidden", "true");
+      caret.textContent = "▾";
       const select = document.createElement("select");
       select.id = `model-${index + 1}`;
       select.dataset.modelSlot = "";
       select.dataset.slotIndex = String(index);
+      select.setAttribute("aria-label", `Model for slot ${index + 1}`);
       for (const option of renderModelOptions(modelId, index, modelIds)) {
         select.appendChild(option);
       }
-      field.append(label, select);
-      return field;
+      swap.append(caret, select);
+
+      card.append(avatar, info, estimate, swap);
+      return card;
     });
-    modelInputs.replaceChildren(...fields);
+    modelInputs.replaceChildren(...cards);
   }
 
   // ---------------------------------------------------------------------------
@@ -1651,7 +1745,6 @@
   function setRunning(isRunning) {
     state.isRunning = isRunning;
     estimateButton.disabled = isRunning;
-    if (runNowButton) runNowButton.disabled = isRunning;
     // The cancel pill is hidden in the idle layout and revealed only
     // while a run is actually in flight. Toggling ``hidden`` on the
     // container (not the button) keeps the button's ``disabled`` state
@@ -1676,6 +1769,10 @@
       // Reset for the next run so the scroll-once fires again.
       state.hasScrolledToRunControls = false;
     }
+    // Re-assert the high-stakes gate on top of the run-state disabling so
+    // an un-acknowledged safety topic keeps the CTA disabled after a run
+    // finishes.
+    applyHighStakesGate();
   }
 
   // PR-0 / Bug 8: the "Current time" card is a state machine. It
@@ -1744,7 +1841,7 @@
     // PR-0 / Bug 8: the "Current time" card has its own state
     // machine (frozen-at-start, finalized-on-terminal) and is
     // updated by the ``setRunStartTime`` / ``finalizeRunTime``
-    // wrappers from ``runNow`` / ``proceedWithRun`` / ``pollRun``.
+    // wrappers from ``proceedWithRun`` / ``pollRun``.
     // A status update in the middle of a run is not a time
     // change, so we do not touch the time card from here.
     // Surface the citation coverage denominator so users can audit the
@@ -1766,7 +1863,14 @@
 
   function updateQueryValidation() {
     const length = queryTextarea.value.length;
-    charCount.textContent = `${length.toLocaleString()} chars`;
+    charCount.textContent = `${length.toLocaleString()} / 20,000`;
+    // Keep the visible "N / 20,000" but give assistive tech an
+    // unambiguous reading ("N of 20,000 characters") — the bare "/"
+    // is unit-ambiguous to a screen reader.
+    charCount.setAttribute(
+      "aria-label",
+      `${length.toLocaleString()} of 20,000 characters`,
+    );
     // Empty (0) is invalid (required field). 1–11 chars is too short.
     const isInvalid = length < 12;
     queryTextarea.setAttribute("aria-invalid", isInvalid ? "true" : "false");
@@ -1890,6 +1994,28 @@
         }),
       });
       state.currentEstimate = estimate;
+      // Slice 1: fan the itemized ``by_model`` breakdown out onto the
+      // slot cards and surface the grand total in the composer footer.
+      // ``by_model`` is emitted one row per slot in slot order, so we map
+      // the (non-synthesis) rows to slots BY POSITION — keying by
+      // model_id would collapse two slots that pick the same model. The
+      // ``kind === "synthesis"`` writer row is NOT a slot, so it is
+      // excluded before the positional mapping.
+      state.perModelEstimates = [];
+      const byModel =
+        estimate.cost_estimate.breakdown &&
+        estimate.cost_estimate.breakdown.by_model;
+      if (Array.isArray(byModel)) {
+        state.perModelEstimates = byModel
+          .filter((row) => row.kind !== "synthesis")
+          .map((row) => row.usd);
+      }
+      renderModelInputs(getModelIds());
+      if (composerTotalEstimate) {
+        composerTotalEstimate.textContent = formatUsd(
+          estimate.cost_estimate.estimated_cost_usd,
+        ).replace(" USD", "");
+      }
       const { primary: usdPrimary, secondary: usdSecondary } = formatCostWithLocal(
         estimate.cost_estimate.estimated_cost_usd,
       );
@@ -1954,6 +2080,9 @@
       return estimate;
     } finally {
       setButtonLoading(estimateButton, false);
+      // ``setButtonLoading`` clears ``disabled``; re-assert the gate so a
+      // high-stakes topic detected mid-compose keeps the CTA disabled.
+      applyHighStakesGate();
     }
   }
 
@@ -1962,6 +2091,95 @@
       warning_type: warning.warning_type,
       version: warning.version,
     }));
+  }
+
+  // ---------------------------------------------------------------------------
+  // High-stakes gate (COPY-002)
+  // ---------------------------------------------------------------------------
+  // The gate appears only when ``POST /v1/query-runs/warnings`` reports a
+  // ``high_stakes`` warning for the current query. While it is showing and
+  // the acknowledgement checkbox is unchecked, the primary CTA stays
+  // disabled. The acknowledgement itself is still delivered to the server as
+  // ``safety_acknowledgements[]`` by the existing run flow.
+
+  // Re-derive the primary CTA's disabled state from the run + gate state.
+  function applyHighStakesGate() {
+    const blocked = state.highStakesRequired && !state.highStakesAck;
+    if (estimateButton) {
+      estimateButton.disabled = state.isRunning || blocked;
+      estimateButton.dataset.gateBlocked = blocked ? "true" : "false";
+    }
+  }
+
+  // Show or hide the gate; hiding resets the acknowledgement so a later
+  // high-stakes query re-requires an explicit check.
+  function setHighStakesRequired(required) {
+    state.highStakesRequired = required;
+    if (highStakesGate) highStakesGate.hidden = !required;
+    if (!required) {
+      state.highStakesAck = false;
+      if (highStakesAckCheckbox) highStakesAckCheckbox.checked = false;
+    }
+    applyHighStakesGate();
+  }
+
+  // Probe the warnings endpoint for the current query text. A
+  // ``high_stakes`` warning raises the gate; anything else (or a probe
+  // failure) leaves the user un-gated. Best-effort: a network error must
+  // never block composing.
+  // Monotonically increasing token stamped on every warnings probe. The
+  // debounced probes are fired without ordering guarantees, so an older
+  // request can resolve AFTER a newer one and clobber the gate state
+  // (stranding the CTA disabled over empty text, or — worse — hiding the
+  // gate so a run proceeds with the high-stakes ack unchecked). Each
+  // probe captures the token it was issued with before awaiting and
+  // ignores its own response unless it is still the latest token issued.
+  let highStakesProbeToken = 0;
+  async function checkHighStakesWarning() {
+    const token = ++highStakesProbeToken;
+    const queryText = queryTextarea.value.trim();
+    if (!queryText) {
+      // Empty text resolves synchronously via the latest probe.
+      if (token === highStakesProbeToken) setHighStakesRequired(false);
+      return;
+    }
+    try {
+      const response = await api("/v1/query-runs/warnings", {
+        method: "POST",
+        body: JSON.stringify({ query_text: queryText }),
+      });
+      // Drop a stale response: a newer probe was issued while this one
+      // was in flight, so its (fresher) result must win.
+      if (token !== highStakesProbeToken) return;
+      const required =
+        Array.isArray(response.warnings) &&
+        response.warnings.some((w) => w.warning_type === "high_stakes");
+      setHighStakesRequired(required);
+    } catch (_) {
+      // Non-fatal: leave the gate as-is rather than surfacing an error.
+    }
+  }
+
+  let highStakesProbeTimer = null;
+  function scheduleHighStakesCheck() {
+    if (highStakesProbeTimer) clearTimeout(highStakesProbeTimer);
+    highStakesProbeTimer = setTimeout(() => {
+      highStakesProbeTimer = null;
+      checkHighStakesWarning();
+    }, 500);
+  }
+
+  // Returns ``true`` when the high-stakes gate is satisfied (not required,
+  // or acknowledged). When it blocks, it nudges the user to the checkbox.
+  function highStakesGateSatisfied() {
+    if (!state.highStakesRequired || state.highStakesAck) return true;
+    toast({
+      message:
+        "Acknowledge the decision-support notice before running this query.",
+      tone: "warn",
+    });
+    if (highStakesAckCheckbox) highStakesAckCheckbox.focus();
+    return false;
   }
 
   // L5c: developer-only "magic" phrases that flip the pipeline into
@@ -2023,6 +2241,7 @@
   async function startRun() {
     state.submissionAttempted = true;
     clearError();
+    if (!highStakesGateSatisfied()) return;
     setButtonLoading(estimateButton, true);
     try {
       const queryText = queryTextarea.value.trim();
@@ -2038,122 +2257,6 @@
       handleError(error);
     } finally {
       setButtonLoading(estimateButton, false);
-    }
-  }
-
-  // The fast-path primary action: skip the estimate and POST the run
-  // directly. If the server reports the cost needs confirmation or
-  // exceeds the hard limit, auto-fall-back to the cost callout so the
-  // user sees the same review UI as the estimate-first path. The
-  // hard guardrail (>$0.25) is server-enforced and cannot be bypassed
-  // client-side — see costs.py:35-36.
-  //
-  // PR-0 / Bug 4 (Option A): when the server returns
-  // ``COST_CONFIRMATION_REQUIRED`` from the run-create call, the
-  // fast-path silently fell back to the estimate callout and the
-  // user had to click "Proceed" themselves. The fast path should
-  // still be a single click when possible, so we estimate, then
-  // immediately re-fire the create-run with the fresh
-  // ``confirmation_token`` if the user has not yet blocked the
-  // run. The user sees a brief "Cost review" callout (less than a
-  // second) and the run starts without a second click. We only do
-  // this when the band is ``require_confirmation`` — the
-  // ``block`` band surfaces the callout as a read-only refusal
-  // and the user clicks Cancel.
-  async function runNow() {
-    state.submissionAttempted = true;
-    clearError();
-    setButtonLoading(runNowButton, true);
-    try {
-      const queryText = queryTextarea.value.trim();
-      if (!queryText) {
-        throw new ApiError({
-          status: 422,
-          code: "QUERY_REQUIRED",
-          message: "Please enter a question before starting a run.",
-        });
-      }
-      if (!checkMagicPhraseAck(queryText, runNowButton)) {
-        return;
-      }
-      const warnings = await api("/v1/query-runs/warnings", {
-        method: "POST",
-        body: JSON.stringify({ query_text: queryText }),
-      });
-      let created;
-      try {
-        created = await api("/v1/query-runs", {
-          method: "POST",
-          body: JSON.stringify({
-            query_text: queryText,
-            model_slots: getModelIds(),
-            safety_acknowledgements: warningAcknowledgements(warnings.warnings),
-            // No cost_confirmation: server will compute the estimate
-            // and either accept (allow band), require confirmation, or
-            // block. The fallback below handles the latter two.
-          }),
-        });
-      } catch (error) {
-        if (error instanceof ApiError) {
-          if (error.code === "COST_CONFIRMATION_REQUIRED") {
-            // PR-0 / Bug 4: the user clicked "Run now" expecting a
-            // single-click start. The server wants confirmation, so
-            // run the estimate and then chain the proceed with the
-            // fresh token. The callout flashes briefly before the
-            // run actually starts. The user does not have to click
-            // anything for an upper-band query.
-            state.currentEstimate = null;
-            toast({
-              message: "Cost confirmation required — auto-confirming with the latest estimate.",
-              tone: "warn",
-            });
-            const estimate = await estimateRun();
-            if (estimate && state.currentEstimate) {
-              const band =
-                state.currentEstimate.cost_estimate.threshold_action;
-              if (band === "require_confirmation") {
-                // Re-fire the create-run with the confirmation token.
-                // ``proceedWithRun`` reads ``state.currentEstimate`` and
-                // posts the same payload the manual Proceed button
-                // would have, so the behaviour is identical to a
-                // two-click flow.
-                await proceedWithRun();
-              }
-              // For the allow band the run already started; for the
-              // block band the callout is now showing the refusal and
-              // the user clicks Cancel.
-            }
-            return;
-          }
-          if (error.code === "COST_LIMIT_EXCEEDED") {
-            // Same fallback: surface the cost callout (now showing the
-            // hard-limit message) so the user can read the figure
-            // before deciding. No auto-proceed — the run is blocked.
-            state.currentEstimate = null;
-            await estimateRun();
-            return;
-          }
-        }
-        throw error;
-      }
-      state.currentRunId = created.query_run_id;
-      // Server accepted the run. Consume any prior estimate copy and
-      // hide the callout.
-      hideCostConfirmation();
-      setRunning(true);
-      updateRunMeta(created);
-      renderProgress(created.progress);
-      // PR-0 / Bug 8: capture the run start time once, here, on the
-      // first run-create response. Subsequent poll ticks will not
-      // overwrite the displayed time until the run reaches a
-      // terminal state.
-      setRunStartTime(created.result_generated_at_utc);
-      toast({ message: "Run started. Tracking progress below.", tone: "info" });
-      startPolling();
-    } catch (error) {
-      handleError(error);
-    } finally {
-      setButtonLoading(runNowButton, false);
     }
   }
 
@@ -2210,8 +2313,9 @@
       setRunning(true);
       updateRunMeta(created);
       renderProgress(created.progress);
-      // PR-0 / Bug 8: capture the run start time once. See
-      // ``runNow`` for the full rationale.
+      // PR-0 / Bug 8: capture the run start time once, on the
+      // first run-create response, so later poll ticks do not
+      // overwrite the displayed time until a terminal state.
       setRunStartTime(created.result_generated_at_utc);
       // The estimate is now consumed; collapse the cost callout until
       // the next estimate.
@@ -2556,7 +2660,20 @@
 
   function initQueryValidation() {
     queryTextarea.addEventListener("input", updateQueryValidation);
+    // Slice 1: probe the warnings endpoint (debounced) so the COPY-002
+    // high-stakes gate appears as soon as the query looks like a safety
+    // topic. Also re-probe on blur to catch a paste that skipped input.
+    queryTextarea.addEventListener("input", scheduleHighStakesCheck);
+    queryTextarea.addEventListener("blur", checkHighStakesWarning);
     updateQueryValidation();
+  }
+
+  function initHighStakesGate() {
+    if (!highStakesAckCheckbox) return;
+    highStakesAckCheckbox.addEventListener("change", () => {
+      state.highStakesAck = highStakesAckCheckbox.checked;
+      applyHighStakesGate();
+    });
   }
 
   function initKeyboardShortcuts() {
@@ -2564,11 +2681,10 @@
       const isCmdEnter = (event.metaKey || event.ctrlKey) && event.key === "Enter";
       if (isCmdEnter) {
         event.preventDefault();
-        // Primary action is now "Run now" — skip the estimate, fall
-        // back to the cost callout only if the server requires it.
-        if (runNowButton && !runNowButton.disabled) {
-          runNow();
-        } else if (!estimateButton.disabled) {
+        // Single-CTA design: Ctrl/Cmd+Enter runs the estimate-first
+        // flow (``startRun``), which routes through the cost gate. The
+        // high-stakes gate keeps the CTA disabled until acknowledged.
+        if (!estimateButton.disabled) {
           startRun();
         }
         return;
@@ -2634,6 +2750,7 @@
     initThemeToggle();
     initModelSlotSelection();
     initQueryValidation();
+    initHighStakesGate();
     initKeyboardShortcuts();
     initBannerDismiss();
     initWorkflowKeyboard();
@@ -2648,11 +2765,6 @@
     estimateButton.addEventListener("click", () => {
       startRun();
     });
-    if (runNowButton) {
-      runNowButton.addEventListener("click", () => {
-        runNow();
-      });
-    }
     if (copyCorrelationButton) {
       copyCorrelationButton.addEventListener("click", async () => {
         const target = el("correlation-meta");

@@ -19,7 +19,7 @@ def test_browser_ui_exposes_accessible_labels_focus_and_landmarks() -> None:
     assert 'id="model-inputs"' in html
     assert 'aria-live="polite" aria-atomic="true"' in html
     assert "Choose four different models" in html
-    assert '<label for="query-text">Question</label>' in html
+    assert '<label for="query-text">Your question</label>' in html
     assert 'id="time-meta"' in html
     assert ":focus-visible" in html
     assert "min-height: 44px" in html

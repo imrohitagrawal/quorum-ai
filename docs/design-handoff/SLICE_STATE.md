@@ -62,7 +62,7 @@ a11y + perf) → `devsecops` (secrets/scanning) → `traceability-management` +
 |---|-------|--------|-------|
 | 0 | Design system + view switch | **DONE — committed 3132548** | Tokens+fonts+components+header+setView scaffold. 4 adversarial reviews; all confirmed fixes applied. USER DECISIONS: --muted WCAG-corrected to AA (#5F6570 light / #8A9099 dark, clears AA on every surface incl. pill/line); pre-existing app.js edits KEPT + boot() hardened. 44 contract tests pass; 2 unrelated pre-existing failures untouched (422 backend contract; drift-banner stale-id — both reproduce on clean tree). /ui 200. |
 | B1 | Backend: CostBreakdown | **DONE — committed d46cb42** | by_model (4 + Synthesis-writer, `kind` field); by_stage keys initial_answers/debate_round_1/debate_round_2/synthesis; sign-safe largest-remainder reconciliation (no negative lines), Field(ge=0), display names via lookup_short_name. 14 adversarial tests. CARRY-FWD to Slice 2: fix e2e/tests/api-mocking mock breakdown shape (currently wrong legacy array). |
-| B2 | Backend: agreement + positions + actual cost | pending | per-model positions emitted in debate.py (real when keyed / templated in demo); demo → actual=estimate; demo-mode caveat in UI. |
+| B2 | Backend: agreement + positions + actual cost | **DONE — committed 5a5b9e8** | agreement + position_movements on ResultProjection (INFERRED, honesty-reframed — no fabricated concession; banned-verb guard test); actual_cost_usd (required) + actual_breakdown, demo→actual=estimate. openapi.yaml regenerated; make validate passes. Backend extension COMPLETE. |
 | 1 | 02 Composer (draft) | pending | reconcile brand-lede test (pre-existing red) here. |
 | 2 | 03 Cost gate | pending | needs B1. |
 | 3 | 04 Live run | pending | |

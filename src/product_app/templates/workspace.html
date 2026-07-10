@@ -84,22 +84,22 @@
 
       <div class="layout">
         <div data-view="composer">
-        <section class="panel" aria-labelledby="composer-heading">
-          <h1 id="composer-heading">Workspace</h1>
-          <p class="lede">Results are ephemeral. Cost is shown before each run; nothing executes without your confirmation.</p>
-          <div class="stack">
-            <div class="callout callout-warning">
-              <div class="callout-icon" aria-hidden="true">!</div>
-              <div class="callout-body">
-                <strong>Safety reminder.</strong>
-                Do not submit sensitive, private, regulated, or secret information. High-stakes topics remain decision support only.
-              </div>
+        <section class="panel composer" aria-labelledby="composer-heading">
+          <div class="composer-head">
+            <h1 id="composer-heading">Ask the panel</h1>
+            <p class="lede">Results are ephemeral. Cost is shown before each run; nothing executes without your confirmation.</p>
+          </div>
+          <div class="stack composer-stack">
+            <!-- COPY-001 privacy warning — always visible above the question field. -->
+            <div class="privacy-notice" role="note">
+              <span class="privacy-notice-icon" aria-hidden="true">!</span>
+              <p class="privacy-notice-text">Do not include sensitive, private, personal, confidential, regulated, or secret information. Privacy controls are not defined yet, and your query may be sent to external AI and search providers.</p>
             </div>
-            <div class="field">
+            <div class="field question-field">
               <div class="field-label-row">
-                <label for="query-text">Question</label>
+                <label for="query-text">Your question</label>
                 <span class="field-meta">
-                  <span id="query-char-count" class="field-meta-counter" aria-live="polite">0 chars</span>
+                  <span id="query-char-count" class="field-meta-counter" aria-live="polite" aria-label="0 of 20,000 characters">0 / 20,000</span>
                   <span class="field-meta-hint" id="query-validation-hint"></span>
                 </span>
               </div>
@@ -112,10 +112,27 @@
               ></textarea>
               <div id="query-error" class="field-error" hidden role="alert" aria-live="assertive"></div>
             </div>
+
+            <!-- COPY-002 high-stakes gate. Hidden until POST /v1/query-runs/warnings
+                 flags a ``high_stakes`` topic; the acknowledgement checkbox keeps
+                 the primary CTA disabled until it is checked. The safety
+                 acknowledgement is sent as ``safety_acknowledgements[]``. -->
+            <div id="high-stakes-gate" class="high-stakes-gate" role="group" aria-label="High-stakes topic acknowledgement" hidden>
+              <div class="high-stakes-label">
+                <span class="high-stakes-dot" aria-hidden="true"></span>
+                <span class="high-stakes-title">Decision support only</span>
+              </div>
+              <p class="high-stakes-body">This result is decision support only. It is not medical, legal, financial, safety, or regulated professional advice. Review the sources, compare the disagreement, and consult a qualified professional before acting.</p>
+              <label class="high-stakes-ack" for="high-stakes-ack">
+                <input type="checkbox" id="high-stakes-ack">
+                <span>I understand this is not professional advice.</span>
+              </label>
+            </div>
+
             <fieldset class="field-group">
               <legend>Model slots</legend>
-              <div class="muted">Choose four different models. Once a model is selected in one slot, it is removed from the other dropdowns.</div>
-              <div id="model-inputs" class="stack">
+              <div class="muted">Choose four different models. Swap any slot from the live catalog; duplicates are allowed but flagged.</div>
+              <div id="model-inputs" class="model-slot-grid">
                 <label class="inline" data-model-slot="1">
                   <span>Slot 1</span>
                   <select data-model-slot-select="1" aria-label="Model for slot 1">
@@ -178,18 +195,18 @@
                 </div>
               </div>
             </div>
-            <div class="inline">
-              <button id="run-now" class="button button-primary" type="button" data-loading-text="Starting...">
-                <span class="button-label">Run now</span>
-                <span class="button-spinner" aria-hidden="true"></span>
-              </button>
-              <button id="estimate-run" class="button button-secondary" type="button" data-loading-text="Estimating...">
-                <span class="button-label">Estimate cost</span>
-                <span class="button-spinner" aria-hidden="true"></span>
-              </button>
+            <div class="composer-footer">
+              <p class="composer-footer-notice">You'll approve an itemized estimate before anything runs · hard cap <span class="mono">$0.25</span>/run · one run at a time per session</p>
+              <div class="composer-footer-actions">
+                <span id="composer-total-estimate" class="mono composer-total" aria-live="polite">—</span>
+                <button id="estimate-run" class="button button-primary composer-cta" type="button" data-loading-text="Estimating...">
+                  <span class="button-label">See the estimate →</span>
+                  <span class="button-spinner" aria-hidden="true"></span>
+                </button>
+              </div>
             </div>
             <div class="keyboard-hint muted">
-              <kbd>Ctrl</kbd>+<kbd>Enter</kbd> runs now · <kbd>Esc</kbd> cancels
+              <kbd>Ctrl</kbd>+<kbd>Enter</kbd> shows the estimate · <kbd>Esc</kbd> cancels
             </div>
           </div>
         </section>

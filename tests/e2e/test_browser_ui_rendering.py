@@ -20,7 +20,7 @@ def test_browser_ui_renders_core_workflow_sections_without_secrets() -> None:
     assert 'id="query-text"' in html
     assert "Model outputs" in html
     assert "Debate and synthesis" in html
-    assert "Estimate cost" in html
+    assert "See the estimate" in html
     assert "openai/gpt-4o-mini" in html
     assert "Browser session" in html
     assert 'id="time-meta"' in html

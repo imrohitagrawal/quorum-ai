@@ -1876,3 +1876,259 @@ main:focus { outline: none; }
    3. Break down large UI patterns into smaller components
    4. Use semantic names (.field-group instead of .form-section)
    ============================================= */
+
+/* ============================================================
+   Slice 1 — 02 Composer (screen 02)
+   Privacy notice, question field, high-stakes gate, 2x2 model
+   slot cards, footer estimate + ink CTA.
+   Green rule: the money CTA is ink (.button-primary), never green.
+   ============================================================ */
+
+.composer { gap: var(--space-5); }
+.composer-head { display: grid; gap: var(--space-2); }
+.composer .composer-head h1 {
+  font-family: var(--font-serif);
+  font-size: 1.85rem; /* ~30px Newsreader display */
+  font-weight: 500;
+  letter-spacing: -0.01em;
+  line-height: 1.2;
+}
+.composer-stack { gap: var(--space-5); }
+
+/* Question label — rendered as a bare <label for="query-text"> to honour
+   the accessibility contract, styled as an uppercase micro-label here. */
+.question-field .field-label-row label {
+  font-family: var(--font-sans);
+  font-weight: 600;
+  font-size: 11.5px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+
+/* ----- COPY-001 privacy notice (amber, always visible) --------------- */
+.privacy-notice {
+  display: flex;
+  gap: var(--space-3);
+  align-items: flex-start;
+  padding: var(--space-3) var(--space-4);
+  border-radius: var(--radius-sm);
+  border: 1px solid color-mix(in srgb, var(--warning) 32%, transparent);
+  background: var(--warning-soft);
+}
+.privacy-notice-icon {
+  flex-shrink: 0;
+  width: 20px;
+  height: 20px;
+  border-radius: var(--radius-pill);
+  border: 1.5px solid var(--warning);
+  color: var(--warning);
+  display: grid;
+  place-items: center;
+  font-family: var(--font-mono);
+  font-size: 0.75rem;
+  font-weight: 700;
+  margin-top: 1px;
+}
+.privacy-notice-text {
+  margin: 0;
+  font-size: 0.85rem;
+  line-height: 1.55;
+  color: var(--ink);
+}
+
+/* ----- COPY-002 high-stakes gate (red, appears on safety topics) ----- */
+.high-stakes-gate {
+  display: grid;
+  gap: var(--space-3);
+  padding: var(--space-4) var(--space-4) var(--space-4);
+  border-radius: var(--radius-md);
+  border: 1px solid var(--danger-border);
+  background: var(--surface);
+}
+.high-stakes-gate[hidden] { display: none; }
+.high-stakes-label {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+}
+.high-stakes-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 2px;
+  background: var(--danger);
+  flex-shrink: 0;
+}
+.high-stakes-title {
+  font-size: 0.78rem;
+  font-weight: 650;
+  letter-spacing: 0.03em;
+  text-transform: uppercase;
+  color: var(--danger);
+}
+.high-stakes-body {
+  margin: 0;
+  font-size: 0.85rem;
+  line-height: 1.6;
+  color: var(--ink);
+}
+.high-stakes-ack {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  font-size: 0.85rem;
+  font-weight: 600;
+  color: var(--ink);
+  cursor: pointer;
+}
+.high-stakes-ack input[type="checkbox"] {
+  width: 20px;
+  height: 20px;
+  min-height: 20px;
+  flex-shrink: 0;
+  accent-color: var(--ink);
+  cursor: pointer;
+}
+
+/* ----- Model slots: 2x2 grid of cards -------------------------------- */
+.model-slot-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: var(--space-3);
+}
+.model-slot {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  padding: var(--space-3) var(--space-4);
+  background: var(--surface);
+  border: 1px solid var(--line-2);
+  border-radius: var(--radius-sm);
+  min-width: 0;
+}
+.model-slot-avatar {
+  flex-shrink: 0;
+  width: 30px;
+  height: 30px;
+  border-radius: var(--radius-pill);
+  background: var(--accent-soft);
+  color: var(--ink);
+  display: grid;
+  place-items: center;
+  font-size: 0.75rem;
+  font-weight: 700;
+}
+.model-slot-info { flex: 1; min-width: 0; }
+.model-slot-name {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  font-size: 0.84rem;
+  font-weight: 600;
+  color: var(--ink);
+}
+.model-slot-name > span:first-child {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.model-slot-dup {
+  flex-shrink: 0;
+  padding: 1px var(--space-2);
+  border-radius: var(--radius-pill);
+  background: var(--warning-soft);
+  color: var(--warning);
+  font-size: 0.62rem;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+.model-slot-id {
+  font-size: 0.72rem;
+  color: var(--muted);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.model-slot-estimate {
+  flex-shrink: 0;
+  font-size: 0.7rem;
+  color: var(--muted);
+}
+/* Compact ▾ swap control: a real <select> overlaid transparently so the
+   caret box opens the vendor-scoped model list while the accessible name
+   (aria-label="Model for slot N") and keyboard affordance survive. */
+.model-slot-swap {
+  position: relative;
+  flex-shrink: 0;
+  /* 44x44 interactive convention (repo standard) so the ▾ swap control
+     meets the minimum touch-target size. The caret itself keeps its
+     compact visual size (see .model-slot-swap-caret). */
+  min-width: 44px;
+  min-height: 44px;
+  display: grid;
+  place-items: center;
+  border: 1px solid var(--line-strong);
+  border-radius: var(--radius-xs);
+  background: var(--surface);
+}
+.model-slot-swap:focus-within {
+  outline: 3px solid var(--focus-ring);
+  outline-offset: 2px;
+}
+.model-slot-swap-caret {
+  color: var(--muted);
+  font-size: 0.72rem;
+  pointer-events: none;
+}
+.model-slot-swap select {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  min-height: 0;
+  padding: 0;
+  margin: 0;
+  border: none;
+  background: transparent;
+  color: transparent;
+  opacity: 0;
+  cursor: pointer;
+  appearance: none;
+  -webkit-appearance: none;
+}
+.model-slot-swap select:focus { outline: none; box-shadow: none; }
+
+/* ----- Composer footer: total estimate + ink CTA + one-run notice ---- */
+.composer-footer {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-4);
+  flex-wrap: wrap;
+}
+.composer-footer-notice {
+  margin: 0;
+  flex: 1;
+  min-width: 240px;
+  font-size: 0.8rem;
+  line-height: 1.5;
+  color: var(--muted);
+}
+.composer-footer-notice .mono { color: var(--ink); }
+.composer-footer-actions {
+  display: flex;
+  align-items: center;
+  gap: var(--space-4);
+}
+.composer-total {
+  font-size: 1.05rem;
+  font-weight: 600;
+  color: var(--ink);
+}
+
+@media (max-width: 600px) {
+  .model-slot-grid { grid-template-columns: 1fr; }
+  .composer-footer { flex-direction: column; align-items: stretch; }
+  .composer-footer-actions { justify-content: space-between; }
+}
