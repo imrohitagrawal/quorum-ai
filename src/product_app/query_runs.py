@@ -35,7 +35,7 @@ from decimal import Decimal
 from enum import StrEnum
 from threading import BoundedSemaphore, RLock, Thread
 from time import sleep
-from typing import Annotated
+from typing import Annotated, Literal
 from uuid import UUID, uuid4
 
 from fastapi import APIRouter, Depends, HTTPException, Request, status
@@ -316,6 +316,21 @@ class QueryRunResultResponse(BaseModel):
     #: estimate's breakdown verbatim on every run (demo and live) until
     #: per-call usage capture is plumbed through the pipeline.
     actual_breakdown: CostBreakdown | None = None
+    #: Provenance of ``actual_cost_usd`` / ``actual_breakdown``:
+    #:
+    #: * ``"estimated"`` — the value is the pre-run estimate standing in for
+    #:   measured usage. This is the ONLY value emitted today, because
+    #:   per-call provider-usage capture is not yet plumbed through the
+    #:   pipeline: on demo/simulation runs the estimate is exact (no real
+    #:   usage was billed), and on live runs it is a known limitation
+    #:   (the figure does not yet reflect real provider billing).
+    #: * ``"measured"`` — reserved for when usage capture lands and the
+    #:   value reflects real per-call provider billing.
+    #:
+    #: The UI MUST read this to avoid presenting an estimate as a measured
+    #: "actual": an ``"estimated"`` receipt is labelled as such rather than
+    #: implying the figure was reconciled against provider billing.
+    cost_source: Literal["estimated", "measured"] = "estimated"
 
 
 class QueryRunWarningsRequest(BaseModel):
@@ -1358,8 +1373,9 @@ def _result_response(query_run: QueryRun) -> QueryRunResultResponse:
     agreement, position_movements = build_agreement_and_positions(
         initial_answers=query_run.initial_answers,
         debate_outputs=query_run.debate_outputs,
+        final_synthesis=query_run.final_synthesis,
     )
-    actual_cost_usd, actual_breakdown = _actual_cost(query_run)
+    actual_cost_usd, actual_breakdown, cost_source = _actual_cost(query_run)
     return QueryRunResultResponse(
         query_run_id=query_run.query_run_id,
         status=query_run.status,
@@ -1386,22 +1402,27 @@ def _result_response(query_run: QueryRun) -> QueryRunResultResponse:
         material_claim_count=material_claim_count,
         actual_cost_usd=actual_cost_usd,
         actual_breakdown=actual_breakdown,
+        cost_source=cost_source,
     )
 
 
-def _actual_cost(query_run: QueryRun) -> tuple[Decimal, CostBreakdown | None]:
+def _actual_cost(
+    query_run: QueryRun,
+) -> tuple[Decimal, CostBreakdown | None, Literal["estimated", "measured"]]:
     """Actual cost incurred, for the receipt's est→actual reconciliation.
 
     Per-call provider-usage capture is NOT yet plumbed through the pipeline,
     so this returns the estimate (value and itemized breakdown) for EVERY run,
-    demo and live alike. On a demo/simulation run that is exact — no real
-    provider usage was billed, so the honest "actual" is the estimate itself.
-    On a live run it is a known limitation: the estimate stands in for the
-    (not-yet-captured) measured usage. Once usage capture lands, live runs
-    should substitute the real token usage here instead of the estimate.
+    demo and live alike, tagged ``cost_source="estimated"``. On a demo/simulation
+    run that is exact — no real provider usage was billed, so the honest
+    "actual" is the estimate itself. On a live run it is a known limitation:
+    the estimate stands in for the (not-yet-captured) measured usage, and the
+    ``"estimated"`` tag tells the UI not to present it as measured billing.
+    Once usage capture lands, live runs should substitute the real token usage
+    here and return ``cost_source="measured"``.
     """
     estimate = query_run.cost_estimate
-    return estimate.estimated_cost_usd, estimate.breakdown
+    return estimate.estimated_cost_usd, estimate.breakdown, "estimated"
 
 
 def _initial_progress() -> list[QueryRunStageProgress]:

@@ -42,9 +42,13 @@
     Array.from(root.querySelectorAll(selector));
 
   const errorRegion = el("error-region");
+  const errorIcon = el("error-region-icon");
+  const errorActag = el("error-region-actag");
   const errorTitle = el("error-region-title");
   const errorMessage = el("error-region-message");
+  const errorDetail = el("error-region-detail");
   const errorActions = el("error-region-actions");
+  const errorFooter = el("error-region-footer");
   const errorDismiss = el("error-region-dismiss");
   const driftRegion = el("drift-region");
   const driftMessage = el("drift-region-message");
@@ -69,9 +73,21 @@
   const proceedButton = el("proceed-run");
   const cancelEstimateButton = el("cancel-estimate");
   const estimateButton = el("estimate-run");
-  const runNowButton = el("run-now");
+  // Slice 1 (02 Composer): the composer collapses to a single ink CTA
+  // ("See the estimate →", the ``estimate-run`` button), which routes the
+  // run through the separate cost gate. The legacy fast-path "Run now"
+  // button and its ``runNow`` handler are gone; Ctrl/Cmd+Enter falls
+  // through to the estimate-first ``startRun`` flow.
+  const highStakesGate = el("high-stakes-gate");
+  const highStakesAckCheckbox = el("high-stakes-ack");
+  const composerTotalEstimate = el("composer-total-estimate");
   const costConfirmationSecondary = el("cost-confirmation-secondary");
   const copyCorrelationButton = el("copy-correlation");
+  // Slice 3 (04 Live run): the visible live-run heading. Focus lands here when
+  // entering the live view (setRunning focuses the now-hidden #cancel-run).
+  const liveRunHeading = el("live-run-heading");
+  // Slice 4a (05 Result): focus lands on this h1 when entering the result view.
+  const resultHeading = el("result-heading");
   const cancelButton = el("cancel-run");
   const cancelContainer = el("cancel-run-container");
   const connectionPill = el("connection-pill");
@@ -81,6 +97,30 @@
   const demoModeBanner = el("demo-mode-banner");
   const demoModeTarget = demoModeBanner ? demoModeBanner.querySelector("[data-demo-mode-target]") : null;
   const infoTooltip = el("info-tooltip");
+  // Screen 03 (cost gate) elements. ``renderCostGate`` fills these from
+  // ``cost_estimate.breakdown``; the confirm button reuses ``proceedWithRun``.
+  const gateHeading = el("cost-gate-heading");
+  const gateQuestion = el("cost-gate-question");
+  const gateTotal = el("cost-gate-total");
+  const gateRange = el("cost-gate-range");
+  const gateRangeWrap = el("cost-gate-range-wrap");
+  const gateRail = el("cost-gate-rail");
+  const gateRailMarker = el("cost-rail-marker");
+  const gateByModel = el("cost-by-model");
+  const gateByStage = el("cost-by-stage");
+  const gateReason = el("cost-gate-reason");
+  const gateBlockNote = el("cost-gate-block-note");
+  const gateBlockFooter = el("cost-gate-block-footer");
+  const gateBandLabel = el("cost-review-band-label");
+  const gateCard = el("cost-review-card");
+  const gateConfirmButton = el("gate-confirm");
+  const gateBackButton = el("gate-back");
+  const gateBlockModelsButton = el("gate-block-models");
+  const gateBlockShortenButton = el("gate-block-shorten");
+  const gateCapNote = el("cost-gate-cap-note");
+  const gateHintConfirm = el("cost-gate-hint-confirm");
+  const gateLive = el("cost-gate-live");
+  const costGateContainer = document.querySelector('[data-view="cost-gate"]');
 
   // ---------------------------------------------------------------------------
   // State
@@ -121,7 +161,96 @@
     lastStaleModelIds: null,
     // Track if user has attempted to submit (gates inline error display)
     submissionAttempted: false,
+    // Slice 3 (04 Live run): live-run view state.
+    // ``liveQueryText`` is the submitted question, captured at run start so the
+    // running-query band can echo it (the poll payload carries no query_text).
+    // ``lastLiveStatus`` short-circuits SR announcements on the live status
+    // pill. The ``liveElapsed*`` triple drives a local ~1s ticker: on each poll
+    // we store the server ``elapsed_time_ms`` (REAL, whole-run) plus a local
+    // timestamp, and the ticker displays ``base + (now - stamp)``. The ticker
+    // is CLEARED (never runs after the run ends) and frozen at the final
+    // elapsed on any terminal transition.
+    liveQueryText: null,
+    lastLiveStatus: null,
+    // Slice 4a (05 Result): the plain-text summary (question + verdict +
+    // agreement line) built ONCE by ``renderResult`` at the terminal
+    // transition; the Copy/Export buttons read it. ``lastResultRunId`` names
+    // the exported file. Kept as textContent-safe strings (no HTML).
+    lastResultSummary: null,
+    lastResultRunId: null,
+    // Slice 5 (06 Transcript): the last terminal poll result, captured in the
+    // pollRun terminal branch alongside ``renderResult``. The transcript view
+    // (an audit drill-down of opening positions + round-level critiques) is
+    // rendered from this snapshot on demand. ``null`` until a run completes;
+    // the transcript link + ``renderTranscript`` both guard the null.
+    lastResult: null,
+    // Slice 4a (05 Result): guards the terminal poll branch so a re-entrant
+    // slow poll response cannot double-fire the completion toast + focus (C-A).
+    // Reset to false on every run start (proceedWithRun, C-C).
+    terminalHandled: false,
+    liveElapsedBaseMs: 0,
+    liveElapsedStamp: 0,
+    liveElapsedTimer: null,
+    // Slice 3 (04 Live run): per-block render signatures. ``renderLiveRun``
+    // runs every 750ms; without a change guard each helper rebuilds identical
+    // nodes (text-selection loss, animation restart, and — since #live-fallback
+    // is role=status — an SR re-announcement every tick). Each helper stores a
+    // lightweight signature of the exact data it renders and skips the
+    // ``replaceChildren`` when unchanged. ``null`` forces a render (reset per
+    // new run in ``proceedWithRun``). Mirrors the ``lastLiveStatus`` guard.
+    liveSig: {
+      stage: null,
+      debate: null,
+      models: null,
+      fallback: null,
+      notices: null,
+    },
+    // Slice 1 (02 Composer): the high-stakes gate. ``highStakesRequired``
+    // is set from ``POST /v1/query-runs/warnings`` (a ``high_stakes``
+    // warning in the response). While it is true and the user has not
+    // checked the acknowledgement (``highStakesAck``), the primary CTA
+    // stays disabled. The acknowledgement itself is still sent as
+    // ``safety_acknowledgements[]`` by the existing run flow.
+    highStakesRequired: false,
+    highStakesAck: false,
+    // Per-SLOT USD estimate keyed by slot position (array index),
+    // populated from the estimate response's
+    // ``cost_estimate.breakdown.by_model`` (the ``kind === "synthesis"``
+    // writer row is excluded — it is not a slot). ``by_model`` is emitted
+    // one row per slot in slot order (costs.py loops ``model_slots``), so
+    // keying by position — NOT by model_id — keeps duplicate models in
+    // different slots from collapsing/misattributing. Consumed by
+    // ``renderModelInputs`` to label each slot card.
+    perModelEstimates: [],
   };
+
+  // ---------------------------------------------------------------------------
+  // View switch (Slice 0 scaffold)
+  // ---------------------------------------------------------------------------
+
+  // Show exactly one ``[data-view]`` element and hide its siblings.
+  // Names: "composer", "cost-gate", "live-run", "result". This is a
+  // safe scaffold — later slices fill the placeholder views and wire
+  // real transitions. No-ops gracefully if the view container or the
+  // requested view is absent (e.g. a trimmed template), so it can be
+  // called unconditionally on load.
+  function setView(name) {
+    const views = qsa("[data-view]");
+    if (!views.length) return;
+    const target = views.find((view) => view.dataset.view === name);
+    if (!target) return;
+    for (const view of views) {
+      view.hidden = view !== target;
+    }
+    // Slice 3 (04 Live run): stamp the active view on the ``<main>`` shell so
+    // CSS can go full-width and hide the persistent "Run controls" aside while
+    // the live-run card is on screen (its status/cancel/run-id function is
+    // subsumed by the live card). The aside element stays in the DOM — it is
+    // only visually hidden via CSS — so the existing ``#cancel-run`` /
+    // ``#status-meta`` render targets remain valid.
+    const shell = document.getElementById("main-content");
+    if (shell) shell.dataset.activeView = name;
+  }
 
   // ---------------------------------------------------------------------------
   // Error / toast / banner presentation
@@ -130,33 +259,70 @@
   // Map a server "code" string to a user-friendly title. Anything we
   // don't recognise falls through to the generic "Something went wrong".
   const ERROR_TITLES = {
-    AUTH_REQUIRED: "Session expired",
+    AUTH_REQUIRED: "Start a session to run a query",
     SESSION_EXPIRED: "Session expired",
     CSRF_INVALID: "Security check failed",
-    INVALID_MODEL_SLOT: "Model selection needs adjustment",
+    INVALID_MODEL_SLOT: "One model slot needs a fix",
     SAFETY_ACK_REQUIRED: "Acknowledgement required",
     VALIDATION_ERROR: "Please check the form",
     COST_CONFIRMATION_REQUIRED: "Cost confirmation required",
-    COST_LIMIT_EXCEEDED: "Run blocked: cost too high",
+    COST_LIMIT_EXCEEDED: "Over the hard cap — this run won't start",
+    ACTIVE_QUERY_EXISTS: "You already have a run in progress",
+    QUERY_RUN_NOT_FOUND: "You don't have access to this",
     QUERY_TOO_LONG: "Question is too long",
     QUERY_REQUIRED: "Question is required",
     NETWORK_UNREACHABLE: "Can't reach the server",
-    RUN_FAILED: "Run failed",
+    RUN_FAILED: "One model didn't finish",
     TIMEOUT: "Run timed out",
   };
 
   // Some error codes have a CTA the user can take. Each entry has a
   // label + an onClick callback. We render them in the error banner.
+  // Slice 6 (07 edge states): only actions the backend can ACTUALLY
+  // perform are wired here (see ``edgeStateFromError`` for the
+  // per-state builders). No fabricated per-step retry / "continue with
+  // N models" buttons — there is no backend endpoint for either.
   const ERROR_ACTIONS = {
-    AUTH_REQUIRED: [{ label: "Refresh session", action: () => location.reload() }],
     SESSION_EXPIRED: [{ label: "Refresh session", action: () => location.reload() }],
+    CSRF_INVALID: [{ label: "Refresh session", action: () => location.reload() }],
   };
 
-  function showError({ code, message, hint, fieldErrors } = {}) {
+  // Slice 6 (07 edge states): the error banner doubles as the seven
+  // first-class honest edge cards. ``showError`` accepts optional
+  // ``acTag`` (the "… · AC-0NN" pill), ``severity`` (error / warning /
+  // info / neutral), ``detailRows`` (an itemized key→value block), and
+  // ``footer`` (a mono correlation/ID line). Every field is server-data
+  // driven at the call site — nothing here fabricates provider status,
+  // slot suggestions, or "why" reasons.
+  function showError({
+    code,
+    message,
+    hint,
+    fieldErrors,
+    acTag,
+    severity,
+    detailRows,
+    footer,
+    actions,
+  } = {}) {
     const title = (code && ERROR_TITLES[code]) || "Something went wrong";
+    const sev = severity || "error";
+    errorRegion.dataset.severity = sev;
+    if (errorIcon) {
+      errorIcon.textContent =
+        sev === "info" || sev === "neutral" ? "i" : "!";
+    }
+    if (errorActag) {
+      if (acTag) {
+        errorActag.textContent = acTag;
+        errorActag.hidden = false;
+      } else {
+        errorActag.textContent = "";
+        errorActag.hidden = true;
+      }
+    }
     errorTitle.textContent = title;
     errorMessage.textContent = message || "An unexpected error occurred. Please try again.";
-    errorRegion.dataset.severity = "error";
     if (fieldErrors && fieldErrors.length) {
       const list = document.createElement("ul");
       list.className = "status-banner-field-errors";
@@ -174,29 +340,110 @@
       hintEl.textContent = hint;
       errorMessage.appendChild(hintEl);
     }
-    // Render any action buttons the registry recommends for this code.
+    // Itemized detail block (failed step, bad slot id, hard cap, …).
+    if (errorDetail) {
+      errorDetail.replaceChildren();
+      const rows = Array.isArray(detailRows) ? detailRows : [];
+      if (rows.length) {
+        for (const row of rows) {
+          const wrap = document.createElement("div");
+          wrap.className = "status-banner-detail-row";
+          const dt = document.createElement("dt");
+          dt.textContent = row.label;
+          const dd = document.createElement("dd");
+          dd.textContent = row.value;
+          if (row.mono) dd.classList.add("mono");
+          if (row.tone) dd.dataset.tone = row.tone;
+          // Any sub-line belongs INSIDE the <dd> (valid <dl> content model);
+          // a bare <div> child of <dl> is invalid and confuses some AT.
+          if (row.sub) {
+            const sub = document.createElement("div");
+            sub.className = "status-banner-detail-sub";
+            sub.textContent = row.sub;
+            dd.appendChild(sub);
+          }
+          wrap.append(dt, dd);
+          errorDetail.appendChild(wrap);
+        }
+        errorDetail.hidden = false;
+      } else {
+        errorDetail.hidden = true;
+      }
+    }
+    // Action buttons. Prefer explicit per-call ``actions``; otherwise
+    // fall back to the static registry. Each action may be sync or async.
     errorActions.replaceChildren();
-    const actions = (code && ERROR_ACTIONS[code]) || [];
-    for (const { label, action } of actions) {
+    const resolvedActions =
+      (Array.isArray(actions) && actions.length
+        ? actions
+        : (code && ERROR_ACTIONS[code]) || []);
+    resolvedActions.forEach(({ label, action, primary }, index) => {
       const button = document.createElement("button");
       button.type = "button";
-      button.className = "button button-secondary button-compact";
+      button.className = primary
+        ? "button button-primary button-compact"
+        : "button button-secondary button-compact";
       button.textContent = label;
-      button.addEventListener("click", action);
+      button.addEventListener("click", () => {
+        try {
+          const maybePromise = action();
+          if (maybePromise && typeof maybePromise.catch === "function") {
+            maybePromise.catch((err) => {
+              toast({
+                message: (err && err.message) || "That action could not complete.",
+                tone: "error",
+                timeout: 6000,
+              });
+            });
+          }
+        } catch (err) {
+          toast({
+            message: (err && err.message) || "That action could not complete.",
+            tone: "error",
+            timeout: 6000,
+          });
+        }
+      });
       errorActions.appendChild(button);
+    });
+    // Mono correlation / ID footer.
+    if (errorFooter) {
+      if (footer) {
+        errorFooter.textContent = footer;
+        errorFooter.hidden = false;
+      } else {
+        errorFooter.textContent = "";
+        errorFooter.hidden = true;
+      }
     }
     errorRegion.hidden = false;
     // Move focus so screen readers announce the error.
     errorRegion.focus({ preventScroll: true });
-    // Bring the banner into view if it is below the fold.
-    errorRegion.scrollIntoView({ behavior: "smooth", block: "center" });
+    // Bring the banner into view if it is below the fold (honour reduced motion).
+    errorRegion.scrollIntoView({
+      behavior: prefersReducedMotion() ? "auto" : "smooth",
+      block: "center",
+    });
   }
 
   function clearError() {
     errorRegion.hidden = true;
+    errorRegion.dataset.severity = "error";
     errorTitle.textContent = "";
     errorMessage.textContent = "";
     errorActions.replaceChildren();
+    if (errorActag) {
+      errorActag.textContent = "";
+      errorActag.hidden = true;
+    }
+    if (errorDetail) {
+      errorDetail.replaceChildren();
+      errorDetail.hidden = true;
+    }
+    if (errorFooter) {
+      errorFooter.textContent = "";
+      errorFooter.hidden = true;
+    }
   }
 
   // Render the catalog-drift banner. ``renderDriftBanner`` builds a
@@ -550,9 +797,14 @@
   // free). Use a magnitude-aware decimal count: 4 dp below 1¢, 3 dp
   // below $1, 2 dp otherwise. Strip trailing zeros so the display
   // stays compact (e.g. ``$0.0023`` not ``$0.00230``).
-  function formatUsd(usdAmount) {
+  // ``suffix:false`` drops the trailing " USD" for compact cells (the cost
+  // gate's table/total/big number). Passing the option through here is the
+  // single source of truth for money formatting — callers must never
+  // string-strip the suffix themselves.
+  function formatUsd(usdAmount, { suffix = true } = {}) {
+    const tail = suffix ? " USD" : "";
     const num = Number(usdAmount);
-    if (!Number.isFinite(num)) return "$0.00 USD";
+    if (!Number.isFinite(num)) return `$0.00${tail}`;
     let decimals;
     if (num < 0.01) {
       decimals = 4;
@@ -566,7 +818,7 @@
     const fixed = num.toFixed(decimals);
     const trimmed = fixed.replace(/\.?0+$/, "");
     const withCents = trimmed.includes(".") ? trimmed : `${trimmed}.00`;
-    return `$${withCents} USD`;
+    return `$${withCents}${tail}`;
   }
 
   function formatCostWithLocal(usdAmount) {
@@ -663,7 +915,7 @@
   };
 
   class ApiError extends Error {
-    constructor({ status, code, message, slotErrors, fieldErrors, partial }) {
+    constructor({ status, code, message, slotErrors, fieldErrors, partial, correlationId }) {
       super(message || STATUS_COPY[status] || "Unexpected error");
       this.name = "ApiError";
       this.status = status;
@@ -671,6 +923,10 @@
       this.slotErrors = slotErrors;
       this.fieldErrors = fieldErrors;
       this.partial = partial;
+      // Slice 6 (07 edge states): surface a server correlation_id on the
+      // error when the envelope carries one, so honest edge states can
+      // quote it in their footer. Never invented — undefined when absent.
+      this.correlationId = correlationId;
     }
   }
 
@@ -726,6 +982,7 @@
         slotErrors: detail && detail.slot_errors,
         fieldErrors: detail && detail.field_errors,
         partial: payload,
+        correlationId: (detail && detail.correlation_id) || (payload && payload.correlation_id) || undefined,
       });
     }
     return response.json();
@@ -742,29 +999,26 @@
   }
 
   function renderModelOptions(currentModelId, currentIndex, selectedModelIds) {
-    const takenIds = new Set(
-      selectedModelIds.filter((_, index) => index !== currentIndex),
-    );
-    // PR-0 / Bug 10: vendor-scoped filtering. The defaults are
-    // curated so each slot targets a different vendor family
-    // (openai / anthropic / google / deepseek). If we showed the
-    // entire catalog and only filtered out the exact other slots'
-    // selected ids, slot 1 and slot 3 both showed the openai
-    // fallbacks (gpt-4.1, o3) as their first non-selected options
-    // — confusing because the user picked google for slot 3, not
-    // "any other openai model." Restrict each dropdown to the
-    // vendor prefix of the slot's currently selected model id
-    // (``openai/``, ``anthropic/``, etc.) so the visible options
-    // always belong to the family the slot is supposed to pick
-    // from. The "curated default — not in live catalog" synthetic
-    // option is preserved for the case where the live catalog
-    // no longer lists the default.
-    const vendorPrefix = currentModelId.split("/", 1)[0];
+    // Slice 1 (02 Composer): free model choice from the live catalog.
+    // The approved design ("swap from live catalog", "Duplicates allowed
+    // but visibly flagged") lets any slot pick ANY catalog model. We do
+    // NOT scope a slot's dropdown to a vendor family, and we do NOT
+    // remove a model just because another slot already selected it —
+    // cross-slot duplicates are permitted and ``renderModelInputs``
+    // surfaces a small inline "duplicate" flag when the same model is
+    // chosen in >= 2 slots. ``selectedModelIds``/``currentIndex`` are
+    // retained in the signature for call-site compatibility (and future
+    // cross-slot awareness) even though no filtering is applied.
+    void selectedModelIds;
+    void currentIndex;
     const catalogHasDefault = modelCatalog.some(
       (option) => option.model_id === currentModelId,
     );
     const options = [];
     if (!catalogHasDefault) {
+      // The curated default is no longer in the live catalog: keep it
+      // reachable as a synthetic, pre-selected option so the slot does
+      // not silently jump to a different model.
       const synthetic = document.createElement("option");
       synthetic.value = currentModelId;
       synthetic.textContent = `${currentModelId} (curated default — not in live catalog)`;
@@ -772,16 +1026,8 @@
       options.push(synthetic);
     }
     for (const option of modelCatalog) {
-      // Vendor scope: only show models from the slot's vendor
-      // family. The exact mutual-exclusion check is preserved as
-      // a belt-and-braces guard, but the vendor filter does the
-      // heavy lifting.
-      if (!option.model_id.startsWith(`${vendorPrefix}/`)) {
-        continue;
-      }
-      if (takenIds.has(option.model_id) && option.model_id !== currentModelId) {
-        continue;
-      }
+      // Every catalog model is offered for every slot, regardless of
+      // vendor. Duplicates across slots are permitted (and flagged).
       const optionElement = document.createElement("option");
       optionElement.value = option.model_id;
       optionElement.textContent = `${option.label} (${option.model_id})`;
@@ -793,24 +1039,105 @@
     return options;
   }
 
+  // Human-friendly display name for a model id. The catalog data island
+  // carries the full label ("OpenAI: GPT-4o mini"); we strip the
+  // "Vendor: " prefix to get the short display name ("GPT-4o mini") the
+  // design uses on the slot cards. Falls back to the raw id.
+  function displayNameForModel(modelId) {
+    const entry = modelCatalog.find((option) => option.model_id === modelId);
+    const label = entry ? entry.label : modelId;
+    const short = label.includes(":")
+      ? label.slice(label.indexOf(":") + 1).trim()
+      : label;
+    return short || modelId;
+  }
+
+  // Avatar initial: first letter of the display name, uppercased.
+  function avatarInitialForModel(modelId) {
+    const name = displayNameForModel(modelId).trim();
+    return (name[0] || "?").toUpperCase();
+  }
+
+  // Per-slot estimate label. Returns a mono "~$0.034" once an estimate
+  // exists for this slot position, otherwise an em-dash placeholder.
+  // Keyed by slot index (not model_id) so two slots with the same model
+  // each show their own positional estimate.
+  function perModelEstimateText(slotIndex) {
+    const usd = Array.isArray(state.perModelEstimates)
+      ? state.perModelEstimates[slotIndex]
+      : undefined;
+    if (usd === undefined || usd === null) return "—";
+    const num = Number(usd);
+    if (!Number.isFinite(num)) return "—";
+    return `~$${num.toFixed(3)}`;
+  }
+
+  // Slice 1 (02 Composer): the four model slots render as a 2x2 grid of
+  // cards — avatar, display name, mono OpenRouter id, per-model mono
+  // estimate, and a compact ▾ swap ``<select>`` (kept as a real select
+  // so the ``aria-label`` + keyboard affordance survive). Duplicates are
+  // allowed but flagged with a small amber "duplicate" pill.
   function renderModelInputs(modelIds) {
-    const fields = modelIds.map((modelId, index) => {
-      const field = document.createElement("div");
-      field.className = "field";
-      const label = document.createElement("label");
-      label.htmlFor = `model-${index + 1}`;
-      label.textContent = `Model slot ${index + 1}`;
+    const counts = {};
+    for (const id of modelIds) counts[id] = (counts[id] || 0) + 1;
+
+    const cards = modelIds.map((modelId, index) => {
+      const card = document.createElement("div");
+      card.className = "model-slot";
+      card.dataset.slotIndex = String(index);
+
+      const avatar = document.createElement("span");
+      avatar.className = "model-slot-avatar";
+      avatar.setAttribute("aria-hidden", "true");
+      avatar.textContent = avatarInitialForModel(modelId);
+
+      const info = document.createElement("div");
+      info.className = "model-slot-info";
+      const nameRow = document.createElement("div");
+      nameRow.className = "model-slot-name";
+      const nameText = document.createElement("span");
+      nameText.textContent = displayNameForModel(modelId);
+      nameRow.appendChild(nameText);
+      if (counts[modelId] > 1) {
+        const dup = document.createElement("span");
+        dup.className = "model-slot-dup";
+        dup.textContent = "duplicate";
+        nameRow.appendChild(dup);
+      }
+      const idEl = document.createElement("div");
+      idEl.className = "model-slot-id mono";
+      idEl.textContent = modelId;
+      info.append(nameRow, idEl);
+
+      const estimate = document.createElement("span");
+      estimate.className = "model-slot-estimate mono";
+      estimate.textContent = perModelEstimateText(index);
+
+      // The swap control: a compact ▾ affordance whose native <select>
+      // is overlaid transparently so a click opens the vendor-scoped
+      // model list. ``id`` (``model-N``) and ``data-model-slot`` are
+      // preserved for the change handler and ``getModelIds``; the
+      // ``aria-label`` names the control for assistive tech.
+      const swap = document.createElement("span");
+      swap.className = "model-slot-swap";
+      const caret = document.createElement("span");
+      caret.className = "model-slot-swap-caret";
+      caret.setAttribute("aria-hidden", "true");
+      caret.textContent = "▾";
       const select = document.createElement("select");
       select.id = `model-${index + 1}`;
       select.dataset.modelSlot = "";
       select.dataset.slotIndex = String(index);
+      select.setAttribute("aria-label", `Model for slot ${index + 1}`);
       for (const option of renderModelOptions(modelId, index, modelIds)) {
         select.appendChild(option);
       }
-      field.append(label, select);
-      return field;
+      swap.append(caret, select);
+
+      card.append(avatar, info, estimate, swap);
+      return card;
     });
-    modelInputs.replaceChildren(...fields);
+    modelInputs.replaceChildren(...cards);
   }
 
   // ---------------------------------------------------------------------------
@@ -872,6 +1199,1729 @@
         updateWorkflowProgress(null);
       }
     }
+  }
+
+  // ---------------------------------------------------------------------------
+  // Slice 3 (04 Live run)
+  // ---------------------------------------------------------------------------
+  //
+  // ``renderLiveRun`` paints the dedicated live-run view from a poll result
+  // (or the create response, which has no ``.result`` projection — every
+  // nested read is guarded). HONESTY: this view renders ONLY server-backed
+  // fields. There is NO per-model debate stance, NO token streaming, NO
+  // per-stage accrued cost, and NO live spend accrual — those are mock-only
+  // in the pixel spec and have no backing field. Debate is shown at ROUND
+  // granularity; cost is shown as the approved CAP with the real auto-stop
+  // guarantee; model status is pending → done/failed (+ search-fallback tag).
+  // GREEN RULE: nothing here is green (green is the verdict, Slice 4a). Running
+  // is blue (--info); done is ink; failed is --danger; caution is --warning.
+
+  const LIVE_PIPELINE_STAGES = [
+    { key: "initial_answers", label: "Initial answers" },
+    { key: "debate_round_1", label: "Debate round 1" },
+    { key: "debate_round_2", label: "Debate round 2" },
+    { key: "synthesis", label: "Synthesis" },
+  ];
+
+  const LIVE_TERMINAL = new Set([
+    "completed",
+    "partial",
+    "failed",
+    "timed_out",
+    "cancelled",
+  ]);
+
+  const LIVE_ROUND_PLACEHOLDER_STATE = {
+    running: "in progress",
+    pending: "pending",
+    failed: "failed",
+    skipped: "skipped",
+  };
+
+  const LIVE_ROUND_PLACEHOLDER_BODY = {
+    running:
+      "Models are exchanging critiques for this round. The round-level critique appears here once it completes.",
+    pending: "This round has not started yet.",
+    failed: "This round did not complete.",
+    skipped: "This round was skipped.",
+  };
+
+  // Map a run status to the header pill's visible text + colour state. The
+  // state feeds ``data-state`` (CSS colours it): "running" = blue, "completed"
+  // = ink (NOT green — green is the verdict only), "partial" = amber, "failed"/
+  // "cancelled" = red. Text derived honestly from status/round position.
+  function liveStatusPresentation(status) {
+    switch (status) {
+      case "accepted":
+        return { text: "Starting…", state: "running" };
+      case "initial_answers_running":
+        return { text: "Running · initial answers", state: "running" };
+      case "debate_round_1_running":
+        return { text: "Running · debate round 1 of 2", state: "running" };
+      case "debate_round_2_running":
+        return { text: "Running · debate round 2 of 2", state: "running" };
+      case "synthesis_running":
+        return { text: "Running · synthesis", state: "running" };
+      case "completed":
+        return { text: "Completed", state: "completed" };
+      case "partial":
+        return { text: "Partial result", state: "partial" };
+      case "failed":
+        return { text: "Failed", state: "failed" };
+      case "timed_out":
+        return { text: "Timed out", state: "failed" };
+      case "cancelled":
+        return { text: "Cancelled", state: "cancelled" };
+      default:
+        return { text: STATUS_LABELS[status] || "Running", state: "running" };
+    }
+  }
+
+  // Format whole-run elapsed. Sub-minute → "28.7s elapsed"; ≥60s → "1m 05s
+  // elapsed". Driven by the REAL server ``elapsed_time_ms``.
+  function formatElapsed(ms) {
+    if (!Number.isFinite(ms)) return "—";
+    const clamped = Math.max(0, Math.round(ms));
+    // Branch on the ROUNDED ms, not the sub-minute float: [59.95s, 60s) rounds
+    // to 60000ms and must read "1m 00s elapsed", never "60.0s elapsed".
+    if (clamped >= 60000) {
+      const whole = Math.floor(clamped / 1000);
+      const minutes = Math.floor(whole / 60);
+      const seconds = whole % 60;
+      return `${minutes}m ${String(seconds).padStart(2, "0")}s elapsed`;
+    }
+    return `${(clamped / 1000).toFixed(1)}s elapsed`;
+  }
+
+  function tickLiveElapsed() {
+    const elapsedEl = el("live-elapsed");
+    if (!elapsedEl) return;
+    const shown = state.liveElapsedBaseMs + (Date.now() - state.liveElapsedStamp);
+    elapsedEl.textContent = formatElapsed(shown);
+  }
+
+  function startLiveElapsedTicker() {
+    if (state.liveElapsedTimer) return;
+    tickLiveElapsed();
+    state.liveElapsedTimer = window.setInterval(tickLiveElapsed, 1000);
+  }
+
+  // Stop the ticker so it never runs after the run ends. Callers: terminal
+  // renderLiveRun, stopPolling, setRunning(false).
+  function stopLiveElapsedTicker() {
+    if (state.liveElapsedTimer) {
+      window.clearInterval(state.liveElapsedTimer);
+      state.liveElapsedTimer = null;
+    }
+  }
+
+  // Freeze the elapsed readout at the final value and stop ticking.
+  function freezeLiveElapsed(finalMs) {
+    stopLiveElapsedTicker();
+    const elapsedEl = el("live-elapsed");
+    if (elapsedEl && Number.isFinite(finalMs)) {
+      elapsedEl.textContent = formatElapsed(finalMs);
+    }
+  }
+
+  function liveStageDotGlyph(stageState, index) {
+    if (stageState === "completed") return "✓";
+    if (stageState === "failed") return "!";
+    if (stageState === "running") return "●";
+    if (stageState === "skipped") return "–";
+    return String(index + 1); // pending
+  }
+
+  // Honest per-stage meta: initial answers shows the REAL "N/4 answers"
+  // (answers received vs 4) while running/complete; every other stage shows
+  // its state label + the server ``detail`` if any. NO fabricated time/cost.
+  function liveStageMeta(def, stage, stageState, answersReceived) {
+    const detail = stage && stage.detail ? String(stage.detail) : "";
+    if (def.key === "initial_answers") {
+      if (stageState === "running" || stageState === "completed") {
+        const base = `${Math.min(answersReceived, 4)}/4 answers`;
+        return detail ? `${base} · ${detail}` : base;
+      }
+      return detail ? `${stageState} · ${detail}` : stageState;
+    }
+    return detail ? `${stageState} · ${detail}` : stageState;
+  }
+
+  function renderLiveStageStrip(result, answersReceived) {
+    const strip = el("live-stage-strip");
+    if (!strip) return;
+    const stages = (result.progress && result.progress.stages) || [];
+    const byKey = new Map(stages.map((s) => [s.stage, s]));
+    // Fix 3: skip the rebuild when nothing this strip renders has changed.
+    const sig = JSON.stringify({
+      answersReceived,
+      stages: LIVE_PIPELINE_STAGES.map((def) => {
+        const s = byKey.get(def.key);
+        return s ? [s.state, s.detail || ""] : null;
+      }),
+    });
+    if (sig === state.liveSig.stage) return;
+    state.liveSig.stage = sig;
+    const items = LIVE_PIPELINE_STAGES.map((def, index) => {
+      const stage = byKey.get(def.key);
+      const stageState = stage ? stage.state : "pending";
+      const item = document.createElement("div");
+      item.className = "live-stage";
+      item.dataset.state = stageState;
+
+      const head = document.createElement("div");
+      head.className = "live-stage-head";
+      const dot = document.createElement("span");
+      dot.className = "live-stage-dot";
+      dot.setAttribute("aria-hidden", "true");
+      dot.textContent = liveStageDotGlyph(stageState, index);
+      const label = document.createElement("span");
+      label.className = "live-stage-label";
+      label.textContent = def.label;
+      head.append(dot, label);
+
+      const bar = document.createElement("div");
+      bar.className = "live-stage-bar";
+      bar.dataset.state = stageState;
+      const fill = document.createElement("span");
+      fill.className = "live-stage-bar-fill";
+      if (def.key === "initial_answers" && stageState === "running") {
+        // REAL fraction: answers landed out of 4.
+        fill.style.width = `${(Math.min(answersReceived, 4) / 4) * 100}%`;
+      } else if (stageState === "running") {
+        // No honest fraction exists for debate/synthesis — show an
+        // indeterminate blue bar (static under reduced-motion).
+        bar.dataset.indeterminate = "true";
+      }
+      bar.appendChild(fill);
+
+      const meta = document.createElement("div");
+      meta.className = "live-stage-meta mono";
+      meta.textContent = liveStageMeta(def, stage, stageState, answersReceived);
+
+      item.append(head, bar, meta);
+      return item;
+    });
+    strip.replaceChildren(...items);
+  }
+
+  function renderLiveDebateCard(round) {
+    const card = document.createElement("article");
+    card.className = "live-round-card";
+    card.dataset.state = "complete";
+    const header = document.createElement("div");
+    header.className = "live-round-header";
+    const pill = document.createElement("span");
+    pill.className = "live-round-pill";
+    pill.textContent = `Round ${round.round_number}`;
+    const focus = document.createElement("span");
+    focus.className = "live-round-focus";
+    focus.textContent = `Focus: ${
+      (round.focus_areas || []).join(", ") || "general critique"
+    }`;
+    const stateEl = document.createElement("span");
+    stateEl.className = "live-round-state";
+    stateEl.textContent = "complete";
+    header.append(pill, focus, stateEl);
+    const body = document.createElement("p");
+    body.className = "live-round-body";
+    body.textContent = round.critique_text || "";
+    card.append(header, body);
+    return card;
+  }
+
+  function renderLiveDebatePlaceholder(roundNo, stageState) {
+    const card = document.createElement("article");
+    card.className = "live-round-card live-round-placeholder";
+    card.dataset.state = stageState;
+    const header = document.createElement("div");
+    header.className = "live-round-header";
+    const pill = document.createElement("span");
+    pill.className = "live-round-pill";
+    pill.textContent = `Round ${roundNo}`;
+    const stateEl = document.createElement("span");
+    stateEl.className = "live-round-state";
+    stateEl.textContent = LIVE_ROUND_PLACEHOLDER_STATE[stageState] || "pending";
+    header.append(pill, stateEl);
+    const body = document.createElement("p");
+    body.className = "live-round-body muted";
+    body.textContent =
+      LIVE_ROUND_PLACEHOLDER_BODY[stageState] || "This round has not started yet.";
+    card.append(header, body);
+    return card;
+  }
+
+  // Debate at ROUND granularity from ``debate_outputs`` (one critique_text per
+  // round). Rounds not yet written show a pending/running placeholder driven by
+  // the matching ``debate_round_N`` stage state. There is NO per-model debate
+  // data to render.
+  function renderLiveDebate(result) {
+    const host = el("live-debate");
+    if (!host) return;
+    const debate = (result.result && result.result.debate_outputs) || [];
+    const byRound = new Map(debate.map((r) => [r.round_number, r]));
+    const stages = (result.progress && result.progress.stages) || [];
+    const stageByKey = new Map(stages.map((s) => [s.stage, s]));
+    // Fix 3: skip the rebuild when neither the round critiques nor the
+    // debate-round stage states have changed since the last render.
+    const sig = JSON.stringify({
+      debate: debate.map((r) => [
+        r.round_number,
+        r.focus_areas || [],
+        r.critique_text || "",
+      ]),
+      stages: [1, 2].map((n) => {
+        const s = stageByKey.get(`debate_round_${n}`);
+        return s ? s.state : "pending";
+      }),
+    });
+    if (sig === state.liveSig.debate) return;
+    state.liveSig.debate = sig;
+    const cards = [1, 2].map((roundNo) => {
+      const round = byRound.get(roundNo);
+      if (round) return renderLiveDebateCard(round);
+      const stage = stageByKey.get(`debate_round_${roundNo}`);
+      return renderLiveDebatePlaceholder(roundNo, stage ? stage.state : "pending");
+    });
+    host.replaceChildren(...cards);
+  }
+
+  // Honest model status: a slot NOT yet in model_answers = "pending"; present
+  // = "done" (completed, with real latency) or "failed"; a fallback answer is
+  // tagged "search fallback". Nothing else (no "queued"/"responding"/"live").
+  function renderLiveModelStatus(slots, answers) {
+    const host = el("live-model-status");
+    if (!host) return;
+    const bySlot = new Map(answers.map((a) => [a.slot_number, a]));
+    const slotList = slots.length
+      ? slots
+      : defaultModelIds.map((mid, i) => ({ slot_number: i + 1, model_id: mid }));
+    // Fix 3: skip the rebuild when the slot set and every answer field this
+    // row renders are unchanged.
+    const sig = JSON.stringify({
+      slots: slotList.map((s) => [s.slot_number, s.model_id]),
+      answers: answers.map((a) => [
+        a.slot_number,
+        a.model_id,
+        a.display_name,
+        a.status,
+        a.latency_ms,
+        a.fallback_used,
+        a.provider_path,
+      ]),
+    });
+    if (sig === state.liveSig.models) return;
+    state.liveSig.models = sig;
+    const rows = slotList.map((slot) => {
+      const answer = bySlot.get(slot.slot_number);
+      const modelId = (answer && answer.model_id) || slot.model_id;
+      const name = (answer && answer.display_name) || displayNameForModel(modelId);
+      const row = document.createElement("div");
+      row.className = "live-model-row";
+      const avatar = document.createElement("span");
+      avatar.className = "live-model-avatar";
+      avatar.setAttribute("aria-hidden", "true");
+      avatar.textContent = avatarInitialForModel(modelId);
+      const nameEl = document.createElement("span");
+      nameEl.className = "live-model-name";
+      nameEl.textContent = name;
+      const stateEl = document.createElement("span");
+      stateEl.className = "live-model-state mono";
+
+      let stateKey;
+      let stateText;
+      if (!answer) {
+        stateKey = "pending";
+        stateText = "pending";
+      } else if (answer.status === "failed") {
+        stateKey = "failed";
+        stateText = "failed";
+      } else {
+        stateKey = "done";
+        stateText =
+          answer.latency_ms != null ? `done · ${answer.latency_ms} ms` : "done";
+      }
+      row.dataset.state = stateKey;
+      stateEl.textContent = stateText;
+      row.append(avatar, nameEl, stateEl);
+
+      if (
+        answer &&
+        (answer.fallback_used || answer.provider_path === "fallback_search")
+      ) {
+        const tag = document.createElement("span");
+        tag.className = "live-model-tag";
+        tag.textContent = "search fallback";
+        row.appendChild(tag);
+      }
+      return row;
+    });
+    host.replaceChildren(...rows);
+  }
+
+  // Amber search-fallback disclosure — hidden unless some answer used a
+  // fallback. Prefers the server ``provider_notice`` text, else an honest
+  // default (no provider brand names fabricated).
+  function renderLiveFallback(answers) {
+    const host = el("live-fallback");
+    if (!host) return;
+    const fallbackAnswer = answers.find(
+      (a) => a.fallback_used || a.provider_path === "fallback_search",
+    );
+    // Fix 3: this block is role=status — skipping the rebuild when the
+    // disclosure is unchanged avoids an SR re-announcement every poll tick.
+    const sig = JSON.stringify(
+      fallbackAnswer ? [true, fallbackAnswer.provider_notice || ""] : [false],
+    );
+    if (sig === state.liveSig.fallback) return;
+    state.liveSig.fallback = sig;
+    if (!fallbackAnswer) {
+      host.hidden = true;
+      host.replaceChildren();
+      return;
+    }
+    const title = document.createElement("div");
+    title.className = "live-fallback-title";
+    const dot = document.createElement("span");
+    dot.className = "live-fallback-dot";
+    dot.setAttribute("aria-hidden", "true");
+    const titleText = document.createElement("span");
+    titleText.textContent = "Search fallback in use";
+    title.append(dot, titleText);
+    const body = document.createElement("div");
+    body.className = "live-fallback-body";
+    body.textContent =
+      fallbackAnswer.provider_notice ||
+      "Primary search didn't return enough source support for a model, so a fallback search is providing citations. Informational — the run continues, and it's disclosed on the receipt.";
+    host.replaceChildren(title, body);
+    host.hidden = false;
+  }
+
+  // Approved-cap panel. Shows the APPROVED CAP (estimated_cost_usd) labelled as
+  // a cap, the REAL auto-stop guarantee, and the receipt reconciliation note.
+  // NO spend bar, NO accruing "so far" figure — none exists.
+  function renderLiveCap(result) {
+    const host = el("live-cap");
+    if (!host) return;
+    const cap =
+      result.cost_estimate && result.cost_estimate.estimated_cost_usd;
+    const head = document.createElement("div");
+    head.className = "live-cap-head";
+    const label = document.createElement("span");
+    label.className = "live-cap-label";
+    label.textContent = "Approved cap";
+    const value = document.createElement("span");
+    value.className = "live-cap-value mono";
+    value.textContent = cap != null ? formatUsd(cap, { suffix: false }) : "—";
+    head.append(label, value);
+    const guarantee = document.createElement("p");
+    guarantee.className = "live-cap-note";
+    guarantee.textContent =
+      "The run stops itself if spend would pass the approved figure.";
+    const reconcile = document.createElement("p");
+    reconcile.className = "live-cap-note muted";
+    reconcile.textContent = "Final cost reconciles on the receipt.";
+    host.replaceChildren(head, guarantee, reconcile);
+  }
+
+  // Fix 1: surface failure notices inside the live-run card. While the live
+  // view is active the "Run controls" aside (and its ``#notice-list``) is
+  // hidden, so on a partial/failed run the REASON it degraded would otherwise
+  // be invisible. This mirrors the HONESTY-SAFE fields ``renderNotices``
+  // surfaces — never innerHTML, never provider keys/secrets — and shows the
+  // block only when at least one field is non-empty.
+  // Single source of truth for "does the live-run card have failure-disclosure
+  // content to show". Used by ``renderLiveNotices`` (to show/hide the block)
+  // AND by the terminal toast/hint copy, so the copy can never point at a
+  // "run notices" block that is actually hidden.
+  function liveNoticesHaveContent(result) {
+    if (!result) return false;
+    return Boolean(
+      result.partial_failure_notice ||
+        (result.provider_failure_notices &&
+          result.provider_failure_notices.length) ||
+        (result.failed_steps && result.failed_steps.length) ||
+        (result.missing_steps && result.missing_steps.length),
+    );
+  }
+
+  function renderLiveNotices(result) {
+    const host = el("live-notices");
+    const list = el("live-notices-list");
+    if (!host || !list) return;
+    const partialNotice = (result && result.partial_failure_notice) || "";
+    const providerNotices = (result && result.provider_failure_notices) || [];
+    const failedSteps = (result && result.failed_steps) || [];
+    const missingSteps = (result && result.missing_steps) || [];
+    // Fix 3: skip the rebuild when nothing this block renders has changed.
+    const sig = JSON.stringify({
+      partialNotice,
+      providerNotices,
+      failedSteps,
+      missingSteps,
+    });
+    if (sig === state.liveSig.notices) return;
+    state.liveSig.notices = sig;
+    const hasContent = liveNoticesHaveContent(result);
+    if (!hasContent) {
+      host.hidden = true;
+      list.replaceChildren();
+      return;
+    }
+    const fragment = document.createDocumentFragment();
+    if (partialNotice) {
+      const item = document.createElement("div");
+      item.className = "notice notice-warn";
+      item.textContent = partialNotice;
+      fragment.appendChild(item);
+    }
+    for (const notice of providerNotices) {
+      const item = document.createElement("div");
+      item.className = "notice notice-warn";
+      item.textContent = notice;
+      fragment.appendChild(item);
+    }
+    if (failedSteps.length || missingSteps.length) {
+      fragment.appendChild(renderStageDiagnostics(failedSteps, missingSteps));
+    }
+    list.replaceChildren(fragment);
+    host.hidden = false;
+  }
+
+  function renderLiveRun(result) {
+    if (!result) return;
+    const status = result.status || "accepted";
+    const isTerminal = LIVE_TERMINAL.has(status);
+
+    // Header status pill.
+    const pill = el("live-status-pill");
+    const statusText = el("live-status-text");
+    const present = liveStatusPresentation(status);
+    if (pill) pill.dataset.state = present.state;
+    // Only reassign textContent on a real change so the polite live region
+    // announces coarse status transitions, not every 750ms poll tick.
+    if (statusText && present.text !== state.lastLiveStatus) {
+      state.lastLiveStatus = present.text;
+      statusText.textContent = present.text;
+    }
+
+    // Stop button — available while running, removed once terminal.
+    const stopBtn = el("live-stop");
+    if (stopBtn) stopBtn.hidden = isTerminal;
+
+    // Correlation id (the live card subsumes the aside's run-id readout).
+    const corr = el("live-corr");
+    if (corr) {
+      const corrId = result.correlation_id || "";
+      corr.textContent = corrId ? `run ${corrId}` : "";
+      // Fix 6: stash the RAW id so the copy handler copies exactly what is
+      // shown here (without the "run " prefix).
+      if (corrId) {
+        corr.dataset.correlationId = corrId;
+      } else {
+        delete corr.dataset.correlationId;
+      }
+    }
+
+    // Running-query echo. The poll payload carries no query_text, so use the
+    // value captured at run start (falling back to the composer field).
+    const queryEl = el("live-query");
+    if (queryEl) {
+      const queryText =
+        state.liveQueryText ||
+        (queryTextarea ? queryTextarea.value.trim() : "") ||
+        "";
+      queryEl.textContent = queryText || "—";
+    }
+
+    // Live elapsed ticker. Store the REAL server elapsed + a local timestamp;
+    // the ~1s ticker shows base + drift. On terminal, freeze at the final
+    // elapsed and stop ticking (it must never run after the run ends).
+    const elapsedMs = Number.isFinite(result.elapsed_time_ms)
+      ? result.elapsed_time_ms
+      : null;
+    if (isTerminal) {
+      const finalMs =
+        elapsedMs != null
+          ? elapsedMs
+          : state.liveElapsedBaseMs + (Date.now() - state.liveElapsedStamp);
+      freezeLiveElapsed(finalMs);
+    } else {
+      if (elapsedMs != null) {
+        state.liveElapsedBaseMs = elapsedMs;
+        state.liveElapsedStamp = Date.now();
+      }
+      startLiveElapsedTicker();
+    }
+
+    // Guarded reads: ``created`` has no ``.result`` projection; model_answers /
+    // debate_outputs may be undefined; model_slots is present on both.
+    const answers = (result.result && result.result.model_answers) || [];
+    const slots = result.model_slots || [];
+    // HONESTY: a failed slot returned no answer, so it must NOT inflate the
+    // "N/4 answers" text or the initial-answers progress fraction. Count only
+    // slots that actually completed.
+    const answersReceived = answers.filter(
+      (a) => a.status === "completed",
+    ).length;
+
+    renderLiveStageStrip(result, answersReceived);
+    renderLiveDebate(result);
+    renderLiveModelStatus(slots, answers);
+    renderLiveFallback(answers);
+    renderLiveCap(result);
+    renderLiveNotices(result);
+  }
+
+  // ---------------------------------------------------------------------------
+  // Slice 4a (05 Result): verdict band + trust triangle
+  // ---------------------------------------------------------------------------
+
+  // Small element factory (textContent only — never innerHTML).
+  function mkEl(tag, className, text) {
+    const node = document.createElement(tag);
+    if (className) node.className = className;
+    if (text != null) node.textContent = text;
+    return node;
+  }
+
+  const RESULT_SVG_NS = "http://www.w3.org/2000/svg";
+  const RESULT_RING_RADIUS = 40;
+  const RESULT_RING_CIRC = 2 * Math.PI * RESULT_RING_RADIUS;
+
+  // Duration without the " elapsed" suffix, e.g. "41.2s" / "1m 05s".
+  function formatDuration(ms) {
+    return formatElapsed(ms).replace(/ elapsed$/, "");
+  }
+
+  // Format the finished-at UTC timestamp as "Jul 7, 2026 · finished 09:41:44
+  // UTC" (UTC-anchored — the receipt time is authoritative in UTC). Guards a
+  // missing/invalid value and any ICU rejection.
+  function formatFinishedUtc(raw) {
+    if (!raw) return "";
+    const date = new Date(raw);
+    if (Number.isNaN(date.getTime())) return "";
+    try {
+      const datePart = new Intl.DateTimeFormat("en-US", {
+        month: "short",
+        day: "numeric",
+        year: "numeric",
+        timeZone: "UTC",
+      }).format(date);
+      const timePart = new Intl.DateTimeFormat("en-GB", {
+        hour: "2-digit",
+        minute: "2-digit",
+        second: "2-digit",
+        hour12: false,
+        timeZone: "UTC",
+      }).format(date);
+      return `${datePart} · finished ${timePart} UTC`;
+    } catch (_) {
+      try {
+        return date.toISOString();
+      } catch (_e) {
+        return "";
+      }
+    }
+  }
+
+  function truncateText(text, max) {
+    const value = String(text || "").trim();
+    if (value.length <= max) return value;
+    return `${value.slice(0, max - 1).trimEnd()}…`;
+  }
+
+  // UTC wall-clock only, e.g. "09:41:44 UTC" — used by the run-receipt
+  // Started/Finished rows. Accepts a Date or an ISO string; guards a
+  // missing/invalid value and any ICU rejection.
+  function formatClockUtc(dateOrRaw) {
+    if (!dateOrRaw) return "";
+    const date = dateOrRaw instanceof Date ? dateOrRaw : new Date(dateOrRaw);
+    if (Number.isNaN(date.getTime())) return "";
+    try {
+      const t = new Intl.DateTimeFormat("en-GB", {
+        hour: "2-digit",
+        minute: "2-digit",
+        second: "2-digit",
+        hour12: false,
+        timeZone: "UTC",
+      }).format(date);
+      return `${t} UTC`;
+    } catch (_) {
+      return "";
+    }
+  }
+
+  // Append " · " separated children to the meta row.
+  function appendMetaSep(container) {
+    container.appendChild(mkEl("span", "result-meta-sep", "·"));
+  }
+
+  // Draw the aligned/total trust ring. ``fraction`` is 0..1; total===0 draws
+  // an empty ring (guarded upstream). Colours are set in CSS off the band's
+  // ``data-consensus`` attribute; the draw animation is reduced-motion-guarded
+  // in CSS. Returns the ring wrapper element.
+  function buildTrustRing(aligned, total) {
+    const fraction = total > 0 ? Math.max(0, Math.min(1, aligned / total)) : 0;
+    const offset = RESULT_RING_CIRC * (1 - fraction);
+
+    const wrap = mkEl("div", "result-ring");
+    const svg = document.createElementNS(RESULT_SVG_NS, "svg");
+    svg.setAttribute("width", "104");
+    svg.setAttribute("height", "104");
+    svg.setAttribute("viewBox", "0 0 104 104");
+    svg.setAttribute("aria-hidden", "true");
+
+    const track = document.createElementNS(RESULT_SVG_NS, "circle");
+    track.setAttribute("class", "result-ring-track");
+    track.setAttribute("cx", "52");
+    track.setAttribute("cy", "52");
+    track.setAttribute("r", String(RESULT_RING_RADIUS));
+    track.setAttribute("fill", "none");
+    track.setAttribute("stroke-width", "9");
+
+    const value = document.createElementNS(RESULT_SVG_NS, "circle");
+    value.setAttribute("class", "result-ring-value");
+    value.setAttribute("cx", "52");
+    value.setAttribute("cy", "52");
+    value.setAttribute("r", String(RESULT_RING_RADIUS));
+    value.setAttribute("fill", "none");
+    value.setAttribute("stroke-width", "9");
+    value.style.setProperty("--ring-circ", `${RESULT_RING_CIRC}`);
+    value.style.setProperty("--ring-offset", `${offset}`);
+
+    svg.append(track, value);
+
+    const center = mkEl("div", "result-ring-center");
+    center.appendChild(mkEl("span", "result-ring-count", `${aligned}/${total}`));
+    center.appendChild(mkEl("span", "result-ring-label", "agree"));
+
+    wrap.append(svg, center);
+    return wrap;
+  }
+
+  // Build one trust-triangle card. ``value``/``valueSub`` are optional (the
+  // uncertainty card carries prose only). ``accent`` drives the CSS role.
+  function buildTrustCard({ accent, kicker, value, valueSub, caption, consensus }) {
+    const card = mkEl("div", "result-trust-card");
+    card.dataset.accent = accent;
+    if (accent === "agreement") card.dataset.consensus = consensus ? "true" : "false";
+
+    const head = mkEl("div", "result-trust-head");
+    head.appendChild(mkEl("span", "result-trust-kicker", kicker));
+    head.appendChild(mkEl("span", "result-trust-chip"));
+    card.appendChild(head);
+
+    if (value != null) {
+      const valueEl = mkEl("div", "result-trust-value");
+      valueEl.appendChild(mkEl("strong", null, value));
+      if (valueSub) valueEl.appendChild(mkEl("span", "result-trust-value-sub", ` ${valueSub}`));
+      card.appendChild(valueEl);
+    }
+    if (caption) card.appendChild(mkEl("div", "result-trust-caption", caption));
+    return card;
+  }
+
+  // Populate the result view from a TERMINAL poll result. Called ONCE at the
+  // terminal transition (never per 750ms poll), so no aria-live spam. Every
+  // nested field is guarded. The green treatment is GATED behind
+  // ``isConsensus`` (AC-019 "no false consensus").
+  function renderResult(result) {
+    if (!result) return;
+    const res = result.result || {};
+    const fs = res.final_synthesis || null;
+    const agreement = res.agreement || null;
+    const aligned =
+      agreement && Number.isFinite(Number(agreement.aligned))
+        ? Number(agreement.aligned)
+        : 0;
+    const total =
+      agreement && Number.isFinite(Number(agreement.total))
+        ? Number(agreement.total)
+        : 0;
+    // GREEN GATE (AC-019): the single source of truth is ``isConsensusResult``
+    // (below), shared with the transcript view so the two green surfaces can
+    // never drift out of lockstep.
+    const isConsensus = isConsensusResult(result);
+
+    // Revised count — INFERRED from position_movements' ``revised`` flag.
+    const movements = Array.isArray(res.position_movements)
+      ? res.position_movements
+      : [];
+    const revisedCount = movements.filter((m) => m && m.revised === true).length;
+
+    // "You asked" question echo (poll payload has no query_text). Only the
+    // submitted question is echoed — never the live textarea, which on a
+    // rehydrated run holds unrelated in-progress text (C-B).
+    const question = state.liveQueryText || "";
+    const questionEl = el("result-question");
+    if (questionEl) questionEl.textContent = question || "—";
+
+    // Completion status pill (INK — never green).
+    const status = result.status || "completed";
+    const durationText = formatDuration(result.elapsed_time_ms);
+    const completionEl = el("result-completion-text");
+    if (completionEl) {
+      let completionText;
+      if (status === "completed") {
+        completionText = `Completed in ${durationText}`;
+      } else if (status === "partial") {
+        completionText = `Finished with gaps in ${durationText}`;
+      } else {
+        completionText = `${STATUS_LABELS[status] || status} · ${durationText}`;
+      }
+      completionEl.textContent = completionText;
+    }
+
+    renderResultMeta(result, status, durationText);
+    renderResultReceipt(result, res);
+    renderVerdictBand(result, fs, { isConsensus, aligned, total, revisedCount, movements });
+    renderTrustTriangle(result, res, fs, { isConsensus, aligned, total });
+    renderResultPositions(res);
+
+    // Build the plain-text Copy/Export summary ONCE (textContent-safe).
+    const summaryLines = [];
+    if (question) summaryLines.push(question, "");
+    const recommendation = fs && fs.recommendation ? String(fs.recommendation).trim() : "";
+    if (recommendation) {
+      // Mirror the on-screen eyebrow: a divided panel has no unified "verdict".
+      summaryLines.push(`${isConsensus ? "Verdict" : "Leaning"}: ${recommendation}`);
+    } else {
+      summaryLines.push("Verdict: No synthesis was produced for this run.");
+    }
+    summaryLines.push(
+      isConsensus
+        ? `Agreement: ${aligned} of ${total} models aligned.`
+        : `Agreement: ${aligned} of ${total} models aligned; the rest are preserved as disagreement.`,
+    );
+    if (result.correlation_id) summaryLines.push(`Run: ${result.correlation_id}`);
+    state.lastResultSummary = summaryLines.join("\n");
+    state.lastResultRunId = result.query_run_id || result.correlation_id || "run";
+  }
+
+  // Fix 8: cached reference to the static "Run details" toggle. Once grabbed,
+  // the node reference survives being detached from the DOM (when
+  // ``renderResultMeta`` clears ``#result-meta``), so we can always re-append
+  // the SAME element — with its click listener intact — on a re-render.
+  let resultDetailsToggleNode = null;
+
+  function renderResultMeta(result, status, durationText) {
+    const meta = el("result-meta");
+    if (!meta) return;
+    meta.textContent = "";
+
+    // Status label (ink dot — not green).
+    const statusWrap = mkEl("span", "result-meta-status");
+    statusWrap.appendChild(mkEl("span", "result-meta-status-dot"));
+    statusWrap.appendChild(mkEl("span", null, STATUS_LABELS[status] || status));
+    meta.appendChild(statusWrap);
+
+    appendMetaSep(meta);
+    meta.appendChild(mkEl("span", "mono", durationText));
+
+    const finished = formatFinishedUtc(result.result_generated_at_utc);
+    if (finished) {
+      appendMetaSep(meta);
+      const finishedEl = mkEl("span", null, finished);
+      finishedEl.style.whiteSpace = "nowrap";
+      meta.appendChild(finishedEl);
+    }
+
+    // actual $X (approved $Y).
+    const actual = Number(result.actual_cost_usd);
+    // Guard the field's PRESENCE explicitly so a missing estimate coerces to
+    // NaN (rendered as "—" / omitted) rather than a bogus "$0.00" (C-D).
+    const approved =
+      result.cost_estimate && result.cost_estimate.estimated_cost_usd != null
+        ? Number(result.cost_estimate.estimated_cost_usd)
+        : NaN;
+    if (Number.isFinite(actual)) {
+      appendMetaSep(meta);
+      const moneyWrap = mkEl("span", null);
+      moneyWrap.appendChild(document.createTextNode("actual "));
+      moneyWrap.appendChild(
+        mkEl("span", "mono result-meta-money-actual", formatUsd(actual, { suffix: false })),
+      );
+      if (Number.isFinite(approved)) {
+        moneyWrap.appendChild(
+          document.createTextNode(` (approved ${formatUsd(approved, { suffix: false })})`),
+        );
+      }
+      meta.appendChild(moneyWrap);
+    }
+
+    if (result.correlation_id) {
+      appendMetaSep(meta);
+      meta.appendChild(mkEl("span", "mono", result.correlation_id));
+    }
+
+    // Slice 4b: move the static "Run details" disclosure toggle into the meta
+    // row (it lives in the HTML so its click listener is wired once; moving the
+    // node keeps the listener). ``renderResultMeta`` cleared ``meta`` above,
+    // which detaches the toggle on a re-render — after which
+    // ``getElementById`` can no longer find it. Fix 8: use the cached node
+    // reference (which survives detachment) so the toggle + listener always
+    // return on every terminal render.
+    if (!resultDetailsToggleNode) resultDetailsToggleNode = el("result-details-toggle");
+    if (resultDetailsToggleNode) meta.appendChild(resultDetailsToggleNode);
+  }
+
+  function renderVerdictBand(result, fs, ctx) {
+    const band = el("result-verdict");
+    if (!band) return;
+    band.textContent = "";
+    delete band.dataset.empty;
+
+    // No synthesis (failed/blocked run reached here defensively) — NEVER green.
+    if (!fs) {
+      band.dataset.consensus = "false";
+      band.dataset.empty = "true";
+      band.textContent = "No synthesis was produced for this run.";
+      return;
+    }
+
+    const { isConsensus, aligned, total, revisedCount } = ctx;
+    band.dataset.consensus = isConsensus ? "true" : "false";
+
+    band.appendChild(buildTrustRing(aligned, total));
+
+    const content = mkEl("div", "result-verdict-content");
+    content.appendChild(
+      mkEl(
+        "span",
+        "result-verdict-eyebrow",
+        isConsensus ? "The panel's verdict" : "The panel's leaning",
+      ),
+    );
+
+    const recommendation = fs.recommendation ? String(fs.recommendation).trim() : "";
+    content.appendChild(
+      mkEl("div", "result-verdict-text", recommendation || "No recommendation was recorded for this run."),
+    );
+
+    // Honest summary line — derived from real fields, no banned verbs.
+    let summary;
+    if (isConsensus) {
+      summary = `${aligned} of ${total} models aligned`;
+      if (revisedCount > 0) {
+        summary += ` · ${revisedCount} revised their position`;
+      }
+    } else {
+      summary = `${aligned} of ${total} models aligned — the rest are preserved as disagreement below.`;
+    }
+    content.appendChild(mkEl("span", "result-verdict-summary", summary));
+
+    // High-stakes caveat, if the synthesis carries one.
+    if (fs.high_stakes_notice) {
+      content.appendChild(
+        mkEl("span", "result-verdict-caveat", String(fs.high_stakes_notice).trim()),
+      );
+    }
+
+    // Inferred-narration caption for anything derived from position_movements.
+    if (isConsensus && revisedCount > 0) {
+      content.appendChild(
+        mkEl(
+          "span",
+          "result-verdict-caption",
+          "Revision counts are inferred from the panel's position movements, not quoted.",
+        ),
+      );
+    }
+
+    band.appendChild(content);
+  }
+
+  function renderTrustTriangle(result, res, fs, ctx) {
+    const trust = el("result-trust");
+    if (!trust) return;
+    trust.textContent = "";
+    const { isConsensus, aligned, total } = ctx;
+
+    // Agreement — green accent ONLY when isConsensus.
+    trust.appendChild(
+      buildTrustCard({
+        accent: "agreement",
+        consensus: isConsensus,
+        kicker: "Agreement",
+        value: `${aligned} of ${total}`,
+        valueSub: "aligned",
+        caption: isConsensus
+          ? "How many models the final synthesis places in agreement — inferred, not a tallied vote."
+          : "How many models the final synthesis places in agreement — inferred, not a tallied vote; the panel did not fully align, so the disagreement is preserved below.",
+      }),
+    );
+
+    // Source support — BLUE. Percentage from citation_coverage; source count is
+    // NON-fallback sources across model_answers. Degrade gracefully if absent.
+    const coverage = fs && fs.citation_coverage ? fs.citation_coverage : null;
+    let coveragePct = null;
+    if (coverage) {
+      const ratio = Number(coverage.coverage_ratio);
+      if (Number.isFinite(ratio)) coveragePct = Math.round(ratio * 100);
+    }
+    const answers = Array.isArray(res.model_answers) ? res.model_answers : [];
+    // Count DISTINCT non-fallback sources (de-dupe by url/title) so two
+    // models citing the same page don't inflate "N sources cited".
+    const sourceKeys = new Set();
+    for (const answer of answers) {
+      const sources = answer && Array.isArray(answer.sources) ? answer.sources : [];
+      for (const s of sources) {
+        if (!s || s.is_fallback) continue;
+        const key = s.url || s.title;
+        if (key) sourceKeys.add(key);
+      }
+    }
+    const sourceCount = sourceKeys.size;
+    const sourceSub = `· ${sourceCount} source${sourceCount === 1 ? "" : "s"} cited`;
+    trust.appendChild(
+      buildTrustCard({
+        accent: "source",
+        kicker: "Source support",
+        value: coveragePct != null ? `${coveragePct}%` : "—",
+        valueSub: sourceSub,
+        caption: "Material claims scored against citations.",
+      }),
+    );
+
+    // Open uncertainty — AMBER. Prose only; NO fabricated numeric flag count.
+    const uncertaintyText = fs && fs.uncertainty ? String(fs.uncertainty).trim() : "";
+    trust.appendChild(
+      buildTrustCard({
+        accent: "uncertainty",
+        kicker: "Open uncertainty",
+        caption: uncertaintyText
+          ? truncateText(uncertaintyText, 180)
+          : "No open uncertainty was flagged for this run.",
+      }),
+    );
+  }
+
+  // --- Slice 4b: run receipt + cost reconciliation -----------------------
+  //
+  // Friendly labels for the four pipeline stages. Keys mirror the backend
+  // ``progress.stages[].stage`` vocabulary and ``CostLineByStage.stage``.
+  const RECEIPT_STAGE_LABELS = {
+    initial_answers: "Initial answers",
+    debate_round_1: "Debate round 1",
+    debate_round_2: "Debate round 2",
+    synthesis: "Synthesis",
+  };
+  const RECEIPT_STAGE_SHORT = {
+    initial_answers: "Initial",
+    debate_round_1: "Round 1",
+    debate_round_2: "Round 2",
+    synthesis: "Synthesis",
+  };
+  const RECEIPT_PIPELINE_ORDER = [
+    "initial_answers",
+    "debate_round_1",
+    "debate_round_2",
+    "synthesis",
+  ];
+
+  // Map a backend stage state onto a completion marker. NOTE: the response
+  // carries NO per-stage duration (``progress.stages[]`` is {stage,state,detail}
+  // only), so the pipeline column renders completion STATE, never a fabricated
+  // per-stage time. The mock's "8.2s / 11.4s" are mock-only and dropped.
+  function receiptStageMarker(state) {
+    switch (state) {
+      case "completed":
+        return { glyph: "✓", label: "Completed", tone: "done" };
+      case "failed":
+        return { glyph: "✕", label: "Failed", tone: "failed" };
+      case "skipped":
+        return { glyph: "–", label: "Skipped", tone: "skipped" };
+      case "running":
+        return { glyph: "…", label: "Running", tone: "running" };
+      default:
+        return { glyph: "·", label: "Pending", tone: "pending" };
+    }
+  }
+
+  function buildReceiptTextRow(label, value, { mono = false } = {}) {
+    const row = mkEl("div", "result-receipt-row");
+    row.appendChild(mkEl("span", "result-receipt-label", label));
+    row.appendChild(
+      mkEl("span", mono ? "result-receipt-value mono" : "result-receipt-value", value),
+    );
+    return row;
+  }
+
+  // Copyable ID row (Run ID / Correlation). The ⧉ button carries the value on
+  // its dataset; a single delegated click handler on ``#result-receipt`` (wired
+  // once in boot) reuses the shared ``copyRunIdToClipboard`` helper.
+  function buildReceiptIdRow(label, value, idleTitle) {
+    const row = mkEl("div", "result-receipt-row");
+    row.appendChild(mkEl("span", "result-receipt-label", label));
+    const valWrap = mkEl("span", "result-receipt-id");
+    valWrap.appendChild(mkEl("span", "mono", value));
+    const copy = mkEl("button", "result-receipt-copy", "⧉");
+    copy.type = "button";
+    copy.dataset.copyValue = value;
+    copy.dataset.idleTitle = idleTitle;
+    copy.setAttribute("aria-label", idleTitle);
+    copy.title = idleTitle;
+    valWrap.appendChild(copy);
+    row.appendChild(valWrap);
+    return row;
+  }
+
+  // One "est → actual" money row. When ``actualUsd`` is not finite (no actual
+  // breakdown) the actual side renders "—" — NEVER a fabricated number.
+  function buildReceiptCostRow(label, estUsd, actualUsd, { total = false } = {}) {
+    const row = mkEl(
+      "div",
+      total ? "result-receipt-row result-receipt-cost-total" : "result-receipt-row",
+    );
+    row.appendChild(mkEl("span", "result-receipt-label", label));
+    const estText = Number.isFinite(estUsd) ? formatUsd(estUsd, { suffix: false }) : "—";
+    const actText = Number.isFinite(actualUsd)
+      ? formatUsd(actualUsd, { suffix: false })
+      : "—";
+    // Fix 6: the "→" is decorative (SR would read "rightwards arrow"). Hide it
+    // and give SR a spoken "to" so the pair reads "$0.034 to $0.031".
+    const valueEl = mkEl("span", "result-receipt-value mono");
+    valueEl.appendChild(mkEl("span", null, estText));
+    const arrow = mkEl("span", null, " → ");
+    arrow.setAttribute("aria-hidden", "true");
+    valueEl.appendChild(arrow);
+    valueEl.appendChild(mkEl("span", "sr-only", "to"));
+    valueEl.appendChild(mkEl("span", null, actText));
+    row.appendChild(valueEl);
+    return row;
+  }
+
+  // Cost reconciliation footer. delta = approved − actual.
+  //  · no actual breakdown / missing actual → "Actual cost … pending" (no delta)
+  //  · demo_mode OR actual ≈ approved       → "Matched estimate" (neutral)
+  //  · actual < approved (real savings)     → "Under approval −$X" (ink, money)
+  //  · actual > approved (real overage)     → "Over approval +$X" (ink)
+  // Green is reserved for the verdict band; the delta is money, so it moves on
+  // ink per the money-on-ink rule — never green (see report for the rationale).
+  function buildReconciliationRow(result) {
+    const row = mkEl("div", "result-receipt-row result-receipt-recon");
+    const approved =
+      result.cost_estimate && result.cost_estimate.estimated_cost_usd != null
+        ? Number(result.cost_estimate.estimated_cost_usd)
+        : NaN;
+    const actual = Number(result.actual_cost_usd);
+    const hasActual = result.actual_breakdown != null && Number.isFinite(actual);
+    // ``cost_source`` marks whether the "actual" figure is measured provider
+    // billing or the pre-run estimate standing in for it. Today the backend
+    // only ever emits "estimated" (per-call usage capture is not yet plumbed),
+    // so we must NOT present the est→actual delta as a real reconciliation —
+    // that would imply the figure was checked against provider billing. A
+    // "measured" source (future) flows through the delta branches below.
+    const measured = result.cost_source === "measured";
+    const label = mkEl("span", "result-receipt-recon-label");
+    const value = mkEl("span", "result-receipt-recon-value mono");
+    if (!hasActual || !Number.isFinite(approved)) {
+      row.dataset.state = "pending";
+      label.textContent = "Actual cost";
+      value.textContent = "pending";
+    } else if (!measured) {
+      row.dataset.state = "estimated";
+      label.textContent = "Actual cost (estimated)";
+      value.textContent = formatUsd(actual, { suffix: false });
+    } else {
+      const delta = approved - actual;
+      const eps = 0.0005;
+      if (result.demo_mode || Math.abs(delta) <= eps) {
+        row.dataset.state = "matched";
+        label.textContent = "Matched estimate";
+        value.textContent = formatUsd(actual, { suffix: false });
+      } else if (delta > eps) {
+        row.dataset.state = "under";
+        label.textContent = "Under approval";
+        value.textContent = `−${formatUsd(delta, { suffix: false })}`;
+      } else {
+        row.dataset.state = "over";
+        label.textContent = "Over approval";
+        value.textContent = `+${formatUsd(-delta, { suffix: false })}`;
+      }
+    }
+    row.append(label, value);
+    return row;
+  }
+
+  // Populate the collapsed run-receipt panel. Idempotent: clears + resets to
+  // collapsed on every call. Every nested field is guarded; the actual columns
+  // null-guard ``actual_breakdown`` and never fabricate an actual figure.
+  function renderResultReceipt(result, res) {
+    const receipt = el("result-receipt");
+    if (!receipt) return;
+    receipt.textContent = "";
+    receipt.hidden = true;
+    const toggle = el("result-details-toggle");
+    if (toggle) {
+      toggle.setAttribute("aria-expanded", "false");
+      const caret = toggle.querySelector(".result-details-caret");
+      if (caret) caret.textContent = "▾";
+    }
+
+    const est =
+      result.cost_estimate && result.cost_estimate.breakdown
+        ? result.cost_estimate.breakdown
+        : null;
+    const actual = result.actual_breakdown || null;
+    const answers = Array.isArray(res.model_answers) ? res.model_answers : [];
+
+    const grid = mkEl("div", "result-receipt-grid");
+
+    // --- Col 1: Run receipt ------------------------------------------------
+    const c1 = mkEl("div", "result-receipt-col");
+    // Fix 7: label each receipt column as a semantic group so SR announces the
+    // column's purpose (the kicker spans alone are non-semantic).
+    c1.setAttribute("role", "group");
+    c1.setAttribute("aria-label", "Run receipt");
+    c1.appendChild(mkEl("span", "result-receipt-kicker", "Run receipt"));
+    if (result.query_run_id) {
+      c1.appendChild(
+        buildReceiptIdRow(
+          "Run ID",
+          String(result.query_run_id),
+          "Copy run ID — include it if you report an issue.",
+        ),
+      );
+    }
+    if (result.correlation_id) {
+      c1.appendChild(
+        buildReceiptIdRow(
+          "Correlation",
+          String(result.correlation_id),
+          "Copy correlation ID — include it if you report an issue.",
+        ),
+      );
+    }
+    c1.appendChild(buildReceiptTextRow("Session", "Secure cookie"));
+
+    const finishedDate = result.result_generated_at_utc
+      ? new Date(result.result_generated_at_utc)
+      : null;
+    const finishedValid = finishedDate && !Number.isNaN(finishedDate.getTime());
+    const elapsedMs = Number(result.elapsed_time_ms);
+    if (finishedValid && Number.isFinite(elapsedMs) && elapsedMs > 0) {
+      const startedClock = formatClockUtc(new Date(finishedDate.getTime() - elapsedMs));
+      if (startedClock) {
+        c1.appendChild(buildReceiptTextRow("Started", startedClock, { mono: true }));
+      }
+    }
+    if (finishedValid) {
+      const finishedClock = formatClockUtc(finishedDate);
+      if (finishedClock) {
+        c1.appendChild(buildReceiptTextRow("Finished", finishedClock, { mono: true }));
+      }
+    }
+
+    // Search: "OpenRouter" plus "· Fallback search ×N" only when N>0 (N =
+    // answers that fell back to the LOCAL search stub). We name what actually
+    // ran: the fallback emits synthetic stub citations and never reaches a real
+    // web-search provider (OQ-008 / DEBT-002), so naming one would be a
+    // fabricated integration claim.
+    const fallbackCount = answers.filter(
+      (a) => a && (a.fallback_used === true || a.provider_path === "fallback_search"),
+    ).length;
+    c1.appendChild(
+      buildReceiptTextRow(
+        "Search",
+        fallbackCount > 0
+          ? `OpenRouter · Fallback search ×${fallbackCount}`
+          : "OpenRouter",
+      ),
+    );
+    c1.appendChild(
+      mkEl(
+        "p",
+        "result-receipt-note",
+        "Quote the run ID and correlation ID when you report an issue — support can pull every log line. Ephemeral: this receipt is gone when the session ends.",
+      ),
+    );
+    grid.appendChild(c1);
+
+    // --- Col 2: Cost by model · est → actual -------------------------------
+    const c2 = mkEl("div", "result-receipt-col result-receipt-col-div");
+    c2.setAttribute("role", "group");
+    c2.setAttribute("aria-label", "Cost by model, estimate to actual");
+    c2.appendChild(mkEl("span", "result-receipt-kicker", "Cost by model · est → actual"));
+    if (est && Array.isArray(est.by_model) && est.by_model.length) {
+      const actualByModel =
+        actual && Array.isArray(actual.by_model) ? actual.by_model : null;
+      est.by_model.forEach((line) => {
+        // Fix 10: null-entry guard (parity with the positions loop).
+        if (!line) return;
+        // Fix 9: pair est→actual by model key, not array index, so a real
+        // (reordered/partial) actual breakdown can never be misattributed.
+        const key = line.model_id || line.display_name;
+        let actUsd = NaN;
+        if (actualByModel) {
+          const match = actualByModel.find(
+            (a) => a && (a.model_id || a.display_name) === key,
+          );
+          if (match) actUsd = Number(match.usd);
+        }
+        c2.appendChild(
+          buildReceiptCostRow(
+            line.display_name || line.model_id || "—",
+            Number(line.usd),
+            actUsd,
+          ),
+        );
+      });
+      c2.appendChild(
+        buildReceiptCostRow(
+          "Total",
+          Number(est.total),
+          actual ? Number(actual.total) : NaN,
+          { total: true },
+        ),
+      );
+    } else {
+      c2.appendChild(
+        mkEl("p", "result-receipt-note", "Itemized cost breakdown is not available for this run."),
+      );
+    }
+    grid.appendChild(c2);
+
+    // --- Col 3: Cost by stage · est → actual + reconciliation --------------
+    const c3 = mkEl("div", "result-receipt-col result-receipt-col-div");
+    c3.setAttribute("role", "group");
+    c3.setAttribute("aria-label", "Cost by stage, estimate to actual");
+    c3.appendChild(mkEl("span", "result-receipt-kicker", "Cost by stage · est → actual"));
+    if (est && Array.isArray(est.by_stage) && est.by_stage.length) {
+      const actualByStage =
+        actual && Array.isArray(actual.by_stage) ? actual.by_stage : null;
+      est.by_stage.forEach((line) => {
+        // Fix 10: null-entry guard (parity with the positions loop).
+        if (!line) return;
+        // Fix 9: pair est→actual by stage key, not array index.
+        let actUsd = NaN;
+        if (actualByStage) {
+          const match = actualByStage.find((a) => a && a.stage === line.stage);
+          if (match) actUsd = Number(match.usd);
+        }
+        c3.appendChild(
+          buildReceiptCostRow(
+            RECEIPT_STAGE_SHORT[line.stage] || line.stage,
+            Number(line.usd),
+            actUsd,
+          ),
+        );
+      });
+    } else {
+      c3.appendChild(
+        mkEl("p", "result-receipt-note", "Itemized stage breakdown is not available for this run."),
+      );
+    }
+    c3.appendChild(buildReconciliationRow(result));
+    grid.appendChild(c3);
+
+    // --- Col 4: Pipeline (completion states, NO fabricated durations) ------
+    const c4 = mkEl("div", "result-receipt-col result-receipt-col-div");
+    c4.setAttribute("role", "group");
+    c4.setAttribute("aria-label", "Pipeline");
+    c4.appendChild(mkEl("span", "result-receipt-kicker", "Pipeline"));
+    const stages =
+      result.progress && Array.isArray(result.progress.stages)
+        ? result.progress.stages
+        : [];
+    const stateByStage = {};
+    for (const s of stages) {
+      if (s && s.stage) stateByStage[s.stage] = String(s.state || "");
+    }
+    let allCompleted = true;
+    for (const key of RECEIPT_PIPELINE_ORDER) {
+      const st = stateByStage[key];
+      if (st !== "completed") allCompleted = false;
+      const marker = receiptStageMarker(st);
+      const row = mkEl("div", "result-receipt-row");
+      const lbl = mkEl("span", "result-receipt-stage");
+      const glyph = mkEl("span", "result-receipt-stage-glyph", marker.glyph);
+      glyph.dataset.tone = marker.tone;
+      glyph.setAttribute("aria-hidden", "true");
+      lbl.append(glyph, mkEl("span", null, RECEIPT_STAGE_LABELS[key]));
+      row.append(lbl, mkEl("span", "result-receipt-stage-state", marker.label));
+      c4.appendChild(row);
+    }
+    // The ONLY real timing the response exposes is the whole-run elapsed.
+    if (Number.isFinite(elapsedMs) && elapsedMs > 0) {
+      const totalRow = mkEl("div", "result-receipt-row result-receipt-cost-total");
+      totalRow.append(
+        mkEl("span", "result-receipt-label", "Total"),
+        mkEl("span", "result-receipt-value mono", formatDuration(elapsedMs)),
+      );
+      c4.appendChild(totalRow);
+    }
+    const failedSteps = Array.isArray(result.failed_steps) ? result.failed_steps : [];
+    if (allCompleted && failedSteps.length === 0) {
+      c4.appendChild(
+        mkEl("p", "result-receipt-note", "All stages completed."),
+      );
+    }
+    grid.appendChild(c4);
+
+    receipt.appendChild(grid);
+  }
+
+  // One position <td>. ``data-label`` carries the column name so the mobile
+  // stacked layout can re-label each cell via CSS ``::before``.
+  function mkPositionsCell(label, text) {
+    const cell = mkEl("td", "result-positions-cell");
+    cell.dataset.label = label;
+    if (text) cell.appendChild(mkEl("span", "result-pos-text", String(text)));
+    return cell;
+  }
+
+  // "How positions moved" table. The caption is ALWAYS rendered (not demo-gated)
+  // because the per-model movement is INFERRED from opening answers + panel
+  // consensus in both demo and live modes. Empty movements → hide the section.
+  //
+  // Fix 4: rendered as a NATIVE <table> so screen readers associate each model
+  // with its cells. The model is a ``<th scope="row">``; each phase is a
+  // ``<td>``; the column headers are ``<th scope="col">``. The table is
+  // labelled (the "Inferred from…" caption stays a separate visible element in
+  // the head) and wrapped in an ``overflow-x:auto`` scroller so it never pushes
+  // the page body sideways.
+  function renderResultPositions(res) {
+    const container = el("result-positions");
+    if (!container) return;
+    container.textContent = "";
+    const movements = Array.isArray(res.position_movements)
+      ? res.position_movements
+      : [];
+    if (movements.length === 0) {
+      container.hidden = true;
+      return;
+    }
+    container.hidden = false;
+
+    const head = mkEl("div", "result-positions-head");
+    head.appendChild(mkEl("span", "result-positions-title", "How positions moved"));
+    head.appendChild(
+      mkEl(
+        "span",
+        "result-positions-caption",
+        "Inferred from opening answers and panel consensus — not a quoted transcript.",
+      ),
+    );
+    container.appendChild(head);
+
+    const scroller = mkEl("div", "result-positions-scroll");
+    const table = mkEl("table", "result-positions-table");
+    table.setAttribute("aria-label", "How positions moved");
+
+    const thead = document.createElement("thead");
+    const headRow = document.createElement("tr");
+    for (const text of ["Model", "Opening", "After round 1", "Final"]) {
+      const th = mkEl("th", "result-positions-colhead", text);
+      th.setAttribute("scope", "col");
+      headRow.appendChild(th);
+    }
+    thead.appendChild(headRow);
+    table.appendChild(thead);
+
+    const tbody = document.createElement("tbody");
+    for (const m of movements) {
+      if (!m) continue;
+      const row = mkEl("tr", "result-positions-row");
+
+      const name = String(m.display_name || m.model_id || "Model");
+      const modelCell = mkEl("th", "result-positions-cell result-pos-model");
+      modelCell.setAttribute("scope", "row");
+      const avatar = mkEl("span", "result-pos-avatar", name.trim().charAt(0).toUpperCase() || "?");
+      avatar.setAttribute("aria-hidden", "true");
+      modelCell.append(avatar, mkEl("span", "result-pos-name", name));
+      row.appendChild(modelCell);
+
+      row.appendChild(mkPositionsCell("Opening", m.opening));
+      row.appendChild(mkPositionsCell("After round 1", m.after_round_1));
+
+      const finalCell = mkEl("td", "result-positions-cell");
+      finalCell.dataset.label = "Final";
+      if (m.final) finalCell.appendChild(mkEl("span", "result-pos-text", String(m.final)));
+      if (m.revised === true) {
+        // Fix 12: this "✓ Revised" chip is GREEN ON PURPOSE — it is the
+        // sanctioned agreement/revision semantic (the model changed its
+        // position) and is pixel-mandated by the mock. Do NOT retint it to a
+        // neutral tone; unlike the done glyph / copied-state, green here maps
+        // to a real, verified signal.
+        const chip = mkEl("span", "result-pos-chip", "✓ Revised");
+        const note = m.revision_note ? String(m.revision_note) : "";
+        if (note) {
+          chip.title = note;
+          finalCell.appendChild(chip);
+          finalCell.appendChild(mkEl("span", "result-pos-note", note));
+        } else {
+          finalCell.appendChild(chip);
+        }
+      }
+      row.appendChild(finalCell);
+      tbody.appendChild(row);
+    }
+    table.appendChild(tbody);
+    scroller.appendChild(table);
+    container.appendChild(scroller);
+  }
+
+  function focusResultHeading() {
+    if (!resultHeading) return;
+    resultHeading.focus({ preventScroll: true });
+    resultHeading.scrollIntoView({
+      behavior: prefersReducedMotion() ? "auto" : "smooth",
+      block: "start",
+    });
+  }
+
+  // ---------------------------------------------------------------------------
+  // Slice 5 (06 Transcript) — the debate audit trail
+  // ---------------------------------------------------------------------------
+  //
+  // The transcript is the ONLY drill-down: real per-model OPENING positions
+  // (from ``model_answers``) followed by the ROUND-LEVEL debate critiques
+  // (from ``debate_outputs``). HONESTY (non-negotiable): the backend records
+  // ONE ``critique_text`` per round with NO per-model attribution — there is
+  // no "who challenged whom", no per-model stance/concession, no line-by-line
+  // transcript. This view therefore renders round-level critiques only, with an
+  // explicit caption saying so, and NEVER fabricates the mock's per-model
+  // exchange cards. GREEN RULE: the status chip + footer go green ONLY on real,
+  // complete consensus (the same gate as the verdict band); otherwise neutral.
+
+  // The consensus gate — the SINGLE SOURCE OF TRUTH for the AC-019 "no false
+  // consensus" green rule, shared by both ``renderResult`` (verdict band /
+  // trust triangle) and ``renderTranscript`` (status chip / footer) so the two
+  // green surfaces can never drift apart. Green requires: a real agreement
+  // signal, every model aligned, the synthesis explicitly NOT preserving a
+  // false consensus, no failed steps, and a ``completed`` status.
+  function isConsensusResult(result) {
+    const res = (result && result.result) || {};
+    const fs = res.final_synthesis || null;
+    const agreement = res.agreement || null;
+    const aligned =
+      agreement && Number.isFinite(Number(agreement.aligned))
+        ? Number(agreement.aligned)
+        : 0;
+    const total =
+      agreement && Number.isFinite(Number(agreement.total))
+        ? Number(agreement.total)
+        : 0;
+    const failedSteps = Array.isArray(result && result.failed_steps)
+      ? result.failed_steps
+      : [];
+    return Boolean(
+      agreement &&
+        total > 0 &&
+        aligned === total &&
+        fs &&
+        fs.quality_checks &&
+        fs.quality_checks.false_consensus_preserved === false &&
+        failedSteps.length === 0 &&
+        String(result && result.status) === "completed",
+    );
+  }
+
+  // Honest provider tag for an opening position. OPENROUTER_SEARCH = a live
+  // provider call; FALLBACK_SEARCH / LOCAL_SIMULATION are NOT live (the answer
+  // came from Quorum's local helpers) so they are never labelled "live".
+  function transcriptProviderTag(answer) {
+    const path = String((answer && answer.provider_path) || "");
+    // Even on the live path, honor an explicit ``fallback_used`` flag — never
+    // claim "live" for an answer the server marked as a fallback.
+    if (path === "openrouter_search" && !(answer && answer.fallback_used)) {
+      return { text: "live", fallback: false };
+    }
+    if (path === "openrouter_search") return { text: "fallback", fallback: true };
+    if (path === "fallback_search") return { text: "fallback", fallback: true };
+    if (path === "local_simulation") return { text: "simulated", fallback: true };
+    // Unknown path: stay conservative and never claim "live".
+    return { text: answer && answer.fallback_used ? "fallback" : "unverified", fallback: true };
+  }
+
+  // A single opening-position card — REAL per-model data: display name, a
+  // non-fallback source count, the honest provider tag, and the model's
+  // ``answer_text`` (its opening answer), all via textContent.
+  function buildTranscriptOpening(answer) {
+    const card = mkEl("article", "transcript-opening");
+    const head = mkEl("div", "transcript-opening-head");
+    const name = String((answer && (answer.display_name || answer.model_id)) || "Model");
+    const avatar = mkEl(
+      "span",
+      "transcript-opening-avatar",
+      name.trim().charAt(0).toUpperCase() || "?",
+    );
+    avatar.setAttribute("aria-hidden", "true");
+    head.append(avatar, mkEl("span", "transcript-opening-name", name));
+
+    const sources = Array.isArray(answer && answer.sources) ? answer.sources : [];
+    const primarySrc = sources.filter((s) => s && s.is_fallback !== true).length;
+    const tagInfo = transcriptProviderTag(answer);
+    const tag = mkEl(
+      "span",
+      "transcript-opening-tag mono",
+      `${tagInfo.text} · ${primarySrc} src`,
+    );
+    if (tagInfo.fallback) tag.dataset.fallback = "true";
+    head.appendChild(tag);
+    card.appendChild(head);
+
+    const body = mkEl("p", "transcript-opening-body");
+    const text = String((answer && answer.answer_text) || "").trim();
+    if (text) {
+      body.textContent = text;
+    } else {
+      body.textContent = "This model did not return an opening answer.";
+      body.classList.add("muted");
+    }
+    card.appendChild(body);
+    return card;
+  }
+
+  // A round-level critique block. Header = "Round N" + focus areas; body = the
+  // round's ``critique_text``. NO per-model cards/attribution are invented.
+  function buildTranscriptRound(round) {
+    const card = mkEl("article", "transcript-round");
+    const head = mkEl("div", "transcript-round-head");
+    head.appendChild(
+      mkEl("span", "transcript-round-pill", `Round ${round.round_number}`),
+    );
+    const focusAreas = Array.isArray(round.focus_areas)
+      ? round.focus_areas.filter(Boolean)
+      : [];
+    if (focusAreas.length) {
+      head.appendChild(
+        mkEl("span", "transcript-round-focus", `Focus: ${focusAreas.join(", ")}`),
+      );
+    }
+    card.appendChild(head);
+
+    const body = mkEl("p", "transcript-round-body");
+    const text = String(round.critique_text || "").trim();
+    if (text) {
+      body.textContent = text;
+    } else {
+      body.textContent = "This round did not produce a critique summary.";
+      body.classList.add("muted");
+    }
+    card.appendChild(body);
+    return card;
+  }
+
+  // Render the transcript view from a terminal result snapshot
+  // (``state.lastResult``). Guards a null/empty snapshot. Called just before
+  // ``setView("transcript")``.
+  function renderTranscript(result) {
+    if (!result) return;
+    const res = result.result || {};
+    const modelAnswers = Array.isArray(res.model_answers) ? res.model_answers : [];
+    const debate = Array.isArray(res.debate_outputs) ? res.debate_outputs : [];
+    const isConsensus = isConsensusResult(result);
+
+    // Question echo (serif h1) — the submitted question, never the live
+    // textarea (a rehydrated run holds unrelated in-progress text).
+    const heading = el("transcript-heading");
+    if (heading) heading.textContent = state.liveQueryText || "The debate";
+
+    // Meta line: round count + model count + optional debate-stage ESTIMATE.
+    const metaEl = el("transcript-meta");
+    if (metaEl) {
+      const parts = [];
+      parts.push(`${debate.length} round${debate.length === 1 ? "" : "s"}`);
+      parts.push(`${modelAnswers.length} model${modelAnswers.length === 1 ? "" : "s"}`);
+      const byStage =
+        result.cost_estimate &&
+        result.cost_estimate.breakdown &&
+        Array.isArray(result.cost_estimate.breakdown.by_stage)
+          ? result.cost_estimate.breakdown.by_stage
+          : [];
+      let debateUsd = 0;
+      let haveDebate = false;
+      for (const line of byStage) {
+        if (
+          line &&
+          (line.stage === "debate_round_1" || line.stage === "debate_round_2")
+        ) {
+          const v = Number(line.usd);
+          if (Number.isFinite(v)) {
+            debateUsd += v;
+            haveDebate = true;
+          }
+        }
+      }
+      if (haveDebate) {
+        parts.push(`debate ~${formatUsd(debateUsd, { suffix: false })} est.`);
+      }
+      metaEl.textContent = parts.join(" · ");
+    }
+
+    // Status chip — GREEN only on real consensus (avoids the banned "converged"
+    // wording; "Consensus reached" is the sanctioned green status word).
+    const statusEl = el("transcript-status");
+    if (statusEl) {
+      statusEl.textContent = "";
+      statusEl.dataset.consensus = isConsensus ? "true" : "false";
+      const dot = mkEl("span", "transcript-status-dot");
+      dot.setAttribute("aria-hidden", "true");
+      statusEl.append(
+        dot,
+        mkEl("span", null, isConsensus ? "Consensus reached" : "Panel divided"),
+      );
+    }
+
+    // Opening positions — REAL per-model data.
+    const openings = el("transcript-openings");
+    if (openings) {
+      openings.textContent = "";
+      if (modelAnswers.length === 0) {
+        openings.appendChild(
+          mkEl("p", "transcript-empty muted", "No opening positions were recorded for this run."),
+        );
+      } else {
+        for (const answer of modelAnswers) {
+          openings.appendChild(buildTranscriptOpening(answer));
+        }
+      }
+    }
+
+    // The debate — round-level critiques only.
+    const rounds = el("transcript-rounds");
+    if (rounds) {
+      rounds.textContent = "";
+      if (debate.length === 0) {
+        rounds.appendChild(
+          mkEl("p", "transcript-empty muted", "No debate rounds were recorded for this run."),
+        );
+      } else {
+        for (const round of debate) {
+          rounds.appendChild(buildTranscriptRound(round));
+        }
+      }
+    }
+
+    // Footer link — green treatment ONLY on real consensus.
+    const footer = el("transcript-footer-link");
+    if (footer) footer.dataset.consensus = isConsensus ? "true" : "false";
+  }
+
+  function focusTranscriptHeading() {
+    const heading = el("transcript-heading");
+    if (!heading) return;
+    heading.focus({ preventScroll: true });
+    heading.scrollIntoView({
+      behavior: prefersReducedMotion() ? "auto" : "smooth",
+      block: "start",
+    });
+  }
+
+  // Open the transcript drill-down from the last terminal result. If no
+  // snapshot exists (defensive — the link is only shown on a completed run),
+  // toast and stay put rather than navigating to an empty view.
+  function openTranscript() {
+    if (!state.lastResult) {
+      toast({ message: "The debate transcript is available once a run completes.", tone: "info" });
+      return;
+    }
+    renderTranscript(state.lastResult);
+    setView("transcript");
+    focusTranscriptHeading();
   }
 
   function mapStageToStep(stageName) {
@@ -1631,7 +3681,11 @@
   function setRunning(isRunning) {
     state.isRunning = isRunning;
     estimateButton.disabled = isRunning;
-    if (runNowButton) runNowButton.disabled = isRunning;
+    // Slice 3 (04 Live run): the live-elapsed ticker only runs while a run is
+    // in flight. Terminal freezing of the readout is handled by renderLiveRun
+    // (which sets the final value before this clear); here we just guarantee
+    // the interval is gone once the run is no longer running.
+    if (!isRunning) stopLiveElapsedTicker();
     // The cancel pill is hidden in the idle layout and revealed only
     // while a run is actually in flight. Toggling ``hidden`` on the
     // container (not the button) keeps the button's ``disabled`` state
@@ -1644,18 +3698,30 @@
       // submission.
       proceedButton.disabled = isRunning || !state.currentEstimate;
     }
+    // The cost gate's "Approve & run" CTA is disabled during a run for the
+    // same double-submit reason.
+    if (gateConfirmButton) {
+      gateConfirmButton.disabled = isRunning || !state.currentEstimate;
+    }
     if (isRunning && !state.hasScrolledToRunControls) {
       // Scroll once on the transition into running. The poll loop
       // would otherwise scroll the page aggressively every 750ms.
       state.hasScrolledToRunControls = true;
       if (cancelButton) {
-        cancelButton.scrollIntoView({ behavior: "smooth", block: "center" });
+        cancelButton.scrollIntoView({
+          behavior: prefersReducedMotion() ? "auto" : "smooth",
+          block: "center",
+        });
         cancelButton.focus({ preventScroll: true });
       }
     } else if (!isRunning && state.hasScrolledToRunControls) {
       // Reset for the next run so the scroll-once fires again.
       state.hasScrolledToRunControls = false;
     }
+    // Re-assert the high-stakes gate on top of the run-state disabling so
+    // an un-acknowledged safety topic keeps the CTA disabled after a run
+    // finishes.
+    applyHighStakesGate();
   }
 
   // PR-0 / Bug 8: the "Current time" card is a state machine. It
@@ -1724,7 +3790,7 @@
     // PR-0 / Bug 8: the "Current time" card has its own state
     // machine (frozen-at-start, finalized-on-terminal) and is
     // updated by the ``setRunStartTime`` / ``finalizeRunTime``
-    // wrappers from ``runNow`` / ``proceedWithRun`` / ``pollRun``.
+    // wrappers from ``proceedWithRun`` / ``pollRun``.
     // A status update in the middle of a run is not a time
     // change, so we do not touch the time card from here.
     // Surface the citation coverage denominator so users can audit the
@@ -1733,7 +3799,8 @@
     // run has no initial answers yet (cost-blocked, pending, etc.).
     const claimMeta = el("claim-meta");
     if (claimMeta) {
-      const count = Number(result?.material_claim_count ?? 0);
+      const rawCount = result?.material_claim_count ?? 0;
+      const count = Number.isFinite(Number(rawCount)) ? Number(rawCount) : 0;
       const finished = status === "completed" || status === "partial" || status === "failed" || status === "timed_out";
       if (finished && count > 0) {
         claimMeta.textContent = `${count.toLocaleString()} material claim${count === 1 ? "" : "s"} inspected`;
@@ -1745,7 +3812,14 @@
 
   function updateQueryValidation() {
     const length = queryTextarea.value.length;
-    charCount.textContent = `${length.toLocaleString()} chars`;
+    charCount.textContent = `${length.toLocaleString()} / 20,000`;
+    // Keep the visible "N / 20,000" but give assistive tech an
+    // unambiguous reading ("N of 20,000 characters") — the bare "/"
+    // is unit-ambiguous to a screen reader.
+    charCount.setAttribute(
+      "aria-label",
+      `${length.toLocaleString()} of 20,000 characters`,
+    );
     // Empty (0) is invalid (required field). 1–11 chars is too short.
     const isInvalid = length < 12;
     queryTextarea.setAttribute("aria-invalid", isInvalid ? "true" : "false");
@@ -1848,6 +3922,315 @@
     }
   }
 
+  // ---------------------------------------------------------------------------
+  // Screen 03 — Cost gate (``cost_review`` state)
+  // ---------------------------------------------------------------------------
+
+  // COPY-003 (verbatim, docs/33-content-design.md). Shown in the confirm
+  // band above the server's first ``reasons[]`` line.
+  const COPY_003_COST_WARNING =
+    "This run may cost more than the normal target because of selected " +
+    "models, query length, search, or debate rounds. Review the estimate " +
+    "before continuing.";
+
+  // The hard block boundary ($0.25) — the rail's full-scale value. The
+  // confirm tick sits at $0.15 (60% of scale, matched by the CSS segment
+  // widths). Numbers are the design's fixed guardrail labels; the ACTIVE
+  // band is driven by the server ``threshold_action``, never re-derived
+  // from these constants.
+  const COST_HARD_LIMIT_USD = 0.25;
+
+  // Width of the illustrative planning band shown as "estimated range". The
+  // server returns a point estimate with no confidence interval, so this ±
+  // band is presentational only — the upper bound is clamped to
+  // ``COST_HARD_LIMIT_USD`` in ``renderCostGate`` so it can never print
+  // above the "blocked, no override" ceiling on the same card.
+  const PLANNING_RANGE_PCT = 0.15;
+
+  // Partition a ``cost_estimate.breakdown`` into the two labelled row
+  // lists the gate renders — by model AND by stage — plus the shared
+  // total. Pure (no DOM, no closures) so it is unit-testable in node.
+  //   * by_model: the ``kind === "synthesis"`` row renders as "Synthesis
+  //     writer"; every other row uses its ``display_name``.
+  //   * by_stage: the server ``stage`` enum maps to friendly labels; an
+  //     unknown stage falls back to its raw key.
+  // Both lists re-sum to ``total`` by construction (the reconciliation
+  // invariant), so each column's Total row shows the same figure.
+  function costGatePartitions(breakdown) {
+    const stageLabels = {
+      initial_answers: "Initial answers × 4",
+      debate_round_1: "Debate round 1",
+      debate_round_2: "Debate round 2",
+      synthesis: "Synthesis",
+    };
+    const byModelRows = Array.isArray(breakdown && breakdown.by_model)
+      ? breakdown.by_model
+      : [];
+    const byStageRows = Array.isArray(breakdown && breakdown.by_stage)
+      ? breakdown.by_stage
+      : [];
+    return {
+      byModel: byModelRows.map((row) => ({
+        label: row.kind === "synthesis" ? "Synthesis writer" : row.display_name,
+        usd: row.usd,
+      })),
+      byStage: byStageRows.map((row) => ({
+        label: stageLabels[row.stage] || row.stage,
+        usd: row.usd,
+      })),
+      total: breakdown ? breakdown.total : undefined,
+    };
+  }
+
+  // Format a USD amount for the gate's mono cells — reuses ``formatUsd``
+  // (the single money-formatting source of truth) with the " USD" suffix
+  // off so the compact table/total read as "$0.19", not "$0.19 USD".
+  function gateUsd(usdAmount) {
+    return formatUsd(usdAmount, { suffix: false });
+  }
+
+  // A fixed 2-decimal USD render for the presentational planning-range
+  // endpoints. The range is an illustrative ±band (see ``renderCostGate``),
+  // NOT a server-provided interval, so it is shown at whole-cent precision
+  // to avoid implying sub-cent accuracy on a derived figure.
+  function gateUsd2dp(usdAmount) {
+    const num = Number(usdAmount);
+    if (!Number.isFinite(num)) return "$0.00";
+    return `$${num.toFixed(2)}`;
+  }
+
+  // Choose ONE decimal count for a whole itemized column so every cell
+  // aligns. Driven by the SMALLEST magnitude present (< $0.01 → 4 dp;
+  // < $1 → 3 dp; else 2 dp) and applied to every row AND the Total —
+  // tiering each cell independently (as an earlier version did) misaligns a
+  // column that spans a magnitude boundary (e.g. a sub-cent row beside a
+  // cent-scale total). Matches the mock's aligned "$0.034 … $0.190".
+  function columnDecimals(amounts) {
+    const finite = amounts.map(Number).filter(Number.isFinite).map(Math.abs);
+    if (!finite.length) return 2;
+    const smallest = Math.min(...finite);
+    return smallest < 0.01 ? 4 : smallest < 1 ? 3 : 2;
+  }
+
+  function gateUsdFixed(usdAmount, decimals) {
+    const num = Number(usdAmount);
+    if (!Number.isFinite(num)) return "$0.00";
+    return `$${num.toFixed(decimals)}`;
+  }
+
+  // Render a list of {label, usd} rows plus a bold Total row into a
+  // container. Built with createElement + textContent (never innerHTML)
+  // so a catalog display name can never inject markup.
+  function renderCostRows(container, rows, total) {
+    if (!container) return;
+    const decimals = columnDecimals(rows.map((r) => r.usd).concat([total]));
+    const frag = document.createDocumentFragment();
+    for (const row of rows) {
+      frag.appendChild(
+        costRowNode(row.label, gateUsdFixed(row.usd, decimals), false),
+      );
+    }
+    frag.appendChild(costRowNode("Total", gateUsdFixed(total, decimals), true));
+    container.replaceChildren(frag);
+  }
+
+  function costRowNode(labelText, amountText, isTotal) {
+    const row = document.createElement("div");
+    row.className = isTotal ? "cost-row cost-row-total" : "cost-row";
+    const label = document.createElement("span");
+    label.className = "cost-row-label";
+    label.textContent = labelText;
+    const amount = document.createElement("span");
+    amount.className = "cost-row-amount";
+    amount.textContent = amountText;
+    row.append(label, amount);
+    return row;
+  }
+
+  // Populate the cost gate (screen 03) from an estimate response. Called
+  // for the ``require_confirmation`` and ``block`` bands only; the
+  // ``allow`` band skips this screen entirely. Does NOT switch the view —
+  // the caller does that after rendering so the DOM is ready when it shows.
+  // Populate the cost gate and RETURN its live-region announcement string.
+  // The announcement is deliberately NOT written here: this runs while the
+  // gate is still ``hidden``, and an ``aria-live`` mutation on a
+  // non-rendered node is not reliably announced — the caller writes it via
+  // ``revealCostGate`` AFTER the view is shown. Throws when the estimate
+  // carries no usable cost figure so the caller surfaces an error instead
+  // of rendering a "$0.00" spend-approval button (worst-case money bug).
+  function renderCostGate(estimate) {
+    const ce = estimate.cost_estimate;
+    const action = ce.threshold_action;
+    const total = Number(ce.estimated_cost_usd);
+    if (!Number.isFinite(total)) {
+      throw new Error(
+        "The estimate response did not include a usable cost figure. " +
+          "Please run the estimate again.",
+      );
+    }
+    const breakdown = ce.breakdown || {};
+    const reasons = Array.isArray(ce.reasons) ? ce.reasons : [];
+
+    // Question echo (from the composer).
+    if (gateQuestion) gateQuestion.textContent = queryTextarea.value.trim();
+
+    // Big mono total. The estimated range is band-specific and is set only
+    // in the confirm branch below (it is hidden in the block band, where a
+    // range for a run that will not execute is both meaningless and — since
+    // the total is above the ceiling — liable to invert past it).
+    if (gateTotal) gateTotal.textContent = gateUsd(total);
+
+    // Threshold rail: marker at estimate/hard-limit, clamped to [0,100]%.
+    const pct = Math.max(0, Math.min(100, (total / COST_HARD_LIMIT_USD) * 100));
+    if (gateRailMarker) gateRailMarker.style.left = `${pct}%`;
+    if (gateRail) gateRail.dataset.band = action;
+    if (gateCard) gateCard.dataset.band = action;
+
+    // Itemized table — both partitions of the SAME breakdown total.
+    const partitions = costGatePartitions(breakdown);
+    renderCostRows(gateByModel, partitions.byModel, partitions.total);
+    renderCostRows(gateByStage, partitions.byStage, partitions.total);
+
+    if (action === "block") {
+      // BLOCK (> $0.25) — Slice 6 (07 cost-blocked · AC-010 · COPY-004).
+      // First-class honest treatment: COPY-004 VERBATIM, the itemized
+      // estimate (rendered above), the $0.25 hard-cap disclosure, an honest
+      // "nothing ran / nothing charged", and the server ``reasons[]`` (the
+      // real "why" — NEVER a fabricated "4 premium slots · 14,600-char
+      // question"). Footer surfaces ``threshold_action: blocked`` + the
+      // estimate correlation_id. No proceed path exists.
+      if (gateBandLabel) gateBandLabel.textContent = "Over the hard cap — this run won't start";
+      if (gateReason) {
+        // COPY-004 verbatim, then the server's honest reason(s) if present.
+        const serverReasons = reasons.length ? ` ${reasons.join(" ")}` : "";
+        gateReason.textContent = `${COPY_004_COST_BLOCK}${serverReasons}`;
+      }
+      if (gateBlockNote) {
+        gateBlockNote.textContent =
+          `The itemized estimate above (${gateUsd(total)}) is over the ` +
+          "$0.25 hard cap and no override exists in this release. Nothing " +
+          "ran and nothing was charged.";
+        gateBlockNote.hidden = false;
+      }
+      if (gateBlockFooter) {
+        const corr = estimate && estimate.correlation_id;
+        gateBlockFooter.textContent = `threshold_action: blocked${corr ? ` · ${corr}` : ""}`;
+        gateBlockFooter.hidden = false;
+      }
+      // Actions: swap the confirm/change-models pair for the two honest
+      // recovery paths (both return to the composer — real, no fabrication).
+      if (gateConfirmButton) gateConfirmButton.hidden = true;
+      if (gateBackButton) gateBackButton.hidden = true;
+      if (gateBlockModelsButton) gateBlockModelsButton.hidden = false;
+      if (gateBlockShortenButton) gateBlockShortenButton.hidden = false;
+      if (gateCapNote) gateCapNote.hidden = true;
+      // Ctrl+Enter confirms nothing in the block band — hide that hint.
+      if (gateHintConfirm) gateHintConfirm.hidden = true;
+      // No planning range for a run that will not execute.
+      if (gateRangeWrap) gateRangeWrap.hidden = true;
+      return `Run blocked. Estimated ${gateUsd(total)} is above the $0.25 hard cap. ${COPY_004_COST_BLOCK}`;
+    }
+
+    // REQUIRE_CONFIRMATION ($0.15–$0.25).
+    // Illustrative ±``PLANNING_RANGE_PCT`` planning band (NOT a server
+    // interval). Only shown in this band, where total ≤ the hard limit so
+    // ``lo < hi`` always holds; ``hi`` is still clamped to the ceiling and
+    // both endpoints render at whole-cent precision (no false sub-cent).
+    if (gateRangeWrap) gateRangeWrap.hidden = false;
+    if (gateRange) {
+      const lo = total * (1 - PLANNING_RANGE_PCT);
+      const hi = Math.min(total * (1 + PLANNING_RANGE_PCT), COST_HARD_LIMIT_USD);
+      gateRange.textContent = `${gateUsd2dp(lo)}–${gateUsd2dp(hi)}`;
+    }
+    if (gateBandLabel) {
+      gateBandLabel.textContent = "Cost review — your confirmation required";
+    }
+    if (gateReason) {
+      const firstReason = reasons.length ? ` ${reasons[0]}` : "";
+      gateReason.textContent = `${COPY_003_COST_WARNING}${firstReason}`;
+    }
+    if (gateConfirmButton) {
+      gateConfirmButton.hidden = false;
+      const label = gateConfirmButton.querySelector(".button-label");
+      if (label) label.textContent = `Approve ${gateUsd(total)} & run`;
+    }
+    // Reset the block-only surfaces so a prior block render never bleeds
+    // into the confirm band.
+    if (gateBackButton) gateBackButton.hidden = false;
+    if (gateBlockModelsButton) gateBlockModelsButton.hidden = true;
+    if (gateBlockShortenButton) gateBlockShortenButton.hidden = true;
+    if (gateBlockNote) gateBlockNote.hidden = true;
+    if (gateBlockFooter) gateBlockFooter.hidden = true;
+    if (gateCapNote) gateCapNote.hidden = false;
+    if (gateHintConfirm) gateHintConfirm.hidden = false;
+    return `Cost review: your confirmation required. Estimated ${gateUsd(total)}.`;
+  }
+
+  // ``true`` when the user has asked the OS to minimise motion.
+  function prefersReducedMotion() {
+    try {
+      return window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+    } catch (_) {
+      return false;
+    }
+  }
+
+  // Land focus on the live-run heading AND bring it into view. ``setRunning``
+  // may have just smooth-scrolled toward the (now display:none) #cancel-run;
+  // an explicit scrollIntoView here wins (last scroll target) so the h1 is not
+  // left off-screen for a sighted keyboard user. Reduced-motion honoured.
+  function focusLiveHeading() {
+    if (!liveRunHeading) return;
+    liveRunHeading.focus({ preventScroll: true });
+    liveRunHeading.scrollIntoView({
+      behavior: prefersReducedMotion() ? "auto" : "smooth",
+      block: "start",
+    });
+  }
+
+  // Post-reveal choreography for the cost gate. Call AFTER ``setView`` so
+  // the region is in the rendered accessibility tree. Moves focus into the
+  // gate (WCAG 2.4.3 — never strand focus on the now-hidden composer),
+  // fires the live-region announcement (set here, not in ``renderCostGate``,
+  // because aria-live only queues mutations made while rendered), and scrolls
+  // the card into view honouring ``prefers-reduced-motion``.
+  function revealCostGate(action, announcement) {
+    if (gateLive && announcement) {
+      gateLive.textContent = "";
+      // Announce after the next frame (post-layout) so the empty→text change
+      // is observed by AT as a discrete update. The region is persistent
+      // (outside the swapped views), so it is always a registered live region.
+      const announce = () => {
+        gateLive.textContent = announcement;
+      };
+      if (typeof requestAnimationFrame === "function") {
+        requestAnimationFrame(announce);
+      } else {
+        announce();
+      }
+    }
+    // Focus the heading (SR reads the gate from the top, cost context first)
+    // rather than the CTA. The heading is present in both bands, incl. block
+    // where the confirm button is hidden.
+    const focusTarget =
+      gateHeading ||
+      (action === "block" ? gateBackButton : gateConfirmButton);
+    if (focusTarget) focusTarget.focus({ preventScroll: true });
+    if (gateCard) {
+      gateCard.scrollIntoView({
+        behavior: prefersReducedMotion() ? "auto" : "smooth",
+        block: "center",
+      });
+    }
+  }
+
+  // "Change models" / "Back to edit": return to the composer to adjust the
+  // query or model slots. The next estimate re-opens the gate fresh.
+  function gateBackToComposer() {
+    setView("composer");
+    if (queryTextarea) queryTextarea.focus({ preventScroll: true });
+  }
+
   async function estimateRun() {
     clearError();
     hideCostConfirmation();
@@ -1869,70 +4252,78 @@
         }),
       });
       state.currentEstimate = estimate;
+      // Slice 1: fan the itemized ``by_model`` breakdown out onto the
+      // slot cards and surface the grand total in the composer footer.
+      // ``by_model`` is emitted one row per slot in slot order, so we map
+      // the (non-synthesis) rows to slots BY POSITION — keying by
+      // model_id would collapse two slots that pick the same model. The
+      // ``kind === "synthesis"`` writer row is NOT a slot, so it is
+      // excluded before the positional mapping.
+      state.perModelEstimates = [];
+      const byModel =
+        estimate.cost_estimate.breakdown &&
+        estimate.cost_estimate.breakdown.by_model;
+      if (Array.isArray(byModel)) {
+        state.perModelEstimates = byModel
+          .filter((row) => row.kind !== "synthesis")
+          .map((row) => row.usd);
+      }
+      renderModelInputs(getModelIds());
+      if (composerTotalEstimate) {
+        composerTotalEstimate.textContent = gateUsd(
+          estimate.cost_estimate.estimated_cost_usd,
+        );
+      }
       const { primary: usdPrimary, secondary: usdSecondary } = formatCostWithLocal(
         estimate.cost_estimate.estimated_cost_usd,
       );
-      const costLine = `Estimated cost: ${usdPrimary}.`;
-      // PR-0 / Bug 2: the success-path DOM operations used to live
-      // inline. If any of them threw (e.g. an unexpectedly-shaped
-      // response made formatCostWithLocal fail), the throw would
-      // jump straight to the finally, skipping the cost callout
-      // and leaving the button briefly in the loading state before
-      // the finally reset it. Wrap the callout rendering in its
-      // own try/catch so a single broken callout render surfaces
-      // an error message in the callout area instead of leaving
-      // the screen blank. The button is always reset by the outer
-      // finally regardless.
+      const action = estimate.cost_estimate.threshold_action;
+      // Slice 2 (03 Cost gate): route by the server ``threshold_action``.
+      //   allow                → skip the gate, run straight away.
+      //   require_confirmation  → show the itemized cost gate (screen 03).
+      //   block                → show the gate's inline blocked state.
+      // The legacy inline composer callout (``#cost-confirmation``) is no
+      // longer surfaced here; its confirm role moved to the dedicated
+      // gate. The element stays in the template (hidden) for its contract.
+      // PR-0 / Bug 2: wrap the success-path DOM work in its own try/catch
+      // so a broken render surfaces a message instead of a blank screen;
+      // the outer finally always resets the estimate button.
       try {
         if (usdSecondary) renderCostSecondary(estimate.cost_estimate.estimated_cost_usd);
-        if (estimate.cost_estimate.threshold_action === "require_confirmation") {
-          costConfirmationMessage.textContent =
-            `${costLine} This is in the upper band. Confirm to proceed.`;
-          costConfirmation.hidden = false;
-          if (proceedButton) {
-            proceedButton.disabled = false;
-            proceedButton.dataset.estimateBand = "require_confirmation";
-          }
-        } else if (estimate.cost_estimate.threshold_action === "block") {
-          costConfirmationMessage.textContent =
-            `${costLine} This exceeds the hard limit (USD 0.25). The run is blocked.`;
-          costConfirmation.hidden = false;
-          if (proceedButton) {
-            proceedButton.disabled = true;
-            proceedButton.dataset.estimateBand = "block";
-          }
-        } else {
-          costConfirmationMessage.textContent =
-            `${costLine} This is in the normal band. Proceed to start.`;
-          costConfirmation.hidden = false;
-          if (proceedButton) {
-            proceedButton.disabled = false;
-            proceedButton.dataset.estimateBand = "allow";
-          }
-        }
         renderNotices(null);
-        toast({
-          message: `Cost estimate ready: ${usdPrimary}.`,
-          tone: "success",
-        });
+        if (action === "allow") {
+          // ≤ $0.15: nothing to confirm — go straight to the run.
+          await proceedWithRun();
+        } else {
+          // require_confirmation ($0.15–$0.25) or block (> $0.25):
+          // render, switch to the gate, THEN move focus + announce + scroll.
+          const announcement = renderCostGate(estimate);
+          setView("cost-gate");
+          revealCostGate(action, announcement);
+          toast({
+            message: `Cost estimate ready: ${usdPrimary}.`,
+            tone: "success",
+          });
+        }
       } catch (renderError) {
-        // The estimate itself succeeded — the response is valid —
-        // but rendering the callout blew up. Show the error in the
-        // callout so the user can see what happened and reset the
-        // proceed button so the next estimate isn't blocked.
-        if (costConfirmation) {
-          costConfirmationMessage.textContent =
-            `Got the estimate (${usdPrimary}) but could not render the cost review. ` +
-            `${renderError && renderError.message ? renderError.message : "Unknown error."}`;
-          costConfirmation.hidden = false;
-        }
-        if (proceedButton) {
-          proceedButton.disabled = true;
-        }
+        // The estimate itself succeeded — the response is valid — but the
+        // gate render (or the auto-proceed) blew up. Surface it rather
+        // than leaving the composer silent.
+        handleError(
+          renderError instanceof ApiError
+            ? renderError
+            : new Error(
+                `Got the estimate (${usdPrimary}) but could not open the cost review. ` +
+                  `${renderError && renderError.message ? renderError.message : "Unknown error."}`,
+              ),
+        );
       }
       return estimate;
     } finally {
       setButtonLoading(estimateButton, false);
+      // ``setButtonLoading`` clears ``disabled``; re-assert the gate so a
+      // high-stakes topic detected mid-compose keeps the CTA disabled.
+      applyHighStakesGate();
     }
   }
 
@@ -1941,6 +4332,95 @@
       warning_type: warning.warning_type,
       version: warning.version,
     }));
+  }
+
+  // ---------------------------------------------------------------------------
+  // High-stakes gate (COPY-002)
+  // ---------------------------------------------------------------------------
+  // The gate appears only when ``POST /v1/query-runs/warnings`` reports a
+  // ``high_stakes`` warning for the current query. While it is showing and
+  // the acknowledgement checkbox is unchecked, the primary CTA stays
+  // disabled. The acknowledgement itself is still delivered to the server as
+  // ``safety_acknowledgements[]`` by the existing run flow.
+
+  // Re-derive the primary CTA's disabled state from the run + gate state.
+  function applyHighStakesGate() {
+    const blocked = state.highStakesRequired && !state.highStakesAck;
+    if (estimateButton) {
+      estimateButton.disabled = state.isRunning || blocked;
+      estimateButton.dataset.gateBlocked = blocked ? "true" : "false";
+    }
+  }
+
+  // Show or hide the gate; hiding resets the acknowledgement so a later
+  // high-stakes query re-requires an explicit check.
+  function setHighStakesRequired(required) {
+    state.highStakesRequired = required;
+    if (highStakesGate) highStakesGate.hidden = !required;
+    if (!required) {
+      state.highStakesAck = false;
+      if (highStakesAckCheckbox) highStakesAckCheckbox.checked = false;
+    }
+    applyHighStakesGate();
+  }
+
+  // Probe the warnings endpoint for the current query text. A
+  // ``high_stakes`` warning raises the gate; anything else (or a probe
+  // failure) leaves the user un-gated. Best-effort: a network error must
+  // never block composing.
+  // Monotonically increasing token stamped on every warnings probe. The
+  // debounced probes are fired without ordering guarantees, so an older
+  // request can resolve AFTER a newer one and clobber the gate state
+  // (stranding the CTA disabled over empty text, or — worse — hiding the
+  // gate so a run proceeds with the high-stakes ack unchecked). Each
+  // probe captures the token it was issued with before awaiting and
+  // ignores its own response unless it is still the latest token issued.
+  let highStakesProbeToken = 0;
+  async function checkHighStakesWarning() {
+    const token = ++highStakesProbeToken;
+    const queryText = queryTextarea.value.trim();
+    if (!queryText) {
+      // Empty text resolves synchronously via the latest probe.
+      if (token === highStakesProbeToken) setHighStakesRequired(false);
+      return;
+    }
+    try {
+      const response = await api("/v1/query-runs/warnings", {
+        method: "POST",
+        body: JSON.stringify({ query_text: queryText }),
+      });
+      // Drop a stale response: a newer probe was issued while this one
+      // was in flight, so its (fresher) result must win.
+      if (token !== highStakesProbeToken) return;
+      const required =
+        Array.isArray(response.warnings) &&
+        response.warnings.some((w) => w.warning_type === "high_stakes");
+      setHighStakesRequired(required);
+    } catch (_) {
+      // Non-fatal: leave the gate as-is rather than surfacing an error.
+    }
+  }
+
+  let highStakesProbeTimer = null;
+  function scheduleHighStakesCheck() {
+    if (highStakesProbeTimer) clearTimeout(highStakesProbeTimer);
+    highStakesProbeTimer = setTimeout(() => {
+      highStakesProbeTimer = null;
+      checkHighStakesWarning();
+    }, 500);
+  }
+
+  // Returns ``true`` when the high-stakes gate is satisfied (not required,
+  // or acknowledged). When it blocks, it nudges the user to the checkbox.
+  function highStakesGateSatisfied() {
+    if (!state.highStakesRequired || state.highStakesAck) return true;
+    toast({
+      message:
+        "Acknowledge the decision-support notice before running this query.",
+      tone: "warn",
+    });
+    if (highStakesAckCheckbox) highStakesAckCheckbox.focus();
+    return false;
   }
 
   // L5c: developer-only "magic" phrases that flip the pipeline into
@@ -2002,6 +4482,7 @@
   async function startRun() {
     state.submissionAttempted = true;
     clearError();
+    if (!highStakesGateSatisfied()) return;
     setButtonLoading(estimateButton, true);
     try {
       const queryText = queryTextarea.value.trim();
@@ -2017,122 +4498,11 @@
       handleError(error);
     } finally {
       setButtonLoading(estimateButton, false);
-    }
-  }
-
-  // The fast-path primary action: skip the estimate and POST the run
-  // directly. If the server reports the cost needs confirmation or
-  // exceeds the hard limit, auto-fall-back to the cost callout so the
-  // user sees the same review UI as the estimate-first path. The
-  // hard guardrail (>$0.25) is server-enforced and cannot be bypassed
-  // client-side — see costs.py:35-36.
-  //
-  // PR-0 / Bug 4 (Option A): when the server returns
-  // ``COST_CONFIRMATION_REQUIRED`` from the run-create call, the
-  // fast-path silently fell back to the estimate callout and the
-  // user had to click "Proceed" themselves. The fast path should
-  // still be a single click when possible, so we estimate, then
-  // immediately re-fire the create-run with the fresh
-  // ``confirmation_token`` if the user has not yet blocked the
-  // run. The user sees a brief "Cost review" callout (less than a
-  // second) and the run starts without a second click. We only do
-  // this when the band is ``require_confirmation`` — the
-  // ``block`` band surfaces the callout as a read-only refusal
-  // and the user clicks Cancel.
-  async function runNow() {
-    state.submissionAttempted = true;
-    clearError();
-    setButtonLoading(runNowButton, true);
-    try {
-      const queryText = queryTextarea.value.trim();
-      if (!queryText) {
-        throw new ApiError({
-          status: 422,
-          code: "QUERY_REQUIRED",
-          message: "Please enter a question before starting a run.",
-        });
-      }
-      if (!checkMagicPhraseAck(queryText, runNowButton)) {
-        return;
-      }
-      const warnings = await api("/v1/query-runs/warnings", {
-        method: "POST",
-        body: JSON.stringify({ query_text: queryText }),
-      });
-      let created;
-      try {
-        created = await api("/v1/query-runs", {
-          method: "POST",
-          body: JSON.stringify({
-            query_text: queryText,
-            model_slots: getModelIds(),
-            safety_acknowledgements: warningAcknowledgements(warnings.warnings),
-            // No cost_confirmation: server will compute the estimate
-            // and either accept (allow band), require confirmation, or
-            // block. The fallback below handles the latter two.
-          }),
-        });
-      } catch (error) {
-        if (error instanceof ApiError) {
-          if (error.code === "COST_CONFIRMATION_REQUIRED") {
-            // PR-0 / Bug 4: the user clicked "Run now" expecting a
-            // single-click start. The server wants confirmation, so
-            // run the estimate and then chain the proceed with the
-            // fresh token. The callout flashes briefly before the
-            // run actually starts. The user does not have to click
-            // anything for an upper-band query.
-            state.currentEstimate = null;
-            toast({
-              message: "Cost confirmation required — auto-confirming with the latest estimate.",
-              tone: "warn",
-            });
-            const estimate = await estimateRun();
-            if (estimate && state.currentEstimate) {
-              const band =
-                state.currentEstimate.cost_estimate.threshold_action;
-              if (band === "require_confirmation") {
-                // Re-fire the create-run with the confirmation token.
-                // ``proceedWithRun`` reads ``state.currentEstimate`` and
-                // posts the same payload the manual Proceed button
-                // would have, so the behaviour is identical to a
-                // two-click flow.
-                await proceedWithRun();
-              }
-              // For the allow band the run already started; for the
-              // block band the callout is now showing the refusal and
-              // the user clicks Cancel.
-            }
-            return;
-          }
-          if (error.code === "COST_LIMIT_EXCEEDED") {
-            // Same fallback: surface the cost callout (now showing the
-            // hard-limit message) so the user can read the figure
-            // before deciding. No auto-proceed — the run is blocked.
-            state.currentEstimate = null;
-            await estimateRun();
-            return;
-          }
-        }
-        throw error;
-      }
-      state.currentRunId = created.query_run_id;
-      // Server accepted the run. Consume any prior estimate copy and
-      // hide the callout.
-      hideCostConfirmation();
-      setRunning(true);
-      updateRunMeta(created);
-      renderProgress(created.progress);
-      // PR-0 / Bug 8: capture the run start time once, here, on the
-      // first run-create response. Subsequent poll ticks will not
-      // overwrite the displayed time until the run reaches a
-      // terminal state.
-      setRunStartTime(created.result_generated_at_utc);
-      toast({ message: "Run started. Tracking progress below.", tone: "info" });
-      startPolling();
-    } catch (error) {
-      handleError(error);
-    } finally {
-      setButtonLoading(runNowButton, false);
+      // ``setButtonLoading`` clears ``disabled``; re-assert the run/gate
+      // state so the CTA stays disabled when a run is now in flight (the
+      // ``allow`` band auto-proceeds inside ``estimateRun``) or a
+      // high-stakes topic is unacknowledged.
+      applyHighStakesGate();
     }
   }
 
@@ -2147,6 +4517,16 @@
       // Defensive: button should be disabled until an estimate exists.
       return;
     }
+    // Defense-in-depth for the money boundary: a ``block`` estimate must
+    // never POST a create. The confirm button is hidden and the keyboard
+    // path is guarded in the block band, and the server rejects it with
+    // COST_LIMIT_EXCEEDED — this early return closes the last direct-call
+    // gap so no client path can spend past the $0.25 hard limit.
+    if (
+      state.currentEstimate.cost_estimate.threshold_action === "block"
+    ) {
+      return;
+    }
     clearError();
     const queryText = queryTextarea.value.trim();
     if (!queryText) {
@@ -2156,10 +4536,14 @@
         message: "Please enter a question before starting a run.",
       });
     }
-    if (!checkMagicPhraseAck(queryText, proceedButton)) {
+    // The visible confirm CTA is now the cost gate's "Approve $X & run"
+    // (``gateConfirmButton``); fall back to the legacy composer proceed
+    // button if the gate markup is absent (trimmed template).
+    const confirmBtn = gateConfirmButton || proceedButton;
+    if (!checkMagicPhraseAck(queryText, confirmBtn)) {
       return;
     }
-    setButtonLoading(proceedButton, true);
+    setButtonLoading(confirmBtn, true);
     try {
       const thresholdAction =
         state.currentEstimate.cost_estimate.threshold_action;
@@ -2186,15 +4570,48 @@
         }),
       });
       state.currentRunId = created.query_run_id;
+      // Slice 3 (04 Live run): capture the submitted question so the live-run
+      // running-query band can echo it (the poll payload has no query_text),
+      // and reset the live view's SR/elapsed state for a fresh run.
+      state.liveQueryText = queryText;
+      state.lastLiveStatus = null;
+      // Slice 4a (05 Result): a new run must never serve the previous run's
+      // Copy/Export text, and the terminal-branch guard must start fresh (C-C).
+      state.lastResultSummary = null;
+      state.lastResultRunId = null;
+      // Slice 5 (06 Transcript): drop the previous run's transcript snapshot so
+      // the drill-down can never render stale openings/critiques for a new run.
+      state.lastResult = null;
+      state.terminalHandled = false;
+      // Fix 3: a NEW run must re-render every live block even if its first
+      // payload is byte-identical to the previous run's — reset the guards.
+      state.liveSig = {
+        stage: null,
+        debate: null,
+        models: null,
+        fallback: null,
+        notices: null,
+      };
+      state.liveElapsedBaseMs = 0;
+      state.liveElapsedStamp = Date.now();
       setRunning(true);
       updateRunMeta(created);
       renderProgress(created.progress);
-      // PR-0 / Bug 8: capture the run start time once. See
-      // ``runNow`` for the full rationale.
+      // PR-0 / Bug 8: capture the run start time once, on the
+      // first run-create response, so later poll ticks do not
+      // overwrite the displayed time until a terminal state.
       setRunStartTime(created.result_generated_at_utc);
       // The estimate is now consumed; collapse the cost callout until
       // the next estimate.
       hideCostConfirmation();
+      // Slice 3 (04 Live run): swap to the dedicated live-run view and seed it
+      // from the create response (which has no ``.result`` projection — every
+      // nested read in ``renderLiveRun`` is guarded).
+      setView("live-run");
+      // Fix 2: setRunning(true) above focused the now-hidden #cancel-run;
+      // land focus on the visible live-run heading instead (one h1 per view).
+      focusLiveHeading();
+      renderLiveRun(created);
       toast({ message: "Run started. Tracking progress below.", tone: "info" });
       startPolling();
     } catch (error) {
@@ -2212,7 +4629,7 @@
       }
       handleError(error);
     } finally {
-      setButtonLoading(proceedButton, false);
+      setButtonLoading(confirmBtn, false);
     }
   }
 
@@ -2243,6 +4660,11 @@
       }
       state.currentRunId = active.query_run_id;
       setRunning(true);
+      // Fix 11: a run discovered here never went through proceedWithRun, so it
+      // has not switched to the live card. Show it (otherwise we poll a hidden
+      // view) and land focus on the heading, matching the proceed path.
+      setView("live-run");
+      focusLiveHeading();
       // PR-0 / Bug 8: when ``pollRun`` rehydrates the active run on
       // a fresh page load, capture its start time so the
       // "Current time" card is not stuck on "Not started" while the
@@ -2257,6 +4679,7 @@
     });
     updateRunMeta(result);
     renderProgress(result.progress);
+    renderLiveRun(result);
     renderModelPanels(result.result.model_answers, result);
     renderDebateAndSynthesis(result);
     renderNotices(result);
@@ -2271,6 +4694,13 @@
         result.status,
       )
     ) {
+      // C-A: a slow poll response (server latency > the 750ms poll interval)
+      // can re-enter this terminal branch after it already ran, double-firing
+      // the completion toast + focus move. Handle the transition exactly once.
+      if (state.terminalHandled) {
+        return;
+      }
+      state.terminalHandled = true;
       stopPolling();
       setRunning(false);
       // PR-0 / Bug 8: replace the displayed time with the
@@ -2278,47 +4708,42 @@
       // has already stopped, so this is the last time we touch
       // the card for this run.
       finalizeRunTime(result.result_generated_at_utc);
+      // Slice 4a (05 Result): if a real synthesis exists, transition to the
+      // result view (verdict band + trust triangle) and move focus to its
+      // heading. ``renderResult`` is called ONCE here (not per 750ms poll —
+      // polling has already stopped) so there is no aria-live spam. If there is
+      // NO final_synthesis (failed/timed_out/cancelled/blocked), STAY on the
+      // live-run view: its terminal error state + ``#live-notices`` handle that.
+      if (result.result && result.result.final_synthesis) {
+        // Slice 5 (06 Transcript): stash the terminal result so the transcript
+        // drill-down renders honest per-model openings + round critiques
+        // without a re-fetch. Captured only alongside a real synthesis (same
+        // guard as the result view), so the transcript link only ever opens a
+        // completed audit trail.
+        state.lastResult = result;
+        renderResult(result);
+        setView("result");
+        focusResultHeading();
+      }
       if (result.status === "completed") {
         toast({ message: "Run completed. See the synthesis below.", tone: "success" });
       } else if (result.status === "partial") {
         toast({
-          message: "Run finished with partial results. Check the notices section.",
+          message: liveNoticesHaveContent(result)
+            ? "Run finished with partial results. See the run notices above."
+            : "Run finished with partial results — some steps did not complete.",
           tone: "warn",
           timeout: 6500,
         });
       } else if (result.status === "failed") {
-        // Show error banner for failed runs using server-provided info
-        const failedSteps = result.failed_steps || [];
-        const partialNotice = result.partial_failure_notice || '';
-        const failedStepsText = failedSteps.length > 0
-          ? `Failed at: ${failedSteps.join(', ').replace(/_/g, ' ')}`
-          : '';
-
-        // Build a user-friendly message based on failed steps
-        let errorMessage = 'Run failed. ';
-        if (failedSteps.includes('initial_answers')) {
-          errorMessage += 'Models could not provide initial answers. ';
-        } else if (failedSteps.includes('debate_round_1') || failedSteps.includes('debate_round_2')) {
-          errorMessage += 'Debate could not complete. ';
-        } else if (failedSteps.includes('synthesis')) {
-          errorMessage += 'Final synthesis could not be generated. ';
-        }
-
-        if (partialNotice) {
-          errorMessage += partialNotice;
-        } else {
-          errorMessage += 'Please try again or contact support if the problem persists.';
-        }
-
-        showError({
-          code: 'RUN_FAILED',
-          message: errorMessage,
-          hint: failedStepsText
-            ? `Technical details: ${failedStepsText}`
-            : 'Check the notices section for more information.',
-        });
-
-        toast({ message: "Run failed. See error banner above.", tone: "error", timeout: 8000 });
+        // Slice 6 (07 provider failure · AC-015). First-class honest
+        // treatment driven ENTIRELY by server data: which step(s) failed,
+        // the server's user-safe failure notice(s), and the correlation +
+        // run ids. The mock's "Retry this step" / "Continue with 3 models"
+        // buttons are DROPPED — there is no per-step retry endpoint, so
+        // rendering them would be a lie. Only real actions are offered.
+        showProviderFailure(result);
+        toast({ message: "Run failed. See the banner above.", tone: "error", timeout: 8000 });
       } else if (result.status === "timed_out") {
         showError({
           code: 'TIMEOUT',
@@ -2351,6 +4776,8 @@
       window.clearInterval(state.pollingTimer);
       state.pollingTimer = null;
     }
+    // Slice 3 (04 Live run): the elapsed ticker must never outlive polling.
+    stopLiveElapsedTicker();
   }
 
   async function cancelRun() {
@@ -2362,6 +4789,9 @@
       });
       updateRunMeta(result);
       renderProgress(result.progress);
+      // Slice 3 (04 Live run): reflect the cancelled state in the live-run
+      // card (pill → "Cancelled", Stop hidden, elapsed frozen).
+      renderLiveRun(result);
       renderNotices(result);
       // PR-0 / Bug 8: cancel is a terminal transition; finalize
       // the run time once so the card shows the cancel time
@@ -2369,12 +4799,325 @@
       finalizeRunTime(result.result_generated_at_utc);
       stopPolling();
       setRunning(false);
+      // Slice 4a (05 Result): cancelled runs almost always have no synthesis, so
+      // we stay on the live-run view. Transition only if one somehow exists.
+      if (result.result && result.result.final_synthesis) {
+        state.lastResult = result;
+        renderResult(result);
+        setView("result");
+        focusResultHeading();
+      }
       toast({ message: "Run cancelled.", tone: "info" });
     } catch (error) {
       handleError(error);
     } finally {
       setButtonLoading(cancelButton, false);
     }
+  }
+
+  // ---------------------------------------------------------------------------
+  // Slice 6 — 07 Edge states (the seven)
+  // ---------------------------------------------------------------------------
+  //
+  // The seven edge states are surfaced IN the existing SPA (not a parallel
+  // gallery), each wired to its REAL server trigger:
+  //   1. Anonymous · AC-001        → session-establishment FAILURE
+  //      (``AUTH_REQUIRED``). The app auto-creates a session on boot, so a
+  //      *persistent* anonymous gate is unreachable; the honest analog is
+  //      "we couldn't start a session", which is what this state says.
+  //   2. Active query exists · AC-003 → 409 ``ACTIVE_QUERY_EXISTS`` on a 2nd
+  //      create. Actions ("Go to run" / "Stop it & start new") both hit real
+  //      endpoints (``GET`` / ``DELETE /v1/query-runs/{active}``).
+  //   3. Provider failure · AC-015 → a failed run (``status==="failed"`` +
+  //      ``failed_steps``). Handled at the pollRun terminal branch
+  //      (``showProviderFailure``). There is NO per-step retry endpoint, so
+  //      the mock's "Retry this step" / "Continue with 3 models" buttons are
+  //      DROPPED — only real actions (new run / review results) are offered.
+  //   4. Partial result · AC-022  → ``status==="partial"``; the run has a
+  //      synthesis, so it lands on the result view with first-class partial
+  //      disclosure (``#live-notices`` + the result notices).
+  //   5. Invalid model slot · AC-008 → 422 ``INVALID_MODEL_SLOT`` +
+  //      ``slot_errors``. Names the exact slot + bad id from server data. The
+  //      backend provides NO "did you mean" suggestion, so none is shown.
+  //   6. Cost blocked · AC-010 · COPY-004 → the cost-gate block band (see
+  //      ``renderCostGate``). Defensive create-time 402 also lands here.
+  //   7. Wrong session · AC-032  → the backend returns 404
+  //      ``QUERY_RUN_NOT_FOUND`` for a run not owned by this session (the
+  //      SAME response as a truly-missing run — it deliberately does NOT
+  //      disclose existence, so it is honest to NOT invent a 403). We defend
+  //      against both 404-not-found and a raw 403 and disclose NOTHING.
+
+  // Friendly stage labels for failed / missing step keys. Falls back to the
+  // raw key (spaces for underscores) for anything unmapped.
+  const STEP_LABELS = {
+    initial_answers: "Initial answers",
+    debate_round_1: "Debate round 1",
+    debate_round_2: "Debate round 2",
+    synthesis: "Synthesis",
+    pipeline: "Pipeline",
+  };
+  function stepLabel(step) {
+    return STEP_LABELS[step] || String(step || "").replace(/_/g, " ");
+  }
+
+  // COPY-004 (verbatim, docs/33-content-design.md). Cost block message.
+  const COPY_004_COST_BLOCK =
+    "This run is above the MVP cost limit. Choose lower-cost models, " +
+    "shorten the query, or reduce the workflow before trying again.";
+
+  // Return to the composer and clear the current edge state. Optionally
+  // focus a specific field so the fix path is obvious.
+  function returnToComposer(focus) {
+    clearError();
+    setView("composer");
+    if (focus === "slot") {
+      const firstSlot = document.querySelector("[data-model-slot]");
+      if (firstSlot) {
+        firstSlot.focus({ preventScroll: true });
+        return;
+      }
+    }
+    // Default (and the "question" fix path): land focus on the query box.
+    if (queryTextarea) queryTextarea.focus({ preventScroll: true });
+  }
+
+  // AC-003 "Go to run": look up the session's OWN active run and switch to
+  // the live-run view. Only ever surfaces the caller's own run.
+  async function goToActiveRun() {
+    const active = await api("/v1/query-runs/active", { method: "GET" });
+    if (!active || !active.query_run_id) {
+      clearError();
+      toast({ message: "No active run found — you can start a new one.", tone: "info" });
+      returnToComposer();
+      return;
+    }
+    clearError();
+    state.currentRunId = active.query_run_id;
+    setRunning(true);
+    setView("live-run");
+    focusLiveHeading();
+    startPolling();
+  }
+
+  // AC-003 "Stop it & start new": cancel the session's own active run, then
+  // return to the composer. Real DELETE — no fabricated affordance.
+  async function stopActiveRunAndCompose() {
+    const active = await api("/v1/query-runs/active", { method: "GET" });
+    if (active && active.query_run_id) {
+      await api(`/v1/query-runs/${active.query_run_id}`, { method: "DELETE" });
+      toast({ message: "Previous run stopped. Start a fresh query.", tone: "info" });
+    }
+    stopPolling();
+    state.currentRunId = null;
+    setRunning(false);
+    returnToComposer();
+  }
+
+  // AC-001 "Start a session": retry the session bootstrap in place. Falls
+  // back to a full reload if the retry itself fails.
+  async function retrySession() {
+    try {
+      await initSession();
+      await refreshDefaults();
+      clearError();
+      toast({ message: "Session started. You can run a query now.", tone: "success" });
+    } catch (_) {
+      location.reload();
+    }
+  }
+
+  // AC-015 Provider failure — a failed run. Surfaced from the pollRun
+  // terminal branch (the failure arrives as a run projection, not an
+  // ApiError). Renders ONLY server-provided fields: failed step(s), the
+  // user-safe provider failure notice(s), "other steps completed", and both
+  // ids. NO per-step "Retry" / "Continue with N models" — the backend has
+  // no such endpoint, so those mock buttons are deliberately absent.
+  function showProviderFailure(result) {
+    const failedSteps = Array.isArray(result.failed_steps) ? result.failed_steps : [];
+    const missingSteps = Array.isArray(result.missing_steps) ? result.missing_steps : [];
+    const providerNotices = Array.isArray(result.provider_failure_notices)
+      ? result.provider_failure_notices
+      : [];
+    const partialNotice = result.partial_failure_notice || "";
+
+    const detailRows = [];
+    if (failedSteps.length) {
+      detailRows.push({
+        label: failedSteps.length === 1 ? "Failed step" : "Failed steps",
+        value: failedSteps.map(stepLabel).join(", "),
+        tone: "danger",
+      });
+    }
+    // The server's user-safe notice — never a synthesised HTTP code.
+    const notice = providerNotices[0] || partialNotice;
+    if (notice) {
+      detailRows.push({ label: "Provider response", value: notice });
+    }
+    // "Other steps completed" — only claim it when at least one of the four
+    // pipeline stages is NOT in the failed/missing set (honest, derived).
+    const brokenSteps = new Set([...failedSteps, ...missingSteps]);
+    const pipeline = ["initial_answers", "debate_round_1", "debate_round_2", "synthesis"];
+    const completed = pipeline.filter((s) => !brokenSteps.has(s));
+    if (completed.length && brokenSteps.size) {
+      detailRows.push({
+        label: "Other steps",
+        value: `${completed.length} completed`,
+      });
+    }
+
+    // Footer: both ids, quoted for support. No secrets, no provider keys.
+    const corr = result.correlation_id || "";
+    const runId = result.query_run_id ? String(result.query_run_id) : "";
+    const idParts = [corr, runId].filter(Boolean);
+    const footer = idParts.length
+      ? `${idParts.join(" · ")} — quote when reporting`
+      : undefined;
+
+    const actions = [
+      { label: "Start a new run", primary: true, action: () => returnToComposer("question") },
+    ];
+    // Only offer "Review available results" when a synthesis actually
+    // exists (otherwise the button would open an empty result view).
+    if (result.result && result.result.final_synthesis) {
+      actions.push({
+        label: "Review available results",
+        action: () => {
+          clearError();
+          state.lastResult = result;
+          renderResult(result);
+          setView("result");
+          focusResultHeading();
+        },
+      });
+    }
+
+    showError({
+      code: "RUN_FAILED",
+      severity: "error",
+      acTag: "Provider failure · AC-015",
+      message:
+        "A model step returned a provider error, so the run couldn't " +
+        "finish. This is a provider-side issue, not your query — no keys " +
+        "or secrets are exposed.",
+      detailRows,
+      actions,
+      footer,
+    });
+  }
+
+  // Map a caught error to one of the seven honest edge states, or ``null``
+  // when it is an ordinary error (handled by the generic banner). Every
+  // field is derived from REAL server data — no fabricated slot suggestion,
+  // provider status, or "why" reason.
+  function edgeStateFromError(error) {
+    if (!(error instanceof ApiError)) return null;
+    const code = error.code;
+    const status = error.status;
+
+    // AC-032 Wrong session — the ONLY honest signal is 404 QUERY_RUN_NOT_FOUND
+    // (the backend returns the SAME 404 for a missing OR a non-owned run, so
+    // existence is never disclosed). It never returns 403 for a non-owned run:
+    // the only 403s are CSRF_INVALID / SESSION_EXPIRED, which must fall through
+    // to their own "Security check failed" / "Refresh session" handlers — NOT
+    // be mislabeled as a cross-session access event. Disclose NOTHING here.
+    if (code === "QUERY_RUN_NOT_FOUND") {
+      return {
+        code: "QUERY_RUN_NOT_FOUND",
+        severity: "neutral",
+        acTag: "Wrong session · AC-032",
+        message:
+          "This link belongs to a different browser session. Runs are " +
+          "private to the session that started them and disappear when it " +
+          "ends — so we can't open it for you. That's the extent of what " +
+          "we can say about it.",
+        actions: [
+          { label: "Start your own query", primary: true, action: () => returnToComposer("question") },
+          { label: "Start a session", action: retrySession },
+        ],
+        footer: "error 404 · no run details disclosed",
+      };
+    }
+
+    // AC-003 Active query exists — 409 on a second create.
+    if (code === "ACTIVE_QUERY_EXISTS") {
+      return {
+        code,
+        severity: "info",
+        acTag: "Active query exists · AC-003",
+        message:
+          "One active query per session keeps costs predictable. Jump back " +
+          "to your running query, or stop it before starting a new one.",
+        actions: [
+          { label: "Go to run", primary: true, action: goToActiveRun },
+          { label: "Stop it & start new", action: stopActiveRunAndCompose },
+        ],
+      };
+    }
+
+    // AC-008 Invalid model slot — 422 with per-slot errors.
+    if (code === "INVALID_MODEL_SLOT") {
+      const slotErrors = Array.isArray(error.slotErrors) ? error.slotErrors : [];
+      const detailRows = slotErrors.map((se) => ({
+        label: se.slot_number ? `Slot ${se.slot_number}` : "Model slots",
+        value: se.model_id || "(empty)",
+        mono: true,
+        tone: "danger",
+        // ``se.message`` is the server's exact reason (e.g. "…is not in the
+        // catalog") — no client-side "did you mean" is fabricated.
+        sub: se.message || undefined,
+      }));
+      return {
+        code,
+        severity: "error",
+        acTag: "Invalid model slot · AC-008",
+        message:
+          "That model ID isn't one we can call, so nothing was sent and " +
+          "nothing was charged. The error names the exact slot — never a " +
+          'generic "invalid input".',
+        detailRows,
+        actions: [
+          { label: "Fix model slots", primary: true, action: () => returnToComposer("slot") },
+        ],
+        footer: error.correlationId ? `${error.correlationId}` : undefined,
+      };
+    }
+
+    // AC-010 Cost blocked (defensive create-time 402; the estimate gate is
+    // the primary surface — see ``renderCostGate``). COPY-004 verbatim.
+    if (code === "COST_LIMIT_EXCEEDED") {
+      return {
+        code,
+        severity: "error",
+        acTag: "Cost blocked · AC-010 · COPY-004",
+        message: `${COPY_004_COST_BLOCK} Nothing ran and nothing was charged.`,
+        detailRows: [
+          { label: "Hard cap", value: "$0.25 · no override", mono: true },
+        ],
+        actions: [
+          { label: "Choose cheaper models", primary: true, action: () => returnToComposer("slot") },
+          { label: "Shorten the question", action: () => returnToComposer("question") },
+        ],
+        footer: `threshold_action: blocked${error.correlationId ? ` · ${error.correlationId}` : ""}`,
+      };
+    }
+
+    // AC-001 Anonymous — session establishment failed on boot.
+    if (code === "AUTH_REQUIRED") {
+      return {
+        code,
+        severity: "neutral",
+        acTag: "Anonymous · AC-001",
+        message:
+          "We couldn't start a browser session, so no query can run yet. " +
+          "Starting a session is one click — a secure cookie, no signup or " +
+          "password. Provider access is configured on the server; you'll " +
+          "never enter an API key.",
+        actions: [{ label: "Start a session", primary: true, action: retrySession }],
+        footer: status ? `session unavailable · error ${status}` : undefined,
+      };
+    }
+
+    return null;
   }
 
   function handleError(error) {
@@ -2385,6 +5128,13 @@
     if (proceedButton && !state.isRunning) {
       const band = proceedButton.dataset.estimateBand;
       proceedButton.disabled = band === "block";
+    }
+    // Slice 6 (07 edge states): route recognised codes to their honest,
+    // first-class edge treatment before the generic fallback.
+    const edge = edgeStateFromError(error);
+    if (edge) {
+      showError(edge);
+      return;
     }
     if (error instanceof ApiError) {
       const detail = {
@@ -2508,6 +5258,78 @@
     });
   }
 
+  // Slice 7 (01 Landing) — the marketing front door.
+  //
+  // HONESTY / WIRING contract:
+  //   * The landing is REACHABLE (top-bar "How it works" → ``setView("landing")``)
+  //     but is NOT the default view — ``boot()`` still lands on the composer.
+  //   * NOTHING on the landing runs a query or fabricates a live estimate. The
+  //     "Estimate" and "Run the debate" buttons both just open the composer
+  //     (estimate-first flow lives there); "Run" pre-fills nothing.
+  //   * The example chips fill the REAL composer textarea via ``.value`` (not
+  //     innerHTML) with the chip's own question, dispatch a native ``input``
+  //     event so validation/char-count/high-stakes probing run exactly as if
+  //     the user typed it, then switch to the composer and focus the field.
+  //   * The "Example preview" card is illustrative marketing copy (labelled),
+  //     never presented as a result the user produced.
+  function initLanding() {
+    const showLandingButton = el("show-landing");
+    const landingHeading = el("landing-heading");
+
+    // Enter the landing view and move focus to its single h1 (one h1 per view).
+    function enterLanding() {
+      setView("landing");
+      if (landingHeading) {
+        landingHeading.focus({ preventScroll: true });
+        landingHeading.scrollIntoView({
+          behavior: prefersReducedMotion() ? "auto" : "smooth",
+          block: "start",
+        });
+      }
+    }
+
+    // Every landing CTA leads here: back to the composer, textarea focused.
+    function goToComposer() {
+      setView("composer");
+      if (queryTextarea) queryTextarea.focus({ preventScroll: true });
+    }
+
+    if (showLandingButton) {
+      showLandingButton.addEventListener("click", enterLanding);
+    }
+
+    // "How it works" on the landing itself reveals the illustrative example.
+    const landingHowItWorks = el("landing-howitworks");
+    const landingPreview = qs(".landing-preview");
+    if (landingHowItWorks && landingPreview) {
+      landingHowItWorks.addEventListener("click", () => {
+        landingPreview.scrollIntoView({
+          behavior: prefersReducedMotion() ? "auto" : "smooth",
+          block: "center",
+        });
+      });
+    }
+
+    for (const id of ["landing-open-workspace", "landing-estimate", "landing-run"]) {
+      const button = el(id);
+      if (button) button.addEventListener("click", goToComposer);
+    }
+
+    // Example chips: fill the real composer textarea, then open it.
+    for (const chip of qsa("[data-landing-chip]")) {
+      chip.addEventListener("click", () => {
+        const question = chip.dataset.landingChip || "";
+        if (queryTextarea) {
+          queryTextarea.value = question;
+          // Native input event so the composer's own validation, character
+          // counter, and high-stakes probe react as if the user typed it.
+          queryTextarea.dispatchEvent(new Event("input", { bubbles: true }));
+        }
+        goToComposer();
+      });
+    }
+  }
+
   function initModelSlotSelection() {
     modelInputs.addEventListener("change", (event) => {
       const target = event.target;
@@ -2535,24 +5357,51 @@
 
   function initQueryValidation() {
     queryTextarea.addEventListener("input", updateQueryValidation);
+    // Slice 1: probe the warnings endpoint (debounced) so the COPY-002
+    // high-stakes gate appears as soon as the query looks like a safety
+    // topic. Also re-probe on blur to catch a paste that skipped input.
+    queryTextarea.addEventListener("input", scheduleHighStakesCheck);
+    queryTextarea.addEventListener("blur", checkHighStakesWarning);
     updateQueryValidation();
+  }
+
+  function initHighStakesGate() {
+    if (!highStakesAckCheckbox) return;
+    highStakesAckCheckbox.addEventListener("change", () => {
+      state.highStakesAck = highStakesAckCheckbox.checked;
+      applyHighStakesGate();
+    });
   }
 
   function initKeyboardShortcuts() {
     document.addEventListener("keydown", (event) => {
+      const gateActive = costGateContainer && !costGateContainer.hidden;
       const isCmdEnter = (event.metaKey || event.ctrlKey) && event.key === "Enter";
       if (isCmdEnter) {
         event.preventDefault();
-        // Primary action is now "Run now" — skip the estimate, fall
-        // back to the cost callout only if the server requires it.
-        if (runNowButton && !runNowButton.disabled) {
-          runNow();
-        } else if (!estimateButton.disabled) {
+        // On the cost gate, Ctrl/Cmd+Enter confirms the estimate (unless
+        // the confirm CTA is absent/disabled — e.g. the block band).
+        if (gateActive) {
+          if (gateConfirmButton && !gateConfirmButton.hidden && !gateConfirmButton.disabled) {
+            proceedWithRun();
+          }
+          return;
+        }
+        // Single-CTA design: Ctrl/Cmd+Enter runs the estimate-first
+        // flow (``startRun``), which routes through the cost gate. The
+        // high-stakes gate keeps the CTA disabled until acknowledged.
+        if (!estimateButton.disabled) {
           startRun();
         }
         return;
       }
       if (event.key === "Escape") {
+        // On the cost gate, Esc returns to the composer ("Back to edit").
+        if (gateActive && !state.isRunning) {
+          event.preventDefault();
+          gateBackToComposer();
+          return;
+        }
         // If a tooltip is open, hide it first and stop here.
         if (infoTooltip && !infoTooltip.hidden) {
           const active = document.querySelector("[data-info-icon][data-info-active]");
@@ -2606,9 +5455,15 @@
   }
 
   async function boot() {
+    // Slice 0 scaffold: start on the composer view. Later slices drive
+    // ``setView`` from the run lifecycle; for now it just asserts the
+    // initial state and no-ops if the view container is absent.
+    setView("composer");
     initThemeToggle();
+    initLanding();
     initModelSlotSelection();
     initQueryValidation();
+    initHighStakesGate();
     initKeyboardShortcuts();
     initBannerDismiss();
     initWorkflowKeyboard();
@@ -2623,32 +5478,86 @@
     estimateButton.addEventListener("click", () => {
       startRun();
     });
-    if (runNowButton) {
-      runNowButton.addEventListener("click", () => {
-        runNow();
-      });
+    // Shared run-id clipboard helper (Fix 6): both the aside's #copy-correlation
+    // button and the live card's #live-corr button copy a run id and show the
+    // same copied-title feedback. Extracted so both stay in lockstep.
+    async function copyRunIdToClipboard(button, value, idleTitle) {
+      if (!button || !value) return;
+      // Fix 5: preserve this button's OWN idle aria-label (the three callers
+      // have different ones) so it is restored exactly on timeout.
+      const idleAria = button.getAttribute("aria-label");
+      try {
+        await navigator.clipboard.writeText(value);
+        button.dataset.copied = "true";
+        button.title = "Copied!";
+        // Fix 5: convey the copied state to SR (not color-only). The visible
+        // non-color cue (a ✓ glyph) is added via CSS ``::after`` so it never
+        // clobbers the button's own text — #live-corr shows the run id and
+        // #copy-correlation wraps a child <span>. aria-label="Copied"
+        // overrides the accessible name, so the ✓ stays purely visual.
+        button.setAttribute("aria-label", "Copied");
+        setTimeout(() => {
+          delete button.dataset.copied;
+          button.title = idleTitle;
+          if (idleAria != null) button.setAttribute("aria-label", idleAria);
+        }, 1500);
+      } catch (_) {
+        button.title = "Copy failed — select and copy manually.";
+      }
     }
     if (copyCorrelationButton) {
-      copyCorrelationButton.addEventListener("click", async () => {
+      copyCorrelationButton.addEventListener("click", () => {
         const target = el("correlation-meta");
         const value = (target?.textContent || "").trim();
         if (!value || value === "Not started") return;
-        try {
-          await navigator.clipboard.writeText(value);
-          copyCorrelationButton.dataset.copied = "true";
-          copyCorrelationButton.title = "Copied!";
-          setTimeout(() => {
-            delete copyCorrelationButton.dataset.copied;
-            copyCorrelationButton.title = "Copy run ID — include it if you report an issue.";
-          }, 1500);
-        } catch (_) {
-          copyCorrelationButton.title = "Copy failed — select and copy manually.";
-        }
+        copyRunIdToClipboard(
+          copyCorrelationButton,
+          value,
+          "Copy run ID — include it if you report an issue.",
+        );
+      });
+    }
+    // Fix 6: the live card's run id is copyable too (the aside copy button is
+    // hidden during a live run). It copies the SAME id shown, stashed on the
+    // button's dataset by ``renderLiveRun``.
+    const liveCorrButton = el("live-corr");
+    if (liveCorrButton) {
+      liveCorrButton.addEventListener("click", () => {
+        const value = (liveCorrButton.dataset.correlationId || "").trim();
+        if (!value) return;
+        copyRunIdToClipboard(liveCorrButton, value, "Copy run ID");
       });
     }
     if (proceedButton) {
       proceedButton.addEventListener("click", () => {
         proceedWithRun();
+      });
+    }
+    // Cost gate (screen 03) actions. "Approve $X & run" reuses the same
+    // confirmation-token create path as the legacy proceed button; "Change
+    // models" returns to the composer.
+    if (gateConfirmButton) {
+      gateConfirmButton.addEventListener("click", () => {
+        proceedWithRun();
+      });
+    }
+    if (gateBackButton) {
+      gateBackButton.addEventListener("click", () => {
+        gateBackToComposer();
+      });
+    }
+    // Slice 6 (07 cost-blocked · AC-010): the block band's two honest
+    // recovery paths. Both return to the composer — "Choose cheaper models"
+    // lands focus on the first model slot, "Shorten the question" on the
+    // query box. Neither runs anything.
+    if (gateBlockModelsButton) {
+      gateBlockModelsButton.addEventListener("click", () => {
+        returnToComposer("slot");
+      });
+    }
+    if (gateBlockShortenButton) {
+      gateBlockShortenButton.addEventListener("click", () => {
+        returnToComposer("question");
       });
     }
     if (cancelEstimateButton) {
@@ -2659,6 +5568,110 @@
     cancelButton.addEventListener("click", () => {
       cancelRun();
     });
+    // Slice 3 (04 Live run): the live card's "Stop run" button reuses the same
+    // cancel path as the aside's cancel button.
+    const liveStopButton = el("live-stop");
+    if (liveStopButton) {
+      liveStopButton.addEventListener("click", () => {
+        cancelRun();
+      });
+    }
+    // Slice 4b (05 Result): "Run details" disclosure toggle. Collapsed by
+    // default; expands/collapses the run-receipt panel. Keyboard operable
+    // (native <button>), reflects state via aria-expanded + the caret glyph.
+    const resultDetailsToggle = el("result-details-toggle");
+    if (resultDetailsToggle) {
+      resultDetailsToggle.addEventListener("click", () => {
+        const receipt = el("result-receipt");
+        const next = resultDetailsToggle.getAttribute("aria-expanded") !== "true";
+        resultDetailsToggle.setAttribute("aria-expanded", next ? "true" : "false");
+        if (receipt) receipt.hidden = !next;
+        const caret = resultDetailsToggle.querySelector(".result-details-caret");
+        if (caret) caret.textContent = next ? "▴" : "▾";
+      });
+    }
+    // Slice 4b: delegated copy for the receipt's ⧉ id buttons — reuses the
+    // shared ``copyRunIdToClipboard`` helper so run-id copy stays in lockstep.
+    const resultReceiptEl = el("result-receipt");
+    if (resultReceiptEl) {
+      resultReceiptEl.addEventListener("click", (event) => {
+        const target = event.target;
+        const button =
+          target && target.closest ? target.closest("[data-copy-value]") : null;
+        if (!button || !resultReceiptEl.contains(button)) return;
+        const value = (button.dataset.copyValue || "").trim();
+        if (!value) return;
+        copyRunIdToClipboard(button, value, button.dataset.idleTitle || "Copy");
+      });
+    }
+    // Slice 4a (05 Result): Copy + Export the result summary. Both read the
+    // plain-text ``state.lastResultSummary`` built by ``renderResult`` (question
+    // + verdict + agreement line) — textContent-safe, no HTML.
+    const resultCopyButton = el("result-copy");
+    if (resultCopyButton) {
+      resultCopyButton.addEventListener("click", async () => {
+        const summary = state.lastResultSummary;
+        if (!summary) return;
+        try {
+          await navigator.clipboard.writeText(summary);
+          resultCopyButton.dataset.copied = "true";
+          resultCopyButton.textContent = "Copied";
+          window.setTimeout(() => {
+            delete resultCopyButton.dataset.copied;
+            resultCopyButton.textContent = "Copy";
+          }, 1500);
+          toast({ message: "Result summary copied.", tone: "success" });
+        } catch (_) {
+          resultCopyButton.textContent = "Copy failed";
+          window.setTimeout(() => {
+            resultCopyButton.textContent = "Copy";
+          }, 1500);
+        }
+      });
+    }
+    const resultExportButton = el("result-export");
+    if (resultExportButton) {
+      resultExportButton.addEventListener("click", () => {
+        const summary = state.lastResultSummary;
+        if (!summary) return;
+        try {
+          const blob = new Blob([summary], { type: "text/markdown;charset=utf-8" });
+          const url = URL.createObjectURL(blob);
+          const anchor = document.createElement("a");
+          anchor.href = url;
+          anchor.download = `quorum-${state.lastResultRunId || "run"}.md`;
+          document.body.appendChild(anchor);
+          anchor.click();
+          anchor.remove();
+          window.setTimeout(() => URL.revokeObjectURL(url), 0);
+          toast({ message: "Result exported.", tone: "success" });
+        } catch (_) {
+          toast({ message: "Export failed. Copy the summary instead.", tone: "error" });
+        }
+      });
+    }
+    // Slice 5 (06 Transcript): the result view's "Read the full debate
+    // transcript →" link opens the audit-trail drill-down; the transcript's
+    // "← Back to verdict" header button and its footer link both return to the
+    // result view. All three are native <button>s (keyboard operable).
+    const transcriptLink = el("result-transcript-link");
+    if (transcriptLink) {
+      transcriptLink.addEventListener("click", openTranscript);
+    }
+    const transcriptBack = el("transcript-back");
+    if (transcriptBack) {
+      transcriptBack.addEventListener("click", () => {
+        setView("result");
+        focusResultHeading();
+      });
+    }
+    const transcriptFooterLink = el("transcript-footer-link");
+    if (transcriptFooterLink) {
+      transcriptFooterLink.addEventListener("click", () => {
+        setView("result");
+        focusResultHeading();
+      });
+    }
     setConnectionPill("connecting", "Connecting");
     try {
       await initSession();
@@ -2670,15 +5683,22 @@
       // the "Current time" card should read "Not started" rather
       // than the wall-clock at the moment ``boot()`` ran.
       resetRunTime();
-      // Pull the live readiness snapshot. ``/ready`` is
-      // unauthenticated so this works even if the session bootstrap
-      // were to fail. Best-effort: errors are logged to a toast
-      // inside ``refreshReadiness`` and the page-load seed stays
-      // visible.
-      await refreshReadiness();
     } catch (error) {
       handleError(error);
       setConnectionPill("error", "Disconnected");
+    }
+    // Pull the live readiness snapshot. ``/ready`` is
+    // unauthenticated so this works even if the session bootstrap
+    // were to fail. Best-effort: errors are logged to a toast
+    // inside ``refreshReadiness`` and the page-load seed stays
+    // visible. This runs outside the session try/catch so the
+    // readiness banner always appears even when session init fails,
+    // but is itself guarded so a throw in ``applyReadinessState``
+    // can never reject ``boot()`` unhandled.
+    try {
+      await refreshReadiness();
+    } catch (error) {
+      handleError(error);
     }
   }
 

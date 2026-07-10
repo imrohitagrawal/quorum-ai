@@ -50,6 +50,15 @@ _OVERLAP_JACCARD_THRESHOLD = 0.1
 #: the signal with citation noise.
 _OVERLAP_EXCERPT_CHARS = 200
 
+#: Containment cutoff for :func:`_opening_reflected_in_final` — the share of a
+#: model's opening 4-grams that must also appear in the final synthesis for the
+#: opening to count as "landed in the final answer". We use CONTAINMENT (found
+#: fraction of the SHORT opening) rather than symmetric Jaccard so the much
+#: longer synthesis text does not dilute the signal. Intentionally low, matching
+#: the spirit of ``_OVERLAP_JACCARD_THRESHOLD``: we ask "did a substantive
+#: phrase of the opening survive into the final?", not "are they near-identical".
+_FINAL_ALIGN_CONTAINMENT_THRESHOLD = 0.1
+
 #: Keywords that flip a debate critique toward "convergence" (used
 #: in the strong-consensus alt path). Substring match, case
 #: insensitive. The list is small and conservative — the audit
@@ -266,13 +275,21 @@ def _polar_split(completed_texts: list[str]) -> list[bool] | None:
     Scans ``_POLAR_PAIRS`` for the first pair on which the texts split —
     at least one text uses one member (and not its antonym) and at least
     one other text uses the antonym. If found, returns a per-text
-    majority-side flag list (the larger polar side is the majority; a tie
-    puts the first sorted keyword's side in the majority; texts on neither
-    side count as majority). Returns ``None`` when no polar split exists.
+    majority-side flag list where ``True`` marks ONLY the texts on the
+    strictly-larger polar side. Everything else is ``False``:
 
-    This is the single source of truth for BOTH "does the panel disagree
-    on a polar marker?" (:func:`_has_polar_disagreement`) and "which side
-    is each model's opening on?" (:func:`_opening_majority_flags`).
+    * texts on the smaller (minority) side,
+    * texts on NEITHER side (neutral / unclustered), which must never
+      default to aligned, and
+    * every text when the two sides TIE — a tie has no majority, so no
+      opening is counted toward the agreement numerator.
+
+    Returns ``None`` when no polar split exists. This is the single source
+    of truth for BOTH "does the panel disagree on a polar marker?"
+    (:func:`_has_polar_disagreement`) and "which side is each model's
+    opening on?" (:func:`_opening_majority_flags`). A detected split (even
+    a tie) still yields a non-``None`` list, so the disagreement signal
+    fires while the majority flags stay honest.
     """
     if len(completed_texts) < 2:
         return None
@@ -292,11 +309,14 @@ def _polar_split(completed_texts: list[str]) -> list[bool] | None:
         count_a = sum(side_a)
         count_b = sum(side_b)
         if count_a >= 1 and count_b >= 1:
-            minority_is_b = count_b <= count_a
-            return [
-                not (in_b if minority_is_b else in_a)
-                for in_a, in_b in zip(side_a, side_b, strict=True)
-            ]
+            # Only the strictly-larger side is the majority. On a tie
+            # neither side wins, so nobody is majority; neutral texts (on
+            # neither side) are never majority either.
+            if count_a > count_b:
+                return list(side_a)
+            if count_b > count_a:
+                return list(side_b)
+            return [False] * len(lowered)
     return None
 
 
@@ -312,9 +332,32 @@ def _has_polar_disagreement(completed_texts: list[str]) -> bool:
     return _polar_split(completed_texts) is not None
 
 
+def _opening_reflected_in_final(opening_text: str, final_text: str) -> bool:
+    """Return ``True`` when a substantive share of the model's opening 4-grams
+    also appear in the final synthesis content.
+
+    This is the direct, content-based test for "did THIS model's own position
+    land in the final answer?". It uses containment (share of the opening's
+    n-grams found in the final) rather than symmetric Jaccard so a short opening
+    is not diluted by the much longer synthesis text. The final text is NOT
+    excerpted for the same reason — a phrase from the opening may appear
+    anywhere in the synthesis.
+    """
+    opening_ngrams = _four_grams(_excerpt(opening_text))
+    if not opening_ngrams:
+        return False
+    final_ngrams = _four_grams(final_text)
+    if not final_ngrams:
+        return False
+    shared = len(opening_ngrams & final_ngrams)
+    return shared / len(opening_ngrams) >= _FINAL_ALIGN_CONTAINMENT_THRESHOLD
+
+
 def classify_model_alignment(
     initial_answers: list[InitialModelAnswer],
     debate_outputs: list[DebateOutput],
+    *,
+    final_synthesis_text: str | None = None,
 ) -> list[ModelAlignment]:
     """Deterministic per-model alignment, one :class:`ModelAlignment` per
     initial answer in the given order.
@@ -323,7 +366,7 @@ def classify_model_alignment(
     The debate is round-scoped (a ``DebateOutput`` critiques the whole panel,
     with no per-model attribution), so we never see what any single model did
     mid-debate. Every field below is derived from the model's own opening
-    answer clustered against the others and the panel's final consensus — the
+    answer clustered against the others and the panel's final synthesis — the
     same in demo and live runs.
 
     The classification reuses :func:`compute_consensus_strength` (the same
@@ -333,13 +376,25 @@ def classify_model_alignment(
     * ``opening_majority`` — the model's opening answer clusters with the
       others (shares a polar side, or shares 4-gram overlap with at least one
       other completed answer).
-    * ``final_aligned`` — with a ``"strong"`` panel every completed model
-      lands in the consensus; with a ``"weak"`` / ``"divided"`` panel a model
-      keeps its opening side (the minority stays dissenting).
+    * ``final_aligned`` — whether the model's position lands in the final
+      answer, derived PER MODEL. A MAJORITY opener always lands in the
+      consensus (this was never the inflation bug). A MINORITY opener:
+
+      - When ``final_synthesis_text`` is available, aligns ONLY if its own
+        opening is reflected in the final synthesis content
+        (:func:`_opening_reflected_in_final`). A panel-level convergence
+        keyword alone no longer blanket-aligns every model: an unrelated
+        minority whose opening is absent from the final synthesis is NOT
+        counted aligned.
+      - When there is no final synthesis to compare against (synthesis failed
+        or not supplied), falls back to the panel-strength inference — a
+        ``"strong"`` panel aligns the minority too. This makes the
+        no-synthesis path identical to the pre-fix behaviour.
+
     * ``revised`` — the OBSERVABLE INFERENCE that ``opening_majority`` differs
-      from ``final_aligned``: the model opened clustered as a minority AND the
-      final synthesis aligns with the consensus. It is NOT a claim that the
-      model changed its mind during the debate (unobservable here).
+      from ``final_aligned``: the model opened clustered as a minority AND its
+      position nonetheless lands in the final synthesis. It is NOT a claim that
+      the model changed its mind during the debate (unobservable here).
 
     Failed / empty answers are ``completed=False`` and never aligned.
     """
@@ -352,6 +407,8 @@ def classify_model_alignment(
     completed_texts = [initial_answers[index].answer_text for index in completed_indices]
     majority_flags = _opening_majority_flags(completed_texts)
     majority_by_index = dict(zip(completed_indices, majority_flags, strict=True))
+    text_by_index = dict(zip(completed_indices, completed_texts, strict=True))
+    final_text = (final_synthesis_text or "").strip()
 
     alignments: list[ModelAlignment] = []
     for index, answer in enumerate(initial_answers):
@@ -359,10 +416,21 @@ def classify_model_alignment(
         opening_majority = majority_by_index.get(index, False)
         if not completed:
             final_aligned = False
-        elif strength == "strong":
+        elif opening_majority:
+            # A majority opener lands in the consensus — this was never the
+            # inflation bug, and keeping it True preserves the honest 4-state
+            # narration (a majority opener is never "moved to consensus").
             final_aligned = True
+        elif final_text:
+            # Minority opener with a final answer to check against: aligned ONLY
+            # if its OWN opening survives into the final synthesis. A panel-level
+            # convergence keyword no longer aligns an unrelated minority.
+            final_aligned = _opening_reflected_in_final(text_by_index[index], final_text)
         else:
-            final_aligned = opening_majority
+            # Minority opener, no final synthesis to compare against — fall back
+            # to the panel-strength inference (a "strong" panel aligns it too).
+            # This makes the no-synthesis path identical to the pre-fix behaviour.
+            final_aligned = strength == "strong"
         revised = completed and opening_majority != final_aligned
         alignments.append(
             ModelAlignment(
@@ -381,9 +449,10 @@ def _opening_majority_flags(completed_texts: list[str]) -> list[bool]:
 
     Deterministic. With 0 texts returns ``[]``; with 1 text returns ``[True]``
     (a lone answer is trivially its own majority). A polar disagreement (the
-    first :data:`_POLAR_PAIRS` split found) puts the smaller polar side in the
-    minority; otherwise a text is majority when it shares 4-gram overlap with
-    at least one other completed answer.
+    first :data:`_POLAR_PAIRS` split found) flags only the strictly-larger side
+    as majority — the smaller side, neutral texts, and BOTH sides of a tie are
+    minority (see :func:`_polar_split`). Otherwise a text is majority when it
+    shares 4-gram overlap with at least one other completed answer.
     """
     count = len(completed_texts)
     if count == 0:

@@ -51,61 +51,131 @@
 :root {
   color-scheme: light;
 
-  /* Background: a soft layered gradient over a warm paper colour. */
-  --bg: radial-gradient(circle at top, rgba(255, 154, 118, 0.22), transparent 38%),
-    radial-gradient(circle at 80% 20%, rgba(65, 91, 255, 0.13), transparent 30%),
-    linear-gradient(180deg, #fffaf5 0%, #f4efe8 100%);
+  /* ===================================================================
+   * QUORUM APPROVED DESIGN SYSTEM — Release 1 (Light · cool paper).
+   * Three-layer tokens: primitive (raw hex) → semantic (role aliases)
+   * → component (reused via the semantic layer). Source of truth:
+   * docs/design-handoff/ (README + Quorum Final Review.dc.html).
+   *
+   * THE GREEN RULE (non-negotiable): green (#0E6B50) means "minds
+   * agree" — brand mark + agreement/consensus/completed ONLY. Exactly
+   * one large green surface per journey (the verdict band). Money
+   * always moves on ink buttons; running is blue. Never green on
+   * buttons, links, or decoration.
+   * =================================================================== */
 
-  /* Surfaces. The two panel variants differ in translucency so
-     nested content reads correctly. */
-  --panel: rgba(255, 255, 255, 0.72);
-  --panel-strong: rgba(255, 255, 255, 0.88);
+  /* --- Primitive palette (raw values — do not reference in components) */
+  --c-paper: #F6F5F2;
+  --c-surface: #FFFFFF;
+  --c-ink: #14171C;
+  --c-body: #3C4148;
+  --c-secondary: #565C66;
+  --c-muted: #5F6570; /* WCAG-corrected from signed-off #7A8089 (3.65:1) to clear AA (≥4.66:1) on every surface incl. the .pill/--line pair; drives ~30 small-text usages */
+  --c-green: #0E6B50; /* agreement / consensus / completed / brand ONLY */
+  --c-blue: #47689E;  /* sources + running */
+  --c-amber: #8A5F16; /* caution / uncertainty */
+  --c-red: #A83A2A;   /* error / decision-support boundary */
 
-  /* Foreground. */
-  --ink: #10161f;
-  --muted: #5d6776;
-  --line: rgba(16, 22, 31, 0.10);
-  --line-strong: rgba(16, 22, 31, 0.18);
+  /* Borders as an opacity ramp over ink. */
+  --line: rgba(20, 23, 28, 0.07);
+  --line-2: rgba(20, 23, 28, 0.10);
+  --line-strong: rgba(20, 23, 28, 0.14);
+  --line-strong-2: rgba(20, 23, 28, 0.16);
 
-  /* Accent. Used sparingly: the primary CTA, the brand mark, and
-     focus rings. */
-  --accent: #d6663f;
-  --accent-strong: #b04f2c;
-  --accent-ink: #10161f; /* dark ink — ~5.5:1 on #d6663f */
-  --accent-soft: rgba(214, 102, 63, 0.14);
+  /* --- Semantic layer (role aliases used by components) */
+  --paper: var(--c-paper);
+  --bg: var(--c-paper); /* flat cool paper — no gradient */
+  --surface: var(--c-surface);
+  --panel: var(--c-surface);
+  --panel-strong: var(--c-surface);
+  --ink: var(--c-ink);
+  --body: var(--c-body);
+  --text-secondary: var(--c-secondary);
+  --muted: var(--c-muted);
 
-  /* Semantic state. */
-  --success: #0f7b65;
-  --success-soft: rgba(15, 123, 101, 0.12);
-  --warning: #946017;
-  --warning-soft: rgba(241, 179, 111, 0.20);
-  --danger: #9a2e1f;
-  --danger-soft: rgba(154, 46, 31, 0.12);
-  --info: #1f4f9a;
-  --info-soft: rgba(31, 79, 154, 0.10);
-  --debate-4: #6b3fa0; /* purple — debate round 4 accent bar */
-  --focus-ring: #8a1a0a; /* ~4.6:1 on #fffaf5 — clears WCAG AA */
+  /* Money / primary action moves on ink — never green. */
+  --accent: var(--c-ink);
+  --accent-strong: var(--c-ink); /* hover keeps ink (translateY + shadow do the work), never pure black */
+  --accent-ink: var(--c-surface); /* white on ink — ~14:1 */
+  --accent-soft: rgba(20, 23, 28, 0.06);
+  --accent-medium: rgba(20, 23, 28, 0.12); /* approval-band rail fill — ink, never green */
+  /* Glyph colour on a saturated/tonal fill (severity/callout icon badges).
+     White in light (the fills are the deep tonal values), dark ink in dark
+     (the fills flip to the LIGHT tonal variants — white would be illegible).
+     Light value is unchanged from the previous hard-coded ``white``. */
+  --on-tonal: #FFFFFF;
+  /* Lightened inset panel used inside a tinted banner (field-error rows).
+     Was a hard-coded 50% white that stayed a bright box in dark. */
+  --overlay-inset: rgba(255, 255, 255, 0.50);
 
-  /* Elevation. */
-  --shadow-sm: 0 1px 2px rgba(30, 26, 19, 0.06);
-  --shadow-md: 0 12px 36px rgba(30, 26, 19, 0.08);
-  --shadow-lg: 0 30px 90px rgba(30, 26, 19, 0.12);
+  /* Brand mark. The Q tile is the one sanctioned green surface that is
+     THEME-INVARIANT: it stays #0E6B50 with white glyph in BOTH light and
+     dark ("no other logo colorways", dc.html §08). Defined once here and
+     NOT overridden in the dark block, so it never inherits the tonal
+     dark-green (--c-green → #4EC28C). White-on-#0E6B50 = 6.5:1 (AA). */
+  --brand-tile-bg: #0E6B50;
+  --brand-tile-fg: #FFFFFF;
 
-  /* Geometry. */
-  --radius-xs: 10px;
-  --radius-sm: 14px;
-  --radius-md: 18px;
-  --radius-lg: 22px;
-  --radius-xl: 30px;
+  /* Verdict band (Slice 4a · 05 Result). THE one sanctioned large green
+     surface, and — like the brand tile — THEME-INVARIANT: it stays
+     #0E6B50 with white text in BOTH light and dark, so it never inherits
+     the tonal dark-green (--c-green → #4EC28C). Defined once here and NOT
+     overridden in the dark block. White-on-#0E6B50 = 6.5:1 (AA). Gated by
+     the green rule: applied only when the panel truly reached consensus
+     (see the ``isConsensus`` gate in app.js); a divided panel gets the
+     neutral --surface/--ink treatment with an amber accent instead. */
+  --verdict-surface: #0E6B50;
+  --verdict-on: #FFFFFF;
 
-  /* Motion. The bezier is shared everywhere. Durations are
-     conservative: nothing in the UI should run for more than 240ms. */
+  /* Header + inset surfaces (light). Dark overrides these below. */
+  --header-bg: var(--c-paper);
+  --inset: #EFEEEA;
+
+  /* Semantic state (role-mapped to the approved palette). */
+  --success: var(--c-green);
+  --success-soft: rgba(14, 107, 80, 0.10);
+  --success-border: rgba(14, 107, 80, 0.45);
+  --warning: var(--c-amber);
+  --warning-soft: rgba(138, 95, 22, 0.10);
+  --warning-medium: rgba(138, 95, 22, 0.28); /* active confirm-band fill / rail emphasis */
+  --warning-border: rgba(138, 95, 22, 0.40); /* cost-review caution-card border */
+  --danger: var(--c-red);
+  --danger-soft: rgba(168, 58, 42, 0.08);
+  --danger-medium: rgba(168, 58, 42, 0.22); /* active block-band fill */
+  --danger-border: rgba(168, 58, 42, 0.35);
+  --info: var(--c-blue); /* sources + running */
+  --info-soft: rgba(71, 104, 158, 0.10);
+  --info-glow: rgba(71, 104, 158, 0.18); /* running dot/ring glow — live run */
+  --info-border: rgba(71, 104, 158, 0.40); /* info status-banner border */
+  --debate-4: var(--c-blue);
+  --focus-ring: var(--c-ink); /* ink focus ring — ~13:1 on cool paper */
+
+  /* Elevation (from the handoff shadow scale). */
+  --shadow-sm: 0 1px 2px rgba(20, 23, 28, 0.05);
+  --shadow-md: 0 12px 32px rgba(20, 23, 28, 0.08);
+  --shadow-warning: 0 12px 32px rgba(138, 95, 22, 0.08); /* amber halo for the cost-review card */
+  --shadow-lg: 0 24px 60px rgba(20, 23, 28, 0.12);
+  --shadow-verdict: 0 16px 40px rgba(14, 107, 80, 0.30);
+  --shadow-cta: 0 6px 16px rgba(20, 23, 28, 0.22);
+  --shadow-cta-hover: 0 10px 22px rgba(20, 23, 28, 0.30);
+
+  /* Geometry — pills 999 · buttons 8–11 · cards 10–18. */
+  --radius-pill: 999px;
+  --radius-btn: 11px;
+  --radius-xs: 8px;
+  --radius-sm: 10px;
+  --radius-md: 14px;
+  --radius-lg: 18px;
+  --radius-xl: 18px;
+
+  /* Motion. Shared bezier; verdict ring is the one long (1.4s) motion. */
   --bezier: cubic-bezier(0.22, 1, 0.36, 1);
   --duration-fast: 120ms;
-  --duration-base: 200ms;
-  --duration-slow: 240ms;
+  --duration-base: 160ms;
+  --duration-slow: 180ms;
+  --duration-verdict: 1.4s;
 
-  /* Spacing scale. Use these in component padding/gap values. */
+  /* Spacing scale. */
   --space-1: 4px;
   --space-2: 8px;
   --space-3: 12px;
@@ -115,43 +185,73 @@
   --space-7: 32px;
   --space-8: 40px;
 
-  /* Typography. */
-  --font-sans: "Manrope", system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI",
+  /* Typography — Newsreader (display/verdict/wordmark-Q) · Geist (UI)
+     · Geist Mono (money/IDs/timings/counters). */
+  --font-sans: "Geist", system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI",
     sans-serif;
-  --font-serif: "Instrument Serif", Georgia, serif;
-  --font-mono: ui-monospace, SFMono-Regular, "SF Mono", Menlo, monospace;
+  --font-serif: "Newsreader", Georgia, serif;
+  --font-mono: "Geist Mono", ui-monospace, SFMono-Regular, "SF Mono", Menlo, monospace;
 }
 
 /* ----- Dark mode ------------------------------------------------------- */
 
 html[data-theme="dark"] {
   color-scheme: dark;
-  --bg: radial-gradient(circle at top, rgba(255, 136, 90, 0.10), transparent 38%),
-    radial-gradient(circle at 80% 20%, rgba(97, 122, 255, 0.12), transparent 30%),
-    linear-gradient(180deg, #171a1f 0%, #0d0f12 100%);
-  --panel: rgba(25, 29, 35, 0.78);
-  --panel-strong: rgba(30, 34, 41, 0.92);
-  --ink: #f4eee7;
-  --muted: #b5bdca;
-  --line: rgba(255, 255, 255, 0.10);
-  --line-strong: rgba(255, 255, 255, 0.18);
-  --accent: #ff9b72;
-  --accent-strong: #ffb38b;
-  --accent-ink: #1a0d00; /* dark ink — ~7.5:1 on #ff9b72, ~10:1 on #ffb38b */
-  --accent-soft: rgba(255, 155, 114, 0.16);
-  --success: #5ad0b8;
-  --success-soft: rgba(90, 208, 184, 0.16);
-  --warning: #f1c178;
-  --warning-soft: rgba(241, 193, 120, 0.18);
-  --danger: #ff8b78;
-  --danger-soft: rgba(255, 139, 120, 0.16);
-  --info: #8db3ff;
-  --info-soft: rgba(141, 179, 255, 0.14);
-  --debate-4: #a479e3; /* purple — debate round 4 accent bar */
-  --focus-ring: #ffcf7d; /* amber — ~11:1 on #0d0f12 dark bg */
+
+  /* Dark primitives — bg #101215 · header #15181D · card #191C22 ·
+     inset #22262D · text #E8EAEE. Semantic colours use the lighter
+     tonal variants (not inverted): green #4EC28C · blue #9FB6DF ·
+     amber #D9A954 · red #DB8070. The verdict band keeps #0E6B50 in
+     both themes (white-on-green passes AA either way). */
+  --c-paper: #101215;
+  --c-surface: #191C22;
+  --c-ink: #E8EAEE;
+  --c-body: #C3C7CE;
+  --c-secondary: #9AA0AA;
+  --c-muted: #8A9099; /* WCAG-corrected from signed-off #737A85 (3.51:1 on inset) to clear AA (≥4.7:1) on every dark surface */
+  --c-green: #4EC28C;
+  --c-blue: #9FB6DF;
+  --c-amber: #D9A954;
+  --c-red: #DB8070;
+
+  --line: rgba(232, 234, 238, 0.07);
+  --line-2: rgba(232, 234, 238, 0.10);
+  --line-strong: rgba(232, 234, 238, 0.14);
+  --line-strong-2: rgba(232, 234, 238, 0.16);
+
+  --bg: var(--c-paper);
+  --header-bg: #15181D;
+  --inset: #22262D;
+
+  /* Primary/money buttons invert to paper-on-ink (light chip on dark). */
+  --accent: var(--c-ink);
+  --accent-strong: var(--c-ink); /* hover keeps the chip colour; translateY + shadow do the work */
+  --accent-ink: var(--c-paper); /* dark text on the light chip */
+  --accent-soft: rgba(232, 234, 238, 0.08);
+  --accent-medium: rgba(232, 234, 238, 0.14); /* approval-band rail fill — ink, never green */
+  --on-tonal: #101215; /* dark ink glyph on the LIGHT tonal fills used in dark */
+  --overlay-inset: rgba(232, 234, 238, 0.06); /* subtle light inset on dark, not a white box */
+
+  --success-soft: rgba(78, 194, 140, 0.14);
+  --success-border: rgba(78, 194, 140, 0.42);
+  --warning-soft: rgba(217, 169, 84, 0.14);
+  --warning-medium: rgba(217, 169, 84, 0.34); /* active confirm-band fill / rail emphasis */
+  --warning-border: rgba(217, 169, 84, 0.45); /* cost-review caution-card border */
+  --danger-soft: rgba(219, 128, 112, 0.14);
+  --danger-medium: rgba(219, 128, 112, 0.32); /* active block-band fill */
+  --danger-border: rgba(219, 128, 112, 0.35);
+  --info-soft: rgba(159, 182, 223, 0.14);
+  --info-glow: rgba(159, 182, 223, 0.22); /* running dot/ring glow — live run */
+  --info-border: rgba(159, 182, 223, 0.42); /* info status-banner border */
+  --debate-4: var(--c-blue); /* declared in the dark scope too (auto-flips via --c-blue) */
+  --focus-ring: var(--c-ink); /* light ring on dark bg */
+
   --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.30);
-  --shadow-md: 0 12px 36px rgba(0, 0, 0, 0.32);
-  --shadow-lg: 0 30px 90px rgba(0, 0, 0, 0.42);
+  --shadow-md: 0 12px 32px rgba(0, 0, 0, 0.32);
+  --shadow-warning: 0 12px 32px rgba(0, 0, 0, 0.32); /* dark elevation for the cost-review card */
+  --shadow-lg: 0 24px 60px rgba(0, 0, 0, 0.42);
+  --shadow-cta: 0 6px 16px rgba(0, 0, 0, 0.40);
+  --shadow-cta-hover: 0 10px 22px rgba(0, 0, 0, 0.50);
 }
 
 /* ----- Base ------------------------------------------------------------ */
@@ -208,7 +308,7 @@ a { color: var(--accent); text-underline-offset: 2px; }
 /* ----- Layout ---------------------------------------------------------- */
 
 .shell {
-  width: min(1280px, 80ch, calc(100vw - var(--space-7)));
+  width: min(1280px, calc(100vw - var(--space-7)));
   margin: var(--space-6) auto var(--space-8);
   display: flex;
   flex-direction: column;
@@ -224,11 +324,9 @@ a { color: var(--accent); text-underline-offset: 2px; }
   gap: var(--space-4);
   padding: var(--space-4) var(--space-5);
   border: 1px solid var(--line);
-  border-radius: 999px;
-  background: var(--panel);
-  backdrop-filter: blur(24px);
-  -webkit-backdrop-filter: blur(24px);
-  box-shadow: var(--shadow-lg);
+  border-radius: var(--radius-pill);
+  background: var(--paper);
+  box-shadow: var(--shadow-sm);
 }
 
 .brand {
@@ -238,60 +336,53 @@ a { color: var(--accent); text-underline-offset: 2px; }
   min-width: 0;
 }
 
-.logo {
-  width: 48px;
-  height: 48px;
-  border-radius: var(--radius-md);
+/* Green Q tile — the brand mark. Green is allowed here (the mark is
+   one of the two sanctioned green surfaces); white Q reads on it in
+   both themes. Radius ~8px, Newsreader 700. */
+.brand-mark {
+  width: 30px;
+  height: 30px;
+  border-radius: var(--radius-xs);
   display: grid;
   place-items: center;
-  background: linear-gradient(135deg, var(--accent), var(--accent-strong));
-  color: var(--accent-ink);
+  background: var(--brand-tile-bg);
+  color: var(--brand-tile-fg);
   font-family: var(--font-serif);
-  font-size: 1.6rem;
-  font-weight: 600;
-  flex-shrink: 0;
-  box-shadow: var(--shadow-md);
-  animation: spin 12s linear infinite;
-  transform-origin: center;
-}
-
-.brand-copy { min-width: 0; }
-
-.brand-copy h1 {
-  margin: 0;
-  font-family: var(--font-serif);
-  font-size: clamp(1.9rem, 3.5vw, 2.6rem);
+  font-size: 1.05rem;
   font-weight: 700;
   line-height: 1;
+  flex-shrink: 0;
+}
+
+.brand-copy {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+/* Ink wordmark — Geist 650, ~16px. No "AI" suffix; the mechanism
+   lives in the tagline below. */
+.wordmark {
+  font-family: var(--font-sans);
+  font-size: 1.05rem;
+  font-weight: 650;
   letter-spacing: -0.01em;
+  line-height: 1.1;
+  color: var(--ink);
 }
 
 .brand-copy p {
   margin: var(--space-2) 0 0;
   color: var(--muted);
   font-size: 0.95rem;
-  /* No max-width: the flex parent (.topbar) already constrains the
-     available width. A 52ch cap was actively truncating the tagline
-     to 2 lines at 1440px viewports, hiding "before you run it". The
-     -webkit-line-clamp below is a safety net for extreme widths
-     only (e.g. ultra-narrow windows); the media queries lift it when
-     the topbar wraps to a stacked layout. */
-  display: -webkit-box;
-  -webkit-line-clamp: 2;
-  -webkit-box-orient: vertical;
-  overflow: hidden;
 }
 
 .brand-lede {
-  font-weight: 600;
-  color: var(--ink);
-  -webkit-line-clamp: 1;
-}
-
-.brand-workflow {
+  font-weight: 400;
   font-size: 0.85rem;
-  color: var(--muted);
-  -webkit-line-clamp: 3;
+  color: var(--text-secondary);
+  -webkit-line-clamp: 1;
 }
 
 .topbar-actions {
@@ -316,6 +407,24 @@ a { color: var(--accent); text-underline-offset: 2px; }
 }
 .toggle:hover { border-color: var(--line-strong); transform: translateY(-1px); }
 
+/* Reach-the-landing affordance in the persistent top bar. Text button (no
+   money semantics), ink on hover. Not the default view — clicking it swaps to
+   the marketing landing; every landing CTA returns to the composer. */
+.topbar-howitworks {
+  min-height: 44px;
+  padding: 0 var(--space-3);
+  border: none;
+  background: transparent;
+  color: var(--text-secondary);
+  font-family: var(--font-sans);
+  font-weight: 500;
+  font-size: 0.9rem;
+  cursor: pointer;
+  border-radius: var(--radius-sm);
+  transition: color var(--duration-fast) var(--bezier);
+}
+.topbar-howitworks:hover { color: var(--ink); }
+
 /* ----- Status banner (errors, warnings, success) ----------------------- */
 
 .status-banner {
@@ -333,21 +442,35 @@ a { color: var(--accent); text-underline-offset: 2px; }
 .status-banner[hidden] { display: none; }
 
 .status-banner[data-severity="error"] {
-  border-color: rgba(154, 46, 31, 0.30);
+  border-color: var(--danger-border);
   background: var(--danger-soft);
   color: var(--ink);
 }
 
 .status-banner[data-severity="warning"] {
-  border-color: rgba(241, 179, 111, 0.40);
+  border-color: var(--warning-border);
   background: var(--warning-soft);
   color: var(--ink);
 }
 
 .status-banner[data-severity="info"] {
-  border-color: rgba(31, 79, 154, 0.28);
+  border-color: var(--info-border);
   background: var(--info-soft);
   color: var(--ink);
+}
+
+/* Neutral severity — the security-honest / anonymous edge states
+   (Slice 6, screen 07). No colour signal: these are neither errors nor
+   warnings, so they read as plain ink-on-panel and never borrow the
+   danger/warning palette. */
+.status-banner[data-severity="neutral"] {
+  border-color: var(--line);
+  background: var(--panel-strong);
+  color: var(--ink);
+}
+.status-banner[data-severity="neutral"] .status-banner-icon {
+  background: var(--ink);
+  color: var(--panel-strong);
 }
 
 .status-banner-icon {
@@ -363,9 +486,9 @@ a { color: var(--accent); text-underline-offset: 2px; }
   flex-shrink: 0;
 }
 
-.status-banner[data-severity="error"] .status-banner-icon { background: var(--danger); color: white; }
-.status-banner[data-severity="warning"] .status-banner-icon { background: var(--warning); color: white; }
-.status-banner[data-severity="info"] .status-banner-icon { background: var(--info); color: white; }
+.status-banner[data-severity="error"] .status-banner-icon { background: var(--danger); color: var(--on-tonal); }
+.status-banner[data-severity="warning"] .status-banner-icon { background: var(--warning); color: var(--on-tonal); }
+.status-banner[data-severity="info"] .status-banner-icon { background: var(--info); color: var(--on-tonal); }
 
 .status-banner-body { min-width: 0; }
 
@@ -400,7 +523,7 @@ a { color: var(--accent); text-underline-offset: 2px; }
 .status-banner-field-errors li {
   padding: var(--space-2) var(--space-3);
   border-radius: var(--radius-xs);
-  background: rgba(255, 255, 255, 0.50);
+  background: var(--overlay-inset);
   border: 1px solid var(--line);
 }
 
@@ -416,6 +539,73 @@ a { color: var(--accent); text-underline-offset: 2px; }
   flex-wrap: wrap;
   gap: var(--space-2);
 }
+
+/* Slice 6 (screen 07 edge states): AC-tag pill, an itemized detail
+   block, and a mono correlation/ID footer. These upgrade the error
+   banner into the seven first-class honest edge cards without a
+   parallel gallery. All colours are semantic tokens (no raw hex). */
+.status-banner-actag {
+  display: inline-flex;
+  align-items: center;
+  align-self: flex-start;
+  margin-bottom: var(--space-2);
+  padding: 2px 8px;
+  border-radius: 999px;
+  background: var(--panel);
+  border: 1px solid var(--line);
+  color: var(--muted);
+  font-family: var(--font-mono);
+  font-size: 0.68rem;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+.status-banner-actag[hidden] { display: none; }
+
+.status-banner-detail {
+  margin: var(--space-3) 0 0;
+  padding: var(--space-3) var(--space-4);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-xs);
+  background: var(--panel-strong);
+  display: grid;
+  gap: var(--space-2);
+  font-size: 0.85rem;
+}
+.status-banner-detail[hidden] { display: none; }
+.status-banner-detail-row {
+  display: flex;
+  justify-content: space-between;
+  gap: var(--space-4);
+}
+.status-banner-detail-row dt {
+  color: var(--muted);
+  margin: 0;
+  flex-shrink: 0;
+}
+.status-banner-detail-row dd {
+  margin: 0;
+  text-align: right;
+  min-width: 0;
+  word-break: break-word;
+  color: var(--ink);
+  font-weight: 600;
+}
+.status-banner-detail-row dd.mono { font-family: var(--font-mono); font-weight: 500; }
+.status-banner-detail-row dd[data-tone="danger"] { color: var(--danger); }
+.status-banner-detail-sub {
+  font-size: 0.8rem;
+  color: var(--muted);
+  line-height: 1.5;
+}
+
+.status-banner-footer {
+  margin-top: var(--space-3);
+  font-size: 0.78rem;
+  color: var(--muted);
+  word-break: break-word;
+}
+.status-banner-footer[hidden] { display: none; }
 
 .status-banner-dismiss {
   background: transparent;
@@ -501,27 +691,83 @@ a { color: var(--accent); text-underline-offset: 2px; }
   gap: var(--space-5);
 }
 
+/* Slice 3 (04 Live run): while the live-run view is active the live card goes
+   full width and the persistent "Run controls" aside is hidden — its status /
+   cancel / run-id function is subsumed by the live card. The aside element
+   stays in the DOM (only hidden here), so the existing ``#cancel-run`` /
+   ``#status-meta`` / ``#correlation-meta`` render targets remain valid; the
+   ``.run-controls-cancel[hidden]`` behaviour is untouched. */
+[data-active-view="live-run"] .layout {
+  grid-template-columns: 1fr;
+}
+
+[data-active-view="live-run"] .layout > aside {
+  display: none;
+}
+
+/* Slice 4a (05 Result): the result view is the main surface — go full-width
+   and hide the "Run controls" aside, mirroring the live-run treatment. The
+   aside stays in the DOM (only hidden here) so its render targets remain
+   valid; the persistent synthesis/model panels below ``.layout`` are
+   unaffected. */
+[data-active-view="result"] .layout {
+  grid-template-columns: 1fr;
+}
+
+[data-active-view="result"] .layout > aside {
+  display: none;
+}
+
+/* Slice 5 (06 Transcript): the debate audit trail is a full-width drill-down —
+   mirror the result/live-run treatment (single column, aside hidden). The aside
+   stays in the DOM (only hidden here) so its render targets remain valid. */
+[data-active-view="transcript"] .layout {
+  grid-template-columns: 1fr;
+}
+
+[data-active-view="transcript"] .layout > aside {
+  display: none;
+}
+
+/* Slice 7 (01 Landing): the marketing front door is a full-width, self-contained
+   view. Hide the aside, the workflow-progress rail, and the persistent
+   debate/synthesis + model-output panel sections so the landing reads as one
+   clean page. All stay in the DOM (only hidden here) so their render targets
+   remain valid the moment a CTA returns to the composer. */
+[data-active-view="landing"] .layout {
+  grid-template-columns: 1fr;
+}
+
+[data-active-view="landing"] .layout > aside {
+  display: none;
+}
+
+[data-active-view="landing"] .workflow-progress,
+[data-active-view="landing"] .panel-section {
+  display: none;
+}
+
 .panel {
   padding: var(--space-6);
-  border-radius: var(--radius-xl);
-  border: 1px solid var(--line);
-  background: var(--panel);
-  backdrop-filter: blur(24px);
-  -webkit-backdrop-filter: blur(24px);
-  box-shadow: var(--shadow-lg);
+  border-radius: var(--radius-lg);
+  border: 1px solid var(--line-2);
+  background: var(--surface);
+  box-shadow: var(--shadow-md);
   display: flex;
   flex-direction: column;
   gap: var(--space-4);
 }
 
+.panel h1,
 .panel h2 {
   margin: 0;
   font-family: var(--font-serif);
   font-size: 1.7rem;
-  font-weight: 700;
+  font-weight: 500; /* Newsreader display weight per the approved spec */
   letter-spacing: -0.01em;
 }
 
+.panel > h1,
 .panel > h2 { margin-bottom: 0; }
 
 /* Use design tokens instead of inline styles */
@@ -664,7 +910,7 @@ select {
   height: 18px;
   border-radius: 999px;
   background: var(--danger);
-  color: white;
+  color: var(--on-tonal);
   font-weight: 700;
   font-size: 0.75rem;
   flex-shrink: 0;
@@ -709,14 +955,14 @@ select {
 }
 .callout-warning .callout-icon {
   background: var(--warning);
-  color: white;
+  color: var(--on-tonal);
 }
 
 .callout-info {
   background: var(--info-soft);
   border-color: rgba(31, 79, 154, 0.28);
 }
-.callout-info .callout-icon { background: var(--info); color: white; }
+.callout-info .callout-icon { background: var(--info); color: var(--on-tonal); }
 
 /* Workstream 3 — UI honesty. The readiness banner shares the
    palette of callout-warning / callout-info but the colour is
@@ -730,7 +976,7 @@ select {
 }
 .callout-readiness[data-severity="warning"] .callout-icon {
   background: var(--warning);
-  color: white;
+  color: var(--on-tonal);
 }
 .callout-readiness[data-severity="info"] {
   background: var(--info-soft);
@@ -738,7 +984,7 @@ select {
 }
 .callout-readiness[data-severity="info"] .callout-icon {
   background: var(--info);
-  color: white;
+  color: var(--on-tonal);
 }
 
 .callout-cost {
@@ -747,7 +993,242 @@ select {
 }
 .callout-cost .callout-icon {
   background: var(--accent);
-  color: white;
+  color: var(--on-tonal);
+}
+
+/* Screen-reader-only utility. Visually hidden but present in the
+   accessibility tree — used for the cost-gate live-region announcement. */
+.sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
+}
+
+/* ===================================================================
+ * Screen 03 — Cost gate (``data-view="cost-gate"``). Single centred
+ * reading column. Money moves on ink; the threshold rail + confirm
+ * band use amber/red (caution/boundary) — NEVER green (green means
+ * minds agree, and nothing has agreed yet at the gate).
+ * =================================================================== */
+.cost-gate {
+  max-width: 720px;
+  margin: 0 auto;
+  width: 100%;
+}
+.cost-gate-head { display: flex; flex-direction: column; gap: var(--space-1); }
+.cost-gate-eyebrow {
+  font-size: 0.72rem;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+
+.cost-gate-question {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+}
+.cost-gate-question-label { font-size: 0.82rem; color: var(--text-secondary); }
+.cost-gate-question-text {
+  font-family: var(--font-serif);
+  font-size: 1.35rem;
+  line-height: 1.3;
+  font-weight: 500;
+  color: var(--ink);
+  text-wrap: balance;
+}
+.cost-gate-question-meta { font-size: 0.78rem; color: var(--muted); }
+
+/* Amber-framed estimate card — confirmation required. */
+.cost-review-card {
+  border: 1.5px solid var(--warning-border);
+  border-radius: var(--radius-md);
+  overflow: hidden;
+  box-shadow: var(--shadow-warning);
+  background: var(--surface);
+}
+.cost-review-card[data-band="block"] {
+  border-color: var(--danger-border);
+}
+.cost-review-card-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+  padding: var(--space-3) var(--space-6);
+  background: var(--warning-soft);
+  border-bottom: 1px solid var(--warning-border);
+}
+.cost-review-card[data-band="block"] .cost-review-card-head {
+  background: var(--danger-soft);
+  border-bottom-color: var(--danger-border);
+}
+.cost-review-band-label {
+  font-size: 0.72rem;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--warning);
+}
+.cost-review-card[data-band="block"] .cost-review-band-label { color: var(--danger); }
+.cost-review-card-note { font-size: 0.78rem; color: var(--warning); }
+.cost-review-card[data-band="block"] .cost-review-card-note { color: var(--danger); }
+.cost-review-card-body {
+  padding: var(--space-5) var(--space-6);
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-5);
+}
+
+.cost-total-row { display: flex; align-items: baseline; gap: var(--space-3); flex-wrap: wrap; }
+.cost-total {
+  font-size: 2.6rem;
+  font-weight: 600;
+  letter-spacing: -0.02em;
+  color: var(--ink);
+  line-height: 1;
+}
+.cost-total-range { font-size: 0.85rem; color: var(--text-secondary); }
+
+/* Threshold rail. */
+.cost-rail { display: flex; flex-direction: column; gap: var(--space-2); }
+.cost-rail-track {
+  position: relative;
+  display: flex;
+  height: 10px;
+  border-radius: var(--radius-pill);
+}
+.cost-rail-seg-allow {
+  width: 60%;
+  background: var(--accent-medium);
+  border-radius: var(--radius-pill) 0 0 var(--radius-pill);
+}
+.cost-rail-seg-confirm {
+  width: 40%;
+  background: var(--warning-soft);
+  border-radius: 0 var(--radius-pill) var(--radius-pill) 0;
+}
+/* Active-band emphasis per ``threshold_action`` (theme-aware tokens). */
+.cost-rail[data-band="require_confirmation"] .cost-rail-seg-confirm { background: var(--warning-medium); }
+.cost-rail[data-band="block"] .cost-rail-seg-confirm { background: var(--danger-medium); }
+.cost-rail-tick {
+  position: absolute;
+  top: -3px;
+  width: 2px;
+  height: 16px;
+}
+.cost-rail-tick-confirm { left: 60%; background: var(--ink); }
+.cost-rail-tick-block { right: 0; background: var(--danger); }
+.cost-rail-marker {
+  position: absolute;
+  top: -5px;
+  left: 0;
+  width: 3px;
+  height: 20px;
+  border-radius: var(--radius-pill);
+  background: var(--warning);
+  transform: translateX(-1px);
+  transition: left var(--duration-base) var(--bezier);
+}
+.cost-rail[data-band="block"] .cost-rail-marker { background: var(--danger); }
+.cost-rail-labels {
+  display: flex;
+  justify-content: space-between;
+  font-size: 0.66rem;
+  color: var(--muted);
+}
+.cost-rail-label-confirm { color: var(--ink); }
+.cost-rail-label-block { color: var(--danger); }
+
+/* Itemized two-column table. */
+.cost-itemized {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: var(--space-6);
+}
+.cost-column { display: flex; flex-direction: column; gap: var(--space-2); }
+.cost-column-stage {
+  border-left: 1px solid var(--line-2);
+  padding-left: var(--space-6);
+}
+.cost-column-head {
+  font-size: 0.7rem;
+  font-weight: 600;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--muted);
+  padding-bottom: var(--space-1);
+}
+.cost-rows { display: flex; flex-direction: column; gap: var(--space-2); }
+.cost-row {
+  display: flex;
+  justify-content: space-between;
+  gap: var(--space-3);
+  font-size: 0.82rem;
+}
+.cost-row-label { color: var(--text-secondary); }
+.cost-row-amount { font-family: var(--font-mono); }
+.cost-row-total {
+  font-weight: 600;
+  border-top: 1px solid var(--line-2);
+  padding-top: var(--space-2);
+}
+.cost-row-total .cost-row-label { color: var(--ink); }
+
+.cost-gate-reason {
+  margin: 0;
+  font-size: 0.85rem;
+  line-height: 1.6;
+  color: var(--body);
+}
+
+.cost-gate-actions {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  flex-wrap: wrap;
+}
+.cost-gate-cap-note { font-size: 0.76rem; color: var(--muted); }
+
+/* Slice 6 (screen 07 · cost blocked · COPY-004): the block band's honest
+   "nothing ran / nothing charged + hard cap" disclosure and the mono
+   threshold/correlation footer. Danger tint from the token, never raw. */
+.cost-gate-block-note {
+  margin: 0;
+  font-size: 0.82rem;
+  line-height: 1.6;
+  color: var(--danger);
+  font-weight: 550;
+}
+.cost-gate-block-note[hidden] { display: none; }
+.cost-gate-block-footer {
+  margin: 0;
+  font-size: 0.78rem;
+  color: var(--muted);
+  word-break: break-word;
+}
+.cost-gate-block-footer[hidden] { display: none; }
+
+.cost-gate-hint { font-size: 0.8rem; }
+.cost-gate-hint kbd {
+  font-family: var(--font-mono);
+  font-size: 0.72rem;
+  border: 1px solid var(--line-strong);
+  border-radius: var(--radius-xs);
+  padding: 1px 6px;
+}
+
+@media (max-width: 600px) {
+  .cost-itemized { grid-template-columns: 1fr; }
+  .cost-column-stage { border-left: none; padding-left: 0; border-top: 1px solid var(--line-2); padding-top: var(--space-4); }
 }
 
 .callout-high-stakes {
@@ -757,7 +1238,7 @@ select {
 }
 .callout-high-stakes .callout-icon {
   background: var(--warning);
-  color: white;
+  color: var(--on-tonal);
 }
 
 .callout-demo-mode {
@@ -767,7 +1248,7 @@ select {
 }
 .callout-demo-mode .callout-icon {
   background: var(--warning);
-  color: white; /* 5.3:1 on #946017 — passes WCAG AA */
+  color: var(--on-tonal); /* 5.3:1 on #946017 — passes WCAG AA */
 }
 .callout-demo-mode .callout-title {
   font-size: 1rem;
@@ -882,7 +1363,7 @@ select {
   min-height: 48px;
   padding: 0 var(--space-5);
   border: 1px solid transparent;
-  border-radius: 999px;
+  border-radius: var(--radius-btn);
   font-weight: 600;
   font-size: 0.95rem;
   cursor: pointer;
@@ -896,26 +1377,37 @@ select {
 .button:active:not(:disabled) { transform: translateY(0); }
 .button:disabled { cursor: not-allowed; opacity: 0.5; background: var(--line) !important; border-color: var(--line) !important; }
 
+/* Ink money/primary CTA — never green. Money always moves on ink. */
 .button-primary {
-  background: var(--accent);
+  background: var(--ink);
   color: var(--accent-ink);
-  box-shadow: var(--shadow-sm);
+  border-radius: var(--radius-btn);
+  box-shadow: var(--shadow-cta);
+  transition: transform 0.16s var(--bezier), box-shadow 0.18s var(--bezier),
+    background 0.16s var(--bezier);
 }
-.button-primary:hover:not(:disabled) { background: var(--accent-strong); box-shadow: var(--shadow-md); }
+.button-primary:hover:not(:disabled) {
+  background: var(--accent-strong);
+  transform: translateY(-1px);
+  box-shadow: var(--shadow-cta-hover);
+}
 
+/* Outline secondary — surface fill, ink text, strong hairline. */
 .button-secondary {
-  background: var(--panel-strong);
+  background: var(--surface);
   color: var(--ink);
-  border-color: var(--line);
+  border-color: var(--line-strong-2);
+  border-radius: var(--radius-btn);
 }
-.button-secondary:hover:not(:disabled) { border-color: var(--line-strong); }
+.button-secondary:hover:not(:disabled) { background: var(--paper); border-color: var(--line-strong-2); }
 
 .button-ghost {
   background: transparent;
   color: var(--ink);
-  border-color: var(--line);
+  border-color: transparent;
+  border-radius: var(--radius-btn);
 }
-.button-ghost:hover:not(:disabled) { background: var(--panel); border-color: var(--line-strong); }
+.button-ghost:hover:not(:disabled) { background: var(--accent-soft); }
 
 .button-danger {
   background: transparent;
@@ -978,7 +1470,7 @@ kbd {
   align-items: center;
   gap: var(--space-2);
   padding: 4px var(--space-3);
-  border-radius: 999px;
+  border-radius: var(--radius-pill);
   background: var(--line);
   color: var(--muted);
   font-size: 0.85rem;
@@ -1003,6 +1495,20 @@ kbd {
 .status-pill[data-state="timed_out"] { background: var(--danger-soft); color: var(--danger); }
 .status-pill[data-state="cancelled"] { background: var(--line); color: var(--muted); }
 .status-pill[data-state="partial"] { background: var(--warning-soft); color: var(--warning); }
+
+/* Dark only: small muted text that sits on a faintly-lit inset (--line over
+   the dark card ≈ #272A30 / #2A2C32) lands just under AA — --muted (#8A9099)
+   gives 4.3–4.47:1 there (the dark muted↔secondary ramp is too compressed to
+   define a distinct passing muted). Bump only these lit-inset cases to
+   --secondary (≥4.9:1); --muted is left intact everywhere it already passes,
+   and the colour-carrying / warning states are untouched. */
+html[data-theme="dark"] .status-pill[data-state="idle"],
+html[data-theme="dark"] .status-pill[data-state="pending"],
+html[data-theme="dark"] .status-pill[data-state="cancelled"],
+html[data-theme="dark"] .field-meta-counter:not([data-warning="true"]),
+html[data-theme="dark"] .landing-preview-caption {
+  color: var(--text-secondary);
+}
 
 .status-pill[data-state="connecting"] .status-pill-dot,
 .status-pill[data-state="initial_answers_running"] .status-pill-dot,
@@ -1054,6 +1560,1727 @@ kbd {
 .run-controls-cancel-hint strong {
   color: var(--ink);
   font-weight: 600;
+}
+
+/* ----- Slice 3 (04 Live run) ------------------------------------------------
+   GREEN RULE: no green surfaces here — running is blue (--info), done is ink,
+   failed is --danger, caution/fallback is --warning. Green is the verdict only
+   (Slice 4a). All colours are tokens; no raw hex/rgba below. */
+
+.live-run {
+  gap: 0;
+  padding: 0;
+  overflow: hidden;
+}
+
+.live-run-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: var(--space-3);
+  padding: var(--space-4) var(--space-6);
+  border-bottom: 1px solid var(--line);
+  background: var(--surface);
+}
+
+.live-run-header-lead {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  flex-wrap: wrap;
+}
+
+.live-run-heading {
+  margin: 0;
+  font-family: var(--font-serif);
+  font-size: 1.15rem;
+  font-weight: 500;
+  letter-spacing: -0.01em;
+}
+
+.live-run-header-meta {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+}
+
+.live-elapsed {
+  font-size: 0.8rem;
+  color: var(--text-secondary);
+  white-space: nowrap;
+}
+
+/* Running-status pill — blue while running, recoloured on terminal states. */
+.live-status-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+  font-size: 0.82rem;
+  font-weight: 600;
+}
+
+.live-status-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: var(--radius-pill);
+  background: currentColor;
+  flex-shrink: 0;
+}
+
+.live-status-pill[data-state="running"] {
+  color: var(--info);
+}
+
+.live-status-pill[data-state="running"] .live-status-dot {
+  box-shadow: 0 0 0 3px var(--info-glow);
+  animation: pulse 1.6s ease-in-out infinite;
+}
+
+.live-status-pill[data-state="completed"] {
+  color: var(--ink);
+}
+
+.live-status-pill[data-state="partial"] {
+  color: var(--warning);
+}
+
+.live-status-pill[data-state="failed"],
+.live-status-pill[data-state="cancelled"] {
+  color: var(--danger);
+}
+
+/* "Stop run" — red-outline, never a filled danger button (the run is healthy). */
+.live-stop {
+  min-height: 34px;
+  padding: 0 var(--space-4);
+  border-radius: var(--radius-btn);
+  border: 1px solid var(--danger-border);
+  background: var(--surface);
+  color: var(--danger);
+  font-size: 0.8rem;
+  font-weight: 600;
+}
+
+.live-stop:hover {
+  background: var(--danger-soft);
+}
+
+.live-stop[hidden] {
+  display: none;
+}
+
+.live-corr {
+  padding: var(--space-2) var(--space-6) 0;
+  font-size: 0.72rem;
+  color: var(--muted);
+}
+
+.live-corr:empty {
+  display: none;
+}
+
+/* Fix 6: the live run-id is a copy button (the aside copy affordance is hidden
+   during a live run). Reset the button chrome so it reads as the quiet run-id
+   line, with a subtle hover/focus/copied affordance. No green — the copied
+   confirmation uses the running-blue --info, per the live-view green rule. */
+.live-corr-copy {
+  display: block;
+  text-align: left;
+  background: transparent;
+  border: 1px dashed transparent;
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+}
+
+.live-corr-copy:hover {
+  border-color: var(--line);
+}
+
+.live-corr-copy:focus-visible {
+  outline: 2px solid var(--focus-ring);
+  outline-offset: 2px;
+}
+
+.live-corr-copy[data-copied="true"] {
+  border-color: var(--info);
+}
+
+.live-query-band {
+  padding: var(--space-4) var(--space-6);
+  border-bottom: 1px solid var(--line);
+  background: var(--inset);
+}
+
+.live-eyebrow {
+  font-size: 0.68rem;
+  font-weight: 600;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--muted);
+  margin-bottom: var(--space-1);
+}
+
+.live-query {
+  font-family: var(--font-serif);
+  font-size: 1.15rem;
+  font-weight: 500;
+  line-height: 1.35;
+  color: var(--ink);
+}
+
+/* Stage strip — four pipeline stages, honest meta only. */
+.live-stage-strip {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: var(--space-5);
+  padding: var(--space-4) var(--space-6);
+  border-bottom: 1px solid var(--line);
+  background: var(--surface);
+}
+
+.live-stage {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  min-width: 0;
+}
+
+.live-stage-head {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+}
+
+.live-stage-dot {
+  width: 18px;
+  height: 18px;
+  border-radius: var(--radius-pill);
+  display: grid;
+  place-items: center;
+  font-size: 0.62rem;
+  font-weight: 700;
+  flex-shrink: 0;
+  background: var(--accent-soft);
+  color: var(--muted);
+}
+
+.live-stage[data-state="completed"] .live-stage-dot {
+  background: var(--ink);
+  color: var(--accent-ink);
+}
+
+.live-stage[data-state="running"] .live-stage-dot {
+  background: var(--info);
+  color: var(--accent-ink);
+  box-shadow: 0 0 0 3px var(--info-glow);
+}
+
+.live-stage[data-state="failed"] .live-stage-dot {
+  background: var(--danger);
+  color: var(--accent-ink);
+}
+
+.live-stage-label {
+  font-size: 0.8rem;
+  font-weight: 600;
+  color: var(--ink);
+}
+
+.live-stage[data-state="pending"] .live-stage-label,
+.live-stage[data-state="skipped"] .live-stage-label {
+  color: var(--muted);
+}
+
+.live-stage[data-state="running"] .live-stage-label {
+  color: var(--info);
+}
+
+.live-stage-bar {
+  height: 3px;
+  border-radius: var(--radius-pill);
+  background: var(--accent-soft);
+  overflow: hidden;
+}
+
+.live-stage-bar-fill {
+  display: block;
+  height: 100%;
+  width: 0;
+  border-radius: var(--radius-pill);
+  background: var(--accent-soft);
+}
+
+.live-stage[data-state="completed"] .live-stage-bar-fill {
+  width: 100%;
+  background: var(--ink);
+}
+
+.live-stage[data-state="running"] .live-stage-bar-fill {
+  background: var(--info);
+}
+
+.live-stage[data-state="failed"] .live-stage-bar-fill {
+  width: 100%;
+  background: var(--danger);
+}
+
+/* Indeterminate blue bar for running debate/synthesis (no honest fraction). */
+.live-stage-bar[data-indeterminate="true"] .live-stage-bar-fill {
+  width: 40%;
+  animation: live-indeterminate 1.4s ease-in-out infinite;
+}
+
+@keyframes live-indeterminate {
+  0% { transform: translateX(-60%); }
+  100% { transform: translateX(260%); }
+}
+
+.live-stage-meta {
+  font-size: 0.68rem;
+  color: var(--muted);
+}
+
+.live-stage[data-state="running"] .live-stage-meta {
+  color: var(--info);
+}
+
+/* Two-column inner grid: debate lane + sidebar. */
+.live-run-grid {
+  display: grid;
+  grid-template-columns: 1fr 320px;
+}
+
+.live-run-main {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-4);
+  padding: var(--space-6);
+  border-right: 1px solid var(--line);
+}
+
+.live-debate-caption {
+  font-size: 0.78rem;
+  margin: 0;
+}
+
+.live-debate {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-4);
+}
+
+.live-round-card {
+  border: 1px solid var(--line-2);
+  border-radius: var(--radius-md);
+  padding: var(--space-4);
+  background: var(--surface);
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+}
+
+.live-round-card[data-state="running"] {
+  border-color: var(--info);
+  box-shadow: 0 0 0 3px var(--info-glow);
+}
+
+.live-round-placeholder {
+  border-style: dashed;
+  background: var(--inset);
+}
+
+.live-round-header {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  flex-wrap: wrap;
+}
+
+.live-round-pill {
+  font-size: 0.68rem;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  padding: 2px var(--space-2);
+  border-radius: var(--radius-pill);
+  background: var(--accent-soft);
+  color: var(--ink);
+}
+
+.live-round-focus {
+  font-size: 0.75rem;
+  color: var(--text-secondary);
+}
+
+.live-round-state {
+  margin-left: auto;
+  font-size: 0.7rem;
+  font-weight: 600;
+  color: var(--muted);
+}
+
+.live-round-card[data-state="running"] .live-round-state {
+  color: var(--info);
+}
+
+.live-round-card[data-state="failed"] .live-round-state {
+  color: var(--danger);
+}
+
+.live-round-body {
+  margin: 0;
+  font-size: 0.85rem;
+  line-height: 1.6;
+  color: var(--body);
+}
+
+/* Sidebar. */
+.live-run-side {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-5);
+  padding: var(--space-6);
+  background: var(--inset);
+}
+
+.live-side-section {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+}
+
+.live-model-status {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+}
+
+.live-model-row {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  flex-wrap: wrap;
+}
+
+.live-model-avatar {
+  width: 24px;
+  height: 24px;
+  border-radius: var(--radius-pill);
+  display: grid;
+  place-items: center;
+  font-size: 0.62rem;
+  font-weight: 700;
+  flex-shrink: 0;
+  background: var(--accent-soft);
+  color: var(--ink);
+}
+
+.live-model-name {
+  flex: 1;
+  min-width: 0;
+  font-size: 0.8rem;
+  font-weight: 600;
+  color: var(--ink);
+}
+
+.live-model-state {
+  font-size: 0.7rem;
+  font-weight: 600;
+  color: var(--muted);
+}
+
+.live-model-row[data-state="done"] .live-model-state {
+  color: var(--text-secondary);
+}
+
+.live-model-row[data-state="failed"] .live-model-state {
+  color: var(--danger);
+}
+
+.live-model-tag {
+  font-size: 0.66rem;
+  font-weight: 600;
+  padding: 2px var(--space-2);
+  border-radius: var(--radius-pill);
+  background: var(--warning-soft);
+  color: var(--warning);
+}
+
+/* Search-fallback disclosure — amber caution. */
+.live-fallback {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  padding: var(--space-3);
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--warning-border);
+  background: var(--warning-soft);
+}
+
+.live-fallback[hidden] {
+  display: none;
+}
+
+.live-fallback-title {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  font-size: 0.78rem;
+  font-weight: 650;
+  color: var(--warning);
+}
+
+.live-fallback-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: var(--radius-pill);
+  background: var(--warning);
+  flex-shrink: 0;
+}
+
+.live-fallback-body {
+  font-size: 0.76rem;
+  line-height: 1.5;
+  color: var(--body);
+}
+
+/* Approved-cap panel — cap + auto-stop guarantee, no spend bar. */
+.live-cap {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  padding: var(--space-4);
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--line-2);
+  background: var(--surface);
+}
+
+.live-cap-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: var(--space-2);
+}
+
+.live-cap-label {
+  font-size: 0.78rem;
+  font-weight: 650;
+  color: var(--ink);
+}
+
+.live-cap-value {
+  font-size: 0.95rem;
+  font-weight: 600;
+  color: var(--ink);
+}
+
+.live-cap-note {
+  margin: 0;
+  font-size: 0.72rem;
+  line-height: 1.5;
+  color: var(--text-secondary);
+}
+
+.live-cap-note.muted {
+  color: var(--muted);
+}
+
+/* Fix 1: failure notices surfaced inside the live card (the aside #notice-list
+   is hidden during a live run). Amber caution box; individual .notice items
+   carry their own tone colours. */
+.live-notices {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  padding: var(--space-3) var(--space-4);
+  border: 1px solid var(--warning-border);
+  border-radius: var(--radius-sm);
+  background: var(--warning-soft);
+}
+
+.live-notices[hidden] {
+  display: none;
+}
+
+.live-notices-list {
+  display: flex;
+  flex-direction: column;
+}
+
+/* Fix 4: the shared `.mono` utility (font-size: 0.9rem) is declared AFTER this
+   live block at equal specificity, so it clobbers the intended small sizes.
+   These compound selectors (higher specificity) restore the design sizes
+   without touching the shared `.mono` utility other components depend on. */
+.live-stage-meta.mono {
+  font-size: 0.68rem;
+}
+
+.live-model-state.mono {
+  font-size: 0.7rem;
+}
+
+.live-corr.mono {
+  font-size: 0.72rem;
+}
+
+.live-elapsed.mono {
+  font-size: 0.8rem;
+}
+
+.live-cap-value.mono {
+  font-size: 0.95rem;
+}
+
+@media (max-width: 900px) {
+  .live-run-grid {
+    grid-template-columns: 1fr;
+  }
+  .live-run-main {
+    border-right: none;
+    border-bottom: 1px solid var(--line);
+  }
+  .live-stage-strip {
+    grid-template-columns: repeat(2, 1fr);
+  }
+}
+
+/* a11y: disable the live-run pulse + indeterminate motion under
+   prefers-reduced-motion (the readout stays legible, just static). */
+@media (prefers-reduced-motion: reduce) {
+  .live-status-pill[data-state="running"] .live-status-dot {
+    animation: none;
+  }
+  .live-stage-bar[data-indeterminate="true"] .live-stage-bar-fill {
+    animation: none;
+  }
+}
+
+/* ----- Slice 4a (05 Result): verdict band + trust triangle ------------------
+   GREEN RULE: the ONLY green here is the verdict band + Agreement accent WHEN
+   the panel truly reached consensus (``data-consensus="true"``), plus the brand
+   mark. Everything else is ink / blue (--info) / amber (--warning). Completed
+   status is INK, never green. All colours are tokens (incl. the two
+   theme-invariant --verdict-* tokens); no raw hex/rgba below. */
+
+.result {
+  gap: 0;
+  padding: 0;
+  overflow: hidden;
+}
+
+.result-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: var(--space-3);
+  padding: var(--space-4) var(--space-6);
+  border-bottom: 1px solid var(--line);
+  background: var(--surface);
+}
+
+.result-header-lead {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  flex-wrap: wrap;
+}
+
+.result-brand {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+}
+
+.result-brand-tile {
+  display: grid;
+  place-items: center;
+  width: 28px;
+  height: 28px;
+  border-radius: var(--radius-xs);
+  background: var(--brand-tile-bg);
+  color: var(--brand-tile-fg);
+  font-family: var(--font-serif);
+  font-size: 0.9rem;
+  font-weight: 700;
+}
+
+.result-brand-name {
+  font-weight: 650;
+  font-size: 1rem;
+  letter-spacing: -0.01em;
+}
+
+.result-header-divider {
+  width: 1px;
+  height: 18px;
+  background: var(--line-strong);
+}
+
+/* Completion status — INK, never green (green is reserved for agreement). */
+.result-completion {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+  font-size: 0.84rem;
+  font-weight: 600;
+  color: var(--text-secondary);
+}
+
+.result-completion-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: var(--radius-pill);
+  background: currentColor;
+  flex-shrink: 0;
+}
+
+.result-header-actions {
+  display: flex;
+  gap: var(--space-2);
+}
+
+.result-action {
+  min-height: 34px;
+  padding: 0 var(--space-4);
+  border-radius: var(--radius-btn);
+  border: 1px solid var(--line-strong);
+  background: var(--surface);
+  color: var(--ink);
+  font-size: 0.84rem;
+  font-weight: 600;
+}
+
+.result-action:hover {
+  background: var(--paper);
+}
+
+.result-action[data-copied="true"] {
+  border-color: var(--line-strong-2);
+  color: var(--ink);
+}
+
+.result-body {
+  width: min(960px, 100%);
+  margin: 0 auto;
+  padding: var(--space-7) var(--space-6) var(--space-8);
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-5);
+}
+
+.result-ask {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+}
+
+.result-eyebrow {
+  font-size: 0.8rem;
+  font-weight: 500;
+  color: var(--text-secondary);
+}
+
+.result-question {
+  margin: 0;
+  font-family: var(--font-serif);
+  font-size: 1.8rem;
+  line-height: 1.28;
+  font-weight: 500;
+  letter-spacing: -0.01em;
+  text-wrap: balance;
+}
+
+.result-meta {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  flex-wrap: wrap;
+  font-size: 0.8rem;
+  color: var(--muted);
+}
+
+.result-meta-status {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
+  color: var(--text-secondary);
+  font-weight: 600;
+}
+
+.result-meta-status-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: var(--radius-pill);
+  background: currentColor;
+}
+
+.result-meta .mono {
+  color: var(--body);
+}
+
+.result-meta-money-actual {
+  color: var(--body);
+  font-weight: 600;
+}
+
+.result-meta-sep {
+  color: var(--line-strong-2);
+}
+
+/* --- Verdict band --- */
+.result-verdict {
+  display: flex;
+  align-items: center;
+  gap: var(--space-7);
+  border-radius: var(--radius-lg);
+  padding: var(--space-6) var(--space-7);
+  flex-wrap: wrap;
+}
+
+/* Consensus: the large green surface (theme-invariant tokens). */
+.result-verdict[data-consensus="true"] {
+  background: var(--verdict-surface);
+  color: var(--verdict-on);
+  box-shadow: var(--shadow-verdict);
+}
+
+/* Divided panel (AC-019): NEVER green. Neutral surface, ink text, amber accent. */
+.result-verdict[data-consensus="false"] {
+  background: var(--surface);
+  color: var(--ink);
+  border: 1px solid var(--line-2);
+  border-left: 4px solid var(--warning);
+  box-shadow: var(--shadow-md);
+}
+
+.result-ring {
+  position: relative;
+  width: 104px;
+  height: 104px;
+  flex-shrink: 0;
+}
+
+.result-ring svg {
+  transform: rotate(-90deg);
+}
+
+.result-ring-track {
+  stroke: var(--line-2);
+}
+
+.result-ring-value {
+  stroke: var(--warning);
+  stroke-linecap: round;
+  stroke-dasharray: var(--ring-circ, 251);
+  stroke-dashoffset: var(--ring-offset, var(--ring-circ, 251));
+  animation: qdraw-ring var(--duration-verdict) var(--bezier) both;
+}
+
+.result-verdict[data-consensus="true"] .result-ring-track {
+  stroke: color-mix(in srgb, var(--verdict-on) 22%, transparent);
+}
+
+.result-verdict[data-consensus="true"] .result-ring-value {
+  stroke: var(--verdict-on);
+}
+
+@keyframes qdraw-ring {
+  from { stroke-dashoffset: var(--ring-circ, 251); }
+  to { stroke-dashoffset: var(--ring-offset, var(--ring-circ, 251)); }
+}
+
+.result-ring-center {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+}
+
+.result-ring-count {
+  font-family: var(--font-serif);
+  font-size: 1.6rem;
+  font-weight: 600;
+  line-height: 1;
+}
+
+.result-ring-label {
+  font-size: 0.66rem;
+  font-weight: 650;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  margin-top: 2px;
+}
+
+.result-verdict[data-consensus="true"] .result-ring-label {
+  color: color-mix(in srgb, var(--verdict-on) 88%, transparent);
+}
+
+.result-verdict[data-consensus="false"] .result-ring-label {
+  color: var(--text-secondary);
+}
+
+.result-verdict-content {
+  flex: 1 1 320px;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+}
+
+.result-verdict-eyebrow {
+  font-size: 0.72rem;
+  font-weight: 650;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+}
+
+.result-verdict[data-consensus="true"] .result-verdict-eyebrow {
+  color: color-mix(in srgb, var(--verdict-on) 88%, transparent);
+}
+
+.result-verdict[data-consensus="false"] .result-verdict-eyebrow {
+  color: var(--text-secondary);
+}
+
+.result-verdict-text {
+  font-family: var(--font-serif);
+  font-size: 1.45rem;
+  line-height: 1.3;
+  font-weight: 500;
+  text-wrap: pretty;
+}
+
+.result-verdict-summary {
+  font-size: 0.9rem;
+  line-height: 1.55;
+}
+
+.result-verdict[data-consensus="true"] .result-verdict-summary {
+  color: color-mix(in srgb, var(--verdict-on) 90%, transparent);
+}
+
+.result-verdict[data-consensus="false"] .result-verdict-summary {
+  color: var(--body);
+}
+
+.result-verdict-caveat {
+  font-size: 0.8rem;
+  line-height: 1.5;
+  font-style: italic;
+}
+
+.result-verdict[data-consensus="true"] .result-verdict-caveat {
+  color: color-mix(in srgb, var(--verdict-on) 90%, transparent);
+}
+
+.result-verdict[data-consensus="false"] .result-verdict-caveat {
+  color: var(--warning);
+}
+
+.result-verdict-caption {
+  font-size: 0.72rem;
+  line-height: 1.5;
+}
+
+.result-verdict[data-consensus="true"] .result-verdict-caption {
+  color: color-mix(in srgb, var(--verdict-on) 90%, transparent);
+}
+
+.result-verdict[data-consensus="false"] .result-verdict-caption {
+  color: var(--muted);
+}
+
+/* Empty state — failed/blocked run reached the result view with no synthesis. */
+.result-verdict[data-empty="true"] {
+  display: block;
+  font-size: 0.95rem;
+  color: var(--body);
+}
+
+/* --- Trust triangle --- */
+.result-trust {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: var(--space-3);
+}
+
+.result-trust-card {
+  background: var(--surface);
+  border: 1px solid var(--line-2);
+  border-radius: var(--radius-md);
+  padding: var(--space-4);
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+}
+
+.result-trust-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-2);
+}
+
+.result-trust-kicker {
+  font-size: 0.78rem;
+  font-weight: 700;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+}
+
+.result-trust-chip {
+  width: 9px;
+  height: 9px;
+  border-radius: 3px;
+  flex-shrink: 0;
+}
+
+/* Accent by card role. Agreement is green ONLY on consensus (see JS gate). */
+.result-trust-card[data-accent="agreement"][data-consensus="true"] .result-trust-kicker { color: var(--success); }
+.result-trust-card[data-accent="agreement"][data-consensus="true"] .result-trust-chip { background: var(--success); }
+
+.result-trust-card[data-accent="agreement"][data-consensus="false"] .result-trust-kicker { color: var(--warning); }
+.result-trust-card[data-accent="agreement"][data-consensus="false"] .result-trust-chip { background: var(--warning); }
+
+.result-trust-card[data-accent="source"] .result-trust-kicker { color: var(--info); }
+.result-trust-card[data-accent="source"] .result-trust-chip { background: var(--info); }
+
+.result-trust-card[data-accent="uncertainty"] .result-trust-kicker { color: var(--warning); }
+.result-trust-card[data-accent="uncertainty"] .result-trust-chip { background: var(--warning); }
+
+.result-trust-value {
+  font-size: 1.4rem;
+  font-weight: 700;
+  letter-spacing: -0.01em;
+  color: var(--ink);
+}
+
+.result-trust-value-sub {
+  font-size: 0.84rem;
+  font-weight: 600;
+  color: var(--text-secondary);
+}
+
+.result-trust-caption {
+  font-size: 0.8rem;
+  line-height: 1.5;
+  color: var(--text-secondary);
+}
+
+@media (max-width: 760px) {
+  .result-trust {
+    grid-template-columns: 1fr;
+  }
+  .result-verdict {
+    gap: var(--space-4);
+  }
+}
+
+/* The verdict ring DRAW is the one long motion — disable it under
+   reduced-motion (the ring stays at its final value, just static). */
+@media (prefers-reduced-motion: reduce) {
+  .result-ring-value {
+    animation: none;
+  }
+}
+
+/* ----- Slice 4b: Run-details disclosure + run receipt -------------------- */
+/* All colour/money/ID treatment uses the locked tokens (no raw hex/rgba).
+   Green stays reserved for the verdict band; the money delta moves on ink. */
+
+.result-details-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  margin-left: var(--space-1);
+  padding: 3px 10px;
+  border-radius: var(--radius-xl);
+  border: 1px solid var(--line-strong);
+  background: transparent;
+  color: var(--text-secondary);
+  font: inherit;
+  font-size: 0.8rem;
+  font-weight: 600;
+  cursor: pointer;
+  transition: border-color var(--duration-fast) var(--bezier),
+              color var(--duration-fast) var(--bezier);
+}
+
+.result-details-toggle:hover {
+  border-color: var(--ink);
+  color: var(--ink);
+}
+
+.result-details-caret {
+  font-size: 0.72rem;
+  line-height: 1;
+}
+
+.result-receipt {
+  position: relative;
+  border: 1px solid var(--line-2);
+  border-radius: var(--radius-md);
+  background: var(--surface);
+  padding: 18px 22px 20px;
+}
+
+.result-receipt-grid {
+  display: grid;
+  grid-template-columns: 1.05fr 1fr 1fr 0.9fr;
+  gap: 22px;
+}
+
+.result-receipt-col {
+  display: flex;
+  flex-direction: column;
+  gap: 7px;
+  min-width: 0;
+}
+
+.result-receipt-col-div {
+  border-left: 1px solid var(--line);
+  padding-left: 22px;
+}
+
+.result-receipt-kicker {
+  font-size: 0.69rem;
+  font-weight: 600;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--text-secondary);
+}
+
+.result-receipt-row {
+  display: flex;
+  justify-content: space-between;
+  gap: 8px;
+  font-size: 0.78rem;
+  line-height: 1.4;
+}
+
+.result-receipt-label {
+  color: var(--muted);
+}
+
+.result-receipt-value {
+  text-align: right;
+}
+
+.result-receipt-value.mono,
+.result-receipt-recon-value.mono {
+  font-family: var(--font-mono);
+  white-space: nowrap;
+}
+
+.result-receipt-id {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-family: var(--font-mono);
+  min-width: 0;
+}
+
+.result-receipt-id .mono {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  max-width: 12ch;
+}
+
+.result-receipt-copy {
+  border: none;
+  background: transparent;
+  color: var(--text-secondary);
+  cursor: pointer;
+  padding: 0 2px;
+  font-size: 0.85rem;
+  line-height: 1;
+  border-radius: var(--radius-sm);
+  transition: color var(--duration-fast) var(--bezier);
+}
+
+.result-receipt-copy:hover { color: var(--ink); }
+/* Fix 3: the copied confirmation is INFO (blue), not green — copying is not an
+   agreement signal, and Slice 3's live-corr copy already uses blue. Green stays
+   reserved for the verdict band + the ✓ Revised chip. */
+.result-receipt-copy[data-copied="true"] { color: var(--info); }
+
+/* Fix 5: non-color "copied" cue — a ✓ glyph appended to any copy button in its
+   copied state, so the confirmation is not conveyed by color alone. The JS also
+   sets aria-label="Copied", which overrides the accessible name, so this glyph
+   is a purely visual cue and is not double-announced. */
+.result-receipt-copy[data-copied="true"]::after,
+.live-corr-copy[data-copied="true"]::after,
+.meta-value-copy[data-copied="true"]::after {
+  content: " \2713";
+  font-weight: 700;
+}
+
+.result-receipt-cost-total {
+  font-weight: 600;
+  border-top: 1px solid var(--line);
+  padding-top: 6px;
+  margin-top: 2px;
+  color: var(--ink);
+}
+
+.result-receipt-recon {
+  font-weight: 600;
+  border-top: 1px solid var(--line);
+  padding-top: 6px;
+  margin-top: 2px;
+}
+
+/* The reconciliation delta is MONEY, so it moves on ink — never green.
+   "matched"/"pending" are neutral/muted; there is no fabricated savings. */
+.result-receipt-recon[data-state="under"] .result-receipt-recon-value,
+.result-receipt-recon[data-state="over"] .result-receipt-recon-value {
+  color: var(--ink);
+}
+.result-receipt-recon[data-state="matched"] .result-receipt-recon-label,
+.result-receipt-recon[data-state="matched"] .result-receipt-recon-value {
+  color: var(--ink);
+}
+.result-receipt-recon[data-state="pending"] .result-receipt-recon-label,
+.result-receipt-recon[data-state="pending"] .result-receipt-recon-value,
+/* "estimated": the actual figure is the pre-run estimate, not measured
+   provider billing — muted, no fabricated savings/overage on ink. */
+.result-receipt-recon[data-state="estimated"] .result-receipt-recon-label,
+.result-receipt-recon[data-state="estimated"] .result-receipt-recon-value {
+  color: var(--muted);
+}
+
+.result-receipt-stage {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  color: var(--muted);
+  min-width: 0;
+}
+
+.result-receipt-stage-glyph {
+  font-family: var(--font-mono);
+  font-weight: 700;
+  flex-shrink: 0;
+}
+/* Fix 2: a completed pipeline ✓ is INK/MUTED, not green — the mock renders it
+   ink-gray and the codebase rule is "running=blue, done=ink". Green is reserved
+   for agreement (verdict band + ✓ Revised chip), never mere completion. */
+.result-receipt-stage-glyph[data-tone="done"] { color: var(--muted); }
+.result-receipt-stage-glyph[data-tone="failed"] { color: var(--danger); }
+.result-receipt-stage-glyph[data-tone="skipped"] { color: var(--muted); }
+.result-receipt-stage-glyph[data-tone="running"] { color: var(--info); }
+.result-receipt-stage-glyph[data-tone="pending"] { color: var(--muted); }
+
+.result-receipt-stage-state {
+  color: var(--text-secondary);
+  white-space: nowrap;
+}
+
+.result-receipt-note {
+  margin: 4px 0 0;
+  font-size: 0.72rem;
+  line-height: 1.5;
+  color: var(--muted);
+}
+
+/* ----- Slice 4b: How positions moved ------------------------------------ */
+
+.result-positions {
+  border: 1px solid var(--line-2);
+  border-radius: var(--radius-md);
+  background: var(--surface);
+  overflow: hidden;
+}
+
+.result-positions-head {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  padding: 18px 24px 4px;
+}
+
+.result-positions-title {
+  font-size: 1rem;
+  font-weight: 700;
+  letter-spacing: -0.01em;
+  color: var(--ink);
+}
+
+.result-positions-caption {
+  font-size: 0.8rem;
+  line-height: 1.5;
+  color: var(--text-secondary);
+}
+
+/* Fix 4: native <table>. Wrapped in an overflow-x:auto scroller so a wide
+   table scrolls inside its own box and never pushes the page body sideways. */
+.result-positions-scroll {
+  overflow-x: auto;
+}
+
+.result-positions-table {
+  width: 100%;
+  border-collapse: collapse;
+  table-layout: fixed;
+  padding: 14px 24px 20px;
+}
+
+.result-positions-table thead th:first-child {
+  width: 190px;
+}
+
+.result-positions-colhead {
+  text-align: left;
+  vertical-align: bottom;
+  font-size: 0.72rem;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--text-secondary);
+  padding: 8px 10px;
+}
+
+.result-positions-cell {
+  vertical-align: middle;
+  text-align: left;
+  padding: 10px;
+  border-top: 1px solid var(--line);
+  font-size: 0.78rem;
+  font-weight: 400;
+  color: var(--muted);
+}
+
+.result-pos-model {
+  padding-left: 0;
+  color: var(--ink);
+}
+
+.result-pos-avatar {
+  display: inline-grid;
+  place-items: center;
+  flex-shrink: 0;
+  width: 26px;
+  height: 26px;
+  border-radius: var(--radius-xl);
+  background: var(--line);
+  color: var(--ink);
+  font-size: 0.7rem;
+  font-weight: 700;
+  margin-right: 9px;
+  vertical-align: middle;
+}
+
+.result-pos-name {
+  font-size: 0.84rem;
+  font-weight: 650;
+  color: var(--ink);
+  vertical-align: middle;
+}
+
+.result-pos-text {
+  display: block;
+  line-height: 1.45;
+}
+
+/* Fix 12: this "✓ Revised" chip is GREEN ON PURPOSE — the sanctioned
+   agreement/revision semantic (the model changed its position) and pixel-
+   mandated by the mock. Do NOT retint it to neutral; unlike the completion
+   glyph and the copied-state cue, green here maps to a real, verified signal. */
+.result-pos-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  margin-top: 5px;
+  padding: 4px 10px;
+  border-radius: var(--radius-xl);
+  background: var(--success-soft);
+  border: 1.5px solid var(--success-border);
+  color: var(--success);
+  font-size: 0.75rem;
+  font-weight: 650;
+}
+
+.result-pos-note {
+  display: block;
+  margin-top: 5px;
+  font-size: 0.72rem;
+  line-height: 1.45;
+  color: var(--text-secondary);
+}
+
+@media (max-width: 760px) {
+  .result-receipt-grid {
+    grid-template-columns: 1fr;
+    gap: var(--space-4);
+  }
+  .result-receipt-col-div {
+    border-left: none;
+    padding-left: 0;
+    border-top: 1px solid var(--line);
+    padding-top: var(--space-4);
+  }
+  /* Fix 4: stacked layout on mobile. The <thead> column headers are visually
+     hidden (NOT display:none — they stay in the a11y tree), and each <td> is
+     re-labeled from its data-label so every cell keeps a visible phase name. */
+  .result-positions-table,
+  .result-positions-table thead,
+  .result-positions-table tbody,
+  .result-positions-table tr,
+  .result-positions-table th,
+  .result-positions-table td {
+    display: block;
+  }
+  .result-positions-table thead {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    overflow: hidden;
+    clip: rect(0, 0, 0, 0);
+    white-space: nowrap;
+  }
+  .result-positions-table thead th:first-child {
+    width: auto;
+  }
+  .result-positions-row {
+    padding: 4px 0 8px;
+  }
+  .result-pos-model {
+    border-top: 1px solid var(--line-2);
+    padding-top: var(--space-3);
+  }
+  .result-positions-cell:not(.result-pos-model) {
+    border-top: none;
+    padding-top: 2px;
+  }
+  .result-positions-cell:not(.result-pos-model)::before {
+    content: attr(data-label);
+    display: block;
+    font-size: 0.66rem;
+    font-weight: 700;
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+    color: var(--text-secondary);
+    margin-bottom: 2px;
+  }
+}
+
+/* ----- Slice 5 (06 Transcript) — the debate audit trail ------------------ */
+/* Tokens only (no raw hex/rgba). GREEN is reserved for the consensus status
+   chip + footer link and is applied ONLY when the panel truly reached
+   consensus (data-consensus="true"); a divided panel gets a neutral/amber
+   treatment. Newsreader serif for the question; Geist Mono for counts/money. */
+
+/* The deferred "Read the full debate transcript →" link on the result view.
+   Ink text on a subtle divider — a navigation affordance, never green. */
+.result-transcript-link {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: var(--space-2);
+  width: 100%;
+  padding: 13px;
+  border: 1px solid var(--line-2);
+  border-radius: var(--radius-md);
+  background: var(--accent-soft);
+  color: var(--ink);
+  font: inherit;
+  font-size: 0.84rem;
+  font-weight: 600;
+  cursor: pointer;
+  transition: background var(--duration-fast) var(--bezier);
+}
+
+.result-transcript-link:hover {
+  background: var(--accent-medium);
+}
+
+.transcript {
+  gap: 0;
+  padding: 0;
+  overflow: hidden;
+}
+
+.transcript-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: var(--space-3);
+  padding: var(--space-4) var(--space-6);
+  border-bottom: 1px solid var(--line);
+  background: var(--surface);
+}
+
+.transcript-header-lead {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  flex-wrap: wrap;
+}
+
+.transcript-back {
+  border: none;
+  background: transparent;
+  color: var(--text-secondary);
+  font: inherit;
+  font-size: 0.84rem;
+  font-weight: 600;
+  cursor: pointer;
+  padding: 0;
+  transition: color var(--duration-fast) var(--bezier);
+}
+
+.transcript-back:hover {
+  color: var(--ink);
+}
+
+.transcript-header-divider {
+  width: 1px;
+  height: 18px;
+  background: var(--line-strong);
+}
+
+.transcript-header-title {
+  font-size: 0.95rem;
+  font-weight: 650;
+  color: var(--ink);
+}
+
+.transcript-meta {
+  font-size: 0.78rem;
+  color: var(--muted);
+}
+
+/* Status chip. Neutral/amber by default (divided); green ONLY on real
+   consensus. Dot inherits currentColor. */
+.transcript-status {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+  font-size: 0.8rem;
+  font-weight: 600;
+  color: var(--warning);
+}
+
+.transcript-status[data-consensus="true"] {
+  color: var(--success);
+}
+
+.transcript-status-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: var(--radius-pill);
+  background: currentColor;
+  flex-shrink: 0;
+}
+
+.transcript-body {
+  max-width: 840px;
+  margin: 0 auto;
+  padding: var(--space-8) var(--space-6);
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-7);
+  width: 100%;
+}
+
+.transcript-question {
+  margin: 0 auto;
+  max-width: 30ch;
+  font-family: var(--font-serif);
+  font-size: 1.4rem;
+  line-height: 1.35;
+  font-weight: 500;
+  color: var(--body);
+  text-align: center;
+  text-wrap: balance;
+}
+
+.transcript-section {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-4);
+}
+
+.transcript-section-head {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+}
+
+.transcript-section-title {
+  font-size: 0.72rem;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--text-secondary);
+}
+
+.transcript-section-rule {
+  flex: 1;
+  height: 1px;
+  background: var(--line-2);
+}
+
+.transcript-section-note {
+  font-size: 0.72rem;
+  color: var(--muted);
+}
+
+.transcript-openings {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: var(--space-3);
+}
+
+.transcript-opening {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  border: 1px solid var(--line-2);
+  border-radius: var(--radius-md);
+  background: var(--surface);
+  padding: var(--space-3) var(--space-4);
+}
+
+.transcript-opening-head {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+}
+
+.transcript-opening-avatar {
+  display: inline-grid;
+  place-items: center;
+  flex-shrink: 0;
+  width: 26px;
+  height: 26px;
+  border-radius: var(--radius-xl);
+  background: var(--line);
+  color: var(--ink);
+  font-size: 0.7rem;
+  font-weight: 700;
+}
+
+.transcript-opening-name {
+  font-size: 0.84rem;
+  font-weight: 650;
+  color: var(--ink);
+}
+
+.transcript-opening-tag {
+  margin-left: auto;
+  font-size: 0.72rem;
+  color: var(--muted);
+  white-space: nowrap;
+}
+
+.transcript-opening-tag[data-fallback="true"] {
+  color: var(--warning);
+}
+
+.transcript-opening-body {
+  margin: 0;
+  font-size: 0.84rem;
+  line-height: 1.6;
+  color: var(--body);
+}
+
+.transcript-debate-caption {
+  margin: 0;
+  font-size: 0.78rem;
+  line-height: 1.5;
+}
+
+.transcript-rounds {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-4);
+}
+
+.transcript-round {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  border: 1px solid var(--line-2);
+  border-radius: var(--radius-md);
+  background: var(--surface);
+  padding: var(--space-4);
+}
+
+.transcript-round-head {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  flex-wrap: wrap;
+}
+
+.transcript-round-pill {
+  font-size: 0.68rem;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  padding: 2px var(--space-2);
+  border-radius: var(--radius-pill);
+  background: var(--accent-soft);
+  color: var(--ink);
+}
+
+.transcript-round-focus {
+  font-size: 0.75rem;
+  color: var(--text-secondary);
+}
+
+.transcript-round-body {
+  margin: 0;
+  font-size: 0.85rem;
+  line-height: 1.6;
+  color: var(--body);
+}
+
+.transcript-empty {
+  margin: 0;
+  font-size: 0.82rem;
+}
+
+/* Footer link back to the verdict. Neutral by default; green treatment ONLY
+   on real consensus (data-consensus="true"). */
+.transcript-footer-link {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: var(--space-2);
+  width: 100%;
+  padding: var(--space-4);
+  border: 1px solid var(--line-2);
+  border-radius: var(--radius-md);
+  background: var(--inset);
+  color: var(--ink);
+  font: inherit;
+  font-size: 0.84rem;
+  font-weight: 600;
+  cursor: pointer;
+  transition: background var(--duration-fast) var(--bezier);
+}
+
+.transcript-footer-link:hover {
+  background: var(--accent-soft);
+}
+
+.transcript-footer-link[data-consensus="true"] {
+  background: var(--success-soft);
+  border-color: var(--success-border);
+  color: var(--success);
+}
+
+@media (max-width: 760px) {
+  .transcript-openings {
+    grid-template-columns: 1fr;
+  }
 }
 
 /* ----- Workflow progress indicator -------------------------------------- */
@@ -1550,6 +3777,24 @@ html[data-theme="dark"] .workflow-step[data-state="completed"] .workflow-step-nu
 .mono { font-family: var(--font-mono); font-size: 0.9rem; overflow-wrap: anywhere; }
 .muted { color: var(--muted); }
 
+/* Uppercase micro-label (section eyebrows, meta labels). */
+.label-caps {
+  font-family: var(--font-sans);
+  font-weight: 600;
+  font-size: 11.5px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--text-secondary);
+}
+
+/* ----- View switch scaffold (Slice 0) ----------------------------------
+   ``setView(name)`` in app.js flips ``hidden`` on the [data-view]
+   siblings. The visible wrapper is transparent to layout (display:
+   contents) so the composer column keeps its current grid placement;
+   ``hidden`` still wins by specificity so a hidden view is removed. */
+[data-view] { display: contents; }
+[data-view][hidden] { display: none; }
+
 .error-placeholder {
   color: var(--danger-soft);
   font-style: italic;
@@ -1572,9 +3817,7 @@ main:focus { outline: none; }
 @media (max-width: 980px) {
   .layout, .model-grid, .meta-grid { grid-template-columns: 1fr; }
   .topbar { flex-wrap: wrap; }
-  /* When the topbar wraps, allow one extra line on the tagline so it
-     doesn't crowd the actions row, and shrink the font slightly. */
-  .brand-copy p { font-size: 0.85rem; -webkit-line-clamp: 3; }
+  .brand-copy p { font-size: 0.85rem; }
 }
 
 @media (max-width: 600px) {
@@ -1594,8 +3837,7 @@ main:focus { outline: none; }
   }
 
   .panel { padding: var(--space-4); }
-  .brand-copy h1 { font-size: 1.6rem; }
-  .brand-copy p { font-size: 0.8rem; -webkit-line-clamp: 4; }
+  .brand-copy p { font-size: 0.8rem; }
   .toast-region { left: var(--space-3); right: var(--space-3); max-width: none; }
 }
 
@@ -1795,3 +4037,541 @@ main:focus { outline: none; }
    3. Break down large UI patterns into smaller components
    4. Use semantic names (.field-group instead of .form-section)
    ============================================= */
+
+/* ============================================================
+   Slice 1 — 02 Composer (screen 02)
+   Privacy notice, question field, high-stakes gate, 2x2 model
+   slot cards, footer estimate + ink CTA.
+   Green rule: the money CTA is ink (.button-primary), never green.
+   ============================================================ */
+
+.composer { gap: var(--space-5); }
+.composer-head { display: grid; gap: var(--space-2); }
+.composer .composer-head h1 {
+  font-family: var(--font-serif);
+  font-size: 1.85rem; /* ~30px Newsreader display */
+  font-weight: 500;
+  letter-spacing: -0.01em;
+  line-height: 1.2;
+}
+.composer-stack { gap: var(--space-5); }
+
+/* Question label — rendered as a bare <label for="query-text"> to honour
+   the accessibility contract, styled as an uppercase micro-label here. */
+.question-field .field-label-row label {
+  font-family: var(--font-sans);
+  font-weight: 600;
+  font-size: 11.5px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+
+/* ----- COPY-001 privacy notice (amber, always visible) --------------- */
+.privacy-notice {
+  display: flex;
+  gap: var(--space-3);
+  align-items: flex-start;
+  padding: var(--space-3) var(--space-4);
+  border-radius: var(--radius-sm);
+  border: 1px solid color-mix(in srgb, var(--warning) 32%, transparent);
+  background: var(--warning-soft);
+}
+.privacy-notice-icon {
+  flex-shrink: 0;
+  width: 20px;
+  height: 20px;
+  border-radius: var(--radius-pill);
+  border: 1.5px solid var(--warning);
+  color: var(--warning);
+  display: grid;
+  place-items: center;
+  font-family: var(--font-mono);
+  font-size: 0.75rem;
+  font-weight: 700;
+  margin-top: 1px;
+}
+.privacy-notice-text {
+  margin: 0;
+  font-size: 0.85rem;
+  line-height: 1.55;
+  color: var(--ink);
+}
+
+/* ----- COPY-002 high-stakes gate (red, appears on safety topics) ----- */
+.high-stakes-gate {
+  display: grid;
+  gap: var(--space-3);
+  padding: var(--space-4) var(--space-4) var(--space-4);
+  border-radius: var(--radius-md);
+  border: 1px solid var(--danger-border);
+  background: var(--surface);
+}
+.high-stakes-gate[hidden] { display: none; }
+.high-stakes-label {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+}
+.high-stakes-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 2px;
+  background: var(--danger);
+  flex-shrink: 0;
+}
+.high-stakes-title {
+  font-size: 0.78rem;
+  font-weight: 650;
+  letter-spacing: 0.03em;
+  text-transform: uppercase;
+  color: var(--danger);
+}
+.high-stakes-body {
+  margin: 0;
+  font-size: 0.85rem;
+  line-height: 1.6;
+  color: var(--ink);
+}
+.high-stakes-ack {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  font-size: 0.85rem;
+  font-weight: 600;
+  color: var(--ink);
+  cursor: pointer;
+}
+.high-stakes-ack input[type="checkbox"] {
+  width: 20px;
+  height: 20px;
+  min-height: 20px;
+  flex-shrink: 0;
+  accent-color: var(--ink);
+  cursor: pointer;
+}
+
+/* ----- Model slots: 2x2 grid of cards -------------------------------- */
+.model-slot-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: var(--space-3);
+}
+.model-slot {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  padding: var(--space-3) var(--space-4);
+  background: var(--surface);
+  border: 1px solid var(--line-2);
+  border-radius: var(--radius-sm);
+  min-width: 0;
+}
+.model-slot-avatar {
+  flex-shrink: 0;
+  width: 30px;
+  height: 30px;
+  border-radius: var(--radius-pill);
+  background: var(--accent-soft);
+  color: var(--ink);
+  display: grid;
+  place-items: center;
+  font-size: 0.75rem;
+  font-weight: 700;
+}
+.model-slot-info { flex: 1; min-width: 0; }
+.model-slot-name {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  font-size: 0.84rem;
+  font-weight: 600;
+  color: var(--ink);
+}
+.model-slot-name > span:first-child {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.model-slot-dup {
+  flex-shrink: 0;
+  padding: 1px var(--space-2);
+  border-radius: var(--radius-pill);
+  background: var(--warning-soft);
+  color: var(--warning);
+  font-size: 0.62rem;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+.model-slot-id {
+  font-size: 0.72rem;
+  color: var(--muted);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.model-slot-estimate {
+  flex-shrink: 0;
+  font-size: 0.7rem;
+  color: var(--muted);
+}
+/* Compact ▾ swap control: a real <select> overlaid transparently so the
+   caret box opens the vendor-scoped model list while the accessible name
+   (aria-label="Model for slot N") and keyboard affordance survive. */
+.model-slot-swap {
+  position: relative;
+  flex-shrink: 0;
+  /* 44x44 interactive convention (repo standard) so the ▾ swap control
+     meets the minimum touch-target size. The caret itself keeps its
+     compact visual size (see .model-slot-swap-caret). */
+  min-width: 44px;
+  min-height: 44px;
+  display: grid;
+  place-items: center;
+  border: 1px solid var(--line-strong);
+  border-radius: var(--radius-xs);
+  background: var(--surface);
+}
+.model-slot-swap:focus-within {
+  outline: 3px solid var(--focus-ring);
+  outline-offset: 2px;
+}
+.model-slot-swap-caret {
+  color: var(--muted);
+  font-size: 0.72rem;
+  pointer-events: none;
+}
+.model-slot-swap select {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  min-height: 0;
+  padding: 0;
+  margin: 0;
+  border: none;
+  background: transparent;
+  color: transparent;
+  opacity: 0;
+  cursor: pointer;
+  appearance: none;
+  -webkit-appearance: none;
+}
+.model-slot-swap select:focus { outline: none; box-shadow: none; }
+
+/* ----- Composer footer: total estimate + ink CTA + one-run notice ---- */
+.composer-footer {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-4);
+  flex-wrap: wrap;
+}
+.composer-footer-notice {
+  margin: 0;
+  flex: 1;
+  min-width: 240px;
+  font-size: 0.8rem;
+  line-height: 1.5;
+  color: var(--muted);
+}
+.composer-footer-notice .mono { color: var(--ink); }
+.composer-footer-actions {
+  display: flex;
+  align-items: center;
+  gap: var(--space-4);
+}
+.composer-total {
+  font-size: 1.05rem;
+  font-weight: 600;
+  color: var(--ink);
+}
+
+@media (max-width: 600px) {
+  .model-slot-grid { grid-template-columns: 1fr; }
+  .composer-footer { flex-direction: column; align-items: stretch; }
+  .composer-footer-actions { justify-content: space-between; }
+}
+
+/* ----- Landing (01 · marketing front door) ---------------------------- */
+/* Tokens only — no raw hex/rgba. Green appears exactly where the mock
+   sanctions it as a brand/agreement signpost: the eyebrow, the Preview
+   badge, and the active example chip's dot. Money/entry CTAs move on ink
+   (.button-primary / .button-secondary). The whole view re-themes via the
+   semantic tokens; the brand tile + Preview badge use the theme-invariant
+   --brand-tile-* pair (green in both themes, white glyph). */
+.landing {
+  gap: var(--space-7);
+}
+
+.landing-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-4);
+  flex-wrap: wrap;
+}
+.landing-brand {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+}
+.landing-brand-mark {
+  width: 34px;
+  height: 34px;
+  border-radius: var(--radius-xs);
+  display: grid;
+  place-items: center;
+  background: var(--brand-tile-bg);
+  color: var(--brand-tile-fg);
+  font-family: var(--font-serif);
+  font-weight: 700;
+  font-size: 1.05rem;
+  line-height: 1;
+  flex-shrink: 0;
+}
+.landing-brand-name {
+  font-family: var(--font-sans);
+  font-weight: 650;
+  font-size: 1.05rem;
+  letter-spacing: -0.01em;
+  color: var(--ink);
+}
+.landing-nav {
+  display: flex;
+  align-items: center;
+  gap: var(--space-4);
+}
+.landing-howitworks {
+  min-height: 44px;
+  padding: 0 var(--space-2);
+  border: none;
+  background: transparent;
+  color: var(--text-secondary);
+  font-weight: 500;
+  font-size: 0.9rem;
+  cursor: pointer;
+  border-radius: var(--radius-sm);
+  transition: color var(--duration-fast) var(--bezier);
+}
+.landing-howitworks:hover { color: var(--ink); }
+
+.landing-hero {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  text-align: center;
+  gap: var(--space-4);
+  max-width: 60ch;
+  margin: var(--space-4) auto 0;
+}
+.landing-eyebrow {
+  margin: 0;
+  font-size: 0.78rem;
+  font-weight: 600;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: var(--success); /* green signpost — brand/agreement-adjacent, per the mock */
+}
+.landing-h1 {
+  margin: 0;
+  font-family: var(--font-serif);
+  font-weight: 500;
+  font-size: clamp(2.2rem, 5vw, 3.25rem);
+  line-height: 1.06;
+  letter-spacing: -0.02em;
+  max-width: 15ch;
+  text-wrap: balance;
+  color: var(--ink);
+}
+.landing-subhead {
+  margin: 0;
+  font-size: 1.05rem;
+  line-height: 1.6;
+  color: var(--text-secondary);
+  max-width: 56ch;
+  text-wrap: pretty;
+}
+
+.landing-runbar {
+  width: 100%;
+  max-width: 800px;
+  margin: 0 auto;
+  background: var(--surface);
+  border: 1px solid var(--line-2);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-md);
+  overflow: hidden;
+}
+.landing-runbar-prompt {
+  padding: var(--space-5) var(--space-6) var(--space-1);
+  min-height: 84px;
+}
+.landing-runbar-placeholder {
+  font-size: 1.05rem;
+  line-height: 1.55;
+  color: var(--muted);
+}
+.landing-runbar-foot {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-4);
+  padding: var(--space-4) var(--space-5);
+  border-top: 1px solid var(--line);
+  flex-wrap: wrap;
+}
+.landing-cost {
+  margin: 0;
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  flex-wrap: wrap;
+  font-size: 0.85rem;
+  color: var(--text-secondary);
+}
+.landing-cost-figure {
+  color: var(--ink);
+  font-weight: 600;
+  white-space: nowrap;
+}
+.landing-cost-note .mono { color: var(--ink); }
+.landing-runbar-actions {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+}
+
+.landing-chips {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: var(--space-3);
+}
+.landing-chips-label {
+  font-size: 0.85rem;
+  font-weight: 500;
+  color: var(--muted);
+}
+.landing-chips-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-3);
+  justify-content: center;
+  max-width: 760px;
+}
+.landing-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+  min-height: 44px;
+  padding: 0 var(--space-4);
+  border-radius: var(--radius-pill);
+  border: 1px solid var(--line-strong-2);
+  background: var(--surface);
+  color: var(--body);
+  font-family: var(--font-sans);
+  font-size: 0.9rem;
+  font-weight: 500;
+  cursor: pointer;
+  transition: border-color var(--duration-fast) var(--bezier),
+    color var(--duration-fast) var(--bezier),
+    transform var(--duration-fast) var(--bezier);
+}
+.landing-chip:hover {
+  border-color: var(--ink);
+  color: var(--ink);
+  transform: translateY(-1px);
+}
+.landing-chip-active {
+  border-color: var(--success-border); /* green outline — active signpost, per the mock */
+  color: var(--ink);
+}
+.landing-chip-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: var(--radius-pill);
+  background: var(--success); /* small green consensus dot */
+  flex-shrink: 0;
+}
+
+.landing-preview {
+  display: flex;
+  gap: var(--space-4);
+  align-items: flex-start;
+  width: 100%;
+  max-width: 800px;
+  margin: 0 auto;
+  padding: var(--space-5);
+  border-radius: var(--radius-md);
+  background: var(--accent-soft);
+  border: 1px solid var(--line-2);
+}
+.landing-preview-badge {
+  flex-shrink: 0;
+  display: inline-flex;
+  align-items: center;
+  height: 22px;
+  padding: 0 var(--space-2);
+  border-radius: var(--radius-xs);
+  background: var(--brand-tile-bg);
+  color: var(--brand-tile-fg);
+  font-size: 0.66rem;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  white-space: nowrap;
+}
+.landing-preview-body {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+  min-width: 0;
+}
+.landing-preview-text {
+  margin: 0;
+  font-size: 0.95rem;
+  line-height: 1.6;
+  color: var(--body);
+  text-wrap: pretty;
+}
+.landing-preview-caption {
+  font-size: 0.78rem;
+  font-style: italic;
+  color: var(--muted);
+}
+
+.landing-disclaimers {
+  display: flex;
+  gap: var(--space-3);
+  justify-content: center;
+  flex-wrap: wrap;
+}
+.landing-disclaimer {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+  padding: var(--space-2) var(--space-4);
+  border-radius: var(--radius-pill);
+  background: var(--surface);
+  border: 1px solid var(--line-2);
+  font-size: 0.82rem;
+  color: var(--text-secondary);
+}
+.landing-disclaimer-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 2px;
+  background: var(--warning); /* amber caution square — not green */
+  flex-shrink: 0;
+}
+.landing-disclaimer-dot-neutral {
+  border-radius: var(--radius-pill);
+  background: var(--muted);
+}
+
+@media (max-width: 600px) {
+  .landing-runbar-foot { flex-direction: column; align-items: stretch; }
+  .landing-runbar-actions { justify-content: space-between; }
+}

@@ -68,8 +68,9 @@ This is the design-level API contract for Release 1. `openapi.yaml` must be sync
 | `agreement` | object | Verdict-ring `aligned` of `total` (screen 05). `total` = number of initial answers, including failed ones; `aligned` = how many land in the final consensus. |
 | `position_movements` | array | Per-model "how positions moved" rows (`opening`, `after_round_1`, `final`, `revised`, `revision_note`). INFERRED from opening-vs-final alignment — the debate is round-scoped, so this is never an observed per-model transcript and the UI must caption it as inferred. |
 | `cost` | object | Estimated and actual cost where available. |
-| `actual_cost_usd` | string (decimal) | Actual cost incurred, for the receipt's est→actual reconciliation. On demo/simulation runs (no billable usage) this equals the estimate. |
-| `actual_breakdown` | object \| null | Itemized actual-cost partition mirroring `cost_estimate.breakdown`; `null` when no breakdown is available. On demo/simulation runs this is the estimate's breakdown. |
+| `actual_cost_usd` | string (decimal) | Actual cost incurred, for the receipt's est→actual reconciliation. Per-call provider-usage capture is not yet plumbed, so this currently equals the estimate on every run (see `cost_source`). |
+| `actual_breakdown` | object \| null | Itemized actual-cost partition mirroring `cost_estimate.breakdown`; `null` when no breakdown is available. Currently reuses the estimate's breakdown on every run (see `cost_source`). |
+| `cost_source` | string (`estimated` \| `measured`) | Provenance of `actual_cost_usd` / `actual_breakdown`. Only `estimated` is emitted today (per-call usage capture is not yet plumbed): on demo runs the estimate is exact, on live runs it stands in for measured billing. The UI reads this to label the receipt as estimated rather than implying a measured reconciliation. `measured` is reserved for when usage capture lands. Defaults to `estimated`. |
 | `elapsed_ms` | integer | Workflow elapsed time. |
 | `provider_notices` | array | User-safe failure/fallback notices. |
 | `correlation_id` | string | Non-secret support identifier. |

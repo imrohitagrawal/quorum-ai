@@ -135,9 +135,9 @@ def test_workspace_html_query_textarea_has_keyboard_shortcut_hint() -> None:
     html = _fetch_ui()
     assert 'id="query-text"' in html
     assert "Ctrl+Enter" in html or "Cmd+Enter" in html
-    # The character counter starts at 0.
+    # The character counter starts at 0, formatted "N / 20,000".
     assert 'id="query-char-count"' in html
-    assert "0 chars" in html
+    assert "0 / 20,000" in html
 
 
 def test_workspace_html_button_spinners_present() -> None:

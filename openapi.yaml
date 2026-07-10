@@ -1256,6 +1256,13 @@ components:
           anyOf:
           - $ref: '#/components/schemas/CostBreakdown'
           - type: 'null'
+        cost_source:
+          type: string
+          enum:
+          - estimated
+          - measured
+          title: Cost Source
+          default: estimated
       type: object
       required:
       - query_run_id

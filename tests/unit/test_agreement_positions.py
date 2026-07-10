@@ -28,7 +28,12 @@ from product_app.query_runs import (
     ResultProjection,
     _result_response,
 )
-from product_app.synthesis import build_agreement_and_positions
+from product_app.synthesis import (
+    FinalSynthesis,
+    SynthesisQualityChecks,
+    SynthesisStatus,
+    build_agreement_and_positions,
+)
 
 FOCUS = ["disagreement", "weak_support", "missing_reasoning"]
 
@@ -77,6 +82,38 @@ def _debate(critique: str) -> list[DebateOutput]:
     ]
 
 
+def _synthesis(
+    consensus: str,
+    *,
+    recommendation: str = "",
+    status: SynthesisStatus = SynthesisStatus.COMPLETED,
+) -> FinalSynthesis:
+    """Minimal COMPLETED FinalSynthesis whose consensus/recommendation carry the
+    final-answer content that per-model alignment is compared against.
+    """
+    return FinalSynthesis(
+        status=status,
+        consensus=consensus,
+        disagreement="",
+        source_support="",
+        uncertainty="",
+        recommendation=recommendation,
+        high_stakes_notice=None,
+        citation_coverage=CitationCoverage(
+            material_claim_count=0,
+            cited_claim_count=0,
+            coverage_ratio=Decimal("0"),
+            target_met=False,
+        ),
+        quality_checks=SynthesisQualityChecks(
+            citation_coverage_target_met=False,
+            false_consensus_preserved=False,
+            decision_support_framing_present=True,
+            high_stakes_warning_required=False,
+        ),
+    )
+
+
 # --- derivation shape / invariants ----------------------------------------
 
 
@@ -117,11 +154,13 @@ def test_strong_consensus_marks_all_completed_models_aligned() -> None:
 
 
 def test_minority_that_aligns_is_marked_revised_with_an_inference_note() -> None:
-    # Three agree, one opens elsewhere; the debate critique signals
-    # convergence → "strong" panel → the minority's opening clustered as a
-    # minority AND the final synthesis aligns, so it is flagged ``revised``.
-    # The note describes that OBSERVABLE INFERENCE, not a claimed mid-debate
-    # action (the round-scoped transcript can't observe one).
+    # FALLBACK path (no final synthesis supplied — e.g. synthesis failed):
+    # three agree, one opens elsewhere; the debate critique signals convergence
+    # → "strong" panel → with no final answer to compare against we fall back to
+    # the panel-strength inference, so the minority is inferred to have landed
+    # aligned and is flagged ``revised``. The note describes that OBSERVABLE
+    # INFERENCE, not a claimed mid-debate action (the round-scoped transcript
+    # can't observe one). The synthesis-aware path is pinned separately below.
     answers = [
         _answer(1, _AGREE_TEXT),
         _answer(2, _AGREE_TEXT),
@@ -145,6 +184,61 @@ def test_minority_that_aligns_is_marked_revised_with_an_inference_note() -> None
     # A revised model still lands aligned, so aligned counts it.
     assert agreement.aligned == 4
     assert agreement.total == 4
+
+
+def test_unrelated_minority_absent_from_final_is_not_counted_aligned() -> None:
+    # PR7 follow-up #2, synthesis-aware path: a convergence keyword makes the
+    # panel "strong", but an unrelated minority whose opening never appears in
+    # the final synthesis must NOT be swept into the agreement numerator. With
+    # the final answer in hand each opening is compared to it per-model.
+    answers = [
+        _answer(1, _AGREE_TEXT),
+        _answer(2, _AGREE_TEXT),
+        _answer(3, _AGREE_TEXT),
+        _answer(4, "An unrelated claim about zebra migration patterns in autumn."),
+    ]
+    debate = _debate("After round 2 the models converged on the load-limit reading.")
+    # The final answer is the majority (bridge / load-limit) reading; the zebra
+    # opening is nowhere in it.
+    synthesis = _synthesis(_AGREE_TEXT)
+
+    agreement, positions = build_agreement_and_positions(
+        initial_answers=answers, debate_outputs=debate, final_synthesis=synthesis
+    )
+
+    assert agreement.total == 4
+    assert agreement.aligned == 3  # the unrelated minority is NOT aligned
+    slot4 = next(p for p in positions if p.slot_number == 4)
+    assert slot4.revised is False
+    assert slot4.revision_note is None
+
+
+def test_minority_whose_opening_lands_in_final_is_marked_revised() -> None:
+    # PR7 follow-up #2, the HONEST ``revised`` case: a model opens outside the
+    # majority cluster, yet its own distinctive position appears in the final
+    # synthesis, so it legitimately lands aligned and is flagged revised.
+    majority = "The tunnel option is best because it avoids the flood plain entirely."
+    minority = "A bridge could work if reinforced against seasonal flooding downstream."
+    answers = [
+        _answer(1, majority),
+        _answer(2, majority),
+        _answer(3, majority),
+        _answer(4, minority),
+    ]
+    debate = _debate("The panel weighed both options.")
+    # The final answer reflects BOTH the majority reading and the minority's
+    # distinctive proposal.
+    synthesis = _synthesis(f"{majority} {minority}")
+
+    agreement, positions = build_agreement_and_positions(
+        initial_answers=answers, debate_outputs=debate, final_synthesis=synthesis
+    )
+
+    revised = [p for p in positions if p.revised]
+    assert len(revised) == 1
+    assert revised[0].slot_number == 4
+    assert agreement.total == 4
+    assert agreement.aligned == 4
 
 
 def test_no_stance_copy_claims_an_unobservable_mid_debate_action() -> None:
@@ -179,6 +273,62 @@ def test_divided_panel_keeps_the_minority_dissenting() -> None:
     assert agreement.total == 4
     # Not everyone aligns, and no minority model was recorded as revising.
     assert agreement.aligned < agreement.total
+    assert all(p.revised is False for p in positions)
+
+
+def test_polar_tie_has_no_majority_side() -> None:
+    # PR7 follow-up #3: on a 1-vs-1 polar tie neither side is the majority, so
+    # NO opening is flagged majority (the old code arbitrarily crowned the
+    # first sorted keyword's side and swept neutral texts in with it).
+    from product_app.synthesis_consensus import _opening_majority_flags, _polar_split
+
+    texts = [
+        "Yes, proceed with the rollout today.",
+        "No, do not proceed with the rollout.",
+        "Maybe later; it depends on the audit outcome.",
+        "Insufficient evidence to decide either way.",
+    ]
+    split = _polar_split(texts)
+    # A split is still detected (yes vs no) so the disagreement signal fires ...
+    assert split is not None
+    # ... but a tie crowns nobody: every majority flag is False.
+    assert split == [False, False, False, False]
+    assert _opening_majority_flags(texts) == [False, False, False, False]
+
+
+def test_neutral_answers_are_never_counted_as_majority() -> None:
+    # PR7 follow-up #3: with a clear 2-vs-1 polar split plus one neutral answer,
+    # only the strictly-larger side is the majority. The neutral text (on
+    # neither polar side) must NOT default into the majority.
+    from product_app.synthesis_consensus import _opening_majority_flags
+
+    texts = [
+        "Yes, this is affordable; recommend proceeding.",
+        "Yes, affordable overall, so proceed.",
+        "No, it is far too expensive; avoid it.",
+        "The committee met on Tuesday to review the schedule.",  # neutral
+    ]
+    flags = _opening_majority_flags(texts)
+    # The two "yes" openers are the majority; the "no" and the neutral are not.
+    assert flags == [True, True, False, False]
+
+
+def test_four_way_divided_panel_does_not_inflate_agreement() -> None:
+    # PR7 follow-up #3, end to end: a genuinely divided panel (Yes / No /
+    # Maybe / Insufficient) must NOT report an inflated agreement numerator.
+    # The pre-fix code reported 3/4 here; the honest count is that no opening
+    # sits in a majority consensus.
+    answers = [
+        _answer(1, "Yes, proceed with the plan now."),
+        _answer(2, "No, do not proceed with the plan."),
+        _answer(3, "Maybe later; it depends on further review."),
+        _answer(4, "Insufficient evidence to make the call."),
+    ]
+    agreement, positions = build_agreement_and_positions(
+        initial_answers=answers, debate_outputs=_debate("The panel remained split.")
+    )
+    assert agreement.total == 4
+    assert agreement.aligned == 0
     assert all(p.revised is False for p in positions)
 
 

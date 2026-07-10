@@ -6,19 +6,22 @@
     <title>{{ app_name }} workspace</title>
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-    <link href="https://fonts.googleapis.com/css2?family=Instrument+Serif:ital@0;1&family=Manrope:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+    <link href="https://fonts.googleapis.com/css2?family=Newsreader:ital,opsz,wght@0,6..72,400;0,6..72,500;0,6..72,600;0,6..72,700;1,6..72,400;1,6..72,500&family=Geist:wght@400;500;550;600;650;700&family=Geist+Mono:wght@400;500;600&display=swap" rel="stylesheet">
     <link rel="stylesheet" href="/static/app.css">
     <style>
       /* Inline accessibility-critical rules so the page remains usable
          even if the external stylesheet fails to load. */
-      :focus-visible { outline: 3px solid var(--focus-ring, #8a1a0a); outline-offset: 3px; }
-      :focus { outline: 3px solid var(--focus-ring, #8a1a0a); outline-offset: 3px; }
+      :focus-visible { outline: 3px solid var(--focus-ring, #14171C); outline-offset: 3px; }
+      :focus { outline: 3px solid var(--focus-ring, #14171C); outline-offset: 3px; }
       .button, button, .toggle, .info-icon { min-width: 44px; min-height: 44px; }
 
-      /* Critical above-the-fold styles */
-      body { font-family: 'Manrope', system-ui, sans-serif; font-size: 16px; line-height: 1.5; background: #fffaf5; color: #10161f; }
-      .panel { background: rgba(255, 255, 255, 0.72); backdrop-filter: blur(24px); }
-      .topbar { background: rgba(255, 255, 255, 0.88); backdrop-filter: blur(24px); }
+      /* Critical above-the-fold styles (approved: cool paper #F6F5F2 · ink #14171C · Geist).
+         Reference the theme tokens so dark mode is honoured when app.css loads;
+         the literal fallbacks keep the page usable in the approved light palette
+         if the external stylesheet fails to load (tokens undefined → fallback). */
+      body { font-family: 'Geist', system-ui, sans-serif; font-size: 16px; line-height: 1.5; background: var(--bg, #F6F5F2); color: var(--ink, #14171C); }
+      .panel { background: var(--surface, #FFFFFF); }
+      .topbar { background: var(--paper, #F6F5F2); }
     </style>
   </head>
   <body>
@@ -27,14 +30,14 @@
     <main id="main-content" class="shell" tabindex="-1">
       <header class="topbar">
         <div class="brand">
-          <div class="logo" aria-label="Quorum AI logo" role="img">Q</div>
+          <div class="brand-mark" aria-label="Quorum AI logo" role="img">Q</div>
           <div class="brand-copy">
-            <h1>Quorum AI</h1>
+            <span class="wordmark">Quorum</span>
             <p class="brand-lede">Four AI models, one sourced answer.</p>
-            <p class="brand-workflow">Four AI models respond. They read each other's answers, debate, and revise. A fifth model writes the final synthesis. Cost shown before you run.</p>
           </div>
         </div>
         <div class="topbar-actions">
+          <button id="show-landing" class="topbar-howitworks" type="button">How it works</button>
           <span class="status-pill" id="connection-pill" data-state="connecting" aria-live="polite" aria-atomic="true">
             <span class="status-pill-dot" aria-hidden="true"></span>
             <span id="connection-pill-text">Connecting</span>
@@ -44,11 +47,14 @@
       </header>
 
       <section id="error-region" class="status-banner" data-severity="error" tabindex="-1" role="alert" hidden>
-        <div class="status-banner-icon" aria-hidden="true">!</div>
+        <div class="status-banner-icon" id="error-region-icon" aria-hidden="true">!</div>
         <div class="status-banner-body">
-          <div class="status-banner-title" id="error-region-title">Something went wrong</div>
+          <span class="status-banner-actag" id="error-region-actag" hidden></span>
+          <div class="status-banner-title" id="error-region-title" role="heading" aria-level="2">Something went wrong</div>
           <div class="status-banner-message" id="error-region-message"></div>
+          <dl class="status-banner-detail" id="error-region-detail" hidden></dl>
           <div class="status-banner-actions" id="error-region-actions"></div>
+          <div class="status-banner-footer mono" id="error-region-footer" hidden></div>
         </div>
         <button class="status-banner-dismiss" type="button" id="error-region-dismiss" aria-label="Dismiss error">&times;</button>
       </section>
@@ -64,19 +70,19 @@
 
       <nav class="workflow-progress" aria-label="Workflow: 4-step process (Question, Models, Debate, Synthesis)">
         <ol class="workflow-steps" role="tablist" aria-orientation="horizontal" aria-live="polite" aria-atomic="false">
-          <li class="workflow-step" data-step="question" role="tab" tabindex="0" aria-selected="false" aria-controls="workflow-question">
+          <li class="workflow-step" data-step="question" role="tab" tabindex="0" aria-selected="false">
             <span class="workflow-step-number" aria-hidden="true">1</span>
             <span class="workflow-step-label">Question</span>
           </li>
-          <li class="workflow-step" data-step="models" role="tab" tabindex="-1" aria-selected="false" aria-controls="workflow-models">
+          <li class="workflow-step" data-step="models" role="tab" tabindex="-1" aria-selected="false">
             <span class="workflow-step-number" aria-hidden="true">2</span>
             <span class="workflow-step-label">Models</span>
           </li>
-          <li class="workflow-step" data-step="debate" role="tab" tabindex="-1" aria-selected="false" aria-controls="workflow-debate">
+          <li class="workflow-step" data-step="debate" role="tab" tabindex="-1" aria-selected="false">
             <span class="workflow-step-number" aria-hidden="true">3</span>
             <span class="workflow-step-label">Debate</span>
           </li>
-          <li class="workflow-step" data-step="synthesis" role="tab" tabindex="-1" aria-selected="false" aria-controls="workflow-synthesis">
+          <li class="workflow-step" data-step="synthesis" role="tab" tabindex="-1" aria-selected="false">
             <span class="workflow-step-number" aria-hidden="true">4</span>
             <span class="workflow-step-label">Synthesis</span>
           </li>
@@ -84,22 +90,28 @@
       </nav>
 
       <div class="layout">
-        <section class="panel" aria-labelledby="composer-heading">
-          <h2 id="composer-heading">Workspace</h2>
-          <p class="lede">Results are ephemeral. Cost is shown before each run; nothing executes without your confirmation.</p>
-          <div class="stack">
-            <div class="callout callout-warning">
-              <div class="callout-icon" aria-hidden="true">!</div>
-              <div class="callout-body">
-                <strong>Safety reminder.</strong>
-                Do not submit sensitive, private, regulated, or secret information. High-stakes topics remain decision support only.
-              </div>
+        <!-- Persistent polite live region for view-transition announcements
+             (e.g. the cost gate). Kept OUTSIDE the swapped [data-view]
+             containers so it is always in the accessibility tree and its
+             mutations are reliably announced. -->
+        <div id="cost-gate-live" class="sr-only" role="status" aria-live="polite"></div>
+        <div data-view="composer">
+        <section class="panel composer" aria-labelledby="composer-heading">
+          <div class="composer-head">
+            <h1 id="composer-heading">Ask the panel</h1>
+            <p class="lede">Results are ephemeral. Cost is shown before each run; nothing executes without your confirmation.</p>
+          </div>
+          <div class="stack composer-stack">
+            <!-- COPY-001 privacy warning — always visible above the question field. -->
+            <div class="privacy-notice" role="note">
+              <span class="privacy-notice-icon" aria-hidden="true">!</span>
+              <p class="privacy-notice-text">Do not include sensitive, private, personal, confidential, regulated, or secret information. Privacy controls are not defined yet, and your query may be sent to external AI and search providers.</p>
             </div>
-            <div class="field">
+            <div class="field question-field">
               <div class="field-label-row">
-                <label for="query-text">Question</label>
+                <label for="query-text">Your question</label>
                 <span class="field-meta">
-                  <span id="query-char-count" class="field-meta-counter" aria-live="polite">0 chars</span>
+                  <span id="query-char-count" class="field-meta-counter" aria-live="polite" aria-label="0 of 20,000 characters">0 / 20,000</span>
                   <span class="field-meta-hint" id="query-validation-hint"></span>
                 </span>
               </div>
@@ -112,10 +124,27 @@
               ></textarea>
               <div id="query-error" class="field-error" hidden role="alert" aria-live="assertive"></div>
             </div>
+
+            <!-- COPY-002 high-stakes gate. Hidden until POST /v1/query-runs/warnings
+                 flags a ``high_stakes`` topic; the acknowledgement checkbox keeps
+                 the primary CTA disabled until it is checked. The safety
+                 acknowledgement is sent as ``safety_acknowledgements[]``. -->
+            <div id="high-stakes-gate" class="high-stakes-gate" role="group" aria-label="High-stakes topic acknowledgement" hidden>
+              <div class="high-stakes-label">
+                <span class="high-stakes-dot" aria-hidden="true"></span>
+                <span class="high-stakes-title">Decision support only</span>
+              </div>
+              <p class="high-stakes-body">This result is decision support only. It is not medical, legal, financial, safety, or regulated professional advice. Review the sources, compare the disagreement, and consult a qualified professional before acting.</p>
+              <label class="high-stakes-ack" for="high-stakes-ack">
+                <input type="checkbox" id="high-stakes-ack">
+                <span>I understand this is not professional advice.</span>
+              </label>
+            </div>
+
             <fieldset class="field-group">
               <legend>Model slots</legend>
-              <div class="muted">Choose four different models. Once a model is selected in one slot, it is removed from the other dropdowns.</div>
-              <div id="model-inputs" class="stack">
+              <div class="muted">Choose four different models. Swap any slot from the live catalog; duplicates are allowed but flagged.</div>
+              <div id="model-inputs" class="model-slot-grid">
                 <label class="inline" data-model-slot="1">
                   <span>Slot 1</span>
                   <select data-model-slot-select="1" aria-label="Model for slot 1">
@@ -178,21 +207,362 @@
                 </div>
               </div>
             </div>
-            <div class="inline">
-              <button id="run-now" class="button button-primary" type="button" data-loading-text="Starting...">
-                <span class="button-label">Run now</span>
-                <span class="button-spinner" aria-hidden="true"></span>
-              </button>
-              <button id="estimate-run" class="button button-secondary" type="button" data-loading-text="Estimating...">
-                <span class="button-label">Estimate cost</span>
-                <span class="button-spinner" aria-hidden="true"></span>
-              </button>
+            <div class="composer-footer">
+              <p class="composer-footer-notice">You'll approve an itemized estimate before anything runs · hard cap <span class="mono">$0.25</span>/run · one run at a time per session</p>
+              <div class="composer-footer-actions">
+                <span id="composer-total-estimate" class="mono composer-total" aria-live="polite">—</span>
+                <button id="estimate-run" class="button button-primary composer-cta" type="button" data-loading-text="Estimating...">
+                  <span class="button-label">See the estimate →</span>
+                  <span class="button-spinner" aria-hidden="true"></span>
+                </button>
+              </div>
             </div>
             <div class="keyboard-hint muted">
-              <kbd>Ctrl</kbd>+<kbd>Enter</kbd> runs now · <kbd>Esc</kbd> cancels
+              <kbd>Ctrl</kbd>+<kbd>Enter</kbd> shows the estimate · <kbd>Esc</kbd> cancels
             </div>
           </div>
         </section>
+        </div>
+        <!-- Screen 03 — Cost gate (``cost_review`` state). Filled by
+             Slice 2. ``estimateRun`` routes here for the
+             ``require_confirmation`` and ``block`` bands (the ``allow``
+             band skips this screen and runs straight away). The itemized
+             by-model / by-stage table and threshold rail are populated by
+             ``renderCostGate`` from ``cost_estimate.breakdown``. -->
+        <div data-view="cost-gate" hidden>
+          <section class="panel cost-gate" role="region" aria-labelledby="cost-gate-heading">
+            <div class="cost-gate-head">
+              <span class="cost-gate-eyebrow">Cost review</span>
+              <h1 id="cost-gate-heading" tabindex="-1">Approve before anything runs</h1>
+              <p class="lede">Nothing executes without this approval. The approved figure becomes this run's spend cap.</p>
+            </div>
+
+            <div class="cost-gate-question">
+              <span class="cost-gate-question-label">Your question</span>
+              <div id="cost-gate-question" class="cost-gate-question-text"></div>
+              <span class="cost-gate-question-meta">4 models · 2 debate rounds · synthesis · sourced answers where search succeeds</span>
+            </div>
+
+            <div id="cost-review-card" class="cost-review-card" data-band="require_confirmation">
+              <div class="cost-review-card-head">
+                <span id="cost-review-band-label" class="cost-review-band-label">Cost review — your confirmation required</span>
+                <span class="cost-review-card-note">Planning estimate · reconciled to actuals on the receipt</span>
+              </div>
+              <div class="cost-review-card-body">
+                <div class="cost-total-row">
+                  <span id="cost-gate-total" class="cost-total mono">$0.00</span>
+                  <span id="cost-gate-range-wrap" class="cost-total-range">estimated range <span id="cost-gate-range" class="mono"></span></span>
+                </div>
+
+                <!-- Threshold rail (dataviz). 0 → $0.25 linear; the confirm
+                     tick sits at $0.15 (60%), the block boundary at $0.25
+                     (100%). ``renderCostGate`` positions the marker. Colours
+                     are ink-tint (approval band) + amber (confirm) + red
+                     (block) — never green. -->
+                <div id="cost-gate-rail" class="cost-rail" data-band="require_confirmation">
+                  <div class="cost-rail-track" aria-hidden="true">
+                    <span class="cost-rail-seg cost-rail-seg-allow"></span>
+                    <span class="cost-rail-seg cost-rail-seg-confirm"></span>
+                    <span class="cost-rail-tick cost-rail-tick-confirm"></span>
+                    <span class="cost-rail-tick cost-rail-tick-block"></span>
+                    <span id="cost-rail-marker" class="cost-rail-marker"></span>
+                  </div>
+                  <div class="cost-rail-labels mono">
+                    <span>$0 — runs on approval</span>
+                    <span class="cost-rail-label-confirm">$0.15 — explicit confirmation</span>
+                    <span class="cost-rail-label-block">$0.25 — blocked, no override</span>
+                  </div>
+                </div>
+
+                <!-- Itemized estimate, partitioned two ways from the same
+                     ``breakdown`` total. Rows are rendered by JS. -->
+                <div class="cost-itemized">
+                  <div class="cost-column">
+                    <span class="cost-column-head">By model</span>
+                    <div id="cost-by-model" class="cost-rows"></div>
+                  </div>
+                  <div class="cost-column cost-column-stage">
+                    <span class="cost-column-head">By stage — every round priced</span>
+                    <div id="cost-by-stage" class="cost-rows"></div>
+                  </div>
+                </div>
+
+                <p id="cost-gate-reason" class="cost-gate-reason"></p>
+                <p id="cost-gate-block-note" class="cost-gate-block-note" hidden></p>
+                <p id="cost-gate-block-footer" class="cost-gate-block-footer mono" hidden></p>
+
+                <div id="cost-gate-actions" class="cost-gate-actions">
+                  <button
+                    id="gate-confirm"
+                    class="button button-primary cost-gate-confirm"
+                    type="button"
+                    data-loading-text="Starting..."
+                  >
+                    <span class="button-label">Approve &amp; run</span>
+                    <span class="button-spinner" aria-hidden="true"></span>
+                  </button>
+                  <button id="gate-back" class="button button-secondary" type="button">Change models</button>
+                  <button id="gate-block-models" class="button button-primary" type="button" hidden>Choose cheaper models</button>
+                  <button id="gate-block-shorten" class="button button-secondary" type="button" hidden>Shorten the question</button>
+                  <span id="cost-gate-cap-note" class="cost-gate-cap-note">The approved figure becomes this run's spend cap.</span>
+                </div>
+              </div>
+            </div>
+
+            <div class="cost-gate-hint muted">
+              <span id="cost-gate-hint-confirm"><kbd>Ctrl</kbd>+<kbd>Enter</kbd> confirm · </span><kbd>Esc</kbd> back — estimates at or below <span class="mono">$0.15</span> skip this screen and run on approval.
+            </div>
+          </section>
+        </div>
+        <div data-view="live-run" hidden>
+          <section class="panel live-run" role="region" aria-labelledby="live-run-heading">
+            <div class="live-run-header">
+              <div class="live-run-header-lead">
+                <h1 id="live-run-heading" class="live-run-heading" tabindex="-1">Live run</h1>
+                <span id="live-status-pill" class="live-status-pill" data-state="running">
+                  <span class="live-status-dot" aria-hidden="true"></span>
+                  <span id="live-status-text" role="status" aria-live="polite">Starting…</span>
+                </span>
+              </div>
+              <div class="live-run-header-meta">
+                <span id="live-elapsed" class="live-elapsed mono" aria-hidden="true">0.0s elapsed</span>
+                <button id="live-stop" class="button live-stop" type="button">Stop run</button>
+              </div>
+            </div>
+            <button
+              id="live-corr"
+              type="button"
+              class="live-corr live-corr-copy mono"
+              aria-label="Copy run ID"
+            ></button>
+
+            <div class="live-query-band">
+              <div class="live-eyebrow">Running query</div>
+              <div id="live-query" class="live-query"></div>
+            </div>
+
+            <div id="live-stage-strip" class="live-stage-strip" aria-hidden="true"></div>
+
+            <div class="live-run-grid">
+              <div class="live-run-main">
+                <div id="live-notices" class="live-notices" hidden>
+                  <div class="live-eyebrow">Run notices</div>
+                  <div id="live-notices-list" class="live-notices-list"></div>
+                </div>
+                <p class="live-debate-caption muted">
+                  Round-level critiques appear here as each debate round completes.
+                  Per-model debate detail is not captured.
+                </p>
+                <div id="live-debate" class="live-debate"></div>
+              </div>
+              <div class="live-run-side">
+                <div class="live-side-section">
+                  <div class="live-eyebrow">Model status</div>
+                  <div id="live-model-status" class="live-model-status"></div>
+                </div>
+                <div id="live-fallback" class="live-fallback" role="status" hidden></div>
+                <div id="live-cap" class="live-cap"></div>
+              </div>
+            </div>
+          </section>
+        </div>
+        <div data-view="result" hidden>
+          <section class="panel result" role="region" aria-labelledby="result-heading">
+            <div class="result-header">
+              <div class="result-header-lead">
+                <span class="result-brand">
+                  <span class="result-brand-tile" aria-hidden="true">Q</span>
+                  <span class="result-brand-name">Quorum</span>
+                </span>
+                <span class="result-header-divider" aria-hidden="true"></span>
+                <span class="result-completion">
+                  <span class="result-completion-dot" aria-hidden="true"></span>
+                  <span id="result-completion-text"></span>
+                </span>
+              </div>
+              <div class="result-header-actions">
+                <button id="result-copy" type="button" class="button result-action">Copy</button>
+                <button id="result-export" type="button" class="button result-action">Export</button>
+              </div>
+            </div>
+
+            <div class="result-body">
+              <div class="result-ask">
+                <span class="result-eyebrow">You asked</span>
+                <h1 id="result-heading" class="result-question" tabindex="-1"><span id="result-question"></span></h1>
+                <div id="result-meta" class="result-meta"></div>
+                <button
+                  id="result-details-toggle"
+                  type="button"
+                  class="result-details-toggle"
+                  aria-expanded="false"
+                  aria-controls="result-receipt"
+                >
+                  <span class="result-details-label">Run details</span>
+                  <span class="result-details-caret" aria-hidden="true">&#9662;</span>
+                </button>
+              </div>
+
+              <div
+                id="result-receipt"
+                class="result-receipt"
+                role="region"
+                aria-label="Run receipt and cost reconciliation"
+                hidden
+              ></div>
+
+              <div id="result-verdict" class="result-verdict" role="region" aria-label="Panel result"></div>
+
+              <div id="result-trust" class="result-trust" role="group" aria-label="Trust signals"></div>
+
+              <div
+                id="result-positions"
+                class="result-positions"
+                role="region"
+                aria-label="How positions moved"
+                hidden
+              ></div>
+
+              <button
+                id="result-transcript-link"
+                type="button"
+                class="result-transcript-link"
+              >Read the full debate transcript &rarr;</button>
+            </div>
+          </section>
+        </div>
+
+        <div data-view="transcript" hidden>
+          <section class="panel transcript" role="region" aria-labelledby="transcript-heading">
+            <div class="transcript-header">
+              <div class="transcript-header-lead">
+                <button id="transcript-back" type="button" class="transcript-back">&larr; Back to verdict</button>
+                <span class="transcript-header-divider" aria-hidden="true"></span>
+                <span class="transcript-header-title">The debate</span>
+                <span id="transcript-meta" class="transcript-meta mono"></span>
+              </div>
+              <span id="transcript-status" class="transcript-status" data-consensus="false"></span>
+            </div>
+
+            <div class="transcript-body">
+              <h1 id="transcript-heading" class="transcript-question" tabindex="-1"></h1>
+
+              <section class="transcript-section" aria-label="Opening positions">
+                <div class="transcript-section-head">
+                  <span class="transcript-section-title">Opening positions</span>
+                  <span class="transcript-section-rule" aria-hidden="true"></span>
+                  <span class="transcript-section-note mono">opening answers</span>
+                </div>
+                <div id="transcript-openings" class="transcript-openings"></div>
+              </section>
+
+              <section class="transcript-section" aria-label="The debate rounds">
+                <div class="transcript-section-head">
+                  <span class="transcript-section-title">The debate</span>
+                  <span class="transcript-section-rule" aria-hidden="true"></span>
+                </div>
+                <p class="transcript-debate-caption muted">The debate is captured as a per-round critique summary &mdash; Quorum does not record a per-model, line-by-line transcript.</p>
+                <div id="transcript-rounds" class="transcript-rounds"></div>
+              </section>
+
+              <button
+                id="transcript-footer-link"
+                type="button"
+                class="transcript-footer-link"
+                data-consensus="false"
+              >back to the result &rarr;</button>
+            </div>
+          </section>
+        </div>
+
+        <!-- Screen 01 — Landing (marketing front door). REACHABLE via the
+             top-bar "How it works" affordance, but NOT the default boot view
+             (boot() stays on the composer). Every CTA leads back into the
+             composer; nothing here runs a query or fabricates a live estimate.
+             The "Example preview" card is illustrative marketing copy, clearly
+             labelled — not a result the user produced. -->
+        <div data-view="landing" hidden>
+          <section class="panel landing" role="region" aria-labelledby="landing-heading">
+            <header class="landing-header">
+              <div class="landing-brand">
+                <span class="landing-brand-mark" aria-hidden="true">Q</span>
+                <span class="landing-brand-name">Quorum</span>
+              </div>
+              <div class="landing-nav">
+                <button id="landing-howitworks" class="landing-howitworks" type="button">How it works</button>
+                <button id="landing-open-workspace" class="button button-secondary landing-open" type="button">Open the workspace</button>
+              </div>
+            </header>
+
+            <div class="landing-hero">
+              <p class="landing-eyebrow">Four AI models · two debate rounds · one sourced answer</p>
+              <h1 id="landing-heading" class="landing-h1" tabindex="-1">Ask once. Let four minds argue it out.</h1>
+              <p class="landing-subhead">Quorum sends your question to four frontier AI models, has them critique each other twice, then hands you one answer that shows where they agree, where they don't, and exactly what to trust.</p>
+            </div>
+
+            <div class="landing-runbar">
+              <div class="landing-runbar-prompt">
+                <span class="landing-runbar-placeholder">e.g. Should our company adopt passkeys and phase out passwords by 2027?</span>
+              </div>
+              <div class="landing-runbar-foot">
+                <p class="landing-cost">
+                  <span class="mono landing-cost-figure">&#8776; $0.02&ndash;0.19</span>
+                  <span class="landing-cost-note">&middot; you approve the estimate first &mdash; hard cap <span class="mono">$0.25</span>/run</span>
+                </p>
+                <div class="landing-runbar-actions">
+                  <button id="landing-estimate" class="button button-secondary" type="button">Estimate</button>
+                  <button id="landing-run" class="button button-primary" type="button">Run the debate &rarr;</button>
+                </div>
+              </div>
+            </div>
+
+            <div class="landing-chips">
+              <span class="landing-chips-label">Not sure what to ask? Try one &mdash; it fills the box:</span>
+              <div class="landing-chips-row" role="group" aria-label="Example questions">
+                <button
+                  type="button"
+                  class="landing-chip landing-chip-active"
+                  data-landing-chip="Should we adopt passkeys by 2027?"
+                ><span class="landing-chip-dot" aria-hidden="true"></span>Should we adopt passkeys by 2027?</button>
+                <button
+                  type="button"
+                  class="landing-chip"
+                  data-landing-chip="Usage-based vs seat pricing?"
+                >Usage-based vs seat pricing?</button>
+                <button
+                  type="button"
+                  class="landing-chip"
+                  data-landing-chip="Is my startup thesis sound?"
+                >Is my startup thesis sound?</button>
+                <button
+                  type="button"
+                  class="landing-chip"
+                  data-landing-chip="How do I read this lab result?"
+                >How do I read this lab result?</button>
+              </div>
+            </div>
+
+            <div class="landing-preview" role="note" aria-label="Example preview">
+              <span class="landing-preview-badge">Example preview</span>
+              <div class="landing-preview-body">
+                <p class="landing-preview-text">4 of 4 models agree &mdash; with one real disagreement worth your attention: the safe overlap window (9 vs 18 months). You get a verdict, a phased plan, 12 sources, and the round-by-round debate on record.</p>
+                <span class="landing-preview-caption">Illustrative &mdash; a product example, not a run you started.</span>
+              </div>
+            </div>
+
+            <div class="landing-disclaimers">
+              <span class="landing-disclaimer">
+                <span class="landing-disclaimer-dot" aria-hidden="true"></span>Decision support, not professional advice
+              </span>
+              <span class="landing-disclaimer">
+                <span class="landing-disclaimer-dot" aria-hidden="true"></span>Don't paste sensitive or private data
+              </span>
+              <span class="landing-disclaimer">
+                <span class="landing-disclaimer-dot landing-disclaimer-dot-neutral" aria-hidden="true"></span>Results vanish when you leave
+              </span>
+            </div>
+          </section>
+        </div>
 
         <aside class="panel">
           <h2>Run controls</h2>
@@ -271,7 +641,7 @@
                 type="button"
                 class="info-icon"
                 data-info-icon
-                data-info-text="The synthesis is written by a single configured model (currently openai/gpt-4o-mini) after it reads the four refined answers. It is not a vote or a quote — it is one model's interpretation of the four."
+                data-info-text="The synthesis is written by a single configured model (currently openai/gpt-4o-mini) after it reads the four opening answers and the round-level debate critiques. It is not a vote or a quote — it is one model's interpretation of the four."
                 aria-label="What is the synthesis?"
               >&#9432;</button>
             </h3>

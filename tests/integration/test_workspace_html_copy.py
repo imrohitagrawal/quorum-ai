@@ -43,8 +43,9 @@ def client() -> TestClient:
 
 EXPECTED_BRAND_LEDE = "Four AI models, one sourced answer."
 
-OLD_BRAND_LEDE = (
-    "Stop hopping between multiple AI chatbots. Get one sourced, synthesized answer you can trust"
+OLD_BRAND_LEDES = (
+    "Your question. Four expert perspectives. One synthesized truth.",
+    "Stop hopping between multiple AI chatbots. Get one sourced, synthesized answer you can trust",
 )
 
 EXPECTED_WORKSPACE_LEDE = (
@@ -61,12 +62,26 @@ def test_workspace_html_has_brand_lede(client: TestClient) -> None:
     )
 
 
+def test_landing_preview_is_labelled_illustrative(client: TestClient) -> None:
+    # The 01 Landing "Example preview" card is marketing copy, NOT a real run.
+    # It MUST stay unambiguously labelled so a future edit can't turn it into
+    # a fabricated real result (the product's core honesty posture).
+    response = client.get("/ui")
+    assert response.status_code == 200
+    assert "Example preview" in response.text
+    assert "Illustrative" in response.text
+    assert "not a run you started" in response.text
+    # And it must not claim a per-model transcript the pipeline never records.
+    assert "full debate on record" not in response.text
+
+
 def test_workspace_html_drops_old_brand_lede(client: TestClient) -> None:
     response = client.get("/ui")
     assert response.status_code == 200
-    assert OLD_BRAND_LEDE not in response.text, (
-        "Old brand lede is still rendered. PR-1's job was to retire it."
-    )
+    for old_lede in OLD_BRAND_LEDES:
+        assert old_lede not in response.text, (
+            "Old brand lede is still rendered. PR-1's job was to retire it."
+        )
 
 
 def test_brand_lede_is_within_90_chars() -> None:

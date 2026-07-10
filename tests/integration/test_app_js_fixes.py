@@ -104,14 +104,26 @@ const HTMLElement = { [Symbol.hasInstance]: (n) => n instanceof _Node };
 
 
 @pytest.mark.skipif(shutil.which("node") is None, reason="node not available")
-def test_bug10_render_model_options_vendor_scopes_to_current_vendor() -> None:
-    """Bug 10: ``renderModelOptions`` must only return options from the
-    current slot's vendor family.
+def test_render_model_options_returns_full_catalog_free_choice() -> None:
+    """Design-approved behaviour (02 Composer .dc.html: "swap from live
+    catalog", "Duplicates allowed but visibly flagged"): each slot's
+    dropdown offers EVERY catalog model regardless of vendor, and a
+    model already selected in another slot is STILL offered so
+    cross-slot duplicates remain reachable.
 
-    Before the fix, slot 1 and slot 3 both showed the openai fallbacks
-    as their first non-selected options. The fix restricts each slot
-    to its own vendor prefix (``openai/``, ``anthropic/``, etc.).
+    This replaces the old vendor-scoped ("bug10") behaviour, which made
+    cross-slot duplicates unreachable and the duplicate flag dead code.
     """
+    catalog_ids = [
+        "openai/gpt-4.1",
+        "openai/o3",
+        "openai/gpt-4o-mini",
+        "anthropic/claude-3-haiku",
+        "anthropic/claude-sonnet-4.5",
+        "google/gemini-2.5-flash",
+        "google/gemini-2.5-flash-lite",
+        "deepseek/deepseek-chat-v3.1",
+    ]
     body = _extract_function("renderModelOptions")
     script = (
         DOM_SHIM
@@ -128,6 +140,8 @@ def test_bug10_render_model_options_vendor_scopes_to_current_vendor() -> None:
         + "  {model_id: 'google/gemini-2.5-flash-lite', label: 'Gemini Lite'},\n"
         + "  {model_id: 'deepseek/deepseek-chat-v3.1', label: 'DeepSeek V3.1'},\n"
         + "];\n"
+        # Slot 0 currently holds openai/gpt-4.1; anthropic/claude-3-haiku
+        # is already selected in ANOTHER slot (index 1).
         + "const out = renderModelOptions(\n"
         + "  'openai/gpt-4.1', 0,\n"
         + "  ['openai/gpt-4.1', 'anthropic/claude-3-haiku',\n"
@@ -143,19 +157,25 @@ def test_bug10_render_model_options_vendor_scopes_to_current_vendor() -> None:
         timeout=10,
     )
     ids = json.loads(result.stdout)
-    # Every returned option must be openai/*
     assert ids, "renderModelOptions returned no options"
-    for model_id in ids:
-        assert model_id.startswith("openai/"), (
-            f"Bug 10 regression: renderModelOptions returned non-openai id {model_id!r}"
-        )
+    # Free choice: every catalog model_id is offered, regardless of vendor.
+    assert set(ids) == set(catalog_ids), f"expected the full catalog, got {ids!r}"
+    # A model selected in another slot is STILL offered (duplicates allowed).
+    assert "anthropic/claude-3-haiku" in ids, (
+        "a model selected in another slot must remain reachable (duplicates allowed)"
+    )
+    # Vendors other than the current slot's are present (not vendor-scoped).
+    assert any(not m.startswith("openai/") for m in ids), (
+        "dropdown must not be scoped to the current slot's vendor family"
+    )
 
 
 @pytest.mark.skipif(shutil.which("node") is None, reason="node not available")
-def test_bug10_render_model_options_preserves_curated_default_synthetic() -> None:
-    """Bug 10 (corner case): if the current slot's default is NOT in
-    the live catalog, ``renderModelOptions`` must still produce a
-    synthetic option for it so the dropdown is not empty.
+def test_render_model_options_preserves_curated_default_synthetic() -> None:
+    """Corner case: if the current slot's default is NOT in the live
+    catalog, ``renderModelOptions`` must still produce a synthetic
+    "curated default — not in live catalog" option for it so the
+    dropdown is not empty and the slot does not silently jump models.
     """
     body = _extract_function("renderModelOptions")
     script = (
@@ -309,40 +329,11 @@ def test_bug6_poll_run_early_returns_when_already_running() -> None:
     assert "return" in between, "Bug 6 regression: no early return statement after isRunning check"
 
 
-@pytest.mark.skipif(shutil.which("node") is None, reason="node not available")
-def test_bug4_run_now_chains_to_proceed_with_run_on_confirmation() -> None:
-    """Bug 4: ``runNow`` must chain through ``estimateRun`` →
-    ``proceedWithRun`` when the server returns
-    ``COST_CONFIRMATION_REQUIRED``.
-
-    We pin the source-level invariant: the catch block must call
-    both ``estimateRun()`` and ``proceedWithRun()`` in that order
-    when the error code is ``COST_CONFIRMATION_REQUIRED``.
-    """
-    text = APP_JS.read_text(encoding="utf-8")
-    match = re.search(r"async function runNow\(\) \{", text)
-    assert match is not None, "runNow not found in app.js"
-    body_start = match.start()
-    # Find the COST_CONFIRMATION_REQUIRED block within runNow.
-    body_slice = text[body_start : body_start + 4000]
-    block_start = body_slice.find("COST_CONFIRMATION_REQUIRED")
-    assert block_start != -1, "runNow does not handle COST_CONFIRMATION_REQUIRED"
-    # Within that block, estimateRun() must come before proceedWithRun().
-    block_slice = body_slice[block_start : block_start + 2000]
-    estimate_idx = block_slice.find("estimateRun(")
-    proceed_idx = block_slice.find("proceedWithRun(")
-    assert estimate_idx != -1, "estimateRun() not called in COST_CONFIRMATION_REQUIRED block"
-    assert proceed_idx != -1, "proceedWithRun() not called in COST_CONFIRMATION_REQUIRED block"
-    assert estimate_idx < proceed_idx, (
-        f"Bug 4 regression: estimateRun (idx {estimate_idx}) must come before "
-        f"proceedWithRun (idx {proceed_idx}) in the COST_CONFIRMATION_REQUIRED block"
-    )
-    # The proceed call must be guarded by the require_confirmation band check.
-    band_idx = block_slice.find("require_confirmation")
-    assert band_idx != -1, "require_confirmation band check missing in runNow"
-    assert band_idx < proceed_idx, (
-        "Bug 4 regression: proceedWithRun called without require_confirmation band check"
-    )
+# Note: the legacy Bug-4 ``runNow`` fast-path (immediate run with an
+# auto-chained ``proceedWithRun`` on COST_CONFIRMATION_REQUIRED) was
+# removed with the single-CTA "See the estimate →" design. Ctrl+Enter
+# and the CTA now route exclusively through the estimate-first
+# ``startRun`` → cost-gate flow, so there is no ``runNow`` to pin.
 
 
 # ---------------------------------------------------------------------------

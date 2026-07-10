@@ -766,10 +766,26 @@ class SynthesisOrchestrationService:
         return False
 
 
+def _final_synthesis_alignment_text(final_synthesis: FinalSynthesis | None) -> str | None:
+    """The substantive final-answer text used to test per-model alignment: the
+    consensus plus the recommendation of a COMPLETED synthesis.
+
+    Returns ``None`` when there is no completed synthesis to compare against
+    (missing, or ``status != COMPLETED``), in which case alignment falls back
+    to the panel-strength inference rather than comparing openings to a failure
+    placeholder.
+    """
+    if final_synthesis is None or final_synthesis.status is not SynthesisStatus.COMPLETED:
+        return None
+    text = " ".join(p for p in (final_synthesis.consensus, final_synthesis.recommendation) if p)
+    return text or None
+
+
 def build_agreement_and_positions(
     *,
     initial_answers: list[InitialModelAnswer],
     debate_outputs: list[DebateOutput],
+    final_synthesis: FinalSynthesis | None = None,
 ) -> tuple[AgreementSummary, list[PositionMovement]]:
     """Single deterministic entry point for the screen-05 verdict ring and the
     "how positions moved" table.
@@ -777,11 +793,19 @@ def build_agreement_and_positions(
     Classifies each model's alignment once (:func:`classify_model_alignment`),
     then derives the agreement count and the per-model position movements from
     that shared classification so the ring and the table can never disagree.
-    Pure and deterministic: same inputs → same output, no randomness, no
-    wall-clock. Whether the underlying content is live or simulated is already
-    surfaced by ``QueryRunResultResponse.demo_mode``.
+    When ``final_synthesis`` is supplied, per-model alignment is derived by
+    comparing each opening against the actual final-answer content rather than
+    blanket-aligning the whole panel; without it, alignment falls back to the
+    panel-strength inference. Pure and deterministic: same inputs → same
+    output, no randomness, no wall-clock. Whether the underlying content is
+    live or simulated is already surfaced by
+    ``QueryRunResultResponse.demo_mode``.
     """
-    alignments = classify_model_alignment(initial_answers, debate_outputs)
+    alignments = classify_model_alignment(
+        initial_answers,
+        debate_outputs,
+        final_synthesis_text=_final_synthesis_alignment_text(final_synthesis),
+    )
     agreement = summarize_agreement(initial_answers=initial_answers, alignments=alignments)
     positions = build_position_movements(
         initial_answers=initial_answers,
