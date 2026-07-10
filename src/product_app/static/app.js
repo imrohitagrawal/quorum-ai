@@ -82,6 +82,8 @@
   // Slice 3 (04 Live run): the visible live-run heading. Focus lands here when
   // entering the live view (setRunning focuses the now-hidden #cancel-run).
   const liveRunHeading = el("live-run-heading");
+  // Slice 4a (05 Result): focus lands on this h1 when entering the result view.
+  const resultHeading = el("result-heading");
   const cancelButton = el("cancel-run");
   const cancelContainer = el("cancel-run-container");
   const connectionPill = el("connection-pill");
@@ -162,6 +164,16 @@
     // elapsed on any terminal transition.
     liveQueryText: null,
     lastLiveStatus: null,
+    // Slice 4a (05 Result): the plain-text summary (question + verdict +
+    // agreement line) built ONCE by ``renderResult`` at the terminal
+    // transition; the Copy/Export buttons read it. ``lastResultRunId`` names
+    // the exported file. Kept as textContent-safe strings (no HTML).
+    lastResultSummary: null,
+    lastResultRunId: null,
+    // Slice 4a (05 Result): guards the terminal poll branch so a re-entrant
+    // slow poll response cannot double-fire the completion toast + focus (C-A).
+    // Reset to false on every run start (proceedWithRun, C-C).
+    terminalHandled: false,
     liveElapsedBaseMs: 0,
     liveElapsedStamp: 0,
     liveElapsedTimer: null,
@@ -1625,6 +1637,412 @@
     renderLiveFallback(answers);
     renderLiveCap(result);
     renderLiveNotices(result);
+  }
+
+  // ---------------------------------------------------------------------------
+  // Slice 4a (05 Result): verdict band + trust triangle
+  // ---------------------------------------------------------------------------
+
+  // Small element factory (textContent only — never innerHTML).
+  function mkEl(tag, className, text) {
+    const node = document.createElement(tag);
+    if (className) node.className = className;
+    if (text != null) node.textContent = text;
+    return node;
+  }
+
+  const RESULT_SVG_NS = "http://www.w3.org/2000/svg";
+  const RESULT_RING_RADIUS = 40;
+  const RESULT_RING_CIRC = 2 * Math.PI * RESULT_RING_RADIUS;
+
+  // Duration without the " elapsed" suffix, e.g. "41.2s" / "1m 05s".
+  function formatDuration(ms) {
+    return formatElapsed(ms).replace(/ elapsed$/, "");
+  }
+
+  // Format the finished-at UTC timestamp as "Jul 7, 2026 · finished 09:41:44
+  // UTC" (UTC-anchored — the receipt time is authoritative in UTC). Guards a
+  // missing/invalid value and any ICU rejection.
+  function formatFinishedUtc(raw) {
+    if (!raw) return "";
+    const date = new Date(raw);
+    if (Number.isNaN(date.getTime())) return "";
+    try {
+      const datePart = new Intl.DateTimeFormat("en-US", {
+        month: "short",
+        day: "numeric",
+        year: "numeric",
+        timeZone: "UTC",
+      }).format(date);
+      const timePart = new Intl.DateTimeFormat("en-GB", {
+        hour: "2-digit",
+        minute: "2-digit",
+        second: "2-digit",
+        hour12: false,
+        timeZone: "UTC",
+      }).format(date);
+      return `${datePart} · finished ${timePart} UTC`;
+    } catch (_) {
+      try {
+        return date.toISOString();
+      } catch (_e) {
+        return "";
+      }
+    }
+  }
+
+  function truncateText(text, max) {
+    const value = String(text || "").trim();
+    if (value.length <= max) return value;
+    return `${value.slice(0, max - 1).trimEnd()}…`;
+  }
+
+  // Append " · " separated children to the meta row.
+  function appendMetaSep(container) {
+    container.appendChild(mkEl("span", "result-meta-sep", "·"));
+  }
+
+  // Draw the aligned/total trust ring. ``fraction`` is 0..1; total===0 draws
+  // an empty ring (guarded upstream). Colours are set in CSS off the band's
+  // ``data-consensus`` attribute; the draw animation is reduced-motion-guarded
+  // in CSS. Returns the ring wrapper element.
+  function buildTrustRing(aligned, total) {
+    const fraction = total > 0 ? Math.max(0, Math.min(1, aligned / total)) : 0;
+    const offset = RESULT_RING_CIRC * (1 - fraction);
+
+    const wrap = mkEl("div", "result-ring");
+    const svg = document.createElementNS(RESULT_SVG_NS, "svg");
+    svg.setAttribute("width", "104");
+    svg.setAttribute("height", "104");
+    svg.setAttribute("viewBox", "0 0 104 104");
+    svg.setAttribute("aria-hidden", "true");
+
+    const track = document.createElementNS(RESULT_SVG_NS, "circle");
+    track.setAttribute("class", "result-ring-track");
+    track.setAttribute("cx", "52");
+    track.setAttribute("cy", "52");
+    track.setAttribute("r", String(RESULT_RING_RADIUS));
+    track.setAttribute("fill", "none");
+    track.setAttribute("stroke-width", "9");
+
+    const value = document.createElementNS(RESULT_SVG_NS, "circle");
+    value.setAttribute("class", "result-ring-value");
+    value.setAttribute("cx", "52");
+    value.setAttribute("cy", "52");
+    value.setAttribute("r", String(RESULT_RING_RADIUS));
+    value.setAttribute("fill", "none");
+    value.setAttribute("stroke-width", "9");
+    value.style.setProperty("--ring-circ", `${RESULT_RING_CIRC}`);
+    value.style.setProperty("--ring-offset", `${offset}`);
+
+    svg.append(track, value);
+
+    const center = mkEl("div", "result-ring-center");
+    center.appendChild(mkEl("span", "result-ring-count", `${aligned}/${total}`));
+    center.appendChild(mkEl("span", "result-ring-label", "agree"));
+
+    wrap.append(svg, center);
+    return wrap;
+  }
+
+  // Build one trust-triangle card. ``value``/``valueSub`` are optional (the
+  // uncertainty card carries prose only). ``accent`` drives the CSS role.
+  function buildTrustCard({ accent, kicker, value, valueSub, caption, consensus }) {
+    const card = mkEl("div", "result-trust-card");
+    card.dataset.accent = accent;
+    if (accent === "agreement") card.dataset.consensus = consensus ? "true" : "false";
+
+    const head = mkEl("div", "result-trust-head");
+    head.appendChild(mkEl("span", "result-trust-kicker", kicker));
+    head.appendChild(mkEl("span", "result-trust-chip"));
+    card.appendChild(head);
+
+    if (value != null) {
+      const valueEl = mkEl("div", "result-trust-value");
+      valueEl.appendChild(mkEl("strong", null, value));
+      if (valueSub) valueEl.appendChild(mkEl("span", "result-trust-value-sub", ` ${valueSub}`));
+      card.appendChild(valueEl);
+    }
+    if (caption) card.appendChild(mkEl("div", "result-trust-caption", caption));
+    return card;
+  }
+
+  // Populate the result view from a TERMINAL poll result. Called ONCE at the
+  // terminal transition (never per 750ms poll), so no aria-live spam. Every
+  // nested field is guarded. The green treatment is GATED behind
+  // ``isConsensus`` (AC-019 "no false consensus").
+  function renderResult(result) {
+    if (!result) return;
+    const res = result.result || {};
+    const fs = res.final_synthesis || null;
+    const agreement = res.agreement || null;
+    const aligned =
+      agreement && Number.isFinite(Number(agreement.aligned))
+        ? Number(agreement.aligned)
+        : 0;
+    const total =
+      agreement && Number.isFinite(Number(agreement.total))
+        ? Number(agreement.total)
+        : 0;
+    const failedSteps = Array.isArray(result.failed_steps) ? result.failed_steps : [];
+
+    // GREEN GATE (AC-019): green must reflect REAL, complete agreement — never
+    // merely the presence of a recommendation (which exists even on a divided
+    // panel). Requires: a real agreement signal, every model aligned, the
+    // synthesis explicitly NOT preserving a false consensus, and no failed steps.
+    const isConsensus = Boolean(
+      agreement &&
+        total > 0 &&
+        aligned === total &&
+        fs &&
+        fs.quality_checks &&
+        fs.quality_checks.false_consensus_preserved === false &&
+        failedSteps.length === 0 &&
+        String(result.status) === "completed",
+    );
+
+    // Revised count — INFERRED from position_movements' ``revised`` flag.
+    const movements = Array.isArray(res.position_movements)
+      ? res.position_movements
+      : [];
+    const revisedCount = movements.filter((m) => m && m.revised === true).length;
+
+    // "You asked" question echo (poll payload has no query_text). Only the
+    // submitted question is echoed — never the live textarea, which on a
+    // rehydrated run holds unrelated in-progress text (C-B).
+    const question = state.liveQueryText || "";
+    const questionEl = el("result-question");
+    if (questionEl) questionEl.textContent = question || "—";
+
+    // Completion status pill (INK — never green).
+    const status = result.status || "completed";
+    const durationText = formatDuration(result.elapsed_time_ms);
+    const completionEl = el("result-completion-text");
+    if (completionEl) {
+      let completionText;
+      if (status === "completed") {
+        completionText = `Completed in ${durationText}`;
+      } else if (status === "partial") {
+        completionText = `Finished with gaps in ${durationText}`;
+      } else {
+        completionText = `${STATUS_LABELS[status] || status} · ${durationText}`;
+      }
+      completionEl.textContent = completionText;
+    }
+
+    renderResultMeta(result, status, durationText);
+    renderVerdictBand(result, fs, { isConsensus, aligned, total, revisedCount, movements });
+    renderTrustTriangle(result, res, fs, { isConsensus, aligned, total });
+
+    // Build the plain-text Copy/Export summary ONCE (textContent-safe).
+    const summaryLines = [];
+    if (question) summaryLines.push(question, "");
+    const recommendation = fs && fs.recommendation ? String(fs.recommendation).trim() : "";
+    if (recommendation) {
+      // Mirror the on-screen eyebrow: a divided panel has no unified "verdict".
+      summaryLines.push(`${isConsensus ? "Verdict" : "Leaning"}: ${recommendation}`);
+    } else {
+      summaryLines.push("Verdict: No synthesis was produced for this run.");
+    }
+    summaryLines.push(
+      isConsensus
+        ? `Agreement: ${aligned} of ${total} models aligned.`
+        : `Agreement: ${aligned} of ${total} models aligned; the rest are preserved as disagreement.`,
+    );
+    if (result.correlation_id) summaryLines.push(`Run: ${result.correlation_id}`);
+    state.lastResultSummary = summaryLines.join("\n");
+    state.lastResultRunId = result.query_run_id || result.correlation_id || "run";
+  }
+
+  function renderResultMeta(result, status, durationText) {
+    const meta = el("result-meta");
+    if (!meta) return;
+    meta.textContent = "";
+
+    // Status label (ink dot — not green).
+    const statusWrap = mkEl("span", "result-meta-status");
+    statusWrap.appendChild(mkEl("span", "result-meta-status-dot"));
+    statusWrap.appendChild(mkEl("span", null, STATUS_LABELS[status] || status));
+    meta.appendChild(statusWrap);
+
+    appendMetaSep(meta);
+    meta.appendChild(mkEl("span", "mono", durationText));
+
+    const finished = formatFinishedUtc(result.result_generated_at_utc);
+    if (finished) {
+      appendMetaSep(meta);
+      const finishedEl = mkEl("span", null, finished);
+      finishedEl.style.whiteSpace = "nowrap";
+      meta.appendChild(finishedEl);
+    }
+
+    // actual $X (approved $Y).
+    const actual = Number(result.actual_cost_usd);
+    // Guard the field's PRESENCE explicitly so a missing estimate coerces to
+    // NaN (rendered as "—" / omitted) rather than a bogus "$0.00" (C-D).
+    const approved =
+      result.cost_estimate && result.cost_estimate.estimated_cost_usd != null
+        ? Number(result.cost_estimate.estimated_cost_usd)
+        : NaN;
+    if (Number.isFinite(actual)) {
+      appendMetaSep(meta);
+      const moneyWrap = mkEl("span", null);
+      moneyWrap.appendChild(document.createTextNode("actual "));
+      moneyWrap.appendChild(
+        mkEl("span", "mono result-meta-money-actual", formatUsd(actual, { suffix: false })),
+      );
+      if (Number.isFinite(approved)) {
+        moneyWrap.appendChild(
+          document.createTextNode(` (approved ${formatUsd(approved, { suffix: false })})`),
+        );
+      }
+      meta.appendChild(moneyWrap);
+    }
+
+    if (result.correlation_id) {
+      appendMetaSep(meta);
+      meta.appendChild(mkEl("span", "mono", result.correlation_id));
+    }
+  }
+
+  function renderVerdictBand(result, fs, ctx) {
+    const band = el("result-verdict");
+    if (!band) return;
+    band.textContent = "";
+    delete band.dataset.empty;
+
+    // No synthesis (failed/blocked run reached here defensively) — NEVER green.
+    if (!fs) {
+      band.dataset.consensus = "false";
+      band.dataset.empty = "true";
+      band.textContent = "No synthesis was produced for this run.";
+      return;
+    }
+
+    const { isConsensus, aligned, total, revisedCount } = ctx;
+    band.dataset.consensus = isConsensus ? "true" : "false";
+
+    band.appendChild(buildTrustRing(aligned, total));
+
+    const content = mkEl("div", "result-verdict-content");
+    content.appendChild(
+      mkEl(
+        "span",
+        "result-verdict-eyebrow",
+        isConsensus ? "The panel's verdict" : "The panel's leaning",
+      ),
+    );
+
+    const recommendation = fs.recommendation ? String(fs.recommendation).trim() : "";
+    content.appendChild(
+      mkEl("div", "result-verdict-text", recommendation || "No recommendation was recorded for this run."),
+    );
+
+    // Honest summary line — derived from real fields, no banned verbs.
+    let summary;
+    if (isConsensus) {
+      summary = `${aligned} of ${total} models aligned`;
+      if (revisedCount > 0) {
+        summary += ` · ${revisedCount} revised their position`;
+      }
+    } else {
+      summary = `${aligned} of ${total} models aligned — the rest are preserved as disagreement below.`;
+    }
+    content.appendChild(mkEl("span", "result-verdict-summary", summary));
+
+    // High-stakes caveat, if the synthesis carries one.
+    if (fs.high_stakes_notice) {
+      content.appendChild(
+        mkEl("span", "result-verdict-caveat", String(fs.high_stakes_notice).trim()),
+      );
+    }
+
+    // Inferred-narration caption for anything derived from position_movements.
+    if (isConsensus && revisedCount > 0) {
+      content.appendChild(
+        mkEl(
+          "span",
+          "result-verdict-caption",
+          "Revision counts are inferred from the panel's position movements, not quoted.",
+        ),
+      );
+    }
+
+    band.appendChild(content);
+  }
+
+  function renderTrustTriangle(result, res, fs, ctx) {
+    const trust = el("result-trust");
+    if (!trust) return;
+    trust.textContent = "";
+    const { isConsensus, aligned, total } = ctx;
+
+    // Agreement — green accent ONLY when isConsensus.
+    trust.appendChild(
+      buildTrustCard({
+        accent: "agreement",
+        consensus: isConsensus,
+        kicker: "Agreement",
+        value: `${aligned} of ${total}`,
+        valueSub: "aligned",
+        caption: isConsensus
+          ? "How many models the final synthesis places in agreement — inferred, not a tallied vote."
+          : "How many models the final synthesis places in agreement — inferred, not a tallied vote; the panel did not fully align, so the disagreement is preserved below.",
+      }),
+    );
+
+    // Source support — BLUE. Percentage from citation_coverage; source count is
+    // NON-fallback sources across model_answers. Degrade gracefully if absent.
+    const coverage = fs && fs.citation_coverage ? fs.citation_coverage : null;
+    let coveragePct = null;
+    if (coverage) {
+      const ratio = Number(coverage.coverage_ratio);
+      if (Number.isFinite(ratio)) coveragePct = Math.round(ratio * 100);
+    }
+    const answers = Array.isArray(res.model_answers) ? res.model_answers : [];
+    // Count DISTINCT non-fallback sources (de-dupe by url/title) so two
+    // models citing the same page don't inflate "N sources cited".
+    const sourceKeys = new Set();
+    for (const answer of answers) {
+      const sources = answer && Array.isArray(answer.sources) ? answer.sources : [];
+      for (const s of sources) {
+        if (!s || s.is_fallback) continue;
+        const key = s.url || s.title;
+        if (key) sourceKeys.add(key);
+      }
+    }
+    const sourceCount = sourceKeys.size;
+    const sourceSub = `· ${sourceCount} source${sourceCount === 1 ? "" : "s"} cited`;
+    trust.appendChild(
+      buildTrustCard({
+        accent: "source",
+        kicker: "Source support",
+        value: coveragePct != null ? `${coveragePct}%` : "—",
+        valueSub: sourceSub,
+        caption: "Material claims scored against citations.",
+      }),
+    );
+
+    // Open uncertainty — AMBER. Prose only; NO fabricated numeric flag count.
+    const uncertaintyText = fs && fs.uncertainty ? String(fs.uncertainty).trim() : "";
+    trust.appendChild(
+      buildTrustCard({
+        accent: "uncertainty",
+        kicker: "Open uncertainty",
+        caption: uncertaintyText
+          ? truncateText(uncertaintyText, 180)
+          : "No open uncertainty was flagged for this run.",
+      }),
+    );
+  }
+
+  function focusResultHeading() {
+    if (!resultHeading) return;
+    resultHeading.focus({ preventScroll: true });
+    resultHeading.scrollIntoView({
+      behavior: prefersReducedMotion() ? "auto" : "smooth",
+      block: "start",
+    });
   }
 
   function mapStageToStep(stageName) {
@@ -3251,6 +3669,11 @@
       // and reset the live view's SR/elapsed state for a fresh run.
       state.liveQueryText = queryText;
       state.lastLiveStatus = null;
+      // Slice 4a (05 Result): a new run must never serve the previous run's
+      // Copy/Export text, and the terminal-branch guard must start fresh (C-C).
+      state.lastResultSummary = null;
+      state.lastResultRunId = null;
+      state.terminalHandled = false;
       // Fix 3: a NEW run must re-render every live block even if its first
       // payload is byte-identical to the previous run's — reset the guards.
       state.liveSig = {
@@ -3362,19 +3785,31 @@
         result.status,
       )
     ) {
+      // C-A: a slow poll response (server latency > the 750ms poll interval)
+      // can re-enter this terminal branch after it already ran, double-firing
+      // the completion toast + focus move. Handle the transition exactly once.
+      if (state.terminalHandled) {
+        return;
+      }
+      state.terminalHandled = true;
       stopPolling();
       setRunning(false);
-      // Slice 3 (04 Live run): stay on the live-run view and render its
-      // terminal state (status pill reflects completed/failed/etc., Stop button
-      // hidden, elapsed frozen). ``renderLiveRun`` already ran above with the
-      // terminal ``result``; the persistent panels below show the detailed
-      // results.
-      // TODO(Slice 4a): transition to the result view on terminal success.
       // PR-0 / Bug 8: replace the displayed time with the
       // completion time on the first terminal transition. Polling
       // has already stopped, so this is the last time we touch
       // the card for this run.
       finalizeRunTime(result.result_generated_at_utc);
+      // Slice 4a (05 Result): if a real synthesis exists, transition to the
+      // result view (verdict band + trust triangle) and move focus to its
+      // heading. ``renderResult`` is called ONCE here (not per 750ms poll —
+      // polling has already stopped) so there is no aria-live spam. If there is
+      // NO final_synthesis (failed/timed_out/cancelled/blocked), STAY on the
+      // live-run view: its terminal error state + ``#live-notices`` handle that.
+      if (result.result && result.result.final_synthesis) {
+        renderResult(result);
+        setView("result");
+        focusResultHeading();
+      }
       if (result.status === "completed") {
         toast({ message: "Run completed. See the synthesis below.", tone: "success" });
       } else if (result.status === "partial") {
@@ -3475,6 +3910,13 @@
       finalizeRunTime(result.result_generated_at_utc);
       stopPolling();
       setRunning(false);
+      // Slice 4a (05 Result): cancelled runs almost always have no synthesis, so
+      // we stay on the live-run view. Transition only if one somehow exists.
+      if (result.result && result.result.final_synthesis) {
+        renderResult(result);
+        setView("result");
+        focusResultHeading();
+      }
       toast({ message: "Run cancelled.", tone: "info" });
     } catch (error) {
       handleError(error);
@@ -3833,6 +4275,52 @@
     if (liveStopButton) {
       liveStopButton.addEventListener("click", () => {
         cancelRun();
+      });
+    }
+    // Slice 4a (05 Result): Copy + Export the result summary. Both read the
+    // plain-text ``state.lastResultSummary`` built by ``renderResult`` (question
+    // + verdict + agreement line) — textContent-safe, no HTML.
+    const resultCopyButton = el("result-copy");
+    if (resultCopyButton) {
+      resultCopyButton.addEventListener("click", async () => {
+        const summary = state.lastResultSummary;
+        if (!summary) return;
+        try {
+          await navigator.clipboard.writeText(summary);
+          resultCopyButton.dataset.copied = "true";
+          resultCopyButton.textContent = "Copied";
+          window.setTimeout(() => {
+            delete resultCopyButton.dataset.copied;
+            resultCopyButton.textContent = "Copy";
+          }, 1500);
+          toast({ message: "Result summary copied.", tone: "success" });
+        } catch (_) {
+          resultCopyButton.textContent = "Copy failed";
+          window.setTimeout(() => {
+            resultCopyButton.textContent = "Copy";
+          }, 1500);
+        }
+      });
+    }
+    const resultExportButton = el("result-export");
+    if (resultExportButton) {
+      resultExportButton.addEventListener("click", () => {
+        const summary = state.lastResultSummary;
+        if (!summary) return;
+        try {
+          const blob = new Blob([summary], { type: "text/markdown;charset=utf-8" });
+          const url = URL.createObjectURL(blob);
+          const anchor = document.createElement("a");
+          anchor.href = url;
+          anchor.download = `quorum-${state.lastResultRunId || "run"}.md`;
+          document.body.appendChild(anchor);
+          anchor.click();
+          anchor.remove();
+          window.setTimeout(() => URL.revokeObjectURL(url), 0);
+          toast({ message: "Result exported.", tone: "success" });
+        } catch (_) {
+          toast({ message: "Export failed. Copy the summary instead.", tone: "error" });
+        }
       });
     }
     setConnectionPill("connecting", "Connecting");

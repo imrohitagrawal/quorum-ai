@@ -355,7 +355,39 @@
             </div>
           </section>
         </div>
-        <div data-view="result" hidden></div>
+        <div data-view="result" hidden>
+          <section class="panel result" role="region" aria-labelledby="result-heading">
+            <div class="result-header">
+              <div class="result-header-lead">
+                <span class="result-brand">
+                  <span class="result-brand-tile" aria-hidden="true">Q</span>
+                  <span class="result-brand-name">Quorum</span>
+                </span>
+                <span class="result-header-divider" aria-hidden="true"></span>
+                <span class="result-completion">
+                  <span class="result-completion-dot" aria-hidden="true"></span>
+                  <span id="result-completion-text"></span>
+                </span>
+              </div>
+              <div class="result-header-actions">
+                <button id="result-copy" type="button" class="button result-action">Copy</button>
+                <button id="result-export" type="button" class="button result-action">Export</button>
+              </div>
+            </div>
+
+            <div class="result-body">
+              <div class="result-ask">
+                <span class="result-eyebrow">You asked</span>
+                <h1 id="result-heading" class="result-question" tabindex="-1"><span id="result-question"></span></h1>
+                <div id="result-meta" class="result-meta"></div>
+              </div>
+
+              <div id="result-verdict" class="result-verdict" role="region" aria-label="Panel result"></div>
+
+              <div id="result-trust" class="result-trust" role="group" aria-label="Trust signals"></div>
+            </div>
+          </section>
+        </div>
 
         <aside class="panel">
           <h2>Run controls</h2>

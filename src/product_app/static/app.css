@@ -108,6 +108,17 @@
   --brand-tile-bg: #0E6B50;
   --brand-tile-fg: #FFFFFF;
 
+  /* Verdict band (Slice 4a · 05 Result). THE one sanctioned large green
+     surface, and — like the brand tile — THEME-INVARIANT: it stays
+     #0E6B50 with white text in BOTH light and dark, so it never inherits
+     the tonal dark-green (--c-green → #4EC28C). Defined once here and NOT
+     overridden in the dark block. White-on-#0E6B50 = 6.5:1 (AA). Gated by
+     the green rule: applied only when the panel truly reached consensus
+     (see the ``isConsensus`` gate in app.js); a divided panel gets the
+     neutral --surface/--ink treatment with an amber accent instead. */
+  --verdict-surface: #0E6B50;
+  --verdict-on: #FFFFFF;
+
   /* Header + inset surfaces (light). Dark overrides these below. */
   --header-bg: var(--c-paper);
   --inset: #EFEEEA;
@@ -579,6 +590,19 @@ a { color: var(--accent); text-underline-offset: 2px; }
 }
 
 [data-active-view="live-run"] .layout > aside {
+  display: none;
+}
+
+/* Slice 4a (05 Result): the result view is the main surface — go full-width
+   and hide the "Run controls" aside, mirroring the live-run treatment. The
+   aside stays in the DOM (only hidden here) so its render targets remain
+   valid; the persistent synthesis/model panels below ``.layout`` are
+   unaffected. */
+[data-active-view="result"] .layout {
+  grid-template-columns: 1fr;
+}
+
+[data-active-view="result"] .layout > aside {
   display: none;
 }
 
@@ -1954,6 +1978,437 @@ kbd {
     animation: none;
   }
   .live-stage-bar[data-indeterminate="true"] .live-stage-bar-fill {
+    animation: none;
+  }
+}
+
+/* ----- Slice 4a (05 Result): verdict band + trust triangle ------------------
+   GREEN RULE: the ONLY green here is the verdict band + Agreement accent WHEN
+   the panel truly reached consensus (``data-consensus="true"``), plus the brand
+   mark. Everything else is ink / blue (--info) / amber (--warning). Completed
+   status is INK, never green. All colours are tokens (incl. the two
+   theme-invariant --verdict-* tokens); no raw hex/rgba below. */
+
+.result {
+  gap: 0;
+  padding: 0;
+  overflow: hidden;
+}
+
+.result-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: var(--space-3);
+  padding: var(--space-4) var(--space-6);
+  border-bottom: 1px solid var(--line);
+  background: var(--surface);
+}
+
+.result-header-lead {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  flex-wrap: wrap;
+}
+
+.result-brand {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+}
+
+.result-brand-tile {
+  display: grid;
+  place-items: center;
+  width: 28px;
+  height: 28px;
+  border-radius: var(--radius-xs);
+  background: var(--brand-tile-bg);
+  color: var(--brand-tile-fg);
+  font-family: var(--font-serif);
+  font-size: 0.9rem;
+  font-weight: 700;
+}
+
+.result-brand-name {
+  font-weight: 650;
+  font-size: 1rem;
+  letter-spacing: -0.01em;
+}
+
+.result-header-divider {
+  width: 1px;
+  height: 18px;
+  background: var(--line-strong);
+}
+
+/* Completion status — INK, never green (green is reserved for agreement). */
+.result-completion {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+  font-size: 0.84rem;
+  font-weight: 600;
+  color: var(--text-secondary);
+}
+
+.result-completion-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: var(--radius-pill);
+  background: currentColor;
+  flex-shrink: 0;
+}
+
+.result-header-actions {
+  display: flex;
+  gap: var(--space-2);
+}
+
+.result-action {
+  min-height: 34px;
+  padding: 0 var(--space-4);
+  border-radius: var(--radius-btn);
+  border: 1px solid var(--line-strong);
+  background: var(--surface);
+  color: var(--ink);
+  font-size: 0.84rem;
+  font-weight: 600;
+}
+
+.result-action:hover {
+  background: var(--paper);
+}
+
+.result-action[data-copied="true"] {
+  border-color: var(--line-strong-2);
+  color: var(--ink);
+}
+
+.result-body {
+  width: min(960px, 100%);
+  margin: 0 auto;
+  padding: var(--space-7) var(--space-6) var(--space-8);
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-5);
+}
+
+.result-ask {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+}
+
+.result-eyebrow {
+  font-size: 0.8rem;
+  font-weight: 500;
+  color: var(--text-secondary);
+}
+
+.result-question {
+  margin: 0;
+  font-family: var(--font-serif);
+  font-size: 1.8rem;
+  line-height: 1.28;
+  font-weight: 500;
+  letter-spacing: -0.01em;
+  text-wrap: balance;
+}
+
+.result-meta {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  flex-wrap: wrap;
+  font-size: 0.8rem;
+  color: var(--muted);
+}
+
+.result-meta-status {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
+  color: var(--text-secondary);
+  font-weight: 600;
+}
+
+.result-meta-status-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: var(--radius-pill);
+  background: currentColor;
+}
+
+.result-meta .mono {
+  color: var(--body);
+}
+
+.result-meta-money-actual {
+  color: var(--body);
+  font-weight: 600;
+}
+
+.result-meta-sep {
+  color: var(--line-strong-2);
+}
+
+/* --- Verdict band --- */
+.result-verdict {
+  display: flex;
+  align-items: center;
+  gap: var(--space-7);
+  border-radius: var(--radius-lg);
+  padding: var(--space-6) var(--space-7);
+  flex-wrap: wrap;
+}
+
+/* Consensus: the large green surface (theme-invariant tokens). */
+.result-verdict[data-consensus="true"] {
+  background: var(--verdict-surface);
+  color: var(--verdict-on);
+  box-shadow: var(--shadow-verdict);
+}
+
+/* Divided panel (AC-019): NEVER green. Neutral surface, ink text, amber accent. */
+.result-verdict[data-consensus="false"] {
+  background: var(--surface);
+  color: var(--ink);
+  border: 1px solid var(--line-2);
+  border-left: 4px solid var(--warning);
+  box-shadow: var(--shadow-md);
+}
+
+.result-ring {
+  position: relative;
+  width: 104px;
+  height: 104px;
+  flex-shrink: 0;
+}
+
+.result-ring svg {
+  transform: rotate(-90deg);
+}
+
+.result-ring-track {
+  stroke: var(--line-2);
+}
+
+.result-ring-value {
+  stroke: var(--warning);
+  stroke-linecap: round;
+  stroke-dasharray: var(--ring-circ, 251);
+  stroke-dashoffset: var(--ring-offset, var(--ring-circ, 251));
+  animation: qdraw-ring var(--duration-verdict) var(--bezier) both;
+}
+
+.result-verdict[data-consensus="true"] .result-ring-track {
+  stroke: color-mix(in srgb, var(--verdict-on) 22%, transparent);
+}
+
+.result-verdict[data-consensus="true"] .result-ring-value {
+  stroke: var(--verdict-on);
+}
+
+@keyframes qdraw-ring {
+  from { stroke-dashoffset: var(--ring-circ, 251); }
+  to { stroke-dashoffset: var(--ring-offset, var(--ring-circ, 251)); }
+}
+
+.result-ring-center {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+}
+
+.result-ring-count {
+  font-family: var(--font-serif);
+  font-size: 1.6rem;
+  font-weight: 600;
+  line-height: 1;
+}
+
+.result-ring-label {
+  font-size: 0.66rem;
+  font-weight: 650;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  margin-top: 2px;
+}
+
+.result-verdict[data-consensus="true"] .result-ring-label {
+  color: color-mix(in srgb, var(--verdict-on) 88%, transparent);
+}
+
+.result-verdict[data-consensus="false"] .result-ring-label {
+  color: var(--text-secondary);
+}
+
+.result-verdict-content {
+  flex: 1 1 320px;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+}
+
+.result-verdict-eyebrow {
+  font-size: 0.72rem;
+  font-weight: 650;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+}
+
+.result-verdict[data-consensus="true"] .result-verdict-eyebrow {
+  color: color-mix(in srgb, var(--verdict-on) 88%, transparent);
+}
+
+.result-verdict[data-consensus="false"] .result-verdict-eyebrow {
+  color: var(--text-secondary);
+}
+
+.result-verdict-text {
+  font-family: var(--font-serif);
+  font-size: 1.45rem;
+  line-height: 1.3;
+  font-weight: 500;
+  text-wrap: pretty;
+}
+
+.result-verdict-summary {
+  font-size: 0.9rem;
+  line-height: 1.55;
+}
+
+.result-verdict[data-consensus="true"] .result-verdict-summary {
+  color: color-mix(in srgb, var(--verdict-on) 90%, transparent);
+}
+
+.result-verdict[data-consensus="false"] .result-verdict-summary {
+  color: var(--body);
+}
+
+.result-verdict-caveat {
+  font-size: 0.8rem;
+  line-height: 1.5;
+  font-style: italic;
+}
+
+.result-verdict[data-consensus="true"] .result-verdict-caveat {
+  color: color-mix(in srgb, var(--verdict-on) 90%, transparent);
+}
+
+.result-verdict[data-consensus="false"] .result-verdict-caveat {
+  color: var(--warning);
+}
+
+.result-verdict-caption {
+  font-size: 0.72rem;
+  line-height: 1.5;
+}
+
+.result-verdict[data-consensus="true"] .result-verdict-caption {
+  color: color-mix(in srgb, var(--verdict-on) 90%, transparent);
+}
+
+.result-verdict[data-consensus="false"] .result-verdict-caption {
+  color: var(--muted);
+}
+
+/* Empty state — failed/blocked run reached the result view with no synthesis. */
+.result-verdict[data-empty="true"] {
+  display: block;
+  font-size: 0.95rem;
+  color: var(--body);
+}
+
+/* --- Trust triangle --- */
+.result-trust {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: var(--space-3);
+}
+
+.result-trust-card {
+  background: var(--surface);
+  border: 1px solid var(--line-2);
+  border-radius: var(--radius-md);
+  padding: var(--space-4);
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+}
+
+.result-trust-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-2);
+}
+
+.result-trust-kicker {
+  font-size: 0.78rem;
+  font-weight: 700;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+}
+
+.result-trust-chip {
+  width: 9px;
+  height: 9px;
+  border-radius: 3px;
+  flex-shrink: 0;
+}
+
+/* Accent by card role. Agreement is green ONLY on consensus (see JS gate). */
+.result-trust-card[data-accent="agreement"][data-consensus="true"] .result-trust-kicker { color: var(--success); }
+.result-trust-card[data-accent="agreement"][data-consensus="true"] .result-trust-chip { background: var(--success); }
+
+.result-trust-card[data-accent="agreement"][data-consensus="false"] .result-trust-kicker { color: var(--warning); }
+.result-trust-card[data-accent="agreement"][data-consensus="false"] .result-trust-chip { background: var(--warning); }
+
+.result-trust-card[data-accent="source"] .result-trust-kicker { color: var(--info); }
+.result-trust-card[data-accent="source"] .result-trust-chip { background: var(--info); }
+
+.result-trust-card[data-accent="uncertainty"] .result-trust-kicker { color: var(--warning); }
+.result-trust-card[data-accent="uncertainty"] .result-trust-chip { background: var(--warning); }
+
+.result-trust-value {
+  font-size: 1.4rem;
+  font-weight: 700;
+  letter-spacing: -0.01em;
+  color: var(--ink);
+}
+
+.result-trust-value-sub {
+  font-size: 0.84rem;
+  font-weight: 600;
+  color: var(--text-secondary);
+}
+
+.result-trust-caption {
+  font-size: 0.8rem;
+  line-height: 1.5;
+  color: var(--text-secondary);
+}
+
+@media (max-width: 760px) {
+  .result-trust {
+    grid-template-columns: 1fr;
+  }
+  .result-verdict {
+    gap: var(--space-4);
+  }
+}
+
+/* The verdict ring DRAW is the one long motion — disable it under
+   reduced-motion (the ring stays at its final value, just static). */
+@media (prefers-reduced-motion: reduce) {
+  .result-ring-value {
     animation: none;
   }
 }
