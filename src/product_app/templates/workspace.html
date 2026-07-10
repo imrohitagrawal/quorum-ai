@@ -43,11 +43,14 @@
       </header>
 
       <section id="error-region" class="status-banner" data-severity="error" tabindex="-1" role="alert" hidden>
-        <div class="status-banner-icon" aria-hidden="true">!</div>
+        <div class="status-banner-icon" id="error-region-icon" aria-hidden="true">!</div>
         <div class="status-banner-body">
-          <div class="status-banner-title" id="error-region-title">Something went wrong</div>
+          <span class="status-banner-actag" id="error-region-actag" hidden></span>
+          <div class="status-banner-title" id="error-region-title" role="heading" aria-level="2">Something went wrong</div>
           <div class="status-banner-message" id="error-region-message"></div>
+          <dl class="status-banner-detail" id="error-region-detail" hidden></dl>
           <div class="status-banner-actions" id="error-region-actions"></div>
+          <div class="status-banner-footer mono" id="error-region-footer" hidden></div>
         </div>
         <button class="status-banner-dismiss" type="button" id="error-region-dismiss" aria-label="Dismiss error">&times;</button>
       </section>
@@ -281,6 +284,8 @@
                 </div>
 
                 <p id="cost-gate-reason" class="cost-gate-reason"></p>
+                <p id="cost-gate-block-note" class="cost-gate-block-note" hidden></p>
+                <p id="cost-gate-block-footer" class="cost-gate-block-footer mono" hidden></p>
 
                 <div id="cost-gate-actions" class="cost-gate-actions">
                   <button
@@ -293,6 +298,8 @@
                     <span class="button-spinner" aria-hidden="true"></span>
                   </button>
                   <button id="gate-back" class="button button-secondary" type="button">Change models</button>
+                  <button id="gate-block-models" class="button button-primary" type="button" hidden>Choose cheaper models</button>
+                  <button id="gate-block-shorten" class="button button-secondary" type="button" hidden>Shorten the question</button>
                   <span id="cost-gate-cap-note" class="cost-gate-cap-note">The approved figure becomes this run's spend cap.</span>
                 </div>
               </div>

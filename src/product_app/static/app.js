@@ -42,9 +42,13 @@
     Array.from(root.querySelectorAll(selector));
 
   const errorRegion = el("error-region");
+  const errorIcon = el("error-region-icon");
+  const errorActag = el("error-region-actag");
   const errorTitle = el("error-region-title");
   const errorMessage = el("error-region-message");
+  const errorDetail = el("error-region-detail");
   const errorActions = el("error-region-actions");
+  const errorFooter = el("error-region-footer");
   const errorDismiss = el("error-region-dismiss");
   const driftRegion = el("drift-region");
   const driftMessage = el("drift-region-message");
@@ -105,10 +109,14 @@
   const gateByModel = el("cost-by-model");
   const gateByStage = el("cost-by-stage");
   const gateReason = el("cost-gate-reason");
+  const gateBlockNote = el("cost-gate-block-note");
+  const gateBlockFooter = el("cost-gate-block-footer");
   const gateBandLabel = el("cost-review-band-label");
   const gateCard = el("cost-review-card");
   const gateConfirmButton = el("gate-confirm");
   const gateBackButton = el("gate-back");
+  const gateBlockModelsButton = el("gate-block-models");
+  const gateBlockShortenButton = el("gate-block-shorten");
   const gateCapNote = el("cost-gate-cap-note");
   const gateHintConfirm = el("cost-gate-hint-confirm");
   const gateLive = el("cost-gate-live");
@@ -251,33 +259,70 @@
   // Map a server "code" string to a user-friendly title. Anything we
   // don't recognise falls through to the generic "Something went wrong".
   const ERROR_TITLES = {
-    AUTH_REQUIRED: "Session expired",
+    AUTH_REQUIRED: "Start a session to run a query",
     SESSION_EXPIRED: "Session expired",
     CSRF_INVALID: "Security check failed",
-    INVALID_MODEL_SLOT: "Model selection needs adjustment",
+    INVALID_MODEL_SLOT: "One model slot needs a fix",
     SAFETY_ACK_REQUIRED: "Acknowledgement required",
     VALIDATION_ERROR: "Please check the form",
     COST_CONFIRMATION_REQUIRED: "Cost confirmation required",
-    COST_LIMIT_EXCEEDED: "Run blocked: cost too high",
+    COST_LIMIT_EXCEEDED: "Over the hard cap — this run won't start",
+    ACTIVE_QUERY_EXISTS: "You already have a run in progress",
+    QUERY_RUN_NOT_FOUND: "You don't have access to this",
     QUERY_TOO_LONG: "Question is too long",
     QUERY_REQUIRED: "Question is required",
     NETWORK_UNREACHABLE: "Can't reach the server",
-    RUN_FAILED: "Run failed",
+    RUN_FAILED: "One model didn't finish",
     TIMEOUT: "Run timed out",
   };
 
   // Some error codes have a CTA the user can take. Each entry has a
   // label + an onClick callback. We render them in the error banner.
+  // Slice 6 (07 edge states): only actions the backend can ACTUALLY
+  // perform are wired here (see ``edgeStateFromError`` for the
+  // per-state builders). No fabricated per-step retry / "continue with
+  // N models" buttons — there is no backend endpoint for either.
   const ERROR_ACTIONS = {
-    AUTH_REQUIRED: [{ label: "Refresh session", action: () => location.reload() }],
     SESSION_EXPIRED: [{ label: "Refresh session", action: () => location.reload() }],
+    CSRF_INVALID: [{ label: "Refresh session", action: () => location.reload() }],
   };
 
-  function showError({ code, message, hint, fieldErrors } = {}) {
+  // Slice 6 (07 edge states): the error banner doubles as the seven
+  // first-class honest edge cards. ``showError`` accepts optional
+  // ``acTag`` (the "… · AC-0NN" pill), ``severity`` (error / warning /
+  // info / neutral), ``detailRows`` (an itemized key→value block), and
+  // ``footer`` (a mono correlation/ID line). Every field is server-data
+  // driven at the call site — nothing here fabricates provider status,
+  // slot suggestions, or "why" reasons.
+  function showError({
+    code,
+    message,
+    hint,
+    fieldErrors,
+    acTag,
+    severity,
+    detailRows,
+    footer,
+    actions,
+  } = {}) {
     const title = (code && ERROR_TITLES[code]) || "Something went wrong";
+    const sev = severity || "error";
+    errorRegion.dataset.severity = sev;
+    if (errorIcon) {
+      errorIcon.textContent =
+        sev === "info" || sev === "neutral" ? "i" : "!";
+    }
+    if (errorActag) {
+      if (acTag) {
+        errorActag.textContent = acTag;
+        errorActag.hidden = false;
+      } else {
+        errorActag.textContent = "";
+        errorActag.hidden = true;
+      }
+    }
     errorTitle.textContent = title;
     errorMessage.textContent = message || "An unexpected error occurred. Please try again.";
-    errorRegion.dataset.severity = "error";
     if (fieldErrors && fieldErrors.length) {
       const list = document.createElement("ul");
       list.className = "status-banner-field-errors";
@@ -295,16 +340,81 @@
       hintEl.textContent = hint;
       errorMessage.appendChild(hintEl);
     }
-    // Render any action buttons the registry recommends for this code.
+    // Itemized detail block (failed step, bad slot id, hard cap, …).
+    if (errorDetail) {
+      errorDetail.replaceChildren();
+      const rows = Array.isArray(detailRows) ? detailRows : [];
+      if (rows.length) {
+        for (const row of rows) {
+          const wrap = document.createElement("div");
+          wrap.className = "status-banner-detail-row";
+          const dt = document.createElement("dt");
+          dt.textContent = row.label;
+          const dd = document.createElement("dd");
+          dd.textContent = row.value;
+          if (row.mono) dd.classList.add("mono");
+          if (row.tone) dd.dataset.tone = row.tone;
+          // Any sub-line belongs INSIDE the <dd> (valid <dl> content model);
+          // a bare <div> child of <dl> is invalid and confuses some AT.
+          if (row.sub) {
+            const sub = document.createElement("div");
+            sub.className = "status-banner-detail-sub";
+            sub.textContent = row.sub;
+            dd.appendChild(sub);
+          }
+          wrap.append(dt, dd);
+          errorDetail.appendChild(wrap);
+        }
+        errorDetail.hidden = false;
+      } else {
+        errorDetail.hidden = true;
+      }
+    }
+    // Action buttons. Prefer explicit per-call ``actions``; otherwise
+    // fall back to the static registry. Each action may be sync or async.
     errorActions.replaceChildren();
-    const actions = (code && ERROR_ACTIONS[code]) || [];
-    for (const { label, action } of actions) {
+    const resolvedActions =
+      (Array.isArray(actions) && actions.length
+        ? actions
+        : (code && ERROR_ACTIONS[code]) || []);
+    resolvedActions.forEach(({ label, action, primary }, index) => {
       const button = document.createElement("button");
       button.type = "button";
-      button.className = "button button-secondary button-compact";
+      button.className = primary
+        ? "button button-primary button-compact"
+        : "button button-secondary button-compact";
       button.textContent = label;
-      button.addEventListener("click", action);
+      button.addEventListener("click", () => {
+        try {
+          const maybePromise = action();
+          if (maybePromise && typeof maybePromise.catch === "function") {
+            maybePromise.catch((err) => {
+              toast({
+                message: (err && err.message) || "That action could not complete.",
+                tone: "error",
+                timeout: 6000,
+              });
+            });
+          }
+        } catch (err) {
+          toast({
+            message: (err && err.message) || "That action could not complete.",
+            tone: "error",
+            timeout: 6000,
+          });
+        }
+      });
       errorActions.appendChild(button);
+    });
+    // Mono correlation / ID footer.
+    if (errorFooter) {
+      if (footer) {
+        errorFooter.textContent = footer;
+        errorFooter.hidden = false;
+      } else {
+        errorFooter.textContent = "";
+        errorFooter.hidden = true;
+      }
     }
     errorRegion.hidden = false;
     // Move focus so screen readers announce the error.
@@ -318,9 +428,22 @@
 
   function clearError() {
     errorRegion.hidden = true;
+    errorRegion.dataset.severity = "error";
     errorTitle.textContent = "";
     errorMessage.textContent = "";
     errorActions.replaceChildren();
+    if (errorActag) {
+      errorActag.textContent = "";
+      errorActag.hidden = true;
+    }
+    if (errorDetail) {
+      errorDetail.replaceChildren();
+      errorDetail.hidden = true;
+    }
+    if (errorFooter) {
+      errorFooter.textContent = "";
+      errorFooter.hidden = true;
+    }
   }
 
   // Render the catalog-drift banner. ``renderDriftBanner`` builds a
@@ -792,7 +915,7 @@
   };
 
   class ApiError extends Error {
-    constructor({ status, code, message, slotErrors, fieldErrors, partial }) {
+    constructor({ status, code, message, slotErrors, fieldErrors, partial, correlationId }) {
       super(message || STATUS_COPY[status] || "Unexpected error");
       this.name = "ApiError";
       this.status = status;
@@ -800,6 +923,10 @@
       this.slotErrors = slotErrors;
       this.fieldErrors = fieldErrors;
       this.partial = partial;
+      // Slice 6 (07 edge states): surface a server correlation_id on the
+      // error when the envelope carries one, so honest edge states can
+      // quote it in their footer. Never invented — undefined when absent.
+      this.correlationId = correlationId;
     }
   }
 
@@ -855,6 +982,7 @@
         slotErrors: detail && detail.slot_errors,
         fieldErrors: detail && detail.field_errors,
         partial: payload,
+        correlationId: (detail && detail.correlation_id) || (payload && payload.correlation_id) || undefined,
       });
     }
     return response.json();
@@ -3953,23 +4081,43 @@
     renderCostRows(gateByStage, partitions.byStage, partitions.total);
 
     if (action === "block") {
-      // BLOCK (> $0.25). Screen 07 (cost-blocked) with the full COPY-004
-      // treatment lands in Slice 6; for now this is a minimal inline
-      // blocked state: server reasons + the hard-limit note, no proceed.
-      // TODO(Slice 6 / COPY-004): replace with the dedicated 07 edge state.
-      if (gateBandLabel) gateBandLabel.textContent = "Cost review — run blocked";
+      // BLOCK (> $0.25) — Slice 6 (07 cost-blocked · AC-010 · COPY-004).
+      // First-class honest treatment: COPY-004 VERBATIM, the itemized
+      // estimate (rendered above), the $0.25 hard-cap disclosure, an honest
+      // "nothing ran / nothing charged", and the server ``reasons[]`` (the
+      // real "why" — NEVER a fabricated "4 premium slots · 14,600-char
+      // question"). Footer surfaces ``threshold_action: blocked`` + the
+      // estimate correlation_id. No proceed path exists.
+      if (gateBandLabel) gateBandLabel.textContent = "Over the hard cap — this run won't start";
       if (gateReason) {
-        const reasonText = reasons.length ? `${reasons.join(" ")} ` : "";
-        gateReason.textContent =
-          `${reasonText}This run is above the $0.25 hard limit — execution is blocked, no override.`;
+        // COPY-004 verbatim, then the server's honest reason(s) if present.
+        const serverReasons = reasons.length ? ` ${reasons.join(" ")}` : "";
+        gateReason.textContent = `${COPY_004_COST_BLOCK}${serverReasons}`;
       }
+      if (gateBlockNote) {
+        gateBlockNote.textContent =
+          `The itemized estimate above (${gateUsd(total)}) is over the ` +
+          "$0.25 hard cap and no override exists in this release. Nothing " +
+          "ran and nothing was charged.";
+        gateBlockNote.hidden = false;
+      }
+      if (gateBlockFooter) {
+        const corr = estimate && estimate.correlation_id;
+        gateBlockFooter.textContent = `threshold_action: blocked${corr ? ` · ${corr}` : ""}`;
+        gateBlockFooter.hidden = false;
+      }
+      // Actions: swap the confirm/change-models pair for the two honest
+      // recovery paths (both return to the composer — real, no fabrication).
       if (gateConfirmButton) gateConfirmButton.hidden = true;
+      if (gateBackButton) gateBackButton.hidden = true;
+      if (gateBlockModelsButton) gateBlockModelsButton.hidden = false;
+      if (gateBlockShortenButton) gateBlockShortenButton.hidden = false;
       if (gateCapNote) gateCapNote.hidden = true;
       // Ctrl+Enter confirms nothing in the block band — hide that hint.
       if (gateHintConfirm) gateHintConfirm.hidden = true;
       // No planning range for a run that will not execute.
       if (gateRangeWrap) gateRangeWrap.hidden = true;
-      return `Run blocked. Estimated ${gateUsd(total)} is above the $0.25 hard limit.`;
+      return `Run blocked. Estimated ${gateUsd(total)} is above the $0.25 hard cap. ${COPY_004_COST_BLOCK}`;
     }
 
     // REQUIRE_CONFIRMATION ($0.15–$0.25).
@@ -3995,6 +4143,13 @@
       const label = gateConfirmButton.querySelector(".button-label");
       if (label) label.textContent = `Approve ${gateUsd(total)} & run`;
     }
+    // Reset the block-only surfaces so a prior block render never bleeds
+    // into the confirm band.
+    if (gateBackButton) gateBackButton.hidden = false;
+    if (gateBlockModelsButton) gateBlockModelsButton.hidden = true;
+    if (gateBlockShortenButton) gateBlockShortenButton.hidden = true;
+    if (gateBlockNote) gateBlockNote.hidden = true;
+    if (gateBlockFooter) gateBlockFooter.hidden = true;
     if (gateCapNote) gateCapNote.hidden = false;
     if (gateHintConfirm) gateHintConfirm.hidden = false;
     return `Cost review: your confirmation required. Estimated ${gateUsd(total)}.`;
@@ -4570,40 +4725,14 @@
           timeout: 6500,
         });
       } else if (result.status === "failed") {
-        // Show error banner for failed runs using server-provided info
-        const failedSteps = result.failed_steps || [];
-        const partialNotice = result.partial_failure_notice || '';
-        const failedStepsText = failedSteps.length > 0
-          ? `Failed at: ${failedSteps.join(', ').replace(/_/g, ' ')}`
-          : '';
-
-        // Build a user-friendly message based on failed steps
-        let errorMessage = 'Run failed. ';
-        if (failedSteps.includes('initial_answers')) {
-          errorMessage += 'Models could not provide initial answers. ';
-        } else if (failedSteps.includes('debate_round_1') || failedSteps.includes('debate_round_2')) {
-          errorMessage += 'Debate could not complete. ';
-        } else if (failedSteps.includes('synthesis')) {
-          errorMessage += 'Final synthesis could not be generated. ';
-        }
-
-        if (partialNotice) {
-          errorMessage += partialNotice;
-        } else {
-          errorMessage += 'Please try again or contact support if the problem persists.';
-        }
-
-        showError({
-          code: 'RUN_FAILED',
-          message: errorMessage,
-          hint: failedStepsText
-            ? `Technical details: ${failedStepsText}`
-            : liveNoticesHaveContent(result)
-              ? 'The run notices above explain what went wrong.'
-              : 'Copy the run ID above and contact support if this persists.',
-        });
-
-        toast({ message: "Run failed. See error banner above.", tone: "error", timeout: 8000 });
+        // Slice 6 (07 provider failure · AC-015). First-class honest
+        // treatment driven ENTIRELY by server data: which step(s) failed,
+        // the server's user-safe failure notice(s), and the correlation +
+        // run ids. The mock's "Retry this step" / "Continue with 3 models"
+        // buttons are DROPPED — there is no per-step retry endpoint, so
+        // rendering them would be a lie. Only real actions are offered.
+        showProviderFailure(result);
+        toast({ message: "Run failed. See the banner above.", tone: "error", timeout: 8000 });
       } else if (result.status === "timed_out") {
         showError({
           code: 'TIMEOUT',
@@ -4675,6 +4804,311 @@
     }
   }
 
+  // ---------------------------------------------------------------------------
+  // Slice 6 — 07 Edge states (the seven)
+  // ---------------------------------------------------------------------------
+  //
+  // The seven edge states are surfaced IN the existing SPA (not a parallel
+  // gallery), each wired to its REAL server trigger:
+  //   1. Anonymous · AC-001        → session-establishment FAILURE
+  //      (``AUTH_REQUIRED``). The app auto-creates a session on boot, so a
+  //      *persistent* anonymous gate is unreachable; the honest analog is
+  //      "we couldn't start a session", which is what this state says.
+  //   2. Active query exists · AC-003 → 409 ``ACTIVE_QUERY_EXISTS`` on a 2nd
+  //      create. Actions ("Go to run" / "Stop it & start new") both hit real
+  //      endpoints (``GET`` / ``DELETE /v1/query-runs/{active}``).
+  //   3. Provider failure · AC-015 → a failed run (``status==="failed"`` +
+  //      ``failed_steps``). Handled at the pollRun terminal branch
+  //      (``showProviderFailure``). There is NO per-step retry endpoint, so
+  //      the mock's "Retry this step" / "Continue with 3 models" buttons are
+  //      DROPPED — only real actions (new run / review results) are offered.
+  //   4. Partial result · AC-022  → ``status==="partial"``; the run has a
+  //      synthesis, so it lands on the result view with first-class partial
+  //      disclosure (``#live-notices`` + the result notices).
+  //   5. Invalid model slot · AC-008 → 422 ``INVALID_MODEL_SLOT`` +
+  //      ``slot_errors``. Names the exact slot + bad id from server data. The
+  //      backend provides NO "did you mean" suggestion, so none is shown.
+  //   6. Cost blocked · AC-010 · COPY-004 → the cost-gate block band (see
+  //      ``renderCostGate``). Defensive create-time 402 also lands here.
+  //   7. Wrong session · AC-032  → the backend returns 404
+  //      ``QUERY_RUN_NOT_FOUND`` for a run not owned by this session (the
+  //      SAME response as a truly-missing run — it deliberately does NOT
+  //      disclose existence, so it is honest to NOT invent a 403). We defend
+  //      against both 404-not-found and a raw 403 and disclose NOTHING.
+
+  // Friendly stage labels for failed / missing step keys. Falls back to the
+  // raw key (spaces for underscores) for anything unmapped.
+  const STEP_LABELS = {
+    initial_answers: "Initial answers",
+    debate_round_1: "Debate round 1",
+    debate_round_2: "Debate round 2",
+    synthesis: "Synthesis",
+    pipeline: "Pipeline",
+  };
+  function stepLabel(step) {
+    return STEP_LABELS[step] || String(step || "").replace(/_/g, " ");
+  }
+
+  // COPY-004 (verbatim, docs/33-content-design.md). Cost block message.
+  const COPY_004_COST_BLOCK =
+    "This run is above the MVP cost limit. Choose lower-cost models, " +
+    "shorten the query, or reduce the workflow before trying again.";
+
+  // Return to the composer and clear the current edge state. Optionally
+  // focus a specific field so the fix path is obvious.
+  function returnToComposer(focus) {
+    clearError();
+    setView("composer");
+    if (focus === "slot") {
+      const firstSlot = document.querySelector("[data-model-slot]");
+      if (firstSlot) {
+        firstSlot.focus({ preventScroll: true });
+        return;
+      }
+    }
+    // Default (and the "question" fix path): land focus on the query box.
+    if (queryTextarea) queryTextarea.focus({ preventScroll: true });
+  }
+
+  // AC-003 "Go to run": look up the session's OWN active run and switch to
+  // the live-run view. Only ever surfaces the caller's own run.
+  async function goToActiveRun() {
+    const active = await api("/v1/query-runs/active", { method: "GET" });
+    if (!active || !active.query_run_id) {
+      clearError();
+      toast({ message: "No active run found — you can start a new one.", tone: "info" });
+      returnToComposer();
+      return;
+    }
+    clearError();
+    state.currentRunId = active.query_run_id;
+    setRunning(true);
+    setView("live-run");
+    focusLiveHeading();
+    startPolling();
+  }
+
+  // AC-003 "Stop it & start new": cancel the session's own active run, then
+  // return to the composer. Real DELETE — no fabricated affordance.
+  async function stopActiveRunAndCompose() {
+    const active = await api("/v1/query-runs/active", { method: "GET" });
+    if (active && active.query_run_id) {
+      await api(`/v1/query-runs/${active.query_run_id}`, { method: "DELETE" });
+      toast({ message: "Previous run stopped. Start a fresh query.", tone: "info" });
+    }
+    stopPolling();
+    state.currentRunId = null;
+    setRunning(false);
+    returnToComposer();
+  }
+
+  // AC-001 "Start a session": retry the session bootstrap in place. Falls
+  // back to a full reload if the retry itself fails.
+  async function retrySession() {
+    try {
+      await initSession();
+      await refreshDefaults();
+      clearError();
+      toast({ message: "Session started. You can run a query now.", tone: "success" });
+    } catch (_) {
+      location.reload();
+    }
+  }
+
+  // AC-015 Provider failure — a failed run. Surfaced from the pollRun
+  // terminal branch (the failure arrives as a run projection, not an
+  // ApiError). Renders ONLY server-provided fields: failed step(s), the
+  // user-safe provider failure notice(s), "other steps completed", and both
+  // ids. NO per-step "Retry" / "Continue with N models" — the backend has
+  // no such endpoint, so those mock buttons are deliberately absent.
+  function showProviderFailure(result) {
+    const failedSteps = Array.isArray(result.failed_steps) ? result.failed_steps : [];
+    const missingSteps = Array.isArray(result.missing_steps) ? result.missing_steps : [];
+    const providerNotices = Array.isArray(result.provider_failure_notices)
+      ? result.provider_failure_notices
+      : [];
+    const partialNotice = result.partial_failure_notice || "";
+
+    const detailRows = [];
+    if (failedSteps.length) {
+      detailRows.push({
+        label: failedSteps.length === 1 ? "Failed step" : "Failed steps",
+        value: failedSteps.map(stepLabel).join(", "),
+        tone: "danger",
+      });
+    }
+    // The server's user-safe notice — never a synthesised HTTP code.
+    const notice = providerNotices[0] || partialNotice;
+    if (notice) {
+      detailRows.push({ label: "Provider response", value: notice });
+    }
+    // "Other steps completed" — only claim it when at least one of the four
+    // pipeline stages is NOT in the failed/missing set (honest, derived).
+    const brokenSteps = new Set([...failedSteps, ...missingSteps]);
+    const pipeline = ["initial_answers", "debate_round_1", "debate_round_2", "synthesis"];
+    const completed = pipeline.filter((s) => !brokenSteps.has(s));
+    if (completed.length && brokenSteps.size) {
+      detailRows.push({
+        label: "Other steps",
+        value: `${completed.length} completed`,
+      });
+    }
+
+    // Footer: both ids, quoted for support. No secrets, no provider keys.
+    const corr = result.correlation_id || "";
+    const runId = result.query_run_id ? String(result.query_run_id) : "";
+    const idParts = [corr, runId].filter(Boolean);
+    const footer = idParts.length
+      ? `${idParts.join(" · ")} — quote when reporting`
+      : undefined;
+
+    const actions = [
+      { label: "Start a new run", primary: true, action: () => returnToComposer("question") },
+    ];
+    // Only offer "Review available results" when a synthesis actually
+    // exists (otherwise the button would open an empty result view).
+    if (result.result && result.result.final_synthesis) {
+      actions.push({
+        label: "Review available results",
+        action: () => {
+          clearError();
+          state.lastResult = result;
+          renderResult(result);
+          setView("result");
+          focusResultHeading();
+        },
+      });
+    }
+
+    showError({
+      code: "RUN_FAILED",
+      severity: "error",
+      acTag: "Provider failure · AC-015",
+      message:
+        "A model step returned a provider error, so the run couldn't " +
+        "finish. This is a provider-side issue, not your query — no keys " +
+        "or secrets are exposed.",
+      detailRows,
+      actions,
+      footer,
+    });
+  }
+
+  // Map a caught error to one of the seven honest edge states, or ``null``
+  // when it is an ordinary error (handled by the generic banner). Every
+  // field is derived from REAL server data — no fabricated slot suggestion,
+  // provider status, or "why" reason.
+  function edgeStateFromError(error) {
+    if (!(error instanceof ApiError)) return null;
+    const code = error.code;
+    const status = error.status;
+
+    // AC-032 Wrong session — the ONLY honest signal is 404 QUERY_RUN_NOT_FOUND
+    // (the backend returns the SAME 404 for a missing OR a non-owned run, so
+    // existence is never disclosed). It never returns 403 for a non-owned run:
+    // the only 403s are CSRF_INVALID / SESSION_EXPIRED, which must fall through
+    // to their own "Security check failed" / "Refresh session" handlers — NOT
+    // be mislabeled as a cross-session access event. Disclose NOTHING here.
+    if (code === "QUERY_RUN_NOT_FOUND") {
+      return {
+        code: "QUERY_RUN_NOT_FOUND",
+        severity: "neutral",
+        acTag: "Wrong session · AC-032",
+        message:
+          "This link belongs to a different browser session. Runs are " +
+          "private to the session that started them and disappear when it " +
+          "ends — so we can't open it for you. That's the extent of what " +
+          "we can say about it.",
+        actions: [
+          { label: "Start your own query", primary: true, action: () => returnToComposer("question") },
+          { label: "Start a session", action: retrySession },
+        ],
+        footer: "error 404 · no run details disclosed",
+      };
+    }
+
+    // AC-003 Active query exists — 409 on a second create.
+    if (code === "ACTIVE_QUERY_EXISTS") {
+      return {
+        code,
+        severity: "info",
+        acTag: "Active query exists · AC-003",
+        message:
+          "One active query per session keeps costs predictable. Jump back " +
+          "to your running query, or stop it before starting a new one.",
+        actions: [
+          { label: "Go to run", primary: true, action: goToActiveRun },
+          { label: "Stop it & start new", action: stopActiveRunAndCompose },
+        ],
+      };
+    }
+
+    // AC-008 Invalid model slot — 422 with per-slot errors.
+    if (code === "INVALID_MODEL_SLOT") {
+      const slotErrors = Array.isArray(error.slotErrors) ? error.slotErrors : [];
+      const detailRows = slotErrors.map((se) => ({
+        label: se.slot_number ? `Slot ${se.slot_number}` : "Model slots",
+        value: se.model_id || "(empty)",
+        mono: true,
+        tone: "danger",
+        // ``se.message`` is the server's exact reason (e.g. "…is not in the
+        // catalog") — no client-side "did you mean" is fabricated.
+        sub: se.message || undefined,
+      }));
+      return {
+        code,
+        severity: "error",
+        acTag: "Invalid model slot · AC-008",
+        message:
+          "That model ID isn't one we can call, so nothing was sent and " +
+          "nothing was charged. The error names the exact slot — never a " +
+          'generic "invalid input".',
+        detailRows,
+        actions: [
+          { label: "Fix model slots", primary: true, action: () => returnToComposer("slot") },
+        ],
+        footer: error.correlationId ? `${error.correlationId}` : undefined,
+      };
+    }
+
+    // AC-010 Cost blocked (defensive create-time 402; the estimate gate is
+    // the primary surface — see ``renderCostGate``). COPY-004 verbatim.
+    if (code === "COST_LIMIT_EXCEEDED") {
+      return {
+        code,
+        severity: "error",
+        acTag: "Cost blocked · AC-010 · COPY-004",
+        message: `${COPY_004_COST_BLOCK} Nothing ran and nothing was charged.`,
+        detailRows: [
+          { label: "Hard cap", value: "$0.25 · no override", mono: true },
+        ],
+        actions: [
+          { label: "Choose cheaper models", primary: true, action: () => returnToComposer("slot") },
+          { label: "Shorten the question", action: () => returnToComposer("question") },
+        ],
+        footer: `threshold_action: blocked${error.correlationId ? ` · ${error.correlationId}` : ""}`,
+      };
+    }
+
+    // AC-001 Anonymous — session establishment failed on boot.
+    if (code === "AUTH_REQUIRED") {
+      return {
+        code,
+        severity: "neutral",
+        acTag: "Anonymous · AC-001",
+        message:
+          "We couldn't start a browser session, so no query can run yet. " +
+          "Starting a session is one click — a secure cookie, no signup or " +
+          "password. Provider access is configured on the server; you'll " +
+          "never enter an API key.",
+        actions: [{ label: "Start a session", primary: true, action: retrySession }],
+        footer: status ? `session unavailable · error ${status}` : undefined,
+      };
+    }
+
+    return null;
+  }
+
   function handleError(error) {
     // Re-enable the Proceed button so a transient failure does not
     // strand the user. The button is gated again on a fresh estimate
@@ -4683,6 +5117,13 @@
     if (proceedButton && !state.isRunning) {
       const band = proceedButton.dataset.estimateBand;
       proceedButton.disabled = band === "block";
+    }
+    // Slice 6 (07 edge states): route recognised codes to their honest,
+    // first-class edge treatment before the generic fallback.
+    const edge = edgeStateFromError(error);
+    if (edge) {
+      showError(edge);
+      return;
     }
     if (error instanceof ApiError) {
       const detail = {
@@ -5019,6 +5460,20 @@
     if (gateBackButton) {
       gateBackButton.addEventListener("click", () => {
         gateBackToComposer();
+      });
+    }
+    // Slice 6 (07 cost-blocked · AC-010): the block band's two honest
+    // recovery paths. Both return to the composer — "Choose cheaper models"
+    // lands focus on the first model slot, "Shorten the question" on the
+    // query box. Neither runs anything.
+    if (gateBlockModelsButton) {
+      gateBlockModelsButton.addEventListener("click", () => {
+        returnToComposer("slot");
+      });
+    }
+    if (gateBlockShortenButton) {
+      gateBlockShortenButton.addEventListener("click", () => {
+        returnToComposer("question");
       });
     }
     if (cancelEstimateButton) {
