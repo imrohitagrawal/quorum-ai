@@ -38,18 +38,14 @@ def client() -> TestClient:
     "path",
     ["/health", "/ready", "/v1/session", "/", "/v1/models/defaults"],
 )
-def test_security_headers_present_on_every_response(
-    client: TestClient, path: str
-) -> None:
+def test_security_headers_present_on_every_response(client: TestClient, path: str) -> None:
     response = client.get(path)
     # We don't assert on the status code here — the goal is the
     # headers, which the middleware sets before the status is
     # inspected.
     for header_name, expected in SECURITY_HEADERS.items():
         actual = response.headers.get(header_name)
-        assert actual == expected, (
-            f"{path}: expected {header_name}={expected!r}, got {actual!r}"
-        )
+        assert actual == expected, f"{path}: expected {header_name}={expected!r}, got {actual!r}"
 
 
 def test_server_header_is_replaced(client: TestClient) -> None:
@@ -71,9 +67,7 @@ def test_hsts_present_only_in_production(
     """
     # LOCAL default: no HSTS
     response = client.get("/health")
-    assert "strict-transport-security" not in {
-        k.lower() for k in response.headers.keys()
-    }
+    assert "strict-transport-security" not in {k.lower() for k in response.headers.keys()}
 
     # PRODUCTION: HSTS present
     monkeypatch.setattr(

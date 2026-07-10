@@ -44,6 +44,5 @@ def test_catalog_json_is_escaped() -> None:
     payload_end = html.index(close_marker, payload_start)
     catalog_payload = html[payload_start:payload_end]
     assert "<" not in catalog_payload, (
-        "unescaped '<' in catalog data island — payload was: "
-        + catalog_payload[:200]
+        "unescaped '<' in catalog data island — payload was: " + catalog_payload[:200]
     )

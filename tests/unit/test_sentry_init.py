@@ -1,4 +1,5 @@
 """Verify Sentry init is a safe no-op when DSN is absent and active when set."""
+
 from __future__ import annotations
 
 import importlib

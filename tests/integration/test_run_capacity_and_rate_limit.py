@@ -44,9 +44,7 @@ def test_session_endpoint_rate_limited_after_burst() -> None:
     # Drain the bucket: 30 sessions should all return 200.
     for i in range(30):
         response = client.get("/v1/session")
-        assert response.status_code == 200, (
-            f"session {i} expected 200, got {response.status_code}"
-        )
+        assert response.status_code == 200, f"session {i} expected 200, got {response.status_code}"
     # The 31st request should be rate-limited.
     response = client.get("/v1/session")
     assert response.status_code == 429

@@ -215,9 +215,7 @@ class CostEstimationService:
                 "fix this.",
                 stacklevel=2,
             )
-        self._binding_secret = (
-            binding_secret or env_secret or secrets.token_hex(32)
-        ).encode()
+        self._binding_secret = (binding_secret or env_secret or secrets.token_hex(32)).encode()
         self._tokens: dict[str, _BoundToken] = {}
         self._lock = RLock()
         if now_provider is None:
@@ -387,6 +385,7 @@ class CostEstimationService:
         # normal traffic and would just spam the Sentry quota.
         if threshold_action is CostThresholdAction.BLOCK:
             import sentry_sdk  # local import to avoid loading the SDK in tests
+
             try:
                 with sentry_sdk.push_scope() as scope:
                     scope.set_tag("event_type", event_type)
@@ -405,6 +404,7 @@ class CostEstimationService:
                 # persisted to the feedback store; Sentry is a
                 # notification channel, not the source of truth.
                 import logging
+
                 logging.getLogger(__name__).debug(
                     "Sentry capture failed for cost_guardrail_blocked: %s", exc
                 )
@@ -442,18 +442,10 @@ class CostEstimationService:
             )
 
         model_input_cost = sum(
-            (
-                _price(slot.model_id)[0]
-                * (input_tokens / Decimal(1000))
-            )
-            for slot in model_slots
+            (_price(slot.model_id)[0] * (input_tokens / Decimal(1000))) for slot in model_slots
         )
         model_output_cost = sum(
-            (
-                _price(slot.model_id)[1]
-                * (output_tokens / Decimal(1000))
-            )
-            for slot in model_slots
+            (_price(slot.model_id)[1] * (output_tokens / Decimal(1000))) for slot in model_slots
         )
         # L3 - proportional inner-call cost. Debate and synthesis are
         # also LLM calls now (L4), so the estimate must price them.
@@ -476,13 +468,7 @@ class CostEstimationService:
         inner_per_call = inner_multiplier * max_output_rate * output_tokens / Decimal(1000)
         inner_call_cost = min(inner_per_call * Decimal(3), inner_cap)
 
-        return (
-            query_cost
-            + processing_cost
-            + model_input_cost
-            + model_output_cost
-            + inner_call_cost
-        )
+        return query_cost + processing_cost + model_input_cost + model_output_cost + inner_call_cost
 
     def _cumulative_spend_for(self, account_id: UUID) -> Decimal:
         """Sum the ``estimated_cost_usd`` of every cost event recorded

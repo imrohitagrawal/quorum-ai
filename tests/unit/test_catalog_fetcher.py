@@ -77,7 +77,12 @@ class _CountingTransport:
 
 def test_parse_catalog_response_extracts_pricing_as_decimal() -> None:
     payload = _payload(
-        _model(id="openai/gpt-4o-mini", name="OpenAI: GPT-4o mini", prompt="0.00015", completion="0.0006"),
+        _model(
+            id="openai/gpt-4o-mini",
+            name="OpenAI: GPT-4o mini",
+            prompt="0.00015",
+            completion="0.0006",
+        ),
     )
     entries = _parse_catalog_response(json.loads(payload))
     assert len(entries) == 1
@@ -98,7 +103,11 @@ def test_parse_catalog_response_extracts_pricing_as_decimal() -> None:
 def test_parse_catalog_response_drops_rows_missing_pricing() -> None:
     payload = _payload(
         _model(id="openai/gpt-4o-mini"),
-        {"id": "openai/gpt-broken", "name": "Broken", "pricing": {"prompt": None, "completion": None}},
+        {
+            "id": "openai/gpt-broken",
+            "name": "Broken",
+            "pricing": {"prompt": None, "completion": None},
+        },
         {"id": "openai/gpt-malformed", "name": "Malformed", "pricing": "not-a-dict"},
     )
     entries = _parse_catalog_response(json.loads(payload))
@@ -126,7 +135,9 @@ def test_parse_catalog_response_handles_empty_or_wrong_shape() -> None:
         ("no-slash", "", "no-slash"),
     ],
 )
-def test_vendor_and_short_name_helpers(model_id: str, expected_vendor: str, expected_short: str) -> None:
+def test_vendor_and_short_name_helpers(
+    model_id: str, expected_vendor: str, expected_short: str
+) -> None:
     assert _vendor_for(model_id) == expected_vendor
     assert _short_name_for(model_id) == expected_short
 
@@ -199,16 +210,20 @@ def test_fetcher_lookup_returns_none_for_unknown_model() -> None:
 
 
 def test_cheapest_per_vendor_picks_lowest_priced_entry() -> None:
-    entries = _parse_catalog_response(json.loads(_payload(
-        _model(id="openai/gpt-4o-mini", prompt="0.00015", completion="0.0006"),
-        _model(id="openai/gpt-4.1", prompt="0.002", completion="0.008"),
-        _model(id="openai/gpt-3.5-turbo", prompt="0.00005", completion="0.0001"),
-        _model(id="anthropic/claude-3-haiku", prompt="0.00025", completion="0.00125"),
-        _model(id="anthropic/claude-haiku-4.5", prompt="0.001", completion="0.005"),
-        _model(id="google/gemini-2.5-flash-lite", prompt="0.000075", completion="0.0003"),
-        _model(id="google/gemini-2.5-flash", prompt="0.0003", completion="0.0012"),
-        _model(id="deepseek/deepseek-chat-v3.1", prompt="0.00014", completion="0.00028"),
-    )))
+    entries = _parse_catalog_response(
+        json.loads(
+            _payload(
+                _model(id="openai/gpt-4o-mini", prompt="0.00015", completion="0.0006"),
+                _model(id="openai/gpt-4.1", prompt="0.002", completion="0.008"),
+                _model(id="openai/gpt-3.5-turbo", prompt="0.00005", completion="0.0001"),
+                _model(id="anthropic/claude-3-haiku", prompt="0.00025", completion="0.00125"),
+                _model(id="anthropic/claude-haiku-4.5", prompt="0.001", completion="0.005"),
+                _model(id="google/gemini-2.5-flash-lite", prompt="0.000075", completion="0.0003"),
+                _model(id="google/gemini-2.5-flash", prompt="0.0003", completion="0.0012"),
+                _model(id="deepseek/deepseek-chat-v3.1", prompt="0.00014", completion="0.00028"),
+            )
+        )
+    )
     cheapest = OpenRouterCatalogFetcher.cheapest_per_vendor(entries)
     assert cheapest == {
         "openai": "openai/gpt-3.5-turbo",
@@ -219,9 +234,13 @@ def test_cheapest_per_vendor_picks_lowest_priced_entry() -> None:
 
 
 def test_cheapest_per_vendor_skips_vendors_with_no_candidates() -> None:
-    entries = _parse_catalog_response(json.loads(_payload(
-        _model(id="anthropic/claude-3-haiku", prompt="0.00025", completion="0.00125"),
-    )))
+    entries = _parse_catalog_response(
+        json.loads(
+            _payload(
+                _model(id="anthropic/claude-3-haiku", prompt="0.00025", completion="0.00125"),
+            )
+        )
+    )
     cheapest = OpenRouterCatalogFetcher.cheapest_per_vendor(
         entries,
         vendors=("openai", "anthropic", "google"),
@@ -232,10 +251,14 @@ def test_cheapest_per_vendor_skips_vendors_with_no_candidates() -> None:
 
 
 def test_cheapest_per_vendor_respects_input_vendor_order() -> None:
-    entries = _parse_catalog_response(json.loads(_payload(
-        _model(id="google/gemini-2.5-flash-lite", prompt="0.000075", completion="0.0003"),
-        _model(id="openai/gpt-4o-mini", prompt="0.00015", completion="0.0006"),
-    )))
+    entries = _parse_catalog_response(
+        json.loads(
+            _payload(
+                _model(id="google/gemini-2.5-flash-lite", prompt="0.000075", completion="0.0003"),
+                _model(id="openai/gpt-4o-mini", prompt="0.00015", completion="0.0006"),
+            )
+        )
+    )
     # Reverse the input order; result preserves it.
     cheapest = OpenRouterCatalogFetcher.cheapest_per_vendor(
         entries,
@@ -245,10 +268,14 @@ def test_cheapest_per_vendor_respects_input_vendor_order() -> None:
 
 
 def test_cheapest_per_vendor_breaks_ties_by_model_id_lexicographic() -> None:
-    entries = _parse_catalog_response(json.loads(_payload(
-        _model(id="openai/gpt-a", prompt="0.0001", completion="0.0005"),
-        _model(id="openai/gpt-b", prompt="0.0001", completion="0.0005"),
-    )))
+    entries = _parse_catalog_response(
+        json.loads(
+            _payload(
+                _model(id="openai/gpt-a", prompt="0.0001", completion="0.0005"),
+                _model(id="openai/gpt-b", prompt="0.0001", completion="0.0005"),
+            )
+        )
+    )
     cheapest = OpenRouterCatalogFetcher.cheapest_per_vendor(entries, vendors=("openai",))
     # Same price → tie-broken by lex order: gpt-a < gpt-b.
     assert cheapest["openai"] == "openai/gpt-a"

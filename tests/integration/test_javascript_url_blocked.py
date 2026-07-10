@@ -33,10 +33,8 @@ def test_javascript_url_not_rendered_as_anchor() -> None:
     )
     # Read the static JS file directly.
     import pathlib
-    js_path = (
-        pathlib.Path(__file__).resolve().parents[2]
-        / "src/product_app/static/app.js"
-    )
+
+    js_path = pathlib.Path(__file__).resolve().parents[2] / "src/product_app/static/app.js"
     text = js_path.read_text(encoding="utf-8")
 
     assert "/^https?:/i.test(trimmed)" in text, "http(s) allow-list missing"

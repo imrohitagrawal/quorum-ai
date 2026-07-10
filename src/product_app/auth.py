@@ -190,6 +190,7 @@ session_repository = InMemorySessionRepository()
 # constantly.
 def _start_gc_thread() -> threading.Thread:
     """Start a daemon thread that periodically purges expired sessions."""
+
     def _gc_loop() -> None:
         while True:
             # Use a private method that runs the purge
@@ -221,7 +222,8 @@ def _enforce_production_guards(*, require_legacy_disabled: bool) -> None:
             raise HTTPException(
                 status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
                 detail=(
-                    "Refusing to start in " + settings.runtime_environment.value
+                    "Refusing to start in "
+                    + settings.runtime_environment.value
                     + ": SESSION_COOKIE_SECURE must be true. "
                     "Set the SESSION_COOKIE_SECURE environment variable to true and restart."
                 ),
@@ -230,7 +232,8 @@ def _enforce_production_guards(*, require_legacy_disabled: bool) -> None:
             raise HTTPException(
                 status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
                 detail=(
-                    "Refusing to start in " + settings.runtime_environment.value
+                    "Refusing to start in "
+                    + settings.runtime_environment.value
                     + ": ACCOUNT_LEGACY_HEADER_ENABLED must be false. "
                     "The X-Account-Id header is not part of the production auth contract."
                 ),
@@ -369,10 +372,7 @@ def enforce_csrf(request: Request, session: SessionContext) -> None:
                 },
             )
         return
-    presented = (
-        request.headers.get(CSRF_HEADER_NAME)
-        or request.headers.get("X-CSRF")
-    )
+    presented = request.headers.get(CSRF_HEADER_NAME) or request.headers.get("X-CSRF")
     if not presented or not secrets.compare_digest(presented, session.csrf_token):
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,

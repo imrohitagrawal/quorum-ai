@@ -141,13 +141,9 @@ def run_startup_probe() -> ReadinessReport:
     drift: tuple[str, ...] = ()
     catalog_loaded = False
     try:
-        catalog_ids = {
-            entry.model_id for entry in openrouter_model_catalog_service._entries()
-        }
+        catalog_ids = {entry.model_id for entry in openrouter_model_catalog_service._entries()}
         catalog_loaded = True
-        drift = tuple(
-            model_id for model_id in DEFAULT_MODEL_IDS if model_id not in catalog_ids
-        )
+        drift = tuple(model_id for model_id in DEFAULT_MODEL_IDS if model_id not in catalog_ids)
     except Exception as exc:  # noqa: BLE001 — probe is best-effort
         reasons.append(
             "Could not fetch the live  catalog at startup: "

@@ -97,9 +97,7 @@ def test_result_endpoint_projects_model_answers_debate_cost_elapsed_and_synthesi
     # share the "local simulation" wording, so pin that to
     # decouple the test from the exact failure-mode phrasing.
     assert len(body["provider_failure_notices"]) == 1
-    assert (
-        "local simulation" in body["provider_failure_notices"][0]
-    )
+    assert "local simulation" in body["provider_failure_notices"][0]
     # The demo_mode flag is True for local-simulation runs so the UI can
     # render the demo-mode banner and render stub sources as in-app
     # placeholders rather than clickable anchors.

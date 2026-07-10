@@ -192,8 +192,7 @@ def test_provider_stub_returns_openrouter_path_when_live_response_succeeds(
     assert all(answer.provider_path == ProviderPath.OPENROUTER_SEARCH for answer in answers)
     assert all(not answer.fallback_used for answer in answers)
     assert all(
-        answer.provider_attempt_order == [ProviderPath.OPENROUTER_SEARCH]
-        for answer in answers
+        answer.provider_attempt_order == [ProviderPath.OPENROUTER_SEARCH] for answer in answers
     )
     # Real URL prefix, not the example.test fallback stub.
     assert all(answer.sources[0].url.startswith("https://example.com/live/") for answer in answers)
@@ -642,4 +641,3 @@ class _FakeResponse:
 
     def __exit__(self, exc_type, exc, tb) -> None:  # noqa: ANN001
         return None
-

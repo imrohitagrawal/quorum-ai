@@ -130,12 +130,14 @@ def validate_production_environment() -> None:
         return
     if not settings.session_cookie_secure:
         raise RuntimeError(
-            "Refusing to start: runtime_environment=" + settings.runtime_environment.value
+            "Refusing to start: runtime_environment="
+            + settings.runtime_environment.value
             + " requires SESSION_COOKIE_SECURE=true."
         )
     if settings.account_legacy_header_enabled:
         raise RuntimeError(
-            "Refusing to start: runtime_environment=" + settings.runtime_environment.value
+            "Refusing to start: runtime_environment="
+            + settings.runtime_environment.value
             + " requires ACCOUNT_LEGACY_HEADER_ENABLED=false. "
             "The X-Account-Id header is not part of the production auth contract."
         )
@@ -149,7 +151,8 @@ def validate_production_environment() -> None:
     quorum_token_secret = os.environ.get("QUORUM_TOKEN_SECRET", "")
     if not quorum_token_secret:
         raise RuntimeError(
-            "Refusing to start: runtime_environment=" + settings.runtime_environment.value
+            "Refusing to start: runtime_environment="
+            + settings.runtime_environment.value
             + " requires QUORUM_TOKEN_SECRET to be set to a stable, "
             "non-empty value. Generate one with: openssl rand -hex 32"
         )
