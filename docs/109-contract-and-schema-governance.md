@@ -25,4 +25,15 @@ Use `fanatic-critic`, `api-contract-governance`, `traceability-graph-gate`, and 
 ```bash
 python scripts/check_breaking.py
 make validate
+make openapi-check      # openapi.yaml == app.openapi() (drift-guard)
 ```
+
+## `openapi.yaml` is generated and guarded
+
+`openapi.yaml` is the canonical serialization of `app.openapi()`, not a
+hand-maintained document. Regenerate it after any route/model change with
+`python scripts/export_openapi.py` (`make openapi-export`). A CI drift-guard
+(`scripts/validate_openapi_contract.py` / `make openapi-check`, plus
+`tests/contract/test_openapi_contract.py`) fails whenever the checked-in
+spec no longer equals `app.openapi()`, so the contract can never silently
+drift from the implementation. See `docs/22-api-contract.md` for details.
