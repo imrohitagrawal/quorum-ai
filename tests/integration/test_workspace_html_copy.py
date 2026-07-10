@@ -58,6 +58,19 @@ def test_workspace_html_has_brand_lede(client: TestClient) -> None:
     )
 
 
+def test_landing_preview_is_labelled_illustrative(client: TestClient) -> None:
+    # The 01 Landing "Example preview" card is marketing copy, NOT a real run.
+    # It MUST stay unambiguously labelled so a future edit can't turn it into
+    # a fabricated real result (the product's core honesty posture).
+    response = client.get("/ui")
+    assert response.status_code == 200
+    assert "Example preview" in response.text
+    assert "Illustrative" in response.text
+    assert "not a run you started" in response.text
+    # And it must not claim a per-model transcript the pipeline never records.
+    assert "full debate on record" not in response.text
+
+
 def test_workspace_html_drops_old_brand_lede(client: TestClient) -> None:
     response = client.get("/ui")
     assert response.status_code == 200

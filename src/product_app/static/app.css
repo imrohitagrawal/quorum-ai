@@ -99,6 +99,14 @@
   --accent-ink: var(--c-surface); /* white on ink — ~14:1 */
   --accent-soft: rgba(20, 23, 28, 0.06);
   --accent-medium: rgba(20, 23, 28, 0.12); /* approval-band rail fill — ink, never green */
+  /* Glyph colour on a saturated/tonal fill (severity/callout icon badges).
+     White in light (the fills are the deep tonal values), dark ink in dark
+     (the fills flip to the LIGHT tonal variants — white would be illegible).
+     Light value is unchanged from the previous hard-coded ``white``. */
+  --on-tonal: #FFFFFF;
+  /* Lightened inset panel used inside a tinted banner (field-error rows).
+     Was a hard-coded 50% white that stayed a bright box in dark. */
+  --overlay-inset: rgba(255, 255, 255, 0.50);
 
   /* Brand mark. The Q tile is the one sanctioned green surface that is
      THEME-INVARIANT: it stays #0E6B50 with white glyph in BOTH light and
@@ -220,6 +228,8 @@ html[data-theme="dark"] {
   --accent-ink: var(--c-paper); /* dark text on the light chip */
   --accent-soft: rgba(232, 234, 238, 0.08);
   --accent-medium: rgba(232, 234, 238, 0.14); /* approval-band rail fill — ink, never green */
+  --on-tonal: #101215; /* dark ink glyph on the LIGHT tonal fills used in dark */
+  --overlay-inset: rgba(232, 234, 238, 0.06); /* subtle light inset on dark, not a white box */
 
   --success-soft: rgba(78, 194, 140, 0.14);
   --success-border: rgba(78, 194, 140, 0.42);
@@ -394,6 +404,24 @@ a { color: var(--accent); text-underline-offset: 2px; }
 }
 .toggle:hover { border-color: var(--line-strong); transform: translateY(-1px); }
 
+/* Reach-the-landing affordance in the persistent top bar. Text button (no
+   money semantics), ink on hover. Not the default view — clicking it swaps to
+   the marketing landing; every landing CTA returns to the composer. */
+.topbar-howitworks {
+  min-height: 44px;
+  padding: 0 var(--space-3);
+  border: none;
+  background: transparent;
+  color: var(--text-secondary);
+  font-family: var(--font-sans);
+  font-weight: 500;
+  font-size: 0.9rem;
+  cursor: pointer;
+  border-radius: var(--radius-sm);
+  transition: color var(--duration-fast) var(--bezier);
+}
+.topbar-howitworks:hover { color: var(--ink); }
+
 /* ----- Status banner (errors, warnings, success) ----------------------- */
 
 .status-banner {
@@ -455,9 +483,9 @@ a { color: var(--accent); text-underline-offset: 2px; }
   flex-shrink: 0;
 }
 
-.status-banner[data-severity="error"] .status-banner-icon { background: var(--danger); color: white; }
-.status-banner[data-severity="warning"] .status-banner-icon { background: var(--warning); color: white; }
-.status-banner[data-severity="info"] .status-banner-icon { background: var(--info); color: white; }
+.status-banner[data-severity="error"] .status-banner-icon { background: var(--danger); color: var(--on-tonal); }
+.status-banner[data-severity="warning"] .status-banner-icon { background: var(--warning); color: var(--on-tonal); }
+.status-banner[data-severity="info"] .status-banner-icon { background: var(--info); color: var(--on-tonal); }
 
 .status-banner-body { min-width: 0; }
 
@@ -492,7 +520,7 @@ a { color: var(--accent); text-underline-offset: 2px; }
 .status-banner-field-errors li {
   padding: var(--space-2) var(--space-3);
   border-radius: var(--radius-xs);
-  background: rgba(255, 255, 255, 0.50);
+  background: var(--overlay-inset);
   border: 1px solid var(--line);
 }
 
@@ -698,6 +726,24 @@ a { color: var(--accent); text-underline-offset: 2px; }
   display: none;
 }
 
+/* Slice 7 (01 Landing): the marketing front door is a full-width, self-contained
+   view. Hide the aside, the workflow-progress rail, and the persistent
+   debate/synthesis + model-output panel sections so the landing reads as one
+   clean page. All stay in the DOM (only hidden here) so their render targets
+   remain valid the moment a CTA returns to the composer. */
+[data-active-view="landing"] .layout {
+  grid-template-columns: 1fr;
+}
+
+[data-active-view="landing"] .layout > aside {
+  display: none;
+}
+
+[data-active-view="landing"] .workflow-progress,
+[data-active-view="landing"] .panel-section {
+  display: none;
+}
+
 .panel {
   padding: var(--space-6);
   border-radius: var(--radius-lg);
@@ -861,7 +907,7 @@ select {
   height: 18px;
   border-radius: 999px;
   background: var(--danger);
-  color: white;
+  color: var(--on-tonal);
   font-weight: 700;
   font-size: 0.75rem;
   flex-shrink: 0;
@@ -906,14 +952,14 @@ select {
 }
 .callout-warning .callout-icon {
   background: var(--warning);
-  color: white;
+  color: var(--on-tonal);
 }
 
 .callout-info {
   background: var(--info-soft);
   border-color: rgba(31, 79, 154, 0.28);
 }
-.callout-info .callout-icon { background: var(--info); color: white; }
+.callout-info .callout-icon { background: var(--info); color: var(--on-tonal); }
 
 /* Workstream 3 — UI honesty. The readiness banner shares the
    palette of callout-warning / callout-info but the colour is
@@ -927,7 +973,7 @@ select {
 }
 .callout-readiness[data-severity="warning"] .callout-icon {
   background: var(--warning);
-  color: white;
+  color: var(--on-tonal);
 }
 .callout-readiness[data-severity="info"] {
   background: var(--info-soft);
@@ -935,7 +981,7 @@ select {
 }
 .callout-readiness[data-severity="info"] .callout-icon {
   background: var(--info);
-  color: white;
+  color: var(--on-tonal);
 }
 
 .callout-cost {
@@ -944,7 +990,7 @@ select {
 }
 .callout-cost .callout-icon {
   background: var(--accent);
-  color: white;
+  color: var(--on-tonal);
 }
 
 /* Screen-reader-only utility. Visually hidden but present in the
@@ -1189,7 +1235,7 @@ select {
 }
 .callout-high-stakes .callout-icon {
   background: var(--warning);
-  color: white;
+  color: var(--on-tonal);
 }
 
 .callout-demo-mode {
@@ -1199,7 +1245,7 @@ select {
 }
 .callout-demo-mode .callout-icon {
   background: var(--warning);
-  color: white; /* 5.3:1 on #946017 — passes WCAG AA */
+  color: var(--on-tonal); /* 5.3:1 on #946017 — passes WCAG AA */
 }
 .callout-demo-mode .callout-title {
   font-size: 1rem;
@@ -4225,4 +4271,286 @@ main:focus { outline: none; }
   .model-slot-grid { grid-template-columns: 1fr; }
   .composer-footer { flex-direction: column; align-items: stretch; }
   .composer-footer-actions { justify-content: space-between; }
+}
+
+/* ----- Landing (01 · marketing front door) ---------------------------- */
+/* Tokens only — no raw hex/rgba. Green appears exactly where the mock
+   sanctions it as a brand/agreement signpost: the eyebrow, the Preview
+   badge, and the active example chip's dot. Money/entry CTAs move on ink
+   (.button-primary / .button-secondary). The whole view re-themes via the
+   semantic tokens; the brand tile + Preview badge use the theme-invariant
+   --brand-tile-* pair (green in both themes, white glyph). */
+.landing {
+  gap: var(--space-7);
+}
+
+.landing-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-4);
+  flex-wrap: wrap;
+}
+.landing-brand {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+}
+.landing-brand-mark {
+  width: 34px;
+  height: 34px;
+  border-radius: var(--radius-xs);
+  display: grid;
+  place-items: center;
+  background: var(--brand-tile-bg);
+  color: var(--brand-tile-fg);
+  font-family: var(--font-serif);
+  font-weight: 700;
+  font-size: 1.05rem;
+  line-height: 1;
+  flex-shrink: 0;
+}
+.landing-brand-name {
+  font-family: var(--font-sans);
+  font-weight: 650;
+  font-size: 1.05rem;
+  letter-spacing: -0.01em;
+  color: var(--ink);
+}
+.landing-nav {
+  display: flex;
+  align-items: center;
+  gap: var(--space-4);
+}
+.landing-howitworks {
+  min-height: 44px;
+  padding: 0 var(--space-2);
+  border: none;
+  background: transparent;
+  color: var(--text-secondary);
+  font-weight: 500;
+  font-size: 0.9rem;
+  cursor: pointer;
+  border-radius: var(--radius-sm);
+  transition: color var(--duration-fast) var(--bezier);
+}
+.landing-howitworks:hover { color: var(--ink); }
+
+.landing-hero {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  text-align: center;
+  gap: var(--space-4);
+  max-width: 60ch;
+  margin: var(--space-4) auto 0;
+}
+.landing-eyebrow {
+  margin: 0;
+  font-size: 0.78rem;
+  font-weight: 600;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: var(--success); /* green signpost — brand/agreement-adjacent, per the mock */
+}
+.landing-h1 {
+  margin: 0;
+  font-family: var(--font-serif);
+  font-weight: 500;
+  font-size: clamp(2.2rem, 5vw, 3.25rem);
+  line-height: 1.06;
+  letter-spacing: -0.02em;
+  max-width: 15ch;
+  text-wrap: balance;
+  color: var(--ink);
+}
+.landing-subhead {
+  margin: 0;
+  font-size: 1.05rem;
+  line-height: 1.6;
+  color: var(--text-secondary);
+  max-width: 56ch;
+  text-wrap: pretty;
+}
+
+.landing-runbar {
+  width: 100%;
+  max-width: 800px;
+  margin: 0 auto;
+  background: var(--surface);
+  border: 1px solid var(--line-2);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-md);
+  overflow: hidden;
+}
+.landing-runbar-prompt {
+  padding: var(--space-5) var(--space-6) var(--space-1);
+  min-height: 84px;
+}
+.landing-runbar-placeholder {
+  font-size: 1.05rem;
+  line-height: 1.55;
+  color: var(--muted);
+}
+.landing-runbar-foot {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-4);
+  padding: var(--space-4) var(--space-5);
+  border-top: 1px solid var(--line);
+  flex-wrap: wrap;
+}
+.landing-cost {
+  margin: 0;
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  flex-wrap: wrap;
+  font-size: 0.85rem;
+  color: var(--text-secondary);
+}
+.landing-cost-figure {
+  color: var(--ink);
+  font-weight: 600;
+  white-space: nowrap;
+}
+.landing-cost-note .mono { color: var(--ink); }
+.landing-runbar-actions {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+}
+
+.landing-chips {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: var(--space-3);
+}
+.landing-chips-label {
+  font-size: 0.85rem;
+  font-weight: 500;
+  color: var(--muted);
+}
+.landing-chips-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-3);
+  justify-content: center;
+  max-width: 760px;
+}
+.landing-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+  min-height: 44px;
+  padding: 0 var(--space-4);
+  border-radius: var(--radius-pill);
+  border: 1px solid var(--line-strong-2);
+  background: var(--surface);
+  color: var(--body);
+  font-family: var(--font-sans);
+  font-size: 0.9rem;
+  font-weight: 500;
+  cursor: pointer;
+  transition: border-color var(--duration-fast) var(--bezier),
+    color var(--duration-fast) var(--bezier),
+    transform var(--duration-fast) var(--bezier);
+}
+.landing-chip:hover {
+  border-color: var(--ink);
+  color: var(--ink);
+  transform: translateY(-1px);
+}
+.landing-chip-active {
+  border-color: var(--success-border); /* green outline — active signpost, per the mock */
+  color: var(--ink);
+}
+.landing-chip-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: var(--radius-pill);
+  background: var(--success); /* small green consensus dot */
+  flex-shrink: 0;
+}
+
+.landing-preview {
+  display: flex;
+  gap: var(--space-4);
+  align-items: flex-start;
+  width: 100%;
+  max-width: 800px;
+  margin: 0 auto;
+  padding: var(--space-5);
+  border-radius: var(--radius-md);
+  background: var(--accent-soft);
+  border: 1px solid var(--line-2);
+}
+.landing-preview-badge {
+  flex-shrink: 0;
+  display: inline-flex;
+  align-items: center;
+  height: 22px;
+  padding: 0 var(--space-2);
+  border-radius: var(--radius-xs);
+  background: var(--brand-tile-bg);
+  color: var(--brand-tile-fg);
+  font-size: 0.66rem;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  white-space: nowrap;
+}
+.landing-preview-body {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+  min-width: 0;
+}
+.landing-preview-text {
+  margin: 0;
+  font-size: 0.95rem;
+  line-height: 1.6;
+  color: var(--body);
+  text-wrap: pretty;
+}
+.landing-preview-caption {
+  font-size: 0.78rem;
+  font-style: italic;
+  color: var(--muted);
+}
+
+.landing-disclaimers {
+  display: flex;
+  gap: var(--space-3);
+  justify-content: center;
+  flex-wrap: wrap;
+}
+.landing-disclaimer {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+  padding: var(--space-2) var(--space-4);
+  border-radius: var(--radius-pill);
+  background: var(--surface);
+  border: 1px solid var(--line-2);
+  font-size: 0.82rem;
+  color: var(--text-secondary);
+}
+.landing-disclaimer-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 2px;
+  background: var(--warning); /* amber caution square — not green */
+  flex-shrink: 0;
+}
+.landing-disclaimer-dot-neutral {
+  border-radius: var(--radius-pill);
+  background: var(--muted);
+}
+
+@media (max-width: 600px) {
+  .landing-runbar-foot { flex-direction: column; align-items: stretch; }
+  .landing-runbar-actions { justify-content: space-between; }
 }

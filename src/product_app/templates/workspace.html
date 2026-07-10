@@ -34,6 +34,7 @@
           </div>
         </div>
         <div class="topbar-actions">
+          <button id="show-landing" class="topbar-howitworks" type="button">How it works</button>
           <span class="status-pill" id="connection-pill" data-state="connecting" aria-live="polite" aria-atomic="true">
             <span class="status-pill-dot" aria-hidden="true"></span>
             <span id="connection-pill-text">Connecting</span>
@@ -467,6 +468,95 @@
                 class="transcript-footer-link"
                 data-consensus="false"
               >back to the result &rarr;</button>
+            </div>
+          </section>
+        </div>
+
+        <!-- Screen 01 — Landing (marketing front door). REACHABLE via the
+             top-bar "How it works" affordance, but NOT the default boot view
+             (boot() stays on the composer). Every CTA leads back into the
+             composer; nothing here runs a query or fabricates a live estimate.
+             The "Example preview" card is illustrative marketing copy, clearly
+             labelled — not a result the user produced. -->
+        <div data-view="landing" hidden>
+          <section class="panel landing" role="region" aria-labelledby="landing-heading">
+            <header class="landing-header">
+              <div class="landing-brand">
+                <span class="landing-brand-mark" aria-hidden="true">Q</span>
+                <span class="landing-brand-name">Quorum</span>
+              </div>
+              <div class="landing-nav">
+                <button id="landing-howitworks" class="landing-howitworks" type="button">How it works</button>
+                <button id="landing-open-workspace" class="button button-secondary landing-open" type="button">Open the workspace</button>
+              </div>
+            </header>
+
+            <div class="landing-hero">
+              <p class="landing-eyebrow">Four AI models · two debate rounds · one sourced answer</p>
+              <h1 id="landing-heading" class="landing-h1" tabindex="-1">Ask once. Let four minds argue it out.</h1>
+              <p class="landing-subhead">Quorum sends your question to four frontier AI models, has them critique each other twice, then hands you one answer that shows where they agree, where they don't, and exactly what to trust.</p>
+            </div>
+
+            <div class="landing-runbar">
+              <div class="landing-runbar-prompt">
+                <span class="landing-runbar-placeholder">e.g. Should our company adopt passkeys and phase out passwords by 2027?</span>
+              </div>
+              <div class="landing-runbar-foot">
+                <p class="landing-cost">
+                  <span class="mono landing-cost-figure">&#8776; $0.02&ndash;0.19</span>
+                  <span class="landing-cost-note">&middot; you approve the estimate first &mdash; hard cap <span class="mono">$0.25</span>/run</span>
+                </p>
+                <div class="landing-runbar-actions">
+                  <button id="landing-estimate" class="button button-secondary" type="button">Estimate</button>
+                  <button id="landing-run" class="button button-primary" type="button">Run the debate &rarr;</button>
+                </div>
+              </div>
+            </div>
+
+            <div class="landing-chips">
+              <span class="landing-chips-label">Not sure what to ask? Try one &mdash; it fills the box:</span>
+              <div class="landing-chips-row" role="group" aria-label="Example questions">
+                <button
+                  type="button"
+                  class="landing-chip landing-chip-active"
+                  data-landing-chip="Should we adopt passkeys by 2027?"
+                ><span class="landing-chip-dot" aria-hidden="true"></span>Should we adopt passkeys by 2027?</button>
+                <button
+                  type="button"
+                  class="landing-chip"
+                  data-landing-chip="Usage-based vs seat pricing?"
+                >Usage-based vs seat pricing?</button>
+                <button
+                  type="button"
+                  class="landing-chip"
+                  data-landing-chip="Is my startup thesis sound?"
+                >Is my startup thesis sound?</button>
+                <button
+                  type="button"
+                  class="landing-chip"
+                  data-landing-chip="How do I read this lab result?"
+                >How do I read this lab result?</button>
+              </div>
+            </div>
+
+            <div class="landing-preview" role="note" aria-label="Example preview">
+              <span class="landing-preview-badge">Example preview</span>
+              <div class="landing-preview-body">
+                <p class="landing-preview-text">4 of 4 models agree &mdash; with one real disagreement worth your attention: the safe overlap window (9 vs 18 months). You get a verdict, a phased plan, 12 sources, and the round-by-round debate on record.</p>
+                <span class="landing-preview-caption">Illustrative &mdash; a product example, not a run you started.</span>
+              </div>
+            </div>
+
+            <div class="landing-disclaimers">
+              <span class="landing-disclaimer">
+                <span class="landing-disclaimer-dot" aria-hidden="true"></span>Decision support, not professional advice
+              </span>
+              <span class="landing-disclaimer">
+                <span class="landing-disclaimer-dot" aria-hidden="true"></span>Don't paste sensitive or private data
+              </span>
+              <span class="landing-disclaimer">
+                <span class="landing-disclaimer-dot landing-disclaimer-dot-neutral" aria-hidden="true"></span>Results vanish when you leave
+              </span>
             </div>
           </section>
         </div>

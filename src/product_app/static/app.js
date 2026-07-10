@@ -5247,6 +5247,78 @@
     });
   }
 
+  // Slice 7 (01 Landing) — the marketing front door.
+  //
+  // HONESTY / WIRING contract:
+  //   * The landing is REACHABLE (top-bar "How it works" → ``setView("landing")``)
+  //     but is NOT the default view — ``boot()`` still lands on the composer.
+  //   * NOTHING on the landing runs a query or fabricates a live estimate. The
+  //     "Estimate" and "Run the debate" buttons both just open the composer
+  //     (estimate-first flow lives there); "Run" pre-fills nothing.
+  //   * The example chips fill the REAL composer textarea via ``.value`` (not
+  //     innerHTML) with the chip's own question, dispatch a native ``input``
+  //     event so validation/char-count/high-stakes probing run exactly as if
+  //     the user typed it, then switch to the composer and focus the field.
+  //   * The "Example preview" card is illustrative marketing copy (labelled),
+  //     never presented as a result the user produced.
+  function initLanding() {
+    const showLandingButton = el("show-landing");
+    const landingHeading = el("landing-heading");
+
+    // Enter the landing view and move focus to its single h1 (one h1 per view).
+    function enterLanding() {
+      setView("landing");
+      if (landingHeading) {
+        landingHeading.focus({ preventScroll: true });
+        landingHeading.scrollIntoView({
+          behavior: prefersReducedMotion() ? "auto" : "smooth",
+          block: "start",
+        });
+      }
+    }
+
+    // Every landing CTA leads here: back to the composer, textarea focused.
+    function goToComposer() {
+      setView("composer");
+      if (queryTextarea) queryTextarea.focus({ preventScroll: true });
+    }
+
+    if (showLandingButton) {
+      showLandingButton.addEventListener("click", enterLanding);
+    }
+
+    // "How it works" on the landing itself reveals the illustrative example.
+    const landingHowItWorks = el("landing-howitworks");
+    const landingPreview = qs(".landing-preview");
+    if (landingHowItWorks && landingPreview) {
+      landingHowItWorks.addEventListener("click", () => {
+        landingPreview.scrollIntoView({
+          behavior: prefersReducedMotion() ? "auto" : "smooth",
+          block: "center",
+        });
+      });
+    }
+
+    for (const id of ["landing-open-workspace", "landing-estimate", "landing-run"]) {
+      const button = el(id);
+      if (button) button.addEventListener("click", goToComposer);
+    }
+
+    // Example chips: fill the real composer textarea, then open it.
+    for (const chip of qsa("[data-landing-chip]")) {
+      chip.addEventListener("click", () => {
+        const question = chip.dataset.landingChip || "";
+        if (queryTextarea) {
+          queryTextarea.value = question;
+          // Native input event so the composer's own validation, character
+          // counter, and high-stakes probe react as if the user typed it.
+          queryTextarea.dispatchEvent(new Event("input", { bubbles: true }));
+        }
+        goToComposer();
+      });
+    }
+  }
+
   function initModelSlotSelection() {
     modelInputs.addEventListener("change", (event) => {
       const target = event.target;
@@ -5377,6 +5449,7 @@
     // initial state and no-ops if the view container is absent.
     setView("composer");
     initThemeToggle();
+    initLanding();
     initModelSlotSelection();
     initQueryValidation();
     initHighStakesGate();
