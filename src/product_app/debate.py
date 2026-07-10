@@ -20,6 +20,7 @@ thread — debate failures degrade gracefully to a partial result.
 
 from __future__ import annotations
 
+import re
 from dataclasses import asdict, dataclass
 from enum import StrEnum
 from threading import RLock
@@ -488,6 +489,281 @@ class DebateOrchestrationService:
         )
 
 
+# ---------------------------------------------------------------------------
+# Agreement summary + per-model position movements (Slice B2).
+#
+# The debate is ROUND-scoped: each ``DebateOutput`` critiques the whole panel,
+# with NO per-model attribution. Screen 05 wants a *per-model* view — how each
+# model's stance opened and how it relates to the final synthesis — plus the
+# verdict ring's N/4 agreement count.
+#
+# HONESTY CONTRACT: because the transcript carries no per-model movement, the
+# "position movement" below is an INFERENCE, not an observation — in BOTH demo
+# AND live runs. We compute it deterministically from two things we *can*
+# observe: (1) how each model's OPENING answer clusters against the others, and
+# (2) the panel's FINAL consensus. We NEVER observe what a model did mid-debate,
+# so no stance string may assert a mid-debate action (no "conceded",
+# "converged during debate", "moved toward"). ``demo_mode`` is orthogonal: it
+# flags answer-content provenance (simulated vs live), NOT whether the stance
+# narration is inferred — the narration is always inferred, so the UI must
+# ALWAYS caption this table as inferred, independent of ``demo_mode``.
+# ---------------------------------------------------------------------------
+
+
+class AlignmentState(StrEnum):
+    """The four mutually exclusive alignment cases a model can land in.
+
+    Single source of truth shared by the classifier and the stance copy: the
+    ``final_aligned`` derivation in
+    :func:`product_app.synthesis_consensus.classify_model_alignment` and the
+    per-model narration in :func:`_stance_texts` both key off this state
+    (via :attr:`ModelAlignment.state`) instead of duplicating parallel
+    if-chains. Every state is an INFERENCE from opening-vs-final, never an
+    observed mid-debate action.
+    """
+
+    #: Model returned no usable answer; there is no stance to place.
+    NO_ANSWER = "no_answer"
+    #: Opening clustered with the majority; final synthesis keeps it aligned.
+    HELD_WITH_CONSENSUS = "held_with_consensus"
+    #: Opening clustered as a minority; final synthesis aligns (``revised``).
+    MOVED_TO_CONSENSUS = "moved_to_consensus"
+    #: Opening clustered as a minority; final synthesis leaves it dissenting.
+    HELD_MINORITY = "held_minority"
+
+
+@dataclass(frozen=True)
+class ModelAlignment:
+    """Deterministic per-model alignment record.
+
+    Computed by :func:`product_app.synthesis_consensus.classify_model_alignment`
+    from the initial answers + the debate outputs. ``opening_majority`` is the
+    model's opening stance relative to the majority cluster; ``final_aligned``
+    is whether it lands in the panel's final consensus. ``revised`` is the
+    OBSERVABLE INFERENCE that the two differ — the model opened clustered as a
+    minority AND the final synthesis aligns with the consensus. Because the
+    debate is round-scoped (no per-model transcript), none of these observe a
+    mid-debate action; they are inferred from opening-vs-final alignment alone.
+    """
+
+    slot_number: int
+    completed: bool
+    opening_majority: bool
+    final_aligned: bool
+    revised: bool
+
+    @property
+    def state(self) -> AlignmentState:
+        """Map the alignment booleans onto the single :class:`AlignmentState`.
+
+        This is the ONLY place the boolean triple is collapsed into a case;
+        the stance copy table then keys off the state, so the narration and
+        the honesty of the revision note derive from one source of truth.
+        """
+        if not self.completed:
+            return AlignmentState.NO_ANSWER
+        if self.revised:
+            return AlignmentState.MOVED_TO_CONSENSUS
+        if self.final_aligned:
+            return AlignmentState.HELD_WITH_CONSENSUS
+        return AlignmentState.HELD_MINORITY
+
+
+class AgreementSummary(BaseModel):
+    """Verdict-ring numerator/denominator for screen 05 (``aligned`` of
+    ``total``). ``total`` is the number of initial answers on the run —
+    INCLUDING failed/empty ones (matching :func:`summarize_agreement`, which
+    uses ``len(initial_answers)``); ``aligned`` is how many land in the final
+    consensus (a failed answer can never align).
+    """
+
+    aligned: int = Field(ge=0)
+    total: int = Field(ge=0)
+
+
+class PositionMovement(BaseModel):
+    """One row of the "how positions moved" table — a single model's opening
+    synopsis and how it relates to the final synthesis.
+
+    All movement here is INFERRED (the debate is round-scoped, no per-model
+    transcript): ``after_round_1`` and ``final`` describe opening-vs-final
+    alignment, never an observed mid-debate action.
+    """
+
+    slot_number: int = Field(ge=1, le=4)
+    model_id: str
+    display_name: str
+    opening: str
+    after_round_1: str
+    final: str
+    #: OBSERVABLE-INFERENCE definition (design chip "✓ Revised"): the model's
+    #: opening clustered as a minority AND the final synthesis aligns with the
+    #: group consensus. NOT a claim that the model changed its mind mid-debate
+    #: (unobservable — the transcript has no per-model attribution).
+    revised: bool
+    revision_note: str | None = None
+
+
+#: Friendly phrasing for each debate focus area, used in the templated stance
+#: narration so the per-model text names the lens the round examined.
+_FOCUS_PHRASES: dict[str, str] = {
+    "disagreement": "the points of disagreement",
+    "weak_support": "weak source support",
+    "missing_reasoning": "missing reasoning",
+}
+
+
+def _focus_phrase(debate_outputs: list[DebateOutput]) -> str:
+    for output in debate_outputs:
+        for area in output.focus_areas:
+            phrase = _FOCUS_PHRASES.get(area)
+            if phrase is not None:
+                return phrase
+    return "the points of disagreement"
+
+
+def _opening_synopsis(answer_text: str, *, limit: int = 140) -> str:
+    """First-sentence / ~``limit``-char synopsis of a model's answer.
+
+    Deterministic and always non-empty: a failed/empty answer yields a fixed
+    stand-in string rather than "".
+    """
+    text = (answer_text or "").strip().replace("\n", " ")
+    text = re.sub(r"\s+", " ", text)
+    if not text:
+        return "No usable answer was returned for this model."
+    first_sentence = re.split(r"(?<=[.!?])\s+", text, maxsplit=1)[0]
+    if len(first_sentence) <= limit:
+        return first_sentence
+    return text[:limit].rstrip() + "…"
+
+
+def summarize_agreement(
+    *,
+    initial_answers: list[InitialModelAnswer],
+    alignments: list[ModelAlignment],
+) -> AgreementSummary:
+    """Count how many models land in the final consensus. ``total`` is the
+    number of initial answers; ``aligned`` is clamped to ``<= total``.
+    """
+    total = len(initial_answers)
+    aligned = sum(1 for alignment in alignments if alignment.final_aligned)
+    return AgreementSummary(aligned=min(aligned, total), total=total)
+
+
+def build_position_movements(
+    *,
+    initial_answers: list[InitialModelAnswer],
+    debate_outputs: list[DebateOutput],
+    alignments: list[ModelAlignment],
+) -> list[PositionMovement]:
+    """One :class:`PositionMovement` per model, in slot order.
+
+    Fully deterministic. The opening is a synopsis of the model's own initial
+    answer (observed); the round-1 and final stances are INFERRED from the
+    model's alignment (opening majority/minority vs final consensus) and the
+    debate focus lens — never from an observed per-model transcript.
+    """
+    focus = _focus_phrase(debate_outputs)
+    by_slot = {alignment.slot_number: alignment for alignment in alignments}
+    movements: list[PositionMovement] = []
+    for answer in initial_answers:
+        alignment = by_slot.get(answer.slot_number)
+        opening = _opening_synopsis(answer.answer_text)
+        after_round_1, final, revised, revision_note = _stance_texts(
+            alignment=alignment, focus=focus
+        )
+        movements.append(
+            PositionMovement(
+                slot_number=answer.slot_number,
+                model_id=answer.model_id,
+                display_name=answer.display_name or answer.model_id,
+                opening=opening,
+                after_round_1=after_round_1,
+                final=final,
+                revised=revised,
+                revision_note=revision_note,
+            )
+        )
+    return movements
+
+
+@dataclass(frozen=True)
+class _StanceCopy:
+    """Templated stance copy for one :class:`AlignmentState`.
+
+    ``after_round_1`` may contain a ``{focus}`` placeholder (the debate lens).
+    Every string describes OPENING-vs-FINAL alignment — none asserts a
+    mid-debate action, because the round-scoped transcript can't observe one.
+    ``revision_note`` is non-None iff ``revised`` is True.
+    """
+
+    after_round_1: str
+    final: str
+    revised: bool
+    revision_note: str | None
+
+
+#: One row of honest copy per alignment state — the single source of truth for
+#: the stance narration. The classifier's booleans collapse to an
+#: :class:`AlignmentState` (via :attr:`ModelAlignment.state`), which indexes
+#: here, so the copy and the honesty of the note can never drift from the
+#: classification.
+_STANCE_COPY: dict[AlignmentState, _StanceCopy] = {
+    AlignmentState.NO_ANSWER: _StanceCopy(
+        after_round_1="No usable answer was returned, so there is no round-1 stance to place.",
+        final="No final stance; this model's answer was unavailable.",
+        revised=False,
+        revision_note=None,
+    ),
+    AlignmentState.HELD_WITH_CONSENSUS: _StanceCopy(
+        after_round_1="Opening clustered with the majority reading on {focus}.",
+        final="Opened with, and the final synthesis keeps it in, the group consensus.",
+        revised=False,
+        revision_note=None,
+    ),
+    AlignmentState.MOVED_TO_CONSENSUS: _StanceCopy(
+        after_round_1="Opening clustered as a minority reading on {focus}.",
+        final="Aligns with the group consensus in the final synthesis.",
+        revised=True,
+        revision_note=(
+            "Opened as a minority view; the final synthesis reflects the group consensus."
+        ),
+    ),
+    AlignmentState.HELD_MINORITY: _StanceCopy(
+        after_round_1="Opening clustered as a minority reading on {focus}.",
+        final=(
+            "Opened in the minority; the final synthesis leaves it outside "
+            "the group consensus."
+        ),
+        revised=False,
+        revision_note=None,
+    ),
+}
+
+
+def _stance_texts(
+    *,
+    alignment: ModelAlignment | None,
+    focus: str,
+) -> tuple[str, str, bool, str | None]:
+    """Return ``(after_round_1, final, revised, revision_note)`` for one model.
+
+    Pure lookup on the model's :class:`AlignmentState` — no branching logic
+    lives here, so the copy stays in lockstep with the classification. Every
+    string is an inference from opening-vs-final alignment; none claims a
+    mid-debate action.
+    """
+    state = alignment.state if alignment is not None else AlignmentState.NO_ANSWER
+    copy = _STANCE_COPY[state]
+    return (
+        copy.after_round_1.format(focus=focus),
+        copy.final,
+        copy.revised,
+        copy.revision_note,
+    )
+
+
 debate_event_recorder = InMemoryDebateEventRecorder()
 debate_stub_service = DebateOrchestrationService()
 debate_orchestration_service = debate_stub_service
@@ -496,6 +772,8 @@ debate_orchestration_service = debate_stub_service
 # keep working without importing two modules.
 __all__ = [
     "DEBATE_HARD_TIMEOUT_MS",
+    "AgreementSummary",
+    "AlignmentState",
     "DebateOrchestrationService",
     "DebateResult",
     "DebateOutput",
@@ -503,7 +781,11 @@ __all__ = [
     "DebateRoundStatus",
     "FOCUS_AREAS",
     "InMemoryDebateEventRecorder",
+    "ModelAlignment",
+    "PositionMovement",
+    "build_position_movements",
     "debate_event_recorder",
     "debate_orchestration_service",
     "debate_stub_service",
+    "summarize_agreement",
 ]

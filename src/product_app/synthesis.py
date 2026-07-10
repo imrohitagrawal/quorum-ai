@@ -32,7 +32,13 @@ from uuid import UUID
 from pydantic import BaseModel
 
 from product_app.config import settings
-from product_app.debate import DebateOutput
+from product_app.debate import (
+    AgreementSummary,
+    DebateOutput,
+    PositionMovement,
+    build_position_movements,
+    summarize_agreement,
+)
 from product_app.feedback_store import record_event as _record_feedback_event
 from product_app.providers import (
     CitationCoverage,
@@ -51,6 +57,7 @@ from product_app.safety import (
 )
 from product_app.synthesis_consensus import (
     ConsensusStrength,
+    classify_model_alignment,
     compute_consensus_strength,
 )
 from product_app.synthesis_length import (
@@ -769,6 +776,33 @@ class SynthesisOrchestrationService:
             if warning.warning_type is WarningType.HIGH_STAKES:
                 return True
         return False
+
+
+def build_agreement_and_positions(
+    *,
+    initial_answers: list[InitialModelAnswer],
+    debate_outputs: list[DebateOutput],
+) -> tuple[AgreementSummary, list[PositionMovement]]:
+    """Single deterministic entry point for the screen-05 verdict ring and the
+    "how positions moved" table.
+
+    Classifies each model's alignment once (:func:`classify_model_alignment`),
+    then derives the agreement count and the per-model position movements from
+    that shared classification so the ring and the table can never disagree.
+    Pure and deterministic: same inputs → same output, no randomness, no
+    wall-clock. Whether the underlying content is live or simulated is already
+    surfaced by ``QueryRunResultResponse.demo_mode``.
+    """
+    alignments = classify_model_alignment(initial_answers, debate_outputs)
+    agreement = summarize_agreement(
+        initial_answers=initial_answers, alignments=alignments
+    )
+    positions = build_position_movements(
+        initial_answers=initial_answers,
+        debate_outputs=debate_outputs,
+        alignments=alignments,
+    )
+    return agreement, positions
 
 
 synthesis_event_recorder = InMemorySynthesisEventRecorder()

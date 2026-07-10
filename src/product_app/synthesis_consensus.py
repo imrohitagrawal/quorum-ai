@@ -27,19 +27,22 @@ from __future__ import annotations
 import re
 from typing import Literal
 
-from product_app.debate import DebateOutput
+from product_app.debate import DebateOutput, ModelAlignment
 from product_app.providers import InitialAnswerStatus, InitialModelAnswer
 
 ConsensusStrength = Literal["strong", "weak", "divided"]
 
-#: 4-gram Jaccard threshold for "substantive overlap" in the
-#: strong-consensus branch. The threshold is intentionally low
-#: because we are looking for "do these texts share ANY
-#: substantive phrase?" — 3 distinct texts with one shared
-#: 4-gram typically score ~0.15 because each text has 11-13
-#: distinct 4-grams. A higher threshold would miss the common
-#: case of "all four models answer the same factual question
-#: with slightly different wording".
+#: 4-gram Jaccard cutoff for "these two texts share a substantive
+#: phrase". This is the SINGLE tuning knob of the shared clustering
+#: primitive (:func:`_overlap_partner_counts`), consumed by BOTH the
+#: panel-level strong-overlap test (:func:`_has_strong_overlap`) and the
+#: per-model opening-majority test (:func:`_opening_majority_flags`), so
+#: the two questions can never drift apart on a copy-pasted threshold.
+#: It is intentionally low because we are asking "do these texts share
+#: ANY substantive phrase?" — 3 distinct texts with one shared 4-gram
+#: typically score ~0.15 because each text has 11-13 distinct 4-grams. A
+#: higher threshold would miss the common case of "all four models answer
+#: the same factual question with slightly different wording".
 _OVERLAP_JACCARD_THRESHOLD = 0.1
 
 #: First-N characters of each answer text used for overlap scoring.
@@ -141,6 +144,32 @@ def compute_consensus_strength(
     return "weak"
 
 
+def _overlap_partner_counts(completed_texts: list[str]) -> list[int]:
+    """Shared 4-gram clustering primitive.
+
+    Returns, per text, the number of OTHER completed answers it shares
+    4-gram Jaccard overlap ``>= _OVERLAP_JACCARD_THRESHOLD`` with (on the
+    opening excerpt). This one primitive answers both clustering questions
+    in this module — "is this text in a majority cluster?" (partners >= 1)
+    and "does the panel broadly overlap?" (>= 3 texts with partners >= 2) —
+    so the threshold and the tokenisation can never drift between them.
+    """
+    ngrams_per_text = [_four_grams(_excerpt(text)) for text in completed_texts]
+    counts: list[int] = []
+    for i, current in enumerate(ngrams_per_text):
+        partners = 0
+        for j, other in enumerate(ngrams_per_text):
+            if i == j or not current or not other:
+                continue
+            union = len(current | other)
+            if union == 0:
+                continue
+            if len(current & other) / union >= _OVERLAP_JACCARD_THRESHOLD:
+                partners += 1
+        counts.append(partners)
+    return counts
+
+
 def _has_strong_overlap(completed_texts: list[str]) -> bool:
     """Return ``True`` when ≥3 of 4 completed answers share substantive
     overlap on the opening 200 chars.
@@ -152,44 +181,10 @@ def _has_strong_overlap(completed_texts: list[str]) -> bool:
     """
     if len(completed_texts) < 3:
         return False
-    ngrams_per_text = [
-        _four_grams(_excerpt(text)) for text in completed_texts
-    ]
-    # Count how many texts have at least one strong overlap with
-    # at least two other texts. The 4-gram Jaccard threshold is
-    # intentionally low (0.2) — even a single shared opening
-    # phrase ("The capital of France is") counts.
-    strong_count = sum(
-        1
-        for ngrams in ngrams_per_text
-        if _has_overlap_with_others(ngrams, ngrams_per_text)
-    )
-    return strong_count >= 3
-
-
-def _has_overlap_with_others(
-    ngrams: frozenset[str],
-    all_ngrams: list[frozenset[str]],
-) -> bool:
-    """Return ``True`` if ``ngrams`` has Jaccard overlap above the
-    threshold with at least two other entries in ``all_ngrams``.
-    """
-    overlaps = 0
-    for other in all_ngrams:
-        if other is ngrams:
-            continue
-        if not ngrams or not other:
-            continue
-        intersection = len(ngrams & other)
-        union = len(ngrams | other)
-        if union == 0:
-            continue
-        jaccard = intersection / union
-        if jaccard >= _OVERLAP_JACCARD_THRESHOLD:
-            overlaps += 1
-            if overlaps >= 2:
-                return True
-    return False
+    # A text is "strongly clustered" when it overlaps with at least two
+    # others; the panel is "strong" when ≥3 texts clear that bar.
+    counts = _overlap_partner_counts(completed_texts)
+    return sum(1 for partners in counts if partners >= 2) >= 3
 
 
 def _four_grams(text: str) -> frozenset[str]:
@@ -262,41 +257,146 @@ def _keyword_negated(haystack: str, keyword: str) -> bool:
     return False
 
 
-def _has_polar_disagreement(completed_texts: list[str]) -> bool:
-    """Return ``True`` if exactly 2 of the completed answers
-    disagree on a polar marker from ``_POLAR_PAIRS``.
+def _polar_split(completed_texts: list[str]) -> list[bool] | None:
+    """Shared polar-clustering primitive.
 
-    "Polar disagreement" here means: one text contains one
-    member of a polar pair and a different text contains the
-    other member. This is a deliberately narrow heuristic — the
-    audit may widen it (e.g. sentiment-flip detection) if
-    examples prove it too quiet.
+    Scans ``_POLAR_PAIRS`` for the first pair on which the texts split —
+    at least one text uses one member (and not its antonym) and at least
+    one other text uses the antonym. If found, returns a per-text
+    majority-side flag list (the larger polar side is the majority; a tie
+    puts the first sorted keyword's side in the majority; texts on neither
+    side count as majority). Returns ``None`` when no polar split exists.
 
-    For fewer than 2 completed answers, returns ``False``.
+    This is the single source of truth for BOTH "does the panel disagree
+    on a polar marker?" (:func:`_has_polar_disagreement`) and "which side
+    is each model's opening on?" (:func:`_opening_majority_flags`).
     """
     if len(completed_texts) < 2:
-        return False
+        return None
     lowered = [text.lower() for text in completed_texts]
     for pair in _POLAR_PAIRS:
-        # The pair is a frozenset of exactly two words.
-        words = sorted(pair)
-        a, b = words[0], words[1]
-        # Count texts that contain ``a`` but not ``b`` and vice versa.
-        only_a = sum(
-            1
-            for text in lowered
-            if re.search(rf"\b{re.escape(a)}\b", text)
+        a, b = sorted(pair)
+        side_a = [
+            bool(re.search(rf"\b{re.escape(a)}\b", text))
             and not re.search(rf"\b{re.escape(b)}\b", text)
-        )
-        only_b = sum(
-            1
             for text in lowered
-            if re.search(rf"\b{re.escape(b)}\b", text)
+        ]
+        side_b = [
+            bool(re.search(rf"\b{re.escape(b)}\b", text))
             and not re.search(rf"\b{re.escape(a)}\b", text)
+            for text in lowered
+        ]
+        count_a = sum(side_a)
+        count_b = sum(side_b)
+        if count_a >= 1 and count_b >= 1:
+            minority_is_b = count_b <= count_a
+            return [
+                not (in_b if minority_is_b else in_a)
+                for in_a, in_b in zip(side_a, side_b, strict=True)
+            ]
+    return None
+
+
+def _has_polar_disagreement(completed_texts: list[str]) -> bool:
+    """Return ``True`` if the completed answers disagree on a polar marker
+    from ``_POLAR_PAIRS`` (one text uses a keyword, another its antonym).
+
+    A deliberately narrow heuristic — the audit may widen it (e.g.
+    sentiment-flip detection) if examples prove it too quiet. For fewer
+    than 2 completed answers, returns ``False``. Thin wrapper over the
+    shared :func:`_polar_split` primitive.
+    """
+    return _polar_split(completed_texts) is not None
+
+
+def classify_model_alignment(
+    initial_answers: list[InitialModelAnswer],
+    debate_outputs: list[DebateOutput],
+) -> list[ModelAlignment]:
+    """Deterministic per-model alignment, one :class:`ModelAlignment` per
+    initial answer in the given order.
+
+    IMPORTANT — this per-model split is an INFERENCE, not an observation.
+    The debate is round-scoped (a ``DebateOutput`` critiques the whole panel,
+    with no per-model attribution), so we never see what any single model did
+    mid-debate. Every field below is derived from the model's own opening
+    answer clustered against the others and the panel's final consensus — the
+    same in demo and live runs.
+
+    The classification reuses :func:`compute_consensus_strength` (the same
+    honest three-way signal the synthesis uses) plus a per-model
+    majority/minority split on the opening stance:
+
+    * ``opening_majority`` — the model's opening answer clusters with the
+      others (shares a polar side, or shares 4-gram overlap with at least one
+      other completed answer).
+    * ``final_aligned`` — with a ``"strong"`` panel every completed model
+      lands in the consensus; with a ``"weak"`` / ``"divided"`` panel a model
+      keeps its opening side (the minority stays dissenting).
+    * ``revised`` — the OBSERVABLE INFERENCE that ``opening_majority`` differs
+      from ``final_aligned``: the model opened clustered as a minority AND the
+      final synthesis aligns with the consensus. It is NOT a claim that the
+      model changed its mind during the debate (unobservable here).
+
+    Failed / empty answers are ``completed=False`` and never aligned.
+    """
+    strength = compute_consensus_strength(initial_answers, debate_outputs)
+    completed_indices = [
+        index
+        for index, answer in enumerate(initial_answers)
+        if answer.status is InitialAnswerStatus.COMPLETED
+        and (answer.answer_text or "").strip()
+    ]
+    completed_texts = [initial_answers[index].answer_text for index in completed_indices]
+    majority_flags = _opening_majority_flags(completed_texts)
+    majority_by_index = dict(zip(completed_indices, majority_flags, strict=True))
+
+    alignments: list[ModelAlignment] = []
+    for index, answer in enumerate(initial_answers):
+        completed = index in majority_by_index
+        opening_majority = majority_by_index.get(index, False)
+        if not completed:
+            final_aligned = False
+        elif strength == "strong":
+            final_aligned = True
+        else:
+            final_aligned = opening_majority
+        revised = completed and opening_majority != final_aligned
+        alignments.append(
+            ModelAlignment(
+                slot_number=answer.slot_number,
+                completed=completed,
+                opening_majority=opening_majority,
+                final_aligned=final_aligned,
+                revised=revised,
+            )
         )
-        if only_a >= 1 and only_b >= 1:
-            return True
-    return False
+    return alignments
+
+
+def _opening_majority_flags(completed_texts: list[str]) -> list[bool]:
+    """Per-text ``True`` if the opening stance clusters with the majority.
+
+    Deterministic. With 0 texts returns ``[]``; with 1 text returns ``[True]``
+    (a lone answer is trivially its own majority). A polar disagreement (the
+    first :data:`_POLAR_PAIRS` split found) puts the smaller polar side in the
+    minority; otherwise a text is majority when it shares 4-gram overlap with
+    at least one other completed answer.
+    """
+    count = len(completed_texts)
+    if count == 0:
+        return []
+    if count == 1:
+        return [True]
+
+    polar = _polar_split(completed_texts)
+    if polar is not None:
+        return polar
+
+    # No polar split: a text is majority when it shares 4-gram overlap with
+    # at least one other completed answer (same primitive/threshold the
+    # panel-level strong-overlap test uses).
+    return [partners >= 1 for partners in _overlap_partner_counts(completed_texts)]
 
 
 def _classify_divided_or_weak(completed_texts: list[str]) -> ConsensusStrength:

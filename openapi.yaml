@@ -580,6 +580,31 @@ components:
       - cost_estimate
       - initial_answers
       title: ActiveQueryRunResponse
+    AgreementSummary:
+      properties:
+        aligned:
+          type: integer
+          minimum: 0.0
+          title: Aligned
+        total:
+          type: integer
+          minimum: 0.0
+          title: Total
+      type: object
+      required:
+      - aligned
+      - total
+      title: AgreementSummary
+      description: 'Verdict-ring numerator/denominator for screen 05 (``aligned``
+        of
+
+        ``total``). ``total`` is the number of initial answers on the run —
+
+        INCLUDING failed/empty ones (matching :func:`summarize_agreement`, which
+
+        uses ``len(initial_answers)``); ``aligned`` is how many land in the final
+
+        consensus (a failed answer can never align).'
     CitationCoverage:
       properties:
         material_claim_count:
@@ -609,6 +634,44 @@ components:
       - coverage_ratio
       - target_met
       title: CitationCoverage
+    CostBreakdown:
+      properties:
+        by_model:
+          items:
+            $ref: '#/components/schemas/CostLineByModel'
+          type: array
+          title: By Model
+        by_stage:
+          items:
+            $ref: '#/components/schemas/CostLineByStage'
+          type: array
+          title: By Stage
+        total:
+          type: string
+          pattern: ^(?!^[-+.]*$)[+-]?0*\d*\.?\d*$
+          title: Total
+      type: object
+      required:
+      - by_model
+      - by_stage
+      - total
+      title: CostBreakdown
+      description: 'Itemized cost partition for screen 03 (cost gate) and the 05 receipt.
+
+
+        The estimate is partitioned two independent ways — ``by_model`` and
+
+        ``by_stage`` — from the *same* underlying arithmetic that produces
+
+        ``total``. Both lists re-sum to ``total`` exactly after quantization
+
+        (the reconciliation invariant): every line is apportioned to
+
+        :data:`COST_DISPLAY_QUANTUM` by :meth:`_reconcile_usd_lines` using a
+
+        sign-safe largest-remainder rule, so every line is ``>= 0`` and the
+
+        lines sum to ``total`` exactly.'
     CostConfirmation:
       properties:
         estimated_cost_usd:
@@ -637,26 +700,63 @@ components:
           default: USD
         threshold_action:
           $ref: '#/components/schemas/CostThresholdAction'
-        normal_cost_threshold_usd:
-          type: string
-          pattern: ^(?!^[-+.]*$)[+-]?0*\d*\.?\d*$
-          title: Normal Cost Threshold Usd
-          default: '0.15'
-        block_cost_threshold_usd:
-          type: string
-          pattern: ^(?!^[-+.]*$)[+-]?0*\d*\.?\d*$
-          title: Block Cost Threshold Usd
-          default: '0.25'
         confirmation_token:
           anyOf:
           - type: string
           - type: 'null'
           title: Confirmation Token
+        reasons:
+          items:
+            type: string
+          type: array
+          title: Reasons
+        breakdown:
+          anyOf:
+          - $ref: '#/components/schemas/CostBreakdown'
+          - type: 'null'
       type: object
       required:
       - estimated_cost_usd
       - threshold_action
+      - confirmation_token
+      - reasons
       title: CostEstimate
+    CostLineByModel:
+      properties:
+        model_id:
+          type: string
+          title: Model Id
+        display_name:
+          type: string
+          title: Display Name
+        usd:
+          type: string
+          pattern: ^(?!^[-+.]*$)[+-]?0*\d*\.?\d*$
+          title: Usd
+        kind:
+          type: string
+          title: Kind
+          default: model
+      type: object
+      required:
+      - model_id
+      - display_name
+      - usd
+      title: CostLineByModel
+    CostLineByStage:
+      properties:
+        stage:
+          type: string
+          title: Stage
+        usd:
+          type: string
+          pattern: ^(?!^[-+.]*$)[+-]?0*\d*\.?\d*$
+          title: Usd
+      type: object
+      required:
+      - stage
+      - usd
+      title: CostLineByStage
     CostThresholdAction:
       type: string
       enum:
@@ -858,6 +958,57 @@ components:
       - model_id
       - display_label
       title: ModelSlot
+    PositionMovement:
+      properties:
+        slot_number:
+          type: integer
+          maximum: 4.0
+          minimum: 1.0
+          title: Slot Number
+        model_id:
+          type: string
+          title: Model Id
+        display_name:
+          type: string
+          title: Display Name
+        opening:
+          type: string
+          title: Opening
+        after_round_1:
+          type: string
+          title: After Round 1
+        final:
+          type: string
+          title: Final
+        revised:
+          type: boolean
+          title: Revised
+        revision_note:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Revision Note
+      type: object
+      required:
+      - slot_number
+      - model_id
+      - display_name
+      - opening
+      - after_round_1
+      - final
+      - revised
+      title: PositionMovement
+      description: 'One row of the "how positions moved" table — a single model''s
+        opening
+
+        synopsis and how it relates to the final synthesis.
+
+
+        All movement here is INFERRED (the debate is round-scoped, no per-model
+
+        transcript): ``after_round_1`` and ``final`` describe opening-vs-final
+
+        alignment, never an observed mid-debate action.'
     ProviderCredentialSource:
       type: string
       enum:
@@ -1074,10 +1225,37 @@ components:
           title: Provider Failure Notices
         result:
           $ref: '#/components/schemas/ResultProjection'
+        result_generated_at_utc:
+          type: string
+          format: date-time
+          title: Result Generated At Utc
         demo_mode:
           type: boolean
           title: Demo Mode
           default: false
+        live_count:
+          type: integer
+          minimum: 0.0
+          title: Live Count
+          default: 0
+        local_count:
+          type: integer
+          minimum: 0.0
+          title: Local Count
+          default: 0
+        material_claim_count:
+          type: integer
+          minimum: 0.0
+          title: Material Claim Count
+          default: 0
+        actual_cost_usd:
+          type: string
+          pattern: ^(?!^[-+.]*$)[+-]?0*\d*\.?\d*$
+          title: Actual Cost Usd
+        actual_breakdown:
+          anyOf:
+          - $ref: '#/components/schemas/CostBreakdown'
+          - type: 'null'
       type: object
       required:
       - query_run_id
@@ -1091,6 +1269,8 @@ components:
       - progress
       - provider_failure_notices
       - result
+      - result_generated_at_utc
+      - actual_cost_usd
       title: QueryRunResultResponse
     QueryRunStageProgress:
       properties:
@@ -1164,11 +1344,20 @@ components:
           anyOf:
           - $ref: '#/components/schemas/FinalSynthesis'
           - type: 'null'
+        agreement:
+          $ref: '#/components/schemas/AgreementSummary'
+        position_movements:
+          items:
+            $ref: '#/components/schemas/PositionMovement'
+          type: array
+          title: Position Movements
       type: object
       required:
       - model_answers
       - debate_outputs
       - final_synthesis
+      - agreement
+      - position_movements
       title: ResultProjection
     SafetyAcknowledgement:
       properties:

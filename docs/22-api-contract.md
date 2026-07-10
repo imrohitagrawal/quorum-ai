@@ -65,7 +65,11 @@ This is the design-level API contract for Release 1. `openapi.yaml` must be sync
 | `model_answers` | array | Per-model answer/status/source/error summary. |
 | `debate_rounds` | array | Round one and round two outputs when available. |
 | `synthesis` | object | Consensus, disagreement, source support, uncertainty, recommendation. |
+| `agreement` | object | Verdict-ring `aligned` of `total` (screen 05). `total` = number of initial answers, including failed ones; `aligned` = how many land in the final consensus. |
+| `position_movements` | array | Per-model "how positions moved" rows (`opening`, `after_round_1`, `final`, `revised`, `revision_note`). INFERRED from opening-vs-final alignment — the debate is round-scoped, so this is never an observed per-model transcript and the UI must caption it as inferred. |
 | `cost` | object | Estimated and actual cost where available. |
+| `actual_cost_usd` | string (decimal) | Actual cost incurred, for the receipt's est→actual reconciliation. On demo/simulation runs (no billable usage) this equals the estimate. |
+| `actual_breakdown` | object \| null | Itemized actual-cost partition mirroring `cost_estimate.breakdown`; `null` when no breakdown is available. On demo/simulation runs this is the estimate's breakdown. |
 | `elapsed_ms` | integer | Workflow elapsed time. |
 | `provider_notices` | array | User-safe failure/fallback notices. |
 | `correlation_id` | string | Non-secret support identifier. |
