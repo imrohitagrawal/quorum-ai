@@ -4,6 +4,16 @@
 > It is the single source of truth for what's done, what's next, and the
 > invariants no slice may violate. Update it at every slice boundary.
 
+## ▶ FRESH-CHAT HANDOFF (read this, then the rest of the file)
+- **Branch:** `feat/quorum-r1-ui`. **Committed & reviewed:** Slice 0 (`3132548`) · B1 (`d46cb42`) · B2 (`5a5b9e8`) · Slice 1 (`15d4636`). Backend extension COMPLETE.
+- **IN FLIGHT when this chat ended: Slice 2 (03 Cost gate)** was running in a subagent editing `workspace.html`/`app.css`/`app.js`. **First action in the fresh chat:** run `git status`.
+  - If there ARE uncommitted changes → the subagent finished; **run the Slice 2 UI review panel** (design-fidelity+green-rule + dataviz-rail check, a11y, code-quality+taste — per the review-mechanism below, reviewers `Read` the `.agents/skills/*/SKILL.md`), fix confirmed findings, re-verify, **commit Slice 2**, then continue.
+  - If the tree is clean (only this file modified) → the subagent didn't land; **re-run Slice 2** (03 Cost gate: itemized by-model/by-stage table from `breakdown`, threshold rail $0/$0.15/$0.25 amber-red-never-green, COPY-003 confirm band, ink "Approve $X & run", allow/confirm/block routing in `estimateRun`; ≤$0.15 skips, >$0.25 → blocked stub for Slice 6).
+- **Then remaining, in order:** Slice 3 (04 Live run) → 4a (05 verdict+trust) → 4b (05 receipt+positions+reconciliation — see its HONESTY carry-forwards below) → 5 (06 Transcript) → 6 (07 Edge states ×7) → 7 (08 Dark + 01 Landing) → **industrial PR gate** → open PR.
+- **Workflow (user-confirmed):** orchestrate each slice + its adversarial review panel in isolated subagents; **do NOT pause between slices**; commit each slice after fixes. Prioritize the PRE-INSTALLED specialized skills (Read their SKILL.md). Skills installed & registered: `uiux-*`, `taste-check` (~/.claude/skills).
+- **Sandbox limits:** proxy blocks `openrouter.ai:443` → any test POSTing a query-run fails at `validate_model_slots` (pre-existing/CI-only; always `git stash`-confirm a failure is pre-existing before chasing it). No browser MCP → do the Playwright/axe browser drive in the final verification (Slice V), not per-slice. Test cmd: `UV_CACHE_DIR=.uv-cache uv run --extra dev pytest`.
+- **Open design decision (vetoable):** Slice 1 removed model-slot vendor-scoping for free choice (honors "duplicates allowed"); `bug10` test rewritten.
+
 ## Non-negotiable invariants (audit every slice against these)
 1. **Green rule:** green `#0E6B50` means *minds agree* — brand mark + agreement/
    consensus/completed ONLY. Exactly ONE large green surface per journey (the
@@ -63,7 +73,7 @@ a11y + perf) → `devsecops` (secrets/scanning) → `traceability-management` +
 | 0 | Design system + view switch | **DONE — committed 3132548** | Tokens+fonts+components+header+setView scaffold. 4 adversarial reviews; all confirmed fixes applied. USER DECISIONS: --muted WCAG-corrected to AA (#5F6570 light / #8A9099 dark, clears AA on every surface incl. pill/line); pre-existing app.js edits KEPT + boot() hardened. 44 contract tests pass; 2 unrelated pre-existing failures untouched (422 backend contract; drift-banner stale-id — both reproduce on clean tree). /ui 200. |
 | B1 | Backend: CostBreakdown | **DONE — committed d46cb42** | by_model (4 + Synthesis-writer, `kind` field); by_stage keys initial_answers/debate_round_1/debate_round_2/synthesis; sign-safe largest-remainder reconciliation (no negative lines), Field(ge=0), display names via lookup_short_name. 14 adversarial tests. CARRY-FWD to Slice 2: fix e2e/tests/api-mocking mock breakdown shape (currently wrong legacy array). |
 | B2 | Backend: agreement + positions + actual cost | **DONE — committed 5a5b9e8** | agreement + position_movements on ResultProjection (INFERRED, honesty-reframed — no fabricated concession; banned-verb guard test); actual_cost_usd (required) + actual_breakdown, demo→actual=estimate. openapi.yaml regenerated; make validate passes. Backend extension COMPLETE. |
-| 1 | 02 Composer (draft) | pending | reconcile brand-lede test (pre-existing red) here. |
+| 1 | 02 Composer (draft) | **DONE — committed 15d4636** | COPY-001/002, high-stakes gate (race-fixed), 2×2 slots w/ per-slot estimates from breakdown.by_model, free-choice swap (vendor-scoping/bug10 removed — DESIGN DECISION, vetoable), dead runNow removed, "See the estimate →" ink CTA. |
 | 2 | 03 Cost gate | pending | needs B1. |
 | 3 | 04 Live run | pending | |
 | 4a | 05 Result: verdict band + trust triangle | pending | needs B2. reduced-motion guard on ring. |
