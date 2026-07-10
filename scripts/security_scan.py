@@ -138,13 +138,13 @@ def _iter_text_files() -> list[Path]:
 
 
 def _contains_raw_openrouter_key(line: str) -> bool:
-    lowered = line.casefold()
-    if "test" in lowered or "placeholder" in lowered:
-        return False
-    # A real OpenRouter key carries a long token after the ``sk-or-v1-`` prefix.
-    # Documentation placeholders such as ``sk-or-v1-...`` have no key material
-    # and must not trip the scanner.
-    return re.search(r"sk-or-v1-[A-Za-z0-9]{20,}", line) is not None
+    # A real OpenRouter key is ``sk-or-v1-`` followed by a long token (64 hex
+    # chars). Key off that shape so a genuine key is flagged wherever it
+    # appears, while documentation placeholders like ``sk-or-v1-...`` or
+    # ``sk-or-v1-xxx`` (no real key material) are ignored. Deliberately does
+    # NOT gate on surrounding words such as "test"/"placeholder": a real key
+    # could sit on a line that also mentions them, and must still be caught.
+    return re.search(r"sk-or-v1-[A-Za-z0-9]{40,}", line) is not None
 
 
 def _contains_env_secret_assignment(line: str, *, is_python: bool = False) -> bool:
