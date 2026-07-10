@@ -88,6 +88,23 @@
   const demoModeBanner = el("demo-mode-banner");
   const demoModeTarget = demoModeBanner ? demoModeBanner.querySelector("[data-demo-mode-target]") : null;
   const infoTooltip = el("info-tooltip");
+  // Screen 03 (cost gate) elements. ``renderCostGate`` fills these from
+  // ``cost_estimate.breakdown``; the confirm button reuses ``proceedWithRun``.
+  const gateQuestion = el("cost-gate-question");
+  const gateTotal = el("cost-gate-total");
+  const gateRange = el("cost-gate-range");
+  const gateRail = el("cost-gate-rail");
+  const gateRailMarker = el("cost-rail-marker");
+  const gateByModel = el("cost-by-model");
+  const gateByStage = el("cost-by-stage");
+  const gateReason = el("cost-gate-reason");
+  const gateBandLabel = el("cost-review-band-label");
+  const gateCard = el("cost-review-card");
+  const gateConfirmButton = el("gate-confirm");
+  const gateBackButton = el("gate-back");
+  const gateCapNote = el("cost-gate-cap-note");
+  const gateLive = el("cost-gate-live");
+  const costGateContainer = document.querySelector('[data-view="cost-gate"]');
 
   // ---------------------------------------------------------------------------
   // State
@@ -1757,6 +1774,11 @@
       // submission.
       proceedButton.disabled = isRunning || !state.currentEstimate;
     }
+    // The cost gate's "Approve & run" CTA is disabled during a run for the
+    // same double-submit reason.
+    if (gateConfirmButton) {
+      gateConfirmButton.disabled = isRunning || !state.currentEstimate;
+    }
     if (isRunning && !state.hasScrolledToRunControls) {
       // Scroll once on the transition into running. The poll loop
       // would otherwise scroll the page aggressively every 750ms.
@@ -1973,6 +1995,174 @@
     }
   }
 
+  // ---------------------------------------------------------------------------
+  // Screen 03 — Cost gate (``cost_review`` state)
+  // ---------------------------------------------------------------------------
+
+  // COPY-003 (verbatim, docs/33-content-design.md). Shown in the confirm
+  // band above the server's first ``reasons[]`` line.
+  const COPY_003_COST_WARNING =
+    "This run may cost more than the normal target because of selected " +
+    "models, query length, search, or debate rounds. Review the estimate " +
+    "before continuing.";
+
+  // The hard block boundary ($0.25) — the rail's full-scale value. The
+  // confirm tick sits at $0.15 (60% of scale, matched by the CSS segment
+  // widths). Numbers are the design's fixed guardrail labels; the ACTIVE
+  // band is driven by the server ``threshold_action``, never re-derived
+  // from these constants.
+  const COST_HARD_LIMIT_USD = 0.25;
+
+  // Partition a ``cost_estimate.breakdown`` into the two labelled row
+  // lists the gate renders — by model AND by stage — plus the shared
+  // total. Pure (no DOM, no closures) so it is unit-testable in node.
+  //   * by_model: the ``kind === "synthesis"`` row renders as "Synthesis
+  //     writer"; every other row uses its ``display_name``.
+  //   * by_stage: the server ``stage`` enum maps to friendly labels; an
+  //     unknown stage falls back to its raw key.
+  // Both lists re-sum to ``total`` by construction (the reconciliation
+  // invariant), so each column's Total row shows the same figure.
+  function costGatePartitions(breakdown) {
+    const stageLabels = {
+      initial_answers: "Initial answers × 4",
+      debate_round_1: "Debate round 1",
+      debate_round_2: "Debate round 2",
+      synthesis: "Synthesis",
+    };
+    const byModelRows = Array.isArray(breakdown && breakdown.by_model)
+      ? breakdown.by_model
+      : [];
+    const byStageRows = Array.isArray(breakdown && breakdown.by_stage)
+      ? breakdown.by_stage
+      : [];
+    return {
+      byModel: byModelRows.map((row) => ({
+        label: row.kind === "synthesis" ? "Synthesis writer" : row.display_name,
+        usd: row.usd,
+      })),
+      byStage: byStageRows.map((row) => ({
+        label: stageLabels[row.stage] || row.stage,
+        usd: row.usd,
+      })),
+      total: breakdown ? breakdown.total : undefined,
+    };
+  }
+
+  // Format a USD amount for the gate's mono cells — reuses ``formatUsd``
+  // (the single money-formatting source of truth) but drops the trailing
+  // " USD" so the compact table/total read as "$0.19", not "$0.19 USD".
+  function gateUsd(usdAmount) {
+    return formatUsd(usdAmount).replace(" USD", "");
+  }
+
+  // Render a list of {label, usd} rows plus a bold Total row into a
+  // container. Built with createElement + textContent (never innerHTML)
+  // so a catalog display name can never inject markup.
+  function renderCostRows(container, rows, total) {
+    if (!container) return;
+    const frag = document.createDocumentFragment();
+    for (const row of rows) {
+      frag.appendChild(costRowNode(row.label, gateUsd(row.usd), false));
+    }
+    frag.appendChild(costRowNode("Total", gateUsd(total), true));
+    container.replaceChildren(frag);
+  }
+
+  function costRowNode(labelText, amountText, isTotal) {
+    const row = document.createElement("div");
+    row.className = isTotal ? "cost-row cost-row-total" : "cost-row";
+    const label = document.createElement("span");
+    label.className = "cost-row-label";
+    label.textContent = labelText;
+    const amount = document.createElement("span");
+    amount.className = "cost-row-amount";
+    amount.textContent = amountText;
+    row.append(label, amount);
+    return row;
+  }
+
+  // Populate the cost gate (screen 03) from an estimate response. Called
+  // for the ``require_confirmation`` and ``block`` bands only; the
+  // ``allow`` band skips this screen entirely. Does NOT switch the view —
+  // the caller does that after rendering so the DOM is ready when it shows.
+  function renderCostGate(estimate) {
+    const ce = estimate.cost_estimate;
+    const action = ce.threshold_action;
+    const total = Number(ce.estimated_cost_usd);
+    const breakdown = ce.breakdown || {};
+    const reasons = Array.isArray(ce.reasons) ? ce.reasons : [];
+
+    // Question echo (from the composer).
+    if (gateQuestion) gateQuestion.textContent = queryTextarea.value.trim();
+
+    // Big mono total + estimated range. The server returns a point
+    // estimate; the range is a ±15% band, consistent with the honesty
+    // caveat that actuals vary from this planning estimate (see the cost
+    // info-icon copy). It is presentational, never a spend commitment.
+    if (gateTotal) gateTotal.textContent = gateUsd(total);
+    if (gateRange) {
+      gateRange.textContent = `${gateUsd(total * 0.85)}–${gateUsd(total * 1.15)}`;
+    }
+
+    // Threshold rail: marker at estimate/hard-limit, clamped to [0,100]%.
+    const pct = Math.max(0, Math.min(100, (total / COST_HARD_LIMIT_USD) * 100));
+    if (gateRailMarker) gateRailMarker.style.left = `${pct}%`;
+    if (gateRail) gateRail.dataset.band = action;
+    if (gateCard) gateCard.dataset.band = action;
+
+    // Itemized table — both partitions of the SAME breakdown total.
+    const partitions = costGatePartitions(breakdown);
+    renderCostRows(gateByModel, partitions.byModel, partitions.total);
+    renderCostRows(gateByStage, partitions.byStage, partitions.total);
+
+    if (action === "block") {
+      // BLOCK (> $0.25). Screen 07 (cost-blocked) with the full COPY-004
+      // treatment lands in Slice 6; for now this is a minimal inline
+      // blocked state: server reasons + the hard-limit note, no proceed.
+      // TODO(Slice 6 / COPY-004): replace with the dedicated 07 edge state.
+      if (gateBandLabel) gateBandLabel.textContent = "Cost review — run blocked";
+      if (gateReason) {
+        const reasonText = reasons.length
+          ? `${reasons.join(" ")} `
+          : "";
+        gateReason.textContent =
+          `${reasonText}This run is above the $0.25 hard limit — execution is blocked, no override.`;
+      }
+      if (gateConfirmButton) gateConfirmButton.hidden = true;
+      if (gateCapNote) gateCapNote.hidden = true;
+      if (gateLive) {
+        gateLive.textContent =
+          `Run blocked. Estimated ${gateUsd(total)} is above the $0.25 hard limit.`;
+      }
+    } else {
+      // REQUIRE_CONFIRMATION ($0.15–$0.25).
+      if (gateBandLabel) {
+        gateBandLabel.textContent = "Cost review — your confirmation required";
+      }
+      if (gateReason) {
+        const firstReason = reasons.length ? ` ${reasons[0]}` : "";
+        gateReason.textContent = `${COPY_003_COST_WARNING}${firstReason}`;
+      }
+      if (gateConfirmButton) {
+        gateConfirmButton.hidden = false;
+        const label = gateConfirmButton.querySelector(".button-label");
+        if (label) label.textContent = `Approve ${gateUsd(total)} & run`;
+      }
+      if (gateCapNote) gateCapNote.hidden = false;
+      if (gateLive) {
+        gateLive.textContent =
+          `Cost review: your confirmation required. Estimated ${gateUsd(total)}.`;
+      }
+    }
+  }
+
+  // "Change models" / "Back to edit": return to the composer to adjust the
+  // query or model slots. The next estimate re-opens the gate fresh.
+  function gateBackToComposer() {
+    setView("composer");
+    if (queryTextarea) queryTextarea.focus({ preventScroll: true });
+  }
+
   async function estimateRun() {
     clearError();
     hideCostConfirmation();
@@ -2019,63 +2209,46 @@
       const { primary: usdPrimary, secondary: usdSecondary } = formatCostWithLocal(
         estimate.cost_estimate.estimated_cost_usd,
       );
-      const costLine = `Estimated cost: ${usdPrimary}.`;
-      // PR-0 / Bug 2: the success-path DOM operations used to live
-      // inline. If any of them threw (e.g. an unexpectedly-shaped
-      // response made formatCostWithLocal fail), the throw would
-      // jump straight to the finally, skipping the cost callout
-      // and leaving the button briefly in the loading state before
-      // the finally reset it. Wrap the callout rendering in its
-      // own try/catch so a single broken callout render surfaces
-      // an error message in the callout area instead of leaving
-      // the screen blank. The button is always reset by the outer
-      // finally regardless.
+      const action = estimate.cost_estimate.threshold_action;
+      // Slice 2 (03 Cost gate): route by the server ``threshold_action``.
+      //   allow                → skip the gate, run straight away.
+      //   require_confirmation  → show the itemized cost gate (screen 03).
+      //   block                → show the gate's inline blocked state.
+      // The legacy inline composer callout (``#cost-confirmation``) is no
+      // longer surfaced here; its confirm role moved to the dedicated
+      // gate. The element stays in the template (hidden) for its contract.
+      // PR-0 / Bug 2: wrap the success-path DOM work in its own try/catch
+      // so a broken render surfaces a message instead of a blank screen;
+      // the outer finally always resets the estimate button.
       try {
         if (usdSecondary) renderCostSecondary(estimate.cost_estimate.estimated_cost_usd);
-        if (estimate.cost_estimate.threshold_action === "require_confirmation") {
-          costConfirmationMessage.textContent =
-            `${costLine} This is in the upper band. Confirm to proceed.`;
-          costConfirmation.hidden = false;
-          if (proceedButton) {
-            proceedButton.disabled = false;
-            proceedButton.dataset.estimateBand = "require_confirmation";
-          }
-        } else if (estimate.cost_estimate.threshold_action === "block") {
-          costConfirmationMessage.textContent =
-            `${costLine} This exceeds the hard limit (USD 0.25). The run is blocked.`;
-          costConfirmation.hidden = false;
-          if (proceedButton) {
-            proceedButton.disabled = true;
-            proceedButton.dataset.estimateBand = "block";
-          }
-        } else {
-          costConfirmationMessage.textContent =
-            `${costLine} This is in the normal band. Proceed to start.`;
-          costConfirmation.hidden = false;
-          if (proceedButton) {
-            proceedButton.disabled = false;
-            proceedButton.dataset.estimateBand = "allow";
-          }
-        }
         renderNotices(null);
-        toast({
-          message: `Cost estimate ready: ${usdPrimary}.`,
-          tone: "success",
-        });
+        if (action === "allow") {
+          // ≤ $0.15: nothing to confirm — go straight to the run.
+          await proceedWithRun();
+        } else {
+          // require_confirmation ($0.15–$0.25) or block (> $0.25):
+          // render + reveal the dedicated cost gate.
+          renderCostGate(estimate);
+          setView("cost-gate");
+          if (gateCard) gateCard.scrollIntoView({ behavior: "smooth", block: "center" });
+          toast({
+            message: `Cost estimate ready: ${usdPrimary}.`,
+            tone: "success",
+          });
+        }
       } catch (renderError) {
-        // The estimate itself succeeded — the response is valid —
-        // but rendering the callout blew up. Show the error in the
-        // callout so the user can see what happened and reset the
-        // proceed button so the next estimate isn't blocked.
-        if (costConfirmation) {
-          costConfirmationMessage.textContent =
-            `Got the estimate (${usdPrimary}) but could not render the cost review. ` +
-            `${renderError && renderError.message ? renderError.message : "Unknown error."}`;
-          costConfirmation.hidden = false;
-        }
-        if (proceedButton) {
-          proceedButton.disabled = true;
-        }
+        // The estimate itself succeeded — the response is valid — but the
+        // gate render (or the auto-proceed) blew up. Surface it rather
+        // than leaving the composer silent.
+        handleError(
+          renderError instanceof ApiError
+            ? renderError
+            : new Error(
+                `Got the estimate (${usdPrimary}) but could not open the cost review. ` +
+                  `${renderError && renderError.message ? renderError.message : "Unknown error."}`,
+              ),
+        );
       }
       return estimate;
     } finally {
@@ -2257,6 +2430,11 @@
       handleError(error);
     } finally {
       setButtonLoading(estimateButton, false);
+      // ``setButtonLoading`` clears ``disabled``; re-assert the run/gate
+      // state so the CTA stays disabled when a run is now in flight (the
+      // ``allow`` band auto-proceeds inside ``estimateRun``) or a
+      // high-stakes topic is unacknowledged.
+      applyHighStakesGate();
     }
   }
 
@@ -2280,10 +2458,14 @@
         message: "Please enter a question before starting a run.",
       });
     }
-    if (!checkMagicPhraseAck(queryText, proceedButton)) {
+    // The visible confirm CTA is now the cost gate's "Approve $X & run"
+    // (``gateConfirmButton``); fall back to the legacy composer proceed
+    // button if the gate markup is absent (trimmed template).
+    const confirmBtn = gateConfirmButton || proceedButton;
+    if (!checkMagicPhraseAck(queryText, confirmBtn)) {
       return;
     }
-    setButtonLoading(proceedButton, true);
+    setButtonLoading(confirmBtn, true);
     try {
       const thresholdAction =
         state.currentEstimate.cost_estimate.threshold_action;
@@ -2320,6 +2502,10 @@
       // The estimate is now consumed; collapse the cost callout until
       // the next estimate.
       hideCostConfirmation();
+      // Leave the cost gate — the run is now live. Slice 3 will swap to a
+      // dedicated live-run view; for now return to the composer so the
+      // gate is not stranded on screen while progress renders below.
+      setView("composer");
       toast({ message: "Run started. Tracking progress below.", tone: "info" });
       startPolling();
     } catch (error) {
@@ -2337,7 +2523,7 @@
       }
       handleError(error);
     } finally {
-      setButtonLoading(proceedButton, false);
+      setButtonLoading(confirmBtn, false);
     }
   }
 
@@ -2678,9 +2864,18 @@
 
   function initKeyboardShortcuts() {
     document.addEventListener("keydown", (event) => {
+      const gateActive = costGateContainer && !costGateContainer.hidden;
       const isCmdEnter = (event.metaKey || event.ctrlKey) && event.key === "Enter";
       if (isCmdEnter) {
         event.preventDefault();
+        // On the cost gate, Ctrl/Cmd+Enter confirms the estimate (unless
+        // the confirm CTA is absent/disabled — e.g. the block band).
+        if (gateActive) {
+          if (gateConfirmButton && !gateConfirmButton.hidden && !gateConfirmButton.disabled) {
+            proceedWithRun();
+          }
+          return;
+        }
         // Single-CTA design: Ctrl/Cmd+Enter runs the estimate-first
         // flow (``startRun``), which routes through the cost gate. The
         // high-stakes gate keeps the CTA disabled until acknowledged.
@@ -2690,6 +2885,12 @@
         return;
       }
       if (event.key === "Escape") {
+        // On the cost gate, Esc returns to the composer ("Back to edit").
+        if (gateActive && !state.isRunning) {
+          event.preventDefault();
+          gateBackToComposer();
+          return;
+        }
         // If a tooltip is open, hide it first and stop here.
         if (infoTooltip && !infoTooltip.hidden) {
           const active = document.querySelector("[data-info-icon][data-info-active]");
@@ -2786,6 +2987,19 @@
     if (proceedButton) {
       proceedButton.addEventListener("click", () => {
         proceedWithRun();
+      });
+    }
+    // Cost gate (screen 03) actions. "Approve $X & run" reuses the same
+    // confirmation-token create path as the legacy proceed button; "Change
+    // models" returns to the composer.
+    if (gateConfirmButton) {
+      gateConfirmButton.addEventListener("click", () => {
+        proceedWithRun();
+      });
+    }
+    if (gateBackButton) {
+      gateBackButton.addEventListener("click", () => {
+        gateBackToComposer();
       });
     }
     if (cancelEstimateButton) {

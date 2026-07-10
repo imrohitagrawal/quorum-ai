@@ -211,10 +211,95 @@
           </div>
         </section>
         </div>
-        <!-- View-switch placeholders (Slice 0 scaffold). Later slices
-             fill these with the cost gate, live run, and result views;
-             ``setView()`` in app.js toggles which one is visible. -->
-        <div data-view="cost-gate" hidden></div>
+        <!-- Screen 03 — Cost gate (``cost_review`` state). Filled by
+             Slice 2. ``estimateRun`` routes here for the
+             ``require_confirmation`` and ``block`` bands (the ``allow``
+             band skips this screen and runs straight away). The itemized
+             by-model / by-stage table and threshold rail are populated by
+             ``renderCostGate`` from ``cost_estimate.breakdown``. -->
+        <div data-view="cost-gate" hidden>
+          <section class="panel cost-gate" role="region" aria-labelledby="cost-gate-heading">
+            <!-- Polite live region: announces the gate + estimate when it appears. -->
+            <div id="cost-gate-live" class="sr-only" role="status" aria-live="polite"></div>
+            <div class="cost-gate-head">
+              <span class="cost-gate-eyebrow">Cost review</span>
+              <h2 id="cost-gate-heading">Approve before anything runs</h2>
+              <p class="lede">Nothing executes without this approval. The approved figure becomes this run's spend cap.</p>
+            </div>
+
+            <div class="cost-gate-question">
+              <span class="cost-gate-question-label">Your question</span>
+              <div id="cost-gate-question" class="cost-gate-question-text"></div>
+              <span class="cost-gate-question-meta">4 models · 2 debate rounds · synthesis · sourced answers where search succeeds</span>
+            </div>
+
+            <div id="cost-review-card" class="cost-review-card" data-band="require_confirmation">
+              <div class="cost-review-card-head">
+                <span id="cost-review-band-label" class="cost-review-band-label">Cost review — your confirmation required</span>
+                <span class="cost-review-card-note">Planning estimate · reconciled to actuals on the receipt</span>
+              </div>
+              <div class="cost-review-card-body">
+                <div class="cost-total-row">
+                  <span id="cost-gate-total" class="cost-total mono">$0.00</span>
+                  <span class="cost-total-range">estimated range <span id="cost-gate-range" class="mono"></span></span>
+                </div>
+
+                <!-- Threshold rail (dataviz). 0 → $0.25 linear; the confirm
+                     tick sits at $0.15 (60%), the block boundary at $0.25
+                     (100%). ``renderCostGate`` positions the marker. Colours
+                     are ink-tint (approval band) + amber (confirm) + red
+                     (block) — never green. -->
+                <div id="cost-gate-rail" class="cost-rail" data-band="require_confirmation">
+                  <div class="cost-rail-track" aria-hidden="true">
+                    <span class="cost-rail-seg cost-rail-seg-allow"></span>
+                    <span class="cost-rail-seg cost-rail-seg-confirm"></span>
+                    <span class="cost-rail-tick cost-rail-tick-confirm"></span>
+                    <span class="cost-rail-tick cost-rail-tick-block"></span>
+                    <span id="cost-rail-marker" class="cost-rail-marker"></span>
+                  </div>
+                  <div class="cost-rail-labels mono">
+                    <span>$0 — runs on approval</span>
+                    <span class="cost-rail-label-confirm">$0.15 — explicit confirmation</span>
+                    <span class="cost-rail-label-block">$0.25 — blocked, no override</span>
+                  </div>
+                </div>
+
+                <!-- Itemized estimate, partitioned two ways from the same
+                     ``breakdown`` total. Rows are rendered by JS. -->
+                <div class="cost-itemized">
+                  <div class="cost-column">
+                    <span class="cost-column-head">By model</span>
+                    <div id="cost-by-model" class="cost-rows"></div>
+                  </div>
+                  <div class="cost-column cost-column-stage">
+                    <span class="cost-column-head">By stage — every round priced</span>
+                    <div id="cost-by-stage" class="cost-rows"></div>
+                  </div>
+                </div>
+
+                <p id="cost-gate-reason" class="cost-gate-reason"></p>
+
+                <div id="cost-gate-actions" class="cost-gate-actions">
+                  <button
+                    id="gate-confirm"
+                    class="button button-primary cost-gate-confirm"
+                    type="button"
+                    data-loading-text="Starting..."
+                  >
+                    <span class="button-label">Approve &amp; run</span>
+                    <span class="button-spinner" aria-hidden="true"></span>
+                  </button>
+                  <button id="gate-back" class="button button-secondary" type="button">Change models</button>
+                  <span id="cost-gate-cap-note" class="cost-gate-cap-note">The approved figure becomes this run's spend cap.</span>
+                </div>
+              </div>
+            </div>
+
+            <div class="cost-gate-hint muted">
+              <kbd>Ctrl</kbd>+<kbd>Enter</kbd> confirm · <kbd>Esc</kbd> back — estimates at or below <span class="mono">$0.15</span> skip this screen and run on approval.
+            </div>
+          </section>
+        </div>
         <div data-view="live-run" hidden></div>
         <div data-view="result" hidden></div>
 

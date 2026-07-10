@@ -805,6 +805,223 @@ select {
   color: white;
 }
 
+/* Screen-reader-only utility. Visually hidden but present in the
+   accessibility tree — used for the cost-gate live-region announcement. */
+.sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
+}
+
+/* ===================================================================
+ * Screen 03 — Cost gate (``data-view="cost-gate"``). Single centred
+ * reading column. Money moves on ink; the threshold rail + confirm
+ * band use amber/red (caution/boundary) — NEVER green (green means
+ * minds agree, and nothing has agreed yet at the gate).
+ * =================================================================== */
+.cost-gate {
+  max-width: 720px;
+  margin: 0 auto;
+  width: 100%;
+}
+.cost-gate-head { display: flex; flex-direction: column; gap: var(--space-1); }
+.cost-gate-eyebrow {
+  font-size: 0.72rem;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+
+.cost-gate-question {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+}
+.cost-gate-question-label { font-size: 0.82rem; color: var(--text-secondary); }
+.cost-gate-question-text {
+  font-family: var(--font-serif);
+  font-size: 1.35rem;
+  line-height: 1.3;
+  font-weight: 500;
+  color: var(--ink);
+  text-wrap: balance;
+}
+.cost-gate-question-meta { font-size: 0.78rem; color: var(--muted); }
+
+/* Amber-framed estimate card — confirmation required. */
+.cost-review-card {
+  border: 1.5px solid var(--warning-soft);
+  border-color: rgba(138, 95, 22, 0.40);
+  border-radius: var(--radius-md);
+  overflow: hidden;
+  box-shadow: var(--shadow-md);
+  background: var(--surface);
+}
+.cost-review-card[data-band="block"] {
+  border-color: var(--danger-border);
+}
+.cost-review-card-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+  padding: var(--space-3) var(--space-6);
+  background: var(--warning-soft);
+  border-bottom: 1px solid rgba(138, 95, 22, 0.15);
+}
+.cost-review-card[data-band="block"] .cost-review-card-head {
+  background: var(--danger-soft);
+  border-bottom-color: var(--danger-border);
+}
+.cost-review-band-label {
+  font-size: 0.72rem;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--warning);
+}
+.cost-review-card[data-band="block"] .cost-review-band-label { color: var(--danger); }
+.cost-review-card-note { font-size: 0.78rem; color: var(--warning); }
+.cost-review-card[data-band="block"] .cost-review-card-note { color: var(--danger); }
+.cost-review-card-body {
+  padding: var(--space-5) var(--space-6);
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-5);
+}
+
+.cost-total-row { display: flex; align-items: baseline; gap: var(--space-3); flex-wrap: wrap; }
+.cost-total {
+  font-size: 2.6rem;
+  font-weight: 600;
+  letter-spacing: -0.02em;
+  color: var(--ink);
+  line-height: 1;
+}
+.cost-total-range { font-size: 0.85rem; color: var(--text-secondary); }
+
+/* Threshold rail. */
+.cost-rail { display: flex; flex-direction: column; gap: var(--space-2); }
+.cost-rail-track {
+  position: relative;
+  display: flex;
+  height: 10px;
+  border-radius: var(--radius-pill);
+}
+.cost-rail-seg-allow {
+  width: 60%;
+  background: var(--accent-soft);
+  border-radius: var(--radius-pill) 0 0 var(--radius-pill);
+}
+.cost-rail-seg-confirm {
+  width: 40%;
+  background: var(--warning-soft);
+  border-radius: 0 var(--radius-pill) var(--radius-pill) 0;
+}
+/* Active-band emphasis per ``threshold_action``. */
+.cost-rail[data-band="require_confirmation"] .cost-rail-seg-confirm { background: rgba(138, 95, 22, 0.28); }
+.cost-rail[data-band="block"] .cost-rail-seg-confirm { background: rgba(168, 58, 42, 0.22); }
+.cost-rail-tick {
+  position: absolute;
+  top: -3px;
+  width: 2px;
+  height: 16px;
+}
+.cost-rail-tick-confirm { left: 60%; background: var(--ink); }
+.cost-rail-tick-block { right: 0; background: var(--danger); }
+.cost-rail-marker {
+  position: absolute;
+  top: -5px;
+  left: 0;
+  width: 3px;
+  height: 20px;
+  border-radius: var(--radius-pill);
+  background: var(--warning);
+  transform: translateX(-1px);
+  transition: left var(--duration-base) var(--bezier);
+}
+.cost-rail[data-band="block"] .cost-rail-marker { background: var(--danger); }
+.cost-rail-labels {
+  display: flex;
+  justify-content: space-between;
+  font-size: 0.66rem;
+  color: var(--muted);
+}
+.cost-rail-label-confirm { color: var(--ink); }
+.cost-rail-label-block { color: var(--danger); }
+
+/* Itemized two-column table. */
+.cost-itemized {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: var(--space-6);
+}
+.cost-column { display: flex; flex-direction: column; gap: var(--space-2); }
+.cost-column-stage {
+  border-left: 1px solid var(--line-2);
+  padding-left: var(--space-6);
+}
+.cost-column-head {
+  font-size: 0.7rem;
+  font-weight: 600;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--muted);
+  padding-bottom: var(--space-1);
+}
+.cost-rows { display: flex; flex-direction: column; gap: var(--space-2); }
+.cost-row {
+  display: flex;
+  justify-content: space-between;
+  gap: var(--space-3);
+  font-size: 0.82rem;
+}
+.cost-row-label { color: var(--text-secondary); }
+.cost-row-amount { font-family: var(--font-mono); }
+.cost-row-total {
+  font-weight: 600;
+  border-top: 1px solid var(--line-2);
+  padding-top: var(--space-2);
+}
+.cost-row-total .cost-row-label { color: var(--ink); }
+
+.cost-gate-reason {
+  margin: 0;
+  font-size: 0.85rem;
+  line-height: 1.6;
+  color: var(--body);
+}
+
+.cost-gate-actions {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  flex-wrap: wrap;
+}
+.cost-gate-cap-note { font-size: 0.76rem; color: var(--muted); }
+
+.cost-gate-hint { font-size: 0.8rem; }
+.cost-gate-hint kbd {
+  font-family: var(--font-mono);
+  font-size: 0.72rem;
+  border: 1px solid var(--line-strong);
+  border-radius: var(--radius-xs);
+  padding: 1px 6px;
+}
+
+@media (max-width: 600px) {
+  .cost-itemized { grid-template-columns: 1fr; }
+  .cost-column-stage { border-left: none; padding-left: 0; border-top: 1px solid var(--line-2); padding-top: var(--space-4); }
+}
+
 .callout-high-stakes {
   background: var(--warning-soft);
   border-color: rgba(241, 179, 111, 0.40);
