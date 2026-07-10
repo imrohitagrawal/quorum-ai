@@ -31,6 +31,7 @@ import time as _time_module
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
+from decimal import Decimal
 from enum import StrEnum
 from threading import BoundedSemaphore, RLock, Thread
 from time import sleep
@@ -43,12 +44,18 @@ from pydantic import BaseModel, Field
 from product_app.auth import SessionContext, enforce_csrf, require_session
 from product_app.config import settings
 from product_app.costs import (
+    CostBreakdown,
     CostConfirmation,
     CostEstimate,
     CostThresholdAction,
     cost_estimation_service,
 )
-from product_app.debate import DebateOutput, debate_stub_service
+from product_app.debate import (
+    AgreementSummary,
+    DebateOutput,
+    PositionMovement,
+    debate_stub_service,
+)
 from product_app.model_slots import (
     InvalidModelSlotError,
     ModelSlot,
@@ -67,7 +74,11 @@ from product_app.safety import (
     SafetyWarning,
     safety_warning_policy,
 )
-from product_app.synthesis import FinalSynthesis, synthesis_stub_service
+from product_app.synthesis import (
+    FinalSynthesis,
+    build_agreement_and_positions,
+    synthesis_stub_service,
+)
 
 router = APIRouter(prefix="/v1/query-runs", tags=["query-runs"])
 
@@ -189,6 +200,10 @@ class ResultProjection(BaseModel):
     model_answers: list[InitialModelAnswer]
     debate_outputs: list[DebateOutput]
     final_synthesis: FinalSynthesis | None
+    #: Verdict-ring numerator/denominator (aligned of total) for screen 05.
+    agreement: AgreementSummary
+    #: One row per model, in slot order, for the "how positions moved" table.
+    position_movements: list[PositionMovement]
 
 
 # SEC-C/H7: server-side query text length must align with the frontend
@@ -284,6 +299,23 @@ class QueryRunResultResponse(BaseModel):
     #: initial-answers list is empty (e.g. cost-blocked before any model
     #: was called).
     material_claim_count: int = Field(ge=0, default=0)
+    #: Actual cost incurred by this run, for the receipt's est→actual
+    #: reconciliation. Per-call provider-usage capture is NOT yet plumbed
+    #: through the pipeline, so this value currently ALWAYS equals the
+    #: estimate (``cost_estimate.estimated_cost_usd``) regardless of
+    #: ``demo_mode``: for demo/simulation runs that is exact (no real usage
+    #: is billed); for live runs it is the estimate standing in for measured
+    #: usage until usage capture lands (a known limitation — this field does
+    #: not yet reflect real provider billing on live runs). REQUIRED (no
+    #: default): ``_result_response`` always supplies it, so a missing value
+    #: should surface loudly rather than silently emit "0".
+    actual_cost_usd: Decimal = Field(ge=Decimal("0"))
+    #: Itemized actual-cost partition (mirrors ``cost_estimate.breakdown``).
+    #: ``None`` when no breakdown is available (e.g. a cost estimate built
+    #: without one). Like ``actual_cost_usd``, this currently reuses the
+    #: estimate's breakdown verbatim on every run (demo and live) until
+    #: per-call usage capture is plumbed through the pipeline.
+    actual_breakdown: CostBreakdown | None = None
 
 
 class QueryRunWarningsRequest(BaseModel):
@@ -1323,6 +1355,11 @@ def _result_response(query_run: QueryRun) -> QueryRunResultResponse:
     material_claim_count = sum(
         answer.citation_coverage.material_claim_count for answer in query_run.initial_answers
     )
+    agreement, position_movements = build_agreement_and_positions(
+        initial_answers=query_run.initial_answers,
+        debate_outputs=query_run.debate_outputs,
+    )
+    actual_cost_usd, actual_breakdown = _actual_cost(query_run)
     return QueryRunResultResponse(
         query_run_id=query_run.query_run_id,
         status=query_run.status,
@@ -1339,13 +1376,32 @@ def _result_response(query_run: QueryRun) -> QueryRunResultResponse:
             model_answers=query_run.initial_answers,
             debate_outputs=query_run.debate_outputs,
             final_synthesis=query_run.final_synthesis,
+            agreement=agreement,
+            position_movements=position_movements,
         ),
         result_generated_at_utc=datetime.now(UTC),
         demo_mode=demo_mode,
         live_count=live_count,
         local_count=local_count,
         material_claim_count=material_claim_count,
+        actual_cost_usd=actual_cost_usd,
+        actual_breakdown=actual_breakdown,
     )
+
+
+def _actual_cost(query_run: QueryRun) -> tuple[Decimal, CostBreakdown | None]:
+    """Actual cost incurred, for the receipt's est→actual reconciliation.
+
+    Per-call provider-usage capture is NOT yet plumbed through the pipeline,
+    so this returns the estimate (value and itemized breakdown) for EVERY run,
+    demo and live alike. On a demo/simulation run that is exact — no real
+    provider usage was billed, so the honest "actual" is the estimate itself.
+    On a live run it is a known limitation: the estimate stands in for the
+    (not-yet-captured) measured usage. Once usage capture lands, live runs
+    should substitute the real token usage here instead of the estimate.
+    """
+    estimate = query_run.cost_estimate
+    return estimate.estimated_cost_usd, estimate.breakdown
 
 
 def _initial_progress() -> list[QueryRunStageProgress]:
