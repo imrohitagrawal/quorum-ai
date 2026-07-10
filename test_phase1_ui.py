@@ -1,6 +1,6 @@
 """Test Phase 1 UI/UX critical fixes for Quorum AI."""
 
-from playwright.sync_api import sync_playwright, Page, expect
+from playwright.sync_api import Page, sync_playwright
 
 
 def test_focus_states(page: Page):

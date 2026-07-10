@@ -47,7 +47,7 @@ def test_csrf_query_string_is_not_accepted() -> None:
     csrf, cookie = _start(client)
     # The cookie is auto-attached by TestClient when present in the
     # cookie jar.
-    response = client.get(
+    client.get(
         f"/v1/session?csrf_token={csrf}",  # token via query string
     )
     # /v1/session is a GET — there is no CSRF check on GET.

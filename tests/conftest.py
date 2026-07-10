@@ -25,8 +25,8 @@ import pytest
 
 from product_app.auth import session_repository
 from product_app.query_runs import (
-    _ip_rate_limiter,
     _account_rate_limiter,
+    _ip_rate_limiter,
     query_run_repository,
 )
 

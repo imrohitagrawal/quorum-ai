@@ -240,12 +240,13 @@ def test_query_run_live_path_records_all_four_slots_as_openrouter_search(
             return _live_result_for_slot(slot_number)
         # Debate / synthesis call: return a short, opinionated
         # response so the result is still coherent.
+        model_slug = model_id.replace(":", "_").replace("/", "-")
         return LiveProviderResult(
             answer_text=f"Live second-pass analysis for {model_id}.",
             sources=[
                 SourceReference(
                     title=f"Second-pass citation {model_id}",
-                    url=f"https://example.org/second-pass/{model_id.replace(':', '_').replace('/', '-')}",
+                    url=f"https://example.org/second-pass/{model_slug}",
                     provider=ProviderPath.OPENROUTER_SEARCH,
                     is_fallback=False,
                 )

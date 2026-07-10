@@ -98,7 +98,9 @@ const document = {
 // true for our shim nodes so the change-event handler's guard
 // fires on the right inputs. We define the element classes via
 // a custom ``Symbol.hasInstance`` keyed off the shim's tagName.
-const HTMLSelectElement = { [Symbol.hasInstance]: (n) => n instanceof _Node && n.tagName === "SELECT" };
+const HTMLSelectElement = {
+  [Symbol.hasInstance]: (n) => n instanceof _Node && n.tagName === "SELECT",
+};
 const HTMLElement = { [Symbol.hasInstance]: (n) => n instanceof _Node };
 """
 

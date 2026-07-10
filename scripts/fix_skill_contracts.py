@@ -1,7 +1,6 @@
 #!/usr/bin/env python3
 """Fix missing skill contract sections in all SKILL.md files."""
 
-import json
 import re
 from pathlib import Path
 
@@ -161,12 +160,14 @@ def fix_skill_file(file_path: Path) -> bool:
 
     # Append the rest of the template sections
     for section in REQUIRED_SECTIONS:
-        if f"## {section}" not in content:
-            if section not in ["When to use", "When not to use"]:
-                # Find the template section
-                template_section = extract_section_from_template(SKILL_TEMPLATE, section)
-                if template_section:
-                    additions.append(template_section)
+        if f"## {section}" not in content and section not in [
+            "When to use",
+            "When not to use",
+        ]:
+            # Find the template section
+            template_section = extract_section_from_template(SKILL_TEMPLATE, section)
+            if template_section:
+                additions.append(template_section)
 
     if additions:
         # Find insertion point - before the last ## heading or at end
@@ -208,9 +209,8 @@ def main():
     for skill_dir in sorted(skills_dir.iterdir()):
         if skill_dir.is_dir():
             skill_file = skill_dir / "SKILL.md"
-            if skill_file.exists():
-                if fix_skill_file(skill_file):
-                    fixed_count += 1
+            if skill_file.exists() and fix_skill_file(skill_file):
+                fixed_count += 1
 
     print(f"\nFixed {fixed_count} skill files")
 

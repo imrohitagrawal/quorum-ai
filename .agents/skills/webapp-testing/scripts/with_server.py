@@ -14,11 +14,11 @@ Usage:
       -- python test.py
 """
 
-import subprocess
-import socket
-import time
-import sys
 import argparse
+import socket
+import subprocess
+import sys
+import time
 
 
 def is_server_ready(port, timeout=30):
@@ -28,7 +28,7 @@ def is_server_ready(port, timeout=30):
         try:
             with socket.create_connection(("localhost", port), timeout=1):
                 return True
-        except (socket.error, ConnectionRefusedError):
+        except (OSError, ConnectionRefusedError):
             time.sleep(0.5)
     return False
 
@@ -73,7 +73,7 @@ def main():
         sys.exit(1)
 
     servers = []
-    for cmd, port in zip(args.servers, args.ports):
+    for cmd, port in zip(args.servers, args.ports, strict=False):
         servers.append({"cmd": cmd, "port": port})
 
     server_processes = []
