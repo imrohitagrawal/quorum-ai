@@ -15,6 +15,7 @@ regression in the JS is caught here.
 If node is unavailable in CI this test is skipped — the alternative
 is the Playwright walkthrough documented in PR-0.
 """
+
 from __future__ import annotations
 
 import json
@@ -37,11 +38,18 @@ def _extract_format_usd() -> str:
     renamed or its signature changes.
     """
     text = APP_JS.read_text(encoding="utf-8")
-    match = re.search(r"function formatUsd\(usdAmount\) \{", text)
+    # Tolerate optional extra parameters after ``usdAmount`` (e.g. the
+    # ``{ suffix = true } = {}`` options bag) — a single-arg call still
+    # defaults to the " USD" suffix, so the contract below is unchanged.
+    # The regex consumes the whole signature up to and including the body's
+    # opening brace, so we begin depth-counting AFTER it (depth already 1).
+    # Counting from ``match.start()`` would trip over braces in the
+    # destructured-parameter list and return a truncated function.
+    match = re.search(r"function formatUsd\(usdAmount[^)]*\) \{", text)
     assert match is not None, "formatUsd not found in app.js — was the function renamed?"
     start = match.start()
-    depth = 0
-    for i in range(start, len(text)):
+    depth = 1
+    for i in range(match.end(), len(text)):
         ch = text[i]
         if ch == "{":
             depth += 1
@@ -81,12 +89,8 @@ def test_format_usd_sub_cent_does_not_display_zero() -> None:
     by_input = {item["input"]: item["actual"] for item in out}
 
     # Sub-cent values must show the actual sub-cent digits, not "$0.00".
-    assert by_input[0.0023] != "$0.00 USD", (
-        "Bug 3 regression: 0.0023 displayed as $0.00 USD"
-    )
-    assert "$0.0023" in by_input[0.0023], (
-        f"expected '$0.0023' substring in {by_input[0.0023]!r}"
-    )
+    assert by_input[0.0023] != "$0.00 USD", "Bug 3 regression: 0.0023 displayed as $0.00 USD"
+    assert "$0.0023" in by_input[0.0023], f"expected '$0.0023' substring in {by_input[0.0023]!r}"
 
     assert by_input[0.001] != "$0.00 USD"
     assert "$0.001" in by_input[0.001]

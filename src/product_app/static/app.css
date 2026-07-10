@@ -98,6 +98,7 @@
   --accent-strong: var(--c-ink); /* hover keeps ink (translateY + shadow do the work), never pure black */
   --accent-ink: var(--c-surface); /* white on ink — ~14:1 */
   --accent-soft: rgba(20, 23, 28, 0.06);
+  --accent-medium: rgba(20, 23, 28, 0.12); /* approval-band rail fill — ink, never green */
 
   /* Brand mark. The Q tile is the one sanctioned green surface that is
      THEME-INVARIANT: it stays #0E6B50 with white glyph in BOTH light and
@@ -117,8 +118,11 @@
   --success-border: rgba(14, 107, 80, 0.45);
   --warning: var(--c-amber);
   --warning-soft: rgba(138, 95, 22, 0.10);
+  --warning-medium: rgba(138, 95, 22, 0.28); /* active confirm-band fill / rail emphasis */
+  --warning-border: rgba(138, 95, 22, 0.40); /* cost-review caution-card border */
   --danger: var(--c-red);
   --danger-soft: rgba(168, 58, 42, 0.08);
+  --danger-medium: rgba(168, 58, 42, 0.22); /* active block-band fill */
   --danger-border: rgba(168, 58, 42, 0.35);
   --info: var(--c-blue); /* sources + running */
   --info-soft: rgba(71, 104, 158, 0.10);
@@ -128,6 +132,7 @@
   /* Elevation (from the handoff shadow scale). */
   --shadow-sm: 0 1px 2px rgba(20, 23, 28, 0.05);
   --shadow-md: 0 12px 32px rgba(20, 23, 28, 0.08);
+  --shadow-warning: 0 12px 32px rgba(138, 95, 22, 0.08); /* amber halo for the cost-review card */
   --shadow-lg: 0 24px 60px rgba(20, 23, 28, 0.12);
   --shadow-verdict: 0 16px 40px rgba(14, 107, 80, 0.30);
   --shadow-cta: 0 6px 16px rgba(20, 23, 28, 0.22);
@@ -202,17 +207,22 @@ html[data-theme="dark"] {
   --accent-strong: var(--c-ink); /* hover keeps the chip colour; translateY + shadow do the work */
   --accent-ink: var(--c-paper); /* dark text on the light chip */
   --accent-soft: rgba(232, 234, 238, 0.08);
+  --accent-medium: rgba(232, 234, 238, 0.14); /* approval-band rail fill — ink, never green */
 
   --success-soft: rgba(78, 194, 140, 0.14);
   --success-border: rgba(78, 194, 140, 0.42);
   --warning-soft: rgba(217, 169, 84, 0.14);
+  --warning-medium: rgba(217, 169, 84, 0.34); /* active confirm-band fill / rail emphasis */
+  --warning-border: rgba(217, 169, 84, 0.45); /* cost-review caution-card border */
   --danger-soft: rgba(219, 128, 112, 0.14);
+  --danger-medium: rgba(219, 128, 112, 0.32); /* active block-band fill */
   --danger-border: rgba(219, 128, 112, 0.35);
   --info-soft: rgba(159, 182, 223, 0.14);
   --focus-ring: var(--c-ink); /* light ring on dark bg */
 
   --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.30);
   --shadow-md: 0 12px 32px rgba(0, 0, 0, 0.32);
+  --shadow-warning: 0 12px 32px rgba(0, 0, 0, 0.32); /* dark elevation for the cost-review card */
   --shadow-lg: 0 24px 60px rgba(0, 0, 0, 0.42);
   --shadow-cta: 0 6px 16px rgba(0, 0, 0, 0.40);
   --shadow-cta-hover: 0 10px 22px rgba(0, 0, 0, 0.50);
@@ -857,11 +867,10 @@ select {
 
 /* Amber-framed estimate card — confirmation required. */
 .cost-review-card {
-  border: 1.5px solid var(--warning-soft);
-  border-color: rgba(138, 95, 22, 0.40);
+  border: 1.5px solid var(--warning-border);
   border-radius: var(--radius-md);
   overflow: hidden;
-  box-shadow: var(--shadow-md);
+  box-shadow: var(--shadow-warning);
   background: var(--surface);
 }
 .cost-review-card[data-band="block"] {
@@ -875,7 +884,7 @@ select {
   gap: var(--space-2);
   padding: var(--space-3) var(--space-6);
   background: var(--warning-soft);
-  border-bottom: 1px solid rgba(138, 95, 22, 0.15);
+  border-bottom: 1px solid var(--warning-border);
 }
 .cost-review-card[data-band="block"] .cost-review-card-head {
   background: var(--danger-soft);
@@ -918,7 +927,7 @@ select {
 }
 .cost-rail-seg-allow {
   width: 60%;
-  background: var(--accent-soft);
+  background: var(--accent-medium);
   border-radius: var(--radius-pill) 0 0 var(--radius-pill);
 }
 .cost-rail-seg-confirm {
@@ -926,9 +935,9 @@ select {
   background: var(--warning-soft);
   border-radius: 0 var(--radius-pill) var(--radius-pill) 0;
 }
-/* Active-band emphasis per ``threshold_action``. */
-.cost-rail[data-band="require_confirmation"] .cost-rail-seg-confirm { background: rgba(138, 95, 22, 0.28); }
-.cost-rail[data-band="block"] .cost-rail-seg-confirm { background: rgba(168, 58, 42, 0.22); }
+/* Active-band emphasis per ``threshold_action`` (theme-aware tokens). */
+.cost-rail[data-band="require_confirmation"] .cost-rail-seg-confirm { background: var(--warning-medium); }
+.cost-rail[data-band="block"] .cost-rail-seg-confirm { background: var(--danger-medium); }
 .cost-rail-tick {
   position: absolute;
   top: -3px;

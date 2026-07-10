@@ -90,9 +90,11 @@
   const infoTooltip = el("info-tooltip");
   // Screen 03 (cost gate) elements. ``renderCostGate`` fills these from
   // ``cost_estimate.breakdown``; the confirm button reuses ``proceedWithRun``.
+  const gateHeading = el("cost-gate-heading");
   const gateQuestion = el("cost-gate-question");
   const gateTotal = el("cost-gate-total");
   const gateRange = el("cost-gate-range");
+  const gateRangeWrap = el("cost-gate-range-wrap");
   const gateRail = el("cost-gate-rail");
   const gateRailMarker = el("cost-rail-marker");
   const gateByModel = el("cost-by-model");
@@ -103,6 +105,7 @@
   const gateConfirmButton = el("gate-confirm");
   const gateBackButton = el("gate-back");
   const gateCapNote = el("cost-gate-cap-note");
+  const gateHintConfirm = el("cost-gate-hint-confirm");
   const gateLive = el("cost-gate-live");
   const costGateContainer = document.querySelector('[data-view="cost-gate"]');
 
@@ -249,8 +252,11 @@
     errorRegion.hidden = false;
     // Move focus so screen readers announce the error.
     errorRegion.focus({ preventScroll: true });
-    // Bring the banner into view if it is below the fold.
-    errorRegion.scrollIntoView({ behavior: "smooth", block: "center" });
+    // Bring the banner into view if it is below the fold (honour reduced motion).
+    errorRegion.scrollIntoView({
+      behavior: prefersReducedMotion() ? "auto" : "smooth",
+      block: "center",
+    });
   }
 
   function clearError() {
@@ -611,9 +617,14 @@
   // free). Use a magnitude-aware decimal count: 4 dp below 1¢, 3 dp
   // below $1, 2 dp otherwise. Strip trailing zeros so the display
   // stays compact (e.g. ``$0.0023`` not ``$0.00230``).
-  function formatUsd(usdAmount) {
+  // ``suffix:false`` drops the trailing " USD" for compact cells (the cost
+  // gate's table/total/big number). Passing the option through here is the
+  // single source of truth for money formatting — callers must never
+  // string-strip the suffix themselves.
+  function formatUsd(usdAmount, { suffix = true } = {}) {
+    const tail = suffix ? " USD" : "";
     const num = Number(usdAmount);
-    if (!Number.isFinite(num)) return "$0.00 USD";
+    if (!Number.isFinite(num)) return `$0.00${tail}`;
     let decimals;
     if (num < 0.01) {
       decimals = 4;
@@ -627,7 +638,7 @@
     const fixed = num.toFixed(decimals);
     const trimmed = fixed.replace(/\.?0+$/, "");
     const withCents = trimmed.includes(".") ? trimmed : `${trimmed}.00`;
-    return `$${withCents} USD`;
+    return `$${withCents}${tail}`;
   }
 
   function formatCostWithLocal(usdAmount) {
@@ -1784,7 +1795,10 @@
       // would otherwise scroll the page aggressively every 750ms.
       state.hasScrolledToRunControls = true;
       if (cancelButton) {
-        cancelButton.scrollIntoView({ behavior: "smooth", block: "center" });
+        cancelButton.scrollIntoView({
+          behavior: prefersReducedMotion() ? "auto" : "smooth",
+          block: "center",
+        });
         cancelButton.focus({ preventScroll: true });
       }
     } else if (!isRunning && state.hasScrolledToRunControls) {
@@ -2013,6 +2027,13 @@
   // from these constants.
   const COST_HARD_LIMIT_USD = 0.25;
 
+  // Width of the illustrative planning band shown as "estimated range". The
+  // server returns a point estimate with no confidence interval, so this ±
+  // band is presentational only — the upper bound is clamped to
+  // ``COST_HARD_LIMIT_USD`` in ``renderCostGate`` so it can never print
+  // above the "blocked, no override" ceiling on the same card.
+  const PLANNING_RANGE_PCT = 0.15;
+
   // Partition a ``cost_estimate.breakdown`` into the two labelled row
   // lists the gate renders — by model AND by stage — plus the shared
   // total. Pure (no DOM, no closures) so it is unit-testable in node.
@@ -2049,10 +2070,39 @@
   }
 
   // Format a USD amount for the gate's mono cells — reuses ``formatUsd``
-  // (the single money-formatting source of truth) but drops the trailing
-  // " USD" so the compact table/total read as "$0.19", not "$0.19 USD".
+  // (the single money-formatting source of truth) with the " USD" suffix
+  // off so the compact table/total read as "$0.19", not "$0.19 USD".
   function gateUsd(usdAmount) {
-    return formatUsd(usdAmount).replace(" USD", "");
+    return formatUsd(usdAmount, { suffix: false });
+  }
+
+  // A fixed 2-decimal USD render for the presentational planning-range
+  // endpoints. The range is an illustrative ±band (see ``renderCostGate``),
+  // NOT a server-provided interval, so it is shown at whole-cent precision
+  // to avoid implying sub-cent accuracy on a derived figure.
+  function gateUsd2dp(usdAmount) {
+    const num = Number(usdAmount);
+    if (!Number.isFinite(num)) return "$0.00";
+    return `$${num.toFixed(2)}`;
+  }
+
+  // Choose ONE decimal count for a whole itemized column so every cell
+  // aligns. Driven by the SMALLEST magnitude present (< $0.01 → 4 dp;
+  // < $1 → 3 dp; else 2 dp) and applied to every row AND the Total —
+  // tiering each cell independently (as an earlier version did) misaligns a
+  // column that spans a magnitude boundary (e.g. a sub-cent row beside a
+  // cent-scale total). Matches the mock's aligned "$0.034 … $0.190".
+  function columnDecimals(amounts) {
+    const finite = amounts.map(Number).filter(Number.isFinite).map(Math.abs);
+    if (!finite.length) return 2;
+    const smallest = Math.min(...finite);
+    return smallest < 0.01 ? 4 : smallest < 1 ? 3 : 2;
+  }
+
+  function gateUsdFixed(usdAmount, decimals) {
+    const num = Number(usdAmount);
+    if (!Number.isFinite(num)) return "$0.00";
+    return `$${num.toFixed(decimals)}`;
   }
 
   // Render a list of {label, usd} rows plus a bold Total row into a
@@ -2060,11 +2110,14 @@
   // so a catalog display name can never inject markup.
   function renderCostRows(container, rows, total) {
     if (!container) return;
+    const decimals = columnDecimals(rows.map((r) => r.usd).concat([total]));
     const frag = document.createDocumentFragment();
     for (const row of rows) {
-      frag.appendChild(costRowNode(row.label, gateUsd(row.usd), false));
+      frag.appendChild(
+        costRowNode(row.label, gateUsdFixed(row.usd, decimals), false),
+      );
     }
-    frag.appendChild(costRowNode("Total", gateUsd(total), true));
+    frag.appendChild(costRowNode("Total", gateUsdFixed(total, decimals), true));
     container.replaceChildren(frag);
   }
 
@@ -2085,24 +2138,34 @@
   // for the ``require_confirmation`` and ``block`` bands only; the
   // ``allow`` band skips this screen entirely. Does NOT switch the view —
   // the caller does that after rendering so the DOM is ready when it shows.
+  // Populate the cost gate and RETURN its live-region announcement string.
+  // The announcement is deliberately NOT written here: this runs while the
+  // gate is still ``hidden``, and an ``aria-live`` mutation on a
+  // non-rendered node is not reliably announced — the caller writes it via
+  // ``revealCostGate`` AFTER the view is shown. Throws when the estimate
+  // carries no usable cost figure so the caller surfaces an error instead
+  // of rendering a "$0.00" spend-approval button (worst-case money bug).
   function renderCostGate(estimate) {
     const ce = estimate.cost_estimate;
     const action = ce.threshold_action;
     const total = Number(ce.estimated_cost_usd);
+    if (!Number.isFinite(total)) {
+      throw new Error(
+        "The estimate response did not include a usable cost figure. " +
+          "Please run the estimate again.",
+      );
+    }
     const breakdown = ce.breakdown || {};
     const reasons = Array.isArray(ce.reasons) ? ce.reasons : [];
 
     // Question echo (from the composer).
     if (gateQuestion) gateQuestion.textContent = queryTextarea.value.trim();
 
-    // Big mono total + estimated range. The server returns a point
-    // estimate; the range is a ±15% band, consistent with the honesty
-    // caveat that actuals vary from this planning estimate (see the cost
-    // info-icon copy). It is presentational, never a spend commitment.
+    // Big mono total. The estimated range is band-specific and is set only
+    // in the confirm branch below (it is hidden in the block band, where a
+    // range for a run that will not execute is both meaningless and — since
+    // the total is above the ceiling — liable to invert past it).
     if (gateTotal) gateTotal.textContent = gateUsd(total);
-    if (gateRange) {
-      gateRange.textContent = `${gateUsd(total * 0.85)}–${gateUsd(total * 1.15)}`;
-    }
 
     // Threshold rail: marker at estimate/hard-limit, clamped to [0,100]%.
     const pct = Math.max(0, Math.min(100, (total / COST_HARD_LIMIT_USD) * 100));
@@ -2122,37 +2185,89 @@
       // TODO(Slice 6 / COPY-004): replace with the dedicated 07 edge state.
       if (gateBandLabel) gateBandLabel.textContent = "Cost review — run blocked";
       if (gateReason) {
-        const reasonText = reasons.length
-          ? `${reasons.join(" ")} `
-          : "";
+        const reasonText = reasons.length ? `${reasons.join(" ")} ` : "";
         gateReason.textContent =
           `${reasonText}This run is above the $0.25 hard limit — execution is blocked, no override.`;
       }
       if (gateConfirmButton) gateConfirmButton.hidden = true;
       if (gateCapNote) gateCapNote.hidden = true;
-      if (gateLive) {
-        gateLive.textContent =
-          `Run blocked. Estimated ${gateUsd(total)} is above the $0.25 hard limit.`;
+      // Ctrl+Enter confirms nothing in the block band — hide that hint.
+      if (gateHintConfirm) gateHintConfirm.hidden = true;
+      // No planning range for a run that will not execute.
+      if (gateRangeWrap) gateRangeWrap.hidden = true;
+      return `Run blocked. Estimated ${gateUsd(total)} is above the $0.25 hard limit.`;
+    }
+
+    // REQUIRE_CONFIRMATION ($0.15–$0.25).
+    // Illustrative ±``PLANNING_RANGE_PCT`` planning band (NOT a server
+    // interval). Only shown in this band, where total ≤ the hard limit so
+    // ``lo < hi`` always holds; ``hi`` is still clamped to the ceiling and
+    // both endpoints render at whole-cent precision (no false sub-cent).
+    if (gateRangeWrap) gateRangeWrap.hidden = false;
+    if (gateRange) {
+      const lo = total * (1 - PLANNING_RANGE_PCT);
+      const hi = Math.min(total * (1 + PLANNING_RANGE_PCT), COST_HARD_LIMIT_USD);
+      gateRange.textContent = `${gateUsd2dp(lo)}–${gateUsd2dp(hi)}`;
+    }
+    if (gateBandLabel) {
+      gateBandLabel.textContent = "Cost review — your confirmation required";
+    }
+    if (gateReason) {
+      const firstReason = reasons.length ? ` ${reasons[0]}` : "";
+      gateReason.textContent = `${COPY_003_COST_WARNING}${firstReason}`;
+    }
+    if (gateConfirmButton) {
+      gateConfirmButton.hidden = false;
+      const label = gateConfirmButton.querySelector(".button-label");
+      if (label) label.textContent = `Approve ${gateUsd(total)} & run`;
+    }
+    if (gateCapNote) gateCapNote.hidden = false;
+    if (gateHintConfirm) gateHintConfirm.hidden = false;
+    return `Cost review: your confirmation required. Estimated ${gateUsd(total)}.`;
+  }
+
+  // ``true`` when the user has asked the OS to minimise motion.
+  function prefersReducedMotion() {
+    try {
+      return window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+    } catch (_) {
+      return false;
+    }
+  }
+
+  // Post-reveal choreography for the cost gate. Call AFTER ``setView`` so
+  // the region is in the rendered accessibility tree. Moves focus into the
+  // gate (WCAG 2.4.3 — never strand focus on the now-hidden composer),
+  // fires the live-region announcement (set here, not in ``renderCostGate``,
+  // because aria-live only queues mutations made while rendered), and scrolls
+  // the card into view honouring ``prefers-reduced-motion``.
+  function revealCostGate(action, announcement) {
+    if (gateLive && announcement) {
+      gateLive.textContent = "";
+      // Announce after the next frame (post-layout) so the empty→text change
+      // is observed by AT as a discrete update. The region is persistent
+      // (outside the swapped views), so it is always a registered live region.
+      const announce = () => {
+        gateLive.textContent = announcement;
+      };
+      if (typeof requestAnimationFrame === "function") {
+        requestAnimationFrame(announce);
+      } else {
+        announce();
       }
-    } else {
-      // REQUIRE_CONFIRMATION ($0.15–$0.25).
-      if (gateBandLabel) {
-        gateBandLabel.textContent = "Cost review — your confirmation required";
-      }
-      if (gateReason) {
-        const firstReason = reasons.length ? ` ${reasons[0]}` : "";
-        gateReason.textContent = `${COPY_003_COST_WARNING}${firstReason}`;
-      }
-      if (gateConfirmButton) {
-        gateConfirmButton.hidden = false;
-        const label = gateConfirmButton.querySelector(".button-label");
-        if (label) label.textContent = `Approve ${gateUsd(total)} & run`;
-      }
-      if (gateCapNote) gateCapNote.hidden = false;
-      if (gateLive) {
-        gateLive.textContent =
-          `Cost review: your confirmation required. Estimated ${gateUsd(total)}.`;
-      }
+    }
+    // Focus the heading (SR reads the gate from the top, cost context first)
+    // rather than the CTA. The heading is present in both bands, incl. block
+    // where the confirm button is hidden.
+    const focusTarget =
+      gateHeading ||
+      (action === "block" ? gateBackButton : gateConfirmButton);
+    if (focusTarget) focusTarget.focus({ preventScroll: true });
+    if (gateCard) {
+      gateCard.scrollIntoView({
+        behavior: prefersReducedMotion() ? "auto" : "smooth",
+        block: "center",
+      });
     }
   }
 
@@ -2202,9 +2317,9 @@
       }
       renderModelInputs(getModelIds());
       if (composerTotalEstimate) {
-        composerTotalEstimate.textContent = formatUsd(
+        composerTotalEstimate.textContent = gateUsd(
           estimate.cost_estimate.estimated_cost_usd,
-        ).replace(" USD", "");
+        );
       }
       const { primary: usdPrimary, secondary: usdSecondary } = formatCostWithLocal(
         estimate.cost_estimate.estimated_cost_usd,
@@ -2228,10 +2343,10 @@
           await proceedWithRun();
         } else {
           // require_confirmation ($0.15–$0.25) or block (> $0.25):
-          // render + reveal the dedicated cost gate.
-          renderCostGate(estimate);
+          // render, switch to the gate, THEN move focus + announce + scroll.
+          const announcement = renderCostGate(estimate);
           setView("cost-gate");
-          if (gateCard) gateCard.scrollIntoView({ behavior: "smooth", block: "center" });
+          revealCostGate(action, announcement);
           toast({
             message: `Cost estimate ready: ${usdPrimary}.`,
             tone: "success",
@@ -2447,6 +2562,16 @@
     state.submissionAttempted = true;
     if (!state.currentEstimate) {
       // Defensive: button should be disabled until an estimate exists.
+      return;
+    }
+    // Defense-in-depth for the money boundary: a ``block`` estimate must
+    // never POST a create. The confirm button is hidden and the keyboard
+    // path is guarded in the block band, and the server rejects it with
+    // COST_LIMIT_EXCEEDED — this early return closes the last direct-call
+    // gap so no client path can spend past the $0.25 hard limit.
+    if (
+      state.currentEstimate.cost_estimate.threshold_action === "block"
+    ) {
       return;
     }
     clearError();

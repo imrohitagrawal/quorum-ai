@@ -83,6 +83,11 @@
       </nav>
 
       <div class="layout">
+        <!-- Persistent polite live region for view-transition announcements
+             (e.g. the cost gate). Kept OUTSIDE the swapped [data-view]
+             containers so it is always in the accessibility tree and its
+             mutations are reliably announced. -->
+        <div id="cost-gate-live" class="sr-only" role="status" aria-live="polite"></div>
         <div data-view="composer">
         <section class="panel composer" aria-labelledby="composer-heading">
           <div class="composer-head">
@@ -219,11 +224,9 @@
              ``renderCostGate`` from ``cost_estimate.breakdown``. -->
         <div data-view="cost-gate" hidden>
           <section class="panel cost-gate" role="region" aria-labelledby="cost-gate-heading">
-            <!-- Polite live region: announces the gate + estimate when it appears. -->
-            <div id="cost-gate-live" class="sr-only" role="status" aria-live="polite"></div>
             <div class="cost-gate-head">
               <span class="cost-gate-eyebrow">Cost review</span>
-              <h2 id="cost-gate-heading">Approve before anything runs</h2>
+              <h1 id="cost-gate-heading" tabindex="-1">Approve before anything runs</h1>
               <p class="lede">Nothing executes without this approval. The approved figure becomes this run's spend cap.</p>
             </div>
 
@@ -241,7 +244,7 @@
               <div class="cost-review-card-body">
                 <div class="cost-total-row">
                   <span id="cost-gate-total" class="cost-total mono">$0.00</span>
-                  <span class="cost-total-range">estimated range <span id="cost-gate-range" class="mono"></span></span>
+                  <span id="cost-gate-range-wrap" class="cost-total-range">estimated range <span id="cost-gate-range" class="mono"></span></span>
                 </div>
 
                 <!-- Threshold rail (dataviz). 0 → $0.25 linear; the confirm
@@ -296,7 +299,7 @@
             </div>
 
             <div class="cost-gate-hint muted">
-              <kbd>Ctrl</kbd>+<kbd>Enter</kbd> confirm · <kbd>Esc</kbd> back — estimates at or below <span class="mono">$0.15</span> skip this screen and run on approval.
+              <span id="cost-gate-hint-confirm"><kbd>Ctrl</kbd>+<kbd>Enter</kbd> confirm · </span><kbd>Esc</kbd> back — estimates at or below <span class="mono">$0.15</span> skip this screen and run on approval.
             </div>
           </section>
         </div>
