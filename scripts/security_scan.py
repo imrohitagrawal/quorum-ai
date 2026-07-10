@@ -13,12 +13,22 @@ EXCLUDED_DIRS = {
     ".mypy_cache",
     ".pytest_cache",
     ".ruff_cache",
+    ".uv-cache",
     ".venv",
     "__pycache__",
     "build",
     "dist",
     "htmlcov",
 }
+
+# A bare Python identifier or attribute access on the right-hand side of an
+# assignment is a variable / keyword-argument pass-through (for example
+# ``openrouter_key=openrouter_key`` or ``token=confirmation.confirmation_token``),
+# never a hardcoded secret. Real secret literals in Python source are always
+# quoted, so these are safe to ignore in ``.py`` files.
+_PYTHON_PASSTHROUGH_VALUE = re.compile(
+    r"^[A-Za-z_][A-Za-z0-9_]*(?:\.[A-Za-z_][A-Za-z0-9_]*)*\s*[,)]?\s*(?:#.*)?$"
+)
 TEXT_SUFFIXES = {
     ".css",
     ".html",
@@ -93,7 +103,9 @@ def _run_checks() -> list[SecurityFinding]:
                         message="Potential private key material is present.",
                     )
                 )
-            if not relative.startswith("tests/") and _contains_env_secret_assignment(line):
+            if not relative.startswith("tests/") and _contains_env_secret_assignment(
+                line, is_python=relative.endswith(".py")
+            ):
                 findings.append(
                     SecurityFinding(
                         check_id="env_secret_assignment",
@@ -126,20 +138,32 @@ def _iter_text_files() -> list[Path]:
 
 
 def _contains_raw_openrouter_key(line: str) -> bool:
-    return "sk-or-v1-" in line and "test" not in line.casefold()
+    lowered = line.casefold()
+    if "test" in lowered or "placeholder" in lowered:
+        return False
+    # A real OpenRouter key carries a long token after the ``sk-or-v1-`` prefix.
+    # Documentation placeholders such as ``sk-or-v1-...`` have no key material
+    # and must not trip the scanner.
+    return re.search(r"sk-or-v1-[A-Za-z0-9]{20,}", line) is not None
 
 
-def _contains_env_secret_assignment(line: str) -> bool:
+def _contains_env_secret_assignment(line: str, *, is_python: bool = False) -> bool:
     if line.lstrip().startswith("#"):
         return False
-    return (
-        re.search(
-            r"(?i)^\s*(api_key|openrouter_key|tavily_key|secret|token)\s*=\s*['\"]?[A-Za-z0-9_\-]{12,}",
-            line,
-        )
-        is not None
-        and "placeholder" not in line.casefold()
+    match = re.search(
+        r"(?i)^\s*(api_key|openrouter_key|tavily_key|secret|token)\s*=\s*['\"]?[A-Za-z0-9_\-]{12,}",
+        line,
     )
+    if match is None or "placeholder" in line.casefold():
+        return False
+    # In Python source, a keyword-argument / variable pass-through (the value is
+    # a bare identifier or attribute access, not a quoted literal) is not a
+    # hardcoded secret.
+    if is_python:
+        _, _, rhs = line.partition("=")
+        if _PYTHON_PASSTHROUGH_VALUE.match(rhs.strip()):
+            return False
+    return True
 
 
 if __name__ == "__main__":
