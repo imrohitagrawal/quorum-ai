@@ -15,6 +15,7 @@ regression in the JS is caught here.
 If node is unavailable in CI this test is skipped — the alternative
 is the Playwright walkthrough documented in PR-0.
 """
+
 from __future__ import annotations
 
 import json
@@ -81,12 +82,8 @@ def test_format_usd_sub_cent_does_not_display_zero() -> None:
     by_input = {item["input"]: item["actual"] for item in out}
 
     # Sub-cent values must show the actual sub-cent digits, not "$0.00".
-    assert by_input[0.0023] != "$0.00 USD", (
-        "Bug 3 regression: 0.0023 displayed as $0.00 USD"
-    )
-    assert "$0.0023" in by_input[0.0023], (
-        f"expected '$0.0023' substring in {by_input[0.0023]!r}"
-    )
+    assert by_input[0.0023] != "$0.00 USD", "Bug 3 regression: 0.0023 displayed as $0.00 USD"
+    assert "$0.0023" in by_input[0.0023], f"expected '$0.0023' substring in {by_input[0.0023]!r}"
 
     assert by_input[0.001] != "$0.00 USD"
     assert "$0.001" in by_input[0.001]

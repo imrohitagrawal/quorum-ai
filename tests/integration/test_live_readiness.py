@@ -40,15 +40,11 @@ def client() -> TestClient:
 
 
 def _set_live(*, enabled: bool, key: str, monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr(
-        settings, "openrouter_live_execution_enabled", enabled
-    )
+    monkeypatch.setattr(settings, "openrouter_live_execution_enabled", enabled)
     monkeypatch.setattr(settings, "openrouter_api_key", key)
 
 
-def _set_catalog(
-    monkeypatch: pytest.MonkeyPatch, model_ids: list[str]
-) -> None:
+def _set_catalog(monkeypatch: pytest.MonkeyPatch, model_ids: list[str]) -> None:
     entries = [
         ModelCatalogEntry(
             model_id=mid,
@@ -150,16 +146,12 @@ def test_models_defaults_endpoint_returns_stale_model_ids(
     cookie = session_response.cookies.get("quorum_session")
     assert cookie is not None
 
-    response = client.get(
-        "/v1/models/defaults", cookies={"quorum_session": cookie}
-    )
+    response = client.get("/v1/models/defaults", cookies={"quorum_session": cookie})
     assert response.status_code == 200
     payload = response.json()
 
     # The four returned slots are still the static defaults.
-    assert [slot["model_id"] for slot in payload["model_slots"]] == list(
-        DEFAULT_MODEL_IDS
-    )
+    assert [slot["model_id"] for slot in payload["model_slots"]] == list(DEFAULT_MODEL_IDS)
     # And drift is surfaced alongside.
     assert payload["stale_model_ids"] == ["google/gemini-2.5-flash-lite"]
 

@@ -24,6 +24,7 @@ Form validation:
   • The CSS rule ``textarea[aria-invalid="true"]`` applies a red border and
     danger-soft box shadow — visible feedback without a page reload.
 """
+
 from __future__ import annotations
 
 import re
@@ -49,21 +50,21 @@ _REQUIRED_TOKENS = [
     "--danger-soft",
     "--info",
     "--info-soft",
-    "--debate-4",      # Phase 3 new — replaces raw #6b3fa0 / #a479e3
-    "--focus-ring",     # Phase 3 — darkened to meet WCAG AA
+    "--debate-4",  # Phase 3 new — replaces raw #6b3fa0 / #a479e3
+    "--focus-ring",  # Phase 3 — darkened to meet WCAG AA
     # Accent
     "--accent",
     "--accent-strong",
-    "--accent-ink",    # Phase 3 — was hardcoded #10161f in .logo
+    "--accent-ink",  # Phase 3 — was hardcoded #10161f in .logo
 ]
 
 # These raw hex values must NOT appear as dual-value var() fallbacks like
 # ``color: var(--foo, #deadbeef)`` — they must use the token alone.
 _FORBIDDEN_FALLBACK_HEXES = [
-    "#4a6cf7",   # old --focus-ring fallback in .meta-value-copy:focus-visible
-    "#16a34a",   # old --success fallback in [data-copied] states
-    "#6b7280",   # old --muted fallback in .cost-secondary
-    "#b45309",   # old --warning fallback in .stage-diagnostics summary
+    "#4a6cf7",  # old --focus-ring fallback in .meta-value-copy:focus-visible
+    "#16a34a",  # old --success fallback in [data-copied] states
+    "#6b7280",  # old --muted fallback in .cost-secondary
+    "#b45309",  # old --warning fallback in .stage-diagnostics summary
 ]
 
 # Raw hex values that must NOT appear in component rules (they belong in
@@ -71,8 +72,8 @@ _FORBIDDEN_FALLBACK_HEXES = [
 _FORBIDDEN_COMPONENT_HEXES = {
     # key = CSS class / rule context
     # value = hex that must not appear in that context
-    ".logo": "#fffdf9",                    # use var(--accent-ink)
-    ".callout-demo-mode": "#fff7e6",       # use var(--warning-soft)
+    ".logo": "#fffdf9",  # use var(--accent-ink)
+    ".callout-demo-mode": "#fff7e6",  # use var(--warning-soft)
     ".callout-demo-mode .callout-icon": "#1a1300",  # replaced with white for WCAG AA compliance
 }
 
@@ -87,10 +88,7 @@ def css_text() -> str:
     """
     from pathlib import Path
 
-    css_path = (
-        Path(__file__).resolve().parents[2]
-        / "src/product_app/static/app.css"
-    )
+    css_path = Path(__file__).resolve().parents[2] / "src/product_app/static/app.css"
     return css_path.read_text()
 
 
@@ -103,16 +101,17 @@ def client() -> TestClient:
 # Token presence tests
 # ---------------------------------------------------------------------------
 
+
 def test_all_required_tokens_defined_in_light_scope(css_text: str) -> None:
     """Every Phase 3 token appears in :root {} (light mode)."""
     for token in _REQUIRED_TOKENS:
-        pattern = rf"^\s*--[\w-]+:"   # rough token def
+        pattern = rf"^\s*--[\w-]+:"  # rough token def
         assert token in css_text, f"Token {token} not found in app.css"
 
 
 def test_all_required_tokens_defined_in_dark_scope(css_text: str) -> None:
     """Every Phase 3 token appears in html[data-theme] (dark mode)."""
-    dark_block = css_text.split("html[data-theme=\"dark\"]")[1].split("}")[0]
+    dark_block = css_text.split('html[data-theme="dark"]')[1].split("}")[0]
     for token in _REQUIRED_TOKENS:
         assert token in dark_block, f"Token {token} missing from dark mode block"
 
@@ -121,10 +120,12 @@ def test_all_required_tokens_defined_in_dark_scope(css_text: str) -> None:
 # Raw hex / fallback banishment tests
 # ---------------------------------------------------------------------------
 
+
 def test_no_var_fallback_hexes(css_text: str) -> None:
     """No dual-value var() fallbacks of the form var(--foo, #hex)."""
     import re
-    bad = re.findall(r'var\(--[\w-]+,\s*#[0-9a-fA-F]{3,8}\)', css_text)
+
+    bad = re.findall(r"var\(--[\w-]+,\s*#[0-9a-fA-F]{3,8}\)", css_text)
     assert not bad, f"Found dual-value var() fallbacks: {bad}"
 
 
@@ -134,9 +135,7 @@ def test_logo_uses_accentsink_not_raw_hex(css_text: str) -> None:
     assert "#fffdf9" not in logo_block, (
         ".logo still uses raw #fffdf9 — use var(--accent-ink) instead"
     )
-    assert "color: var(--accent-ink)" in logo_block, (
-        ".logo must use color: var(--accent-ink)"
-    )
+    assert "color: var(--accent-ink)" in logo_block, ".logo must use color: var(--accent-ink)"
 
 
 def test_callout_demo_mode_uses_tokens_not_raw_hex(css_text: str) -> None:
@@ -158,7 +157,7 @@ def test_round4_uses_debate4_token(css_text: str) -> None:
         ".round-card[data-round='4']::before rule is missing"
     )
     # Must use var(--debate-4), not a raw hex
-    assert 'var(--debate-4)' in css_text, (
+    assert "var(--debate-4)" in css_text, (
         "var(--debate-4) token missing — round 4 must use it instead of a raw hex"
     )
     # The specific line should reference the token
@@ -177,6 +176,7 @@ def test_debate4_token_in_both_scopes(css_text: str) -> None:
 # Focus ring WCAG AA contrast
 # ---------------------------------------------------------------------------
 
+
 def test_focus_ring_token_in_root(css_text: str) -> None:
     """:root defines --focus-ring."""
     root_block = css_text.split(":root")[1].split("}")[0]
@@ -192,6 +192,7 @@ def test_focus_ring_token_in_dark_mode(css_text: str) -> None:
 # ---------------------------------------------------------------------------
 # Form validation: aria-invalid
 # ---------------------------------------------------------------------------
+
 
 def test_textarea_has_maxlength_attribute(client: TestClient) -> None:
     """The question textarea carries a maxlength so the browser enforces it."""
@@ -209,10 +210,7 @@ def test_app_js_sets_aria_invalid_on_short_query() -> None:
     updateQueryValidation at boot so pre-filled forms have correct state."""
     from pathlib import Path
 
-    js_path = (
-        Path(__file__).resolve().parents[2]
-        / "src/product_app/static/app.js"
-    )
+    js_path = Path(__file__).resolve().parents[2] / "src/product_app/static/app.js"
     js = js_path.read_text()
     assert 'setAttribute("aria-invalid"' in js, (
         "app.js must call setAttribute('aria-invalid', ...) on queryTextarea"
@@ -240,7 +238,8 @@ def test_css_applies_invalid_state_to_textarea(css_text: str) -> None:
     start = css_text.index(marker) + len(marker)
     depth = 0
     for i, ch in enumerate(css_text[start:], start):
-        if ch == "{":   depth += 1
+        if ch == "{":
+            depth += 1
         elif ch == "}":
             depth -= 1
             if depth == 0:
@@ -255,6 +254,7 @@ def test_css_applies_invalid_state_to_textarea(css_text: str) -> None:
 # Helpers
 # ---------------------------------------------------------------------------
 
+
 def _css_escape(s: str) -> str:
     r"""Escape only the regex metacharacters that also appear in CSS selectors.
 
@@ -263,7 +263,7 @@ def _css_escape(s: str) -> str:
     ``[`` / ``]`` in the CSS source. We escape only the truly problematic set:
     ``\\ . ^ $ * + ? { } | ( )``.
     """
-    return re.sub(r'([\\.^$*+?{}|()])', r'\\\1', s)
+    return re.sub(r"([\\.^$*+?{}|()])", r"\\\1", s)
 
 
 def _extract_rule(css: str, selector: str) -> str:

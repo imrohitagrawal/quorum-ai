@@ -68,7 +68,9 @@ def test_query_run_response_marks_local_simulation_when_live_execution_is_disabl
         and not answer["citation_coverage"]["target_met"]
         for answer in body["initial_answers"]
     )
-    assert all("local simulation" in answer["provider_notice"] for answer in body["initial_answers"])
+    assert all(
+        "local simulation" in answer["provider_notice"] for answer in body["initial_answers"]
+    )
     event = provider_event_recorder.list_events()[0]
     assert event.account_id == account_id
     assert event.source_count == 1

@@ -21,6 +21,7 @@ Pinned contract:
 * Every synthesis tooltip in ``app.js`` ends with the agreed caveat
   ("Templated by Quorum; no model generates this.").
 """
+
 from __future__ import annotations
 
 import re
@@ -43,8 +44,7 @@ def client() -> TestClient:
 EXPECTED_BRAND_LEDE = "Four AI models, one sourced answer."
 
 OLD_BRAND_LEDE = (
-    "Stop hopping between multiple AI chatbots. Get one sourced, "
-    "synthesized answer you can trust"
+    "Stop hopping between multiple AI chatbots. Get one sourced, synthesized answer you can trust"
 )
 
 EXPECTED_WORKSPACE_LEDE = (
@@ -99,9 +99,7 @@ def test_workspace_lede_answers_cost_and_data_questions(client: TestClient) -> N
         f"Workspace lede does not address data persistence: {lede!r}"
     )
     # Cost question: cost is shown first.
-    assert "cost" in lede.lower(), (
-        f"Workspace lede does not address cost confirmation: {lede!r}"
-    )
+    assert "cost" in lede.lower(), f"Workspace lede does not address cost confirmation: {lede!r}"
 
 
 # --- Product name (display form) ---------------------------------------------
@@ -149,8 +147,7 @@ def test_workspace_user_facing_copy_does_not_leak_env_var_names(
     tooltip_texts = re.findall(r'data-info-text="([^"]*)"', html)
     for t in tooltip_texts:
         assert leaked not in t, (
-            f"Operator env-var {leaked!r} leaked into a user-facing "
-            f"info-icon tooltip: {t!r}"
+            f"Operator env-var {leaked!r} leaked into a user-facing info-icon tooltip: {t!r}"
         )
 
     # The static banner bodies (workspace lede, safety reminder, cost
@@ -176,8 +173,7 @@ def test_workspace_user_facing_copy_does_not_leak_env_var_names(
     ]
     for s in static_user_strings:
         assert leaked not in s, (
-            f"Operator env-var {leaked!r} leaked into a hardcoded "
-            f"user-facing string: {s!r}"
+            f"Operator env-var {leaked!r} leaked into a hardcoded user-facing string: {s!r}"
         )
 
 
@@ -226,9 +222,7 @@ _SYNTHESIS_SECTIONS = [
 
 def _read_app_js() -> str:
     repo_root = Path(__file__).resolve().parents[2]
-    return (repo_root / "src" / "product_app" / "static" / "app.js").read_text(
-        encoding="utf-8"
-    )
+    return (repo_root / "src" / "product_app" / "static" / "app.js").read_text(encoding="utf-8")
 
 
 @pytest.mark.parametrize("section", _SYNTHESIS_SECTIONS)
@@ -237,17 +231,12 @@ def test_synthesis_tooltip_for_section_ends_with_caveat(section: str) -> None:
     brief-mandated caveat. A regression in any single tooltip is
     caught here."""
     js = _read_app_js()
-    pattern = (
-        r'SYNTHESIS_TOOLTIPS\s*=\s*\{.*?"'
-        + re.escape(section)
-        + r'":\s*"([^"]+)"'
-    )
+    pattern = r'SYNTHESIS_TOOLTIPS\s*=\s*\{.*?"' + re.escape(section) + r'":\s*"([^"]+)"'
     match = re.search(pattern, js, flags=re.DOTALL)
     assert match, f"No SYNTHESIS_TOOLTIPS entry found for section {section!r}"
     tooltip = match.group(1)
     assert _SYNTHESIS_TOOLTIP_CAVEAT in tooltip, (
-        f"Tooltip for {section!r} does not contain the caveat. "
-        f"Got: {tooltip!r}"
+        f"Tooltip for {section!r} does not contain the caveat. Got: {tooltip!r}"
     )
 
 

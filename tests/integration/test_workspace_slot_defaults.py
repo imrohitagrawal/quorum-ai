@@ -12,6 +12,7 @@ populated by the route handler. These tests pin the contract: the
 ``/v1/models/defaults`` returns, and the ``selected`` attribute is
 present on exactly one option per slot.
 """
+
 from __future__ import annotations
 
 import pytest
@@ -104,8 +105,7 @@ def test_workspace_html_no_legacy_hardcoded_models(
         # The legacy model id should not appear as a static <option value="...">
         # anywhere in the HTML.
         assert f'value="{legacy}"' not in html, (
-            f"regression: legacy hardcoded value {legacy!r} "
-            f"found in workspace HTML"
+            f"regression: legacy hardcoded value {legacy!r} found in workspace HTML"
         )
 
 

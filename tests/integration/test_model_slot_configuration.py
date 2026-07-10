@@ -150,8 +150,7 @@ def test_invalid_slot_search_length_is_rejected() -> None:
     assert response.status_code == 422
     assert response.json()["detail"]["code"] == "INVALID_MODEL_SLOT"
     assert any(
-        "slot_search length" in err["message"]
-        for err in response.json()["detail"]["slot_errors"]
+        "slot_search length" in err["message"] for err in response.json()["detail"]["slot_errors"]
     )
     assert query_run_repository.get_active_for_account(account_id) is None
 

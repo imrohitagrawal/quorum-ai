@@ -44,9 +44,9 @@ def test_no_warning_when_env_supplied(
         warnings.simplefilter("always")
         CostEstimationService()
 
-    assert not any(
-        "QUORUM_TOKEN_SECRET" in str(w.message) for w in caught
-    ), "warning fired even though the secret was set"
+    assert not any("QUORUM_TOKEN_SECRET" in str(w.message) for w in caught), (
+        "warning fired even though the secret was set"
+    )
 
 
 def test_no_warning_when_binding_secret_supplied(
@@ -62,6 +62,4 @@ def test_no_warning_when_binding_secret_supplied(
         warnings.simplefilter("always")
         CostEstimationService(binding_secret="explicit-test-secret")
 
-    assert not any(
-        "QUORUM_TOKEN_SECRET" in str(w.message) for w in caught
-    )
+    assert not any("QUORUM_TOKEN_SECRET" in str(w.message) for w in caught)

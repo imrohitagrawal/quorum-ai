@@ -64,8 +64,7 @@ def test_csrf_query_string_is_not_accepted() -> None:
 
 
 def test_csrf_header_is_accepted() -> None:
-    """Sanity check: header-only CSRF works.
-    """
+    """Sanity check: header-only CSRF works."""
     client = TestClient(app)
     csrf, _ = _start(client)
     response = client.post(
@@ -87,9 +86,7 @@ def test_session_resume_rotates_csrf() -> None:
     response = client.get("/v1/session")
     assert response.status_code == 200
     csrf_new = cast(str, response.json()["csrf_token"])
-    assert csrf_new != csrf_initial, (
-        "csrf_token must rotate on resume; got the same token twice"
-    )
+    assert csrf_new != csrf_initial, "csrf_token must rotate on resume; got the same token twice"
 
     # Old token must NOT work anymore.
     response = client.post(

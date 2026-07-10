@@ -66,6 +66,7 @@ def _resolve_display_name(model_id: str) -> str:
     """
     return openrouter_model_catalog_service.lookup_short_name(model_id) or model_id
 
+
 #: Stable prefix used for the stub citation URLs that ship with the local
 #: simulation mode. Lives under example.test (an IANA-reserved domain) so it
 #: cannot accidentally resolve to a real host.
@@ -308,9 +309,7 @@ class ProviderExecutionService:
         # clause was a bug — it misclassified every successful live call
         # as fallback_search, which cascaded into the wrong demo-banner
         # state and the wrong provider_path on the response.
-        use_fallback = self._should_force_fallback(
-            query_text=query_text, model_slot=model_slot
-        )
+        use_fallback = self._should_force_fallback(query_text=query_text, model_slot=model_slot)
         if use_fallback:
             provider_attempt_order = [ProviderPath.LOCAL_SIMULATION, ProviderPath.FALLBACK_SEARCH]
             answer_text = (

@@ -295,10 +295,7 @@ def test_extract_citations_dedupes_inline_links_overlapping_annotations() -> Non
         "choices": [
             {
                 "message": {
-                    "content": (
-                        "Quoting [the docs](https://dup.example/page) for "
-                        "context."
-                    ),
+                    "content": ("Quoting [the docs](https://dup.example/page) for context."),
                     "annotations": [
                         {
                             "title": "the docs",
@@ -361,9 +358,7 @@ def test_extract_citations_coerces_non_list_annotations_to_empty() -> None:
             {
                 "message": {
                     "annotations": "nope",
-                    "content": (
-                        "Sources: [the docs](https://safe.example/page)."
-                    ),
+                    "content": ("Sources: [the docs](https://safe.example/page)."),
                 }
             }
         ]
@@ -387,9 +382,7 @@ def test_extract_citations_skips_inline_fallback_when_annotations_produced_citat
                     "annotations": [
                         {"title": "annotated", "url": "https://annotated.example/"},
                     ],
-                    "content": (
-                        "Inline: [inline-only](https://inline.example/page)."
-                    ),
+                    "content": ("Inline: [inline-only](https://inline.example/page)."),
                 }
             }
         ]

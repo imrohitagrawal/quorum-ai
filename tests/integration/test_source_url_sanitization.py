@@ -35,10 +35,7 @@ def test_fragment_stripped() -> None:
 
 
 def test_fragment_only_stripped() -> None:
-    assert (
-        _sanitize_source_url("https://example.com/article#")
-        == "https://example.com/article"
-    )
+    assert _sanitize_source_url("https://example.com/article#") == "https://example.com/article"
 
 
 def test_localhost_denied() -> None:
@@ -51,17 +48,11 @@ def test_loopback_ip_denied() -> None:
 
 
 def test_aws_metadata_denied() -> None:
-    assert (
-        _sanitize_source_url("http://169.254.169.254/latest/meta-data")
-        is None
-    )
+    assert _sanitize_source_url("http://169.254.169.254/latest/meta-data") is None
 
 
 def test_gcp_metadata_denied() -> None:
-    assert (
-        _sanitize_source_url("http://metadata.google.internal/computeMetadata/v1/")
-        is None
-    )
+    assert _sanitize_source_url("http://metadata.google.internal/computeMetadata/v1/") is None
 
 
 def test_ipv6_loopback_denied() -> None:

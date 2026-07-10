@@ -104,16 +104,18 @@ SKILL_TEMPLATE = """
 **Good**: "Fixed the reported bug. Separate refactoring tracked in ISSUE-123."
 """
 
+
 def get_skill_name(file_path: Path) -> str:
     """Extract skill name from path."""
     return file_path.parent.name.replace("-", " ").replace("_", " ").title()
+
 
 def get_when_to_use(content: str) -> str:
     """Extract or generate When to use section."""
     # Try to find existing content
     if "## When to use" in content:
         return ""
-    
+
     skill_name = get_skill_name(Path("dummy.md"))
     return f"""## When to use
 
@@ -122,11 +124,12 @@ def get_when_to_use(content: str) -> str:
 - When the context aligns with the skill's scope
 """
 
+
 def get_when_not_to_use(content: str) -> str:
     """Extract or generate When not to use section."""
     if "## When not to use" in content:
         return ""
-    
+
     return """## When not to use
 
 - When the task requires a different skill
@@ -134,27 +137,28 @@ def get_when_not_to_use(content: str) -> str:
 - When the user asks about unrelated topics
 """
 
+
 def fix_skill_file(file_path: Path) -> bool:
     """Fix a single SKILL.md file."""
     content = file_path.read_text(encoding="utf-8")
-    
+
     # Check which sections are missing
     missing = [s for s in REQUIRED_SECTIONS if f"## {s}" not in content]
-    
+
     if not missing:
         print(f"✓ {file_path} - already complete")
         return True
-    
+
     print(f"Fixing {file_path} - missing: {missing}")
-    
+
     # Add When to use and When not to use at the top if missing
     additions = []
-    
+
     if "## When to use" not in content:
         additions.append(get_when_to_use(content))
     if "## When not to use" not in content:
         additions.append(get_when_not_to_use(content))
-    
+
     # Append the rest of the template sections
     for section in REQUIRED_SECTIONS:
         if f"## {section}" not in content:
@@ -163,25 +167,32 @@ def fix_skill_file(file_path: Path) -> bool:
                 template_section = extract_section_from_template(SKILL_TEMPLATE, section)
                 if template_section:
                     additions.append(template_section)
-    
+
     if additions:
         # Find insertion point - before the last ## heading or at end
-        lines = content.split('\n')
-        
+        lines = content.split("\n")
+
         # Find where to insert (before any section that's not in required list)
         insert_idx = len(lines)
         for i, line in enumerate(lines):
-            if line.startswith('## '):
+            if line.startswith("## "):
                 section_name = line[3:].strip()
                 if section_name not in REQUIRED_SECTIONS:
                     insert_idx = i
                     break
-        
-        new_content = '\n'.join(lines[:insert_idx]) + '\n\n' + '\n\n'.join(additions) + '\n\n' + '\n'.join(lines[insert_idx:])
+
+        new_content = (
+            "\n".join(lines[:insert_idx])
+            + "\n\n"
+            + "\n\n".join(additions)
+            + "\n\n"
+            + "\n".join(lines[insert_idx:])
+        )
         file_path.write_text(new_content, encoding="utf-8")
         return True
-    
+
     return False
+
 
 def extract_section_from_template(template: str, section_name: str) -> str:
     """Extract a section from the template."""
@@ -189,18 +200,20 @@ def extract_section_from_template(template: str, section_name: str) -> str:
     match = re.search(pattern, template, re.DOTALL)
     return match.group(0) if match else ""
 
+
 def main():
     skills_dir = Path(".agents/skills")
     fixed_count = 0
-    
+
     for skill_dir in sorted(skills_dir.iterdir()):
         if skill_dir.is_dir():
             skill_file = skill_dir / "SKILL.md"
             if skill_file.exists():
                 if fix_skill_file(skill_file):
                     fixed_count += 1
-    
+
     print(f"\nFixed {fixed_count} skill files")
+
 
 if __name__ == "__main__":
     main()

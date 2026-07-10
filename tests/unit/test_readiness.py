@@ -59,17 +59,11 @@ def reset_settings(
 
 
 def _set_live(monkeypatch: pytest.MonkeyPatch, *, enabled: bool, key: str) -> None:
-    monkeypatch.setattr(
-        settings, "openrouter_live_execution_enabled", enabled
-    )
-    monkeypatch.setattr(
-        settings, "openrouter_api_key", key
-    )
+    monkeypatch.setattr(settings, "openrouter_live_execution_enabled", enabled)
+    monkeypatch.setattr(settings, "openrouter_api_key", key)
 
 
-def _set_catalog(
-    monkeypatch: pytest.MonkeyPatch, model_ids: list[str]
-) -> None:
+def _set_catalog(monkeypatch: pytest.MonkeyPatch, model_ids: list[str]) -> None:
     """Patch the catalog service to return a fixed list of ids."""
     entries = [
         ModelCatalogEntry(
@@ -191,9 +185,7 @@ def test_probe_does_not_raise_when_catalog_unreachable(
     def _explode() -> list[ModelCatalogEntry]:
         raise RuntimeError("simulated catalog outage")
 
-    monkeypatch.setattr(
-        openrouter_model_catalog_service, "_entries", _explode
-    )
+    monkeypatch.setattr(openrouter_model_catalog_service, "_entries", _explode)
     _set_live(monkeypatch, enabled=True, key="sk-or-v1-fake-key-for-tests-only")
 
     report = run_startup_probe()
@@ -220,9 +212,7 @@ def test_probe_reasons_never_include_api_key_value(
     report = run_startup_probe()
 
     for reason in report.reasons:
-        assert secret_value not in reason, (
-            f"API key value leaked into reason: {reason!r}"
-        )
+        assert secret_value not in reason, f"API key value leaked into reason: {reason!r}"
 
 
 # PR-0 / Bug 11: ``catalog_loaded`` is the new field that
@@ -266,9 +256,7 @@ def test_catalog_loaded_false_when_catalog_fetch_fails(
     def _raise() -> list[ModelCatalogEntry]:
         raise RuntimeError("upstream 502")
 
-    monkeypatch.setattr(
-        openrouter_model_catalog_service, "_entries", _raise
-    )
+    monkeypatch.setattr(openrouter_model_catalog_service, "_entries", _raise)
 
     report = run_startup_probe()
 

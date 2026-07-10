@@ -629,9 +629,7 @@ class _InMemoryAccountRateLimiter:
 
     def allow(self, *, account_id: str, now_epoch: float) -> bool:
         with self._lock:
-            tokens, last = self._buckets.get(
-                account_id, (float(self.CAPACITY), now_epoch)
-            )
+            tokens, last = self._buckets.get(account_id, (float(self.CAPACITY), now_epoch))
             elapsed_minutes = max(0.0, (now_epoch - last) / 60.0)
             tokens = min(
                 float(self.CAPACITY),
@@ -673,10 +671,7 @@ def _enforce_account_rate_limit(request: Request, session: SessionContext) -> No
             status_code=status.HTTP_429_TOO_MANY_REQUESTS,
             detail={
                 "code": "RATE_LIMITED",
-                "message": (
-                    "Too many requests for this account. "
-                    "Limit is 30 requests per minute."
-                ),
+                "message": ("Too many requests for this account. Limit is 30 requests per minute."),
             },
         )
 
@@ -830,8 +825,7 @@ def create_query_run(
         # tuple so the on-the-wire record reflects the caller's opt-in
         # decision, not just the slot number and model id.
         model_slots=tuple(
-            (slot.slot_number, slot.model_id, slot.search)
-            for slot in query_run.model_slots
+            (slot.slot_number, slot.model_id, slot.search) for slot in query_run.model_slots
         ),
     )
     cost_estimation_service.record_guardrail_event(
@@ -1044,9 +1038,7 @@ def _execute_query_run_safely(query_run_id: UUID, account_id: UUID) -> None:
             )
 
 
-def _execute_query_run_with_semaphore_release(
-    query_run_id: UUID, account_id: UUID
-) -> None:
+def _execute_query_run_with_semaphore_release(query_run_id: UUID, account_id: UUID) -> None:
     """Thread entry point that also releases the run-cap semaphore.
 
     The semaphore is acquired in the request handler (so the 503
@@ -1085,6 +1077,7 @@ def _execute_query_run(query_run_id: UUID, account_id: UUID) -> None:
         detail="Running four initial model calls.",
         mark_started=True,
     )
+
     # PERF-P0: parallelize the 4 initial-answer calls. Previously ran
     # serially (4x per-call latency); now runs concurrently via the
     # shared ThreadPoolExecutor. ``record_initial_answer`` is called
@@ -1328,8 +1321,7 @@ def _result_response(query_run: QueryRun) -> QueryRunResultResponse:
         if answer.provider_path is ProviderPath.OPENROUTER_SEARCH
     )
     material_claim_count = sum(
-        answer.citation_coverage.material_claim_count
-        for answer in query_run.initial_answers
+        answer.citation_coverage.material_claim_count for answer in query_run.initial_answers
     )
     return QueryRunResultResponse(
         query_run_id=query_run.query_run_id,

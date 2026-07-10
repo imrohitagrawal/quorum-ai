@@ -112,8 +112,7 @@ def compute_consensus_strength(
     completed = [
         answer
         for answer in initial_answers
-        if answer.status is InitialAnswerStatus.COMPLETED
-        and (answer.answer_text or "").strip()
+        if answer.status is InitialAnswerStatus.COMPLETED and (answer.answer_text or "").strip()
     ]
 
     # 0 completed answers → no signal at all. Treat as "divided".
@@ -152,17 +151,13 @@ def _has_strong_overlap(completed_texts: list[str]) -> bool:
     """
     if len(completed_texts) < 3:
         return False
-    ngrams_per_text = [
-        _four_grams(_excerpt(text)) for text in completed_texts
-    ]
+    ngrams_per_text = [_four_grams(_excerpt(text)) for text in completed_texts]
     # Count how many texts have at least one strong overlap with
     # at least two other texts. The 4-gram Jaccard threshold is
     # intentionally low (0.2) — even a single shared opening
     # phrase ("The capital of France is") counts.
     strong_count = sum(
-        1
-        for ngrams in ngrams_per_text
-        if _has_overlap_with_others(ngrams, ngrams_per_text)
+        1 for ngrams in ngrams_per_text if _has_overlap_with_others(ngrams, ngrams_per_text)
     )
     return strong_count >= 3
 
@@ -202,9 +197,7 @@ def _four_grams(text: str) -> frozenset[str]:
     words = re.findall(r"[a-z0-9]+", text.lower())
     if len(words) < 4:
         return frozenset(words)
-    return frozenset(
-        " ".join(words[i : i + 4]) for i in range(len(words) - 3)
-    )
+    return frozenset(" ".join(words[i : i + 4]) for i in range(len(words) - 3))
 
 
 def _excerpt(text: str) -> str:
@@ -250,8 +243,14 @@ def _keyword_negated(haystack: str, keyword: str) -> bool:
     "cannot", "can't") within 3 words before the keyword.
     """
     negation_tokens = (
-        "not ", "no ", "didn't ", "doesn't ",
-        "did not ", "does not ", "cannot ", "can't ",
+        "not ",
+        "no ",
+        "didn't ",
+        "doesn't ",
+        "did not ",
+        "does not ",
+        "cannot ",
+        "can't ",
     )
     for match in re.finditer(re.escape(keyword), haystack):
         start = match.start()

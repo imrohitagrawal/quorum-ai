@@ -223,9 +223,7 @@ def test_bug9_render_drift_banner_hides_when_no_selected_slot_is_stale() -> None
     assert out["hidden"] is True, (
         f"Bug 9 regression: drift banner shown despite no selected slot being stale: {out!r}"
     )
-    assert out["message"] == "", (
-        f"expected empty message, got {out['message']!r}"
-    )
+    assert out["message"] == "", f"expected empty message, got {out['message']!r}"
 
 
 @pytest.mark.skipif(shutil.which("node") is None, reason="node not available")
@@ -308,9 +306,7 @@ def test_bug6_poll_run_early_returns_when_already_running() -> None:
     )
     # The early-return body must return before any render call.
     between = body_slice[early_return_idx:active_call_idx]
-    assert "return" in between, (
-        "Bug 6 regression: no early return statement after isRunning check"
-    )
+    assert "return" in between, "Bug 6 regression: no early return statement after isRunning check"
 
 
 @pytest.mark.skipif(shutil.which("node") is None, reason="node not available")
@@ -329,10 +325,8 @@ def test_bug4_run_now_chains_to_proceed_with_run_on_confirmation() -> None:
     body_start = match.start()
     # Find the COST_CONFIRMATION_REQUIRED block within runNow.
     body_slice = text[body_start : body_start + 4000]
-    block_start = body_slice.find('COST_CONFIRMATION_REQUIRED')
-    assert block_start != -1, (
-        "runNow does not handle COST_CONFIRMATION_REQUIRED"
-    )
+    block_start = body_slice.find("COST_CONFIRMATION_REQUIRED")
+    assert block_start != -1, "runNow does not handle COST_CONFIRMATION_REQUIRED"
     # Within that block, estimateRun() must come before proceedWithRun().
     block_slice = body_slice[block_start : block_start + 2000]
     estimate_idx = block_slice.find("estimateRun(")
@@ -417,12 +411,9 @@ def test_pr01_f1_set_run_start_time_freezes_card_and_ignores_poll_payload() -> N
     )
     out = json.loads(result.stdout)
     # The card must have a non-empty timestamp (not "Not started").
-    assert out["afterStart"], (
-        f"F1 regression: time card empty after setRunStartTime: {out!r}"
-    )
+    assert out["afterStart"], f"F1 regression: time card empty after setRunStartTime: {out!r}"
     assert out["afterStart"] != "Not started", (
-        f"F1 regression: time card still says 'Not started' after "
-        f"setRunStartTime: {out!r}"
+        f"F1 regression: time card still says 'Not started' after setRunStartTime: {out!r}"
     )
     # The state must reflect the start transition.
     assert out["runStartTime"] == "2026-06-23T10:00:00Z", (
@@ -523,9 +514,7 @@ def test_pr01_f2_reset_is_the_only_path_to_not_started() -> None:
     assert out["text"] == "Not started", (
         f"F2 regression: reset did not produce 'Not started': {out!r}"
     )
-    assert out["runStartTime"] is None, (
-        f"F2 regression: reset did not clear runStartTime: {out!r}"
-    )
+    assert out["runStartTime"] is None, f"F2 regression: reset did not clear runStartTime: {out!r}"
     assert out["runTimeFinalized"] is False, (
         f"F2 regression: reset did not clear runTimeFinalized: {out!r}"
     )
@@ -542,9 +531,7 @@ def test_pr01_f2_reset_is_the_only_path_to_not_started() -> None:
     update_fn = _extract_function("updateRunTimeCard")
     # The reset branch unconditionally writes "Not started".
     reset_idx = update_fn.find('"reset"')
-    assert reset_idx != -1, (
-        "F2 regression: 'reset' branch missing from updateRunTimeCard"
-    )
+    assert reset_idx != -1, "F2 regression: 'reset' branch missing from updateRunTimeCard"
     # The first ``"Not started"`` literal in the function is the
     # reset branch's write. The defensive ``|| "Not started"``
     # fallback (if present) is later in the function, inside the
@@ -665,12 +652,10 @@ def test_pr01_f3_change_event_filter_uses_id_prefix_not_dataset() -> None:
     )
     # Other change should NOT fire either (counter must stay at 1).
     assert out["afterOther"]["renderModelInputs"] == 1, (
-        f"F3 regression: non-slot change incorrectly triggered "
-        f"renderModelInputs: {out!r}"
+        f"F3 regression: non-slot change incorrectly triggered renderModelInputs: {out!r}"
     )
     assert out["afterOther"]["renderDriftBanner"] == 1, (
-        f"F3 regression: non-slot change incorrectly triggered "
-        f"renderDriftBanner: {out!r}"
+        f"F3 regression: non-slot change incorrectly triggered renderDriftBanner: {out!r}"
     )
 
 
@@ -712,6 +697,5 @@ def test_pr01_f3_change_event_filter_survives_dataset_rename() -> None:
     )
     out = json.loads(result.stdout)
     assert out["calls"] == 1, (
-        f"F3 regression: handler skipped a slot select without "
-        f"data-model-slot set: {out!r}"
+        f"F3 regression: handler skipped a slot select without data-model-slot set: {out!r}"
     )
