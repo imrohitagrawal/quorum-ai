@@ -128,14 +128,24 @@ def test_no_var_fallback_hexes(css_text: str) -> None:
     assert not bad, f"Found dual-value var() fallbacks: {bad}"
 
 
-def test_logo_uses_accentsink_not_raw_hex(css_text: str) -> None:
-    """.logo does not hard-code ``color: #fffdf9``."""
-    logo_block = _extract_rule(css_text, ".logo")
-    assert "#fffdf9" not in logo_block, (
-        ".logo still uses raw #fffdf9 — use var(--accent-ink) instead"
+def test_brand_mark_uses_color_tokens_not_raw_hex(css_text: str) -> None:
+    """The brand mark's colours come from tokens, not a hard-coded hex.
+
+    The R1 redesign renamed the old ``.logo`` to ``.brand-mark`` (the Quorum
+    tile) and moved it onto the ``--brand-tile-*`` tokens. This test tracks
+    that rename: the brand mark must still be tokenised (no raw hex), which is
+    what the original ``.logo``/``--accent-ink`` assertion was guarding.
+    """
+    rule = _extract_rule(css_text, ".brand-mark")
+    assert rule, ".brand-mark rule is missing"
+    assert "color: var(--brand-tile-fg)" in rule, (
+        ".brand-mark must set its foreground via the --brand-tile-fg token"
     )
-    assert "color: var(--accent-ink)" in logo_block, (
-        ".logo must use color: var(--accent-ink)"
+    assert "background: var(--brand-tile-bg)" in rule, (
+        ".brand-mark must set its background via the --brand-tile-bg token"
+    )
+    assert not re.search(r"#[0-9a-fA-F]{3,8}\b", rule), (
+        ".brand-mark must not hard-code a hex colour — use the --brand-tile-* tokens"
     )
 
 
