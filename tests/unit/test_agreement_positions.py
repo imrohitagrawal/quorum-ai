@@ -28,7 +28,12 @@ from product_app.query_runs import (
     ResultProjection,
     _result_response,
 )
-from product_app.synthesis import build_agreement_and_positions
+from product_app.synthesis import (
+    FinalSynthesis,
+    SynthesisQualityChecks,
+    SynthesisStatus,
+    build_agreement_and_positions,
+)
 
 FOCUS = ["disagreement", "weak_support", "missing_reasoning"]
 
@@ -77,6 +82,38 @@ def _debate(critique: str) -> list[DebateOutput]:
     ]
 
 
+def _synthesis(
+    consensus: str,
+    *,
+    recommendation: str = "",
+    status: SynthesisStatus = SynthesisStatus.COMPLETED,
+) -> FinalSynthesis:
+    """Minimal COMPLETED FinalSynthesis whose consensus/recommendation carry the
+    final-answer content that per-model alignment is compared against.
+    """
+    return FinalSynthesis(
+        status=status,
+        consensus=consensus,
+        disagreement="",
+        source_support="",
+        uncertainty="",
+        recommendation=recommendation,
+        high_stakes_notice=None,
+        citation_coverage=CitationCoverage(
+            material_claim_count=0,
+            cited_claim_count=0,
+            coverage_ratio=Decimal("0"),
+            target_met=False,
+        ),
+        quality_checks=SynthesisQualityChecks(
+            citation_coverage_target_met=False,
+            false_consensus_preserved=False,
+            decision_support_framing_present=True,
+            high_stakes_warning_required=False,
+        ),
+    )
+
+
 # --- derivation shape / invariants ----------------------------------------
 
 
@@ -117,11 +154,13 @@ def test_strong_consensus_marks_all_completed_models_aligned() -> None:
 
 
 def test_minority_that_aligns_is_marked_revised_with_an_inference_note() -> None:
-    # Three agree, one opens elsewhere; the debate critique signals
-    # convergence → "strong" panel → the minority's opening clustered as a
-    # minority AND the final synthesis aligns, so it is flagged ``revised``.
-    # The note describes that OBSERVABLE INFERENCE, not a claimed mid-debate
-    # action (the round-scoped transcript can't observe one).
+    # FALLBACK path (no final synthesis supplied — e.g. synthesis failed):
+    # three agree, one opens elsewhere; the debate critique signals convergence
+    # → "strong" panel → with no final answer to compare against we fall back to
+    # the panel-strength inference, so the minority is inferred to have landed
+    # aligned and is flagged ``revised``. The note describes that OBSERVABLE
+    # INFERENCE, not a claimed mid-debate action (the round-scoped transcript
+    # can't observe one). The synthesis-aware path is pinned separately below.
     answers = [
         _answer(1, _AGREE_TEXT),
         _answer(2, _AGREE_TEXT),
@@ -145,6 +184,61 @@ def test_minority_that_aligns_is_marked_revised_with_an_inference_note() -> None
     # A revised model still lands aligned, so aligned counts it.
     assert agreement.aligned == 4
     assert agreement.total == 4
+
+
+def test_unrelated_minority_absent_from_final_is_not_counted_aligned() -> None:
+    # PR7 follow-up #2, synthesis-aware path: a convergence keyword makes the
+    # panel "strong", but an unrelated minority whose opening never appears in
+    # the final synthesis must NOT be swept into the agreement numerator. With
+    # the final answer in hand each opening is compared to it per-model.
+    answers = [
+        _answer(1, _AGREE_TEXT),
+        _answer(2, _AGREE_TEXT),
+        _answer(3, _AGREE_TEXT),
+        _answer(4, "An unrelated claim about zebra migration patterns in autumn."),
+    ]
+    debate = _debate("After round 2 the models converged on the load-limit reading.")
+    # The final answer is the majority (bridge / load-limit) reading; the zebra
+    # opening is nowhere in it.
+    synthesis = _synthesis(_AGREE_TEXT)
+
+    agreement, positions = build_agreement_and_positions(
+        initial_answers=answers, debate_outputs=debate, final_synthesis=synthesis
+    )
+
+    assert agreement.total == 4
+    assert agreement.aligned == 3  # the unrelated minority is NOT aligned
+    slot4 = next(p for p in positions if p.slot_number == 4)
+    assert slot4.revised is False
+    assert slot4.revision_note is None
+
+
+def test_minority_whose_opening_lands_in_final_is_marked_revised() -> None:
+    # PR7 follow-up #2, the HONEST ``revised`` case: a model opens outside the
+    # majority cluster, yet its own distinctive position appears in the final
+    # synthesis, so it legitimately lands aligned and is flagged revised.
+    majority = "The tunnel option is best because it avoids the flood plain entirely."
+    minority = "A bridge could work if reinforced against seasonal flooding downstream."
+    answers = [
+        _answer(1, majority),
+        _answer(2, majority),
+        _answer(3, majority),
+        _answer(4, minority),
+    ]
+    debate = _debate("The panel weighed both options.")
+    # The final answer reflects BOTH the majority reading and the minority's
+    # distinctive proposal.
+    synthesis = _synthesis(f"{majority} {minority}")
+
+    agreement, positions = build_agreement_and_positions(
+        initial_answers=answers, debate_outputs=debate, final_synthesis=synthesis
+    )
+
+    revised = [p for p in positions if p.revised]
+    assert len(revised) == 1
+    assert revised[0].slot_number == 4
+    assert agreement.total == 4
+    assert agreement.aligned == 4
 
 
 def test_no_stance_copy_claims_an_unobservable_mid_debate_action() -> None:

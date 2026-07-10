@@ -1373,6 +1373,7 @@ def _result_response(query_run: QueryRun) -> QueryRunResultResponse:
     agreement, position_movements = build_agreement_and_positions(
         initial_answers=query_run.initial_answers,
         debate_outputs=query_run.debate_outputs,
+        final_synthesis=query_run.final_synthesis,
     )
     actual_cost_usd, actual_breakdown, cost_source = _actual_cost(query_run)
     return QueryRunResultResponse(
