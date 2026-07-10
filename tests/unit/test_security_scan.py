@@ -57,9 +57,13 @@ _REAL_KEY = "sk-or-v1-" + "a1b2c3d4e5f6a7b8c9d0e1f2a3b4c5d6" * 2
         # when the RHS is identifier-shaped like a Python pass-through.
         ("SECRET=abcdef123456789012", False, True),
         ("openrouter_key=openrouter_key", False, True),
-        # Comments and explicit placeholder values are ignored.
+        # Comments and explicit placeholder *values* are ignored.
         ("# openrouter_key=openrouter_key", True, False),
         ('api_key = "placeholder-value-1234"', True, False),
+        # ...but a genuine secret VALUE is still caught when the word
+        # "placeholder" only appears elsewhere on the line (comment / name).
+        ('api_key = "AKIAREALSECRET1234"  # not a placeholder', True, True),
+        ("secret=AKIAREALSECRET1234  # placeholder note", False, True),
     ],
 )
 def test_env_secret_assignment_detection(line: str, is_python: bool, expected: bool) -> None:

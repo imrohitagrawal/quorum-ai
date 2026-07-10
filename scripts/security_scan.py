@@ -151,10 +151,15 @@ def _contains_env_secret_assignment(line: str, *, is_python: bool = False) -> bo
     if line.lstrip().startswith("#"):
         return False
     match = re.search(
-        r"(?i)^\s*(api_key|openrouter_key|tavily_key|secret|token)\s*=\s*['\"]?[A-Za-z0-9_\-]{12,}",
+        r"(?i)^\s*(?:api_key|openrouter_key|tavily_key|secret|token)\s*=\s*['\"]?([A-Za-z0-9_\-]{12,})",
         line,
     )
-    if match is None or "placeholder" in line.casefold():
+    if match is None:
+        return False
+    # A literal placeholder VALUE (e.g. ``api_key = "placeholder-value"``) is not
+    # a real secret. Test the captured value, not the whole line, so a genuine
+    # secret sitting on a line that merely mentions "placeholder" is still caught.
+    if "placeholder" in match.group(1).casefold():
         return False
     # In Python source, a keyword-argument / variable pass-through (the value is
     # a bare identifier or attribute access, not a quoted literal) is not a
