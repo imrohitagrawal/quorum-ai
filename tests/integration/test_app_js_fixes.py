@@ -262,8 +262,12 @@ def test_bug9_render_drift_banner_shows_when_a_selected_slot_is_stale() -> None:
     assert out["hidden"] is False, (
         f"expected banner to be visible when a selected slot is stale: {out!r}"
     )
-    assert "openai/gpt-4o-mini" in out["message"], (
-        f"expected stale id in message, got {out['message']!r}"
+    # The shipped banner copy is deliberately generic — it explains the
+    # catalog drift without naming internal model ids. Assert the meaningful
+    # drift message rather than a specific id (which the product intentionally
+    # omits from the user-facing banner).
+    assert "no longer in the catalog" in out["message"], (
+        f"expected the catalog-drift message, got {out['message']!r}"
     )
 
 

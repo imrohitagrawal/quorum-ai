@@ -359,9 +359,9 @@ class ProviderExecutionService:
                 "helpers. It is not a real-model answer."
                 if (live_response is None or not (live_response.answer_text or "").strip())
                 and self._live_execution_enabled(openrouter_key=openrouter_key)
-                else "Local demo mode is active because  live execution is "
-                "disabled. These results are simulated and do not come from a "
-                "live provider."
+                else "Local demo mode is active because live execution is "
+                "disabled. These results come from Quorum's local simulation "
+                "helpers and do not come from a live provider."
             ),
         )
 
