@@ -170,6 +170,12 @@
     // the exported file. Kept as textContent-safe strings (no HTML).
     lastResultSummary: null,
     lastResultRunId: null,
+    // Slice 5 (06 Transcript): the last terminal poll result, captured in the
+    // pollRun terminal branch alongside ``renderResult``. The transcript view
+    // (an audit drill-down of opening positions + round-level critiques) is
+    // rendered from this snapshot on demand. ``null`` until a run completes;
+    // the transcript link + ``renderTranscript`` both guard the null.
+    lastResult: null,
     // Slice 4a (05 Result): guards the terminal poll branch so a re-entrant
     // slow poll response cannot double-fire the completion toast + focus (C-A).
     // Reset to false on every run start (proceedWithRun, C-C).
@@ -1805,22 +1811,10 @@
       agreement && Number.isFinite(Number(agreement.total))
         ? Number(agreement.total)
         : 0;
-    const failedSteps = Array.isArray(result.failed_steps) ? result.failed_steps : [];
-
-    // GREEN GATE (AC-019): green must reflect REAL, complete agreement — never
-    // merely the presence of a recommendation (which exists even on a divided
-    // panel). Requires: a real agreement signal, every model aligned, the
-    // synthesis explicitly NOT preserving a false consensus, and no failed steps.
-    const isConsensus = Boolean(
-      agreement &&
-        total > 0 &&
-        aligned === total &&
-        fs &&
-        fs.quality_checks &&
-        fs.quality_checks.false_consensus_preserved === false &&
-        failedSteps.length === 0 &&
-        String(result.status) === "completed",
-    );
+    // GREEN GATE (AC-019): the single source of truth is ``isConsensusResult``
+    // (below), shared with the transcript view so the two green surfaces can
+    // never drift out of lockstep.
+    const isConsensus = isConsensusResult(result);
 
     // Revised count — INFERRED from position_movements' ``revised`` flag.
     const movements = Array.isArray(res.position_movements)
@@ -2537,6 +2531,258 @@
       behavior: prefersReducedMotion() ? "auto" : "smooth",
       block: "start",
     });
+  }
+
+  // ---------------------------------------------------------------------------
+  // Slice 5 (06 Transcript) — the debate audit trail
+  // ---------------------------------------------------------------------------
+  //
+  // The transcript is the ONLY drill-down: real per-model OPENING positions
+  // (from ``model_answers``) followed by the ROUND-LEVEL debate critiques
+  // (from ``debate_outputs``). HONESTY (non-negotiable): the backend records
+  // ONE ``critique_text`` per round with NO per-model attribution — there is
+  // no "who challenged whom", no per-model stance/concession, no line-by-line
+  // transcript. This view therefore renders round-level critiques only, with an
+  // explicit caption saying so, and NEVER fabricates the mock's per-model
+  // exchange cards. GREEN RULE: the status chip + footer go green ONLY on real,
+  // complete consensus (the same gate as the verdict band); otherwise neutral.
+
+  // The consensus gate — the SINGLE SOURCE OF TRUTH for the AC-019 "no false
+  // consensus" green rule, shared by both ``renderResult`` (verdict band /
+  // trust triangle) and ``renderTranscript`` (status chip / footer) so the two
+  // green surfaces can never drift apart. Green requires: a real agreement
+  // signal, every model aligned, the synthesis explicitly NOT preserving a
+  // false consensus, no failed steps, and a ``completed`` status.
+  function isConsensusResult(result) {
+    const res = (result && result.result) || {};
+    const fs = res.final_synthesis || null;
+    const agreement = res.agreement || null;
+    const aligned =
+      agreement && Number.isFinite(Number(agreement.aligned))
+        ? Number(agreement.aligned)
+        : 0;
+    const total =
+      agreement && Number.isFinite(Number(agreement.total))
+        ? Number(agreement.total)
+        : 0;
+    const failedSteps = Array.isArray(result && result.failed_steps)
+      ? result.failed_steps
+      : [];
+    return Boolean(
+      agreement &&
+        total > 0 &&
+        aligned === total &&
+        fs &&
+        fs.quality_checks &&
+        fs.quality_checks.false_consensus_preserved === false &&
+        failedSteps.length === 0 &&
+        String(result && result.status) === "completed",
+    );
+  }
+
+  // Honest provider tag for an opening position. OPENROUTER_SEARCH = a live
+  // provider call; FALLBACK_SEARCH / LOCAL_SIMULATION are NOT live (the answer
+  // came from Quorum's local helpers) so they are never labelled "live".
+  function transcriptProviderTag(answer) {
+    const path = String((answer && answer.provider_path) || "");
+    // Even on the live path, honor an explicit ``fallback_used`` flag — never
+    // claim "live" for an answer the server marked as a fallback.
+    if (path === "openrouter_search" && !(answer && answer.fallback_used)) {
+      return { text: "live", fallback: false };
+    }
+    if (path === "openrouter_search") return { text: "fallback", fallback: true };
+    if (path === "fallback_search") return { text: "fallback", fallback: true };
+    if (path === "local_simulation") return { text: "simulated", fallback: true };
+    // Unknown path: stay conservative and never claim "live".
+    return { text: answer && answer.fallback_used ? "fallback" : "unverified", fallback: true };
+  }
+
+  // A single opening-position card — REAL per-model data: display name, a
+  // non-fallback source count, the honest provider tag, and the model's
+  // ``answer_text`` (its opening answer), all via textContent.
+  function buildTranscriptOpening(answer) {
+    const card = mkEl("article", "transcript-opening");
+    const head = mkEl("div", "transcript-opening-head");
+    const name = String((answer && (answer.display_name || answer.model_id)) || "Model");
+    const avatar = mkEl(
+      "span",
+      "transcript-opening-avatar",
+      name.trim().charAt(0).toUpperCase() || "?",
+    );
+    avatar.setAttribute("aria-hidden", "true");
+    head.append(avatar, mkEl("span", "transcript-opening-name", name));
+
+    const sources = Array.isArray(answer && answer.sources) ? answer.sources : [];
+    const primarySrc = sources.filter((s) => s && s.is_fallback !== true).length;
+    const tagInfo = transcriptProviderTag(answer);
+    const tag = mkEl(
+      "span",
+      "transcript-opening-tag mono",
+      `${tagInfo.text} · ${primarySrc} src`,
+    );
+    if (tagInfo.fallback) tag.dataset.fallback = "true";
+    head.appendChild(tag);
+    card.appendChild(head);
+
+    const body = mkEl("p", "transcript-opening-body");
+    const text = String((answer && answer.answer_text) || "").trim();
+    if (text) {
+      body.textContent = text;
+    } else {
+      body.textContent = "This model did not return an opening answer.";
+      body.classList.add("muted");
+    }
+    card.appendChild(body);
+    return card;
+  }
+
+  // A round-level critique block. Header = "Round N" + focus areas; body = the
+  // round's ``critique_text``. NO per-model cards/attribution are invented.
+  function buildTranscriptRound(round) {
+    const card = mkEl("article", "transcript-round");
+    const head = mkEl("div", "transcript-round-head");
+    head.appendChild(
+      mkEl("span", "transcript-round-pill", `Round ${round.round_number}`),
+    );
+    const focusAreas = Array.isArray(round.focus_areas)
+      ? round.focus_areas.filter(Boolean)
+      : [];
+    if (focusAreas.length) {
+      head.appendChild(
+        mkEl("span", "transcript-round-focus", `Focus: ${focusAreas.join(", ")}`),
+      );
+    }
+    card.appendChild(head);
+
+    const body = mkEl("p", "transcript-round-body");
+    const text = String(round.critique_text || "").trim();
+    if (text) {
+      body.textContent = text;
+    } else {
+      body.textContent = "This round did not produce a critique summary.";
+      body.classList.add("muted");
+    }
+    card.appendChild(body);
+    return card;
+  }
+
+  // Render the transcript view from a terminal result snapshot
+  // (``state.lastResult``). Guards a null/empty snapshot. Called just before
+  // ``setView("transcript")``.
+  function renderTranscript(result) {
+    if (!result) return;
+    const res = result.result || {};
+    const modelAnswers = Array.isArray(res.model_answers) ? res.model_answers : [];
+    const debate = Array.isArray(res.debate_outputs) ? res.debate_outputs : [];
+    const isConsensus = isConsensusResult(result);
+
+    // Question echo (serif h1) — the submitted question, never the live
+    // textarea (a rehydrated run holds unrelated in-progress text).
+    const heading = el("transcript-heading");
+    if (heading) heading.textContent = state.liveQueryText || "The debate";
+
+    // Meta line: round count + model count + optional debate-stage ESTIMATE.
+    const metaEl = el("transcript-meta");
+    if (metaEl) {
+      const parts = [];
+      parts.push(`${debate.length} round${debate.length === 1 ? "" : "s"}`);
+      parts.push(`${modelAnswers.length} model${modelAnswers.length === 1 ? "" : "s"}`);
+      const byStage =
+        result.cost_estimate &&
+        result.cost_estimate.breakdown &&
+        Array.isArray(result.cost_estimate.breakdown.by_stage)
+          ? result.cost_estimate.breakdown.by_stage
+          : [];
+      let debateUsd = 0;
+      let haveDebate = false;
+      for (const line of byStage) {
+        if (
+          line &&
+          (line.stage === "debate_round_1" || line.stage === "debate_round_2")
+        ) {
+          const v = Number(line.usd);
+          if (Number.isFinite(v)) {
+            debateUsd += v;
+            haveDebate = true;
+          }
+        }
+      }
+      if (haveDebate) {
+        parts.push(`debate ~${formatUsd(debateUsd, { suffix: false })} est.`);
+      }
+      metaEl.textContent = parts.join(" · ");
+    }
+
+    // Status chip — GREEN only on real consensus (avoids the banned "converged"
+    // wording; "Consensus reached" is the sanctioned green status word).
+    const statusEl = el("transcript-status");
+    if (statusEl) {
+      statusEl.textContent = "";
+      statusEl.dataset.consensus = isConsensus ? "true" : "false";
+      const dot = mkEl("span", "transcript-status-dot");
+      dot.setAttribute("aria-hidden", "true");
+      statusEl.append(
+        dot,
+        mkEl("span", null, isConsensus ? "Consensus reached" : "Panel divided"),
+      );
+    }
+
+    // Opening positions — REAL per-model data.
+    const openings = el("transcript-openings");
+    if (openings) {
+      openings.textContent = "";
+      if (modelAnswers.length === 0) {
+        openings.appendChild(
+          mkEl("p", "transcript-empty muted", "No opening positions were recorded for this run."),
+        );
+      } else {
+        for (const answer of modelAnswers) {
+          openings.appendChild(buildTranscriptOpening(answer));
+        }
+      }
+    }
+
+    // The debate — round-level critiques only.
+    const rounds = el("transcript-rounds");
+    if (rounds) {
+      rounds.textContent = "";
+      if (debate.length === 0) {
+        rounds.appendChild(
+          mkEl("p", "transcript-empty muted", "No debate rounds were recorded for this run."),
+        );
+      } else {
+        for (const round of debate) {
+          rounds.appendChild(buildTranscriptRound(round));
+        }
+      }
+    }
+
+    // Footer link — green treatment ONLY on real consensus.
+    const footer = el("transcript-footer-link");
+    if (footer) footer.dataset.consensus = isConsensus ? "true" : "false";
+  }
+
+  function focusTranscriptHeading() {
+    const heading = el("transcript-heading");
+    if (!heading) return;
+    heading.focus({ preventScroll: true });
+    heading.scrollIntoView({
+      behavior: prefersReducedMotion() ? "auto" : "smooth",
+      block: "start",
+    });
+  }
+
+  // Open the transcript drill-down from the last terminal result. If no
+  // snapshot exists (defensive — the link is only shown on a completed run),
+  // toast and stay put rather than navigating to an empty view.
+  function openTranscript() {
+    if (!state.lastResult) {
+      toast({ message: "The debate transcript is available once a run completes.", tone: "info" });
+      return;
+    }
+    renderTranscript(state.lastResult);
+    setView("transcript");
+    focusTranscriptHeading();
   }
 
   function mapStageToStep(stageName) {
@@ -4167,6 +4413,9 @@
       // Copy/Export text, and the terminal-branch guard must start fresh (C-C).
       state.lastResultSummary = null;
       state.lastResultRunId = null;
+      // Slice 5 (06 Transcript): drop the previous run's transcript snapshot so
+      // the drill-down can never render stale openings/critiques for a new run.
+      state.lastResult = null;
       state.terminalHandled = false;
       // Fix 3: a NEW run must re-render every live block even if its first
       // payload is byte-identical to the previous run's — reset the guards.
@@ -4300,6 +4549,12 @@
       // NO final_synthesis (failed/timed_out/cancelled/blocked), STAY on the
       // live-run view: its terminal error state + ``#live-notices`` handle that.
       if (result.result && result.result.final_synthesis) {
+        // Slice 5 (06 Transcript): stash the terminal result so the transcript
+        // drill-down renders honest per-model openings + round critiques
+        // without a re-fetch. Captured only alongside a real synthesis (same
+        // guard as the result view), so the transcript link only ever opens a
+        // completed audit trail.
+        state.lastResult = result;
         renderResult(result);
         setView("result");
         focusResultHeading();
@@ -4407,6 +4662,7 @@
       // Slice 4a (05 Result): cancelled runs almost always have no synthesis, so
       // we stay on the live-run view. Transition only if one somehow exists.
       if (result.result && result.result.final_synthesis) {
+        state.lastResult = result;
         renderResult(result);
         setView("result");
         focusResultHeading();
@@ -4853,6 +5109,28 @@
         } catch (_) {
           toast({ message: "Export failed. Copy the summary instead.", tone: "error" });
         }
+      });
+    }
+    // Slice 5 (06 Transcript): the result view's "Read the full debate
+    // transcript →" link opens the audit-trail drill-down; the transcript's
+    // "← Back to verdict" header button and its footer link both return to the
+    // result view. All three are native <button>s (keyboard operable).
+    const transcriptLink = el("result-transcript-link");
+    if (transcriptLink) {
+      transcriptLink.addEventListener("click", openTranscript);
+    }
+    const transcriptBack = el("transcript-back");
+    if (transcriptBack) {
+      transcriptBack.addEventListener("click", () => {
+        setView("result");
+        focusResultHeading();
+      });
+    }
+    const transcriptFooterLink = el("transcript-footer-link");
+    if (transcriptFooterLink) {
+      transcriptFooterLink.addEventListener("click", () => {
+        setView("result");
+        focusResultHeading();
       });
     }
     setConnectionPill("connecting", "Connecting");

@@ -606,6 +606,17 @@ a { color: var(--accent); text-underline-offset: 2px; }
   display: none;
 }
 
+/* Slice 5 (06 Transcript): the debate audit trail is a full-width drill-down —
+   mirror the result/live-run treatment (single column, aside hidden). The aside
+   stays in the DOM (only hidden here) so its render targets remain valid. */
+[data-active-view="transcript"] .layout {
+  grid-template-columns: 1fr;
+}
+
+[data-active-view="transcript"] .layout > aside {
+  display: none;
+}
+
 .panel {
   padding: var(--space-6);
   border-radius: var(--radius-lg);
@@ -2787,6 +2798,321 @@ kbd {
     text-transform: uppercase;
     color: var(--text-secondary);
     margin-bottom: 2px;
+  }
+}
+
+/* ----- Slice 5 (06 Transcript) — the debate audit trail ------------------ */
+/* Tokens only (no raw hex/rgba). GREEN is reserved for the consensus status
+   chip + footer link and is applied ONLY when the panel truly reached
+   consensus (data-consensus="true"); a divided panel gets a neutral/amber
+   treatment. Newsreader serif for the question; Geist Mono for counts/money. */
+
+/* The deferred "Read the full debate transcript →" link on the result view.
+   Ink text on a subtle divider — a navigation affordance, never green. */
+.result-transcript-link {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: var(--space-2);
+  width: 100%;
+  padding: 13px;
+  border: 1px solid var(--line-2);
+  border-radius: var(--radius-md);
+  background: var(--accent-soft);
+  color: var(--ink);
+  font: inherit;
+  font-size: 0.84rem;
+  font-weight: 600;
+  cursor: pointer;
+  transition: background var(--duration-fast) var(--bezier);
+}
+
+.result-transcript-link:hover {
+  background: var(--accent-medium);
+}
+
+.transcript {
+  gap: 0;
+  padding: 0;
+  overflow: hidden;
+}
+
+.transcript-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: var(--space-3);
+  padding: var(--space-4) var(--space-6);
+  border-bottom: 1px solid var(--line);
+  background: var(--surface);
+}
+
+.transcript-header-lead {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  flex-wrap: wrap;
+}
+
+.transcript-back {
+  border: none;
+  background: transparent;
+  color: var(--text-secondary);
+  font: inherit;
+  font-size: 0.84rem;
+  font-weight: 600;
+  cursor: pointer;
+  padding: 0;
+  transition: color var(--duration-fast) var(--bezier);
+}
+
+.transcript-back:hover {
+  color: var(--ink);
+}
+
+.transcript-header-divider {
+  width: 1px;
+  height: 18px;
+  background: var(--line-strong);
+}
+
+.transcript-header-title {
+  font-size: 0.95rem;
+  font-weight: 650;
+  color: var(--ink);
+}
+
+.transcript-meta {
+  font-size: 0.78rem;
+  color: var(--muted);
+}
+
+/* Status chip. Neutral/amber by default (divided); green ONLY on real
+   consensus. Dot inherits currentColor. */
+.transcript-status {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+  font-size: 0.8rem;
+  font-weight: 600;
+  color: var(--warning);
+}
+
+.transcript-status[data-consensus="true"] {
+  color: var(--success);
+}
+
+.transcript-status-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: var(--radius-pill);
+  background: currentColor;
+  flex-shrink: 0;
+}
+
+.transcript-body {
+  max-width: 840px;
+  margin: 0 auto;
+  padding: var(--space-8) var(--space-6);
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-7);
+  width: 100%;
+}
+
+.transcript-question {
+  margin: 0 auto;
+  max-width: 30ch;
+  font-family: var(--font-serif);
+  font-size: 1.4rem;
+  line-height: 1.35;
+  font-weight: 500;
+  color: var(--body);
+  text-align: center;
+  text-wrap: balance;
+}
+
+.transcript-section {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-4);
+}
+
+.transcript-section-head {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+}
+
+.transcript-section-title {
+  font-size: 0.72rem;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--text-secondary);
+}
+
+.transcript-section-rule {
+  flex: 1;
+  height: 1px;
+  background: var(--line-2);
+}
+
+.transcript-section-note {
+  font-size: 0.72rem;
+  color: var(--muted);
+}
+
+.transcript-openings {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: var(--space-3);
+}
+
+.transcript-opening {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  border: 1px solid var(--line-2);
+  border-radius: var(--radius-md);
+  background: var(--surface);
+  padding: var(--space-3) var(--space-4);
+}
+
+.transcript-opening-head {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+}
+
+.transcript-opening-avatar {
+  display: inline-grid;
+  place-items: center;
+  flex-shrink: 0;
+  width: 26px;
+  height: 26px;
+  border-radius: var(--radius-xl);
+  background: var(--line);
+  color: var(--ink);
+  font-size: 0.7rem;
+  font-weight: 700;
+}
+
+.transcript-opening-name {
+  font-size: 0.84rem;
+  font-weight: 650;
+  color: var(--ink);
+}
+
+.transcript-opening-tag {
+  margin-left: auto;
+  font-size: 0.72rem;
+  color: var(--muted);
+  white-space: nowrap;
+}
+
+.transcript-opening-tag[data-fallback="true"] {
+  color: var(--warning);
+}
+
+.transcript-opening-body {
+  margin: 0;
+  font-size: 0.84rem;
+  line-height: 1.6;
+  color: var(--body);
+}
+
+.transcript-debate-caption {
+  margin: 0;
+  font-size: 0.78rem;
+  line-height: 1.5;
+}
+
+.transcript-rounds {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-4);
+}
+
+.transcript-round {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  border: 1px solid var(--line-2);
+  border-radius: var(--radius-md);
+  background: var(--surface);
+  padding: var(--space-4);
+}
+
+.transcript-round-head {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  flex-wrap: wrap;
+}
+
+.transcript-round-pill {
+  font-size: 0.68rem;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  padding: 2px var(--space-2);
+  border-radius: var(--radius-pill);
+  background: var(--accent-soft);
+  color: var(--ink);
+}
+
+.transcript-round-focus {
+  font-size: 0.75rem;
+  color: var(--text-secondary);
+}
+
+.transcript-round-body {
+  margin: 0;
+  font-size: 0.85rem;
+  line-height: 1.6;
+  color: var(--body);
+}
+
+.transcript-empty {
+  margin: 0;
+  font-size: 0.82rem;
+}
+
+/* Footer link back to the verdict. Neutral by default; green treatment ONLY
+   on real consensus (data-consensus="true"). */
+.transcript-footer-link {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: var(--space-2);
+  width: 100%;
+  padding: var(--space-4);
+  border: 1px solid var(--line-2);
+  border-radius: var(--radius-md);
+  background: var(--inset);
+  color: var(--ink);
+  font: inherit;
+  font-size: 0.84rem;
+  font-weight: 600;
+  cursor: pointer;
+  transition: background var(--duration-fast) var(--bezier);
+}
+
+.transcript-footer-link:hover {
+  background: var(--accent-soft);
+}
+
+.transcript-footer-link[data-consensus="true"] {
+  background: var(--success-soft);
+  border-color: var(--success-border);
+  color: var(--success);
+}
+
+@media (max-width: 760px) {
+  .transcript-openings {
+    grid-template-columns: 1fr;
   }
 }
 

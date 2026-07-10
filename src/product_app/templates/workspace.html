@@ -411,6 +411,55 @@
                 aria-label="How positions moved"
                 hidden
               ></div>
+
+              <button
+                id="result-transcript-link"
+                type="button"
+                class="result-transcript-link"
+              >Read the full debate transcript &rarr;</button>
+            </div>
+          </section>
+        </div>
+
+        <div data-view="transcript" hidden>
+          <section class="panel transcript" role="region" aria-labelledby="transcript-heading">
+            <div class="transcript-header">
+              <div class="transcript-header-lead">
+                <button id="transcript-back" type="button" class="transcript-back">&larr; Back to verdict</button>
+                <span class="transcript-header-divider" aria-hidden="true"></span>
+                <span class="transcript-header-title">The debate</span>
+                <span id="transcript-meta" class="transcript-meta mono"></span>
+              </div>
+              <span id="transcript-status" class="transcript-status" data-consensus="false"></span>
+            </div>
+
+            <div class="transcript-body">
+              <h1 id="transcript-heading" class="transcript-question" tabindex="-1"></h1>
+
+              <section class="transcript-section" aria-label="Opening positions">
+                <div class="transcript-section-head">
+                  <span class="transcript-section-title">Opening positions</span>
+                  <span class="transcript-section-rule" aria-hidden="true"></span>
+                  <span class="transcript-section-note mono">opening answers</span>
+                </div>
+                <div id="transcript-openings" class="transcript-openings"></div>
+              </section>
+
+              <section class="transcript-section" aria-label="The debate rounds">
+                <div class="transcript-section-head">
+                  <span class="transcript-section-title">The debate</span>
+                  <span class="transcript-section-rule" aria-hidden="true"></span>
+                </div>
+                <p class="transcript-debate-caption muted">The debate is captured as a per-round critique summary &mdash; Quorum does not record a per-model, line-by-line transcript.</p>
+                <div id="transcript-rounds" class="transcript-rounds"></div>
+              </section>
+
+              <button
+                id="transcript-footer-link"
+                type="button"
+                class="transcript-footer-link"
+                data-consensus="false"
+              >back to the result &rarr;</button>
             </div>
           </section>
         </div>
@@ -492,7 +541,7 @@
                 type="button"
                 class="info-icon"
                 data-info-icon
-                data-info-text="The synthesis is written by a single configured model (currently openai/gpt-4o-mini) after it reads the four refined answers. It is not a vote or a quote — it is one model's interpretation of the four."
+                data-info-text="The synthesis is written by a single configured model (currently openai/gpt-4o-mini) after it reads the four opening answers and the round-level debate critiques. It is not a vote or a quote — it is one model's interpretation of the four."
                 aria-label="What is the synthesis?"
               >&#9432;</button>
             </h3>
