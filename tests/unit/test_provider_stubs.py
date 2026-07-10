@@ -1,5 +1,7 @@
 import json
 from decimal import Decimal
+from email.message import Message
+from typing import Any
 from uuid import uuid4
 
 import pytest
@@ -7,6 +9,7 @@ import pytest
 from product_app.model_slots import ModelSlot, validate_model_slots
 from product_app.providers import (
     _SEARCH_REJECTED,
+    LiveProviderResult,
     ProviderPath,
     SourceReference,
     calculate_citation_coverage,
@@ -161,7 +164,9 @@ def test_provider_stub_returns_openrouter_path_when_live_response_succeeds(
     # the network. The fake returns real text and a real source.
     captured = []
 
-    def fake_live(*, openrouter_key, query_text, model_slot):
+    def fake_live(
+        *, openrouter_key: str, query_text: str, model_slot: ModelSlot
+    ) -> "_FakeLiveResult":
         captured.append((model_slot.slot_number, query_text))
         return _FakeLiveResult(
             answer_text=f"live answer for slot {model_slot.slot_number}",
@@ -212,7 +217,9 @@ def test_provider_stub_relaxes_sources_gate_when_live_text_present_without_citat
         lambda *, openrouter_key: True,
     )
 
-    def fake_live(*, openrouter_key, query_text, model_slot):
+    def fake_live(
+        *, openrouter_key: str, query_text: str, model_slot: ModelSlot
+    ) -> "_FakeLiveResult":
         return _FakeLiveResult(answer_text="answer only, no citations", sources=[])
 
     monkeypatch.setattr(
@@ -250,7 +257,7 @@ def test_live_response_uses_online_suffix_for_search(
     """
     captured_model_ids: list[str] = []
 
-    def fake_urlopen(request, timeout=0):  # noqa: ANN001 - matches urlopen signature
+    def fake_urlopen(request: Any, timeout: float = 0) -> "_FakeResponse":
         body = json.loads(request.data.decode())
         captured_model_ids.append(body["model"])
         return _FakeResponse(
@@ -284,6 +291,7 @@ def test_live_response_uses_online_suffix_for_search(
     assert captured_model_ids == ["openai/gpt-4o-mini:online"]
     assert result is not None
     assert result is not _SEARCH_REJECTED
+    assert isinstance(result, LiveProviderResult)
     assert result.answer_text == "live answer"
     assert result.sources[0].url == "https://live.example/article"
 
@@ -298,7 +306,7 @@ def test_live_response_retries_without_online_suffix_on_404(
 
     captured_model_ids: list[str] = []
 
-    def fake_urlopen(request, timeout=0):  # noqa: ANN001
+    def fake_urlopen(request: Any, timeout: float = 0) -> "_FakeResponse":
         body = json.loads(request.data.decode())
         captured_model_ids.append(body["model"])
         if body["model"].endswith(":online"):
@@ -306,7 +314,7 @@ def test_live_response_retries_without_online_suffix_on_404(
                 url=request.full_url,
                 code=404,
                 msg="Not Found",
-                hdrs=None,
+                hdrs=Message(),
                 fp=None,
             )
         return _FakeResponse(
@@ -334,6 +342,7 @@ def test_live_response_retries_without_online_suffix_on_404(
 
     assert captured_model_ids == ["openai/gpt-4o-mini:online", "openai/gpt-4o-mini"]
     assert result is not None
+    assert isinstance(result, LiveProviderResult)
     assert result.answer_text == "bare answer, no citations"
     assert result.sources == []
 
@@ -348,10 +357,10 @@ def test_live_response_returns_none_when_both_online_and_bare_fail(
 
     call_count = 0
 
-    def fake_urlopen(request, timeout=0):  # noqa: ANN001
+    def fake_urlopen(request: Any, timeout: float = 0) -> "_FakeResponse":
         nonlocal call_count
         call_count += 1
-        raise HTTPError(url=request.full_url, code=500, msg="Server Error", hdrs=None, fp=None)
+        raise HTTPError(url=request.full_url, code=500, msg="Server Error", hdrs=Message(), fp=None)
 
     monkeypatch.setattr("product_app.providers.urlopen", fake_urlopen)
 
@@ -379,10 +388,10 @@ def test_live_response_rejects_online_only_for_400_and_404(
 
     call_count = 0
 
-    def fake_urlopen(request, timeout=0):  # noqa: ANN001
+    def fake_urlopen(request: Any, timeout: float = 0) -> "_FakeResponse":
         nonlocal call_count
         call_count += 1
-        raise HTTPError(url=request.full_url, code=401, msg="Unauthorized", hdrs=None, fp=None)
+        raise HTTPError(url=request.full_url, code=401, msg="Unauthorized", hdrs=Message(), fp=None)
 
     monkeypatch.setattr("product_app.providers.urlopen", fake_urlopen)
 
@@ -409,8 +418,8 @@ def test_live_response_logs_warning_on_non_benign_http_error(
     """
     from urllib.error import HTTPError
 
-    def fake_urlopen(request, timeout=0):  # noqa: ANN001
-        raise HTTPError(url=request.full_url, code=401, msg="Unauthorized", hdrs=None, fp=None)
+    def fake_urlopen(request: Any, timeout: float = 0) -> "_FakeResponse":
+        raise HTTPError(url=request.full_url, code=401, msg="Unauthorized", hdrs=Message(), fp=None)
 
     monkeypatch.setattr("product_app.providers.urlopen", fake_urlopen)
 
@@ -450,7 +459,7 @@ def test_per_slot_search_off_skips_online_attempt(
     """
     captured_model_ids: list[str] = []
 
-    def fake_urlopen(request, timeout=0):  # noqa: ANN001
+    def fake_urlopen(request: Any, timeout: float = 0) -> "_FakeResponse":
         body = json.loads(request.data.decode())
         captured_model_ids.append(body["model"])
         return _FakeResponse(
@@ -483,6 +492,7 @@ def test_per_slot_search_off_skips_online_attempt(
     # Exactly one POST, to the bare model id, NOT the :online suffix.
     assert captured_model_ids == ["openai/gpt-4o-mini"], captured_model_ids
     assert result is not None
+    assert isinstance(result, LiveProviderResult)
     assert result.answer_text == "training-data answer"
 
 
@@ -499,14 +509,14 @@ def test_per_slot_search_off_returns_none_when_bare_call_fails(
 
     call_count = 0
 
-    def fake_urlopen(request, timeout=0):  # noqa: ANN001
+    def fake_urlopen(request: Any, timeout: float = 0) -> "_FakeResponse":
         nonlocal call_count
         call_count += 1
         raise HTTPError(
             url=request.full_url,
             code=500,
             msg="Server Error",
-            hdrs=None,
+            hdrs=Message(),
             fp=None,
         )
 
@@ -543,7 +553,9 @@ def test_per_slot_search_off_response_records_search_disabled_notice(
         lambda *, openrouter_key: True,
     )
 
-    def fake_live(*, openrouter_key, query_text, model_slot):
+    def fake_live(
+        *, openrouter_key: str, query_text: str, model_slot: ModelSlot
+    ) -> "_FakeLiveResult":
         # Bare-id POST returns text but no annotations (the realistic
         # case for a search-disabled slot — the model answers from
         # training data).
@@ -639,5 +651,5 @@ class _FakeResponse:
     def __enter__(self) -> "_FakeResponse":
         return self
 
-    def __exit__(self, exc_type, exc, tb) -> None:  # noqa: ANN001
+    def __exit__(self, exc_type: object, exc: object, tb: object) -> None:
         return None

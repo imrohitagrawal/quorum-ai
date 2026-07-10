@@ -1,8 +1,11 @@
+from typing import cast
 from uuid import uuid4
 
-from product_app.debate import debate_stub_service
+import pytest
+
+from product_app.debate import DebateOutput, debate_stub_service
 from product_app.model_slots import validate_model_slots
-from product_app.providers import provider_stub_service
+from product_app.providers import provider_execution_service, provider_stub_service
 from product_app.synthesis import SynthesisStatus, synthesis_event_recorder, synthesis_stub_service
 
 DEFAULT_MODEL_IDS = [
@@ -108,14 +111,13 @@ def test_high_stakes_synthesis_includes_decision_support_notice() -> None:
 
 
 def test_synthesis_live_path_uses_llm_text_when_key_and_flag_set(
-    monkeypatch: object,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """L4: when a key and the live-execution flag are both set, the
     synthesis orchestrator should call the LLM for each of the five
     sections and use the LLM text in the result.
     """
     from product_app import config
-    from product_app import synthesis as synth_mod
     from product_app.providers import LiveProviderResult
 
     calls: list[str] = []
@@ -128,7 +130,7 @@ def test_synthesis_live_path_uses_llm_text_when_key_and_flag_set(
         )
 
     monkeypatch.setattr(
-        synth_mod.provider_execution_service,
+        provider_execution_service,
         "call_with_prompt",
         fake_call,
     )
@@ -183,14 +185,13 @@ def test_synthesis_live_path_uses_llm_text_when_key_and_flag_set(
 
 
 def test_synthesis_falls_back_to_template_when_live_execution_disabled(
-    monkeypatch: object,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """L4: even with a key set, if the operator has explicitly
     disabled live execution, the synthesis orchestrator must fall
     back to the templated text on all five sections.
     """
     from product_app import config
-    from product_app import synthesis as synth_mod
 
     called = {"count": 0}
 
@@ -199,7 +200,7 @@ def test_synthesis_falls_back_to_template_when_live_execution_disabled(
         return None
 
     monkeypatch.setattr(
-        synth_mod.provider_execution_service,
+        provider_execution_service,
         "call_with_prompt",
         fake_call,
     )
@@ -514,7 +515,10 @@ def test_user_prompt_includes_full_700_char_debate_excerpt() -> None:
 
     user_prompt = synth_mod.synthesis_stub_service._user_prompt(
         initial_answers=[],
-        debate_outputs=[_FakeRound(round_number=1, critique_text=long_critique)],
+        debate_outputs=cast(
+            "list[DebateOutput]",
+            [_FakeRound(round_number=1, critique_text=long_critique)],
+        ),
         failed_count=0,
         coverage_ratio=type("R", (), {"__str__": lambda self: "0.0"})(),
     )

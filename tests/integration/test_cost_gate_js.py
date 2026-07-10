@@ -26,6 +26,7 @@ import re
 import shutil
 import subprocess
 from pathlib import Path
+from typing import Any
 
 import pytest
 
@@ -102,7 +103,7 @@ _BREAKDOWN = {
 }
 
 
-def _run(breakdown: dict) -> dict:
+def _run(breakdown: dict[str, Any]) -> dict[str, Any]:
     body = _extract_function("costGatePartitions")
     script = (
         body
@@ -117,7 +118,8 @@ def _run(breakdown: dict) -> dict:
         text=True,
         timeout=10,
     )
-    return json.loads(result.stdout)
+    parsed: dict[str, Any] = json.loads(result.stdout)
+    return parsed
 
 
 @pytest.mark.skipif(shutil.which("node") is None, reason="node not available")

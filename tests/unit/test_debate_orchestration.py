@@ -1,8 +1,10 @@
 from uuid import uuid4
 
+import pytest
+
 from product_app.debate import DebateRoundStatus, debate_event_recorder, debate_stub_service
 from product_app.model_slots import validate_model_slots
-from product_app.providers import provider_stub_service
+from product_app.providers import provider_execution_service, provider_stub_service
 
 DEFAULT_MODEL_IDS = [
     "openai/gpt-4o-mini",
@@ -69,7 +71,7 @@ def test_debate_stub_returns_partial_plan_when_second_round_exceeds_budget() -> 
 
 
 def test_debate_live_path_uses_llm_critique_when_key_and_flag_set(
-    monkeypatch: object,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """L4: when a key and the live-execution flag are both set, the
     debate orchestrator should call the LLM and use its output as the
@@ -77,7 +79,6 @@ def test_debate_live_path_uses_llm_critique_when_key_and_flag_set(
     the network.
     """
     from product_app import config
-    from product_app import debate as debate_mod
     from product_app.providers import LiveProviderResult
 
     calls: list[str] = []
@@ -91,7 +92,7 @@ def test_debate_live_path_uses_llm_critique_when_key_and_flag_set(
         )
 
     monkeypatch.setattr(
-        debate_mod.provider_execution_service,
+        provider_execution_service,
         "call_with_prompt",
         fake_call,
     )
@@ -129,7 +130,7 @@ def test_debate_live_path_uses_llm_critique_when_key_and_flag_set(
 
 
 def test_debate_falls_back_to_template_when_live_execution_disabled(
-    monkeypatch: object,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """L4: even with a key set, if the operator has explicitly
     disabled live execution, the debate orchestrator must fall back
@@ -137,7 +138,6 @@ def test_debate_falls_back_to_template_when_live_execution_disabled(
     environments would silently hit the network.
     """
     from product_app import config
-    from product_app import debate as debate_mod
 
     called = {"count": 0}
 
@@ -146,7 +146,7 @@ def test_debate_falls_back_to_template_when_live_execution_disabled(
         return None
 
     monkeypatch.setattr(
-        debate_mod.provider_execution_service,
+        provider_execution_service,
         "call_with_prompt",
         fake_call,
     )

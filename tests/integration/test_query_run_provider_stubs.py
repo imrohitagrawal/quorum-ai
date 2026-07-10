@@ -232,7 +232,7 @@ def test_query_run_live_path_records_all_four_slots_as_openrouter_search(
         model_id: str,
         messages: list[dict[str, str]],
         max_tokens: int | None = None,
-    ):
+    ) -> LiveProviderResult:
         bare_model_id = model_id.replace(":online", "")
         if bare_model_id in DEFAULT_MODEL_IDS:
             slot_number = DEFAULT_MODEL_IDS.index(bare_model_id) + 1
@@ -348,7 +348,7 @@ def test_query_run_live_path_records_search_off_slot_as_openrouter_search_too(
         model_id: str,
         messages: list[dict[str, str]],
         max_tokens: int | None = None,
-    ):
+    ) -> LiveProviderResult:
         # Real live result regardless of ``:online`` suffix.
         return LiveProviderResult(
             answer_text=f"Live answer for {model_id}.",
