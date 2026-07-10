@@ -146,6 +146,7 @@
   --info: var(--c-blue); /* sources + running */
   --info-soft: rgba(71, 104, 158, 0.10);
   --info-glow: rgba(71, 104, 158, 0.18); /* running dot/ring glow — live run */
+  --info-border: rgba(71, 104, 158, 0.40); /* info status-banner border */
   --debate-4: var(--c-blue);
   --focus-ring: var(--c-ink); /* ink focus ring — ~13:1 on cool paper */
 
@@ -241,6 +242,8 @@ html[data-theme="dark"] {
   --danger-border: rgba(219, 128, 112, 0.35);
   --info-soft: rgba(159, 182, 223, 0.14);
   --info-glow: rgba(159, 182, 223, 0.22); /* running dot/ring glow — live run */
+  --info-border: rgba(159, 182, 223, 0.42); /* info status-banner border */
+  --debate-4: var(--c-blue); /* declared in the dark scope too (auto-flips via --c-blue) */
   --focus-ring: var(--c-ink); /* light ring on dark bg */
 
   --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.30);
@@ -439,19 +442,19 @@ a { color: var(--accent); text-underline-offset: 2px; }
 .status-banner[hidden] { display: none; }
 
 .status-banner[data-severity="error"] {
-  border-color: rgba(154, 46, 31, 0.30);
+  border-color: var(--danger-border);
   background: var(--danger-soft);
   color: var(--ink);
 }
 
 .status-banner[data-severity="warning"] {
-  border-color: rgba(241, 179, 111, 0.40);
+  border-color: var(--warning-border);
   background: var(--warning-soft);
   color: var(--ink);
 }
 
 .status-banner[data-severity="info"] {
-  border-color: rgba(31, 79, 154, 0.28);
+  border-color: var(--info-border);
   background: var(--info-soft);
   color: var(--ink);
 }
@@ -1492,6 +1495,20 @@ kbd {
 .status-pill[data-state="timed_out"] { background: var(--danger-soft); color: var(--danger); }
 .status-pill[data-state="cancelled"] { background: var(--line); color: var(--muted); }
 .status-pill[data-state="partial"] { background: var(--warning-soft); color: var(--warning); }
+
+/* Dark only: small muted text that sits on a faintly-lit inset (--line over
+   the dark card ≈ #272A30 / #2A2C32) lands just under AA — --muted (#8A9099)
+   gives 4.3–4.47:1 there (the dark muted↔secondary ramp is too compressed to
+   define a distinct passing muted). Bump only these lit-inset cases to
+   --secondary (≥4.9:1); --muted is left intact everywhere it already passes,
+   and the colour-carrying / warning states are untouched. */
+html[data-theme="dark"] .status-pill[data-state="idle"],
+html[data-theme="dark"] .status-pill[data-state="pending"],
+html[data-theme="dark"] .status-pill[data-state="cancelled"],
+html[data-theme="dark"] .field-meta-counter:not([data-warning="true"]),
+html[data-theme="dark"] .landing-preview-caption {
+  color: var(--text-secondary);
+}
 
 .status-pill[data-state="connecting"] .status-pill-dot,
 .status-pill[data-state="initial_answers_running"] .status-pill-dot,
