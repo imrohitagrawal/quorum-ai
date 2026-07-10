@@ -182,6 +182,62 @@ def test_divided_panel_keeps_the_minority_dissenting() -> None:
     assert all(p.revised is False for p in positions)
 
 
+def test_polar_tie_has_no_majority_side() -> None:
+    # PR7 follow-up #3: on a 1-vs-1 polar tie neither side is the majority, so
+    # NO opening is flagged majority (the old code arbitrarily crowned the
+    # first sorted keyword's side and swept neutral texts in with it).
+    from product_app.synthesis_consensus import _opening_majority_flags, _polar_split
+
+    texts = [
+        "Yes, proceed with the rollout today.",
+        "No, do not proceed with the rollout.",
+        "Maybe later; it depends on the audit outcome.",
+        "Insufficient evidence to decide either way.",
+    ]
+    split = _polar_split(texts)
+    # A split is still detected (yes vs no) so the disagreement signal fires ...
+    assert split is not None
+    # ... but a tie crowns nobody: every majority flag is False.
+    assert split == [False, False, False, False]
+    assert _opening_majority_flags(texts) == [False, False, False, False]
+
+
+def test_neutral_answers_are_never_counted_as_majority() -> None:
+    # PR7 follow-up #3: with a clear 2-vs-1 polar split plus one neutral answer,
+    # only the strictly-larger side is the majority. The neutral text (on
+    # neither polar side) must NOT default into the majority.
+    from product_app.synthesis_consensus import _opening_majority_flags
+
+    texts = [
+        "Yes, this is affordable; recommend proceeding.",
+        "Yes, affordable overall, so proceed.",
+        "No, it is far too expensive; avoid it.",
+        "The committee met on Tuesday to review the schedule.",  # neutral
+    ]
+    flags = _opening_majority_flags(texts)
+    # The two "yes" openers are the majority; the "no" and the neutral are not.
+    assert flags == [True, True, False, False]
+
+
+def test_four_way_divided_panel_does_not_inflate_agreement() -> None:
+    # PR7 follow-up #3, end to end: a genuinely divided panel (Yes / No /
+    # Maybe / Insufficient) must NOT report an inflated agreement numerator.
+    # The pre-fix code reported 3/4 here; the honest count is that no opening
+    # sits in a majority consensus.
+    answers = [
+        _answer(1, "Yes, proceed with the plan now."),
+        _answer(2, "No, do not proceed with the plan."),
+        _answer(3, "Maybe later; it depends on further review."),
+        _answer(4, "Insufficient evidence to make the call."),
+    ]
+    agreement, positions = build_agreement_and_positions(
+        initial_answers=answers, debate_outputs=_debate("The panel remained split.")
+    )
+    assert agreement.total == 4
+    assert agreement.aligned == 0
+    assert all(p.revised is False for p in positions)
+
+
 def test_failed_model_is_not_aligned_and_gets_a_stand_in_opening() -> None:
     answers = [
         _answer(1, _AGREE_TEXT),

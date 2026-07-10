@@ -266,13 +266,21 @@ def _polar_split(completed_texts: list[str]) -> list[bool] | None:
     Scans ``_POLAR_PAIRS`` for the first pair on which the texts split —
     at least one text uses one member (and not its antonym) and at least
     one other text uses the antonym. If found, returns a per-text
-    majority-side flag list (the larger polar side is the majority; a tie
-    puts the first sorted keyword's side in the majority; texts on neither
-    side count as majority). Returns ``None`` when no polar split exists.
+    majority-side flag list where ``True`` marks ONLY the texts on the
+    strictly-larger polar side. Everything else is ``False``:
 
-    This is the single source of truth for BOTH "does the panel disagree
-    on a polar marker?" (:func:`_has_polar_disagreement`) and "which side
-    is each model's opening on?" (:func:`_opening_majority_flags`).
+    * texts on the smaller (minority) side,
+    * texts on NEITHER side (neutral / unclustered), which must never
+      default to aligned, and
+    * every text when the two sides TIE — a tie has no majority, so no
+      opening is counted toward the agreement numerator.
+
+    Returns ``None`` when no polar split exists. This is the single source
+    of truth for BOTH "does the panel disagree on a polar marker?"
+    (:func:`_has_polar_disagreement`) and "which side is each model's
+    opening on?" (:func:`_opening_majority_flags`). A detected split (even
+    a tie) still yields a non-``None`` list, so the disagreement signal
+    fires while the majority flags stay honest.
     """
     if len(completed_texts) < 2:
         return None
@@ -292,11 +300,14 @@ def _polar_split(completed_texts: list[str]) -> list[bool] | None:
         count_a = sum(side_a)
         count_b = sum(side_b)
         if count_a >= 1 and count_b >= 1:
-            minority_is_b = count_b <= count_a
-            return [
-                not (in_b if minority_is_b else in_a)
-                for in_a, in_b in zip(side_a, side_b, strict=True)
-            ]
+            # Only the strictly-larger side is the majority. On a tie
+            # neither side wins, so nobody is majority; neutral texts (on
+            # neither side) are never majority either.
+            if count_a > count_b:
+                return list(side_a)
+            if count_b > count_a:
+                return list(side_b)
+            return [False] * len(lowered)
     return None
 
 
@@ -381,9 +392,10 @@ def _opening_majority_flags(completed_texts: list[str]) -> list[bool]:
 
     Deterministic. With 0 texts returns ``[]``; with 1 text returns ``[True]``
     (a lone answer is trivially its own majority). A polar disagreement (the
-    first :data:`_POLAR_PAIRS` split found) puts the smaller polar side in the
-    minority; otherwise a text is majority when it shares 4-gram overlap with
-    at least one other completed answer.
+    first :data:`_POLAR_PAIRS` split found) flags only the strictly-larger side
+    as majority — the smaller side, neutral texts, and BOTH sides of a tie are
+    minority (see :func:`_polar_split`). Otherwise a text is majority when it
+    shares 4-gram overlap with at least one other completed answer.
     """
     count = len(completed_texts)
     if count == 0:
