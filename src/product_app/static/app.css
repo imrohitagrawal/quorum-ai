@@ -2413,6 +2413,383 @@ kbd {
   }
 }
 
+/* ----- Slice 4b: Run-details disclosure + run receipt -------------------- */
+/* All colour/money/ID treatment uses the locked tokens (no raw hex/rgba).
+   Green stays reserved for the verdict band; the money delta moves on ink. */
+
+.result-details-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  margin-left: var(--space-1);
+  padding: 3px 10px;
+  border-radius: var(--radius-xl);
+  border: 1px solid var(--line-strong);
+  background: transparent;
+  color: var(--text-secondary);
+  font: inherit;
+  font-size: 0.8rem;
+  font-weight: 600;
+  cursor: pointer;
+  transition: border-color var(--duration-fast) var(--bezier),
+              color var(--duration-fast) var(--bezier);
+}
+
+.result-details-toggle:hover {
+  border-color: var(--ink);
+  color: var(--ink);
+}
+
+.result-details-caret {
+  font-size: 0.72rem;
+  line-height: 1;
+}
+
+.result-receipt {
+  position: relative;
+  border: 1px solid var(--line-2);
+  border-radius: var(--radius-md);
+  background: var(--surface);
+  padding: 18px 22px 20px;
+}
+
+.result-receipt-grid {
+  display: grid;
+  grid-template-columns: 1.05fr 1fr 1fr 0.9fr;
+  gap: 22px;
+}
+
+.result-receipt-col {
+  display: flex;
+  flex-direction: column;
+  gap: 7px;
+  min-width: 0;
+}
+
+.result-receipt-col-div {
+  border-left: 1px solid var(--line);
+  padding-left: 22px;
+}
+
+.result-receipt-kicker {
+  font-size: 0.69rem;
+  font-weight: 600;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--text-secondary);
+}
+
+.result-receipt-row {
+  display: flex;
+  justify-content: space-between;
+  gap: 8px;
+  font-size: 0.78rem;
+  line-height: 1.4;
+}
+
+.result-receipt-label {
+  color: var(--muted);
+}
+
+.result-receipt-value {
+  text-align: right;
+}
+
+.result-receipt-value.mono,
+.result-receipt-recon-value.mono {
+  font-family: var(--font-mono);
+  white-space: nowrap;
+}
+
+.result-receipt-id {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-family: var(--font-mono);
+  min-width: 0;
+}
+
+.result-receipt-id .mono {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  max-width: 12ch;
+}
+
+.result-receipt-copy {
+  border: none;
+  background: transparent;
+  color: var(--text-secondary);
+  cursor: pointer;
+  padding: 0 2px;
+  font-size: 0.85rem;
+  line-height: 1;
+  border-radius: var(--radius-sm);
+  transition: color var(--duration-fast) var(--bezier);
+}
+
+.result-receipt-copy:hover { color: var(--ink); }
+/* Fix 3: the copied confirmation is INFO (blue), not green — copying is not an
+   agreement signal, and Slice 3's live-corr copy already uses blue. Green stays
+   reserved for the verdict band + the ✓ Revised chip. */
+.result-receipt-copy[data-copied="true"] { color: var(--info); }
+
+/* Fix 5: non-color "copied" cue — a ✓ glyph appended to any copy button in its
+   copied state, so the confirmation is not conveyed by color alone. The JS also
+   sets aria-label="Copied", which overrides the accessible name, so this glyph
+   is a purely visual cue and is not double-announced. */
+.result-receipt-copy[data-copied="true"]::after,
+.live-corr-copy[data-copied="true"]::after,
+.meta-value-copy[data-copied="true"]::after {
+  content: " \2713";
+  font-weight: 700;
+}
+
+.result-receipt-cost-total {
+  font-weight: 600;
+  border-top: 1px solid var(--line);
+  padding-top: 6px;
+  margin-top: 2px;
+  color: var(--ink);
+}
+
+.result-receipt-recon {
+  font-weight: 600;
+  border-top: 1px solid var(--line);
+  padding-top: 6px;
+  margin-top: 2px;
+}
+
+/* The reconciliation delta is MONEY, so it moves on ink — never green.
+   "matched"/"pending" are neutral/muted; there is no fabricated savings. */
+.result-receipt-recon[data-state="under"] .result-receipt-recon-value,
+.result-receipt-recon[data-state="over"] .result-receipt-recon-value {
+  color: var(--ink);
+}
+.result-receipt-recon[data-state="matched"] .result-receipt-recon-label,
+.result-receipt-recon[data-state="matched"] .result-receipt-recon-value {
+  color: var(--ink);
+}
+.result-receipt-recon[data-state="pending"] .result-receipt-recon-label,
+.result-receipt-recon[data-state="pending"] .result-receipt-recon-value {
+  color: var(--muted);
+}
+
+.result-receipt-stage {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  color: var(--muted);
+  min-width: 0;
+}
+
+.result-receipt-stage-glyph {
+  font-family: var(--font-mono);
+  font-weight: 700;
+  flex-shrink: 0;
+}
+/* Fix 2: a completed pipeline ✓ is INK/MUTED, not green — the mock renders it
+   ink-gray and the codebase rule is "running=blue, done=ink". Green is reserved
+   for agreement (verdict band + ✓ Revised chip), never mere completion. */
+.result-receipt-stage-glyph[data-tone="done"] { color: var(--muted); }
+.result-receipt-stage-glyph[data-tone="failed"] { color: var(--danger); }
+.result-receipt-stage-glyph[data-tone="skipped"] { color: var(--muted); }
+.result-receipt-stage-glyph[data-tone="running"] { color: var(--info); }
+.result-receipt-stage-glyph[data-tone="pending"] { color: var(--muted); }
+
+.result-receipt-stage-state {
+  color: var(--text-secondary);
+  white-space: nowrap;
+}
+
+.result-receipt-note {
+  margin: 4px 0 0;
+  font-size: 0.72rem;
+  line-height: 1.5;
+  color: var(--muted);
+}
+
+/* ----- Slice 4b: How positions moved ------------------------------------ */
+
+.result-positions {
+  border: 1px solid var(--line-2);
+  border-radius: var(--radius-md);
+  background: var(--surface);
+  overflow: hidden;
+}
+
+.result-positions-head {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  padding: 18px 24px 4px;
+}
+
+.result-positions-title {
+  font-size: 1rem;
+  font-weight: 700;
+  letter-spacing: -0.01em;
+  color: var(--ink);
+}
+
+.result-positions-caption {
+  font-size: 0.8rem;
+  line-height: 1.5;
+  color: var(--text-secondary);
+}
+
+/* Fix 4: native <table>. Wrapped in an overflow-x:auto scroller so a wide
+   table scrolls inside its own box and never pushes the page body sideways. */
+.result-positions-scroll {
+  overflow-x: auto;
+}
+
+.result-positions-table {
+  width: 100%;
+  border-collapse: collapse;
+  table-layout: fixed;
+  padding: 14px 24px 20px;
+}
+
+.result-positions-table thead th:first-child {
+  width: 190px;
+}
+
+.result-positions-colhead {
+  text-align: left;
+  vertical-align: bottom;
+  font-size: 0.72rem;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--text-secondary);
+  padding: 8px 10px;
+}
+
+.result-positions-cell {
+  vertical-align: middle;
+  text-align: left;
+  padding: 10px;
+  border-top: 1px solid var(--line);
+  font-size: 0.78rem;
+  font-weight: 400;
+  color: var(--muted);
+}
+
+.result-pos-model {
+  padding-left: 0;
+  color: var(--ink);
+}
+
+.result-pos-avatar {
+  display: inline-grid;
+  place-items: center;
+  flex-shrink: 0;
+  width: 26px;
+  height: 26px;
+  border-radius: var(--radius-xl);
+  background: var(--line);
+  color: var(--ink);
+  font-size: 0.7rem;
+  font-weight: 700;
+  margin-right: 9px;
+  vertical-align: middle;
+}
+
+.result-pos-name {
+  font-size: 0.84rem;
+  font-weight: 650;
+  color: var(--ink);
+  vertical-align: middle;
+}
+
+.result-pos-text {
+  display: block;
+  line-height: 1.45;
+}
+
+/* Fix 12: this "✓ Revised" chip is GREEN ON PURPOSE — the sanctioned
+   agreement/revision semantic (the model changed its position) and pixel-
+   mandated by the mock. Do NOT retint it to neutral; unlike the completion
+   glyph and the copied-state cue, green here maps to a real, verified signal. */
+.result-pos-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  margin-top: 5px;
+  padding: 4px 10px;
+  border-radius: var(--radius-xl);
+  background: var(--success-soft);
+  border: 1.5px solid var(--success-border);
+  color: var(--success);
+  font-size: 0.75rem;
+  font-weight: 650;
+}
+
+.result-pos-note {
+  display: block;
+  margin-top: 5px;
+  font-size: 0.72rem;
+  line-height: 1.45;
+  color: var(--text-secondary);
+}
+
+@media (max-width: 760px) {
+  .result-receipt-grid {
+    grid-template-columns: 1fr;
+    gap: var(--space-4);
+  }
+  .result-receipt-col-div {
+    border-left: none;
+    padding-left: 0;
+    border-top: 1px solid var(--line);
+    padding-top: var(--space-4);
+  }
+  /* Fix 4: stacked layout on mobile. The <thead> column headers are visually
+     hidden (NOT display:none — they stay in the a11y tree), and each <td> is
+     re-labeled from its data-label so every cell keeps a visible phase name. */
+  .result-positions-table,
+  .result-positions-table thead,
+  .result-positions-table tbody,
+  .result-positions-table tr,
+  .result-positions-table th,
+  .result-positions-table td {
+    display: block;
+  }
+  .result-positions-table thead {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    overflow: hidden;
+    clip: rect(0, 0, 0, 0);
+    white-space: nowrap;
+  }
+  .result-positions-table thead th:first-child {
+    width: auto;
+  }
+  .result-positions-row {
+    padding: 4px 0 8px;
+  }
+  .result-pos-model {
+    border-top: 1px solid var(--line-2);
+    padding-top: var(--space-3);
+  }
+  .result-positions-cell:not(.result-pos-model) {
+    border-top: none;
+    padding-top: 2px;
+  }
+  .result-positions-cell:not(.result-pos-model)::before {
+    content: attr(data-label);
+    display: block;
+    font-size: 0.66rem;
+    font-weight: 700;
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+    color: var(--text-secondary);
+    margin-bottom: 2px;
+  }
+}
+
 /* ----- Workflow progress indicator -------------------------------------- */
 
 .workflow-progress {

@@ -1697,6 +1697,27 @@
     return `${value.slice(0, max - 1).trimEnd()}…`;
   }
 
+  // UTC wall-clock only, e.g. "09:41:44 UTC" — used by the run-receipt
+  // Started/Finished rows. Accepts a Date or an ISO string; guards a
+  // missing/invalid value and any ICU rejection.
+  function formatClockUtc(dateOrRaw) {
+    if (!dateOrRaw) return "";
+    const date = dateOrRaw instanceof Date ? dateOrRaw : new Date(dateOrRaw);
+    if (Number.isNaN(date.getTime())) return "";
+    try {
+      const t = new Intl.DateTimeFormat("en-GB", {
+        hour: "2-digit",
+        minute: "2-digit",
+        second: "2-digit",
+        hour12: false,
+        timeZone: "UTC",
+      }).format(date);
+      return `${t} UTC`;
+    } catch (_) {
+      return "";
+    }
+  }
+
   // Append " · " separated children to the meta row.
   function appendMetaSep(container) {
     container.appendChild(mkEl("span", "result-meta-sep", "·"));
@@ -1831,8 +1852,10 @@
     }
 
     renderResultMeta(result, status, durationText);
+    renderResultReceipt(result, res);
     renderVerdictBand(result, fs, { isConsensus, aligned, total, revisedCount, movements });
     renderTrustTriangle(result, res, fs, { isConsensus, aligned, total });
+    renderResultPositions(res);
 
     // Build the plain-text Copy/Export summary ONCE (textContent-safe).
     const summaryLines = [];
@@ -1853,6 +1876,12 @@
     state.lastResultSummary = summaryLines.join("\n");
     state.lastResultRunId = result.query_run_id || result.correlation_id || "run";
   }
+
+  // Fix 8: cached reference to the static "Run details" toggle. Once grabbed,
+  // the node reference survives being detached from the DOM (when
+  // ``renderResultMeta`` clears ``#result-meta``), so we can always re-append
+  // the SAME element — with its click listener intact — on a re-render.
+  let resultDetailsToggleNode = null;
 
   function renderResultMeta(result, status, durationText) {
     const meta = el("result-meta");
@@ -1903,6 +1932,16 @@
       appendMetaSep(meta);
       meta.appendChild(mkEl("span", "mono", result.correlation_id));
     }
+
+    // Slice 4b: move the static "Run details" disclosure toggle into the meta
+    // row (it lives in the HTML so its click listener is wired once; moving the
+    // node keeps the listener). ``renderResultMeta`` cleared ``meta`` above,
+    // which detaches the toggle on a re-render — after which
+    // ``getElementById`` can no longer find it. Fix 8: use the cached node
+    // reference (which survives detachment) so the toggle + listener always
+    // return on every terminal render.
+    if (!resultDetailsToggleNode) resultDetailsToggleNode = el("result-details-toggle");
+    if (resultDetailsToggleNode) meta.appendChild(resultDetailsToggleNode);
   }
 
   function renderVerdictBand(result, fs, ctx) {
@@ -2034,6 +2073,461 @@
           : "No open uncertainty was flagged for this run.",
       }),
     );
+  }
+
+  // --- Slice 4b: run receipt + cost reconciliation -----------------------
+  //
+  // Friendly labels for the four pipeline stages. Keys mirror the backend
+  // ``progress.stages[].stage`` vocabulary and ``CostLineByStage.stage``.
+  const RECEIPT_STAGE_LABELS = {
+    initial_answers: "Initial answers",
+    debate_round_1: "Debate round 1",
+    debate_round_2: "Debate round 2",
+    synthesis: "Synthesis",
+  };
+  const RECEIPT_STAGE_SHORT = {
+    initial_answers: "Initial",
+    debate_round_1: "Round 1",
+    debate_round_2: "Round 2",
+    synthesis: "Synthesis",
+  };
+  const RECEIPT_PIPELINE_ORDER = [
+    "initial_answers",
+    "debate_round_1",
+    "debate_round_2",
+    "synthesis",
+  ];
+
+  // Map a backend stage state onto a completion marker. NOTE: the response
+  // carries NO per-stage duration (``progress.stages[]`` is {stage,state,detail}
+  // only), so the pipeline column renders completion STATE, never a fabricated
+  // per-stage time. The mock's "8.2s / 11.4s" are mock-only and dropped.
+  function receiptStageMarker(state) {
+    switch (state) {
+      case "completed":
+        return { glyph: "✓", label: "Completed", tone: "done" };
+      case "failed":
+        return { glyph: "✕", label: "Failed", tone: "failed" };
+      case "skipped":
+        return { glyph: "–", label: "Skipped", tone: "skipped" };
+      case "running":
+        return { glyph: "…", label: "Running", tone: "running" };
+      default:
+        return { glyph: "·", label: "Pending", tone: "pending" };
+    }
+  }
+
+  function buildReceiptTextRow(label, value, { mono = false } = {}) {
+    const row = mkEl("div", "result-receipt-row");
+    row.appendChild(mkEl("span", "result-receipt-label", label));
+    row.appendChild(
+      mkEl("span", mono ? "result-receipt-value mono" : "result-receipt-value", value),
+    );
+    return row;
+  }
+
+  // Copyable ID row (Run ID / Correlation). The ⧉ button carries the value on
+  // its dataset; a single delegated click handler on ``#result-receipt`` (wired
+  // once in boot) reuses the shared ``copyRunIdToClipboard`` helper.
+  function buildReceiptIdRow(label, value, idleTitle) {
+    const row = mkEl("div", "result-receipt-row");
+    row.appendChild(mkEl("span", "result-receipt-label", label));
+    const valWrap = mkEl("span", "result-receipt-id");
+    valWrap.appendChild(mkEl("span", "mono", value));
+    const copy = mkEl("button", "result-receipt-copy", "⧉");
+    copy.type = "button";
+    copy.dataset.copyValue = value;
+    copy.dataset.idleTitle = idleTitle;
+    copy.setAttribute("aria-label", idleTitle);
+    copy.title = idleTitle;
+    valWrap.appendChild(copy);
+    row.appendChild(valWrap);
+    return row;
+  }
+
+  // One "est → actual" money row. When ``actualUsd`` is not finite (no actual
+  // breakdown) the actual side renders "—" — NEVER a fabricated number.
+  function buildReceiptCostRow(label, estUsd, actualUsd, { total = false } = {}) {
+    const row = mkEl(
+      "div",
+      total ? "result-receipt-row result-receipt-cost-total" : "result-receipt-row",
+    );
+    row.appendChild(mkEl("span", "result-receipt-label", label));
+    const estText = Number.isFinite(estUsd) ? formatUsd(estUsd, { suffix: false }) : "—";
+    const actText = Number.isFinite(actualUsd)
+      ? formatUsd(actualUsd, { suffix: false })
+      : "—";
+    // Fix 6: the "→" is decorative (SR would read "rightwards arrow"). Hide it
+    // and give SR a spoken "to" so the pair reads "$0.034 to $0.031".
+    const valueEl = mkEl("span", "result-receipt-value mono");
+    valueEl.appendChild(mkEl("span", null, estText));
+    const arrow = mkEl("span", null, " → ");
+    arrow.setAttribute("aria-hidden", "true");
+    valueEl.appendChild(arrow);
+    valueEl.appendChild(mkEl("span", "sr-only", "to"));
+    valueEl.appendChild(mkEl("span", null, actText));
+    row.appendChild(valueEl);
+    return row;
+  }
+
+  // Cost reconciliation footer. delta = approved − actual.
+  //  · no actual breakdown / missing actual → "Actual cost … pending" (no delta)
+  //  · demo_mode OR actual ≈ approved       → "Matched estimate" (neutral)
+  //  · actual < approved (real savings)     → "Under approval −$X" (ink, money)
+  //  · actual > approved (real overage)     → "Over approval +$X" (ink)
+  // Green is reserved for the verdict band; the delta is money, so it moves on
+  // ink per the money-on-ink rule — never green (see report for the rationale).
+  function buildReconciliationRow(result) {
+    const row = mkEl("div", "result-receipt-row result-receipt-recon");
+    const approved =
+      result.cost_estimate && result.cost_estimate.estimated_cost_usd != null
+        ? Number(result.cost_estimate.estimated_cost_usd)
+        : NaN;
+    const actual = Number(result.actual_cost_usd);
+    const hasActual = result.actual_breakdown != null && Number.isFinite(actual);
+    const label = mkEl("span", "result-receipt-recon-label");
+    const value = mkEl("span", "result-receipt-recon-value mono");
+    if (!hasActual || !Number.isFinite(approved)) {
+      row.dataset.state = "pending";
+      label.textContent = "Actual cost";
+      value.textContent = "pending";
+    } else {
+      const delta = approved - actual;
+      const eps = 0.0005;
+      if (result.demo_mode || Math.abs(delta) <= eps) {
+        row.dataset.state = "matched";
+        label.textContent = "Matched estimate";
+        value.textContent = formatUsd(actual, { suffix: false });
+      } else if (delta > eps) {
+        row.dataset.state = "under";
+        label.textContent = "Under approval";
+        value.textContent = `−${formatUsd(delta, { suffix: false })}`;
+      } else {
+        row.dataset.state = "over";
+        label.textContent = "Over approval";
+        value.textContent = `+${formatUsd(-delta, { suffix: false })}`;
+      }
+    }
+    row.append(label, value);
+    return row;
+  }
+
+  // Populate the collapsed run-receipt panel. Idempotent: clears + resets to
+  // collapsed on every call. Every nested field is guarded; the actual columns
+  // null-guard ``actual_breakdown`` and never fabricate an actual figure.
+  function renderResultReceipt(result, res) {
+    const receipt = el("result-receipt");
+    if (!receipt) return;
+    receipt.textContent = "";
+    receipt.hidden = true;
+    const toggle = el("result-details-toggle");
+    if (toggle) {
+      toggle.setAttribute("aria-expanded", "false");
+      const caret = toggle.querySelector(".result-details-caret");
+      if (caret) caret.textContent = "▾";
+    }
+
+    const est =
+      result.cost_estimate && result.cost_estimate.breakdown
+        ? result.cost_estimate.breakdown
+        : null;
+    const actual = result.actual_breakdown || null;
+    const answers = Array.isArray(res.model_answers) ? res.model_answers : [];
+
+    const grid = mkEl("div", "result-receipt-grid");
+
+    // --- Col 1: Run receipt ------------------------------------------------
+    const c1 = mkEl("div", "result-receipt-col");
+    // Fix 7: label each receipt column as a semantic group so SR announces the
+    // column's purpose (the kicker spans alone are non-semantic).
+    c1.setAttribute("role", "group");
+    c1.setAttribute("aria-label", "Run receipt");
+    c1.appendChild(mkEl("span", "result-receipt-kicker", "Run receipt"));
+    if (result.query_run_id) {
+      c1.appendChild(
+        buildReceiptIdRow(
+          "Run ID",
+          String(result.query_run_id),
+          "Copy run ID — include it if you report an issue.",
+        ),
+      );
+    }
+    if (result.correlation_id) {
+      c1.appendChild(
+        buildReceiptIdRow(
+          "Correlation",
+          String(result.correlation_id),
+          "Copy correlation ID — include it if you report an issue.",
+        ),
+      );
+    }
+    c1.appendChild(buildReceiptTextRow("Session", "Secure cookie"));
+
+    const finishedDate = result.result_generated_at_utc
+      ? new Date(result.result_generated_at_utc)
+      : null;
+    const finishedValid = finishedDate && !Number.isNaN(finishedDate.getTime());
+    const elapsedMs = Number(result.elapsed_time_ms);
+    if (finishedValid && Number.isFinite(elapsedMs) && elapsedMs > 0) {
+      const startedClock = formatClockUtc(new Date(finishedDate.getTime() - elapsedMs));
+      if (startedClock) {
+        c1.appendChild(buildReceiptTextRow("Started", startedClock, { mono: true }));
+      }
+    }
+    if (finishedValid) {
+      const finishedClock = formatClockUtc(finishedDate);
+      if (finishedClock) {
+        c1.appendChild(buildReceiptTextRow("Finished", finishedClock, { mono: true }));
+      }
+    }
+
+    // Search: "OpenRouter" plus "· Fallback search ×N" only when N>0 (N =
+    // answers that fell back to the LOCAL search stub). We name what actually
+    // ran: the fallback emits synthetic stub citations and never reaches a real
+    // web-search provider (OQ-008 / DEBT-002), so naming one would be a
+    // fabricated integration claim.
+    const fallbackCount = answers.filter(
+      (a) => a && (a.fallback_used === true || a.provider_path === "fallback_search"),
+    ).length;
+    c1.appendChild(
+      buildReceiptTextRow(
+        "Search",
+        fallbackCount > 0
+          ? `OpenRouter · Fallback search ×${fallbackCount}`
+          : "OpenRouter",
+      ),
+    );
+    c1.appendChild(
+      mkEl(
+        "p",
+        "result-receipt-note",
+        "Quote the run ID and correlation ID when you report an issue — support can pull every log line. Ephemeral: this receipt is gone when the session ends.",
+      ),
+    );
+    grid.appendChild(c1);
+
+    // --- Col 2: Cost by model · est → actual -------------------------------
+    const c2 = mkEl("div", "result-receipt-col result-receipt-col-div");
+    c2.setAttribute("role", "group");
+    c2.setAttribute("aria-label", "Cost by model, estimate to actual");
+    c2.appendChild(mkEl("span", "result-receipt-kicker", "Cost by model · est → actual"));
+    if (est && Array.isArray(est.by_model) && est.by_model.length) {
+      const actualByModel =
+        actual && Array.isArray(actual.by_model) ? actual.by_model : null;
+      est.by_model.forEach((line) => {
+        // Fix 10: null-entry guard (parity with the positions loop).
+        if (!line) return;
+        // Fix 9: pair est→actual by model key, not array index, so a real
+        // (reordered/partial) actual breakdown can never be misattributed.
+        const key = line.model_id || line.display_name;
+        let actUsd = NaN;
+        if (actualByModel) {
+          const match = actualByModel.find(
+            (a) => a && (a.model_id || a.display_name) === key,
+          );
+          if (match) actUsd = Number(match.usd);
+        }
+        c2.appendChild(
+          buildReceiptCostRow(
+            line.display_name || line.model_id || "—",
+            Number(line.usd),
+            actUsd,
+          ),
+        );
+      });
+      c2.appendChild(
+        buildReceiptCostRow(
+          "Total",
+          Number(est.total),
+          actual ? Number(actual.total) : NaN,
+          { total: true },
+        ),
+      );
+    } else {
+      c2.appendChild(
+        mkEl("p", "result-receipt-note", "Itemized cost breakdown is not available for this run."),
+      );
+    }
+    grid.appendChild(c2);
+
+    // --- Col 3: Cost by stage · est → actual + reconciliation --------------
+    const c3 = mkEl("div", "result-receipt-col result-receipt-col-div");
+    c3.setAttribute("role", "group");
+    c3.setAttribute("aria-label", "Cost by stage, estimate to actual");
+    c3.appendChild(mkEl("span", "result-receipt-kicker", "Cost by stage · est → actual"));
+    if (est && Array.isArray(est.by_stage) && est.by_stage.length) {
+      const actualByStage =
+        actual && Array.isArray(actual.by_stage) ? actual.by_stage : null;
+      est.by_stage.forEach((line) => {
+        // Fix 10: null-entry guard (parity with the positions loop).
+        if (!line) return;
+        // Fix 9: pair est→actual by stage key, not array index.
+        let actUsd = NaN;
+        if (actualByStage) {
+          const match = actualByStage.find((a) => a && a.stage === line.stage);
+          if (match) actUsd = Number(match.usd);
+        }
+        c3.appendChild(
+          buildReceiptCostRow(
+            RECEIPT_STAGE_SHORT[line.stage] || line.stage,
+            Number(line.usd),
+            actUsd,
+          ),
+        );
+      });
+    } else {
+      c3.appendChild(
+        mkEl("p", "result-receipt-note", "Itemized stage breakdown is not available for this run."),
+      );
+    }
+    c3.appendChild(buildReconciliationRow(result));
+    grid.appendChild(c3);
+
+    // --- Col 4: Pipeline (completion states, NO fabricated durations) ------
+    const c4 = mkEl("div", "result-receipt-col result-receipt-col-div");
+    c4.setAttribute("role", "group");
+    c4.setAttribute("aria-label", "Pipeline");
+    c4.appendChild(mkEl("span", "result-receipt-kicker", "Pipeline"));
+    const stages =
+      result.progress && Array.isArray(result.progress.stages)
+        ? result.progress.stages
+        : [];
+    const stateByStage = {};
+    for (const s of stages) {
+      if (s && s.stage) stateByStage[s.stage] = String(s.state || "");
+    }
+    let allCompleted = true;
+    for (const key of RECEIPT_PIPELINE_ORDER) {
+      const st = stateByStage[key];
+      if (st !== "completed") allCompleted = false;
+      const marker = receiptStageMarker(st);
+      const row = mkEl("div", "result-receipt-row");
+      const lbl = mkEl("span", "result-receipt-stage");
+      const glyph = mkEl("span", "result-receipt-stage-glyph", marker.glyph);
+      glyph.dataset.tone = marker.tone;
+      glyph.setAttribute("aria-hidden", "true");
+      lbl.append(glyph, mkEl("span", null, RECEIPT_STAGE_LABELS[key]));
+      row.append(lbl, mkEl("span", "result-receipt-stage-state", marker.label));
+      c4.appendChild(row);
+    }
+    // The ONLY real timing the response exposes is the whole-run elapsed.
+    if (Number.isFinite(elapsedMs) && elapsedMs > 0) {
+      const totalRow = mkEl("div", "result-receipt-row result-receipt-cost-total");
+      totalRow.append(
+        mkEl("span", "result-receipt-label", "Total"),
+        mkEl("span", "result-receipt-value mono", formatDuration(elapsedMs)),
+      );
+      c4.appendChild(totalRow);
+    }
+    const failedSteps = Array.isArray(result.failed_steps) ? result.failed_steps : [];
+    if (allCompleted && failedSteps.length === 0) {
+      c4.appendChild(
+        mkEl("p", "result-receipt-note", "All stages completed."),
+      );
+    }
+    grid.appendChild(c4);
+
+    receipt.appendChild(grid);
+  }
+
+  // One position <td>. ``data-label`` carries the column name so the mobile
+  // stacked layout can re-label each cell via CSS ``::before``.
+  function mkPositionsCell(label, text) {
+    const cell = mkEl("td", "result-positions-cell");
+    cell.dataset.label = label;
+    if (text) cell.appendChild(mkEl("span", "result-pos-text", String(text)));
+    return cell;
+  }
+
+  // "How positions moved" table. The caption is ALWAYS rendered (not demo-gated)
+  // because the per-model movement is INFERRED from opening answers + panel
+  // consensus in both demo and live modes. Empty movements → hide the section.
+  //
+  // Fix 4: rendered as a NATIVE <table> so screen readers associate each model
+  // with its cells. The model is a ``<th scope="row">``; each phase is a
+  // ``<td>``; the column headers are ``<th scope="col">``. The table is
+  // labelled (the "Inferred from…" caption stays a separate visible element in
+  // the head) and wrapped in an ``overflow-x:auto`` scroller so it never pushes
+  // the page body sideways.
+  function renderResultPositions(res) {
+    const container = el("result-positions");
+    if (!container) return;
+    container.textContent = "";
+    const movements = Array.isArray(res.position_movements)
+      ? res.position_movements
+      : [];
+    if (movements.length === 0) {
+      container.hidden = true;
+      return;
+    }
+    container.hidden = false;
+
+    const head = mkEl("div", "result-positions-head");
+    head.appendChild(mkEl("span", "result-positions-title", "How positions moved"));
+    head.appendChild(
+      mkEl(
+        "span",
+        "result-positions-caption",
+        "Inferred from opening answers and panel consensus — not a quoted transcript.",
+      ),
+    );
+    container.appendChild(head);
+
+    const scroller = mkEl("div", "result-positions-scroll");
+    const table = mkEl("table", "result-positions-table");
+    table.setAttribute("aria-label", "How positions moved");
+
+    const thead = document.createElement("thead");
+    const headRow = document.createElement("tr");
+    for (const text of ["Model", "Opening", "After round 1", "Final"]) {
+      const th = mkEl("th", "result-positions-colhead", text);
+      th.setAttribute("scope", "col");
+      headRow.appendChild(th);
+    }
+    thead.appendChild(headRow);
+    table.appendChild(thead);
+
+    const tbody = document.createElement("tbody");
+    for (const m of movements) {
+      if (!m) continue;
+      const row = mkEl("tr", "result-positions-row");
+
+      const name = String(m.display_name || m.model_id || "Model");
+      const modelCell = mkEl("th", "result-positions-cell result-pos-model");
+      modelCell.setAttribute("scope", "row");
+      const avatar = mkEl("span", "result-pos-avatar", name.trim().charAt(0).toUpperCase() || "?");
+      avatar.setAttribute("aria-hidden", "true");
+      modelCell.append(avatar, mkEl("span", "result-pos-name", name));
+      row.appendChild(modelCell);
+
+      row.appendChild(mkPositionsCell("Opening", m.opening));
+      row.appendChild(mkPositionsCell("After round 1", m.after_round_1));
+
+      const finalCell = mkEl("td", "result-positions-cell");
+      finalCell.dataset.label = "Final";
+      if (m.final) finalCell.appendChild(mkEl("span", "result-pos-text", String(m.final)));
+      if (m.revised === true) {
+        // Fix 12: this "✓ Revised" chip is GREEN ON PURPOSE — it is the
+        // sanctioned agreement/revision semantic (the model changed its
+        // position) and is pixel-mandated by the mock. Do NOT retint it to a
+        // neutral tone; unlike the done glyph / copied-state, green here maps
+        // to a real, verified signal.
+        const chip = mkEl("span", "result-pos-chip", "✓ Revised");
+        const note = m.revision_note ? String(m.revision_note) : "";
+        if (note) {
+          chip.title = note;
+          finalCell.appendChild(chip);
+          finalCell.appendChild(mkEl("span", "result-pos-note", note));
+        } else {
+          finalCell.appendChild(chip);
+        }
+      }
+      row.appendChild(finalCell);
+      tbody.appendChild(row);
+    }
+    table.appendChild(tbody);
+    scroller.appendChild(table);
+    container.appendChild(scroller);
   }
 
   function focusResultHeading() {
@@ -4208,13 +4702,23 @@
     // same copied-title feedback. Extracted so both stay in lockstep.
     async function copyRunIdToClipboard(button, value, idleTitle) {
       if (!button || !value) return;
+      // Fix 5: preserve this button's OWN idle aria-label (the three callers
+      // have different ones) so it is restored exactly on timeout.
+      const idleAria = button.getAttribute("aria-label");
       try {
         await navigator.clipboard.writeText(value);
         button.dataset.copied = "true";
         button.title = "Copied!";
+        // Fix 5: convey the copied state to SR (not color-only). The visible
+        // non-color cue (a ✓ glyph) is added via CSS ``::after`` so it never
+        // clobbers the button's own text — #live-corr shows the run id and
+        // #copy-correlation wraps a child <span>. aria-label="Copied"
+        // overrides the accessible name, so the ✓ stays purely visual.
+        button.setAttribute("aria-label", "Copied");
         setTimeout(() => {
           delete button.dataset.copied;
           button.title = idleTitle;
+          if (idleAria != null) button.setAttribute("aria-label", idleAria);
         }, 1500);
       } catch (_) {
         button.title = "Copy failed — select and copy manually.";
@@ -4275,6 +4779,34 @@
     if (liveStopButton) {
       liveStopButton.addEventListener("click", () => {
         cancelRun();
+      });
+    }
+    // Slice 4b (05 Result): "Run details" disclosure toggle. Collapsed by
+    // default; expands/collapses the run-receipt panel. Keyboard operable
+    // (native <button>), reflects state via aria-expanded + the caret glyph.
+    const resultDetailsToggle = el("result-details-toggle");
+    if (resultDetailsToggle) {
+      resultDetailsToggle.addEventListener("click", () => {
+        const receipt = el("result-receipt");
+        const next = resultDetailsToggle.getAttribute("aria-expanded") !== "true";
+        resultDetailsToggle.setAttribute("aria-expanded", next ? "true" : "false");
+        if (receipt) receipt.hidden = !next;
+        const caret = resultDetailsToggle.querySelector(".result-details-caret");
+        if (caret) caret.textContent = next ? "▴" : "▾";
+      });
+    }
+    // Slice 4b: delegated copy for the receipt's ⧉ id buttons — reuses the
+    // shared ``copyRunIdToClipboard`` helper so run-id copy stays in lockstep.
+    const resultReceiptEl = el("result-receipt");
+    if (resultReceiptEl) {
+      resultReceiptEl.addEventListener("click", (event) => {
+        const target = event.target;
+        const button =
+          target && target.closest ? target.closest("[data-copy-value]") : null;
+        if (!button || !resultReceiptEl.contains(button)) return;
+        const value = (button.dataset.copyValue || "").trim();
+        if (!value) return;
+        copyRunIdToClipboard(button, value, button.dataset.idleTitle || "Copy");
       });
     }
     // Slice 4a (05 Result): Copy + Export the result summary. Both read the

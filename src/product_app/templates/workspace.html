@@ -380,11 +380,37 @@
                 <span class="result-eyebrow">You asked</span>
                 <h1 id="result-heading" class="result-question" tabindex="-1"><span id="result-question"></span></h1>
                 <div id="result-meta" class="result-meta"></div>
+                <button
+                  id="result-details-toggle"
+                  type="button"
+                  class="result-details-toggle"
+                  aria-expanded="false"
+                  aria-controls="result-receipt"
+                >
+                  <span class="result-details-label">Run details</span>
+                  <span class="result-details-caret" aria-hidden="true">&#9662;</span>
+                </button>
               </div>
+
+              <div
+                id="result-receipt"
+                class="result-receipt"
+                role="region"
+                aria-label="Run receipt and cost reconciliation"
+                hidden
+              ></div>
 
               <div id="result-verdict" class="result-verdict" role="region" aria-label="Panel result"></div>
 
               <div id="result-trust" class="result-trust" role="group" aria-label="Trust signals"></div>
+
+              <div
+                id="result-positions"
+                class="result-positions"
+                role="region"
+                aria-label="How positions moved"
+                hidden
+              ></div>
             </div>
           </section>
         </div>
