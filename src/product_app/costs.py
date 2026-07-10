@@ -563,8 +563,7 @@ class CostEstimationService:
         raw_model: list[tuple[str, str, str, Decimal]] = []
         for slot, initial_i in zip(model_slots, initial_per_model, strict=True):
             display_name = (
-                openrouter_model_catalog_service.lookup_short_name(slot.model_id)
-                or slot.model_id
+                openrouter_model_catalog_service.lookup_short_name(slot.model_id) or slot.model_id
             )
             raw_model.append(
                 ("model", slot.model_id, display_name, initial_i + base_share + debate_share)
@@ -601,18 +600,12 @@ class CostEstimationService:
         quantum = COST_DISPLAY_QUANTUM
         if not raw:
             if total != 0:
-                raise ValueError(
-                    f"cannot reconcile an empty line list to non-zero total {total}"
-                )
+                raise ValueError(f"cannot reconcile an empty line list to non-zero total {total}")
             return []
         # Floor each line to a whole number of quanta; keep the fractional
         # remainder (in [0, 1) for raw >= 0) to rank apportionment.
-        floor_steps = [
-            (v / quantum).to_integral_value(rounding=ROUND_FLOOR) for v in raw
-        ]
-        remainders = [
-            (v / quantum) - fs for v, fs in zip(raw, floor_steps, strict=True)
-        ]
+        floor_steps = [(v / quantum).to_integral_value(rounding=ROUND_FLOOR) for v in raw]
+        remainders = [(v / quantum) - fs for v, fs in zip(raw, floor_steps, strict=True)]
         residual = total - sum(fs * quantum for fs in floor_steps)
         residual_steps = int((residual / quantum).to_integral_value(rounding=ROUND_HALF_UP))
         steps = list(floor_steps)
@@ -629,9 +622,7 @@ class CostEstimationService:
             )
             needed = -residual_steps
             if needed > len(order):
-                raise ValueError(
-                    "cannot reconcile lines without driving a line negative"
-                )
+                raise ValueError("cannot reconcile lines without driving a line negative")
             for i in order[:needed]:
                 steps[i] -= 1
         return [s * quantum for s in steps]

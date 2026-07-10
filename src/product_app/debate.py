@@ -730,8 +730,7 @@ _STANCE_COPY: dict[AlignmentState, _StanceCopy] = {
     AlignmentState.HELD_MINORITY: _StanceCopy(
         after_round_1="Opening clustered as a minority reading on {focus}.",
         final=(
-            "Opened in the minority; the final synthesis leaves it outside "
-            "the group consensus."
+            "Opened in the minority; the final synthesis leaves it outside the group consensus."
         ),
         revised=False,
         revision_note=None,

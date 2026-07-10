@@ -782,9 +782,7 @@ def build_agreement_and_positions(
     surfaced by ``QueryRunResultResponse.demo_mode``.
     """
     alignments = classify_model_alignment(initial_answers, debate_outputs)
-    agreement = summarize_agreement(
-        initial_answers=initial_answers, alignments=alignments
-    )
+    agreement = summarize_agreement(initial_answers=initial_answers, alignments=alignments)
     positions = build_position_movements(
         initial_answers=initial_answers,
         debate_outputs=debate_outputs,

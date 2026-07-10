@@ -347,8 +347,7 @@ def classify_model_alignment(
     completed_indices = [
         index
         for index, answer in enumerate(initial_answers)
-        if answer.status is InitialAnswerStatus.COMPLETED
-        and (answer.answer_text or "").strip()
+        if answer.status is InitialAnswerStatus.COMPLETED and (answer.answer_text or "").strip()
     ]
     completed_texts = [initial_answers[index].answer_text for index in completed_indices]
     majority_flags = _opening_majority_flags(completed_texts)
