@@ -300,15 +300,21 @@ class QueryRunResultResponse(BaseModel):
     #: was called).
     material_claim_count: int = Field(ge=0, default=0)
     #: Actual cost incurred by this run, for the receipt's est→actual
-    #: reconciliation. On live runs this is the real provider usage; on
-    #: demo/simulation runs there is no real usage to bill, so the honest
-    #: "actual" equals the estimate (``cost_estimate.estimated_cost_usd``).
-    #: REQUIRED (no default): ``_result_response`` always supplies it, so a
-    #: missing value should surface loudly rather than silently emit "0".
+    #: reconciliation. Per-call provider-usage capture is NOT yet plumbed
+    #: through the pipeline, so this value currently ALWAYS equals the
+    #: estimate (``cost_estimate.estimated_cost_usd``) regardless of
+    #: ``demo_mode``: for demo/simulation runs that is exact (no real usage
+    #: is billed); for live runs it is the estimate standing in for measured
+    #: usage until usage capture lands (a known limitation — this field does
+    #: not yet reflect real provider billing on live runs). REQUIRED (no
+    #: default): ``_result_response`` always supplies it, so a missing value
+    #: should surface loudly rather than silently emit "0".
     actual_cost_usd: Decimal = Field(ge=Decimal("0"))
     #: Itemized actual-cost partition (mirrors ``cost_estimate.breakdown``).
     #: ``None`` when no breakdown is available (e.g. a cost estimate built
-    #: without one). On demo/simulation runs this is the estimate's breakdown.
+    #: without one). Like ``actual_cost_usd``, this currently reuses the
+    #: estimate's breakdown verbatim on every run (demo and live) until
+    #: per-call usage capture is plumbed through the pipeline.
     actual_breakdown: CostBreakdown | None = None
 
 
@@ -1386,11 +1392,13 @@ def _result_response(query_run: QueryRun) -> QueryRunResultResponse:
 def _actual_cost(query_run: QueryRun) -> tuple[Decimal, CostBreakdown | None]:
     """Actual cost incurred, for the receipt's est→actual reconciliation.
 
-    On a demo/simulation run no real provider usage was billed, so the honest
-    "actual" is the estimate itself — same number, same itemized breakdown.
-    Live runs would substitute real token usage here; until per-call usage
-    capture is plumbed through the pipeline we fall back to the estimate,
-    which is the correct value for every simulated run in this build.
+    Per-call provider-usage capture is NOT yet plumbed through the pipeline,
+    so this returns the estimate (value and itemized breakdown) for EVERY run,
+    demo and live alike. On a demo/simulation run that is exact — no real
+    provider usage was billed, so the honest "actual" is the estimate itself.
+    On a live run it is a known limitation: the estimate stands in for the
+    (not-yet-captured) measured usage. Once usage capture lands, live runs
+    should substitute the real token usage here instead of the estimate.
     """
     estimate = query_run.cost_estimate
     return estimate.estimated_cost_usd, estimate.breakdown

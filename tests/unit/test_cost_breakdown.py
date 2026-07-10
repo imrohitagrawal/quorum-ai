@@ -15,6 +15,7 @@ catalog without depending on the live-catalog network cross-check.
 
 from __future__ import annotations
 
+from collections.abc import Sequence
 from datetime import UTC, datetime
 from decimal import Decimal
 from uuid import UUID, uuid4
@@ -25,6 +26,8 @@ from product_app.costs import (
     COST_DISPLAY_QUANTUM,
     HARD_LIMIT_USD,
     CostBreakdown,
+    CostLineByModel,
+    CostLineByStage,
     CostThresholdAction,
     cost_estimation_service,
     cost_event_recorder,
@@ -66,7 +69,7 @@ def _slots(model_ids: list[str]) -> list[ModelSlot]:
     return [ModelSlot(slot_number=i + 1, model_id=mid) for i, mid in enumerate(model_ids)]
 
 
-def _sum(lines: list) -> Decimal:
+def _sum(lines: Sequence[CostLineByModel | CostLineByStage]) -> Decimal:
     return sum((line.usd for line in lines), Decimal("0"))
 
 
@@ -108,7 +111,11 @@ def test_breakdown_shape_and_reconciliation(query_text: str, model_ids: list[str
     # Sign-safety guarantee: EVERY line (both partitions) is non-negative —
     # this is the property the old "dump residual on the largest line" rule
     # violated for the fallback-priced case.
-    for line in [*breakdown.by_model, *breakdown.by_stage]:
+    all_lines: list[CostLineByModel | CostLineByStage] = [
+        *breakdown.by_model,
+        *breakdown.by_stage,
+    ]
+    for line in all_lines:
         assert line.usd >= 0, f"negative line: {line}"
 
     # Reconciliation invariant: BOTH partitions sum EXACTLY to total.
@@ -119,7 +126,7 @@ def test_breakdown_shape_and_reconciliation(query_text: str, model_ids: list[str
     assert breakdown.total == estimate.estimated_cost_usd
 
     # Every line is quantized to at most 4 dp.
-    for line in [*breakdown.by_model, *breakdown.by_stage]:
+    for line in all_lines:
         assert int(line.usd.as_tuple().exponent) >= -4
 
 
@@ -135,7 +142,11 @@ def test_fallback_priced_repro_has_no_negative_line() -> None:
     breakdown = estimate.breakdown
     assert breakdown is not None
 
-    for line in [*breakdown.by_model, *breakdown.by_stage]:
+    repro_lines: list[CostLineByModel | CostLineByStage] = [
+        *breakdown.by_model,
+        *breakdown.by_stage,
+    ]
+    for line in repro_lines:
         assert line.usd >= 0, f"negative line in repro: {line}"
 
     assert _sum(breakdown.by_model) == breakdown.total
@@ -338,5 +349,9 @@ def test_quantum_is_the_apportionment_unit() -> None:
         model_slots=_slots(FALLBACK_PRICED_IDS),
     )
     assert estimate.breakdown is not None
-    for line in [*estimate.breakdown.by_model, *estimate.breakdown.by_stage]:
+    quantum_lines: list[CostLineByModel | CostLineByStage] = [
+        *estimate.breakdown.by_model,
+        *estimate.breakdown.by_stage,
+    ]
+    for line in quantum_lines:
         assert line.usd % COST_DISPLAY_QUANTUM == 0
