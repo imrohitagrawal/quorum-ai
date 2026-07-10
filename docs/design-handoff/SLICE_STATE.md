@@ -50,15 +50,37 @@
    - UI slices → `ux-design` + `design-system-governance` + `uiux-*`;
      `accessibility-testing`; `code-quality-review`; design-fidelity-vs-dc.html.
    - Every slice → `taste-check` + `fanatic-critic` (ruthless).
-   Fix confirmed findings; re-verify. VERIFY each finding before applying (reviewers err).
+   VERIFY each finding before applying (reviewers err — re-check the claim against the
+   code; some findings are wrong). Fix confirmed findings; re-verify (tests/build).
+   **RE-REVIEW LOOP (required): after applying fixes, run a focused adversarial
+   re-review of the fixed areas until a pass returns NO new confirmed findings.**
+   Do not commit a slice while any confirmed finding is open. Scale the loop to risk:
+   money/security/honesty-touching slices get a full second panel; low-risk cosmetic
+   fixes get a single focused re-check.
 
 ### Industrial PR-review gate (run BEFORE opening the PR)
 `enterprise-quality-gatekeeper` → `fanatic-critic` → `nfr-measurability-gate` (AC-035
 a11y + perf) → `devsecops` (secrets/scanning) → `traceability-management` +
 `acceptance-criteria-quality-gate` (AC-001…036 crosswalk) → `production-readiness-review`
 / `release-readiness` (go/no-go + evidence + rollback in PR body).
-5. **Pause for user review** at the boundary. Commit only on approval.
-6. Update this file (Done/Next), then hand off to the next fresh context.
+5. **Do NOT pause for per-slice approval** (user relaxed this) — once the re-review
+   loop is clean, commit the slice yourself and continue to the next.
+6. **MANDATORY on every slice commit:** update this file's ledger row (status →
+   DONE + commit SHA, key decisions, carry-forwards) IN THE SAME commit as the slice.
+   A slice is not "done" until its ledger row is updated. Never let the ledger drift
+   from the branch.
+
+## PR strategy — 2–3 cohesive PRs (NOT per-slice, NOT one giant PR)
+The frontend slices edit the same 3 files in a dependency chain, so per-slice PRs would
+be stacked and churny; the rigorous review is already per-slice (adversarial panels on
+each commit), so the PR is the FINAL external gate. Open at cohesive boundaries:
+- **PR-A — Backend** (B1 `d46cb42` + B2 `5a5b9e8`): self-contained, no UI; mergeable to
+  `main` first, independently.
+- **PR-B — Money-path UI** (Slices 0→4b): the reviewable core.
+- **PR-C — Remaining** (Slices 5–7 + `docs/32-ui-state-matrix.md`).
+Run the **Industrial PR-review gate** (above) before opening EACH PR; put its go/no-go
+evidence + AC-001…036 crosswalk + green-rule audit + rollback in the PR body. After a PR
+merges to `main`, rebase the remaining branch onto the new `main` before continuing.
 
 ## Test command
 `UV_CACHE_DIR=.uv-cache uv run --extra dev pytest`  ·  lint `uv run ruff check .`  ·  types `uv run mypy src tests`  ·  e2e `cd e2e && npm test`
