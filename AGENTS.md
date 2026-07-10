@@ -56,6 +56,25 @@ make quality
 Stop on failed validation gates.
 
 
+## Review before "done"
+
+Green gates are necessary but not sufficient — they catch known failures, not
+new bugs a change introduces. Before declaring any non-trivial change complete:
+
+- **Adversarially review the diff with independent subagents.** At minimum a
+  correctness pass; and for anything touching security, secret handling, auth,
+  or detection/validation logic, a reviewer whose explicit job is to *break*
+  the change and find an evasion. Do this proactively — do not wait to be
+  asked, and do not rely on a single self-assessment.
+- **A behavioural change ships with a test that would fail without it.** This
+  applies to helper scripts too (e.g. `scripts/security_scan.py`), not only
+  `src/` — CI coverage (`--cov=src`) does not see them.
+- **When you loosen or suppress a check, prove both directions:** the false
+  positive is gone AND every genuine case the check must still catch is still
+  caught. Never gate a secret/threat check on whole-line substrings; key off
+  the matched token or value.
+
+
 ## V5 deterministic skill routing
 
 Before choosing a skill manually, run or simulate:
