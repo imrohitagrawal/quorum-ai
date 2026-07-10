@@ -434,10 +434,7 @@ class DebateOrchestrationService:
             # the prompt well-formed even if the catalog is unaware
             # of the model.
             label = answer.display_name or answer.model_id
-            lines.append(
-                f"- {label} ({answer.status.value}): "
-                f"{excerpt}"
-            )
+            lines.append(f"- {label} ({answer.status.value}): {excerpt}")
         if prior_round is not None:
             lines.append("")
             lines.append("Round 1 critique (for context; do NOT repeat):")
@@ -733,8 +730,7 @@ _STANCE_COPY: dict[AlignmentState, _StanceCopy] = {
     AlignmentState.HELD_MINORITY: _StanceCopy(
         after_round_1="Opening clustered as a minority reading on {focus}.",
         final=(
-            "Opened in the minority; the final synthesis leaves it outside "
-            "the group consensus."
+            "Opened in the minority; the final synthesis leaves it outside the group consensus."
         ),
         revised=False,
         revision_note=None,

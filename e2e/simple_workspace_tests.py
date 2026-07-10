@@ -7,6 +7,7 @@ Run with: python e2e/simple_workspace_tests.py
 from playwright.sync_api import sync_playwright
 import re
 
+
 def test_workspace_loads():
     """Test that the workspace loads successfully"""
     with sync_playwright() as p:
@@ -24,11 +25,16 @@ def test_workspace_loads():
 
         # Check main elements exist
         assert page.get_by_role("textbox").is_visible(), "Question input should be visible"
-        assert page.get_by_role("button", name=re.compile("estimate cost", re.IGNORECASE)).is_visible(), "Estimate cost button should be visible"
-        assert page.get_by_role("button", name=re.compile("run now", re.IGNORECASE)).is_visible(), "Run now button should be visible"
+        assert page.get_by_role(
+            "button", name=re.compile("estimate cost", re.IGNORECASE)
+        ).is_visible(), "Estimate cost button should be visible"
+        assert page.get_by_role("button", name=re.compile("run now", re.IGNORECASE)).is_visible(), (
+            "Run now button should be visible"
+        )
 
         browser.close()
         print("✓ Workspace load test passed")
+
 
 def test_theme_toggle():
     """Test theme switching functionality"""
@@ -57,6 +63,7 @@ def test_theme_toggle():
         browser.close()
         print("✓ Theme toggle test passed")
 
+
 def test_cost_estimation():
     """Test cost estimation functionality"""
     with sync_playwright() as p:
@@ -83,6 +90,7 @@ def test_cost_estimation():
         browser.close()
         print("✓ Cost estimation test passed")
 
+
 def test_error_handling():
     """Test error display when API fails"""
     with sync_playwright() as p:
@@ -94,7 +102,7 @@ def test_error_handling():
             route.fulfill(
                 status=500,
                 content_type="application/json",
-                body='{"error": "Internal Server Error"}'
+                body='{"error": "Internal Server Error"}',
             )
 
         page.route("**/v1/query-runs/**", handle_route)
@@ -122,6 +130,7 @@ def test_error_handling():
         browser.close()
         print("✓ Error handling test passed")
 
+
 def test_keyboard_navigation():
     """Test keyboard navigation works"""
     with sync_playwright() as p:
@@ -148,6 +157,7 @@ def test_keyboard_navigation():
         browser.close()
         print("✓ Keyboard navigation test passed")
 
+
 def test_mobile_responsive():
     """Test responsive design on mobile"""
     with sync_playwright() as p:
@@ -159,11 +169,16 @@ def test_mobile_responsive():
 
         # Check UI is still usable on mobile
         assert page.get_by_role("textbox").is_visible(), "Input should be visible on mobile"
-        assert page.get_by_role("button", name=re.compile("estimate cost", re.IGNORECASE)).is_visible(), "Estimate button should be visible on mobile"
-        assert page.get_by_role("button", name=re.compile("run now", re.IGNORECASE)).is_visible(), "Run button should be visible on mobile"
+        assert page.get_by_role(
+            "button", name=re.compile("estimate cost", re.IGNORECASE)
+        ).is_visible(), "Estimate button should be visible on mobile"
+        assert page.get_by_role("button", name=re.compile("run now", re.IGNORECASE)).is_visible(), (
+            "Run button should be visible on mobile"
+        )
 
         browser.close()
         print("✓ Mobile responsive test passed")
+
 
 def test_console_no_errors():
     """Test that there are no console errors"""
@@ -187,6 +202,7 @@ def test_console_no_errors():
         browser.close()
 
     return len(errors) == 0
+
 
 def test_form_interactions():
     """Test form input and interactions"""
@@ -215,6 +231,7 @@ def test_form_interactions():
 
         browser.close()
         print("✓ Form interactions test passed")
+
 
 if __name__ == "__main__":
     print("=" * 60)

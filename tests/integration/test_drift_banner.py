@@ -12,6 +12,7 @@ isn't adding. These tests pin the *contract surface* — the server
 exposes the stale ids, the template renders the banner element, and
 the JS receives them via ``window.STALE_MODEL_IDS``.
 """
+
 from __future__ import annotations
 
 import json
@@ -59,12 +60,8 @@ def test_workspace_html_injects_stale_model_ids(client: TestClient) -> None:
     response = client.get("/ui")
     assert response.status_code == 200
     html = response.text
-    match = re.search(
-        r"window\.STALE_MODEL_IDS\s*=\s*([^;]+);", html
-    )
-    assert match is not None, (
-        "expected window.STALE_MODEL_IDS = ...; in workspace.html"
-    )
+    match = re.search(r"window\.STALE_MODEL_IDS\s*=\s*([^;]+);", html)
+    assert match is not None, "expected window.STALE_MODEL_IDS = ...; in workspace.html"
     raw = match.group(1).strip()
     parsed = json.loads(raw)
     assert isinstance(parsed, list)
@@ -75,11 +72,8 @@ def test_workspace_html_injects_stale_model_ids(client: TestClient) -> None:
     stale = set(parsed)
     for default_id in DEFAULT_MODEL_IDS:
         if default_id in stale:
-            assert default_id in (
-                openrouter_model_catalog_service.last_drift_diagnostic or []
-            ), (
-                f"stale model id {default_id!r} injected but catalog "
-                f"does not flag it as drifted"
+            assert default_id in (openrouter_model_catalog_service.last_drift_diagnostic or []), (
+                f"stale model id {default_id!r} injected but catalog does not flag it as drifted"
             )
 
 
@@ -99,9 +93,7 @@ def test_drift_banner_visibility_does_not_pin_to_defaults(
     """
     response = client.get("/ui")
     html = response.text
-    match = re.search(
-        r"window\.STALE_MODEL_IDS\s*=\s*([^;]+);", html
-    )
+    match = re.search(r"window\.STALE_MODEL_IDS\s*=\s*([^;]+);", html)
     assert match is not None
     parsed = json.loads(match.group(1).strip())
     # The server only emits ids flagged by the catalog, never any
@@ -115,9 +107,6 @@ def test_drift_banner_visibility_does_not_pin_to_defaults(
     stale_set = set(parsed)
     for default_id in DEFAULT_MODEL_IDS:
         if default_id in stale_set:
-            assert default_id in (
-                openrouter_model_catalog_service.last_drift_diagnostic or []
-            ), (
-                f"stale model id {default_id!r} injected but catalog "
-                f"does not flag it as drifted"
+            assert default_id in (openrouter_model_catalog_service.last_drift_diagnostic or []), (
+                f"stale model id {default_id!r} injected but catalog does not flag it as drifted"
             )

@@ -115,8 +115,7 @@ def compute_consensus_strength(
     completed = [
         answer
         for answer in initial_answers
-        if answer.status is InitialAnswerStatus.COMPLETED
-        and (answer.answer_text or "").strip()
+        if answer.status is InitialAnswerStatus.COMPLETED and (answer.answer_text or "").strip()
     ]
 
     # 0 completed answers → no signal at all. Treat as "divided".
@@ -197,9 +196,7 @@ def _four_grams(text: str) -> frozenset[str]:
     words = re.findall(r"[a-z0-9]+", text.lower())
     if len(words) < 4:
         return frozenset(words)
-    return frozenset(
-        " ".join(words[i : i + 4]) for i in range(len(words) - 3)
-    )
+    return frozenset(" ".join(words[i : i + 4]) for i in range(len(words) - 3))
 
 
 def _excerpt(text: str) -> str:
@@ -245,8 +242,14 @@ def _keyword_negated(haystack: str, keyword: str) -> bool:
     "cannot", "can't") within 3 words before the keyword.
     """
     negation_tokens = (
-        "not ", "no ", "didn't ", "doesn't ",
-        "did not ", "does not ", "cannot ", "can't ",
+        "not ",
+        "no ",
+        "didn't ",
+        "doesn't ",
+        "did not ",
+        "does not ",
+        "cannot ",
+        "can't ",
     )
     for match in re.finditer(re.escape(keyword), haystack):
         start = match.start()
@@ -344,8 +347,7 @@ def classify_model_alignment(
     completed_indices = [
         index
         for index, answer in enumerate(initial_answers)
-        if answer.status is InitialAnswerStatus.COMPLETED
-        and (answer.answer_text or "").strip()
+        if answer.status is InitialAnswerStatus.COMPLETED and (answer.answer_text or "").strip()
     ]
     completed_texts = [initial_answers[index].answer_text for index in completed_indices]
     majority_flags = _opening_majority_flags(completed_texts)

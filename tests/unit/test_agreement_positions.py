@@ -229,15 +229,11 @@ def test_derivation_is_deterministic() -> None:
     )
 
     assert first_agreement.model_dump() == second_agreement.model_dump()
-    assert [p.model_dump() for p in first_positions] == [
-        p.model_dump() for p in second_positions
-    ]
+    assert [p.model_dump() for p in first_positions] == [p.model_dump() for p in second_positions]
 
 
 def test_empty_initial_answers_yields_empty_derivations() -> None:
-    agreement, positions = build_agreement_and_positions(
-        initial_answers=[], debate_outputs=[]
-    )
+    agreement, positions = build_agreement_and_positions(initial_answers=[], debate_outputs=[])
     assert agreement.aligned == 0
     assert agreement.total == 0
     assert positions == []
@@ -250,12 +246,9 @@ def _seed_completed_run(
     repository: InMemoryQueryRunRepository, account_id: UUID, query_text: str
 ) -> UUID:
     model_slots = [
-        ModelSlot(slot_number=i + 1, model_id=f"prov/model-{i + 1}", search=True)
-        for i in range(4)
+        ModelSlot(slot_number=i + 1, model_id=f"prov/model-{i + 1}", search=True) for i in range(4)
     ]
-    estimate = cost_estimation_service.estimate(
-        query_text=query_text, model_slots=model_slots
-    )
+    estimate = cost_estimation_service.estimate(query_text=query_text, model_slots=model_slots)
     query_run = repository.create(
         account_id=account_id,
         query_text=query_text,

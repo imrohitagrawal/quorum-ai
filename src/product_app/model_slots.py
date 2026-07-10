@@ -86,10 +86,10 @@ EXPECTED_SLOT_COUNT = 4
 #: because the operator explicitly chose it. Operator action is
 #: only required if the id has actually been deprecated upstream.
 DEFAULT_MODEL_IDS: tuple[str, ...] = (
-    "openai/gpt-4o-mini",                 # cheapest paid OpenAI
-    "anthropic/claude-3-haiku",           # cheapest paid Anthropic
-    "google/gemini-2.5-flash-lite",       # cheapest paid Google
-    "deepseek/deepseek-chat-v3.1",        # DeepSeek's paid tier
+    "openai/gpt-4o-mini",  # cheapest paid OpenAI
+    "anthropic/claude-3-haiku",  # cheapest paid Anthropic
+    "google/gemini-2.5-flash-lite",  # cheapest paid Google
+    "deepseek/deepseek-chat-v3.1",  # DeepSeek's paid tier
 )
 
 #: Curated-default id set, computed once at module load. The validator
@@ -250,9 +250,7 @@ def _validate_model_id_list(model_ids: list[str]) -> None:
     known_ids: set[str] = set(_DEFAULT_MODEL_ID_SET)
     # Catalog failures must not break validation.
     with contextlib.suppress(Exception):  # noqa: BLE001
-        known_ids |= {
-            entry.model_id for entry in openrouter_catalog_fetcher.list_models()
-        }
+        known_ids |= {entry.model_id for entry in openrouter_catalog_fetcher.list_models()}
 
     for index, model_id in enumerate(model_ids, start=1):
         if not isinstance(model_id, str) or not model_id or not _MODEL_ID_RE.match(model_id):
@@ -269,9 +267,7 @@ def _validate_model_id_list(model_ids: list[str]) -> None:
                 ModelSlotError(
                     slot_number=index,
                     model_id=model_id,
-                    message=(
-                        f"Model id '{model_id}' is not in the  catalog."
-                    ),
+                    message=(f"Model id '{model_id}' is not in the  catalog."),
                 ),
             )
             continue
@@ -334,9 +330,7 @@ def validate_model_slots_with_search(
                 ),
             ],
         )
-    flags: list[bool] = (
-        list(slot_search) if slot_search is not None else [True] * len(model_ids)
-    )
+    flags: list[bool] = list(slot_search) if slot_search is not None else [True] * len(model_ids)
     return [
         ModelSlot(slot_number=i + 1, model_id=model_id, search=flags[i])
         for i, model_id in enumerate(model_ids)

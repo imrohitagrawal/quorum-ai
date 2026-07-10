@@ -57,9 +57,10 @@ def test_unknown_model_id_is_rejected_when_catalog_available() -> None:
         _make_entry("google/gemini-2.5-flash"),
         _make_entry("deepseek/deepseek-chat-v3.1"),
     ]
-    with patch.object(
-        openrouter_catalog_fetcher, "list_models", return_value=catalog
-    ), pytest.raises(InvalidModelSlotError) as exc_info:
+    with (
+        patch.object(openrouter_catalog_fetcher, "list_models", return_value=catalog),
+        pytest.raises(InvalidModelSlotError) as exc_info,
+    ):
         validate_model_slots(
             [
                 "openai/gpt-4o-mini",
@@ -82,13 +83,8 @@ def test_known_model_ids_are_accepted() -> None:
     """
     from product_app.catalog_fetcher import openrouter_catalog_fetcher
 
-    catalog = [
-        _make_entry(model_id)
-        for model_id in DEFAULT_MODEL_IDS
-    ]
-    with patch.object(
-        openrouter_catalog_fetcher, "list_models", return_value=catalog
-    ):
+    catalog = [_make_entry(model_id) for model_id in DEFAULT_MODEL_IDS]
+    with patch.object(openrouter_catalog_fetcher, "list_models", return_value=catalog):
         slots = validate_model_slots(list(DEFAULT_MODEL_IDS))
     assert [s.model_id for s in slots] == list(DEFAULT_MODEL_IDS)
 
@@ -113,9 +109,7 @@ def test_default_model_ids_pass_validation_when_catalog_lacks_them() -> None:
         _make_entry("google/gemini-2.5-flash"),
         _make_entry("deepseek/deepseek-chat-v3.1"),
     ]
-    with patch.object(
-        openrouter_catalog_fetcher, "list_models", return_value=catalog
-    ):
+    with patch.object(openrouter_catalog_fetcher, "list_models", return_value=catalog):
         slots = validate_model_slots(list(DEFAULT_MODEL_IDS))
     assert [s.model_id for s in slots] == list(DEFAULT_MODEL_IDS)
 
@@ -151,6 +145,4 @@ def test_catalog_unreachable_falls_back_to_curated_whitelist() -> None:
                     "any/arbitrary-model",
                 ],
             )
-        assert any(
-            "any/arbitrary-model" in e.message for e in exc_info.value.errors
-        )
+        assert any("any/arbitrary-model" in e.message for e in exc_info.value.errors)

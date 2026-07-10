@@ -18,6 +18,7 @@ Pinned contract:
 
 If node is unavailable the test is skipped (mirrors the sibling test).
 """
+
 from __future__ import annotations
 
 import json
@@ -60,11 +61,36 @@ def _extract_function(name: str) -> str:
 # numbers from the mock (screen 03 / 05)".
 _BREAKDOWN = {
     "by_model": [
-        {"model_id": "openai/gpt-4o-mini", "display_name": "GPT-4o mini", "usd": 0.034, "kind": "model"},
-        {"model_id": "anthropic/claude-haiku", "display_name": "Claude Haiku 4.5", "usd": 0.062, "kind": "model"},
-        {"model_id": "google/gemini-flash", "display_name": "Gemini 2.5 Flash", "usd": 0.031, "kind": "model"},
-        {"model_id": "deepseek/deepseek-v3", "display_name": "DeepSeek V3.1", "usd": 0.039, "kind": "model"},
-        {"model_id": "openai/gpt-4o-mini", "display_name": "GPT-4o mini (writer)", "usd": 0.024, "kind": "synthesis"},
+        {
+            "model_id": "openai/gpt-4o-mini",
+            "display_name": "GPT-4o mini",
+            "usd": 0.034,
+            "kind": "model",
+        },
+        {
+            "model_id": "anthropic/claude-haiku",
+            "display_name": "Claude Haiku 4.5",
+            "usd": 0.062,
+            "kind": "model",
+        },
+        {
+            "model_id": "google/gemini-flash",
+            "display_name": "Gemini 2.5 Flash",
+            "usd": 0.031,
+            "kind": "model",
+        },
+        {
+            "model_id": "deepseek/deepseek-v3",
+            "display_name": "DeepSeek V3.1",
+            "usd": 0.039,
+            "kind": "model",
+        },
+        {
+            "model_id": "openai/gpt-4o-mini",
+            "display_name": "GPT-4o mini (writer)",
+            "usd": 0.024,
+            "kind": "synthesis",
+        },
     ],
     "by_stage": [
         {"stage": "initial_answers", "usd": 0.078},
@@ -136,5 +162,7 @@ def test_cost_gate_both_partitions_share_total() -> None:
 
 @pytest.mark.skipif(shutil.which("node") is None, reason="node not available")
 def test_cost_gate_unknown_stage_falls_back_to_raw_key() -> None:
-    out = _run({"by_model": [], "by_stage": [{"stage": "mystery_stage", "usd": 0.01}], "total": 0.01})
+    out = _run(
+        {"by_model": [], "by_stage": [{"stage": "mystery_stage", "usd": 0.01}], "total": 0.01}
+    )
     assert out["byStage"][0]["label"] == "mystery_stage"

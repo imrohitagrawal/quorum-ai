@@ -350,19 +350,24 @@ class SynthesisOrchestrationService:
         # ``SynthesisResult.failed_steps`` so a single
         # section raising no longer aborts the whole run.
         consensus_section, _consensus_failed = _safe_section_result(
-            consensus_future, "Consensus",
+            consensus_future,
+            "Consensus",
         )
         disagreement_section, _disagreement_failed = _safe_section_result(
-            disagreement_future, "Disagreement",
+            disagreement_future,
+            "Disagreement",
         )
         source_section, _source_failed = _safe_section_result(
-            source_future, "Source support",
+            source_future,
+            "Source support",
         )
         uncertainty_section, _uncertainty_failed = _safe_section_result(
-            uncertainty_future, "Uncertainty",
+            uncertainty_future,
+            "Uncertainty",
         )
         recommendation_section, _recommendation_failed = _safe_section_result(
-            recommendation_future, "Recommendation",
+            recommendation_future,
+            "Recommendation",
         )
         failed_steps: list[str] = [
             step
@@ -453,8 +458,7 @@ class SynthesisOrchestrationService:
         # already focused on a specific lens.
         lines.append("")
         lines.append(
-            f"Coverage ratio: {Decimal(str(coverage_ratio)) * 100:.0f}% of "
-            f"material claims cited."
+            f"Coverage ratio: {Decimal(str(coverage_ratio)) * 100:.0f}% of material claims cited."
         )
         lines.append(f"Failed model count: {failed_count}.")
         lines.append("")
@@ -466,18 +470,13 @@ class SynthesisOrchestrationService:
             # a sliver of the answer and the disagreement section had
             # nothing concrete to quote.
             excerpt = (answer.answer_text or "").strip().replace("\n", " ")[:600]
-            sources_str = ", ".join(
-                f"{s.title} ({s.url})" for s in (answer.sources or [])[:3]
-            )
+            sources_str = ", ".join(f"{s.title} ({s.url})" for s in (answer.sources or [])[:3])
             # ``display_name`` is the catalog's short label
             # ("Claude Haiku 4.5"). Falling back to ``model_id`` keeps
             # the prompt well-formed even if the catalog is unaware
             # of the model.
             label = answer.display_name or answer.model_id
-            lines.append(
-                f"- {label} ({answer.status.value}): "
-                f"{excerpt}"
-            )
+            lines.append(f"- {label} ({answer.status.value}): {excerpt}")
             if sources_str:
                 lines.append(f"    sources: {sources_str}")
         if debate_outputs:
@@ -489,9 +488,7 @@ class SynthesisOrchestrationService:
                 # on; 300 was cutting off the actual claim in the middle of
                 # the sentence, leaving the model to fill in the gap.
                 excerpt = (round_output.critique_text or "").strip().replace("\n", " ")[:700]
-                lines.append(
-                    f"- round {round_output.round_number}: {excerpt}"
-                )
+                lines.append(f"- round {round_output.round_number}: {excerpt}")
         return "\n".join(lines)
 
     def _build_consensus(
@@ -642,9 +639,7 @@ class SynthesisOrchestrationService:
             # before reaching here when debate is missing, but
             # the orchestrator could be called directly with an
             # empty list).
-            debate_marker = (
-                " (debate was skipped)" if not debate_outputs else ""
-            )
+            debate_marker = " (debate was skipped)" if not debate_outputs else ""
             base = (
                 "All four models returned a usable response, but no model is independently "
                 f"authoritative{debate_marker}. Treat the synthesis as a working hypothesis "
@@ -680,11 +675,7 @@ class SynthesisOrchestrationService:
         else:
             base = (
                 "Recommendation: do not act on the consensus yet. "
-                + (
-                    "The citation coverage target is below 80%. "
-                    if not target_met
-                    else ""
-                )
+                + ("The citation coverage target is below 80%. " if not target_met else "")
                 + (
                     f"At least one model ({failed_count}) failed to return a usable response. "
                     if failed_count > 0
@@ -757,10 +748,7 @@ class SynthesisOrchestrationService:
         # backwards-compatibility with existing tests that
         # import this helper. It is not used in the new logic.
         del disagreement
-        if not any(
-            answer.status is InitialAnswerStatus.COMPLETED
-            for answer in initial_answers
-        ):
+        if not any(answer.status is InitialAnswerStatus.COMPLETED for answer in initial_answers):
             return False
         return consensus_strength in {"weak", "divided"}
 
@@ -794,9 +782,7 @@ def build_agreement_and_positions(
     surfaced by ``QueryRunResultResponse.demo_mode``.
     """
     alignments = classify_model_alignment(initial_answers, debate_outputs)
-    agreement = summarize_agreement(
-        initial_answers=initial_answers, alignments=alignments
-    )
+    agreement = summarize_agreement(initial_answers=initial_answers, alignments=alignments)
     positions = build_position_movements(
         initial_answers=initial_answers,
         debate_outputs=debate_outputs,
@@ -814,9 +800,7 @@ synthesis_stub_service = SynthesisOrchestrationService()
 # parallel via the shared pool cuts wall-clock latency from 5x to
 # ~1x the per-call latency. Pool size of 20 = max_concurrent_runs
 # (16) * sections per run (5) / 4 to give steady-state headroom.
-_synthesis_section_pool = ThreadPoolExecutor(
-    max_workers=20, thread_name_prefix="synthesis-section"
-)
+_synthesis_section_pool = ThreadPoolExecutor(max_workers=20, thread_name_prefix="synthesis-section")
 
 
 SectionFuture = Future[tuple[str, str | None]]

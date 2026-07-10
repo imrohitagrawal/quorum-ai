@@ -300,15 +300,21 @@ class QueryRunResultResponse(BaseModel):
     #: was called).
     material_claim_count: int = Field(ge=0, default=0)
     #: Actual cost incurred by this run, for the receipt's est→actual
-    #: reconciliation. On live runs this is the real provider usage; on
-    #: demo/simulation runs there is no real usage to bill, so the honest
-    #: "actual" equals the estimate (``cost_estimate.estimated_cost_usd``).
-    #: REQUIRED (no default): ``_result_response`` always supplies it, so a
-    #: missing value should surface loudly rather than silently emit "0".
+    #: reconciliation. Per-call provider-usage capture is NOT yet plumbed
+    #: through the pipeline, so this value currently ALWAYS equals the
+    #: estimate (``cost_estimate.estimated_cost_usd``) regardless of
+    #: ``demo_mode``: for demo/simulation runs that is exact (no real usage
+    #: is billed); for live runs it is the estimate standing in for measured
+    #: usage until usage capture lands (a known limitation — this field does
+    #: not yet reflect real provider billing on live runs). REQUIRED (no
+    #: default): ``_result_response`` always supplies it, so a missing value
+    #: should surface loudly rather than silently emit "0".
     actual_cost_usd: Decimal = Field(ge=Decimal("0"))
     #: Itemized actual-cost partition (mirrors ``cost_estimate.breakdown``).
     #: ``None`` when no breakdown is available (e.g. a cost estimate built
-    #: without one). On demo/simulation runs this is the estimate's breakdown.
+    #: without one). Like ``actual_cost_usd``, this currently reuses the
+    #: estimate's breakdown verbatim on every run (demo and live) until
+    #: per-call usage capture is plumbed through the pipeline.
     actual_breakdown: CostBreakdown | None = None
 
 
@@ -655,9 +661,7 @@ class _InMemoryAccountRateLimiter:
 
     def allow(self, *, account_id: str, now_epoch: float) -> bool:
         with self._lock:
-            tokens, last = self._buckets.get(
-                account_id, (float(self.CAPACITY), now_epoch)
-            )
+            tokens, last = self._buckets.get(account_id, (float(self.CAPACITY), now_epoch))
             elapsed_minutes = max(0.0, (now_epoch - last) / 60.0)
             tokens = min(
                 float(self.CAPACITY),
@@ -699,10 +703,7 @@ def _enforce_account_rate_limit(request: Request, session: SessionContext) -> No
             status_code=status.HTTP_429_TOO_MANY_REQUESTS,
             detail={
                 "code": "RATE_LIMITED",
-                "message": (
-                    "Too many requests for this account. "
-                    "Limit is 30 requests per minute."
-                ),
+                "message": ("Too many requests for this account. Limit is 30 requests per minute."),
             },
         )
 
@@ -856,8 +857,7 @@ def create_query_run(
         # tuple so the on-the-wire record reflects the caller's opt-in
         # decision, not just the slot number and model id.
         model_slots=tuple(
-            (slot.slot_number, slot.model_id, slot.search)
-            for slot in query_run.model_slots
+            (slot.slot_number, slot.model_id, slot.search) for slot in query_run.model_slots
         ),
     )
     cost_estimation_service.record_guardrail_event(
@@ -1070,9 +1070,7 @@ def _execute_query_run_safely(query_run_id: UUID, account_id: UUID) -> None:
             )
 
 
-def _execute_query_run_with_semaphore_release(
-    query_run_id: UUID, account_id: UUID
-) -> None:
+def _execute_query_run_with_semaphore_release(query_run_id: UUID, account_id: UUID) -> None:
     """Thread entry point that also releases the run-cap semaphore.
 
     The semaphore is acquired in the request handler (so the 503
@@ -1111,6 +1109,7 @@ def _execute_query_run(query_run_id: UUID, account_id: UUID) -> None:
         detail="Running four initial model calls.",
         mark_started=True,
     )
+
     # PERF-P0: parallelize the 4 initial-answer calls. Previously ran
     # serially (4x per-call latency); now runs concurrently via the
     # shared ThreadPoolExecutor. ``record_initial_answer`` is called
@@ -1354,8 +1353,7 @@ def _result_response(query_run: QueryRun) -> QueryRunResultResponse:
         if answer.provider_path is ProviderPath.OPENROUTER_SEARCH
     )
     material_claim_count = sum(
-        answer.citation_coverage.material_claim_count
-        for answer in query_run.initial_answers
+        answer.citation_coverage.material_claim_count for answer in query_run.initial_answers
     )
     agreement, position_movements = build_agreement_and_positions(
         initial_answers=query_run.initial_answers,
@@ -1394,11 +1392,13 @@ def _result_response(query_run: QueryRun) -> QueryRunResultResponse:
 def _actual_cost(query_run: QueryRun) -> tuple[Decimal, CostBreakdown | None]:
     """Actual cost incurred, for the receipt's est→actual reconciliation.
 
-    On a demo/simulation run no real provider usage was billed, so the honest
-    "actual" is the estimate itself — same number, same itemized breakdown.
-    Live runs would substitute real token usage here; until per-call usage
-    capture is plumbed through the pipeline we fall back to the estimate,
-    which is the correct value for every simulated run in this build.
+    Per-call provider-usage capture is NOT yet plumbed through the pipeline,
+    so this returns the estimate (value and itemized breakdown) for EVERY run,
+    demo and live alike. On a demo/simulation run that is exact — no real
+    provider usage was billed, so the honest "actual" is the estimate itself.
+    On a live run it is a known limitation: the estimate stands in for the
+    (not-yet-captured) measured usage. Once usage capture lands, live runs
+    should substitute the real token usage here instead of the estimate.
     """
     estimate = query_run.cost_estimate
     return estimate.estimated_cost_usd, estimate.breakdown

@@ -26,14 +26,14 @@ from product_app.main import app
 # Tokens that would only make sense to a developer reading source.
 # If any of these appear in a user-facing string, the test fails.
 INTERNAL_REFERENCES = [
-    "product_app/",       # Python module path
-    "model_slots.py",     # Specific source file
+    "product_app/",  # Python module path
+    "model_slots.py",  # Specific source file
     "DEFAULT_MODEL_IDS",  # Source-level constant name
-    "DEFAULT_VENDORS",    # Source-level constant name
-    "operator should",    # Operator jargon
-    "the operator",       # Operator jargon
-    "/src/",              # Source-tree path
-    "src/product_app",    # Source-tree path
+    "DEFAULT_VENDORS",  # Source-level constant name
+    "operator should",  # Operator jargon
+    "the operator",  # Operator jargon
+    "/src/",  # Source-tree path
+    "src/product_app",  # Source-tree path
 ]
 
 # Strings used by the user-facing drift banner UI region.
@@ -125,9 +125,7 @@ def test_rendered_ui_with_drift_does_not_leak_paths() -> None:
     visible = re.sub(r"<script[\s\S]*?</script>", " ", body)
     visible = re.sub(r"<style[\s\S]*?</style>", " ", visible)
     for ref in INTERNAL_REFERENCES:
-        assert ref not in visible, (
-            f"Rendered /ui visible text contains internal reference: {ref!r}"
-        )
+        assert ref not in visible, f"Rendered /ui visible text contains internal reference: {ref!r}"
 
 
 # CSS rule that forces the cancel-run container to honor the HTML
@@ -135,9 +133,7 @@ def test_rendered_ui_with_drift_does_not_leak_paths() -> None:
 # rule wins and the cancel button is visible (and clickable) when no
 # run is in flight. The user flagged this as a bug. The fix: a
 # ``!important`` rule keyed off ``[hidden]``.
-_CSS_HIDDEN_OVERRIDE = (
-    ".run-controls-cancel[hidden]" in _read("src/product_app/static/app.css")
-)
+_CSS_HIDDEN_OVERRIDE = ".run-controls-cancel[hidden]" in _read("src/product_app/static/app.css")
 
 
 def test_cancel_button_hidden_when_no_run_in_progress() -> None:

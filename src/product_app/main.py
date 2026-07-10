@@ -60,9 +60,7 @@ TEMPLATES_DIR = Path(__file__).parent / "templates"
 STATIC_DIR = Path(__file__).parent / "static"
 
 
-def _redact_sentry_event(
-    event: SentryEvent, _hint: dict[str, Any]
-) -> SentryEvent | None:
+def _redact_sentry_event(event: SentryEvent, _hint: dict[str, Any]) -> SentryEvent | None:
     """Strip any user-supplied data from a Sentry event before sending.
 
     Defense-in-depth: even though we don't set send_default_pii, this
@@ -348,9 +346,7 @@ def _render_workspace_html() -> str:
         # first paint.
         rendered = rendered.replace(
             "{{ model_slot_" + str(slot_index + 1) + "_value }}", default_id
-        ).replace(
-            "{{ model_slot_" + str(slot_index + 1) + "_selected }}", "selected"
-        )
+        ).replace("{{ model_slot_" + str(slot_index + 1) + "_selected }}", "selected")
     return rendered
 
 
@@ -425,9 +421,7 @@ def status_snapshot() -> dict[str, object]:
             feedback_events_total = 0
     # Latest audit date
     latest_report = _latest_feedback_report()
-    latest_audit = (
-        latest_report.stem.replace("audit-", "") if latest_report else None
-    )
+    latest_audit = latest_report.stem.replace("audit-", "") if latest_report else None
     # Sentry state
     sentry_client = sentry_sdk.get_client()
     sentry_state = "active" if sentry_client.is_active() else "inactive"

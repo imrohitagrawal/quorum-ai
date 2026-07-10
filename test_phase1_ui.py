@@ -1,11 +1,12 @@
 """Test Phase 1 UI/UX critical fixes for Quorum AI."""
+
 from playwright.sync_api import sync_playwright, Page, expect
 
 
 def test_focus_states(page: Page):
     """1.1 Verify focus states work correctly."""
     # Tab to first interactive element
-    page.keyboard.press('Tab')
+    page.keyboard.press("Tab")
 
     # Check that focus-visible outline is applied (not border-radius)
     focused = page.evaluate("""
@@ -25,32 +26,32 @@ def test_focus_states(page: Page):
 
 def test_logo_accessibility(page: Page):
     """1.3 Verify logo has proper accessibility attributes."""
-    logo = page.locator('.logo')
-    aria_label = logo.get_attribute('aria-label')
-    role = logo.get_attribute('role')
-    aria_hidden = logo.get_attribute('aria-hidden')
+    logo = page.locator(".logo")
+    aria_label = logo.get_attribute("aria-label")
+    role = logo.get_attribute("role")
+    aria_hidden = logo.get_attribute("aria-hidden")
 
     print(f"Logo - aria-label: {aria_label}, role: {role}, aria-hidden: {aria_hidden}")
 
     # Should have aria-label, not aria-hidden
-    assert aria_label == "Quorum AI logo", f"Expected aria-label='Quorum AI logo', got '{aria_label}'"
+    assert aria_label == "Quorum AI logo", (
+        f"Expected aria-label='Quorum AI logo', got '{aria_label}'"
+    )
     assert aria_hidden is None, f"Logo should not have aria-hidden, got '{aria_hidden}'"
 
 
 def test_button_touch_targets(page: Page):
     """1.4 Verify button touch targets are >= 44px."""
-    buttons = page.locator('.button, button').all()
+    buttons = page.locator(".button, button").all()
 
     small_buttons = []
     for btn in buttons:
         if btn.is_visible():
             box = btn.bounding_box()
-            if box and (box['height'] < 44 or box['width'] < 44):
-                small_buttons.append({
-                    'text': btn.inner_text()[:20],
-                    'height': box['height'],
-                    'width': box['width']
-                })
+            if box and (box["height"] < 44 or box["width"] < 44):
+                small_buttons.append(
+                    {"text": btn.inner_text()[:20], "height": box["height"], "width": box["width"]}
+                )
 
     if small_buttons:
         print(f"Small buttons found: {small_buttons}")
@@ -58,7 +59,7 @@ def test_button_touch_targets(page: Page):
         print("All buttons meet 44px minimum touch target")
 
     # Check .button-compact specifically
-    compact = page.locator('.button-compact').first
+    compact = page.locator(".button-compact").first
     if compact.count() > 0:
         box = compact.bounding_box()
         print(f".button-compact size: {box['width']}x{box['height']}px")
@@ -116,11 +117,11 @@ def test_mobile_viewport(page: Page):
 def test_keyboard_navigation(page: Page):
     """Test keyboard navigation works."""
     # Start from skip link
-    page.goto('http://localhost:18085/')
-    page.wait_for_load_state('networkidle')
+    page.goto("http://localhost:18085/")
+    page.wait_for_load_state("networkidle")
 
     # Press Tab to move focus
-    page.keyboard.press('Tab')
+    page.keyboard.press("Tab")
     page.wait_for_timeout(100)
 
     # Check focus moved to an element
@@ -138,8 +139,8 @@ def main():
         print("=" * 60)
 
         # Navigate to the app (Quorum AI uses /ui for workspace)
-        page.goto('http://localhost:18085/ui')
-        page.wait_for_load_state('networkidle')
+        page.goto("http://localhost:18085/ui")
+        page.wait_for_load_state("networkidle")
 
         # Run tests
         print("\n[1.1] Testing focus states...")
@@ -168,7 +169,7 @@ def main():
         print("=" * 60)
 
         # Take a screenshot for reference
-        page.screenshot(path='/tmp/quorum_phase1_test.png', full_page=True)
+        page.screenshot(path="/tmp/quorum_phase1_test.png", full_page=True)
         print("\nScreenshot saved to /tmp/quorum_phase1_test.png")
 
         browser.close()
