@@ -2150,8 +2150,11 @@
           }
           chip.appendChild(mkEl("span", "result-source-num", String(i + 1)));
           const host = sourceHost(s.url);
-          // Avoid a "host · host" label when a source has no distinct title.
-          const label = s.title && s.title !== host ? `${host} · ${s.title}` : host;
+          const title = s.title && s.title !== host ? String(s.title) : "";
+          // Combine host + title when both are meaningful; otherwise show
+          // whichever exists (no "host · host", no leading " · " when a
+          // non-http URL yields an empty host).
+          const label = host && title ? `${host} · ${title}` : host || title || "source";
           chip.appendChild(mkEl("span", "result-source-label", label));
           chipRow.appendChild(chip);
         });
