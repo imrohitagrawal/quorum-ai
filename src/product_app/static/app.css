@@ -1583,6 +1583,11 @@ kbd {
 .status-pill-session[data-state="connecting"] .status-pill-dot {
   background: var(--info);
 }
+/* The comp's session-pill dot is 6px (vs the 8px status dot used elsewhere). */
+.status-pill-session .status-pill-dot {
+  width: 6px;
+  height: 6px;
+}
 
 /* Dark only: small muted text that sits on a faintly-lit inset (--line over
    the dark card ≈ #272A30 / #2A2C32) lands just under AA — --muted (#8A9099)
@@ -4902,13 +4907,16 @@ main:focus { outline: none; }
   color: var(--muted);
 }
 /* Example-question chips render as a 2×2 grid (design-comp parity, item 4).
-   The comp lays the four chips out two-per-row; at the build's wider content
-   column a plain ``flex-wrap`` kept them on a single row, so pin an explicit
-   two-column grid. ``minmax(0,1fr)`` lets long labels shrink inside their cell
-   instead of forcing a third column. */
+   The comp lays the four chips out two-per-row as content-width pills packed to
+   the left. A two-column ``auto`` grid pins exactly two columns (robust — never
+   collapses to one row or spills to three) while ``justify-items/content: start``
+   keeps each chip at its content width and left-aligned, matching the comp's
+   pills rather than stretching them into full-width bars. */
 .composer-examples-row {
   display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
+  grid-template-columns: auto auto;
+  justify-content: start;
+  justify-items: start;
   gap: var(--space-3);
 }
 .composer-disclaimers {
