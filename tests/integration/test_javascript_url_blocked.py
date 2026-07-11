@@ -24,9 +24,17 @@ def test_javascript_url_not_rendered_as_anchor() -> None:
     """A direct check that mdInline's URL allow-list is wired up.
 
     The renderer is bundled into the static JS file, so we assert
-    on the JS source rather than runtime behavior here. The e2e
-    path is covered by the live curl smoke test in the demo
-    verification step.
+    on the JS source rather than runtime behavior here. The runtime,
+    both-directions behavioural proof lives in the e2e suite
+    (``e2e/tests/ui-parity/parity-behavior.spec.ts`` — "a crafted
+    markdown link ... cannot inject a javascript: anchor").
+
+    The link renderer no longer scheme-checks the raw string with a
+    naive regex (that was bypassable with control-char obfuscation
+    such as ``java\\tscript:``). It now decodes the URL, vets it with
+    the shared ``URL()``-based allow-list (``safeHttpUrl``), and
+    re-escapes the href at the interpolation point. This test pins
+    that stronger wiring in place.
     """
     # Touch the import so the renderer module is loaded for side-effects.
     assert _render_workspace_html is not None
@@ -36,9 +44,21 @@ def test_javascript_url_not_rendered_as_anchor() -> None:
     js_path = pathlib.Path(__file__).resolve().parents[2] / "src/product_app/static/app.js"
     text = js_path.read_text(encoding="utf-8")
 
-    assert "/^https?:/i.test(trimmed)" in text, "http(s) allow-list missing"
-    assert "/^mailto:/i.test(trimmed)" in text, "mailto allow-list missing"
-    # The denylist fallback path that returns text without an href.
+    # The link renderer vets every URL through the scheme allow-list helper...
+    assert "function safeMarkdownHref" in text, "safeMarkdownHref helper missing"
+    assert "safeMarkdownHref(decodeBasicEntities(url))" in text, (
+        "link renderer must vet the decoded URL through safeMarkdownHref"
+    )
+    # ...which reuses the URL()-based http(s) allow-list (not a raw-string regex,
+    # so control-char scheme smuggling like `java\\tscript:` cannot pass)...
+    assert "const http = safeHttpUrl(url);" in text, "safeHttpUrl allow-list not reused"
+    # ...strips the full C0-control + DEL set the browser strips before scheme
+    # resolution (closes the leading-\\x01 / interior-TAB bypass)...
+    assert "/[\\u0000-\\u001F\\u007F]/g" in text, "control-char normalisation missing"
+    # ...and attribute-escapes the vetted href so a quote can't break out.
+    assert 'href="${escapeHtml(href)}"' in text, "href is not attribute-escaped"
+    # The denylist fallback path that returns text without an href (URL stays
+    # HTML-escaped, never interpolated raw).
     assert "return `${text} (${url})`" in text, "fallback path missing"
 
 

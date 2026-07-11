@@ -1,0 +1,99 @@
+name: E2E (axe + parity)
+
+# Browser-level gate for the built workspace UI. Runs the two committed
+# end-to-end suites on every pull request and every push to main:
+#
+#   * tests/accessibility/axe-all-views.spec.ts — a real axe-core drive over
+#     every SPA view in both themes; fails on any critical/serious WCAG
+#     violation.
+#   * tests/ui-parity/parity-behavior.spec.ts — behavioural contracts for the
+#     design-comp parity work, including the markdown-link XSS regression.
+#
+# Both suites are hermetic: the FastAPI app is self-started by Playwright's
+# webServer (local_simulation, no live OpenRouter calls) and every query POST
+# is mocked per-test, so the job needs no secrets and no network egress.
+#
+# retries are set to 0 here on purpose — the suites are deterministic by
+# construction (per-test isolation, no shared run-state dependence), so a
+# failure is a real failure, never something to paper over with a re-run.
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  e2e:
+    name: e2e axe + parity (chromium)
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      # The app boots without a live OpenRouter key: every query falls back to
+      # local_simulation, which is exactly what the mocked suites expect. No
+      # network egress is required.
+      OPENROUTER_LIVE_EXECUTION_ENABLED: "false"
+      QUORUM_RUNTIME_ENVIRONMENT: "ci"
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v5
+        with:
+          version: "latest"
+          enable-cache: true
+
+      - name: Set up Python
+        run: uv python install 3.12
+
+      - name: Install backend dependencies
+        run: uv sync --all-extras --dev
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: "npm"
+          cache-dependency-path: e2e/package-lock.json
+
+      - name: Install e2e dependencies
+        working-directory: e2e
+        run: npm ci
+
+      - name: Install Playwright Chromium (+ system deps)
+        working-directory: e2e
+        run: npx playwright install --with-deps chromium
+
+      - name: Run axe + parity suites
+        working-directory: e2e
+        # Playwright's webServer self-starts the FastAPI app (see
+        # e2e/playwright.config.ts). --retries=0 keeps the gate honest: no
+        # flaky-masking retries. CI=true makes the config run serially with a
+        # fresh server, forbid `.only`, and use the bundled Chromium.
+        env:
+          CI: "true"
+        run: >-
+          npx playwright test
+          tests/accessibility/axe-all-views.spec.ts
+          tests/ui-parity/parity-behavior.spec.ts
+          --project=chromium
+          --retries=0
+
+      - name: Upload Playwright report
+        if: ${{ !cancelled() }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: playwright-report
+          path: |
+            e2e/playwright-report/
+            e2e/test-results/
+          if-no-files-found: ignore
+          retention-days: 7
