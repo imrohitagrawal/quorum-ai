@@ -902,6 +902,15 @@ def _safe_section_result(future: SectionFuture, label: str) -> SectionResult:
     string with the ``TEMPLATED_FALLBACK_PREFIX``, a failed-step string the
     orchestrator aggregates into ``SynthesisResult.failed_steps``, and a
     ``None`` live result (a failed section made no billed call).
+
+    INVARIANT for measured-cost honesty: a raised section is reported here as
+    ``live_result=None`` (not billed). This is only honest because a builder
+    never bills and *then* raises — after ``_call_synthesis_model`` returns a
+    live result the remaining builder code is pure string trimming that does
+    not raise. If a future change introduces a fallible step AFTER the live
+    call, this ``None`` would drop a billed call's usage and could yield a
+    dishonest ``measured`` undercount; such a step must instead surface the
+    ``LiveProviderResult`` so ``_actual_cost`` can fall back to ``estimated``.
     """
     try:
         text, notice, live = future.result()

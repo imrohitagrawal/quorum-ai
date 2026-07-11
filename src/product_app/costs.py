@@ -795,15 +795,18 @@ def measured_call_cost_usd(*, model_id: str, prompt_tokens: int, completion_toke
 def build_measured_breakdown(
     *,
     per_model_initial: list[tuple[str, str, Decimal]],
-    debate_costs: list[Decimal],
+    debate_by_round: dict[int, Decimal],
     synthesis_cost: Decimal,
 ) -> CostBreakdown:
     """Assemble a measured :class:`CostBreakdown` that re-sums to the total.
 
     * ``per_model_initial`` — ``(model_id, display_name, measured_initial_cost)``
       per model slot (``0`` for a slot that ran simulated / was not billed).
-    * ``debate_costs`` — measured cost of each live debate round, in round order
-      (length 0..2).
+    * ``debate_by_round`` — measured cost keyed by round number (``1`` and/or
+      ``2``); a round that ran templated / was skipped is simply absent, so its
+      ``by_stage`` line is ``0``. Keying by round (rather than positionally)
+      keeps ``debate_round_1`` / ``debate_round_2`` attributed to the round the
+      money was actually spent on.
     * ``synthesis_cost`` — summed measured cost of the live synthesis section
       calls.
 
@@ -815,12 +818,12 @@ def build_measured_breakdown(
     reconciliation invariant).
     """
     initial_total = sum((cost for _, _, cost in per_model_initial), Decimal("0"))
-    debate_total = sum(debate_costs, Decimal("0"))
+    debate_total = sum(debate_by_round.values(), Decimal("0"))
     raw_total = initial_total + debate_total + synthesis_cost
     total = raw_total.quantize(COST_DISPLAY_QUANTUM, rounding=ROUND_HALF_UP)
 
-    debate_round_1 = debate_costs[0] if len(debate_costs) >= 1 else Decimal("0")
-    debate_round_2 = debate_costs[1] if len(debate_costs) >= 2 else Decimal("0")
+    debate_round_1 = debate_by_round.get(1, Decimal("0"))
+    debate_round_2 = debate_by_round.get(2, Decimal("0"))
     raw_stage: list[tuple[str, Decimal]] = [
         ("initial_answers", initial_total),
         ("debate_round_1", debate_round_1),

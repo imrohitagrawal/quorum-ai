@@ -99,6 +99,16 @@ class CitationCoverage(BaseModel):
     target_met: bool
 
 
+#: Upper bound on a plausible per-call token count. Real completions are far
+#: below this (the largest model context windows are a few million tokens); a
+#: value above it is treated as a malformed/hostile payload and the usage is
+#: dropped (the run stays ``estimated``). The bound also keeps the downstream
+#: Decimal cost arithmetic well within the default 28-digit precision, so a
+#: crafted huge count cannot raise ``decimal.InvalidOperation`` on the result
+#: endpoint.
+_MAX_PLAUSIBLE_TOKENS = 100_000_000
+
+
 class TokenUsage(BaseModel):
     """Real per-call token usage as reported by the provider.
 
@@ -836,9 +846,12 @@ def _extract_usage(payload: object) -> TokenUsage | None:
 
     Returns ``None`` — never a fabricated record — when the object is
     missing, is not a mapping, or lacks the three integer token counts. A
-    negative or non-integer value is treated as absent so the cost layer
-    never measures from a malformed payload. ``total_tokens`` falls back to
-    ``prompt + completion`` when the provider omits it but reports the parts.
+    non-integer, negative, or implausibly large value (see
+    :data:`_MAX_PLAUSIBLE_TOKENS`) is treated as absent so the cost layer
+    never measures from a malformed or hostile payload — the run stays
+    ``estimated`` instead of crashing on a Decimal overflow downstream.
+    ``total_tokens`` falls back to ``prompt + completion`` when the provider
+    omits it but reports the parts.
     """
     if not isinstance(payload, dict):
         return None
@@ -848,8 +861,17 @@ def _extract_usage(payload: object) -> TokenUsage | None:
 
     def _count(key: str) -> int | None:
         value = usage.get(key)
-        # Reject bools (``isinstance(True, int)`` is True) and non-integers.
-        if isinstance(value, bool) or not isinstance(value, int) or value < 0:
+        # Reject bools (``isinstance(True, int)`` is True), non-integers,
+        # negatives, and implausibly large counts. The upper bound both
+        # guards against a Decimal-precision overflow in the downstream cost
+        # arithmetic and refuses to trust an absurd provider-supplied value —
+        # either way the call is treated as unmeasurable, not fatal.
+        if (
+            isinstance(value, bool)
+            or not isinstance(value, int)
+            or value < 0
+            or value > _MAX_PLAUSIBLE_TOKENS
+        ):
             return None
         return value
 

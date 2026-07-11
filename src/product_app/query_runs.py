@@ -31,7 +31,7 @@ import time as _time_module
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
-from decimal import Decimal
+from decimal import Decimal, InvalidOperation
 from enum import StrEnum
 from threading import BoundedSemaphore, RLock, Thread
 from time import sleep
@@ -374,7 +374,7 @@ class QueryRun:
     #: (P2). One entry per billed live call; ``None`` inside a list means the
     #: call went live but the provider omitted its usage object. Read by
     #: ``_actual_cost`` to decide whether the run's actual cost can be measured.
-    debate_call_usages: list[TokenUsage | None] = field(default_factory=list)
+    debate_call_usages: list[tuple[int, TokenUsage | None]] = field(default_factory=list)
     synthesis_call_usages: list[TokenUsage | None] = field(default_factory=list)
 
     @property
@@ -530,7 +530,7 @@ class InMemoryQueryRunRepository:
         self,
         query_run_id: UUID,
         debate_outputs: list[DebateOutput],
-        live_call_usages: list[TokenUsage | None] | None = None,
+        live_call_usages: list[tuple[int, TokenUsage | None]] | None = None,
     ) -> QueryRun:
         with self._lock:
             query_run = self._query_runs[query_run_id]
@@ -1442,88 +1442,91 @@ def _actual_cost(
     * A demo/simulation run makes no live calls, so there is no captured usage
       to measure from — it stays ``estimated`` (the estimate is exact anyway,
       because nothing was billed).
-    * A live (or mixed) run is ``measured`` only if every billed call — each
-      ``OPENROUTER_SEARCH`` initial answer plus every live debate/synthesis
-      call — carried a usage record. If any one is missing (the provider
-      omitted it, or a stage fell back to the templated path mid-run), the run
-      cannot be fully measured and falls back to ``estimated``.
+    * A live run is ``measured`` only when the whole run is cleanly captured:
+      EVERY one of its initial slots COMPLETED on the ``OPENROUTER_SEARCH`` path
+      AND reported usage, AND every live debate/synthesis call reported usage.
+      This gate is deliberately STRICT — if any slot fell back to
+      simulation/fallback or failed (a state we cannot distinguish from a
+      billed-but-uncaptured call), or any live call omitted its usage, the run
+      stays ``estimated``. It is the only way to guarantee that no billed call
+      is silently omitted from a figure the UI presents as measured billing.
     """
     estimate = query_run.cost_estimate
 
-    # Every billed live call and its captured usage (which may be ``None`` when
-    # the provider omitted the object). An initial answer is a billed call iff
-    # it COMPLETED on the OpenRouter path — a FAILED/cancelled slot also carries
-    # ``provider_path=OPENROUTER_SEARCH`` but returned no completion, so it was
-    # not billed and must not block measurement. Debate/synthesis usage lists
-    # already contain one entry per billed call.
-    initial_live = [
-        answer
-        for answer in query_run.initial_answers
-        if answer.provider_path is ProviderPath.OPENROUTER_SEARCH
-        and answer.status is InitialAnswerStatus.COMPLETED
-    ]
-    live_usages: list[TokenUsage | None] = (
-        [answer.token_usage for answer in initial_live]
-        + list(query_run.debate_call_usages)
-        + list(query_run.synthesis_call_usages)
-    )
-
-    # No live calls (pure demo), or at least one live call without usage → we
-    # cannot honestly present a measured figure. Keep the estimate.
-    if not live_usages or any(usage is None for usage in live_usages):
-        return estimate.estimated_cost_usd, estimate.breakdown, "estimated"
-
-    # Every contributing call reported usage — compute the measured actual.
-    answers_by_slot = {answer.slot_number: answer for answer in query_run.initial_answers}
-    per_model_initial_named: list[tuple[str, str, Decimal]] = []
-    for slot in query_run.model_slots:
-        answer = answers_by_slot.get(slot.slot_number)
-        if (
-            answer is not None
-            and answer.provider_path is ProviderPath.OPENROUTER_SEARCH
+    # --- STRICT honesty gate -------------------------------------------------
+    model_slots = query_run.model_slots
+    initial_answers = query_run.initial_answers
+    initial_fully_captured = (
+        bool(model_slots)
+        and len(initial_answers) == len(model_slots)
+        and all(
+            answer.provider_path is ProviderPath.OPENROUTER_SEARCH
             and answer.status is InitialAnswerStatus.COMPLETED
             and answer.token_usage is not None
-        ):
-            cost = measured_call_cost_usd(
-                model_id=answer.model_id,
-                prompt_tokens=answer.token_usage.prompt_tokens,
-                completion_tokens=answer.token_usage.completion_tokens,
-            )
-            display_name = answer.display_name or slot.model_id
-        else:
-            # Slot ran simulated / was not billed → genuinely $0 measured.
-            cost = Decimal("0")
-            display_name = slot.model_id
-        per_model_initial_named.append((slot.model_id, display_name, cost))
-
-    debate_costs = [
-        measured_call_cost_usd(
-            model_id=settings.debate_model_id,
-            prompt_tokens=usage.prompt_tokens,
-            completion_tokens=usage.completion_tokens,
+            for answer in initial_answers
         )
-        for usage in query_run.debate_call_usages
-        if usage is not None  # narrowing; the gate above guarantees non-None
-    ]
-    synthesis_cost = sum(
-        (
-            measured_call_cost_usd(
-                model_id=settings.synthesis_model_id,
-                prompt_tokens=usage.prompt_tokens,
-                completion_tokens=usage.completion_tokens,
-            )
-            for usage in query_run.synthesis_call_usages
-            if usage is not None
-        ),
-        Decimal("0"),
     )
+    debate_captured = all(usage is not None for _, usage in query_run.debate_call_usages)
+    synthesis_captured = all(usage is not None for usage in query_run.synthesis_call_usages)
+    if not (initial_fully_captured and debate_captured and synthesis_captured):
+        return estimate.estimated_cost_usd, estimate.breakdown, "estimated"
 
-    breakdown = build_measured_breakdown(
-        per_model_initial=per_model_initial_named,
-        debate_costs=debate_costs,
-        synthesis_cost=synthesis_cost,
-    )
-    return breakdown.total, breakdown, "measured"
+    # --- measured computation (guarded) --------------------------------------
+    # Past the gate, every ``token_usage`` is present; the ``is None`` skips are
+    # unreachable but keep the types narrow. The whole computation is wrapped so
+    # a cost-arithmetic error (e.g. a Decimal overflow from a value that somehow
+    # slipped the capture-time bound) can never crash the result endpoint.
+    try:
+        per_model_initial_named: list[tuple[str, str, Decimal]] = []
+        for answer in sorted(initial_answers, key=lambda a: a.slot_number):
+            usage = answer.token_usage
+            if usage is None:
+                continue
+            per_model_initial_named.append(
+                (
+                    answer.model_id,
+                    answer.display_name or answer.model_id,
+                    measured_call_cost_usd(
+                        model_id=answer.model_id,
+                        prompt_tokens=usage.prompt_tokens,
+                        completion_tokens=usage.completion_tokens,
+                    ),
+                )
+            )
+
+        debate_by_round: dict[int, Decimal] = {}
+        for round_number, debate_usage in query_run.debate_call_usages:
+            if debate_usage is None:
+                continue
+            debate_by_round[round_number] = debate_by_round.get(
+                round_number, Decimal("0")
+            ) + measured_call_cost_usd(
+                model_id=settings.debate_model_id,
+                prompt_tokens=debate_usage.prompt_tokens,
+                completion_tokens=debate_usage.completion_tokens,
+            )
+
+        synthesis_cost = sum(
+            (
+                measured_call_cost_usd(
+                    model_id=settings.synthesis_model_id,
+                    prompt_tokens=synth_usage.prompt_tokens,
+                    completion_tokens=synth_usage.completion_tokens,
+                )
+                for synth_usage in query_run.synthesis_call_usages
+                if synth_usage is not None
+            ),
+            Decimal("0"),
+        )
+
+        breakdown = build_measured_breakdown(
+            per_model_initial=per_model_initial_named,
+            debate_by_round=debate_by_round,
+            synthesis_cost=synthesis_cost,
+        )
+        return breakdown.total, breakdown, "measured"
+    except (InvalidOperation, ArithmeticError, ValueError):
+        return estimate.estimated_cost_usd, estimate.breakdown, "estimated"
 
 
 def _initial_progress() -> list[QueryRunStageProgress]:

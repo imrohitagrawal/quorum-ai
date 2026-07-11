@@ -166,10 +166,12 @@ class DebateResult:
     round_timings_ms: dict[int, int]
     #: One entry per debate round that actually made a live moderator call
     #: (a templated/skipped round contributes NO entry — it was not billed).
-    #: Each entry is the call's captured :class:`TokenUsage`, or ``None`` when
-    #: the live call succeeded but the provider omitted the usage object. The
-    #: cost layer reads this to measure the debate stage's real cost.
-    live_call_usages: list[TokenUsage | None] = field(default_factory=list)
+    #: Each entry is ``(round_number, usage)``; ``usage`` is the call's
+    #: captured :class:`TokenUsage`, or ``None`` when the live call succeeded
+    #: but the provider omitted the usage object. The round number is carried
+    #: so the cost layer attributes each cost to the RIGHT ``by_stage`` round
+    #: (a round-2-only live run must not be labelled ``debate_round_1``).
+    live_call_usages: list[tuple[int, TokenUsage | None]] = field(default_factory=list)
 
 
 class DebateOrchestrationService:
@@ -213,7 +215,7 @@ class DebateOrchestrationService:
         missing_steps: list[str] = []
         round_timings_ms: dict[int, int] = {}
         fallback_messages: list[str] = []
-        live_call_usages: list[TokenUsage | None] = []
+        live_call_usages: list[tuple[int, TokenUsage | None]] = []
 
         # Round 1 always runs. The orchestrator pulls disagreement, weak
         # support, and missing reasoning signals from the initial answers
@@ -229,9 +231,9 @@ class DebateOrchestrationService:
         if round_one_fallback is not None:
             fallback_messages.append(round_one_fallback)
         # A non-None live result means a billed moderator call happened; record
-        # its usage (which may itself be None if the provider omitted it).
+        # it against round 1 (usage may itself be None if the provider omitted it).
         if round_one_live is not None:
-            live_call_usages.append(round_one_live.usage)
+            live_call_usages.append((1, round_one_live.usage))
         debate_event_recorder.record(
             event_type="debate_round_completed",
             account_id=account_id,
@@ -294,7 +296,7 @@ class DebateOrchestrationService:
         if round_two_fallback is not None:
             fallback_messages.append(round_two_fallback)
         if round_two_live is not None:
-            live_call_usages.append(round_two_live.usage)
+            live_call_usages.append((2, round_two_live.usage))
         debate_event_recorder.record(
             event_type="debate_round_completed",
             account_id=account_id,

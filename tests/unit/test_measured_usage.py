@@ -52,14 +52,37 @@ def test_live_provider_result_usage_defaults_to_none() -> None:
     assert result.usage is None
 
 
-def test_measured_call_cost_is_positive_and_scales_with_tokens() -> None:
-    small = measured_call_cost_usd(model_id="x/unknown", prompt_tokens=1000, completion_tokens=0)
-    big = measured_call_cost_usd(model_id="x/unknown", prompt_tokens=2000, completion_tokens=0)
-    assert small > Decimal("0")
-    assert big == small * 2
+def test_measured_call_cost_exact_input_and_output_pricing() -> None:
+    """Pin the EXACT per-call value so a price swap or /1000 typo can't ship.
+
+    An unknown model falls to the default floor prices ($0.0008/1K input,
+    $0.002/1K output), independent of any catalog state, so the expected
+    figures are deterministic. Pricing input-only and output-only separately
+    is what catches an input/output swap (mutation the reviewer found green).
+    """
+    # Input tokens only → input price; output tokens only → output price.
+    assert measured_call_cost_usd(
+        model_id="x/unknown", prompt_tokens=1000, completion_tokens=0
+    ) == Decimal("0.0008")
+    assert measured_call_cost_usd(
+        model_id="x/unknown", prompt_tokens=0, completion_tokens=1000
+    ) == Decimal("0.002")
+    # Both, and the /1000 scaling.
+    assert measured_call_cost_usd(
+        model_id="x/unknown", prompt_tokens=1000, completion_tokens=1000
+    ) == Decimal("0.0028")
+    assert measured_call_cost_usd(
+        model_id="x/unknown", prompt_tokens=2000, completion_tokens=0
+    ) == Decimal("0.0016")
 
 
-def test_measured_breakdown_partitions_reconcile_to_total() -> None:
+def test_measured_breakdown_partitions_reconcile_and_attribute_rounds() -> None:
+    debate_r1 = measured_call_cost_usd(
+        model_id="x/unknown", prompt_tokens=300, completion_tokens=100
+    )
+    debate_r2 = measured_call_cost_usd(
+        model_id="x/unknown", prompt_tokens=600, completion_tokens=200
+    )
     breakdown = build_measured_breakdown(
         per_model_initial=[
             (
@@ -79,9 +102,7 @@ def test_measured_breakdown_partitions_reconcile_to_total() -> None:
             ("c/model", "C", Decimal("0")),
             ("d/model", "D", Decimal("0")),
         ],
-        debate_costs=[
-            measured_call_cost_usd(model_id="w/debate", prompt_tokens=300, completion_tokens=100),
-        ],
+        debate_by_round={1: debate_r1, 2: debate_r2},
         synthesis_cost=measured_call_cost_usd(
             model_id="w/synth", prompt_tokens=500, completion_tokens=250
         ),
@@ -98,3 +119,18 @@ def test_measured_breakdown_partitions_reconcile_to_total() -> None:
         "debate_round_2",
         "synthesis",
     ]
+
+
+def test_measured_breakdown_attributes_round2_only_to_round2() -> None:
+    """A round-2-only live debate must NOT be labelled debate_round_1."""
+    r2_cost = measured_call_cost_usd(
+        model_id="x/unknown", prompt_tokens=1000, completion_tokens=1000
+    )
+    breakdown = build_measured_breakdown(
+        per_model_initial=[("a", "A", Decimal("0.001"))],
+        debate_by_round={2: r2_cost},  # round 1 was templated / absent
+        synthesis_cost=Decimal("0"),
+    )
+    by_stage = {line.stage: line.usd for line in breakdown.by_stage}
+    assert by_stage["debate_round_1"] == Decimal("0")
+    assert by_stage["debate_round_2"] == r2_cost.quantize(Decimal("0.0001"))
