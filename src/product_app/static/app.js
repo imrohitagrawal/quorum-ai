@@ -1045,17 +1045,49 @@
   // design uses on the slot cards. Falls back to the raw id.
   function displayNameForModel(modelId) {
     const entry = modelCatalog.find((option) => option.model_id === modelId);
-    const label = entry ? entry.label : modelId;
-    const short = label.includes(":")
-      ? label.slice(label.indexOf(":") + 1).trim()
-      : label;
-    return short || modelId;
+    if (entry) {
+      const label = entry.label;
+      const short = label.includes(":") ? label.slice(label.indexOf(":") + 1).trim() : label;
+      return short || modelId;
+    }
+    // Not in the catalog (offline / drifted id): derive a friendly label from
+    // the ``vendor/model`` slug rather than leaking the raw slug into the UI.
+    // Purely presentational — no data is invented.
+    return prettifyModelSlug(modelId);
+  }
+
+  // "deepseek/deepseek-v3.1" -> "Deepseek V3.1". Strips the vendor prefix,
+  // turns separators into spaces, and title-cases words while preserving
+  // version-y tokens (v3.1, 4o, 2.5) intact.
+  function prettifyModelSlug(modelId) {
+    const raw = String(modelId || "").trim();
+    if (!raw) return "";
+    const tail = raw.includes("/") ? raw.slice(raw.indexOf("/") + 1) : raw;
+    const words = tail.replace(/[-_]+/g, " ").split(/\s+/).filter(Boolean);
+    if (!words.length) return raw;
+    return words
+      .map((w) => (/[0-9]/.test(w) ? w : w.charAt(0).toUpperCase() + w.slice(1)))
+      .join(" ");
   }
 
   // Avatar initial: first letter of the display name, uppercased.
   function avatarInitialForModel(modelId) {
     const name = displayNameForModel(modelId).trim();
     return (name[0] || "?").toUpperCase();
+  }
+
+  // Map a model id to its vendor key for the per-model avatar tint. Derived
+  // from the ``vendor/model`` id prefix; unknown vendors fall back to the
+  // neutral ink tint. Purely presentational — never affects run behaviour.
+  function vendorForModel(modelId) {
+    const prefix = String(modelId || "").split("/")[0].toLowerCase();
+    if (prefix === "openai") return "openai";
+    if (prefix === "anthropic") return "anthropic";
+    if (prefix === "google") return "google";
+    if (prefix === "deepseek") return "deepseek";
+    if (prefix === "meta-llama" || prefix === "meta") return "meta";
+    if (prefix === "mistralai" || prefix === "mistral") return "mistral";
+    return "generic";
   }
 
   // Per-slot estimate label. Returns a mono "~$0.034" once an estimate
@@ -1085,10 +1117,14 @@
       const card = document.createElement("div");
       card.className = "model-slot";
       card.dataset.slotIndex = String(index);
+      // Per-model vendor tint (design parity): the avatar carries the vendor's
+      // brand colour pair (see .model-slot-avatar[data-vendor=…] in app.css).
+      card.dataset.vendor = vendorForModel(modelId);
 
       const avatar = document.createElement("span");
       avatar.className = "model-slot-avatar";
       avatar.setAttribute("aria-hidden", "true");
+      avatar.dataset.vendor = vendorForModel(modelId);
       avatar.textContent = avatarInitialForModel(modelId);
 
       const info = document.createElement("div");
@@ -1978,6 +2014,7 @@
     renderVerdictBand(result, fs, { isConsensus, aligned, total, revisedCount, movements });
     renderTrustTriangle(result, res, fs, { isConsensus, aligned, total });
     renderResultPositions(res);
+    renderResultSynthesis(fs, res);
 
     // Build the plain-text Copy/Export summary ONCE (textContent-safe).
     const summaryLines = [];
@@ -1997,6 +2034,104 @@
     if (result.correlation_id) summaryLines.push(`Run: ${result.correlation_id}`);
     state.lastResultSummary = summaryLines.join("\n");
     state.lastResultRunId = result.query_run_id || result.correlation_id || "run";
+  }
+
+  // Hostname (without www.) for a source chip label. Falls back to the raw
+  // string if the URL will not parse.
+  function sourceHost(url) {
+    try {
+      return new URL(url).hostname.replace(/^www\./, "");
+    } catch (_e) {
+      return String(url || "").replace(/^https?:\/\//, "").split("/")[0] || "source";
+    }
+  }
+
+  // Aggregate the unique cited sources across every model answer, in order of
+  // first appearance. Real backend data only — never fabricated.
+  function collectResultSources(res) {
+    const answers = Array.isArray(res.model_answers) ? res.model_answers : [];
+    const seen = new Set();
+    const out = [];
+    for (const a of answers) {
+      for (const s of Array.isArray(a && a.sources) ? a.sources : []) {
+        const url = s && s.url ? String(s.url) : "";
+        const key = url || (s && s.title) || "";
+        if (!key || seen.has(key)) continue;
+        seen.add(key);
+        out.push({ title: s && s.title ? String(s.title) : sourceHost(url), url });
+      }
+    }
+    return out;
+  }
+
+  // The synthesis card (design comp screen 05). Labelled rows + attribution +
+  // numbered source chips. Every value is a real backend value from
+  // ``final_synthesis`` / the model answers; when the backend produced nothing
+  // the card stays hidden rather than inventing content.
+  function renderResultSynthesis(fs, res) {
+    const host = el("result-synthesis");
+    if (!host) return;
+    const rows = fs
+      ? [
+          ["Consensus", fs.consensus, "consensus"],
+          ["Disagreement", fs.disagreement, "disagreement"],
+          ["Uncertainty", fs.uncertainty, "uncertainty"],
+          ["Recommendation", fs.recommendation, "recommendation"],
+        ].filter(([, v]) => v && String(v).trim())
+      : [];
+    const sources = collectResultSources(res || {});
+    if (!rows.length && !sources.length) {
+      host.hidden = true;
+      host.replaceChildren();
+      return;
+    }
+    host.hidden = false;
+
+    const head = mkEl("div", "result-synthesis-head");
+    head.appendChild(mkEl("h2", "result-synthesis-title", "The synthesis"));
+    head.appendChild(
+      mkEl(
+        "span",
+        "result-synthesis-attr",
+        "from the four refined answers",
+      ),
+    );
+
+    const grid = mkEl("div", "result-synthesis-grid");
+    const addRow = (label, sectionKey, bodyNode) => {
+      const row = mkEl("div", "result-synth-row");
+      row.dataset.section = sectionKey;
+      row.appendChild(mkEl("span", "result-synth-label", label));
+      const body = mkEl("div", "result-synth-body");
+      body.appendChild(bodyNode);
+      row.appendChild(body);
+      grid.appendChild(row);
+    };
+    for (const [label, value, key] of rows) {
+      addRow(label, key, document.createTextNode(String(value).trim()));
+    }
+    // SOURCES row — numbered chips built from the models' real citations.
+    if (sources.length) {
+      const wrap = mkEl("div", "result-synth-sources");
+      const shown = sources.slice(0, 3);
+      shown.forEach((s, i) => {
+        const chip = s.url ? mkEl("a", "result-source-chip") : mkEl("span", "result-source-chip");
+        if (s.url) {
+          chip.href = s.url;
+          chip.target = "_blank";
+          chip.rel = "noopener noreferrer";
+        }
+        chip.appendChild(mkEl("span", "result-source-num", String(i + 1)));
+        chip.appendChild(mkEl("span", "result-source-label", `${sourceHost(s.url)} · ${s.title}`));
+        wrap.appendChild(chip);
+      });
+      if (sources.length > shown.length) {
+        wrap.appendChild(mkEl("span", "result-source-more", `+ ${sources.length - shown.length} more`));
+      }
+      addRow("Sources", "sources", wrap);
+    }
+
+    host.replaceChildren(head, grid);
   }
 
   // Fix 8: cached reference to the static "Run details" toggle. Once grabbed,
@@ -2742,13 +2877,19 @@
   function buildTranscriptOpening(answer) {
     const card = mkEl("article", "transcript-opening");
     const head = mkEl("div", "transcript-opening-head");
-    const name = String((answer && (answer.display_name || answer.model_id)) || "Model");
+    // Prefer the friendly display name (matches the positions table + slots);
+    // fall back to catalog resolution, then the raw id.
+    const modelId = (answer && answer.model_id) || "";
+    const name = String(
+      (answer && answer.display_name) || displayNameForModel(modelId) || modelId || "Model",
+    );
     const avatar = mkEl(
       "span",
       "transcript-opening-avatar",
       name.trim().charAt(0).toUpperCase() || "?",
     );
     avatar.setAttribute("aria-hidden", "true");
+    avatar.dataset.vendor = vendorForModel(modelId);
     head.append(avatar, mkEl("span", "transcript-opening-name", name));
 
     const sources = Array.isArray(answer && answer.sources) ? answer.sources : [];
@@ -4152,7 +4293,7 @@
     if (gateConfirmButton) {
       gateConfirmButton.hidden = false;
       const label = gateConfirmButton.querySelector(".button-label");
-      if (label) label.textContent = `Approve ${gateUsd(total)} & run`;
+      if (label) label.textContent = `Confirm & run · ${gateUsd(total)}`;
     }
     // Reset the block-only surfaces so a prior block render never bleeds
     // into the confirm band.
@@ -5326,6 +5467,46 @@
           queryTextarea.dispatchEvent(new Event("input", { bubbles: true }));
         }
         goToComposer();
+      });
+    }
+
+    // Result-view "Ask your next question" (design parity, screen 05). Follow-up
+    // and Start fresh both route back to the composer — there is no server-side
+    // context carry (that remains a documented backend follow-up), so the copy
+    // only promises what actually happens: the question is pre-filled and the
+    // user re-approves the estimate.
+    const nextInput = el("result-next-input");
+    const followBtn = el("result-followup");
+    const freshBtn = el("result-startfresh");
+    const nextRun = el("result-next-run");
+    let nextFollowUp = true;
+    function setNextMode(followUp) {
+      nextFollowUp = followUp;
+      if (followBtn) {
+        followBtn.classList.toggle("result-next-mode-active", followUp);
+        followBtn.setAttribute("aria-pressed", String(followUp));
+      }
+      if (freshBtn) {
+        freshBtn.classList.toggle("result-next-mode-active", !followUp);
+        freshBtn.setAttribute("aria-pressed", String(!followUp));
+      }
+      if (!followUp && nextInput) nextInput.value = "";
+      if (nextInput) nextInput.focus({ preventScroll: true });
+    }
+    if (followBtn) followBtn.addEventListener("click", () => setNextMode(true));
+    if (freshBtn) freshBtn.addEventListener("click", () => setNextMode(false));
+    if (nextRun) {
+      nextRun.addEventListener("click", async () => {
+        const typed = (nextInput && nextInput.value.trim()) || "";
+        // Follow-up pre-fills the answered question so the user can refine it;
+        // Start fresh (or a typed refinement) uses the box verbatim.
+        const base = typed || (nextFollowUp ? state.liveQueryText || "" : "");
+        if (queryTextarea) {
+          queryTextarea.value = base;
+          queryTextarea.dispatchEvent(new Event("input", { bubbles: true }));
+        }
+        goToComposer();
+        if (base) await estimateRun();
       });
     }
   }

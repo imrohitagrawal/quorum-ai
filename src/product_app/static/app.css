@@ -76,6 +76,13 @@
   --c-amber: #8A5F16; /* caution / uncertainty */
   --c-red: #A83A2A;   /* error / decision-support boundary */
 
+  /* --- Per-model vendor tints (design comp screens 02/05/06). Soft pill +
+     saturated glyph per frontier vendor. Presentational only. */
+  --vendor-openai-soft: #DFEDE9;    --vendor-openai-ink: #2A7A68;
+  --vendor-anthropic-soft: #F2E8DA; --vendor-anthropic-ink: #A26A2F;
+  --vendor-google-soft: #E1E8F2;    --vendor-google-ink: #47689E;
+  --vendor-deepseek-soft: #EAE3F2;  --vendor-deepseek-ink: #7A5C9E;
+
   /* Borders as an opacity ramp over ink. */
   --line: rgba(20, 23, 28, 0.07);
   --line-2: rgba(20, 23, 28, 0.10);
@@ -691,59 +698,48 @@ a { color: var(--accent); text-underline-offset: 2px; }
   gap: var(--space-5);
 }
 
-/* Slice 3 (04 Live run): while the live-run view is active the live card goes
-   full width and the persistent "Run controls" aside is hidden — its status /
-   cancel / run-id function is subsumed by the live card. The aside element
-   stays in the DOM (only hidden here), so the existing ``#cancel-run`` /
-   ``#status-meta`` / ``#correlation-meta`` render targets remain valid; the
-   ``.run-controls-cancel[hidden]`` behaviour is untouched. */
-[data-active-view="live-run"] .layout {
-  grid-template-columns: 1fr;
-}
+/* ---------------------------------------------------------------------------
+   SCREEN ISOLATION (design-comp parity).
 
-[data-active-view="live-run"] .layout > aside {
+   The design comp renders eight self-contained screens — each carries its own
+   header and body and nothing else. The pre-parity app-shell instead kept a
+   persistent "Run controls" aside, two legacy panel-sections (Debate/synthesis
+   + Model outputs) and a 4-step workflow stepper visible on top of *every*
+   ``[data-view]``. None of that chrome exists in the comp.
+
+   So: the stepper, the aside and both legacy panel-sections are hidden for
+   every screen, and ``.layout`` collapses to a single full-width column. Every
+   element stays in the DOM (only visually hidden) so the app.js render targets
+   — ``#status-meta``, ``#progress-list``, ``#notice-list``, ``#synthesis-output``,
+   ``#debate-output``, ``#model-grid`` — remain valid and keep updating. The
+   result view now renders its own synthesis + follow-up block (see
+   ``.result-synthesis`` / ``.result-next``), so nothing is lost by hiding the
+   legacy sections.
+   --------------------------------------------------------------------------- */
+.workflow-progress {
   display: none;
 }
 
-/* Slice 4a (05 Result): the result view is the main surface — go full-width
-   and hide the "Run controls" aside, mirroring the live-run treatment. The
-   aside stays in the DOM (only hidden here) so its render targets remain
-   valid; the persistent synthesis/model panels below ``.layout`` are
-   unaffected. */
-[data-active-view="result"] .layout {
-  grid-template-columns: 1fr;
+.layout {
+  display: block;
 }
 
-[data-active-view="result"] .layout > aside {
+/* ``.panel.panel-section`` (0-2-0) so this wins over the later ``.panel``
+   (0-1-0, display:flex) rule; the aside child-combinator already out-specifies
+   ``.panel``. */
+.layout > aside,
+.panel.panel-section {
   display: none;
 }
 
-/* Slice 5 (06 Transcript): the debate audit trail is a full-width drill-down —
-   mirror the result/live-run treatment (single column, aside hidden). The aside
-   stays in the DOM (only hidden here) so its render targets remain valid. */
-[data-active-view="transcript"] .layout {
-  grid-template-columns: 1fr;
-}
-
-[data-active-view="transcript"] .layout > aside {
-  display: none;
-}
-
-/* Slice 7 (01 Landing): the marketing front door is a full-width, self-contained
-   view. Hide the aside, the workflow-progress rail, and the persistent
-   debate/synthesis + model-output panel sections so the landing reads as one
-   clean page. All stay in the DOM (only hidden here) so their render targets
-   remain valid the moment a CTA returns to the composer. */
-[data-active-view="landing"] .layout {
-  grid-template-columns: 1fr;
-}
-
-[data-active-view="landing"] .layout > aside {
-  display: none;
-}
-
-[data-active-view="landing"] .workflow-progress,
-[data-active-view="landing"] .panel-section {
+/* Views that carry their own brand header (result / live-run / transcript) or a
+   full self-contained header (landing) hide the persistent top bar so there is
+   no double header. The composer and cost-gate keep the top bar as their brand
+   bar (they have no brand header of their own). */
+[data-active-view="landing"] .topbar,
+[data-active-view="result"] .topbar,
+[data-active-view="live-run"] .topbar,
+[data-active-view="transcript"] .topbar {
   display: none;
 }
 
@@ -1089,8 +1085,12 @@ select {
 }
 
 .cost-total-row { display: flex; align-items: baseline; gap: var(--space-3); flex-wrap: wrap; }
+/* ``.cost-review-card-body`` prefix so this out-specifies the later ``.mono``
+   utility (font-size: 0.9rem) that the element also carries — otherwise the
+   headline total collapses to body size. ~48px matches the design comp. */
+.cost-review-card-body .cost-total,
 .cost-total {
-  font-size: 2.6rem;
+  font-size: 3rem;
   font-weight: 600;
   letter-spacing: -0.02em;
   color: var(--ink);
@@ -1372,6 +1372,12 @@ select {
     background var(--duration-fast) var(--bezier),
     opacity var(--duration-fast) var(--bezier);
 }
+
+/* ``.button`` sets display:inline-flex, which overrides the UA ``[hidden]``
+   display:none — so a hidden button (e.g. the cost-gate block-band buttons in
+   the confirm band, or the confirm button in the block band) stays visible.
+   Restore the hidden semantics for every button. */
+.button[hidden] { display: none; }
 
 .button:hover:not(:disabled) { transform: translateY(-1px); }
 .button:active:not(:disabled) { transform: translateY(0); }
@@ -2998,6 +3004,203 @@ html[data-theme="dark"] .landing-preview-caption {
   background: var(--accent-medium);
 }
 
+/* ----- Result: the synthesis card (design comp screen 05) ------------------- */
+.result-synthesis {
+  border: 1px solid var(--line-2);
+  border-radius: var(--radius-lg);
+  background: var(--surface);
+  padding: var(--space-5) var(--space-6);
+}
+.result-synthesis-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: var(--space-4);
+  flex-wrap: wrap;
+  padding-bottom: var(--space-4);
+  border-bottom: 1px solid var(--line-2);
+}
+.result-synthesis-title {
+  margin: 0;
+  font-family: var(--font-serif);
+  font-size: 1.25rem;
+  font-weight: 500;
+  letter-spacing: -0.01em;
+}
+.result-synthesis-attr {
+  font-size: 0.8rem;
+  color: var(--muted);
+}
+.result-synthesis-grid {
+  display: grid;
+  gap: 0;
+}
+.result-synth-row {
+  display: grid;
+  grid-template-columns: 132px 1fr;
+  gap: var(--space-4);
+  padding: var(--space-4) 0;
+  border-bottom: 1px solid var(--line);
+}
+.result-synth-row:last-child { border-bottom: 0; }
+.result-synth-label {
+  font-size: 0.72rem;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+.result-synth-row[data-section="consensus"] .result-synth-label { color: var(--success); }
+.result-synth-row[data-section="disagreement"] .result-synth-label { color: var(--warning); }
+.result-synth-row[data-section="uncertainty"] .result-synth-label { color: var(--danger, var(--c-red)); }
+.result-synth-row[data-section="sources"] .result-synth-label { color: var(--info); }
+.result-synth-row[data-section="recommendation"] .result-synth-label { color: var(--success); }
+.result-synth-body {
+  font-size: 0.95rem;
+  line-height: 1.6;
+  color: var(--body);
+  text-wrap: pretty;
+}
+.result-synth-sources {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-2);
+}
+.result-source-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+  padding: 4px var(--space-3);
+  border-radius: var(--radius-pill);
+  border: 1px solid var(--line-strong-2);
+  background: var(--surface);
+  color: var(--body);
+  font-size: 0.8rem;
+  font-weight: 500;
+  text-decoration: none;
+  cursor: pointer;
+}
+a.result-source-chip:hover { border-color: var(--info); color: var(--info); }
+.result-source-num {
+  display: inline-grid;
+  place-items: center;
+  width: 16px;
+  height: 16px;
+  border-radius: var(--radius-pill);
+  background: var(--info);
+  color: var(--on-tonal);
+  font-size: 0.62rem;
+  font-weight: 700;
+}
+.result-source-more { font-size: 0.8rem; color: var(--muted); }
+
+/* ----- Result: "Ask your next question" block (design comp screen 05) ------- */
+.result-next {
+  border: 1px solid var(--line-2);
+  border-radius: var(--radius-lg);
+  background: var(--surface);
+  padding: var(--space-5) var(--space-6);
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-4);
+}
+.result-next-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-4);
+  flex-wrap: wrap;
+}
+.result-next-title {
+  margin: 0;
+  font-family: var(--font-serif);
+  font-size: 1.25rem;
+  font-weight: 500;
+  letter-spacing: -0.01em;
+}
+.result-next-modes {
+  display: inline-flex;
+  padding: 3px;
+  gap: 3px;
+  border-radius: var(--radius-pill);
+  background: var(--accent-soft);
+  border: 1px solid var(--line-2);
+}
+.result-next-mode {
+  min-height: 34px;
+  padding: 0 var(--space-4);
+  border: 0;
+  border-radius: var(--radius-pill);
+  background: transparent;
+  color: var(--text-secondary);
+  font: inherit;
+  font-size: 0.84rem;
+  font-weight: 600;
+  cursor: pointer;
+}
+.result-next-mode-active {
+  background: var(--surface);
+  color: var(--ink);
+  box-shadow: var(--shadow-sm);
+}
+.result-next-note {
+  margin: 0;
+  display: flex;
+  gap: var(--space-3);
+  align-items: flex-start;
+  padding: var(--space-3) var(--space-4);
+  border-radius: var(--radius-md);
+  background: var(--accent-soft);
+  font-size: 0.86rem;
+  line-height: 1.55;
+  color: var(--body);
+}
+.result-next-dot {
+  flex-shrink: 0;
+  width: 7px;
+  height: 7px;
+  margin-top: 0.5em;
+  border-radius: var(--radius-pill);
+  background: var(--ink);
+}
+.result-next-input {
+  width: 100%;
+  min-height: 64px;
+  padding: var(--space-4);
+  border: 1px solid var(--line-2);
+  border-radius: var(--radius-md);
+  background: var(--surface);
+  color: var(--ink);
+  font: inherit;
+  font-size: 0.95rem;
+  resize: vertical;
+}
+.result-next-input::placeholder { color: var(--muted); }
+.result-next-foot {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-4);
+  flex-wrap: wrap;
+  padding-top: var(--space-4);
+  border-top: 1px solid var(--line-2);
+}
+.result-next-cost { font-size: 0.84rem; color: var(--muted); }
+.result-next-cost-note { color: var(--muted); }
+
+/* ----- Result footer strip (design comp screen 05) ------------------------- */
+.result-footer {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-4);
+  flex-wrap: wrap;
+  padding-top: var(--space-4);
+  margin-top: var(--space-2);
+}
+.result-footer-note { font-size: 0.82rem; color: var(--muted); }
+
 .transcript {
   gap: 0;
   padding: 0;
@@ -3810,6 +4013,11 @@ html[data-theme="dark"] .workflow-step[data-state="completed"] .workflow-step-nu
   /* Removed border-radius for consistent cross-browser focus rings */
 }
 
+/* Programmatic focus (view-entry headings with tabindex=-1) must not draw the
+   ring — only keyboard focus (:focus-visible) does. Matches the design comp,
+   which shows no box on the focused heading. */
+:focus:not(:focus-visible) { outline: none; }
+
 main:focus { outline: none; }
 
 /* ----- Responsive ----------------------------------------------------- */
@@ -4179,6 +4387,19 @@ main:focus { outline: none; }
   font-size: 0.75rem;
   font-weight: 700;
 }
+
+/* Per-model vendor tints (design parity — Quorum Final Review, screen 02/05/06).
+   Each frontier vendor gets a soft brand-tint pill + saturated glyph so the four
+   slots read as four distinct minds at a glance. Values lifted verbatim from the
+   comp. Dark-mode overrides live in the theming block. */
+.model-slot-avatar[data-vendor="openai"],
+.transcript-opening-avatar[data-vendor="openai"] { background: var(--vendor-openai-soft); color: var(--vendor-openai-ink); }
+.model-slot-avatar[data-vendor="anthropic"],
+.transcript-opening-avatar[data-vendor="anthropic"] { background: var(--vendor-anthropic-soft); color: var(--vendor-anthropic-ink); }
+.model-slot-avatar[data-vendor="google"],
+.transcript-opening-avatar[data-vendor="google"] { background: var(--vendor-google-soft); color: var(--vendor-google-ink); }
+.model-slot-avatar[data-vendor="deepseek"],
+.transcript-opening-avatar[data-vendor="deepseek"] { background: var(--vendor-deepseek-soft); color: var(--vendor-deepseek-ink); }
 .model-slot-info { flex: 1; min-width: 0; }
 .model-slot-name {
   display: flex;
@@ -4569,6 +4790,31 @@ main:focus { outline: none; }
 .landing-disclaimer-dot-neutral {
   border-radius: var(--radius-pill);
   background: var(--muted);
+}
+
+/* ----- Composer example chips + disclaimer chips (design parity, screen 02) --
+   Left-aligned within the composer column (the landing versions are centred). */
+.composer-examples {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+  padding-top: var(--space-4);
+  border-top: 1px solid var(--line-2);
+}
+.composer-examples-label {
+  font-size: 0.85rem;
+  font-weight: 500;
+  color: var(--muted);
+}
+.composer-examples-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-3);
+}
+.composer-disclaimers {
+  display: flex;
+  gap: var(--space-3);
+  flex-wrap: wrap;
 }
 
 @media (max-width: 600px) {
