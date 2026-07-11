@@ -99,6 +99,22 @@ class CitationCoverage(BaseModel):
     target_met: bool
 
 
+class TokenUsage(BaseModel):
+    """Real per-call token usage as reported by the provider.
+
+    Parsed from the ``usage`` object OpenRouter returns on a completed
+    ``/chat/completions`` response. Captured so a run's actual cost can be
+    computed from measured tokens rather than the pre-run estimate. Absent
+    (``None``) whenever the provider omitted the object or a call did not go
+    live — the cost layer treats a missing record as "cannot measure this
+    call" and keeps the run tagged ``estimated`` (never fabricates usage).
+    """
+
+    prompt_tokens: int = Field(ge=0)
+    completion_tokens: int = Field(ge=0)
+    total_tokens: int = Field(ge=0)
+
+
 class InitialModelAnswer(BaseModel):
     slot_number: int = Field(ge=1, le=4)
     model_id: str
@@ -113,6 +129,11 @@ class InitialModelAnswer(BaseModel):
     citation_coverage: CitationCoverage
     error_code: str | None = None
     provider_notice: str | None = None
+    #: Real per-call token usage when this answer came from a live provider
+    #: call that reported it; ``None`` for simulated/fallback/failed slots
+    #: (no real billing) or when the provider omitted the usage object. Read
+    #: by the cost layer to compute a measured actual cost.
+    token_usage: TokenUsage | None = None
 
 
 @dataclass(frozen=True)
@@ -300,6 +321,7 @@ class ProviderExecutionService:
                 provider_attempt_order=provider_attempt_order,
                 fallback_used=False,
                 provider_notice=search_disabled_notice,
+                token_usage=live_response.usage,
             )
 
         # No live response, or live response returned no usable text.
@@ -383,6 +405,7 @@ class ProviderExecutionService:
         provider_attempt_order: list[ProviderPath],
         fallback_used: bool,
         provider_notice: str | None = None,
+        token_usage: TokenUsage | None = None,
     ) -> InitialModelAnswer:
         duration_ms = max(1, round((perf_counter() - started_at) * 1000))
         provider_event_recorder.record(
@@ -428,6 +451,7 @@ class ProviderExecutionService:
                 cited_claim_count=cited_claim_count,
             ),
             provider_notice=provider_notice,
+            token_usage=token_usage,
         )
 
     def _failed_answer(
@@ -684,7 +708,11 @@ class ProviderExecutionService:
         citations = _extract_citations(parsed, content=content)
         if not content:
             return None
-        return LiveProviderResult(answer_text=content, sources=citations)
+        # Capture the provider-reported token usage (``None`` if the response
+        # omitted it). Threaded up so the run's actual cost can be measured
+        # rather than estimated when every contributing call reported usage.
+        usage = _extract_usage(parsed)
+        return LiveProviderResult(answer_text=content, sources=citations, usage=usage)
 
     def call_with_prompt(
         self,
@@ -785,6 +813,10 @@ class ProviderExecutionService:
 class LiveProviderResult:
     answer_text: str
     sources: list[SourceReference]
+    #: Real token usage reported by the provider for this call, or ``None``
+    #: when the response omitted the ``usage`` object. Threaded up to the
+    #: cost layer so a fully-captured run can report a measured actual cost.
+    usage: TokenUsage | None = None
 
 
 #: Internal sentinel returned by ``_post_openrouter`` when ````
@@ -797,6 +829,42 @@ class _SearchRejected:
 
 
 _SEARCH_REJECTED: _SearchRejected = _SearchRejected()
+
+
+def _extract_usage(payload: object) -> TokenUsage | None:
+    """Parse the OpenRouter ``usage`` object into a :class:`TokenUsage`.
+
+    Returns ``None`` — never a fabricated record — when the object is
+    missing, is not a mapping, or lacks the three integer token counts. A
+    negative or non-integer value is treated as absent so the cost layer
+    never measures from a malformed payload. ``total_tokens`` falls back to
+    ``prompt + completion`` when the provider omits it but reports the parts.
+    """
+    if not isinstance(payload, dict):
+        return None
+    usage = payload.get("usage")
+    if not isinstance(usage, dict):
+        return None
+
+    def _count(key: str) -> int | None:
+        value = usage.get(key)
+        # Reject bools (``isinstance(True, int)`` is True) and non-integers.
+        if isinstance(value, bool) or not isinstance(value, int) or value < 0:
+            return None
+        return value
+
+    prompt_tokens = _count("prompt_tokens")
+    completion_tokens = _count("completion_tokens")
+    if prompt_tokens is None or completion_tokens is None:
+        return None
+    total_tokens = _count("total_tokens")
+    if total_tokens is None:
+        total_tokens = prompt_tokens + completion_tokens
+    return TokenUsage(
+        prompt_tokens=prompt_tokens,
+        completion_tokens=completion_tokens,
+        total_tokens=total_tokens,
+    )
 
 
 def _extract_message_content(payload: object) -> str:

@@ -12,6 +12,7 @@ from product_app.providers import (
     LiveProviderResult,
     ProviderPath,
     SourceReference,
+    TokenUsage,
     calculate_citation_coverage,
     estimate_material_claim_count,
     provider_event_recorder,
@@ -242,11 +243,20 @@ def test_provider_stub_relaxes_sources_gate_when_live_text_present_without_citat
 
 class _FakeLiveResult:
     """Minimal stand-in for ``LiveProviderResult`` that doesn't require
-    pulling the dataclass into the test module."""
+    pulling the dataclass into the test module. Mirrors the real fields,
+    including the ``usage`` record added for measured-cost capture (defaults
+    to ``None`` — these tests do not exercise the usage path)."""
 
-    def __init__(self, *, answer_text: str, sources: list[SourceReference]) -> None:
+    def __init__(
+        self,
+        *,
+        answer_text: str,
+        sources: list[SourceReference],
+        usage: TokenUsage | None = None,
+    ) -> None:
         self.answer_text = answer_text
         self.sources = sources
+        self.usage = usage
 
 
 def test_live_response_uses_online_suffix_for_search(

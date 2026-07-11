@@ -21,7 +21,7 @@ from __future__ import annotations
 import logging
 from collections.abc import Callable
 from concurrent.futures import Future, ThreadPoolExecutor
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, field
 from decimal import Decimal
 from enum import StrEnum
 from threading import RLock
@@ -46,6 +46,7 @@ from product_app.providers import (
     InitialModelAnswer,
     LiveProviderResult,
     ProviderPath,
+    TokenUsage,
     calculate_citation_coverage,
     provider_execution_service,
 )
@@ -222,6 +223,12 @@ class SynthesisResult:
     final_synthesis: FinalSynthesis | None
     failed_steps: list[str]
     missing_steps: list[str]
+    #: One entry per synthesis section that actually made a live LLM call (a
+    #: templated section contributes NO entry — it was not billed). Each entry
+    #: is the call's captured :class:`TokenUsage`, or ``None`` when the live
+    #: call succeeded but the provider omitted the usage object. The cost layer
+    #: reads this to measure the synthesis stage's real cost.
+    live_call_usages: list[TokenUsage | None] = field(default_factory=list)
 
 
 class SynthesisOrchestrationService:
@@ -349,23 +356,23 @@ class SynthesisOrchestrationService:
         # orchestrator aggregates the exception steps into
         # ``SynthesisResult.failed_steps`` so a single
         # section raising no longer aborts the whole run.
-        consensus_section, _consensus_failed = _safe_section_result(
+        consensus_section, _consensus_failed, _consensus_live = _safe_section_result(
             consensus_future,
             "Consensus",
         )
-        disagreement_section, _disagreement_failed = _safe_section_result(
+        disagreement_section, _disagreement_failed, _disagreement_live = _safe_section_result(
             disagreement_future,
             "Disagreement",
         )
-        source_section, _source_failed = _safe_section_result(
+        source_section, _source_failed, _source_live = _safe_section_result(
             source_future,
             "Source support",
         )
-        uncertainty_section, _uncertainty_failed = _safe_section_result(
+        uncertainty_section, _uncertainty_failed, _uncertainty_live = _safe_section_result(
             uncertainty_future,
             "Uncertainty",
         )
-        recommendation_section, _recommendation_failed = _safe_section_result(
+        recommendation_section, _recommendation_failed, _recommendation_live = _safe_section_result(
             recommendation_future,
             "Recommendation",
         )
@@ -379,6 +386,21 @@ class SynthesisOrchestrationService:
                 _recommendation_failed,
             )
             if step is not None
+        ]
+        # One usage entry per section that actually made a billed live call
+        # (a templated section has ``live is None`` and is skipped). The entry
+        # is the call's captured usage, which may itself be ``None`` if the
+        # provider omitted it — the cost layer treats that as unmeasurable.
+        live_call_usages: list[TokenUsage | None] = [
+            live.usage
+            for live in (
+                _consensus_live,
+                _disagreement_live,
+                _source_live,
+                _uncertainty_live,
+                _recommendation_live,
+            )
+            if live is not None
         ]
 
         false_consensus_preserved = self._is_false_consensus_preserved(
@@ -428,6 +450,7 @@ class SynthesisOrchestrationService:
             final_synthesis=synthesis,
             failed_steps=failed_steps,
             missing_steps=[],
+            live_call_usages=live_call_usages,
         )
 
     # -- helpers ----------------------------------------------------------
@@ -499,7 +522,7 @@ class SynthesisOrchestrationService:
         consensus_strength: ConsensusStrength,
         openrouter_key: str,
         user_prompt: str,
-    ) -> tuple[str, str | None]:
+    ) -> tuple[str, str | None, LiveProviderResult | None]:
         successful = [
             answer for answer in initial_answers if answer.status is InitialAnswerStatus.COMPLETED
         ]
@@ -511,10 +534,14 @@ class SynthesisOrchestrationService:
             # the user can read the message and infer it's a
             # fallback.
             return (
-                "No model returned a usable response, so no consensus could be "
-                "formed. This run is reported as a partial result and the failed "
-                "steps are listed separately."
-            ), None
+                (
+                    "No model returned a usable response, so no consensus could be "
+                    "formed. This run is reported as a partial result and the failed "
+                    "steps are listed separately."
+                ),
+                None,
+                None,
+            )
         avg_cited = round(coverage.coverage_ratio * 100)
         # PR-2: the templated consensus text now varies by
         # strength. "strong" and "weak" both describe a real
@@ -549,8 +576,12 @@ class SynthesisOrchestrationService:
             user_prompt=user_prompt,
         )
         if live is None:
-            return truncate_section(templated, max_chars=DEFAULT_SECTION_MAX_CHARS), None
-        return truncate_section(live, max_chars=DEFAULT_SECTION_MAX_CHARS), None
+            return truncate_section(templated, max_chars=DEFAULT_SECTION_MAX_CHARS), None, None
+        return (
+            truncate_section(live.answer_text.strip(), max_chars=DEFAULT_SECTION_MAX_CHARS),
+            None,
+            live,
+        )
 
     def _build_disagreement(
         self,
@@ -559,7 +590,7 @@ class SynthesisOrchestrationService:
         consensus_strength: ConsensusStrength,
         openrouter_key: str,
         user_prompt: str,
-    ) -> tuple[str, str | None]:
+    ) -> tuple[str, str | None, LiveProviderResult | None]:
         fallback_paths = {answer.provider_path for answer in initial_answers}
         if ProviderPath.FALLBACK_SEARCH in fallback_paths and len(fallback_paths) > 1:
             base = (
@@ -584,8 +615,12 @@ class SynthesisOrchestrationService:
             user_prompt=user_prompt,
         )
         if live is None:
-            return truncate_section(templated, max_chars=DEFAULT_SECTION_MAX_CHARS), None
-        return truncate_section(live, max_chars=DEFAULT_SECTION_MAX_CHARS), None
+            return truncate_section(templated, max_chars=DEFAULT_SECTION_MAX_CHARS), None, None
+        return (
+            truncate_section(live.answer_text.strip(), max_chars=DEFAULT_SECTION_MAX_CHARS),
+            None,
+            live,
+        )
 
     def _build_source_support(
         self,
@@ -593,7 +628,7 @@ class SynthesisOrchestrationService:
         initial_answers: list[InitialModelAnswer],
         openrouter_key: str,
         user_prompt: str,
-    ) -> tuple[str, str | None]:
+    ) -> tuple[str, str | None, LiveProviderResult | None]:
         cited = sum(
             1
             for answer in initial_answers
@@ -601,7 +636,7 @@ class SynthesisOrchestrationService:
         )
         total = len(initial_answers)
         if cited == 0:
-            return "No model returned visible source references for this query.", None
+            return "No model returned visible source references for this query.", None, None
         base = (
             f"{cited} of {total} models returned visible source references. The references come "
             "from the primary provider; fallback sources are listed separately and are not "
@@ -614,8 +649,12 @@ class SynthesisOrchestrationService:
             user_prompt=user_prompt,
         )
         if live is None:
-            return truncate_section(templated, max_chars=DEFAULT_SECTION_MAX_CHARS), None
-        return truncate_section(live, max_chars=DEFAULT_SECTION_MAX_CHARS), None
+            return truncate_section(templated, max_chars=DEFAULT_SECTION_MAX_CHARS), None, None
+        return (
+            truncate_section(live.answer_text.strip(), max_chars=DEFAULT_SECTION_MAX_CHARS),
+            None,
+            live,
+        )
 
     def _build_uncertainty(
         self,
@@ -624,7 +663,7 @@ class SynthesisOrchestrationService:
         debate_outputs: list[DebateOutput],
         openrouter_key: str,
         user_prompt: str,
-    ) -> tuple[str, str | None]:
+    ) -> tuple[str, str | None, LiveProviderResult | None]:
         failed = sum(1 for answer in initial_answers if answer.status is InitialAnswerStatus.FAILED)
         if failed:
             base = (
@@ -652,8 +691,12 @@ class SynthesisOrchestrationService:
             user_prompt=user_prompt,
         )
         if live is None:
-            return truncate_section(templated, max_chars=DEFAULT_SECTION_MAX_CHARS), None
-        return truncate_section(live, max_chars=DEFAULT_SECTION_MAX_CHARS), None
+            return truncate_section(templated, max_chars=DEFAULT_SECTION_MAX_CHARS), None, None
+        return (
+            truncate_section(live.answer_text.strip(), max_chars=DEFAULT_SECTION_MAX_CHARS),
+            None,
+            live,
+        )
 
     def _build_recommendation(
         self,
@@ -663,7 +706,7 @@ class SynthesisOrchestrationService:
         failed_count: int,
         openrouter_key: str,
         user_prompt: str,
-    ) -> tuple[str, str | None]:
+    ) -> tuple[str, str | None, LiveProviderResult | None]:
         target_met = coverage.target_met
         if target_met and failed_count == 0:
             base = (
@@ -691,8 +734,8 @@ class SynthesisOrchestrationService:
             user_prompt=user_prompt,
         )
         if live is None:
-            return truncate_recommendation(templated), None
-        return truncate_recommendation(live), None
+            return truncate_recommendation(templated), None, None
+        return truncate_recommendation(live.answer_text.strip()), None, live
 
     def _call_synthesis_model(
         self,
@@ -700,7 +743,7 @@ class SynthesisOrchestrationService:
         openrouter_key: str,
         system_prompt: str,
         user_prompt: str,
-    ) -> str | None:
+    ) -> LiveProviderResult | None:
         # Same operator-opt-in guard as in ``debate._call_debate_model``:
         # if live execution is disabled, return ``None`` and let the
         # templated path serve. Without this check the synthesis
@@ -719,7 +762,7 @@ class SynthesisOrchestrationService:
         )
         if result is None or not result.answer_text.strip():
             return None
-        return result.answer_text.strip()
+        return result
 
     def _synthesis_fallback_notice(self, section_label: str) -> str:
         return (
@@ -827,8 +870,12 @@ synthesis_stub_service = SynthesisOrchestrationService()
 _synthesis_section_pool = ThreadPoolExecutor(max_workers=20, thread_name_prefix="synthesis-section")
 
 
-SectionFuture = Future[tuple[str, str | None]]
-SectionBuilder = Callable[..., tuple[str, str | None]]
+#: A built section: ``(section_text, failed_step, live_result)``. ``live_result``
+#: is the :class:`LiveProviderResult` when the section made a billed live call
+#: (``None`` for a templated section), and carries the captured token usage.
+SectionResult = tuple[str, str | None, LiveProviderResult | None]
+SectionFuture = Future[SectionResult]
+SectionBuilder = Callable[..., SectionResult]
 
 
 def _submit_section(label: str, builder: SectionBuilder, **kwargs: Any) -> SectionFuture:
@@ -847,17 +894,17 @@ def _submit_section(label: str, builder: SectionBuilder, **kwargs: Any) -> Secti
     return _synthesis_section_pool.submit(builder, **kwargs)
 
 
-def _safe_section_result(future: SectionFuture, label: str) -> tuple[str, str | None]:
+def _safe_section_result(future: SectionFuture, label: str) -> SectionResult:
     """PR-2 Item 3: catch per-section builder exceptions.
 
-    Returns ``(section_text, failed_step)``. If the section
-    builder raised, we log a structured event, return a
-    templated fallback string with the ``TEMPLATED_FALLBACK_PREFIX``,
-    and a failed-step string the orchestrator aggregates into
-    ``SynthesisResult.failed_steps``.
+    Returns ``(section_text, failed_step, live_result)``. If the section
+    builder raised, we log a structured event, return a templated fallback
+    string with the ``TEMPLATED_FALLBACK_PREFIX``, a failed-step string the
+    orchestrator aggregates into ``SynthesisResult.failed_steps``, and a
+    ``None`` live result (a failed section made no billed call).
     """
     try:
-        text, notice = future.result()
+        text, notice, live = future.result()
     except Exception as exc:
         logging.getLogger(__name__).error(
             "synthesis_section_failed",
@@ -866,8 +913,9 @@ def _safe_section_result(future: SectionFuture, label: str) -> tuple[str, str | 
         return (
             TEMPLATED_FALLBACK_PREFIX + f"{label} section failed to build.",
             f"{label} section raised an exception: {type(exc).__name__}",
+            None,
         )
-    return (text, notice)
+    return (text, notice, live)
 
 
 synthesis_orchestration_service = synthesis_stub_service

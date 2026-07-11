@@ -48,7 +48,9 @@ from product_app.costs import (
     CostConfirmation,
     CostEstimate,
     CostThresholdAction,
+    build_measured_breakdown,
     cost_estimation_service,
+    measured_call_cost_usd,
 )
 from product_app.debate import (
     AgreementSummary,
@@ -67,6 +69,7 @@ from product_app.providers import (
     InitialAnswerStatus,
     InitialModelAnswer,
     ProviderPath,
+    TokenUsage,
     provider_execution_service,
 )
 from product_app.safety import (
@@ -367,6 +370,12 @@ class QueryRun:
     final_synthesis: FinalSynthesis | None = None
     failed_steps: list[str] = field(default_factory=list)
     missing_steps: list[str] = field(default_factory=list)
+    #: Real per-call token usage captured from the live debate/synthesis calls
+    #: (P2). One entry per billed live call; ``None`` inside a list means the
+    #: call went live but the provider omitted its usage object. Read by
+    #: ``_actual_cost`` to decide whether the run's actual cost can be measured.
+    debate_call_usages: list[TokenUsage | None] = field(default_factory=list)
+    synthesis_call_usages: list[TokenUsage | None] = field(default_factory=list)
 
     @property
     def is_terminal(self) -> bool:
@@ -521,10 +530,13 @@ class InMemoryQueryRunRepository:
         self,
         query_run_id: UUID,
         debate_outputs: list[DebateOutput],
+        live_call_usages: list[TokenUsage | None] | None = None,
     ) -> QueryRun:
         with self._lock:
             query_run = self._query_runs[query_run_id]
             query_run.debate_outputs = debate_outputs
+            if live_call_usages is not None:
+                query_run.debate_call_usages = live_call_usages
             query_run.updated_at = datetime.now(UTC)
             return query_run
 
@@ -532,10 +544,13 @@ class InMemoryQueryRunRepository:
         self,
         query_run_id: UUID,
         final_synthesis: FinalSynthesis,
+        live_call_usages: list[TokenUsage | None] | None = None,
     ) -> QueryRun:
         with self._lock:
             query_run = self._query_runs[query_run_id]
             query_run.final_synthesis = final_synthesis
+            if live_call_usages is not None:
+                query_run.synthesis_call_usages = live_call_usages
             query_run.updated_at = datetime.now(UTC)
             return query_run
 
@@ -1200,7 +1215,11 @@ def _execute_query_run(query_run_id: UUID, account_id: UUID) -> None:
         initial_answers=refreshed.initial_answers,
         openrouter_key=openrouter_key,
     )
-    query_run_repository.record_debate_outputs(query_run_id, debate_result.debate_outputs)
+    query_run_repository.record_debate_outputs(
+        query_run_id,
+        debate_result.debate_outputs,
+        live_call_usages=debate_result.live_call_usages,
+    )
     if not debate_result.debate_outputs:
         query_run_repository.update_status(
             query_run_id,
@@ -1277,7 +1296,11 @@ def _execute_query_run(query_run_id: UUID, account_id: UUID) -> None:
             missing_steps=synthesis_result.missing_steps,
         )
         return
-    query_run_repository.record_final_synthesis(query_run_id, synthesis_result.final_synthesis)
+    query_run_repository.record_final_synthesis(
+        query_run_id,
+        synthesis_result.final_synthesis,
+        live_call_usages=synthesis_result.live_call_usages,
+    )
     query_run_repository.update_status(
         query_run_id,
         status_value=QueryRunStatus.COMPLETED,
@@ -1411,18 +1434,96 @@ def _actual_cost(
 ) -> tuple[Decimal, CostBreakdown | None, Literal["estimated", "measured"]]:
     """Actual cost incurred, for the receipt's est→actual reconciliation.
 
-    Per-call provider-usage capture is NOT yet plumbed through the pipeline,
-    so this returns the estimate (value and itemized breakdown) for EVERY run,
-    demo and live alike, tagged ``cost_source="estimated"``. On a demo/simulation
-    run that is exact — no real provider usage was billed, so the honest
-    "actual" is the estimate itself. On a live run it is a known limitation:
-    the estimate stands in for the (not-yet-captured) measured usage, and the
-    ``"estimated"`` tag tells the UI not to present it as measured billing.
-    Once usage capture lands, live runs should substitute the real token usage
-    here and return ``cost_source="measured"``.
+    Returns ``cost_source="measured"`` — with a cost computed from the REAL
+    per-call token usage captured from the provider (P2) — only when EVERY
+    contributing live call reported usage. Otherwise it returns the pre-run
+    estimate tagged ``cost_source="estimated"``, and never fabricates usage:
+
+    * A demo/simulation run makes no live calls, so there is no captured usage
+      to measure from — it stays ``estimated`` (the estimate is exact anyway,
+      because nothing was billed).
+    * A live (or mixed) run is ``measured`` only if every billed call — each
+      ``OPENROUTER_SEARCH`` initial answer plus every live debate/synthesis
+      call — carried a usage record. If any one is missing (the provider
+      omitted it, or a stage fell back to the templated path mid-run), the run
+      cannot be fully measured and falls back to ``estimated``.
     """
     estimate = query_run.cost_estimate
-    return estimate.estimated_cost_usd, estimate.breakdown, "estimated"
+
+    # Every billed live call and its captured usage (which may be ``None`` when
+    # the provider omitted the object). An initial answer is a billed call iff
+    # it COMPLETED on the OpenRouter path — a FAILED/cancelled slot also carries
+    # ``provider_path=OPENROUTER_SEARCH`` but returned no completion, so it was
+    # not billed and must not block measurement. Debate/synthesis usage lists
+    # already contain one entry per billed call.
+    initial_live = [
+        answer
+        for answer in query_run.initial_answers
+        if answer.provider_path is ProviderPath.OPENROUTER_SEARCH
+        and answer.status is InitialAnswerStatus.COMPLETED
+    ]
+    live_usages: list[TokenUsage | None] = (
+        [answer.token_usage for answer in initial_live]
+        + list(query_run.debate_call_usages)
+        + list(query_run.synthesis_call_usages)
+    )
+
+    # No live calls (pure demo), or at least one live call without usage → we
+    # cannot honestly present a measured figure. Keep the estimate.
+    if not live_usages or any(usage is None for usage in live_usages):
+        return estimate.estimated_cost_usd, estimate.breakdown, "estimated"
+
+    # Every contributing call reported usage — compute the measured actual.
+    answers_by_slot = {answer.slot_number: answer for answer in query_run.initial_answers}
+    per_model_initial_named: list[tuple[str, str, Decimal]] = []
+    for slot in query_run.model_slots:
+        answer = answers_by_slot.get(slot.slot_number)
+        if (
+            answer is not None
+            and answer.provider_path is ProviderPath.OPENROUTER_SEARCH
+            and answer.status is InitialAnswerStatus.COMPLETED
+            and answer.token_usage is not None
+        ):
+            cost = measured_call_cost_usd(
+                model_id=answer.model_id,
+                prompt_tokens=answer.token_usage.prompt_tokens,
+                completion_tokens=answer.token_usage.completion_tokens,
+            )
+            display_name = answer.display_name or slot.model_id
+        else:
+            # Slot ran simulated / was not billed → genuinely $0 measured.
+            cost = Decimal("0")
+            display_name = slot.model_id
+        per_model_initial_named.append((slot.model_id, display_name, cost))
+
+    debate_costs = [
+        measured_call_cost_usd(
+            model_id=settings.debate_model_id,
+            prompt_tokens=usage.prompt_tokens,
+            completion_tokens=usage.completion_tokens,
+        )
+        for usage in query_run.debate_call_usages
+        if usage is not None  # narrowing; the gate above guarantees non-None
+    ]
+    synthesis_cost = sum(
+        (
+            measured_call_cost_usd(
+                model_id=settings.synthesis_model_id,
+                prompt_tokens=usage.prompt_tokens,
+                completion_tokens=usage.completion_tokens,
+            )
+            for usage in query_run.synthesis_call_usages
+            if usage is not None
+        ),
+        Decimal("0"),
+    )
+
+    breakdown = build_measured_breakdown(
+        per_model_initial=per_model_initial_named,
+        debate_costs=debate_costs,
+        synthesis_cost=synthesis_cost,
+    )
+    return breakdown.total, breakdown, "measured"
 
 
 def _initial_progress() -> list[QueryRunStageProgress]:
