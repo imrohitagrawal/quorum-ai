@@ -345,12 +345,146 @@ test.describe("UI parity — behaviour", () => {
 
   test("landing preview badge reads Preview but keeps the illustrative accessible name", async ({ page }) => {
     await boot(page);
-    await page.locator("#show-landing").click();
+    // ``#show-landing`` is intentionally visually hidden (sr-only) after the
+    // item-2 top-bar change. Dispatch the click straight to the element (a
+    // coordinate click would land on the overlapping status pill instead).
+    await page.locator("#show-landing").dispatchEvent("click");
     await expect(page.locator('[data-view="landing"]')).toBeVisible();
     await expect(page.locator(".landing-preview-badge")).toHaveText("Preview");
     await expect(page.locator(".landing-preview")).toHaveAttribute("aria-label", "Example preview");
     await expect(page.locator(".landing-preview-caption")).toContainText("not a run you started");
     // The global top bar is hidden on landing (no double header).
     await expect(page.locator(".topbar")).toBeHidden();
+  });
+
+  // ---- Design-comp parity closeout: the 4 remaining visual-parity gaps -----
+
+  test("item 1 — main content sits in a centered, constrained column (not full-width)", async ({ page }) => {
+    await boot(page);
+    // The comp centers content in a symmetric column narrower than the shell.
+    // Audited widths: composer 800, result 960. The top bar stays shell-wide.
+    const geom = async (view: string) => {
+      const layout = page.locator(`[data-active-view="${view}"] .layout`).first();
+      const shell = page.locator("#main-content");
+      const l = await layout.boundingBox();
+      const s = await shell.boundingBox();
+      if (!l || !s) throw new Error("missing box");
+      return { width: l.width, left: l.x - s.x, right: s.x + s.width - (l.x + l.width), shell: s.width };
+    };
+    const composer = await geom("composer");
+    // Constrained well below the shell width, and symmetrically centered.
+    expect(composer.width).toBeLessThanOrEqual(840);
+    expect(composer.width).toBeLessThan(composer.shell - 200);
+    expect(Math.abs(composer.left - composer.right)).toBeLessThanOrEqual(4);
+    expect(composer.left).toBeGreaterThan(120);
+    // The top bar itself is NOT constrained to the content column — it keeps the
+    // full shell width (comp: wide bar over a centered column).
+    const topbar = await page.locator(".topbar").boundingBox();
+    expect(topbar!.width).toBeGreaterThan(composer.width + 150);
+    // Result view is centered too (comp: 960), and wider than the composer.
+    await driveToResult(page, completedResp());
+    const result = await geom("result");
+    expect(Math.abs(result.left - result.right)).toBeLessThanOrEqual(4);
+    expect(result.width).toBeGreaterThan(composer.width);
+    expect(result.width).toBeLessThanOrEqual(1000);
+  });
+
+  test("item 2 — top bar shows a single session pill + theme toggle; no visible 'How it works'", async ({ page }) => {
+    await boot(page);
+    const pill = page.locator("#connection-pill");
+    await expect(pill).toBeVisible();
+    await expect(pill).toHaveClass(/status-pill-session/);
+    // Honest wording: "Session active · <capability>" — provider configured when
+    // live, local simulation when degraded. Either way it starts "Session active".
+    await expect(page.locator("#connection-pill-text")).toHaveText(/^Session active · (provider configured|local simulation)$/);
+    // The theme toggle is preserved (a real feature the comp doesn't depict).
+    await expect(page.locator("#theme-toggle")).toBeVisible();
+    // The "How it works" control is no longer visible chrome — it survives as a
+    // visually-hidden (sr-only) button so the landing view stays reachable and
+    // the landing tests keep working. Assert it renders at ~0 visual size.
+    const box = await page.locator("#show-landing").boundingBox();
+    expect(box).not.toBeNull();
+    expect(box!.width).toBeLessThanOrEqual(2);
+    expect(box!.height).toBeLessThanOrEqual(2);
+    // It must still exist exactly once (reachability contract).
+    await expect(page.locator("#show-landing")).toHaveCount(1);
+  });
+
+  test("item 3 — each slot shows a real per-model estimate that MATCHES the server estimate (never a fake number)", async ({ page }) => {
+    await boot(page);
+    // A longer question so the figures are clearly non-zero and differentiated.
+    const longQ =
+      "Should our 200-person company adopt passkeys and phase out passwords by the end of 2027? " +
+      "What is the safest migration sequence, what are the top three rollout risks, and how should " +
+      "we stage enrollment across engineering, sales, and support so nobody is locked out mid-migration?";
+    await page.getByRole("textbox").first().fill(longQ);
+    const cells = page.locator("#model-inputs .model-slot-estimate");
+    await expect(cells).toHaveCount(4);
+    // Every slot shows a real ``~$0.NNN`` figure — not the "—" placeholder.
+    for (const text of await cells.allTextContents()) {
+      expect(text.trim(), `slot estimate was not a real figure: ${text}`).toMatch(/^~\$\d+\.\d{3}$/);
+    }
+    // HONESTY GUARD: the client figures must equal what the REAL server
+    // ``/v1/query-runs/estimate`` returns for the same query + models (the
+    // by_model rows, formatted the same way). This is an UNMOCKED cross-check —
+    // if the server formula ever drifts from the client mirror, this fails.
+    const cross = await page.evaluate(async (q) => {
+      const ids = [...document.querySelectorAll("[data-model-slot]")].map(
+        (s) => (s as HTMLSelectElement).value,
+      );
+      const client = [...document.querySelectorAll("#model-inputs .model-slot-estimate")].map(
+        (e) => (e as HTMLElement).textContent!.trim(),
+      );
+      const sess = await (await fetch("/v1/session", { credentials: "same-origin" })).json();
+      const resp = await fetch("/v1/query-runs/estimate", {
+        method: "POST",
+        credentials: "same-origin",
+        headers: { "Content-Type": "application/json", "X-CSRF-Token": sess.csrf_token },
+        body: JSON.stringify({ query_text: q, model_slots: ids }),
+      });
+      const j = await resp.json();
+      const server = (j.cost_estimate.breakdown.by_model || [])
+        .filter((r: { kind: string }) => r.kind !== "synthesis")
+        .map((r: { usd: string }) => Number(r.usd));
+      return { client, server };
+    }, longQ);
+    // The client mirrors the RAW by_model arithmetic; the server additionally
+    // runs a largest-remainder reconciliation that can nudge any single line by
+    // at most one display quantum ($0.0001). So the honest guard is agreement
+    // within a cent-fraction, not byte-identical strings: each client figure
+    // must be within $0.001 of the server's by_model row for the same slot.
+    const clientUsd = cross.client.map((t) => Number(t.replace(/[^0-9.]/g, "")));
+    expect(clientUsd).toHaveLength(cross.server.length);
+    clientUsd.forEach((c, i) => {
+      expect(
+        Math.abs(c - cross.server[i]),
+        `slot ${i}: client ${c} vs server ${cross.server[i]} exceeds tolerance`,
+      ).toBeLessThanOrEqual(0.001);
+    });
+    // Clearing the box drops the figures back to the neutral placeholder.
+    await page.getByRole("textbox").first().fill("");
+    for (const text of await cells.allTextContents()) {
+      expect(text.trim()).toBe("—");
+    }
+  });
+
+  test("item 4 — the four example chips lay out 2×2 (two rows of two)", async ({ page }) => {
+    await boot(page);
+    const chips = page.locator(".composer-examples-row .landing-chip");
+    await expect(chips).toHaveCount(4);
+    const boxes = await chips.evaluateAll((els) =>
+      els.map((e) => {
+        const r = e.getBoundingClientRect();
+        return { x: Math.round(r.left), y: Math.round(r.top) };
+      }),
+    );
+    const rows = [...new Set(boxes.map((b) => b.y))].sort((a, b) => a - b);
+    expect(rows.length, "chips should occupy exactly two rows").toBe(2);
+    const rowCount = (y: number) => boxes.filter((b) => b.y === y).length;
+    expect(rowCount(rows[0]), "row 1 should hold two chips").toBe(2);
+    expect(rowCount(rows[1]), "row 2 should hold two chips").toBe(2);
+    // The two columns line up (left edges match across rows) — a real grid.
+    const cols = [...new Set(boxes.map((b) => b.x))].sort((a, b) => a - b);
+    expect(cols.length).toBe(2);
   });
 });

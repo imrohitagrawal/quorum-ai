@@ -175,7 +175,11 @@ test.describe("AC-035 — axe over every view (both themes)", () => {
 
   test("landing", async ({ page }) => {
     await boot(page);
-    await page.locator("#show-landing").click();
+    // ``#show-landing`` is an intentionally visually-hidden (sr-only) control
+    // in the parity design — the workspace top bar no longer surfaces a visible
+    // "How it works" link. Dispatch the click directly (a coordinate click would
+    // land on the overlapping status pill instead of this off-screen control).
+    await page.locator("#show-landing").dispatchEvent("click");
     await expect(page.locator('[data-view="landing"]')).toBeVisible();
     await scanBothThemes(page, "landing");
   });

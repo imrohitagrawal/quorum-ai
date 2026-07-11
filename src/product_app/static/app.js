@@ -36,6 +36,20 @@
   );
   const defaultModelIds = window.DEFAULT_MODEL_IDS;
 
+  // Per-model price index for the honest per-slot pre-run estimate (design-comp
+  // parity, item 3). Built from the catalog island's ``input_price_per_1k`` /
+  // ``output_price_per_1k`` (USD per 1K tokens). Models missing from the map
+  // fall back to ``COST_MODEL`` defaults — exactly like the server's ``_price``.
+  const catalogPriceIndex = new Map();
+  for (const option of modelCatalog) {
+    if (option && option.model_id) {
+      catalogPriceIndex.set(option.model_id, {
+        input: Number(option.input_price_per_1k),
+        output: Number(option.output_price_per_1k),
+      });
+    }
+  }
+
   const el = (id) => document.getElementById(id);
   const qs = (selector, root = document) => root.querySelector(selector);
   const qsa = (selector, root = document) =>
@@ -883,6 +897,20 @@
     connectionPillText.textContent = label;
   }
 
+  // Design-comp parity (item 2): the connected session pill mirrors the comp's
+  // "Session active · provider configured" wording — but HONESTLY. The comp
+  // depicts the live-provider happy path; we only claim "provider configured"
+  // when the seeded readiness probe reports live execution. When the process is
+  // degraded to local simulation (no provider key / live execution disabled) we
+  // say so plainly rather than overstating capability.
+  function connectedPillLabel() {
+    const readiness = window.LIVE_READINESS;
+    const live = readiness && readiness.state === "live";
+    return live
+      ? "Session active · provider configured"
+      : "Session active · local simulation";
+  }
+
   function setStatusPill(stateName, label) {
     const pill = statusMeta.querySelector(".status-pill");
     if (!pill) return;
@@ -1102,6 +1130,82 @@
     const num = Number(usd);
     if (!Number.isFinite(num)) return "—";
     return `~$${num.toFixed(3)}`;
+  }
+
+  // Honest per-slot pre-run cost estimate (design-comp parity, item 3).
+  //
+  // Mirrors the server's ``by_model`` model-row arithmetic EXACTLY
+  // (``CostEstimationService._estimate_breakdown``): each row is the model's own
+  // initial-answer input+output charge plus an equal share of the query/
+  // processing overhead and of the two debate rounds. Prices come from the
+  // catalog island; the shared scalars come from ``window.COST_MODEL`` — there
+  // are no hard-coded figures here, and the parity e2e suite cross-checks this
+  // against the real ``/v1/query-runs/estimate`` response so any server-side
+  // formula change that this fails to track is caught. Returns one USD number
+  // per slot, or ``null`` per slot when there is no query yet (nothing to price).
+  function computePerSlotEstimatesUsd(modelIds, queryText) {
+    const cm = window.COST_MODEL;
+    const chars = (queryText || "").length;
+    if (!cm || chars === 0) return modelIds.map(() => null);
+
+    const multiplier = Number(cm.output_token_multiplier);
+    const innerMultiplier = Number(cm.inner_call_multiplier);
+    const innerCap = Number(cm.inner_call_cap_usd);
+    const queryCostPer1kChars = Number(cm.query_cost_per_1k_chars);
+    const perCharProcessing = Number(cm.per_char_processing);
+    const defaultInput = Number(cm.default_input_price_per_1k);
+    const defaultOutput = Number(cm.default_output_price_per_1k);
+
+    const priceFor = (modelId) =>
+      catalogPriceIndex.get(modelId) || { input: defaultInput, output: defaultOutput };
+
+    const inputTokens = chars / 4; // ~4 chars/token, matching the server
+    const outputTokens = inputTokens * multiplier;
+    const queryCost = queryCostPer1kChars * (chars / 1000);
+    const processingCost = perCharProcessing * chars;
+
+    const initial = modelIds.map((modelId) => {
+      const price = priceFor(modelId);
+      return (
+        price.input * (inputTokens / 1000) + price.output * (outputTokens / 1000)
+      );
+    });
+    // Mirror the server's ``max(output rates, default=DEFAULT_OUTPUT)``: the
+    // default is the fallback for an EMPTY slot list only — with slots present
+    // it is the true max of the selected models' output rates. Seeding the
+    // reduce with ``defaultOutput`` (0.002) would instead FLOOR the rate at
+    // 0.002 whenever every selected model is cheaper (e.g. the default mix),
+    // overstating the debate share. Seed with 0 (all rates are positive) so the
+    // reduce returns the real max; fall back to the default only when empty.
+    const maxOutputRate = modelIds.length
+      ? modelIds.reduce((max, modelId) => Math.max(max, priceFor(modelId).output), 0)
+      : defaultOutput;
+    const innerPerCall = (innerMultiplier * maxOutputRate * outputTokens) / 1000;
+    const innerCallCost = Math.min(innerPerCall * 3, innerCap);
+    const stageInner = innerCallCost / 3;
+    const base = queryCost + processingCost;
+    const baseShare = base / 4;
+    const debateShare = stageInner / 2;
+    return initial.map((initialCost) => initialCost + baseShare + debateShare);
+  }
+
+  // Recompute the pre-run per-slot estimates from the current query + model
+  // selection and paint them onto the slot cards' estimate cells. Updates only
+  // the ``.model-slot-estimate`` text (never rebuilds the cards) so a focused
+  // ``<select>`` or the user's typing is never disrupted. A live estimate
+  // response later overwrites ``state.perModelEstimates`` with the authoritative
+  // server figures (see ``estimateRun``); this owns the composer pre-run view.
+  function updatePerSlotEstimates() {
+    if (!modelInputs) return;
+    const modelIds = getModelIds();
+    state.perModelEstimates = computePerSlotEstimatesUsd(
+      modelIds,
+      queryTextarea ? queryTextarea.value : "",
+    );
+    const cells = modelInputs.querySelectorAll(".model-slot-estimate");
+    cells.forEach((cell, index) => {
+      cell.textContent = perModelEstimateText(index);
+    });
   }
 
   // Slice 1 (02 Composer): the four model slots render as a 2x2 grid of
@@ -4117,7 +4221,7 @@
       const session = await response.json();
       state.csrfToken = session.csrf_token;
       el("session-meta").textContent = "Managed by secure cookie";
-      setConnectionPill("connected", "Connected");
+      setConnectionPill("connected", connectedPillLabel());
     } catch (error) {
       setConnectionPill("error", "Disconnected");
       throw error;
@@ -5625,6 +5729,10 @@
         return;
       }
       renderModelInputs(getModelIds());
+      // Item 3: refresh the per-slot pre-run estimate for the newly
+      // selected model(s). Runs after the card rebuild so the estimate
+      // cells exist to paint.
+      updatePerSlotEstimates();
       // PR-0 / Bug 9: re-evaluate the drift banner against the
       // new selection. If the user just moved off the drifted
       // default, the banner should disappear on this change
@@ -5635,6 +5743,9 @@
 
   function initQueryValidation() {
     queryTextarea.addEventListener("input", updateQueryValidation);
+    // Item 3: keep the per-slot pre-run estimate in step with the query as the
+    // user types. Pure client-side arithmetic (no network), so no debounce.
+    queryTextarea.addEventListener("input", updatePerSlotEstimates);
     // Slice 1: probe the warnings endpoint (debounced) so the COPY-002
     // high-stakes gate appears as soon as the query looks like a safety
     // topic. Also re-probe on blur to catch a paste that skipped input.

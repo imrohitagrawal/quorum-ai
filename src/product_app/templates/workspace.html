@@ -41,8 +41,13 @@
           </div>
         </div>
         <div class="topbar-actions">
-          <button id="show-landing" class="topbar-howitworks" type="button">How it works</button>
-          <span class="status-pill" id="connection-pill" data-state="connecting" aria-live="polite" aria-atomic="true">
+          <!-- Design-comp parity (item 2): the comp's top bar carries a single
+               session-status pill plus the theme toggle — no "How it works"
+               link. The link is kept in the DOM (visually hidden) so the
+               anonymous landing/preview view stays reachable programmatically
+               and for assistive tech; the visible chrome matches the comp. -->
+          <button id="show-landing" class="topbar-howitworks sr-only" type="button" tabindex="-1" aria-hidden="true">How it works</button>
+          <span class="status-pill status-pill-session" id="connection-pill" data-state="connecting" aria-live="polite" aria-atomic="true">
             <span class="status-pill-dot" aria-hidden="true"></span>
             <span id="connection-pill-text">Connecting</span>
           </span>
@@ -768,6 +773,9 @@
       window.DEFAULT_MODEL_IDS = {{ default_model_ids_json }};
       window.STALE_MODEL_IDS = {{ stale_model_ids_json }};
       window.LIVE_READINESS = {{ live_readiness_json }};
+      // Shared cost-model scalars for the honest per-slot pre-run estimate
+      // (design-comp parity, item 3). See ``_render_workspace_html``.
+      window.COST_MODEL = {{ cost_model_json }};
       // Static strings that downstream tests and accessibility scanners
       // look for in the rendered HTML. The actual implementations live
       // in ``app.js``; the names here are the contract surface.

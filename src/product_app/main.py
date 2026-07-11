@@ -36,6 +36,13 @@ from product_app.auth import (
     require_session,
 )
 from product_app.config import RuntimeEnvironment, settings, validate_production_environment
+from product_app.costs import (
+    _DEFAULT_PRICE_PER_1K_INPUT,
+    _DEFAULT_PRICE_PER_1K_OUTPUT,
+    COST_DISPLAY_QUANTUM,
+    PER_CHAR_PROCESSING_USD,
+    QUERY_COST_PER_1K_CHARS_USD,
+)
 from product_app.feedback_store import FeedbackStore, get_store
 from product_app.feedback_store import configure as configure_feedback_store
 from product_app.logging_config import setup_json_logging
@@ -304,6 +311,25 @@ def _render_workspace_html() -> str:
         [option.model_dump(mode="json") for option in catalog_options],
     ).replace("<", "\\u003c")
     default_ids_json = json.dumps(default_ids).replace("<", "\\u003c")
+    # Cost-model constants for the honest per-slot pre-run estimate (design-comp
+    # parity, item 3). The workspace JS mirrors the server ``by_model`` breakdown
+    # arithmetic (see ``CostEstimationService._estimate_breakdown``); it reads the
+    # per-model prices from the catalog island and these shared scalars from here,
+    # so there is a SINGLE source of truth for the numbers and no hard-coded
+    # figures in the client. The parity e2e suite cross-checks the client estimate
+    # against the real ``/v1/query-runs/estimate`` response to guard against drift.
+    cost_model_json = json.dumps(
+        {
+            "output_token_multiplier": float(settings.cost_output_token_multiplier),
+            "inner_call_multiplier": float(settings.cost_inner_call_multiplier),
+            "inner_call_cap_usd": str(settings.cost_inner_call_cap_usd),
+            "query_cost_per_1k_chars": str(QUERY_COST_PER_1K_CHARS_USD),
+            "per_char_processing": str(PER_CHAR_PROCESSING_USD),
+            "default_input_price_per_1k": str(_DEFAULT_PRICE_PER_1K_INPUT),
+            "default_output_price_per_1k": str(_DEFAULT_PRICE_PER_1K_OUTPUT),
+            "display_quantum": str(COST_DISPLAY_QUANTUM),
+        }
+    ).replace("<", "\\u003c")
     stale_ids_json = json.dumps(stale_ids).replace("<", "\\u003c")
     # The readiness snapshot is seeded at template-render time so the
     # client can render the pre-run honesty banner without a round-trip.
@@ -335,6 +361,7 @@ def _render_workspace_html() -> str:
         .replace("{{ default_model_ids_json }}", default_ids_json)
         .replace("{{ stale_model_ids_json }}", stale_ids_json)
         .replace("{{ live_readiness_json }}", live_readiness_json)
+        .replace("{{ cost_model_json }}", cost_model_json)
     )
     for slot_index in range(4):
         default_id = escape(default_ids[slot_index])

@@ -5,6 +5,7 @@ import pytest
 from product_app.catalog_fetcher import ModelCatalogEntry
 from product_app.model_slots import (
     DEFAULT_MODEL_IDS,
+    FALLBACK_CATALOG_OPTIONS,
     InvalidModelSlotError,
     OpenRouterModelCatalogService,
     _is_unauthenticated_variant,
@@ -115,6 +116,37 @@ def _make_entry(model_id: str, vendor: str, *, input_price: str = "0.0001") -> M
         input_price_per_1k=Decimal(input_price),
         output_price_per_1k=Decimal(input_price),
     )
+
+
+def test_list_model_options_exposes_exact_per_1k_prices(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The workspace UI computes an honest per-slot pre-run cost estimate from
+    the catalog island, so ``ModelCatalogOption`` must carry each model's
+    per-1K-token prices — verbatim, as strings (no lossy float round-trip)."""
+    catalog = [
+        _make_entry("openai/gpt-4o-mini", "openai", input_price="0.00015"),
+        _make_entry("anthropic/claude-3-haiku", "anthropic", input_price="0.00025"),
+    ]
+    service = OpenRouterModelCatalogService()
+    monkeypatch.setattr(service, "_entries", lambda: list(catalog))
+
+    options = {opt.model_id: opt for opt in service.list_model_options()}
+    assert options["openai/gpt-4o-mini"].input_price_per_1k == "0.00015"
+    assert options["openai/gpt-4o-mini"].output_price_per_1k == "0.00015"
+    assert options["anthropic/claude-3-haiku"].input_price_per_1k == "0.00025"
+    # The exact Decimal survives the string round-trip used for the JSON island.
+    assert Decimal(options["openai/gpt-4o-mini"].input_price_per_1k) == Decimal("0.00015")
+
+
+def test_fallback_catalog_options_carry_prices() -> None:
+    """The degraded-mode fallback options must also carry prices so the UI's
+    per-slot estimate keeps working when the live catalog is unreachable."""
+    assert FALLBACK_CATALOG_OPTIONS
+    for option in FALLBACK_CATALOG_OPTIONS:
+        # Parseable, non-negative Decimals — never blank/None.
+        assert Decimal(option.input_price_per_1k) >= 0
+        assert Decimal(option.output_price_per_1k) >= 0
 
 
 def test_is_unauthenticated_variant_detects_free_and_preview_suffixes() -> None:
