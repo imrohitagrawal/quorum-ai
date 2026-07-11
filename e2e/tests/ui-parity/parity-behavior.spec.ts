@@ -468,6 +468,39 @@ test.describe("UI parity — behaviour", () => {
     }
   });
 
+  test("item 3 (honesty) — a paid model never renders as $0.000; sub-cent shows '<$0.001'", async ({ page }) => {
+    await boot(page);
+    // A very short question: the honest per-model estimate is a positive value
+    // that rounds below the 3-decimal display resolution. It must read "<$0.001",
+    // NEVER "~$0.000" (which would claim a paid model is free).
+    await page.getByRole("textbox").first().fill("hi there?");
+    const cells = page.locator("#model-inputs .model-slot-estimate");
+    await expect(cells).toHaveCount(4);
+    for (const text of await cells.allTextContents()) {
+      const t = text.trim();
+      expect(t, `slot rendered a free-looking figure: ${t}`).not.toBe("~$0.000");
+      expect(t, `unexpected slot estimate: ${t}`).toMatch(/^(<\$0\.001|~\$\d+\.\d{3})$/);
+    }
+    // At least one slot is the honest sub-cent marker for this tiny query.
+    expect((await cells.allTextContents()).map((t) => t.trim())).toContain("<$0.001");
+  });
+
+  test("item 3 (recompute) — swapping a model slot recomputes that slot's estimate", async ({ page }) => {
+    await boot(page);
+    await page.getByRole("textbox").first().fill(
+      "What are the tradeoffs between usage-based and seat pricing for a 30k-seat SaaS with heavy API usage across three products, and how should we stage a migration?",
+    );
+    const cells = page.locator("#model-inputs .model-slot-estimate");
+    // Swap slot 1 to slot 4's model (guaranteed present in the catalog — it is
+    // already selected — and differently priced; cross-slot duplicates are
+    // allowed). Slot 1's estimate must recompute to match slot 4's, proving the
+    // figure tracks the selected model rather than the slot position.
+    const slot4Model = await page.locator("[data-model-slot]").nth(3).inputValue();
+    const slot4Estimate = (await cells.nth(3).textContent())!.trim();
+    await page.locator("#model-1").selectOption(slot4Model);
+    await expect(cells.first()).toHaveText(slot4Estimate);
+  });
+
   test("item 4 — the four example chips lay out 2×2 (two rows of two)", async ({ page }) => {
     await boot(page);
     const chips = page.locator(".composer-examples-row .landing-chip");
@@ -475,16 +508,28 @@ test.describe("UI parity — behaviour", () => {
     const boxes = await chips.evaluateAll((els) =>
       els.map((e) => {
         const r = e.getBoundingClientRect();
-        return { x: Math.round(r.left), y: Math.round(r.top) };
+        return { x: r.left, y: r.top };
       }),
     );
-    const rows = [...new Set(boxes.map((b) => b.y))].sort((a, b) => a - b);
-    expect(rows.length, "chips should occupy exactly two rows").toBe(2);
-    const rowCount = (y: number) => boxes.filter((b) => b.y === y).length;
-    expect(rowCount(rows[0]), "row 1 should hold two chips").toBe(2);
-    expect(rowCount(rows[1]), "row 2 should hold two chips").toBe(2);
-    // The two columns line up (left edges match across rows) — a real grid.
-    const cols = [...new Set(boxes.map((b) => b.x))].sort((a, b) => a - b);
-    expect(cols.length).toBe(2);
+    // Cluster by coordinate with a tolerance so a sub-pixel layout shift does
+    // not flip the count — two chips are "in the same row/column" when their
+    // top/left are within a few px of each other.
+    const cluster = (vals: number[], tol = 6) => {
+      const sorted = [...vals].sort((a, b) => a - b);
+      const groups: number[] = [];
+      for (const v of sorted) {
+        if (!groups.length || v - groups[groups.length - 1] > tol) groups.push(v);
+      }
+      return groups;
+    };
+    const rowBands = cluster(boxes.map((b) => b.y));
+    const colBands = cluster(boxes.map((b) => b.x));
+    expect(rowBands.length, "chips should occupy exactly two rows").toBe(2);
+    expect(colBands.length, "chips should occupy exactly two columns").toBe(2);
+    // Each row holds exactly two chips.
+    for (const band of rowBands) {
+      const inRow = boxes.filter((b) => Math.abs(b.y - band) <= 6).length;
+      expect(inRow, "each row should hold two chips").toBe(2);
+    }
   });
 });

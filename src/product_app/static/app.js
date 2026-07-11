@@ -1122,14 +1122,19 @@
   // exists for this slot position, otherwise an em-dash placeholder.
   // Keyed by slot index (not model_id) so two slots with the same model
   // each show their own positional estimate.
+  //
+  // Honesty: a paid model must NEVER read "$0.000". For a positive estimate
+  // that rounds below the 3-decimal display resolution (very short queries),
+  // show "<$0.001" rather than "$0.000" (which would claim the model is free).
   function perModelEstimateText(slotIndex) {
     const usd = Array.isArray(state.perModelEstimates)
       ? state.perModelEstimates[slotIndex]
       : undefined;
     if (usd === undefined || usd === null) return "—";
     const num = Number(usd);
-    if (!Number.isFinite(num)) return "—";
-    return `~$${num.toFixed(3)}`;
+    if (!Number.isFinite(num) || num <= 0) return "—";
+    const rounded = num.toFixed(3);
+    return rounded === "0.000" ? "<$0.001" : `~$${rounded}`;
   }
 
   // Honest per-slot pre-run cost estimate (design-comp parity, item 3).

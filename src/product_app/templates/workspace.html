@@ -42,11 +42,14 @@
         </div>
         <div class="topbar-actions">
           <!-- Design-comp parity (item 2): the comp's top bar carries a single
-               session-status pill plus the theme toggle — no "How it works"
-               link. The link is kept in the DOM (visually hidden) so the
-               anonymous landing/preview view stays reachable programmatically
-               and for assistive tech; the visible chrome matches the comp. -->
-          <button id="show-landing" class="topbar-howitworks sr-only" type="button" tabindex="-1" aria-hidden="true">How it works</button>
+               session-status pill plus the theme toggle — no visible "How it
+               works" link. The control is kept in the DOM but visually hidden
+               (sr-only) and removed from the sighted tab order (tabindex=-1),
+               so the composer chrome matches the comp. It is NOT surfaced as a
+               visible affordance; it stays in the accessibility tree so the
+               anonymous landing/preview view remains reachable to assistive
+               tech (via browse mode) and to the parity/axe tests. -->
+          <button id="show-landing" class="topbar-howitworks sr-only" type="button" tabindex="-1">How it works</button>
           <span class="status-pill status-pill-session" id="connection-pill" data-state="connecting" aria-live="polite" aria-atomic="true">
             <span class="status-pill-dot" aria-hidden="true"></span>
             <span id="connection-pill-text">Connecting</span>
