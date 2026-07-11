@@ -13,6 +13,10 @@
          even if the external stylesheet fails to load. */
       :focus-visible { outline: 3px solid var(--focus-ring, #14171C); outline-offset: 3px; }
       :focus { outline: 3px solid var(--focus-ring, #14171C); outline-offset: 3px; }
+      /* Suppress the outline for PROGRAMMATIC focus (headings with tabindex=-1
+         receive .focus() on view entry). Keyboard focus keeps its ring via
+         :focus-visible; design comp shows no box on the focused heading. */
+      :focus:not(:focus-visible) { outline: none; }
       .button, button, .toggle, .info-icon { min-width: 44px; min-height: 44px; }
 
       /* Critical above-the-fold styles (approved: cool paper #F6F5F2 · ink #14171C · Geist).
@@ -142,7 +146,7 @@
             </div>
 
             <fieldset class="field-group">
-              <legend>Model slots</legend>
+              <legend>Four model slots</legend>
               <div class="muted">Choose four different models. Swap any slot from the live catalog; duplicates are allowed but flagged.</div>
               <div id="model-inputs" class="model-slot-grid">
                 <label class="inline" data-model-slot="1">
@@ -219,6 +223,32 @@
             </div>
             <div class="keyboard-hint muted">
               <kbd>Ctrl</kbd>+<kbd>Enter</kbd> shows the estimate · <kbd>Esc</kbd> cancels
+            </div>
+
+            <!-- Example-question chips (design parity, screen 02). Reuse the
+                 landing chip fill handler via ``data-landing-chip`` so a click
+                 fills the real composer textarea and fires its validation. -->
+            <div class="composer-examples">
+              <span class="composer-examples-label">Not sure what to ask? These show Quorum at its best:</span>
+              <div class="composer-examples-row" role="group" aria-label="Example questions">
+                <button type="button" class="landing-chip" data-landing-chip="Usage-based vs seat pricing?">Usage-based vs seat pricing?</button>
+                <button type="button" class="landing-chip" data-landing-chip="Aurora vs AlloyDB vs self-managed?">Aurora vs AlloyDB vs self-managed?</button>
+                <button type="button" class="landing-chip" data-landing-chip="Is my startup thesis defensible?">Is my startup thesis defensible?</button>
+                <button type="button" class="landing-chip" data-landing-chip="Rewrite our retention policy?">Rewrite our retention policy?</button>
+              </div>
+            </div>
+
+            <!-- Footer disclaimer chips (design parity, screen 02). -->
+            <div class="composer-disclaimers">
+              <span class="landing-disclaimer">
+                <span class="landing-disclaimer-dot" aria-hidden="true"></span>Decision support, not professional advice
+              </span>
+              <span class="landing-disclaimer">
+                <span class="landing-disclaimer-dot" aria-hidden="true"></span>Don't paste sensitive or private data
+              </span>
+              <span class="landing-disclaimer">
+                <span class="landing-disclaimer-dot landing-disclaimer-dot-neutral" aria-hidden="true"></span>Results vanish when you leave
+              </span>
             </div>
           </div>
         </section>
@@ -301,7 +331,7 @@
                     <span class="button-label">Approve &amp; run</span>
                     <span class="button-spinner" aria-hidden="true"></span>
                   </button>
-                  <button id="gate-back" class="button button-secondary" type="button">Change models</button>
+                  <button id="gate-back" class="button button-secondary" type="button">Back to edit</button>
                   <button id="gate-block-models" class="button button-primary" type="button" hidden>Choose cheaper models</button>
                   <button id="gate-block-shorten" class="button button-secondary" type="button" hidden>Shorten the question</button>
                   <span id="cost-gate-cap-note" class="cost-gate-cap-note">The approved figure becomes this run's spend cap.</span>
@@ -428,6 +458,57 @@
                 type="button"
                 class="result-transcript-link"
               >Read the full debate transcript &rarr;</button>
+
+              <!-- The synthesis (design parity, screen 05). Populated by
+                   ``renderResultSynthesis`` from ``final_synthesis`` — labelled
+                   rows + attribution + source chips. Real backend values only. -->
+              <div
+                id="result-synthesis"
+                class="result-synthesis"
+                role="region"
+                aria-label="The synthesis"
+                hidden
+              ></div>
+
+              <!-- Ask your next question (design parity, screen 05). Follow-up
+                   returns to the composer with the question pre-filled; results
+                   are ephemeral so there is no server-side context carry (that
+                   remains a backend follow-up). Honest copy only. -->
+              <div class="result-next" role="region" aria-label="Ask your next question">
+                <div class="result-next-head">
+                  <h2 class="result-next-title">Ask your next question</h2>
+                  <div class="result-next-modes" role="group" aria-label="Follow-up mode">
+                    <button id="result-followup" type="button" class="result-next-mode result-next-mode-active" aria-pressed="true">Follow up on this</button>
+                    <button id="result-startfresh" type="button" class="result-next-mode" aria-pressed="false">Start fresh</button>
+                  </div>
+                </div>
+                <p class="result-next-note">
+                  <span class="result-next-dot" aria-hidden="true"></span>
+                  <span><strong>Follow up</strong> takes you back to the composer with this question pre-filled so you can refine it. <strong>Start fresh</strong> clears the box for a new question. Either way results are ephemeral — export this one first if you need to keep it.</span>
+                </p>
+                <textarea
+                  id="result-next-input"
+                  class="result-next-input"
+                  rows="2"
+                  maxlength="20000"
+                  placeholder="e.g. What about hardware security keys instead of platform passkeys?"
+                  aria-label="Your next question"
+                ></textarea>
+                <div class="result-next-foot">
+                  <span class="result-next-cost">
+                    <span class="mono" id="result-next-range">&#8776; $0.05&ndash;0.20</span>
+                    <span class="result-next-cost-note">&middot; you approve the estimate first &middot; hard cap <span class="mono">$0.25</span> &middot; one run at a time</span>
+                  </span>
+                  <button id="result-next-run" class="button button-primary result-next-run" type="button">Estimate &amp; run &rarr;</button>
+                </div>
+              </div>
+
+              <!-- Result footer strip (design parity, screen 05). Static honest
+                   copy — the ephemerality reminder + the standing disclaimer. -->
+              <div class="result-footer">
+                <span class="result-footer-note">Ephemeral &mdash; this result vanishes when the session ends. Export it to keep it.</span>
+                <span class="result-footer-note">Decision support, not professional advice.</span>
+              </div>
             </div>
           </section>
         </div>
@@ -543,7 +624,7 @@
             </div>
 
             <div class="landing-preview" role="note" aria-label="Example preview">
-              <span class="landing-preview-badge">Example preview</span>
+              <span class="landing-preview-badge">Preview</span>
               <div class="landing-preview-body">
                 <p class="landing-preview-text">4 of 4 models agree &mdash; with one real disagreement worth your attention: the safe overlap window (9 vs 18 months). You get a verdict, a phased plan, 12 sources, and the round-by-round debate on record.</p>
                 <span class="landing-preview-caption">Illustrative &mdash; a product example, not a run you started.</span>
