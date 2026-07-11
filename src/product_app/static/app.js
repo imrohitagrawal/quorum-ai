@@ -3757,31 +3757,85 @@
     // the ** would each be consumed as empty italics.
     s = s.replace(/\*\*([^*]+)\*\*/g, (_m, t) => `<strong>${t}</strong>`);
     s = s.replace(/(^|[^*])\*([^*]+)\*/g, (_m, lead, t) => `${lead}<em>${t}</em>`);
-    // [text](url). URL is escaped on input; we only need to add the
-    // rel="noopener" for safety. The text may itself contain inline
-    // markup already rendered above (rare), so we just emit the
-    // anchor as-is.
+    // [text](url). The captured ``url`` reaches us HTML-escaped (every
+    // caller runs its input through ``escapeHtml`` before mdInline), but we
+    // deliberately do NOT rely on that: this replace decodes the URL back,
+    // vets its scheme with the shared ``URL()``-based allow-list, and
+    // re-escapes it for the attribute itself — so a markdown link is safe by
+    // construction here, not by convention at a distant caller. ``URL()``
+    // (like the browser's own href resolution) strips tab/CR/LF before
+    // reading the scheme, so control-char tricks such as ``java\tscript:``
+    // cannot smuggle a scheme past the check.
     s = s.replace(
       /\[([^\]]+)\]\(([^)]+)\)/g,
       (_m, text, url) => {
-        // URL scheme allow-list: only http(s) and mailto (and relative
-        // URLs, i.e. those starting with no scheme) become anchors.
-        // Everything else — javascript:, data:, vbscript:, file:,
-        // etc. — is rendered as plain text with no href, so a
-        // crafted LLM response cannot smuggle a script execution
-        // vector into the page via a markdown link.
-        const trimmed = url.trim();
-        const safe =
-          /^https?:/i.test(trimmed) ||
-          /^mailto:/i.test(trimmed) ||
-          !/^[a-z][a-z0-9+.-]*:/i.test(trimmed);
-        if (!safe) {
+        const href = safeMarkdownHref(decodeBasicEntities(url));
+        if (href == null) {
+          // Disallowed scheme (javascript:, data:, vbscript:, tab-obfuscated
+          // variants, …): render inert text, never an anchor.
           return `${text} (${url})`;
         }
-        return `<a href="${url}" target="_blank" rel="noopener noreferrer">${text}</a>`;
+        // Attribute-encode the vetted href at the interpolation point so a
+        // quote in the URL can never break out of href="…".
+        return `<a href="${escapeHtml(href)}" target="_blank" rel="noopener noreferrer">${text}</a>`;
       },
     );
     return s;
+  }
+
+  // Reverse the five entities ``escapeHtml`` emits, so a URL that was escaped
+  // upstream can be scheme-checked and normalised as its real value. ``&amp;``
+  // is decoded last so an escaped literal like ``&amp;lt;`` round-trips to
+  // ``&lt;`` rather than being double-decoded to ``<``.
+  function decodeBasicEntities(text) {
+    return String(text)
+      .replace(/&lt;/g, "<")
+      .replace(/&gt;/g, ">")
+      .replace(/&quot;/g, '"')
+      .replace(/&#39;/g, "'")
+      .replace(/&amp;/g, "&");
+  }
+
+  // Return a safe href for a markdown link, or null when the scheme is not
+  // allow-listed. Reuses ``safeHttpUrl`` (the same ``URL()`` allow-list the
+  // source chips and ``createSafeLink`` use) for http(s); permits inert
+  // ``mailto:`` and genuinely scheme-less relative URLs; rejects everything
+  // else. Control chars are stripped the way a browser would before the
+  // scheme test, so ``java\tscript:`` / ``javascript\n:`` cannot pass as
+  // "relative".
+  function safeMarkdownHref(rawUrl) {
+    // Normalise exactly the way a browser does before it resolves an href's
+    // scheme: strip EVERY C0 control char (U+0000–U+001F, incl. TAB/CR/LF) and
+    // DEL, then trim surrounding spaces. ``String.trim()`` alone is NOT enough
+    // — it drops only JS-whitespace, so a leading ``\x01`` (or interior TAB)
+    // would slip a ``javascript:`` scheme past the checks below yet still be
+    // stripped by the browser at navigation time. We VET and EMIT this same
+    // cleaned string — never the raw input — so there is no vet/emit gap.
+    const url = String(rawUrl == null ? "" : rawUrl)
+      .replace(/[\u0000-\u001F\u007F]/g, "")
+      .trim();
+    if (!url) return null;
+    // http(s): reuse the shared URL()-based allow-list (returns a normalised,
+    // percent-encoded href, or null).
+    const http = safeHttpUrl(url);
+    if (http) return http;
+    // mailto: inert (no script vector); validate the scheme via URL().
+    try {
+      if (new URL(url).protocol === "mailto:") return url;
+    } catch (_e) {
+      /* not an absolute URL — fall through to the relative check */
+    }
+    // Relative URLs (no scheme) are same-origin and safe — EXCEPT protocol-
+    // relative ``//host`` and its backslash-folded equivalents ``/\``, ``\/``,
+    // ``\\``. Browsers fold backslashes to forward slashes in the authority for
+    // an http(s) base, so ANY two leading slash-or-backslash characters form an
+    // off-origin authority (open-redirect vector). Reject those; they never
+    // appear in trustworthy model output. Everything with a scheme that is not
+    // http(s)/mailto is also rejected.
+    if (!/^[a-z][a-z0-9+.-]*:/i.test(url) && !/^[/\\]{2}/.test(url)) {
+      return url;
+    }
+    return null;
   }
 
   function escapeHtml(text) {
