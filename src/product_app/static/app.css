@@ -870,7 +870,17 @@ select {
   display: grid;
   gap: var(--space-3);
 }
-.field-group > legend { font-weight: 700; padding: 0 var(--space-2); margin-left: -8px; }
+/* Comp screen 02: the model-slots heading is a small-caps eyebrow, not a
+   bold legend. Uppercase via CSS so the accessible name stays sentence-case. */
+.field-group > legend {
+  padding: 0;
+  margin-left: 0;
+  font-size: 0.72rem;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
 
 /* ----- Field error (inline validation) -------------------------------- */
 
@@ -3063,9 +3073,20 @@ html[data-theme="dark"] .landing-preview-caption {
 }
 .result-synth-sources {
   display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+}
+.result-synth-source-chips {
+  display: flex;
   flex-wrap: wrap;
   align-items: center;
   gap: var(--space-2);
+}
+.result-source-support {
+  margin: 0;
+  font-size: 0.85rem;
+  line-height: 1.5;
+  color: var(--muted);
 }
 .result-source-chip {
   display: inline-flex;

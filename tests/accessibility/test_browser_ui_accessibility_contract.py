@@ -15,7 +15,7 @@ def test_browser_ui_exposes_accessible_labels_focus_and_landmarks() -> None:
     assert 'aria-labelledby="composer-heading"' in html
     assert 'role="alert"' in html
     assert '<fieldset class="field-group">' in html
-    assert "<legend>Model slots</legend>" in html
+    assert "<legend>Four model slots</legend>" in html
     assert 'id="model-inputs"' in html
     assert 'aria-live="polite" aria-atomic="true"' in html
     assert "Choose four different models" in html

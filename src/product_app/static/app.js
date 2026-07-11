@@ -1056,9 +1056,9 @@
     return prettifyModelSlug(modelId);
   }
 
-  // "deepseek/deepseek-v3.1" -> "Deepseek V3.1". Strips the vendor prefix,
-  // turns separators into spaces, and title-cases words while preserving
-  // version-y tokens (v3.1, 4o, 2.5) intact.
+  // "deepseek/deepseek-v3.1" -> "Deepseek v3.1". Strips the vendor prefix,
+  // turns separators into spaces, and title-cases alpha words while leaving
+  // version-y tokens that contain a digit (v3.1, 4o, 2.5) untouched.
   function prettifyModelSlug(modelId) {
     const raw = String(modelId || "").trim();
     if (!raw) return "";
@@ -2036,6 +2036,23 @@
     state.lastResultRunId = result.query_run_id || result.correlation_id || "run";
   }
 
+  // Return the normalised URL string only when it is a real http(s) URL;
+  // otherwise null. Untrusted source URLs must pass this before becoming an
+  // anchor href (blocks javascript:/data:/vbscript: XSS vectors). Mirrors the
+  // ``createSafeLink`` allow-list.
+  function safeHttpUrl(url) {
+    if (!url) return null;
+    try {
+      const parsed = new URL(String(url));
+      if (parsed.protocol === "http:" || parsed.protocol === "https:") {
+        return parsed.toString();
+      }
+    } catch (_e) {
+      /* not a parseable absolute URL → not linkable */
+    }
+    return null;
+  }
+
   // Hostname (without www.) for a source chip label. Falls back to the raw
   // string if the URL will not parse.
   function sourceHost(url) {
@@ -2110,23 +2127,41 @@
     for (const [label, value, key] of rows) {
       addRow(label, key, document.createTextNode(String(value).trim()));
     }
-    // SOURCES row — numbered chips built from the models' real citations.
-    if (sources.length) {
+    // SOURCES row — numbered chips built from the models' real citations, with
+    // the synthesis' own ``source_support`` prose as a caption beneath them.
+    // Shown when either exists so no real backend content is dropped.
+    const sourceSupport = fs && fs.source_support ? String(fs.source_support).trim() : "";
+    if (sources.length || sourceSupport) {
       const wrap = mkEl("div", "result-synth-sources");
-      const shown = sources.slice(0, 3);
-      shown.forEach((s, i) => {
-        const chip = s.url ? mkEl("a", "result-source-chip") : mkEl("span", "result-source-chip");
-        if (s.url) {
-          chip.href = s.url;
-          chip.target = "_blank";
-          chip.rel = "noopener noreferrer";
+      if (sources.length) {
+        const chipRow = mkEl("div", "result-synth-source-chips");
+        const shown = sources.slice(0, 3);
+        shown.forEach((s, i) => {
+          // SECURITY: source URLs come from external search providers (untrusted).
+          // Only make the chip a link when the URL is http(s) — mirrors the
+          // ``createSafeLink`` scheme allow-list so a ``javascript:`` URL can never
+          // become a clickable anchor. Otherwise render a plain, non-link chip.
+          const safe = safeHttpUrl(s.url);
+          const chip = safe ? mkEl("a", "result-source-chip") : mkEl("span", "result-source-chip");
+          if (safe) {
+            chip.href = safe;
+            chip.target = "_blank";
+            chip.rel = "noopener noreferrer";
+          }
+          chip.appendChild(mkEl("span", "result-source-num", String(i + 1)));
+          const host = sourceHost(s.url);
+          // Avoid a "host · host" label when a source has no distinct title.
+          const label = s.title && s.title !== host ? `${host} · ${s.title}` : host;
+          chip.appendChild(mkEl("span", "result-source-label", label));
+          chipRow.appendChild(chip);
+        });
+        if (sources.length > shown.length) {
+          chipRow.appendChild(mkEl("span", "result-source-more", `+ ${sources.length - shown.length} more`));
         }
-        chip.appendChild(mkEl("span", "result-source-num", String(i + 1)));
-        chip.appendChild(mkEl("span", "result-source-label", `${sourceHost(s.url)} · ${s.title}`));
-        wrap.appendChild(chip);
-      });
-      if (sources.length > shown.length) {
-        wrap.appendChild(mkEl("span", "result-source-more", `+ ${sources.length - shown.length} more`));
+        wrap.appendChild(chipRow);
+      }
+      if (sourceSupport) {
+        wrap.appendChild(mkEl("p", "result-source-support", sourceSupport));
       }
       addRow("Sources", "sources", wrap);
     }
@@ -5506,7 +5541,12 @@
           queryTextarea.dispatchEvent(new Event("input", { bubbles: true }));
         }
         goToComposer();
-        if (base) await estimateRun();
+        // Estimate through the composer's OWN gated button rather than calling
+        // estimateRun() directly, so the high-stakes acknowledgement gate (which
+        // disables that button until the topic is acknowledged) is respected on
+        // a safety-sensitive follow-up. A disabled button no-ops.
+        const estimateBtn = el("estimate-run");
+        if (base && estimateBtn && !estimateBtn.disabled) estimateBtn.click();
       });
     }
   }
