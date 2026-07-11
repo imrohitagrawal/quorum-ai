@@ -600,6 +600,10 @@ def test_pr01_f3_change_event_filter_uses_id_prefix_not_dataset() -> None:
         + "let renderDriftBannerCalls = 0;\n"
         + "function renderModelInputs() { renderModelInputsCalls += 1; }\n"
         + "function renderDriftBanner() { renderDriftBannerCalls += 1; }\n"
+        # Item 3 added a per-slot estimate refresh to the change handler; stub
+        # it so the shim resolves the reference (its effect is tested in the
+        # parity e2e suite, not here).
+        + "function updatePerSlotEstimates() {}\n"
         + "function getModelIds() { return ['a', 'b', 'c', 'd']; }\n"
         + "const modelInputs = new _Node('div');\n"
         # Two selects: one with id='model-1' (the slot), one with
@@ -669,6 +673,8 @@ def test_pr01_f3_change_event_filter_survives_dataset_rename() -> None:
         + "let renderModelInputsCalls = 0;\n"
         + "function renderModelInputs() { renderModelInputsCalls += 1; }\n"
         + "function renderDriftBanner() {}\n"
+        # Item 3 added a per-slot estimate refresh to the change handler; stub it.
+        + "function updatePerSlotEstimates() {}\n"
         + "function getModelIds() { return ['a', 'b', 'c', 'd']; }\n"
         + "const modelInputs = new _Node('div');\n"
         + "const slotSelect = new _Node('select');\n"

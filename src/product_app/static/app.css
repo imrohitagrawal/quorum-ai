@@ -720,9 +720,44 @@ a { color: var(--accent); text-underline-offset: 2px; }
   display: none;
 }
 
+/* Centered content column (design-comp parity, item 1).
+
+   The comp renders a full-width top bar with the main content constrained to a
+   symmetric, centered column — NOT the near-full-width shell the build used
+   (the shell/topbar stay wide; only the content column narrows). The exact
+   per-screen widths were audited by rendering the comp's 1440px artboards:
+
+     composer 800 · cost-gate 880 · result 960 · transcript 840 · live-run 900
+
+   ``.layout`` (a single ``display:block`` wrapper holding every ``[data-view]``)
+   is centered with ``margin-inline:auto`` and capped by ``--content-max``, which
+   ``#main-content[data-active-view=…]`` sets per screen below. The top bar is a
+   sibling of ``.layout`` inside the shell, so it keeps the full shell width and
+   the composer/cost-gate get the comp's wide-bar + centered-content look. */
 .layout {
   display: block;
+  max-width: var(--content-max, 960px);
+  margin-inline: auto;
 }
+/* The status banners live between the top bar and ``.layout`` as flex children
+   of the shell. Center + cap them to the SAME content column so an error /
+   drift / readiness notice aligns with the content beneath it instead of
+   spanning the full shell over a narrow centered column. */
+#error-region,
+#drift-region,
+#readiness-banner {
+  max-width: var(--content-max, 960px);
+  margin-inline: auto;
+  width: 100%;
+}
+#main-content[data-active-view="composer"] { --content-max: 800px; }
+#main-content[data-active-view="cost-gate"] { --content-max: 880px; }
+#main-content[data-active-view="result"] { --content-max: 960px; }
+#main-content[data-active-view="transcript"] { --content-max: 840px; }
+#main-content[data-active-view="live-run"] { --content-max: 900px; }
+/* Landing carries its own self-contained, internally-centered layout, so the
+   content column is left unconstrained for that view. */
+#main-content[data-active-view="landing"] { --content-max: none; }
 
 /* ``.panel.panel-section`` (0-2-0) so this wins over the later ``.panel``
    (0-1-0, display:flex) rule; the aside child-combinator already out-specifies
@@ -1008,6 +1043,11 @@ select {
   position: absolute;
   width: 1px;
   height: 1px;
+  /* Override any component ``min-height``/``min-width`` (e.g. the 44px tap
+     target from ``.topbar-howitworks``) so a control styled for visible layout
+     still collapses to 1px when it is ALSO marked sr-only. */
+  min-width: 0;
+  min-height: 0;
   padding: 0;
   margin: -1px;
   overflow: hidden;
@@ -1512,6 +1552,43 @@ kbd {
 .status-pill[data-state="cancelled"] { background: var(--line); color: var(--muted); }
 .status-pill[data-state="partial"] { background: var(--warning-soft); color: var(--warning); }
 
+/* Session status pill (design-comp parity, item 2). The comp renders the top
+   bar's status as a single neutral, outlined pill — muted 12.5px/600 text, a
+   transparent fill and a small state-coloured dot — rather than the filled
+   colour-band pills used elsewhere. Overrides the per-state fills above so the
+   DOT carries the connection signal while the pill itself stays quiet chrome. */
+.status-pill-session {
+  gap: 7px;
+  padding: 5px 12px;
+  font-size: 0.78rem;
+  border: 1px solid var(--line-strong-2);
+}
+.status-pill-session[data-state="connected"],
+.status-pill-session[data-state="connecting"],
+.status-pill-session[data-state="idle"] {
+  background: transparent;
+  color: var(--muted);
+}
+.status-pill-session[data-state="error"] {
+  background: transparent;
+  color: var(--danger);
+  border-color: var(--danger-border, var(--danger));
+}
+/* The dot uses ``currentColor`` by default; on the connected happy path the pill
+   text is muted, so paint the dot green explicitly to match the comp's signpost.
+   Connecting/error keep ``currentColor`` (info/danger) so the state still reads. */
+.status-pill-session[data-state="connected"] .status-pill-dot {
+  background: var(--success);
+}
+.status-pill-session[data-state="connecting"] .status-pill-dot {
+  background: var(--info);
+}
+/* The comp's session-pill dot is 6px (vs the 8px status dot used elsewhere). */
+.status-pill-session .status-pill-dot {
+  width: 6px;
+  height: 6px;
+}
+
 /* Dark only: small muted text that sits on a faintly-lit inset (--line over
    the dark card ≈ #272A30 / #2A2C32) lands just under AA — --muted (#8A9099)
    gives 4.3–4.47:1 there (the dark muted↔secondary ramp is too compressed to
@@ -1519,6 +1596,8 @@ kbd {
    --secondary (≥4.9:1); --muted is left intact everywhere it already passes,
    and the colour-carrying / warning states are untouched. */
 html[data-theme="dark"] .status-pill[data-state="idle"],
+html[data-theme="dark"] .status-pill-session[data-state="connected"],
+html[data-theme="dark"] .status-pill-session[data-state="connecting"],
 html[data-theme="dark"] .status-pill[data-state="pending"],
 html[data-theme="dark"] .status-pill[data-state="cancelled"],
 html[data-theme="dark"] .field-meta-counter:not([data-warning="true"]),
@@ -4827,9 +4906,17 @@ main:focus { outline: none; }
   font-weight: 500;
   color: var(--muted);
 }
+/* Example-question chips render as a 2×2 grid (design-comp parity, item 4).
+   The comp lays the four chips out two-per-row as content-width pills packed to
+   the left. A two-column ``auto`` grid pins exactly two columns (robust — never
+   collapses to one row or spills to three) while ``justify-items/content: start``
+   keeps each chip at its content width and left-aligned, matching the comp's
+   pills rather than stretching them into full-width bars. */
 .composer-examples-row {
-  display: flex;
-  flex-wrap: wrap;
+  display: grid;
+  grid-template-columns: auto auto;
+  justify-content: start;
+  justify-items: start;
   gap: var(--space-3);
 }
 .composer-disclaimers {

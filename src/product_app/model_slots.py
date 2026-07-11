@@ -353,6 +353,14 @@ model_slot_event_recorder = InMemoryModelSlotEventRecorder()
 class ModelCatalogOption(BaseModel):
     model_id: str
     label: str
+    #: Per-1K-token USD prices, carried as strings to preserve the exact
+    #: Decimal value across JSON (pydantic would otherwise emit a lossy
+    #: float). The workspace UI uses these to render an honest per-slot
+    #: pre-run cost estimate that mirrors the server's ``by_model``
+    #: breakdown (design-comp parity, item 3). Public OpenRouter list
+    #: prices — safe to expose to the browser.
+    input_price_per_1k: str
+    output_price_per_1k: str
 
 
 class ModelDefaultsResponse(BaseModel):
@@ -402,7 +410,12 @@ def _is_unauthenticated_variant(model_id: str) -> bool:
 
 
 FALLBACK_CATALOG_OPTIONS: tuple[ModelCatalogOption, ...] = tuple(
-    ModelCatalogOption(model_id=entry.model_id, label=entry.name)
+    ModelCatalogOption(
+        model_id=entry.model_id,
+        label=entry.name,
+        input_price_per_1k=str(entry.input_price_per_1k),
+        output_price_per_1k=str(entry.output_price_per_1k),
+    )
     for entry in _CATALOG_FALLBACK_ENTRIES
 )
 
@@ -429,7 +442,12 @@ class OpenRouterModelCatalogService:
 
     def list_model_options(self) -> tuple[ModelCatalogOption, ...]:
         return tuple(
-            ModelCatalogOption(model_id=entry.model_id, label=entry.name)
+            ModelCatalogOption(
+                model_id=entry.model_id,
+                label=entry.name,
+                input_price_per_1k=str(entry.input_price_per_1k),
+                output_price_per_1k=str(entry.output_price_per_1k),
+            )
             for entry in self._entries()
         )
 

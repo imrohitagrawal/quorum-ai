@@ -46,3 +46,42 @@ def test_catalog_json_is_escaped() -> None:
     assert "<" not in catalog_payload, (
         "unescaped '<' in catalog data island — payload was: " + catalog_payload[:200]
     )
+
+
+def _extract_cost_model(html: str) -> dict[str, object]:
+    import json
+    import re
+
+    m = re.search(r"window\.COST_MODEL\s*=\s*(\{.*?\});", html)
+    assert m is not None, "window.COST_MODEL island not found in rendered HTML"
+    parsed: dict[str, object] = json.loads(m.group(1))
+    return parsed
+
+
+def test_cost_model_island_matches_source_of_truth_constants() -> None:
+    """The per-slot pre-run estimate is computed client-side from the
+    ``window.COST_MODEL`` scalars, which MUST stay identical to the server's
+    own estimator constants. This pins the island to the source of truth so a
+    change to ``costs.py`` / ``settings`` that is not mirrored into the island
+    (or vice versa) fails loudly — the drift guard the e2e cross-check cannot
+    give offline. The client mirrors the arithmetic *shape* (covered by the
+    parity e2e cross-check); this covers the *scalars*.
+    """
+    from decimal import Decimal
+
+    from product_app.config import settings
+    from product_app.costs import (
+        _DEFAULT_PRICE_PER_1K_INPUT,
+        _DEFAULT_PRICE_PER_1K_OUTPUT,
+        PER_CHAR_PROCESSING_USD,
+        QUERY_COST_PER_1K_CHARS_USD,
+    )
+
+    cm = {k: str(v) for k, v in _extract_cost_model(_render_workspace_html()).items()}
+    assert float(cm["output_token_multiplier"]) == float(settings.cost_output_token_multiplier)
+    assert float(cm["inner_call_multiplier"]) == float(settings.cost_inner_call_multiplier)
+    assert Decimal(cm["inner_call_cap_usd"]) == Decimal(str(settings.cost_inner_call_cap_usd))
+    assert Decimal(cm["query_cost_per_1k_chars"]) == QUERY_COST_PER_1K_CHARS_USD
+    assert Decimal(cm["per_char_processing"]) == PER_CHAR_PROCESSING_USD
+    assert Decimal(cm["default_input_price_per_1k"]) == _DEFAULT_PRICE_PER_1K_INPUT
+    assert Decimal(cm["default_output_price_per_1k"]) == _DEFAULT_PRICE_PER_1K_OUTPUT
