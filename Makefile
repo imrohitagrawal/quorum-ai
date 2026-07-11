@@ -4,7 +4,7 @@ PYTHON ?= $(shell if command -v python3 >/dev/null 2>&1; then command -v python3
 UV_CACHE_DIR ?= $(CURDIR)/.uv-cache
 RELOAD ?= 0
 
-.PHONY: check-python publishing-check skill-onboarding-check skill-discover handoff check-breaking apply-orbi-profile skill-route start next capture-idea validate validate-strict quality format format-check lint type-check test test-report security-scan ci-evidence run docker-build feedback-audit
+.PHONY: check-python publishing-check skill-onboarding-check skill-discover handoff check-breaking apply-orbi-profile skill-route start next capture-idea validate validate-strict openapi-export openapi-check quality format format-check lint type-check test test-report security-scan ci-evidence run docker-build feedback-audit
 
 check-python:
 	@if [ -z "$(PYTHON)" ]; then 		echo "ERROR: Python 3 is required. Install python3, or set PYTHON=/path/to/python3."; 		exit 127; 	fi
@@ -23,6 +23,16 @@ validate: check-python
 
 validate-strict: check-python
 	FACTORY_STRICT=1 $(PYTHON) scripts/validate_all.py
+
+# Regenerate openapi.yaml from app.openapi() (a fresh FastAPI app instance).
+openapi-export:
+	UV_CACHE_DIR=$(UV_CACHE_DIR) uv run python scripts/export_openapi.py
+
+# Drift-guard: fail if the checked-in openapi.yaml != app.openapi(). Runs
+# under uv so FastAPI/PyYAML are importable (unlike the stdlib-only
+# ``make validate`` gates). Enforced in the validate-and-test CI job.
+openapi-check:
+	UV_CACHE_DIR=$(UV_CACHE_DIR) uv run python scripts/validate_openapi_contract.py
 
 quality: format-check lint type-check test
 

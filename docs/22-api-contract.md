@@ -116,3 +116,28 @@ Error response shape:
 - Cost threshold actions are returned consistently. Trace: TEST-FR-005.
 - Provider errors are redacted. Trace: TEST-FR-011, TEST-NFR-006.
 - Partial-result response includes missing steps. Trace: TEST-FR-010.
+- `openapi.yaml` equals `app.openapi()`. Trace: `tests/contract/test_openapi_contract.py`.
+
+## `openapi.yaml` generation and drift-guard
+
+`openapi.yaml` is a **generated artifact**, not a hand-edited one: it is the
+canonical serialization of `app.openapi()` for a fresh FastAPI app instance.
+Do not hand-edit it. To change the contract, change the FastAPI routes /
+Pydantic models under `src/product_app`, then regenerate:
+
+```bash
+python scripts/export_openapi.py   # or: make openapi-export
+```
+
+A self-enforcing drift-guard keeps the checked-in spec honest — it can never
+silently drift from the code again:
+
+- `scripts/validate_openapi_contract.py` (`make openapi-check`) asserts the
+  checked-in bytes equal a fresh render of `app.openapi()`. This runs as a
+  dedicated step in the `validate-and-test` CI job.
+- `tests/contract/test_openapi_contract.py` asserts the same invariant from
+  the pytest suite (both required checks) and proves the guard has teeth by
+  showing a mutated schema no longer matches the committed spec.
+
+Both the generator and the guard render through the single
+`render_openapi_yaml` function, so they can never disagree about formatting.

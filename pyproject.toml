@@ -44,6 +44,16 @@ python_version = "3.12"
 strict = true
 mypy_path = "src"
 
+# ``yaml`` (PyYAML, a transitive dep via uvicorn[standard]) ships no type
+# stubs; ``export_openapi`` / ``validate_openapi_contract`` are the OpenAPI
+# generator/renderer and drift-guard under ``scripts/`` (not on
+# ``mypy_path``), imported by the contract drift-guard test at runtime via a
+# ``sys.path`` insert. None are type-checkable here, so silence the
+# missing-import errors without weakening strictness elsewhere.
+[[tool.mypy.overrides]]
+module = ["yaml", "export_openapi", "validate_openapi_contract"]
+ignore_missing_imports = true
+
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 addopts = "--cov=src --cov-report=term-missing"

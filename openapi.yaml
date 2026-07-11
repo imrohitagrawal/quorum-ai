@@ -1,6 +1,12 @@
+# GENERATED FILE — DO NOT EDIT BY HAND.
+# Regenerate with: python scripts/export_openapi.py
+# The CI drift-guard (scripts/validate_openapi_contract.py and
+# tests/contract/test_openapi_contract.py) fails if this file drifts from
+# app.openapi(). Change the FastAPI routes/models, then regenerate.
 openapi: 3.1.0
 info:
   title: Quorum-AI
+  description: Quorum-AI runs your question against four LLMs in parallel, has them debate, and returns a single answer with explicit consensus, disagreement, source support, uncertainty, and recommendation. Cost is shown before the run starts; nothing executes without confirmation. Results are ephemeral. Open the workspace UI at /ui; health and readiness live at /health and /ready; the operator snapshot is at /status.
   version: 0.2.0
 paths:
   /v1/query-runs/estimate:
@@ -23,59 +29,23 @@ paths:
               schema:
                 $ref: '#/components/schemas/QueryRunEstimateResponse'
         '422':
-          description: Validation or model-slot error.
+          description: Validation Error
           content:
             application/json:
-              schema: &id001
-                oneOf:
-                - $ref: '#/components/schemas/HTTPValidationError'
-                - $ref: '#/components/schemas/ErrorResponse'
-        '401':
-          description: Authentication is required before cost estimation.
-          content:
-            application/json:
-              schema: &id002
-                $ref: '#/components/schemas/ErrorResponse'
-      parameters:
-      - name: X-Account-Id
-        in: header
-        required: false
-        description: Legacy account-scoped authentication fallback used by tests and
-          non-browser clients. Browser-session requests should use the quorum_session
-          cookie.
-        schema:
-          type: string
-          format: uuid
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
   /v1/query-runs:
     post:
       tags:
       - query-runs
       summary: Create Query Run
       operationId: create_query_run_v1_query_runs_post
-      parameters:
-      - name: x-csrf-token
-        in: header
-        required: false
-        schema:
-          anyOf:
-          - type: string
-          - type: 'null'
-          title: X-Csrf-Token
-      - name: X-Account-Id
-        in: header
-        required: false
-        description: Legacy account-scoped authentication fallback used by tests and
-          non-browser clients. Browser-session requests should use the quorum_session
-          cookie.
-        schema:
-          type: string
-          format: uuid
       requestBody:
-        required: true
         content:
           application/json:
             schema:
               $ref: '#/components/schemas/QueryRunCreateRequest'
+        required: true
       responses:
         '202':
           description: Successful Response
@@ -84,36 +54,11 @@ paths:
               schema:
                 $ref: '#/components/schemas/QueryRunCreateResponse'
         '422':
-          description: Validation, safety acknowledgement, or model-slot error.
+          description: Validation Error
           content:
             application/json:
-              schema: *id001
-        '401':
-          description: Authentication is required before query execution.
-          content:
-            application/json:
-              schema: *id002
-        '402':
-          description: Cost confirmation is required, or the estimate exceeds the
-            block threshold.
-          content:
-            application/json:
-              schema: *id002
-        '403':
-          description: A valid CSRF token is required for browser-session requests.
-          content:
-            application/json:
-              schema: *id002
-        '409':
-          description: One query can run at a time for the owning session.
-          content:
-            application/json:
-              schema: *id002
-        '412':
-          description: A BYO OpenRouter key must be configured before execution starts.
-          content:
-            application/json:
-              schema: *id002
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
   /v1/query-runs/warnings:
     post:
       tags:
@@ -134,25 +79,11 @@ paths:
               schema:
                 $ref: '#/components/schemas/QueryRunWarningsResponse'
         '422':
-          description: Validation error.
+          description: Validation Error
           content:
             application/json:
-              schema: *id001
-        '401':
-          description: Authentication is required before warning evaluation.
-          content:
-            application/json:
-              schema: *id002
-      parameters:
-      - name: X-Account-Id
-        in: header
-        required: false
-        description: Legacy account-scoped authentication fallback used by tests and
-          non-browser clients. Browser-session requests should use the quorum_session
-          cookie.
-        schema:
-          type: string
-          format: uuid
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
   /v1/query-runs/active:
     get:
       tags:
@@ -166,21 +97,6 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/ActiveQueryRunResponse'
-        '401':
-          description: Authentication is required before active query lookup.
-          content:
-            application/json:
-              schema: *id002
-      parameters:
-      - name: X-Account-Id
-        in: header
-        required: false
-        description: Legacy account-scoped authentication fallback used by tests and
-          non-browser clients. Browser-session requests should use the quorum_session
-          cookie.
-        schema:
-          type: string
-          format: uuid
   /v1/query-runs/{query_run_id}:
     get:
       tags:
@@ -195,15 +111,6 @@ paths:
           type: string
           format: uuid
           title: Query Run Id
-      - name: X-Account-Id
-        in: header
-        required: false
-        description: Legacy account-scoped authentication fallback used by tests and
-          non-browser clients. Browser-session requests should use the quorum_session
-          cookie.
-        schema:
-          type: string
-          format: uuid
       responses:
         '200':
           description: Successful Response
@@ -212,20 +119,11 @@ paths:
               schema:
                 $ref: '#/components/schemas/QueryRunResultResponse'
         '422':
-          description: Validation error.
+          description: Validation Error
           content:
             application/json:
-              schema: *id001
-        '401':
-          description: Authentication is required before result lookup.
-          content:
-            application/json:
-              schema: *id002
-        '404':
-          description: Query run does not exist for the authenticated session.
-          content:
-            application/json:
-              schema: *id002
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
     delete:
       tags:
       - query-runs
@@ -239,23 +137,6 @@ paths:
           type: string
           format: uuid
           title: Query Run Id
-      - name: x-csrf-token
-        in: header
-        required: false
-        schema:
-          anyOf:
-          - type: string
-          - type: 'null'
-          title: X-Csrf-Token
-      - name: X-Account-Id
-        in: header
-        required: false
-        description: Legacy account-scoped authentication fallback used by tests and
-          non-browser clients. Browser-session requests should use the quorum_session
-          cookie.
-        schema:
-          type: string
-          format: uuid
       responses:
         '200':
           description: Successful Response
@@ -264,150 +145,11 @@ paths:
               schema:
                 $ref: '#/components/schemas/QueryRunResultResponse'
         '422':
-          description: Validation error.
-          content:
-            application/json:
-              schema: *id001
-        '401':
-          description: Authentication is required before cancellation.
-          content:
-            application/json:
-              schema: *id002
-        '403':
-          description: A valid CSRF token is required for browser-session requests.
-          content:
-            application/json:
-              schema: *id002
-        '404':
-          description: Query run does not exist for the authenticated session.
-          content:
-            application/json:
-              schema: *id002
-  /v1/provider-keys/openrouter:
-    put:
-      tags:
-      - provider-keys
-      summary: Upsert Openrouter Key
-      operationId: upsert_openrouter_key_v1_provider_keys_openrouter_put
-      parameters:
-      - name: x-csrf-token
-        in: header
-        required: false
-        schema:
-          anyOf:
-          - type: string
-          - type: 'null'
-          title: X-Csrf-Token
-      - name: X-Account-Id
-        in: header
-        required: false
-        description: Legacy account-scoped authentication fallback used by tests and
-          non-browser clients. Browser-session requests should use the quorum_session
-          cookie.
-        schema:
-          type: string
-          format: uuid
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema:
-              $ref: '#/components/schemas/ProviderKeyUpsertRequest'
-      responses:
-        '200':
-          description: Successful Response
+          description: Validation Error
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/ProviderKeyStatusResponse'
-        '422':
-          description: Provider key payload validation failed.
-          content:
-            application/json:
-              schema: *id001
-        '401':
-          description: Authentication is required before BYO key management.
-          content:
-            application/json:
-              schema: *id002
-        '403':
-          description: A valid CSRF token is required for browser-session requests.
-          content:
-            application/json:
-              schema: *id002
-    delete:
-      tags:
-      - provider-keys
-      summary: Remove Openrouter Key
-      operationId: remove_openrouter_key_v1_provider_keys_openrouter_delete
-      parameters:
-      - name: x-csrf-token
-        in: header
-        required: false
-        schema:
-          anyOf:
-          - type: string
-          - type: 'null'
-          title: X-Csrf-Token
-      - name: X-Account-Id
-        in: header
-        required: false
-        description: Legacy account-scoped authentication fallback used by tests and
-          non-browser clients. Browser-session requests should use the quorum_session
-          cookie.
-        schema:
-          type: string
-          format: uuid
-      responses:
-        '200':
-          description: Successful Response
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/ProviderKeyStatusResponse'
-        '422':
-          description: Validation error.
-          content:
-            application/json:
-              schema: *id001
-        '401':
-          description: Authentication is required before BYO key management.
-          content:
-            application/json:
-              schema: *id002
-        '403':
-          description: A valid CSRF token is required for browser-session requests.
-          content:
-            application/json:
-              schema: *id002
-  /v1/provider-keys/openrouter/status:
-    get:
-      tags:
-      - provider-keys
-      summary: Get Openrouter Key Status
-      operationId: get_openrouter_key_status_v1_provider_keys_openrouter_status_get
-      responses:
-        '200':
-          description: Successful Response
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/ProviderKeyStatusResponse'
-        '401':
-          description: Authentication is required before BYO key status lookup.
-          content:
-            application/json:
-              schema: *id002
-      parameters:
-      - name: X-Account-Id
-        in: header
-        required: false
-        description: Legacy account-scoped authentication fallback used by tests and
-          non-browser clients. Browser-session requests should use the quorum_session
-          cookie.
-        schema:
-          type: string
-          format: uuid
+                $ref: '#/components/schemas/HTTPValidationError'
   /:
     get:
       tags:
@@ -420,7 +162,10 @@ paths:
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/RootResponse'
+                additionalProperties:
+                  type: string
+                type: object
+                title: Response Root  Get
   /health:
     get:
       tags:
@@ -433,7 +178,10 @@ paths:
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/HealthResponse'
+                additionalProperties:
+                  type: string
+                type: object
+                title: Response Health Health Get
   /ready:
     get:
       tags:
@@ -446,51 +194,54 @@ paths:
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/ReadyResponse'
-  /v1/session:
+                additionalProperties: true
+                type: object
+                title: Response Ready Ready Get
+  /status:
     get:
       tags:
-      - session
-      summary: Browser session
-      operationId: browser_session_v1_session_get
-      parameters:
-      - name: quorum_session
-        in: cookie
-        required: false
-        schema:
-          anyOf:
-          - type: string
-          - type: 'null'
-          title: Quorum Session
+      - operations
+      summary: Status Snapshot
+      description: 'Runtime snapshot of the app''s current state.
+
+
+        The ``/status`` endpoint is the operator''s single page for
+
+        observability: environment, live-execution readiness, feedback DB
+
+        health, Sentry state, and process uptime. No authentication is
+
+        required — the endpoint never surfaces query text, account ids,
+
+        or session tokens.'
+      operationId: status_snapshot_status_get
       responses:
         '200':
           description: Successful Response
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/BrowserSessionResponse'
-        '422':
-          description: Validation Error
+                additionalProperties: true
+                type: object
+                title: Response Status Snapshot Status Get
+  /v1/session:
+    get:
+      tags:
+      - session
+      summary: Browser Session
+      operationId: browser_session_v1_session_get
+      responses:
+        '200':
+          description: Successful Response
           content:
             application/json:
-              schema:
-                $ref: '#/components/schemas/HTTPValidationError'
-      description: Issue or resume the current browser session and return a CSRF token.
+              schema: {}
   /ui:
     get:
       tags:
       - browser-ui
       summary: Browser Ui
       operationId: browser_ui_ui_get
-      parameters:
-      - name: quorum_session
-        in: cookie
-        required: false
-        schema:
-          anyOf:
-          - type: string
-          - type: 'null'
-          title: Quorum Session
       responses:
         '200':
           description: Successful Response
@@ -498,13 +249,6 @@ paths:
             text/html:
               schema:
                 type: string
-        '422':
-          description: Validation Error
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/HTTPValidationError'
-      description: Serve the browser UI for the current session.
   /v1/models/defaults:
     get:
       tags:
@@ -518,21 +262,29 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/ModelDefaultsResponse'
-        '401':
-          description: Authentication is required before model selection.
+  /feedback/audit:
+    get:
+      tags:
+      - operations
+      summary: Latest Feedback Audit
+      description: 'Return the most recent feedback audit report as plain text.
+
+
+        The route is a thin wrapper around the file the audit job writes;
+
+        it does NOT run the audit on demand (that is a separate, scheduled
+
+        job). Returns 404 when no audit has been written yet so a fresh
+
+        deploy does not 500.'
+      operationId: latest_feedback_audit_feedback_audit_get
+      responses:
+        '200':
+          description: Successful Response
           content:
-            application/json:
-              schema: *id002
-      parameters:
-      - name: X-Account-Id
-        in: header
-        required: false
-        description: Legacy account-scoped authentication fallback used by tests and
-          non-browser clients. Browser-session requests should use the quorum_session
-          cookie.
-        schema:
-          type: string
-          format: uuid
+            text/plain:
+              schema:
+                type: string
 components:
   schemas:
     ActiveQueryRunResponse:
@@ -595,8 +347,7 @@ components:
       - aligned
       - total
       title: AgreementSummary
-      description: 'Verdict-ring numerator/denominator for screen 05 (``aligned``
-        of
+      description: 'Verdict-ring numerator/denominator for screen 05 (``aligned`` of
 
         ``total``). ``total`` is the number of initial answers on the run —
 
@@ -771,44 +522,28 @@ components:
           maximum: 2.0
           minimum: 1.0
           title: Round Number
-        status:
-          $ref: '#/components/schemas/DebateRoundStatus'
-        critique_text:
-          type: string
-          title: Critique Text
         focus_areas:
           items:
             type: string
           type: array
           title: Focus Areas
-        contributing_models:
-          items:
-            type: string
-          type: array
-          title: Contributing Models
-        latency_ms:
-          type: integer
-          minimum: 0.0
-          title: Latency Ms
-        provider_notice:
-          anyOf:
-          - type: string
-          - type: 'null'
-          title: Provider Notice
+        critique_text:
+          type: string
+          title: Critique Text
+        status:
+          $ref: '#/components/schemas/DebateRoundStatus'
       type: object
       required:
       - round_number
-      - status
-      - critique_text
       - focus_areas
-      - contributing_models
-      - latency_ms
+      - critique_text
+      - status
       title: DebateOutput
     DebateRoundStatus:
       type: string
       enum:
       - completed
-      - skipped_timeout
+      - skipped
       title: DebateRoundStatus
     FinalSynthesis:
       properties:
@@ -829,19 +564,15 @@ components:
         recommendation:
           type: string
           title: Recommendation
-        citation_coverage:
-          $ref: '#/components/schemas/CitationCoverage'
-        quality_checks:
-          $ref: '#/components/schemas/SynthesisQualityChecks'
         high_stakes_notice:
           anyOf:
           - type: string
           - type: 'null'
           title: High Stakes Notice
-        latency_ms:
-          type: integer
-          minimum: 0.0
-          title: Latency Ms
+        citation_coverage:
+          $ref: '#/components/schemas/CitationCoverage'
+        quality_checks:
+          $ref: '#/components/schemas/SynthesisQualityChecks'
       type: object
       required:
       - status
@@ -850,9 +581,9 @@ components:
       - source_support
       - uncertainty
       - recommendation
+      - high_stakes_notice
       - citation_coverage
       - quality_checks
-      - latency_ms
       title: FinalSynthesis
     HTTPValidationError:
       properties:
@@ -879,6 +610,10 @@ components:
         model_id:
           type: string
           title: Model Id
+        display_name:
+          type: string
+          title: Display Name
+          default: ''
         answer_text:
           type: string
           title: Answer Text
@@ -935,6 +670,11 @@ components:
             $ref: '#/components/schemas/ModelSlot'
           type: array
           title: Model Slots
+        stale_model_ids:
+          items:
+            type: string
+          type: array
+          title: Stale Model Ids
       type: object
       required:
       - model_slots
@@ -949,14 +689,14 @@ components:
         model_id:
           type: string
           title: Model Id
-        display_label:
-          type: string
-          title: Display Label
+        search:
+          type: boolean
+          title: Search
+          default: true
       type: object
       required:
       - slot_number
       - model_id
-      - display_label
       title: ModelSlot
     PositionMovement:
       properties:
@@ -998,8 +738,7 @@ components:
       - final
       - revised
       title: PositionMovement
-      description: 'One row of the "how positions moved" table — a single model''s
-        opening
+      description: 'One row of the "how positions moved" table — a single model''s opening
 
         synopsis and how it relates to the final synthesis.
 
@@ -1009,54 +748,10 @@ components:
         transcript): ``after_round_1`` and ``final`` describe opening-vs-final
 
         alignment, never an observed mid-debate action.'
-    ProviderCredentialSource:
-      type: string
-      enum:
-      - app_owned
-      - not_configured
-      - byo_openrouter
-      title: ProviderCredentialSource
-    ProviderKeyStatusResponse:
-      properties:
-        provider:
-          type: string
-          title: Provider
-        configured:
-          type: boolean
-          title: Configured
-        credential_source:
-          $ref: '#/components/schemas/ProviderCredentialSource'
-        masked_key_suffix:
-          anyOf:
-          - type: string
-          - type: 'null'
-          title: Masked Key Suffix
-        updated_at:
-          anyOf:
-          - type: string
-            format: date-time
-          - type: 'null'
-          title: Updated At
-      type: object
-      required:
-      - provider
-      - configured
-      - credential_source
-      title: ProviderKeyStatusResponse
-    ProviderKeyUpsertRequest:
-      properties:
-        openrouter_key:
-          type: string
-          maxLength: 4096
-          minLength: 20
-          title: Openrouter Key
-      type: object
-      required:
-      - openrouter_key
-      title: ProviderKeyUpsertRequest
     ProviderPath:
       type: string
       enum:
+      - local_simulation
       - openrouter_search
       - fallback_search
       title: ProviderPath
@@ -1064,7 +759,7 @@ components:
       properties:
         query_text:
           type: string
-          maxLength: 8000
+          maxLength: 20000
           minLength: 1
           title: Query Text
         model_slots:
@@ -1073,6 +768,13 @@ components:
           type: array
           minItems: 1
           title: Model Slots
+        slot_search:
+          anyOf:
+          - items:
+              type: boolean
+            type: array
+          - type: 'null'
+          title: Slot Search
         safety_acknowledgements:
           items:
             $ref: '#/components/schemas/SafetyAcknowledgement'
@@ -1126,7 +828,7 @@ components:
       properties:
         query_text:
           type: string
-          maxLength: 8000
+          maxLength: 20000
           minLength: 1
           title: Query Text
         model_slots:
@@ -1135,6 +837,13 @@ components:
           type: array
           minItems: 1
           title: Model Slots
+        slot_search:
+          anyOf:
+          - items:
+              type: boolean
+            type: array
+          - type: 'null'
+          title: Slot Search
       type: object
       required:
       - query_text
@@ -1391,12 +1100,12 @@ components:
         acknowledgement_required:
           type: boolean
           title: Acknowledgement Required
+          default: true
       type: object
       required:
       - warning_type
       - version
       - message
-      - acknowledgement_required
       title: SafetyWarning
     SourceReference:
       properties:
@@ -1408,6 +1117,10 @@ components:
           title: Url
         provider:
           $ref: '#/components/schemas/ProviderPath'
+        is_fallback:
+          type: boolean
+          title: Is Fallback
+          default: false
       type: object
       required:
       - title
@@ -1482,92 +1195,3 @@ components:
       - sensitive_data
       - high_stakes
       title: WarningType
-    RootResponse:
-      type: object
-      additionalProperties:
-        type: string
-      title: RootResponse
-    HealthResponse:
-      type: object
-      required:
-      - status
-      - service
-      properties:
-        status:
-          type: string
-        service:
-          type: string
-      title: HealthResponse
-    ReadyResponse:
-      type: object
-      required:
-      - status
-      - environment
-      properties:
-        status:
-          type: string
-        environment:
-          type: string
-      title: ReadyResponse
-    BrowserSessionResponse:
-      type: object
-      required:
-      - csrf_token
-      - expires_at
-      properties:
-        csrf_token:
-          type: string
-        expires_at:
-          type: string
-          format: date-time
-      title: BrowserSessionResponse
-    ErrorResponse:
-      type: object
-      required:
-      - detail
-      properties:
-        detail:
-          type: object
-          required:
-          - code
-          - message
-          properties:
-            code:
-              type: string
-              enum:
-              - AUTH_REQUIRED
-              - SESSION_EXPIRED
-              - CSRF_INVALID
-              - PROVIDER_KEY_REQUIRED
-              - ACTIVE_QUERY_EXISTS
-              - INVALID_MODEL_SLOT
-              - COST_CONFIRMATION_REQUIRED
-              - COST_LIMIT_EXCEEDED
-              - QUERY_RUN_NOT_FOUND
-              - VALIDATION_ERROR
-            message:
-              type: string
-            cost_estimate:
-              $ref: '#/components/schemas/CostEstimate'
-            required_warnings:
-              type: array
-              items:
-                $ref: '#/components/schemas/SafetyWarning'
-            slot_errors:
-              type: array
-              items:
-                type: object
-                required:
-                - message
-                properties:
-                  slot_number:
-                    type:
-                    - integer
-                    - 'null'
-                  model_id:
-                    type:
-                    - string
-                    - 'null'
-                  message:
-                    type: string
-      title: ErrorResponse
