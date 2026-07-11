@@ -399,7 +399,9 @@ def status_snapshot() -> dict[str, object]:
     observability: environment, live-execution readiness, feedback DB
     health, Sentry state, and process uptime. No authentication is
     required — the endpoint never surfaces query text, account ids,
-    or session tokens.
+    session tokens, or internal filesystem paths. ``feedback_db`` is
+    reported as ``connected``/``disconnected`` health only; the on-disk
+    database path is deliberately not exposed in this public response.
     """
     # Use the live probe rather than the boot-time snapshot so /status
     # reflects current state, not "the state at process start".
@@ -414,8 +416,10 @@ def status_snapshot() -> dict[str, object]:
     else:
         try:
             feedback_events_total = store.event_count()
-            db_path = getattr(store, "_db_path", "")
-            feedback_db = f"connected ({db_path})" if db_path else "connected"
+            # Report health only. The on-disk database path is an
+            # internal detail and must never be leaked through this
+            # unauthenticated operator snapshot.
+            feedback_db = "connected"
         except Exception:  # noqa: BLE001 - status must not 500
             feedback_db = "disconnected"
             feedback_events_total = 0
@@ -497,12 +501,14 @@ def model_defaults(
 # --- Feedback audit surface -------------------------------------------------
 # The nightly feedback audit produces a Markdown report at
 # ``feedback/audit-YYYY-MM-DD.md``. The route below serves the most recent
-# report as plain text so the operator can curl the running app and see what
-# the AI auditor is saying. The route is intentionally unauthenticated —
-# the audit is about *operational* state, not user data, and the report
-# never contains query text, account ids, or session tokens. Production
-# deployments can put the route behind a reverse-proxy allowlist if they
-# want to keep it off the public internet.
+# report as plain text so an operator with a valid browser session can read
+# what the AI auditor is saying. The route is session-gated via
+# ``require_session`` (the same dependency ``/v1/models/defaults`` uses):
+# anonymous requests get 401 and only an authenticated session receives the
+# report body. The anonymous liveness/readiness probes live at ``/health``
+# and ``/ready``; nothing operational depends on this route being open.
+# Production deployments can additionally put the route behind a
+# reverse-proxy allowlist to keep it off the public internet.
 
 _FEEDBACK_DIR = Path(__file__).resolve().parents[2] / "feedback"
 
@@ -516,13 +522,16 @@ def _latest_feedback_report() -> Path | None:
 
 
 @app.get("/feedback/audit", tags=["operations"], response_class=PlainTextResponse)
-def latest_feedback_audit() -> Response:
+def latest_feedback_audit(
+    _: Annotated[SessionContext, Depends(require_session)],
+) -> Response:
     """Return the most recent feedback audit report as plain text.
 
     The route is a thin wrapper around the file the audit job writes;
     it does NOT run the audit on demand (that is a separate, scheduled
-    job). Returns 404 when no audit has been written yet so a fresh
-    deploy does not 500.
+    job). Access requires a valid browser session (``require_session``);
+    anonymous callers receive 401. Returns 404 when no audit has been
+    written yet so a fresh deploy does not 500.
     """
     report_path = _latest_feedback_report()
     if report_path is None:

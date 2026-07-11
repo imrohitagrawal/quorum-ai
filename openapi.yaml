@@ -213,7 +213,11 @@ paths:
 
         required — the endpoint never surfaces query text, account ids,
 
-        or session tokens.'
+        session tokens, or internal filesystem paths. ``feedback_db`` is
+
+        reported as ``connected``/``disconnected`` health only; the on-disk
+
+        database path is deliberately not exposed in this public response.'
       operationId: status_snapshot_status_get
       responses:
         '200':
@@ -274,9 +278,11 @@ paths:
 
         it does NOT run the audit on demand (that is a separate, scheduled
 
-        job). Returns 404 when no audit has been written yet so a fresh
+        job). Access requires a valid browser session (``require_session``);
 
-        deploy does not 500.'
+        anonymous callers receive 401. Returns 404 when no audit has been
+
+        written yet so a fresh deploy does not 500.'
       operationId: latest_feedback_audit_feedback_audit_get
       responses:
         '200':
