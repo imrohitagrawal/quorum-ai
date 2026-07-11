@@ -193,14 +193,22 @@ test.describe("UI parity — behaviour", () => {
     await page.locator("#result-startfresh").click();
     await expect(page.locator("#result-startfresh")).toHaveAttribute("aria-pressed", "true");
     await expect(nextInput).toHaveValue("");
-    // Follow up + Estimate & run returns to composer with the answered question
-    // prefilled and fires a fresh estimate request.
+    // Follow up + Estimate & run routes the answered question back through the
+    // composer's own gated estimate button. Assert only the DURABLE outcomes,
+    // never the transient view: on the mocked "allow" band the re-estimate
+    // auto-proceeds (proceedWithRun) and flips the view composer→result almost
+    // immediately, so any assertion on composer visibility or on
+    // ``getByRole("textbox").first()`` (which then resolves to the empty
+    // ``#result-next-input``) races and flakes under load. The two things that
+    // deterministically prove the behaviour are: a fresh estimate fired, and the
+    // composer's own ``#query-text`` carries the prefilled question — its value
+    // is set synchronously on the follow-up and is never cleared by the run, so
+    // it holds regardless of how the view has since transitioned.
     await page.locator("#result-followup").click();
     const estimateReq = page.waitForRequest("**/v1/query-runs/estimate");
     await page.locator("#result-next-run").click();
-    await expect(page.locator('[data-view="composer"]')).toBeVisible();
-    await expect(page.getByRole("textbox").first()).toHaveValue(QUESTION);
     await estimateReq;
+    await expect(page.locator("#query-text")).toHaveValue(QUESTION);
   });
 
   test("SECURITY: a javascript: source URL never becomes a clickable anchor", async ({ page }) => {
@@ -221,6 +229,77 @@ test.describe("UI parity — behaviour", () => {
     // The safe https source IS a real anchor.
     const goodChip = synth.locator("a.result-source-chip", { hasText: "Good" });
     await expect(goodChip).toHaveAttribute("href", "https://example.com/ok");
+  });
+
+  test("SECURITY: a crafted markdown link in model answer text cannot inject a javascript: anchor, a control-char-obfuscated scheme, or an event-handler breakout", async ({ page }) => {
+    // A model's answer_text is rendered as inline markdown (formatAnswerText →
+    // mdInline). It is untrusted (model/synthesis output). Craft hostile
+    // markdown links and prove none of them become a script vector.
+    //   Browsers strip control characters before resolving a scheme, so a
+    //   URL like "java\tscript:" (interior TAB, 0x09) or "\x01javascript:"
+    //   (leading C0 control) would execute if the renderer allow-listed it as
+    //   a scheme-less (relative) URL. These are the cases that must fail
+    //   against a naive regex allow-list and pass after the URL()-based fix
+    //   that strips the SAME control set the browser does.
+    const TAB = "\t";
+    const CTRL = "\u0001";
+    const hostileAnswer =
+      `Links: [tab](java${TAB}script:alert(1)) ` +
+      `[ctrl](${CTRL}javascript:alert(2)) ` +
+      `[plain](javascript:alert(3)) ` +
+      `[data](data:text/html,<script>alert(4)</script>) ` +
+      `[quote](https://a" onmouseover="alert(5)) ` +
+      `[protorel](//evil.example/x) ` +
+      // Backslash-folded authority: browsers fold "\\" to "/" in the
+      // authority, so "/\\evil" navigates OFF-ORIGIN (open redirect) if it
+      // were allowed as a relative URL.
+      `[backslash](/\\evil.example/x) ` +
+      // Entity-reintroduced tab: raw "&#9;" survives HTML-escaping as
+      // "&amp;#9;"; only re-escaping the href on emit stops the browser
+      // decoding it back to a TAB and running "javascript:".
+      `[entity](java&#9;script:alert(6)) ` +
+      `[ok](https://example.com/ok).`;
+    const resp = completedResp();
+    (resp.result as { model_answers: { answer_text: string }[] }).model_answers[0].answer_text =
+      hostileAnswer;
+    await driveToResult(page, resp);
+
+    const grid = page.locator("#model-grid");
+    // (1) No anchor may resolve to a dangerous scheme once the browser's own
+    // pre-navigation normalisation (strip ALL C0 controls + DEL, then leading
+    // whitespace) is applied — mirror that here so an obfuscated scheme can't
+    // hide behind a control char the naive /^\s*/ would miss.
+    const dangerous = await grid.locator("a").evaluateAll((anchors) =>
+      anchors
+        .map((a) => a.getAttribute("href") || "")
+        .filter((h) =>
+          /^(javascript|data|vbscript):/i.test(
+            h.replace(/[\u0000-\u001F\u007F]/g, "").replace(/^\s+/, ""),
+          ),
+        ),
+    );
+    expect(dangerous, `dangerous anchors rendered: ${JSON.stringify(dangerous)}`).toEqual([]);
+    // Belt-and-braces: no javascript:/data: anchor anywhere on the page.
+    await expect(page.locator('a[href*="javascript"]')).toHaveCount(0);
+    await expect(page.locator('a[href^="data:"]')).toHaveCount(0);
+    // (2) The quote-breakout attempt must not have produced a real event-handler
+    // attribute — the URL stays inside the href value, it never becomes markup.
+    const injected = await grid
+      .locator("[onmouseover], [onclick], [onerror], [onload]")
+      .count();
+    expect(injected, "a markdown URL broke out into an event-handler attribute").toBe(0);
+    // (3) No anchor RESOLVES off-origin to the attacker host — catches the
+    // protocol-relative and backslash-folded-authority open-redirect vectors,
+    // whose danger is in resolution, not a dangerous scheme. ``.href`` is the
+    // browser's own resolved absolute URL.
+    const offOrigin = await grid.locator("a").evaluateAll((anchors) =>
+      anchors.map((a) => (a as HTMLAnchorElement).href).filter((h) => /evil\.example/i.test(h)),
+    );
+    expect(offOrigin, `open-redirect anchors to evil.example: ${JSON.stringify(offOrigin)}`).toEqual([]);
+    // (4) The one legitimate https link still renders as a working anchor.
+    const ok = grid.locator('a[href="https://example.com/ok"]');
+    await expect(ok).toHaveCount(1);
+    await expect(ok).toHaveText("ok");
   });
 
   test("transcript openings show friendly names, never a raw vendor/model slug", async ({ page }) => {
