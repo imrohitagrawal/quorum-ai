@@ -31,7 +31,7 @@ import time as _time_module
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
-from decimal import Decimal
+from decimal import Decimal, InvalidOperation
 from enum import StrEnum
 from threading import BoundedSemaphore, RLock, Thread
 from time import sleep
@@ -48,7 +48,9 @@ from product_app.costs import (
     CostConfirmation,
     CostEstimate,
     CostThresholdAction,
+    build_measured_breakdown,
     cost_estimation_service,
+    measured_call_cost_usd,
 )
 from product_app.debate import (
     AgreementSummary,
@@ -67,6 +69,7 @@ from product_app.providers import (
     InitialAnswerStatus,
     InitialModelAnswer,
     ProviderPath,
+    TokenUsage,
     provider_execution_service,
 )
 from product_app.safety import (
@@ -367,6 +370,12 @@ class QueryRun:
     final_synthesis: FinalSynthesis | None = None
     failed_steps: list[str] = field(default_factory=list)
     missing_steps: list[str] = field(default_factory=list)
+    #: Real per-call token usage captured from the live debate/synthesis calls
+    #: (P2). One entry per billed live call; ``None`` inside a list means the
+    #: call went live but the provider omitted its usage object. Read by
+    #: ``_actual_cost`` to decide whether the run's actual cost can be measured.
+    debate_call_usages: list[tuple[int, TokenUsage | None]] = field(default_factory=list)
+    synthesis_call_usages: list[TokenUsage | None] = field(default_factory=list)
 
     @property
     def is_terminal(self) -> bool:
@@ -521,10 +530,13 @@ class InMemoryQueryRunRepository:
         self,
         query_run_id: UUID,
         debate_outputs: list[DebateOutput],
+        live_call_usages: list[tuple[int, TokenUsage | None]] | None = None,
     ) -> QueryRun:
         with self._lock:
             query_run = self._query_runs[query_run_id]
             query_run.debate_outputs = debate_outputs
+            if live_call_usages is not None:
+                query_run.debate_call_usages = live_call_usages
             query_run.updated_at = datetime.now(UTC)
             return query_run
 
@@ -532,10 +544,13 @@ class InMemoryQueryRunRepository:
         self,
         query_run_id: UUID,
         final_synthesis: FinalSynthesis,
+        live_call_usages: list[TokenUsage | None] | None = None,
     ) -> QueryRun:
         with self._lock:
             query_run = self._query_runs[query_run_id]
             query_run.final_synthesis = final_synthesis
+            if live_call_usages is not None:
+                query_run.synthesis_call_usages = live_call_usages
             query_run.updated_at = datetime.now(UTC)
             return query_run
 
@@ -1200,7 +1215,11 @@ def _execute_query_run(query_run_id: UUID, account_id: UUID) -> None:
         initial_answers=refreshed.initial_answers,
         openrouter_key=openrouter_key,
     )
-    query_run_repository.record_debate_outputs(query_run_id, debate_result.debate_outputs)
+    query_run_repository.record_debate_outputs(
+        query_run_id,
+        debate_result.debate_outputs,
+        live_call_usages=debate_result.live_call_usages,
+    )
     if not debate_result.debate_outputs:
         query_run_repository.update_status(
             query_run_id,
@@ -1277,7 +1296,11 @@ def _execute_query_run(query_run_id: UUID, account_id: UUID) -> None:
             missing_steps=synthesis_result.missing_steps,
         )
         return
-    query_run_repository.record_final_synthesis(query_run_id, synthesis_result.final_synthesis)
+    query_run_repository.record_final_synthesis(
+        query_run_id,
+        synthesis_result.final_synthesis,
+        live_call_usages=synthesis_result.live_call_usages,
+    )
     query_run_repository.update_status(
         query_run_id,
         status_value=QueryRunStatus.COMPLETED,
@@ -1411,18 +1434,99 @@ def _actual_cost(
 ) -> tuple[Decimal, CostBreakdown | None, Literal["estimated", "measured"]]:
     """Actual cost incurred, for the receipt's est→actual reconciliation.
 
-    Per-call provider-usage capture is NOT yet plumbed through the pipeline,
-    so this returns the estimate (value and itemized breakdown) for EVERY run,
-    demo and live alike, tagged ``cost_source="estimated"``. On a demo/simulation
-    run that is exact — no real provider usage was billed, so the honest
-    "actual" is the estimate itself. On a live run it is a known limitation:
-    the estimate stands in for the (not-yet-captured) measured usage, and the
-    ``"estimated"`` tag tells the UI not to present it as measured billing.
-    Once usage capture lands, live runs should substitute the real token usage
-    here and return ``cost_source="measured"``.
+    Returns ``cost_source="measured"`` — with a cost computed from the REAL
+    per-call token usage captured from the provider (P2) — only when EVERY
+    contributing live call reported usage. Otherwise it returns the pre-run
+    estimate tagged ``cost_source="estimated"``, and never fabricates usage:
+
+    * A demo/simulation run makes no live calls, so there is no captured usage
+      to measure from — it stays ``estimated`` (the estimate is exact anyway,
+      because nothing was billed).
+    * A live run is ``measured`` only when the whole run is cleanly captured:
+      EVERY one of its initial slots COMPLETED on the ``OPENROUTER_SEARCH`` path
+      AND reported usage, AND every live debate/synthesis call reported usage.
+      This gate is deliberately STRICT — if any slot fell back to
+      simulation/fallback or failed (a state we cannot distinguish from a
+      billed-but-uncaptured call), or any live call omitted its usage, the run
+      stays ``estimated``. It is the only way to guarantee that no billed call
+      is silently omitted from a figure the UI presents as measured billing.
     """
     estimate = query_run.cost_estimate
-    return estimate.estimated_cost_usd, estimate.breakdown, "estimated"
+
+    # --- STRICT honesty gate -------------------------------------------------
+    model_slots = query_run.model_slots
+    initial_answers = query_run.initial_answers
+    initial_fully_captured = (
+        bool(model_slots)
+        and len(initial_answers) == len(model_slots)
+        and all(
+            answer.provider_path is ProviderPath.OPENROUTER_SEARCH
+            and answer.status is InitialAnswerStatus.COMPLETED
+            and answer.token_usage is not None
+            for answer in initial_answers
+        )
+    )
+    debate_captured = all(usage is not None for _, usage in query_run.debate_call_usages)
+    synthesis_captured = all(usage is not None for usage in query_run.synthesis_call_usages)
+    if not (initial_fully_captured and debate_captured and synthesis_captured):
+        return estimate.estimated_cost_usd, estimate.breakdown, "estimated"
+
+    # --- measured computation (guarded) --------------------------------------
+    # Past the gate, every ``token_usage`` is present; the ``is None`` skips are
+    # unreachable but keep the types narrow. The whole computation is wrapped so
+    # a cost-arithmetic error (e.g. a Decimal overflow from a value that somehow
+    # slipped the capture-time bound) can never crash the result endpoint.
+    try:
+        per_model_initial_named: list[tuple[str, str, Decimal]] = []
+        for answer in sorted(initial_answers, key=lambda a: a.slot_number):
+            usage = answer.token_usage
+            if usage is None:
+                continue
+            per_model_initial_named.append(
+                (
+                    answer.model_id,
+                    answer.display_name or answer.model_id,
+                    measured_call_cost_usd(
+                        model_id=answer.model_id,
+                        prompt_tokens=usage.prompt_tokens,
+                        completion_tokens=usage.completion_tokens,
+                    ),
+                )
+            )
+
+        debate_by_round: dict[int, Decimal] = {}
+        for round_number, debate_usage in query_run.debate_call_usages:
+            if debate_usage is None:
+                continue
+            debate_by_round[round_number] = debate_by_round.get(
+                round_number, Decimal("0")
+            ) + measured_call_cost_usd(
+                model_id=settings.debate_model_id,
+                prompt_tokens=debate_usage.prompt_tokens,
+                completion_tokens=debate_usage.completion_tokens,
+            )
+
+        synthesis_cost = sum(
+            (
+                measured_call_cost_usd(
+                    model_id=settings.synthesis_model_id,
+                    prompt_tokens=synth_usage.prompt_tokens,
+                    completion_tokens=synth_usage.completion_tokens,
+                )
+                for synth_usage in query_run.synthesis_call_usages
+                if synth_usage is not None
+            ),
+            Decimal("0"),
+        )
+
+        breakdown = build_measured_breakdown(
+            per_model_initial=per_model_initial_named,
+            debate_by_round=debate_by_round,
+            synthesis_cost=synthesis_cost,
+        )
+        return breakdown.total, breakdown, "measured"
+    except (InvalidOperation, ArithmeticError, ValueError):
+        return estimate.estimated_cost_usd, estimate.breakdown, "estimated"
 
 
 def _initial_progress() -> list[QueryRunStageProgress]:

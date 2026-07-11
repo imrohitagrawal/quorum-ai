@@ -650,6 +650,10 @@ components:
           - type: string
           - type: 'null'
           title: Provider Notice
+        token_usage:
+          anyOf:
+          - $ref: '#/components/schemas/TokenUsage'
+          - type: 'null'
       type: object
       required:
       - slot_number
@@ -1163,6 +1167,40 @@ components:
       - completed
       - failed
       title: SynthesisStatus
+    TokenUsage:
+      properties:
+        prompt_tokens:
+          type: integer
+          minimum: 0.0
+          title: Prompt Tokens
+        completion_tokens:
+          type: integer
+          minimum: 0.0
+          title: Completion Tokens
+        total_tokens:
+          type: integer
+          minimum: 0.0
+          title: Total Tokens
+      type: object
+      required:
+      - prompt_tokens
+      - completion_tokens
+      - total_tokens
+      title: TokenUsage
+      description: 'Real per-call token usage as reported by the provider.
+
+
+        Parsed from the ``usage`` object OpenRouter returns on a completed
+
+        ``/chat/completions`` response. Captured so a run''s actual cost can be
+
+        computed from measured tokens rather than the pre-run estimate. Absent
+
+        (``None``) whenever the provider omitted the object or a call did not go
+
+        live — the cost layer treats a missing record as "cannot measure this
+
+        call" and keeps the run tagged ``estimated`` (never fabricates usage).'
     ValidationError:
       properties:
         loc:

@@ -761,3 +761,92 @@ class CostEstimationService:
 
 cost_event_recorder = InMemoryCostEventRecorder()
 cost_estimation_service = CostEstimationService()
+
+
+# ---------------------------------------------------------------------------
+# Measured actual cost (P2). Computed from REAL per-call token usage captured
+# from the provider, priced on the SAME per-1K-token catalog basis as the
+# pre-run estimate. These are only ever used when every contributing live call
+# reported usage (the honesty gate lives in ``query_runs._actual_cost``); the
+# functions themselves never fabricate a token count.
+# ---------------------------------------------------------------------------
+
+
+def _price_per_1k(model_id: str) -> tuple[Decimal, Decimal]:
+    """``(input, output)`` per-1K-token price for a model, with the default floor."""
+    prices = openrouter_model_catalog_service.price_index()
+    return prices.get(model_id, (_DEFAULT_PRICE_PER_1K_INPUT, _DEFAULT_PRICE_PER_1K_OUTPUT))
+
+
+def measured_call_cost_usd(*, model_id: str, prompt_tokens: int, completion_tokens: int) -> Decimal:
+    """Full-precision measured USD cost of one provider call from real tokens.
+
+    Uses the same per-1K-token catalog prices (with the same default floor) as
+    the pre-run estimate, so a measured actual and its estimate are priced on
+    one basis. Not quantized — callers sum several of these and quantize the
+    grand total once (see :func:`build_measured_breakdown`).
+    """
+    in_price, out_price = _price_per_1k(model_id)
+    return in_price * Decimal(prompt_tokens) / Decimal(1000) + out_price * Decimal(
+        completion_tokens
+    ) / Decimal(1000)
+
+
+def build_measured_breakdown(
+    *,
+    per_model_initial: list[tuple[str, str, Decimal]],
+    debate_by_round: dict[int, Decimal],
+    synthesis_cost: Decimal,
+) -> CostBreakdown:
+    """Assemble a measured :class:`CostBreakdown` that re-sums to the total.
+
+    * ``per_model_initial`` — ``(model_id, display_name, measured_initial_cost)``
+      per model slot (``0`` for a slot that ran simulated / was not billed).
+    * ``debate_by_round`` — measured cost keyed by round number (``1`` and/or
+      ``2``); a round that ran templated / was skipped is simply absent, so its
+      ``by_stage`` line is ``0``. Keying by round (rather than positionally)
+      keeps ``debate_round_1`` / ``debate_round_2`` attributed to the round the
+      money was actually spent on.
+    * ``synthesis_cost`` — summed measured cost of the live synthesis section
+      calls.
+
+    Debate + synthesis are attributed to a single ``"Synthesis writer"``
+    ``by_model`` row because they use the dedicated debate/synthesis writer
+    models, not the four slot models. Both partitions are reconciled to the
+    quantized grand total with the same largest-remainder rule as the estimate,
+    so every line is ``>= 0`` and the lines sum to the total exactly (the UI's
+    reconciliation invariant).
+    """
+    initial_total = sum((cost for _, _, cost in per_model_initial), Decimal("0"))
+    debate_total = sum(debate_by_round.values(), Decimal("0"))
+    raw_total = initial_total + debate_total + synthesis_cost
+    total = raw_total.quantize(COST_DISPLAY_QUANTUM, rounding=ROUND_HALF_UP)
+
+    debate_round_1 = debate_by_round.get(1, Decimal("0"))
+    debate_round_2 = debate_by_round.get(2, Decimal("0"))
+    raw_stage: list[tuple[str, Decimal]] = [
+        ("initial_answers", initial_total),
+        ("debate_round_1", debate_round_1),
+        ("debate_round_2", debate_round_2),
+        ("synthesis", synthesis_cost),
+    ]
+    stage_usd = CostEstimationService._reconcile_usd_lines([v for _, v in raw_stage], total)
+    by_stage = [
+        CostLineByStage(stage=name, usd=usd)
+        for (name, _), usd in zip(raw_stage, stage_usd, strict=True)
+    ]
+
+    writer_cost = debate_total + synthesis_cost
+    raw_model: list[tuple[str, str, Decimal]] = list(per_model_initial)
+    raw_model.append(("synthesis", "Synthesis writer", writer_cost))
+    model_usd = CostEstimationService._reconcile_usd_lines([c for *_, c in raw_model], total)
+    by_model = [
+        CostLineByModel(
+            model_id=mid,
+            display_name=name,
+            usd=usd,
+            kind="synthesis" if mid == "synthesis" else "model",
+        )
+        for (mid, name, _), usd in zip(raw_model, model_usd, strict=True)
+    ]
+    return CostBreakdown(by_model=by_model, by_stage=by_stage, total=total)

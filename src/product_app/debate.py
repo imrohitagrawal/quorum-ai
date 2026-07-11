@@ -21,7 +21,7 @@ thread — debate failures degrade gracefully to a partial result.
 from __future__ import annotations
 
 import re
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, field
 from enum import StrEnum
 from threading import RLock
 from time import perf_counter
@@ -37,6 +37,7 @@ from product_app.providers import (
     InitialModelAnswer,
     LiveProviderResult,
     ProviderPath,
+    TokenUsage,
     provider_execution_service,
 )
 from product_app.safety import (
@@ -163,6 +164,14 @@ class DebateResult:
     missing_steps: list[str]
     timed_out: bool
     round_timings_ms: dict[int, int]
+    #: One entry per debate round that actually made a live moderator call
+    #: (a templated/skipped round contributes NO entry — it was not billed).
+    #: Each entry is ``(round_number, usage)``; ``usage`` is the call's
+    #: captured :class:`TokenUsage`, or ``None`` when the live call succeeded
+    #: but the provider omitted the usage object. The round number is carried
+    #: so the cost layer attributes each cost to the RIGHT ``by_stage`` round
+    #: (a round-2-only live run must not be labelled ``debate_round_1``).
+    live_call_usages: list[tuple[int, TokenUsage | None]] = field(default_factory=list)
 
 
 class DebateOrchestrationService:
@@ -206,12 +215,13 @@ class DebateOrchestrationService:
         missing_steps: list[str] = []
         round_timings_ms: dict[int, int] = {}
         fallback_messages: list[str] = []
+        live_call_usages: list[tuple[int, TokenUsage | None]] = []
 
         # Round 1 always runs. The orchestrator pulls disagreement, weak
         # support, and missing reasoning signals from the initial answers
         # to produce a critique text that the synthesis step can build on.
         round_one_started = perf_counter()
-        round_one_text, round_one_fallback = self._build_round_one_text(
+        round_one_text, round_one_fallback, round_one_live = self._build_round_one_text(
             initial_answers=initial_answers,
             query_text=query_text,
             openrouter_key=openrouter_key,
@@ -220,6 +230,10 @@ class DebateOrchestrationService:
         round_timings_ms[1] = round_one_ms
         if round_one_fallback is not None:
             fallback_messages.append(round_one_fallback)
+        # A non-None live result means a billed moderator call happened; record
+        # it against round 1 (usage may itself be None if the provider omitted it).
+        if round_one_live is not None:
+            live_call_usages.append((1, round_one_live.usage))
         debate_event_recorder.record(
             event_type="debate_round_completed",
             account_id=account_id,
@@ -267,10 +281,11 @@ class DebateOrchestrationService:
                 missing_steps=missing_steps,
                 timed_out=True,
                 round_timings_ms=round_timings_ms,
+                live_call_usages=live_call_usages,
             )
 
         round_two_started = perf_counter()
-        round_two_text, round_two_fallback = self._build_round_two_text(
+        round_two_text, round_two_fallback, round_two_live = self._build_round_two_text(
             initial_answers=initial_answers,
             query_text=query_text,
             round_one_text=round_one_text,
@@ -280,6 +295,8 @@ class DebateOrchestrationService:
         round_timings_ms[2] = round_two_ms
         if round_two_fallback is not None:
             fallback_messages.append(round_two_fallback)
+        if round_two_live is not None:
+            live_call_usages.append((2, round_two_live.usage))
         debate_event_recorder.record(
             event_type="debate_round_completed",
             account_id=account_id,
@@ -305,6 +322,7 @@ class DebateOrchestrationService:
             missing_steps=missing_steps,
             timed_out=False,
             round_timings_ms=round_timings_ms,
+            live_call_usages=live_call_usages,
         )
 
     def _should_skip_round_two(self, *, elapsed_ms: float, query_text: str) -> bool:
@@ -325,7 +343,7 @@ class DebateOrchestrationService:
         initial_answers: list[InitialModelAnswer],
         query_text: str,
         openrouter_key: str,
-    ) -> tuple[str, str | None]:
+    ) -> tuple[str, str | None, LiveProviderResult | None]:
         disagreement = self._extract_disagreement(initial_answers=initial_answers)
         weak_support = self._extract_weak_support(initial_answers=initial_answers)
         missing = self._extract_missing_reasoning(initial_answers=initial_answers)
@@ -346,8 +364,8 @@ class DebateOrchestrationService:
             ),
         )
         if live is None:
-            return templated, self._debate_fallback_notice(round_number=1)
-        return live, None
+            return templated, self._debate_fallback_notice(round_number=1), None
+        return live.answer_text.strip(), None, live
 
     def _build_round_two_text(
         self,
@@ -356,7 +374,7 @@ class DebateOrchestrationService:
         query_text: str,
         round_one_text: str,
         openrouter_key: str,
-    ) -> tuple[str, str | None]:
+    ) -> tuple[str, str | None, LiveProviderResult | None]:
         disagreement = self._extract_disagreement(initial_answers=initial_answers)
         weak_support = self._extract_weak_support(initial_answers=initial_answers)
         missing = self._extract_missing_reasoning(initial_answers=initial_answers)
@@ -377,8 +395,8 @@ class DebateOrchestrationService:
             ),
         )
         if live is None:
-            return templated, self._debate_fallback_notice(round_number=2)
-        return live, None
+            return templated, self._debate_fallback_notice(round_number=2), None
+        return live.answer_text.strip(), None, live
 
     def _call_debate_model(
         self,
@@ -386,11 +404,12 @@ class DebateOrchestrationService:
         openrouter_key: str,
         system_prompt: str,
         user_prompt: str,
-    ) -> str | None:
-        """Call the configured debate model. Returns ``None`` on any
-        failure so the caller can fall back to the templated text.
-        The four model answers are summarised, not re-quoted, to keep
-        the prompt within budget.
+    ) -> LiveProviderResult | None:
+        """Call the configured debate model. Returns the live provider result
+        (carrying the answer text and captured token usage) or ``None`` on any
+        failure so the caller can fall back to the templated text. The four
+        model answers are summarised, not re-quoted, to keep the prompt within
+        budget.
         """
         # The live-execution flag is the operator's opt-in switch;
         # we honour it here the same way ``provider_execution_service``
@@ -410,7 +429,7 @@ class DebateOrchestrationService:
         )
         if result is None or not result.answer_text.strip():
             return None
-        return result.answer_text.strip()
+        return result
 
     def _debate_user_prompt(
         self,
