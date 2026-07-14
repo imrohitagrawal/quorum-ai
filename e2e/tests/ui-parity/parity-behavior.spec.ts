@@ -333,6 +333,33 @@ test.describe("UI parity — behaviour", () => {
     await expect(info).toHaveAttribute("aria-label", /what is the run id/i);
   });
 
+  test("Run ID is ONE id everywhere: the receipt's Run ID matches the header (the qr_ form) and carries an info icon; the raw UUID is a secondary reference", async ({ page }) => {
+    // correlation_id = "qr_" + query_run_id.hex — the SAME id in two formats. The
+    // user must see one "Run ID" (the friendly qr_/correlation form) in the header
+    // AND the receipt, with the raw UUID demoted to a clearly-labelled secondary
+    // reference — not a competing second "Run ID".
+    await driveToResult(page, completedResp());
+    // Header "Run ID" copy value is the correlation id.
+    await expect(page.locator(".result-meta-runid-copy")).toHaveText("corr-run-0001");
+    await page.locator("#result-details-toggle").click();
+    await expect(page.locator("#result-receipt")).toBeVisible();
+    // Exactly one row labelled "Run ID" in the receipt, and it shows the SAME id
+    // as the header (not the UUID), with an info icon.
+    const runIdLabel = page.locator("#result-receipt .result-receipt-label", { hasText: /^Run ID\b/ });
+    await expect(runIdLabel).toHaveCount(1);
+    const runIdRow = page
+      .locator("#result-receipt .result-receipt-row")
+      .filter({ hasText: "Run ID" })
+      .filter({ hasText: "corr-run-0001" });
+    await expect(runIdRow).toHaveCount(1);
+    await expect(runIdRow.locator(".info-icon")).toBeVisible();
+    // The raw UUID is still present, but under a secondary label — never "Run ID".
+    await expect(page.locator("#result-receipt .result-receipt-label", { hasText: /internal reference/i })).toHaveCount(1);
+    await expect(page.locator("#result-receipt")).toContainText("11111111-1111-4111-8111-111111111111");
+    // The old "Correlation" label is gone (it was the same id under a confusing name).
+    await expect(page.locator("#result-receipt .result-receipt-label", { hasText: /^Correlation$/ })).toHaveCount(0);
+  });
+
   test("Run details receipt: est→actual values never overflow their column into the next section", async ({ page }) => {
     // The receipt is a 4-column grid and the "$X → $Y" values are nowrap; on a
     // constrained width they used to overflow their column into the neighbouring
@@ -368,29 +395,29 @@ test.describe("UI parity — behaviour", () => {
     await expect(runNow).not.toHaveClass(/button-ghost/);
   });
 
-  test("next-question: Start fresh clears, Follow up prefills, Estimate & run re-estimates", async ({ page }) => {
+  test("next-question: Start fresh clears, Follow up prefills, and Review & run lands on page B with editable models (no auto-estimate)", async ({ page }) => {
     await driveToResult(page, completedResp());
     const nextInput = page.locator("#result-next-input");
     await nextInput.fill("a refinement");
     await page.locator("#result-startfresh").click();
     await expect(page.locator("#result-startfresh")).toHaveAttribute("aria-pressed", "true");
     await expect(nextInput).toHaveValue("");
-    // Follow up + Estimate & run routes the answered question back through the
-    // composer's own gated estimate button. Assert only the DURABLE outcomes,
-    // never the transient view: on the mocked "allow" band the re-estimate
-    // auto-proceeds (proceedWithRun) and flips the view composer→result almost
-    // immediately, so any assertion on composer visibility or on
-    // ``getByRole("textbox").first()`` (which then resolves to the empty
-    // ``#result-next-input``) races and flakes under load. The two things that
-    // deterministically prove the behaviour are: a fresh estimate fired, and the
-    // composer's own ``#query-text`` carries the prefilled question — its value
-    // is set synchronously on the follow-up and is never cleared by the run, so
-    // it holds regardless of how the view has since transitioned.
+    // Follow up + Review & run drops the user back on the composer (page B) with
+    // the question pre-filled and the four model slots visible/editable — and it
+    // must NOT auto-fire an estimate, so the user can change models before
+    // running (they click See the estimate / Run now themselves).
+    let estimateFired = false;
+    page.on("request", (r) => { if (r.url().includes("/v1/query-runs/estimate")) estimateFired = true; });
     await page.locator("#result-followup").click();
-    const estimateReq = page.waitForRequest("**/v1/query-runs/estimate");
     await page.locator("#result-next-run").click();
-    await estimateReq;
+    await expect(page.locator('[data-view="composer"]')).toBeVisible();
     await expect(page.locator("#query-text")).toHaveValue(QUESTION);
+    // The four model slots are present and enabled on page B.
+    const slots = page.locator("[data-model-slot]");
+    await expect(slots).toHaveCount(4);
+    await expect(slots.first()).toBeEnabled();
+    await page.waitForTimeout(300);
+    expect(estimateFired, "Review & run must not auto-fire an estimate — the user picks models then runs").toBe(false);
   });
 
   test("SECURITY: a javascript: source URL never becomes a clickable anchor", async ({ page }) => {

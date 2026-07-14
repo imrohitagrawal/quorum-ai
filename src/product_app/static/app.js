@@ -2582,12 +2582,26 @@
     return row;
   }
 
-  // Copyable ID row (Run ID / Correlation). The ⧉ button carries the value on
-  // its dataset; a single delegated click handler on ``#result-receipt`` (wired
-  // once in boot) reuses the shared ``copyRunIdToClipboard`` helper.
-  function buildReceiptIdRow(label, value, idleTitle) {
+  // Copyable ID row (Run ID / internal reference). The ⧉ button carries the
+  // value on its dataset; a single delegated click handler on ``#result-receipt``
+  // (wired once in boot) reuses the shared ``copyRunIdToClipboard`` helper. When
+  // ``infoText`` is given, a compact info icon is appended to the label so the
+  // receipt explains the id the same way the result header does.
+  function buildReceiptIdRow(label, value, idleTitle, infoText) {
     const row = mkEl("div", "result-receipt-row");
-    row.appendChild(mkEl("span", "result-receipt-label", label));
+    const labelEl = mkEl("span", "result-receipt-label", label);
+    if (infoText) {
+      const info = document.createElement("button");
+      info.type = "button";
+      info.className = "info-icon info-icon-inline";
+      info.setAttribute("data-info-icon", "");
+      info.setAttribute("data-info-text", infoText);
+      info.setAttribute("aria-label", `What is the ${label}?`);
+      info.innerHTML = "&#9432;";
+      labelEl.appendChild(document.createTextNode(" "));
+      labelEl.appendChild(info);
+    }
+    row.appendChild(labelEl);
     const valWrap = mkEl("span", "result-receipt-id");
     valWrap.appendChild(mkEl("span", "mono", value));
     const copy = mkEl("button", "result-receipt-copy", "⧉");
@@ -2710,21 +2724,31 @@
     c1.setAttribute("role", "group");
     c1.setAttribute("aria-label", "Run receipt");
     c1.appendChild(mkEl("span", "result-receipt-kicker", "Run receipt"));
-    if (result.query_run_id) {
-      c1.appendChild(
-        buildReceiptIdRow(
-          "Run ID",
-          String(result.query_run_id),
-          "Copy run ID — include it if you report an issue.",
-        ),
-      );
-    }
+    // ONE user-facing "Run ID" = the friendly ``qr_``/correlation form, matching
+    // the result header and live-run card. The raw ``query_run_id`` (a UUID) is
+    // the SAME id in another format (``correlation_id`` is ``"qr_" + uuid.hex``),
+    // so it is demoted to a clearly-labelled secondary "Internal reference" — not
+    // a second, conflicting "Run ID".
     if (result.correlation_id) {
       c1.appendChild(
         buildReceiptIdRow(
-          "Correlation",
+          "Run ID",
           String(result.correlation_id),
-          "Copy correlation ID — include it if you report an issue.",
+          "Copy run ID — quote it if you report a problem to support.",
+          "A unique audit handle for this run. Copy it and quote it if you report a " +
+            "problem to support — it lets them pull up every log line for this exact " +
+            "request. It is not a link and has no meaning outside support.",
+        ),
+      );
+    }
+    if (result.query_run_id) {
+      c1.appendChild(
+        buildReceiptIdRow(
+          "Internal reference",
+          String(result.query_run_id),
+          "Copy the internal reference id.",
+          "The same run in its raw internal (UUID) form. The Run ID above is the " +
+            "friendly version of this id; support can use either.",
         ),
       );
     }
@@ -2768,7 +2792,7 @@
       mkEl(
         "p",
         "result-receipt-note",
-        "Quote the run ID and correlation ID when you report an issue — support can pull every log line. Ephemeral: this receipt is gone when the session ends.",
+        "Quote the run ID when you report an issue — support can pull every log line. Ephemeral: this receipt is gone when the session ends.",
       ),
     );
     grid.appendChild(c1);
@@ -2895,6 +2919,9 @@
     grid.appendChild(c4);
 
     receipt.appendChild(grid);
+    // Wire the receipt's ID info icons into the shared tooltip system
+    // (idempotent — keyed off ``data-info-wired``).
+    initInfoIcons();
   }
 
   // One position <td>. ``data-label`` carries the column name so the mobile
@@ -5973,13 +6000,12 @@
           queryTextarea.value = base;
           queryTextarea.dispatchEvent(new Event("input", { bubbles: true }));
         }
+        // Land on the composer (page B) with the question pre-filled so the user
+        // can REVIEW OR CHANGE their four models before running — a follow-up
+        // reuses the same models by default, but a new question may want a
+        // different panel. We deliberately do NOT auto-fire the estimate here;
+        // the user picks their models then clicks See the estimate / Run now.
         goToComposer();
-        // Estimate through the composer's OWN gated button rather than calling
-        // estimateRun() directly, so the high-stakes acknowledgement gate (which
-        // disables that button until the topic is acknowledged) is respected on
-        // a safety-sensitive follow-up. A disabled button no-ops.
-        const estimateBtn = el("estimate-run");
-        if (base && estimateBtn && !estimateBtn.disabled) estimateBtn.click();
       });
     }
   }
