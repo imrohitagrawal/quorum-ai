@@ -5607,6 +5607,33 @@
     });
   }
 
+  // First-visit gate for the marketing landing (screen 01).
+  //
+  // The landing is the default "front door" ONLY for visitors who have not yet
+  // entered the workspace on this device; returning visitors boot straight into
+  // the composer (screen 02). The flag is a device-local UX preference — not
+  // auth/session state — so ``localStorage`` is the right store. Every access is
+  // guarded because ``localStorage`` throws in private-mode / storage-disabled
+  // browsers. On read failure we fail toward the workspace (return ``true``): we
+  // never want to nag a no-storage user with the landing on every reload, and
+  // the landing stays reachable for them via the visible "How it works" link.
+  const WORKSPACE_SEEN_KEY = "quorum.workspaceSeen";
+  function hasSeenWorkspace() {
+    try {
+      return window.localStorage.getItem(WORKSPACE_SEEN_KEY) === "1";
+    } catch (_) {
+      return true;
+    }
+  }
+  function markWorkspaceSeen() {
+    try {
+      window.localStorage.setItem(WORKSPACE_SEEN_KEY, "1");
+    } catch (_) {
+      // Best-effort: if we cannot persist, the only cost is the landing
+      // reappearing on the next load — harmless, and every CTA still works.
+    }
+  }
+
   // Slice 7 (01 Landing) — the marketing front door.
   //
   // HONESTY / WIRING contract:
@@ -5638,7 +5665,10 @@
     }
 
     // Every landing CTA leads here: back to the composer, textarea focused.
+    // Entering the workspace this way marks it "seen" so the first-visit gate
+    // in ``boot()`` sends this device straight to the composer next time.
     function goToComposer() {
+      markWorkspaceSeen();
       setView("composer");
       if (queryTextarea) queryTextarea.focus({ preventScroll: true });
     }
@@ -5780,6 +5810,13 @@
       const isCmdEnter = (event.metaKey || event.ctrlKey) && event.key === "Enter";
       if (isCmdEnter) {
         event.preventDefault();
+        // No-op on the marketing landing (screen 01): it has no run flow of its
+        // own — its CTAs route to the composer. Without this guard, a first-time
+        // visitor pressing Ctrl/Cmd+Enter on the landing would fire an empty
+        // ``startRun()`` and paint a QUERY_REQUIRED error banner over the pitch.
+        if (document.getElementById("main-content")?.dataset.activeView === "landing") {
+          return;
+        }
         // On the cost gate, Ctrl/Cmd+Enter confirms the estimate (unless
         // the confirm CTA is absent/disabled — e.g. the block band).
         if (gateActive) {
@@ -5856,10 +5893,25 @@
   }
 
   async function boot() {
-    // Slice 0 scaffold: start on the composer view. Later slices drive
-    // ``setView`` from the run lifecycle; for now it just asserts the
-    // initial state and no-ops if the view container is absent.
-    setView("composer");
+    // First-visit gate: show the marketing landing (screen 01) as the front
+    // door to first-time visitors, and boot returning visitors straight into
+    // the composer (screen 02). None of the boot helpers below call
+    // ``setView``, so the view chosen here is the one the user lands on. Every
+    // landing CTA marks the workspace as seen (see ``goToComposer``), so this
+    // branch takes the landing path at most once per device. We do NOT move
+    // focus to the landing heading here — on a fresh page load assistive tech
+    // already reads from the top, and forcing focus would paint a stray outline
+    // on the h1. (View-switch focus management lives in ``enterLanding``, which
+    // fires only on the user-initiated "How it works" click.)
+    setView(hasSeenWorkspace() ? "composer" : "landing");
+    // Hand view control back to the normal ``hidden`` mechanism now that
+    // setView has applied the correct initial view. The pre-paint gate (inline
+    // ``<head>`` script + critical CSS in workspace.html) forced the landing on
+    // first visit to avoid a flash of the composer; clearing it AFTER setView
+    // (which already set the matching ``hidden`` attributes) avoids any flash or
+    // reflow, and prevents the ``!important`` rules from trapping the composer
+    // hidden once a first-time visitor navigates into it.
+    document.documentElement.removeAttribute("data-first-visit");
     initThemeToggle();
     initLanding();
     initModelSlotSelection();

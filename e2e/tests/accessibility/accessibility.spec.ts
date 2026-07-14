@@ -5,6 +5,12 @@ import { test, expect } from "../../fixtures/test-data";
  */
 test.describe("Accessibility", () => {
   test.beforeEach(async ({ page }) => {
+    // These tests assert workspace (screen 02) content. Seed the first-visit
+    // gate's flag so boot lands on the composer directly, as a returning
+    // visitor would, rather than the marketing landing (screen 01).
+    await page.addInitScript(() => {
+      try { window.localStorage.setItem("quorum.workspaceSeen", "1"); } catch (_) {}
+    });
     await page.goto("/ui");
     await page.waitForLoadState("networkidle");
   });
