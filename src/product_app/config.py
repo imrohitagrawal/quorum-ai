@@ -67,29 +67,72 @@ class Settings(BaseSettings):
     soft_threshold_usd: float = 0.15
     hard_limit_usd: float = 0.25
 
-    # --- Cost estimation -------------------------------------------------
-    # Output tokens dominate real LLM bills. The estimate before this
-    # multiplier only counted input tokens, which produced a 22×
-    # under-estimate vs. the actual provider charge on the live demo.
-    # The multiplier is the expected output-to-input token ratio for
-    # the average model answer; 3.0 is a conservative industry
-    # rule-of-thumb. Operators can tune this per deployment via the
-    # COST_OUTPUT_TOKEN_MULTIPLIER env var.
-    cost_output_token_multiplier: float = 3.0
+    # --- Cost estimation (issue #16: realistic per-call token model) -----
+    # The pre-run estimate is a PURE LOCAL calculation — it makes no API
+    # call and spends no tokens. It prices a realistic token model per
+    # billed call (4 initial answers + 2 debate rounds + 1 synthesis)
+    # against the cached catalog rates. The old model priced only
+    # ``len(query_text)/4`` input tokens × an output multiplier, which
+    # ignored the fixed system-prompt overhead, the web-search context
+    # the ``:online`` suffix injects, and the debate/synthesis calls —
+    # producing a ~7.7× UNDER-estimate on a real live run (est $0.0016 vs
+    # measured $0.0123). These constants model the tokens each call
+    # actually carries; all are tunable per deployment via the matching
+    # env vars. They are deliberately calibrated slightly conservative so
+    # the estimate rarely falls BELOW the measured actual (the cost
+    # guardrail keys off the estimate and must fail safe).
+    #
+    # Grounding (real live run d7785cd8, 4 default models, all searching):
+    # observed prompt tokens/model 2277–2560 (≈ system + web-search +
+    # query) and output tokens/model 465–1152.
+    #: Fixed system-prompt overhead carried by every billed call (the
+    #: quorum / debate / synthesis instructions), in tokens.
+    cost_system_prompt_tokens: int = 350
+    #: Prompt tokens the ``:online`` web-search suffix injects into each
+    #: SEARCHING initial-answer call (retrieved passages). Applied per
+    #: slot only when that slot has search enabled; a search-disabled
+    #: slot (the cheaper, training-data-only path) omits it.
+    cost_web_search_context_tokens: int = 2000
+    #: Output-token floor for a single initial answer.
+    cost_initial_output_tokens: int = 700
+    #: How much each initial answer lengthens per token of query (longer,
+    #: richer questions elicit longer answers). Output tokens for an
+    #: initial answer = ``cost_initial_output_tokens + this × query_tokens``.
+    cost_output_tokens_per_query_token: float = 0.5
+    #: Output-token floor for one debate round (the typical, for the point
+    #: estimate). The debate model reads the four initial answers (a bounded
+    #: context) and emits a critique.
+    cost_debate_output_tokens: int = 400
+    #: Enforced per-round debate output CAP, used by the fail-safe
+    #: ``max_cost_usd`` bound so it is a true ceiling on the debate stage too
+    #: (the point estimate keeps the lower typical floor above). MUST stay in
+    #: sync with ``debate.DEBATE_ROUND_MAX_TOKENS`` — the value the live debate
+    #: call actually enforces.
+    cost_debate_output_tokens_cap: int = 700
+    #: Output-token floor for one synthesis section call (the reconciled
+    #: answer). Synthesis fans out into up to ``cost_synthesis_sections``
+    #: independent live calls, each re-sending the full context.
+    cost_synthesis_output_tokens: int = 800
 
-    # L3: debate and synthesis are LLM calls now (L4), so the estimate
-    # needs to price them too. ``cost_inner_call_multiplier`` scales
-    # the per-call inner cost; the per-call cost itself is
-    # ``max_output_rate × query_tokens × multiplier / 1000``. The
-    # result is capped at ``cost_inner_call_cap_usd`` so very long
-    # queries don't push the total estimate over the $0.25 hard limit
-    # on the default model mix. The default values land a 500–600-char
-    # research query in the existing ``$0.03–$0.30`` band and keep a
-    # 5K-char query in ``require_confirmation`` (≤ $0.25). Operators
-    # can tune both via ``COST_INNER_CALL_MULTIPLIER`` and
-    # ``COST_INNER_CALL_CAP_USD``.
-    cost_inner_call_multiplier: float = 1.5
-    cost_inner_call_cap_usd: float = 0.05
+    #: Number of independent synthesis section calls the pipeline can make
+    #: (``synthesis.SYNTHESIS_SECTION_MAX_TOKENS`` caps each). The realistic
+    #: point estimate models synthesis as a SINGLE call (the measured typical
+    #: is ~one section's worth); the fail-safe ``max_cost_usd`` bound prices
+    #: all ``cost_synthesis_sections`` so it stays a true worst-case ceiling.
+    cost_synthesis_sections: int = 5
+
+    #: Hard per-call output cap for the four initial answers, enforced as
+    #: ``max_tokens`` on the live call (the debate and synthesis calls are
+    #: already capped at 700 / 800). Without it, initial-answer output is
+    #: unbounded, so a verbose prompt on an expensive model mix can cost far
+    #: more than any pre-run estimate — defeating the cost guardrail. 2000 is
+    #: generous (~2× the largest answer observed in the live validation run,
+    #: 1152 tokens), so real answers are essentially never truncated, while a
+    #: pathological "write a 20,000-word report" request stays bounded. The
+    #: cost guardrail's fail-safe upper bound (``max_cost_usd``) prices the
+    #: initial-answer output at exactly this cap, so the bound is a true
+    #: ceiling on real cost.
+    initial_answer_max_tokens: int = 2000
 
     # --- LLM-driven debate + synthesis ----------------------------------
     # Both stages now call a live model. Defaults: Haiku 4.5 for the

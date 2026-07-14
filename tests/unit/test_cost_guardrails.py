@@ -34,11 +34,27 @@ def test_normal_cost_query_is_allowed() -> None:
 
 
 def test_high_cost_query_requires_matching_confirmation() -> None:
-    model_slots = validate_model_slots(DEFAULT_MODEL_IDS)
+    # issue #16: the guardrail keys off the fail-safe ``max_cost_usd`` bound
+    # (worst-case, initial output priced at the enforced cap), not the point
+    # estimate. The CONFIRM band (bound in (0.15, 0.25]) is a narrow window —
+    # cheap mixes bound well under $0.15, and any opus-tier model jumps the
+    # bound over $0.25. One opus slot + three cheap slots lands the bound at
+    # ~$0.21 (CONFIRM) while the point estimate is only ~$0.10 — so this also
+    # proves the rail evaluates the bound, not the (ALLOW-band) point estimate.
+    model_slots = validate_model_slots(
+        [
+            "anthropic/claude-opus-4",
+            "openai/gpt-4o-mini",
+            "deepseek/deepseek-chat-v3.1",
+            "google/gemini-2.5-flash",
+        ]
+    )
     estimate = cost_estimation_service.estimate(
-        query_text="x" * 5_200,
+        query_text="Compare frontier model safety features.",
         model_slots=model_slots,
     )
+    assert estimate.max_cost_usd is not None
+    assert estimate.estimated_cost_usd < Decimal("0.15") < estimate.max_cost_usd
 
     missing_decision = cost_estimation_service.evaluate_confirmation(
         estimate=estimate,
@@ -98,12 +114,14 @@ def test_cost_estimate_is_quantized_to_four_decimal_places() -> None:
 
 
 def test_cost_estimate_includes_output_tokens_in_band() -> None:
-    """L3 regression: the input-only estimate was ~$0.02 for a 500-char
-    research question; the actual charge was ~$0.20 (10× off, in the
-    "model is misleading the user" zone). With output-token pricing
-    and a 3× output multiplier, the same query lands in the
-    ``$0.10–$0.30`` band, which is within the plan's ±25% accuracy
-    target on a typical research query.
+    """issue #16 regression: the estimate must price the FULL per-call token
+    model — system-prompt overhead + injected web-search context + realistic
+    output floors + the debate/synthesis calls — not just ``len(query)/4``
+    input tokens. The old query-length-only model priced a 500-char research
+    question at ~$0.001–0.002; the real pipeline (four searching answers +
+    two debate rounds + synthesis) on the default mix costs ~$0.024. The
+    assertion pins the estimate an ORDER OF MAGNITUDE above the old input-only
+    figure and inside a realistic band, without depending on exact rates.
     """
     model_slots = validate_model_slots(DEFAULT_MODEL_IDS)
     # Realistic research prompt: ~500 chars, including a couple of
@@ -126,15 +144,19 @@ def test_cost_estimate_includes_output_tokens_in_band() -> None:
     )
 
     cost = estimate.estimated_cost_usd
-    # The pre-L3 estimate was ~$0.01–$0.02 for this query; the actual
-    # provider charge was ~$0.20. The new estimate (input + output +
-    # debate/synthesis fixed) must be in the same order of magnitude
-    # as the actual charge, not the input-only baseline. The band
-    # $0.03–$0.30 captures the realistic range across the default
-    # model mix without depending on the exact rate-table values.
-    assert Decimal("0.03") <= cost <= Decimal("0.30"), (
-        f"expected estimate in $0.03–$0.30 band for a typical 500-char "
+    # The old input-only estimate was ~$0.001–$0.002 for this query. The new
+    # token model puts it at ~$0.024 — well over 10× the input-only figure and
+    # in a realistic band for the default (cheap) mix. The band $0.015–$0.30
+    # captures the realistic range without depending on exact rate-table values.
+    assert Decimal("0.015") <= cost <= Decimal("0.30"), (
+        f"expected estimate in $0.015–$0.30 band for a typical 500-char "
         f"research query on the default model mix; got ${cost}"
+    )
+    # And specifically: an order of magnitude above the old input-only estimate
+    # (which never cleared $0.005 for a query this short).
+    assert cost > Decimal("0.010"), (
+        f"estimate ${cost} looks input-only again — the debate/synthesis and "
+        "web-search terms must dominate a real research query"
     )
 
 

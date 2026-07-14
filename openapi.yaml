@@ -467,6 +467,12 @@ components:
             type: string
           type: array
           title: Reasons
+        max_cost_usd:
+          anyOf:
+          - type: string
+            pattern: ^(?!^[-+.]*$)[+-]?0*\d*\.?\d*$
+          - type: 'null'
+          title: Max Cost Usd
         breakdown:
           anyOf:
           - $ref: '#/components/schemas/CostBreakdown'

@@ -25,14 +25,19 @@ const BY_MODEL = [
   { model_id: "anthropic/claude-haiku-4.5", display_name: "Claude Haiku 4.5", usd: "0.062", kind: "model" },
   { model_id: "google/gemini-2.5-flash", display_name: "Gemini 2.5 Flash", usd: "0.031", kind: "model" },
   { model_id: "deepseek/deepseek-v3.1", display_name: "DeepSeek V3.1", usd: "0.039", kind: "model" },
-  { model_id: "synthesis", display_name: "Synthesis writer", usd: "0.024", kind: "synthesis" },
+  { model_id: "synthesis", display_name: "Debate + synthesis", usd: "0.024", kind: "synthesis" },
 ];
 const BY_STAGE = [
   { stage: "initial_answers", usd: "0.120" }, { stage: "debate", usd: "0.046" }, { stage: "synthesis", usd: "0.024" },
 ];
 const breakdown = (total = "0.190") => ({ by_model: BY_MODEL, by_stage: BY_STAGE, total });
 const costEstimate = (total: string, action: string) => ({
-  estimated_cost_usd: total, currency: "USD", threshold_action: action, confirmation_token: "tok-abc123",
+  estimated_cost_usd: total,
+  // issue #16: the fail-safe "up to $Y" bound the guardrail evaluates. Set a
+  // clear worst-case above the point estimate so the confirm-band range renders
+  // the real point→bound span (0.190 → ~0.23).
+  max_cost_usd: (Number(total) * 1.2).toFixed(4),
+  currency: "USD", threshold_action: action, confirmation_token: "tok-abc123",
   reasons: action === "block" ? ["Estimated spend exceeds the $0.25 hard cap."] : [], breakdown: breakdown(total),
 });
 const estimateResp = (total: string, action: string) => ({
@@ -158,6 +163,9 @@ test.describe("UI parity — behaviour", () => {
     await expect(page.locator("#gate-block-shorten")).toBeHidden();
     await expect(page.locator("#gate-confirm")).toContainText(/Confirm & run/);
     await expect(page.locator("#cost-gate-total")).toContainText("$0.19");
+    // The range shows the REAL point→bound span (typical $0.19 → up to ~$0.23),
+    // not a fabricated ±band, so the confirmation is legible.
+    await expect(page.locator("#cost-gate-range")).toContainText("$0.23");
   });
 
   test("cost-gate block band shows recovery buttons; confirm hidden", async ({ page }) => {
@@ -468,11 +476,14 @@ test.describe("UI parity — behaviour", () => {
     }
   });
 
-  test("item 3 (honesty) — a paid model never renders as $0.000; sub-cent shows '<$0.001'", async ({ page }) => {
+  test("item 3 (honesty) — a paid model never renders as $0.000 or a free-looking figure", async ({ page }) => {
     await boot(page);
-    // A very short question: the honest per-model estimate is a positive value
-    // that rounds below the 3-decimal display resolution. It must read "<$0.001",
-    // NEVER "~$0.000" (which would claim a paid model is free).
+    // issue #16: the per-model estimate now prices the injected web-search
+    // context (~2,000 prompt tokens/slot), so even a tiny question is ~$0.001
+    // per slot — no longer sub-cent. The honesty guarantee is unchanged: a
+    // paid model is NEVER shown as free ("~$0.000") and always renders a real
+    // positive figure (the "<$0.001" marker survives for the rare truly
+    // sub-cent slot, but is no longer required for a tiny query).
     await page.getByRole("textbox").first().fill("hi there?");
     const cells = page.locator("#model-inputs .model-slot-estimate");
     await expect(cells).toHaveCount(4);
@@ -481,8 +492,6 @@ test.describe("UI parity — behaviour", () => {
       expect(t, `slot rendered a free-looking figure: ${t}`).not.toBe("~$0.000");
       expect(t, `unexpected slot estimate: ${t}`).toMatch(/^(<\$0\.001|~\$\d+\.\d{3})$/);
     }
-    // At least one slot is the honest sub-cent marker for this tiny query.
-    expect((await cells.allTextContents()).map((t) => t.trim())).toContain("<$0.001");
   });
 
   test("item 3 (recompute) — swapping a model slot recomputes that slot's estimate", async ({ page }) => {

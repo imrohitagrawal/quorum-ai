@@ -1139,59 +1139,49 @@
 
   // Honest per-slot pre-run cost estimate (design-comp parity, item 3).
   //
-  // Mirrors the server's ``by_model`` model-row arithmetic EXACTLY
-  // (``CostEstimationService._estimate_breakdown``): each row is the model's own
-  // initial-answer input+output charge plus an equal share of the query/
-  // processing overhead and of the two debate rounds. Prices come from the
-  // catalog island; the shared scalars come from ``window.COST_MODEL`` — there
-  // are no hard-coded figures here, and the parity e2e suite cross-checks this
-  // against the real ``/v1/query-runs/estimate`` response so any server-side
-  // formula change that this fails to track is caught. Returns one USD number
-  // per slot, or ``null`` per slot when there is no query yet (nothing to price).
+  // Mirrors the server's per-slot ``by_model`` row EXACTLY
+  // (``CostEstimationService._estimate_breakdown``, issue #16): each row is that
+  // slot's own initial-answer charge — ``input × prompt_tokens + output ×
+  // output_tokens`` — where the prompt is the fixed system-prompt overhead plus
+  // the injected web-search context plus the query, and the output is a floor
+  // that grows modestly with query length. The debate + synthesis calls are a
+  // SEPARATE by_model row (server-only, on dedicated models) that the client
+  // renders from the server breakdown, not from these scalars — so this
+  // function prices only the four initial answers. Prices come from the catalog
+  // island; the scalars come from ``window.COST_MODEL`` (single source of
+  // truth, no hard-coded figures). The parity e2e suite cross-checks this
+  // against the real ``/v1/query-runs/estimate`` by_model rows, so any drift is
+  // caught. Returns one USD number per slot, or ``null`` when there is no query.
   function computePerSlotEstimatesUsd(modelIds, queryText) {
     const cm = window.COST_MODEL;
     const chars = (queryText || "").length;
     if (!cm || chars === 0) return modelIds.map(() => null);
 
-    const multiplier = Number(cm.output_token_multiplier);
-    const innerMultiplier = Number(cm.inner_call_multiplier);
-    const innerCap = Number(cm.inner_call_cap_usd);
-    const queryCostPer1kChars = Number(cm.query_cost_per_1k_chars);
-    const perCharProcessing = Number(cm.per_char_processing);
+    const charsPerToken = Number(cm.chars_per_token);
+    const systemTokens = Number(cm.system_prompt_tokens);
+    const searchTokens = Number(cm.web_search_context_tokens);
+    const initialOutputTokens = Number(cm.initial_output_tokens);
+    const outputPerQueryToken = Number(cm.output_tokens_per_query_token);
     const defaultInput = Number(cm.default_input_price_per_1k);
     const defaultOutput = Number(cm.default_output_price_per_1k);
 
     const priceFor = (modelId) =>
       catalogPriceIndex.get(modelId) || { input: defaultInput, output: defaultOutput };
 
-    const inputTokens = chars / 4; // ~4 chars/token, matching the server
-    const outputTokens = inputTokens * multiplier;
-    const queryCost = queryCostPer1kChars * (chars / 1000);
-    const processingCost = perCharProcessing * chars;
+    const queryTokens = chars / charsPerToken;
+    const outputTokens = initialOutputTokens + outputPerQueryToken * queryTokens;
+    // The composer pre-run view assumes web search is ON for every slot — the
+    // server default (``ModelSlot.search=True``) when the estimate request omits
+    // ``slot_search``, which this composer does. A searching slot's prompt
+    // carries the injected web-search context; mirror that here.
+    const promptTokens = systemTokens + searchTokens + queryTokens;
 
-    const initial = modelIds.map((modelId) => {
+    return modelIds.map((modelId) => {
       const price = priceFor(modelId);
       return (
-        price.input * (inputTokens / 1000) + price.output * (outputTokens / 1000)
+        price.input * (promptTokens / 1000) + price.output * (outputTokens / 1000)
       );
     });
-    // Mirror the server's ``max(output rates, default=DEFAULT_OUTPUT)``: the
-    // default is the fallback for an EMPTY slot list only — with slots present
-    // it is the true max of the selected models' output rates. Seeding the
-    // reduce with ``defaultOutput`` (0.002) would instead FLOOR the rate at
-    // 0.002 whenever every selected model is cheaper (e.g. the default mix),
-    // overstating the debate share. Seed with 0 (all rates are positive) so the
-    // reduce returns the real max; fall back to the default only when empty.
-    const maxOutputRate = modelIds.length
-      ? modelIds.reduce((max, modelId) => Math.max(max, priceFor(modelId).output), 0)
-      : defaultOutput;
-    const innerPerCall = (innerMultiplier * maxOutputRate * outputTokens) / 1000;
-    const innerCallCost = Math.min(innerPerCall * 3, innerCap);
-    const stageInner = innerCallCost / 3;
-    const base = queryCost + processingCost;
-    const baseShare = base / 4;
-    const debateShare = stageInner / 2;
-    return initial.map((initialCost) => initialCost + baseShare + debateShare);
   }
 
   // Recompute the pre-run per-slot estimates from the current query + model
@@ -4292,8 +4282,9 @@
   // Partition a ``cost_estimate.breakdown`` into the two labelled row
   // lists the gate renders — by model AND by stage — plus the shared
   // total. Pure (no DOM, no closures) so it is unit-testable in node.
-  //   * by_model: the ``kind === "synthesis"`` row renders as "Synthesis
-  //     writer"; every other row uses its ``display_name``.
+  //   * by_model: the ``kind === "synthesis"`` row renders as "Debate +
+  //     synthesis" (it folds in the two debate rounds too — issue #16);
+  //     every other row uses its ``display_name``.
   //   * by_stage: the server ``stage`` enum maps to friendly labels; an
   //     unknown stage falls back to its raw key.
   // Both lists re-sum to ``total`` by construction (the reconciliation
@@ -4313,7 +4304,7 @@
       : [];
     return {
       byModel: byModelRows.map((row) => ({
-        label: row.kind === "synthesis" ? "Synthesis writer" : row.display_name,
+        label: row.kind === "synthesis" ? "Debate + synthesis" : row.display_name,
         usd: row.usd,
       })),
       byStage: byStageRows.map((row) => ({
@@ -4448,8 +4439,13 @@
         gateReason.textContent = `${COPY_004_COST_BLOCK}${serverReasons}`;
       }
       if (gateBlockNote) {
+        // The guardrail blocks on the WORST-CASE (max_cost_usd), which can
+        // exceed the $0.25 cap even when the typical estimate shown above is
+        // under it — so the note names the worst case, not the point estimate.
+        const maxCost = Number(ce.max_cost_usd);
+        const ceiling = Number.isFinite(maxCost) && maxCost > total ? maxCost : total;
         gateBlockNote.textContent =
-          `The itemized estimate above (${gateUsd(total)}) is over the ` +
+          `This run's worst-case cost (up to ${gateUsd(ceiling)}) is over the ` +
           "$0.25 hard cap and no override exists in this release. Nothing " +
           "ran and nothing was charged.";
         gateBlockNote.hidden = false;
@@ -4480,9 +4476,20 @@
     // both endpoints render at whole-cent precision (no false sub-cent).
     if (gateRangeWrap) gateRangeWrap.hidden = false;
     if (gateRange) {
-      const lo = total * (1 - PLANNING_RANGE_PCT);
-      const hi = Math.min(total * (1 + PLANNING_RANGE_PCT), COST_HARD_LIMIT_USD);
-      gateRange.textContent = `${gateUsd2dp(lo)}–${gateUsd2dp(hi)}`;
+      // Show the REAL server range: the typical point estimate → the fail-safe
+      // "up to" ceiling (``max_cost_usd``) the guardrail actually evaluated.
+      // This makes confirmation legible ("why confirm a $0.10 run?" → because
+      // the worst case is $0.22). Fall back to the illustrative ±planning band
+      // only when an (older) response omits ``max_cost_usd``.
+      const maxCost = Number(ce.max_cost_usd);
+      if (Number.isFinite(maxCost) && maxCost > total) {
+        const hi = Math.min(maxCost, COST_HARD_LIMIT_USD);
+        gateRange.textContent = `${gateUsd2dp(total)}–${gateUsd2dp(hi)}`;
+      } else {
+        const lo = total * (1 - PLANNING_RANGE_PCT);
+        const hi = Math.min(total * (1 + PLANNING_RANGE_PCT), COST_HARD_LIMIT_USD);
+        gateRange.textContent = `${gateUsd2dp(lo)}–${gateUsd2dp(hi)}`;
+      }
     }
     if (gateBandLabel) {
       gateBandLabel.textContent = "Cost review — your confirmation required";

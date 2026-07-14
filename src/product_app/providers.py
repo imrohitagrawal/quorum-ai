@@ -602,11 +602,19 @@ class ProviderExecutionService:
         # a ``provider_notice`` that tells the user web search was
         # disabled. This is the "cheaper, faster, training-data only"
         # path some users will pick for cost control.
+        # Cap initial-answer output (like debate/synthesis already are). Without
+        # this, initial-answer output is unbounded, so a verbose prompt on an
+        # expensive model mix can bill far above any pre-run estimate and slip
+        # the cost guardrail. The cap is generous (see
+        # ``settings.initial_answer_max_tokens``) so real answers are not
+        # truncated in practice.
+        max_tokens = settings.initial_answer_max_tokens
         if not model_slot.search:
             return self._post_openrouter(
                 openrouter_key=openrouter_key,
                 query_text=query_text,
                 model_id=bare_model_id,
+                max_tokens=max_tokens,
             )
 
         online_model_id = f"{bare_model_id}:online"
@@ -616,6 +624,7 @@ class ProviderExecutionService:
             openrouter_key=openrouter_key,
             query_text=query_text,
             model_id=online_model_id,
+            max_tokens=max_tokens,
         )
         if online_result is _SEARCH_REJECTED:
             #  re-try without the ``:online`` suffix.
@@ -623,6 +632,7 @@ class ProviderExecutionService:
                 openrouter_key=openrouter_key,
                 query_text=query_text,
                 model_id=bare_model_id,
+                max_tokens=max_tokens,
             )
         return online_result
 
@@ -636,10 +646,10 @@ class ProviderExecutionService:
         max_tokens: int | None = None,
     ) -> LiveProviderResult | _SearchRejected | None:
         # ``_post_openrouter`` accepts a custom system prompt and
-        # ``max_tokens`` cap. The debate and synthesis services use
-        # this overload to constrain token spend per call; the search
-        # path uses the defaults (no cap, generic "source-backed"
-        # system prompt).
+        # ``max_tokens`` cap. The debate and synthesis services pass their
+        # own caps; the initial-answer search path now passes
+        # ``settings.initial_answer_max_tokens`` too (previously uncapped).
+        # The default here stays ``None`` for any other caller.
         system_message = system_prompt or (
             "Answer the user query with explicit source-backed reasoning. "
             "Include citations or source URLs where possible, and explain "

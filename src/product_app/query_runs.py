@@ -27,6 +27,7 @@ stuck in ``RUNNING`` forever.
 from __future__ import annotations
 
 import contextlib
+import logging
 import time as _time_module
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
@@ -84,6 +85,8 @@ from product_app.synthesis import (
 )
 
 router = APIRouter(prefix="/v1/query-runs", tags=["query-runs"])
+
+logger = logging.getLogger(__name__)
 
 
 #: Terminal-state TTL for finished runs. The repository evicts runs older
@@ -1308,9 +1311,46 @@ def _execute_query_run(query_run_id: UUID, account_id: UUID) -> None:
         stage_state=StageState.COMPLETED,
         detail="Synthesis completed.",
     )
+    # issue #16 telemetry: log the estimate/actual accuracy ONCE, at
+    # completion. This is the signal that tells us whether the pre-run
+    # estimate's token model tracks reality over live traffic, so the
+    # ``cost_*_tokens`` constants can be recalibrated (and a regression
+    # caught) without re-running the whole validation by hand.
+    _log_estimate_accuracy(query_run_id)
 
 
 # -- helpers -----------------------------------------------------------------
+
+
+def _log_estimate_accuracy(query_run_id: UUID) -> None:
+    """Emit the estimate-vs-measured ratio for a completed run (issue #16).
+
+    Best-effort and completely side-effect-free beyond a log line: any
+    failure here must never affect the run's terminal state, so the whole
+    body is guarded. Only runs whose actual cost is genuinely ``measured``
+    (the strict-honesty gate in :func:`_actual_cost` passed) carry a
+    meaningful ratio; an ``estimated`` receipt is the estimate standing in
+    for itself (ratio 1.0 by construction) and is not worth logging.
+    """
+    try:
+        query_run = query_run_repository.get(query_run_id)
+        if query_run is None:
+            return
+        estimated = query_run.cost_estimate.estimated_cost_usd
+        actual, _breakdown, cost_source = _actual_cost(query_run)
+        if cost_source != "measured" or actual <= 0:
+            return
+        ratio = float(estimated / actual)
+        logger.info(
+            "cost_estimate_accuracy query_run_id=%s estimated_usd=%s "
+            "measured_usd=%s estimate_over_actual_ratio=%.3f",
+            query_run_id,
+            estimated,
+            actual,
+            ratio,
+        )
+    except Exception as exc:  # noqa: BLE001 — telemetry must never crash a run
+        logger.debug("cost_estimate_accuracy logging failed: %s", exc)
 
 
 def _validated_model_slots(

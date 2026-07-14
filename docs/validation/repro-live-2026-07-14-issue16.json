@@ -1,0 +1,444 @@
+{
+  "query_run_id": "4735b2cb-33c4-4264-9600-2d2565c1a1a2",
+  "status": "completed",
+  "correlation_id": "qr_4735b2cb33c4426496002d2565c1a1a2",
+  "model_slots": [
+    {
+      "slot_number": 1,
+      "model_id": "openai/gpt-4o-mini",
+      "search": true
+    },
+    {
+      "slot_number": 2,
+      "model_id": "anthropic/claude-3-haiku",
+      "search": true
+    },
+    {
+      "slot_number": 3,
+      "model_id": "google/gemini-2.5-flash-lite",
+      "search": true
+    },
+    {
+      "slot_number": 4,
+      "model_id": "deepseek/deepseek-chat-v3.1",
+      "search": true
+    }
+  ],
+  "cost_estimate": {
+    "estimated_cost_usd": "0.0155",
+    "currency": "USD",
+    "threshold_action": "allow",
+    "confirmation_token": "1784025840.5ff0684b8c8adb1d03be183b48f99fe8.6852ffe5704467d29ca4895d66e0f62af7f87eb8e16ced2b1462fc8111fb598c",
+    "reasons": [
+      "Worst-case cost is within the no-confirmation band."
+    ],
+    "max_cost_usd": "0.0307",
+    "breakdown": {
+      "by_model": [
+        {
+          "model_id": "openai/gpt-4o-mini",
+          "display_name": "GPT-4o mini",
+          "usd": "0.0008",
+          "kind": "model"
+        },
+        {
+          "model_id": "anthropic/claude-3-haiku",
+          "display_name": "Claude 3 Haiku",
+          "usd": "0.0015",
+          "kind": "model"
+        },
+        {
+          "model_id": "google/gemini-2.5-flash-lite",
+          "display_name": "Gemini 2.5 Flash Lite",
+          "usd": "0.0005",
+          "kind": "model"
+        },
+        {
+          "model_id": "deepseek/deepseek-chat-v3.1",
+          "display_name": "DeepSeek Chat v3.1",
+          "usd": "0.0013",
+          "kind": "model"
+        },
+        {
+          "model_id": "synthesis",
+          "display_name": "Debate + synthesis",
+          "usd": "0.0114",
+          "kind": "synthesis"
+        }
+      ],
+      "by_stage": [
+        {
+          "stage": "initial_answers",
+          "usd": "0.0040"
+        },
+        {
+          "stage": "debate_round_1",
+          "usd": "0.0052"
+        },
+        {
+          "stage": "debate_round_2",
+          "usd": "0.0052"
+        },
+        {
+          "stage": "synthesis",
+          "usd": "0.0011"
+        }
+      ],
+      "total": "0.0155"
+    }
+  },
+  "elapsed_time_ms": 126297,
+  "failed_steps": [],
+  "missing_steps": [],
+  "progress": {
+    "current_stage": "estimate",
+    "stages": [
+      {
+        "stage": "estimate",
+        "state": "completed",
+        "detail": "Estimate accepted."
+      },
+      {
+        "stage": "initial_answers",
+        "state": "completed",
+        "detail": "Initial model answers collected."
+      },
+      {
+        "stage": "debate_round_1",
+        "state": "completed",
+        "detail": "Debate round 1 completed."
+      },
+      {
+        "stage": "debate_round_2",
+        "state": "completed",
+        "detail": "Debate round 2 completed."
+      },
+      {
+        "stage": "synthesis",
+        "state": "completed",
+        "detail": "Synthesis completed."
+      }
+    ]
+  },
+  "partial_failure_notice": null,
+  "provider_failure_notices": [
+    "Live answer returned without citation annotations; coverage may be below the 80% target because :online web search was unavailable."
+  ],
+  "result": {
+    "model_answers": [
+      {
+        "slot_number": 1,
+        "model_id": "openai/gpt-4o-mini",
+        "display_name": "GPT-4o mini",
+        "answer_text": "In the SaaS industry, retention is critical for maintaining revenue and ensuring long-term growth. Here are some key metrics for measuring customer retention:\n\n1. **Customer Retention Rate (CRR)**: This measures the percentage of customers retained over a specific period. It helps gauge how effective a company is at keeping its customers. The formula is:\n   \\[\n   \\text{Customer Retention Rate} = \\left( \\frac{\\text{Customers at End of Period} - \\text{New Customers Acquired}}{\\text{Customers at Start of Period}} \\right) \\times 100\n   \\]\n\n2. **Net Revenue Retention (NRR)**: NRR provides insights into how much revenue is retained from existing customers after accounting for churn, downgrades, and upgrades. A NRR greater than 100% indicates that expansion revenue exceeds losses from churn, signifying strong product value. The formula is:\n   \\[\n   \\text{NRR} = \\left( \\frac{\\text{Starting MRR} - \\text{Churn MRR} + \\text{Expansion MRR}}{\\text{Starting MRR}} \\right) \\times 100\n   \\]\n\n3. **Customer Churn Rate**: This metric looks at the percentage of customers that stop using the service during a specific period. It's a direct indicator of customer loss and is critical for understanding retention challenges. The formula is:\n   \\[\n   \\text{Customer Churn Rate} = \\left( \\frac{\\text{Customers Lost in Period}}{\\text{Customers at Start of Period}} \\right) \\times 100\n   \\]\n\n4. **Revenue Churn Rate**: Similar to customer churn, this metric measures the lost revenue due to churned customers. It gives a more nuanced view of the financial impact of churn. The formula is:\n   \\[\n   \\text{Revenue Churn Rate} = \\left( \\frac{\\text{Lost Revenue in Period}}{\\text{Revenue at Start of Period}} \\right) \\times 100\n   \\]\n\n5. **Logo Retention Rate**: This focuses on the number of unique customers (or \"logos\") retained over a period, which can differ from customer retention if companies have multiple subscriptions. It reflects account-level engagement and performance. The formula is:\n   \\[\n   \\text{Logo Retention Rate} = \\left( \\frac{\\text{Retained Logos}}{\\text{Base Logos}} \\right) \\times 100\n   \\]\n\n6. **Gross Revenue Retention (GRR)**: This metric measures the percentage of recurring revenue retained from the existing customer base, excluding any upsells or expansions. GRR is useful for assessing the stability of revenue streams. The formula is:\n   \\[\n   \\text{GRR} = \\left( \\frac{\\text{Retained Revenue} - \\text{Churned Revenue}}{\\text{Total Revenue at Start}} \\right) \\times 100\n   \\]\n\n7. **Customer Lifetime Value (CLV)**: While not solely a retention metric, CLV gives insights into the total revenue a business can expect from a customer throughout their relationship. Higher CLV indicates successful retention strategies.\n\nThese metrics together provide a comprehensive overview of how well a SaaS business retains its customers and the revenue generated from them, helping to identify areas for improvement and optimize growth strategies. For more in-depth details, refer to resources from [Stripe](https://stripe.com/en-ca/resources/more/essential-saas-metrics) and [Paddle](https://www.paddle.com/blog/10-essential-saas-customer-retention-metrics).",
+        "sources": [
+          {
+            "title": "Stripe",
+            "url": "https://stripe.com/en-ca/resources/more/essential-saas-metrics",
+            "provider": "openrouter_search",
+            "is_fallback": false
+          },
+          {
+            "title": "Paddle",
+            "url": "https://www.paddle.com/blog/10-essential-saas-customer-retention-metrics",
+            "provider": "openrouter_search",
+            "is_fallback": false
+          }
+        ],
+        "provider_attempt_order": [
+          "openrouter_search"
+        ],
+        "provider_path": "openrouter_search",
+        "fallback_used": false,
+        "status": "completed",
+        "latency_ms": 16334,
+        "citation_coverage": {
+          "material_claim_count": 16,
+          "cited_claim_count": 1,
+          "coverage_ratio": "0.06",
+          "target_ratio": "0.80",
+          "target_met": false
+        },
+        "error_code": null,
+        "provider_notice": null,
+        "token_usage": {
+          "prompt_tokens": 2277,
+          "completion_tokens": 756,
+          "total_tokens": 3033
+        }
+      },
+      {
+        "slot_number": 2,
+        "model_id": "anthropic/claude-3-haiku",
+        "display_name": "Claude 3 Haiku",
+        "answer_text": "Based on the information gathered from the web search results, the key metrics for SaaS retention include:\n\n1. **Net Revenue Retention (NRR)**: This measures the percentage of revenue retained from existing customers, accounting for churn, contraction, and expansion. NRR above 100% indicates that expansion revenue more than offsets churn, a strong signal of product value and growth potential.\n\n[stripe.com](https://stripe.com/resources/more/essential-saas-metrics), [paddle.com](https://www.paddle.com/blog/10-essential-saas-customer-retention-metrics), [damien-singh.com](https://damien-singh.com/blog/saas-retention-metrics)\n\n2. **Gross Revenue Retention (GRR)**: This metric focuses solely on retained revenue, excluding any expansion. It provides a measure of the underlying stability of the business.\n\n[damien-singh.com](https://damien-singh.com/blog/saas-retention-metrics)\n\n3. **Customer Churn Rate**: The percentage of customers that discontinue using the product or service over a given period. A high customer churn rate can negatively impact revenue and growth.\n\n[stripe.com](https://stripe.com/resources/more/essential-saas-metrics), [paddle.com](https://www.paddle.com/blog/10-essential-saas-customer-retention-metrics)\n\n4. **Revenue Churn Rate**: The percentage of revenue lost due to customers cancelling their subscriptions or downgrading their plans. This provides a more accurate picture of the business's financial performance and growth than the customer churn rate alone.\n\n[stripe.com](https://stripe.com/resources/more/essential-saas-metrics), [paddle.com](https://www.paddle.com/blog/10-essential-saas-customer-retention-metrics)\n\n5. **Renewal Rate**: The percentage of customers that renew their subscription or continue using the service. A high renewal rate indicates a healthy, loyal customer base.\n\n[paddle.com](https://www.paddle.com/blog/10-essential-saas-customer-retention-metrics)\n\n6. **Customer Lifetime Value (CLV)**: The estimated revenue a customer will generate over the lifetime of their relationship with the company. This metric helps assess the long-term value of customer relationships.\n\n[paddle.com](https://www.paddle.com/blog/10-essential-saas-customer-retention-metrics)\n\n7. **Net Promoter Score (NPS)**: A measure of customer loyalty and satisfaction, calculated by subtracting the percentage of detractors from the percentage of promoters.\n\n[paddle.com](https://www.paddle.com/blog/10-essential-saas-customer-retention-metrics)\n\nThese metrics provide a comprehensive view of customer retention and the long-term sustainability of a SaaS business.",
+        "sources": [
+          {
+            "title": "stripe.com",
+            "url": "https://stripe.com/resources/more/essential-saas-metrics",
+            "provider": "openrouter_search",
+            "is_fallback": false
+          },
+          {
+            "title": "paddle.com",
+            "url": "https://www.paddle.com/blog/10-essential-saas-customer-retention-metrics",
+            "provider": "openrouter_search",
+            "is_fallback": false
+          },
+          {
+            "title": "damien-singh.com",
+            "url": "https://damien-singh.com/blog/saas-retention-metrics",
+            "provider": "openrouter_search",
+            "is_fallback": false
+          }
+        ],
+        "provider_attempt_order": [
+          "openrouter_search"
+        ],
+        "provider_path": "openrouter_search",
+        "fallback_used": false,
+        "status": "completed",
+        "latency_ms": 7752,
+        "citation_coverage": {
+          "material_claim_count": 13,
+          "cited_claim_count": 1,
+          "coverage_ratio": "0.08",
+          "target_ratio": "0.80",
+          "target_met": false
+        },
+        "error_code": null,
+        "provider_notice": null,
+        "token_usage": {
+          "prompt_tokens": 2636,
+          "completion_tokens": 654,
+          "total_tokens": 3290
+        }
+      },
+      {
+        "slot_number": 3,
+        "model_id": "google/gemini-2.5-flash-lite",
+        "display_name": "Gemini 2.5 Flash Lite",
+        "answer_text": "To measure SaaS retention, businesses typically track several key metrics that provide insights into customer loyalty, satisfaction, and the company's ability to generate recurring revenue. These metrics can be broadly categorized, and some of the most important ones include:\n\n*   **Customer Churn Rate:** This metric measures the percentage of customers who stop using a product or service during a specific period. A high customer churn rate can indicate issues with customer experience, product pricing, or customer service. It's calculated by dividing the number of customers lost by the total number of customers at the beginning of the period. For example, if a company starts with 2,000 customers and loses 200 in a month, the customer churn rate is 10% [stripe.com].\n\n*   **Revenue Churn Rate:** Unlike customer churn, revenue churn focuses on the loss of revenue rather than the loss of customers. It's typically expressed as a percentage of revenue lost due to subscriptions being cancelled or downgraded. This metric offers a more direct view of the financial impact of customer attrition [stripe.com]. A common way to calculate it is by dividing the total revenue lost from churned customers in a period by the total recurring revenue at the beginning of that period [stripe.com]. For instance, losing $10,000 in revenue from churned customers when starting with $100,000 in recurring revenue results in a 10% revenue churn rate [stripe.com].\n\n*   **Net Revenue Retention (NRR):** NRR, also known as dollar retention, is a crucial metric that tracks the percentage of revenue retained from existing customers over a given period. It accounts for revenue lost due to churn and downgrades (contraction), as well as revenue gained from upgrades and cross-sells (expansion) [stripe.com]. A high NRR indicates that a company is not only retaining its existing customers but also growing the revenue generated from them sustainably [stripe.com]. NRR above 100% signifies that expansion revenue outweighs churn, which is a strong indicator of product value and growth potential sought by investors [damien-singh.com]. It is calculated as (Retained Revenue / Base Recurring Revenue) x 100 [stripe.com].\n\n*   **Logo Retention:** This metric measures the percentage of companies (or \"logos\") that continue to pay for a SaaS product or service over a specific period. It's similar to customer retention but focuses on unique companies rather than individual users, allowing businesses to track the performance of key accounts [stripe.com]. The formula is (Retained Logos / Base Logos) x 100 [stripe.com]. For example, if a SaaS business starts with 400 companies and ends with 300, its logo retention rate is 75% [stripe.com].\n\n*   **Gross Revenue Retention (GRR):** GRR measures the revenue retained from existing customers, specifically excluding any expansion revenue. It focuses on the underlying stability of the business and indicates how consistently customers are deriving value from the product [damien-singh.com].\n\nIn addition to these core metrics, other important SaaS retention metrics include Customer Lifetime Value (LTV), Customer Retention Rate, and Renewal Rate [stripe.com, paddle.com]. Analyzing retention through methods like cohort analysis, which groups users by shared starting points, can provide deeper insights into evolving retention patterns over time [damien-singh.com].",
+        "sources": [],
+        "provider_attempt_order": [
+          "openrouter_search"
+        ],
+        "provider_path": "openrouter_search",
+        "fallback_used": false,
+        "status": "completed",
+        "latency_ms": 8313,
+        "citation_coverage": {
+          "material_claim_count": 18,
+          "cited_claim_count": 0,
+          "coverage_ratio": "0.00",
+          "target_ratio": "0.80",
+          "target_met": false
+        },
+        "error_code": null,
+        "provider_notice": "Live answer returned without citation annotations; coverage may be below the 80% target because :online web search was unavailable.",
+        "token_usage": {
+          "prompt_tokens": 2319,
+          "completion_tokens": 720,
+          "total_tokens": 3039
+        }
+      },
+      {
+        "slot_number": 4,
+        "model_id": "deepseek/deepseek-chat-v3.1",
+        "display_name": "DeepSeek Chat v3.1",
+        "answer_text": "Based on the web search results, the key metrics for SaaS retention fall into several categories that measure customer loyalty, revenue stability, and business health. Here are the most critical ones to track:\n\n### 1. **Net Revenue Retention (NRR)**\nNRR, also known as dollar retention, measures the percentage of recurring revenue retained from existing customers over a period, **including expansion revenue** (e.g., upsells, cross-sells). It is calculated as:  \n`(Retained Revenue / Base Recurring Revenue) \u00d7 100`  \nAn NRR **above 100%** indicates that expansion revenue from existing customers more than offsets churn, signaling strong product value and growth potential. It is a top focus for investors. [stripe.com](https://stripe.com/en-ca/resources/more/essential-saas-metrics) | [damien-singh.com](https://damien-singh.com/blog/saas-retention-metrics)\n\n### 2. **Gross Revenue Retention (GRR)**\nGRR measures retained revenue **excluding expansion** (e.g., upsells). It answers: *\"How much revenue would we retain if we did not grow existing accounts?\"* High GRR indicates underlying revenue stability and consistent customer value. [damien-singh.com](https://damien-singh.com/blog/saas-retention-metrics)\n\n### 3. **Revenue Churn Rate**\nThis metric tracks the percentage of recurring revenue lost due to churn or downgrades. It is calculated as:  \n`(Revenue Lost from Churned Customers / Starting Recurring Revenue) \u00d7 100`  \nUnlike customer churn, it reflects the **financial impact** of lost customers and provides a more accurate picture of revenue health. [stripe.com](https://stripe.com/en-ca/resources/more/essential-saas-metrics) | [paddle.com](https://www.paddle.com/blog/10-essential-saas-customer-retention-metrics)\n\n### 4. **Customer Retention Rate / Logo Retention**\n- **Customer Retention Rate**: The percentage of individual customers retained over a period. Calculated as:  \n  `(Customers Retained / Starting Customers) \u00d7 100`  \n- **Logo Retention**: Similar but tracks retention of unique companies (not individual users), which is crucial for B2B SaaS with multi-user accounts. Formula:  \n  `(Retained Logos / Starting Logos) \u00d7 100`  \nThese metrics help assess customer loyalty but do not capture revenue changes. [stripe.com](https://stripe.com/en-ca/resources/more/essential-saas-metrics) | [damien-singh.com](https://damien-singh.com/blog/saas-retention-metrics)\n\n### 5. **Customer Churn Rate**\nThe percentage of customers lost during a period:  \n`(Customers Lost / Starting Customers) \u00d7 100`  \nA high churn rate often points to issues with product-market fit, pricing, or customer experience. It complements revenue churn by focusing on attrition volume. [stripe.com](https://stripe.com/en-ca/resources/more/essential-saas-metrics) | [paddle.com](https://www.paddle.com/blog/10-essential-saas-customer-retention-metrics)\n\n### 6. **Cohort Analysis**\nRetention is best analyzed through **cohorts**\u2014grouping users by sign-up date\u2014to track how retention evolves over time. This reveals patterns (e.g., whether newer customers retain better than older ones) and avoids the pitfalls of aggregated metrics. [damien-singh.com](https://damien-singh.com/blog/saas-retention-metrics)\n\n### Additional Important Metrics:\n- **Customer Lifetime Value (CLV)**: Predicts total revenue from a customer over their lifespan. [paddle.com](https://www.paddle.com/blog/10-essential-saas-customer-retention-metrics)\n- **Renewal Rate**: Measures the percentage of customers renewing subscriptions. [paddle.com](https://www.paddle.com/blog/10-essential-saas-customer-retention-metrics)\n- **Net Promoter Score (NPS)**: Gauges customer satisfaction and loyalty. [paddle.com](https://www.paddle.com/blog/10-essential-saas-customer-retention-metrics)\n\n### Why These Metrics Matter:\nRetention metrics indicate **customer engagement, satisfaction, and the stability of recurring revenue**. They help identify risks, inform retention strategies (e.g., improving product features or support), and are critical for sustainable growth\u2014especially since retaining existing customers is often more cost-effective than acquiring new ones. [stripe.com](https://stripe.com/en-ca/resources/more/essential-saas-metrics) | [damien-singh.com](https://damien-singh.com/blog/saas-retention-metrics)\n\nFor a comprehensive view, combine these with acquisition and engagement metrics (e.g., CAC, DAU/MAU) to fully understand SaaS performance. [stripe.com](https://stripe.com/en-ca/resources/more/essential-saas-metrics)",
+        "sources": [
+          {
+            "title": "stripe.com",
+            "url": "https://stripe.com/en-ca/resources/more/essential-saas-metrics",
+            "provider": "openrouter_search",
+            "is_fallback": false
+          },
+          {
+            "title": "damien-singh.com",
+            "url": "https://damien-singh.com/blog/saas-retention-metrics",
+            "provider": "openrouter_search",
+            "is_fallback": false
+          },
+          {
+            "title": "paddle.com",
+            "url": "https://www.paddle.com/blog/10-essential-saas-customer-retention-metrics",
+            "provider": "openrouter_search",
+            "is_fallback": false
+          }
+        ],
+        "provider_attempt_order": [
+          "openrouter_search"
+        ],
+        "provider_path": "openrouter_search",
+        "fallback_used": false,
+        "status": "completed",
+        "latency_ms": 103422,
+        "citation_coverage": {
+          "material_claim_count": 23,
+          "cited_claim_count": 1,
+          "coverage_ratio": "0.04",
+          "target_ratio": "0.80",
+          "target_met": false
+        },
+        "error_code": null,
+        "provider_notice": null,
+        "token_usage": {
+          "prompt_tokens": 2254,
+          "completion_tokens": 1087,
+          "total_tokens": 3341
+        }
+      }
+    ],
+    "debate_outputs": [
+      {
+        "round_number": 1,
+        "focus_areas": [
+          "disagreement",
+          "weak_support",
+          "missing_reasoning"
+        ],
+        "critique_text": "# Debate Moderation Report: SaaS Retention Metrics\n\n## Points of Disagreement\n\n**Metric Prioritization:**\n- **Claude 3 Haiku** leads with: \"Net Revenue Retention (NRR): This measures the percentage of revenue retained from ex[isting customers]\" as the opening metric\n- **GPT-4o mini** opens with: \"Customer Retention Rate (CRR): Th[is...]\" (cuts off but positions CRR first)\n- **Gemini 2.5 Flash Lite** and **DeepSeek Chat v3.1** frame metrics as multiple categories rather than hierarchical importance\n\nThis represents a substantive disagreement about whether revenue-based metrics (Claude) or customer-based metrics (GPT-4o mini) should anchor the discussion.\n\n## Source Support Deficiencies\n\n**Claude 3 Haiku** explicitly cites \"web search results\" but provides no hyperlinks, citations, or specific source attribution. The phrase \"Based on the information gathered from the web search results\" appears to be a generic framing without demonstrable sourcing.\n\n**GPT-4o mini** provides no sourcing language whatsoever. The answer presents metrics as established fact without qualifying phrases like \"industry sources\" or \"according to research.\"\n\n**Gemini 2.5 Flash Lite** states \"To measure SaaS retention, businesses typically track...\" but offers no sources for what \"businesses typically\" do\u2014this is unsupported generalization.\n\n**DeepSeek Chat v3.1** claims \"Based on the web search results, the key metrics for SaaS retention fall into several categories\" but similarly provides no specific source links, publication names, or attribution. All four models appear to lack concrete source documentation that a human reviewer could verify.\n\n## Missing Content\n\nAll four responses cut off at approximately 200 characters, making full comparative analysis impossible. The truncation prevents evaluation of depth, breadth, and whether source citations appear later in the full answers.",
+        "status": "completed"
+      },
+      {
+        "round_number": 2,
+        "focus_areas": [
+          "disagreement",
+          "weak_support",
+          "missing_reasoning"
+        ],
+        "critique_text": "# Round 1 Critique Refinement: SaaS Retention Metrics\n\n## (A) Strongest Residual Disagreements\n\n### 1. **Metric Hierarchy vs. Categorical Framework**\nThe core unresolved tension is whether retention metrics should be presented as a ranked priority or as parallel categories:\n\n- **GPT-4o mini** and **Claude 3 Haiku** impose implicit hierarchy by leading with single metrics (CRR vs. NRR respectively)\n- **Gemini 2.5 Flash Lite** states: \"businesses typically track several key metrics that provide insights into customer loyalty, satisfaction, and the company's ability to generate recurring revenue. These metr[ics...]\" \u2014 framing metrics as co-equal drivers of three different business dimensions\n- **DeepSeek Chat v3.1** similarly declares: \"the key metrics for SaaS retention fall into several categories\" \u2014 suggesting categorical organization rather than sequential importance\n\n**Why this matters**: A practitioner building a retention dashboard needs to know if NRR should dominate strategy (Claude's implicit argument) or if CRR deserves equal weight (GPT-4o mini's framing). The models don't debate this; they simply choose different architectures without justification.\n\n### 2. **Revenue Retention vs. Customer Retention as the Primary Lens**\n- **Claude 3 Haiku** leads with \"Net Revenue Retention (NRR)\" \u2014 privileging revenue stability\n- **GPT-4o mini** leads with \"Customer Retention Rate (CRR)\" \u2014 privileging customer count stability\n\nThis is not mere sequencing; it reflects different theories of SaaS health. NRR-first assumes expansion revenue and upsells mask churn. CRR-first assumes customer survival is the foundational metric. Neither model articulates *why* their leading metric should be primary.\n\n---\n\n## (B) Reasoning Flagged as Missing in Round 1\n\n### 1. **No Justification for Metric Selection**\nNone of the four models explain *why* certain metrics matter more than others for specific business contexts. \n\n**Missing reasoning example:**\n- Claude should justify: *\"NRR is the leading metric because SaaS profitability depends on expansion revenue, not just customer survival.\"*\n- GPT-4o mini should justify: *\"CRR is foundational because you cannot achieve NRR growth without first stemming customer churn.\"*\n\nInstead, all four present metrics as self-evident importance.\n\n### 2. **No Distinction Between Diagnostic vs. Strategic Metrics**\nThe round 1 critique noted truncation, but even the openings don't differentiate:\n- **Diagnostic metrics**: indicators that *signal* problems (e.g., time-to-first-value, feature adoption rates)\n- **Strategic metrics**: targets that *drive* business decisions (NRR, CRR)\n\n**GPT-4o mini**, **Claude 3 Haiku**, **Gemini 2.5 Flash Lite**, and **DeepSeek Chat v3.1** all conflate these without distingu",
+        "status": "completed"
+      }
+    ],
+    "final_synthesis": {
+      "status": "completed",
+      "consensus": "**Consensus:**\n\n- Both **Claude 3 Haiku**, **Gemini 2.5 Flash Lite**, and **DeepSeek Chat v3.1** mention **Net Revenue Retention (NRR)** as a critical metric, highlighting its importance in measuring revenue retained from existing customers.\u2026",
+      "disagreement": "Disagreement:\n\n1.\u2026",
+      "source_support": "**Source support:**\n\n1. **GPT-4o mini**\n   - Stripe (https://stripe.com/en-ca/resources/more/essential-saas-metrics)\n   - Paddle (https://www.paddle.com/blog/10-essential-saas-customer-retention-metrics)\n\n2.\u2026",
+      "uncertainty": "Uncertainty:\n1. The overall effectiveness or preference for a specific retention metric (CRR vs. NRR) in different contexts or industries is not clear from the discussion.\n2. The long-term implications of prioritizing one type of metric over another (revenue-based vs.\u2026",
+      "recommendation": "While there were no failed models, the coverage ratio is alarmingly low at 4%, suggesting that the information available may lack sufficient backing.\u2026  decision support only and is not medical, legal, financial, safety, or regulated professional advice.",
+      "high_stakes_notice": null,
+      "citation_coverage": {
+        "material_claim_count": 70,
+        "cited_claim_count": 3,
+        "coverage_ratio": "0.04",
+        "target_ratio": "0.80",
+        "target_met": false
+      },
+      "quality_checks": {
+        "citation_coverage_target_met": false,
+        "false_consensus_preserved": true,
+        "decision_support_framing_present": true,
+        "high_stakes_warning_required": false
+      }
+    },
+    "agreement": {
+      "aligned": 2,
+      "total": 4
+    },
+    "position_movements": [
+      {
+        "slot_number": 1,
+        "model_id": "openai/gpt-4o-mini",
+        "display_name": "GPT-4o mini",
+        "opening": "In the SaaS industry, retention is critical for maintaining revenue and ensuring long-term growth.",
+        "after_round_1": "Opening clustered as a minority reading on the points of disagreement.",
+        "final": "Opened in the minority; the final synthesis leaves it outside the group consensus.",
+        "revised": false,
+        "revision_note": null
+      },
+      {
+        "slot_number": 2,
+        "model_id": "anthropic/claude-3-haiku",
+        "display_name": "Claude 3 Haiku",
+        "opening": "Based on the information gathered from the web search results, the key metrics for SaaS retention include: 1.",
+        "after_round_1": "Opening clustered with the majority reading on the points of disagreement.",
+        "final": "Opened with, and the final synthesis keeps it in, the group consensus.",
+        "revised": false,
+        "revision_note": null
+      },
+      {
+        "slot_number": 3,
+        "model_id": "google/gemini-2.5-flash-lite",
+        "display_name": "Gemini 2.5 Flash Lite",
+        "opening": "To measure SaaS retention, businesses typically track several key metrics that provide insights into customer loyalty, satisfaction, and the\u2026",
+        "after_round_1": "Opening clustered as a minority reading on the points of disagreement.",
+        "final": "Opened in the minority; the final synthesis leaves it outside the group consensus.",
+        "revised": false,
+        "revision_note": null
+      },
+      {
+        "slot_number": 4,
+        "model_id": "deepseek/deepseek-chat-v3.1",
+        "display_name": "DeepSeek Chat v3.1",
+        "opening": "Based on the web search results, the key metrics for SaaS retention fall into several categories that measure customer loyalty, revenue stab\u2026",
+        "after_round_1": "Opening clustered with the majority reading on the points of disagreement.",
+        "final": "Opened with, and the final synthesis keeps it in, the group consensus.",
+        "revised": false,
+        "revision_note": null
+      }
+    ]
+  },
+  "result_generated_at_utc": "2026-07-14T10:41:07.201813Z",
+  "demo_mode": false,
+  "live_count": 4,
+  "local_count": 0,
+  "material_claim_count": 70,
+  "actual_cost_usd": "0.0129",
+  "actual_breakdown": {
+    "by_model": [
+      {
+        "model_id": "openai/gpt-4o-mini",
+        "display_name": "GPT-4o mini",
+        "usd": "0.0008",
+        "kind": "model"
+      },
+      {
+        "model_id": "anthropic/claude-3-haiku",
+        "display_name": "Claude 3 Haiku",
+        "usd": "0.0015",
+        "kind": "model"
+      },
+      {
+        "model_id": "google/gemini-2.5-flash-lite",
+        "display_name": "Gemini 2.5 Flash Lite",
+        "usd": "0.0005",
+        "kind": "model"
+      },
+      {
+        "model_id": "deepseek/deepseek-chat-v3.1",
+        "display_name": "DeepSeek Chat v3.1",
+        "usd": "0.0016",
+        "kind": "model"
+      },
+      {
+        "model_id": "synthesis",
+        "display_name": "Debate + synthesis",
+        "usd": "0.0085",
+        "kind": "synthesis"
+      }
+    ],
+    "by_stage": [
+      {
+        "stage": "initial_answers",
+        "usd": "0.0044"
+      },
+      {
+        "stage": "debate_round_1",
+        "usd": "0.0026"
+      },
+      {
+        "stage": "debate_round_2",
+        "usd": "0.0043"
+      },
+      {
+        "stage": "synthesis",
+        "usd": "0.0016"
+      }
+    ],
+    "total": "0.0129"
+  },
+  "cost_source": "measured"
+}
