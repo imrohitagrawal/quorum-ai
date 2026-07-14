@@ -1852,7 +1852,9 @@
     const corr = el("live-corr");
     if (corr) {
       const corrId = result.correlation_id || "";
-      corr.textContent = corrId ? `run ${corrId}` : "";
+      // Label it "Run ID" (not a bare "run …") so the value reads as a
+      // meaningful, quotable handle rather than opaque text.
+      corr.textContent = corrId ? `Run ID ${corrId}` : "";
       // Fix 6: stash the RAW id so the copy handler copies exactly what is
       // shown here (without the "run " prefix).
       if (corrId) {
@@ -2328,7 +2330,51 @@
 
     if (result.correlation_id) {
       appendMetaSep(meta);
-      meta.appendChild(mkEl("span", "mono", result.correlation_id));
+      // A bare ``qr_…`` value is meaningless to a user on its own. Label it
+      // "Run ID", make it click-to-copy, and attach a compact info icon that
+      // explains what it is for — the aside's "Run controls" readout (which
+      // carried this affordance) is hidden in the parity design, so the result
+      // header is the only place the user sees the id.
+      const runIdWrap = mkEl("span", "result-meta-runid");
+      runIdWrap.appendChild(mkEl("span", "result-meta-runid-label", "Run ID"));
+      const idValue = String(result.correlation_id);
+      const copyBtn = document.createElement("button");
+      copyBtn.type = "button";
+      copyBtn.className = "mono result-meta-runid-copy";
+      copyBtn.textContent = idValue;
+      copyBtn.title = "Copy run ID — quote it if you report a problem to support.";
+      copyBtn.setAttribute("aria-label", `Copy run ID ${idValue}`);
+      copyBtn.addEventListener("click", async () => {
+        try {
+          await navigator.clipboard.writeText(idValue);
+          copyBtn.dataset.copied = "true";
+          copyBtn.title = "Copied!";
+          setTimeout(() => {
+            delete copyBtn.dataset.copied;
+            copyBtn.title = "Copy run ID — quote it if you report a problem to support.";
+          }, 1500);
+        } catch (_) {
+          copyBtn.title = "Copy failed — select and copy the id manually.";
+        }
+      });
+      runIdWrap.appendChild(copyBtn);
+      const info = document.createElement("button");
+      info.type = "button";
+      info.className = "info-icon info-icon-inline";
+      info.setAttribute("data-info-icon", "");
+      info.setAttribute(
+        "data-info-text",
+        "A unique audit handle for this run. Copy it and quote it if you report a " +
+          "problem to support — it lets them pull up every log line for this exact " +
+          "request. It is not a link and has no meaning outside support.",
+      );
+      info.setAttribute("aria-label", "What is the run ID?");
+      info.innerHTML = "&#9432;";
+      runIdWrap.appendChild(info);
+      meta.appendChild(runIdWrap);
+      // Wire the freshly-created info icon into the shared tooltip system
+      // (idempotent — keyed off ``data-info-wired``).
+      initInfoIcons();
     }
 
     // Slice 4b: move the static "Run details" disclosure toggle into the meta

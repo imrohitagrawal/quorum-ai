@@ -2433,6 +2433,43 @@ html[data-theme="dark"] .landing-preview-caption {
   color: var(--line-strong-2);
 }
 
+/* Run ID chip in the result header: a labelled, self-explanatory handle (the
+   aside's "Run controls" panel is hidden in the parity design, so this is the
+   only place a user sees — and can copy — the run id). The label makes the bare
+   ``qr_…`` value legible; the compact info icon explains what it is for. */
+.result-meta-runid {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
+}
+.result-meta-runid-label {
+  font-weight: 600;
+  color: var(--text-secondary);
+}
+.result-meta-runid-copy {
+  border: 0;
+  background: none;
+  padding: 0;
+  font: inherit;
+  color: var(--body);
+  cursor: copy;
+  text-decoration: underline dotted;
+  text-underline-offset: 2px;
+}
+.result-meta-runid-copy:hover { color: var(--ink); }
+
+/* Compact (24px) info-icon variant for tight inline rows. 24px is the WCAG 2.5.8
+   minimum target size; the 44px ``.info-icon`` default is too heavy for the
+   result meta row. */
+.info-icon.info-icon-inline {
+  min-width: 24px;
+  min-height: 24px;
+  width: 24px;
+  height: 24px;
+  font-size: 0.72rem;
+  margin-left: 0;
+}
+
 /* --- Verdict band --- */
 .result-verdict {
   display: flex;

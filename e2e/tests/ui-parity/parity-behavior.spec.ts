@@ -314,6 +314,35 @@ test.describe("UI parity — behaviour", () => {
     for (const s of await page.locator(".panel-section").all()) await expect(s).toBeHidden();
   });
 
+  test("result header labels the Run ID with a copy affordance and an explanatory info icon", async ({ page }) => {
+    // A bare ``qr_…`` / ``corr-…`` value means nothing on its own. The header
+    // must label it "Run ID", make it click-to-copy, and attach an info icon
+    // that explains its significance (quote it to support). The aside that used
+    // to carry this is hidden in the parity design, so the header is the only
+    // place a user sees the id.
+    await driveToResult(page, completedResp());
+    const runId = page.locator(".result-meta-runid");
+    await expect(runId).toBeVisible();
+    await expect(runId.locator(".result-meta-runid-label")).toHaveText("Run ID");
+    const copy = runId.locator(".result-meta-runid-copy");
+    await expect(copy).toHaveText("corr-run-0001");
+    await expect(copy).toHaveAttribute("aria-label", /copy run id/i);
+    const info = runId.locator(".info-icon-inline");
+    await expect(info).toBeVisible();
+    await expect(info).toHaveAttribute("data-info-text", /quote it if you report a problem to support/i);
+    await expect(info).toHaveAttribute("aria-label", /what is the run id/i);
+  });
+
+  test("composer 'Run now' is a solid secondary button, not a borderless ghost", async ({ page }) => {
+    // The ghost variant renders as plain text until hover — it did not read as a
+    // button. It must be a solid secondary CTA (visible surface + border) beside
+    // the primary "See the estimate".
+    await boot(page);
+    const runNow = page.locator("#run-now");
+    await expect(runNow).toHaveClass(/button-secondary/);
+    await expect(runNow).not.toHaveClass(/button-ghost/);
+  });
+
   test("next-question: Start fresh clears, Follow up prefills, Estimate & run re-estimates", async ({ page }) => {
     await driveToResult(page, completedResp());
     const nextInput = page.locator("#result-next-input");
