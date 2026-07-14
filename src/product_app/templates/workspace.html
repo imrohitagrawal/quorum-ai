@@ -141,6 +141,15 @@
             <p class="lede">Results are ephemeral. Cost is shown before each run; nothing executes without your confirmation.</p>
           </div>
           <div class="stack composer-stack">
+            <!-- Hand-off note shown when the user arrives from the landing page's
+                 "Estimate"/"Run" buttons. Non-blocking, dismissible; tells them
+                 their question carried over and what the next step is. Hidden by
+                 default and cleared on any non-hand-off entry to the composer. -->
+            <div id="composer-handoff-note" class="composer-handoff-note" role="status" aria-live="polite" hidden>
+              <span class="composer-handoff-note-icon" aria-hidden="true">&#10003;</span>
+              <span class="composer-handoff-note-text" id="composer-handoff-note-text"></span>
+              <button type="button" class="composer-handoff-note-dismiss" id="composer-handoff-note-dismiss" aria-label="Dismiss this message">&times;</button>
+            </div>
             <!-- COPY-001 privacy warning — always visible above the question field. -->
             <div class="privacy-notice" role="note">
               <span class="privacy-notice-icon" aria-hidden="true">!</span>
@@ -623,7 +632,16 @@
 
             <div class="landing-runbar">
               <div class="landing-runbar-prompt">
-                <span class="landing-runbar-placeholder">e.g. Should our company adopt passkeys and phase out passwords by 2027?</span>
+                <label for="landing-query" class="sr-only">Your question</label>
+                <textarea
+                  id="landing-query"
+                  class="landing-runbar-input"
+                  rows="2"
+                  maxlength="20000"
+                  placeholder="e.g. Should our company adopt passkeys and phase out passwords by 2027?"
+                  aria-describedby="landing-query-error"
+                ></textarea>
+                <div id="landing-query-error" class="field-error landing-query-error" hidden role="alert" aria-live="assertive">Enter a question to continue.</div>
               </div>
               <div class="landing-runbar-foot">
                 <p class="landing-cost">

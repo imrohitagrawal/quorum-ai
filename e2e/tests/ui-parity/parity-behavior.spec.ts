@@ -333,6 +333,31 @@ test.describe("UI parity — behaviour", () => {
     await expect(info).toHaveAttribute("aria-label", /what is the run id/i);
   });
 
+  test("Run details receipt: est→actual values never overflow their column into the next section", async ({ page }) => {
+    // The receipt is a 4-column grid and the "$X → $Y" values are nowrap; on a
+    // constrained width they used to overflow their column into the neighbouring
+    // section (measured up to ~35px). Drive at a deliberately narrow-but-still-4-col
+    // width so the pre-fix overflow condition is present, and assert none overflow.
+    await page.setViewportSize({ width: 900, height: 900 });
+    await driveToResult(page, completedResp());
+    await page.locator("#result-details-toggle").click();
+    await expect(page.locator("#result-receipt")).toBeVisible();
+    const overflows = await page.locator(".result-receipt-col").evaluateAll((cols) => {
+      const bad: { txt: string; overflow: number }[] = [];
+      for (const col of cols) {
+        const colR = col.getBoundingClientRect();
+        for (const v of col.querySelectorAll(".result-receipt-value, .result-receipt-label")) {
+          const vr = v.getBoundingClientRect();
+          if (vr.right - colR.right > 1) {
+            bad.push({ txt: (v.textContent || "").trim().slice(0, 24), overflow: Math.round(vr.right - colR.right) });
+          }
+        }
+      }
+      return bad;
+    });
+    expect(overflows, `receipt values overflow their column: ${JSON.stringify(overflows)}`).toEqual([]);
+  });
+
   test("composer 'Run now' is a solid secondary button, not a borderless ghost", async ({ page }) => {
     // The ghost variant renders as plain text until hover — it did not read as a
     // button. It must be a solid secondary CTA (visible surface + border) beside
@@ -530,7 +555,9 @@ test.describe("UI parity — behaviour", () => {
     await expect(page.locator('[data-view="landing"]')).toBeVisible();
     await expect(page.locator("#error-region")).toBeHidden();
 
-    // A landing CTA hands off to the workspace and records the visit.
+    // A landing CTA hands off to the workspace and records the visit. A question
+    // is now required first (the empty-submit guard has its own test below).
+    await page.locator("#landing-query").fill("Should we adopt passkeys by 2027?");
     await page.locator("#landing-run").click();
     await expect(page.locator('[data-view="composer"]')).toBeVisible();
     expect(await page.evaluate(() => localStorage.getItem("quorum.workspaceSeen"))).toBe("1");
@@ -542,6 +569,79 @@ test.describe("UI parity — behaviour", () => {
     await expect(page.locator('[data-view="landing"]')).toBeHidden();
     await page.locator("#show-landing").click();
     await expect(page.locator('[data-view="landing"]')).toBeVisible();
+  });
+
+  test("landing empty-submit guard: Estimate/Run with no question shows the error and does not navigate", async ({ page }) => {
+    // Fresh visitor → landing is the front door.
+    await page.goto("/ui", { waitUntil: "domcontentloaded" });
+    await expect(page.locator('[data-view="landing"]')).toBeVisible();
+    const err = page.locator("#landing-query-error");
+    await expect(err).toBeHidden();
+
+    // Run with an empty field: all cues fire together and it does NOT navigate.
+    await page.locator("#landing-run").click();
+    await expect(err).toBeVisible();
+    await expect(err).toHaveText(/enter a question/i);
+    await expect(page.locator(".landing-runbar")).toHaveAttribute("data-invalid", "true");
+    await expect(page.locator("#landing-query")).toHaveAttribute("aria-invalid", "true");
+    await expect(page.locator("#landing-query-error")).toHaveAttribute("role", "alert");
+    await expect(page.locator('[data-view="landing"]')).toBeVisible();
+    await expect(page.locator('[data-view="composer"]')).toBeHidden();
+
+    // Estimate behaves identically.
+    await page.locator("#landing-estimate").click();
+    await expect(err).toBeVisible();
+    await expect(page.locator('[data-view="landing"]')).toBeVisible();
+
+    // Typing clears every error cue immediately.
+    await page.locator("#landing-query").fill("Should we adopt passkeys?");
+    await expect(err).toBeHidden();
+    await expect(page.locator(".landing-runbar")).not.toHaveAttribute("data-invalid", "true");
+    await expect(page.locator("#landing-query")).toHaveAttribute("aria-invalid", "false");
+  });
+
+  test("landing Estimate carries the question to the composer with the estimate-tailored note", async ({ page }) => {
+    const Q = "Should we migrate our monolith to microservices this year?";
+    await page.goto("/ui", { waitUntil: "domcontentloaded" });
+    await page.locator("#landing-query").fill(Q);
+    await page.locator("#landing-estimate").click();
+    // Lands on the composer with the question carried over — nothing runs here.
+    await expect(page.locator('[data-view="composer"]')).toBeVisible();
+    await expect(page.locator("#query-text")).toHaveValue(Q);
+    const note = page.locator("#composer-handoff-note");
+    await expect(note).toBeVisible();
+    await expect(note).toContainText(/itemized cost before anything runs/i);
+    // The note is dismissible.
+    await page.locator("#composer-handoff-note-dismiss").click();
+    await expect(note).toBeHidden();
+  });
+
+  test("hand-off note is a one-shot: it does not survive a cost-gate round-trip back to the composer", async ({ page }) => {
+    await page.route("**/v1/query-runs/estimate", (r) => r.fulfill(fulfil(estimateResp("0.190", "require_confirmation"))));
+    await page.route("**/v1/query-runs/warnings", (r) => r.fulfill(fulfil({ warnings: [] })));
+    await page.goto("/ui", { waitUntil: "domcontentloaded" });
+    await page.locator("#landing-query").fill("Does this note survive a gate round-trip?");
+    await page.locator("#landing-estimate").click();
+    const note = page.locator("#composer-handoff-note");
+    await expect(note).toBeVisible();
+    // Open the cost gate, then return to the composer via "Change models"/"Back".
+    await page.locator("#estimate-run").click();
+    await expect(page.locator("#gate-confirm")).toBeVisible();
+    await page.locator("#gate-back").click();
+    await expect(page.locator('[data-view="composer"]')).toBeVisible();
+    // The one-shot note must be gone — not re-surfaced by the direct setView.
+    await expect(note).toBeHidden();
+  });
+
+  test("landing Run carries the question to the composer with the run-tailored note", async ({ page }) => {
+    const Q = "Is passwordless auth worth the migration cost?";
+    await page.goto("/ui", { waitUntil: "domcontentloaded" });
+    await page.locator("#landing-query").fill(Q);
+    await page.locator("#landing-run").click();
+    await expect(page.locator('[data-view="composer"]')).toBeVisible();
+    await expect(page.locator("#query-text")).toHaveValue(Q);
+    // Run's note is honest about the cost-approval step (it does not run from A).
+    await expect(page.locator("#composer-handoff-note")).toContainText(/price it and run once you approve/i);
   });
 
   // ---- Design-comp parity closeout: the 4 remaining visual-parity gaps -----

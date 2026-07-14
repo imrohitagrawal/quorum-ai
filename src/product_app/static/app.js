@@ -257,6 +257,12 @@
     if (!views.length) return;
     const target = views.find((view) => view.dataset.view === name);
     if (!target) return;
+    // The landing hand-off note is a one-shot for the immediate landing→composer
+    // transition. Clear it on ANY view change so a later round-trip back to the
+    // composer (e.g. cost-gate "Change models", or error recovery) never
+    // re-surfaces a stale note. ``handoffToComposer`` re-shows it AFTER this runs.
+    const handoffNote = el("composer-handoff-note");
+    if (handoffNote) handoffNote.hidden = true;
     for (const view of views) {
       view.hidden = view !== target;
     }
@@ -5784,13 +5790,77 @@
       }
     }
 
+    // Landing question input + its empty-submit guard elements.
+    const landingQuery = el("landing-query");
+    const landingRunbar = qs(".landing-runbar");
+    const landingQueryError = el("landing-query-error");
+    const handoffNote = el("composer-handoff-note");
+    const handoffNoteText = el("composer-handoff-note-text");
+    const handoffNoteDismiss = el("composer-handoff-note-dismiss");
+
+    // Clear the empty-submit error state (called on typing and on a valid submit).
+    function clearLandingError() {
+      if (landingRunbar) delete landingRunbar.dataset.invalid;
+      if (landingQuery) landingQuery.setAttribute("aria-invalid", "false");
+      if (landingQueryError) landingQueryError.hidden = true;
+    }
+
+    // Empty-submit guard: show ALL cues together — highlight the runbar (danger
+    // ring), reveal the "!" error message, mark the input aria-invalid, move
+    // focus to the field, and let ``role="alert"`` announce it. Returns true
+    // when a question is present.
+    function landingHasQuestion() {
+      const value = (landingQuery && landingQuery.value.trim()) || "";
+      if (value) {
+        clearLandingError();
+        return true;
+      }
+      if (landingRunbar) landingRunbar.dataset.invalid = "true";
+      if (landingQuery) landingQuery.setAttribute("aria-invalid", "true");
+      if (landingQueryError) {
+        // Re-assert the text so ``role="alert"`` announces on each attempt.
+        landingQueryError.textContent = "Enter a question to continue.";
+        landingQueryError.hidden = false;
+      }
+      if (landingQuery) landingQuery.focus({ preventScroll: true });
+      return false;
+    }
+
+    // Show the tailored hand-off note at the top of the composer. ``kind`` is the
+    // page-A button that was clicked: "estimate" or "run".
+    function showComposerHandoffNote(kind) {
+      if (!handoffNote || !handoffNoteText) return;
+      handoffNoteText.textContent =
+        kind === "estimate"
+          ? "Got your question. Review your four models below — we'll show the itemized cost before anything runs."
+          : "Got your question. Review your four models below, then we'll price it and run once you approve.";
+      handoffNote.hidden = false;
+    }
+
     // Every landing CTA leads here: back to the composer, textarea focused.
     // Entering the workspace this way marks it "seen" so the first-visit gate
     // in ``boot()`` sends this device straight to the composer next time.
+    // ``setView`` clears any stale hand-off note; an explicit Estimate/Run
+    // hand-off re-shows it afterwards.
     function goToComposer() {
       markWorkspaceSeen();
       setView("composer");
       if (queryTextarea) queryTextarea.focus({ preventScroll: true });
+    }
+
+    // Estimate/Run on the landing: validate, carry the typed question into the
+    // real composer (so its own validation/char-count/high-stakes probe run),
+    // then open the composer and surface the tailored hand-off note. Nothing is
+    // estimated or run here — page B owns model review + cost approval.
+    function handoffToComposer(kind) {
+      if (!landingHasQuestion()) return;
+      const question = landingQuery.value.trim();
+      if (queryTextarea) {
+        queryTextarea.value = question;
+        queryTextarea.dispatchEvent(new Event("input", { bubbles: true }));
+      }
+      goToComposer();
+      showComposerHandoffNote(kind);
     }
 
     if (showLandingButton) {
@@ -5809,10 +5879,27 @@
       });
     }
 
-    for (const id of ["landing-open-workspace", "landing-estimate", "landing-run"]) {
-      const button = el(id);
-      if (button) button.addEventListener("click", goToComposer);
+    // Typing clears the empty-submit error immediately.
+    if (landingQuery) {
+      landingQuery.addEventListener("input", () => {
+        if (landingQuery.value.trim()) clearLandingError();
+      });
     }
+    if (handoffNoteDismiss && handoffNote) {
+      handoffNoteDismiss.addEventListener("click", () => {
+        handoffNote.hidden = true;
+      });
+    }
+
+    // "Open the workspace" is a plain skip-to-B link (no question needed — the
+    // user will type on B). Estimate/Run carry the typed question and guard the
+    // empty case.
+    const openWorkspaceBtn = el("landing-open-workspace");
+    if (openWorkspaceBtn) openWorkspaceBtn.addEventListener("click", goToComposer);
+    const estimateBtn = el("landing-estimate");
+    if (estimateBtn) estimateBtn.addEventListener("click", () => handoffToComposer("estimate"));
+    const runBtn = el("landing-run");
+    if (runBtn) runBtn.addEventListener("click", () => handoffToComposer("run"));
 
     // Example chips: fill the real composer textarea, then open it.
     for (const chip of qsa("[data-landing-chip]")) {

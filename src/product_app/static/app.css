@@ -966,6 +966,49 @@ select {
   flex-shrink: 0;
 }
 
+/* Hand-off note: shown at the top of the composer when the user arrives from
+   the landing "Estimate"/"Run" buttons. A calm, dismissible confirmation — not
+   an error — so it uses the accent (success-ish) tone, never danger. */
+.composer-handoff-note {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--space-2);
+  padding: var(--space-3) var(--space-4);
+  border-radius: var(--radius-md);
+  background: var(--accent-soft);
+  border: 1px solid var(--accent);
+  color: var(--ink);
+  font-size: 0.9rem;
+  line-height: 1.5;
+}
+.composer-handoff-note[hidden] { display: none; }
+.composer-handoff-note-icon {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 20px;
+  height: 20px;
+  border-radius: 999px;
+  background: var(--accent);
+  color: var(--on-tonal);
+  font-size: 0.7rem;
+  font-weight: 700;
+  flex-shrink: 0;
+  margin-top: 1px;
+}
+.composer-handoff-note-text { flex: 1; }
+.composer-handoff-note-dismiss {
+  border: 0;
+  background: none;
+  color: var(--muted);
+  font-size: 1.1rem;
+  line-height: 1;
+  cursor: pointer;
+  padding: 0 var(--space-1);
+  flex-shrink: 0;
+}
+.composer-handoff-note-dismiss:hover { color: var(--ink); }
+
 /* ----- Callouts (warning, info, cost confirmation) -------------------- */
 
 .callout {
@@ -2786,6 +2829,21 @@ html[data-theme="dark"] .landing-preview-caption {
   padding-left: 22px;
 }
 
+/* On narrow viewports four side-by-side columns cannot hold the money values,
+   so stack the sections vertically and swap the left divider for a top one. */
+@media (max-width: 720px) {
+  .result-receipt-grid {
+    grid-template-columns: 1fr;
+    gap: 18px;
+  }
+  .result-receipt-col-div {
+    border-left: 0;
+    padding-left: 0;
+    border-top: 1px solid var(--line);
+    padding-top: 16px;
+  }
+}
+
 .result-receipt-kicker {
   font-size: 0.69rem;
   font-weight: 600;
@@ -2800,6 +2858,10 @@ html[data-theme="dark"] .landing-preview-caption {
   gap: 8px;
   font-size: 0.78rem;
   line-height: 1.4;
+  /* Allow the value to drop below the label when the column is too narrow to
+     hold both on one line, instead of the (nowrap) "est → actual" value
+     overflowing into the next section. */
+  flex-wrap: wrap;
 }
 
 .result-receipt-label {
@@ -2808,6 +2870,9 @@ html[data-theme="dark"] .landing-preview-caption {
 
 .result-receipt-value {
   text-align: right;
+  /* Keep the value hard-right whether it sits beside the label or wraps to its
+     own line (``space-between`` alone left-aligns a lone wrapped item). */
+  margin-left: auto;
 }
 
 .result-receipt-value.mono,
@@ -4822,6 +4887,37 @@ main:focus { outline: none; }
   font-size: 1.0625rem; /* 17px — comp 01 */
   line-height: 1.55;
   color: var(--muted);
+}
+/* Real question input on the landing runbar. Borderless so it reads as one
+   seamless card (the bordered ``.landing-runbar`` IS the field); the container
+   shows focus/invalid rings via :focus-within / [data-invalid]. */
+.landing-runbar-input {
+  width: 100%;
+  border: 0;
+  background: transparent;
+  resize: none;
+  padding: 0;
+  margin: 0;
+  min-height: 52px;
+  font-family: var(--font-sans);
+  font-size: 1.0625rem; /* 17px — matches the old placeholder */
+  line-height: 1.55;
+  color: var(--ink);
+}
+.landing-runbar-input::placeholder { color: var(--muted); opacity: 1; }
+.landing-runbar-input:focus { outline: none; box-shadow: none; border: 0; }
+.landing-runbar:focus-within {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px var(--accent-soft);
+}
+/* Empty-submit guard: highlight the whole runbar with the danger ring (the
+   input itself is borderless). The danger ring wins over :focus-within. */
+.landing-runbar[data-invalid="true"] {
+  border-color: var(--danger);
+  box-shadow: 0 0 0 3px var(--danger-soft);
+}
+.landing-query-error {
+  margin-top: var(--space-3);
 }
 .landing-runbar-foot {
   /* ONE row (comp 01): cost left, both buttons right. No flex-wrap at desktop —
