@@ -966,13 +966,15 @@ select {
   flex-shrink: 0;
 }
 
-/* Hand-off note: shown at the top of the composer when the user arrives from
-   the landing "Estimate"/"Run" buttons. A calm, dismissible confirmation — not
-   an error — so it uses the accent (success-ish) tone, never danger. */
-.composer-handoff-note {
+/* Landing transition message: shown on page A (in the run bar) when the visitor
+   clicks Estimate/Run, explaining why they're being taken to the workspace. A
+   calm accent-toned confirmation — never danger. Mutually exclusive with the
+   empty-submit error above it. */
+.landing-handoff-note {
   display: flex;
   align-items: flex-start;
   gap: var(--space-2);
+  margin-top: var(--space-3);
   padding: var(--space-3) var(--space-4);
   border-radius: var(--radius-md);
   background: var(--accent-soft);
@@ -981,8 +983,8 @@ select {
   font-size: 0.9rem;
   line-height: 1.5;
 }
-.composer-handoff-note[hidden] { display: none; }
-.composer-handoff-note-icon {
+.landing-handoff-note[hidden] { display: none; }
+.landing-handoff-note-icon {
   display: flex;
   align-items: center;
   justify-content: center;
@@ -996,18 +998,7 @@ select {
   flex-shrink: 0;
   margin-top: 1px;
 }
-.composer-handoff-note-text { flex: 1; }
-.composer-handoff-note-dismiss {
-  border: 0;
-  background: none;
-  color: var(--muted);
-  font-size: 1.1rem;
-  line-height: 1;
-  cursor: pointer;
-  padding: 0 var(--space-1);
-  flex-shrink: 0;
-}
-.composer-handoff-note-dismiss:hover { color: var(--ink); }
+.landing-handoff-note-text { flex: 1; }
 
 /* ----- Callouts (warning, info, cost confirmation) -------------------- */
 

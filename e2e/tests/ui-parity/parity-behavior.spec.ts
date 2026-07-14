@@ -600,48 +600,53 @@ test.describe("UI parity — behaviour", () => {
     await expect(page.locator("#landing-query")).toHaveAttribute("aria-invalid", "false");
   });
 
-  test("landing Estimate carries the question to the composer with the estimate-tailored note", async ({ page }) => {
+  test("landing Estimate shows the transition message ON page A, then hands off to the composer (no note on page B)", async ({ page }) => {
     const Q = "Should we migrate our monolith to microservices this year?";
     await page.goto("/ui", { waitUntil: "domcontentloaded" });
     await page.locator("#landing-query").fill(Q);
     await page.locator("#landing-estimate").click();
-    // Lands on the composer with the question carried over — nothing runs here.
-    await expect(page.locator('[data-view="composer"]')).toBeVisible();
-    await expect(page.locator("#query-text")).toHaveValue(Q);
-    const note = page.locator("#composer-handoff-note");
+    // The tailored message appears on the LANDING (page A) so the user learns WHY
+    // they are being moved — BEFORE the view changes.
+    const note = page.locator("#landing-handoff-note");
     await expect(note).toBeVisible();
     await expect(note).toContainText(/itemized cost before anything runs/i);
-    // The note is dismissible.
-    await page.locator("#composer-handoff-note-dismiss").click();
-    await expect(note).toBeHidden();
-  });
-
-  test("hand-off note is a one-shot: it does not survive a cost-gate round-trip back to the composer", async ({ page }) => {
-    await page.route("**/v1/query-runs/estimate", (r) => r.fulfill(fulfil(estimateResp("0.190", "require_confirmation"))));
-    await page.route("**/v1/query-runs/warnings", (r) => r.fulfill(fulfil({ warnings: [] })));
-    await page.goto("/ui", { waitUntil: "domcontentloaded" });
-    await page.locator("#landing-query").fill("Does this note survive a gate round-trip?");
-    await page.locator("#landing-estimate").click();
-    const note = page.locator("#composer-handoff-note");
-    await expect(note).toBeVisible();
-    // Open the cost gate, then return to the composer via "Change models"/"Back".
-    await page.locator("#estimate-run").click();
-    await expect(page.locator("#gate-confirm")).toBeVisible();
-    await page.locator("#gate-back").click();
+    await expect(page.locator('[data-view="landing"]')).toBeVisible();
+    // Then it hands off to the composer with the question carried over.
     await expect(page.locator('[data-view="composer"]')).toBeVisible();
-    // The one-shot note must be gone — not re-surfaced by the direct setView.
-    await expect(note).toBeHidden();
+    await expect(page.locator("#query-text")).toHaveValue(Q);
+    // There is NO hand-off note on page B — the message lives on page A now, so it
+    // can never overlap the composer's privacy notice.
+    await expect(page.locator("#composer-handoff-note")).toHaveCount(0);
   });
 
-  test("landing Run carries the question to the composer with the run-tailored note", async ({ page }) => {
+  test("landing Run shows the run-tailored message ON page A, then hands off to the composer", async ({ page }) => {
     const Q = "Is passwordless auth worth the migration cost?";
     await page.goto("/ui", { waitUntil: "domcontentloaded" });
     await page.locator("#landing-query").fill(Q);
     await page.locator("#landing-run").click();
+    const note = page.locator("#landing-handoff-note");
+    await expect(note).toBeVisible();
+    // Run's message is honest about the cost-approval step (it does not run from A).
+    await expect(note).toContainText(/price it and run once you approve/i);
     await expect(page.locator('[data-view="composer"]')).toBeVisible();
     await expect(page.locator("#query-text")).toHaveValue(Q);
-    // Run's note is honest about the cost-approval step (it does not run from A).
-    await expect(page.locator("#composer-handoff-note")).toContainText(/price it and run once you approve/i);
+    await expect(page.locator("#composer-handoff-note")).toHaveCount(0);
+  });
+
+  test("landing empty-submit error is cleared when the visitor returns to the landing", async ({ page }) => {
+    // Regression: the error state used to persist across a How-it-works round-trip.
+    await page.goto("/ui", { waitUntil: "domcontentloaded" });
+    await page.locator("#landing-run").click(); // empty → error
+    await expect(page.locator("#landing-query-error")).toBeVisible();
+    // Leave to the workspace, then come back via the "How it works" link.
+    await page.locator("#landing-open-workspace").click();
+    await expect(page.locator('[data-view="composer"]')).toBeVisible();
+    await page.locator("#show-landing").click();
+    await expect(page.locator('[data-view="landing"]')).toBeVisible();
+    // The stale error must be gone.
+    await expect(page.locator("#landing-query-error")).toBeHidden();
+    await expect(page.locator(".landing-runbar")).not.toHaveAttribute("data-invalid", "true");
+    await expect(page.locator("#landing-query")).toHaveAttribute("aria-invalid", "false");
   });
 
   // ---- Design-comp parity closeout: the 4 remaining visual-parity gaps -----
