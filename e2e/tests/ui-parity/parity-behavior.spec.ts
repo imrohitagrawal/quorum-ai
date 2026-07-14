@@ -120,6 +120,14 @@ async function fill(page: Page) { await page.getByRole("textbox").first().fill(Q
 async function clickEstimate(page: Page) {
   await page.getByRole("button", { name: /see the estimate|estimate cost/i }).click();
 }
+// "Run now" is the direct-run composer CTA: for an allow-band estimate it
+// auto-proceeds straight to the run (no gate), so it is the fast path for
+// tests that only need to REACH the result view. "See the estimate" now always
+// opens the cost gate — even on the allow band — so it is no longer the way to
+// drive to a result without a click-through.
+async function clickRunNow(page: Page) {
+  await page.locator("#run-now").click();
+}
 async function routeRun(page: Page, pollBody: unknown) {
   await page.route("**/v1/query-runs/estimate", (r) => r.fulfill(fulfil(estimateResp("0.100", "allow"))));
   await page.route("**/v1/query-runs/warnings", (r) => r.fulfill(fulfil({ warnings: [] })));
@@ -131,7 +139,10 @@ async function routeRun(page: Page, pollBody: unknown) {
 async function driveToResult(page: Page, pollBody: unknown) {
   await boot(page);
   await routeRun(page, pollBody);
-  await fill(page); await clickEstimate(page);
+  // Use "Run now" (direct auto-proceed on the mocked allow band) to reach the
+  // result. "See the estimate" would stop at the gate — that path has its own
+  // dedicated tests below.
+  await fill(page); await clickRunNow(page);
   await expect(page.locator('#result-verdict[data-consensus="true"]')).toBeVisible();
 }
 
@@ -184,6 +195,108 @@ test.describe("UI parity — behaviour", () => {
     await expect(page.locator("#gate-block-models")).toBeVisible();
     await expect(page.locator("#gate-block-shorten")).toBeVisible();
     await expect(page.locator("#gate-confirm")).toBeHidden();
+  });
+
+  test("composer offers both a Run now and a See the estimate CTA, both enabled", async ({ page }) => {
+    await boot(page);
+    const runNow = page.locator("#run-now");
+    const seeEstimate = page.locator("#estimate-run");
+    await expect(runNow).toBeVisible();
+    await expect(runNow).toBeEnabled();
+    await expect(runNow).toContainText(/run now/i);
+    await expect(seeEstimate).toBeVisible();
+    await expect(seeEstimate).toBeEnabled();
+    await expect(seeEstimate).toContainText(/see the estimate/i);
+  });
+
+  test("See the estimate ALWAYS opens the cost gate — even for an allow-band run (never a hidden auto-run)", async ({ page }) => {
+    // The footer promises the user can review an itemized estimate before a run.
+    // A cheap (allow-band) run used to skip the gate and execute immediately,
+    // contradicting that promise. "See the estimate" must now stop at the gate
+    // for every band; the allow band shows a non-alarming "review and run" CTA.
+    await boot(page);
+    await page.route("**/v1/query-runs/estimate", (r) => r.fulfill(fulfil(estimateResp("0.100", "allow"))));
+    await page.route("**/v1/query-runs/warnings", (r) => r.fulfill(fulfil({ warnings: [] })));
+    // If it wrongly auto-proceeded, THIS create POST would fire — assert it does not.
+    let created = false;
+    await page.route(/\/v1\/query-runs$/, (r) => {
+      if (r.request().method() === "POST") created = true;
+      return r.fulfill(fulfil(createResp()));
+    });
+    await fill(page); await clickEstimate(page);
+    // The gate is shown with the allow-band review copy and a plain "Run" CTA
+    // (not "Confirm & run", which is the require_confirmation band).
+    await expect(page.locator("#cost-review-card")).toBeVisible();
+    await expect(page.locator("#gate-confirm")).toBeVisible();
+    // Allow-band CTA reads "Run · $X" (a plain start), never the
+    // require_confirmation band's "Confirm & run · $X". Assert on the label span
+    // so the spinner sibling's whitespace never pollutes the match.
+    await expect(page.locator("#gate-confirm .button-label")).toHaveText(/^Run · \$0\.1\d*$/);
+    await expect(page.locator("#gate-confirm .button-label")).not.toContainText(/Confirm & run/);
+    // And nothing ran on its own.
+    await page.waitForTimeout(200);
+    expect(created, "See the estimate must not auto-start an allow-band run").toBe(false);
+  });
+
+  test("HARDENING: while one CTA's estimate is in flight, BOTH composer CTAs lock and only ONE create is ever POSTed", async ({ page }) => {
+    // The two-button composer widened a pre-existing re-entrancy window: only the
+    // clicked button was disabled during the estimate round-trip, so the sibling
+    // (or Ctrl/Cmd+Enter) could fire a second concurrent flow, and ``isRunning``
+    // (which locks everything) is only set after the create POST returns. Hold
+    // the estimate open with a controlled gate so the window is deterministic,
+    // and prove both CTAs are locked and no second create escapes.
+    await boot(page);
+    let createCount = 0;
+    let releaseEstimate!: () => void;
+    const estimateGate = new Promise<void>((res) => { releaseEstimate = res; });
+    await page.route("**/v1/query-runs/estimate", async (r) => {
+      await estimateGate; // hold the estimate open to freeze the re-entrancy window
+      await r.fulfill(fulfil(estimateResp("0.100", "allow")));
+    });
+    await page.route("**/v1/query-runs/warnings", (r) => r.fulfill(fulfil({ warnings: [] })));
+    await page.route("**/v1/query-runs/active", (r) => r.fulfill(fulfil({ query_run_id: null })));
+    await page.route(/\/v1\/query-runs\/[0-9a-f-]{36}$/, (r) => r.fulfill(fulfil(completedResp())));
+    await page.route(/\/v1\/query-runs$/, (r) => {
+      if (r.request().method() === "POST") { createCount++; return r.fulfill(fulfil(createResp())); }
+      return r.continue();
+    });
+
+    await fill(page);
+    await page.locator("#run-now").click();
+    // Estimate is held open → both composer CTAs are locked for the whole window.
+    await expect(page.locator("#run-now")).toBeDisabled();
+    await expect(page.locator("#estimate-run")).toBeDisabled();
+    // Release the estimate; the Run-now allow-band path auto-proceeds to a run.
+    releaseEstimate();
+    await expect(page.locator('#result-verdict[data-consensus="true"]')).toBeVisible();
+    // Exactly one create was POSTed — the single-create latch held.
+    expect(createCount, "exactly one create must be POSTed").toBe(1);
+  });
+
+  test("REGRESSION: a completed run whose slots carry a provider_notice renders with no 'runStatusValue is not defined' toast storm", async ({ page }) => {
+    // The toast storm fired ONLY when a model slot carried a ``provider_notice``:
+    // the guard that reads it was the sole reader of a variable that had been
+    // ``const``-scoped to a sibling branch, so on a completed run it threw
+    // ``ReferenceError: runStatusValue is not defined`` once per card on every
+    // poll tick — each surfaced as a toast. The mock ``answer()`` has no
+    // provider_notice, so the storm was invisible to this suite; set one here so
+    // the completed-run render actually exercises the guarded branch.
+    const withNotice = completedResp();
+    (withNotice.result as { model_answers: { provider_notice: string }[] }).model_answers.forEach(
+      (a) => { a.provider_notice = "Answer produced by local simulation."; },
+    );
+
+    const pageErrors: string[] = [];
+    page.on("pageerror", (e) => pageErrors.push(String(e)));
+
+    await driveToResult(page, withNotice);
+
+    // The provider notice renders on the cards — proving the guarded branch ran.
+    await expect(page.locator(".model-card-notice").first()).toContainText("local simulation");
+    // No "... is not defined" surfaced as a toast (the pre-fix storm) ...
+    await expect(page.locator(".toast", { hasText: /is not defined/i })).toHaveCount(0);
+    // ... and no uncaught page error slipped through either.
+    expect(pageErrors, `unexpected page errors: ${JSON.stringify(pageErrors)}`).toEqual([]);
   });
 
   test("result renders the synthesis card + next-question block + footer; legacy sections hidden", async ({ page }) => {
@@ -334,7 +447,7 @@ test.describe("UI parity — behaviour", () => {
     (noSources.result as { model_answers: { sources: unknown[] }[] }).model_answers.forEach((a) => { a.sources = []; });
     await boot(page);
     await routeRun(page, noSources);
-    await fill(page); await clickEstimate(page);
+    await fill(page); await clickRunNow(page);
     await expect(page.locator('#result-verdict[data-consensus="true"]')).toBeVisible();
     // The synthesis card still shows its labelled rows...
     await expect(page.locator("#result-synthesis")).toBeVisible();

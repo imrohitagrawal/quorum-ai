@@ -87,11 +87,15 @@
   const proceedButton = el("proceed-run");
   const cancelEstimateButton = el("cancel-estimate");
   const estimateButton = el("estimate-run");
-  // Slice 1 (02 Composer): the composer collapses to a single ink CTA
-  // ("See the estimate →", the ``estimate-run`` button), which routes the
-  // run through the separate cost gate. The legacy fast-path "Run now"
-  // button and its ``runNow`` handler are gone; Ctrl/Cmd+Enter falls
-  // through to the estimate-first ``startRun`` flow.
+  // Composer (02) offers two paths to a run:
+  //   ``estimate-run`` ("See the estimate →") ALWAYS opens the cost gate so
+  //     the user can review the itemized estimate before approving — even a
+  //     cheap ``allow``-band run (``estimateRun`` with ``autoProceed:false``).
+  //   ``run-now`` ("Run now") starts straight away for the ``allow`` band and
+  //     otherwise falls into the same gate (``autoProceed:true``); the money
+  //     guardrail still pauses any ``require_confirmation``/``block`` run.
+  // Ctrl/Cmd+Enter maps to the estimate-first path (see the keydown handler).
+  const runNowButton = el("run-now");
   const highStakesGate = el("high-stakes-gate");
   const highStakesAckCheckbox = el("high-stakes-ack");
   const composerTotalEstimate = el("composer-total-estimate");
@@ -3403,6 +3407,13 @@
     const cards = defaultModelIds.map((fallbackModelId, index) => {
       const slot = modelAnswers.find((answer) => answer.slot_number === index + 1);
       const modelId = slot?.model_id || getModelIds()[index] || fallbackModelId;
+      // Run-level status, scoped to the whole card so both the empty-slot
+      // error placeholder and the provider-notice guard below can read it.
+      // Previously this was ``const``-declared inside the ``else`` branch,
+      // so the ``slot`` branch left it undefined and the provider-notice
+      // check threw ``ReferenceError: runStatusValue is not defined`` once
+      // per card on every poll tick — a toast storm on any completed run.
+      const runStatusValue = result?.status;
       // Prefer the server-supplied ``display_name`` (catalog short
       // name like "Claude Haiku 4.5") over the raw model_id. The id
       // is still shown as a small subtitle so the user can identify
@@ -3462,7 +3473,6 @@
         }
       } else {
         // Check if run failed - show error state instead of pending
-        const runStatusValue = result?.status;
         if (runStatusValue && ['failed', 'timed_out', 'cancelled'].includes(runStatusValue)) {
           const errorPlaceholder = document.createElement("p");
           errorPlaceholder.className = "error-placeholder";
@@ -4013,6 +4023,9 @@
   function setRunning(isRunning) {
     state.isRunning = isRunning;
     estimateButton.disabled = isRunning;
+    // The "Run now" CTA is disabled alongside "See the estimate" so a run in
+    // flight cannot be double-started from either composer button.
+    if (runNowButton) runNowButton.disabled = isRunning;
     // Slice 3 (04 Live run): the live-elapsed ticker only runs while a run is
     // in flight. Terminal freezing of the readout is handled by renderLiveRun
     // (which sets the final value before this clear); here we just guarantee
@@ -4491,17 +4504,30 @@
         gateRange.textContent = `${gateUsd2dp(lo)}–${gateUsd2dp(hi)}`;
       }
     }
+    // ``allow`` reaches here only via "See the estimate" (a deliberate review
+    // of a run the server would let start without confirmation). Its copy must
+    // NOT claim "your confirmation required" — nothing is being required; the
+    // user asked to look. ``require_confirmation`` keeps the warning framing.
+    const isAllowReview = action === "allow";
     if (gateBandLabel) {
-      gateBandLabel.textContent = "Cost review — your confirmation required";
+      gateBandLabel.textContent = isAllowReview
+        ? "Estimate ready — review and run"
+        : "Cost review — your confirmation required";
     }
     if (gateReason) {
       const firstReason = reasons.length ? ` ${reasons[0]}` : "";
-      gateReason.textContent = `${COPY_003_COST_WARNING}${firstReason}`;
+      gateReason.textContent = isAllowReview
+        ? `This run is estimated at ${gateUsd(total)}, within the no-confirmation band — start it when you're ready.${firstReason}`
+        : `${COPY_003_COST_WARNING}${firstReason}`;
     }
     if (gateConfirmButton) {
       gateConfirmButton.hidden = false;
       const label = gateConfirmButton.querySelector(".button-label");
-      if (label) label.textContent = `Confirm & run · ${gateUsd(total)}`;
+      if (label) {
+        label.textContent = isAllowReview
+          ? `Run · ${gateUsd(total)}`
+          : `Confirm & run · ${gateUsd(total)}`;
+      }
     }
     // Reset the block-only surfaces so a prior block render never bleeds
     // into the confirm band.
@@ -4512,7 +4538,9 @@
     if (gateBlockFooter) gateBlockFooter.hidden = true;
     if (gateCapNote) gateCapNote.hidden = false;
     if (gateHintConfirm) gateHintConfirm.hidden = false;
-    return `Cost review: your confirmation required. Estimated ${gateUsd(total)}.`;
+    return isAllowReview
+      ? `Estimate ready. Estimated ${gateUsd(total)}. Review and run when you're ready.`
+      : `Cost review: your confirmation required. Estimated ${gateUsd(total)}.`;
   }
 
   // ``true`` when the user has asked the OS to minimise motion.
@@ -4580,10 +4608,17 @@
     if (queryTextarea) queryTextarea.focus({ preventScroll: true });
   }
 
-  async function estimateRun() {
+  // ``autoProceed`` decides what happens once the server returns an ``allow``
+  // band ($ ≤ the no-confirmation threshold): the "Run now" path proceeds
+  // straight to the run, while the "See the estimate" path (``false``) opens
+  // the gate so the user reviews the itemized estimate first. Higher bands
+  // (``require_confirmation``/``block``) always open the gate regardless.
+  // ``trigger`` is the button that initiated the flow, so its own spinner is
+  // the one shown.
+  async function estimateRun({ autoProceed = false, trigger = estimateButton } = {}) {
     clearError();
     hideCostConfirmation();
-    setButtonLoading(estimateButton, true);
+    setButtonLoading(trigger, true);
     try {
       const queryText = queryTextarea.value.trim();
       if (!queryText) {
@@ -4640,8 +4675,10 @@
       try {
         if (usdSecondary) renderCostSecondary(estimate.cost_estimate.estimated_cost_usd);
         renderNotices(null);
-        if (action === "allow") {
-          // ≤ $0.15: nothing to confirm — go straight to the run.
+        if (action === "allow" && autoProceed) {
+          // ≤ $0.15 AND the user chose "Run now": nothing to confirm — go
+          // straight to the run. The "See the estimate" path (autoProceed
+          // false) skips this branch so it always shows the gate below.
           await proceedWithRun();
         } else {
           // require_confirmation ($0.15–$0.25) or block (> $0.25):
@@ -4669,9 +4706,9 @@
       }
       return estimate;
     } finally {
-      setButtonLoading(estimateButton, false);
+      setButtonLoading(trigger, false);
       // ``setButtonLoading`` clears ``disabled``; re-assert the gate so a
-      // high-stakes topic detected mid-compose keeps the CTA disabled.
+      // high-stakes topic detected mid-compose keeps both CTAs disabled.
       applyHighStakesGate();
     }
   }
@@ -4698,6 +4735,12 @@
     if (estimateButton) {
       estimateButton.disabled = state.isRunning || blocked;
       estimateButton.dataset.gateBlocked = blocked ? "true" : "false";
+    }
+    // "Run now" is gated identically: an unacknowledged high-stakes topic must
+    // block the direct-run path too, not just the estimate-first path.
+    if (runNowButton) {
+      runNowButton.disabled = state.isRunning || blocked;
+      runNowButton.dataset.gateBlocked = blocked ? "true" : "false";
     }
   }
 
@@ -4823,16 +4866,30 @@
     return false;
   }
 
-  // The single primary composer action. Always estimates first so the
-  // user sees the cost, then surfaces Proceed / Cancel inside the
-  // cost confirmation callout. The previous two-button flow had a
-  // hidden auto-estimates-then-starts shortcut; that shortcut is gone
-  // — the user always sees the estimate before a run starts.
-  async function startRun() {
+  // Entry point for both composer CTAs. It always fetches the estimate first
+  // (so the cost is known before anything spends), then either opens the cost
+  // gate or — for a ``Run now`` click on an ``allow``-band estimate — proceeds
+  // straight to the run. ``autoProceed`` selects between the two; ``trigger``
+  // is the button that fired so its own spinner is shown.
+  async function startRun(autoProceed = false, trigger = estimateButton) {
+    // Re-entrancy latch. With two composer CTAs, clicking one only disables
+    // THAT button (``setButtonLoading`` below) — the sibling and Ctrl/Cmd+Enter
+    // stay live during the estimate round-trip. Without this guard a second
+    // click could fire a concurrent ``estimateRun`` (and, on the Run-now
+    // allow-band path, yank the view mid-run). ``state.isRunning`` is only set
+    // later, after the create POST, so it can't cover this window. Set the latch
+    // synchronously (no await before it) and clear it in ``finally``.
+    if (state.submittingRun || state.isRunning) return;
+    state.submittingRun = true;
     state.submissionAttempted = true;
     clearError();
-    if (!highStakesGateSatisfied()) return;
-    setButtonLoading(estimateButton, true);
+    if (!highStakesGateSatisfied()) { state.submittingRun = false; return; }
+    setButtonLoading(trigger, true);
+    // Lock the sibling CTA for the whole estimate window too, so neither the
+    // other button nor Ctrl/Cmd+Enter (which keys off ``estimateButton.disabled``)
+    // can start a second flow before this one resolves.
+    const sibling = trigger === estimateButton ? runNowButton : estimateButton;
+    if (sibling) sibling.disabled = true;
     try {
       const queryText = queryTextarea.value.trim();
       if (!queryText) {
@@ -4842,15 +4899,17 @@
           message: "Please enter a question before starting a run.",
         });
       }
-      await estimateRun();
+      await estimateRun({ autoProceed, trigger });
     } catch (error) {
       handleError(error);
     } finally {
-      setButtonLoading(estimateButton, false);
+      state.submittingRun = false;
+      setButtonLoading(trigger, false);
       // ``setButtonLoading`` clears ``disabled``; re-assert the run/gate
-      // state so the CTA stays disabled when a run is now in flight (the
-      // ``allow`` band auto-proceeds inside ``estimateRun``) or a
-      // high-stakes topic is unacknowledged.
+      // state so both CTAs stay disabled when a run is now in flight (a
+      // ``Run now`` allow-band click auto-proceeds inside ``estimateRun``)
+      // or a high-stakes topic is unacknowledged. This also re-derives the
+      // sibling CTA's disabled state that was force-locked above.
       applyHighStakesGate();
     }
   }
@@ -4861,6 +4920,14 @@
   // token is needed; for BLOCK the button is disabled and this path
   // cannot fire.
   async function proceedWithRun() {
+    // Synchronous single-create latch. ``setRunning(true)`` (which disables
+    // every run CTA) only fires AFTER the create POST returns, so between two
+    // concurrent entry points — a Run-now auto-proceed still awaiting its
+    // create, and a cost-gate "Run · $X" click — both would otherwise pass to a
+    // second create. This latch (set before the first await, cleared in
+    // ``finally``) guarantees at most one create is ever in flight, enforcing
+    // the "one run at a time per session" invariant on the client.
+    if (state.creatingRun) return;
     state.submissionAttempted = true;
     if (!state.currentEstimate) {
       // Defensive: button should be disabled until an estimate exists.
@@ -4892,6 +4959,9 @@
     if (!checkMagicPhraseAck(queryText, confirmBtn)) {
       return;
     }
+    // Commit to the create: latch now (synchronously, before any await) so a
+    // concurrent proceedWithRun bails at the guard above.
+    state.creatingRun = true;
     setButtonLoading(confirmBtn, true);
     try {
       const thresholdAction =
@@ -4978,6 +5048,10 @@
       }
       handleError(error);
     } finally {
+      // Release the single-create latch. On the success path the run is now in
+      // flight and ``setRunning(true)`` keeps every CTA disabled anyway; on the
+      // failure path this re-opens the create for a genuine retry.
+      state.creatingRun = false;
       setButtonLoading(confirmBtn, false);
     }
   }
@@ -5825,9 +5899,12 @@
           }
           return;
         }
-        // Single-CTA design: Ctrl/Cmd+Enter runs the estimate-first
-        // flow (``startRun``), which routes through the cost gate. The
-        // high-stakes gate keeps the CTA disabled until acknowledged.
+        // Ctrl/Cmd+Enter runs the estimate-first flow (``startRun`` with the
+        // default ``autoProceed=false``), which always routes through the cost
+        // gate — the same as clicking "See the estimate". "Run now" (direct) is
+        // mouse-only by design. The high-stakes gate keeps the CTA disabled
+        // until acknowledged, and the estimate-window latch inside ``startRun``
+        // blocks a second concurrent flow.
         if (!estimateButton.disabled) {
           startRun();
         }
@@ -5929,8 +6006,17 @@
     seedReadinessFromPageLoad();
     applyReadinessState();
     estimateButton.addEventListener("click", () => {
-      startRun();
+      // "See the estimate" always opens the cost gate first (autoProceed
+      // false), even for a cheap allow-band run.
+      startRun(false, estimateButton);
     });
+    if (runNowButton) {
+      runNowButton.addEventListener("click", () => {
+        // "Run now" starts straight away for an allow-band estimate; higher
+        // cost bands still fall into the gate inside ``estimateRun``.
+        startRun(true, runNowButton);
+      });
+    }
     // Shared run-id clipboard helper (Fix 6): both the aside's #copy-correlation
     // button and the live card's #live-corr button copy a run id and show the
     // same copied-title feedback. Extracted so both stay in lockstep.

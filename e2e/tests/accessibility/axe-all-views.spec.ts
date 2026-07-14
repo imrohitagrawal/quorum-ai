@@ -170,6 +170,13 @@ async function routeRun(page: Page, pollBody: unknown) {
 async function clickEstimate(page: Page) {
   await page.getByRole("button", { name: /see the estimate|estimate cost/i }).click();
 }
+// "Run now" is the direct-run CTA: on the mocked allow band it auto-proceeds
+// straight to the run (live-run → result → error views). "See the estimate" now
+// always stops at the cost gate, so it can no longer be used to reach those
+// post-run views — use this helper for them.
+async function clickRunNow(page: Page) {
+  await page.locator("#run-now").click();
+}
 
 test.describe("AC-035 — axe over every view (both themes)", () => {
   test.skip(({ browserName }) => browserName !== "chromium", "axe reference run is chromium-only");
@@ -206,14 +213,14 @@ test.describe("AC-035 — axe over every view (both themes)", () => {
 
   test("live-run — running", async ({ page }) => {
     await boot(page); await routeRun(page, runningResp());
-    await fill(page); await clickEstimate(page);
+    await fill(page); await clickRunNow(page);
     await expect(page.locator('#live-status-pill[data-state="running"]')).toBeVisible();
     await scanBothThemes(page, "live-run-running");
   });
 
   test("result — consensus + details expanded + transcript", async ({ page }) => {
     await boot(page); await routeRun(page, completedResp(true));
-    await fill(page); await clickEstimate(page);
+    await fill(page); await clickRunNow(page);
     await expect(page.locator('#result-verdict[data-consensus="true"]')).toBeVisible();
     await scanBothThemes(page, "result-consensus");
     await page.locator("#result-details-toggle").click();
@@ -226,7 +233,7 @@ test.describe("AC-035 — axe over every view (both themes)", () => {
 
   test("result — divided (amber)", async ({ page }) => {
     await boot(page); await routeRun(page, completedResp(false));
-    await fill(page); await clickEstimate(page);
+    await fill(page); await clickRunNow(page);
     await expect(page.locator('#result-verdict[data-consensus="false"]')).toBeVisible();
     await scanBothThemes(page, "result-divided");
   });
@@ -246,7 +253,7 @@ test.describe("AC-035 — axe over every view (both themes)", () => {
         r.request().method() === "POST"
           ? r.fulfill(fulfil({ detail: { code: e.code, message: "A user-safe error occurred.", ...e.extra } }, e.status))
           : r.continue());
-      await fill(page); await clickEstimate(page);
+      await fill(page); await clickRunNow(page);
       await expect(page.locator("#error-region")).toBeVisible();
       await scanBothThemes(page, `error-${e.name}`);
     });
