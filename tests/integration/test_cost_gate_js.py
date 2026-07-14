@@ -9,7 +9,7 @@ we can exercise it directly via ``node`` the same way
 Pinned contract:
 
 * by_model uses each row's ``display_name``, EXCEPT the
-  ``kind === "synthesis"`` row, which renders as "Synthesis writer".
+  ``kind === "synthesis"`` row, which renders as "Debate + synthesis".
 * by_stage maps the server stage enum (``initial_answers`` /
   ``debate_round_1`` / ``debate_round_2`` / ``synthesis``) to the friendly
   labels, and an unknown stage falls back to its raw key.
@@ -133,9 +133,10 @@ def test_cost_gate_by_model_labels_synthesis_writer() -> None:
         "Gemini 2.5 Flash",
         "DeepSeek V3.1",
     ]
-    # The kind=="synthesis" row renders as the fixed "Synthesis writer"
-    # label, NOT its raw display_name.
-    assert labels[4] == "Synthesis writer"
+    # The kind=="synthesis" row renders as the fixed "Debate + synthesis"
+    # label (issue #16 relabel — it folds in the two debate rounds too), NOT
+    # its raw display_name.
+    assert labels[4] == "Debate + synthesis"
     assert "GPT-4o mini (writer)" not in labels
 
 

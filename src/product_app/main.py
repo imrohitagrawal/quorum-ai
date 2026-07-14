@@ -39,9 +39,7 @@ from product_app.config import RuntimeEnvironment, settings, validate_production
 from product_app.costs import (
     _DEFAULT_PRICE_PER_1K_INPUT,
     _DEFAULT_PRICE_PER_1K_OUTPUT,
-    COST_DISPLAY_QUANTUM,
-    PER_CHAR_PROCESSING_USD,
-    QUERY_COST_PER_1K_CHARS_USD,
+    CHARS_PER_TOKEN,
 )
 from product_app.feedback_store import FeedbackStore, get_store
 from product_app.feedback_store import configure as configure_feedback_store
@@ -320,14 +318,19 @@ def _render_workspace_html() -> str:
     # against the real ``/v1/query-runs/estimate`` response to guard against drift.
     cost_model_json = json.dumps(
         {
-            "output_token_multiplier": float(settings.cost_output_token_multiplier),
-            "inner_call_multiplier": float(settings.cost_inner_call_multiplier),
-            "inner_call_cap_usd": str(settings.cost_inner_call_cap_usd),
-            "query_cost_per_1k_chars": str(QUERY_COST_PER_1K_CHARS_USD),
-            "per_char_processing": str(PER_CHAR_PROCESSING_USD),
+            # issue #16: realistic per-call token model. The client mirrors
+            # the per-slot initial-answer row from these scalars + the
+            # per-model catalog prices (single source of truth; no
+            # hard-coded figures client-side). Debate/synthesis pricing is
+            # server-only (the client renders that row from the server
+            # breakdown), so those knobs are intentionally not exposed here.
+            "chars_per_token": str(CHARS_PER_TOKEN),
+            "system_prompt_tokens": int(settings.cost_system_prompt_tokens),
+            "web_search_context_tokens": int(settings.cost_web_search_context_tokens),
+            "initial_output_tokens": int(settings.cost_initial_output_tokens),
+            "output_tokens_per_query_token": float(settings.cost_output_tokens_per_query_token),
             "default_input_price_per_1k": str(_DEFAULT_PRICE_PER_1K_INPUT),
             "default_output_price_per_1k": str(_DEFAULT_PRICE_PER_1K_OUTPUT),
-            "display_quantum": str(COST_DISPLAY_QUANTUM),
         }
     ).replace("<", "\\u003c")
     stale_ids_json = json.dumps(stale_ids).replace("<", "\\u003c")

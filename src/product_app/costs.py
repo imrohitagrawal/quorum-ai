@@ -63,29 +63,22 @@ _DEFAULT_PRICE_PER_1K_INPUT = Decimal("0.0008")
 _DEFAULT_PRICE_PER_1K_OUTPUT = Decimal("0.002")
 
 
-DEBATE_FIXED_COST_USD = Decimal("0.012")
-SYNTHESIS_FIXED_COST_USD = Decimal("0.015")
+#: Chars-per-token conversion used to turn query text length into a
+#: token count (the industry ~4-chars/token rule of thumb).
+CHARS_PER_TOKEN = Decimal(4)
 
-#: L3: debate + synthesis inner-call cost is now proportional to the
-#: max output rate in the selected model mix, scaled by the configured
-#: ``cost_inner_call_multiplier`` and capped at
-#: ``cost_inner_call_cap_usd`` (both via :data:`product_app.config.settings`).
-#: The flat ``DEBATE_FIXED_COST_USD`` and ``SYNTHESIS_FIXED_COST_USD``
-#: constants above remain for backward compatibility (re-exported by
-#: ``_estimate_breakdown`` callers and referenced by some tests) but are
-#: no longer summed into the estimate; the proportional term replaces
-#: them. The cap exists so a 5K-char query on the default model mix
-#: doesn't tip over the $0.25 hard limit just because the inner-call
-#: cost scales with query length.
-
-QUERY_COST_PER_1K_CHARS_USD = Decimal("0.00002")
-#: Per-character base processing charge. The debate pipeline scans the
-#: query text once and the cost grows linearly with character count.
-#: This term dominates for long queries and ensures a 5K-character
-#: prompt falls into the require-confirmation band on the default
-#: model mix, while a short prompt (a few dozen characters) stays in
-#: the allow band.
-PER_CHAR_PROCESSING_USD = Decimal("0.00003")
+#: issue #16: the estimate is a realistic per-call token model. The old
+#: ``QUERY_COST_PER_1K_CHARS_USD`` / ``PER_CHAR_PROCESSING_USD`` synthetic
+#: per-character charges (and the flat ``DEBATE_FIXED_COST_USD`` /
+#: proportional inner-call terms) are gone: they were tuned to push long
+#: queries into the guardrail bands, not to model real token economics,
+#: and they under-priced the debate + synthesis calls that actually
+#: dominate cost. Every term is now ``price_per_1k × tokens``, where the
+#: token counts come from :data:`product_app.config.settings` (see the
+#: ``cost_*_tokens`` knobs). Debate is priced on
+#: ``settings.debate_model_id`` and synthesis on
+#: ``settings.synthesis_model_id`` — the models those calls actually use —
+#: not a proxy rate borrowed from the four slot models.
 
 CONFIRMATION_TOKEN_TTL = timedelta(minutes=5)
 
@@ -100,7 +93,7 @@ class CostLineByModel(BaseModel):
     model_id: str
     display_name: str
     usd: Decimal = Field(ge=Decimal("0"))
-    #: Discriminator so consumers distinguish the pseudo "Synthesis writer"
+    #: Discriminator so consumers distinguish the pseudo "Debate + synthesis"
     #: row from a real model row without matching the magic ``model_id``.
     #: ``"model"`` for the four model rows, ``"synthesis"`` for the writer.
     kind: str = "model"
@@ -132,11 +125,22 @@ class CostBreakdown(BaseModel):
 
 
 class CostEstimate(BaseModel):
+    #: Realistic point estimate of the typical charge — the headline "≈ $X"
+    #: shown to the user. Calibrated to track measured actual (issue #16).
     estimated_cost_usd: Decimal = Field(ge=Decimal("0"))
     currency: str = "USD"
     threshold_action: CostThresholdAction
     confirmation_token: str | None
     reasons: list[str]
+    #: Fail-safe upper bound — the "up to $Y" figure. Prices the initial-answer
+    #: output at the enforced ``settings.initial_answer_max_tokens`` cap, so
+    #: (because the live initial calls are capped at that value) real cost never
+    #: exceeds it. The cost guardrail (BLOCK / REQUIRE_CONFIRMATION / daily cap)
+    #: is evaluated against THIS value, not the point estimate, so the rail
+    #: fails safe (issue #16 rec #2/#3). Optional with a ``None`` default so
+    #: pre-existing ``CostEstimate(...)`` constructions keep working; always >=
+    #: ``estimated_cost_usd`` when ``estimate()`` sets it.
+    max_cost_usd: Decimal | None = Field(default=None, ge=Decimal("0"))
     #: Itemized cost partition (by model AND by stage). Optional with a
     #: ``None`` default so pre-existing ``CostEstimate(...)`` constructions
     #: (tests, cancel path) keep working; ``estimate()`` always attaches a
@@ -278,7 +282,17 @@ class CostEstimationService:
         # the BLOCK / cumulative / daily-cap early returns — so screens 03/05
         # always have the itemized partition.
         estimated = breakdown.total
-        threshold_action, reasons = self._threshold_for(estimated)
+        # Fail-safe upper bound (issue #16 rec #2/#3). The cost guardrail
+        # (per-call BLOCK / REQUIRE_CONFIRMATION) is evaluated against THIS,
+        # not the realistic point estimate, so it can only over-protect: real
+        # cost is capped at the initial-answer ``max_tokens`` this bound
+        # prices, and debate/synthesis are already capped. ``max_cost_usd``
+        # is >= ``estimated`` and is surfaced to the UI as the "up to $Y"
+        # figure. The cumulative / daily-cap accounting below stays on the
+        # realistic ``estimated`` — those track accumulated REAL spend, which
+        # tracks the point estimate, not the worst case.
+        bound = self._estimate_bound_usd(query_text=query_text, model_slots=model_slots)
+        threshold_action, reasons = self._threshold_for(bound)
         # C8: cumulative-spend guard. A user can issue many small
         # queries that each stay below ``HARD_LIMIT_USD`` but together
         # blow the budget. The hard limit is per-account-per-window;
@@ -296,6 +310,7 @@ class CostEstimationService:
             if cumulative + estimated > HARD_LIMIT_USD:
                 return CostEstimate(
                     estimated_cost_usd=estimated,
+                    max_cost_usd=bound,
                     threshold_action=CostThresholdAction.BLOCK,
                     confirmation_token=None,
                     breakdown=breakdown,
@@ -327,6 +342,7 @@ class CostEstimationService:
                 if already_spent + estimated > DAILY_CAP_USD:
                     return CostEstimate(
                         estimated_cost_usd=estimated,
+                        max_cost_usd=bound,
                         threshold_action=CostThresholdAction.BLOCK,
                         confirmation_token=None,
                         breakdown=breakdown,
@@ -358,6 +374,7 @@ class CostEstimationService:
             )
         return CostEstimate(
             estimated_cost_usd=estimated,
+            max_cost_usd=bound,
             threshold_action=threshold_action,
             confirmation_token=confirmation_token,
             reasons=reasons,
@@ -463,32 +480,117 @@ class CostEstimationService:
     ) -> CostBreakdown:
         """Compute the itemized cost partition (by model AND by stage).
 
-        The grand total is *identical* to the pre-B1 ``_estimate_total``
-        arithmetic — this method only exposes structure. Two partitions are
-        derived from the same terms; both re-sum to the (quantized) total
+        issue #16: a realistic per-call token model. The pipeline is seven
+        billed calls — four initial answers (one per slot, on the slot's
+        own model), two debate rounds (on ``settings.debate_model_id``),
+        and one synthesis (on ``settings.synthesis_model_id``). Each call's
+        prompt is modelled as ``system-prompt overhead + web-search context
+        (searching initial slots only) + the query + the upstream answers
+        it consumes``; each call's output is a configured floor that grows
+        modestly with query length. Every term is ``price_per_1k × tokens``
+        against the cached catalog rates — no API call, no synthetic
+        per-character charge. Two partitions (``by_stage`` and ``by_model``)
+        are derived from the same terms; both re-sum to the quantized total
         after :meth:`_reconcile_usd_lines` distributes the rounding residual.
+        """
+        # An initial answer's output lengthens modestly with the query. The
+        # bound path (:meth:`_estimate_bound_usd`) overrides this with the
+        # enforced ``max_tokens`` cap.
+        query_tokens = Decimal(len(query_text)) / CHARS_PER_TOKEN
+        init_output_tokens = Decimal(settings.cost_initial_output_tokens) + (
+            Decimal(str(settings.cost_output_tokens_per_query_token)) * query_tokens
+        )
+        (
+            initial_per_model,
+            initial_total,
+            debate_round_cost,
+            synthesis_cost,
+            raw_total,
+        ) = self._cost_components(
+            query_text=query_text,
+            model_slots=model_slots,
+            init_output_tokens=init_output_tokens,
+        )
+        total = raw_total.quantize(COST_DISPLAY_QUANTUM, rounding=ROUND_HALF_UP)
+
+        # --- by_stage: initial + the two debate rounds + synthesis ------
+        # Stage keys mirror ``progress.stages[].stage`` (see
+        # ``query_runs._initial_progress``) so a UI can join the two.
+        # Reconcile ALL FOUR raw lines against ``total`` in a single call. Their
+        # raw sum IS ``raw_total`` (whose quantization is ``total``), so the
+        # residual is always <= the line count and no quantum is ever dropped —
+        # both partitions re-sum to ``total`` exactly. (Reconciling only a
+        # subset against a derived sub-total could leak the debate-round
+        # rounding slack into a residual larger than the subset can absorb,
+        # silently short-summing the partition.)
+        stage_names = ("initial_answers", "debate_round_1", "debate_round_2", "synthesis")
+        stage_usd = self._reconcile_usd_lines(
+            [initial_total, debate_round_cost, debate_round_cost, synthesis_cost], total
+        )
+        # The two debate rounds share one token model and must display equal,
+        # but the largest-remainder tie-break can award the residual quantum to
+        # ``debate_round_1`` (lower index) and not ``debate_round_2``. Equal raws
+        # can only diverge by a single quantum, so move that quantum onto
+        # ``initial_answers`` (the largest line): the pair is equalized AND the
+        # total is preserved (a sum-neutral transfer, every line stays >= 0).
+        if stage_usd[1] != stage_usd[2]:
+            hi = 1 if stage_usd[1] > stage_usd[2] else 2
+            stage_usd[hi] -= COST_DISPLAY_QUANTUM
+            stage_usd[0] += COST_DISPLAY_QUANTUM
+        by_stage = [
+            CostLineByStage(stage=name, usd=usd)
+            for name, usd in zip(stage_names, stage_usd, strict=True)
+        ]
+
+        # --- by_model: 4 initial-answer rows + a debate+synthesis row ----
+        # Each of the four rows is its slot's own initial-answer cost. The
+        # fifth row is the debate (×2) + synthesis orchestration, which runs
+        # on the dedicated inner-call models, not the four slots — so it is
+        # its own line rather than being smeared across the slot rows.
+        # (issue #16 relabel: the old "Synthesis writer" name hid that this
+        # line also includes the two debate rounds.)
+        inner_call_cost = Decimal(2) * debate_round_cost + synthesis_cost
+        raw_model: list[tuple[str, str, str, Decimal]] = []
+        for slot, initial_i in zip(model_slots, initial_per_model, strict=True):
+            display_name = (
+                openrouter_model_catalog_service.lookup_short_name(slot.model_id) or slot.model_id
+            )
+            raw_model.append(("model", slot.model_id, display_name, initial_i))
+        raw_model.append(("synthesis", "synthesis", "Debate + synthesis", inner_call_cost))
+        model_usd = self._reconcile_usd_lines([v for *_, v in raw_model], total)
+        by_model = [
+            CostLineByModel(model_id=mid, display_name=name, usd=usd, kind=kind)
+            for (kind, mid, name, _), usd in zip(raw_model, model_usd, strict=True)
+        ]
+
+        return CostBreakdown(by_model=by_model, by_stage=by_stage, total=total)
+
+    def _cost_components(
+        self,
+        *,
+        query_text: str,
+        model_slots: list[ModelSlot],
+        init_output_tokens: Decimal,
+        synthesis_sections: Decimal = Decimal(1),
+        debate_output_override: Decimal | None = None,
+    ) -> tuple[list[Decimal], Decimal, Decimal, Decimal, Decimal]:
+        """The shared per-call token model, parameterised by the initial-answer
+        output token count and the synthesis section count.
+
+        Returns ``(initial_per_model, initial_total, debate_round_cost,
+        synthesis_cost, raw_total)``. Used with the realistic output floor +
+        one synthesis section for the displayed estimate
+        (:meth:`_estimate_breakdown`) and with the enforced ``max_tokens`` cap +
+        all synthesis sections for the fail-safe guardrail bound
+        (:meth:`_estimate_bound_usd`) — same arithmetic, different worst-case
+        assumptions, so the two can never drift.
         """
         if not model_slots:
             raise ValueError("model_slots must not be empty")
         if len(model_slots) != 4:
             raise ValueError("model_slots must contain exactly four slots")
-        query_cost = QUERY_COST_PER_1K_CHARS_USD * Decimal(len(query_text) / 1000)
-        # Per-character base processing charge. This dominates for long
-        # queries so a 5K-character prompt lands in the
-        # require-confirmation band on the default model mix.
-        processing_cost = PER_CHAR_PROCESSING_USD * Decimal(len(query_text))
-        # Both input and output tokens are billed by real providers.
-        # The output-token multiplier is a heuristic — we cannot know
-        # the actual answer length before the call — but it brings
-        # the estimate from ~$0.01 to within ~25% of the actual
-        # charge on a typical research query.
-        input_tokens = Decimal(len(query_text) / 4)  # ~4 chars/token
-        multiplier = Decimal(str(settings.cost_output_token_multiplier))
-        output_tokens = input_tokens * multiplier
-        # We approximate each model as receiving the full query text.
-        # PERF-P1: use the cached price index instead of rebuilding
-        # the dict on every estimate call. The index is built once
-        # per cache miss and looked up in O(1) per model id.
+        # PERF-P1: use the cached price index instead of rebuilding the dict
+        # on every estimate call — O(1) lookup per model id.
         prices = openrouter_model_catalog_service.price_index()
 
         def _price(model_id: str) -> tuple[Decimal, Decimal]:
@@ -497,85 +599,91 @@ class CostEstimationService:
                 (_DEFAULT_PRICE_PER_1K_INPUT, _DEFAULT_PRICE_PER_1K_OUTPUT),
             )
 
-        # Per-model initial-answer cost: the model's own input+output
-        # charge. ``sum(initial_i)`` == the old
-        # ``model_input_cost + model_output_cost`` term exactly.
-        initial_per_model: list[Decimal] = [
-            _price(slot.model_id)[0] * (input_tokens / Decimal(1000))
-            + _price(slot.model_id)[1] * (output_tokens / Decimal(1000))
-            for slot in model_slots
-        ]
-        model_input_output_cost = sum(initial_per_model, Decimal("0"))
-        # L3 - proportional inner-call cost. Debate and synthesis are
-        # also LLM calls now (L4), so the estimate must price them.
-        # Per-call cost: ``max_output_rate × output_tokens / 1000``,
-        # scaled by ``cost_inner_call_multiplier``. Three inner calls
-        # total (2 debate rounds + 1 synthesis), capped at
-        # ``cost_inner_call_cap_usd`` so very long queries don't push
-        # the total estimate over the $0.25 hard limit on the default
-        # model mix. The cap is the saturation point: real debate and
-        # synthesis outputs don't grow linearly with query length
-        # because the inner steps process a bounded context (the 4
-        # initial answers + the query) regardless of how long the
-        # query is.
-        max_output_rate = max(
-            (_price(slot.model_id)[1] for slot in model_slots),
-            default=_DEFAULT_PRICE_PER_1K_OUTPUT,
+        def _cost(model_id: str, prompt_tokens: Decimal, output_tokens: Decimal) -> Decimal:
+            pin, pout = _price(model_id)
+            return pin * prompt_tokens / Decimal(1000) + pout * output_tokens / Decimal(1000)
+
+        query_tokens = Decimal(len(query_text)) / CHARS_PER_TOKEN
+        system_tokens = Decimal(settings.cost_system_prompt_tokens)
+        search_tokens = Decimal(settings.cost_web_search_context_tokens)
+        # Point estimate uses the typical floor; the bound overrides with the
+        # enforced per-round cap so it is a true ceiling on the debate stage.
+        debate_output_tokens = (
+            debate_output_override
+            if debate_output_override is not None
+            else Decimal(settings.cost_debate_output_tokens)
         )
-        inner_multiplier = Decimal(str(settings.cost_inner_call_multiplier))
-        inner_cap = Decimal(str(settings.cost_inner_call_cap_usd))
-        inner_per_call = inner_multiplier * max_output_rate * output_tokens / Decimal(1000)
-        inner_call_cost = min(inner_per_call * Decimal(3), inner_cap)
+        synthesis_output_tokens = Decimal(settings.cost_synthesis_output_tokens)
 
-        # Grand total — unchanged value vs. the old ``_estimate_total``.
-        raw_total = query_cost + processing_cost + model_input_output_cost + inner_call_cost
-        total = raw_total.quantize(COST_DISPLAY_QUANTUM, rounding=ROUND_HALF_UP)
-
-        # The 3 inner calls (debate r1 + debate r2 + synthesis) are equal
-        # in the underlying formula, so each is one third of the
-        # inner-call cost.
-        stage_inner = inner_call_cost / Decimal(3)
-        base = query_cost + processing_cost  # query + processing overhead
-
-        # --- by_stage: initial + the three equal inner-call stages ------
-        # Stage keys mirror ``progress.stages[].stage`` (see
-        # ``query_runs._initial_progress``) so a UI can join the two.
-        raw_stage: list[tuple[str, Decimal]] = [
-            ("initial_answers", base + model_input_output_cost),
-            ("debate_round_1", stage_inner),
-            ("debate_round_2", stage_inner),
-            ("synthesis", stage_inner),
-        ]
-        stage_usd = self._reconcile_usd_lines([v for _, v in raw_stage], total)
-        by_stage = [
-            CostLineByStage(stage=name, usd=usd)
-            for (name, _), usd in zip(raw_stage, stage_usd, strict=True)
-        ]
-
-        # --- by_model: 4 model rows + a "Synthesis writer" row ----------
-        # Each model row carries its own initial cost plus an equal share
-        # of the query/processing overhead and of the two debate rounds
-        # (round_1 + round_2). The synthesis inner call is its own row.
-        base_share = base / Decimal(4)
-        # Each model row absorbs an equal share of the two debate rounds
-        # (round_1 + round_2 = 2 * stage_inner, split four ways).
-        debate_share = stage_inner / Decimal(2)
-        raw_model: list[tuple[str, str, str, Decimal]] = []
-        for slot, initial_i in zip(model_slots, initial_per_model, strict=True):
-            display_name = (
-                openrouter_model_catalog_service.lookup_short_name(slot.model_id) or slot.model_id
+        # --- 4 initial answers (each on its own slot model) -------------
+        # A searching slot's prompt carries the injected web-search context;
+        # a search-disabled slot (the cheaper, training-data-only path)
+        # does not. This is the term the old model missed entirely — it
+        # priced ~11 query tokens instead of the ~2,300 prompt tokens a
+        # searching call actually carries.
+        initial_per_model: list[Decimal] = []
+        for slot in model_slots:
+            prompt_tokens = (
+                system_tokens + (search_tokens if slot.search else Decimal(0)) + query_tokens
             )
-            raw_model.append(
-                ("model", slot.model_id, display_name, initial_i + base_share + debate_share)
-            )
-        raw_model.append(("synthesis", "synthesis", "Synthesis writer", stage_inner))
-        model_usd = self._reconcile_usd_lines([v for *_, v in raw_model], total)
-        by_model = [
-            CostLineByModel(model_id=mid, display_name=name, usd=usd, kind=kind)
-            for (kind, mid, name, _), usd in zip(raw_model, model_usd, strict=True)
-        ]
+            initial_per_model.append(_cost(slot.model_id, prompt_tokens, init_output_tokens))
+        initial_total = sum(initial_per_model, Decimal("0"))
 
-        return CostBreakdown(by_model=by_model, by_stage=by_stage, total=total)
+        # --- 2 debate rounds + 1 synthesis (dedicated inner-call models) -
+        # These read a BOUNDED context — the four initial answers plus the
+        # query — priced on the models they actually run on (debate/synthesis
+        # writers), not a rate borrowed from the four slot models. Their prompt
+        # scales with the initial answers they consume (``init_output_tokens``),
+        # so the guardrail bound's larger initial output flows through here too.
+        upstream_answers_tokens = Decimal(4) * init_output_tokens
+        debate_prompt_tokens = system_tokens + query_tokens + upstream_answers_tokens
+        # Both rounds share the same token model (the invariant the UI and the
+        # breakdown tests rely on: ``by_stage`` round_1 == round_2).
+        debate_round_cost = _cost(
+            settings.debate_model_id, debate_prompt_tokens, debate_output_tokens
+        )
+        synthesis_prompt_tokens = (
+            system_tokens
+            + query_tokens
+            + upstream_answers_tokens
+            + Decimal(2) * debate_output_tokens
+        )
+        # Synthesis fans out into ``synthesis_sections`` independent live calls,
+        # each re-sending the full context. The point estimate passes 1 (the
+        # measured typical); the bound passes the configured section count.
+        synthesis_cost = synthesis_sections * _cost(
+            settings.synthesis_model_id, synthesis_prompt_tokens, synthesis_output_tokens
+        )
+        raw_total = initial_total + Decimal(2) * debate_round_cost + synthesis_cost
+        return initial_per_model, initial_total, debate_round_cost, synthesis_cost, raw_total
+
+    def _estimate_bound_usd(self, *, query_text: str, model_slots: list[ModelSlot]) -> Decimal:
+        """Fail-safe upper bound on real cost — the "up to $Y" figure the cost
+        guardrail is evaluated against (issue #16 rec #2/#3).
+
+        Identical arithmetic to the displayed estimate, but priced at the
+        worst case on every dimension the point estimate models as typical:
+        initial-answer output at the enforced
+        ``settings.initial_answer_max_tokens`` cap (instead of the floor),
+        debate output at the enforced per-round
+        ``settings.cost_debate_output_tokens_cap`` (instead of the floor), and
+        synthesis as all ``settings.cost_synthesis_sections`` section calls
+        (instead of one). Because the live calls are capped at exactly these
+        values — initial (see ``providers._call_openrouter_with_optional_search``),
+        debate (``debate.DEBATE_ROUND_MAX_TOKENS``), synthesis
+        (``synthesis.SYNTHESIS_SECTION_MAX_TOKENS`` × section count) — this
+        total is a true ceiling on real cost: the guardrail keying off it can
+        only ever over-protect, never wave through a run that then bills more.
+        """
+        init_output_tokens = Decimal(settings.initial_answer_max_tokens)
+        *_, raw_total = self._cost_components(
+            query_text=query_text,
+            model_slots=model_slots,
+            init_output_tokens=init_output_tokens,
+            synthesis_sections=Decimal(settings.cost_synthesis_sections),
+            debate_output_override=Decimal(settings.cost_debate_output_tokens_cap),
+        )
+        return raw_total.quantize(COST_DISPLAY_QUANTUM, rounding=ROUND_HALF_UP)
 
     @staticmethod
     def _reconcile_usd_lines(raw: list[Decimal], total: Decimal) -> list[Decimal]:
@@ -652,24 +760,27 @@ class CostEstimationService:
             total += event.estimated_cost_usd
         return total
 
-    def _threshold_for(self, estimated: Decimal) -> tuple[CostThresholdAction, list[str]]:
-        if estimated > HARD_LIMIT_USD:
+    def _threshold_for(self, bound: Decimal) -> tuple[CostThresholdAction, list[str]]:
+        # ``bound`` is the fail-safe ``max_cost_usd`` (the "up to $Y" figure),
+        # NOT the realistic point estimate — the rail keys off the worst case so
+        # a run can never bill past a limit it was waved through under.
+        if bound > HARD_LIMIT_USD:
             return (
                 CostThresholdAction.BLOCK,
                 [
-                    "Estimated cost is above the USD 0.25 hard limit for this account.",
+                    "Worst-case cost could exceed the USD 0.25 hard limit for this account.",
                 ],
             )
-        if estimated > SOFT_THRESHOLD_USD:
+        if bound > SOFT_THRESHOLD_USD:
             return (
                 CostThresholdAction.REQUIRE_CONFIRMATION,
                 [
-                    "Estimated cost is above USD 0.15 and requires explicit confirmation.",
+                    "Worst-case cost could exceed USD 0.15 and requires explicit confirmation.",
                 ],
             )
         return (
             CostThresholdAction.ALLOW,
-            ["Estimated cost is within the no-confirmation band."],
+            ["Worst-case cost is within the no-confirmation band."],
         )
 
     def _mint_confirmation_token(
@@ -810,10 +921,12 @@ def build_measured_breakdown(
     * ``synthesis_cost`` — summed measured cost of the live synthesis section
       calls.
 
-    Debate + synthesis are attributed to a single ``"Synthesis writer"``
+    Debate + synthesis are attributed to a single ``"Debate + synthesis"``
     ``by_model`` row because they use the dedicated debate/synthesis writer
-    models, not the four slot models. Both partitions are reconciled to the
-    quantized grand total with the same largest-remainder rule as the estimate,
+    models, not the four slot models. (issue #16 relabel: the old
+    ``"Synthesis writer"`` name hid that this line also folds in the two
+    debate rounds — which are the bulk of the inner-call cost.) Both partitions
+    are reconciled to the quantized grand total with the same rule as the estimate,
     so every line is ``>= 0`` and the lines sum to the total exactly (the UI's
     reconciliation invariant).
     """
@@ -838,7 +951,7 @@ def build_measured_breakdown(
 
     writer_cost = debate_total + synthesis_cost
     raw_model: list[tuple[str, str, Decimal]] = list(per_model_initial)
-    raw_model.append(("synthesis", "Synthesis writer", writer_cost))
+    raw_model.append(("synthesis", "Debate + synthesis", writer_cost))
     model_usd = CostEstimationService._reconcile_usd_lines([c for *_, c in raw_model], total)
     by_model = [
         CostLineByModel(

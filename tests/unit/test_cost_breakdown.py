@@ -94,13 +94,13 @@ def test_breakdown_shape_and_reconciliation(query_text: str, model_ids: list[str
     breakdown = estimate.breakdown
     assert isinstance(breakdown, CostBreakdown)
 
-    # by_model: 4 model rows + a 5th "Synthesis writer" pseudo-row that is
+    # by_model: 4 model rows + a 5th "Debate + synthesis" pseudo-row that is
     # tagged with ``kind="synthesis"`` (not identified by the magic id).
     assert len(breakdown.by_model) == 5
     assert [line.kind for line in breakdown.by_model[:4]] == ["model"] * 4
     assert breakdown.by_model[-1].kind == "synthesis"
     assert breakdown.by_model[-1].model_id == "synthesis"
-    assert breakdown.by_model[-1].display_name == "Synthesis writer"
+    assert breakdown.by_model[-1].display_name == "Debate + synthesis"
     assert [line.model_id for line in breakdown.by_model[:4]] == model_ids
 
     # by_stage: the four named stages, in the progress vocabulary, in order.
@@ -159,19 +159,24 @@ def test_exact_partition_pins_the_split() -> None:
 
     Hand computation for ``query_text = "x" * 1000`` with 4 fallback-priced
     slots (all at ``_DEFAULT_PRICE_PER_1K_INPUT=0.0008`` /
-    ``_DEFAULT_PRICE_PER_1K_OUTPUT=0.002``) and the default settings
-    (output multiplier 3.0, inner multiplier 1.5, inner cap 0.05):
+    ``_DEFAULT_PRICE_PER_1K_OUTPUT=0.002``) under the issue #16 token model
+    (system 350, web-search 2000, initial-output floor 700 + 0.5/query-token,
+    debate-output 400, synthesis-output 800; debate priced on haiku-4.5
+    0.001/0.005, synthesis on gpt-4o-mini 0.00015/0.0006):
 
-      query_cost      = 0.00002 * 1     = 0.00002
-      processing_cost = 0.00003 * 1000  = 0.03
-      base            = query+processing= 0.03002
-      input_tokens=250, output_tokens=750
-      initial_i (per model) = 0.0008*0.25 + 0.002*0.75 = 0.0017
-      model_io  = 4 * 0.0017            = 0.0068
-      inner_per_call = 1.5*0.002*750/1000 = 0.00225
-      inner_call_cost = min(3*0.00225, 0.05) = 0.00675
-      stage_inner = 0.00225
-      raw_total = 0.00002+0.03+0.0068+0.00675 = 0.04357 -> total 0.0436
+      query_tokens   = 1000 / 4 = 250
+      init_output    = 700 + 0.5*250 = 825
+      init_prompt    = 350 + 2000 + 250 = 2600  (all slots search=True)
+      initial_i      = 0.0008*2600/1000 + 0.002*825/1000 = 0.00208 + 0.00165
+                     = 0.00373  (per model)
+      initial_total  = 4 * 0.00373 = 0.01492
+      ctx4           = 4 * 825 = 3300
+      debate_prompt  = 350 + 250 + 3300 = 3900
+      debate_round   = 0.001*3900/1000 + 0.005*400/1000 = 0.0039 + 0.002 = 0.0059
+      synth_prompt   = 350 + 250 + 3300 + 800 = 4700
+      synthesis      = 0.00015*4700/1000 + 0.0006*800/1000 = 0.000705 + 0.00048
+                     = 0.001185
+      raw_total      = 0.01492 + 2*0.0059 + 0.001185 = 0.027905 -> total 0.0279
     """
     estimate = cost_estimation_service.estimate(
         query_text="x" * 1000,
@@ -179,40 +184,47 @@ def test_exact_partition_pins_the_split() -> None:
     )
     breakdown = estimate.breakdown
     assert breakdown is not None
-    assert breakdown.total == Decimal("0.0436")
+    assert breakdown.total == Decimal("0.0279")
 
-    # by_stage — initial_answers dominates; the three inner stages are ~0.00225
-    # each and the two remaining quanta land on the two largest remainders
-    # (the two debate rounds; tie -> lowest index), leaving synthesis at 0.0022.
+    # by_stage — initial_answers dominates; the two debate rounds are 0.0059
+    # each; the remaining quantum lands on synthesis (largest remainder 0.85).
     assert [(line.stage, line.usd) for line in breakdown.by_stage] == [
-        ("initial_answers", Decimal("0.0368")),
-        ("debate_round_1", Decimal("0.0023")),
-        ("debate_round_2", Decimal("0.0023")),
-        ("synthesis", Decimal("0.0022")),
+        ("initial_answers", Decimal("0.0149")),
+        ("debate_round_1", Decimal("0.0059")),
+        ("debate_round_2", Decimal("0.0059")),
+        ("synthesis", Decimal("0.0012")),
     ]
 
-    # by_model — each model row raw = 0.0017 + base/4 + stage_inner/2 = 0.01033
-    # (floors to 0.0103, remainder 0.3); synthesis row = stage_inner = 0.00225
-    # (floors to 0.0022, remainder 0.5). Two quanta to distribute -> synthesis
-    # (largest remainder) then model row 0 (tie -> lowest index).
+    # by_model — each model row raw = initial_i = 0.00373 (floors to 0.0037,
+    # remainder 0.3); the debate+synthesis row raw = 2*0.0059 + 0.001185 =
+    # 0.012985 (floors to 0.0129, remainder 0.85). Two quanta to distribute ->
+    # the writer row (largest remainder) then model row 0 (tie -> lowest index).
     assert [(line.model_id, line.usd) for line in breakdown.by_model] == [
-        ("test/fallback-a", Decimal("0.0104")),
-        ("test/fallback-b", Decimal("0.0103")),
-        ("test/fallback-c", Decimal("0.0103")),
-        ("test/fallback-d", Decimal("0.0103")),
-        ("synthesis", Decimal("0.0023")),
+        ("test/fallback-a", Decimal("0.0038")),
+        ("test/fallback-b", Decimal("0.0037")),
+        ("test/fallback-c", Decimal("0.0037")),
+        ("test/fallback-d", Decimal("0.0037")),
+        ("synthesis", Decimal("0.0130")),
     ]
 
 
 def test_breakdown_attached_on_require_confirmation() -> None:
     """The REQUIRE_CONFIRMATION path (final return) must carry the breakdown.
 
-    ``"x" * 5200`` on the default mix estimates to ~$0.2358, which lands in
-    the (0.15, 0.25] confirmation band.
+    issue #16: the guardrail keys off the fail-safe ``max_cost_usd`` bound. One
+    opus slot + three cheap slots lands the bound in the (0.15, 0.25] CONFIRM
+    band (bound ~$0.21) while the point estimate is only ~$0.10.
     """
     estimate = cost_estimation_service.estimate(
-        query_text="x" * 5200,
-        model_slots=_slots(DEFAULT_MODEL_IDS),
+        query_text="Compare frontier model safety features.",
+        model_slots=_slots(
+            [
+                "anthropic/claude-opus-4",
+                "openai/gpt-4o-mini",
+                "deepseek/deepseek-chat-v3.1",
+                "google/gemini-2.5-flash",
+            ]
+        ),
     )
     assert estimate.threshold_action is CostThresholdAction.REQUIRE_CONFIRMATION
     assert estimate.breakdown is not None

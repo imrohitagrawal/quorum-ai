@@ -73,15 +73,18 @@ def test_cost_model_island_matches_source_of_truth_constants() -> None:
     from product_app.costs import (
         _DEFAULT_PRICE_PER_1K_INPUT,
         _DEFAULT_PRICE_PER_1K_OUTPUT,
-        PER_CHAR_PROCESSING_USD,
-        QUERY_COST_PER_1K_CHARS_USD,
+        CHARS_PER_TOKEN,
     )
 
     cm = {k: str(v) for k, v in _extract_cost_model(_render_workspace_html()).items()}
-    assert float(cm["output_token_multiplier"]) == float(settings.cost_output_token_multiplier)
-    assert float(cm["inner_call_multiplier"]) == float(settings.cost_inner_call_multiplier)
-    assert Decimal(cm["inner_call_cap_usd"]) == Decimal(str(settings.cost_inner_call_cap_usd))
-    assert Decimal(cm["query_cost_per_1k_chars"]) == QUERY_COST_PER_1K_CHARS_USD
-    assert Decimal(cm["per_char_processing"]) == PER_CHAR_PROCESSING_USD
+    # issue #16 token-model scalars: these drive the client's per-slot
+    # initial-answer mirror and MUST match the server settings exactly.
+    assert Decimal(cm["chars_per_token"]) == CHARS_PER_TOKEN
+    assert int(cm["system_prompt_tokens"]) == int(settings.cost_system_prompt_tokens)
+    assert int(cm["web_search_context_tokens"]) == int(settings.cost_web_search_context_tokens)
+    assert int(cm["initial_output_tokens"]) == int(settings.cost_initial_output_tokens)
+    assert float(cm["output_tokens_per_query_token"]) == float(
+        settings.cost_output_tokens_per_query_token
+    )
     assert Decimal(cm["default_input_price_per_1k"]) == _DEFAULT_PRICE_PER_1K_INPUT
     assert Decimal(cm["default_output_price_per_1k"]) == _DEFAULT_PRICE_PER_1K_OUTPUT
