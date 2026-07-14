@@ -102,6 +102,13 @@ const fulfil = (body: unknown, status = 200) => ({ status, contentType: "applica
 const QUESTION = "What are the key metrics for measuring SaaS customer retention?";
 
 async function boot(page: Page) {
+  // These suites exercise the WORKSPACE (screen 02). Seed the first-visit gate's
+  // "workspace seen" flag so every boot lands on the composer directly, exactly
+  // as a returning visitor would — the landing front-door path is covered by its
+  // own dedicated test below. addInitScript runs before app.js on every load.
+  await page.addInitScript(() => {
+    try { window.localStorage.setItem("quorum.workspaceSeen", "1"); } catch (_) {}
+  });
   await page.goto("/ui", { waitUntil: "domcontentloaded" });
   await expect(page.locator('[data-view="composer"]')).toBeVisible();
   await page.waitForFunction(() => {
@@ -353,16 +360,46 @@ test.describe("UI parity — behaviour", () => {
 
   test("landing preview badge reads Preview but keeps the illustrative accessible name", async ({ page }) => {
     await boot(page);
-    // ``#show-landing`` is intentionally visually hidden (sr-only) after the
-    // item-2 top-bar change. Dispatch the click straight to the element (a
-    // coordinate click would land on the overlapping status pill instead).
-    await page.locator("#show-landing").dispatchEvent("click");
+    // ``#show-landing`` is the visible top-bar "How it works" link; a returning
+    // visitor clicks it to reopen the marketing landing (screen 01).
+    await page.locator("#show-landing").click();
     await expect(page.locator('[data-view="landing"]')).toBeVisible();
     await expect(page.locator(".landing-preview-badge")).toHaveText("Preview");
     await expect(page.locator(".landing-preview")).toHaveAttribute("aria-label", "Example preview");
     await expect(page.locator(".landing-preview-caption")).toContainText("not a run you started");
     // The global top bar is hidden on landing (no double header).
     await expect(page.locator(".topbar")).toBeHidden();
+  });
+
+  test("first-visit gate: landing is the front door on the first visit, workspace on return", async ({ page }) => {
+    // FRESH visitor — no ``quorum.workspaceSeen`` flag. Do NOT use boot() here
+    // (it seeds the flag); navigate clean so the gate takes the first-visit path.
+    await page.goto("/ui", { waitUntil: "domcontentloaded" });
+    await expect(page.locator('[data-view="landing"]')).toBeVisible();
+    await expect(page.locator('[data-view="composer"]')).toBeHidden();
+    // The flag is not set until the visitor actually enters the workspace.
+    expect(await page.evaluate(() => localStorage.getItem("quorum.workspaceSeen"))).toBeNull();
+    // boot() clears the pre-paint gate attribute once setView has run, so the
+    // ``!important`` gate CSS can never trap the composer hidden after the
+    // visitor navigates into it.
+    expect(await page.locator("html").getAttribute("data-first-visit")).toBeNull();
+    // Ctrl/Cmd+Enter on the landing is a no-op: no empty-run, no error banner.
+    await page.keyboard.press("Control+Enter");
+    await expect(page.locator('[data-view="landing"]')).toBeVisible();
+    await expect(page.locator("#error-region")).toBeHidden();
+
+    // A landing CTA hands off to the workspace and records the visit.
+    await page.locator("#landing-run").click();
+    await expect(page.locator('[data-view="composer"]')).toBeVisible();
+    expect(await page.evaluate(() => localStorage.getItem("quorum.workspaceSeen"))).toBe("1");
+
+    // RETURN visit — the persisted flag boots straight into the workspace, and
+    // the landing stays reachable via the visible "How it works" link.
+    await page.reload({ waitUntil: "domcontentloaded" });
+    await expect(page.locator('[data-view="composer"]')).toBeVisible();
+    await expect(page.locator('[data-view="landing"]')).toBeHidden();
+    await page.locator("#show-landing").click();
+    await expect(page.locator('[data-view="landing"]')).toBeVisible();
   });
 
   // ---- Design-comp parity closeout: the 4 remaining visual-parity gaps -----
@@ -397,7 +434,7 @@ test.describe("UI parity — behaviour", () => {
     expect(result.width).toBeLessThanOrEqual(1000);
   });
 
-  test("item 2 — top bar shows a single session pill + theme toggle; no visible 'How it works'", async ({ page }) => {
+  test("item 2 — top bar shows a session pill + theme toggle + a visible 'How it works' link", async ({ page }) => {
     await boot(page);
     const pill = page.locator("#connection-pill");
     await expect(pill).toBeVisible();
@@ -407,15 +444,19 @@ test.describe("UI parity — behaviour", () => {
     await expect(page.locator("#connection-pill-text")).toHaveText(/^Session active · (provider configured|local simulation)$/);
     // The theme toggle is preserved (a real feature the comp doesn't depict).
     await expect(page.locator("#theme-toggle")).toBeVisible();
-    // The "How it works" control is no longer visible chrome — it survives as a
-    // visually-hidden (sr-only) button so the landing view stays reachable and
-    // the landing tests keep working. Assert it renders at ~0 visual size.
-    const box = await page.locator("#show-landing").boundingBox();
+    // The "How it works" control is now a real, visible, keyboard-reachable link
+    // (the return path to the marketing landing) — no longer sr-only. Assert it
+    // renders at a genuine tap-target size and is exposed to the tab order.
+    const how = page.locator("#show-landing");
+    await expect(how).toHaveCount(1);
+    await expect(how).toBeVisible();
+    await expect(how).toHaveText("How it works");
+    await expect(how).not.toHaveClass(/sr-only/);
+    await expect(how).not.toHaveAttribute("tabindex", "-1");
+    const box = await how.boundingBox();
     expect(box).not.toBeNull();
-    expect(box!.width).toBeLessThanOrEqual(2);
-    expect(box!.height).toBeLessThanOrEqual(2);
-    // It must still exist exactly once (reachability contract).
-    await expect(page.locator("#show-landing")).toHaveCount(1);
+    expect(box!.width).toBeGreaterThan(40);
+    expect(box!.height).toBeGreaterThanOrEqual(40);
   });
 
   test("item 3 — each slot shows a real per-model estimate that MATCHES the server estimate (never a fake number)", async ({ page }) => {

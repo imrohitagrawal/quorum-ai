@@ -142,6 +142,12 @@ async function scanBothThemes(page: Page, label: string) {
 }
 async function fill(page: Page) { await page.getByRole("textbox").first().fill(QUESTION); }
 async function boot(page: Page) {
+  // Seed the first-visit gate's "workspace seen" flag so boot lands on the
+  // composer directly (returning-visitor path). The landing is still scanned by
+  // the dedicated "landing" test below via the "How it works" affordance.
+  await page.addInitScript(() => {
+    try { window.localStorage.setItem("quorum.workspaceSeen", "1"); } catch (_) {}
+  });
   await page.goto("/ui", { waitUntil: "domcontentloaded" });
   await expect(page.locator('[data-view="composer"]')).toBeVisible();
   // Wait until the four model slots are populated before interacting. The
@@ -175,11 +181,9 @@ test.describe("AC-035 — axe over every view (both themes)", () => {
 
   test("landing", async ({ page }) => {
     await boot(page);
-    // ``#show-landing`` is an intentionally visually-hidden (sr-only) control
-    // in the parity design — the workspace top bar no longer surfaces a visible
-    // "How it works" link. Dispatch the click directly (a coordinate click would
-    // land on the overlapping status pill instead of this off-screen control).
-    await page.locator("#show-landing").dispatchEvent("click");
+    // ``#show-landing`` is the visible top-bar "How it works" link; clicking it
+    // reopens the marketing landing (screen 01) for a returning visitor.
+    await page.locator("#show-landing").click();
     await expect(page.locator('[data-view="landing"]')).toBeVisible();
     await scanBothThemes(page, "landing");
   });

@@ -758,6 +758,15 @@ a { color: var(--accent); text-underline-offset: 2px; }
 /* Landing carries its own self-contained, internally-centered layout, so the
    content column is left unconstrained for that view. */
 #main-content[data-active-view="landing"] { --content-max: none; }
+/* The landing renders full-bleed: its own header spans the full shell width and
+   its content sits in an internally-centered 800px column. Override the
+   shrink-to-fit that ``.layout``'s ``margin-inline:auto`` induces as a flex item
+   in the shell's column (auto cross-axis margins suppress stretch), so the
+   landing spans the shell instead of collapsing to its 800px content. */
+#main-content[data-active-view="landing"] .layout {
+  width: 100%;
+  margin-inline: 0;
+}
 
 /* ``.panel.panel-section`` (0-2-0) so this wins over the later ``.panel``
    (0-1-0, display:flex) rule; the aside child-combinator already out-specifies
@@ -4622,8 +4631,20 @@ main:focus { outline: none; }
    (.button-primary / .button-secondary). The whole view re-themes via the
    semantic tokens; the brand tile + Preview badge use the theme-invariant
    --brand-tile-* pair (green in both themes, white glyph). */
-.landing {
-  gap: var(--space-7);
+.landing.panel {
+  /* The comp's outer 1440 card frame (border/radius/shadow) is IDENTICAL on all
+     eight artboards — it is the review chrome, not part of any screen. So the
+     live landing renders full-bleed on the page's cool paper: a full-width
+     header + a centered 800px column, no card border/shadow. The `.landing.panel`
+     compound selector (0-2-0) beats BOTH the base `.panel` rule and the critical
+     inline `.panel { background: var(--surface) }` in workspace.html (which,
+     being inline after the stylesheet link, would otherwise win). */
+  display: block;
+  padding: 0;
+  background: transparent;
+  border: 0;
+  border-radius: 0;
+  box-shadow: none;
 }
 
 .landing-header {
@@ -4632,6 +4653,8 @@ main:focus { outline: none; }
   justify-content: space-between;
   gap: var(--space-4);
   flex-wrap: wrap;
+  min-height: 64px;
+  padding: 0 var(--space-7);
 }
 .landing-brand {
   display: flex;
@@ -4639,8 +4662,8 @@ main:focus { outline: none; }
   gap: var(--space-3);
 }
 .landing-brand-mark {
-  width: 34px;
-  height: 34px;
+  width: 30px;
+  height: 30px;
   border-radius: var(--radius-xs);
   display: grid;
   place-items: center;
@@ -4648,14 +4671,14 @@ main:focus { outline: none; }
   color: var(--brand-tile-fg);
   font-family: var(--font-serif);
   font-weight: 700;
-  font-size: 1.05rem;
+  font-size: 0.9375rem; /* 15px — comp 01 */
   line-height: 1;
   flex-shrink: 0;
 }
 .landing-brand-name {
   font-family: var(--font-sans);
   font-weight: 650;
-  font-size: 1.05rem;
+  font-size: 1.0625rem; /* 17px — comp 01 */
   letter-spacing: -0.01em;
   color: var(--ink);
 }
@@ -4665,18 +4688,43 @@ main:focus { outline: none; }
   gap: var(--space-4);
 }
 .landing-howitworks {
+  /* Reads as the comp's plain-text nav link, but stays a real, keyboard-
+     reachable button (it reopens the landing for returning visitors), so it
+     keeps a 44px min tap target for accessibility. */
   min-height: 44px;
   padding: 0 var(--space-2);
   border: none;
   background: transparent;
   color: var(--text-secondary);
   font-weight: 500;
-  font-size: 0.9rem;
+  font-size: 0.875rem; /* 14px — comp 01 */
   cursor: pointer;
   border-radius: var(--radius-sm);
   transition: color var(--duration-fast) var(--bezier);
 }
 .landing-howitworks:hover { color: var(--ink); }
+/* "Open the workspace" — comp geometry: 38px tall, radius 9, transparent fill
+   on the paper card, 14px. Scoped so the shared .button tokens (48px/radius
+   11/white) don't apply. */
+.landing-header .landing-open {
+  min-height: 38px;
+  height: 38px;
+  padding: 0 18px;
+  border-radius: 9px;
+  background: transparent;
+  font-size: 0.875rem; /* 14px */
+}
+.landing-header .landing-open:hover:not(:disabled) { background: var(--accent-soft); }
+
+/* Single centered reading column (comp 01): everything below the header. */
+.landing-column {
+  max-width: 800px;
+  margin: 0 auto;
+  padding: 44px 0 56px;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-6); /* 24px */
+}
 
 .landing-hero {
   display: flex;
@@ -4684,8 +4732,8 @@ main:focus { outline: none; }
   align-items: center;
   text-align: center;
   gap: var(--space-4);
-  max-width: 60ch;
-  margin: var(--space-4) auto 0;
+  max-width: 800px;
+  margin: 0 auto;
 }
 .landing-eyebrow {
   margin: 0;
@@ -4695,11 +4743,15 @@ main:focus { outline: none; }
   text-transform: uppercase;
   color: var(--success); /* green signpost — brand/agreement-adjacent, per the mock */
 }
-.landing-h1 {
+/* ``.landing .landing-h1`` (0-2-0) is REQUIRED to beat ``.panel h1`` (0-1-1,
+   font-size 1.7rem) — the landing section carries the ``panel`` class, so
+   without the extra specificity the headline renders at 1.7rem/27px instead of
+   the comp's 52px. */
+.landing .landing-h1 {
   margin: 0;
   font-family: var(--font-serif);
   font-weight: 500;
-  font-size: clamp(2.2rem, 5vw, 3.25rem);
+  font-size: 3.25rem; /* 52px — fixed per comp 01 (was a clamp that shrank to ~33px inside the card) */
   line-height: 1.06;
   letter-spacing: -0.02em;
   max-width: 15ch;
@@ -4708,7 +4760,7 @@ main:focus { outline: none; }
 }
 .landing-subhead {
   margin: 0;
-  font-size: 1.05rem;
+  font-size: 1.09375rem; /* 17.5px — comp 01 */
   line-height: 1.6;
   color: var(--text-secondary);
   max-width: 56ch;
@@ -4726,22 +4778,24 @@ main:focus { outline: none; }
   overflow: hidden;
 }
 .landing-runbar-prompt {
-  padding: var(--space-5) var(--space-6) var(--space-1);
+  padding: 22px var(--space-6) var(--space-1); /* comp 01: 22px 24px 4px */
   min-height: 84px;
 }
 .landing-runbar-placeholder {
-  font-size: 1.05rem;
+  font-size: 1.0625rem; /* 17px — comp 01 */
   line-height: 1.55;
   color: var(--muted);
 }
 .landing-runbar-foot {
+  /* ONE row (comp 01): cost left, both buttons right. No flex-wrap at desktop —
+     the ≤600px media query below re-enables the intentional mobile stack. */
   display: flex;
   align-items: center;
   justify-content: space-between;
-  gap: var(--space-4);
-  padding: var(--space-4) var(--space-5);
+  gap: var(--space-3); /* min cost↔buttons gap; space-between spreads them anyway */
+  padding: var(--space-4) 18px 18px; /* comp 01 ~16px 20px 18px; 18px sides keeps cost on one line */
+  margin-top: var(--space-3); /* 12px separation from the prompt */
   border-top: 1px solid var(--line);
-  flex-wrap: wrap;
 }
 .landing-cost {
   margin: 0;
@@ -4749,6 +4803,7 @@ main:focus { outline: none; }
   align-items: center;
   gap: var(--space-2);
   flex-wrap: wrap;
+  min-width: 0; /* allow the cost text to shrink/wrap instead of forcing a 2nd row */
   font-size: 0.85rem;
   color: var(--text-secondary);
 }
@@ -4761,8 +4816,19 @@ main:focus { outline: none; }
 .landing-runbar-actions {
   display: flex;
   align-items: center;
-  gap: var(--space-3);
+  gap: 10px; /* comp 01 button gap; keeps cost + both buttons on one row at 800 */
+  flex-shrink: 0;
 }
+/* Comp 01 run-bar buttons: 44px tall, 14.5px; secondary padding 0 18, primary
+   0 24 + weight 650. Scoped so the global .button (48px / 0 20 / weight 600)
+   is overridden only inside the landing run bar. */
+.landing-runbar-actions .button {
+  min-height: 44px;
+  height: 44px;
+  font-size: 0.90625rem; /* 14.5px */
+}
+.landing-runbar-actions .button-secondary { padding: 0 18px; }
+.landing-runbar-actions .button-primary { padding: 0 24px; font-weight: 650; }
 
 .landing-chips {
   display: flex;
@@ -4771,7 +4837,7 @@ main:focus { outline: none; }
   gap: var(--space-3);
 }
 .landing-chips-label {
-  font-size: 0.85rem;
+  font-size: 0.8125rem; /* 13px — comp 01 */
   font-weight: 500;
   color: var(--muted);
 }
@@ -4786,15 +4852,16 @@ main:focus { outline: none; }
   display: inline-flex;
   align-items: center;
   gap: var(--space-2);
-  min-height: 44px;
+  min-height: 40px;
+  height: 40px;
   padding: 0 var(--space-4);
   border-radius: var(--radius-pill);
   border: 1px solid var(--line-strong-2);
   background: var(--surface);
   color: var(--body);
   font-family: var(--font-sans);
-  font-size: 0.9rem;
-  font-weight: 500;
+  font-size: 0.875rem; /* 14px — comp 01 */
+  font-weight: 550;
   cursor: pointer;
   transition: border-color var(--duration-fast) var(--bezier),
     color var(--duration-fast) var(--bezier),
@@ -4806,7 +4873,8 @@ main:focus { outline: none; }
   transform: translateY(-1px);
 }
 .landing-chip-active {
-  border-color: var(--success-border); /* green outline — active signpost, per the mock */
+  border-width: 1.5px; /* stronger green outline — active signpost, per comp 01 */
+  border-color: var(--success-border);
   color: var(--ink);
 }
 .landing-chip-dot {
@@ -4819,23 +4887,25 @@ main:focus { outline: none; }
 
 .landing-preview {
   display: flex;
-  gap: var(--space-4);
+  gap: 14px; /* comp 01 */
   align-items: flex-start;
   width: 100%;
   max-width: 800px;
   margin: 0 auto;
-  padding: var(--space-5);
+  padding: 18px 20px; /* comp 01 */
   border-radius: var(--radius-md);
-  background: var(--accent-soft);
+  background: rgba(20, 23, 28, 0.035); /* comp 01 preview fill (lighter than --accent-soft .06) */
   border: 1px solid var(--line-2);
 }
+/* Dark theme keeps its token fill — the light comp value would vanish on dark. */
+html[data-theme="dark"] .landing-preview { background: var(--accent-soft); }
 .landing-preview-badge {
   flex-shrink: 0;
   display: inline-flex;
   align-items: center;
   height: 22px;
-  padding: 0 var(--space-2);
-  border-radius: var(--radius-xs);
+  padding: 0 9px; /* comp 01 */
+  border-radius: 6px; /* comp 01 (was --radius-xs 8px) */
   background: var(--brand-tile-bg);
   color: var(--brand-tile-fg);
   font-size: 0.66rem;
@@ -4852,7 +4922,7 @@ main:focus { outline: none; }
 }
 .landing-preview-text {
   margin: 0;
-  font-size: 0.95rem;
+  font-size: 0.9375rem; /* 15px — comp 01 */
   line-height: 1.6;
   color: var(--body);
   text-wrap: pretty;
@@ -4868,16 +4938,18 @@ main:focus { outline: none; }
   gap: var(--space-3);
   justify-content: center;
   flex-wrap: wrap;
+  max-width: 800px;
+  margin: 0 auto;
 }
 .landing-disclaimer {
   display: inline-flex;
   align-items: center;
   gap: var(--space-2);
-  padding: var(--space-2) var(--space-4);
+  padding: var(--space-2) 14px; /* comp 01: 8px 14px */
   border-radius: var(--radius-pill);
   background: var(--surface);
   border: 1px solid var(--line-2);
-  font-size: 0.82rem;
+  font-size: 0.8125rem; /* 13px — comp 01 */
   color: var(--text-secondary);
 }
 .landing-disclaimer-dot {

@@ -26,7 +26,35 @@
       body { font-family: 'Geist', system-ui, sans-serif; font-size: 16px; line-height: 1.5; background: var(--bg, #F6F5F2); color: var(--ink, #14171C); }
       .panel { background: var(--surface, #FFFFFF); }
       .topbar { background: var(--paper, #F6F5F2); }
+
+      /* First-visit gate (pre-paint): the inline script below sets
+         ``data-first-visit`` on <html> for visitors who have not yet entered
+         the workspace, so the marketing landing (screen 01) paints as the front
+         door with NO flash of the composer. app.js clears the attribute right
+         after setView() runs, so these rules govern only the very first paint.
+         Uses ``display: contents`` to match the shown-view default in app.css
+         (``[data-view] { display: contents }``) so nothing reflows on cleanup. */
+      html[data-first-visit="true"] [data-view="composer"] { display: none !important; }
+      html[data-first-visit="true"] [data-view="landing"] { display: contents !important; }
     </style>
+    <script>
+      // First-visit gate (pre-paint): a returning visitor carries the
+      // ``quorum.workspaceSeen`` flag and boots straight into the workspace; a
+      // first-time visitor gets the marketing landing as the front door.
+      // Deciding here — before the body paints — prevents a flash of the
+      // workspace before the deferred app.js swaps the landing in. app.js
+      // re-applies the same decision via setView() and then clears this
+      // attribute. Mirrors ``hasSeenWorkspace()`` in app.js (including the
+      // fail-open-to-workspace behaviour on a storage error); kept tiny and
+      // dependency-free on purpose.
+      try {
+        if (window.localStorage.getItem("quorum.workspaceSeen") !== "1") {
+          document.documentElement.setAttribute("data-first-visit", "true");
+        }
+      } catch (e) {
+        /* storage disabled (private mode): fall through to workspace-first. */
+      }
+    </script>
   </head>
   <body>
     <a class="skip-link" href="#main-content">Skip to main content</a>
@@ -41,15 +69,14 @@
           </div>
         </div>
         <div class="topbar-actions">
-          <!-- Design-comp parity (item 2): the comp's top bar carries a single
-               session-status pill plus the theme toggle — no visible "How it
-               works" link. The control is kept in the DOM but visually hidden
-               (sr-only) and removed from the sighted tab order (tabindex=-1),
-               so the composer chrome matches the comp. It is NOT surfaced as a
-               visible affordance; it stays in the accessibility tree so the
-               anonymous landing/preview view remains reachable to assistive
-               tech (via browse mode) and to the parity/axe tests. -->
-          <button id="show-landing" class="topbar-howitworks sr-only" type="button" tabindex="-1">How it works</button>
+          <!-- "How it works" reopens the marketing landing (screen 01) on
+               demand. The landing is the default view for first-time visitors
+               only (see the first-visit gate in ``boot()``); once a visitor has
+               entered the workspace it becomes the default, so this visible
+               link is how returning users get back to the pitch/preview. It is
+               a real, keyboard-reachable affordance (no longer sr-only), and
+               remains in the accessibility tree for the parity/axe tests. -->
+          <button id="show-landing" class="topbar-howitworks" type="button">How it works</button>
           <span class="status-pill status-pill-session" id="connection-pill" data-state="connecting" aria-live="polite" aria-atomic="true">
             <span class="status-pill-dot" aria-hidden="true"></span>
             <span id="connection-pill-text">Connecting</span>
@@ -583,6 +610,7 @@
               </div>
             </header>
 
+            <div class="landing-column">
             <div class="landing-hero">
               <p class="landing-eyebrow">Four AI models · two debate rounds · one sourced answer</p>
               <h1 id="landing-heading" class="landing-h1" tabindex="-1">Ask once. Let four minds argue it out.</h1>
@@ -595,7 +623,7 @@
               </div>
               <div class="landing-runbar-foot">
                 <p class="landing-cost">
-                  <span class="mono landing-cost-figure">&#8776; $0.02&ndash;0.19</span>
+                  <span class="mono landing-cost-figure">&#8776; $0.05&ndash;0.20</span>
                   <span class="landing-cost-note">&middot; you approve the estimate first &mdash; hard cap <span class="mono">$0.25</span>/run</span>
                 </p>
                 <div class="landing-runbar-actions">
@@ -649,6 +677,7 @@
               <span class="landing-disclaimer">
                 <span class="landing-disclaimer-dot landing-disclaimer-dot-neutral" aria-hidden="true"></span>Results vanish when you leave
               </span>
+            </div>
             </div>
           </section>
         </div>
