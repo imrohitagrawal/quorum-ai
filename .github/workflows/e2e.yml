@@ -1,6 +1,6 @@
 name: E2E (axe + parity)
 
-# Browser-level gate for the built workspace UI. Runs the two committed
+# Browser-level gate for the built workspace UI. Runs the committed
 # end-to-end suites on every pull request and every push to main:
 #
 #   * tests/accessibility/axe-all-views.spec.ts — a real axe-core drive over
@@ -8,6 +8,10 @@ name: E2E (axe + parity)
 #     violation.
 #   * tests/ui-parity/parity-behavior.spec.ts — behavioural contracts for the
 #     design-comp parity work, including the markdown-link XSS regression.
+#   * tests/docs/docs-under-csp.spec.ts — loads the self-hosted Swagger /docs
+#     under the enforced CSP and fails on any CSP-violation console error
+#     (proves the docs FUNCTION under the strict CSP, not just reference the
+#     right asset URLs).
 #
 # Both suites are hermetic: the FastAPI app is self-started by Playwright's
 # webServer (local_simulation, no live OpenRouter calls) and every query POST
@@ -84,6 +88,7 @@ jobs:
           npx playwright test
           tests/accessibility/axe-all-views.spec.ts
           tests/ui-parity/parity-behavior.spec.ts
+          tests/docs/docs-under-csp.spec.ts
           --project=chromium
           --retries=0
 

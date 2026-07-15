@@ -50,9 +50,11 @@ export class WorkspacePage {
       name: /query|question|ask/i,
     });
 
-    // Action buttons - using role and accessible names
+    // Action buttons - using role and accessible names. The composer exposes
+    // two run CTAs: "Run now" (direct) and "See the estimate →" (opens the
+    // itemized cost gate first).
     this.runNowButton = page.getByRole("button", { name: /run now/i });
-    this.estimateCostButton = page.getByRole("button", { name: /estimate cost/i });
+    this.estimateCostButton = page.getByRole("button", { name: /see the estimate|estimate cost/i });
     this.cancelRunButton = page.getByRole("button", { name: /cancel run/i });
 
     // Theme toggle

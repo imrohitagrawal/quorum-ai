@@ -892,6 +892,17 @@ textarea:focus, input:focus, select:focus {
   box-shadow: 0 0 0 3px var(--accent-soft);
 }
 
+/* Transient highlight when the composer question is filled + focused via a
+   hand-off (example chip, follow-up "Review & run", or the landing). Programmatic
+   focus does not trigger :focus-visible and the composer suppresses the plain
+   :focus ring, so without this the field gives no visible cue that the question
+   landed there. Applied by goToComposer() and removed after ~1.4s. The id+class
+   selector wins over the neutral .question-field textarea border. */
+#query-text.question-handoff-focus {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px var(--accent-soft);
+}
+
 select {
   width: 100%;
   min-height: 48px;
@@ -965,6 +976,40 @@ select {
   font-size: 0.75rem;
   flex-shrink: 0;
 }
+
+/* Landing transition message: shown on page A (in the run bar) when the visitor
+   clicks Estimate/Run, explaining why they're being taken to the workspace. A
+   calm accent-toned confirmation — never danger. Mutually exclusive with the
+   empty-submit error above it. */
+.landing-handoff-note {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--space-2);
+  margin-top: var(--space-3);
+  padding: var(--space-3) var(--space-4);
+  border-radius: var(--radius-md);
+  background: var(--accent-soft);
+  border: 1px solid var(--accent);
+  color: var(--ink);
+  font-size: 0.9rem;
+  line-height: 1.5;
+}
+.landing-handoff-note[hidden] { display: none; }
+.landing-handoff-note-icon {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 20px;
+  height: 20px;
+  border-radius: 999px;
+  background: var(--accent);
+  color: var(--on-tonal);
+  font-size: 0.7rem;
+  font-weight: 700;
+  flex-shrink: 0;
+  margin-top: 1px;
+}
+.landing-handoff-note-text { flex: 1; }
 
 /* ----- Callouts (warning, info, cost confirmation) -------------------- */
 
@@ -2433,6 +2478,46 @@ html[data-theme="dark"] .landing-preview-caption {
   color: var(--line-strong-2);
 }
 
+/* Run ID chip in the result header: a labelled, self-explanatory handle (the
+   aside's "Run controls" panel is hidden in the parity design, so this is the
+   only place a user sees — and can copy — the run id). The label makes the bare
+   ``qr_…`` value legible; the compact info icon explains what it is for. */
+.result-meta-runid {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
+}
+.result-meta-runid-label {
+  font-weight: 600;
+  color: var(--text-secondary);
+}
+.result-meta-runid-copy {
+  border: 0;
+  background: none;
+  padding: 0;
+  font: inherit;
+  color: var(--body);
+  cursor: copy;
+  text-decoration: underline dotted;
+  text-underline-offset: 2px;
+}
+.result-meta-runid-copy:hover { color: var(--ink); }
+/* Visible "copied" cue, matching the receipt / live-card copy buttons (the
+   shared copyRunIdToClipboard helper flips data-copied on success). */
+.result-meta-runid-copy[data-copied="true"] { color: var(--info); }
+
+/* Compact (24px) info-icon variant for tight inline rows. 24px is the WCAG 2.5.8
+   minimum target size; the 44px ``.info-icon`` default is too heavy for the
+   result meta row. */
+.info-icon.info-icon-inline {
+  min-width: 24px;
+  min-height: 24px;
+  width: 24px;
+  height: 24px;
+  font-size: 0.72rem;
+  margin-left: 0;
+}
+
 /* --- Verdict band --- */
 .result-verdict {
   display: flex;
@@ -2763,6 +2848,10 @@ html[data-theme="dark"] .landing-preview-caption {
   gap: 8px;
   font-size: 0.78rem;
   line-height: 1.4;
+  /* Allow the value to drop below the label when the column is too narrow to
+     hold both on one line, instead of the (nowrap) "est → actual" value
+     overflowing into the next section. */
+  flex-wrap: wrap;
 }
 
 .result-receipt-label {
@@ -2771,6 +2860,9 @@ html[data-theme="dark"] .landing-preview-caption {
 
 .result-receipt-value {
   text-align: right;
+  /* Keep the value hard-right whether it sits beside the label or wraps to its
+     own line (``space-between`` alone left-aligns a lone wrapped item). */
+  margin-left: auto;
 }
 
 .result-receipt-value.mono,
@@ -4500,15 +4592,21 @@ main:focus { outline: none; }
 /* Per-model vendor tints (design parity — Quorum Final Review, screen 02/05/06).
    Each frontier vendor gets a soft brand-tint pill + saturated glyph so the four
    slots read as four distinct minds at a glance. Values lifted verbatim from the
-   comp. Dark-mode overrides live in the theming block. */
+   comp. The soft-bg/ink pair is self-contained (light pill + dark glyph), so it
+   holds its own contrast in dark mode without a separate override. Shared by the
+   composer slots, transcript openings, and the positions-moved avatars. */
 .model-slot-avatar[data-vendor="openai"],
-.transcript-opening-avatar[data-vendor="openai"] { background: var(--vendor-openai-soft); color: var(--vendor-openai-ink); }
+.transcript-opening-avatar[data-vendor="openai"],
+.result-pos-avatar[data-vendor="openai"] { background: var(--vendor-openai-soft); color: var(--vendor-openai-ink); }
 .model-slot-avatar[data-vendor="anthropic"],
-.transcript-opening-avatar[data-vendor="anthropic"] { background: var(--vendor-anthropic-soft); color: var(--vendor-anthropic-ink); }
+.transcript-opening-avatar[data-vendor="anthropic"],
+.result-pos-avatar[data-vendor="anthropic"] { background: var(--vendor-anthropic-soft); color: var(--vendor-anthropic-ink); }
 .model-slot-avatar[data-vendor="google"],
-.transcript-opening-avatar[data-vendor="google"] { background: var(--vendor-google-soft); color: var(--vendor-google-ink); }
+.transcript-opening-avatar[data-vendor="google"],
+.result-pos-avatar[data-vendor="google"] { background: var(--vendor-google-soft); color: var(--vendor-google-ink); }
 .model-slot-avatar[data-vendor="deepseek"],
-.transcript-opening-avatar[data-vendor="deepseek"] { background: var(--vendor-deepseek-soft); color: var(--vendor-deepseek-ink); }
+.transcript-opening-avatar[data-vendor="deepseek"],
+.result-pos-avatar[data-vendor="deepseek"] { background: var(--vendor-deepseek-soft); color: var(--vendor-deepseek-ink); }
 .model-slot-info { flex: 1; min-width: 0; }
 .model-slot-name {
   display: flex;
@@ -4781,10 +4879,36 @@ main:focus { outline: none; }
   padding: 22px var(--space-6) var(--space-1); /* comp 01: 22px 24px 4px */
   min-height: 84px;
 }
-.landing-runbar-placeholder {
-  font-size: 1.0625rem; /* 17px — comp 01 */
+/* Real question input on the landing runbar. Borderless so it reads as one
+   seamless card (the bordered ``.landing-runbar`` IS the field); the container
+   shows focus/invalid rings via :focus-within / [data-invalid]. */
+.landing-runbar-input {
+  width: 100%;
+  border: 0;
+  background: transparent;
+  resize: none;
+  padding: 0;
+  margin: 0;
+  min-height: 52px;
+  font-family: var(--font-sans);
+  font-size: 1.0625rem; /* 17px — matches the old placeholder */
   line-height: 1.55;
-  color: var(--muted);
+  color: var(--ink);
+}
+.landing-runbar-input::placeholder { color: var(--muted); opacity: 1; }
+.landing-runbar-input:focus { outline: none; box-shadow: none; border: 0; }
+.landing-runbar:focus-within {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px var(--accent-soft);
+}
+/* Empty-submit guard: highlight the whole runbar with the danger ring (the
+   input itself is borderless). The danger ring wins over :focus-within. */
+.landing-runbar[data-invalid="true"] {
+  border-color: var(--danger);
+  box-shadow: 0 0 0 3px var(--danger-soft);
+}
+.landing-query-error {
+  margin-top: var(--space-3);
 }
 .landing-runbar-foot {
   /* ONE row (comp 01): cost left, both buttons right. No flex-wrap at desktop —

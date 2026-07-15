@@ -170,6 +170,13 @@ async function routeRun(page: Page, pollBody: unknown) {
 async function clickEstimate(page: Page) {
   await page.getByRole("button", { name: /see the estimate|estimate cost/i }).click();
 }
+// "Run now" is the direct-run CTA: on the mocked allow band it auto-proceeds
+// straight to the run (live-run → result → error views). "See the estimate" now
+// always stops at the cost gate, so it can no longer be used to reach those
+// post-run views — use this helper for them.
+async function clickRunNow(page: Page) {
+  await page.locator("#run-now").click();
+}
 
 test.describe("AC-035 — axe over every view (both themes)", () => {
   test.skip(({ browserName }) => browserName !== "chromium", "axe reference run is chromium-only");
@@ -188,12 +195,50 @@ test.describe("AC-035 — axe over every view (both themes)", () => {
     await scanBothThemes(page, "landing");
   });
 
+  test("landing — empty-submit error state", async ({ page }) => {
+    // The empty-submit guard renders net-new ARIA/colour (a danger ring on the
+    // runbar, a role=alert "!" message, aria-invalid on the input). Scan it.
+    await boot(page);
+    await page.locator("#show-landing").click();
+    await expect(page.locator('[data-view="landing"]')).toBeVisible();
+    await page.locator("#landing-run").click(); // empty → error state
+    await expect(page.locator("#landing-query-error")).toBeVisible();
+    await scanBothThemes(page, "landing-empty-error");
+  });
+
+  test("landing — hand-off transition note", async ({ page }) => {
+    // The role=status hand-off note is a net-new rendered element. Reveal it
+    // deterministically (the live flow hides it after a dwell) and scan it.
+    await boot(page);
+    await page.locator("#show-landing").click();
+    await expect(page.locator('[data-view="landing"]')).toBeVisible();
+    await page.evaluate(() => {
+      const t = document.getElementById("landing-handoff-note-text");
+      const n = document.getElementById("landing-handoff-note");
+      if (t) t.textContent = "Got your question. Taking you to review your four models and see the itemized cost before anything runs…";
+      if (n) (n as HTMLElement).hidden = false;
+    });
+    await expect(page.locator("#landing-handoff-note")).toBeVisible();
+    await scanBothThemes(page, "landing-handoff-note");
+  });
+
   test("cost-gate — confirm", async ({ page }) => {
     await boot(page);
     await page.route("**/v1/query-runs/estimate", (r) => r.fulfill(fulfil(estimateResp("0.190", "require_confirmation"))));
     await fill(page); await clickEstimate(page);
     await expect(page.locator("#gate-confirm")).toBeVisible();
     await scanBothThemes(page, "cost-gate-confirm");
+  });
+
+  test("cost-gate — allow band (review & run copy)", async ({ page }) => {
+    // "See the estimate" on an allow-band estimate now shows the gate with the new
+    // "review and run" copy + a plain "Run · $X" CTA — a net-new rendered state.
+    await boot(page);
+    await page.route("**/v1/query-runs/estimate", (r) => r.fulfill(fulfil(estimateResp("0.100", "allow"))));
+    await page.route("**/v1/query-runs/warnings", (r) => r.fulfill(fulfil({ warnings: [] })));
+    await fill(page); await clickEstimate(page);
+    await expect(page.locator("#gate-confirm .button-label")).toHaveText(/^Run · \$0\.1/);
+    await scanBothThemes(page, "cost-gate-allow");
   });
 
   test("cost-gate — block", async ({ page }) => {
@@ -206,14 +251,14 @@ test.describe("AC-035 — axe over every view (both themes)", () => {
 
   test("live-run — running", async ({ page }) => {
     await boot(page); await routeRun(page, runningResp());
-    await fill(page); await clickEstimate(page);
+    await fill(page); await clickRunNow(page);
     await expect(page.locator('#live-status-pill[data-state="running"]')).toBeVisible();
     await scanBothThemes(page, "live-run-running");
   });
 
   test("result — consensus + details expanded + transcript", async ({ page }) => {
     await boot(page); await routeRun(page, completedResp(true));
-    await fill(page); await clickEstimate(page);
+    await fill(page); await clickRunNow(page);
     await expect(page.locator('#result-verdict[data-consensus="true"]')).toBeVisible();
     await scanBothThemes(page, "result-consensus");
     await page.locator("#result-details-toggle").click();
@@ -226,7 +271,7 @@ test.describe("AC-035 — axe over every view (both themes)", () => {
 
   test("result — divided (amber)", async ({ page }) => {
     await boot(page); await routeRun(page, completedResp(false));
-    await fill(page); await clickEstimate(page);
+    await fill(page); await clickRunNow(page);
     await expect(page.locator('#result-verdict[data-consensus="false"]')).toBeVisible();
     await scanBothThemes(page, "result-divided");
   });
@@ -246,7 +291,7 @@ test.describe("AC-035 — axe over every view (both themes)", () => {
         r.request().method() === "POST"
           ? r.fulfill(fulfil({ detail: { code: e.code, message: "A user-safe error occurred.", ...e.extra } }, e.status))
           : r.continue());
-      await fill(page); await clickEstimate(page);
+      await fill(page); await clickRunNow(page);
       await expect(page.locator("#error-region")).toBeVisible();
       await scanBothThemes(page, `error-${e.name}`);
     });

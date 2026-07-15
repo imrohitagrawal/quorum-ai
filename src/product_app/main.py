@@ -15,6 +15,7 @@ configuration surface and ``product_app.auth`` for the session model.
 from __future__ import annotations
 
 import json
+import logging
 import os
 import time
 from html import escape
@@ -24,6 +25,7 @@ from typing import Annotated, Any
 import sentry_sdk
 from fastapi import Depends, FastAPI, Request, status
 from fastapi.exceptions import RequestValidationError
+from fastapi.openapi.docs import get_swagger_ui_html
 from fastapi.responses import HTMLResponse, JSONResponse, PlainTextResponse, Response
 from fastapi.staticfiles import StaticFiles
 from sentry_sdk.types import Event as SentryEvent
@@ -35,7 +37,12 @@ from product_app.auth import (
     issue_or_resume_session,
     require_session,
 )
-from product_app.config import RuntimeEnvironment, settings, validate_production_environment
+from product_app.config import (
+    RuntimeEnvironment,
+    Settings,
+    settings,
+    validate_production_environment,
+)
 from product_app.costs import (
     _DEFAULT_PRICE_PER_1K_INPUT,
     _DEFAULT_PRICE_PER_1K_OUTPUT,
@@ -105,19 +112,116 @@ if SENTRY_DSN:
     )
 
 
-app = FastAPI(
-    title=settings.app_name,
-    version="0.2.0",
-    description=(
-        "Quorum-AI runs your question against four LLMs in parallel, "
-        "has them debate, and returns a single answer with explicit "
-        "consensus, disagreement, source support, uncertainty, and "
-        "recommendation. Cost is shown before the run starts; nothing "
-        "executes without confirmation. Results are ephemeral. "
-        "Open the workspace UI at /ui; health and readiness live at "
-        "/health and /ready; the operator snapshot is at /status."
-    ),
-)
+# Self-hosted interactive-docs assets. FastAPI's built-in ``/docs`` loads Swagger
+# UI from ``cdn.jsdelivr.net`` (and a favicon from ``fastapi.tiangolo.com``),
+# which the app's strict CSP (``script-src 'self'`` …) blocks — so the stock docs
+# render an empty page. We vendor the Swagger assets under ``static/vendor`` and
+# serve our own ``/docs`` route that points at them, keeping the docs functional
+# WITHOUT widening the CSP.
+_VENDOR_PREFIX = "/static/vendor"
+
+
+def _openapi_url(active_settings: Settings) -> str | None:
+    """Return the raw schema route (``/openapi.json``), gated by the docs flag.
+
+    When the interactive docs are gated OFF (see ``Settings.api_docs_enabled``)
+    this is ``None``, which removes the raw ``/openapi.json`` route. This does
+    NOT affect ``app.openapi()`` — the in-process schema the OpenAPI contract
+    guard renders from still works — so gating the route never breaks the
+    contract test. The interactive ``/docs`` (Swagger UI) is served by
+    ``_register_docs_routes`` and is gated by the same flag.
+    """
+    return "/openapi.json" if active_settings.api_docs_enabled else None
+
+
+def _register_docs_routes(app: FastAPI, active_settings: Settings) -> None:
+    """Register the CSP-safe, self-hosted ``/docs`` (Swagger UI) route.
+
+    It loads its JS/CSS/favicon from same-origin ``/static/vendor`` assets, so
+    the app's strict Content-Security-Policy never blocks it (the stock FastAPI
+    docs pull from ``cdn.jsdelivr.net``, which the CSP forbids). This is a no-op
+    when the docs are gated off — deployed environments by default — so the gate
+    covers the interactive page exactly as it covers ``/openapi.json``.
+
+    Only Swagger UI is self-hosted: ReDoc was dropped because it cannot be served
+    CSP-clean without widening the policy (it builds its search index in a
+    ``blob:`` Worker that ``script-src 'self'`` blocks on standards-compliant
+    browsers, and it fetches an external ``cdn.redoc.ly`` logo that ``img-src``
+    blocks). Swagger UI is a functional superset (it also renders the whole
+    schema, plus interactive requests) and stays fully within the strict CSP.
+    """
+    if not active_settings.api_docs_enabled:
+        return
+    openapi_url = _openapi_url(active_settings)
+    assert openapi_url is not None  # api_docs_enabled ⇒ the schema route exists
+    title = f"{active_settings.app_name} — API docs"
+
+    @app.get("/docs", include_in_schema=False)
+    async def swagger_ui_html() -> HTMLResponse:
+        return get_swagger_ui_html(
+            openapi_url=openapi_url,
+            title=title,
+            swagger_js_url=f"{_VENDOR_PREFIX}/swagger-ui-bundle.js",
+            swagger_css_url=f"{_VENDOR_PREFIX}/swagger-ui.css",
+            swagger_favicon_url=f"{_VENDOR_PREFIX}/favicon-32x32.png",
+        )
+
+
+def _warn_if_docs_exposed_in_deployed_env(
+    active_settings: Settings, logger: logging.Logger
+) -> None:
+    """Log a WARNING when the interactive docs are served outside local dev.
+
+    The docs are gated off in production by default, but an explicit
+    ``EXPOSE_API_DOCS=true`` — or a staging deploy, which serves them by default
+    — turns them back on. Surfacing that at boot means "docs on in a hardened
+    environment" is visible in the logs, never a silent config drift.
+    """
+    if (
+        active_settings.api_docs_enabled
+        and active_settings.runtime_environment is not RuntimeEnvironment.LOCAL
+    ):
+        logger.warning(
+            "API docs (/docs, /openapi.json) are ENABLED in a %s "
+            "environment. Set EXPOSE_API_DOCS=false to disable them.",
+            active_settings.runtime_environment.value,
+        )
+
+
+def _build_fastapi(active_settings: Settings) -> FastAPI:
+    """Construct the base FastAPI app with the docs routes gated per settings.
+
+    The built-in ``/docs`` and ``/redoc`` are disabled (``docs_url=None`` /
+    ``redoc_url=None``) because they load assets from ``cdn.jsdelivr.net`` — a
+    host the app's CSP blocks; the CSP-safe self-hosted ``/docs`` (Swagger UI)
+    replacement is wired up by ``_register_docs_routes`` (ReDoc is not
+    self-hosted — see that function). Only the raw ``/openapi.json`` route is
+    gated here (via ``_openapi_url``), so a test can build the app under
+    production settings and assert it 404s — proving the gate wiring, not just
+    that FastAPI honours None.
+    """
+    return FastAPI(
+        title=active_settings.app_name,
+        version="0.2.0",
+        description=(
+            "Quorum-AI runs your question against four LLMs in parallel, "
+            "has them debate, and returns a single answer with explicit "
+            "consensus, disagreement, source support, uncertainty, and "
+            "recommendation. Cost is shown before the run starts; nothing "
+            "executes without confirmation. Results are ephemeral. "
+            "Open the workspace UI at /ui; health and readiness live at "
+            "/health and /ready; the operator snapshot is at /status."
+        ),
+        docs_url=None,
+        redoc_url=None,
+        openapi_url=_openapi_url(active_settings),
+    )
+
+
+_warn_if_docs_exposed_in_deployed_env(settings, logging.getLogger(__name__))
+
+app = _build_fastapi(settings)
+_register_docs_routes(app, settings)
 app.include_router(query_runs_router)
 app.mount("/static", StaticFiles(directory=str(STATIC_DIR)), name="static")
 
@@ -155,8 +259,6 @@ openrouter_catalog_fetcher.prewarm()
 try:
     configure_feedback_store(FeedbackStore.from_env())
 except Exception as exc:  # noqa: BLE001 - persistence is optional
-    import logging
-
     logging.getLogger(__name__).warning(
         "feedback_store: could not open SQLite sink, persistence disabled: %s",
         exc,
@@ -382,18 +484,25 @@ def _render_workspace_html() -> str:
 
 @app.get("/", tags=["operations"])
 def root() -> dict[str, str]:
-    return {
-        "service": settings.app_name,
-        "docs": "/docs",
-        "health": "/health",
-        "ready": "/ready",
-        "ui": "/ui",
-        "session": "/v1/session",
-        "model_defaults": "/v1/models/defaults",
-        "query_run_estimate": "/v1/query-runs/estimate",
-        "query_runs": "/v1/query-runs",
-        "feedback_audit": "/feedback/audit",
-    }
+    routes: dict[str, str] = {"service": settings.app_name}
+    # Only advertise the interactive docs when they are actually served (they
+    # are gated off in production) — a listed-but-404 route is worse than an
+    # honest omission.
+    if settings.api_docs_enabled:
+        routes["docs"] = "/docs"
+    routes.update(
+        {
+            "health": "/health",
+            "ready": "/ready",
+            "ui": "/ui",
+            "session": "/v1/session",
+            "model_defaults": "/v1/models/defaults",
+            "query_run_estimate": "/v1/query-runs/estimate",
+            "query_runs": "/v1/query-runs",
+            "feedback_audit": "/feedback/audit",
+        }
+    )
+    return routes
 
 
 @app.get("/health", tags=["operations"])

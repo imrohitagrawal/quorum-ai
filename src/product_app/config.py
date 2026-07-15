@@ -14,7 +14,7 @@ from __future__ import annotations
 import os
 from enum import StrEnum
 
-from pydantic import Field
+from pydantic import Field, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -34,6 +34,41 @@ class Settings(BaseSettings):
 
     app_name: str = "Quorum-AI"
     runtime_environment: RuntimeEnvironment = RuntimeEnvironment.LOCAL
+
+    # --- Interactive API docs exposure ----------------------------------
+    # The Swagger UI (/docs) and the raw schema route (/openapi.json) are
+    # convenient in development but are surface area we do not want live by
+    # default in any DEPLOYED environment. ``None``
+    # (the default) means "derive from the environment": docs are exposed
+    # ONLY in local dev, and off-by-default in both staging AND production
+    # so an internet-reachable box never serves the unauthenticated schema
+    # unless an operator explicitly opts in. Set ``EXPOSE_API_DOCS=true``
+    # to force them on (e.g. a locked-down staging box behind a VPN), or
+    # ``EXPOSE_API_DOCS=false`` to force them off. /health and /ready are
+    # never gated.
+    expose_api_docs: bool | None = None
+
+    @field_validator("expose_api_docs", mode="before")
+    @classmethod
+    def _blank_expose_api_docs_is_unset(cls, value: object) -> object:
+        """Treat a blank ``EXPOSE_API_DOCS`` as unset (derive from environment).
+
+        A common operator footgun is leaving ``EXPOSE_API_DOCS=`` (empty) in a
+        ``.env`` or deploy config. Pydantic's bool parser rejects ``""`` with a
+        ValidationError, which would crash the app at startup. An empty/whitespace
+        value should mean "I didn't set this" — i.e. ``None`` → derive the default
+        from the runtime environment — not a hard boot failure.
+        """
+        if isinstance(value, str) and value.strip() == "":
+            return None
+        return value
+
+    @property
+    def api_docs_enabled(self) -> bool:
+        """Whether the interactive docs + schema route should be served."""
+        if self.expose_api_docs is not None:
+            return self.expose_api_docs
+        return self.runtime_environment is RuntimeEnvironment.LOCAL
 
     # --- Operator-only provider configuration -------------------------
     # The OpenRouter key is owned by the operator; it is never exposed in

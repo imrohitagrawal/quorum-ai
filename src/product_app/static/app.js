@@ -87,11 +87,15 @@
   const proceedButton = el("proceed-run");
   const cancelEstimateButton = el("cancel-estimate");
   const estimateButton = el("estimate-run");
-  // Slice 1 (02 Composer): the composer collapses to a single ink CTA
-  // ("See the estimate →", the ``estimate-run`` button), which routes the
-  // run through the separate cost gate. The legacy fast-path "Run now"
-  // button and its ``runNow`` handler are gone; Ctrl/Cmd+Enter falls
-  // through to the estimate-first ``startRun`` flow.
+  // Composer (02) offers two paths to a run:
+  //   ``estimate-run`` ("See the estimate →") ALWAYS opens the cost gate so
+  //     the user can review the itemized estimate before approving — even a
+  //     cheap ``allow``-band run (``estimateRun`` with ``autoProceed:false``).
+  //   ``run-now`` ("Run now") starts straight away for the ``allow`` band and
+  //     otherwise falls into the same gate (``autoProceed:true``); the money
+  //     guardrail still pauses any ``require_confirmation``/``block`` run.
+  // Ctrl/Cmd+Enter maps to the estimate-first path (see the keydown handler).
+  const runNowButton = el("run-now");
   const highStakesGate = el("high-stakes-gate");
   const highStakesAckCheckbox = el("high-stakes-ack");
   const composerTotalEstimate = el("composer-total-estimate");
@@ -253,6 +257,18 @@
     if (!views.length) return;
     const target = views.find((view) => view.dataset.view === name);
     if (!target) return;
+    // Clear the landing's transient state on EVERY view change so it never
+    // persists across a round-trip: the empty-submit error (which used to
+    // survive a How-it-works round-trip) AND the one-shot transition note (shown
+    // on page A during the hand-off, then left behind once we navigate away).
+    const landingErr = el("landing-query-error");
+    if (landingErr) landingErr.hidden = true;
+    const landingRunbarEl = qs(".landing-runbar");
+    if (landingRunbarEl) delete landingRunbarEl.dataset.invalid;
+    const landingQ = el("landing-query");
+    if (landingQ) landingQ.setAttribute("aria-invalid", "false");
+    const landingNote = el("landing-handoff-note");
+    if (landingNote) landingNote.hidden = true;
     for (const view of views) {
       view.hidden = view !== target;
     }
@@ -1848,7 +1864,9 @@
     const corr = el("live-corr");
     if (corr) {
       const corrId = result.correlation_id || "";
-      corr.textContent = corrId ? `run ${corrId}` : "";
+      // Label it "Run ID" (not a bare "run …") so the value reads as a
+      // meaningful, quotable handle rather than opaque text.
+      corr.textContent = corrId ? `Run ID ${corrId}` : "";
       // Fix 6: stash the RAW id so the copy handler copies exactly what is
       // shown here (without the "run " prefix).
       if (corrId) {
@@ -2277,6 +2295,14 @@
   // the SAME element — with its click listener intact — on a re-render.
   let resultDetailsToggleNode = null;
 
+  // The Run ID's support copy + tooltip text, shared verbatim by the result
+  // header and the receipt so the two never drift.
+  const RUN_ID_COPY_TITLE = "Copy run ID — quote it if you report a problem to support.";
+  const RUN_ID_INFO_TEXT =
+    "A unique audit handle for this run. Copy it and quote it if you report a " +
+    "problem to support — it lets them pull up every log line for this exact " +
+    "request. It is not a link and has no meaning outside support.";
+
   function renderResultMeta(result, status, durationText) {
     const meta = el("result-meta");
     if (!meta) return;
@@ -2324,7 +2350,34 @@
 
     if (result.correlation_id) {
       appendMetaSep(meta);
-      meta.appendChild(mkEl("span", "mono", result.correlation_id));
+      // A bare ``qr_…`` value is meaningless to a user on its own. Label it
+      // "Run ID", make it click-to-copy, and attach a compact info icon that
+      // explains what it is for — the aside's "Run controls" readout (which
+      // carried this affordance) is hidden in the parity design, so the result
+      // header is the only place the user sees the id.
+      const runIdWrap = mkEl("span", "result-meta-runid");
+      runIdWrap.appendChild(mkEl("span", "result-meta-runid-label", "Run ID"));
+      const idValue = String(result.correlation_id);
+      const copyBtn = document.createElement("button");
+      copyBtn.type = "button";
+      copyBtn.className = "mono result-meta-runid-copy";
+      copyBtn.textContent = idValue;
+      copyBtn.title = RUN_ID_COPY_TITLE;
+      copyBtn.setAttribute("aria-label", `Copy run ID ${idValue}`);
+      // Reuse the shared helper so the header copy stays in lockstep with the
+      // receipt / aside / live-card buttons (success AND failure feedback,
+      // visible + screen-reader).
+      copyBtn.addEventListener("click", () => {
+        copyRunIdToClipboard(copyBtn, idValue, RUN_ID_COPY_TITLE);
+      });
+      runIdWrap.appendChild(copyBtn);
+      runIdWrap.appendChild(
+        buildInfoIcon(RUN_ID_INFO_TEXT, { ariaLabel: "What is the run ID?", inline: true }),
+      );
+      meta.appendChild(runIdWrap);
+      // Wire the freshly-created info icon into the shared tooltip system
+      // (idempotent — keyed off ``data-info-wired``).
+      initInfoIcons();
     }
 
     // Slice 4b: move the static "Run details" disclosure toggle into the meta
@@ -2520,12 +2573,21 @@
     return row;
   }
 
-  // Copyable ID row (Run ID / Correlation). The ⧉ button carries the value on
-  // its dataset; a single delegated click handler on ``#result-receipt`` (wired
-  // once in boot) reuses the shared ``copyRunIdToClipboard`` helper.
-  function buildReceiptIdRow(label, value, idleTitle) {
+  // Copyable ID row (Run ID / internal reference). The ⧉ button carries the
+  // value on its dataset; a single delegated click handler on ``#result-receipt``
+  // (wired once in boot) reuses the shared ``copyRunIdToClipboard`` helper. When
+  // ``infoText`` is given, a compact info icon is appended to the label so the
+  // receipt explains the id the same way the result header does.
+  function buildReceiptIdRow(label, value, idleTitle, infoText) {
     const row = mkEl("div", "result-receipt-row");
-    row.appendChild(mkEl("span", "result-receipt-label", label));
+    const labelEl = mkEl("span", "result-receipt-label", label);
+    if (infoText) {
+      labelEl.appendChild(document.createTextNode(" "));
+      labelEl.appendChild(
+        buildInfoIcon(infoText, { ariaLabel: `What is the ${label}?`, inline: true }),
+      );
+    }
+    row.appendChild(labelEl);
     const valWrap = mkEl("span", "result-receipt-id");
     valWrap.appendChild(mkEl("span", "mono", value));
     const copy = mkEl("button", "result-receipt-copy", "⧉");
@@ -2648,21 +2710,19 @@
     c1.setAttribute("role", "group");
     c1.setAttribute("aria-label", "Run receipt");
     c1.appendChild(mkEl("span", "result-receipt-kicker", "Run receipt"));
-    if (result.query_run_id) {
-      c1.appendChild(
-        buildReceiptIdRow(
-          "Run ID",
-          String(result.query_run_id),
-          "Copy run ID — include it if you report an issue.",
-        ),
-      );
-    }
+    // ONE user-facing "Run ID" = the friendly ``qr_``/correlation form, matching
+    // the result header and live-run card. The raw ``query_run_id`` (a UUID) is
+    // the SAME id in another format (``correlation_id`` is ``"qr_" + uuid.hex``),
+    // so surfacing it as a second row only added a competing ID-looking value with
+    // no user benefit — it is intentionally NOT shown on the receipt. (Support can
+    // still resolve the raw form from the friendly id server-side.)
     if (result.correlation_id) {
       c1.appendChild(
         buildReceiptIdRow(
-          "Correlation",
+          "Run ID",
           String(result.correlation_id),
-          "Copy correlation ID — include it if you report an issue.",
+          RUN_ID_COPY_TITLE,
+          RUN_ID_INFO_TEXT,
         ),
       );
     }
@@ -2706,7 +2766,7 @@
       mkEl(
         "p",
         "result-receipt-note",
-        "Quote the run ID and correlation ID when you report an issue — support can pull every log line. Ephemeral: this receipt is gone when the session ends.",
+        "Quote the run ID when you report an issue — support can pull every log line. Ephemeral: this receipt is gone when the session ends.",
       ),
     );
     grid.appendChild(c1);
@@ -2833,6 +2893,9 @@
     grid.appendChild(c4);
 
     receipt.appendChild(grid);
+    // Wire the receipt's ID info icons into the shared tooltip system
+    // (idempotent — keyed off ``data-info-wired``).
+    initInfoIcons();
   }
 
   // One position <td>. ``data-label`` carries the column name so the mobile
@@ -2902,6 +2965,10 @@
       modelCell.setAttribute("scope", "row");
       const avatar = mkEl("span", "result-pos-avatar", name.trim().charAt(0).toUpperCase() || "?");
       avatar.setAttribute("aria-hidden", "true");
+      // Carry the SAME per-vendor tint the composer slots and transcript openings
+      // use, so a model keeps its colour identity across every surface (two "G"
+      // initials — GPT and Gemini — are otherwise indistinguishable here).
+      if (m.model_id) avatar.dataset.vendor = vendorForModel(m.model_id);
       modelCell.append(avatar, mkEl("span", "result-pos-name", name));
       row.appendChild(modelCell);
 
@@ -3403,6 +3470,13 @@
     const cards = defaultModelIds.map((fallbackModelId, index) => {
       const slot = modelAnswers.find((answer) => answer.slot_number === index + 1);
       const modelId = slot?.model_id || getModelIds()[index] || fallbackModelId;
+      // Run-level status, scoped to the whole card so both the empty-slot
+      // error placeholder and the provider-notice guard below can read it.
+      // Previously this was ``const``-declared inside the ``else`` branch,
+      // so the ``slot`` branch left it undefined and the provider-notice
+      // check threw ``ReferenceError: runStatusValue is not defined`` once
+      // per card on every poll tick — a toast storm on any completed run.
+      const runStatusValue = result?.status;
       // Prefer the server-supplied ``display_name`` (catalog short
       // name like "Claude Haiku 4.5") over the raw model_id. The id
       // is still shown as a small subtitle so the user can identify
@@ -3462,7 +3536,6 @@
         }
       } else {
         // Check if run failed - show error state instead of pending
-        const runStatusValue = result?.status;
         if (runStatusValue && ['failed', 'timed_out', 'cancelled'].includes(runStatusValue)) {
           const errorPlaceholder = document.createElement("p");
           errorPlaceholder.className = "error-placeholder";
@@ -3534,15 +3607,45 @@
       "A decision-support framing from Quorum. Not medical, legal, financial, safety, or regulated professional advice. Templated by Quorum; no model generates this.",
   };
 
-  function buildInfoIcon(text) {
+  function buildInfoIcon(text, { ariaLabel = "More information about this section", inline = false } = {}) {
     const button = document.createElement("button");
     button.type = "button";
-    button.className = "info-icon";
+    button.className = inline ? "info-icon info-icon-inline" : "info-icon";
     button.setAttribute("data-info-icon", "");
     button.setAttribute("data-info-text", text);
-    button.setAttribute("aria-label", "More information about this section");
+    button.setAttribute("aria-label", ariaLabel);
     button.innerHTML = "&#9432;";
     return button;
+  }
+
+  // Shared run-id clipboard helper: copies ``value`` and shows the same feedback
+  // on ``button`` both visibly (title + ``data-copied`` colour flip) AND to
+  // screen readers (``aria-label`` swap, WCAG 4.1.3), restoring the button's own
+  // idle title/aria-label after a beat. Used by the result-header Run ID copy,
+  // the receipt copy, the aside ``#copy-correlation``, and the live-card
+  // ``#live-corr`` so all four stay in lockstep on both success AND failure.
+  async function copyRunIdToClipboard(button, value, idleTitle) {
+    if (!button || !value) return;
+    // Preserve this button's OWN idle aria-label (callers have different ones).
+    const idleAria = button.getAttribute("aria-label");
+    const restore = () => {
+      button.title = idleTitle;
+      if (idleAria != null) button.setAttribute("aria-label", idleAria);
+    };
+    try {
+      await navigator.clipboard.writeText(value);
+      button.dataset.copied = "true";
+      button.title = "Copied!";
+      button.setAttribute("aria-label", "Copied");
+      setTimeout(() => {
+        delete button.dataset.copied;
+        restore();
+      }, 1500);
+    } catch (_) {
+      button.title = "Copy failed — select and copy manually.";
+      button.setAttribute("aria-label", "Copy failed — select and copy manually");
+      setTimeout(restore, 1500);
+    }
   }
 
   function renderDebateAndSynthesis(result) {
@@ -4013,6 +4116,9 @@
   function setRunning(isRunning) {
     state.isRunning = isRunning;
     estimateButton.disabled = isRunning;
+    // The "Run now" CTA is disabled alongside "See the estimate" so a run in
+    // flight cannot be double-started from either composer button.
+    if (runNowButton) runNowButton.disabled = isRunning;
     // Slice 3 (04 Live run): the live-elapsed ticker only runs while a run is
     // in flight. Terminal freezing of the readout is handled by renderLiveRun
     // (which sets the final value before this clear); here we just guarantee
@@ -4380,9 +4486,11 @@
     return row;
   }
 
-  // Populate the cost gate (screen 03) from an estimate response. Called
-  // for the ``require_confirmation`` and ``block`` bands only; the
-  // ``allow`` band skips this screen entirely. Does NOT switch the view —
+  // Populate the cost gate (screen 03) from an estimate response. Called for
+  // the ``require_confirmation`` and ``block`` bands, and for an ``allow`` band
+  // reached via "See the estimate" (the gate then shows a plain "Run · $X" CTA).
+  // Only a "Run now" click on an allow-band estimate skips this screen entirely
+  // and auto-proceeds. Does NOT switch the view —
   // the caller does that after rendering so the DOM is ready when it shows.
   // Populate the cost gate and RETURN its live-region announcement string.
   // The announcement is deliberately NOT written here: this runs while the
@@ -4491,17 +4599,30 @@
         gateRange.textContent = `${gateUsd2dp(lo)}–${gateUsd2dp(hi)}`;
       }
     }
+    // ``allow`` reaches here only via "See the estimate" (a deliberate review
+    // of a run the server would let start without confirmation). Its copy must
+    // NOT claim "your confirmation required" — nothing is being required; the
+    // user asked to look. ``require_confirmation`` keeps the warning framing.
+    const isAllowReview = action === "allow";
     if (gateBandLabel) {
-      gateBandLabel.textContent = "Cost review — your confirmation required";
+      gateBandLabel.textContent = isAllowReview
+        ? "Estimate ready — review and run"
+        : "Cost review — your confirmation required";
     }
     if (gateReason) {
       const firstReason = reasons.length ? ` ${reasons[0]}` : "";
-      gateReason.textContent = `${COPY_003_COST_WARNING}${firstReason}`;
+      gateReason.textContent = isAllowReview
+        ? `This run is estimated at ${gateUsd(total)}, within the no-confirmation band — start it when you're ready.${firstReason}`
+        : `${COPY_003_COST_WARNING}${firstReason}`;
     }
     if (gateConfirmButton) {
       gateConfirmButton.hidden = false;
       const label = gateConfirmButton.querySelector(".button-label");
-      if (label) label.textContent = `Confirm & run · ${gateUsd(total)}`;
+      if (label) {
+        label.textContent = isAllowReview
+          ? `Run · ${gateUsd(total)}`
+          : `Confirm & run · ${gateUsd(total)}`;
+      }
     }
     // Reset the block-only surfaces so a prior block render never bleeds
     // into the confirm band.
@@ -4512,7 +4633,9 @@
     if (gateBlockFooter) gateBlockFooter.hidden = true;
     if (gateCapNote) gateCapNote.hidden = false;
     if (gateHintConfirm) gateHintConfirm.hidden = false;
-    return `Cost review: your confirmation required. Estimated ${gateUsd(total)}.`;
+    return isAllowReview
+      ? `Estimate ready. Estimated ${gateUsd(total)}. Review and run when you're ready.`
+      : `Cost review: your confirmation required. Estimated ${gateUsd(total)}.`;
   }
 
   // ``true`` when the user has asked the OS to minimise motion.
@@ -4580,10 +4703,17 @@
     if (queryTextarea) queryTextarea.focus({ preventScroll: true });
   }
 
-  async function estimateRun() {
+  // ``autoProceed`` decides what happens once the server returns an ``allow``
+  // band ($ ≤ the no-confirmation threshold): the "Run now" path proceeds
+  // straight to the run, while the "See the estimate" path (``false``) opens
+  // the gate so the user reviews the itemized estimate first. Higher bands
+  // (``require_confirmation``/``block``) always open the gate regardless.
+  // ``trigger`` is the button that initiated the flow, so its own spinner is
+  // the one shown.
+  async function estimateRun({ autoProceed = false, trigger = estimateButton } = {}) {
     clearError();
     hideCostConfirmation();
-    setButtonLoading(estimateButton, true);
+    setButtonLoading(trigger, true);
     try {
       const queryText = queryTextarea.value.trim();
       if (!queryText) {
@@ -4627,8 +4757,10 @@
         estimate.cost_estimate.estimated_cost_usd,
       );
       const action = estimate.cost_estimate.threshold_action;
-      // Slice 2 (03 Cost gate): route by the server ``threshold_action``.
-      //   allow                → skip the gate, run straight away.
+      // Slice 2 (03 Cost gate): route by the server ``threshold_action`` and
+      // whether this is a "Run now" auto-proceed (``autoProceed``).
+      //   allow + autoProceed  → skip the gate, run straight away (Run now only).
+      //   allow (See estimate) → show the gate with a plain "Run · $X" CTA.
       //   require_confirmation  → show the itemized cost gate (screen 03).
       //   block                → show the gate's inline blocked state.
       // The legacy inline composer callout (``#cost-confirmation``) is no
@@ -4640,8 +4772,10 @@
       try {
         if (usdSecondary) renderCostSecondary(estimate.cost_estimate.estimated_cost_usd);
         renderNotices(null);
-        if (action === "allow") {
-          // ≤ $0.15: nothing to confirm — go straight to the run.
+        if (action === "allow" && autoProceed) {
+          // ≤ $0.15 AND the user chose "Run now": nothing to confirm — go
+          // straight to the run. The "See the estimate" path (autoProceed
+          // false) skips this branch so it always shows the gate below.
           await proceedWithRun();
         } else {
           // require_confirmation ($0.15–$0.25) or block (> $0.25):
@@ -4669,9 +4803,9 @@
       }
       return estimate;
     } finally {
-      setButtonLoading(estimateButton, false);
+      setButtonLoading(trigger, false);
       // ``setButtonLoading`` clears ``disabled``; re-assert the gate so a
-      // high-stakes topic detected mid-compose keeps the CTA disabled.
+      // high-stakes topic detected mid-compose keeps both CTAs disabled.
       applyHighStakesGate();
     }
   }
@@ -4695,9 +4829,22 @@
   // Re-derive the primary CTA's disabled state from the run + gate state.
   function applyHighStakesGate() {
     const blocked = state.highStakesRequired && !state.highStakesAck;
+    // Keep both CTAs disabled while an estimate round-trip is in flight
+    // (``submittingRun``), not just while a run is (``isRunning``). This runs
+    // in ``startRun``/``estimateRun``'s finally, which fires before the run
+    // starts; without the ``submittingRun`` term the just-clicked CTA would
+    // briefly flicker back to enabled between the estimate returning and the
+    // auto-proceed run beginning.
+    const busy = state.isRunning || state.submittingRun;
     if (estimateButton) {
-      estimateButton.disabled = state.isRunning || blocked;
+      estimateButton.disabled = busy || blocked;
       estimateButton.dataset.gateBlocked = blocked ? "true" : "false";
+    }
+    // "Run now" is gated identically: an unacknowledged high-stakes topic must
+    // block the direct-run path too, not just the estimate-first path.
+    if (runNowButton) {
+      runNowButton.disabled = busy || blocked;
+      runNowButton.dataset.gateBlocked = blocked ? "true" : "false";
     }
   }
 
@@ -4823,16 +4970,30 @@
     return false;
   }
 
-  // The single primary composer action. Always estimates first so the
-  // user sees the cost, then surfaces Proceed / Cancel inside the
-  // cost confirmation callout. The previous two-button flow had a
-  // hidden auto-estimates-then-starts shortcut; that shortcut is gone
-  // — the user always sees the estimate before a run starts.
-  async function startRun() {
+  // Entry point for both composer CTAs. It always fetches the estimate first
+  // (so the cost is known before anything spends), then either opens the cost
+  // gate or — for a ``Run now`` click on an ``allow``-band estimate — proceeds
+  // straight to the run. ``autoProceed`` selects between the two; ``trigger``
+  // is the button that fired so its own spinner is shown.
+  async function startRun(autoProceed = false, trigger = estimateButton) {
+    // Re-entrancy latch. With two composer CTAs, clicking one only disables
+    // THAT button (``setButtonLoading`` below) — the sibling and Ctrl/Cmd+Enter
+    // stay live during the estimate round-trip. Without this guard a second
+    // click could fire a concurrent ``estimateRun`` (and, on the Run-now
+    // allow-band path, yank the view mid-run). ``state.isRunning`` is only set
+    // later, after the create POST, so it can't cover this window. Set the latch
+    // synchronously (no await before it) and clear it in ``finally``.
+    if (state.submittingRun || state.isRunning) return;
+    state.submittingRun = true;
     state.submissionAttempted = true;
     clearError();
-    if (!highStakesGateSatisfied()) return;
-    setButtonLoading(estimateButton, true);
+    if (!highStakesGateSatisfied()) { state.submittingRun = false; return; }
+    setButtonLoading(trigger, true);
+    // Lock the sibling CTA for the whole estimate window too, so neither the
+    // other button nor Ctrl/Cmd+Enter (which keys off ``estimateButton.disabled``)
+    // can start a second flow before this one resolves.
+    const sibling = trigger === estimateButton ? runNowButton : estimateButton;
+    if (sibling) sibling.disabled = true;
     try {
       const queryText = queryTextarea.value.trim();
       if (!queryText) {
@@ -4842,15 +5003,17 @@
           message: "Please enter a question before starting a run.",
         });
       }
-      await estimateRun();
+      await estimateRun({ autoProceed, trigger });
     } catch (error) {
       handleError(error);
     } finally {
-      setButtonLoading(estimateButton, false);
+      state.submittingRun = false;
+      setButtonLoading(trigger, false);
       // ``setButtonLoading`` clears ``disabled``; re-assert the run/gate
-      // state so the CTA stays disabled when a run is now in flight (the
-      // ``allow`` band auto-proceeds inside ``estimateRun``) or a
-      // high-stakes topic is unacknowledged.
+      // state so both CTAs stay disabled when a run is now in flight (a
+      // ``Run now`` allow-band click auto-proceeds inside ``estimateRun``)
+      // or a high-stakes topic is unacknowledged. This also re-derives the
+      // sibling CTA's disabled state that was force-locked above.
       applyHighStakesGate();
     }
   }
@@ -4861,6 +5024,14 @@
   // token is needed; for BLOCK the button is disabled and this path
   // cannot fire.
   async function proceedWithRun() {
+    // Synchronous single-create latch. ``setRunning(true)`` (which disables
+    // every run CTA) only fires AFTER the create POST returns, so between two
+    // concurrent entry points — a Run-now auto-proceed still awaiting its
+    // create, and a cost-gate "Run · $X" click — both would otherwise pass to a
+    // second create. This latch (set before the first await, cleared in
+    // ``finally``) guarantees at most one create is ever in flight, enforcing
+    // the "one run at a time per session" invariant on the client.
+    if (state.creatingRun) return;
     state.submissionAttempted = true;
     if (!state.currentEstimate) {
       // Defensive: button should be disabled until an estimate exists.
@@ -4892,6 +5063,9 @@
     if (!checkMagicPhraseAck(queryText, confirmBtn)) {
       return;
     }
+    // Commit to the create: latch now (synchronously, before any await) so a
+    // concurrent proceedWithRun bails at the guard above.
+    state.creatingRun = true;
     setButtonLoading(confirmBtn, true);
     try {
       const thresholdAction =
@@ -4978,6 +5152,10 @@
       }
       handleError(error);
     } finally {
+      // Release the single-create latch. On the success path the run is now in
+      // flight and ``setRunning(true)`` keeps every CTA disabled anyway; on the
+      // failure path this re-opens the create for a genuine retry.
+      state.creatingRun = false;
       setButtonLoading(confirmBtn, false);
     }
   }
@@ -5314,13 +5492,14 @@
       });
     }
 
-    // Footer: both ids, quoted for support. No secrets, no provider keys.
-    const corr = result.correlation_id || "";
-    const runId = result.query_run_id ? String(result.query_run_id) : "";
-    const idParts = [corr, runId].filter(Boolean);
-    const footer = idParts.length
-      ? `${idParts.join(" · ")} — quote when reporting`
-      : undefined;
+    // Footer: the ONE friendly Run ID, quoted for support. The raw query_run_id
+    // is the SAME run in another format (correlation_id is "qr_" + uuid.hex);
+    // quoting two competing ids only confuses the user, so we surface one —
+    // matching the result header and receipt. Fall back to the raw id only if
+    // the friendly form is absent. No secrets, no provider keys.
+    const supportId =
+      result.correlation_id || (result.query_run_id ? String(result.query_run_id) : "");
+    const footer = supportId ? `Run ID ${supportId} — quote when reporting` : undefined;
 
     const actions = [
       { label: "Start a new run", primary: true, action: () => returnToComposer("question") },
@@ -5664,13 +5843,184 @@
       }
     }
 
-    // Every landing CTA leads here: back to the composer, textarea focused.
-    // Entering the workspace this way marks it "seen" so the first-visit gate
-    // in ``boot()`` sends this device straight to the composer next time.
+    // Landing question input, its empty-submit guard, and the on-page-A
+    // transition message elements.
+    const landingQuery = el("landing-query");
+    const landingRunbar = qs(".landing-runbar");
+    const landingQueryError = el("landing-query-error");
+    const landingHandoffNote = el("landing-handoff-note");
+    const landingHandoffNoteText = el("landing-handoff-note-text");
+    // How long the transition message dwells on page A before the view changes,
+    // so the visitor can read WHY they are being moved to the workspace. The note
+    // is a ~19-word sentence; at typical reading speed that needs roughly this
+    // long to land before the composer takes over.
+    const LANDING_HANDOFF_DWELL_MS = 2800;
+    let landingHandoffPending = false;
+    // Pending landing Estimate/Run dwell timer (so a chip click can cancel it).
+    let landingHandoffTimer = null;
+    // Timer that clears the composer question's post-hand-off highlight flash.
+    let composerHandoffFlashTimer = null;
+
+    // Clear the empty-submit error state (called on typing and on a valid submit).
+    function clearLandingError() {
+      if (landingRunbar) delete landingRunbar.dataset.invalid;
+      if (landingQuery) landingQuery.setAttribute("aria-invalid", "false");
+      if (landingQueryError) landingQueryError.hidden = true;
+    }
+
+    // Empty-submit guard: show ALL cues together — highlight the runbar (danger
+    // ring), reveal the "!" error message, mark the input aria-invalid, move
+    // focus to the field, and let ``role="alert"`` announce it. Returns true
+    // when a question is present.
+    function landingHasQuestion() {
+      const value = (landingQuery && landingQuery.value.trim()) || "";
+      if (value) {
+        clearLandingError();
+        return true;
+      }
+      if (landingRunbar) landingRunbar.dataset.invalid = "true";
+      if (landingQuery) landingQuery.setAttribute("aria-invalid", "true");
+      if (landingQueryError) {
+        // Re-assert the text so ``role="alert"`` announces on each attempt.
+        landingQueryError.textContent = "Enter a question to continue.";
+        landingQueryError.hidden = false;
+      }
+      if (landingQuery) landingQuery.focus({ preventScroll: true });
+      return false;
+    }
+
+    // Show the tailored transition message ON page A. ``kind`` is the page-A
+    // button that was clicked: "estimate" or "run". Hides the error first (the
+    // two are mutually exclusive).
+    function showLandingHandoffNote(kind) {
+      clearLandingError();
+      if (!landingHandoffNote || !landingHandoffNoteText) return;
+      const message =
+        kind === "estimate"
+          ? "Got your question. Taking you to review your four models and see the itemized cost before anything runs…"
+          : "Got your question. Taking you to review your four models, then we'll price it and run once you approve…";
+      // Reveal the container FIRST, then write the text: a ``role="status"``
+      // aria-live=polite region announces a text mutation that happens while it
+      // is in the accessibility tree. Writing the text while still ``hidden`` and
+      // then merely un-hiding is not reliably announced (NVDA/VoiceOver), so the
+      // reason-for-navigation could go unspoken. Order matters here.
+      landingHandoffNote.hidden = false;
+      landingHandoffNoteText.textContent = message;
+    }
+
+    // Disable/enable the two landing CTAs while the transition message dwells, so
+    // a second click can't fire a second hand-off mid-transition.
+    function setLandingCtasDisabled(disabled) {
+      for (const id of ["landing-estimate", "landing-run"]) {
+        const btn = el(id);
+        if (btn) btn.disabled = disabled;
+      }
+    }
+
+    // Reset the hand-off dwell latch: clear any pending timer, drop the pending
+    // flag, and re-enable the CTAs. Shared by every site that ends a dwell (the
+    // timer firing, an example-chip/open-workspace navigation, and How-it-works
+    // cancelling) so the trio never drifts out of sync between them.
+    function clearLandingHandoffLatch() {
+      window.clearTimeout(landingHandoffTimer);
+      landingHandoffTimer = null;
+      landingHandoffPending = false;
+      setLandingCtasDisabled(false);
+    }
+
+    // Cancel a pending Estimate/Run dwell WITHOUT navigating: clear the timer,
+    // drop the pending latch, re-enable the CTAs, and hide the transition note.
+    // Used when the visitor does something during the dwell that means they no
+    // longer want the automatic hand-off (e.g. clicking "How it works" to read
+    // the example instead of being yanked to the composer). Returns true when a
+    // pending hand-off was actually cancelled.
+    function cancelPendingHandoff() {
+      if (!landingHandoffTimer) return false;
+      clearLandingHandoffLatch();
+      if (landingHandoffNote) landingHandoffNote.hidden = true;
+      return true;
+    }
+
+    // Every landing CTA leads here: to the composer, textarea focused. Entering
+    // the workspace this way marks it "seen" so the first-visit gate in
+    // ``boot()`` sends this device straight to the composer next time. ``setView``
+    // clears the landing transient state (error + transition note).
     function goToComposer() {
+      // If a landing Estimate/Run dwell is still pending (e.g. the visitor
+      // clicked an example chip during the ~2.8s dwell), cancel it: this call
+      // already lands them on the composer, so letting the stray timer fire a
+      // second goToComposer later would yank the viewport back to the top and
+      // re-flash after they had settled in. Clearing an already-fired timer is
+      // a harmless no-op.
+      if (landingHandoffTimer) clearLandingHandoffLatch();
       markWorkspaceSeen();
       setView("composer");
-      if (queryTextarea) queryTextarea.focus({ preventScroll: true });
+      if (!queryTextarea) return;
+      // Bring the composer back to the top of the viewport so the question field
+      // the user just filled — from an example chip, a follow-up, or the landing
+      // hand-off — is actually visible, framed under the "Ask the panel" heading.
+      // A bare focus({preventScroll}) left the viewport wherever the user had
+      // scrolled (at the example chips, or deep in the result's follow-up block),
+      // so the "focused" field sat off-screen and the hand-off looked like nothing
+      // had happened. Instant scroll (no animation) is reduced-motion-safe.
+      window.scrollTo(0, 0);
+      queryTextarea.focus({ preventScroll: true });
+      // Caret at the END of the pre-filled text, ready to refine.
+      const caret = queryTextarea.value.length;
+      try {
+        queryTextarea.setSelectionRange(caret, caret);
+      } catch (_) {
+        // setSelectionRange throws on some input types; the focus still lands.
+      }
+      // Programmatic focus does NOT trigger :focus-visible, and the composer
+      // textarea suppresses the plain-:focus ring, so without this the field
+      // gives no visible "your question landed here" cue after a hand-off. Flash
+      // an explicit highlight for a beat so the focus is unmistakable — but ONLY
+      // when a question was actually carried in. A bare "Open the workspace" skip
+      // (empty composer) would otherwise ring an empty field, which reads as a
+      // spurious "your question landed here" cue over nothing.
+      if (queryTextarea.value.length > 0) {
+        queryTextarea.classList.add("question-handoff-focus");
+        if (composerHandoffFlashTimer) window.clearTimeout(composerHandoffFlashTimer);
+        composerHandoffFlashTimer = window.setTimeout(() => {
+          queryTextarea.classList.remove("question-handoff-focus");
+          composerHandoffFlashTimer = null;
+        }, 1400);
+      }
+    }
+
+    // Estimate/Run on the landing: validate, carry the typed question into the
+    // real composer (so its own validation/char-count/high-stakes probe run),
+    // show the tailored transition message ON page A, then — after a short dwell
+    // so the visitor reads WHY — hand off to the composer. Nothing is estimated
+    // or run here; page B owns model review + cost approval.
+    function handoffFromLanding(kind) {
+      if (landingHandoffPending) return;
+      if (!landingHasQuestion()) return;
+      landingHandoffPending = true;
+      const question = landingQuery.value.trim();
+      if (queryTextarea) {
+        queryTextarea.value = question;
+        queryTextarea.dispatchEvent(new Event("input", { bubbles: true }));
+      }
+      showLandingHandoffNote(kind);
+      setLandingCtasDisabled(true);
+      // Disabling the CTA the user just activated blurs it, which drops keyboard
+      // focus to <body> for the whole dwell (a lost-focus a11y gap). Re-home focus
+      // onto the still-visible question field so a keyboard/SR user keeps an
+      // anchored, sensible focus until goToComposer moves it to the composer.
+      if (landingQuery) landingQuery.focus({ preventScroll: true });
+      landingHandoffTimer = window.setTimeout(() => {
+        clearLandingHandoffLatch();
+        // The field stays focused through the dwell, so the visitor may have
+        // refined the question. Carry the LATEST text (not the click-time
+        // snapshot) into the composer so a dwell-time edit is never discarded.
+        if (queryTextarea && landingQuery && landingQuery.value.trim() !== queryTextarea.value) {
+          queryTextarea.value = landingQuery.value.trim();
+          queryTextarea.dispatchEvent(new Event("input", { bubbles: true }));
+        }
+        goToComposer();
+      }, LANDING_HANDOFF_DWELL_MS);
     }
 
     if (showLandingButton) {
@@ -5682,6 +6032,10 @@
     const landingPreview = qs(".landing-preview");
     if (landingHowItWorks && landingPreview) {
       landingHowItWorks.addEventListener("click", () => {
+        // If an Estimate/Run dwell is pending, the visitor clicking "How it works"
+        // means they want to read the example, NOT be yanked to the composer a
+        // beat later. Cancel the pending hand-off before scrolling to the preview.
+        cancelPendingHandoff();
         landingPreview.scrollIntoView({
           behavior: prefersReducedMotion() ? "auto" : "smooth",
           block: "center",
@@ -5689,10 +6043,35 @@
       });
     }
 
-    for (const id of ["landing-open-workspace", "landing-estimate", "landing-run"]) {
-      const button = el(id);
-      if (button) button.addEventListener("click", goToComposer);
+    // Typing clears the empty-submit error immediately.
+    if (landingQuery) {
+      landingQuery.addEventListener("input", () => {
+        if (landingQuery.value.trim()) clearLandingError();
+      });
+      // Ctrl/Cmd+Enter from the landing question field runs the same estimate-first
+      // hand-off as clicking "See the estimate". The global keyboard-shortcut
+      // handler no-ops on the landing (it predates this real textarea), so without
+      // this the natural submit gesture is a dead key. Stop propagation so the
+      // global handler does not also fire. Empty input falls through to the
+      // landing empty-submit guard (same as the button), not a silent no-op.
+      landingQuery.addEventListener("keydown", (event) => {
+        if ((event.metaKey || event.ctrlKey) && event.key === "Enter") {
+          event.preventDefault();
+          event.stopPropagation();
+          handoffFromLanding("estimate");
+        }
+      });
     }
+
+    // "Open the workspace" is a plain skip-to-B link (no question needed — the
+    // user will type on B). Estimate/Run carry the typed question, guard the
+    // empty case, and show the on-page-A transition message.
+    const openWorkspaceBtn = el("landing-open-workspace");
+    if (openWorkspaceBtn) openWorkspaceBtn.addEventListener("click", goToComposer);
+    const estimateBtn = el("landing-estimate");
+    if (estimateBtn) estimateBtn.addEventListener("click", () => handoffFromLanding("estimate"));
+    const runBtn = el("landing-run");
+    if (runBtn) runBtn.addEventListener("click", () => handoffFromLanding("run"));
 
     // Example chips: fill the real composer textarea, then open it.
     for (const chip of qsa("[data-landing-chip]")) {
@@ -5743,13 +6122,12 @@
           queryTextarea.value = base;
           queryTextarea.dispatchEvent(new Event("input", { bubbles: true }));
         }
+        // Land on the composer (page B) with the question pre-filled so the user
+        // can REVIEW OR CHANGE their four models before running — a follow-up
+        // reuses the same models by default, but a new question may want a
+        // different panel. We deliberately do NOT auto-fire the estimate here;
+        // the user picks their models then clicks See the estimate / Run now.
         goToComposer();
-        // Estimate through the composer's OWN gated button rather than calling
-        // estimateRun() directly, so the high-stakes acknowledgement gate (which
-        // disables that button until the topic is acknowledged) is respected on
-        // a safety-sensitive follow-up. A disabled button no-ops.
-        const estimateBtn = el("estimate-run");
-        if (base && estimateBtn && !estimateBtn.disabled) estimateBtn.click();
       });
     }
   }
@@ -5825,9 +6203,12 @@
           }
           return;
         }
-        // Single-CTA design: Ctrl/Cmd+Enter runs the estimate-first
-        // flow (``startRun``), which routes through the cost gate. The
-        // high-stakes gate keeps the CTA disabled until acknowledged.
+        // Ctrl/Cmd+Enter runs the estimate-first flow (``startRun`` with the
+        // default ``autoProceed=false``), which always routes through the cost
+        // gate — the same as clicking "See the estimate". "Run now" (direct) is
+        // mouse-only by design. The high-stakes gate keeps the CTA disabled
+        // until acknowledged, and the estimate-window latch inside ``startRun``
+        // blocks a second concurrent flow.
         if (!estimateButton.disabled) {
           startRun();
         }
@@ -5929,35 +6310,20 @@
     seedReadinessFromPageLoad();
     applyReadinessState();
     estimateButton.addEventListener("click", () => {
-      startRun();
+      // "See the estimate" always opens the cost gate first (autoProceed
+      // false), even for a cheap allow-band run.
+      startRun(false, estimateButton);
     });
-    // Shared run-id clipboard helper (Fix 6): both the aside's #copy-correlation
-    // button and the live card's #live-corr button copy a run id and show the
-    // same copied-title feedback. Extracted so both stay in lockstep.
-    async function copyRunIdToClipboard(button, value, idleTitle) {
-      if (!button || !value) return;
-      // Fix 5: preserve this button's OWN idle aria-label (the three callers
-      // have different ones) so it is restored exactly on timeout.
-      const idleAria = button.getAttribute("aria-label");
-      try {
-        await navigator.clipboard.writeText(value);
-        button.dataset.copied = "true";
-        button.title = "Copied!";
-        // Fix 5: convey the copied state to SR (not color-only). The visible
-        // non-color cue (a ✓ glyph) is added via CSS ``::after`` so it never
-        // clobbers the button's own text — #live-corr shows the run id and
-        // #copy-correlation wraps a child <span>. aria-label="Copied"
-        // overrides the accessible name, so the ✓ stays purely visual.
-        button.setAttribute("aria-label", "Copied");
-        setTimeout(() => {
-          delete button.dataset.copied;
-          button.title = idleTitle;
-          if (idleAria != null) button.setAttribute("aria-label", idleAria);
-        }, 1500);
-      } catch (_) {
-        button.title = "Copy failed — select and copy manually.";
-      }
+    if (runNowButton) {
+      runNowButton.addEventListener("click", () => {
+        // "Run now" starts straight away for an allow-band estimate; higher
+        // cost bands still fall into the gate inside ``estimateRun``.
+        startRun(true, runNowButton);
+      });
     }
+    // ``copyRunIdToClipboard`` is a shared top-level helper (defined near
+    // ``buildInfoIcon``) so the result header, receipt, aside, and live card all
+    // copy a run id with identical success/failure feedback.
     if (copyCorrelationButton) {
       copyCorrelationButton.addEventListener("click", () => {
         const target = el("correlation-meta");

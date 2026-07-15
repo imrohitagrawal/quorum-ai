@@ -247,9 +247,13 @@
               </div>
             </div>
             <div class="composer-footer">
-              <p class="composer-footer-notice">You'll approve an itemized estimate before anything runs · hard cap <span class="mono">$0.25</span>/run · one run at a time per session</p>
+              <p class="composer-footer-notice"><strong>See the estimate</strong> to review the itemized cost first, or <strong>Run now</strong> to start low-cost runs immediately — anything needing confirmation still pauses for your approval · the <span class="mono">$0.25</span>/run hard cap always applies · one run at a time per session</p>
               <div class="composer-footer-actions">
                 <span id="composer-total-estimate" class="mono composer-total" aria-live="polite">—</span>
+                <button id="run-now" class="button button-secondary composer-cta" type="button" data-loading-text="Starting...">
+                  <span class="button-label">Run now</span>
+                  <span class="button-spinner" aria-hidden="true"></span>
+                </button>
                 <button id="estimate-run" class="button button-primary composer-cta" type="button" data-loading-text="Estimating...">
                   <span class="button-label">See the estimate →</span>
                   <span class="button-spinner" aria-hidden="true"></span>
@@ -375,7 +379,7 @@
             </div>
 
             <div class="cost-gate-hint muted">
-              <span id="cost-gate-hint-confirm"><kbd>Ctrl</kbd>+<kbd>Enter</kbd> confirm · </span><kbd>Esc</kbd> back — estimates at or below <span class="mono">$0.15</span> skip this screen and run on approval.
+              <span id="cost-gate-hint-confirm"><kbd>Ctrl</kbd>+<kbd>Enter</kbd> confirm · </span><kbd>Esc</kbd> back — use <strong>Run now</strong> in the composer to skip this review on low-cost runs.
             </div>
           </section>
         </div>
@@ -534,7 +538,7 @@
                     <span class="mono" id="result-next-range">&#8776; $0.05&ndash;0.20</span>
                     <span class="result-next-cost-note">&middot; you approve the estimate first &middot; hard cap <span class="mono">$0.25</span> &middot; one run at a time</span>
                   </span>
-                  <button id="result-next-run" class="button button-primary result-next-run" type="button">Estimate &amp; run &rarr;</button>
+                  <button id="result-next-run" class="button button-primary result-next-run" type="button">Review &amp; run &rarr;</button>
                 </div>
               </div>
 
@@ -619,7 +623,23 @@
 
             <div class="landing-runbar">
               <div class="landing-runbar-prompt">
-                <span class="landing-runbar-placeholder">e.g. Should our company adopt passkeys and phase out passwords by 2027?</span>
+                <label for="landing-query" class="sr-only">Your question</label>
+                <textarea
+                  id="landing-query"
+                  class="landing-runbar-input"
+                  rows="2"
+                  maxlength="20000"
+                  placeholder="e.g. Should our company adopt passkeys and phase out passwords by 2027?"
+                  aria-describedby="landing-query-error"
+                ></textarea>
+                <div id="landing-query-error" class="field-error landing-query-error" hidden role="alert" aria-live="assertive">Enter a question to continue.</div>
+                <!-- Transition message: shown here on page A (NOT on the composer)
+                     when the visitor clicks Estimate/Run, so they understand why
+                     they're about to be taken to the workspace. -->
+                <div id="landing-handoff-note" class="landing-handoff-note" role="status" aria-live="polite" hidden>
+                  <span class="landing-handoff-note-icon" aria-hidden="true">&#10003;</span>
+                  <span class="landing-handoff-note-text" id="landing-handoff-note-text"></span>
+                </div>
               </div>
               <div class="landing-runbar-foot">
                 <p class="landing-cost">

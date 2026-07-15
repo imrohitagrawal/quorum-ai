@@ -331,11 +331,12 @@ def test_bug6_poll_run_early_returns_when_already_running() -> None:
     assert "return" in between, "Bug 6 regression: no early return statement after isRunning check"
 
 
-# Note: the legacy Bug-4 ``runNow`` fast-path (immediate run with an
-# auto-chained ``proceedWithRun`` on COST_CONFIRMATION_REQUIRED) was
-# removed with the single-CTA "See the estimate →" design. Ctrl+Enter
-# and the CTA now route exclusively through the estimate-first
-# ``startRun`` → cost-gate flow, so there is no ``runNow`` to pin.
+# Note: the two-button composer now offers BOTH "See the estimate →"
+# (estimate-first, always via the cost gate) and a direct "Run now" CTA
+# (``runNowButton`` → ``startRun(true)``; auto-proceeds only on the allow
+# band). Ctrl/Cmd+Enter routes through the estimate-first flow. The run-now
+# path and its gating are pinned in the e2e suite (parity-behavior.spec.ts),
+# not here.
 
 
 # ---------------------------------------------------------------------------

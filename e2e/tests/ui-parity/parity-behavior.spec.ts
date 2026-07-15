@@ -120,6 +120,14 @@ async function fill(page: Page) { await page.getByRole("textbox").first().fill(Q
 async function clickEstimate(page: Page) {
   await page.getByRole("button", { name: /see the estimate|estimate cost/i }).click();
 }
+// "Run now" is the direct-run composer CTA: for an allow-band estimate it
+// auto-proceeds straight to the run (no gate), so it is the fast path for
+// tests that only need to REACH the result view. "See the estimate" now always
+// opens the cost gate — even on the allow band — so it is no longer the way to
+// drive to a result without a click-through.
+async function clickRunNow(page: Page) {
+  await page.locator("#run-now").click();
+}
 async function routeRun(page: Page, pollBody: unknown) {
   await page.route("**/v1/query-runs/estimate", (r) => r.fulfill(fulfil(estimateResp("0.100", "allow"))));
   await page.route("**/v1/query-runs/warnings", (r) => r.fulfill(fulfil({ warnings: [] })));
@@ -131,7 +139,10 @@ async function routeRun(page: Page, pollBody: unknown) {
 async function driveToResult(page: Page, pollBody: unknown) {
   await boot(page);
   await routeRun(page, pollBody);
-  await fill(page); await clickEstimate(page);
+  // Use "Run now" (direct auto-proceed on the mocked allow band) to reach the
+  // result. "See the estimate" would stop at the gate — that path has its own
+  // dedicated tests below.
+  await fill(page); await clickRunNow(page);
   await expect(page.locator('#result-verdict[data-consensus="true"]')).toBeVisible();
 }
 
@@ -186,6 +197,108 @@ test.describe("UI parity — behaviour", () => {
     await expect(page.locator("#gate-confirm")).toBeHidden();
   });
 
+  test("composer offers both a Run now and a See the estimate CTA, both enabled", async ({ page }) => {
+    await boot(page);
+    const runNow = page.locator("#run-now");
+    const seeEstimate = page.locator("#estimate-run");
+    await expect(runNow).toBeVisible();
+    await expect(runNow).toBeEnabled();
+    await expect(runNow).toContainText(/run now/i);
+    await expect(seeEstimate).toBeVisible();
+    await expect(seeEstimate).toBeEnabled();
+    await expect(seeEstimate).toContainText(/see the estimate/i);
+  });
+
+  test("See the estimate ALWAYS opens the cost gate — even for an allow-band run (never a hidden auto-run)", async ({ page }) => {
+    // The footer promises the user can review an itemized estimate before a run.
+    // A cheap (allow-band) run used to skip the gate and execute immediately,
+    // contradicting that promise. "See the estimate" must now stop at the gate
+    // for every band; the allow band shows a non-alarming "review and run" CTA.
+    await boot(page);
+    await page.route("**/v1/query-runs/estimate", (r) => r.fulfill(fulfil(estimateResp("0.100", "allow"))));
+    await page.route("**/v1/query-runs/warnings", (r) => r.fulfill(fulfil({ warnings: [] })));
+    // If it wrongly auto-proceeded, THIS create POST would fire — assert it does not.
+    let created = false;
+    await page.route(/\/v1\/query-runs$/, (r) => {
+      if (r.request().method() === "POST") created = true;
+      return r.fulfill(fulfil(createResp()));
+    });
+    await fill(page); await clickEstimate(page);
+    // The gate is shown with the allow-band review copy and a plain "Run" CTA
+    // (not "Confirm & run", which is the require_confirmation band).
+    await expect(page.locator("#cost-review-card")).toBeVisible();
+    await expect(page.locator("#gate-confirm")).toBeVisible();
+    // Allow-band CTA reads "Run · $X" (a plain start), never the
+    // require_confirmation band's "Confirm & run · $X". Assert on the label span
+    // so the spinner sibling's whitespace never pollutes the match.
+    await expect(page.locator("#gate-confirm .button-label")).toHaveText(/^Run · \$0\.1\d*$/);
+    await expect(page.locator("#gate-confirm .button-label")).not.toContainText(/Confirm & run/);
+    // And nothing ran on its own.
+    await page.waitForTimeout(200);
+    expect(created, "See the estimate must not auto-start an allow-band run").toBe(false);
+  });
+
+  test("HARDENING: while one CTA's estimate is in flight, BOTH composer CTAs lock and only ONE create is ever POSTed", async ({ page }) => {
+    // The two-button composer widened a pre-existing re-entrancy window: only the
+    // clicked button was disabled during the estimate round-trip, so the sibling
+    // (or Ctrl/Cmd+Enter) could fire a second concurrent flow, and ``isRunning``
+    // (which locks everything) is only set after the create POST returns. Hold
+    // the estimate open with a controlled gate so the window is deterministic,
+    // and prove both CTAs are locked and no second create escapes.
+    await boot(page);
+    let createCount = 0;
+    let releaseEstimate!: () => void;
+    const estimateGate = new Promise<void>((res) => { releaseEstimate = res; });
+    await page.route("**/v1/query-runs/estimate", async (r) => {
+      await estimateGate; // hold the estimate open to freeze the re-entrancy window
+      await r.fulfill(fulfil(estimateResp("0.100", "allow")));
+    });
+    await page.route("**/v1/query-runs/warnings", (r) => r.fulfill(fulfil({ warnings: [] })));
+    await page.route("**/v1/query-runs/active", (r) => r.fulfill(fulfil({ query_run_id: null })));
+    await page.route(/\/v1\/query-runs\/[0-9a-f-]{36}$/, (r) => r.fulfill(fulfil(completedResp())));
+    await page.route(/\/v1\/query-runs$/, (r) => {
+      if (r.request().method() === "POST") { createCount++; return r.fulfill(fulfil(createResp())); }
+      return r.continue();
+    });
+
+    await fill(page);
+    await page.locator("#run-now").click();
+    // Estimate is held open → both composer CTAs are locked for the whole window.
+    await expect(page.locator("#run-now")).toBeDisabled();
+    await expect(page.locator("#estimate-run")).toBeDisabled();
+    // Release the estimate; the Run-now allow-band path auto-proceeds to a run.
+    releaseEstimate();
+    await expect(page.locator('#result-verdict[data-consensus="true"]')).toBeVisible();
+    // Exactly one create was POSTed — the single-create latch held.
+    expect(createCount, "exactly one create must be POSTed").toBe(1);
+  });
+
+  test("REGRESSION: a completed run whose slots carry a provider_notice renders with no 'runStatusValue is not defined' toast storm", async ({ page }) => {
+    // The toast storm fired ONLY when a model slot carried a ``provider_notice``:
+    // the guard that reads it was the sole reader of a variable that had been
+    // ``const``-scoped to a sibling branch, so on a completed run it threw
+    // ``ReferenceError: runStatusValue is not defined`` once per card on every
+    // poll tick — each surfaced as a toast. The mock ``answer()`` has no
+    // provider_notice, so the storm was invisible to this suite; set one here so
+    // the completed-run render actually exercises the guarded branch.
+    const withNotice = completedResp();
+    (withNotice.result as { model_answers: { provider_notice: string }[] }).model_answers.forEach(
+      (a) => { a.provider_notice = "Answer produced by local simulation."; },
+    );
+
+    const pageErrors: string[] = [];
+    page.on("pageerror", (e) => pageErrors.push(String(e)));
+
+    await driveToResult(page, withNotice);
+
+    // The provider notice renders on the cards — proving the guarded branch ran.
+    await expect(page.locator(".model-card-notice").first()).toContainText("local simulation");
+    // No "... is not defined" surfaced as a toast (the pre-fix storm) ...
+    await expect(page.locator(".toast", { hasText: /is not defined/i })).toHaveCount(0);
+    // ... and no uncaught page error slipped through either.
+    expect(pageErrors, `unexpected page errors: ${JSON.stringify(pageErrors)}`).toEqual([]);
+  });
+
   test("result renders the synthesis card + next-question block + footer; legacy sections hidden", async ({ page }) => {
     await driveToResult(page, completedResp());
     const synth = page.locator("#result-synthesis");
@@ -201,29 +314,147 @@ test.describe("UI parity — behaviour", () => {
     for (const s of await page.locator(".panel-section").all()) await expect(s).toBeHidden();
   });
 
-  test("next-question: Start fresh clears, Follow up prefills, Estimate & run re-estimates", async ({ page }) => {
+  test("result header labels the Run ID with a copy affordance and an explanatory info icon", async ({ page }) => {
+    // A bare ``qr_…`` / ``corr-…`` value means nothing on its own. The header
+    // must label it "Run ID", make it click-to-copy, and attach an info icon
+    // that explains its significance (quote it to support). The aside that used
+    // to carry this is hidden in the parity design, so the header is the only
+    // place a user sees the id.
+    await driveToResult(page, completedResp());
+    const runId = page.locator(".result-meta-runid");
+    await expect(runId).toBeVisible();
+    await expect(runId.locator(".result-meta-runid-label")).toHaveText("Run ID");
+    const copy = runId.locator(".result-meta-runid-copy");
+    await expect(copy).toHaveText("corr-run-0001");
+    await expect(copy).toHaveAttribute("aria-label", /copy run id/i);
+    const info = runId.locator(".info-icon-inline");
+    await expect(info).toBeVisible();
+    await expect(info).toHaveAttribute("data-info-text", /quote it if you report a problem to support/i);
+    await expect(info).toHaveAttribute("aria-label", /what is the run id/i);
+  });
+
+  test("Run ID is ONE id everywhere: the receipt shows a single friendly Run ID (qr_ form) with an info icon and NO redundant raw-UUID row", async ({ page }) => {
+    // correlation_id = "qr_" + query_run_id.hex — the SAME id in two formats. The
+    // user sees ONE "Run ID" (the friendly qr_/correlation form) in the header AND
+    // the receipt. The raw UUID adds a second ID-looking value for no user benefit,
+    // so it is dropped from the user-facing receipt entirely.
+    await driveToResult(page, completedResp());
+    // Header "Run ID" copy value is the correlation id.
+    await expect(page.locator(".result-meta-runid-copy")).toHaveText("corr-run-0001");
+    await page.locator("#result-details-toggle").click();
+    await expect(page.locator("#result-receipt")).toBeVisible();
+    // Exactly one row labelled "Run ID" in the receipt, and it shows the SAME id
+    // as the header (not the UUID), with an info icon.
+    const runIdLabel = page.locator("#result-receipt .result-receipt-label", { hasText: /^Run ID\b/ });
+    await expect(runIdLabel).toHaveCount(1);
+    const runIdRow = page
+      .locator("#result-receipt .result-receipt-row")
+      .filter({ hasText: "Run ID" })
+      .filter({ hasText: "corr-run-0001" });
+    await expect(runIdRow).toHaveCount(1);
+    await expect(runIdRow.locator(".info-icon")).toBeVisible();
+    // The raw UUID is NOT shown at all — no "Internal reference" row and the UUID
+    // string appears nowhere in the receipt.
+    await expect(page.locator("#result-receipt .result-receipt-label", { hasText: /internal reference/i })).toHaveCount(0);
+    await expect(page.locator("#result-receipt")).not.toContainText("11111111-1111-4111-8111-111111111111");
+    // The old "Correlation" label is gone too (it was the same id under a confusing name).
+    await expect(page.locator("#result-receipt .result-receipt-label", { hasText: /^Correlation$/ })).toHaveCount(0);
+  });
+
+  test("Run ID is ONE id everywhere: the provider-failure footer quotes the single friendly Run ID, not the raw UUID too", async ({ page }) => {
+    // A failed run's support footer used to quote BOTH ids ("qr_… · <uuid>"),
+    // re-introducing the same two-competing-ids confusion the receipt fix removed.
+    // It must quote ONE friendly Run ID, matching the header/receipt.
+    await boot(page);
+    const failed = {
+      query_run_id: "11111111-1111-4111-8111-111111111111",
+      status: "failed",
+      correlation_id: "corr-run-0001",
+      model_slots: SLOTS,
+      failed_steps: ["synthesis"],
+      missing_steps: [],
+      provider_failure_notices: ["The synthesis provider was temporarily unavailable."],
+      partial_failure_notice: null,
+      progress: progress("synthesis", ["completed", "completed", "completed", "failed"]),
+      // A failed run still carries a (synthesis-less) result object; pollRun
+      // dereferences result.result.model_answers before the terminal branch.
+      result: {
+        model_answers: [answer(0), answer(1), answer(2), answer(3)],
+        debate_outputs: [],
+        final_synthesis: null,
+        agreement: { aligned: 0, total: 4 },
+        position_movements: [],
+      },
+    };
+    await routeRun(page, failed);
+    await fill(page);
+    await clickRunNow(page);
+    const footer = page.locator("#error-region-footer");
+    await expect(footer).toBeVisible();
+    await expect(footer).toContainText("Run ID corr-run-0001");
+    await expect(footer).toContainText("quote when reporting");
+    // The raw UUID is NOT quoted alongside it.
+    await expect(footer).not.toContainText("11111111-1111-4111-8111-111111111111");
+  });
+
+  test("Run details receipt: est→actual values never overflow their column into the next section", async ({ page }) => {
+    // The receipt is a 4-column grid and the "$X → $Y" values are nowrap; on a
+    // constrained width they used to overflow their column into the neighbouring
+    // section (measured up to ~35px). Drive at a deliberately narrow-but-still-4-col
+    // width so the pre-fix overflow condition is present, and assert none overflow.
+    await page.setViewportSize({ width: 900, height: 900 });
+    await driveToResult(page, completedResp());
+    await page.locator("#result-details-toggle").click();
+    await expect(page.locator("#result-receipt")).toBeVisible();
+    const overflows = await page.locator(".result-receipt-col").evaluateAll((cols) => {
+      const bad: { txt: string; overflow: number }[] = [];
+      for (const col of cols) {
+        const colR = col.getBoundingClientRect();
+        for (const v of col.querySelectorAll(".result-receipt-value, .result-receipt-label")) {
+          const vr = v.getBoundingClientRect();
+          if (vr.right - colR.right > 1) {
+            bad.push({ txt: (v.textContent || "").trim().slice(0, 24), overflow: Math.round(vr.right - colR.right) });
+          }
+        }
+      }
+      return bad;
+    });
+    expect(overflows, `receipt values overflow their column: ${JSON.stringify(overflows)}`).toEqual([]);
+  });
+
+  test("composer 'Run now' is a solid secondary button, not a borderless ghost", async ({ page }) => {
+    // The ghost variant renders as plain text until hover — it did not read as a
+    // button. It must be a solid secondary CTA (visible surface + border) beside
+    // the primary "See the estimate".
+    await boot(page);
+    const runNow = page.locator("#run-now");
+    await expect(runNow).toHaveClass(/button-secondary/);
+    await expect(runNow).not.toHaveClass(/button-ghost/);
+  });
+
+  test("next-question: Start fresh clears, Follow up prefills, and Review & run lands on page B with editable models (no auto-estimate)", async ({ page }) => {
     await driveToResult(page, completedResp());
     const nextInput = page.locator("#result-next-input");
     await nextInput.fill("a refinement");
     await page.locator("#result-startfresh").click();
     await expect(page.locator("#result-startfresh")).toHaveAttribute("aria-pressed", "true");
     await expect(nextInput).toHaveValue("");
-    // Follow up + Estimate & run routes the answered question back through the
-    // composer's own gated estimate button. Assert only the DURABLE outcomes,
-    // never the transient view: on the mocked "allow" band the re-estimate
-    // auto-proceeds (proceedWithRun) and flips the view composer→result almost
-    // immediately, so any assertion on composer visibility or on
-    // ``getByRole("textbox").first()`` (which then resolves to the empty
-    // ``#result-next-input``) races and flakes under load. The two things that
-    // deterministically prove the behaviour are: a fresh estimate fired, and the
-    // composer's own ``#query-text`` carries the prefilled question — its value
-    // is set synchronously on the follow-up and is never cleared by the run, so
-    // it holds regardless of how the view has since transitioned.
+    // Follow up + Review & run drops the user back on the composer (page B) with
+    // the question pre-filled and the four model slots visible/editable — and it
+    // must NOT auto-fire an estimate, so the user can change models before
+    // running (they click See the estimate / Run now themselves).
+    let estimateFired = false;
+    page.on("request", (r) => { if (r.url().includes("/v1/query-runs/estimate")) estimateFired = true; });
     await page.locator("#result-followup").click();
-    const estimateReq = page.waitForRequest("**/v1/query-runs/estimate");
     await page.locator("#result-next-run").click();
-    await estimateReq;
+    await expect(page.locator('[data-view="composer"]')).toBeVisible();
     await expect(page.locator("#query-text")).toHaveValue(QUESTION);
+    // The four model slots are present and enabled on page B.
+    const slots = page.locator("[data-model-slot]");
+    await expect(slots).toHaveCount(4);
+    await expect(slots.first()).toBeEnabled();
+    await page.waitForTimeout(300);
+    expect(estimateFired, "Review & run must not auto-fire an estimate — the user picks models then runs").toBe(false);
   });
 
   test("SECURITY: a javascript: source URL never becomes a clickable anchor", async ({ page }) => {
@@ -334,7 +565,7 @@ test.describe("UI parity — behaviour", () => {
     (noSources.result as { model_answers: { sources: unknown[] }[] }).model_answers.forEach((a) => { a.sources = []; });
     await boot(page);
     await routeRun(page, noSources);
-    await fill(page); await clickEstimate(page);
+    await fill(page); await clickRunNow(page);
     await expect(page.locator('#result-verdict[data-consensus="true"]')).toBeVisible();
     // The synthesis card still shows its labelled rows...
     await expect(page.locator("#result-synthesis")).toBeVisible();
@@ -388,7 +619,9 @@ test.describe("UI parity — behaviour", () => {
     await expect(page.locator('[data-view="landing"]')).toBeVisible();
     await expect(page.locator("#error-region")).toBeHidden();
 
-    // A landing CTA hands off to the workspace and records the visit.
+    // A landing CTA hands off to the workspace and records the visit. A question
+    // is now required first (the empty-submit guard has its own test below).
+    await page.locator("#landing-query").fill("Should we adopt passkeys by 2027?");
     await page.locator("#landing-run").click();
     await expect(page.locator('[data-view="composer"]')).toBeVisible();
     expect(await page.evaluate(() => localStorage.getItem("quorum.workspaceSeen"))).toBe("1");
@@ -400,6 +633,370 @@ test.describe("UI parity — behaviour", () => {
     await expect(page.locator('[data-view="landing"]')).toBeHidden();
     await page.locator("#show-landing").click();
     await expect(page.locator('[data-view="landing"]')).toBeVisible();
+  });
+
+  test("landing empty-submit guard: Estimate/Run with no question shows the error and does not navigate", async ({ page }) => {
+    // Fresh visitor → landing is the front door.
+    await page.goto("/ui", { waitUntil: "domcontentloaded" });
+    await expect(page.locator('[data-view="landing"]')).toBeVisible();
+    const err = page.locator("#landing-query-error");
+    await expect(err).toBeHidden();
+
+    // Run with an empty field: all cues fire together and it does NOT navigate.
+    await page.locator("#landing-run").click();
+    await expect(err).toBeVisible();
+    await expect(err).toHaveText(/enter a question/i);
+    await expect(page.locator(".landing-runbar")).toHaveAttribute("data-invalid", "true");
+    await expect(page.locator("#landing-query")).toHaveAttribute("aria-invalid", "true");
+    await expect(page.locator("#landing-query-error")).toHaveAttribute("role", "alert");
+    await expect(page.locator('[data-view="landing"]')).toBeVisible();
+    await expect(page.locator('[data-view="composer"]')).toBeHidden();
+
+    // Estimate behaves identically.
+    await page.locator("#landing-estimate").click();
+    await expect(err).toBeVisible();
+    await expect(page.locator('[data-view="landing"]')).toBeVisible();
+
+    // Typing clears every error cue immediately.
+    await page.locator("#landing-query").fill("Should we adopt passkeys?");
+    await expect(err).toBeHidden();
+    await expect(page.locator(".landing-runbar")).not.toHaveAttribute("data-invalid", "true");
+    await expect(page.locator("#landing-query")).toHaveAttribute("aria-invalid", "false");
+  });
+
+  test("landing Estimate shows the transition message ON page A, then hands off to the composer (no note on page B)", async ({ page }) => {
+    const Q = "Should we migrate our monolith to microservices this year?";
+    await page.goto("/ui", { waitUntil: "domcontentloaded" });
+    await page.locator("#landing-query").fill(Q);
+    await page.locator("#landing-estimate").click();
+    // The tailored message appears on the LANDING (page A) so the user learns WHY
+    // they are being moved — BEFORE the view changes.
+    const note = page.locator("#landing-handoff-note");
+    await expect(note).toBeVisible();
+    await expect(note).toContainText(/itemized cost before anything runs/i);
+    await expect(page.locator('[data-view="landing"]')).toBeVisible();
+    // Then it hands off to the composer with the question carried over.
+    await expect(page.locator('[data-view="composer"]')).toBeVisible();
+    await expect(page.locator("#query-text")).toHaveValue(Q);
+    // There is NO hand-off note on page B — the message lives on page A now, so it
+    // can never overlap the composer's privacy notice.
+    await expect(page.locator("#composer-handoff-note")).toHaveCount(0);
+  });
+
+  test("landing Run shows the run-tailored message ON page A, then hands off to the composer", async ({ page }) => {
+    const Q = "Is passwordless auth worth the migration cost?";
+    await page.goto("/ui", { waitUntil: "domcontentloaded" });
+    await page.locator("#landing-query").fill(Q);
+    await page.locator("#landing-run").click();
+    const note = page.locator("#landing-handoff-note");
+    await expect(note).toBeVisible();
+    // Run's message is honest about the cost-approval step (it does not run from A).
+    await expect(note).toContainText(/price it and run once you approve/i);
+    await expect(page.locator('[data-view="composer"]')).toBeVisible();
+    await expect(page.locator("#query-text")).toHaveValue(Q);
+    await expect(page.locator("#composer-handoff-note")).toHaveCount(0);
+  });
+
+  test("HARDENING: a landing example-chip clicked during the Estimate dwell cancels the pending hand-off — no stray scroll-to-top later", async ({ page }) => {
+    // handoffFromLanding schedules a ~2.8s dwell then goToComposer(). The landing
+    // example chips also call goToComposer() and are NOT disabled during the
+    // dwell, so a chip click mid-dwell navigates immediately — and the stray
+    // dwell timer used to fire a SECOND goToComposer later, yanking the
+    // viewport back to the top after the user had scrolled into the composer.
+    await page.goto("/ui", { waitUntil: "domcontentloaded" });
+    await expect(page.locator('[data-view="landing"]')).toBeVisible();
+    await page.locator("#landing-query").fill("Question A");
+    await page.locator("#landing-estimate").click(); // starts the dwell
+    // Immediately click a landing example chip → lands on the composer now.
+    await page.locator(".landing-chips [data-landing-chip]").first().click();
+    await expect(page.locator('[data-view="composer"]')).toBeVisible();
+    // The visitor scrolls down to review their models.
+    await page.evaluate(() => window.scrollTo(0, 400));
+    await expect.poll(() => page.evaluate(() => window.scrollY)).toBeGreaterThan(50);
+    // Wait well past the (now ~2.8s) dwell window; the cancelled hand-off must
+    // NOT fire and scroll the viewport back to the top.
+    await page.waitForTimeout(3200);
+    expect(
+      await page.evaluate(() => window.scrollY),
+      "the stray landing hand-off scrolled the composer back to the top",
+    ).toBeGreaterThan(50);
+  });
+
+  test("landing empty-submit error is cleared when the visitor returns to the landing", async ({ page }) => {
+    // Regression: the error state used to persist across a How-it-works round-trip.
+    await page.goto("/ui", { waitUntil: "domcontentloaded" });
+    await page.locator("#landing-run").click(); // empty → error
+    await expect(page.locator("#landing-query-error")).toBeVisible();
+    // Leave to the workspace, then come back via the "How it works" link.
+    await page.locator("#landing-open-workspace").click();
+    await expect(page.locator('[data-view="composer"]')).toBeVisible();
+    await page.locator("#show-landing").click();
+    await expect(page.locator('[data-view="landing"]')).toBeVisible();
+    // The stale error must be gone.
+    await expect(page.locator("#landing-query-error")).toBeHidden();
+    await expect(page.locator(".landing-runbar")).not.toHaveAttribute("data-invalid", "true");
+    await expect(page.locator("#landing-query")).toHaveAttribute("aria-invalid", "false");
+  });
+
+  // ---- PR #23 regression-review follow-ups (full-sweep coverage) -----------
+  //
+  // Each test below closes a behaviour the review found shipping WITHOUT a test
+  // that fails on revert. They are written to exercise the actual wiring, not
+  // just static markup, so reverting the corresponding source line turns them red.
+
+  test("Run ID info icons are actually wired: clicking the header + receipt info icon opens the tooltip", async ({ page }) => {
+    // The info icons are created dynamically by renderResultMeta/the receipt and
+    // wired into the shared tooltip ONLY by the initInfoIcons() calls after each.
+    // Asserting the markup exists does NOT prove the click opens the tooltip —
+    // deleting those calls leaves the markup and the attribute assertions green
+    // while the tooltips silently stop working. Click them to prove the wiring.
+    await driveToResult(page, completedResp());
+    const tooltip = page.locator("#info-tooltip");
+
+    // Header Run ID info icon.
+    const headerInfo = page.locator(".result-meta-runid .info-icon-inline");
+    await expect(headerInfo).toBeVisible();
+    await headerInfo.dispatchEvent("mouseenter");
+    await expect(tooltip).not.toBeHidden();
+    await expect(tooltip).toContainText(/audit handle for this run/i);
+    await headerInfo.dispatchEvent("mouseleave");
+
+    // Receipt Run ID info icon (created when the details disclosure opens).
+    await page.locator("#result-details-toggle").click();
+    await expect(page.locator("#result-receipt")).toBeVisible();
+    const receiptInfo = page
+      .locator("#result-receipt .result-receipt-row")
+      .filter({ hasText: "Run ID" })
+      .locator(".info-icon");
+    await expect(receiptInfo).toBeVisible();
+    await receiptInfo.dispatchEvent("mouseenter");
+    await expect(tooltip).not.toBeHidden();
+  });
+
+  test("header Run ID copy button announces 'Copied' to screen readers, then restores its label", async ({ page }) => {
+    // The header copy button confirmed a copy only via title + a colour flip, with
+    // no accessible-name change — an SR user got no confirmation (WCAG 4.1.3). It
+    // now flips aria-label to 'Copied' on success (matching the shared helper the
+    // aside/live-card buttons use), and restores the idle label after.
+    await page.context().grantPermissions(["clipboard-read", "clipboard-write"]);
+    await driveToResult(page, completedResp());
+    const copy = page.locator(".result-meta-runid-copy");
+    await expect(copy).toHaveAttribute("aria-label", /^Copy run ID /);
+    await copy.click();
+    // The accessible name becomes "Copied" (announced), not just the title.
+    await expect(copy).toHaveAttribute("aria-label", "Copied");
+    await expect(copy).toHaveAttribute("data-copied", "true");
+    // …and is restored to the idle copy label afterwards.
+    await expect(copy).toHaveAttribute("aria-label", /^Copy run ID /);
+  });
+
+  test("header Run ID copy FAILURE is also announced to screen readers (not silent)", async ({ page }) => {
+    // If the clipboard write rejects (permission denied), an SR user must still
+    // learn it failed — the old catch set only the unspoken title attribute.
+    await page.addInitScript(() => {
+      // Force navigator.clipboard.writeText to reject for this page.
+      Object.defineProperty(navigator, "clipboard", {
+        configurable: true,
+        value: { writeText: () => Promise.reject(new Error("denied")) },
+      });
+    });
+    await driveToResult(page, completedResp());
+    const copy = page.locator(".result-meta-runid-copy");
+    await copy.click();
+    await expect(copy).toHaveAttribute("aria-label", /copy failed/i);
+    // …then restored to the idle copy label.
+    await expect(copy).toHaveAttribute("aria-label", /^Copy run ID /);
+  });
+
+  test("single-create latch: two independent confirm entry points POST only ONE create", async ({ page }) => {
+    // proceedWithRun latches on state.creatingRun BEFORE its first await, so two
+    // concurrent entry points (the cost-gate confirm and the legacy #proceed-run,
+    // which setButtonLoading does NOT both disable) cannot each POST a create. The
+    // create POST is held open to freeze the window; a second entry is dispatched
+    // before release. Reverting the latch makes createCount === 2.
+    await boot(page);
+    let createCount = 0;
+    let releaseCreate!: () => void;
+    const createGate = new Promise<void>((res) => { releaseCreate = res; });
+    await page.route("**/v1/query-runs/estimate", (r) =>
+      r.fulfill(fulfil(estimateResp("0.190", "require_confirmation"))));
+    await page.route("**/v1/query-runs/warnings", (r) => r.fulfill(fulfil({ warnings: [] })));
+    await page.route("**/v1/query-runs/active", (r) => r.fulfill(fulfil({ query_run_id: null })));
+    await page.route(/\/v1\/query-runs\/[0-9a-f-]{36}$/, (r) => r.fulfill(fulfil(completedResp())));
+    await page.route(/\/v1\/query-runs$/, async (r) => {
+      if (r.request().method() === "POST") {
+        createCount++;
+        await createGate; // hold the FIRST create open to widen the re-entrancy window
+        return r.fulfill(fulfil(createResp()));
+      }
+      return r.continue();
+    });
+
+    await fill(page);
+    await clickEstimate(page);
+    await expect(page.locator("#gate-confirm")).toBeVisible();
+    // Entry A: the cost-gate confirm (kicks off proceedWithRun; its create is held).
+    await page.locator("#gate-confirm").click();
+    // Entry B: the legacy #proceed-run button fires proceedWithRun again while A's
+    // create is still in flight. setButtonLoading(gateConfirm) does not disable it,
+    // so only the state.creatingRun latch prevents a second create POST.
+    await page.locator("#proceed-run").dispatchEvent("click");
+    // Give any (unwanted) second create a chance to be POSTed before releasing.
+    await page.waitForTimeout(200);
+    releaseCreate();
+    await expect(page.locator('#result-verdict[data-consensus="true"]')).toBeVisible();
+    expect(createCount, "exactly one create must be POSTed even with a concurrent entry").toBe(1);
+  });
+
+  test("high-stakes gate disables BOTH composer CTAs (Run now included) until acknowledged", async ({ page }) => {
+    // applyHighStakesGate disables #run-now (not just #estimate-run) when a
+    // high-stakes topic is unacknowledged — a safety-adjacent gate on the direct-run
+    // path. No test exercised the high-stakes branch (every mock returned no
+    // warnings). Drive it: a high_stakes warning must block Run now until the ack.
+    await boot(page);
+    await page.route("**/v1/query-runs/warnings", (r) =>
+      r.fulfill(fulfil({ warnings: [{ warning_type: "high_stakes", version: "1" }] })));
+    await fill(page);
+    // The debounced probe raises the gate.
+    await expect(page.locator("#high-stakes-gate")).toBeVisible();
+    const runNow = page.locator("#run-now");
+    const estimate = page.locator("#estimate-run");
+    await expect(runNow).toBeDisabled();
+    await expect(runNow).toHaveAttribute("data-gate-blocked", "true");
+    await expect(estimate).toBeDisabled();
+    await expect(estimate).toHaveAttribute("data-gate-blocked", "true");
+    // Acknowledging re-enables both.
+    await page.locator("#high-stakes-ack").check();
+    await expect(runNow).toBeEnabled();
+    await expect(runNow).toHaveAttribute("data-gate-blocked", "false");
+    await expect(estimate).toBeEnabled();
+  });
+
+  test("live-run card labels the run id 'Run ID …' (not a bare 'run …') and stashes the raw id to copy", async ({ page }) => {
+    // renderLiveRun unified the live card's correlation readout to 'Run ID {id}';
+    // nothing asserted #live-corr, so reverting the label re-introduced the exact
+    // inconsistency this PR set out to fix, on the live surface.
+    await boot(page);
+    // Hold the run on a non-terminal poll so the live-run view stays put.
+    const running = { ...(createResp() as Record<string, unknown>), status: "running" };
+    await routeRun(page, running);
+    await fill(page); await clickRunNow(page);
+    await expect(page.locator('[data-view="live-run"]')).toBeVisible();
+    const corr = page.locator("#live-corr");
+    await expect(corr).toContainText(/^Run ID corr-run-0001$/);
+    await expect(corr).toHaveAttribute("data-correlation-id", "corr-run-0001");
+  });
+
+  test("receipt collapses to a single column on a narrow (phone) viewport with no value overflow", async ({ page }) => {
+    // The existing overflow test runs at width 900 (the receipt stays 4-col there),
+    // so the phone single-column layout was unguarded. On a phone the nowrap money
+    // columns re-cram/overflow unless the grid stacks to one column. (Note: the PR
+    // added a redundant @media(max-width:720px) stacking block that was dead — the
+    // pre-existing @media(max-width:760px) block already stacks it and wins the
+    // cascade — so that redundant block was removed; this test guards the real
+    // 760px phone-stacking behaviour, which is what actually protects the layout.)
+    await page.setViewportSize({ width: 480, height: 900 });
+    await driveToResult(page, completedResp());
+    await page.locator("#result-details-toggle").click();
+    await expect(page.locator("#result-receipt")).toBeVisible();
+    // The grid resolves to a single column at this width.
+    const columns = await page.locator("#result-receipt .result-receipt-grid").first().evaluate(
+      (grid) => getComputedStyle(grid).gridTemplateColumns.trim().split(/\s+/).length,
+    );
+    expect(columns, "receipt grid must stack to one column ≤720px").toBe(1);
+    // And no value/label overflows its column horizontally.
+    const overflows = await page.locator(".result-receipt-col").evaluateAll((cols) =>
+      cols.flatMap((col) => {
+        const cb = col.getBoundingClientRect();
+        return [...col.querySelectorAll(".result-receipt-value, .result-receipt-label")]
+          .filter((v) => v.getBoundingClientRect().right > cb.right + 1)
+          .map((v) => (v as HTMLElement).textContent || "");
+      }),
+    );
+    expect(overflows, `receipt values overflow at 480px: ${JSON.stringify(overflows)}`).toEqual([]);
+  });
+
+  test("landing Ctrl/Cmd+Enter hands off to the composer with the typed question (not a dead key)", async ({ page }) => {
+    // The landing added a real textarea, but the global Ctrl/Cmd+Enter handler
+    // no-ops on the landing view, so the natural submit gesture did nothing. It
+    // now routes through the same estimate-first hand-off as the button.
+    const Q = "Is a four-day work week worth trialling for our team?";
+    await page.goto("/ui", { waitUntil: "domcontentloaded" });
+    await page.locator("#landing-query").fill(Q);
+    await page.locator("#landing-query").press("ControlOrMeta+Enter");
+    await expect(page.locator("#landing-handoff-note")).toBeVisible();
+    await expect(page.locator('[data-view="composer"]')).toBeVisible();
+    await expect(page.locator("#query-text")).toHaveValue(Q);
+  });
+
+  test("a question refined DURING the hand-off dwell is carried into the composer (not the click-time snapshot)", async ({ page }) => {
+    // The landing field stays focused through the (now ~2.8s) dwell, so the visitor
+    // can keep typing. Their latest text must reach the composer — an edit made
+    // during the dwell must never be silently discarded.
+    await page.goto("/ui", { waitUntil: "domcontentloaded" });
+    await page.locator("#landing-query").fill("First draft");
+    await page.locator("#landing-estimate").click();
+    await expect(page.locator("#landing-handoff-note")).toBeVisible();
+    // Refine the question while the dwell is still running.
+    await page.locator("#landing-query").fill("First draft, refined during the dwell");
+    await expect(page.locator('[data-view="composer"]')).toBeVisible();
+    await expect(page.locator("#query-text")).toHaveValue("First draft, refined during the dwell");
+  });
+
+  test("clicking 'How it works' during the hand-off dwell cancels the pending hand-off (stays on the landing)", async ({ page }) => {
+    // A visitor who clicks Estimate then 'How it works' wants to read the example,
+    // not be yanked to the composer a beat later. The dwell must be cancelled.
+    await page.goto("/ui", { waitUntil: "domcontentloaded" });
+    await page.locator("#landing-query").fill("Question during dwell");
+    await page.locator("#landing-estimate").click(); // starts the ~2.8s dwell
+    await expect(page.locator("#landing-handoff-note")).toBeVisible();
+    await page.locator("#landing-howitworks").click(); // cancels the pending hand-off
+    // The note is hidden and the CTAs are re-enabled immediately.
+    await expect(page.locator("#landing-handoff-note")).toBeHidden();
+    await expect(page.locator("#landing-estimate")).toBeEnabled();
+    // Wait well past the original dwell — the cancelled hand-off must NOT navigate.
+    await page.waitForTimeout(3200);
+    await expect(page.locator('[data-view="landing"]')).toBeVisible();
+    await expect(page.locator('[data-view="composer"]')).toBeHidden();
+  });
+
+  test("landing hand-off keeps keyboard focus on a visible element (not dropped to <body>) during the dwell", async ({ page }) => {
+    // Disabling the CTA the user just activated blurred it, orphaning focus to
+    // <body> for the whole dwell. Focus is re-homed onto the question field.
+    await page.goto("/ui", { waitUntil: "domcontentloaded" });
+    await page.locator("#landing-query").fill("Keep my focus somewhere sensible");
+    await page.locator("#landing-estimate").click();
+    // During the dwell, focus must be on the still-visible landing question field,
+    // never on <body>.
+    const active = await page.evaluate(() => document.activeElement?.id || document.activeElement?.tagName);
+    expect(active, "focus must not be orphaned to <body> during the hand-off dwell").toBe("landing-query");
+  });
+
+  test("a bare 'Open the workspace' (empty composer) does NOT flash the question-handoff highlight", async ({ page }) => {
+    // The accent flash cues 'your question landed here'. 'Open the workspace' carries
+    // no question, so flashing an empty field is a spurious cue over nothing.
+    await page.goto("/ui", { waitUntil: "domcontentloaded" });
+    // Record whether the flash class is EVER applied — a plain not.toHaveClass
+    // auto-retries and would pass once the 1.4s flash times out, missing it. A
+    // MutationObserver catches an add-then-remove within the window.
+    await page.evaluate(() => {
+      (window as unknown as { __flashed: boolean }).__flashed = false;
+      const el = document.getElementById("query-text");
+      if (!el) return;
+      new MutationObserver(() => {
+        if (el.classList.contains("question-handoff-focus")) {
+          (window as unknown as { __flashed: boolean }).__flashed = true;
+        }
+      }).observe(el, { attributes: true, attributeFilter: ["class"] });
+    });
+    await page.locator("#landing-open-workspace").click();
+    await expect(page.locator('[data-view="composer"]')).toBeVisible();
+    await expect(page.locator("#query-text")).toHaveValue("");
+    // The composer is empty, so the highlight flash must never have been applied.
+    expect(
+      await page.evaluate(() => (window as unknown as { __flashed: boolean }).__flashed),
+      "a bare skip-to-workspace must not flash the empty composer",
+    ).toBe(false);
   });
 
   // ---- Design-comp parity closeout: the 4 remaining visual-parity gaps -----
@@ -581,5 +1178,106 @@ test.describe("UI parity — behaviour", () => {
       const inRow = boxes.filter((b) => Math.abs(b.y - band) <= 6).length;
       expect(inRow, "each row should hold two chips").toBe(2);
     }
+  });
+
+  // ---- Reported issues follow-up: hand-off focus, positions colour, retention ----
+
+  test("item 3.2 — 'How positions moved' avatars carry the SAME per-vendor tint as the composer slots, not a flat grey", async ({ page }) => {
+    // The composer's four model slots each get a per-vendor tint (openai teal /
+    // anthropic amber / google blue / deepseek purple). The "How positions moved"
+    // avatars used to render a single flat grey (no data-vendor), losing that
+    // colour identity — so a model that is teal in the composer went grey here.
+    await driveToResult(page, completedResp());
+    const pos = page.locator("#result-positions");
+    await expect(pos).toBeVisible();
+    const avatars = pos.locator(".result-pos-avatar");
+    await expect(avatars).toHaveCount(4);
+    // Each avatar is tagged with its model's vendor, matching the SLOTS order.
+    const vendors = await avatars.evaluateAll((els) =>
+      els.map((e) => (e as HTMLElement).dataset.vendor));
+    expect(vendors).toEqual(["openai", "anthropic", "google", "deepseek"]);
+    // ...and they render four DISTINCT tints (the vendor colours), not one grey.
+    const bgs = await avatars.evaluateAll((els) =>
+      els.map((e) => getComputedStyle(e as HTMLElement).backgroundColor));
+    expect(new Set(bgs).size, `expected 4 distinct vendor tints, got ${JSON.stringify(bgs)}`).toBe(4);
+    // Cross-check: the positions tint for each vendor equals the composer slot
+    // tint for the same vendor (the colour is retained across the two surfaces).
+    const slotBgByVendor: Record<string, string> = await page
+      .locator("#model-inputs .model-slot-avatar")
+      .evaluateAll((els) =>
+        Object.fromEntries(
+          els.map((e) => [
+            (e as HTMLElement).dataset.vendor,
+            getComputedStyle(e as HTMLElement).backgroundColor,
+          ]),
+        ));
+    const posPairs: [string, string][] = await avatars.evaluateAll((els) =>
+      els.map((e) => [
+        (e as HTMLElement).dataset.vendor || "",
+        getComputedStyle(e as HTMLElement).backgroundColor,
+      ]));
+    for (const [vendor, bg] of posPairs) {
+      expect(slotBgByVendor[vendor], `positions tint for ${vendor} must match the composer slot tint`).toBe(bg);
+    }
+  });
+
+  test("item 2.4 — clicking a composer example chip fills the question AND scrolls it into view (focus not left off-screen)", async ({ page }) => {
+    await boot(page);
+    // The example chips sit near the page bottom; scroll to one as a user would,
+    // so the question textarea is above the fold before the click.
+    const chip = page.locator(".composer-examples .landing-chip").first();
+    await chip.scrollIntoViewIfNeeded();
+    await expect
+      .poll(() => page.evaluate(() => window.scrollY))
+      .toBeGreaterThan(2); // we are genuinely scrolled away from the top
+    await chip.click();
+    const ta = page.locator("#query-text");
+    await expect(ta).toBeFocused();
+    await expect(ta).toHaveValue(/Usage-based vs seat pricing\?/);
+    // A brief highlight flash makes the (programmatically) focused field visible.
+    await expect(ta).toHaveClass(/question-handoff-focus/);
+    // The fix brings the composer back to the top so the filled+focused field is
+    // actually visible (a bare focus({preventScroll}) left it off-screen).
+    await expect.poll(() => page.evaluate(() => window.scrollY)).toBeLessThanOrEqual(2);
+    const inView = await ta.evaluate((el) => {
+      const r = el.getBoundingClientRect();
+      return r.top >= 0 && r.bottom <= window.innerHeight;
+    });
+    expect(inView, "composer question must be visible after a chip fill").toBe(true);
+  });
+
+  test("item 2.2 — a follow-up 'Review & run' lands on the composer scrolled to the top with the question focused (not mid-page)", async ({ page }) => {
+    await driveToResult(page, completedResp());
+    // Scroll to the follow-up block near the bottom of the (long) result view.
+    const nextRun = page.locator("#result-next-run");
+    await nextRun.scrollIntoViewIfNeeded();
+    await page.locator("#result-followup").click();
+    await page.locator("#result-next-input").fill("What about hardware security keys?");
+    await nextRun.click();
+    await expect(page.locator('[data-view="composer"]')).toBeVisible();
+    const ta = page.locator("#query-text");
+    await expect(ta).toBeFocused();
+    await expect(ta).toHaveValue("What about hardware security keys?");
+    // The composer is scrolled to the top so its heading + the pre-filled question
+    // are framed together — the pre-fix path left the viewport where the user had
+    // scrolled on the result, with the composer heading off the top of the screen.
+    await expect.poll(() => page.evaluate(() => window.scrollY)).toBeLessThanOrEqual(2);
+    const headingTop = await page
+      .locator("#composer-heading")
+      .evaluate((el) => el.getBoundingClientRect().top);
+    expect(headingTop, "the composer heading must be on-screen after a follow-up hand-off").toBeGreaterThanOrEqual(0);
+  });
+
+  test("item 3.1 — the composer keeps the typed question across a 'How it works' round-trip (typed work is never discarded)", async ({ page }) => {
+    await boot(page);
+    const ta = page.locator("#query-text");
+    const q = "Should we migrate our public API from REST to GraphQL this year?";
+    await ta.fill(q);
+    // Leave to the marketing landing via the top-bar link, then return.
+    await page.locator("#show-landing").click();
+    await expect(page.locator('[data-view="landing"]')).toBeVisible();
+    await page.locator("#landing-open-workspace").click();
+    await expect(page.locator('[data-view="composer"]')).toBeVisible();
+    await expect(ta).toHaveValue(q);
   });
 });
