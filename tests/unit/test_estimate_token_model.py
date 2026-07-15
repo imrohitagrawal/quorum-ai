@@ -195,9 +195,7 @@ def test_point_estimate_prices_all_synthesis_sections(monkeypatch: pytest.Monkey
 
     def _synth_stage(sections: int) -> Decimal:
         monkeypatch.setattr(settings, "cost_synthesis_sections", sections)
-        breakdown = cost_estimation_service.estimate(
-            query_text=QUERY, model_slots=slots
-        ).breakdown
+        breakdown = cost_estimation_service.estimate(query_text=QUERY, model_slots=slots).breakdown
         assert breakdown is not None
         line = next(row for row in breakdown.by_stage if row.stage == "synthesis")
         return line.usd
