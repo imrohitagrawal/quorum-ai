@@ -790,6 +790,24 @@ test.describe("UI parity — behaviour", () => {
     await expect(copy).toHaveAttribute("aria-label", /^Copy run ID /);
   });
 
+  test("header Run ID copy FAILURE is also announced to screen readers (not silent)", async ({ page }) => {
+    // If the clipboard write rejects (permission denied), an SR user must still
+    // learn it failed — the old catch set only the unspoken title attribute.
+    await page.addInitScript(() => {
+      // Force navigator.clipboard.writeText to reject for this page.
+      Object.defineProperty(navigator, "clipboard", {
+        configurable: true,
+        value: { writeText: () => Promise.reject(new Error("denied")) },
+      });
+    });
+    await driveToResult(page, completedResp());
+    const copy = page.locator(".result-meta-runid-copy");
+    await copy.click();
+    await expect(copy).toHaveAttribute("aria-label", /copy failed/i);
+    // …then restored to the idle copy label.
+    await expect(copy).toHaveAttribute("aria-label", /^Copy run ID /);
+  });
+
   test("single-create latch: two independent confirm entry points POST only ONE create", async ({ page }) => {
     // proceedWithRun latches on state.creatingRun BEFORE its first await, so two
     // concurrent entry points (the cost-gate confirm and the legacy #proceed-run,

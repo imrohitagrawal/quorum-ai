@@ -2295,6 +2295,14 @@
   // the SAME element — with its click listener intact — on a re-render.
   let resultDetailsToggleNode = null;
 
+  // The Run ID's support copy + tooltip text, shared verbatim by the result
+  // header and the receipt so the two never drift.
+  const RUN_ID_COPY_TITLE = "Copy run ID — quote it if you report a problem to support.";
+  const RUN_ID_INFO_TEXT =
+    "A unique audit handle for this run. Copy it and quote it if you report a " +
+    "problem to support — it lets them pull up every log line for this exact " +
+    "request. It is not a link and has no meaning outside support.";
+
   function renderResultMeta(result, status, durationText) {
     const meta = el("result-meta");
     if (!meta) return;
@@ -2354,43 +2362,18 @@
       copyBtn.type = "button";
       copyBtn.className = "mono result-meta-runid-copy";
       copyBtn.textContent = idValue;
-      copyBtn.title = "Copy run ID — quote it if you report a problem to support.";
-      const copyIdleAria = `Copy run ID ${idValue}`;
-      copyBtn.setAttribute("aria-label", copyIdleAria);
-      copyBtn.addEventListener("click", async () => {
-        try {
-          await navigator.clipboard.writeText(idValue);
-          copyBtn.dataset.copied = "true";
-          copyBtn.title = "Copied!";
-          // Convey the copied state to screen readers, not colour/title only
-          // (WCAG 4.1.3). ``aria-label`` overrides the accessible name so an SR
-          // announces "Copied" on activation; restored to the idle name on
-          // timeout. Mirrors the shared ``copyRunIdToClipboard`` helper the aside
-          // and live-card copy buttons use — this header button had diverged.
-          copyBtn.setAttribute("aria-label", "Copied");
-          setTimeout(() => {
-            delete copyBtn.dataset.copied;
-            copyBtn.title = "Copy run ID — quote it if you report a problem to support.";
-            copyBtn.setAttribute("aria-label", copyIdleAria);
-          }, 1500);
-        } catch (_) {
-          copyBtn.title = "Copy failed — select and copy the id manually.";
-        }
+      copyBtn.title = RUN_ID_COPY_TITLE;
+      copyBtn.setAttribute("aria-label", `Copy run ID ${idValue}`);
+      // Reuse the shared helper so the header copy stays in lockstep with the
+      // receipt / aside / live-card buttons (success AND failure feedback,
+      // visible + screen-reader).
+      copyBtn.addEventListener("click", () => {
+        copyRunIdToClipboard(copyBtn, idValue, RUN_ID_COPY_TITLE);
       });
       runIdWrap.appendChild(copyBtn);
-      const info = document.createElement("button");
-      info.type = "button";
-      info.className = "info-icon info-icon-inline";
-      info.setAttribute("data-info-icon", "");
-      info.setAttribute(
-        "data-info-text",
-        "A unique audit handle for this run. Copy it and quote it if you report a " +
-          "problem to support — it lets them pull up every log line for this exact " +
-          "request. It is not a link and has no meaning outside support.",
+      runIdWrap.appendChild(
+        buildInfoIcon(RUN_ID_INFO_TEXT, { ariaLabel: "What is the run ID?", inline: true }),
       );
-      info.setAttribute("aria-label", "What is the run ID?");
-      info.innerHTML = "&#9432;";
-      runIdWrap.appendChild(info);
       meta.appendChild(runIdWrap);
       // Wire the freshly-created info icon into the shared tooltip system
       // (idempotent — keyed off ``data-info-wired``).
@@ -2599,15 +2582,10 @@
     const row = mkEl("div", "result-receipt-row");
     const labelEl = mkEl("span", "result-receipt-label", label);
     if (infoText) {
-      const info = document.createElement("button");
-      info.type = "button";
-      info.className = "info-icon info-icon-inline";
-      info.setAttribute("data-info-icon", "");
-      info.setAttribute("data-info-text", infoText);
-      info.setAttribute("aria-label", `What is the ${label}?`);
-      info.innerHTML = "&#9432;";
       labelEl.appendChild(document.createTextNode(" "));
-      labelEl.appendChild(info);
+      labelEl.appendChild(
+        buildInfoIcon(infoText, { ariaLabel: `What is the ${label}?`, inline: true }),
+      );
     }
     row.appendChild(labelEl);
     const valWrap = mkEl("span", "result-receipt-id");
@@ -2743,10 +2721,8 @@
         buildReceiptIdRow(
           "Run ID",
           String(result.correlation_id),
-          "Copy run ID — quote it if you report a problem to support.",
-          "A unique audit handle for this run. Copy it and quote it if you report a " +
-            "problem to support — it lets them pull up every log line for this exact " +
-            "request. It is not a link and has no meaning outside support.",
+          RUN_ID_COPY_TITLE,
+          RUN_ID_INFO_TEXT,
         ),
       );
     }
@@ -3631,15 +3607,45 @@
       "A decision-support framing from Quorum. Not medical, legal, financial, safety, or regulated professional advice. Templated by Quorum; no model generates this.",
   };
 
-  function buildInfoIcon(text) {
+  function buildInfoIcon(text, { ariaLabel = "More information about this section", inline = false } = {}) {
     const button = document.createElement("button");
     button.type = "button";
-    button.className = "info-icon";
+    button.className = inline ? "info-icon info-icon-inline" : "info-icon";
     button.setAttribute("data-info-icon", "");
     button.setAttribute("data-info-text", text);
-    button.setAttribute("aria-label", "More information about this section");
+    button.setAttribute("aria-label", ariaLabel);
     button.innerHTML = "&#9432;";
     return button;
+  }
+
+  // Shared run-id clipboard helper: copies ``value`` and shows the same feedback
+  // on ``button`` both visibly (title + ``data-copied`` colour flip) AND to
+  // screen readers (``aria-label`` swap, WCAG 4.1.3), restoring the button's own
+  // idle title/aria-label after a beat. Used by the result-header Run ID copy,
+  // the receipt copy, the aside ``#copy-correlation``, and the live-card
+  // ``#live-corr`` so all four stay in lockstep on both success AND failure.
+  async function copyRunIdToClipboard(button, value, idleTitle) {
+    if (!button || !value) return;
+    // Preserve this button's OWN idle aria-label (callers have different ones).
+    const idleAria = button.getAttribute("aria-label");
+    const restore = () => {
+      button.title = idleTitle;
+      if (idleAria != null) button.setAttribute("aria-label", idleAria);
+    };
+    try {
+      await navigator.clipboard.writeText(value);
+      button.dataset.copied = "true";
+      button.title = "Copied!";
+      button.setAttribute("aria-label", "Copied");
+      setTimeout(() => {
+        delete button.dataset.copied;
+        restore();
+      }, 1500);
+    } catch (_) {
+      button.title = "Copy failed — select and copy manually.";
+      button.setAttribute("aria-label", "Copy failed — select and copy manually");
+      setTimeout(restore, 1500);
+    }
   }
 
   function renderDebateAndSynthesis(result) {
@@ -4480,9 +4486,11 @@
     return row;
   }
 
-  // Populate the cost gate (screen 03) from an estimate response. Called
-  // for the ``require_confirmation`` and ``block`` bands only; the
-  // ``allow`` band skips this screen entirely. Does NOT switch the view —
+  // Populate the cost gate (screen 03) from an estimate response. Called for
+  // the ``require_confirmation`` and ``block`` bands, and for an ``allow`` band
+  // reached via "See the estimate" (the gate then shows a plain "Run · $X" CTA).
+  // Only a "Run now" click on an allow-band estimate skips this screen entirely
+  // and auto-proceeds. Does NOT switch the view —
   // the caller does that after rendering so the DOM is ready when it shows.
   // Populate the cost gate and RETURN its live-region announcement string.
   // The announcement is deliberately NOT written here: this runs while the
@@ -4749,8 +4757,10 @@
         estimate.cost_estimate.estimated_cost_usd,
       );
       const action = estimate.cost_estimate.threshold_action;
-      // Slice 2 (03 Cost gate): route by the server ``threshold_action``.
-      //   allow                → skip the gate, run straight away.
+      // Slice 2 (03 Cost gate): route by the server ``threshold_action`` and
+      // whether this is a "Run now" auto-proceed (``autoProceed``).
+      //   allow + autoProceed  → skip the gate, run straight away (Run now only).
+      //   allow (See estimate) → show the gate with a plain "Run · $X" CTA.
       //   require_confirmation  → show the itemized cost gate (screen 03).
       //   block                → show the gate's inline blocked state.
       // The legacy inline composer callout (``#cost-confirmation``) is no
@@ -4819,14 +4829,21 @@
   // Re-derive the primary CTA's disabled state from the run + gate state.
   function applyHighStakesGate() {
     const blocked = state.highStakesRequired && !state.highStakesAck;
+    // Keep both CTAs disabled while an estimate round-trip is in flight
+    // (``submittingRun``), not just while a run is (``isRunning``). This runs
+    // in ``startRun``/``estimateRun``'s finally, which fires before the run
+    // starts; without the ``submittingRun`` term the just-clicked CTA would
+    // briefly flicker back to enabled between the estimate returning and the
+    // auto-proceed run beginning.
+    const busy = state.isRunning || state.submittingRun;
     if (estimateButton) {
-      estimateButton.disabled = state.isRunning || blocked;
+      estimateButton.disabled = busy || blocked;
       estimateButton.dataset.gateBlocked = blocked ? "true" : "false";
     }
     // "Run now" is gated identically: an unacknowledged high-stakes topic must
     // block the direct-run path too, not just the estimate-first path.
     if (runNowButton) {
-      runNowButton.disabled = state.isRunning || blocked;
+      runNowButton.disabled = busy || blocked;
       runNowButton.dataset.gateBlocked = blocked ? "true" : "false";
     }
   }
@@ -5900,6 +5917,17 @@
       }
     }
 
+    // Reset the hand-off dwell latch: clear any pending timer, drop the pending
+    // flag, and re-enable the CTAs. Shared by every site that ends a dwell (the
+    // timer firing, an example-chip/open-workspace navigation, and How-it-works
+    // cancelling) so the trio never drifts out of sync between them.
+    function clearLandingHandoffLatch() {
+      window.clearTimeout(landingHandoffTimer);
+      landingHandoffTimer = null;
+      landingHandoffPending = false;
+      setLandingCtasDisabled(false);
+    }
+
     // Cancel a pending Estimate/Run dwell WITHOUT navigating: clear the timer,
     // drop the pending latch, re-enable the CTAs, and hide the transition note.
     // Used when the visitor does something during the dwell that means they no
@@ -5908,10 +5936,7 @@
     // pending hand-off was actually cancelled.
     function cancelPendingHandoff() {
       if (!landingHandoffTimer) return false;
-      window.clearTimeout(landingHandoffTimer);
-      landingHandoffTimer = null;
-      landingHandoffPending = false;
-      setLandingCtasDisabled(false);
+      clearLandingHandoffLatch();
       if (landingHandoffNote) landingHandoffNote.hidden = true;
       return true;
     }
@@ -5922,17 +5947,12 @@
     // clears the landing transient state (error + transition note).
     function goToComposer() {
       // If a landing Estimate/Run dwell is still pending (e.g. the visitor
-      // clicked an example chip during the ~1.2s dwell), cancel it: this call
+      // clicked an example chip during the ~2.8s dwell), cancel it: this call
       // already lands them on the composer, so letting the stray timer fire a
       // second goToComposer later would yank the viewport back to the top and
       // re-flash after they had settled in. Clearing an already-fired timer is
       // a harmless no-op.
-      if (landingHandoffTimer) {
-        window.clearTimeout(landingHandoffTimer);
-        landingHandoffTimer = null;
-        landingHandoffPending = false;
-        setLandingCtasDisabled(false);
-      }
+      if (landingHandoffTimer) clearLandingHandoffLatch();
       markWorkspaceSeen();
       setView("composer");
       if (!queryTextarea) return;
@@ -5991,9 +6011,7 @@
       // anchored, sensible focus until goToComposer moves it to the composer.
       if (landingQuery) landingQuery.focus({ preventScroll: true });
       landingHandoffTimer = window.setTimeout(() => {
-        landingHandoffTimer = null;
-        landingHandoffPending = false;
-        setLandingCtasDisabled(false);
+        clearLandingHandoffLatch();
         // The field stays focused through the dwell, so the visitor may have
         // refined the question. Carry the LATEST text (not the click-time
         // snapshot) into the composer so a dwell-time edit is never discarded.
@@ -6303,33 +6321,9 @@
         startRun(true, runNowButton);
       });
     }
-    // Shared run-id clipboard helper (Fix 6): both the aside's #copy-correlation
-    // button and the live card's #live-corr button copy a run id and show the
-    // same copied-title feedback. Extracted so both stay in lockstep.
-    async function copyRunIdToClipboard(button, value, idleTitle) {
-      if (!button || !value) return;
-      // Fix 5: preserve this button's OWN idle aria-label (the three callers
-      // have different ones) so it is restored exactly on timeout.
-      const idleAria = button.getAttribute("aria-label");
-      try {
-        await navigator.clipboard.writeText(value);
-        button.dataset.copied = "true";
-        button.title = "Copied!";
-        // Fix 5: convey the copied state to SR (not color-only). The visible
-        // non-color cue (a ✓ glyph) is added via CSS ``::after`` so it never
-        // clobbers the button's own text — #live-corr shows the run id and
-        // #copy-correlation wraps a child <span>. aria-label="Copied"
-        // overrides the accessible name, so the ✓ stays purely visual.
-        button.setAttribute("aria-label", "Copied");
-        setTimeout(() => {
-          delete button.dataset.copied;
-          button.title = idleTitle;
-          if (idleAria != null) button.setAttribute("aria-label", idleAria);
-        }, 1500);
-      } catch (_) {
-        button.title = "Copy failed — select and copy manually.";
-      }
-    }
+    // ``copyRunIdToClipboard`` is a shared top-level helper (defined near
+    // ``buildInfoIcon``) so the result header, receipt, aside, and live card all
+    // copy a run id with identical success/failure feedback.
     if (copyCorrelationButton) {
       copyCorrelationButton.addEventListener("click", () => {
         const target = el("correlation-meta");

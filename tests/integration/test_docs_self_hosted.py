@@ -1,18 +1,23 @@
 """The interactive docs are self-hosted, so the strict CSP never blocks them.
 
-FastAPI's built-in ``/docs`` and ``/redoc`` load Swagger UI / ReDoc assets from
-``cdn.jsdelivr.net`` and a favicon from ``fastapi.tiangolo.com``. The app ships a
-strict Content-Security-Policy (``script-src 'self' 'unsafe-inline'``,
+FastAPI's built-in ``/docs`` loads Swagger UI assets from ``cdn.jsdelivr.net``
+and a favicon from ``fastapi.tiangolo.com``. The app ships a strict
+Content-Security-Policy (``script-src 'self' 'unsafe-inline'``,
 ``img-src 'self' data:`` …) that blocks every one of those hosts, so the stock
-docs render an empty page. We serve our own ``/docs`` and ``/redoc`` that point
-at vendored, same-origin assets under ``/static/vendor`` instead.
+docs render an empty page. We serve our own ``/docs`` that points at vendored,
+same-origin assets under ``/static/vendor`` instead. (ReDoc is deliberately not
+self-hosted — it cannot be served CSP-clean without widening the policy; see
+``main._register_docs_routes``. Swagger UI is a functional superset.)
 
 These tests pin BOTH directions:
 
 * the rendered docs reference ONLY same-origin (``/static/vendor/…``) assets —
   no ``cdn.jsdelivr.net``, ``unpkg``, or ``fastapi.tiangolo.com`` host survives;
 * the vendored asset files are actually present and served with a 200;
-* the gate still holds — a deployed-env build with docs OFF 404s all of them.
+* the gate still holds — a deployed-env build with docs OFF 404s them.
+
+That the docs actually FUNCTION under the enforced CSP (not just reference the
+right URLs) is pinned by the browser-level ``e2e/tests/docs/docs-under-csp.spec.ts``.
 
 The CSP itself is deliberately NOT touched (that contract is pinned in
 ``test_security_headers.py``); self-hosting keeps the docs working *without*
@@ -74,15 +79,10 @@ def test_docs_renders_and_references_only_same_origin_assets() -> None:
         assert not url.startswith("http"), f"non-same-origin asset URL in /docs: {url}"
 
 
-def test_redoc_renders_and_references_only_same_origin_assets() -> None:
-    client = _local_client()
-    resp = client.get("/redoc")
-    assert resp.status_code == 200
-    html = resp.text
-    assert _external_hosts(html) == [], f"redoc pulled external assets: {_external_hosts(html)}"
-    assert "/static/vendor/redoc.standalone.js" in html
-    for url in re.findall(r'(?:src|href)="([^"]+)"', html):
-        assert not url.startswith("http"), f"non-same-origin asset URL in /redoc: {url}"
+def test_redoc_is_not_served() -> None:
+    # ReDoc is deliberately NOT self-hosted (it cannot be served CSP-clean).
+    # Swagger UI /docs is the single interactive docs surface.
+    assert _local_client().get("/redoc").status_code == 404
 
 
 @pytest.mark.parametrize(
@@ -90,7 +90,6 @@ def test_redoc_renders_and_references_only_same_origin_assets() -> None:
     [
         "/static/vendor/swagger-ui-bundle.js",
         "/static/vendor/swagger-ui.css",
-        "/static/vendor/redoc.standalone.js",
         "/static/vendor/favicon-32x32.png",
     ],
 )

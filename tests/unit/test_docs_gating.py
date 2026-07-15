@@ -1,9 +1,9 @@
 """Gate the interactive API docs behind an environment flag.
 
-The Swagger UI (``/docs``), ReDoc (``/redoc``), and the raw schema route
-(``/openapi.json``) are useful in development but are surface area we do not
-want live by default in production. These tests pin the gate in BOTH
-directions:
+The Swagger UI (``/docs``) and the raw schema route (``/openapi.json``) are
+useful in development but are surface area we do not want live by default in
+production. (ReDoc is not served — see test_docs_self_hosted.) These tests pin
+the gate in BOTH directions:
 
 * the flag resolution (``Settings.api_docs_enabled``) defaults on outside
   production, off in production, and an explicit flag overrides either way;
@@ -59,6 +59,17 @@ def test_explicit_flag_overrides_environment_default() -> None:
     )
 
 
+def test_blank_expose_api_docs_is_treated_as_unset(monkeypatch: pytest.MonkeyPatch) -> None:
+    # A blank EXPOSE_API_DOCS (a common .env footgun) must NOT crash startup — it
+    # means "unset → derive from environment", not a bool-parse ValidationError.
+    for blank in ("", "   "):
+        monkeypatch.setenv("EXPOSE_API_DOCS", blank)
+        # Must not raise, and must fall back to the environment default.
+        assert Settings(runtime_environment=RuntimeEnvironment.LOCAL).api_docs_enabled is True
+        assert Settings(runtime_environment=RuntimeEnvironment.STAGING).api_docs_enabled is False
+        assert Settings(runtime_environment=RuntimeEnvironment.PRODUCTION).api_docs_enabled is False
+
+
 # --- The raw schema route is gated ------------------------------------------
 #
 # The built-in Swagger UI / ReDoc are always disabled on the constructor
@@ -107,14 +118,16 @@ def test_real_construction_serves_docs_in_local() -> None:
     local_settings = _settings(runtime_environment=RuntimeEnvironment.LOCAL)
     local_app = main._build_fastapi(local_settings)
     main._register_docs_routes(local_app, local_settings)
-    # Built-in docs stay disabled; the self-hosted routes serve the pages.
+    # Built-in docs stay disabled; the self-hosted /docs (Swagger UI) route
+    # serves the interactive page. /redoc is intentionally NOT served (it cannot
+    # be CSP-clean); Swagger UI is the single interactive docs surface.
     assert local_app.docs_url is None
     assert local_app.redoc_url is None
     assert local_app.openapi_url == "/openapi.json"
     client = TestClient(local_app)
     assert client.get("/openapi.json").status_code == 200
     assert client.get("/docs").status_code == 200
-    assert client.get("/redoc").status_code == 200
+    assert client.get("/redoc").status_code == 404
 
 
 def test_real_module_app_serves_docs_under_local_test_env() -> None:
