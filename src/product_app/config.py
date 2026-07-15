@@ -38,10 +38,14 @@ class Settings(BaseSettings):
     # --- Interactive API docs exposure ----------------------------------
     # The Swagger UI (/docs), ReDoc (/redoc), and the raw schema route
     # (/openapi.json) are convenient in development but are surface area we
-    # do not want live by default in production. ``None`` (the default)
-    # means "derive from the environment": docs are exposed everywhere
-    # EXCEPT production. Set ``EXPOSE_API_DOCS=true|false`` to force it on
-    # or off regardless of environment. /health and /ready are never gated.
+    # do not want live by default in any DEPLOYED environment. ``None``
+    # (the default) means "derive from the environment": docs are exposed
+    # ONLY in local dev, and off-by-default in both staging AND production
+    # so an internet-reachable box never serves the unauthenticated schema
+    # unless an operator explicitly opts in. Set ``EXPOSE_API_DOCS=true``
+    # to force them on (e.g. a locked-down staging box behind a VPN), or
+    # ``EXPOSE_API_DOCS=false`` to force them off. /health and /ready are
+    # never gated.
     expose_api_docs: bool | None = None
 
     @property
@@ -49,7 +53,7 @@ class Settings(BaseSettings):
         """Whether the interactive docs + schema route should be served."""
         if self.expose_api_docs is not None:
             return self.expose_api_docs
-        return self.runtime_environment is not RuntimeEnvironment.PRODUCTION
+        return self.runtime_environment is RuntimeEnvironment.LOCAL
 
     # --- Operator-only provider configuration -------------------------
     # The OpenRouter key is owned by the operator; it is never exposed in

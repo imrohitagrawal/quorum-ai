@@ -25,6 +25,7 @@ from typing import Annotated, Any
 import sentry_sdk
 from fastapi import Depends, FastAPI, Request, status
 from fastapi.exceptions import RequestValidationError
+from fastapi.openapi.docs import get_redoc_html, get_swagger_ui_html
 from fastapi.responses import HTMLResponse, JSONResponse, PlainTextResponse, Response
 from fastapi.staticfiles import StaticFiles
 from sentry_sdk.types import Event as SentryEvent
@@ -111,18 +112,64 @@ if SENTRY_DSN:
     )
 
 
-def _docs_urls(active_settings: Settings) -> tuple[str | None, str | None, str | None]:
-    """Return the (docs_url, redoc_url, openapi_url) for the current settings.
+# Self-hosted interactive-docs assets. FastAPI's built-in ``/docs`` and
+# ``/redoc`` load Swagger UI / ReDoc from ``cdn.jsdelivr.net`` (and a favicon
+# from ``fastapi.tiangolo.com``), every one of which the app's strict CSP
+# (``script-src 'self'`` …) blocks — so the stock docs render an empty page.
+# We vendor the assets under ``static/vendor`` and serve our own docs routes
+# that point at them, keeping the docs functional WITHOUT widening the CSP.
+_VENDOR_PREFIX = "/static/vendor"
+
+
+def _openapi_url(active_settings: Settings) -> str | None:
+    """Return the raw schema route (``/openapi.json``), gated by the docs flag.
 
     When the interactive docs are gated OFF (see ``Settings.api_docs_enabled``)
-    all three are ``None``, which removes the Swagger UI, ReDoc, AND the raw
-    ``/openapi.json`` route. This does NOT affect ``app.openapi()`` — the
-    in-process schema the OpenAPI contract guard renders from still works — so
-    gating the routes never breaks the contract test.
+    this is ``None``, which removes the raw ``/openapi.json`` route. This does
+    NOT affect ``app.openapi()`` — the in-process schema the OpenAPI contract
+    guard renders from still works — so gating the route never breaks the
+    contract test. The interactive ``/docs`` and ``/redoc`` are served by
+    ``_register_docs_routes`` and are gated by the same flag.
     """
-    if active_settings.api_docs_enabled:
-        return "/docs", "/redoc", "/openapi.json"
-    return None, None, None
+    return "/openapi.json" if active_settings.api_docs_enabled else None
+
+
+def _register_docs_routes(app: FastAPI, active_settings: Settings) -> None:
+    """Register CSP-safe, self-hosted ``/docs`` and ``/redoc`` routes.
+
+    Both load their JS/CSS/favicon from same-origin ``/static/vendor`` assets,
+    so the app's strict Content-Security-Policy never blocks them (the stock
+    FastAPI docs pull from ``cdn.jsdelivr.net``, which the CSP forbids). This is
+    a no-op when the docs are gated off — deployed environments by default — so
+    the gate covers the interactive pages exactly as it covers ``/openapi.json``.
+    """
+    if not active_settings.api_docs_enabled:
+        return
+    openapi_url = _openapi_url(active_settings)
+    assert openapi_url is not None  # api_docs_enabled ⇒ the schema route exists
+    title = f"{active_settings.app_name} — API docs"
+
+    @app.get("/docs", include_in_schema=False)
+    async def swagger_ui_html() -> HTMLResponse:
+        return get_swagger_ui_html(
+            openapi_url=openapi_url,
+            title=title,
+            swagger_js_url=f"{_VENDOR_PREFIX}/swagger-ui-bundle.js",
+            swagger_css_url=f"{_VENDOR_PREFIX}/swagger-ui.css",
+            swagger_favicon_url=f"{_VENDOR_PREFIX}/favicon-32x32.png",
+        )
+
+    @app.get("/redoc", include_in_schema=False)
+    async def redoc_html() -> HTMLResponse:
+        return get_redoc_html(
+            openapi_url=openapi_url,
+            title=title,
+            redoc_js_url=f"{_VENDOR_PREFIX}/redoc.standalone.js",
+            redoc_favicon_url=f"{_VENDOR_PREFIX}/favicon-32x32.png",
+            # ReDoc's Google-Fonts injection would need external hosts; the
+            # app self-hosts everything, so fall back to the system font stack.
+            with_google_fonts=False,
+        )
 
 
 def _warn_if_docs_exposed_in_deployed_env(
@@ -149,11 +196,14 @@ def _warn_if_docs_exposed_in_deployed_env(
 def _build_fastapi(active_settings: Settings) -> FastAPI:
     """Construct the base FastAPI app with the docs routes gated per settings.
 
-    This is the single place the docs URLs are applied to the real constructor,
-    so a test can build the app under production settings and assert /docs
-    actually 404s — proving the gate wiring, not just that FastAPI honours None.
+    The built-in ``/docs`` and ``/redoc`` are disabled (``docs_url=None`` /
+    ``redoc_url=None``) because they load assets from ``cdn.jsdelivr.net`` — a
+    host the app's CSP blocks; the CSP-safe self-hosted replacements are wired
+    up by ``_register_docs_routes``. Only the raw ``/openapi.json`` route is
+    gated here (via ``_openapi_url``), so a test can build the app under
+    production settings and assert it 404s — proving the gate wiring, not just
+    that FastAPI honours None.
     """
-    docs_url, redoc_url, openapi_url = _docs_urls(active_settings)
     return FastAPI(
         title=active_settings.app_name,
         version="0.2.0",
@@ -166,15 +216,16 @@ def _build_fastapi(active_settings: Settings) -> FastAPI:
             "Open the workspace UI at /ui; health and readiness live at "
             "/health and /ready; the operator snapshot is at /status."
         ),
-        docs_url=docs_url,
-        redoc_url=redoc_url,
-        openapi_url=openapi_url,
+        docs_url=None,
+        redoc_url=None,
+        openapi_url=_openapi_url(active_settings),
     )
 
 
 _warn_if_docs_exposed_in_deployed_env(settings, logging.getLogger(__name__))
 
 app = _build_fastapi(settings)
+_register_docs_routes(app, settings)
 app.include_router(query_runs_router)
 app.mount("/static", StaticFiles(directory=str(STATIC_DIR)), name="static")
 
