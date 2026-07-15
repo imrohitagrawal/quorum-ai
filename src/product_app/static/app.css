@@ -892,6 +892,17 @@ textarea:focus, input:focus, select:focus {
   box-shadow: 0 0 0 3px var(--accent-soft);
 }
 
+/* Transient highlight when the composer question is filled + focused via a
+   hand-off (example chip, follow-up "Review & run", or the landing). Programmatic
+   focus does not trigger :focus-visible and the composer suppresses the plain
+   :focus ring, so without this the field gives no visible cue that the question
+   landed there. Applied by goToComposer() and removed after ~1.4s. The id+class
+   selector wins over the neutral .question-field textarea border. */
+#query-text.question-handoff-focus {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px var(--accent-soft);
+}
+
 select {
   width: 100%;
   min-height: 48px;
@@ -4595,13 +4606,17 @@ main:focus { outline: none; }
    slots read as four distinct minds at a glance. Values lifted verbatim from the
    comp. Dark-mode overrides live in the theming block. */
 .model-slot-avatar[data-vendor="openai"],
-.transcript-opening-avatar[data-vendor="openai"] { background: var(--vendor-openai-soft); color: var(--vendor-openai-ink); }
+.transcript-opening-avatar[data-vendor="openai"],
+.result-pos-avatar[data-vendor="openai"] { background: var(--vendor-openai-soft); color: var(--vendor-openai-ink); }
 .model-slot-avatar[data-vendor="anthropic"],
-.transcript-opening-avatar[data-vendor="anthropic"] { background: var(--vendor-anthropic-soft); color: var(--vendor-anthropic-ink); }
+.transcript-opening-avatar[data-vendor="anthropic"],
+.result-pos-avatar[data-vendor="anthropic"] { background: var(--vendor-anthropic-soft); color: var(--vendor-anthropic-ink); }
 .model-slot-avatar[data-vendor="google"],
-.transcript-opening-avatar[data-vendor="google"] { background: var(--vendor-google-soft); color: var(--vendor-google-ink); }
+.transcript-opening-avatar[data-vendor="google"],
+.result-pos-avatar[data-vendor="google"] { background: var(--vendor-google-soft); color: var(--vendor-google-ink); }
 .model-slot-avatar[data-vendor="deepseek"],
-.transcript-opening-avatar[data-vendor="deepseek"] { background: var(--vendor-deepseek-soft); color: var(--vendor-deepseek-ink); }
+.transcript-opening-avatar[data-vendor="deepseek"],
+.result-pos-avatar[data-vendor="deepseek"] { background: var(--vendor-deepseek-soft); color: var(--vendor-deepseek-ink); }
 .model-slot-info { flex: 1; min-width: 0; }
 .model-slot-name {
   display: flex;

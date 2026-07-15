@@ -35,6 +35,22 @@ class Settings(BaseSettings):
     app_name: str = "Quorum-AI"
     runtime_environment: RuntimeEnvironment = RuntimeEnvironment.LOCAL
 
+    # --- Interactive API docs exposure ----------------------------------
+    # The Swagger UI (/docs), ReDoc (/redoc), and the raw schema route
+    # (/openapi.json) are convenient in development but are surface area we
+    # do not want live by default in production. ``None`` (the default)
+    # means "derive from the environment": docs are exposed everywhere
+    # EXCEPT production. Set ``EXPOSE_API_DOCS=true|false`` to force it on
+    # or off regardless of environment. /health and /ready are never gated.
+    expose_api_docs: bool | None = None
+
+    @property
+    def api_docs_enabled(self) -> bool:
+        """Whether the interactive docs + schema route should be served."""
+        if self.expose_api_docs is not None:
+            return self.expose_api_docs
+        return self.runtime_environment is not RuntimeEnvironment.PRODUCTION
+
     # --- Operator-only provider configuration -------------------------
     # The OpenRouter key is owned by the operator; it is never exposed in
     # API responses, never written to logs, and never sent to the client.

@@ -2727,8 +2727,9 @@
     // ONE user-facing "Run ID" = the friendly ``qr_``/correlation form, matching
     // the result header and live-run card. The raw ``query_run_id`` (a UUID) is
     // the SAME id in another format (``correlation_id`` is ``"qr_" + uuid.hex``),
-    // so it is demoted to a clearly-labelled secondary "Internal reference" — not
-    // a second, conflicting "Run ID".
+    // so surfacing it as a second row only added a competing ID-looking value with
+    // no user benefit — it is intentionally NOT shown on the receipt. (Support can
+    // still resolve the raw form from the friendly id server-side.)
     if (result.correlation_id) {
       c1.appendChild(
         buildReceiptIdRow(
@@ -2738,17 +2739,6 @@
           "A unique audit handle for this run. Copy it and quote it if you report a " +
             "problem to support — it lets them pull up every log line for this exact " +
             "request. It is not a link and has no meaning outside support.",
-        ),
-      );
-    }
-    if (result.query_run_id) {
-      c1.appendChild(
-        buildReceiptIdRow(
-          "Internal reference",
-          String(result.query_run_id),
-          "Copy the internal reference id.",
-          "The same run in its raw internal (UUID) form. The Run ID above is the " +
-            "friendly version of this id; support can use either.",
         ),
       );
     }
@@ -2991,6 +2981,10 @@
       modelCell.setAttribute("scope", "row");
       const avatar = mkEl("span", "result-pos-avatar", name.trim().charAt(0).toUpperCase() || "?");
       avatar.setAttribute("aria-hidden", "true");
+      // Carry the SAME per-vendor tint the composer slots and transcript openings
+      // use, so a model keeps its colour identity across every surface (two "G"
+      // initials — GPT and Gemini — are otherwise indistinguishable here).
+      if (m.model_id) avatar.dataset.vendor = vendorForModel(m.model_id);
       modelCell.append(avatar, mkEl("span", "result-pos-name", name));
       row.appendChild(modelCell);
 
@@ -5473,13 +5467,14 @@
       });
     }
 
-    // Footer: both ids, quoted for support. No secrets, no provider keys.
-    const corr = result.correlation_id || "";
-    const runId = result.query_run_id ? String(result.query_run_id) : "";
-    const idParts = [corr, runId].filter(Boolean);
-    const footer = idParts.length
-      ? `${idParts.join(" · ")} — quote when reporting`
-      : undefined;
+    // Footer: the ONE friendly Run ID, quoted for support. The raw query_run_id
+    // is the SAME run in another format (correlation_id is "qr_" + uuid.hex);
+    // quoting two competing ids only confuses the user, so we surface one —
+    // matching the result header and receipt. Fall back to the raw id only if
+    // the friendly form is absent. No secrets, no provider keys.
+    const supportId =
+      result.correlation_id || (result.query_run_id ? String(result.query_run_id) : "");
+    const footer = supportId ? `Run ID ${supportId} — quote when reporting` : undefined;
 
     const actions = [
       { label: "Start a new run", primary: true, action: () => returnToComposer("question") },
@@ -5834,6 +5829,8 @@
     // so the visitor can read WHY they are being moved to the workspace.
     const LANDING_HANDOFF_DWELL_MS = 1200;
     let landingHandoffPending = false;
+    // Timer that clears the composer question's post-hand-off highlight flash.
+    let composerHandoffFlashTimer = null;
 
     // Clear the empty-submit error state (called on typing and on a valid submit).
     function clearLandingError() {
@@ -5892,7 +5889,33 @@
     function goToComposer() {
       markWorkspaceSeen();
       setView("composer");
-      if (queryTextarea) queryTextarea.focus({ preventScroll: true });
+      if (!queryTextarea) return;
+      // Bring the composer back to the top of the viewport so the question field
+      // the user just filled — from an example chip, a follow-up, or the landing
+      // hand-off — is actually visible, framed under the "Ask the panel" heading.
+      // A bare focus({preventScroll}) left the viewport wherever the user had
+      // scrolled (at the example chips, or deep in the result's follow-up block),
+      // so the "focused" field sat off-screen and the hand-off looked like nothing
+      // had happened. Instant scroll (no animation) is reduced-motion-safe.
+      window.scrollTo(0, 0);
+      queryTextarea.focus({ preventScroll: true });
+      // Caret at the END of the pre-filled text, ready to refine.
+      const caret = queryTextarea.value.length;
+      try {
+        queryTextarea.setSelectionRange(caret, caret);
+      } catch (_) {
+        // setSelectionRange throws on some input types; the focus still lands.
+      }
+      // Programmatic focus does NOT trigger :focus-visible, and the composer
+      // textarea suppresses the plain-:focus ring, so without this the field
+      // gives no visible "your question landed here" cue after a hand-off. Flash
+      // an explicit highlight for a beat so the focus is unmistakable.
+      queryTextarea.classList.add("question-handoff-focus");
+      if (composerHandoffFlashTimer) window.clearTimeout(composerHandoffFlashTimer);
+      composerHandoffFlashTimer = window.setTimeout(() => {
+        queryTextarea.classList.remove("question-handoff-focus");
+        composerHandoffFlashTimer = null;
+      }, 1400);
     }
 
     // Estimate/Run on the landing: validate, carry the typed question into the

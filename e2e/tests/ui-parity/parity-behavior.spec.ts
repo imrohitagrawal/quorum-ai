@@ -333,11 +333,11 @@ test.describe("UI parity — behaviour", () => {
     await expect(info).toHaveAttribute("aria-label", /what is the run id/i);
   });
 
-  test("Run ID is ONE id everywhere: the receipt's Run ID matches the header (the qr_ form) and carries an info icon; the raw UUID is a secondary reference", async ({ page }) => {
+  test("Run ID is ONE id everywhere: the receipt shows a single friendly Run ID (qr_ form) with an info icon and NO redundant raw-UUID row", async ({ page }) => {
     // correlation_id = "qr_" + query_run_id.hex — the SAME id in two formats. The
-    // user must see one "Run ID" (the friendly qr_/correlation form) in the header
-    // AND the receipt, with the raw UUID demoted to a clearly-labelled secondary
-    // reference — not a competing second "Run ID".
+    // user sees ONE "Run ID" (the friendly qr_/correlation form) in the header AND
+    // the receipt. The raw UUID adds a second ID-looking value for no user benefit,
+    // so it is dropped from the user-facing receipt entirely.
     await driveToResult(page, completedResp());
     // Header "Run ID" copy value is the correlation id.
     await expect(page.locator(".result-meta-runid-copy")).toHaveText("corr-run-0001");
@@ -353,11 +353,48 @@ test.describe("UI parity — behaviour", () => {
       .filter({ hasText: "corr-run-0001" });
     await expect(runIdRow).toHaveCount(1);
     await expect(runIdRow.locator(".info-icon")).toBeVisible();
-    // The raw UUID is still present, but under a secondary label — never "Run ID".
-    await expect(page.locator("#result-receipt .result-receipt-label", { hasText: /internal reference/i })).toHaveCount(1);
-    await expect(page.locator("#result-receipt")).toContainText("11111111-1111-4111-8111-111111111111");
-    // The old "Correlation" label is gone (it was the same id under a confusing name).
+    // The raw UUID is NOT shown at all — no "Internal reference" row and the UUID
+    // string appears nowhere in the receipt.
+    await expect(page.locator("#result-receipt .result-receipt-label", { hasText: /internal reference/i })).toHaveCount(0);
+    await expect(page.locator("#result-receipt")).not.toContainText("11111111-1111-4111-8111-111111111111");
+    // The old "Correlation" label is gone too (it was the same id under a confusing name).
     await expect(page.locator("#result-receipt .result-receipt-label", { hasText: /^Correlation$/ })).toHaveCount(0);
+  });
+
+  test("Run ID is ONE id everywhere: the provider-failure footer quotes the single friendly Run ID, not the raw UUID too", async ({ page }) => {
+    // A failed run's support footer used to quote BOTH ids ("qr_… · <uuid>"),
+    // re-introducing the same two-competing-ids confusion the receipt fix removed.
+    // It must quote ONE friendly Run ID, matching the header/receipt.
+    await boot(page);
+    const failed = {
+      query_run_id: "11111111-1111-4111-8111-111111111111",
+      status: "failed",
+      correlation_id: "corr-run-0001",
+      model_slots: SLOTS,
+      failed_steps: ["synthesis"],
+      missing_steps: [],
+      provider_failure_notices: ["The synthesis provider was temporarily unavailable."],
+      partial_failure_notice: null,
+      progress: progress("synthesis", ["completed", "completed", "completed", "failed"]),
+      // A failed run still carries a (synthesis-less) result object; pollRun
+      // dereferences result.result.model_answers before the terminal branch.
+      result: {
+        model_answers: [answer(0), answer(1), answer(2), answer(3)],
+        debate_outputs: [],
+        final_synthesis: null,
+        agreement: { aligned: 0, total: 4 },
+        position_movements: [],
+      },
+    };
+    await routeRun(page, failed);
+    await fill(page);
+    await clickRunNow(page);
+    const footer = page.locator("#error-region-footer");
+    await expect(footer).toBeVisible();
+    await expect(footer).toContainText("Run ID corr-run-0001");
+    await expect(footer).toContainText("quote when reporting");
+    // The raw UUID is NOT quoted alongside it.
+    await expect(footer).not.toContainText("11111111-1111-4111-8111-111111111111");
   });
 
   test("Run details receipt: est→actual values never overflow their column into the next section", async ({ page }) => {
@@ -855,5 +892,106 @@ test.describe("UI parity — behaviour", () => {
       const inRow = boxes.filter((b) => Math.abs(b.y - band) <= 6).length;
       expect(inRow, "each row should hold two chips").toBe(2);
     }
+  });
+
+  // ---- Reported issues follow-up: hand-off focus, positions colour, retention ----
+
+  test("item 3.2 — 'How positions moved' avatars carry the SAME per-vendor tint as the composer slots, not a flat grey", async ({ page }) => {
+    // The composer's four model slots each get a per-vendor tint (openai teal /
+    // anthropic amber / google blue / deepseek purple). The "How positions moved"
+    // avatars used to render a single flat grey (no data-vendor), losing that
+    // colour identity — so a model that is teal in the composer went grey here.
+    await driveToResult(page, completedResp());
+    const pos = page.locator("#result-positions");
+    await expect(pos).toBeVisible();
+    const avatars = pos.locator(".result-pos-avatar");
+    await expect(avatars).toHaveCount(4);
+    // Each avatar is tagged with its model's vendor, matching the SLOTS order.
+    const vendors = await avatars.evaluateAll((els) =>
+      els.map((e) => (e as HTMLElement).dataset.vendor));
+    expect(vendors).toEqual(["openai", "anthropic", "google", "deepseek"]);
+    // ...and they render four DISTINCT tints (the vendor colours), not one grey.
+    const bgs = await avatars.evaluateAll((els) =>
+      els.map((e) => getComputedStyle(e as HTMLElement).backgroundColor));
+    expect(new Set(bgs).size, `expected 4 distinct vendor tints, got ${JSON.stringify(bgs)}`).toBe(4);
+    // Cross-check: the positions tint for each vendor equals the composer slot
+    // tint for the same vendor (the colour is retained across the two surfaces).
+    const slotBgByVendor: Record<string, string> = await page
+      .locator("#model-inputs .model-slot-avatar")
+      .evaluateAll((els) =>
+        Object.fromEntries(
+          els.map((e) => [
+            (e as HTMLElement).dataset.vendor,
+            getComputedStyle(e as HTMLElement).backgroundColor,
+          ]),
+        ));
+    const posPairs: [string, string][] = await avatars.evaluateAll((els) =>
+      els.map((e) => [
+        (e as HTMLElement).dataset.vendor || "",
+        getComputedStyle(e as HTMLElement).backgroundColor,
+      ]));
+    for (const [vendor, bg] of posPairs) {
+      expect(slotBgByVendor[vendor], `positions tint for ${vendor} must match the composer slot tint`).toBe(bg);
+    }
+  });
+
+  test("item 2.4 — clicking a composer example chip fills the question AND scrolls it into view (focus not left off-screen)", async ({ page }) => {
+    await boot(page);
+    // The example chips sit near the page bottom; scroll to one as a user would,
+    // so the question textarea is above the fold before the click.
+    const chip = page.locator(".composer-examples .landing-chip").first();
+    await chip.scrollIntoViewIfNeeded();
+    await expect
+      .poll(() => page.evaluate(() => window.scrollY))
+      .toBeGreaterThan(2); // we are genuinely scrolled away from the top
+    await chip.click();
+    const ta = page.locator("#query-text");
+    await expect(ta).toBeFocused();
+    await expect(ta).toHaveValue(/Usage-based vs seat pricing\?/);
+    // A brief highlight flash makes the (programmatically) focused field visible.
+    await expect(ta).toHaveClass(/question-handoff-focus/);
+    // The fix brings the composer back to the top so the filled+focused field is
+    // actually visible (a bare focus({preventScroll}) left it off-screen).
+    await expect.poll(() => page.evaluate(() => window.scrollY)).toBeLessThanOrEqual(2);
+    const inView = await ta.evaluate((el) => {
+      const r = el.getBoundingClientRect();
+      return r.top >= 0 && r.bottom <= window.innerHeight;
+    });
+    expect(inView, "composer question must be visible after a chip fill").toBe(true);
+  });
+
+  test("item 2.2 — a follow-up 'Review & run' lands on the composer scrolled to the top with the question focused (not mid-page)", async ({ page }) => {
+    await driveToResult(page, completedResp());
+    // Scroll to the follow-up block near the bottom of the (long) result view.
+    const nextRun = page.locator("#result-next-run");
+    await nextRun.scrollIntoViewIfNeeded();
+    await page.locator("#result-followup").click();
+    await page.locator("#result-next-input").fill("What about hardware security keys?");
+    await nextRun.click();
+    await expect(page.locator('[data-view="composer"]')).toBeVisible();
+    const ta = page.locator("#query-text");
+    await expect(ta).toBeFocused();
+    await expect(ta).toHaveValue("What about hardware security keys?");
+    // The composer is scrolled to the top so its heading + the pre-filled question
+    // are framed together — the pre-fix path left the viewport where the user had
+    // scrolled on the result, with the composer heading off the top of the screen.
+    await expect.poll(() => page.evaluate(() => window.scrollY)).toBeLessThanOrEqual(2);
+    const headingTop = await page
+      .locator("#composer-heading")
+      .evaluate((el) => el.getBoundingClientRect().top);
+    expect(headingTop, "the composer heading must be on-screen after a follow-up hand-off").toBeGreaterThanOrEqual(0);
+  });
+
+  test("item 3.1 — the composer keeps the typed question across a 'How it works' round-trip (typed work is never discarded)", async ({ page }) => {
+    await boot(page);
+    const ta = page.locator("#query-text");
+    const q = "Should we migrate our public API from REST to GraphQL this year?";
+    await ta.fill(q);
+    // Leave to the marketing landing via the top-bar link, then return.
+    await page.locator("#show-landing").click();
+    await expect(page.locator('[data-view="landing"]')).toBeVisible();
+    await page.locator("#landing-open-workspace").click();
+    await expect(page.locator('[data-view="composer"]')).toBeVisible();
+    await expect(ta).toHaveValue(q);
   });
 });

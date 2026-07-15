@@ -15,6 +15,7 @@ configuration surface and ``product_app.auth`` for the session model.
 from __future__ import annotations
 
 import json
+import logging
 import os
 import time
 from html import escape
@@ -35,7 +36,12 @@ from product_app.auth import (
     issue_or_resume_session,
     require_session,
 )
-from product_app.config import RuntimeEnvironment, settings, validate_production_environment
+from product_app.config import (
+    RuntimeEnvironment,
+    Settings,
+    settings,
+    validate_production_environment,
+)
 from product_app.costs import (
     _DEFAULT_PRICE_PER_1K_INPUT,
     _DEFAULT_PRICE_PER_1K_OUTPUT,
@@ -105,6 +111,44 @@ if SENTRY_DSN:
     )
 
 
+def _docs_urls(active_settings: Settings) -> tuple[str | None, str | None, str | None]:
+    """Return the (docs_url, redoc_url, openapi_url) for the current settings.
+
+    When the interactive docs are gated OFF (see ``Settings.api_docs_enabled``)
+    all three are ``None``, which removes the Swagger UI, ReDoc, AND the raw
+    ``/openapi.json`` route. This does NOT affect ``app.openapi()`` — the
+    in-process schema the OpenAPI contract guard renders from still works — so
+    gating the routes never breaks the contract test.
+    """
+    if active_settings.api_docs_enabled:
+        return "/docs", "/redoc", "/openapi.json"
+    return None, None, None
+
+
+def _warn_if_docs_exposed_in_deployed_env(
+    active_settings: Settings, logger: logging.Logger
+) -> None:
+    """Log a WARNING when the interactive docs are served outside local dev.
+
+    The docs are gated off in production by default, but an explicit
+    ``EXPOSE_API_DOCS=true`` — or a staging deploy, which serves them by default
+    — turns them back on. Surfacing that at boot means "docs on in a hardened
+    environment" is visible in the logs, never a silent config drift.
+    """
+    if (
+        active_settings.api_docs_enabled
+        and active_settings.runtime_environment is not RuntimeEnvironment.LOCAL
+    ):
+        logger.warning(
+            "API docs (/docs, /redoc, /openapi.json) are ENABLED in a %s "
+            "environment. Set EXPOSE_API_DOCS=false to disable them.",
+            active_settings.runtime_environment.value,
+        )
+
+
+_docs_url, _redoc_url, _openapi_url = _docs_urls(settings)
+_warn_if_docs_exposed_in_deployed_env(settings, logging.getLogger(__name__))
+
 app = FastAPI(
     title=settings.app_name,
     version="0.2.0",
@@ -117,6 +161,9 @@ app = FastAPI(
         "Open the workspace UI at /ui; health and readiness live at "
         "/health and /ready; the operator snapshot is at /status."
     ),
+    docs_url=_docs_url,
+    redoc_url=_redoc_url,
+    openapi_url=_openapi_url,
 )
 app.include_router(query_runs_router)
 app.mount("/static", StaticFiles(directory=str(STATIC_DIR)), name="static")
@@ -382,18 +429,25 @@ def _render_workspace_html() -> str:
 
 @app.get("/", tags=["operations"])
 def root() -> dict[str, str]:
-    return {
-        "service": settings.app_name,
-        "docs": "/docs",
-        "health": "/health",
-        "ready": "/ready",
-        "ui": "/ui",
-        "session": "/v1/session",
-        "model_defaults": "/v1/models/defaults",
-        "query_run_estimate": "/v1/query-runs/estimate",
-        "query_runs": "/v1/query-runs",
-        "feedback_audit": "/feedback/audit",
-    }
+    routes: dict[str, str] = {"service": settings.app_name}
+    # Only advertise the interactive docs when they are actually served (they
+    # are gated off in production) — a listed-but-404 route is worse than an
+    # honest omission.
+    if settings.api_docs_enabled:
+        routes["docs"] = "/docs"
+    routes.update(
+        {
+            "health": "/health",
+            "ready": "/ready",
+            "ui": "/ui",
+            "session": "/v1/session",
+            "model_defaults": "/v1/models/defaults",
+            "query_run_estimate": "/v1/query-runs/estimate",
+            "query_runs": "/v1/query-runs",
+            "feedback_audit": "/feedback/audit",
+        }
+    )
+    return routes
 
 
 @app.get("/health", tags=["operations"])
