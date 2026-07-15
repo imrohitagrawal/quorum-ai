@@ -420,7 +420,11 @@ a { color: var(--accent); text-underline-offset: 2px; }
 .topbar-howitworks {
   min-height: 44px;
   padding: 0 var(--space-3);
-  border: none;
+  /* Ghost button: a real resting border so it reads as a control without
+     needing a hover to reveal it (touch has no hover), and pairs visually with
+     the primary "Open the workspace" button as the secondary action. The token
+     flips per theme, so it stays visible on both light and dark surfaces. */
+  border: 1px solid var(--line-strong);
   background: transparent;
   color: var(--text-secondary);
   font-family: var(--font-sans);
@@ -428,9 +432,21 @@ a { color: var(--accent); text-underline-offset: 2px; }
   font-size: 0.9rem;
   cursor: pointer;
   border-radius: var(--radius-sm);
-  transition: color var(--duration-fast) var(--bezier);
+  /* Stay on one line and keep natural width even when the mobile top-bar row
+     shrinks — the (truncating) session pill absorbs the squeeze, not this
+     label. No effect on desktop, where the row never shrinks. */
+  white-space: nowrap;
+  flex-shrink: 0;
+  transition:
+    color var(--duration-fast) var(--bezier),
+    border-color var(--duration-fast) var(--bezier),
+    background var(--duration-fast) var(--bezier);
 }
-.topbar-howitworks:hover { color: var(--ink); }
+.topbar-howitworks:hover {
+  color: var(--ink);
+  border-color: var(--line-strong-2);
+  background: var(--overlay-inset);
+}
 
 /* ----- Status banner (errors, warnings, success) ----------------------- */
 
@@ -3051,8 +3067,23 @@ html[data-theme="dark"] .landing-preview-caption {
 }
 
 .result-pos-model {
-  padding-left: 0;
+  /* 24px matches the card header's horizontal inset so the avatar aligns under
+     the "How positions moved" title. The table's own ``padding`` is a no-op
+     under ``border-collapse: collapse``, so the side inset must live on the
+     edge cells — otherwise the avatar renders ~1px from the card border and
+     reads as touching it. See the ``:first-child`` / ``:last-child`` rules. */
+  padding-left: 24px;
   color: var(--ink);
+}
+
+/* Restore the symmetric 24px side inset the collapsed table drops, on the
+   edge cells of both the header row and the body rows. */
+.result-positions-colhead:first-child {
+  padding-left: 24px;
+}
+.result-positions-colhead:last-child,
+.result-positions-cell:last-child {
+  padding-right: 24px;
 }
 
 .result-pos-avatar {
@@ -4248,6 +4279,26 @@ main:focus { outline: none; }
   .panel { padding: var(--space-4); }
   .brand-copy p { font-size: 0.8rem; }
   .toast-region { left: var(--space-3); right: var(--space-3); max-width: none; }
+
+  /* Mobile-only header fix (DESKTOP UNTOUCHED — this lives entirely inside the
+     600px breakpoint). The top-bar actions row was a fixed 433px with
+     flex-shrink:0, so on any sub-433px phone the theme toggle was pushed off
+     the right edge and clipped by ``overflow-x: hidden``. Let the row shrink
+     and the session pill truncate so "How it works" + pill + toggle always fit
+     on one line, with the toggle reachable. */
+  .topbar-actions {
+    flex-shrink: 1;
+    min-width: 0;
+    gap: var(--space-2);
+  }
+  #connection-pill {
+    min-width: 0;
+  }
+  #connection-pill-text {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
 }
 
 /* ----- Reduced motion ------------------------------------------------- */

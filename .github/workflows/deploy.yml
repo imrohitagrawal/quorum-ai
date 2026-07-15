@@ -1,13 +1,14 @@
 name: Deploy to Fly.io
 
-# Deploys the app to Fly.io when changes land on main.
-# The CI workflow (ci.yml) runs the full test suite first; this
-# workflow assumes that has already passed.
-
+# Deploys the app to Fly.io. Gated on CI: this runs only AFTER the CI workflow
+# ("CI" in ci.yml) completes SUCCESSFULLY for a commit on main — so a red build
+# never reaches production (issue #21 hardening). ``workflow_dispatch`` remains
+# as a manual escape hatch (deploys whatever is on the default branch).
 on:
-  push:
-    branches: [ main ]
-  workflow_dispatch:  # Allow manual trigger from the Actions tab
+  workflow_run:
+    workflows: ["CI"]
+    types: [completed]
+  workflow_dispatch:
 
 permissions:
   contents: read
@@ -16,14 +17,26 @@ jobs:
   deploy:
     name: Deploy to Fly.io
     runs-on: ubuntu-latest
-    # Only deploy if the CI workflow on the same SHA passed.
-    # This guards against a fast-forwarded push that skipped CI.
-    needs: []
+    # Deploy only when: (a) manually dispatched, OR (b) the CI workflow finished
+    # with conclusion == success on the main branch. This is what makes the
+    # deploy CI-gated — the old ``on: push`` trigger deployed regardless of CI.
+    if: >-
+      github.event_name == 'workflow_dispatch' ||
+      (github.event.workflow_run.conclusion == 'success' &&
+       github.event.workflow_run.head_branch == 'main')
     steps:
       - uses: actions/checkout@v4
+        with:
+          # For a workflow_run trigger, check out the EXACT commit that passed
+          # CI (main's HEAD may have advanced since). For a manual dispatch this
+          # resolves to the default ref. This guarantees we deploy the tested SHA.
+          ref: ${{ github.event.workflow_run.head_sha || github.ref }}
 
       - name: Setup Fly.io CLI
-        uses: superfly/flyctl-actions/setup-flyctl@master
+        # Pinned to a commit SHA (was ``@master``) for a reproducible,
+        # supply-chain-safe toolchain — this is the exact revision that ran
+        # green on the 2026-07-15 deploy.
+        uses: superfly/flyctl-actions/setup-flyctl@ed8efb33836e8b2096c7fd3ba1c8afe303ebbff1
 
       - name: Deploy to Fly.io
         env:
