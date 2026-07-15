@@ -150,10 +150,15 @@ class Settings(BaseSettings):
     cost_synthesis_output_tokens: int = 800
 
     #: Number of independent synthesis section calls the pipeline can make
-    #: (``synthesis.SYNTHESIS_SECTION_MAX_TOKENS`` caps each). The realistic
-    #: point estimate models synthesis as a SINGLE call (the measured typical
-    #: is ~one section's worth); the fail-safe ``max_cost_usd`` bound prices
-    #: all ``cost_synthesis_sections`` so it stays a true worst-case ceiling.
+    #: (``synthesis.SYNTHESIS_SECTION_MAX_TOKENS`` caps each). The live pipeline
+    #: fans synthesis out into this many independent billed calls whenever a key
+    #: is configured (``synthesis.produce_final_synthesis`` submits five). BOTH
+    #: the displayed point estimate AND the fail-safe ``max_cost_usd`` bound now
+    #: price all ``cost_synthesis_sections`` calls — the point estimate at the
+    #: typical per-section output floor, the bound at the enforced cap — so the
+    #: headline reflects the real fan-out (it previously modelled ONE section,
+    #: reading ~17–38% below the actual on cheap-model runs where synthesis
+    #: dominates; issue #24, see ``costs._estimate_breakdown``).
     cost_synthesis_sections: int = 5
 
     #: Hard per-call output cap for the four initial answers, enforced as

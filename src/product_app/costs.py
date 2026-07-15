@@ -493,12 +493,22 @@ class CostEstimationService:
         are derived from the same terms; both re-sum to the quantized total
         after :meth:`_reconcile_usd_lines` distributes the rounding residual.
         """
-        # An initial answer's output lengthens modestly with the query. The
-        # bound path (:meth:`_estimate_bound_usd`) overrides this with the
-        # enforced ``max_tokens`` cap.
+        # An initial answer's output lengthens modestly with the query, but the
+        # live call physically cannot emit more than the enforced
+        # ``initial_answer_max_tokens`` cap (see
+        # ``providers._call_openrouter_with_optional_search``) — so the TYPICAL
+        # output is clamped to that cap too. Without the clamp the floor grows
+        # unbounded with query length and, on a long-form query (the supported
+        # range runs to ``_QUERY_TEXT_MAX_LENGTH`` = 20_000 chars), overtakes the
+        # fixed-cap bound — printing a "typical ≈ $X" ABOVE the "up to $Y"
+        # ceiling and breaking ``estimated_cost_usd <= max_cost_usd`` (issue #24;
+        # the bound path :meth:`_estimate_bound_usd` uses exactly this cap, so
+        # the clamp makes the point <= bound invariant hold on every term).
         query_tokens = Decimal(len(query_text)) / CHARS_PER_TOKEN
-        init_output_tokens = Decimal(settings.cost_initial_output_tokens) + (
-            Decimal(str(settings.cost_output_tokens_per_query_token)) * query_tokens
+        init_output_tokens = min(
+            Decimal(settings.cost_initial_output_tokens)
+            + (Decimal(str(settings.cost_output_tokens_per_query_token)) * query_tokens),
+            Decimal(settings.initial_answer_max_tokens),
         )
         (
             initial_per_model,
@@ -510,6 +520,17 @@ class CostEstimationService:
             query_text=query_text,
             model_slots=model_slots,
             init_output_tokens=init_output_tokens,
+            # The live pipeline fans synthesis out into
+            # ``cost_synthesis_sections`` independent billed calls (see
+            # ``synthesis.produce_final_synthesis`` — five sections when a key
+            # is configured). Model all of them in the headline, matching the
+            # fail-safe bound, so the displayed typical is not ~17–38% below the
+            # real bill on the common cheap-model runs where synthesis
+            # dominates (issue #24; see also
+            # ``config.cost_synthesis_sections``). Output is still the typical
+            # per-section floor, not the enforced cap, so the point estimate
+            # stays strictly <= the ``_estimate_bound_usd`` ceiling.
+            synthesis_sections=Decimal(settings.cost_synthesis_sections),
         )
         total = raw_total.quantize(COST_DISPLAY_QUANTUM, rounding=ROUND_HALF_UP)
 
@@ -578,12 +599,14 @@ class CostEstimationService:
         output token count and the synthesis section count.
 
         Returns ``(initial_per_model, initial_total, debate_round_cost,
-        synthesis_cost, raw_total)``. Used with the realistic output floor +
-        one synthesis section for the displayed estimate
+        synthesis_cost, raw_total)``. Used with the realistic output floor + all
+        ``cost_synthesis_sections`` sections for the displayed estimate
         (:meth:`_estimate_breakdown`) and with the enforced ``max_tokens`` cap +
-        all synthesis sections for the fail-safe guardrail bound
-        (:meth:`_estimate_bound_usd`) — same arithmetic, different worst-case
-        assumptions, so the two can never drift.
+        the same section count for the fail-safe guardrail bound
+        (:meth:`_estimate_bound_usd`) — same arithmetic and section fan-out,
+        differing only in the per-call output assumption (typical floor vs
+        enforced cap), so the point estimate is always <= the bound and the two
+        can never drift.
         """
         if not model_slots:
             raise ValueError("model_slots must not be empty")
@@ -649,8 +672,9 @@ class CostEstimationService:
             + Decimal(2) * debate_output_tokens
         )
         # Synthesis fans out into ``synthesis_sections`` independent live calls,
-        # each re-sending the full context. The point estimate passes 1 (the
-        # measured typical); the bound passes the configured section count.
+        # each re-sending the full context. Both callers now pass the configured
+        # section count: the point estimate at the typical per-section output
+        # floor, the bound at the enforced per-section cap.
         synthesis_cost = synthesis_sections * _cost(
             settings.synthesis_model_id, synthesis_prompt_tokens, synthesis_output_tokens
         )
