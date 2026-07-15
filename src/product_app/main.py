@@ -146,25 +146,35 @@ def _warn_if_docs_exposed_in_deployed_env(
         )
 
 
-_docs_url, _redoc_url, _openapi_url = _docs_urls(settings)
+def _build_fastapi(active_settings: Settings) -> FastAPI:
+    """Construct the base FastAPI app with the docs routes gated per settings.
+
+    This is the single place the docs URLs are applied to the real constructor,
+    so a test can build the app under production settings and assert /docs
+    actually 404s — proving the gate wiring, not just that FastAPI honours None.
+    """
+    docs_url, redoc_url, openapi_url = _docs_urls(active_settings)
+    return FastAPI(
+        title=active_settings.app_name,
+        version="0.2.0",
+        description=(
+            "Quorum-AI runs your question against four LLMs in parallel, "
+            "has them debate, and returns a single answer with explicit "
+            "consensus, disagreement, source support, uncertainty, and "
+            "recommendation. Cost is shown before the run starts; nothing "
+            "executes without confirmation. Results are ephemeral. "
+            "Open the workspace UI at /ui; health and readiness live at "
+            "/health and /ready; the operator snapshot is at /status."
+        ),
+        docs_url=docs_url,
+        redoc_url=redoc_url,
+        openapi_url=openapi_url,
+    )
+
+
 _warn_if_docs_exposed_in_deployed_env(settings, logging.getLogger(__name__))
 
-app = FastAPI(
-    title=settings.app_name,
-    version="0.2.0",
-    description=(
-        "Quorum-AI runs your question against four LLMs in parallel, "
-        "has them debate, and returns a single answer with explicit "
-        "consensus, disagreement, source support, uncertainty, and "
-        "recommendation. Cost is shown before the run starts; nothing "
-        "executes without confirmation. Results are ephemeral. "
-        "Open the workspace UI at /ui; health and readiness live at "
-        "/health and /ready; the operator snapshot is at /status."
-    ),
-    docs_url=_docs_url,
-    redoc_url=_redoc_url,
-    openapi_url=_openapi_url,
-)
+app = _build_fastapi(settings)
 app.include_router(query_runs_router)
 app.mount("/static", StaticFiles(directory=str(STATIC_DIR)), name="static")
 
@@ -202,8 +212,6 @@ openrouter_catalog_fetcher.prewarm()
 try:
     configure_feedback_store(FeedbackStore.from_env())
 except Exception as exc:  # noqa: BLE001 - persistence is optional
-    import logging
-
     logging.getLogger(__name__).warning(
         "feedback_store: could not open SQLite sink, persistence disabled: %s",
         exc,

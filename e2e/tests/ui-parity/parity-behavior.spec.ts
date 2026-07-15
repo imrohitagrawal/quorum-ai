@@ -697,6 +697,31 @@ test.describe("UI parity — behaviour", () => {
     await expect(page.locator("#composer-handoff-note")).toHaveCount(0);
   });
 
+  test("HARDENING: a landing example-chip clicked during the Estimate dwell cancels the pending hand-off — no stray scroll-to-top later", async ({ page }) => {
+    // handoffFromLanding schedules a ~1.2s dwell then goToComposer(). The landing
+    // example chips also call goToComposer() and are NOT disabled during the
+    // dwell, so a chip click mid-dwell navigates immediately — and the stray
+    // dwell timer used to fire a SECOND goToComposer ~1.2s later, yanking the
+    // viewport back to the top after the user had scrolled into the composer.
+    await page.goto("/ui", { waitUntil: "domcontentloaded" });
+    await expect(page.locator('[data-view="landing"]')).toBeVisible();
+    await page.locator("#landing-query").fill("Question A");
+    await page.locator("#landing-estimate").click(); // starts the dwell
+    // Immediately click a landing example chip → lands on the composer now.
+    await page.locator(".landing-chips [data-landing-chip]").first().click();
+    await expect(page.locator('[data-view="composer"]')).toBeVisible();
+    // The visitor scrolls down to review their models.
+    await page.evaluate(() => window.scrollTo(0, 400));
+    await expect.poll(() => page.evaluate(() => window.scrollY)).toBeGreaterThan(50);
+    // Wait well past the original dwell window; the cancelled hand-off must NOT
+    // fire and scroll the viewport back to the top.
+    await page.waitForTimeout(1500);
+    expect(
+      await page.evaluate(() => window.scrollY),
+      "the stray landing hand-off scrolled the composer back to the top",
+    ).toBeGreaterThan(50);
+  });
+
   test("landing empty-submit error is cleared when the visitor returns to the landing", async ({ page }) => {
     // Regression: the error state used to persist across a How-it-works round-trip.
     await page.goto("/ui", { waitUntil: "domcontentloaded" });

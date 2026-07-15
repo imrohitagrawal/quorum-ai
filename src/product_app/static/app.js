@@ -5829,6 +5829,8 @@
     // so the visitor can read WHY they are being moved to the workspace.
     const LANDING_HANDOFF_DWELL_MS = 1200;
     let landingHandoffPending = false;
+    // Pending landing Estimate/Run dwell timer (so a chip click can cancel it).
+    let landingHandoffTimer = null;
     // Timer that clears the composer question's post-hand-off highlight flash.
     let composerHandoffFlashTimer = null;
 
@@ -5887,6 +5889,18 @@
     // ``boot()`` sends this device straight to the composer next time. ``setView``
     // clears the landing transient state (error + transition note).
     function goToComposer() {
+      // If a landing Estimate/Run dwell is still pending (e.g. the visitor
+      // clicked an example chip during the ~1.2s dwell), cancel it: this call
+      // already lands them on the composer, so letting the stray timer fire a
+      // second goToComposer later would yank the viewport back to the top and
+      // re-flash after they had settled in. Clearing an already-fired timer is
+      // a harmless no-op.
+      if (landingHandoffTimer) {
+        window.clearTimeout(landingHandoffTimer);
+        landingHandoffTimer = null;
+        landingHandoffPending = false;
+        setLandingCtasDisabled(false);
+      }
       markWorkspaceSeen();
       setView("composer");
       if (!queryTextarea) return;
@@ -5934,7 +5948,8 @@
       }
       showLandingHandoffNote(kind);
       setLandingCtasDisabled(true);
-      window.setTimeout(() => {
+      landingHandoffTimer = window.setTimeout(() => {
+        landingHandoffTimer = null;
         landingHandoffPending = false;
         setLandingCtasDisabled(false);
         goToComposer();

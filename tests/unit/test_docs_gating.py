@@ -17,10 +17,9 @@ directions:
 from __future__ import annotations
 
 import pytest
-from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
-from product_app import main
+from product_app import config, main
 from product_app.config import RuntimeEnvironment, Settings
 
 
@@ -70,40 +69,46 @@ def test_docs_urls_gated_on_uses_framework_defaults() -> None:
     assert urls == ("/docs", "/redoc", "/openapi.json")
 
 
-# --- The gate actually removes the routes -----------------------------------
+# --- The REAL construction path actually removes the routes -----------------
+#
+# These build the app through ``main._build_fastapi`` — the SAME function the
+# module-level ``app`` is constructed with — so they pin the real constructor
+# wiring, not merely that FastAPI honours ``None``. If someone hardcoded
+# ``docs_url="/docs"`` in ``_build_fastapi``, the production test below fails.
 
 
-def test_gated_off_app_404s_doc_routes_but_keeps_health_and_openapi_method() -> None:
-    """An app built the same way main builds it, but gated OFF, hides the docs.
-
-    Critically, ``app.openapi()`` (what the contract drift-guard renders) still
-    works with the route disabled, so gating never breaks the contract test.
-    """
-    docs_url, redoc_url, openapi_url = main._docs_urls(
-        _settings(runtime_environment=RuntimeEnvironment.PRODUCTION)
-    )
-    gated = FastAPI(title="t", docs_url=docs_url, redoc_url=redoc_url, openapi_url=openapi_url)
-
-    @gated.get("/health")
-    def _health() -> dict[str, str]:  # pragma: no cover - trivial
-        return {"status": "ok"}
-
-    client = TestClient(gated)
+def test_real_construction_gates_docs_off_in_production() -> None:
+    prod_app = main._build_fastapi(_settings(runtime_environment=RuntimeEnvironment.PRODUCTION))
+    # The constructor applied the gated-off URLs...
+    assert prod_app.docs_url is None
+    assert prod_app.redoc_url is None
+    assert prod_app.openapi_url is None
+    # ...so the interactive docs + schema route 404...
+    client = TestClient(prod_app)
     assert client.get("/docs").status_code == 404
     assert client.get("/redoc").status_code == 404
     assert client.get("/openapi.json").status_code == 404
-    # Public health/readiness style route is unaffected.
-    assert client.get("/health").status_code == 200
-    # The in-process schema still builds (the contract guard keeps working).
-    assert gated.openapi()["openapi"]
+    # ...while app.openapi() (the contract drift-guard source) still builds.
+    assert prod_app.openapi()["openapi"]
 
 
-def test_real_app_serves_docs_under_local_test_env() -> None:
+def test_real_construction_serves_docs_in_local() -> None:
+    local_app = main._build_fastapi(_settings(runtime_environment=RuntimeEnvironment.LOCAL))
+    assert local_app.docs_url == "/docs"
+    assert local_app.openapi_url == "/openapi.json"
+    assert TestClient(local_app).get("/openapi.json").status_code == 200
+    assert TestClient(local_app).get("/docs").status_code == 200
+
+
+def test_real_module_app_serves_docs_under_local_test_env() -> None:
     """The module app is built under the local test env, so docs stay ON here.
 
     This is what keeps the existing ``/docs`` and ``/openapi.json`` assertions
     in test_health.py / test_workspace_html_copy.py green without modification.
+    Also pins that the module app's docs URL is DERIVED from settings (matches
+    ``_docs_urls``), not hardcoded.
     """
+    assert main.app.docs_url == main._docs_urls(config.settings)[0]
     client = TestClient(main.app)
     assert client.get("/openapi.json").status_code == 200
     assert client.get("/docs").status_code == 200

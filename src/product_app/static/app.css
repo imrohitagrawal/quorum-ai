@@ -4604,7 +4604,9 @@ main:focus { outline: none; }
 /* Per-model vendor tints (design parity — Quorum Final Review, screen 02/05/06).
    Each frontier vendor gets a soft brand-tint pill + saturated glyph so the four
    slots read as four distinct minds at a glance. Values lifted verbatim from the
-   comp. Dark-mode overrides live in the theming block. */
+   comp. The soft-bg/ink pair is self-contained (light pill + dark glyph), so it
+   holds its own contrast in dark mode without a separate override. Shared by the
+   composer slots, transcript openings, and the positions-moved avatars. */
 .model-slot-avatar[data-vendor="openai"],
 .transcript-opening-avatar[data-vendor="openai"],
 .result-pos-avatar[data-vendor="openai"] { background: var(--vendor-openai-soft); color: var(--vendor-openai-ink); }
