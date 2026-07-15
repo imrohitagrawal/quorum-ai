@@ -2831,21 +2831,6 @@ html[data-theme="dark"] .landing-preview-caption {
   padding-left: 22px;
 }
 
-/* On narrow viewports four side-by-side columns cannot hold the money values,
-   so stack the sections vertically and swap the left divider for a top one. */
-@media (max-width: 720px) {
-  .result-receipt-grid {
-    grid-template-columns: 1fr;
-    gap: 18px;
-  }
-  .result-receipt-col-div {
-    border-left: 0;
-    padding-left: 0;
-    border-top: 1px solid var(--line);
-    padding-top: 16px;
-  }
-}
-
 .result-receipt-kicker {
   font-size: 0.69rem;
   font-weight: 600;

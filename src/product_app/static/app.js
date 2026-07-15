@@ -2355,15 +2355,23 @@
       copyBtn.className = "mono result-meta-runid-copy";
       copyBtn.textContent = idValue;
       copyBtn.title = "Copy run ID — quote it if you report a problem to support.";
-      copyBtn.setAttribute("aria-label", `Copy run ID ${idValue}`);
+      const copyIdleAria = `Copy run ID ${idValue}`;
+      copyBtn.setAttribute("aria-label", copyIdleAria);
       copyBtn.addEventListener("click", async () => {
         try {
           await navigator.clipboard.writeText(idValue);
           copyBtn.dataset.copied = "true";
           copyBtn.title = "Copied!";
+          // Convey the copied state to screen readers, not colour/title only
+          // (WCAG 4.1.3). ``aria-label`` overrides the accessible name so an SR
+          // announces "Copied" on activation; restored to the idle name on
+          // timeout. Mirrors the shared ``copyRunIdToClipboard`` helper the aside
+          // and live-card copy buttons use — this header button had diverged.
+          copyBtn.setAttribute("aria-label", "Copied");
           setTimeout(() => {
             delete copyBtn.dataset.copied;
             copyBtn.title = "Copy run ID — quote it if you report a problem to support.";
+            copyBtn.setAttribute("aria-label", copyIdleAria);
           }, 1500);
         } catch (_) {
           copyBtn.title = "Copy failed — select and copy the id manually.";
@@ -5826,8 +5834,10 @@
     const landingHandoffNote = el("landing-handoff-note");
     const landingHandoffNoteText = el("landing-handoff-note-text");
     // How long the transition message dwells on page A before the view changes,
-    // so the visitor can read WHY they are being moved to the workspace.
-    const LANDING_HANDOFF_DWELL_MS = 1200;
+    // so the visitor can read WHY they are being moved to the workspace. The note
+    // is a ~19-word sentence; at typical reading speed that needs roughly this
+    // long to land before the composer takes over.
+    const LANDING_HANDOFF_DWELL_MS = 2800;
     let landingHandoffPending = false;
     // Pending landing Estimate/Run dwell timer (so a chip click can cancel it).
     let landingHandoffTimer = null;
@@ -5868,11 +5878,17 @@
     function showLandingHandoffNote(kind) {
       clearLandingError();
       if (!landingHandoffNote || !landingHandoffNoteText) return;
-      landingHandoffNoteText.textContent =
+      const message =
         kind === "estimate"
           ? "Got your question. Taking you to review your four models and see the itemized cost before anything runs…"
           : "Got your question. Taking you to review your four models, then we'll price it and run once you approve…";
+      // Reveal the container FIRST, then write the text: a ``role="status"``
+      // aria-live=polite region announces a text mutation that happens while it
+      // is in the accessibility tree. Writing the text while still ``hidden`` and
+      // then merely un-hiding is not reliably announced (NVDA/VoiceOver), so the
+      // reason-for-navigation could go unspoken. Order matters here.
       landingHandoffNote.hidden = false;
+      landingHandoffNoteText.textContent = message;
     }
 
     // Disable/enable the two landing CTAs while the transition message dwells, so
@@ -5882,6 +5898,22 @@
         const btn = el(id);
         if (btn) btn.disabled = disabled;
       }
+    }
+
+    // Cancel a pending Estimate/Run dwell WITHOUT navigating: clear the timer,
+    // drop the pending latch, re-enable the CTAs, and hide the transition note.
+    // Used when the visitor does something during the dwell that means they no
+    // longer want the automatic hand-off (e.g. clicking "How it works" to read
+    // the example instead of being yanked to the composer). Returns true when a
+    // pending hand-off was actually cancelled.
+    function cancelPendingHandoff() {
+      if (!landingHandoffTimer) return false;
+      window.clearTimeout(landingHandoffTimer);
+      landingHandoffTimer = null;
+      landingHandoffPending = false;
+      setLandingCtasDisabled(false);
+      if (landingHandoffNote) landingHandoffNote.hidden = true;
+      return true;
     }
 
     // Every landing CTA leads here: to the composer, textarea focused. Entering
@@ -5923,13 +5955,18 @@
       // Programmatic focus does NOT trigger :focus-visible, and the composer
       // textarea suppresses the plain-:focus ring, so without this the field
       // gives no visible "your question landed here" cue after a hand-off. Flash
-      // an explicit highlight for a beat so the focus is unmistakable.
-      queryTextarea.classList.add("question-handoff-focus");
-      if (composerHandoffFlashTimer) window.clearTimeout(composerHandoffFlashTimer);
-      composerHandoffFlashTimer = window.setTimeout(() => {
-        queryTextarea.classList.remove("question-handoff-focus");
-        composerHandoffFlashTimer = null;
-      }, 1400);
+      // an explicit highlight for a beat so the focus is unmistakable — but ONLY
+      // when a question was actually carried in. A bare "Open the workspace" skip
+      // (empty composer) would otherwise ring an empty field, which reads as a
+      // spurious "your question landed here" cue over nothing.
+      if (queryTextarea.value.length > 0) {
+        queryTextarea.classList.add("question-handoff-focus");
+        if (composerHandoffFlashTimer) window.clearTimeout(composerHandoffFlashTimer);
+        composerHandoffFlashTimer = window.setTimeout(() => {
+          queryTextarea.classList.remove("question-handoff-focus");
+          composerHandoffFlashTimer = null;
+        }, 1400);
+      }
     }
 
     // Estimate/Run on the landing: validate, carry the typed question into the
@@ -5948,10 +5985,22 @@
       }
       showLandingHandoffNote(kind);
       setLandingCtasDisabled(true);
+      // Disabling the CTA the user just activated blurs it, which drops keyboard
+      // focus to <body> for the whole dwell (a lost-focus a11y gap). Re-home focus
+      // onto the still-visible question field so a keyboard/SR user keeps an
+      // anchored, sensible focus until goToComposer moves it to the composer.
+      if (landingQuery) landingQuery.focus({ preventScroll: true });
       landingHandoffTimer = window.setTimeout(() => {
         landingHandoffTimer = null;
         landingHandoffPending = false;
         setLandingCtasDisabled(false);
+        // The field stays focused through the dwell, so the visitor may have
+        // refined the question. Carry the LATEST text (not the click-time
+        // snapshot) into the composer so a dwell-time edit is never discarded.
+        if (queryTextarea && landingQuery && landingQuery.value.trim() !== queryTextarea.value) {
+          queryTextarea.value = landingQuery.value.trim();
+          queryTextarea.dispatchEvent(new Event("input", { bubbles: true }));
+        }
         goToComposer();
       }, LANDING_HANDOFF_DWELL_MS);
     }
@@ -5965,6 +6014,10 @@
     const landingPreview = qs(".landing-preview");
     if (landingHowItWorks && landingPreview) {
       landingHowItWorks.addEventListener("click", () => {
+        // If an Estimate/Run dwell is pending, the visitor clicking "How it works"
+        // means they want to read the example, NOT be yanked to the composer a
+        // beat later. Cancel the pending hand-off before scrolling to the preview.
+        cancelPendingHandoff();
         landingPreview.scrollIntoView({
           behavior: prefersReducedMotion() ? "auto" : "smooth",
           block: "center",
@@ -5976,6 +6029,19 @@
     if (landingQuery) {
       landingQuery.addEventListener("input", () => {
         if (landingQuery.value.trim()) clearLandingError();
+      });
+      // Ctrl/Cmd+Enter from the landing question field runs the same estimate-first
+      // hand-off as clicking "See the estimate". The global keyboard-shortcut
+      // handler no-ops on the landing (it predates this real textarea), so without
+      // this the natural submit gesture is a dead key. Stop propagation so the
+      // global handler does not also fire. Empty input falls through to the
+      // landing empty-submit guard (same as the button), not a silent no-op.
+      landingQuery.addEventListener("keydown", (event) => {
+        if ((event.metaKey || event.ctrlKey) && event.key === "Enter") {
+          event.preventDefault();
+          event.stopPropagation();
+          handoffFromLanding("estimate");
+        }
       });
     }
 
