@@ -162,7 +162,9 @@ def test_exact_partition_pins_the_split() -> None:
     ``_DEFAULT_PRICE_PER_1K_OUTPUT=0.002``) under the issue #16 token model
     (system 350, web-search 2000, initial-output floor 700 + 0.5/query-token,
     debate-output 400, synthesis-output 800; debate priced on haiku-4.5
-    0.001/0.005, synthesis on gpt-4o-mini 0.00015/0.0006):
+    0.001/0.005, synthesis on gpt-4o-mini 0.00015/0.0006). The point estimate
+    now models ALL ``cost_synthesis_sections``=5 synthesis calls (the real live
+    fan-out), each at the per-section floor:
 
       query_tokens   = 1000 / 4 = 250
       init_output    = 700 + 0.5*250 = 825
@@ -174,9 +176,10 @@ def test_exact_partition_pins_the_split() -> None:
       debate_prompt  = 350 + 250 + 3300 = 3900
       debate_round   = 0.001*3900/1000 + 0.005*400/1000 = 0.0039 + 0.002 = 0.0059
       synth_prompt   = 350 + 250 + 3300 + 800 = 4700
-      synthesis      = 0.00015*4700/1000 + 0.0006*800/1000 = 0.000705 + 0.00048
+      synth_section  = 0.00015*4700/1000 + 0.0006*800/1000 = 0.000705 + 0.00048
                      = 0.001185
-      raw_total      = 0.01492 + 2*0.0059 + 0.001185 = 0.027905 -> total 0.0279
+      synthesis      = 5 * 0.001185 = 0.005925   (five section calls)
+      raw_total      = 0.01492 + 2*0.0059 + 0.005925 = 0.032645 -> total 0.0326
     """
     estimate = cost_estimation_service.estimate(
         query_text="x" * 1000,
@@ -184,27 +187,28 @@ def test_exact_partition_pins_the_split() -> None:
     )
     breakdown = estimate.breakdown
     assert breakdown is not None
-    assert breakdown.total == Decimal("0.0279")
+    assert breakdown.total == Decimal("0.0326")
 
     # by_stage — initial_answers dominates; the two debate rounds are 0.0059
-    # each; the remaining quantum lands on synthesis (largest remainder 0.85).
+    # each; synthesis (five sections) is 0.005925 -> floors to 0.0059. The four
+    # floors sum to 0.0326 exactly, so no residual quantum is redistributed.
     assert [(line.stage, line.usd) for line in breakdown.by_stage] == [
         ("initial_answers", Decimal("0.0149")),
         ("debate_round_1", Decimal("0.0059")),
         ("debate_round_2", Decimal("0.0059")),
-        ("synthesis", Decimal("0.0012")),
+        ("synthesis", Decimal("0.0059")),
     ]
 
     # by_model — each model row raw = initial_i = 0.00373 (floors to 0.0037,
-    # remainder 0.3); the debate+synthesis row raw = 2*0.0059 + 0.001185 =
-    # 0.012985 (floors to 0.0129, remainder 0.85). Two quanta to distribute ->
-    # the writer row (largest remainder) then model row 0 (tie -> lowest index).
+    # remainder 0.3); the debate+synthesis row raw = 2*0.0059 + 0.005925 =
+    # 0.017725 (floors to 0.0177, remainder 0.25). One quantum to distribute ->
+    # the largest remainder is a model row (0.3), tie -> lowest index (row a).
     assert [(line.model_id, line.usd) for line in breakdown.by_model] == [
         ("test/fallback-a", Decimal("0.0038")),
         ("test/fallback-b", Decimal("0.0037")),
         ("test/fallback-c", Decimal("0.0037")),
         ("test/fallback-d", Decimal("0.0037")),
-        ("synthesis", Decimal("0.0130")),
+        ("synthesis", Decimal("0.0177")),
     ]
 
 

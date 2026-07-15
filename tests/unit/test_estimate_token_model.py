@@ -111,10 +111,20 @@ def test_max_cost_bound_is_at_or_above_the_point_estimate() -> None:
         ["openai/o3", "openai/gpt-4.1", "google/gemini-2.5-pro", "anthropic/claude-opus-4"],
         ["test/fallback-a", "test/fallback-b", "test/fallback-c", "test/fallback-d"],
     ):
-        for query in ("hi", QUERY, "x" * 3000):
+        # Include long-form queries up to the enforced ``_QUERY_TEXT_MAX_LENGTH``
+        # (20_000). The point estimate's initial-answer output floor grows with
+        # query length, but the live initial call is capped at
+        # ``initial_answer_max_tokens`` — so past ~10k chars an UNCAPPED point
+        # floor would overtake the fixed-cap bound and print a "typical" higher
+        # than the "up to" ceiling. Guard the invariant across the whole
+        # supported range, not just short queries (issue #24 hardening).
+        for query in ("hi", QUERY, "x" * 3000, "x" * 15000, "x" * 20000):
             est = cost_estimation_service.estimate(query_text=query, model_slots=_slots(mix))
             assert est.max_cost_usd is not None
-            assert est.max_cost_usd >= est.estimated_cost_usd
+            assert est.max_cost_usd >= est.estimated_cost_usd, (
+                f"point {est.estimated_cost_usd} > bound {est.max_cost_usd} "
+                f"for {mix[0]}… at len {len(query)}"
+            )
 
 
 def test_guardrail_keys_off_the_bound_not_the_point_estimate() -> None:
@@ -169,6 +179,58 @@ def test_bound_cap_assumptions_match_the_enforced_caps() -> None:
     assert settings.cost_synthesis_output_tokens == SYNTHESIS_SECTION_MAX_TOKENS
     # The bound must price debate at the cap, never below it.
     assert settings.cost_debate_output_tokens_cap >= settings.cost_debate_output_tokens
+
+
+def test_point_estimate_prices_all_synthesis_sections(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The headline point estimate must model the SAME number of synthesis
+    section calls the live pipeline actually fans out to
+    (``settings.cost_synthesis_sections`` — five independent LLM calls, see
+    ``synthesis.produce_final_synthesis``), not a single call. The old model
+    priced synthesis as one section regardless of the section count, so the
+    estimate was blind to ``cost_synthesis_sections`` — scaling it moved
+    nothing. That silently under-counted the headline by ~17–38% on the common
+    cheap-model runs where synthesis dominates. This fails against the
+    one-section model (issue #24)."""
+    slots = _slots(DEFAULT_MODEL_IDS)
+
+    def _synth_stage(sections: int) -> Decimal:
+        monkeypatch.setattr(settings, "cost_synthesis_sections", sections)
+        breakdown = cost_estimation_service.estimate(
+            query_text=QUERY, model_slots=slots
+        ).breakdown
+        assert breakdown is not None
+        line = next(row for row in breakdown.by_stage if row.stage == "synthesis")
+        return line.usd
+
+    one = _synth_stage(1)
+    five = _synth_stage(5)
+    ten = _synth_stage(10)
+
+    # The section count must drive the synthesis stage line — strictly
+    # monotonic. Under the old one-section model all three were identical.
+    assert five > one
+    assert ten > five
+    # Five sections price ~5× a single section (allowing for display-quantum
+    # reconciliation slack), not 1×.
+    assert one * 4 <= five <= one * 6
+
+
+def test_point_estimate_scales_up_with_synthesis_section_count(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A whole-estimate view of the same fix: raising the fan-out section count
+    raises the displayed total, because every extra synthesis section is a real
+    extra billed call. The old model held the total flat across section counts."""
+    slots = _slots(DEFAULT_MODEL_IDS)
+    monkeypatch.setattr(settings, "cost_synthesis_sections", 1)
+    one = cost_estimation_service.estimate(query_text=QUERY, model_slots=slots)
+    monkeypatch.setattr(settings, "cost_synthesis_sections", 5)
+    five = cost_estimation_service.estimate(query_text=QUERY, model_slots=slots)
+    assert five.estimated_cost_usd > one.estimated_cost_usd
+    # The bound is unchanged by this move (it already priced all sections), and
+    # the guardrail invariant still holds: bound >= point after the increase.
+    assert five.max_cost_usd is not None
+    assert five.max_cost_usd >= five.estimated_cost_usd
 
 
 def test_estimate_is_conservative_not_7x_low() -> None:
