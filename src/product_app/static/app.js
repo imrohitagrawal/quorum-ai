@@ -5764,16 +5764,17 @@
   function initThemeToggle() {
     const root = document.documentElement;
     const button = el("theme-toggle");
-    // PR-0 / Bug 12: the glyph used to stay ``◐`` regardless of
-    // theme. The button now swaps between ☀ (light, meaning
-    // "click to go dark") and ☾ (dark, meaning "click to go
-    // light") so the affordance matches the state. We seed the
-    // glyph from the current ``data-theme`` so the first paint is
-    // already consistent — important on browsers that re-hydrate
-    // the page mid-session.
+    // The glyph advertises the ACTION the click performs — the TARGET theme —
+    // so it agrees with the ``aria-label``. In light mode the button shows ☾
+    // ("click to go dark"); in dark mode it shows ☀ ("click to go light").
+    // (Previously it showed the CURRENT state — ☀ while light — which
+    // contradicted the "Switch to dark theme" label a screen reader announces.)
+    // We seed the glyph from the current ``data-theme`` so the first paint is
+    // already consistent — important on browsers that re-hydrate the page
+    // mid-session.
     const setGlyph = () => {
       const isDark = root.dataset.theme === "dark";
-      button.textContent = isDark ? "☾" : "☀";
+      button.textContent = isDark ? "☀" : "☾";
       button.setAttribute(
         "aria-label",
         isDark ? "Switch to light theme" : "Switch to dark theme",

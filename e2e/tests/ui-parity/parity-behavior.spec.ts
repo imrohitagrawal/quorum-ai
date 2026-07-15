@@ -1056,6 +1056,83 @@ test.describe("UI parity — behaviour", () => {
     expect(box!.height).toBeGreaterThanOrEqual(40);
   });
 
+  test("item 2.1 — theme toggle icon shows the TARGET theme (moon in light, sun in dark), matching its aria-label", async ({ page }) => {
+    // The toggle's icon and its accessible name must follow ONE convention:
+    // advertise the ACTION the click performs (switch to the OTHER theme), not
+    // the current state. Previously the glyph showed the current state (☀ in
+    // light) while the aria-label described the action ("Switch to dark") — a
+    // contradiction. Icon and label must now agree.
+    await boot(page);
+    const toggle = page.locator("#theme-toggle");
+    await expect(toggle).toBeVisible();
+    // Default is light → the button advertises "go dark": moon glyph + matching label.
+    await expect(toggle).toHaveText("☾");
+    await expect(toggle).toHaveAttribute("aria-label", "Switch to dark theme");
+    await toggle.click();
+    // Now dark → advertises "go light": sun glyph + matching label.
+    await expect(toggle).toHaveText("☀");
+    await expect(toggle).toHaveAttribute("aria-label", "Switch to light theme");
+  });
+
+  test("item 2.2 — 'How it works' has a visible resting affordance (border) so it reads as clickable in both themes", async ({ page }) => {
+    // The control was borderless muted text — its only "clickable" cues were a
+    // hover colour change + pointer cursor, invisible at rest and absent on
+    // touch. Give it a real resting border (ghost button) so it reads as a
+    // control without hovering, in BOTH themes.
+    await boot(page);
+    const how = page.locator("#show-landing");
+    await expect(how).toBeVisible();
+    const border = async () => {
+      return how.evaluate((el) => {
+        const cs = getComputedStyle(el);
+        return { width: parseFloat(cs.borderTopWidth), color: cs.borderTopColor };
+      });
+    };
+    // Light mode: a real, visible border at rest (not border:none / transparent).
+    const light = await border();
+    expect(light.width).toBeGreaterThan(0);
+    expect(light.color).not.toBe("rgba(0, 0, 0, 0)");
+    // Dark mode: still a visible border.
+    await page.locator("#theme-toggle").click();
+    const dark = await border();
+    expect(dark.width).toBeGreaterThan(0);
+    expect(dark.color).not.toBe("rgba(0, 0, 0, 0)");
+  });
+
+  test.describe("mobile top-bar (narrow phone viewport)", () => {
+    // Emulate a small phone (Galaxy-S9-class 320px). The desktop layout is the
+    // demo and must NOT change; this only guards that the mobile header does not
+    // overflow. The fix lives entirely inside @media (max-width: 600px).
+    test.use({ viewport: { width: 320, height: 658 } });
+
+    test("item 2.3 — top bar does not overflow the viewport on a narrow phone; the theme toggle stays on-screen", async ({ page }) => {
+      await boot(page);
+      // The whole document must not scroll horizontally — .topbar-actions was
+      // fixed at 433px with flex-shrink:0, pushing the toggle off the right
+      // edge (clipped by overflow-x:hidden) on any sub-433px phone.
+      const overflow = await page.evaluate(
+        () => document.documentElement.scrollWidth - document.documentElement.clientWidth,
+      );
+      expect(overflow, `horizontal overflow was ${overflow}px`).toBeLessThanOrEqual(1);
+      // The theme toggle must sit fully inside the viewport, not clipped off-screen.
+      const toggle = page.locator("#theme-toggle");
+      await expect(toggle).toBeVisible();
+      const box = await toggle.boundingBox();
+      const vw = await page.evaluate(() => document.documentElement.clientWidth);
+      expect(box).not.toBeNull();
+      expect(box!.x + box!.width, "toggle right edge must be within the viewport").toBeLessThanOrEqual(
+        vw + 1,
+      );
+      // "How it works" must stay on ONE line — the shrinking row must squeeze the
+      // (truncating) pill, not wrap the button text to "How / it / works".
+      const howBox = await page.locator("#show-landing").boundingBox();
+      expect(howBox, "How it works must not wrap to multiple lines").not.toBeNull();
+      expect(howBox!.height, `How it works height was ${howBox!.height}px (wrapped?)`).toBeLessThanOrEqual(
+        56,
+      );
+    });
+  });
+
   test("item 3 — each slot shows a real per-model estimate that MATCHES the server estimate (never a fake number)", async ({ page }) => {
     await boot(page);
     // A longer question so the figures are clearly non-zero and differentiated.
@@ -1219,6 +1296,24 @@ test.describe("UI parity — behaviour", () => {
     for (const [vendor, bg] of posPairs) {
       expect(slotBgByVendor[vendor], `positions tint for ${vendor} must match the composer slot tint`).toBe(bg);
     }
+  });
+
+  test("item 3.3 — 'How positions moved' avatars are inset from the card's left border, not flush against it", async ({ page }) => {
+    // The model column set ``padding-left: 0`` and the table's own side padding
+    // was a no-op under ``border-collapse: collapse`` — so the tinted avatars
+    // sat only a few px from the card's left border, reading as if touching it
+    // (and mis-aligned with the section title, which is inset 24px). The first
+    // avatar's left edge must sit a real inset in from the card border.
+    await driveToResult(page, completedResp());
+    const card = page.locator("#result-positions");
+    await expect(card).toBeVisible();
+    const firstAvatar = card.locator(".result-pos-avatar").first();
+    const cardBox = await card.boundingBox();
+    const avatarBox = await firstAvatar.boundingBox();
+    expect(cardBox).not.toBeNull();
+    expect(avatarBox).not.toBeNull();
+    const inset = avatarBox!.x - cardBox!.x;
+    expect(inset, `avatar left inset from card border was ${inset}px`).toBeGreaterThanOrEqual(16);
   });
 
   test("item 2.4 — clicking a composer example chip fills the question AND scrolls it into view (focus not left off-screen)", async ({ page }) => {
