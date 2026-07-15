@@ -2502,6 +2502,9 @@ html[data-theme="dark"] .landing-preview-caption {
   text-underline-offset: 2px;
 }
 .result-meta-runid-copy:hover { color: var(--ink); }
+/* Visible "copied" cue, matching the receipt / live-card copy buttons (the
+   shared copyRunIdToClipboard helper flips data-copied on success). */
+.result-meta-runid-copy[data-copied="true"] { color: var(--info); }
 
 /* Compact (24px) info-icon variant for tight inline rows. 24px is the WCAG 2.5.8
    minimum target size; the 44px ``.info-icon`` default is too heavy for the
@@ -4875,11 +4878,6 @@ main:focus { outline: none; }
 .landing-runbar-prompt {
   padding: 22px var(--space-6) var(--space-1); /* comp 01: 22px 24px 4px */
   min-height: 84px;
-}
-.landing-runbar-placeholder {
-  font-size: 1.0625rem; /* 17px — comp 01 */
-  line-height: 1.55;
-  color: var(--muted);
 }
 /* Real question input on the landing runbar. Borderless so it reads as one
    seamless card (the bordered ``.landing-runbar`` IS the field); the container
