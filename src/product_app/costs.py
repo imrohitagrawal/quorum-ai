@@ -629,6 +629,10 @@ class CostEstimationService:
         query_tokens = Decimal(len(query_text)) / CHARS_PER_TOKEN
         system_tokens = Decimal(settings.cost_system_prompt_tokens)
         search_tokens = Decimal(settings.cost_web_search_context_tokens)
+        # Flat per-request web-search plugin fee (issue #18) — charged once per
+        # SEARCHING slot regardless of the model's token price, so a :free model
+        # still incurs it. String() so a float default becomes an exact Decimal.
+        search_request_fee = Decimal(str(settings.cost_web_search_request_fee_usd))
         # Point estimate uses the typical floor; the bound overrides with the
         # enforced per-round cap so it is a true ceiling on the debate stage.
         debate_output_tokens = (
@@ -649,7 +653,12 @@ class CostEstimationService:
             prompt_tokens = (
                 system_tokens + (search_tokens if slot.search else Decimal(0)) + query_tokens
             )
-            initial_per_model.append(_cost(slot.model_id, prompt_tokens, init_output_tokens))
+            slot_cost = _cost(slot.model_id, prompt_tokens, init_output_tokens)
+            # A searching slot also pays the flat web-search plugin fee — the
+            # only web-search cost a :free-priced model carries (issue #18).
+            if slot.search:
+                slot_cost += search_request_fee
+            initial_per_model.append(slot_cost)
         initial_total = sum(initial_per_model, Decimal("0"))
 
         # --- 2 debate rounds + 1 synthesis (dedicated inner-call models) -

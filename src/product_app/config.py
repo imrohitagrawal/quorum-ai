@@ -128,6 +128,27 @@ class Settings(BaseSettings):
     #: slot only when that slot has search enabled; a search-disabled
     #: slot (the cheaper, training-data-only path) omits it.
     cost_web_search_context_tokens: int = 2000
+    #: Flat per-request fee OpenRouter's ``:online`` web-search plugin charges
+    #: for EACH searching initial-answer call, IN ADDITION to the token costs
+    #: above. OpenRouter bills the web plugin at ~$4 per 1,000 results with a
+    #: default of 5 results/request → ~$0.02/request. This term is independent
+    #: of the model's token price, so it is the ONLY web-search cost a
+    #: ``$0``-priced (``:free``) model incurs — without it a searching
+    #: :free-model slot is estimated at $0, which under-counts the real spend
+    #: and (because the guardrail keys off the estimate) is a fail-safe hole
+    #: (issue #18). Applied per slot only when that slot has search enabled;
+    #: search-disabled slots omit it. Tunable via ``COST_WEB_SEARCH_REQUEST_FEE_USD``.
+    #:
+    #: DEFAULT 0.0 (mechanism ships OFF): the fee is a real OpenRouter charge
+    #: (~$4/1,000 results × 5 = ~$0.02/request per their docs), but a $0.02/slot
+    #: fee shifts the point estimate ~$0.08 on a 4-search run, which moves the
+    #: safety guardrail's CONFIRM/BLOCK bands. Changing a guardrail-affecting
+    #: value from a documented-but-never-MEASURED number — and re-calibrating the
+    #: band tests around it — is a human decision tied to the pending measured-cost
+    #: run (issue #24). The plumbing (server + client, per-slot) and its tests are
+    #: in place; set this to the measured value to activate. Until then the term
+    #: is present but zero, so behaviour is unchanged.
+    cost_web_search_request_fee_usd: float = 0.0
     #: Output-token floor for a single initial answer.
     cost_initial_output_tokens: int = 700
     #: How much each initial answer lengthens per token of query (longer,

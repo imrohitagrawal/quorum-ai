@@ -1168,7 +1168,7 @@
   // truth, no hard-coded figures). The parity e2e suite cross-checks this
   // against the real ``/v1/query-runs/estimate`` by_model rows, so any drift is
   // caught. Returns one USD number per slot, or ``null`` when there is no query.
-  function computePerSlotEstimatesUsd(modelIds, queryText) {
+  function computePerSlotEstimatesUsd(modelIds, queryText, searchFlags) {
     const cm = window.COST_MODEL;
     const chars = (queryText || "").length;
     if (!cm || chars === 0) return modelIds.map(() => null);
@@ -1176,6 +1176,7 @@
     const charsPerToken = Number(cm.chars_per_token);
     const systemTokens = Number(cm.system_prompt_tokens);
     const searchTokens = Number(cm.web_search_context_tokens);
+    const searchRequestFee = Number(cm.web_search_request_fee_usd) || 0;
     const initialOutputTokens = Number(cm.initial_output_tokens);
     const outputPerQueryToken = Number(cm.output_tokens_per_query_token);
     const defaultInput = Number(cm.default_input_price_per_1k);
@@ -1186,16 +1187,22 @@
 
     const queryTokens = chars / charsPerToken;
     const outputTokens = initialOutputTokens + outputPerQueryToken * queryTokens;
-    // The composer pre-run view assumes web search is ON for every slot — the
-    // server default (``ModelSlot.search=True``) when the estimate request omits
-    // ``slot_search``, which this composer does. A searching slot's prompt
-    // carries the injected web-search context; mirror that here.
-    const promptTokens = systemTokens + searchTokens + queryTokens;
 
-    return modelIds.map((modelId) => {
+    // Per-slot search flag. The composer today searches every slot (the server
+    // default ``ModelSlot.search=True`` when the estimate omits ``slot_search``),
+    // so ``searchFlags`` defaults to all-ON — but keying off it per slot means
+    // this stays exact if a per-slot search toggle ever ships (issue #20). A
+    // searching slot's prompt carries the injected web-search context AND the
+    // flat per-request web-search plugin fee (issue #18); a non-searching slot
+    // pays neither. Both terms mirror the server's ``_estimate_from_slots``.
+    const searchOn = (i) => (searchFlags ? !!searchFlags[i] : true);
+
+    return modelIds.map((modelId, i) => {
       const price = priceFor(modelId);
+      const promptTokens = systemTokens + (searchOn(i) ? searchTokens : 0) + queryTokens;
+      const fee = searchOn(i) ? searchRequestFee : 0;
       return (
-        price.input * (promptTokens / 1000) + price.output * (outputTokens / 1000)
+        price.input * (promptTokens / 1000) + price.output * (outputTokens / 1000) + fee
       );
     });
   }
@@ -4438,6 +4445,17 @@
     return `$${num.toFixed(2)}`;
   }
 
+  // Format a planning band ``lo``–``hi`` at whole-cent precision, but COLLAPSE
+  // to a single figure when both endpoints round to the same cents (issue #19):
+  // a "$0.15–$0.15" range reads as a broken widget, not a range. Renders the
+  // low endpoint as the single value in that case (the band is illustrative, so
+  // either endpoint is representative). Assumes ``lo <= hi``.
+  function gateRangeText(lo, hi) {
+    const loText = gateUsd2dp(lo);
+    const hiText = gateUsd2dp(hi);
+    return loText === hiText ? loText : `${loText}–${hiText}`;
+  }
+
   // Choose ONE decimal count for a whole itemized column so every cell
   // aligns. Driven by the SMALLEST magnitude present (< $0.01 → 4 dp;
   // < $1 → 3 dp; else 2 dp) and applied to every row AND the Total —
@@ -4592,11 +4610,11 @@
       const maxCost = Number(ce.max_cost_usd);
       if (Number.isFinite(maxCost) && maxCost > total) {
         const hi = Math.min(maxCost, COST_HARD_LIMIT_USD);
-        gateRange.textContent = `${gateUsd2dp(total)}–${gateUsd2dp(hi)}`;
+        gateRange.textContent = gateRangeText(total, hi);
       } else {
         const lo = total * (1 - PLANNING_RANGE_PCT);
         const hi = Math.min(total * (1 + PLANNING_RANGE_PCT), COST_HARD_LIMIT_USD);
-        gateRange.textContent = `${gateUsd2dp(lo)}–${gateUsd2dp(hi)}`;
+        gateRange.textContent = gateRangeText(lo, hi);
       }
     }
     // ``allow`` reaches here only via "See the estimate" (a deliberate review

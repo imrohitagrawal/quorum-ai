@@ -429,6 +429,7 @@ def _render_workspace_html() -> str:
             "chars_per_token": str(CHARS_PER_TOKEN),
             "system_prompt_tokens": int(settings.cost_system_prompt_tokens),
             "web_search_context_tokens": int(settings.cost_web_search_context_tokens),
+            "web_search_request_fee_usd": float(settings.cost_web_search_request_fee_usd),
             "initial_output_tokens": int(settings.cost_initial_output_tokens),
             "output_tokens_per_query_token": float(settings.cost_output_tokens_per_query_token),
             "default_input_price_per_1k": str(_DEFAULT_PRICE_PER_1K_INPUT),
