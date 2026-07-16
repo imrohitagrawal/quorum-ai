@@ -1444,10 +1444,22 @@
     return `${(clamped / 1000).toFixed(1)}s elapsed`;
   }
 
+  // Monotonic clock for the elapsed ticker. ``performance.now()`` never steps
+  // backward, unlike ``Date.now()`` which an NTP correction / manual wall-clock
+  // change can move — so the readout stays monotonic across a system clock step,
+  // not only against server-reported skew (#29). Falls back to ``Date.now()``
+  // only where ``performance`` is unavailable. All stamp writes AND drift reads
+  // MUST use this same clock so ``now - stamp`` is always a real elapsed delta.
+  function nowMs() {
+    return typeof performance !== "undefined" && performance.now
+      ? performance.now()
+      : Date.now();
+  }
+
   function tickLiveElapsed() {
     const elapsedEl = el("live-elapsed");
     if (!elapsedEl) return;
-    const shown = state.liveElapsedBaseMs + (Date.now() - state.liveElapsedStamp);
+    const shown = state.liveElapsedBaseMs + (nowMs() - state.liveElapsedStamp);
     elapsedEl.textContent = formatElapsed(shown);
   }
 
@@ -1574,9 +1586,9 @@
     stateEl.className = "live-round-state";
     stateEl.textContent = "complete";
     header.append(pill, focus, stateEl);
-    const body = document.createElement("p");
+    const body = document.createElement("div");
     body.className = "live-round-body";
-    body.textContent = round.critique_text || "";
+    setProse(body, round.critique_text);
     card.append(header, body);
     return card;
   }
@@ -1893,16 +1905,24 @@
     const elapsedMs = Number.isFinite(result.elapsed_time_ms)
       ? result.elapsed_time_ms
       : null;
+    // Elapsed already projected on the local clock from the last accepted base.
+    // Used as the monotonic floor: the readout must never tick BELOW this. (#29)
+    const projectedElapsedMs = state.liveElapsedStamp
+      ? state.liveElapsedBaseMs + (nowMs() - state.liveElapsedStamp)
+      : 0;
     if (isTerminal) {
-      const finalMs =
-        elapsedMs != null
-          ? elapsedMs
-          : state.liveElapsedBaseMs + (Date.now() - state.liveElapsedStamp);
-      freezeLiveElapsed(finalMs);
+      // Freeze at the final elapsed, clamped so the frozen value never snaps
+      // below what the running ticker already displayed.
+      const serverFinal = elapsedMs != null ? elapsedMs : projectedElapsedMs;
+      freezeLiveElapsed(Math.max(serverFinal, projectedElapsedMs));
     } else {
       if (elapsedMs != null) {
-        state.liveElapsedBaseMs = elapsedMs;
-        state.liveElapsedStamp = Date.now();
+        // MONOTONIC CLAMP (#29): a poll reporting a LOWER server elapsed
+        // (clock skew / out-of-order poll) must not rewind the display. Clamp
+        // the new base UP to what we've already shown, then re-anchor the stamp
+        // so the ~1s ticker keeps advancing smoothly from there.
+        state.liveElapsedBaseMs = Math.max(elapsedMs, projectedElapsedMs);
+        state.liveElapsedStamp = nowMs();
       }
       startLiveElapsedTicker();
     }
@@ -2071,7 +2091,7 @@
       if (valueSub) valueEl.appendChild(mkEl("span", "result-trust-value-sub", ` ${valueSub}`));
       card.appendChild(valueEl);
     }
-    if (caption) card.appendChild(mkEl("div", "result-trust-caption", caption));
+    if (caption) card.appendChild(setInlineProse(mkEl("div", "result-trust-caption"), caption));
     return card;
   }
 
@@ -2232,17 +2252,23 @@
     );
 
     const grid = mkEl("div", "result-synthesis-grid");
-    const addRow = (label, sectionKey, bodyNode) => {
+    const addRow = (label, sectionKey, bodyContent) => {
       const row = mkEl("div", "result-synth-row");
       row.dataset.section = sectionKey;
       row.appendChild(mkEl("span", "result-synth-label", label));
       const body = mkEl("div", "result-synth-body");
-      body.appendChild(bodyNode);
+      // A string is provider PROSE → render as block markdown; an element
+      // (the Sources wrap) is appended as-is.
+      if (typeof bodyContent === "string") {
+        setProse(body, bodyContent);
+      } else {
+        body.appendChild(bodyContent);
+      }
       row.appendChild(body);
       grid.appendChild(row);
     };
     for (const [label, value, key] of rows) {
-      addRow(label, key, document.createTextNode(String(value).trim()));
+      addRow(label, key, String(value).trim());
     }
     // SOURCES row — numbered chips built from the models' real citations, with
     // the synthesis' own ``source_support`` prose as a caption beneath them.
@@ -2281,7 +2307,7 @@
         wrap.appendChild(chipRow);
       }
       if (sourceSupport) {
-        wrap.appendChild(mkEl("p", "result-source-support", sourceSupport));
+        wrap.appendChild(setInlineProse(mkEl("p", "result-source-support"), sourceSupport));
       }
       addRow("Sources", "sources", wrap);
     }
@@ -2421,7 +2447,11 @@
 
     const recommendation = fs.recommendation ? String(fs.recommendation).trim() : "";
     content.appendChild(
-      mkEl("div", "result-verdict-text", recommendation || "No recommendation was recorded for this run."),
+      setProse(
+        mkEl("div", "result-verdict-text"),
+        recommendation,
+        "No recommendation was recorded for this run.",
+      ),
     );
 
     // Honest summary line — derived from real fields, no banned verbs.
@@ -2439,7 +2469,7 @@
     // High-stakes caveat, if the synthesis carries one.
     if (fs.high_stakes_notice) {
       content.appendChild(
-        mkEl("span", "result-verdict-caveat", String(fs.high_stakes_notice).trim()),
+        setInlineProse(mkEl("span", "result-verdict-caveat"), String(fs.high_stakes_notice).trim()),
       );
     }
 
@@ -2903,7 +2933,7 @@
   function mkPositionsCell(label, text) {
     const cell = mkEl("td", "result-positions-cell");
     cell.dataset.label = label;
-    if (text) cell.appendChild(mkEl("span", "result-pos-text", String(text)));
+    if (text) cell.appendChild(setInlineProse(mkEl("span", "result-pos-text"), String(text)));
     return cell;
   }
 
@@ -2977,7 +3007,7 @@
 
       const finalCell = mkEl("td", "result-positions-cell");
       finalCell.dataset.label = "Final";
-      if (m.final) finalCell.appendChild(mkEl("span", "result-pos-text", String(m.final)));
+      if (m.final) finalCell.appendChild(setInlineProse(mkEl("span", "result-pos-text"), String(m.final)));
       if (m.revised === true) {
         // Fix 12: this "✓ Revised" chip is GREEN ON PURPOSE — it is the
         // sanctioned agreement/revision semantic (the model changed its
@@ -3108,14 +3138,9 @@
     head.appendChild(tag);
     card.appendChild(head);
 
-    const body = mkEl("p", "transcript-opening-body");
+    const body = mkEl("div", "transcript-opening-body");
     const text = String((answer && answer.answer_text) || "").trim();
-    if (text) {
-      body.textContent = text;
-    } else {
-      body.textContent = "This model did not return an opening answer.";
-      body.classList.add("muted");
-    }
+    setProse(body, text, "This model did not return an opening answer.");
     card.appendChild(body);
     return card;
   }
@@ -3138,14 +3163,9 @@
     }
     card.appendChild(head);
 
-    const body = mkEl("p", "transcript-round-body");
+    const body = mkEl("div", "transcript-round-body");
     const text = String(round.critique_text || "").trim();
-    if (text) {
-      body.textContent = text;
-    } else {
-      body.textContent = "This round did not produce a critique summary.";
-      body.classList.add("muted");
-    }
+    setProse(body, text, "This round did not produce a critique summary.");
     card.appendChild(body);
     return card;
   }
@@ -3735,7 +3755,8 @@
         icon.textContent = "!";
         const body = document.createElement("div");
         body.className = "callout-body";
-        body.textContent = synthesis.high_stakes_notice;
+        // Provider prose (a "**High-stakes:** …" notice) → inline markdown.
+        setInlineProse(body, synthesis.high_stakes_notice);
         notice.append(icon, body);
         stack.appendChild(notice);
       }
@@ -3919,19 +3940,40 @@
       out.push(`<${tag}>${items.join("")}</${tag}>`);
       buffer = [];
     };
+    // Blockquote: consecutive lines starting with ">" collapse into one
+    // <blockquote> (the marker + one optional space is stripped per line).
+    let quoteBuffer = [];
+    const flushQuote = () => {
+      if (!quoteBuffer.length) return;
+      const inner = quoteBuffer
+        .map((line) => mdInline(escapeHtml(line)))
+        .join("<br>");
+      out.push(`<blockquote>${inner}</blockquote>`);
+      quoteBuffer = [];
+    };
     const listMarker = (line) => /^\s*([-*]|\d+\.)\s+/.test(line);
+    const quoteMarker = (line) => /^\s*>\s?/.test(line);
     for (const line of collapsed) {
       if (line.trim() === "") {
         flushParagraph();
         flushList();
+        flushQuote();
+        continue;
+      }
+      if (quoteMarker(line)) {
+        flushParagraph();
+        flushList();
+        quoteBuffer.push(line.replace(/^\s*>\s?/, ""));
         continue;
       }
       if (listMarker(line)) {
         flushParagraph();
+        flushQuote();
         buffer.push(line);
         continue;
       }
       flushList();
+      flushQuote();
       // Headings: "# ", "## ", "### ".
       const heading = line.match(/^(#{1,3})\s+(.*)$/);
       if (heading) {
@@ -3943,7 +3985,49 @@
     }
     flushParagraph();
     flushList();
+    flushQuote();
     return out.join("");
+  }
+
+  // Render BLOCK-level provider prose (headings, lists, paragraphs, inline
+  // emphasis/code/links) into ``el`` via ``formatAnswerText`` — which
+  // HTML-escapes every value, so there is no XSS regression vs the old
+  // ``textContent`` path. Adds ``q-prose`` for the shared nested-element
+  // spacing. Falls back to a muted placeholder when the text is empty.
+  // Container must be a block element (div), never a <p>/<span> (formatted
+  // output contains <p>/<h*>/<ul>). Returns ``el``.
+  function setProse(el, rawText, placeholder) {
+    const html = formatAnswerText(rawText);
+    if (html) {
+      el.classList.add("q-prose");
+      el.classList.remove("muted");
+      el.innerHTML = html;
+    } else if (placeholder != null) {
+      el.classList.remove("q-prose");
+      el.classList.add("muted");
+      el.textContent = placeholder;
+    } else {
+      el.textContent = "";
+    }
+    return el;
+  }
+
+  // Render INLINE-only provider prose (bold/italic/inline code/links, no block
+  // structure) into ``el`` via ``mdInline`` — escaping first so no raw HTML is
+  // reintroduced. For single-line span/cell/caption surfaces where block tags
+  // would be invalid. Falls back to a muted placeholder. Returns ``el``.
+  function setInlineProse(el, rawText, placeholder) {
+    const text = rawText == null ? "" : String(rawText).trim();
+    if (text) {
+      el.classList.remove("muted");
+      el.innerHTML = mdInline(escapeHtml(text));
+    } else if (placeholder != null) {
+      el.classList.add("muted");
+      el.textContent = placeholder;
+    } else {
+      el.textContent = "";
+    }
+    return el;
   }
 
   // Inline markdown renderer. Escaped text is the input (so we
@@ -3982,7 +4066,34 @@
         return `<a href="${escapeHtml(href)}" target="_blank" rel="noopener noreferrer">${text}</a>`;
       },
     );
+    // Underscore emphasis (LLMs emit both ``_x_`` and ``*x*``). Runs LAST and
+    // ONLY on text OUTSIDE already-emitted tags (via ``applyOutsideTags``), so a
+    // URL underscore inside an ``href="…"`` attribute is never touched. Uses
+    // GFM word-boundary rules: the opening marker must follow a non-word char
+    // (or start) and the closing marker must NOT be followed by a word char, so
+    // intra-word underscores in identifiers (``retention_flag``, ``snake_case``)
+    // are left alone. ``__strong__`` before ``_em_``.
+    s = applyOutsideTags(s, (seg) =>
+      seg
+        .replace(/(^|[^\w])__([^\s_](?:[^_]*[^\s_])?)__(?!\w)/g, (_m, lead, t) => `${lead}<strong>${t}</strong>`)
+        .replace(/(^|[^\w])_([^\s_](?:[^_]*[^\s_])?)_(?!\w)/g, (_m, lead, t) => `${lead}<em>${t}</em>`),
+    );
     return s;
+  }
+
+  // Apply ``fn`` only to the plain-text runs of a string that already contains
+  // emitted HTML — every ``<…>`` tag (with its attributes) AND every whole
+  // ``<code>…</code>`` span is passed through UNTOUCHED. Inline code is verbatim
+  // by contract, so emphasis must never fire inside it (`` `__init__` `` must stay
+  // literal, not become bold). The split captures either a full code span or a
+  // single tag as the delimiter; any part that starts with ``<`` is such a
+  // delimiter (all provider ``<`` were escaped to ``&lt;`` upstream, so only our
+  // emitted markup begins with a literal ``<``) and is left alone.
+  function applyOutsideTags(s, fn) {
+    return s
+      .split(/(<code>[\s\S]*?<\/code>|<[^>]*>)/)
+      .map((part) => (part && part.charAt(0) === "<" ? part : fn(part)))
+      .join("");
   }
 
   // Reverse the five entities ``escapeHtml`` emits, so a URL that was escaped
@@ -5116,7 +5227,7 @@
         notices: null,
       };
       state.liveElapsedBaseMs = 0;
-      state.liveElapsedStamp = Date.now();
+      state.liveElapsedStamp = nowMs();
       setRunning(true);
       updateRunMeta(created);
       renderProgress(created.progress);
