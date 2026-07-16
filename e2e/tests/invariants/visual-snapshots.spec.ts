@@ -25,6 +25,10 @@ const FREEZE =
 async function stabilize(page: Page) {
   await page.addStyleTag({ content: FREEZE });
   await page.evaluate(() => { for (let i = 1; i < 100000; i++) { clearInterval(i); clearTimeout(i); } });
+  // Hide transient run toasts: they are timer-driven overlays whose presence
+  // depends on run timing, so freezing them into the baseline would flake the
+  // diff. They are app chrome, not the layout under test.
+  await page.addStyleTag({ content: ".toast-region{display:none !important;}" });
   await page.waitForTimeout(100);
 }
 

@@ -769,7 +769,10 @@ a { color: var(--accent); text-underline-offset: 2px; }
 #main-content[data-active-view="composer"] { --content-max: 800px; }
 #main-content[data-active-view="cost-gate"] { --content-max: 880px; }
 #main-content[data-active-view="result"] { --content-max: 960px; }
-#main-content[data-active-view="transcript"] { --content-max: 840px; }
+/* #33: widened from 840px → 1040px so the debate transcript (two-column
+   openings holding full model answers) uses wide-screen width instead of
+   wrapping long prose cramped in a narrow column. */
+#main-content[data-active-view="transcript"] { --content-max: 1040px; }
 #main-content[data-active-view="live-run"] { --content-max: 900px; }
 /* Landing carries its own self-contained, internally-centered layout, so the
    content column is left unconstrained for that view. */
@@ -3519,7 +3522,7 @@ a.result-source-chip:hover { border-color: var(--info); color: var(--info); }
 }
 
 .transcript-body {
-  max-width: 840px;
+  max-width: 1040px; /* #33: was 840px — see --content-max note above */
   margin: 0 auto;
   padding: var(--space-8) var(--space-6);
   display: flex;
@@ -3573,8 +3576,11 @@ a.result-source-chip:hover { border-color: var(--info); color: var(--info); }
 
 .transcript-openings {
   display: grid;
-  grid-template-columns: 1fr 1fr;
-  gap: var(--space-3);
+  /* #33: responsive columns — auto-fit gives 2 comfortable columns on wide
+     screens and collapses to 1 when each would fall below ~420px, so long
+     opening answers never wrap in a cramped narrow column. */
+  grid-template-columns: repeat(auto-fit, minmax(420px, 1fr));
+  gap: var(--space-4);
 }
 
 .transcript-opening {
@@ -4019,6 +4025,14 @@ html[data-theme="dark"] .workflow-step[data-state="completed"] .workflow-step-nu
   text-underline-offset: 3px;
 }
 .q-prose a:hover { color: var(--accent); }
+.q-prose blockquote {
+  margin: 0 0 var(--space-3);
+  padding: var(--space-2) 0 var(--space-2) var(--space-4);
+  border-left: 3px solid var(--accent-soft);
+  color: var(--muted);
+  font-style: italic;
+}
+.q-prose blockquote:last-child { margin-bottom: 0; }
 
 .round-card-body {
   display: flex;
