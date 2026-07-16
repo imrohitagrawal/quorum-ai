@@ -2106,6 +2106,43 @@
   // terminal transition (never per 750ms poll), so no aria-live spam. Every
   // nested field is guarded. The green treatment is GATED behind
   // ``isConsensus`` (AC-019 "no false consensus").
+  // #26: surface a degraded/simulated banner on the PRIMARY result view. A
+  // production run whose live provider is unavailable silently falls back to
+  // local simulation (or the fallback-search stub); the response marks that via
+  // ``live_count``/``local_count``/``demo_mode``, but the result view rendered
+  // the verdict/synthesis as if real. This makes the fallback visible so
+  // simulated output can never be mistaken for a real model panel. Shown
+  // whenever fewer than all answers were live (any local/fallback answer).
+  function renderResultDegraded(result) {
+    const banner = el("result-degraded");
+    if (!banner) return;
+    const liveCount = Number.isFinite(result.live_count) ? result.live_count : null;
+    const localCount = Number.isFinite(result.local_count) ? result.local_count : null;
+    const total = liveCount != null && localCount != null ? liveCount + localCount : null;
+    // Degraded when any answer was NOT live. Prefer the explicit counts; fall
+    // back to the ``demo_mode`` boolean when counts are absent (older payload).
+    const degraded =
+      localCount != null ? localCount > 0 : result.demo_mode === true;
+    if (!degraded) {
+      banner.hidden = true;
+      return;
+    }
+    const titleEl = el("result-degraded-title");
+    const msgEl = el("result-degraded-message");
+    const allLocal = liveCount === 0 || liveCount == null;
+    if (titleEl) {
+      titleEl.textContent = allLocal
+        ? "Simulated result — not from real models"
+        : "Partly simulated result";
+    }
+    if (msgEl) {
+      msgEl.textContent = allLocal
+        ? "Live execution was unavailable, so this whole result — the answers, the debate, and the synthesis — comes from Quorum's local simulation, not from GPT, Claude, Gemini, or Deepseek. Treat it as a demo, not a real model panel."
+        : `Only ${liveCount} of ${total ?? 4} answers came from a live provider; the rest are from Quorum's local simulation. The verdict and synthesis below mix real and simulated output — do not rely on them as a fully live result.`;
+    }
+    banner.hidden = false;
+  }
+
   function renderResult(result) {
     if (!result) return;
     const res = result.result || {};
@@ -2153,6 +2190,7 @@
       completionEl.textContent = completionText;
     }
 
+    renderResultDegraded(result);
     renderResultMeta(result, status, durationText);
     renderResultReceipt(result, res);
     renderVerdictBand(result, fs, { isConsensus, aligned, total, revisedCount, movements });
