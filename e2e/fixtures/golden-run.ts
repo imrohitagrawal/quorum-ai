@@ -43,11 +43,16 @@ export const RAW_MARKDOWN_PATTERNS: { name: string; re: RegExp }[] = [
   // <code>/<a>, leaving no marker in any text node):
   { name: "inline code (`...`)", re: /`[^`]+`/ },
   { name: "markdown link (](url))", re: /\]\([^)]+\)/ },
+  // Now asserted too — the formatter was extended (mdInline gained word-boundary
+  // underscore emphasis; formatAnswerText gained a `>` blockquote block), so a
+  // correct render leaves NO marker in any text node:
+  //   underscore emphasis: matches a space/start-anchored `_x_` / `__x__` run
+  //   (word-boundary, so intra-word `retention_flag` / `snake_case` never match);
+  //   blockquote: a line that STARTS with `> ` (mid-line `>` — e.g. "> 100%" — is
+  //   not a blockquote and is intentionally not matched).
+  { name: "underscore emphasis (_x_ / __x__)", re: /(^|\s)_{1,2}[^\s_][^_]*_{1,2}(?=[\s.,!?)]|$)/ },
+  { name: "line-start blockquote (> )", re: /(^|\n)>\s/ },
 ];
-// NOT asserted (would be non-greenable until the formatter is extended):
-//   `_underscore_` / `__underscore__` — mdInline handles only *asterisk* emphasis;
-//   `>` blockquote — formatAnswerText has no blockquote block. Widening the gate
-//   to these REQUIRES extending the formatter first (tracked as a #30 follow-up).
 // STRUCTURAL limits of this gate (documented, not silently implied):
 //   (a) scope — it walks `#main-content` (where provider prose renders); app
 //       chrome (toasts/header/aria-live) is app-authored text, not provider
@@ -64,6 +69,7 @@ const MESSY_RECOMMENDATION =
   "1. Ship the retention-instrumentation slice first — it de-risks every later decision.\n" +
   "2. Only then enable the cohort export; it depends on the events above.\n" +
   "3. Keep the $0.25 spend cap until a measured run confirms the estimate.\n\n" +
+  "> Treat this as _decision support_, __not__ a mandate — a human still owns the call.\n\n" +
   "See the [full playbook](https://example.com/retention/playbook) and set `retention_flag=true`. **Do not** skip step 1.";
 
 // Inline surface: bold only (no line-start heading — a one-line span).
@@ -86,7 +92,7 @@ const MESSY_UNCERTAINTY =
 const MESSY_CRITIQUE_1 =
   "## Round 1 critique\n\n**Alignment:** the models largely agree on the core recommendation. Residual gaps:\n\n1. Scope of the export slice.\n2. Whether citations meet the 0.80 target (they do — 0.85).";
 const MESSY_CRITIQUE_2 =
-  "## Round 2 critique\n\n**Resolved:** the residual disagreement on sequencing; citations re-verified. See the [round-2 log](https://example.com/round2) and the `citation_check` output.";
+  "## Round 2 critique\n\n**Resolved:** the residual disagreement on sequencing; citations _re-verified_. See the [round-2 log](https://example.com/round2) and the `citation_check` output.\n\n> Residual __caveat__: the export slice still needs a manual review gate.";
 
 // Inline surface (table cell): bold only.
 const MESSY_OPENING = (label: string) =>
