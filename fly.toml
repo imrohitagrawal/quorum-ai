@@ -25,6 +25,10 @@ kill_timeout = "5s"
   ACCOUNT_LEGACY_HEADER_ENABLED = "false"
   OPENROUTER_APP_URL = "https://quorum-ai.fly.dev"
   OPENROUTER_LIVE_EXECUTION_ENABLED = "false"  # Operator must enable after setting OPENROUTER_API_KEY
+  # issue #27: keep the feedback-event SQLite trail on the persistent volume
+  # (mounted at /data below), NOT the ephemeral rootfs default (.data/…) which
+  # is wiped on every deploy — that erased the self-improving-loop history.
+  FEEDBACK_DB_PATH = "/data/feedback_events.sqlite3"
 
 [experimental]
   # Required for single-instance state to be stable across deploys.
@@ -79,3 +83,17 @@ kill_timeout = "5s"
 # Prometheus /metrics endpoint (no exporter is wired), so a `[metrics]` scrape
 # would 404 on every poll. Re-add this block only alongside a real /metrics
 # route + exporter. See issue #36.
+
+# issue #27: persistent volume for the feedback-event SQLite trail. Without
+# this, `.data/…` lives on the ephemeral rootfs and is wiped on every deploy,
+# erasing the self-improving-loop history. FEEDBACK_DB_PATH (in [env] above)
+# points the store at /data on this volume.
+#
+# ⚠ OPERATOR PREREQUISITE — the volume MUST exist before this config deploys, or
+#   the deploy fails to mount it. Create it ONCE (single-instance app, iad):
+#       fly volume create quorum_data --app quorum-ai --region iad --size 1
+#   Only merge this change AFTER the volume exists. (This is why the PR adding
+#   it is a DRAFT — see MORNING-REPORT.)
+[[mounts]]
+  source = "quorum_data"
+  destination = "/data"
