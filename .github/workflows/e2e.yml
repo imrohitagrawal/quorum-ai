@@ -104,13 +104,14 @@ jobs:
           --project=chromium
           --retries=0
 
-      - name: Run UI rendering invariants (non-blocking until #29/#30/#33 fixed)
+      - name: Run UI rendering invariants (BLOCKING)
         working-directory: e2e
         # These assert no raw Markdown / no overflow / a monotonic timer against
-        # the golden messy fixture. They are RED TODAY on purpose (the bugs are
-        # unfixed). continue-on-error keeps main mergeable while surfacing the
-        # red in logs; the fix PR MUST delete this line to make the gate hard.
-        continue-on-error: true
+        # the golden messy fixture. The #29 (monotonic timer) and #30 (markdown
+        # on all provider-prose surfaces + underscore/blockquote formatter
+        # extension) fixes have landed and turn these GREEN, so the gate is now
+        # HARD: continue-on-error was removed (the enforcement handoff). A red
+        # here is a real regression and blocks the merge.
         env:
           CI: "true"
         run: >-
