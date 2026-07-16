@@ -7,7 +7,7 @@
 | #21 deploy "should be closed" | No PR closes it; deploy success is only *inferred* from #26/#27 timing | Trigger/observe one real deploy on a main SHA; check `deploy.yml` run status |
 | #26 API key was actually fixed | No PR references it; "valid funded key" in #31 is inference | Inspect Fly secret history / a real live run's provider path |
 | #31/#32 search behaviour offline | `:online` + citations + fallback only differ against a real provider | A real-provider integration test (paid — do deliberately, once) |
-| Provenance of ~14 `.agents/skills` without the factory marker | Not fetch-compared against upstreams | Diff each against its candidate source repo |
+| Provenance of the 25 `.agents/skills` without the factory marker | Not fetch-compared against upstreams | Diff each against its candidate source repo |
 | Visual layout of #33 as a "bug" vs design call | The issue itself says "partly a design call" | Human review of the seeded transcript snapshot at 1440px |
 | That the #30 fix fully greens the invariant | Fix not yet written, but greenability was hardened: adversarial review confirmed only genuine prose surfaces are flagged (source titles de-scoped to plain text); ordered-list rendering is NOT asserted (a partial fix could pass) | Implement the per-surface renderer fix, re-run the invariant — must go green; confirm lists via the visual snapshot |
 

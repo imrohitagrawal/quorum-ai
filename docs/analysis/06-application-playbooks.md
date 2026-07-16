@@ -13,7 +13,7 @@ can slip past a gate that isn't there yet.
 
 1. **Commit `docs/day-one-quality-standard.md` into the new repo first.** Paste
    its 7-point day-one prompt as the kickoff instruction. (It must be *tracked* —
-   it is currently untracked even here; see the retrofit note in Playbook B.)
+   this PR is the commit that finally tracks it in quorum-ai.)
 2. **Enumerate the project's quality dimensions** and state which apply:
    correctness, UI/UX rendering, real integration, security, cost/guardrails,
    API/schema contract, accessibility, data privacy, observability/health,
@@ -40,27 +40,28 @@ Goal: reach the enforced state without a rewrite, worst-gap-first. Much of the
 audit and the UI harness are **already done this session**; the remaining steps
 are ordered below.
 
-1. **Audit the durability gap — DONE.** Verified: no `toHaveScreenshot`; "e2e"
-   uses `page.route` + sim backend; `AGENTS.md` has no UI-testing rule;
-   `.claude/settings.json` is gitignored/untracked; `day-one-quality-standard.md`
-   is untracked.
+1. **Audit the durability gap — DONE.** Verified (at audit time): no
+   `toHaveScreenshot`; "e2e" uses `page.route` + sim backend; `AGENTS.md` has no
+   UI-testing rule; `.claude/settings.json` is gitignored/local-only;
+   `day-one-quality-standard.md` was untracked (this PR tracks it).
 2. **Enumerate the real bug population — DONE.** See `01-bug-ledger.md` (all
    issues verified; two unfiled findings added).
 3. **Golden fixture from real-shaped output — DONE.** `e2e/fixtures/golden-run.ts`.
 4. **Highest-leverage gate first, proven RED — DONE.** Rendering invariants +
    smoke wired into `e2e.yml`; invariants RED-proven on #29/#30.
 5. **Land the fixes under the gate (NEXT), blast-radius order:**
-   - **#30 markdown** — route all provider text through one `renderProse()`
-     renderer (already HTML-escapes → no XSS regression). Turns the invariant
-     green; then **remove `continue-on-error` in `e2e.yml`** (the enforcement flip).
+   - **#30 markdown** — route each prose surface through the appropriate renderer
+     (block `formatAnswerText` / inline `mdInline`, both already HTML-escape → no
+     XSS regression); source titles stay plain. Turns the invariant green; then
+     **remove `continue-on-error` in `e2e.yml`** (the enforcement flip).
    - **#29 timer** — monotonic clamp on the elapsed base.
    - **#33 layout** — widen the transcript container / responsive columns; seed
      the visual baseline.
 6. **Backend dimensions:** #26 degraded-mode signal + "simulated" banner; #31/#32
    real search (Tavily) as its own effort with #18/#20 cost accounting; #27 Fly
    volume; #19 cosmetic.
-7. **Retrofit the influence layer:** track `day-one-quality-standard.md`; add the
-   UI-verification section to `AGENTS.md`; optional local hook.
+7. **Retrofit the influence layer:** ✅ `day-one-quality-standard.md` tracked (this
+   PR); still TODO — add the UI-verification section to `AGENTS.md`; optional local hook.
 8. **Tracker hygiene:** file UNFILED-A (`/metrics` 404) + UNFILED-B (deploy-gate
    scope); widen `deploy.yml` `workflow_run` to Tests + E2E; verify a deploy then
    close #21; run #24 staging smoke then close.

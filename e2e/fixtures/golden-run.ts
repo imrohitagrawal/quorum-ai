@@ -244,7 +244,13 @@ export async function driveToResult(page: Page) {
     r.request().method() === "POST" ? r.fulfill(fulfil(goldenCreateResp())) : r.continue());
   await fill(page);
   await clickRunNow(page);
-  await expect(page.locator("#result-verdict")).toBeVisible({ timeout: 20000 });
+  // Anchor on a POPULATED, late-rendered result: `[data-consensus]` is set only
+  // once synthesis lands, and `#result-transcript-link` is rendered at the end
+  // of the result pass. Waiting on both (not merely verdict visibility) ensures
+  // the whole result DOM has hydrated before the no-raw-markdown walk runs, so a
+  // late-rendering surface cannot slip past as a spurious pass.
+  await expect(page.locator("#result-verdict[data-consensus]")).toBeVisible({ timeout: 20000 });
+  await expect(page.locator("#result-transcript-link")).toBeVisible({ timeout: 20000 });
 }
 
 /** From the result view, open the full debate transcript view. */

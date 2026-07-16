@@ -38,14 +38,16 @@ support ("close #21" — see the ledger). Those corrections are applied here.
 
 ## Exhaustiveness proof (nothing left uncategorized)
 
-- Issues #16, #18–#33 + the two unfiled findings (`/metrics` 404, deploy-gate
-  scope) → **Cat 1**.
+- Every issue (#16 CLOSED; #18,#19,#20,#21,#24,#26,#27,#29–#33 OPEN — the gaps in
+  the range are MERGED PRs #22/#23/#25/#28, not issues) + the two unfiled findings
+  (`/metrics` 404, deploy-gate scope) → **Cat 1**.
 - Transcript principles (durability hierarchy; verify-first; "test the box, not the
   content"; skill ≠ gate; doc ≠ test; narrow-sample → wrong conclusion) → **Cat 2**.
 - Every test artifact (golden fixture, rendering invariants, visual snapshots,
   real-integration smoke, CI job) → **Cat 3**.
 - Every "put it in X" placement decision → **Cat 4**.
-- The 8 memories, the 108/6 skill census, `/verify` + `taste-check` provenance → **Cat 5**
+- The 9 memory files (8 indexed in MEMORY.md + `plans-foreground-prevention-playbooks`),
+  the 108/6 skill census, `/verify` + `taste-check` provenance → **Cat 5**
   (principle-bearing memories cross-referenced into Cat 2).
 - The three "apply next time / here / elsewhere" asks → **Cat 6**.
 - The plan→loop→document + decompose/measure/gate operating rules → **Cat 7**.

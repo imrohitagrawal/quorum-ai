@@ -23,9 +23,11 @@ Running `rendering-invariants.spec.ts` on chromium: **3 failed, 1 passed.**
   ("## Recommendation / **Proceed**"), `.result-verdict-caveat`
   ("**High-stakes:**"), `.result-trust-caption`, `.result-positions-cell`
   ("**Position:**"), `.result-synth-body`, `.callout-high-stakes .callout-body`,
-  the live-debate `.live-round-body`, and the transcript
-  `.transcript-opening-body` / `.transcript-round-body`. This confirms the blast
-  radius across the result, transcript, and live-debate views.
+  and the transcript `.transcript-opening-body` / `.transcript-round-body`.
+  The `.live-round-body` (app.js:1579) content is ALSO flagged because the
+  populated live-debate DOM persists in `#main-content` after the run — so the
+  walk catches it incidentally. It is NOT RED-proven via a dedicated live-run
+  driver (there is none); treat 1579's coverage as opportunistic, not asserted.
 - **Greenability was hardened after adversarial review.** Source-citation
   titles/labels are provider *metadata*, not prose — a prose formatter must not
   (and structurally cannot) render bold inside a link label. Seeding `**` there
@@ -38,6 +40,14 @@ Running `rendering-invariants.spec.ts` on chromium: **3 failed, 1 passed.**
 - **no-horizontal-overflow — PASSED** (correct: today's layout does not overflow;
   #33 is *under-use* of width, caught by the visual snapshot, not this invariant).
 
+**Measured determinism (adversarial reviewer ran the specs 3×, not predicted):**
+the three runs were bit-identical — `worstDrop = 8700ms` (12000→3300) on runs
+1/2/3, backward jump detected 3/3, `#30` failing 3/3, overflow passing 3/3. The
+real-integration smoke ran in **1.2–2.4s** vs its 90s verdict budget (~36×
+headroom; sim `stage_delay_ms`=5ms). Two false-green holes the reviewer found
+were then fixed: the timer test now asserts it witnessed the ~12s pre-drop value,
+and `driveToResult` waits on a late-rendered surface before the markdown walk.
+
 Crucially, the gate is **greenable**: the already-formatted answer surface
 (`.answer-section-body.q-prose`) produced **zero** false positives, and the
 fixture uses only valid Markdown (line-start headings + inline bold) on genuine
@@ -48,6 +58,14 @@ appropriate renderer**: the block formatter (`formatAnswerText`) for prose block
 (`mdInline`) for inline/cell surfaces (the positions cell). Source titles stay
 plain. With that fix every flagged surface loses its raw markers and the test
 turns GREEN.
+
+**Greenability — empirically proven (not just argued).** A throwaway fix that
+routes the flagged prose surfaces through `formatAnswerText` was applied to
+`app.js`, the gate re-run, then reverted (app.js left pristine). Result: **#30
+RESULT and #30 TRANSCRIPT flipped RED → GREEN**, while **#29 (timer) stayed RED**
+— proving the gate both *can* go green on a correct fix AND *discriminates*
+(it is not a blanket always-fail). This is the "perform, don't preach" evidence
+that the gate is honest.
 
 **Honest coverage limits (from the adversarial review):**
 - Ordered-list markers are deliberately NOT asserted (browser `<ol>` numbers are
@@ -75,8 +93,9 @@ smoke, which passes now, is already blocking.
    Run once with `--update-snapshots`, commit the `*-linux.png` files, add the
    spec to the `e2e.yml` run, mask timer/run-id/cost regions.
 2. **Land #30/#29/#33 fixes and flip the invariants to blocking** (remove
-   `continue-on-error`). #30 = route all provider text through one `renderProse()`
-   renderer (which already HTML-escapes, so no XSS regression); #29 = monotonic
+   `continue-on-error`). #30 = route each prose surface through the appropriate
+   renderer — block `formatAnswerText` / inline `mdInline`, both already
+   HTML-escape (no XSS regression); source titles stay plain. #29 = monotonic
    clamp on the elapsed base; #33 = widen the transcript container / responsive
    columns.
 3. **Optional local speed-up:** a `.claude/settings.json` hook that runs the

@@ -21,18 +21,26 @@ skill I must remember        ← opt-in; nothing invokes it on a change
 memory                       ← persistent hint, still only influence
 AGENTS.md / CLAUDE.md        ← always loaded, strong influence — NOT a guarantee
 ───────────────────────────── the line between "influence" and "enforcement"
-CI test  +  settings.json hook   ← deterministic gate; runs whether anyone remembers or not
+tracked hook  (local, fast)  ← runs on every change — ONLY IF its settings file is tracked
+CI test       (shared gate)  ← runs for everyone regardless — the real enforcement
 ```
 
 Everything **above** the line depends on a human or an agent *choosing* correctly
 in the moment. Everything **below** the line runs regardless. A standard only
-holds if it lives **below the line** — as real tests in CI plus a hook. Prose
-(in chat, a skill, memory, or even AGENTS.md) is necessary context but is
-**never** sufficient enforcement.
+holds if it lives **below the line** — as real tests in CI, optionally backed by a
+hook. Prose (in chat, a skill, memory, or even AGENTS.md) is necessary context but
+is **never** sufficient enforcement.
 
-Corollary: to make a practice **automatic on every change**, it must be a
-**hook** (the harness executes hooks; an agent's memory/preferences cannot make
-anything automatic).
+**Critical caveat about hooks:** a hook is below-the-line only if the settings
+file that defines it is **tracked in git**. In many repos `.claude/` is
+gitignored (it is in quorum-ai), so a `.claude/settings.json` hook is
+**LOCAL-ONLY** — not shared, not in CI, not on a teammate's clone. Treat the hook
+as a local fast-feedback convenience; the **shared, authoritative gate is CI**. To
+make a hook shared you must deliberately un-ignore its settings file.
+
+Corollary: to make a practice **automatic on every change for everyone**, it must
+be a **CI test** (a local hook automates it only on the machine whose tracked
+settings define it).
 
 ---
 
@@ -82,12 +90,16 @@ matter what any future prompt says or forgets.
 
 ## Dimension → gate map (fill in per project)
 
-| Dimension | Real test (not mocked) | In CI? | Hook? | Proven red? |
+The **In CI?** column is the authoritative gate; **Hook?** is an *optional local*
+speed-up that only helps on a machine whose settings file is tracked (see the
+hook caveat above) — never a substitute for the CI column.
+
+| Dimension | Real test (not mocked) | In CI? (gate) | Hook? (local only) | Proven red? |
 |---|---|---|---|---|
 | Correctness | unit + integration on real logic | ✅ | — | |
-| **UI/UX rendering** | visual snapshots + global invariants vs golden fixture | ✅ | ✅ on UI-file change | |
+| **UI/UX rendering** | visual snapshots + global invariants vs golden fixture | ✅ | optional, on UI-file change | |
 | Real integration | one smoke against the actual backend (free/deterministic mode), not `page.route` mocks | ✅ | — | |
-| Security | secret scan, authz tests, injection/XSS/CSP tests | ✅ | on secret/auth files | |
+| Security | secret scan, authz tests, injection/XSS/CSP tests | ✅ | optional, on secret/auth files | |
 | Cost / guardrails | estimate vs measured reconciliation; hard-cap cannot be breached | ✅ | — | |
 | API / schema contract | generated-schema-in-sync check | ✅ | — | |
 | Accessibility | axe (or equivalent) on every view | ✅ | — | |

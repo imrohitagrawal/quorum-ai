@@ -112,6 +112,15 @@ test.describe("rendering invariants (golden fixture)", () => {
     }
 
     expect(samples.length, "expected to sample the live elapsed readout while running").toBeGreaterThan(3);
+    // Guard against a SPURIOUS PASS: prove the sampler actually witnessed the
+    // high value the readout falls FROM. Without this, a slow runner whose first
+    // sample lands after the ~1s high-value window would see only the monotonic
+    // tail (3.3s→4.5s→6.0s) and pass while the backward-jump bug is still present.
+    expect(
+      Math.max(...samples),
+      `sampler never observed the pre-drop high value (~12s); saw max=${Math.max(...samples)}ms. ` +
+        `Cannot certify monotonicity without witnessing the drop's origin. samples=${JSON.stringify(samples)}`
+    ).toBeGreaterThan(10000);
     // Allow tiny parse jitter (display granularity is 0.1s), but a real backward
     // jump (seconds) must fail.
     const TOL = 150;
