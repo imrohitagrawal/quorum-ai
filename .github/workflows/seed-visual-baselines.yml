@@ -1,0 +1,79 @@
+name: Seed visual baselines
+
+# One-shot helper (manual dispatch) that generates the Playwright
+# toHaveScreenshot baselines for tests/invariants/visual-snapshots.spec.ts in
+# THIS CI environment (ubuntu-latest) — the only place they pixel-match the
+# comparison runs (mac/other baselines are platform-suffixed and unused here) —
+# and commits the resulting *-linux.png files back to the dispatched branch.
+#
+# Run it from the branch that adds/changes the visual spec, THEN add the spec to
+# the blocking e2e run. Re-run whenever the intended layout changes.
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  seed:
+    name: Generate + commit Linux baselines
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      OPENROUTER_LIVE_EXECUTION_ENABLED: "false"
+      QUORUM_RUNTIME_ENVIRONMENT: "ci"
+    steps:
+      - name: Check out the dispatched branch
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.ref_name }}
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v5
+        with:
+          version: "latest"
+          enable-cache: true
+
+      - name: Set up Python
+        run: uv python install 3.12
+
+      - name: Install backend dependencies
+        run: uv sync --all-extras --dev
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: "npm"
+          cache-dependency-path: e2e/package-lock.json
+
+      - name: Install e2e dependencies
+        working-directory: e2e
+        run: npm ci
+
+      - name: Install Playwright Chromium (+ system deps)
+        working-directory: e2e
+        run: npx playwright install --with-deps chromium
+
+      - name: Generate baselines (--update-snapshots)
+        working-directory: e2e
+        env:
+          CI: "true"
+        run: >-
+          npx playwright test
+          tests/invariants/visual-snapshots.spec.ts
+          --project=chromium
+          --update-snapshots
+
+      - name: Commit baselines back to the branch
+        run: |
+          set -euo pipefail
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add e2e/tests/invariants/*-snapshots/ || true
+          if git diff --cached --quiet; then
+            echo "No baseline changes to commit."
+            exit 0
+          fi
+          git commit -m "test(e2e): seed Linux visual-snapshot baselines [skip ci]"
+          git push origin HEAD:${{ github.ref_name }}
