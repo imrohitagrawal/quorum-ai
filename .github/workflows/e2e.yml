@@ -12,10 +12,21 @@ name: E2E (axe + parity)
 #     under the enforced CSP and fails on any CSP-violation console error
 #     (proves the docs FUNCTION under the strict CSP, not just reference the
 #     right asset URLs).
+#   * tests/invariants/real-integration-smoke.spec.ts — drives the REAL sim
+#     backend end-to-end with NO page.route mock (the counter to the mocked
+#     "e2e" above). Blocking.
+#   * tests/invariants/rendering-invariants.spec.ts — global rendering gate
+#     (no raw Markdown / no overflow / monotonic timer) against the golden
+#     messy fixture. Currently NON-BLOCKING: it is deliberately RED against the
+#     known #29/#30/#33 bugs (see docs/analysis/03-enforcement-machinery.md).
+#     The PR that fixes those bugs turns it green and REMOVES continue-on-error
+#     below — that flip is the enforcement handoff.
 #
-# Both suites are hermetic: the FastAPI app is self-started by Playwright's
-# webServer (local_simulation, no live OpenRouter calls) and every query POST
-# is mocked per-test, so the job needs no secrets and no network egress.
+# The mocked suites are hermetic: the FastAPI app is self-started by
+# Playwright's webServer (local_simulation, no live OpenRouter calls) and every
+# query POST is mocked per-test, so the job needs no secrets and no network
+# egress. The real-integration smoke uses the same self-started sim backend but
+# no per-test mock.
 #
 # retries are set to 0 here on purpose — the suites are deterministic by
 # construction (per-test isolation, no shared run-state dependence), so a
@@ -76,7 +87,7 @@ jobs:
         working-directory: e2e
         run: npx playwright install --with-deps chromium
 
-      - name: Run axe + parity suites
+      - name: Run axe + parity + real-integration suites (blocking)
         working-directory: e2e
         # Playwright's webServer self-starts the FastAPI app (see
         # e2e/playwright.config.ts). --retries=0 keeps the gate honest: no
@@ -89,8 +100,31 @@ jobs:
           tests/accessibility/axe-all-views.spec.ts
           tests/ui-parity/parity-behavior.spec.ts
           tests/docs/docs-under-csp.spec.ts
+          tests/invariants/real-integration-smoke.spec.ts
           --project=chromium
           --retries=0
+
+      - name: Run UI rendering invariants (non-blocking until #29/#30/#33 fixed)
+        working-directory: e2e
+        # These assert no raw Markdown / no overflow / a monotonic timer against
+        # the golden messy fixture. They are RED TODAY on purpose (the bugs are
+        # unfixed). continue-on-error keeps main mergeable while surfacing the
+        # red in logs; the fix PR MUST delete this line to make the gate hard.
+        continue-on-error: true
+        env:
+          CI: "true"
+        run: >-
+          npx playwright test
+          tests/invariants/rendering-invariants.spec.ts
+          --project=chromium
+          --retries=0
+
+      # Visual snapshots (tests/invariants/visual-snapshots.spec.ts) are NOT run
+      # here yet: toHaveScreenshot needs Linux baselines seeded in THIS CI
+      # container (mac baselines are platform-suffixed and unused on ubuntu).
+      # Seed them once with `--update-snapshots` in a CI run, commit the
+      # *-linux.png baselines, then add the spec above. Tracked in
+      # docs/analysis/03-enforcement-machinery.md.
 
       - name: Upload Playwright report
         if: ${{ !cancelled() }}
