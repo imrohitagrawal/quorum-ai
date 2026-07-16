@@ -1,29 +1,100 @@
 name: Deploy to Fly.io
 
-# Deploys the app to Fly.io. Gated on CI: this runs only AFTER the CI workflow
-# ("CI" in ci.yml) completes SUCCESSFULLY for a commit on main — so a red build
-# never reaches production (issue #21 hardening). ``workflow_dispatch`` remains
-# as a manual escape hatch (deploys whatever is on the default branch).
+# Deploys the app to Fly.io. Gated on ALL required CI workflows: this runs only
+# AFTER every required workflow — "CI" (ci.yml), "Tests" (test.yml), and
+# "E2E (axe + parity)" (e2e.yml) — has concluded SUCCESSFULLY for the SAME commit
+# on main. A red build in ANY of the three never reaches production (issues #21,
+# #37). ``workflow_dispatch`` remains as a manual escape hatch (deploys whatever
+# is on the default branch, ungated — operator's explicit choice).
+#
+# Mechanism: each of the three workflows completing on main fires this via
+# ``workflow_run``. The `gate` job then queries the Actions API for the head SHA
+# and only lets `deploy` run when ALL three are green. Whichever workflow
+# finishes LAST finds all-green and deploys; the earlier completions find some
+# still pending and skip. A per-SHA concurrency group collapses a rare
+# simultaneous-finish double-trigger to a single deploy.
 on:
   workflow_run:
-    workflows: ["CI"]
+    workflows: ["CI", "Tests", "E2E (axe + parity)"]
     types: [completed]
   workflow_dispatch:
 
+# Collapse duplicate triggers for the same commit (three workflows finishing
+# close together) into one deploy; a newer trigger for the same SHA supersedes.
+concurrency:
+  group: deploy-fly-${{ github.event.workflow_run.head_sha || github.ref }}
+  cancel-in-progress: true
+
 permissions:
   contents: read
+  actions: read
 
 jobs:
-  deploy:
-    name: Deploy to Fly.io
+  gate:
+    name: Gate — require CI + Tests + E2E green for the SHA
     runs-on: ubuntu-latest
-    # Deploy only when: (a) manually dispatched, OR (b) the CI workflow finished
-    # with conclusion == success on the main branch. This is what makes the
-    # deploy CI-gated — the old ``on: push`` trigger deployed regardless of CI.
+    # Only consider deploying on a manual dispatch, or when a required workflow
+    # finished with success on main. (A failed/cancelled workflow_run stops here.)
     if: >-
       github.event_name == 'workflow_dispatch' ||
       (github.event.workflow_run.conclusion == 'success' &&
        github.event.workflow_run.head_branch == 'main')
+    outputs:
+      proceed: ${{ steps.check.outputs.proceed }}
+    steps:
+      - name: Check all required workflows are green for this SHA
+        id: check
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            echo "Manual dispatch — deploying default-branch HEAD (ungated escape hatch)."
+            echo "proceed=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          SHA="${{ github.event.workflow_run.head_sha }}"
+          echo "Evaluating required workflows for SHA $SHA"
+          # Read the latest run's conclusion for a named workflow on this SHA.
+          conclusion_of() {
+            gh api \
+              "repos/${REPO}/actions/runs?head_sha=${SHA}&per_page=100" \
+              --jq "[.workflow_runs[] | select(.name==\"$1\" and .head_branch==\"main\")] | sort_by(.run_started_at) | last | .conclusion // \"missing\""
+          }
+          ALL_GREEN=true
+          for WF in "CI" "Tests" "E2E (axe + parity)"; do
+            CONCLUSION=$(conclusion_of "${WF}")
+            # The workflow that TRIGGERED this deploy has already completed, but
+            # the REST list endpoint can lag a few seconds behind the event. Since
+            # the LAST-completing trigger has no later trigger to self-heal, poll a
+            # "missing"/in-progress result briefly before giving up. A genuine
+            # failure/cancellation returns immediately (not "missing").
+            for attempt in 1 2 3 4 5; do
+              if [ "${CONCLUSION}" != "missing" ]; then break; fi
+              echo "  ${WF} → missing (API lag?); retry ${attempt}/5 in 6s"
+              sleep 6
+              CONCLUSION=$(conclusion_of "${WF}")
+            done
+            echo "  ${WF} → ${CONCLUSION}"
+            if [ "${CONCLUSION}" != "success" ]; then
+              ALL_GREEN=false
+            fi
+          done
+          if [ "${ALL_GREEN}" = "true" ]; then
+            echo "All required workflows are green for ${SHA} — proceeding to deploy."
+            echo "proceed=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "Not all required workflows are green for ${SHA} yet — skipping this trigger."
+            echo "(A later workflow completion will re-evaluate once the rest finish.)"
+            echo "proceed=false" >> "$GITHUB_OUTPUT"
+          fi
+
+  deploy:
+    name: Deploy to Fly.io
+    needs: gate
+    if: needs.gate.outputs.proceed == 'true'
+    runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
         with:
