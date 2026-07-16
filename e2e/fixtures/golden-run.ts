@@ -70,7 +70,7 @@ const MESSY_RECOMMENDATION =
   "2. Only then enable the cohort export; it depends on the events above.\n" +
   "3. Keep the $0.25 spend cap until a measured run confirms the estimate.\n\n" +
   "> Treat this as _decision support_, __not__ a mandate — a human still owns the call.\n\n" +
-  "See the [full playbook](https://example.com/retention/playbook) and set `retention_flag=true`. **Do not** skip step 1.";
+  "See the [full playbook](https://example.com/retention/playbook), set `retention_flag=true`, and wire `__init__`. **Do not** skip step 1.";
 
 // Inline surface: bold only (no line-start heading — a one-line span).
 const MESSY_SUMMARY =

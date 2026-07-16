@@ -1444,10 +1444,22 @@
     return `${(clamped / 1000).toFixed(1)}s elapsed`;
   }
 
+  // Monotonic clock for the elapsed ticker. ``performance.now()`` never steps
+  // backward, unlike ``Date.now()`` which an NTP correction / manual wall-clock
+  // change can move — so the readout stays monotonic across a system clock step,
+  // not only against server-reported skew (#29). Falls back to ``Date.now()``
+  // only where ``performance`` is unavailable. All stamp writes AND drift reads
+  // MUST use this same clock so ``now - stamp`` is always a real elapsed delta.
+  function nowMs() {
+    return typeof performance !== "undefined" && performance.now
+      ? performance.now()
+      : Date.now();
+  }
+
   function tickLiveElapsed() {
     const elapsedEl = el("live-elapsed");
     if (!elapsedEl) return;
-    const shown = state.liveElapsedBaseMs + (Date.now() - state.liveElapsedStamp);
+    const shown = state.liveElapsedBaseMs + (nowMs() - state.liveElapsedStamp);
     elapsedEl.textContent = formatElapsed(shown);
   }
 
@@ -1896,7 +1908,7 @@
     // Elapsed already projected on the local clock from the last accepted base.
     // Used as the monotonic floor: the readout must never tick BELOW this. (#29)
     const projectedElapsedMs = state.liveElapsedStamp
-      ? state.liveElapsedBaseMs + (Date.now() - state.liveElapsedStamp)
+      ? state.liveElapsedBaseMs + (nowMs() - state.liveElapsedStamp)
       : 0;
     if (isTerminal) {
       // Freeze at the final elapsed, clamped so the frozen value never snaps
@@ -1910,7 +1922,7 @@
         // the new base UP to what we've already shown, then re-anchor the stamp
         // so the ~1s ticker keeps advancing smoothly from there.
         state.liveElapsedBaseMs = Math.max(elapsedMs, projectedElapsedMs);
-        state.liveElapsedStamp = Date.now();
+        state.liveElapsedStamp = nowMs();
       }
       startLiveElapsedTicker();
     }
@@ -4070,13 +4082,17 @@
   }
 
   // Apply ``fn`` only to the plain-text runs of a string that already contains
-  // emitted HTML tags — every ``<…>`` tag (and its attributes) is passed
-  // through untouched. Splitting on a capturing group makes odd-indexed parts
-  // the tags and even-indexed parts the text between them.
+  // emitted HTML — every ``<…>`` tag (with its attributes) AND every whole
+  // ``<code>…</code>`` span is passed through UNTOUCHED. Inline code is verbatim
+  // by contract, so emphasis must never fire inside it (`` `__init__` `` must stay
+  // literal, not become bold). The split captures either a full code span or a
+  // single tag as the delimiter; any part that starts with ``<`` is such a
+  // delimiter (all provider ``<`` were escaped to ``&lt;`` upstream, so only our
+  // emitted markup begins with a literal ``<``) and is left alone.
   function applyOutsideTags(s, fn) {
     return s
-      .split(/(<[^>]*>)/)
-      .map((part, i) => (i % 2 === 0 ? fn(part) : part))
+      .split(/(<code>[\s\S]*?<\/code>|<[^>]*>)/)
+      .map((part) => (part && part.charAt(0) === "<" ? part : fn(part)))
       .join("");
   }
 
@@ -5211,7 +5227,7 @@
         notices: null,
       };
       state.liveElapsedBaseMs = 0;
-      state.liveElapsedStamp = Date.now();
+      state.liveElapsedStamp = nowMs();
       setRunning(true);
       updateRunMeta(created);
       renderProgress(created.progress);
