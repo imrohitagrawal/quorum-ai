@@ -121,12 +121,21 @@ jobs:
           --project=chromium
           --retries=0
 
-      # Visual snapshots (tests/invariants/visual-snapshots.spec.ts) are NOT run
-      # here yet: toHaveScreenshot needs Linux baselines seeded in THIS CI
-      # container (mac baselines are platform-suffixed and unused on ubuntu).
-      # Seed them once with `--update-snapshots` in a CI run, commit the
-      # *-linux.png baselines, then add the spec above. Tracked in
-      # docs/analysis/03-enforcement-machinery.md.
+      - name: Run visual snapshots (BLOCKING)
+        working-directory: e2e
+        # toHaveScreenshot baselines for the result + transcript views against the
+        # golden messy fixture — the human-reviewed guard for the #33 layout.
+        # The *-linux.png baselines were seeded in THIS CI container by
+        # seed-visual-baselines.yml (--update-snapshots) and committed; here they
+        # are COMPARED like-for-like. Dynamic regions (timer/run-id) + toasts are
+        # masked/hidden so the diff never flakes.
+        env:
+          CI: "true"
+        run: >-
+          npx playwright test
+          tests/invariants/visual-snapshots.spec.ts
+          --project=chromium
+          --retries=0
 
       - name: Upload Playwright report
         if: ${{ !cancelled() }}
