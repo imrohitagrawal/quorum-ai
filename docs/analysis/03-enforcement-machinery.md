@@ -67,14 +67,29 @@ RESULT and #30 TRANSCRIPT flipped RED → GREEN**, while **#29 (timer) stayed RE
 (it is not a blanket always-fail). This is the "perform, don't preach" evidence
 that the gate is honest.
 
-**Honest coverage limits (from the adversarial review):**
-- Ordered-list markers are deliberately NOT asserted (browser `<ol>` numbers are
-  `::marker` pseudo-elements, not text nodes; asserting `1.` risks a
-  non-greenable gate). A fix that converts `**`/`##` but not lists would pass here
-  — lists are covered by the visual snapshot instead.
-- `renderStubSource` titles (`app.js:3369`, only for `local_simulation` /
-  `fallback_search` providers) are not exercised — the golden sources use
-  `openrouter_search`. A follow-up fixture variant should cover the stub path.
+**EXACT coverage (do NOT read the gate as "no raw Markdown, full stop").** A
+performing adversarial hunt (probes injected one marker at a time, driven through
+the real UI) proved the gate's true reach. It asserts **four** constructs, all
+greenable via the real renderer (`mdInline`/`formatAnswerText` convert each):
+`**bold**`, line-start `#{1,6}` heading, `` `inline code` ``, and `[link](url)`
+(`](`). It is a snapshot of `#main-content` text nodes.
+
+**Not asserted — real gaps, documented not hidden:**
+- **`_underscore_` / `__underscore__` emphasis** and **`>` blockquote** render raw
+  even in the *formatted* answer surfaces, because `mdInline` handles only
+  asterisk emphasis and `formatAnswerText` has no blockquote block. Asserting
+  these is **non-greenable until the formatter is extended** — so a complete #30
+  fix must extend the formatter, and only then can the gate widen to them.
+- **Ordered/bulleted list markers** (`1.`, `- `, `* `) are not asserted (a correct
+  `<ol>`/`<ul>` exposes markers as `::marker` pseudo-elements, not text; a partial
+  fix that skips lists would pass). Lists are covered by the visual snapshot.
+- **Scope:** the walk covers `#main-content` (where provider prose renders). App
+  chrome (toasts, header, `aria-live`, error banners) is app-authored text, not
+  provider markdown — intentionally out of scope.
+- **Timing:** single post-hydration snapshot; streamed/late renders after the walk
+  are not covered (the anchored waits cover result/transcript hydration only).
+- `renderStubSource` titles (`app.js:3369`, `local_simulation`/`fallback_search`
+  providers) are not exercised — golden sources use `openrouter_search`.
 
 ## Why the invariants are wired NON-BLOCKING today
 
