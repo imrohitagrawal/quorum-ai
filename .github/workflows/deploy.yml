@@ -56,12 +56,26 @@ jobs:
           fi
           SHA="${{ github.event.workflow_run.head_sha }}"
           echo "Evaluating required workflows for SHA $SHA"
+          # Read the latest run's conclusion for a named workflow on this SHA.
+          conclusion_of() {
+            gh api \
+              "repos/${REPO}/actions/runs?head_sha=${SHA}&per_page=100" \
+              --jq "[.workflow_runs[] | select(.name==\"$1\" and .head_branch==\"main\")] | sort_by(.run_started_at) | last | .conclusion // \"missing\""
+          }
           ALL_GREEN=true
           for WF in "CI" "Tests" "E2E (axe + parity)"; do
-            # Latest run of this named workflow for this exact SHA on main.
-            CONCLUSION=$(gh api \
-              "repos/${REPO}/actions/runs?head_sha=${SHA}&per_page=100" \
-              --jq "[.workflow_runs[] | select(.name==\"${WF}\" and .head_branch==\"main\")] | sort_by(.run_started_at) | last | .conclusion // \"missing\"")
+            CONCLUSION=$(conclusion_of "${WF}")
+            # The workflow that TRIGGERED this deploy has already completed, but
+            # the REST list endpoint can lag a few seconds behind the event. Since
+            # the LAST-completing trigger has no later trigger to self-heal, poll a
+            # "missing"/in-progress result briefly before giving up. A genuine
+            # failure/cancellation returns immediately (not "missing").
+            for attempt in 1 2 3 4 5; do
+              if [ "${CONCLUSION}" != "missing" ]; then break; fi
+              echo "  ${WF} → missing (API lag?); retry ${attempt}/5 in 6s"
+              sleep 6
+              CONCLUSION=$(conclusion_of "${WF}")
+            done
             echo "  ${WF} → ${CONCLUSION}"
             if [ "${CONCLUSION}" != "success" ]; then
               ALL_GREEN=false
