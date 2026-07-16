@@ -75,6 +75,7 @@ kill_timeout = "5s"
   release_command = "echo 'Release deploy complete - no migrations needed (in-memory state)'"
   strategy = "rolling"
 
-[metrics]
-  port = 8000
-  path = "/metrics"
+# NOTE: no `[metrics]` block. The app exposes /health, /ready, /status but no
+# Prometheus /metrics endpoint (no exporter is wired), so a `[metrics]` scrape
+# would 404 on every poll. Re-add this block only alongside a real /metrics
+# route + exporter. See issue #36.
