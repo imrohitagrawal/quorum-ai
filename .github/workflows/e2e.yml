@@ -101,6 +101,7 @@ jobs:
           tests/ui-parity/parity-behavior.spec.ts
           tests/docs/docs-under-csp.spec.ts
           tests/invariants/real-integration-smoke.spec.ts
+          tests/degraded/degraded-banner.spec.ts
           --project=chromium
           --retries=0
 

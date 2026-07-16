@@ -456,6 +456,23 @@
             </div>
 
             <div class="result-body">
+              <!-- #26: degraded-mode banner. Surfaced on the PRIMARY result
+                   view whenever any answer came from local simulation / a
+                   fallback stub (live_count < 4) so a run can never silently
+                   present simulated output as real. Toggled by renderResult. -->
+              <div
+                id="result-degraded"
+                class="callout callout-demo-mode result-degraded"
+                role="alert"
+                aria-live="assertive"
+                hidden
+              >
+                <div class="callout-icon" aria-hidden="true">!</div>
+                <div class="callout-body">
+                  <div class="callout-title" id="result-degraded-title">Simulated result</div>
+                  <div class="callout-message" id="result-degraded-message"></div>
+                </div>
+              </div>
               <div class="result-ask">
                 <span class="result-eyebrow">You asked</span>
                 <h1 id="result-heading" class="result-question" tabindex="-1"><span id="result-question"></span></h1>

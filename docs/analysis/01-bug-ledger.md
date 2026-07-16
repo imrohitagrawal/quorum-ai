@@ -54,3 +54,25 @@ a bare AGENTS.md line (those are influence, not gates).
 2. Verify a real deploy, then **close #21** with the evidence.
 3. Widen `deploy.yml` `workflow_run` to include `Tests` + `E2E`.
 4. Run the #24 staging smoke, then close #24.
+
+## Resolution status — overnight quality pass (2026-07-16/17)
+
+All tracker-hygiene actions above were performed, and most ledger defects fixed.
+
+| Item | Resolution | Where |
+|------|-----------|-------|
+| #30 | FIXED — every provider-prose surface routed through `setProse`/`setInlineProse`; formatter extended for `_`/`__` emphasis + `>` blockquote; gate flipped to blocking | PR #39 |
+| #29 | FIXED — monotonic clamp + monotonic clock (`performance.now`) | PR #39 |
+| #33 | FIXED — transcript column 840→1040px + responsive openings; visual baselines follow-up | PR #39 (+ seed workflow) |
+| #26 | FIXED (observability half) — degraded/simulated banner on the result view + blocking test; live-key rotation QUEUED | PR #41 |
+| #19 | FIXED — `gateRangeText` collapses a degenerate `$X–$X` band; node test | PR #40 |
+| #18 | MECHANISM shipped (per-request search fee, server+client+per-slot) DEFAULT 0.0 (OFF); activation QUEUED to the #24 measured value + guardrail-band recalibration | PR #40 |
+| #20 | FIXED — per-slot `searchFlags` parametrization; node test | PR #40 |
+| UNFILED-A (`/metrics`) | FILED #36, FIXED (removed dead `[metrics]` block) | #36 / PR #38 (merged) |
+| UNFILED-B (deploy gate) | FILED #37, FIXED (gate requires CI+Tests+E2E per-SHA; hardened for API flakiness) | #37 / PR #38 (merged) + #42 |
+| #21 | CLOSED with deploy-success evidence | comment on #21 |
+| #24 | SIM-mode staging smoke = TODO; live measured-cost run QUEUED (operator) | — |
+| #27 | Fly-volume config = TODO; live `fly volume create` QUEUED | — |
+| #31/#32 | Real web search (Tavily) sim-side + live wiring QUEUED (live key = operator) | — |
+
+See `MORNING-REPORT.md` for PR/merge state and the ranked queue of operator-gated items.

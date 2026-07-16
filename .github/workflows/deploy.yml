@@ -57,10 +57,15 @@ jobs:
           SHA="${{ github.event.workflow_run.head_sha }}"
           echo "Evaluating required workflows for SHA $SHA"
           # Read the latest run's conclusion for a named workflow on this SHA.
+          # A transient ``gh api`` failure (GitHub 5xx / rate limit) must NOT fail
+          # the whole gate job under ``set -e`` — return "missing" so the retry
+          # loop below re-polls, and a persistent outage ends in a safe SKIP
+          # (don't deploy what we can't verify) rather than a hard job failure.
           conclusion_of() {
             gh api \
               "repos/${REPO}/actions/runs?head_sha=${SHA}&per_page=100" \
-              --jq "[.workflow_runs[] | select(.name==\"$1\" and .head_branch==\"main\")] | sort_by(.run_started_at) | last | .conclusion // \"missing\""
+              --jq "[.workflow_runs[] | select(.name==\"$1\" and .head_branch==\"main\")] | sort_by(.run_started_at) | last | .conclusion // \"missing\"" \
+              2>/dev/null || echo "missing"
           }
           ALL_GREEN=true
           for WF in "CI" "Tests" "E2E (axe + parity)"; do

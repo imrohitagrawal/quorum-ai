@@ -1381,6 +1381,11 @@ select {
   line-height: 1.5;
   color: var(--ink);
 }
+/* #26: the degraded banner sits at the top of the result body; give it the
+   result section's rhythm so it reads as a prominent header, not a footnote. */
+.result-degraded {
+  margin: 0 0 var(--space-6);
+}
 
 .cost-confirmation-actions {
   margin-top: var(--space-3);

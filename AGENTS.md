@@ -75,6 +75,40 @@ new bugs a change introduces. Before declaring any non-trivial change complete:
   the matched token or value.
 
 
+## UI verification (the built workspace)
+
+This is **influence, not enforcement** — the binding gate is CI (see below), not
+this file. But when you touch the workspace UI (`src/product_app/static/app.js`,
+`app.css`, `templates/workspace.html`):
+
+- **Drive the real UI, don't just read the code or run a green test.** A passing
+  unit test on clean sim data has repeatedly hidden real-LLM-output bugs
+  (raw Markdown, a non-monotonic timer, cramped layout). Render against the
+  **golden messy fixture** (`e2e/fixtures/golden-run.ts`) — real-shaped provider
+  output with headings, bold/italic (both `*` and `_`), inline code, links,
+  ordered lists, blockquotes, long multi-paragraph answers, an empty-citation
+  slot — and look at it as a user would (screenshot at 1440px).
+- **The below-the-line gate is `e2e/tests/invariants/`** — driven in CI by
+  `.github/workflows/e2e.yml`:
+  - `rendering-invariants.spec.ts` — walks `#main-content` and asserts NO raw
+    Markdown survives in any text node (`**`, `##`, `` `code` ``, `](url)`,
+    `_ _`/`__ __`, line-start `>`), a **monotonic** elapsed timer, no horizontal
+    overflow, and inline code stays verbatim. **Blocking.**
+  - `visual-snapshots.spec.ts` — human-reviewed `toHaveScreenshot` baselines for
+    the result + transcript views (Linux baselines seeded in CI; see
+    `.github/workflows/seed-visual-baselines.yml`).
+  - `degraded-banner.spec.ts` — the result view must surface a simulated/degraded
+    banner whenever `live_count < 4`, so simulated output is never shown as real.
+- **A new provider-text surface must route through the markdown renderer**
+  (`setProse` for block prose, `setInlineProse` for inline/cell surfaces) — never
+  raw `textContent`/`mkEl`. Source titles are the one exception (provider
+  metadata → plain text). Add its shape to the golden fixture so the gate covers
+  it; the gate only catches surfaces the fixture exercises.
+- **Prove RED then GREEN.** Any UI-gate change must be shown failing on the defect
+  and passing after the fix (revert-and-rerun), and any timing-sensitive spec run
+  N≥10× to establish a real flake rate — not asserted once.
+
+
 ## V5 deterministic skill routing
 
 Before choosing a skill manually, run or simulate:
