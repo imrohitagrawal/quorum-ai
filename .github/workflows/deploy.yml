@@ -8,11 +8,13 @@ name: Deploy to Fly.io
 # is on the default branch, ungated — operator's explicit choice).
 #
 # Mechanism: each of the three workflows completing on main fires this via
-# ``workflow_run``. The `gate` job then queries the Actions API for the head SHA
-# and only lets `deploy` run when ALL three are green. Whichever workflow
-# finishes LAST finds all-green and deploys; the earlier completions find some
-# still pending and skip. A per-SHA concurrency group collapses a rare
-# simultaneous-finish double-trigger to a single deploy.
+# ``workflow_run``. The `gate` job (``scripts/deploy_gate.py``) then WAITS —
+# bounded poll of the Actions API for the head SHA — until every required
+# workflow reaches a terminal conclusion, and lets `deploy` run only when ALL
+# three are green. Waiting (rather than the old skip-and-hope) removes the race
+# where a trigger from a fast check ran the gate before the slow E2E finished,
+# skipped, and no later trigger deployed — leaving a merge silently undeployed
+# (PR #44). A per-SHA concurrency group collapses duplicate triggers to one.
 on:
   workflow_run:
     workflows: ["CI", "Tests", "E2E (axe + parity)"]
@@ -34,66 +36,42 @@ jobs:
     name: Gate — require CI + Tests + E2E green for the SHA
     runs-on: ubuntu-latest
     # Only consider deploying on a manual dispatch, or when a required workflow
-    # finished with success on main. (A failed/cancelled workflow_run stops here.)
+    # finished with success for a GENUINE push to our repo's main. The
+    # ``event == 'push'`` + ``head_repository.full_name == github.repository``
+    # conditions are security-critical: ``head_branch == 'main'`` alone is
+    # spoofable by a fork PR whose source branch is literally named ``main``
+    # (that run would carry attacker code + an attacker commit). Requiring a
+    # push from our own repo defeats that (a fork PR run is ``pull_request`` on
+    # the fork). ``scripts/deploy_gate.py`` re-applies the same filter per run.
     if: >-
       github.event_name == 'workflow_dispatch' ||
       (github.event.workflow_run.conclusion == 'success' &&
-       github.event.workflow_run.head_branch == 'main')
+       github.event.workflow_run.event == 'push' &&
+       github.event.workflow_run.head_branch == 'main' &&
+       github.event.workflow_run.head_repository.full_name == github.repository)
     outputs:
       proceed: ${{ steps.check.outputs.proceed }}
     steps:
-      - name: Check all required workflows are green for this SHA
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.workflow_run.head_sha || github.ref }}
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Wait for all required workflows to be green for this SHA
         id: check
         env:
           GH_TOKEN: ${{ github.token }}
           REPO: ${{ github.repository }}
-        run: |
-          set -euo pipefail
-          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
-            echo "Manual dispatch — deploying default-branch HEAD (ungated escape hatch)."
-            echo "proceed=true" >> "$GITHUB_OUTPUT"
-            exit 0
-          fi
-          SHA="${{ github.event.workflow_run.head_sha }}"
-          echo "Evaluating required workflows for SHA $SHA"
-          # Read the latest run's conclusion for a named workflow on this SHA.
-          # A transient ``gh api`` failure (GitHub 5xx / rate limit) must NOT fail
-          # the whole gate job under ``set -e`` — return "missing" so the retry
-          # loop below re-polls, and a persistent outage ends in a safe SKIP
-          # (don't deploy what we can't verify) rather than a hard job failure.
-          conclusion_of() {
-            gh api \
-              "repos/${REPO}/actions/runs?head_sha=${SHA}&per_page=100" \
-              --jq "[.workflow_runs[] | select(.name==\"$1\" and .head_branch==\"main\")] | sort_by(.run_started_at) | last | .conclusion // \"missing\"" \
-              2>/dev/null || echo "missing"
-          }
-          ALL_GREEN=true
-          for WF in "CI" "Tests" "E2E (axe + parity)"; do
-            CONCLUSION=$(conclusion_of "${WF}")
-            # The workflow that TRIGGERED this deploy has already completed, but
-            # the REST list endpoint can lag a few seconds behind the event. Since
-            # the LAST-completing trigger has no later trigger to self-heal, poll a
-            # "missing"/in-progress result briefly before giving up. A genuine
-            # failure/cancellation returns immediately (not "missing").
-            for attempt in 1 2 3 4 5; do
-              if [ "${CONCLUSION}" != "missing" ]; then break; fi
-              echo "  ${WF} → missing (API lag?); retry ${attempt}/5 in 6s"
-              sleep 6
-              CONCLUSION=$(conclusion_of "${WF}")
-            done
-            echo "  ${WF} → ${CONCLUSION}"
-            if [ "${CONCLUSION}" != "success" ]; then
-              ALL_GREEN=false
-            fi
-          done
-          if [ "${ALL_GREEN}" = "true" ]; then
-            echo "All required workflows are green for ${SHA} — proceeding to deploy."
-            echo "proceed=true" >> "$GITHUB_OUTPUT"
-          else
-            echo "Not all required workflows are green for ${SHA} yet — skipping this trigger."
-            echo "(A later workflow completion will re-evaluate once the rest finish.)"
-            echo "proceed=false" >> "$GITHUB_OUTPUT"
-          fi
+          SHA: ${{ github.event.workflow_run.head_sha }}
+          GITHUB_EVENT_NAME: ${{ github.event_name }}
+          # The gate WAITS (bounded) for pending required workflows rather than
+          # skipping. Comfortably exceeds the slowest required workflow
+          # (E2E ≈ 3 min) with runner-load headroom.
+          GATE_TIMEOUT_SECONDS: "900"
+          GATE_POLL_SECONDS: "15"
+        run: python scripts/deploy_gate.py
 
   deploy:
     name: Deploy to Fly.io
@@ -108,18 +86,49 @@ jobs:
           # resolves to the default ref. This guarantees we deploy the tested SHA.
           ref: ${{ github.event.workflow_run.head_sha || github.ref }}
 
+      - name: Guard — only deploy if this SHA is still main's tip
+        id: fresh
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          SHA: ${{ github.event.workflow_run.head_sha }}
+        run: |
+          set -euo pipefail
+          # The per-SHA concurrency group only serialises deploys of the SAME
+          # commit. Because the gate now WAITS (up to ~min) for slow checks, an
+          # older commit's deploy can finish AFTER a newer commit already
+          # shipped — deploying the older one would regress production. Deploy
+          # only when this SHA is still main's tip; otherwise the newer commit's
+          # own deploy handles it. (Manual dispatch has no workflow_run SHA →
+          # always deploy the default ref.)
+          if [ -z "${SHA}" ]; then
+            echo "Manual dispatch — deploying default ref."
+            echo "deploy=true" >> "$GITHUB_OUTPUT"; exit 0
+          fi
+          TIP=$(gh api "repos/${REPO}/commits/main" --jq .sha)
+          if [ "${TIP}" = "${SHA}" ]; then
+            echo "SHA ${SHA} is still main's tip — deploying."
+            echo "deploy=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "SHA ${SHA} superseded by main tip ${TIP} — skipping (the newer commit's deploy handles it)."
+            echo "deploy=false" >> "$GITHUB_OUTPUT"
+          fi
+
       - name: Setup Fly.io CLI
+        if: steps.fresh.outputs.deploy == 'true'
         # Pinned to a commit SHA (was ``@master``) for a reproducible,
         # supply-chain-safe toolchain — this is the exact revision that ran
         # green on the 2026-07-15 deploy.
         uses: superfly/flyctl-actions/setup-flyctl@ed8efb33836e8b2096c7fd3ba1c8afe303ebbff1
 
       - name: Deploy to Fly.io
+        if: steps.fresh.outputs.deploy == 'true'
         env:
           FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
         run: flyctl deploy --remote-only --strategy immediate
 
       - name: Smoke test - GET /health
+        if: steps.fresh.outputs.deploy == 'true'
         env:
           FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
         run: |
@@ -137,6 +146,7 @@ jobs:
           exit 1
 
       - name: Smoke test - GET /ready
+        if: steps.fresh.outputs.deploy == 'true'
         env:
           FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
         run: |
