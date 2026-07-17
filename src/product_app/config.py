@@ -82,6 +82,22 @@ class Settings(BaseSettings):
     openrouter_app_title: str = "Quorum AI"
     openrouter_timeout_seconds: float = 8.0
 
+    # --- Real web-search fallback (Tavily) ------------------------------
+    # The fallback source path replaces a fabricated ``example.test`` stub
+    # with a real web search when — and only when — ``TAVILY_API_KEY`` is
+    # set at process start. Absent (the default), the fallback keeps the
+    # deterministic local-simulation stub so CI stays hermetic, free, and
+    # needs no live key to merge; the key is never logged or returned to
+    # the client (issues #31 / #32). Tavily is a paid API — leaving the key
+    # unset costs nothing and changes no behaviour.
+    tavily_api_key: str = Field(default="", repr=False)
+    tavily_api_base_url: str = "https://api.tavily.com"
+    #: Number of web results requested from Tavily per fallback search. The
+    #: fallback attaches these as ``is_fallback=True`` sources (they do not
+    #: count toward the model's own citation-coverage metric).
+    tavily_max_results: int = 5
+    tavily_timeout_seconds: float = 8.0
+
     # --- Auth configuration ---------------------------------------------
     # Cookie security: in production we require Secure cookies. The auth
     # layer refuses to start otherwise.
