@@ -5,30 +5,40 @@ This file is the human-friendly dashboard for the product factory. It is generat
 
 ## Current phase
 
-Operate, learn, and improve
+Operate, learn, and improve (Release 1 MVP is live) — routing shows "Session
+continuity and handoff" only because `docs/session-handoff.md` needs a refresh.
 
-## Current session update
+## Current status (2026-07-17)
 
-- 2026-06-18: Drafted QA test-charter Jira payload `JIRA-DRAFT-TASK-002` in `docs/34-qa-test-charter-jira.md` for independent software testing team handoff.
-- Product-owner approval to publish `JIRA-DRAFT-TASK-002` to ORBI was received on 2026-06-18.
-- External Jira creation is blocked because the Atlassian MCP connector timed out during both discovery and direct create calls; no Jira key has been created or recorded.
-- Validation status: `make validate` passed; `make quality` passed with 78 tests.
+- **Release 1 (MVP) is built, deployed, and verified live** at `quorum-ai.fly.dev`
+  (`/health` ok, `/ready` = `live`). Real multi-model runs, two debate rounds,
+  synthesis, real Tavily web-search fallback, cost estimate/guardrails, and the
+  persistent feedback volume all work in production.
+- **GitHub issues: 0 open, 15 closed.** The last operator-gated blockers were
+  cleared this session: #26 (live exec), #27 (Fly volume), #31/#32 (real search),
+  #18 (cost fee accepted-exclusion), plus the deploy-gate race (PR #48).
+- **Live measured-cost run** (query_run 354087fe): `demo_mode=false`,
+  `live_count=4`, `cost_source=measured`, actual $0.0149 vs est $0.0199.
+- **Validation:** `make validate` passes; test suite **483 passed, 1 skipped**;
+  ruff + mypy clean.
+- **Next milestone:** Release 2 (Trust, Evaluation, Operability) — candidate scope
+  only, not started. Immediate housekeeping: refresh `docs/session-handoff.md`
+  (`make handoff`).
 
 ## Next best action
 
-Use driver skill `production-feedback-loop` to complete the missing/placeholder evidence
+Use driver skill `session-continuity-manager` to complete the missing/placeholder evidence
 listed below. Reviewer skills must review, not overwrite, the driver output.
 
 ## Recommended driver skill
 
-`production-feedback-loop`
+`session-continuity-manager`
 
 ## Required reviewer skills
 
-- `post-release-operations`
-- `support-readiness`
-- `product-discovery`
-- `fanatic-critic`
+- `next-action-coach`
+- `skill-router-orchestrator`
+- `skill-conflict-moderator`
 - `ai-feature-classifier`
 - `grounding-contract-builder`
 - `prompt-registry-manager`
@@ -52,6 +62,7 @@ listed below. Reviewer skills must review, not overwrite, the driver output.
 - `performance-engineering`
 - `resilience-testing`
 - `incident-drill`
+- `support-readiness`
 - `mvp-value-outcome-finder`
 - `study-artifact-publisher`
 - `project-knowledge-base-publisher`
@@ -67,11 +78,12 @@ listed below. Reviewer skills must review, not overwrite, the driver output.
 
 ## Blocking gates
 
-- `production-readiness-review`
+- `make handoff`
+- `make skill-route`
 
 ## Missing or placeholder evidence
 
-- None
+- `docs/session-handoff.md`
 
 ## Risk triggers detected
 
@@ -86,7 +98,7 @@ listed below. Reviewer skills must review, not overwrite, the driver output.
 ## Suggested Codex prompt
 
 ```text
-Review production signals, incidents, support feedback, and product metrics. Propose the next iteration with evidence.
+Update session handoff with branch, workstream, driver skill, reviewers, blockers, changed files, validation result, and next prompt. Do not rely on chat history alone.
 ```
 
 ## Conflict precedence

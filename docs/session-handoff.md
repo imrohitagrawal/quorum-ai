@@ -1,22 +1,21 @@
 # Session Handoff
 
 ## Date/time
-2026-06-18T16:15:32+05:30
+2026-07-18T02:41:37+05:30
 
 ## Current branch/worktree
-unavailable: Command '['git', 'branch', '--show-current']' returned non-zero exit status 128.
+main
 
 ## Current phase
-Operate, learn, and improve
+Session continuity and handoff
 
 ## Current driver skill
-`production-feedback-loop`
+`session-continuity-manager`
 
 ## Reviewer skills
-- `post-release-operations`
-- `support-readiness`
-- `product-discovery`
-- `fanatic-critic`
+- `next-action-coach`
+- `skill-router-orchestrator`
+- `skill-conflict-moderator`
 - `ai-feature-classifier`
 - `grounding-contract-builder`
 - `prompt-registry-manager`
@@ -40,6 +39,7 @@ Operate, learn, and improve
 - `performance-engineering`
 - `resilience-testing`
 - `incident-drill`
+- `support-readiness`
 - `mvp-value-outcome-finder`
 - `study-artifact-publisher`
 - `project-knowledge-base-publisher`
@@ -54,34 +54,32 @@ Operate, learn, and improve
 - `test-architecture`
 
 ## Blocking gates
-- `production-readiness-review`
+- `make handoff`
+- `make skill-route`
 
 ## Missing or incomplete evidence
-- None
+- `docs/session-handoff.md`
 
 ## Git status
 ```text
-unavailable: Command '['git', 'status', '--short']' returned non-zero exit status 128.
+M docs/00-factory-console.md
+ M docs/analysis/01-bug-ledger.md
+?? MORNING-REPORT.md
+?? design_handoff_quorum_ui/
 ```
 
 ## Diff stat
 ```text
-unavailable: Command '['git', 'diff', '--stat']' returned non-zero exit status 129.
+docs/00-factory-console.md     | 46 ++++++++++++++--------
+ docs/analysis/01-bug-ledger.md | 88 +++++++++++++++++++++++++-----------------
+ 2 files changed, 81 insertions(+), 53 deletions(-)
 ```
 
 ## Completed in this session
-- Analyzed the current Quorum AI project docs, implementation surface, UI, tests, release evidence, and known source-of-truth drift for QA handoff needs.
-- Created draft QA test-charter Jira payload `JIRA-DRAFT-TASK-002` in `docs/34-qa-test-charter-jira.md`.
-- Linked the QA charter from `docs/34-jira-issue-authoring.md`.
-- Recorded draft coverage notes in `docs/17-requirement-registry.md` and `docs/18-requirement-traceability-matrix.md`.
-- Logged the draft-only Jira payload in `docs/37-jira-confluence-sync-log.md`.
-- Fixed a narrow mypy issue in `tests/integration/test_request_validation_error_envelope.py` by adding explicit typing and a cast.
-- Received product-owner approval to publish `JIRA-DRAFT-TASK-002` to ORBI and attempted Jira creation through the authorized Atlassian tool path.
+- Update manually before closing the session.
 
 ## Decisions made
-- The QA charter is a draft repository artifact only; external Jira creation remains pending explicit payload approval and successful Atlassian tool execution.
-- The testing ticket should explicitly cover local simulation honesty, misconfigured live mode, optional live OpenRouter smoke, OpenAPI/runtime drift, stale release-evidence claims, accessibility, security/privacy, AI safety, and release-readiness blockers.
-- No Jira key should be recorded until the Atlassian create call succeeds and the issue is read back.
+- Update manually before closing the session.
 
 ## Assumptions recorded
 - Update `docs/ASSUMPTIONS.md` when needed.
@@ -90,24 +88,33 @@ unavailable: Command '['git', 'diff', '--stat']' returned non-zero exit status 1
 - Update `docs/13-open-questions.md` when needed.
 
 ## Risks/blockers
-- Atlassian MCP access failed during this session with a startup timeout during both discovery and direct Jira create calls, so no external Jira was created.
-- Repository sync policy approval is now satisfied for `JIRA-DRAFT-TASK-002`; the remaining blocker is connector availability.
-- Known QA defect seeds remain: `openapi.yaml` lists removed provider-key routes, and some release/test evidence documents still mention provider-key endpoint tests that are not present in the current test tree.
+- Update manually before closing the session.
 
 ## Validation run
 ```bash
 make next
 make skill-route
 make validate
-make quality
 ```
 
 ## Validation result
-- `make validate` passed all gates.
-- `make quality` passed with Ruff format/check, Ruff lint, mypy, and 78 pytest tests.
+- `make validate` — all gates passed (2026-07-17).
+- Test suite — 483 passed, 1 skipped; ruff + mypy clean.
+
+## Work completed this session (2026-07-17)
+- Release 1 MVP verified LIVE in prod (real multi-model runs; `/ready`=live).
+- Real Tavily web-search fallback shipped + live-verified (PRs #47/#44), #31/#32/#27.
+- Live measured-cost run (354087fe): `cost_source=measured`, $0.0149 vs est $0.0199 (#24/#26).
+- #18 web-search fee closed as an accepted exclusion (PR #49, AC-037/CHG-005).
+- Deploy-gate race fixed — wait-and-verify gate, fail-safe + fork-spoof hardened,
+  freshness guard, 28 tests (PR #48); validated deploying live.
+- **All GitHub issues CLOSED (0 open, 15 closed);** bug-ledger + this console synced.
+
+## Risks/blockers
+- None open. Next milestone: Release 2 (Trust/Evaluation/Operability) — not started.
 
 ## Next best action
-Review production signals, incidents, support feedback, and product metrics. Propose the next iteration with evidence.
+Refresh only if starting Release 2 work; otherwise the tracker is fully in sync.
 
 ## Suggested next Codex prompt
 ```text
