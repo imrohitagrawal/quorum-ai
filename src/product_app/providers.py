@@ -299,20 +299,45 @@ class ProviderExecutionService:
         # was rejected, but the answer itself is real.
         if live_response is not None and live_response.answer_text:
             sources = live_response.sources or []
+            # #31: the ``:online`` variant frequently returns an answer with
+            # NO citation annotations (~0-3% coverage in the live run). When
+            # search was enabled for this slot but the model returned no
+            # sources, run a REAL web search (Tavily) on the query and attach
+            # its results — so the user gets real, clickable evidence rather
+            # than an empty source list. Gated on ``TAVILY_API_KEY`` (absent →
+            # no-op), so hermetic CI behaviour is unchanged. These sources are
+            # ``is_fallback=True`` and therefore do NOT inflate the model's own
+            # citation-coverage metric; the answer text is still the model's,
+            # so ``provider_path`` stays ``OPENROUTER_SEARCH`` and
+            # ``fallback_used`` stays ``False``.
+            supplemented_sources: list[SourceReference] = []
+            if model_slot.search and not sources and self._tavily_enabled():
+                supplemented_sources = self._tavily_search(query_text=query_text)
+                if supplemented_sources:
+                    sources = supplemented_sources
             # L2: the ``provider_notice`` branches in priority order.
             # 1) If the caller opted this slot out of web search, the
             #    search-disabled fact is the most important for the user
             #    to know — even if the bare-id POST returned citations.
-            # 2) Otherwise, the existing "missing citations, :online was
-            #    unavailable" notice fires when sources are empty.
-            # 3) Otherwise, no notice (clean search hit with sources).
+            # 2) Otherwise, if a real web-search fallback supplied the
+            #    sources, say so plainly (they are not the model's own
+            #    :online citations).
+            # 3) Otherwise, the existing "missing citations, :online was
+            #    unavailable" notice fires when sources are still empty.
+            # 4) Otherwise, no notice (clean search hit with sources).
             if not model_slot.search:
                 search_disabled_notice = (
                     "Web search was disabled for this slot; the answer "
                     "reflects the model's training-data response, not a "
                     "live web search."
                 )
-            elif not live_response.sources:
+            elif supplemented_sources:
+                search_disabled_notice = (
+                    "The model returned no citation annotations, so the sources "
+                    "below come from a fallback web search rather than the "
+                    "model's own :online results."
+                )
+            elif not sources:
                 search_disabled_notice = (
                     "Live answer returned without citation annotations; coverage may "
                     "be below the 80% target because :online web search was unavailable."
@@ -356,7 +381,7 @@ class ProviderExecutionService:
                 credential_source=credential_source,
                 started_at=started_at,
                 answer_text=answer_text,
-                sources=self._fallback_sources(model_slot=model_slot),
+                sources=self._fallback_sources(model_slot=model_slot, query_text=query_text),
                 provider_path=ProviderPath.FALLBACK_SEARCH,
                 provider_attempt_order=provider_attempt_order,
                 fallback_used=True,
@@ -818,7 +843,21 @@ class ProviderExecutionService:
             ),
         ]
 
-    def _fallback_sources(self, *, model_slot: ModelSlot) -> list[SourceReference]:
+    def _fallback_sources(self, *, model_slot: ModelSlot, query_text: str) -> list[SourceReference]:
+        """Sources for the fallback path.
+
+        When ``TAVILY_API_KEY`` is configured we run a REAL web search
+        (Tavily) on the user's query and return its results as
+        ``is_fallback=True`` sources — replacing the fabricated
+        ``example.test`` stub that used to ship here (issues #31 / #32).
+        When the key is absent, or the search returns nothing / errors,
+        we fall back to the deterministic local-simulation stub so the
+        offline-safe default and the hermetic test suite are unchanged.
+        """
+        if self._tavily_enabled():
+            real_sources = self._tavily_search(query_text=query_text)
+            if real_sources:
+                return real_sources
         return [
             SourceReference(
                 title=f"Fallback search evidence for slot {model_slot.slot_number}",
@@ -827,6 +866,70 @@ class ProviderExecutionService:
                 is_fallback=True,
             ),
         ]
+
+    def _tavily_enabled(self) -> bool:
+        """Whether a real Tavily web search should be attempted.
+
+        Gated solely on the presence of ``TAVILY_API_KEY``. Absent → the
+        fallback keeps the local-simulation stub, so CI stays hermetic and
+        no live key is needed to merge.
+        """
+        return bool(settings.tavily_api_key)
+
+    def _tavily_search(self, *, query_text: str) -> list[SourceReference]:
+        """Run a real web search via the Tavily API.
+
+        POSTs the user query to Tavily's ``/search`` endpoint and maps the
+        returned ``results[]`` into ``FALLBACK_SEARCH`` / ``is_fallback=True``
+        ``SourceReference``s. Every result URL is passed through
+        :func:`_sanitize_source_url` (http(s) scheme + host denylist), so a
+        malicious or malformed result cannot smuggle a ``javascript:`` or
+        metadata-service URL into the response. Returns ``[]`` — never
+        raises — on any transport error, non-JSON body, or empty result set,
+        so the caller cleanly degrades to the local-simulation stub.
+
+        The Tavily key is sent only in the ``Authorization`` header; it is
+        never logged nor echoed into a source title.
+        """
+        query = (query_text or "").strip()
+        if not query:
+            return []
+        payload = json.dumps(
+            {
+                "query": query,
+                "max_results": settings.tavily_max_results,
+            }
+        ).encode()
+        request = Request(
+            url=f"{settings.tavily_api_base_url.rstrip('/')}/search",
+            data=payload,
+            headers={
+                "Authorization": f"Bearer {settings.tavily_api_key}",
+                "Content-Type": "application/json",
+            },
+            method="POST",
+        )
+        try:
+            with urlopen(request, timeout=settings.tavily_timeout_seconds) as response:
+                raw_body = response.read().decode()
+            parsed = json.loads(raw_body)
+        except HTTPError as exc:
+            _LOGGER.warning(
+                "tavily_search_http_error",
+                extra={"status_code": exc.code},
+            )
+            return []
+        except (URLError, TimeoutError, OSError, ValueError, RecursionError):
+            # Degrade to the local stub — never raise — on ANY hostile /
+            # transport failure: a socket error or truncated body
+            # (``URLError`` / ``OSError`` incl. ``http.client.IncompleteRead``,
+            # ``ConnectionResetError``), a non-UTF-8 body
+            # (``UnicodeDecodeError`` ⊂ ``ValueError``), malformed JSON
+            # (``json.JSONDecodeError`` ⊂ ``ValueError``), or pathologically
+            # nested JSON (``RecursionError``). ``HTTPError`` ⊂ ``URLError`` ⊂
+            # ``OSError`` is caught above first so its status code is logged.
+            return []
+        return _parse_tavily_results(parsed)
 
 
 @dataclass(frozen=True)
@@ -897,6 +1000,58 @@ def _extract_usage(payload: object) -> TokenUsage | None:
         completion_tokens=completion_tokens,
         total_tokens=total_tokens,
     )
+
+
+#: Upper bound on a citation title we store/echo to the client. A hostile or
+#: MITM'd search response could carry a multi-megabyte ``title``; we truncate
+#: rather than trust the provider's length (defense-in-depth against an
+#: oversized-payload DoS on the result endpoint).
+_MAX_SOURCE_TITLE_LEN = 300
+
+
+def _parse_tavily_results(payload: object) -> list[SourceReference]:
+    """Map a parsed Tavily ``/search`` response into fallback sources.
+
+    Reads the top-level ``results`` array; each result contributes one
+    ``FALLBACK_SEARCH`` / ``is_fallback=True`` ``SourceReference`` whose URL
+    survives :func:`_sanitize_source_url`. Malformed entries (non-dict,
+    missing/blocked URL) are skipped rather than fatal, and duplicate URLs
+    are de-duplicated so the same host cited twice appears once. A missing
+    or non-string title falls back to the URL's host so the UI always has a
+    label; an over-long title is truncated to :data:`_MAX_SOURCE_TITLE_LEN`.
+    Returns ``[]`` for any shape that is not a mapping with a list of results.
+
+    Only the first ``settings.tavily_max_results`` entries are processed —
+    ``max_results`` is a request *hint* Tavily is free to exceed (or a hostile
+    proxy could inflate), so the cap is re-enforced here to bound both server
+    memory and the client payload.
+    """
+    if not isinstance(payload, dict):
+        return []
+    results = payload.get("results")
+    if not isinstance(results, list):
+        return []
+    references: list[SourceReference] = []
+    seen: set[str] = set()
+    for result in results[: max(0, settings.tavily_max_results)]:
+        if not isinstance(result, dict):
+            continue
+        sanitized = _sanitize_source_url(result.get("url") or "")
+        if sanitized is None or sanitized in seen:
+            continue
+        seen.add(sanitized)
+        title = result.get("title")
+        if not isinstance(title, str) or not title.strip():
+            title = urlparse(sanitized).hostname or sanitized
+        references.append(
+            SourceReference(
+                title=title[:_MAX_SOURCE_TITLE_LEN],
+                url=sanitized,
+                provider=ProviderPath.FALLBACK_SEARCH,
+                is_fallback=True,
+            ),
+        )
+    return references
 
 
 def _extract_message_content(payload: object) -> str:
