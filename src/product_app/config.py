@@ -82,6 +82,22 @@ class Settings(BaseSettings):
     openrouter_app_title: str = "Quorum AI"
     openrouter_timeout_seconds: float = 8.0
 
+    # --- Real web-search fallback (Tavily) ------------------------------
+    # The fallback source path replaces a fabricated ``example.test`` stub
+    # with a real web search when — and only when — ``TAVILY_API_KEY`` is
+    # set at process start. Absent (the default), the fallback keeps the
+    # deterministic local-simulation stub so CI stays hermetic, free, and
+    # needs no live key to merge; the key is never logged or returned to
+    # the client (issues #31 / #32). Tavily is a paid API — leaving the key
+    # unset costs nothing and changes no behaviour.
+    tavily_api_key: str = Field(default="", repr=False)
+    tavily_api_base_url: str = "https://api.tavily.com"
+    #: Number of web results requested from Tavily per fallback search. The
+    #: fallback attaches these as ``is_fallback=True`` sources (they do not
+    #: count toward the model's own citation-coverage metric).
+    tavily_max_results: int = 5
+    tavily_timeout_seconds: float = 8.0
+
     # --- Auth configuration ---------------------------------------------
     # Cookie security: in production we require Secure cookies. The auth
     # layer refuses to start otherwise.
@@ -128,6 +144,27 @@ class Settings(BaseSettings):
     #: slot only when that slot has search enabled; a search-disabled
     #: slot (the cheaper, training-data-only path) omits it.
     cost_web_search_context_tokens: int = 2000
+    #: Flat per-request fee OpenRouter's ``:online`` web-search plugin charges
+    #: for EACH searching initial-answer call, IN ADDITION to the token costs
+    #: above. OpenRouter bills the web plugin at ~$4 per 1,000 results with a
+    #: default of 5 results/request → ~$0.02/request. This term is independent
+    #: of the model's token price, so it is the ONLY web-search cost a
+    #: ``$0``-priced (``:free``) model incurs — without it a searching
+    #: :free-model slot is estimated at $0, which under-counts the real spend
+    #: and (because the guardrail keys off the estimate) is a fail-safe hole
+    #: (issue #18). Applied per slot only when that slot has search enabled;
+    #: search-disabled slots omit it. Tunable via ``COST_WEB_SEARCH_REQUEST_FEE_USD``.
+    #:
+    #: DEFAULT 0.0 (mechanism ships OFF): the fee is a real OpenRouter charge
+    #: (~$4/1,000 results × 5 = ~$0.02/request per their docs), but a $0.02/slot
+    #: fee shifts the point estimate ~$0.08 on a 4-search run, which moves the
+    #: safety guardrail's CONFIRM/BLOCK bands. Changing a guardrail-affecting
+    #: value from a documented-but-never-MEASURED number — and re-calibrating the
+    #: band tests around it — is a human decision tied to the pending measured-cost
+    #: run (issue #24). The plumbing (server + client, per-slot) and its tests are
+    #: in place; set this to the measured value to activate. Until then the term
+    #: is present but zero, so behaviour is unchanged.
+    cost_web_search_request_fee_usd: float = 0.0
     #: Output-token floor for a single initial answer.
     cost_initial_output_tokens: int = 700
     #: How much each initial answer lengthens per token of query (longer,

@@ -51,6 +51,11 @@ test.describe("rendering invariants (golden fixture)", () => {
           // Skip hidden subtrees so we only judge what a user can see.
           const parent = node.parentElement;
           if (!parent) continue;
+          // Skip verbatim code: literal markdown markers inside <code>/<pre> are
+          // CORRECT (inline code is not formatted), not a bypassed-formatter bug.
+          // e.g. `__init__` must render literally, so the underscore/backtick
+          // patterns must not flag it here.
+          if (parent.closest("code, pre")) continue;
           const text = node.textContent || "";
           if (!text.trim()) continue;
           for (const p of patterns) {
@@ -92,6 +97,32 @@ test.describe("rendering invariants (golden fixture)", () => {
       `Raw Markdown leaked into the transcript (openings/critiques/source titles):\n` +
         offenders.map((o) => `  [${o.pattern}] "${o.snippet}"  @ ${o.where}`).join("\n")
     ).toEqual([]);
+  });
+
+  test("inline code renders verbatim — no emphasis fires inside a <code> span (#30)", async ({ page }) => {
+    // Inline code is verbatim by contract. The underscore/asterisk emphasis
+    // rules must NOT fire inside a code span: `__init__` must stay literal, not
+    // become `<strong>init</strong>`. Regression guard for the applyOutsideTags
+    // code-span skip (adversarial finding 2a).
+    await driveToResult(page);
+    const codeSpans = await page.evaluate(() => {
+      const scope = document.querySelector("#main-content") || document.body;
+      return [...scope.querySelectorAll("code")].map((c) => ({
+        html: c.innerHTML,
+        text: c.textContent || "",
+      }));
+    });
+    const withEmphasis = codeSpans.filter((c) => /<(strong|em)\b/i.test(c.html));
+    expect(
+      withEmphasis,
+      `emphasis leaked INTO a <code> span (code must be verbatim):\n${JSON.stringify(withEmphasis, null, 2)}`
+    ).toEqual([]);
+    // The seeded dunder must survive literally (proves the fix, not just absence).
+    const dunder = codeSpans.find((c) => c.text.includes("__init__"));
+    expect(
+      dunder,
+      `expected a <code> span containing the literal "__init__"; saw ${JSON.stringify(codeSpans.map((c) => c.text))}`
+    ).toBeTruthy();
   });
 
   test("live-run elapsed readout is monotonic across a decreasing poll sequence (#29)", async ({ page }) => {

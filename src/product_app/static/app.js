@@ -1168,7 +1168,7 @@
   // truth, no hard-coded figures). The parity e2e suite cross-checks this
   // against the real ``/v1/query-runs/estimate`` by_model rows, so any drift is
   // caught. Returns one USD number per slot, or ``null`` when there is no query.
-  function computePerSlotEstimatesUsd(modelIds, queryText) {
+  function computePerSlotEstimatesUsd(modelIds, queryText, searchFlags) {
     const cm = window.COST_MODEL;
     const chars = (queryText || "").length;
     if (!cm || chars === 0) return modelIds.map(() => null);
@@ -1176,6 +1176,7 @@
     const charsPerToken = Number(cm.chars_per_token);
     const systemTokens = Number(cm.system_prompt_tokens);
     const searchTokens = Number(cm.web_search_context_tokens);
+    const searchRequestFee = Number(cm.web_search_request_fee_usd) || 0;
     const initialOutputTokens = Number(cm.initial_output_tokens);
     const outputPerQueryToken = Number(cm.output_tokens_per_query_token);
     const defaultInput = Number(cm.default_input_price_per_1k);
@@ -1186,16 +1187,22 @@
 
     const queryTokens = chars / charsPerToken;
     const outputTokens = initialOutputTokens + outputPerQueryToken * queryTokens;
-    // The composer pre-run view assumes web search is ON for every slot — the
-    // server default (``ModelSlot.search=True``) when the estimate request omits
-    // ``slot_search``, which this composer does. A searching slot's prompt
-    // carries the injected web-search context; mirror that here.
-    const promptTokens = systemTokens + searchTokens + queryTokens;
 
-    return modelIds.map((modelId) => {
+    // Per-slot search flag. The composer today searches every slot (the server
+    // default ``ModelSlot.search=True`` when the estimate omits ``slot_search``),
+    // so ``searchFlags`` defaults to all-ON — but keying off it per slot means
+    // this stays exact if a per-slot search toggle ever ships (issue #20). A
+    // searching slot's prompt carries the injected web-search context AND the
+    // flat per-request web-search plugin fee (issue #18); a non-searching slot
+    // pays neither. Both terms mirror the server's ``_estimate_from_slots``.
+    const searchOn = (i) => (searchFlags ? !!searchFlags[i] : true);
+
+    return modelIds.map((modelId, i) => {
       const price = priceFor(modelId);
+      const promptTokens = systemTokens + (searchOn(i) ? searchTokens : 0) + queryTokens;
+      const fee = searchOn(i) ? searchRequestFee : 0;
       return (
-        price.input * (promptTokens / 1000) + price.output * (outputTokens / 1000)
+        price.input * (promptTokens / 1000) + price.output * (outputTokens / 1000) + fee
       );
     });
   }
@@ -1444,10 +1451,22 @@
     return `${(clamped / 1000).toFixed(1)}s elapsed`;
   }
 
+  // Monotonic clock for the elapsed ticker. ``performance.now()`` never steps
+  // backward, unlike ``Date.now()`` which an NTP correction / manual wall-clock
+  // change can move — so the readout stays monotonic across a system clock step,
+  // not only against server-reported skew (#29). Falls back to ``Date.now()``
+  // only where ``performance`` is unavailable. All stamp writes AND drift reads
+  // MUST use this same clock so ``now - stamp`` is always a real elapsed delta.
+  function nowMs() {
+    return typeof performance !== "undefined" && performance.now
+      ? performance.now()
+      : Date.now();
+  }
+
   function tickLiveElapsed() {
     const elapsedEl = el("live-elapsed");
     if (!elapsedEl) return;
-    const shown = state.liveElapsedBaseMs + (Date.now() - state.liveElapsedStamp);
+    const shown = state.liveElapsedBaseMs + (nowMs() - state.liveElapsedStamp);
     elapsedEl.textContent = formatElapsed(shown);
   }
 
@@ -1574,9 +1593,9 @@
     stateEl.className = "live-round-state";
     stateEl.textContent = "complete";
     header.append(pill, focus, stateEl);
-    const body = document.createElement("p");
+    const body = document.createElement("div");
     body.className = "live-round-body";
-    body.textContent = round.critique_text || "";
+    setProse(body, round.critique_text);
     card.append(header, body);
     return card;
   }
@@ -1893,16 +1912,24 @@
     const elapsedMs = Number.isFinite(result.elapsed_time_ms)
       ? result.elapsed_time_ms
       : null;
+    // Elapsed already projected on the local clock from the last accepted base.
+    // Used as the monotonic floor: the readout must never tick BELOW this. (#29)
+    const projectedElapsedMs = state.liveElapsedStamp
+      ? state.liveElapsedBaseMs + (nowMs() - state.liveElapsedStamp)
+      : 0;
     if (isTerminal) {
-      const finalMs =
-        elapsedMs != null
-          ? elapsedMs
-          : state.liveElapsedBaseMs + (Date.now() - state.liveElapsedStamp);
-      freezeLiveElapsed(finalMs);
+      // Freeze at the final elapsed, clamped so the frozen value never snaps
+      // below what the running ticker already displayed.
+      const serverFinal = elapsedMs != null ? elapsedMs : projectedElapsedMs;
+      freezeLiveElapsed(Math.max(serverFinal, projectedElapsedMs));
     } else {
       if (elapsedMs != null) {
-        state.liveElapsedBaseMs = elapsedMs;
-        state.liveElapsedStamp = Date.now();
+        // MONOTONIC CLAMP (#29): a poll reporting a LOWER server elapsed
+        // (clock skew / out-of-order poll) must not rewind the display. Clamp
+        // the new base UP to what we've already shown, then re-anchor the stamp
+        // so the ~1s ticker keeps advancing smoothly from there.
+        state.liveElapsedBaseMs = Math.max(elapsedMs, projectedElapsedMs);
+        state.liveElapsedStamp = nowMs();
       }
       startLiveElapsedTicker();
     }
@@ -2071,7 +2098,7 @@
       if (valueSub) valueEl.appendChild(mkEl("span", "result-trust-value-sub", ` ${valueSub}`));
       card.appendChild(valueEl);
     }
-    if (caption) card.appendChild(mkEl("div", "result-trust-caption", caption));
+    if (caption) card.appendChild(setInlineProse(mkEl("div", "result-trust-caption"), caption));
     return card;
   }
 
@@ -2079,6 +2106,43 @@
   // terminal transition (never per 750ms poll), so no aria-live spam. Every
   // nested field is guarded. The green treatment is GATED behind
   // ``isConsensus`` (AC-019 "no false consensus").
+  // #26: surface a degraded/simulated banner on the PRIMARY result view. A
+  // production run whose live provider is unavailable silently falls back to
+  // local simulation (or the fallback-search stub); the response marks that via
+  // ``live_count``/``local_count``/``demo_mode``, but the result view rendered
+  // the verdict/synthesis as if real. This makes the fallback visible so
+  // simulated output can never be mistaken for a real model panel. Shown
+  // whenever fewer than all answers were live (any local/fallback answer).
+  function renderResultDegraded(result) {
+    const banner = el("result-degraded");
+    if (!banner) return;
+    const liveCount = Number.isFinite(result.live_count) ? result.live_count : null;
+    const localCount = Number.isFinite(result.local_count) ? result.local_count : null;
+    const total = liveCount != null && localCount != null ? liveCount + localCount : null;
+    // Degraded when any answer was NOT live. Prefer the explicit counts; fall
+    // back to the ``demo_mode`` boolean when counts are absent (older payload).
+    const degraded =
+      localCount != null ? localCount > 0 : result.demo_mode === true;
+    if (!degraded) {
+      banner.hidden = true;
+      return;
+    }
+    const titleEl = el("result-degraded-title");
+    const msgEl = el("result-degraded-message");
+    const allLocal = liveCount === 0 || liveCount == null;
+    if (titleEl) {
+      titleEl.textContent = allLocal
+        ? "Simulated result — not from real models"
+        : "Partly simulated result";
+    }
+    if (msgEl) {
+      msgEl.textContent = allLocal
+        ? "Live execution was unavailable, so this whole result — the answers, the debate, and the synthesis — comes from Quorum's local simulation, not from GPT, Claude, Gemini, or Deepseek. Treat it as a demo, not a real model panel."
+        : `Only ${liveCount} of ${total ?? 4} answers came from a live provider; the rest are from Quorum's local simulation. The verdict and synthesis below mix real and simulated output — do not rely on them as a fully live result.`;
+    }
+    banner.hidden = false;
+  }
+
   function renderResult(result) {
     if (!result) return;
     const res = result.result || {};
@@ -2126,6 +2190,7 @@
       completionEl.textContent = completionText;
     }
 
+    renderResultDegraded(result);
     renderResultMeta(result, status, durationText);
     renderResultReceipt(result, res);
     renderVerdictBand(result, fs, { isConsensus, aligned, total, revisedCount, movements });
@@ -2232,17 +2297,23 @@
     );
 
     const grid = mkEl("div", "result-synthesis-grid");
-    const addRow = (label, sectionKey, bodyNode) => {
+    const addRow = (label, sectionKey, bodyContent) => {
       const row = mkEl("div", "result-synth-row");
       row.dataset.section = sectionKey;
       row.appendChild(mkEl("span", "result-synth-label", label));
       const body = mkEl("div", "result-synth-body");
-      body.appendChild(bodyNode);
+      // A string is provider PROSE → render as block markdown; an element
+      // (the Sources wrap) is appended as-is.
+      if (typeof bodyContent === "string") {
+        setProse(body, bodyContent);
+      } else {
+        body.appendChild(bodyContent);
+      }
       row.appendChild(body);
       grid.appendChild(row);
     };
     for (const [label, value, key] of rows) {
-      addRow(label, key, document.createTextNode(String(value).trim()));
+      addRow(label, key, String(value).trim());
     }
     // SOURCES row — numbered chips built from the models' real citations, with
     // the synthesis' own ``source_support`` prose as a caption beneath them.
@@ -2281,7 +2352,7 @@
         wrap.appendChild(chipRow);
       }
       if (sourceSupport) {
-        wrap.appendChild(mkEl("p", "result-source-support", sourceSupport));
+        wrap.appendChild(setInlineProse(mkEl("p", "result-source-support"), sourceSupport));
       }
       addRow("Sources", "sources", wrap);
     }
@@ -2421,7 +2492,11 @@
 
     const recommendation = fs.recommendation ? String(fs.recommendation).trim() : "";
     content.appendChild(
-      mkEl("div", "result-verdict-text", recommendation || "No recommendation was recorded for this run."),
+      setProse(
+        mkEl("div", "result-verdict-text"),
+        recommendation,
+        "No recommendation was recorded for this run.",
+      ),
     );
 
     // Honest summary line — derived from real fields, no banned verbs.
@@ -2439,7 +2514,7 @@
     // High-stakes caveat, if the synthesis carries one.
     if (fs.high_stakes_notice) {
       content.appendChild(
-        mkEl("span", "result-verdict-caveat", String(fs.high_stakes_notice).trim()),
+        setInlineProse(mkEl("span", "result-verdict-caveat"), String(fs.high_stakes_notice).trim()),
       );
     }
 
@@ -2903,7 +2978,7 @@
   function mkPositionsCell(label, text) {
     const cell = mkEl("td", "result-positions-cell");
     cell.dataset.label = label;
-    if (text) cell.appendChild(mkEl("span", "result-pos-text", String(text)));
+    if (text) cell.appendChild(setInlineProse(mkEl("span", "result-pos-text"), String(text)));
     return cell;
   }
 
@@ -2977,7 +3052,7 @@
 
       const finalCell = mkEl("td", "result-positions-cell");
       finalCell.dataset.label = "Final";
-      if (m.final) finalCell.appendChild(mkEl("span", "result-pos-text", String(m.final)));
+      if (m.final) finalCell.appendChild(setInlineProse(mkEl("span", "result-pos-text"), String(m.final)));
       if (m.revised === true) {
         // Fix 12: this "✓ Revised" chip is GREEN ON PURPOSE — it is the
         // sanctioned agreement/revision semantic (the model changed its
@@ -3108,14 +3183,9 @@
     head.appendChild(tag);
     card.appendChild(head);
 
-    const body = mkEl("p", "transcript-opening-body");
+    const body = mkEl("div", "transcript-opening-body");
     const text = String((answer && answer.answer_text) || "").trim();
-    if (text) {
-      body.textContent = text;
-    } else {
-      body.textContent = "This model did not return an opening answer.";
-      body.classList.add("muted");
-    }
+    setProse(body, text, "This model did not return an opening answer.");
     card.appendChild(body);
     return card;
   }
@@ -3138,14 +3208,9 @@
     }
     card.appendChild(head);
 
-    const body = mkEl("p", "transcript-round-body");
+    const body = mkEl("div", "transcript-round-body");
     const text = String(round.critique_text || "").trim();
-    if (text) {
-      body.textContent = text;
-    } else {
-      body.textContent = "This round did not produce a critique summary.";
-      body.classList.add("muted");
-    }
+    setProse(body, text, "This round did not produce a critique summary.");
     card.appendChild(body);
     return card;
   }
@@ -3735,7 +3800,8 @@
         icon.textContent = "!";
         const body = document.createElement("div");
         body.className = "callout-body";
-        body.textContent = synthesis.high_stakes_notice;
+        // Provider prose (a "**High-stakes:** …" notice) → inline markdown.
+        setInlineProse(body, synthesis.high_stakes_notice);
         notice.append(icon, body);
         stack.appendChild(notice);
       }
@@ -3919,19 +3985,40 @@
       out.push(`<${tag}>${items.join("")}</${tag}>`);
       buffer = [];
     };
+    // Blockquote: consecutive lines starting with ">" collapse into one
+    // <blockquote> (the marker + one optional space is stripped per line).
+    let quoteBuffer = [];
+    const flushQuote = () => {
+      if (!quoteBuffer.length) return;
+      const inner = quoteBuffer
+        .map((line) => mdInline(escapeHtml(line)))
+        .join("<br>");
+      out.push(`<blockquote>${inner}</blockquote>`);
+      quoteBuffer = [];
+    };
     const listMarker = (line) => /^\s*([-*]|\d+\.)\s+/.test(line);
+    const quoteMarker = (line) => /^\s*>\s?/.test(line);
     for (const line of collapsed) {
       if (line.trim() === "") {
         flushParagraph();
         flushList();
+        flushQuote();
+        continue;
+      }
+      if (quoteMarker(line)) {
+        flushParagraph();
+        flushList();
+        quoteBuffer.push(line.replace(/^\s*>\s?/, ""));
         continue;
       }
       if (listMarker(line)) {
         flushParagraph();
+        flushQuote();
         buffer.push(line);
         continue;
       }
       flushList();
+      flushQuote();
       // Headings: "# ", "## ", "### ".
       const heading = line.match(/^(#{1,3})\s+(.*)$/);
       if (heading) {
@@ -3943,7 +4030,49 @@
     }
     flushParagraph();
     flushList();
+    flushQuote();
     return out.join("");
+  }
+
+  // Render BLOCK-level provider prose (headings, lists, paragraphs, inline
+  // emphasis/code/links) into ``el`` via ``formatAnswerText`` — which
+  // HTML-escapes every value, so there is no XSS regression vs the old
+  // ``textContent`` path. Adds ``q-prose`` for the shared nested-element
+  // spacing. Falls back to a muted placeholder when the text is empty.
+  // Container must be a block element (div), never a <p>/<span> (formatted
+  // output contains <p>/<h*>/<ul>). Returns ``el``.
+  function setProse(el, rawText, placeholder) {
+    const html = formatAnswerText(rawText);
+    if (html) {
+      el.classList.add("q-prose");
+      el.classList.remove("muted");
+      el.innerHTML = html;
+    } else if (placeholder != null) {
+      el.classList.remove("q-prose");
+      el.classList.add("muted");
+      el.textContent = placeholder;
+    } else {
+      el.textContent = "";
+    }
+    return el;
+  }
+
+  // Render INLINE-only provider prose (bold/italic/inline code/links, no block
+  // structure) into ``el`` via ``mdInline`` — escaping first so no raw HTML is
+  // reintroduced. For single-line span/cell/caption surfaces where block tags
+  // would be invalid. Falls back to a muted placeholder. Returns ``el``.
+  function setInlineProse(el, rawText, placeholder) {
+    const text = rawText == null ? "" : String(rawText).trim();
+    if (text) {
+      el.classList.remove("muted");
+      el.innerHTML = mdInline(escapeHtml(text));
+    } else if (placeholder != null) {
+      el.classList.add("muted");
+      el.textContent = placeholder;
+    } else {
+      el.textContent = "";
+    }
+    return el;
   }
 
   // Inline markdown renderer. Escaped text is the input (so we
@@ -3982,7 +4111,34 @@
         return `<a href="${escapeHtml(href)}" target="_blank" rel="noopener noreferrer">${text}</a>`;
       },
     );
+    // Underscore emphasis (LLMs emit both ``_x_`` and ``*x*``). Runs LAST and
+    // ONLY on text OUTSIDE already-emitted tags (via ``applyOutsideTags``), so a
+    // URL underscore inside an ``href="…"`` attribute is never touched. Uses
+    // GFM word-boundary rules: the opening marker must follow a non-word char
+    // (or start) and the closing marker must NOT be followed by a word char, so
+    // intra-word underscores in identifiers (``retention_flag``, ``snake_case``)
+    // are left alone. ``__strong__`` before ``_em_``.
+    s = applyOutsideTags(s, (seg) =>
+      seg
+        .replace(/(^|[^\w])__([^\s_](?:[^_]*[^\s_])?)__(?!\w)/g, (_m, lead, t) => `${lead}<strong>${t}</strong>`)
+        .replace(/(^|[^\w])_([^\s_](?:[^_]*[^\s_])?)_(?!\w)/g, (_m, lead, t) => `${lead}<em>${t}</em>`),
+    );
     return s;
+  }
+
+  // Apply ``fn`` only to the plain-text runs of a string that already contains
+  // emitted HTML — every ``<…>`` tag (with its attributes) AND every whole
+  // ``<code>…</code>`` span is passed through UNTOUCHED. Inline code is verbatim
+  // by contract, so emphasis must never fire inside it (`` `__init__` `` must stay
+  // literal, not become bold). The split captures either a full code span or a
+  // single tag as the delimiter; any part that starts with ``<`` is such a
+  // delimiter (all provider ``<`` were escaped to ``&lt;`` upstream, so only our
+  // emitted markup begins with a literal ``<``) and is left alone.
+  function applyOutsideTags(s, fn) {
+    return s
+      .split(/(<code>[\s\S]*?<\/code>|<[^>]*>)/)
+      .map((part) => (part && part.charAt(0) === "<" ? part : fn(part)))
+      .join("");
   }
 
   // Reverse the five entities ``escapeHtml`` emits, so a URL that was escaped
@@ -4438,6 +4594,17 @@
     return `$${num.toFixed(2)}`;
   }
 
+  // Format a planning band ``lo``–``hi`` at whole-cent precision, but COLLAPSE
+  // to a single figure when both endpoints round to the same cents (issue #19):
+  // a "$0.15–$0.15" range reads as a broken widget, not a range. Renders the
+  // low endpoint as the single value in that case (the band is illustrative, so
+  // either endpoint is representative). Assumes ``lo <= hi``.
+  function gateRangeText(lo, hi) {
+    const loText = gateUsd2dp(lo);
+    const hiText = gateUsd2dp(hi);
+    return loText === hiText ? loText : `${loText}–${hiText}`;
+  }
+
   // Choose ONE decimal count for a whole itemized column so every cell
   // aligns. Driven by the SMALLEST magnitude present (< $0.01 → 4 dp;
   // < $1 → 3 dp; else 2 dp) and applied to every row AND the Total —
@@ -4592,11 +4759,11 @@
       const maxCost = Number(ce.max_cost_usd);
       if (Number.isFinite(maxCost) && maxCost > total) {
         const hi = Math.min(maxCost, COST_HARD_LIMIT_USD);
-        gateRange.textContent = `${gateUsd2dp(total)}–${gateUsd2dp(hi)}`;
+        gateRange.textContent = gateRangeText(total, hi);
       } else {
         const lo = total * (1 - PLANNING_RANGE_PCT);
         const hi = Math.min(total * (1 + PLANNING_RANGE_PCT), COST_HARD_LIMIT_USD);
-        gateRange.textContent = `${gateUsd2dp(lo)}–${gateUsd2dp(hi)}`;
+        gateRange.textContent = gateRangeText(lo, hi);
       }
     }
     // ``allow`` reaches here only via "See the estimate" (a deliberate review
@@ -5116,7 +5283,7 @@
         notices: null,
       };
       state.liveElapsedBaseMs = 0;
-      state.liveElapsedStamp = Date.now();
+      state.liveElapsedStamp = nowMs();
       setRunning(true);
       updateRunMeta(created);
       renderProgress(created.progress);

@@ -101,16 +101,18 @@ jobs:
           tests/ui-parity/parity-behavior.spec.ts
           tests/docs/docs-under-csp.spec.ts
           tests/invariants/real-integration-smoke.spec.ts
+          tests/degraded/degraded-banner.spec.ts
           --project=chromium
           --retries=0
 
-      - name: Run UI rendering invariants (non-blocking until #29/#30/#33 fixed)
+      - name: Run UI rendering invariants (BLOCKING)
         working-directory: e2e
         # These assert no raw Markdown / no overflow / a monotonic timer against
-        # the golden messy fixture. They are RED TODAY on purpose (the bugs are
-        # unfixed). continue-on-error keeps main mergeable while surfacing the
-        # red in logs; the fix PR MUST delete this line to make the gate hard.
-        continue-on-error: true
+        # the golden messy fixture. The #29 (monotonic timer) and #30 (markdown
+        # on all provider-prose surfaces + underscore/blockquote formatter
+        # extension) fixes have landed and turn these GREEN, so the gate is now
+        # HARD: continue-on-error was removed (the enforcement handoff). A red
+        # here is a real regression and blocks the merge.
         env:
           CI: "true"
         run: >-
@@ -119,12 +121,21 @@ jobs:
           --project=chromium
           --retries=0
 
-      # Visual snapshots (tests/invariants/visual-snapshots.spec.ts) are NOT run
-      # here yet: toHaveScreenshot needs Linux baselines seeded in THIS CI
-      # container (mac baselines are platform-suffixed and unused on ubuntu).
-      # Seed them once with `--update-snapshots` in a CI run, commit the
-      # *-linux.png baselines, then add the spec above. Tracked in
-      # docs/analysis/03-enforcement-machinery.md.
+      - name: Run visual snapshots (BLOCKING)
+        working-directory: e2e
+        # toHaveScreenshot baselines for the result + transcript views against the
+        # golden messy fixture — the human-reviewed guard for the #33 layout.
+        # The *-linux.png baselines were seeded in THIS CI container by
+        # seed-visual-baselines.yml (--update-snapshots) and committed; here they
+        # are COMPARED like-for-like. Dynamic regions (timer/run-id) + toasts are
+        # masked/hidden so the diff never flakes.
+        env:
+          CI: "true"
+        run: >-
+          npx playwright test
+          tests/invariants/visual-snapshots.spec.ts
+          --project=chromium
+          --retries=0
 
       - name: Upload Playwright report
         if: ${{ !cancelled() }}
