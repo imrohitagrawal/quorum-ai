@@ -265,3 +265,11 @@ Given a query is accepted, when it moves through submission, provider calls, fal
 
 - Requirement: NFR-010
 - Test: TEST-NFR-010
+
+## AC-037 Web-search plugin fee is an accepted cost-accounting exclusion
+
+Given OpenRouter charges a flat per-request web-search plugin fee (~$0.02/request) that is separate from token cost, when a query's cost is estimated and later measured, then the system intentionally does NOT account for that fee: `cost_web_search_request_fee_usd` is permanently `0.0` by decision, the fee is never surfaced to the user or on the UI (at `0.0` it folds invisibly into the total estimate — no separate line item), and the cost guardrail remains fail-safe without it because the pre-run estimate already runs at or above the measured token cost (measured live run 2026-07-17: estimate $0.0199 ≥ actual $0.0149). The per-slot plumbing (server + client) is retained only as a dormant repo-tracking hook, not a pending activation.
+
+- Requirement: NFR-002
+- Decision: accepted 2026-07-17 (issue #18); see CHG-005 and `config.py cost_web_search_request_fee_usd`
+- Test: existing #18 mechanism tests (behaviour unchanged at `0.0`)

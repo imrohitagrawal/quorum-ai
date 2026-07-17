@@ -155,15 +155,17 @@ class Settings(BaseSettings):
     #: (issue #18). Applied per slot only when that slot has search enabled;
     #: search-disabled slots omit it. Tunable via ``COST_WEB_SEARCH_REQUEST_FEE_USD``.
     #:
-    #: DEFAULT 0.0 (mechanism ships OFF): the fee is a real OpenRouter charge
-    #: (~$4/1,000 results × 5 = ~$0.02/request per their docs), but a $0.02/slot
-    #: fee shifts the point estimate ~$0.08 on a 4-search run, which moves the
-    #: safety guardrail's CONFIRM/BLOCK bands. Changing a guardrail-affecting
-    #: value from a documented-but-never-MEASURED number — and re-calibrating the
-    #: band tests around it — is a human decision tied to the pending measured-cost
-    #: run (issue #24). The plumbing (server + client, per-slot) and its tests are
-    #: in place; set this to the measured value to activate. Until then the term
-    #: is present but zero, so behaviour is unchanged.
+    #: DEFAULT 0.0 — INTENTIONALLY, PERMANENTLY OFF (accepted decision, 2026-07-17;
+    #: see AC-037 in docs/12-acceptance-criteria.md and issue #18). The fee is a
+    #: real OpenRouter charge (~$4/1,000 results × 5 = ~$0.02/request per their
+    #: docs), but we have ACCEPTED not to account for it: the 2026-07-17 measured
+    #: live run showed the pre-run estimate already runs ABOVE the actual token
+    #: cost (est $0.0199 ≥ measured $0.0149), so the cost guardrail — which keys
+    #: off the estimate — stays fail-safe without this term. The plumbing (server
+    #: + client, per-slot) is retained ONLY as a dormant repo-tracking hook, not a
+    #: pending TODO; it is never surfaced to users (at 0.0 it folds invisibly into
+    #: the total estimate, no separate line). Activating it would shift the
+    #: CONFIRM/BLOCK bands and is deliberately NOT done. Leave at 0.0.
     cost_web_search_request_fee_usd: float = 0.0
     #: Output-token floor for a single initial answer.
     cost_initial_output_tokens: int = 700
