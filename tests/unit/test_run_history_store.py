@@ -143,7 +143,9 @@ def test_update_evaluation_fills_eval_and_trust_json() -> None:
     store = RunHistoryStore(":memory:")
     row = _row()
     store.record_terminal_run(row)
-    assert store.get(row.query_run_id).eval_json is None
+    stored = store.get(row.query_run_id)
+    assert stored is not None
+    assert stored.eval_json is None
 
     store.update_evaluation(
         row.query_run_id,
@@ -152,6 +154,7 @@ def test_update_evaluation_fills_eval_and_trust_json() -> None:
     )
 
     got = store.get(row.query_run_id)
+    assert got is not None
     assert got.eval_json == {"faithfulness": 0.9, "judge": None}
     assert got.trust_json == {"score": 82, "band": "high"}
     store.close()

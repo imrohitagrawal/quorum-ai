@@ -30,13 +30,15 @@ wrapper swallows.
 
 from __future__ import annotations
 
+import atexit
 import json
 import logging
 import os
 import sqlite3
 import threading
+import weakref
 from collections.abc import Iterator
-from contextlib import contextmanager
+from contextlib import contextmanager, suppress
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from decimal import Decimal
@@ -60,11 +62,20 @@ def _to_utc_iso(value: datetime) -> str:
         return value.replace(tzinfo=UTC).isoformat()
     return value.astimezone(UTC).isoformat()
 
+
 #: Default on-disk location. Operators override via ``RUN_HISTORY_DB_PATH``
 #: (set to ``/data/run_history.sqlite3`` on the Fly volume in ``fly.toml``).
 #: ``:memory:`` is the test home; a local file under ``.data/`` is the dev
 #: default so dev runs do not pollute the repo.
 DEFAULT_DB_PATH = ".data/run_history.sqlite3"
+
+#: How long :meth:`RunHistoryStore.close` waits for the store lock before closing
+#: the handle regardless. Sized from the longest *legitimate* lock hold measured
+#: on these stores: 0.44s for ``iter_runs`` over 50k rows (the slowest), so 5s is
+#: >10x headroom for a disk-backed volume. Anything past that is not contention,
+#: it is a lock that will never be released. Kept in sync with
+#: ``feedback_store._CLOSE_LOCK_TIMEOUT_S``.
+_CLOSE_LOCK_TIMEOUT_S = 5.0
 
 
 @dataclass(frozen=True)
@@ -136,6 +147,7 @@ class RunHistoryStore:
     def __init__(self, db_path: str) -> None:
         self._db_path = db_path
         self._lock = threading.RLock()
+        self._closed = False
         self._conn = sqlite3.connect(
             db_path,
             check_same_thread=False,
@@ -144,6 +156,7 @@ class RunHistoryStore:
         self._conn.row_factory = sqlite3.Row
         with self._lock:
             self._conn.executescript(self._SCHEMA)
+        _open_stores.add(self)
 
     @classmethod
     def from_env(cls) -> RunHistoryStore:
@@ -286,8 +299,59 @@ class RunHistoryStore:
             return int(cursor.fetchone()["n"])
 
     def close(self) -> None:
-        with self._lock:
+        """Close the connection. Idempotent — the exit hook, ``configure_for_tests``
+        and ``__del__`` can all reach the same instance.
+
+        The lock acquire is **bounded**, for the reason spelled out in
+        ``feedback_store.FeedbackStore.close``: this runs from ``__del__`` and
+        from the ``atexit`` hook, and a finaliser that blocks hangs the whole
+        interpreter — on Fly, a shutdown that never drains and is SIGKILLed. If
+        the lock cannot be taken the handle is closed anyway.
+        """
+        acquired = self._lock.acquire(timeout=_CLOSE_LOCK_TIMEOUT_S)
+        if not acquired:
+            _log.warning(
+                "run_history_store: close() could not take the store lock within %ss; "
+                "closing the sqlite handle anyway to keep shutdown bounded",
+                _CLOSE_LOCK_TIMEOUT_S,
+            )
+        try:
+            if self._closed:
+                return
+            self._closed = True
             self._conn.close()
+        finally:
+            if acquired:
+                self._lock.release()
+        _open_stores.discard(self)
+
+    def __del__(self) -> None:
+        # A store dropped without ``close()`` (a displaced singleton, a helper
+        # that forgot teardown) used to leak the handle until sqlite3's own
+        # finaliser complained with ``ResourceWarning: unclosed database``.
+        # Best-effort: during interpreter shutdown the attributes this touches
+        # may already be gone, and a finaliser must never raise.
+        with suppress(Exception):  # teardown is best-effort by definition
+            self.close()
+
+
+#: Every live store, weakly held. The process-exit hook closes whatever is still
+#: open; a ``WeakSet`` avoids the classic ``atexit`` mistake of pinning every
+#: store ever built for the lifetime of the process.
+_open_stores: weakref.WeakSet[RunHistoryStore] = weakref.WeakSet()
+
+
+def _close_open_stores() -> None:
+    """Close every still-open store. Registered with :mod:`atexit`.
+
+    The singleton installed at app start lives for the whole process, so nothing
+    else ever closes it. ``close()`` mutates ``_open_stores``, hence the copy.
+    """
+    for store in list(_open_stores):
+        store.close()
+
+
+atexit.register(_close_open_stores)
 
 
 def _row_from_sqlite(row: sqlite3.Row) -> RunHistoryRow:
@@ -349,9 +413,7 @@ def record_terminal_run(row: RunHistoryRow) -> None:
     try:
         store.record_terminal_run(row)
     except Exception as exc:  # noqa: BLE001 — run-history sink is best-effort
-        _log.warning(
-            "run_history_store: failed to persist run %s: %s", row.query_run_id, exc
-        )
+        _log.warning("run_history_store: failed to persist run %s: %s", row.query_run_id, exc)
 
 
 @contextmanager

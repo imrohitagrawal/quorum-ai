@@ -15,6 +15,7 @@ depends on. They are network-free (sim pipeline in the test env).
 from __future__ import annotations
 
 from decimal import Decimal
+from typing import Any
 from uuid import UUID, uuid4
 
 import pytest
@@ -79,9 +80,7 @@ def test_completed_run_persisted_with_verbatim_cost_and_survives_eviction() -> N
         # Cost provenance copied VERBATIM from the API response.
         assert row.cost_source == body["cost_source"]
         assert row.actual_cost_usd == Decimal(str(body["actual_cost_usd"]))
-        assert row.estimated_cost_usd == Decimal(
-            str(body["cost_estimate"]["estimated_cost_usd"])
-        )
+        assert row.estimated_cost_usd == Decimal(str(body["cost_estimate"]["estimated_cost_usd"]))
         # Metrics match the response.
         assert row.status == body["status"]
         assert row.live_count == body["live_count"]
@@ -105,14 +104,14 @@ def test_partial_run_is_persisted(monkeypatch: pytest.MonkeyPatch) -> None:
     """A run that ends PARTIAL (no usable initial answers) still persists."""
     import product_app.query_runs as qr
 
-    # Force every initial slot to fail so the run terminates PARTIAL early.
-    def _all_fail(*args: object, **kwargs: object):  # type: ignore[no-untyped-def]
-        slot = kwargs.get("model_slot") or args[3]
-        return qr.provider_execution_service.cancelled_answer(slot)
+    service = qr.provider_execution_service  # type: ignore[attr-defined]
 
-    monkeypatch.setattr(
-        qr.provider_execution_service, "produce_initial_answer", _all_fail
-    )
+    # Force every initial slot to fail so the run terminates PARTIAL early.
+    def _all_fail(*args: Any, **kwargs: Any) -> object:
+        slot = kwargs.get("model_slot") or args[3]
+        return service.cancelled_answer(slot)
+
+    monkeypatch.setattr(service, "produce_initial_answer", _all_fail)
 
     client = TestClient(app)
     account_id = uuid4()

@@ -28,13 +28,15 @@ an in-memory ``":memory:"`` connection via ``configure_for_tests``.
 
 from __future__ import annotations
 
+import atexit
 import json
 import logging
 import os
 import sqlite3
 import threading
+import weakref
 from collections.abc import Iterable, Iterator
-from contextlib import contextmanager
+from contextlib import contextmanager, suppress
 from dataclasses import asdict, dataclass
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
@@ -51,6 +53,14 @@ _log = logging.getLogger(__name__)
 #: the test home; a local file under ``.data/`` is the dev default
 #: so dev runs do not pollute the repo.
 DEFAULT_DB_PATH = ".data/feedback_events.sqlite3"
+
+#: How long :meth:`FeedbackStore.close` waits for the store lock before closing
+#: the handle regardless. Sized from the longest *legitimate* lock hold measured
+#: on this store: 0.19s to read 100k events under the lock (and 0.44s for
+#: ``RunHistoryStore.iter_runs`` over 50k rows, the slower sibling), so 5s is
+#: >10x headroom for a disk-backed volume. Anything past that is not contention,
+#: it is a lock that will never be released.
+_CLOSE_LOCK_TIMEOUT_S = 5.0
 
 
 def _json_default(value: Any) -> Any:
@@ -97,8 +107,9 @@ class FeedbackStore:
 
     Thread-safe: a single ``RLock`` guards the connection. The audit job
     reads via a dedicated ``iter_events`` method that returns a generator
-    over the rows; the lock is held for the duration of the iteration so
-    the read is consistent.
+    over the rows; the read is taken in one shot under the lock so it is
+    consistent, and the lock is released before the rows are yielded (see
+    ``iter_events`` for why holding it across a ``yield`` was a shutdown hazard).
     """
 
     _SCHEMA = """
@@ -120,6 +131,7 @@ class FeedbackStore:
     def __init__(self, db_path: str) -> None:
         self._db_path = db_path
         self._lock = threading.RLock()
+        self._closed = False
         # ``check_same_thread=False`` lets the audit job read from a
         # different thread than the writer. The lock above serialises
         # access either way.
@@ -131,6 +143,7 @@ class FeedbackStore:
         self._conn.row_factory = sqlite3.Row
         with self._lock:
             self._conn.executescript(self._SCHEMA)
+        _open_stores.add(self)
 
     @classmethod
     def from_env(cls) -> FeedbackStore:
@@ -194,8 +207,17 @@ class FeedbackStore:
         ``since`` is the lower-bound on ``recorded_at``; ``recorders`` is
         a whitelist of recorder names (``"synthesis"``, ``"provider"``,
         ``"model_slot"``, ``"cost"``, ``"safety"``, ``"debate"``). Both
-        are optional. The iteration is consistent under the lock so the
+        are optional. The rows are read in one shot under the lock so the
         audit job never sees a partial-write mid-iteration.
+
+        The lock is deliberately **not** held across the ``yield``s. It used to
+        be, which meant a consumer that abandoned the generator had it finalised
+        later — possibly on another thread, where ``RLock.release()`` raises
+        ``cannot release un-acquired lock`` and leaves the lock held forever by a
+        thread that no longer exists. Every later ``close()`` (``__del__``, the
+        exit hook) then blocked and the process could not exit. Materialising
+        inside the lock removes that failure mode at the source; ``close()``'s
+        bounded acquire is the second line of defence.
         """
         clauses: list[str] = []
         params: list[Any] = []
@@ -213,16 +235,17 @@ class FeedbackStore:
                 f"recorded_at, payload FROM events{where} ORDER BY id",
                 params,
             )
-            for row in cursor:
-                yield FeedbackEventRow(
-                    id=row["id"],
-                    recorder=row["recorder"],
-                    event_type=row["event_type"],
-                    account_id=row["account_id"],
-                    query_run_id=row["query_run_id"],
-                    recorded_at=datetime.fromisoformat(row["recorded_at"]),
-                    payload=json.loads(row["payload"]),
-                )
+            rows = cursor.fetchall()
+        for row in rows:
+            yield FeedbackEventRow(
+                id=row["id"],
+                recorder=row["recorder"],
+                event_type=row["event_type"],
+                account_id=row["account_id"],
+                query_run_id=row["query_run_id"],
+                recorded_at=datetime.fromisoformat(row["recorded_at"]),
+                payload=json.loads(row["payload"]),
+            )
 
     def event_count(self) -> int:
         """Return the total number of persisted events."""
@@ -273,8 +296,63 @@ class FeedbackStore:
         return total
 
     def close(self) -> None:
-        with self._lock:
+        """Close the connection. Idempotent — the exit hook, ``configure_for_tests``
+        and ``__del__`` can all reach the same instance.
+
+        The lock acquire is **bounded**. ``close()`` runs from ``__del__`` and
+        from the ``atexit`` hook, and a finaliser that blocks does not fail —
+        it hangs the interpreter, which on Fly is a shutdown that never drains
+        and is SIGKILLed at the end of the grace period. Waiting forever is
+        therefore never the right trade here: if the lock cannot be taken the
+        handle is closed anyway. ``sqlite3.Connection.close()`` is safe to call
+        without the lock (``check_same_thread=False``); the worst case is a
+        concurrent statement raising ``ProgrammingError``, which is strictly
+        better than not exiting.
+        """
+        acquired = self._lock.acquire(timeout=_CLOSE_LOCK_TIMEOUT_S)
+        if not acquired:
+            _log.warning(
+                "feedback_store: close() could not take the store lock within %ss; "
+                "closing the sqlite handle anyway to keep shutdown bounded",
+                _CLOSE_LOCK_TIMEOUT_S,
+            )
+        try:
+            if self._closed:
+                return
+            self._closed = True
             self._conn.close()
+        finally:
+            if acquired:
+                self._lock.release()
+        _open_stores.discard(self)
+
+    def __del__(self) -> None:
+        # A store dropped without ``close()`` (a displaced singleton, a helper
+        # that forgot teardown) used to leak the handle until sqlite3's own
+        # finaliser complained with ``ResourceWarning: unclosed database``.
+        # Best-effort: during interpreter shutdown the attributes this touches
+        # may already be gone, and a finaliser must never raise.
+        with suppress(Exception):  # teardown is best-effort by definition
+            self.close()
+
+
+#: Every live store, weakly held. The process-exit hook closes whatever is still
+#: open; a ``WeakSet`` avoids the classic ``atexit`` mistake of pinning every
+#: store ever built for the lifetime of the process.
+_open_stores: weakref.WeakSet[FeedbackStore] = weakref.WeakSet()
+
+
+def _close_open_stores() -> None:
+    """Close every still-open store. Registered with :mod:`atexit`.
+
+    The singleton installed at app start lives for the whole process, so nothing
+    else ever closes it. ``close()`` mutates ``_open_stores``, hence the copy.
+    """
+    for store in list(_open_stores):
+        store.close()
+
+
+atexit.register(_close_open_stores)
 
 
 #: Process-wide singleton. ``None`` when the store is disabled (e.g. in
