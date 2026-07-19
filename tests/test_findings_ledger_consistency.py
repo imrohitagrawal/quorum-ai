@@ -1,0 +1,251 @@
+"""The findings ledger must not lie about what is built (Phase-0 self-check).
+
+`docs/analysis/R2-plan-review-findings.md` is the durable per-item status record
+the reconciling session verifies Phase-0 completion against
+(`PHASE-0-BUILD-PROMPT.md` §0/§4.4). Its whole value is that it is *below the
+line*: if it drifts from the repo, the reconciler falls back to chat text — the
+exact above-the-line evidence the ledger exists to replace.
+
+Prose cannot enforce that. These tests do, mechanically:
+
+1. every row uses a status token from the ledger's own legend;
+2. an item whose Phase-0 artifacts all exist on disk (and are non-empty) MUST
+   read ``DONE`` — a built-and-proven gate may not still read ``BUILD``/``DOC-FIX``;
+3. every ``DONE`` row must cite a proof pointer *registered for that item* and
+   pointing at a non-empty file — so ``DONE`` cannot be claimed without an
+   artifact of its own ("done = artifact + proven");
+4. every still-open ``BUILD`` row must name the slice that owns it, so the
+   out-of-scope confirmation the brief demands is unambiguous.
+
+Rule 3 originally accepted *any* existing path, which made it decorative: a
+session that built nothing could rewrite all 27 status cells to
+``DONE — `pyproject.toml``` and stay green (measured: 0 failures on that
+mutant). It is now keyed to the item — the cited path must be one of the paths
+registered for that row below, and it must be non-empty — and the build
+artifacts are additionally checked to be *new since the S1 baseline*
+(:data:`S1_BASELINE_SHA`), so the registry cannot be pointed at pre-existing
+files either.
+
+Rules 2, 3 and 4 have each been RED on a real defect or an injected mutant.
+"""
+
+from __future__ import annotations
+
+import re
+import subprocess
+from pathlib import Path
+
+import pytest
+
+REPO_ROOT = Path(__file__).resolve().parents[1]
+LEDGER_PATH = REPO_ROOT / "docs" / "analysis" / "R2-plan-review-findings.md"
+
+#: The commit Phase 0 started from (end of S1). Anything listed in
+#: :data:`PHASE0_ARTIFACTS` must be absent there — otherwise the "artifact
+#: proves the item" claim is being made with a file that predates the work.
+S1_BASELINE_SHA = "5ccd6f9"
+
+#: The legend at the top of the ledger. Any other token is a typo or an
+#: invented status nobody can act on.
+ALLOWED_STATUS_TOKENS = {
+    "OPEN",
+    "DECIDED",
+    "DOC-FIX",
+    "BUILD",
+    "DONE",
+    "WONTFIX",
+}
+
+#: Item ID -> the artifact(s) whose existence proves the item was built.
+#: Only files *created* by Phase 0 are listed: a pre-existing file proves
+#: nothing about the item. When every path exists, the row must read DONE.
+PHASE0_ARTIFACTS: dict[str, tuple[str, ...]] = {
+    "EN-2": (
+        "scripts/validate_fr_completeness.py",
+        "tests/test_fr_completeness_gate.py",
+    ),
+    "OC-4": ("docs/metrics/quality-ledger.md",),
+    "RB-1": ("docs/metrics/diff-cover.md",),
+    "RB-2": ("tests/perf/test_workflow_latency_percentiles.py",),
+    "RB-3": (
+        "tests/test_store_lifecycle.py",
+        "tests/test_store_concurrency.py",
+        "docs/adr/0002-sqlite-single-writer-ceiling.md",
+    ),
+    "RB-7": ("docs/metrics/mutation-baseline.md",),
+    "P0-F": ("tests/contract/test_api_contract_schemathesis.py",),
+    "P0-H": ("docs/analysis/09-enforcement-hooks.md",),
+}
+
+#: Item ID -> the file(s) a *doc-fix* item legitimately proves itself with.
+#: These are edits to pre-existing docs, so existence proves nothing on its own
+#: — their job here is to key the proof pointer to the item, so a row cannot
+#: borrow some unrelated file's existence. Adding a path here is a claim that
+#: the item's fix actually landed in that file; keep it specific, never add a
+#: catch-all like ``pyproject.toml``.
+DOC_FIX_PROOFS: dict[str, tuple[str, ...]] = {
+    "EN-1": ("docs/DAY-ONE-PROMPT.md", "docs/R2-comprehensive-plan.md"),
+    "EN-3": ("docs/DAY-ONE-PROMPT.md", "docs/R2-comprehensive-plan.md"),
+    "EN-4": ("docs/DAY-ONE-PROMPT.md",),
+    "EN-5": ("docs/R2-comprehensive-plan.md", "docs/metrics/quality-ledger.md"),
+    "EN-6": (
+        "docs/analysis/03-enforcement-machinery.md",
+        ".github/workflows/e2e.yml",
+    ),
+    "RB-8": ("docs/DAY-ONE-PROMPT.md", "tests/contract/test_api_contract_schemathesis.py"),
+    "FS-1": ("docs/R2-comprehensive-plan.md",),
+    "FS-2": ("docs/DAY-ONE-PROMPT.md",),
+    "FS-3": ("docs/R2-comprehensive-plan.md",),
+    "FS-4": ("docs/00-factory-console.md", "docs/session-handoff.md"),
+    "FS-5": (
+        "R2-S2-S4-ULTRACODE-PROMPT.md",
+        "docs/R2-comprehensive-plan.md",
+        "tests/test_ultracode_prompt_enforcement_contract.py",
+        "tests/test_findings_ledger_fs5_status.py",
+    ),
+    "FS-6": ("docs/DAY-ONE-PROMPT.md", "docs/R2-comprehensive-plan.md"),
+    "FS-7": ("docs/DAY-ONE-PROMPT.md",),
+    "FS-8": ("docs/DAY-ONE-PROMPT.md",),
+    "FS-9": ("docs/R2-comprehensive-plan.md",),
+    "FS-10": ("docs/DAY-ONE-PROMPT.md",),
+    "CF-1": ("docs/day-one-quality-standard.md",),
+    "CF-2": ("docs/DAY-ONE-PROMPT.md",),
+    "CF-3": ("docs/DAY-ONE-PROMPT.md",),
+}
+
+#: A path-shaped backtick span in a status cell, e.g. `tests/perf/x.py`.
+_PROOF_POINTER_RE = re.compile(r"`([^`]+?\.(?:py|md|toml|json|ya?ml))`")
+_ROW_ID_RE = re.compile(r"^[A-Z][A-Z0-9]-[0-9A-Z]+$")
+_SLICE_RE = re.compile(r"\bS[234]\b")
+
+
+def _registered_proofs(item: str) -> tuple[str, ...]:
+    """Every path that may stand as proof for ``item`` (build + doc-fix)."""
+    merged = PHASE0_ARTIFACTS.get(item, ()) + DOC_FIX_PROOFS.get(item, ())
+    return tuple(dict.fromkeys(merged))
+
+
+def _is_real_artifact(rel_path: str) -> bool:
+    """Exists *and* has content — ``touch docs/metrics/x.md`` proves nothing."""
+    path = REPO_ROOT / rel_path
+    return path.is_file() and path.stat().st_size > 0
+
+
+def _rows() -> dict[str, str]:
+    """Ledger item ID -> its Status cell (the last column)."""
+    rows: dict[str, str] = {}
+    for line in LEDGER_PATH.read_text(encoding="utf-8").splitlines():
+        if not line.startswith("|"):
+            continue
+        cells = [cell.strip() for cell in line.strip().strip("|").split("|")]
+        if len(cells) < 2 or not _ROW_ID_RE.match(cells[0]):
+            continue
+        rows[cells[0]] = cells[-1]
+    return rows
+
+
+@pytest.fixture(scope="module")
+def ledger_rows() -> dict[str, str]:
+    rows = _rows()
+    assert rows, f"no parsable item rows in {LEDGER_PATH}"
+    return rows
+
+
+def test_every_status_uses_a_legend_token(ledger_rows: dict[str, str]) -> None:
+    """A status nobody defined is a status nobody can act on."""
+    bad = {
+        item: status
+        for item, status in ledger_rows.items()
+        if not any(token in status for token in ALLOWED_STATUS_TOKENS)
+    }
+    assert not bad, f"status cells with no legend token: {bad}"
+
+
+@pytest.mark.parametrize("item", sorted(PHASE0_ARTIFACTS))
+def test_built_items_read_done(item: str, ledger_rows: dict[str, str]) -> None:
+    """If the artifacts exist, the ledger may not still say BUILD/DOC-FIX."""
+    assert item in ledger_rows, f"{item} has no row in the ledger"
+    missing = [p for p in PHASE0_ARTIFACTS[item] if not _is_real_artifact(p)]
+    if missing:
+        pytest.skip(f"{item} artifacts not built yet: {missing}")
+    status = ledger_rows[item]
+    assert "DONE" in status, (
+        f"{item}: every artifact exists ({', '.join(PHASE0_ARTIFACTS[item])}) "
+        f"but the ledger still reads {status!r}"
+    )
+
+
+def test_every_done_row_registers_its_own_proof_paths(
+    ledger_rows: dict[str, str],
+) -> None:
+    """A row may not go ``DONE`` until someone records what would prove it.
+
+    Without this, rule 3 can be satisfied by inventing a new DONE row and
+    citing any file in the repo — the registry is what ties status to work.
+    """
+    unregistered = sorted(
+        item
+        for item, status in ledger_rows.items()
+        if "DONE" in status and not _registered_proofs(item)
+    )
+    assert not unregistered, (
+        "DONE rows with no registered proof path — add the item's real "
+        f"artifact(s) to PHASE0_ARTIFACTS/DOC_FIX_PROOFS: {unregistered}"
+    )
+
+
+def test_done_rows_cite_an_existing_proof_pointer(
+    ledger_rows: dict[str, str],
+) -> None:
+    """``DONE`` without a real artifact *of its own* is the claim this replaces.
+
+    The pointer must be registered for **this** item and resolve to a non-empty
+    file; citing an unrelated pre-existing path (``pyproject.toml``) or an empty
+    placeholder is exactly the gaming this ledger exists to prevent.
+    """
+    offenders: dict[str, str] = {}
+    for item, status in ledger_rows.items():
+        if "DONE" not in status:
+            continue
+        registered = set(_registered_proofs(item))
+        if not registered:
+            continue  # reported by the registration test above
+        cited = [p for p in _PROOF_POINTER_RE.findall(status) if p in registered]
+        if not any(_is_real_artifact(p) for p in cited):
+            offenders[item] = status
+    assert not offenders, (
+        f"DONE rows citing no registered, non-empty proof path for their own item: {offenders}"
+    )
+
+
+@pytest.mark.parametrize("item", sorted(PHASE0_ARTIFACTS))
+def test_phase0_artifacts_are_new_since_the_s1_baseline(item: str) -> None:
+    """The registry may only claim files Phase 0 actually created.
+
+    ``git cat-file -e`` on the baseline tree is the cheap, deterministic form of
+    "added since ``S1_BASELINE_SHA``" — the artifacts are still untracked while
+    Phase 0 runs, so ``git log --diff-filter=A`` cannot see them yet.
+    """
+    preexisting = []
+    for rel_path in PHASE0_ARTIFACTS[item]:
+        probe = subprocess.run(
+            ["git", "cat-file", "-e", f"{S1_BASELINE_SHA}:{rel_path}"],
+            cwd=REPO_ROOT,
+            capture_output=True,
+        )
+        if probe.returncode == 0:
+            preexisting.append(rel_path)
+    assert not preexisting, (
+        f"{item}: these already existed at {S1_BASELINE_SHA}, so they prove "
+        f"nothing about Phase-0 work: {preexisting}"
+    )
+
+
+def test_open_build_rows_name_their_slice(ledger_rows: dict[str, str]) -> None:
+    """An unbuilt BUILD item must say which slice owns it (S2/S3/S4)."""
+    offenders = {
+        item: status
+        for item, status in ledger_rows.items()
+        if "BUILD" in status and "DONE" not in status and not _SLICE_RE.search(status)
+    }
+    assert not offenders, f"BUILD rows with no owning slice: {offenders}"

@@ -27,6 +27,41 @@
 
 ---
 
+## Precondition — Phase 0 (enforcement machinery) must be complete (FS-5)
+
+**S2 may not start until the Phase-0 enforcement gates exist and are RED-proven.**
+This is a literal precondition, not a note: it is satisfied by *running* the
+gates in this checkout, never by reading `docs/R2-comprehensive-plan.md` and
+believing it. A plan is influence; only a gate that fails the build is
+enforcement.
+
+Run this first. If any command is missing or fails, STOP and finish Phase 0
+(`PHASE-0-BUILD-PROMPT.md`, plan Part B0/Part B) before touching S2:
+
+```bash
+make validate            # factory gates + FR-completeness
+make fr-completeness     # every FR-0NN has a registry AND matrix row
+make api-contract        # Schemathesis vs /openapi.json (hermetic, $0)
+make perf-gate           # hermetic p50/p95 + concurrency
+make diff-cover          # changed-lines coverage >= 95% vs the base ref
+make mutation-baseline   # changed-function mutation score (ADVISORY window)
+uv run pytest tests/ -q  # full suite + the global --cov-fail-under floor
+```
+
+Then confirm each gate is **RED-proven**, i.e. someone has shown it failing on a
+real defect (pre-fix file content or an injected mutant) and passing after — the
+evidence lives in `docs/analysis/R2-plan-review-findings.md` and
+`docs/metrics/`. A gate that was never proven RED is assumed broken and does not
+count as satisfying this precondition. Record in the final report which gates you
+ran, their output, and any you could not run (with the reason) — never assert
+"Phase 0 complete" from a document.
+
+Post-Phase-0 items still OPEN are listed in the ledger's *Post-Phase-0 action
+index*; read it before planning S2 so you do not rebuild what exists or assume
+what does not.
+
+---
+
 ## Mission
 
 Carry **Release 2 — Trust & Evaluation** from **S2 through S4 to completion**,
@@ -76,6 +111,25 @@ a single report for human review (see **Definition of Done**).
 10. **Green gates are necessary, not sufficient.** `make validate` + full suite
     + ruff + mypy + e2e invariants must pass, AND the adversarial review must be
     clean, before a slice is "done".
+11. **Every S2 threshold ships advisory/OFF until calibrated after S4 (FS-6).**
+    The judge weights, refusal thresholds and TrustScore bands cannot be honestly
+    calibrated before the S4 golden set exists, so in S2 they land **advisory —
+    recorded, non-blocking, never used to fail a build** — and only flip to
+    enforcing in S4 once measured against the golden set, with the measured
+    numbers written into `docs/metrics/quality-ledger.md`. Shipping a guessed
+    threshold as enforcing is the guardrail-from-a-guess failure; do not.
+12. **The review loop is bounded: max 3 review rounds, then human override
+    (FS-7).** Fix findings test-first each round. If round 3 still yields a ≥MED
+    finding, STOP and escalate to the operator with the residual list — the
+    operator may override to accept, defer, or authorise more rounds, and the
+    override is recorded in the slice's review record. The loop always
+    terminates; "review to fixpoint" is never unbounded.
+13. **Docs before code for S2's judge (FS-9, AGENTS.md mandatory artifacts).**
+    `docs/40-threat-model.md` (judge prompt-injection + data-exposure surface),
+    `docs/42-ai-safety-grounding.md` (evaluation requirements),
+    `docs/20-architecture.md` (the eval component + seam) and
+    `docs/21-domain-model.md` (`RunEvaluation`, `TrustScore`, `EvalJudgeVerdict`)
+    are updated **before** the S2 judge code lands, not batched after it.
 
 ### S1 patterns to mirror (learned this phase)
 - Durable stores are **best-effort + guarded**: a failed write logs and is
@@ -259,9 +313,10 @@ terminal `QueryRun`.
   judge rationale (derived from the user's query + answers) inherits the run's
   account scoping. Mirror the existing `tests/unit/test_query_run_auth_boundary.py`
   (401) and the `get_for_account` isolation pattern.
-- **Docs:** FR-015 block, AC-041..043, registry + traceability + AC-to-test-map
-  rows, real AIR rows in `docs/44`, judge prompt in `docs/46`, SLICE R2-S2 row
-  → Done. **Adversarial review:** self-grading bias, prompt-injection of the
+- **Docs (FIRST — directive 13):** `docs/40`, `docs/42`, `docs/20`, `docs/21`
+  updated before the judge code lands. Then FR-015 block, AC-041..043, registry
+  + traceability + AC-to-test-map rows, real AIR rows in `docs/44`, judge prompt
+  in `docs/46`, SLICE R2-S2 row → Done. **Adversarial review:** self-grading bias, prompt-injection of the
   judge, neutrality escape, honesty (advisory-only) — fix findings test-first.
 - **Rollback:** judge key unset ⇒ Layer B dormant; unconfigured store ⇒ eval
   persistence off. Forward-only.
@@ -329,11 +384,24 @@ terminal `QueryRun`.
 
 ## Cross-cutting gates & Definition of Done (R2)
 
-A slice is done only when ALL hold; R2 is done when all three slices are done:
+A slice is done only when ALL hold; R2 is done when all three slices are done.
+"All gates green" is not a checkable statement — the DoD names the commands, and
+each must be **run and its output pasted** into the slice report:
+- **Phase-0 precondition still holds** (the section above): the enforcement
+  gates exist and are RED-proven. Re-run them; do not carry a stale claim.
 - **TDD proven:** each behavioural change has a captured RED then GREEN; timing-
   sensitive specs run N≥10× to establish a real flake rate.
-- **Full suite** green (`uv run pytest tests/`), **ruff + mypy** clean,
-  **`make validate`** all gates pass.
+- **Full suite** green (`uv run pytest tests/`), **ruff + mypy** clean, and each
+  of these exits 0:
+  - `make validate` — factory artifact/consistency gates
+  - `make fr-completeness` — the new FR-015/016/017 each have a registry AND a
+    traceability-matrix row (this is what stops a doc-row being skipped)
+  - `make api-contract` — Schemathesis vs `/openapi.json`; the additive
+    `evaluation` field must not break the contract
+  - `make perf-gate` — hermetic p50/p95 + concurrency; eval must not regress it
+  - `make diff-cover` — changed-lines coverage ≥ 95% on the slice's own diff
+  - `make mutation-baseline` — changed-function mutation score (advisory
+    window; record the score, do not silently lower the threshold)
 - **E2E:** `rendering-invariants` (blocking), `visual-snapshots`, axe,
   `real-integration-smoke` green; golden fixture covers every new surface.
 - **Hermetic proof:** spy test shows **zero paid LLM calls** on the every-PR path.

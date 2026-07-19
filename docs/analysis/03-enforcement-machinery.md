@@ -9,10 +9,10 @@ run, and were proven RED against current code.
 | Sub-module | File | Purpose | Mechanism | Enforcement gate | Status |
 |-----------|------|---------|-----------|------------------|--------|
 | Golden realistic fixture | `e2e/fixtures/golden-run.ts` | One canonical blob of messy real-shaped output (line-start `##` headings, `**bold**`, ordered lists, bare URLs, a ~450-word answer, an empty-citation slot) mirroring the OpenAPI QueryRun* schema | Test data | Feeds every invariant + snapshot | **DONE** |
-| Rendering invariants | `e2e/tests/invariants/rendering-invariants.spec.ts` | Walks the whole rendered DOM: (a) no raw Markdown, (b) no horizontal overflow, (c) monotonic elapsed across a decreasing poll sequence | Playwright test | CI (non-blocking until fixes land) | **DONE — RED-PROVEN** |
-| Visual snapshots | `e2e/tests/invariants/visual-snapshots.spec.ts` | `toHaveScreenshot` baselines for result + transcript (masked dynamic regions) — the human-reviewed guard, primary catch for #33 | Playwright visual regression | CI once baselines seeded | **DONE — baseline seed pending** |
-| Real-integration smoke | `e2e/tests/invariants/real-integration-smoke.spec.ts` | Drives the REAL sim backend end-to-end with NO `page.route` mock; asserts a run reaches a populated verdict | Playwright test | CI (blocking) | **DONE — PASSING** |
-| CI wiring | `.github/workflows/e2e.yml` | Smoke added to the blocking run; invariants added as a non-blocking step | GitHub Actions (tracked = shared) | The shared gate | **DONE** |
+| Rendering invariants | `e2e/tests/invariants/rendering-invariants.spec.ts` | Walks the whole rendered DOM: (a) no raw Markdown, (b) no horizontal overflow, (c) monotonic elapsed across a decreasing poll sequence | Playwright test | CI — **BLOCKING** | **DONE — RED-PROVEN, now GREEN + hard** |
+| Visual snapshots | `e2e/tests/invariants/visual-snapshots.spec.ts` | `toHaveScreenshot` baselines for result + transcript (masked dynamic regions) — the human-reviewed guard, primary catch for #33 | Playwright visual regression | CI — **BLOCKING** (Linux baselines seeded by `seed-visual-baselines.yml` and committed) | **DONE** |
+| Real-integration smoke | `e2e/tests/invariants/real-integration-smoke.spec.ts` | Drives the REAL sim backend end-to-end with NO `page.route` mock; asserts a run reaches a populated verdict | Playwright test | CI — **BLOCKING** | **DONE — PASSING** |
+| CI wiring | `.github/workflows/e2e.yml` | Smoke, rendering invariants and visual snapshots all run as **blocking** steps — `continue-on-error` appears nowhere in the file | GitHub Actions (tracked = shared) | The shared gate | **DONE** |
 
 ## Prove-red evidence (recorded this session, against current `app.js`/`app.css`)
 
@@ -69,17 +69,23 @@ that the gate is honest.
 
 **EXACT coverage (do NOT read the gate as "no raw Markdown, full stop").** A
 performing adversarial hunt (probes injected one marker at a time, driven through
-the real UI) proved the gate's true reach. It asserts **four** constructs, all
-greenable via the real renderer (`mdInline`/`formatAnswerText` convert each):
-`**bold**`, line-start `#{1,6}` heading, `` `inline code` ``, and `[link](url)`
-(`](`). It is a snapshot of `#main-content` text nodes.
+the real UI) proved the gate's true reach. It now asserts **six** constructs, all
+greenable via the real renderer (`mdInline`/`formatAnswerText` convert each) —
+verified against `RAW_MARKDOWN_PATTERNS` in `e2e/fixtures/golden-run.ts`:
+`**bold**`, line-start `#{1,6}` heading, `` `inline code` ``, `[link](url)`
+(`](`), `_underscore_` / `__underscore__` emphasis, and line-start `>` blockquote.
+It is a snapshot of `#main-content` text nodes, and it skips any node inside
+`<code>`/`<pre>` — literal markers in inline code (`__init__`) are *correct*, not
+a bypassed formatter.
+
+**Widened after the formatter extension (was a documented gap).** Underscore
+emphasis and blockquotes originally rendered raw even in the *formatted* answer
+surfaces, because `mdInline` handled only asterisk emphasis and `formatAnswerText`
+had no blockquote block — asserting them then would have been **non-greenable**.
+The #30 fix extended the formatter, so the gate was widened to cover both; the
+inline-code exemption keeps it honest.
 
 **Not asserted — real gaps, documented not hidden:**
-- **`_underscore_` / `__underscore__` emphasis** and **`>` blockquote** render raw
-  even in the *formatted* answer surfaces, because `mdInline` handles only
-  asterisk emphasis and `formatAnswerText` has no blockquote block. Asserting
-  these is **non-greenable until the formatter is extended** — so a complete #30
-  fix must extend the formatter, and only then can the gate widen to them.
 - **Ordered/bulleted list markers** (`1.`, `- `, `* `) are not asserted (a correct
   `<ol>`/`<ul>` exposes markers as `::marker` pseudo-elements, not text; a partial
   fix that skips lists would pass). Lists are covered by the visual snapshot.
@@ -91,28 +97,48 @@ greenable via the real renderer (`mdInline`/`formatAnswerText` convert each):
 - `renderStubSource` titles (`app.js:3369`, `local_simulation`/`fallback_search`
   providers) are not exercised — golden sources use `openrouter_search`.
 
-## Why the invariants are wired NON-BLOCKING today
+## The invariants are BLOCKING (the enforcement handoff is DONE)
 
-They are RED on purpose (the bugs are unfixed). Making them blocking now would
-freeze `main`. So `e2e.yml` runs them under `continue-on-error: true`, surfacing
-the red in logs without blocking merges. **The PR that fixes #29/#30/#33 must
-delete that `continue-on-error` line** — flipping the gate to hard is the
-enforcement handoff, and it can only be done honestly once the tests pass. The
-smoke, which passes now, is already blocking.
+> **Corrected 2026-07-19 (finding EN-6).** This section previously said the
+> invariants were wired NON-BLOCKING. That is **stale and was false** — a stale
+> "non-blocking" note undercuts a gate that is in fact hard, and teaches readers
+> to discount it. Verified against the actual workflow: **`continue-on-error`
+> appears nowhere in `.github/workflows/e2e.yml`** (only inside two header/step
+> comments describing its removal), and the two steps are literally named
+> `Run UI rendering invariants (BLOCKING)` and `Run visual snapshots (BLOCKING)`.
+
+The original reasoning, kept for the record: the invariants started RED on
+purpose (#29/#30/#33 were unfixed) and making them blocking then would have
+frozen `main`, so they ran under `continue-on-error: true` — red surfaced in logs
+without blocking merges. **That handoff has since happened.** The #29 (monotonic
+timer) and #30 (route every provider-prose surface through the markdown renderer,
+plus the underscore/blockquote formatter extension) fixes landed, the specs went
+green, and `continue-on-error` was deleted. The visual-snapshot baselines were
+seeded as `*-linux.png` in the CI container by `seed-visual-baselines.yml`,
+committed, and are now compared like-for-like — so that step is blocking too.
+Every invariant step, plus the real-integration smoke, now fails the build.
+
+**Consequence for anyone editing the UI:** a red rendering invariant or a pixel
+diff is a real regression and blocks the merge. It cannot be waved through; fix
+the defect, or change the baseline deliberately with a human review of the new
+screenshot.
 
 ## Follow-ups to fully close the machinery
 
-1. **Seed visual-snapshot baselines in CI.** `toHaveScreenshot` needs Linux
-   baselines generated in the CI container (mac baselines are platform-suffixed
-   and unused on ubuntu, per memory `manual-live-check-is-browser-dependent`).
-   Run once with `--update-snapshots`, commit the `*-linux.png` files, add the
-   spec to the `e2e.yml` run, mask timer/run-id/cost regions.
-2. **Land #30/#29/#33 fixes and flip the invariants to blocking** (remove
-   `continue-on-error`). #30 = route each prose surface through the appropriate
-   renderer — block `formatAnswerText` / inline `mdInline`, both already
-   HTML-escape (no XSS regression); source titles stay plain. #29 = monotonic
-   clamp on the elapsed base; #33 = widen the transcript container / responsive
-   columns.
+1. ~~**Seed visual-snapshot baselines in CI.**~~ **DONE** — `seed-visual-baselines.yml`
+   generated the Linux baselines in the CI container (mac baselines are
+   platform-suffixed and unused on ubuntu, per memory
+   `manual-live-check-is-browser-dependent`), the `*-linux.png` files are
+   committed, the spec runs in `e2e.yml`, and timer/run-id/cost regions are
+   masked. Remaining: `maxDiffPixels` is not yet set from a **measured** noise
+   floor — re-run the unchanged spec N≥10× in the CI container and set the
+   threshold just above the observed max diff (`DAY-ONE-PROMPT.md` §4a).
+2. ~~**Land #30/#29/#33 fixes and flip the invariants to blocking.**~~ **DONE** —
+   #30 routed each prose surface through the appropriate renderer (block
+   `formatAnswerText` / inline `mdInline`, both already HTML-escaping, so no XSS
+   regression; source titles stay plain) and extended the formatter for
+   underscore emphasis + blockquotes; #29 clamped the elapsed base monotonic;
+   #33 widened the transcript container. `continue-on-error` was then removed.
 3. **Optional local speed-up:** a `.claude/settings.json` hook that runs the
    invariants on UI-file changes — but note `.claude/` is gitignored, so it is
    LOCAL-ONLY, never a substitute for the CI gate (see `04-mechanism-map.md`).

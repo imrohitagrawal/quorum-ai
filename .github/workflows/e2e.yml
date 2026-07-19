@@ -17,10 +17,14 @@ name: E2E (axe + parity)
 #     "e2e" above). Blocking.
 #   * tests/invariants/rendering-invariants.spec.ts — global rendering gate
 #     (no raw Markdown / no overflow / monotonic timer) against the golden
-#     messy fixture. Currently NON-BLOCKING: it is deliberately RED against the
-#     known #29/#30/#33 bugs (see docs/analysis/03-enforcement-machinery.md).
-#     The PR that fixes those bugs turns it green and REMOVES continue-on-error
-#     below — that flip is the enforcement handoff.
+#     messy fixture. BLOCKING. It was non-blocking only while it was
+#     deliberately RED against the known #29/#30/#33 bugs; those fixes landed,
+#     `continue-on-error` was removed, and the flip to hard enforcement is done
+#     (see docs/analysis/03-enforcement-machinery.md). A red here is a real
+#     regression and blocks the merge.
+#   * tests/invariants/visual-snapshots.spec.ts — human-reviewed toHaveScreenshot
+#     baselines for the result + transcript views, seeded as *-linux.png in this
+#     CI container and compared like-for-like. BLOCKING.
 #
 # The mocked suites are hermetic: the FastAPI app is self-started by
 # Playwright's webServer (local_simulation, no live OpenRouter calls) and every
