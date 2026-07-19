@@ -215,3 +215,17 @@ answers.
 - Acceptance criteria: AC-038, AC-039, AC-040.
 - Tests: TEST-FR-014 (`tests/unit/test_run_history_store.py`, `tests/integration/test_query_run_history_persist.py`).
 - Jira: Not created.
+
+## FR-015 Per-run evaluation engine (deterministic TrustScore + key-gated LLM judge)
+
+- Actor: System (query-run pipeline).
+- Trigger: A query run reaches any terminal status, immediately after the durable run-history row of FR-014 has been written.
+- Behavior: The system computes a per-run evaluation in two layers. **Layer A** (`src/product_app/evaluation.py`) is deterministic, always-on, hermetic, and performs zero I/O: citation coverage, agreement, false-consensus preservation, decision-support framing, high-stakes-warning presence, uncertainty surfaced, live ratio, completeness, refusal detection (`detect_refusal`), and `citation_marker_grounding` — the fraction of inline citation markers in the answer text that resolve to a real non-fallback `SourceReference`, which is what catches a fluent-but-unfaithful answer sprinkled with fabricated citations that the count-only coverage proxy cannot. A `TrustScore` is a transparent weighted composite of Layer-A signals only, with each component's contribution surfaced. **The honesty rule is binding:** citation *count* coverage cannot verify that a citation SUPPORTS its claim, so `TrustScore.support_verified` is False unless a real Layer-B judge returned a citation-support verdict, and while it is False the numeric score is suppressed and the served band is `unverified` — never a confidence figure. **Layer B** is an optional LLM-as-judge (`EvalJudgeService`) reusing `providers.call_with_prompt`, key-gated on `QUORUM_EVAL_JUDGE_API_KEY` (mirroring the `_tavily_enabled` gate), OFF by default, with a `StubEvalJudge` for CI that deliberately does not set `support_verified`; the judge returns a Pydantic `EvalJudgeVerdict` (faithfulness 0-5, grounding 0-5, disagreement preserved, hallucination risk low/medium/high, rationale, model id) and any malformed response yields no verdict. Judge output is advisory and uncalibrated until the S4 golden set. Results are persisted via `run_history_store.update_evaluation(eval_json, trust_json)` and mirrored as an `evaluation` event to the feedback store; an optional `evaluation` field is added to `QueryRunResultResponse` (additive, contract-compatible). Persisted and logged payloads carry metrics only — never the query text or provider answer prose.
+- Outcome: Every terminal run carries a reproducible, explainable trust signal that never overstates what was actually verified, and the judge seam exists without costing anything or changing behaviour until it is deliberately enabled.
+- Source: `docs/09-roadmap.md` (Release 2), `docs/42-ai-safety-grounding.md`, `docs/44-model-risk-register.md`, `docs/46-prompt-registry.md`.
+- Owner: Backend engineer.
+- Priority: Must.
+- Rationale: The MVP surfaces agreement and citation counts but has no per-run quality signal, and a naive numeric confidence score would claim verification the system never performed.
+- Acceptance criteria: AC-041, AC-042, AC-043.
+- Tests: TEST-FR-015 (`tests/unit/test_evaluation_layer_a.py`, `tests/unit/test_evaluation_judge.py`, `tests/unit/test_evaluation_neutrality.py`, `tests/unit/test_evaluation_auth_boundary.py`, `tests/evals/test_output_correctness_gate.py`, `tests/integration/test_query_run_evaluation_endpoint.py`).
+- Jira: Not created.

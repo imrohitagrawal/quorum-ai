@@ -115,6 +115,33 @@ Design-level contract is recorded in `docs/22-api-contract.md`. Implementation s
 | Estimated cost above threshold | Require confirmation above USD 0.15; block or approved override above USD 0.25. | FR-005, NFR-002 |
 | Provider secret appears in error | Redact before logging or returning response; treat as security incident if detected. | FR-011, NFR-006 |
 
+## Release 2: Evaluation Component (FR-015)
+
+`src/product_app/evaluation.py` is a new leaf module in the application layer.
+It is invoked once per run, after the terminal transition and after the FR-014
+run-history row has been written, and it never participates in the request path
+of a live run.
+
+| Element | Responsibility | Dependencies |
+|---|---|---|
+| Layer A (deterministic evaluator) | Computes citation coverage, agreement, false-consensus preservation, decision-support framing, high-stakes-warning presence, uncertainty surfaced, live ratio, completeness, `detect_refusal`, and `citation_marker_grounding` from the in-memory run. Pure function, zero I/O, always on. | `providers` and `synthesis` value objects only. |
+| `TrustScore` builder | Transparent weighted composite of Layer-A signals only, with per-component contributions surfaced. Suppresses the numeric score and serves the `unverified` band while `support_verified` is False. | Layer A. |
+| Layer B judge seam (`EvalJudgeService`) | Optional LLM-as-judge. Reuses `providers.call_with_prompt` — no new HTTP client, no new provider adapter. Key-gated on `QUORUM_EVAL_JUDGE_API_KEY`, mirroring the `_tavily_enabled` gate; OFF by default. Returns a Pydantic `EvalJudgeVerdict`; a malformed response yields no verdict. | `providers.call_with_prompt`, `config.settings`. |
+| `StubEvalJudge` | Deterministic in-process stand-in used by CI. Deliberately does not set `support_verified`, so judge-OFF and stub-ON are byte-identical. | None. |
+| Evaluation persistence | Writes `eval_json` / `trust_json` onto the existing run-history row via `run_history_store.update_evaluation`, and mirrors an `evaluation` event to the feedback store. Metrics only — never query text or provider prose. | `run_history_store`, `feedback_store`. |
+| Result projection | Optional `evaluation` field on `QueryRunResultResponse` (additive; existing clients are unaffected), served through the same owner-scoped `GET /v1/query-runs/{id}` path. | `query_runs`. |
+
+Boundary rules:
+
+- Layer A must stay pure and hermetic; any network or clock dependency belongs in Layer B or the caller.
+- Layer B is advisory and uncalibrated until the S4 golden set; its verdict never silently changes the numeric score.
+- Evaluation failures are best-effort and must never alter the run's terminal state.
+
+| Failure | Expected Behavior | Trace |
+|---|---|---|
+| Evaluation raises after the terminal transition | Terminal state and the run-history row are unaffected; no evaluation is attached. | FR-015, AC-041 |
+| Judge key set but the provider call fails or returns malformed JSON | No verdict; `support_verified` stays False; the served band remains `unverified`. | FR-015, AC-042 |
+
 ## Deployment Topology
 
 Deployment target is still open. The design assumes:

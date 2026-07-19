@@ -50,6 +50,22 @@ The Release 1 domain centers on a single account-owned query run that moves thro
 - The final synthesis must preserve material disagreement and uncertainty. Trace: FR-009.
 - High-stakes recommendations are decision support only and cannot be framed as professional advice or automated decisions. Trace: FR-003, NFR-008.
 
+## Release 2: Evaluation Entities (FR-015)
+
+| Entity | Attributes | Notes |
+|---|---|---|
+| RunEvaluation | Deterministic Layer-A signals for one terminal run: citation coverage, agreement ratio, false-consensus preserved, decision-support framing present, high-stakes warning present, uncertainty surfaced, live ratio, completeness, refusal detected, citation-marker grounding; plus the optional judge verdict. | Derived value object owned by the query run. Persisted as `eval_json` on the run-history row. Metrics only — never query text or provider prose. |
+| TrustScore | Weighted composite of Layer-A signals only, the per-component contributions, `support_verified`, and the served band. | Persisted as `trust_json`. While `support_verified` is False the numeric score is suppressed and the band is `unverified`. |
+| EvalJudgeVerdict | faithfulness (0-5), grounding (0-5), disagreement preserved (bool), hallucination risk (low/medium/high), rationale, model id. | Produced only by a real Layer-B judge. Advisory and uncalibrated until the S4 golden set. A malformed judge response yields no verdict. |
+
+Invariants:
+
+- A `RunEvaluation` exists only for a terminal query run and is derived from that run alone. Trace: FR-015.
+- A `TrustScore` is composed exclusively of deterministic Layer-A signals; no judge output enters the arithmetic. Trace: FR-015, NFR-012.
+- A numeric `TrustScore` is never served while `support_verified` is False; the band is `unverified` instead, because citation *count* coverage cannot verify that a citation supports its claim. Trace: FR-015, AC-041.
+- `StubEvalJudge` never sets `support_verified` — a stub verifies nothing. Trace: NFR-011, NFR-012.
+- An `EvalJudgeVerdict` and its rationale are derived data and inherit the run's account scoping; they are readable only by the run's owner. Trace: FR-015, NFR-005, AC-043.
+
 ## Domain Services
 
 | Service | Responsibility |
@@ -61,6 +77,8 @@ The Release 1 domain centers on a single account-owned query run that moves thro
 | SynthesisService | Produces consensus, disagreement, source support, uncertainty, and recommendation sections. |
 | SafetyPolicyService | Applies high-stakes and sensitive-data warning behavior and output framing rules. |
 | ResultProjectionService | Builds user-facing result views without secrets or unsafe internal diagnostics. |
+| EvaluationService (Layer A) | Computes the deterministic `RunEvaluation` and `TrustScore` for a terminal run with zero I/O, and enforces the suppression rule when citation support was never verified. |
+| EvalJudgeService (Layer B) | Optional, key-gated LLM-as-judge that returns an advisory `EvalJudgeVerdict` through the existing provider call seam; OFF by default, with a deterministic stub for CI. |
 
 ## Assumptions
 
