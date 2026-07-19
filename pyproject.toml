@@ -86,6 +86,19 @@ testpaths = ["tests"]
 # is enforced separately via diff-cover in CI (see Phase-0 gates).
 addopts = "--cov=src --cov-report=term-missing --cov-fail-under=88"
 pythonpath = ["src"]
+# ``env_oracle`` (ledger DEBT-008): the spec asserts on a property of the
+# CPython runtime — garbage collection / ResourceWarning finalisation, wall-clock
+# thread timing, a child interpreter's exit status — rather than on a value the
+# code under test returns. Those signals do not survive mutmut's trampoline, and
+# a single failure at its stats-collection pass aborts the ENTIRE mutation gate
+# ("failed to collect stats"), so [tool.mutmut] deselects this marker. It is
+# deselected BY MARKER, not by file path, so a new environmental spec in any
+# file is excluded automatically instead of silently killing the gate. Marking a
+# test does not excuse it from having a behavioural twin: see
+# tests/test_store_lifecycle_behaviour.py.
+markers = [
+  "env_oracle: asserts on interpreter/OS behaviour (GC, wall clock, subprocess); deselected under mutmut",
+]
 
 # R2 P0-D (ledger RB-7): mutation testing. Every value below was set from a
 # measured run, not from taste — see docs/metrics/mutation-baseline.md for the
@@ -113,17 +126,26 @@ only_mutate = ["src/product_app/*.py"]
 also_copy = [
   "scripts", "openapi.yaml", "configs", "docs", "policies", "profiles", "examples",
   "Makefile", ".github", "e2e/tests", "R2-S2-S4-ULTRACODE-PROMPT.md",
+  # ``PRODUCT_IDEA.md`` is read from ``REPO_ROOT`` by scripts/skill_router.py
+  # (and therefore by tests/unit/test_skill_router_placeholder.py). Measured
+  # with it absent: that spec fails inside ./mutants/ and mutmut aborts with
+  # "failed to collect stats" before scoring a mutant.
+  "PRODUCT_IDEA.md",
 ]
+# -m "not env_oracle": environmental oracles — GC/ResourceWarning finalisation,
+#   wall-clock thread timing, a child interpreter's exit status — do not survive
+#   mutmut's trampoline (it retains frames, changes call latency, and copies the
+#   tree into ./mutants/ where a repo-root PYTHONPATH addresses the UNMUTATED
+#   source). One failure at stats collection aborts the whole gate ("failed to
+#   collect stats"). This used to be two `--deselect <path>` args, which excluded
+#   ~7 RB-3 lifecycle mutants from having ANY oracle and silently broke the
+#   moment a new environmental spec landed in a different file (ledger DEBT-008).
+#   Selecting by marker fixes both: the marked specs are excluded wherever they
+#   live, and the same lifecycle behaviour is now covered under mutation by
+#   tests/test_store_lifecycle_behaviour.py, which asserts only on store-owned
+#   state (registry membership, _closed, a lock double's recorded timeout).
 # --no-cov: the global --cov-fail-under=88 would fail every per-mutant partial
 #   run, scoring every mutant "killed" and making the number meaningless.
-# --deselect tests/test_store_lifecycle.py: those specs assert on GC/
-#   ResourceWarning behaviour and fail under mutmut's stats instrumentation,
-#   which retains frames (verified: they pass standalone inside ./mutants/).
-# --deselect tests/test_store_shutdown_safety.py: same class — `close()` under
-#   an unreleasable lock is a shutdown-timing assertion, and mutmut's
-#   trampoline changes that timing. Measured on this tree: 3/3 pass at the repo
-#   root, 3/3 fail inside ./mutants/, which aborted the whole run ("failed to
-#   collect stats") before a mutant was scored.
 # --ignore tests/perf tests/performance: latency/percentile specs are timing
 #   gates, not behavioural oracles; including them pushed per-mutant runtime
 #   past mutmut's timeout on every mutant of _persist_terminal_run (measured).
@@ -131,8 +153,7 @@ pytest_add_cli_args = [
   "-p", "no:randomly",
   "--no-cov",
   "-q",
-  "--deselect", "tests/test_store_lifecycle.py",
-  "--deselect", "tests/test_store_shutdown_safety.py",
+  "-m", "not env_oracle",
   "--ignore", "tests/perf",
   "--ignore", "tests/performance",
 ]

@@ -23,6 +23,18 @@ Two guards, because the defect has two halves:
 2. :func:`test_interpreter_exits_when_an_iterator_orphans_the_lock` pins the
    *scenario* end-to-end in a real subprocess, since an interpreter-shutdown
    hang cannot be observed from inside the interpreter that is hanging.
+
+Both are *environmental* oracles — one asserts on wall-clock thread-join timing,
+the other on a child interpreter's exit status with a hand-built ``PYTHONPATH``
+pointing at the repo-root source tree. Neither survives mutmut, which changes
+call latency and copies the project into ``./mutants/`` (where that PYTHONPATH
+addresses the *unmutated* tree, so the assertion would be meaningless even if it
+passed). Hence the module-level ``env_oracle`` mark: the mutation gate deselects
+it by marker (ledger DEBT-008). The bounded-acquire invariant itself is covered
+for mutation by ``tests/test_store_lifecycle_behaviour.py``
+(``test_close_acquires_the_lock_with_a_finite_timeout`` /
+``test_close_gives_up_on_the_lock_and_still_closes``), which injects a lock
+double instead of racing a real thread.
 """
 
 from __future__ import annotations
@@ -47,6 +59,10 @@ from product_app.run_history_store import RunHistoryStore
 _JOIN_TIMEOUT_S = 20.0
 
 _REPO_ROOT = Path(__file__).resolve().parents[1]
+
+#: Every spec in this module is an environmental oracle — see the module
+#: docstring. Deselected from the mutation gate by marker, never by path.
+pytestmark = pytest.mark.env_oracle
 
 
 @pytest.mark.parametrize(
