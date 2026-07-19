@@ -70,8 +70,19 @@ jobs:
         run: make fr-completeness
 
   perf-gate:
-    name: Hermetic perf p50/p95 + concurrency (blocking)
+    # R2 reconciliation (2026-07-19): DOWNGRADED to ADVISORY. The regression
+    # budgets (150/300/1500ms) were measured only on one macOS dev machine; a
+    # slower CI runner can exceed them and false-fail the build, which violates
+    # measure-on-the-target-environment (guardrail-values-need-measurement).
+    # `continue-on-error: true` makes this job report but NOT block. TODO before
+    # re-promoting to blocking: (1) measure p50/p95 on THIS ubuntu-latest runner,
+    # (2) set the regression budget from that data, (3) isolate the latency-budget
+    # spec (tests/perf/test_workflow_latency_percentiles.py) from the default
+    # blocking suite (marker or dedicated path) so the main `pytest tests/` run
+    # cannot false-fail on it either, then flip continue-on-error off + rename.
+    name: Hermetic perf p50/p95 + concurrency (ADVISORY — CI budgets pending)
     runs-on: ubuntu-latest
+    continue-on-error: true
     timeout-minutes: 20
     env:
       OPENROUTER_LIVE_EXECUTION_ENABLED: "false"

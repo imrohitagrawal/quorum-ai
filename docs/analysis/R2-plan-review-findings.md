@@ -131,3 +131,38 @@ does: otherwise their status lives only in chat.
 
 _This ledger is committed with the plan so the feedback is durable and tracked;
 update it as items move OPEN → BUILD → DONE._
+
+---
+
+## Reconciliation — Phase-0 handback verified (2026-07-19, reconciling session)
+
+The Phase-0 handback was **independently verified against the repo** (not accepted
+on claim): `make validate` all gates pass; **740 passed / 4 skipped, coverage
+88.52%**; ruff + mypy clean; the FR-completeness gate re-proven RED on `d7469ce`
+(FR-014 missing from docs/17 AND docs/18) → GREEN on HEAD; leak-fix/lifecycle
+tests 16 passed; all metric/ADR artifacts present. **Phase-0 build accepted.**
+
+**Operator decisions (2026-07-19):**
+1. **Perf gate → ADVISORY** until re-measured on the CI runner (macOS-only budgets
+   would false-fail a slower runner). Done: `ci.yml` perf-gate job
+   `continue-on-error: true`. Tracked: **DEBT-009** (docs/63) — also isolate the
+   latency-budget spec from the default blocking suite before re-promoting.
+2. **Mutation blind spot → tracked, fix in S2.** The deselected lifecycle modules
+   leave 7 "unkillable" mutants in the RB-3 code. Tracked: **DEBT-008** (docs/63).
+3. **Router override CONFIRMED** — R2 is the active workstream; the factory
+   router's `session-continuity-manager` recommendation is stale (pre-dates the
+   R2 branch). FS-4 override recorded (AGENTS.md precedence #2, explicit user
+   approval). Refresh `docs/session-handoff.md` + `docs/00-factory-console.md` to
+   the R2 branch as a follow-up.
+4. **Skill roster APPROVED (reviewer-only)** — no side-effect powers granted;
+   registered in `configs/external-skill-registry.json`. `deploy-checklist` still
+   needs re-fit (npm→uv) before use.
+
+**Residual (accepted, recorded — no 4th review round):** fixpoint was not reached
+(3-round bound; round-3 fixes un-re-reviewed); 5 of 7 RED halves are proof-on-file
+(the 2 blocking ones — FR + coverage — were re-proven by the reconciler; the
+advisory mutation/perf/api-contract ones were not re-executed and that is
+acceptable for advisory/already-suite-green gates). **The highest-value gap is by
+design and unbuilt: output-correctness (OC-1/2/3/5) — the product thesis
+(cross-validation reduces hallucination) is still unmeasured (ledger columns are
+em-dashes). This is the FIRST thing to build in S2, not last.**
