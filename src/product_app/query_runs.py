@@ -1372,9 +1372,10 @@ def _persist_terminal_run(query_run_id: UUID) -> None:
     :func:`_result_response` the ``GET /{id}`` endpoint serves, so the
     persisted numbers — cost provenance especially — are byte-identical to
     what the user sees; we never recompute or upgrade ``estimated``→
-    ``measured`` here. Idempotent at the store (INSERT OR REPLACE on
-    ``query_run_id``) so a double-fire from the two terminal call sites is
-    harmless.
+    ``measured`` here. Idempotent at the store (upsert on ``query_run_id`` via
+    ``INSERT … ON CONFLICT DO UPDATE`` of the metric columns only, preserving any
+    S2 evaluation) so a re-persist — or a double-fire across the two terminal
+    call sites — is harmless.
     """
     try:
         query_run = query_run_repository.get(query_run_id)

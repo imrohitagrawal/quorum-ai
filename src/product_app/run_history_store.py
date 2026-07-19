@@ -38,12 +38,27 @@ import threading
 from collections.abc import Iterator
 from contextlib import contextmanager
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import UTC, datetime
 from decimal import Decimal
 from pathlib import Path
 from typing import Any
 
 _log = logging.getLogger(__name__)
+
+
+def _to_utc_iso(value: datetime) -> str:
+    """Serialise a datetime to an ISO string in UTC.
+
+    Timestamps are stored and compared as ISO TEXT, so lexical ordering is only
+    correct when every value shares one offset. Normalising to UTC on write (and
+    on the ``since`` filter) guarantees that — a caller that passes a non-UTC or
+    naive datetime cannot silently corrupt `iter_runs` ordering/filtering. A
+    naive datetime is assumed to already be UTC (the app only ever produces
+    tz-aware `datetime.now(UTC)`), rather than guessing the local zone.
+    """
+    if value.tzinfo is None:
+        return value.replace(tzinfo=UTC).isoformat()
+    return value.astimezone(UTC).isoformat()
 
 #: Default on-disk location. Operators override via ``RUN_HISTORY_DB_PATH``
 #: (set to ``/data/run_history.sqlite3`` on the Fly volume in ``fly.toml``).
@@ -150,8 +165,8 @@ class RunHistoryStore:
             row.account_id,
             row.correlation_id,
             row.status,
-            row.created_at.isoformat(),
-            row.completed_at.isoformat(),
+            _to_utc_iso(row.created_at),
+            _to_utc_iso(row.completed_at),
             int(row.elapsed_time_ms),
             json.dumps(row.model_ids),
             1 if row.demo_mode else 0,
@@ -245,7 +260,7 @@ class RunHistoryStore:
         params: list[Any] = []
         if since is not None:
             clauses.append("completed_at >= ?")
-            params.append(since.isoformat())
+            params.append(_to_utc_iso(since))
         if account_id is not None:
             clauses.append("account_id = ?")
             params.append(account_id)
@@ -256,7 +271,10 @@ class RunHistoryStore:
             params.append(int(limit))
         with self._lock:
             cursor = self._conn.execute(
-                f"SELECT * FROM runs{where} ORDER BY completed_at DESC{limit_sql}",
+                # Deterministic secondary sort so equal-`completed_at` rows have a
+                # stable order (matters for paginated history views).
+                f"SELECT * FROM runs{where} "
+                f"ORDER BY completed_at DESC, query_run_id DESC{limit_sql}",
                 params,
             )
             rows = cursor.fetchall()

@@ -143,3 +143,29 @@ These NFRs apply to the Release 1 MVP query workflow and supporting browser-sess
 - Dashboard: Query funnel, provider failures, fallback usage, latency, and cost panels.
 - Alert: Ticket when event completeness falls below 99 percent for accepted queries after launch.
 - Source: `docs/04-success-metrics.md`, `docs/09-release-scope.md`.
+
+## Release 2: Trust & Evaluation (Non-Functional)
+
+## NFR-011 Evaluation determinism and CI hermeticity
+
+- Category: Evaluation / CI.
+- Target: The always-on deterministic evaluation signals are reproducible (same run ⇒ same TrustScore), and the every-PR test path makes zero paid LLM calls. Any LLM-as-judge scoring is key-gated and runs only in an opt-in job.
+- Measurement: A spy test asserts zero judge-seam calls when the judge key is absent; the golden-set regression runs hermetically in CI.
+- Owner: Engineering lead.
+- Priority: Must.
+- Rationale: An evaluation gate that silently spends money or flakes is neither trustworthy nor safe to run on every change.
+- Acceptance criteria: AC-040 (persistence best-effort/non-blocking), plus S2/S4 ACs (AC-041.. to be allocated).
+- Tests: TEST-NFR-011.
+- Source: `docs/09-roadmap.md` (Release 2), `docs/42-ai-safety-grounding.md`.
+
+## NFR-012 Evaluation cost and behaviour neutrality (judge OFF ⇒ zero delta)
+
+- Category: Evaluation / Safety.
+- Target: With the LLM-as-judge disabled (default), the evaluation engine adds zero latency, zero cost, and zero change to the TrustScore versus the deterministic-only path; the judge is advisory metadata that never silently alters the score.
+- Measurement: A test asserts identical TrustScore with the judge OFF vs. a deterministic stub judge ON, and zero seam calls when OFF.
+- Owner: Engineering lead.
+- Priority: Must.
+- Rationale: Mirrors the guardrail-values-need-measurement discipline — a new mechanism ships OFF with a proven no-op default before any activation.
+- Acceptance criteria: S2 ACs (to be allocated).
+- Tests: TEST-NFR-012.
+- Source: `docs/09-roadmap.md` (Release 2).

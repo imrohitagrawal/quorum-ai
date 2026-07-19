@@ -12,16 +12,16 @@ text or provider prose — PII minimisation, see docs/43/48).
 
 These tests are network-free and construct rows directly. They pin:
 * round-trip of every column,
-* idempotent re-record (INSERT OR REPLACE on `query_run_id`),
+* idempotent upsert (`INSERT … ON CONFLICT DO UPDATE`) that preserves eval cols,
 * `update_evaluation` filling the eval/trust JSON that S2 writes,
 * the best-effort contract (a failed hot-path write never raises),
 * `configure_for_tests` isolation, and
-* `iter_runs` ordering + filters.
+* `iter_runs` ordering (UTC-normalised, deterministic tie-break) + filters + limit.
 """
 
 from __future__ import annotations
 
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, datetime, timedelta, timezone
 from decimal import Decimal
 
 import pytest
@@ -91,12 +91,12 @@ def test_round_trip_all_columns() -> None:
     store.close()
 
 
-def test_record_is_idempotent_insert_or_replace() -> None:
+def test_record_is_idempotent_upsert() -> None:
     """A double-fire on the same terminal transition must not create two rows.
 
     The pipeline can re-enter a terminal path (safety wrapper + inline path);
-    keying on `query_run_id` with INSERT OR REPLACE makes re-record idempotent
-    and last-write-wins.
+    keying on `query_run_id` with an `INSERT … ON CONFLICT DO UPDATE` upsert
+    makes re-record idempotent and last-write-wins on the metric columns.
     """
     store = RunHistoryStore(":memory:")
     store.record_terminal_run(_row(status="partial"))
@@ -215,6 +215,83 @@ def test_iter_runs_orders_by_completed_at_desc_with_filters() -> None:
 
     recent = list(store.iter_runs(since=base + timedelta(minutes=6)))
     assert [r.query_run_id[:8] for r in recent] == ["cccccccc"]
+    store.close()
+
+
+def test_iter_runs_limit_truncates() -> None:
+    """The `limit` read path (used by S2/operability surfaces) truncates results."""
+    store = RunHistoryStore(":memory:")
+    base = datetime(2026, 7, 19, 12, 0, 0, tzinfo=UTC)
+    for i in range(5):
+        store.record_terminal_run(
+            _row(
+                query_run_id=f"aaaaaaaa-0000-0000-0000-00000000000{i}",
+                completed_at=base + timedelta(minutes=i),
+            )
+        )
+    top2 = store.iter_runs(limit=2)
+    assert len(top2) == 2
+    # newest-first, so the two most recent completions
+    assert [r.query_run_id[-1] for r in top2] == ["4", "3"]
+    store.close()
+
+
+def test_from_env_creates_parent_dir_for_on_disk_path(
+    tmp_path: object, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The on-disk default path (not `:memory:`) creates its parent dir."""
+    from pathlib import Path
+
+    db_path = Path(str(tmp_path)) / "nested" / "run_history.sqlite3"
+    monkeypatch.setenv("RUN_HISTORY_DB_PATH", str(db_path))
+    store = RunHistoryStore.from_env()
+    store.record_terminal_run(_row())
+    assert db_path.exists()  # parent dir was created and the DB file written
+    assert store.run_count() == 1
+    store.close()
+
+
+def test_iter_runs_normalizes_non_utc_timestamps() -> None:
+    """Ordering must be correct even if a caller supplies a non-UTC datetime.
+
+    `completed_at` is compared as ISO text, so a naive lexical compare would rank
+    a `+05:00` row after an earlier-instant `+00:00` row. Normalising to UTC on
+    write fixes it.
+    """
+    store = RunHistoryStore(":memory:")
+    # Row A at 12:00 UTC. Row B at 13:00+05:00 == 08:00 UTC — an EARLIER instant.
+    store.record_terminal_run(
+        _row(
+            query_run_id="aaaaaaaa-0000-0000-0000-000000000001",
+            completed_at=datetime(2026, 7, 19, 12, 0, 0, tzinfo=UTC),
+        )
+    )
+    store.record_terminal_run(
+        _row(
+            query_run_id="bbbbbbbb-0000-0000-0000-000000000002",
+            completed_at=datetime(2026, 7, 19, 13, 0, 0, tzinfo=timezone(timedelta(hours=5))),
+        )
+    )
+    # Newest-first: A (12:00 UTC) is newer than B (08:00 UTC).
+    assert [r.query_run_id[:8] for r in store.iter_runs()] == ["aaaaaaaa", "bbbbbbbb"]
+    store.close()
+
+
+def test_iter_runs_tie_breaks_deterministically_on_equal_completed_at() -> None:
+    """Equal `completed_at` rows must order deterministically (query_run_id DESC)."""
+    store = RunHistoryStore(":memory:")
+    same = datetime(2026, 7, 19, 12, 0, 0, tzinfo=UTC)
+    for qid in (
+        "aaaaaaaa-0000-0000-0000-000000000001",
+        "cccccccc-0000-0000-0000-000000000003",
+        "bbbbbbbb-0000-0000-0000-000000000002",
+    ):
+        store.record_terminal_run(_row(query_run_id=qid, completed_at=same))
+    assert [r.query_run_id[:8] for r in store.iter_runs()] == [
+        "cccccccc",
+        "bbbbbbbb",
+        "aaaaaaaa",
+    ]
     store.close()
 
 

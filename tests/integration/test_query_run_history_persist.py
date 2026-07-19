@@ -133,3 +133,36 @@ def test_partial_run_is_persisted(monkeypatch: pytest.MonkeyPatch) -> None:
         assert row is not None
         assert row.status == body["status"]
         assert row.failed_steps == body["failed_steps"]
+
+
+def test_non_terminal_run_is_not_persisted() -> None:
+    """The `is_terminal` guard in `_persist_terminal_run` must block a half-baked
+    row: a run still in a non-terminal state is never written to history.
+
+    (Belt-and-suspenders — both real call sites fire only after a terminal
+    transition — but pinned so a future refactor that moves a call site earlier
+    cannot silently persist an in-flight run.)
+    """
+    from decimal import Decimal
+
+    import product_app.query_runs as qr
+    from product_app.costs import CostEstimate, CostThresholdAction
+    from product_app.model_slots import validate_model_slots_with_search
+
+    account_id = uuid4()
+    estimate = CostEstimate(
+        estimated_cost_usd=Decimal("0.01"),
+        threshold_action=CostThresholdAction.ALLOW,
+        confirmation_token=None,
+        reasons=[],
+    )
+    with run_history_store.configure_for_tests() as store:
+        run = query_run_repository.create(
+            account_id=account_id,
+            query_text="still running",
+            model_slots=validate_model_slots_with_search(DEFAULT_MODEL_IDS),
+            cost_estimate=estimate,
+        )
+        assert not run.is_terminal  # freshly created == ACCEPTED
+        qr._persist_terminal_run(run.query_run_id)
+        assert store.run_count() == 0
