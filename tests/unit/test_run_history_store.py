@@ -295,6 +295,22 @@ def test_iter_runs_tie_breaks_deterministically_on_equal_completed_at() -> None:
     store.close()
 
 
+def test_naive_completed_at_is_treated_as_utc() -> None:
+    """A naive (tz-less) datetime is assumed UTC on write, not the local zone.
+
+    The app only ever writes `datetime.now(UTC)`, so this is defensive — but the
+    contract (assume-UTC, consistent between the write path and the `since`
+    filter) is pinned rather than left to chance.
+    """
+    store = RunHistoryStore(":memory:")
+    naive = datetime(2026, 7, 19, 12, 0, 0)  # no tzinfo
+    store.record_terminal_run(_row(completed_at=naive))
+    got = store.get("11111111-1111-1111-1111-111111111111")
+    assert got is not None
+    assert got.completed_at == datetime(2026, 7, 19, 12, 0, 0, tzinfo=UTC)
+    store.close()
+
+
 def test_from_env_uses_run_history_db_path(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("RUN_HISTORY_DB_PATH", ":memory:")
     store = RunHistoryStore.from_env()
