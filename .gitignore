@@ -41,3 +41,7 @@ e2e/results.xml
 # Temporary files created by the test harness
 temp-artifacts/
 
+
+# mutmut copies the whole project into ./mutants/ for `make mutation-baseline`.
+# It is a build artifact: never committed, never linted, never type-checked.
+mutants/

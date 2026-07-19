@@ -45,6 +45,152 @@ jobs:
             build/security/security-scan.json
           if-no-files-found: error
 
+  # R2 Phase-0 enforcement gates. All hermetic and $0: no API keys, live
+  # execution is pinned off exactly as in the Tests workflow.
+  #
+  # "Hermetic" here is asserted by a test, not by this comment. Both blocking
+  # gates that import product_app.main pin the model catalog to the shipped
+  # static list, because that import fires openrouter_catalog_fetcher.prewarm()
+  # and every model-slot lookup re-enters list_models(). Unpinned, a single
+  # run of api-contract made 57 outbound TLS connect attempts to openrouter.ai
+  # (MEASURED 2026-07-19). The proofs, which go red on a pin-removed mutant:
+  #   perf-gate    -> tests/perf/test_perf_gate_hermeticity.py
+  #   api-contract -> tests/contract/test_contract_gate_hermeticity.py
+  # A new gate job that imports the app needs the same pin and its own probe.
+  fr-completeness:
+    name: FR traceability completeness (blocking)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      # Stdlib-only validator: no uv sync needed.
+      - name: Every FR-0NN has a registry AND matrix row
+        run: make fr-completeness
+
+  perf-gate:
+    name: Hermetic perf p50/p95 + concurrency (blocking)
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      OPENROUTER_LIVE_EXECUTION_ENABLED: "false"
+      QUORUM_RUNTIME_ENVIRONMENT: "ci"
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+      - name: Set up Python
+        run: uv python install 3.12
+      - name: Install dependencies
+        run: uv sync --all-extras
+      - name: Perf gate
+        run: make perf-gate
+
+  api-contract:
+    name: Schemathesis API contract (blocking)
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      OPENROUTER_LIVE_EXECUTION_ENABLED: "false"
+      QUORUM_RUNTIME_ENVIRONMENT: "ci"
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+      - name: Set up Python
+        run: uv python install 3.12
+      - name: Install dependencies
+        run: uv sync --all-extras
+      - name: Contract fuzzing against /openapi.json
+        run: make api-contract
+
+  diff-cover:
+    name: Changed-lines coverage >= 95% (blocking)
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      OPENROUTER_LIVE_EXECUTION_ENABLED: "false"
+      QUORUM_RUNTIME_ENVIRONMENT: "ci"
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # diff-cover diffs against the merge-base with the PR base branch, so
+          # the full history must be present. On a shallow clone the base ref is
+          # absent and diff-cover exits 1 with "Could not find the branch to
+          # compare to" (measured — it fails loud, it does not pass silently).
+          fetch-depth: 0
+      - uses: astral-sh/setup-uv@v5
+      - name: Set up Python
+        run: uv python install 3.12
+      - name: Install dependencies
+        run: uv sync --all-extras
+      - name: Fetch base branch
+        run: git fetch origin ${{ github.base_ref }}:refs/remotes/origin/${{ github.base_ref }}
+      - name: Changed-lines coverage
+        run: make diff-cover DIFF_BASE=origin/${{ github.base_ref }}
+      - name: Upload diff-cover report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: diff-cover-report
+          path: build/coverage/diff-cover.md
+          if-no-files-found: ignore
+
+  mutation-baseline:
+    name: Mutation score (ADVISORY - non-blocking)
+    # LOCKED decision: advisory until 2026-08-02, then re-evaluate (RB-7).
+    # Scope is CHANGED FUNCTIONS vs the base branch, not whole modules — see
+    # docs/metrics/mutation-baseline.md for the measured baseline, the derived
+    # threshold, and the measured runtime that justifies the timeout below.
+    continue-on-error: true
+    runs-on: ubuntu-latest
+    # Measured locally: 7m25s for the 22 changed functions (425 mutants) on
+    # this branch with --max-children 8. 30 min leaves ~4x headroom for a
+    # slower, 2-core runner.
+    timeout-minutes: 30
+    env:
+      OPENROUTER_LIVE_EXECUTION_ENABLED: "false"
+      QUORUM_RUNTIME_ENVIRONMENT: "ci"
+      # Never let a repo-level DSN reach a mutation run: mutmut copies the
+      # project into ./mutants/ and re-runs the suite hundreds of times.
+      SENTRY_DSN: ""
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      # The scope step diffs against the base branch, so that ref has to exist
+      # locally; on a push build there is no base_ref and we fall back to main.
+      - name: Fetch base ref
+        run: git fetch --no-tags origin "${{ github.base_ref || 'main' }}"
+      - uses: astral-sh/setup-uv@v5
+      - name: Set up Python
+        run: uv python install 3.12
+      - name: Install dependencies
+        run: uv sync --all-extras
+      - name: Mutation score on changed functions
+        run: make mutation-baseline DIFF_BASE=origin/${{ github.base_ref || 'main' }}
+      # The doc-honesty guard SKIPS without build/mutation/score.txt, which is
+      # the normal state in the `quality` job and in a fresh clone — so as
+      # shipped its artifact-comparison tier never ran anywhere in CI and a
+      # stale docs/metrics/mutation-baseline.md passed silently. This step is
+      # the only place in CI where the artifact exists, so it is the only place
+      # that tier can run. It stays inside this `continue-on-error: true` job:
+      # the killed/timeout split is hardware- and load-dependent (baseline §5),
+      # so a Linux runner legitimately differs from the recorded macOS numbers
+      # and this must inform, not block. The machine-independent tier of the
+      # same file (threshold vs Makefile, per-run arithmetic) already runs
+      # blocking in the `quality` job's full pytest run.
+      - name: Mutation doc honesty (artifact tier — advisory)
+        if: always()
+        run: uv run pytest tests/test_mutation_baseline_doc.py -v --no-cov -p no:randomly
+      - name: Upload mutation report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: mutation-report
+          path: build/mutation/
+          if-no-files-found: ignore
+
   codex-review:
     if: github.event_name == 'pull_request'
     runs-on: ubuntu-latest
