@@ -98,6 +98,25 @@ class Settings(BaseSettings):
     tavily_max_results: int = 5
     tavily_timeout_seconds: float = 8.0
 
+    # --- Layer-B evaluation judge (FR-015, PR-EVAL-JUDGE-v1) -------------
+    # The optional LLM-as-judge in ``evaluation.py`` is gated SOLELY on the
+    # presence of ``QUORUM_EVAL_JUDGE_API_KEY``, exactly the way the Tavily
+    # fallback above is gated on ``TAVILY_API_KEY``. Absent (the default),
+    # no judge call is ever made: CI stays hermetic and free, and the
+    # deterministic Layer-A TrustScore is byte-identical with the judge on
+    # or off (NFR-012). The key is never logged or returned to a client.
+    # The judge is advisory and UNCALIBRATED until the R2-S4 golden set
+    # exists; enabling it in any environment is an explicit human decision.
+    quorum_eval_judge_api_key: str = Field(default="", repr=False)
+    #: Pinned judge model id. Verdicts from different models are not
+    #: comparable, so the id is configuration rather than a default: with
+    #: no id pinned the judge does not run even when a key is present.
+    quorum_eval_judge_model_id: str = ""
+    #: Token cap for a judge response. The output contract is a small
+    #: strict-JSON object; a response longer than this is malformed by
+    #: definition and yields no verdict.
+    quorum_eval_judge_max_tokens: int = 512
+
     # --- Auth configuration ---------------------------------------------
     # Cookie security: in production we require Secure cookies. The auth
     # layer refuses to start otherwise.

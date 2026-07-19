@@ -1,0 +1,753 @@
+"""Layer-A deterministic evaluation: markers, refusal, signals, composite.
+
+Every test here is hermetic and performs zero I/O.
+"""
+
+from __future__ import annotations
+
+from decimal import Decimal
+
+import pytest
+
+from product_app.debate import AgreementSummary
+from product_app.evaluation import (
+    LAYER_A_WEIGHTS,
+    citation_marker_grounding,
+    detect_refusal,
+    evaluate_layer_a,
+    extract_citation_markers,
+)
+from product_app.providers import (
+    CitationCoverage,
+    InitialAnswerStatus,
+    InitialModelAnswer,
+    ProviderPath,
+    SourceReference,
+)
+from product_app.synthesis import (
+    FinalSynthesis,
+    SynthesisQualityChecks,
+    SynthesisStatus,
+)
+
+REAL_URL = "https://pages.nist.gov/800-63-3/sp800-63b.html"
+OTHER_URL = "https://www.rfc-editor.org/rfc/rfc6238"
+
+
+def _source(url: str = REAL_URL, *, is_fallback: bool = False) -> SourceReference:
+    return SourceReference(
+        title="A source",
+        url=url,
+        provider=ProviderPath.OPENROUTER_SEARCH,
+        is_fallback=is_fallback,
+    )
+
+
+def _answer(
+    *,
+    slot: int = 1,
+    text: str = "An answer with a claim [1].",
+    sources: list[SourceReference] | None = None,
+    status: InitialAnswerStatus = InitialAnswerStatus.COMPLETED,
+    path: ProviderPath = ProviderPath.OPENROUTER_SEARCH,
+) -> InitialModelAnswer:
+    resolved = [_source()] if sources is None else sources
+    return InitialModelAnswer(
+        slot_number=slot,
+        model_id=f"vendor/model-{slot}",
+        display_name=f"Model {slot}",
+        answer_text=text,
+        sources=resolved,
+        provider_attempt_order=[path],
+        provider_path=path,
+        fallback_used=any(s.is_fallback for s in resolved),
+        status=status,
+        latency_ms=100,
+        citation_coverage=CitationCoverage(
+            material_claim_count=2,
+            cited_claim_count=2 if resolved else 0,
+            coverage_ratio=Decimal("1.00") if resolved else Decimal("0"),
+            target_met=bool(resolved),
+        ),
+    )
+
+
+def _synthesis(
+    *,
+    false_consensus_preserved: bool = False,
+    decision_support: bool = True,
+    high_stakes_required: bool = False,
+    high_stakes_notice: str | None = None,
+    uncertainty: str = "The panel could not establish the long-run effect.",
+    consensus: str = "The panel agrees on the mechanism.",
+) -> FinalSynthesis:
+    return FinalSynthesis(
+        status=SynthesisStatus.COMPLETED,
+        consensus=consensus,
+        disagreement="No material disagreement.",
+        source_support="Both sources carried the load.",
+        uncertainty=uncertainty,
+        recommendation="Treat this as decision support, not a decision.",
+        high_stakes_notice=high_stakes_notice,
+        citation_coverage=CitationCoverage(
+            material_claim_count=8,
+            cited_claim_count=4,
+            coverage_ratio=Decimal("0.50"),
+            target_met=False,
+        ),
+        quality_checks=SynthesisQualityChecks(
+            citation_coverage_target_met=False,
+            false_consensus_preserved=false_consensus_preserved,
+            decision_support_framing_present=decision_support,
+            high_stakes_warning_required=high_stakes_required,
+        ),
+    )
+
+
+# --------------------------------------------------------------------------
+# Marker grammar
+# --------------------------------------------------------------------------
+
+
+def test_numeric_bracket_markers_are_extracted_individually() -> None:
+    assert extract_citation_markers("A claim [1] and another [2, 3].") == ["1", "2", "3"]
+
+
+def test_markdown_link_markers_are_extracted_as_urls() -> None:
+    text = f"See [NIST SP 800-63B]({REAL_URL}) for the wording."
+    assert extract_citation_markers(text) == [REAL_URL]
+
+
+def test_link_text_is_never_mistaken_for_a_numeric_marker() -> None:
+    """Markdown links are consumed before numeric scanning."""
+    text = f"[RFC 6238]({OTHER_URL}) and a separate ordinal [2]."
+    assert extract_citation_markers(text) == [OTHER_URL, "2"]
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "A bare URL https://example.org/paper is deliberately not a marker.",
+        "Author-year style (Smith, 2020) is deliberately not a marker.",
+        "A footnote caret ^1 is deliberately not a marker.",
+        "The bracketed phrase [citation needed] is deliberately not a marker.",
+        "An empty bracket [] is not a marker.",
+    ],
+)
+def test_deliberately_unmatched_forms(text: str) -> None:
+    assert extract_citation_markers(text) == []
+
+
+# --------------------------------------------------------------------------
+# citation_marker_grounding — the None vs 0.0 distinction
+# --------------------------------------------------------------------------
+
+
+def test_grounding_is_one_when_every_marker_resolves() -> None:
+    grounding = citation_marker_grounding(
+        texts=[f"A claim [1] and [Source]({REAL_URL})."],
+        sources=[_source(REAL_URL)],
+    )
+    assert grounding == pytest.approx(1.0)
+
+
+def test_grounding_is_near_zero_when_markers_resolve_to_nothing() -> None:
+    grounding = citation_marker_grounding(
+        texts=["Confident prose [7] with [a study](https://not-a-real.example/paper) behind it."],
+        sources=[_source(REAL_URL)],
+    )
+    assert grounding == pytest.approx(0.0)
+
+
+def test_no_markers_at_all_is_unknown_not_zero() -> None:
+    """A run that never claimed a citation has not fabricated one.
+
+    This is the distinction the composite depends on: ``None`` means the
+    signal is unknown and is EXCLUDED from the weighted composite, while
+    ``0.0`` means markers were made and resolved to nothing, which is a
+    real, punishable defect.
+    """
+    assert (
+        citation_marker_grounding(
+            texts=["Plain prose with no citation markers whatsoever."],
+            sources=[_source(REAL_URL)],
+        )
+        is None
+    )
+
+
+def test_fallback_sources_do_not_ground_a_marker() -> None:
+    """``is_fallback`` sources are fabricated stubs — they resolve nothing."""
+    assert citation_marker_grounding(
+        texts=["A claim [1]."],
+        sources=[_source("https://example.test/local-demo/1", is_fallback=True)],
+    ) == pytest.approx(0.0)
+
+
+def test_grounding_is_none_when_there_are_no_texts() -> None:
+    assert citation_marker_grounding(texts=[], sources=[_source()]) is None
+
+
+def test_a_run_with_no_markers_is_not_punished_like_one_that_fabricated_them() -> None:
+    """The end-to-end form of the same distinction, at composite level."""
+    silent = evaluate_layer_a(
+        initial_answers=[_answer(text="Plain prose with no markers at all.")],
+        final_synthesis=_synthesis(),
+        agreement=AgreementSummary(aligned=1, total=1),
+    )
+    fabricating = evaluate_layer_a(
+        initial_answers=[_answer(text="Prose with a fabricated marker [9].")],
+        final_synthesis=_synthesis(),
+        agreement=AgreementSummary(aligned=1, total=1),
+    )
+    assert silent.signals.citation_marker_grounding is None
+    assert fabricating.signals.citation_marker_grounding == pytest.approx(0.0)
+
+    from product_app.evaluation import build_trust_score
+
+    silent_composite = build_trust_score(silent).diagnostics.layer_a_composite_unverified
+    fabricating_composite = build_trust_score(fabricating).diagnostics.layer_a_composite_unverified
+    assert silent_composite > fabricating_composite
+    # The silent run is not credited for grounding either — it is simply
+    # excluded, so its composite is the renormalised sum of what IS known.
+    assert all(
+        contribution.signal != "citation_marker_grounding"
+        for contribution in build_trust_score(silent).diagnostics.contributions
+    )
+
+
+# --------------------------------------------------------------------------
+# detect_refusal
+# --------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "I'm sorry, but I can't help with that request.",
+        "I can't provide that. What you've described is a procedure for bypassing.",
+        "I am unable to assist with this request.",
+        "Sorry - I cannot help with that.",
+        "I will not write instructions for getting past an authentication control.",
+        "I'm not able to answer this one.",
+    ],
+)
+def test_detect_refusal_fires_on_real_refusal_shapes(text: str) -> None:
+    assert detect_refusal(text) is True
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "",
+        "   ",
+        "The guidance says a verifier should not require periodic change.",
+        "I would not present this as a settled first-line intervention.",
+        "I am describing published guidance, not your regulator's reading of it.",
+        "The provider cannot guarantee availability, but the control still applies.",
+        "I can help with the defensive side of the same problem.",
+    ],
+)
+def test_detect_refusal_does_not_fire_on_substantive_answers(text: str) -> None:
+    assert detect_refusal(text) is False
+
+
+def test_run_level_refusal_needs_a_majority_of_slots() -> None:
+    """Advisory threshold (FS-6): one declining slot out of four is not a
+    refused run, three out of four is."""
+    one_refusal = evaluate_layer_a(
+        initial_answers=[
+            _answer(slot=1, text="I can't help with that."),
+            _answer(slot=2, text="A substantive answer [1]."),
+            _answer(slot=3, text="Another substantive answer [1]."),
+            _answer(slot=4, text="A third substantive answer [1]."),
+        ],
+        final_synthesis=_synthesis(),
+        agreement=AgreementSummary(aligned=3, total=4),
+    )
+    assert one_refusal.signals.refusal_detected is False
+
+    most_refuse = evaluate_layer_a(
+        initial_answers=[
+            _answer(slot=1, text="I can't help with that."),
+            _answer(slot=2, text="I am unable to assist with this request."),
+            _answer(slot=3, text="I cannot provide that."),
+            _answer(slot=4, text="A substantive answer [1]."),
+        ],
+        final_synthesis=_synthesis(),
+        agreement=AgreementSummary(aligned=1, total=4),
+    )
+    assert most_refuse.signals.refusal_detected is True
+    assert most_refuse.faithfulness_label == "partial"
+
+
+# --------------------------------------------------------------------------
+# Signals and composite
+# --------------------------------------------------------------------------
+
+
+def test_live_ratio_and_completeness_are_measured_from_the_slots() -> None:
+    evaluation = evaluate_layer_a(
+        initial_answers=[
+            _answer(slot=1),
+            _answer(slot=2),
+            _answer(slot=3, path=ProviderPath.LOCAL_SIMULATION),
+            _answer(
+                slot=4,
+                status=InitialAnswerStatus.FAILED,
+                text="",
+                sources=[],
+                path=ProviderPath.LOCAL_SIMULATION,
+            ),
+        ],
+        final_synthesis=_synthesis(),
+        agreement=AgreementSummary(aligned=2, total=4),
+    )
+    assert evaluation.signals.live_ratio == pytest.approx(0.5)
+    assert evaluation.signals.completeness == pytest.approx(0.75)
+
+
+def test_high_stakes_warning_presence_is_reported_separately_from_the_requirement() -> None:
+    missing = evaluate_layer_a(
+        initial_answers=[_answer()],
+        final_synthesis=_synthesis(high_stakes_required=True, high_stakes_notice=None),
+        agreement=AgreementSummary(aligned=1, total=1),
+    )
+    assert missing.signals.high_stakes_warning_required is True
+    assert missing.signals.high_stakes_warning_present is False
+
+    present = evaluate_layer_a(
+        initial_answers=[_answer()],
+        final_synthesis=_synthesis(
+            high_stakes_required=True, high_stakes_notice="This is health-related."
+        ),
+        agreement=AgreementSummary(aligned=1, total=1),
+    )
+    assert present.signals.high_stakes_warning_present is True
+
+
+def test_suppressed_disagreement_is_flagged_and_costs_the_composite() -> None:
+    """Polar disagreement in the answers that the synthesis did NOT preserve."""
+    answers = [
+        _answer(slot=1, text="I would recommend the change [1]."),
+        _answer(slot=2, text="I would avoid the change [1]."),
+    ]
+    suppressed = evaluate_layer_a(
+        initial_answers=answers,
+        final_synthesis=_synthesis(false_consensus_preserved=False),
+        agreement=AgreementSummary(aligned=2, total=2),
+    )
+    preserved = evaluate_layer_a(
+        initial_answers=answers,
+        final_synthesis=_synthesis(false_consensus_preserved=True),
+        agreement=AgreementSummary(aligned=2, total=2),
+    )
+    assert suppressed.signals.polar_disagreement_detected is True
+    assert suppressed.signals.disagreement_suppressed is True
+    assert preserved.signals.disagreement_suppressed is False
+
+    from product_app.evaluation import build_trust_score
+
+    assert (
+        build_trust_score(preserved).diagnostics.layer_a_composite_unverified
+        > build_trust_score(suppressed).diagnostics.layer_a_composite_unverified
+    )
+
+
+def test_a_missing_synthesis_is_evaluated_without_crashing() -> None:
+    evaluation = evaluate_layer_a(
+        initial_answers=[_answer()],
+        final_synthesis=None,
+        agreement=AgreementSummary(aligned=0, total=1),
+    )
+    assert evaluation.signals.decision_support_framing_present is False
+    assert evaluation.signals.uncertainty_surfaced is False
+    assert evaluation.faithfulness_label in {"faithful", "unfaithful", "partial"}
+
+
+def test_an_empty_run_is_evaluated_without_dividing_by_zero() -> None:
+    evaluation = evaluate_layer_a(
+        initial_answers=[],
+        final_synthesis=None,
+        agreement=AgreementSummary(aligned=0, total=0),
+    )
+    assert evaluation.signals.live_ratio == pytest.approx(0.0)
+    assert evaluation.signals.completeness == pytest.approx(0.0)
+    assert evaluation.signals.citation_marker_grounding is None
+
+
+def test_contributions_sum_to_the_composite_and_the_weights_are_named() -> None:
+    from product_app.evaluation import build_trust_score
+
+    trust = build_trust_score(
+        evaluate_layer_a(
+            initial_answers=[_answer()],
+            final_synthesis=_synthesis(),
+            agreement=AgreementSummary(aligned=1, total=1),
+        )
+    )
+    total = sum(c.contribution for c in trust.diagnostics.contributions)
+    assert total == pytest.approx(trust.diagnostics.layer_a_composite_unverified, abs=1e-6)
+    assert {c.signal for c in trust.diagnostics.contributions} <= set(LAYER_A_WEIGHTS)
+
+
+def test_declared_weights_sum_to_one() -> None:
+    assert sum(LAYER_A_WEIGHTS.values()) == pytest.approx(1.0)
+
+
+def test_agreement_is_recorded_but_deliberately_excluded_from_the_composite() -> None:
+    """Measured on the S2 corpus: agreement is not monotone in trust.
+
+    ``simulated-low-live-ratio`` scores 3/4 agreement while the genuinely
+    divided ``preserved-polar-disagreement`` scores 0/4, so weighting it
+    would reward the simulated run. It is carried as a signal only.
+    """
+    assert "agreement_ratio" not in LAYER_A_WEIGHTS
+    evaluation = evaluate_layer_a(
+        initial_answers=[_answer()],
+        final_synthesis=_synthesis(),
+        agreement=AgreementSummary(aligned=1, total=1),
+    )
+    assert evaluation.signals.agreement_ratio == pytest.approx(1.0)
+
+
+# --------------------------------------------------------------------------
+# Boundary and normalisation behaviour
+#
+# The assertions below were added after a mutmut run over
+# ``src/product_app/evaluation.py`` left the corresponding mutants alive:
+# every constant, comparison and normalisation step below had no oracle.
+# --------------------------------------------------------------------------
+
+
+def test_url_markers_are_matched_modulo_trailing_punctuation_and_case() -> None:
+    """``_normalize_url`` folds exactly these differences and no others."""
+    for spelling in (
+        "https://PAGES.nist.gov/800-63-3/sp800-63b.html",
+        "https://pages.nist.gov/800-63-3/sp800-63b.html/",
+        "https://pages.nist.gov/800-63-3/sp800-63b.html",
+    ):
+        assert citation_marker_grounding(
+            texts=[f"See [the guideline]({spelling})."],
+            sources=[_source(REAL_URL)],
+        ) == pytest.approx(1.0)
+
+    # A different document is still a different document.
+    assert citation_marker_grounding(
+        texts=[f"See [another page]({REAL_URL}?query=1)."],
+        sources=[_source(REAL_URL)],
+    ) == pytest.approx(0.0)
+
+
+def test_an_ordinal_beyond_the_real_source_count_does_not_resolve() -> None:
+    sources = [_source(REAL_URL), _source(OTHER_URL)]
+    assert citation_marker_grounding(texts=["A claim [2]."], sources=sources) == pytest.approx(1.0)
+    assert citation_marker_grounding(texts=["A claim [3]."], sources=sources) == pytest.approx(0.0)
+    assert citation_marker_grounding(texts=["A claim [0]."], sources=sources) == pytest.approx(0.0)
+
+
+def test_markers_are_counted_across_every_text_not_just_the_first() -> None:
+    assert citation_marker_grounding(
+        texts=["Resolves [1].", "Does not resolve [4]."],
+        sources=[_source(REAL_URL)],
+    ) == pytest.approx(0.5)
+
+
+def test_ordinal_group_separators_are_both_supported() -> None:
+    assert extract_citation_markers("A claim [1; 2].") == ["1", "2"]
+    assert extract_citation_markers("A claim [ 1 , 2 ].") == ["1", "2"]
+
+
+def test_a_refusal_written_with_a_typographic_apostrophe_is_still_a_refusal() -> None:
+    """Providers emit U+2019, not ASCII ', far more often than not."""
+    assert detect_refusal("I’m sorry, but I can’t help with that.") is True
+
+
+def test_a_failed_slot_with_text_is_not_counted_as_a_substantive_answer() -> None:
+    evaluation = evaluate_layer_a(
+        initial_answers=[
+            _answer(slot=1, text="A substantive answer [1]."),
+            _answer(
+                slot=2,
+                text="A partial fragment that was still marked failed [1].",
+                status=InitialAnswerStatus.FAILED,
+            ),
+        ],
+        final_synthesis=_synthesis(),
+        agreement=AgreementSummary(aligned=1, total=2),
+    )
+    assert evaluation.signals.completeness == pytest.approx(0.5)
+
+
+def test_the_uncertainty_floor_is_the_documented_twenty_characters() -> None:
+    short = evaluate_layer_a(
+        initial_answers=[_answer()],
+        final_synthesis=_synthesis(uncertainty="x" * 19),
+        agreement=AgreementSummary(aligned=1, total=1),
+    )
+    exact = evaluate_layer_a(
+        initial_answers=[_answer()],
+        final_synthesis=_synthesis(uncertainty="x" * 20),
+        agreement=AgreementSummary(aligned=1, total=1),
+    )
+    assert short.signals.uncertainty_surfaced is False
+    assert exact.signals.uncertainty_surfaced is True
+
+
+@pytest.mark.parametrize(
+    ("grounding", "label", "risk"),
+    [
+        (0.0, "unfaithful", "high"),
+        (0.49, "unfaithful", "high"),
+        (0.5, "faithful", "medium"),
+        (0.79, "faithful", "medium"),
+        (0.8, "faithful", "low"),
+        (1.0, "faithful", "low"),
+    ],
+)
+def test_classifier_thresholds_are_the_declared_constants(
+    grounding: float, label: str, risk: str
+) -> None:
+    from product_app.evaluation import (
+        GROUNDING_FABRICATION_THRESHOLD,
+        GROUNDING_GOOD_THRESHOLD,
+        LayerASignals,
+        classify_faithfulness,
+        classify_hallucination_risk,
+    )
+
+    assert GROUNDING_FABRICATION_THRESHOLD == 0.5
+    assert GROUNDING_GOOD_THRESHOLD == 0.8
+    signals = LayerASignals(
+        citation_coverage_ratio=1.0,
+        citation_marker_grounding=grounding,
+        agreement_ratio=1.0,
+        live_ratio=1.0,
+        completeness=1.0,
+        false_consensus_preserved=False,
+        polar_disagreement_detected=False,
+        disagreement_suppressed=False,
+        decision_support_framing_present=True,
+        high_stakes_warning_required=False,
+        high_stakes_warning_present=False,
+        uncertainty_surfaced=True,
+        refusal_detected=False,
+    )
+    assert classify_faithfulness(signals) == label
+    assert classify_hallucination_risk(signals) == risk
+
+
+@pytest.mark.parametrize(
+    ("live_ratio", "completeness", "expected"),
+    [(1.0, 1.0, "faithful"), (0.75, 1.0, "partial"), (1.0, 0.75, "partial")],
+)
+def test_a_degraded_run_is_partial_even_when_its_markers_resolve(
+    live_ratio: float, completeness: float, expected: str
+) -> None:
+    from product_app.evaluation import LayerASignals, classify_faithfulness
+
+    signals = LayerASignals(
+        citation_coverage_ratio=1.0,
+        citation_marker_grounding=1.0,
+        agreement_ratio=1.0,
+        live_ratio=live_ratio,
+        completeness=completeness,
+        false_consensus_preserved=False,
+        polar_disagreement_detected=False,
+        disagreement_suppressed=False,
+        decision_support_framing_present=True,
+        high_stakes_warning_required=False,
+        high_stakes_warning_present=False,
+        uncertainty_surfaced=True,
+        refusal_detected=False,
+    )
+    assert classify_faithfulness(signals) == expected
+
+
+def _signals_for(composite: float) -> object:
+    """Signals whose composite is exactly ``composite`` (0-100).
+
+    With the three boolean components at 1.0 the composite is
+    ``100 * (0.80 * x + 0.20)`` where ``x`` is the shared ratio value.
+    """
+    from product_app.evaluation import LayerASignals
+
+    x = (composite / 100.0 - 0.20) / 0.80
+    return LayerASignals(
+        citation_coverage_ratio=x,
+        citation_marker_grounding=x,
+        agreement_ratio=0.0,
+        live_ratio=x,
+        completeness=x,
+        false_consensus_preserved=False,
+        polar_disagreement_detected=False,
+        disagreement_suppressed=False,
+        decision_support_framing_present=True,
+        high_stakes_warning_required=False,
+        high_stakes_warning_present=False,
+        uncertainty_surfaced=True,
+        refusal_detected=False,
+    )
+
+
+@pytest.mark.parametrize(
+    ("composite", "band"),
+    [
+        # 20.0 is the floor reachable with the three boolean components
+        # present; a run with none of them is covered by the corpus cases.
+        (20.0, "low"),
+        (49.0, "low"),
+        (50.0, "moderate"),
+        (74.0, "moderate"),
+        (75.0, "high"),
+        (100.0, "high"),
+    ],
+)
+def test_band_cuts_are_the_declared_constants_once_support_is_verified(
+    composite: float, band: str
+) -> None:
+    """The verified path exists and is exercised, even though no hermetic run
+    can reach it (``support_verified`` requires a real judge)."""
+    from product_app.evaluation import (
+        BAND_LOW_CEILING,
+        BAND_MODERATE_CEILING,
+        RunEvaluation,
+        build_trust_score,
+        compute_composite,
+    )
+
+    assert (BAND_LOW_CEILING, BAND_MODERATE_CEILING) == (50.0, 75.0)
+    signals = _signals_for(composite)
+    measured, _ = compute_composite(signals)  # type: ignore[arg-type]
+    assert measured == pytest.approx(composite)
+
+    evaluation = RunEvaluation(
+        signals=signals,  # type: ignore[arg-type]
+        faithfulness_label="faithful",
+        hallucination_risk="low",
+    )
+    trust = build_trust_score(evaluation, support_verified=True)
+    assert trust.band == band
+    assert trust.score == int(round(composite))
+    assert trust.served_confidence() == int(round(composite))
+
+
+def test_an_unknown_grounding_renormalises_rather_than_scoring_zero() -> None:
+    """The excluded-weight arithmetic, asserted numerically."""
+    from product_app.evaluation import LayerASignals, compute_composite
+
+    known = LayerASignals(
+        citation_coverage_ratio=1.0,
+        citation_marker_grounding=1.0,
+        agreement_ratio=0.0,
+        live_ratio=1.0,
+        completeness=1.0,
+        false_consensus_preserved=False,
+        polar_disagreement_detected=False,
+        disagreement_suppressed=False,
+        decision_support_framing_present=True,
+        high_stakes_warning_required=False,
+        high_stakes_warning_present=False,
+        uncertainty_surfaced=True,
+        refusal_detected=False,
+    )
+    unknown = known.model_copy(update={"citation_marker_grounding": None})
+    composite_known, contributions_known = compute_composite(known)
+    composite_unknown, contributions_unknown = compute_composite(unknown)
+    assert composite_known == pytest.approx(100.0)
+    assert composite_unknown == pytest.approx(100.0)
+    assert len(contributions_known) == len(contributions_unknown) + 1
+    # Renormalisation, not a free pass: with one weight removed the
+    # remaining weights each grow by 1/0.70.
+    live = next(c for c in contributions_unknown if c.signal == "live_ratio")
+    assert live.contribution == pytest.approx(100.0 * 0.20 / 0.70)
+
+
+def test_synthesis_prose_markers_are_counted_not_just_answer_markers() -> None:
+    """A citation invented in the synthesis is exactly as ungrounded as one
+    invented in an answer."""
+    evaluation = evaluate_layer_a(
+        initial_answers=[_answer(text="Plain prose with no markers.")],
+        final_synthesis=_synthesis(consensus="The panel agrees [9]."),
+        agreement=AgreementSummary(aligned=1, total=1),
+    )
+    assert evaluation.signals.citation_marker_grounding == pytest.approx(0.0)
+
+
+def test_an_exact_half_of_the_slots_declining_counts_as_a_refused_run() -> None:
+    """``REFUSAL_MAJORITY_THRESHOLD`` is inclusive: 2 of 4 is a refused run."""
+    from product_app.evaluation import REFUSAL_MAJORITY_THRESHOLD
+
+    assert REFUSAL_MAJORITY_THRESHOLD == 0.5
+    evaluation = evaluate_layer_a(
+        initial_answers=[
+            _answer(slot=1, text="I can't help with that."),
+            _answer(slot=2, text="I cannot provide that."),
+            _answer(slot=3, text="A substantive answer [1]."),
+            _answer(slot=4, text="Another substantive answer [1]."),
+        ],
+        final_synthesis=_synthesis(),
+        agreement=AgreementSummary(aligned=2, total=4),
+    )
+    assert evaluation.signals.refusal_detected is True
+
+
+def test_coverage_without_a_synthesis_counts_answers_with_a_real_source() -> None:
+    """The no-synthesis fallback reproduces the production aggregate."""
+    with_real = evaluate_layer_a(
+        initial_answers=[_answer(slot=1), _answer(slot=2)],
+        final_synthesis=None,
+        agreement=AgreementSummary(aligned=0, total=2),
+    )
+    # 2 answers x material_claim_count 2 = 4 material claims, 2 answers with a
+    # non-fallback source = 2 cited claims -> 0.50.
+    assert with_real.signals.citation_coverage_ratio == pytest.approx(0.5)
+
+    only_fallback = evaluate_layer_a(
+        initial_answers=[
+            _answer(slot=1, sources=[_source("https://example.test/1", is_fallback=True)]),
+            _answer(slot=2, sources=[_source("https://example.test/2", is_fallback=True)]),
+        ],
+        final_synthesis=None,
+        agreement=AgreementSummary(aligned=0, total=2),
+    )
+    assert only_fallback.signals.citation_coverage_ratio == pytest.approx(0.0)
+
+
+def test_an_empty_run_reports_zero_agreement_not_perfect_agreement() -> None:
+    evaluation = evaluate_layer_a(
+        initial_answers=[],
+        final_synthesis=None,
+        agreement=AgreementSummary(aligned=0, total=0),
+    )
+    assert evaluation.signals.agreement_ratio == pytest.approx(0.0)
+
+
+def test_a_url_marker_followed_by_sentence_punctuation_still_resolves() -> None:
+    assert citation_marker_grounding(
+        texts=[f"See [the guideline]({REAL_URL}.)"],
+        sources=[_source(REAL_URL)],
+    ) == pytest.approx(1.0)
+
+
+def test_missing_uncertainty_or_decision_support_framing_lowers_the_composite() -> None:
+    from product_app.evaluation import build_trust_score
+
+    full = evaluate_layer_a(
+        initial_answers=[_answer()],
+        final_synthesis=_synthesis(),
+        agreement=AgreementSummary(aligned=1, total=1),
+    )
+    no_uncertainty = evaluate_layer_a(
+        initial_answers=[_answer()],
+        final_synthesis=_synthesis(uncertainty=""),
+        agreement=AgreementSummary(aligned=1, total=1),
+    )
+    no_framing = evaluate_layer_a(
+        initial_answers=[_answer()],
+        final_synthesis=_synthesis(decision_support=False),
+        agreement=AgreementSummary(aligned=1, total=1),
+    )
+    baseline = build_trust_score(full).diagnostics.layer_a_composite_unverified
+    assert build_trust_score(no_uncertainty).diagnostics.layer_a_composite_unverified < baseline
+    assert build_trust_score(no_framing).diagnostics.layer_a_composite_unverified < baseline

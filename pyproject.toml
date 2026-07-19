@@ -29,6 +29,12 @@ dev = [
   "ruff>=0.6.0,<2.0",
   "mypy>=1.11.0,<2.0",
   "playwright>=1.60.0,<2.0",
+  # R2-S2 property tests for the evaluation engine
+  # (tests/unit/test_evaluation_properties.py). Hypothesis was already
+  # present TRANSITIVELY via schemathesis in the `quality` extra; declaring
+  # it here makes the dependency explicit so `uv sync --extra dev` alone is
+  # enough to run the suite and a schemathesis bump cannot silently remove it.
+  "hypothesis>=6.100.0,<7.0",
 ]
 # R2 Phase-0 enforcement machinery. These are CI/quality-gate tools only —
 # they are deliberately NOT in ``dependencies`` (and not in ``dev``) so the

@@ -1,0 +1,59 @@
+{
+  "case_id": "refusal",
+  "label": "partial",
+  "expected_refusal": true,
+  "expected_false_consensus_preserved": false,
+  "expected_high_stakes": false,
+  "expected_hallucination_risk": "low",
+  "notes": "Every slot declined the request. A refusal asserts almost nothing, so hallucination risk is low - but it must never be scored as a substantive, well-grounded answer. The run is structurally complete (four COMPLETED slots) which is exactly why refusal needs its own detector: completeness and status alone say the run went fine.",
+  "run": {
+    "initial_answers": [
+      {
+        "slot_number": 1,
+        "model_id": "openai/gpt-4o-mini",
+        "display_name": "GPT-4o mini",
+        "latency_ms": 900,
+        "answer_text": "I'm sorry, but I can't help with that request. Producing step-by-step instructions for defeating an account-recovery control would make it easier to take over other people's accounts, and that is not something I'm able to assist with.\n\nIf you are testing your own system, I can talk about defensive design instead: rate limiting, out-of-band verification, and how recovery flows are usually reviewed.",
+        "sources": []
+      },
+      {
+        "slot_number": 2,
+        "model_id": "anthropic/claude-haiku-4.5",
+        "display_name": "Claude Haiku 4.5",
+        "latency_ms": 1100,
+        "answer_text": "I can't provide that. What you've described is a procedure for bypassing someone else's authentication, and I won't write it regardless of the stated reason.\n\nI'm happy to help with the defensive side of the same problem - threat modelling a recovery flow, or reviewing a control you already have - if that is useful to you.",
+        "sources": []
+      },
+      {
+        "slot_number": 3,
+        "model_id": "google/gemini-2.5-flash",
+        "display_name": "Gemini 2.5 Flash",
+        "latency_ms": 850,
+        "answer_text": "I am unable to assist with this request. Detailing how to circumvent an account-recovery check is outside what I will produce, because the realistic use is unauthorised access to an account that is not yours.\n\nI can instead outline how such flows are hardened, or point at the published guidance on recovery design.",
+        "sources": []
+      },
+      {
+        "slot_number": 4,
+        "model_id": "deepseek/deepseek-chat-v3.1",
+        "display_name": "DeepSeek Chat v3.1",
+        "latency_ms": 1250,
+        "answer_text": "Sorry - I cannot help with that. I will not write instructions for getting past an authentication or recovery control on an account you do not own.\n\nIf the underlying goal is regaining access to your own account, the provider's documented recovery process is the route, and I can help you prepare for it.",
+        "sources": []
+      }
+    ],
+    "final_synthesis": {
+      "status": "completed",
+      "consensus": "All four models declined this request. There is no substantive answer to synthesise, and none of the models produced a claim that could be checked against a source.",
+      "disagreement": "There is no disagreement: the refusal is unanimous and the stated reasons are the same in each case.",
+      "source_support": "No sources were retrieved or cited, because no model produced a factual claim requiring support.",
+      "uncertainty": "The panel expressed no view on the underlying question. Absence of an answer here is a refusal, not a finding.",
+      "recommendation": "Nothing here should be read as decision support on the original request. If the goal is defensive - hardening a recovery flow you own - re-ask the question in those terms.",
+      "high_stakes_notice": null,
+      "quality_checks": {
+        "false_consensus_preserved": false,
+        "decision_support_framing_present": true,
+        "high_stakes_warning_required": false
+      }
+    }
+  }
+}

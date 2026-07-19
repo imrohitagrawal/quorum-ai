@@ -1304,6 +1304,7 @@ dependencies = [
 [package.optional-dependencies]
 dev = [
     { name = "httpx" },
+    { name = "hypothesis" },
     { name = "mypy" },
     { name = "playwright" },
     { name = "pytest" },
@@ -1321,6 +1322,7 @@ requires-dist = [
     { name = "diff-cover", marker = "extra == 'quality'", specifier = ">=9.0.0,<11.0" },
     { name = "fastapi", specifier = ">=0.115.0,<1.0" },
     { name = "httpx", marker = "extra == 'dev'", specifier = ">=0.27.0,<1.0" },
+    { name = "hypothesis", marker = "extra == 'dev'", specifier = ">=6.100.0,<7.0" },
     { name = "mutmut", marker = "extra == 'quality'", specifier = ">=3.0.0,<4.0" },
     { name = "mypy", marker = "extra == 'dev'", specifier = ">=1.11.0,<2.0" },
     { name = "playwright", marker = "extra == 'dev'", specifier = ">=1.60.0,<2.0" },
