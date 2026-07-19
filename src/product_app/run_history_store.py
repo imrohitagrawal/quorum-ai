@@ -416,6 +416,32 @@ def record_terminal_run(row: RunHistoryRow) -> None:
         _log.warning("run_history_store: failed to persist run %s: %s", row.query_run_id, exc)
 
 
+def update_evaluation(
+    query_run_id: str,
+    *,
+    eval_json: dict[str, Any] | None,
+    trust_json: dict[str, Any] | None,
+) -> None:
+    """Best-effort hot-path wrapper: attach an evaluation, never raise.
+
+    Exact parity with :func:`record_terminal_run` — the module wrapper is the
+    guard so a failed write is logged and swallowed and can never fail a user
+    run, while :meth:`RunHistoryStore.update_evaluation` still raises so a bug
+    surfaces in tests instead of hiding behind the guard.
+    """
+    store = get_store()
+    if store is None:
+        return
+    try:
+        store.update_evaluation(query_run_id, eval_json=eval_json, trust_json=trust_json)
+    except Exception as exc:  # noqa: BLE001 — run-history sink is best-effort
+        _log.warning(
+            "run_history_store: failed to attach evaluation for run %s: %s",
+            query_run_id,
+            exc,
+        )
+
+
 @contextmanager
 def configure_for_tests() -> Iterator[RunHistoryStore]:
     """Yield a configured in-memory store; restore ``None`` on exit."""
@@ -436,4 +462,5 @@ __all__ = [
     "configure_for_tests",
     "get_store",
     "record_terminal_run",
+    "update_evaluation",
 ]

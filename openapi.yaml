@@ -679,6 +679,75 @@ components:
       - latency_ms
       - citation_coverage
       title: InitialModelAnswer
+    LayerASignals:
+      properties:
+        citation_coverage_ratio:
+          type: number
+          maximum: 1.0
+          minimum: 0.0
+          title: Citation Coverage Ratio
+        citation_marker_grounding:
+          anyOf:
+          - type: number
+            maximum: 1.0
+            minimum: 0.0
+          - type: 'null'
+          title: Citation Marker Grounding
+        agreement_ratio:
+          type: number
+          maximum: 1.0
+          minimum: 0.0
+          title: Agreement Ratio
+        live_ratio:
+          type: number
+          maximum: 1.0
+          minimum: 0.0
+          title: Live Ratio
+        completeness:
+          type: number
+          maximum: 1.0
+          minimum: 0.0
+          title: Completeness
+        false_consensus_preserved:
+          type: boolean
+          title: False Consensus Preserved
+        polar_disagreement_detected:
+          type: boolean
+          title: Polar Disagreement Detected
+        disagreement_suppressed:
+          type: boolean
+          title: Disagreement Suppressed
+        decision_support_framing_present:
+          type: boolean
+          title: Decision Support Framing Present
+        high_stakes_warning_required:
+          type: boolean
+          title: High Stakes Warning Required
+        high_stakes_warning_present:
+          type: boolean
+          title: High Stakes Warning Present
+        uncertainty_surfaced:
+          type: boolean
+          title: Uncertainty Surfaced
+        refusal_detected:
+          type: boolean
+          title: Refusal Detected
+      type: object
+      required:
+      - citation_coverage_ratio
+      - agreement_ratio
+      - live_ratio
+      - completeness
+      - false_consensus_preserved
+      - polar_disagreement_detected
+      - disagreement_suppressed
+      - decision_support_framing_present
+      - high_stakes_warning_required
+      - high_stakes_warning_present
+      - uncertainty_surfaced
+      - refusal_detected
+      title: LayerASignals
+      description: Deterministic per-run signals. Metrics only — never prose.
     ModelDefaultsResponse:
       properties:
         model_slots:
@@ -889,6 +958,60 @@ components:
       - model_slots
       - reasons
       title: QueryRunEstimateResponse
+    QueryRunEvaluationProjection:
+      properties:
+        schema_version:
+          type: string
+          title: Schema Version
+        signals:
+          $ref: '#/components/schemas/LayerASignals'
+        faithfulness_label:
+          type: string
+          enum:
+          - faithful
+          - unfaithful
+          - partial
+          title: Faithfulness Label
+        hallucination_risk:
+          type: string
+          enum:
+          - low
+          - medium
+          - high
+          title: Hallucination Risk
+        trust:
+          $ref: '#/components/schemas/TrustScore'
+      type: object
+      required:
+      - schema_version
+      - signals
+      - faithfulness_label
+      - hallucination_risk
+      - trust
+      title: QueryRunEvaluationProjection
+      description: 'The served S2 per-run evaluation (FR-015). Metrics only — never prose.
+
+
+        Deliberately NOT ``RunEvaluation`` itself: that model carries the optional
+
+        Layer-B ``judge`` verdict, whose ``rationale`` is free text written about
+
+        provider prose. The served projection has no judge field at all, so there
+
+        is no path — present or future — by which a rationale reaches a client.
+
+
+        ``trust`` is the engine''s :class:`~product_app.evaluation.TrustScore`
+
+        verbatim. While ``support_verified`` is False (which, with no real Layer-B
+
+        judge, is every hermetic run) ``score`` IS ``None`` and ``band`` IS
+
+        ``"unverified"``; the only number in the payload is the explicitly-named
+
+        ``layer_a_composite_unverified`` diagnostic, which is not a confidence
+
+        figure and is named so a client cannot mistake it for one.'
     QueryRunProgress:
       properties:
         current_stage:
@@ -988,6 +1111,10 @@ components:
           - measured
           title: Cost Source
           default: estimated
+        evaluation:
+          anyOf:
+          - $ref: '#/components/schemas/QueryRunEvaluationProjection'
+          - type: 'null'
       type: object
       required:
       - query_run_id
@@ -1213,6 +1340,97 @@ components:
         live — the cost layer treats a missing record as "cannot measure this
 
         call" and keeps the run tagged ``estimated`` (never fabricates usage).'
+    TrustContribution:
+      properties:
+        signal:
+          type: string
+          title: Signal
+        weight:
+          type: number
+          title: Weight
+        value:
+          type: number
+          title: Value
+        contribution:
+          type: number
+          title: Contribution
+      type: object
+      required:
+      - signal
+      - weight
+      - value
+      - contribution
+      title: TrustContribution
+      description: One weighted term of the composite, surfaced so the sum is auditable.
+    TrustDiagnostics:
+      properties:
+        layer_a_composite_unverified:
+          type: number
+          maximum: 100.0
+          minimum: 0.0
+          title: Layer A Composite Unverified
+        contributions:
+          items:
+            $ref: '#/components/schemas/TrustContribution'
+          type: array
+          title: Contributions
+      type: object
+      required:
+      - layer_a_composite_unverified
+      - contributions
+      title: TrustDiagnostics
+      description: 'Layer-A arithmetic, carried as a diagnostic and named as one.
+
+
+        ``layer_a_composite_unverified`` is deliberately verbose: it is a
+
+        composite of DETERMINISTIC, UNVERIFIED signals. Nothing in it was
+
+        checked by a judge or a human, and it is never a confidence figure —
+
+        regardless of what ``TrustScore.support_verified`` says, because the
+
+        judge never enters this arithmetic.'
+    TrustScore:
+      properties:
+        support_verified:
+          type: boolean
+          title: Support Verified
+        band:
+          type: string
+          enum:
+          - unverified
+          - low
+          - moderate
+          - high
+          title: Band
+        score:
+          anyOf:
+          - type: integer
+            maximum: 100.0
+            minimum: 0.0
+          - type: 'null'
+          title: Score
+        diagnostics:
+          $ref: '#/components/schemas/TrustDiagnostics'
+      type: object
+      required:
+      - support_verified
+      - band
+      - diagnostics
+      title: TrustScore
+      description: 'What a consumer may serve.
+
+
+        The suppression is STRUCTURAL, not a convention: while
+
+        ``support_verified`` is False, ``score`` IS ``None`` and ``band`` IS
+
+        ``"unverified"``. There is no key on this model a client can read as a
+
+        confidence number; the only number is the explicitly-named diagnostic
+
+        composite and its per-component parts.'
     ValidationError:
       properties:
         loc:

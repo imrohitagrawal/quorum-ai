@@ -90,9 +90,12 @@ def test_completed_run_persisted_with_verbatim_cost_and_survives_eviction() -> N
         assert row.model_ids == DEFAULT_MODEL_IDS
         # PII minimisation: the row must not carry the query text anywhere.
         assert "Compare transparent model answers" not in str(row)
-        # eval fields are empty until S2 fills them.
-        assert row.eval_json is None
-        assert row.trust_json is None
+        # S2 (FR-015) attaches the evaluation to this same row, after the
+        # metrics write. Ownership of the payload's shape and honesty lives in
+        # tests/integration/test_query_run_evaluation_endpoint.py; here we only
+        # pin that the S1 row is the carrier.
+        assert row.eval_json is not None
+        assert row.trust_json is not None
 
         # The row OUTLIVES the in-memory run (simulate eviction).
         query_run_repository.clear()
