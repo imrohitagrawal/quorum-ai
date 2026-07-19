@@ -44,13 +44,26 @@ _SPAN_RE = re.compile(r"`([^`\n]+)`")
 
 @pytest.fixture(scope="module")
 def superseded_text() -> str:
-    return subprocess.run(
+    # The pre-supersede blob lives in history at PRE_SUPERSEDE_SHA. That commit
+    # is NOT present in a shallow checkout (GitHub Actions uses fetch-depth: 1 by
+    # default) — `git show` then exits 128. Our CI grants full history
+    # (fetch-depth: 0) so this audit runs, but in any environment without the
+    # object we SKIP with a clear reason rather than hard-error: a doc
+    # carry-forward audit must not turn a shallow clone red.
+    result = subprocess.run(
         ["git", "show", f"{PRE_SUPERSEDE_SHA}:{SUPERSEDED_REL}"],
         cwd=REPO_ROOT,
         capture_output=True,
         text=True,
-        check=True,
-    ).stdout
+        check=False,
+    )
+    if result.returncode != 0:
+        pytest.skip(
+            f"pre-supersede blob {PRE_SUPERSEDE_SHA}:{SUPERSEDED_REL} is not "
+            "reachable (shallow checkout?); the carry-forward audit needs full "
+            "git history. CI runs it with fetch-depth: 0."
+        )
+    return result.stdout
 
 
 @pytest.fixture(scope="module")
