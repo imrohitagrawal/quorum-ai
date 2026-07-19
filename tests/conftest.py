@@ -21,6 +21,13 @@ os.environ.setdefault("ENVIRONMENT", "local")
 # that use the cookie path are unaffected.
 os.environ.setdefault("ACCOUNT_LEGACY_HEADER_ENABLED", "true")
 
+# Pin the durable run-history sink (S1/FR-014) to an in-memory SQLite DB for the
+# whole test session so importing product_app.main creates no on-disk
+# ``.data/run_history.sqlite3`` artifact and tests never share cross-session
+# state. Tests that assert on persistence opt into an isolated store via
+# ``run_history_store.configure_for_tests``.
+os.environ.setdefault("RUN_HISTORY_DB_PATH", ":memory:")
+
 from collections.abc import Iterator
 
 import pytest

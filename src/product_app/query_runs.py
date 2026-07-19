@@ -73,6 +73,8 @@ from product_app.providers import (
     TokenUsage,
     provider_execution_service,
 )
+from product_app.run_history_store import RunHistoryRow
+from product_app.run_history_store import record_terminal_run as _record_run_history
 from product_app.safety import (
     SafetyAcknowledgement,
     SafetyWarning,
@@ -914,6 +916,9 @@ def create_query_run(
     if session.legacy:
         _execute_query_run(query_run.query_run_id, session.account_id)
         query_run = query_run_repository.get(query_run.query_run_id)
+        # Legacy/test path runs inline (no safety wrapper), so persist the
+        # terminal run here. Idempotent with the production choke point.
+        _persist_terminal_run(query_run.query_run_id)
     else:
         # C9: do not spawn a thread if the in-flight run cap is
         # already at capacity. Returning 503 with a clear error
@@ -1101,6 +1106,11 @@ def _execute_query_run_safely(query_run_id: UUID, account_id: UUID) -> None:
                     if stage.state is StageState.PENDING
                 ],
             )
+    finally:
+        # Single terminal choke point for the production/thread path: persist
+        # the durable run-history row whatever terminal state we reached
+        # (success or the FAILED fallback above). Best-effort + idempotent.
+        _persist_terminal_run(query_run_id)
 
 
 def _execute_query_run_with_semaphore_release(query_run_id: UUID, account_id: UUID) -> None:
@@ -1351,6 +1361,59 @@ def _log_estimate_accuracy(query_run_id: UUID) -> None:
         )
     except Exception as exc:  # noqa: BLE001 — telemetry must never crash a run
         logger.debug("cost_estimate_accuracy logging failed: %s", exc)
+
+
+def _persist_terminal_run(query_run_id: UUID) -> None:
+    """Write a durable, PII-minimised row for a terminal run (S1 / FR-014).
+
+    Best-effort telemetry: any failure here must never affect the run's
+    terminal state, so the whole body is guarded (parity with
+    :func:`_log_estimate_accuracy`). Values are taken from the SAME
+    :func:`_result_response` the ``GET /{id}`` endpoint serves, so the
+    persisted numbers — cost provenance especially — are byte-identical to
+    what the user sees; we never recompute or upgrade ``estimated``→
+    ``measured`` here. Idempotent at the store (upsert on ``query_run_id`` via
+    ``INSERT … ON CONFLICT DO UPDATE`` of the metric columns only, preserving any
+    S2 evaluation) so a re-persist — or a double-fire across the two terminal
+    call sites — is harmless.
+    """
+    try:
+        query_run = query_run_repository.get(query_run_id)
+        if not query_run.is_terminal:
+            return
+        response = _result_response(query_run)
+        agreement = response.result.agreement
+        citation_ratio = None
+        final_synthesis = query_run.final_synthesis
+        if final_synthesis is not None and final_synthesis.citation_coverage is not None:
+            citation_ratio = final_synthesis.citation_coverage.coverage_ratio
+        row = RunHistoryRow(
+            query_run_id=str(query_run.query_run_id),
+            account_id=str(query_run.account_id),
+            correlation_id=query_run.correlation_id,
+            status=query_run.status.value,
+            created_at=query_run.created_at,
+            completed_at=query_run.updated_at,
+            elapsed_time_ms=response.elapsed_time_ms,
+            model_ids=[slot.model_id for slot in query_run.model_slots],
+            demo_mode=response.demo_mode,
+            live_count=response.live_count,
+            local_count=response.local_count,
+            material_claim_count=response.material_claim_count,
+            agreement_aligned=agreement.aligned,
+            agreement_total=agreement.total,
+            citation_ratio=citation_ratio,
+            cost_source=response.cost_source,
+            estimated_cost_usd=query_run.cost_estimate.estimated_cost_usd,
+            actual_cost_usd=response.actual_cost_usd,
+            failed_steps=list(query_run.failed_steps),
+            missing_steps=list(query_run.missing_steps),
+            eval_json=None,
+            trust_json=None,
+        )
+        _record_run_history(row)
+    except Exception as exc:  # noqa: BLE001 — run-history persistence is best-effort
+        logger.debug("run_history persistence failed: %s", exc)
 
 
 def _validated_model_slots(

@@ -27,6 +27,12 @@ jobs:
     steps:
       - name: Check out repository
         uses: actions/checkout@v4
+        with:
+          # Full history: tests/test_day_one_carry_forward_audit.py reads a
+          # pre-supersede blob via `git show <sha>:...`; a shallow clone lacks
+          # that commit and the audit would skip. (The test skips gracefully
+          # without it, but we want the audit to actually run in CI.)
+          fetch-depth: 0
 
       - name: Install uv
         uses: astral-sh/setup-uv@v5

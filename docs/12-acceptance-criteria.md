@@ -273,3 +273,26 @@ Given OpenRouter charges a flat per-request web-search plugin fee (~$0.02/reques
 - Requirement: NFR-002
 - Decision: accepted 2026-07-17 (issue #18); see CHG-005 and `config.py cost_web_search_request_fee_usd`
 - Test: existing #18 mechanism tests (behaviour unchanged at `0.0`)
+
+## Release 2: Trust & Evaluation
+
+## AC-038 Terminal run persisted with verbatim cost provenance
+
+Given a query run reaches a terminal status, when its terminal state is committed, then a durable run-history row exists whose `cost_source`, `actual_cost_usd`, and `estimated_cost_usd` are identical to what `GET /v1/query-runs/{id}` returns for that run — an `estimated` run is never persisted as `measured`.
+
+- Requirement: FR-014
+- Test: TEST-FR-014 (`tests/integration/test_query_run_history_persist.py::test_completed_run_persisted_with_verbatim_cost_and_survives_eviction`)
+
+## AC-039 Run-history row is PII-minimised
+
+Given a terminal run is persisted, when the row is written, then it contains only metrics and model ids — the query text and provider answer prose appear nowhere in the row.
+
+- Requirement: FR-014
+- Test: TEST-FR-014 (asserts the query text is absent from the persisted row)
+
+## AC-040 Persistence is durable, idempotent, and non-blocking
+
+Given a terminal run is persisted, when the in-memory run is later evicted, then the row survives; and re-recording the same run id does not create a duplicate (INSERT OR REPLACE, last write wins); and a persistence failure is swallowed without affecting the run's terminal state or the request.
+
+- Requirement: FR-014, NFR-011
+- Test: TEST-FR-014 (`tests/unit/test_run_history_store.py` idempotency + best-effort; integration survives-eviction assertion)

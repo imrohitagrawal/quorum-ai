@@ -29,6 +29,10 @@ kill_timeout = "5s"
   # (mounted at /data below), NOT the ephemeral rootfs default (.data/…) which
   # is wiped on every deploy — that erased the self-improving-loop history.
   FEEDBACK_DB_PATH = "/data/feedback_events.sqlite3"
+  # R2 S1 (FR-014): durable terminal run-history sink, same persistent volume.
+  # Sibling of the feedback trail; wiped-on-deploy would defeat evaluation and
+  # (later) operability trends, so it lives on /data too.
+  RUN_HISTORY_DB_PATH = "/data/run_history.sqlite3"
 
 [experimental]
   # Required for single-instance state to be stable across deploys.

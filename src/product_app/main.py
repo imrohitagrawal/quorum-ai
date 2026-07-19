@@ -62,6 +62,8 @@ from product_app.query_runs import router as query_runs_router
 from product_app.readiness import (
     run_startup_probe,
 )
+from product_app.run_history_store import RunHistoryStore
+from product_app.run_history_store import configure as configure_run_history_store
 
 # Structured JSON logging for production log aggregators.
 # Called once at module load so every subsequent log line (including
@@ -261,6 +263,23 @@ try:
 except Exception as exc:  # noqa: BLE001 - persistence is optional
     logging.getLogger(__name__).warning(
         "feedback_store: could not open SQLite sink, persistence disabled: %s",
+        exc,
+    )
+
+# Durable terminal run-history sink (S1 / FR-014). Sibling of the feedback
+# store on the same Fly volume, path from ``RUN_HISTORY_DB_PATH``. As with the
+# feedback store, when the env var is UNSET this falls back to the on-disk dev
+# default (``.data/run_history.sqlite3``, gitignored) — it is NOT disabled, so
+# a dev/prod run does write a metrics row. The test suite pins the path to
+# ``:memory:`` (see tests/conftest.py) so tests create no on-disk artifact and
+# never share cross-session state; a test that asserts on persistence opts into
+# an isolated store via ``run_history_store.configure_for_tests``. A failed
+# open is logged and the app continues; the run's terminal state is unaffected.
+try:
+    configure_run_history_store(RunHistoryStore.from_env())
+except Exception as exc:  # noqa: BLE001 - persistence is optional
+    logging.getLogger(__name__).warning(
+        "run_history_store: could not open SQLite sink, persistence disabled: %s",
         exc,
     )
 
