@@ -8,7 +8,7 @@ This file is the human-friendly dashboard for the product factory. It is generat
 > hand-written section below (including the ROUTER OVERRIDE record) is destroyed the
 > next time anyone runs `make next` or `make handoff`-adjacent flows.
 >
-> **The ROUTER OVERRIDE record below is currently NOT durable.** As of 2026-07-19 the
+> **The ROUTER OVERRIDE record below is currently NOT durable.** As of 2026-07-19
 > the override IS now durably recorded — the FS-4 row of
 > `docs/analysis/R2-plan-review-findings.md` reads `DONE`, and the ledger's
 > Reconciliation + PHASE STATUS sections carry it. THIS console copy is still
