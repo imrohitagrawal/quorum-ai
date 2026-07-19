@@ -17,7 +17,7 @@ The recurring failure was placing UI-testing entirely in the influence column.
 
 | Practice / finding | Mechanism today | Should be | Influence or gate | Action |
 |--------------------|-----------------|-----------|-------------------|--------|
-| No raw Markdown in rendered text (#30) | none | CI invariant | **Gate** | Built (`rendering-invariants.spec.ts`), flip to blocking on fix |
+| No raw Markdown in rendered text (#30) | none | CI invariant | **Gate** | Built (`rendering-invariants.spec.ts`); the flip is DONE — the step runs hard in `e2e.yml` |
 | Monotonic live timer (#29) | none | CI invariant | **Gate** | Built (RED-proven) |
 | Transcript uses available width (#33) | none | CI visual snapshot (human-reviewed) | **Gate** | Built; seed baselines |
 | Real-integration (not page.route) | mocked "e2e" only | CI smoke on real sim backend | **Gate** | Built + blocking |

@@ -14,6 +14,24 @@ run, and were proven RED against current code.
 | Real-integration smoke | `e2e/tests/invariants/real-integration-smoke.spec.ts` | Drives the REAL sim backend end-to-end with NO `page.route` mock; asserts a run reaches a populated verdict | Playwright test | CI — **BLOCKING** | **DONE — PASSING** |
 | CI wiring | `.github/workflows/e2e.yml` | Smoke, rendering invariants and visual snapshots all run as **blocking** steps — `continue-on-error` appears nowhere in the file | GitHub Actions (tracked = shared) | The shared gate | **DONE** |
 
+## CI gate enforcement status (the qualified truth, mechanised)
+
+`continue-on-error` is **not** the only way a job fails to block, so this table
+records the *effective* status of every registered gate. It is kept honest by
+`tests/test_doc_gate_consistency.py`, which parses `.github/workflows/*.yml` and
+fails the build if any doc's blocking/advisory wording contradicts reality
+(ledger EN-7).
+
+| Job (`ci.yml` unless noted) | Effective status | Why it is qualified |
+|---|---|---|
+| `fr-completeness` — *FR traceability completeness (blocking)* | blocking | — |
+| `api-contract` — *Schemathesis API contract (blocking)* | blocking | — |
+| `diff-cover` — *Changed-lines coverage >= 95% (blocking)* | blocking-on-pull-requests-only | `if: github.event_name == 'pull_request'`, so a direct push to `main` has no changed-lines gate (`docs/analysis/09-enforcement-hooks.md` records the same PARTIAL) |
+| `perf-gate` | advisory | `continue-on-error: true` — macOS-derived budgets would false-fail a slower runner; DEBT-009 |
+| `mutation-baseline` | advisory | `continue-on-error: true` until 2026-08-02 (RB-7) |
+| `codex-review` | vacuous (no executable step) | the `openai/codex-action` step is commented out pending an `OPENAI_API_KEY` secret, so the job only checks out and always passes |
+| `e2e` (`e2e.yml`) | blocking | — |
+
 ## Prove-red evidence (recorded this session, against current `app.js`/`app.css`)
 
 Running `rendering-invariants.spec.ts` on chromium: **3 failed, 1 passed.**
