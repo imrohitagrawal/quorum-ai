@@ -18,7 +18,8 @@ this session's earlier S1 review fan.
 build+prove Phase-0 gates; (2) **Promote perf now** — hermetic percentile +
 concurrency gate; (3) **Study/publish = phase-exit follow-up**, not a code-slice
 DoD blocker; plus **coverage floor 88** (from measured baseline, not 85),
-**mutmut 70%/2-wk** (baseline-then-set), **both hooks + CI**, **supersede**.
+**mutmut 2-wk advisory, floor measured to 80** (baseline-then-set; NOT the plucked
+70), **both hooks + CI**, **supersede**.
 
 **Status discipline (do not weaken):** a row flips to `DONE` **only** with a
 proof pointer to a file that exists — never on a claim. That rule is itself
@@ -30,6 +31,21 @@ sends a reader back to chat text; the test is what stops it.
 
 **Phase-0 sweep (2026-07-19, branch `feat/r2-s1-run-history-persistence`):**
 statuses below were reconciled against the repo after the Phase-0 gates landed.
+
+**PHASE STATUS (durable — this line, not the auto-overwritten factory console, is
+authoritative):**
+- **Planning phase: CLOSED** (2026-07-19) — the R2 plan + DAY-ONE prompt were
+  adversarially reviewed to a fixpoint; all DOC-FIX items landed-robust; all
+  findings are tracked here.
+- **Phase 0 (enforcement machinery): DONE** — accepted at commit `676413e`,
+  independently verified (`make validate` green; 740 passed / 4 skipped; cov
+  88.52%; FR-gate re-proven RED@`d7469ce`→GREEN@HEAD).
+- **Phase 1 (S2 — evaluation engine): NEXT, not started.** Build the
+  output-correctness gates FIRST (OC-1/OC-2/OC-3/OC-5). Then Phase 2 (S3 — trust
+  UI), Phase 3 (S4 — eval harness).
+- **Open residuals carried into S2+:** DEBT-008 (mutation blind spot), DEBT-009
+  (perf gate re-promotion), DEBT-010 (router false-positive), OC-4 values, the
+  FS-4 operator confirmation (recorded, low-risk).
 
 ---
 
@@ -59,7 +75,7 @@ statuses below were reconciled against the repo after the Phase-0 gates landed.
 | ID | Sev | Finding | Action | Status |
 |---|---|---|---|---|
 | RB-1 | HIGH | **85% coverage floor ratchets DOWN** — measured baseline is **88%**; global floor also hides `feedback_audit.py 61%`, `synthesis_length.py 58%`. | Set `--cov-fail-under=88` (from baseline) + **`diff-cover` ≥95% on changed lines** + per-file watch. | **DONE (both halves)** — repo floor `--cov-fail-under=88` in `pyproject.toml` (proven: passes at 88.23%, fails at 95) **plus** changed-lines `diff-cover ≥95%`: `make diff-cover`, `diff-cover` CI job, measured **97%** on this branch — see `docs/metrics/diff-cover.md`. |
-| RB-2 | HIGH | **Perf deferral is a cop-out for R2** — S2/S3/S4 ARE the latency surface; NFR-001/004 (P50≤45s/P95≤120s/180s) are MUST; hermetic percentile+concurrency tests cost nothing; `docs/55` already declares them release-blocking. | **Promote now** (user-decided): build-failing hermetic **P50/P95 workflow-latency** gate + set PERF-010 eval-batch baseline in S4 + judge-ON latency budget. | **DONE** — hermetic, $0 `tests/perf/test_workflow_latency_percentiles.py` (`make perf-gate`, blocking `perf-gate` CI job). Measured stub baseline (macOS/M4, load avg ~3, 10 runs): seq p50 40.3–44.1 ms, p95 42.2–82.3 ms; 20-concurrent p95 394.3–648.0 ms. Budgets set **from that data** (150/300/1500 ms → ~3.4×/~3.6×/~2.3× headroom over the worst observed value) and proven to bite by injected per-call delay. The gate docstring is the single source for these numbers — an earlier, faster envelope was formally retracted as non-reproducible, and `tests/test_findings_ledger_perf_numbers.py` now fails the build if this row drifts from it again. **PERF-010 eval-batch baseline is out of scope → BUILD (S4).** |
+| RB-2 | HIGH | **Perf deferral is a cop-out for R2** — S2/S3/S4 ARE the latency surface; NFR-001/004 (P50≤45s/P95≤120s/180s) are MUST; hermetic percentile+concurrency tests cost nothing; `docs/55` already declares them release-blocking. | **Promote now** (user-decided): build-failing hermetic **P50/P95 workflow-latency** gate + set PERF-010 eval-batch baseline in S4 + judge-ON latency budget. | **DONE** — hermetic, $0 `tests/perf/test_workflow_latency_percentiles.py` (`make perf-gate`, blocking `perf-gate` CI job). Measured stub baseline (macOS/M4, load avg ~3, 10 runs): seq p50 40.3–44.1 ms, p95 42.2–82.3 ms; 20-concurrent p95 394.3–648.0 ms. Budgets set **from that data** (150/300/1500 ms → ~3.4×/~3.6×/~2.3× headroom over the worst observed value) and proven to bite by injected per-call delay. **Reconciliation 2026-07-19: the CI `perf-gate` job is ADVISORY (`continue-on-error: true`), NOT blocking — the macOS-derived budgets would false-fail a slower CI runner; DEBT-009 tracks re-measuring on CI + isolating the latency spec from the default suite before re-promoting.** The gate docstring is the single source for these numbers — an earlier, faster envelope was formally retracted as non-reproducible, and `tests/test_findings_ledger_perf_numbers.py` now fails the build if this row drifts from it again. **PERF-010 eval-batch baseline is out of scope → BUILD (S4).** |
 | RB-3 | HIGH | **Concurrency "tested" in one word** against a single-`RLock`/single-connection SQLite that is the bottleneck; observed **`ResourceWarning: unclosed database`** leak. | Build an **N-thread contention test** (no lost updates, no `database is locked`, bounded p95 under load); **fix the unclosed-connection leak**; ADR on WAL vs single-lock + measured single-instance concurrency ceiling. | **DONE** — leak fixed and proven RED-first via `tests/test_store_lifecycle.py` (scoped `error::ResourceWarning`); N-thread contention proven in `tests/test_store_concurrency.py`; single-writer ceiling measured and recorded in `docs/adr/0002-sqlite-single-writer-ceiling.md` (no WAL switch without measurement). |
 | RB-4 | MED-HIGH | **No flake policy**; AGENTS.md "**run N≥10×**" rule absent from the plan; `retries:2` masks flakes. | Add flake policy: measure timing-sensitive specs N≥10× in a dedicated job, publish rate to ledger, quarantine over budget (not retries). | BUILD (S3) — out of scope for Phase 0: the N≥10× job belongs with the UI specs it measures. |
 | RB-5 | MED-HIGH | **No resilience/failure-injection** (provider timeout/500/partial/fallback) despite NFR-004/PERF-005/006 and memory `prod-live-execution-falls-back`. | Add a hermetic **fault-injection lane**: assert terminal-by-180s, partial-result surfaced, fallback recorded, degraded banner fires. | BUILD (S3) — out of scope for Phase 0 (needs the fault-injection surface). |
@@ -109,7 +125,8 @@ does: otherwise their status lives only in chat.
    FS-7, FS-9, FS-10, CF-2, CF-3, OC-4(schema), EN-2(doc).
 2. **BUILT + PROVEN in Phase 0:** RB-1 (cov 88 + diff-cover 95/measured 97),
    RB-3 (leak fix + N-thread contention + ADR), RB-2 (perf gate),
-   RB-7 (mutmut baseline 97.0%/96.5% → threshold 90 advisory), EN-2 (the sound
+   RB-7 (mutmut baseline re-measured 87.2–88.7% → threshold 80 advisory; the
+   97.0%/96.5%→90 figures were retracted — see the RB-7 row), EN-2 (the sound
    evidence-artifact rule), FS-4 (router override recorded), P0-F, P0-H,
    FS-5 (the enforcement contract is folded into
    `R2-S2-S4-ULTRACODE-PROMPT.md` §Precondition and gated by

@@ -1,5 +1,13 @@
 # Autonomous Phase-0 Build Prompt — Quorum-AI R2 enforcement machinery
 
+> **⚠️ SUPERSEDED / HISTORICAL (2026-07-19).** Phase 0 has been **built, verified,
+> and accepted** (commit `676413e`). This file is the *pre-build* driver prompt —
+> its baseline numbers (e.g. "501 passed / 1 skipped", "88.23%") were the
+> STARTING point; the current state is **740 passed / 4 skipped, 88.52%**. For
+> current state and phase status see the **PHASE STATUS** section of
+> `docs/analysis/R2-plan-review-findings.md` (durable) and `docs/00-factory-console.md`
+> (dashboard). Kept only as a historical record of the Phase-0 build spec.
+
 > **How to use:** paste this ENTIRE file as the first message in a FRESH Claude
 > Code session opened in the `quorum-ai` repo. It is fully self-contained — it
 > assumes NO prior chat context. Work autonomously through the whole sequence;

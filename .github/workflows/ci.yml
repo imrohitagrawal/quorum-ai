@@ -155,9 +155,9 @@ jobs:
     # threshold, and the measured runtime that justifies the timeout below.
     continue-on-error: true
     runs-on: ubuntu-latest
-    # Measured locally: 7m25s for the 22 changed functions (425 mutants) on
-    # this branch with --max-children 8. 30 min leaves ~4x headroom for a
-    # slower, 2-core runner.
+    # Measured locally: ~7-8m for the 21 changed functions (504 mutants, after
+    # the RB-3 leak fix widened the scope from 425) on this branch with
+    # --max-children 8. 30 min leaves headroom for a slower, 2-core runner.
     timeout-minutes: 30
     env:
       OPENROUTER_LIVE_EXECUTION_ENABLED: "false"
