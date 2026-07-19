@@ -41,6 +41,19 @@ This plan converts the approved Release 1 MVP requirements, architecture, UX, se
 | SLICE-011 | BYO OpenRouter key add/remove/status and account scoping. | FR-012, NFR-005, NFR-006 | TEST-FR-012, TEST-NFR-005, TEST-NFR-006 | BYO key never leaves server boundary and is removable. |
 | SLICE-012 | End-to-end UX, accessibility, observability, performance, and release hardening. | FR-013, NFR-001 through NFR-010 | TEST-NFR-009, TEST-NFR-010, performance/eval/security suites | Core workflow is auditable, accessible, observable, and release-gate ready. |
 
+## Release 2: Trust & Evaluation Slices
+
+Each R2 slice follows the same "code + tests + observability + docs + rollback"
+bar, plus verify-first: RED-then-GREEN proven per slice, guardrail values
+calibrated from measured data, adversarial subagent review on non-trivial logic.
+
+| Slice | Outcome | Primary Requirements | Blocking Tests | Exit Criteria |
+|---|---|---|---|---|
+| R2-S1 | Durable, PII-minimised terminal run-history store; persisted at both terminal choke points. | FR-014, NFR-011 | TEST-FR-014 (`test_run_history_store.py`, `test_query_run_history_persist.py`) | Row written on every terminal state; cost provenance verbatim; survives eviction; idempotent; unset path = no behaviour change. **Done.** |
+| R2-S2 | Per-run evaluation engine (deterministic Layer-A TrustScore + key-gated OFF-by-default LLM judge). | FR-015, NFR-011, NFR-012 | TEST-FR-015 | Layer-A always-on + hermetic; judge OFF ⇒ zero score/latency/cost delta; eval persisted to the S1 row. |
+| R2-S3 | Trust/confidence result surface reusing the trust triangle; honesty + GREEN-RULE preserved. | FR-016 | TEST-FR-016 | New prose routes through the markdown renderer; no raw markdown (blocking gate); "—" when eval absent; axe + visual pass. |
+| R2-S4 | CI eval harness + ~60–80 golden set; DeepEval + RAGAS in an opt-in nightly job; hermetic PR gate. | FR-017, NFR-011 | TEST-FR-017 | Hermetic regression on every PR (zero paid calls); real-judge job opt-in; drift fails the build. |
+
 ## Engineering Standards
 
 - Python package layout remains under `src/product_app`.

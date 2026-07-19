@@ -193,3 +193,25 @@ These requirements cover Release 1 MVP for the public AI cross-validation workfl
 - Team workspaces, billing, enterprise admin, and audit workflows.
 - Automated execution of high-stakes decisions.
 - Claiming guaranteed factual correctness.
+
+## Release 2: Trust & Evaluation Requirements
+
+These requirements are additive to Release 1 and ship behind the same
+verify-first discipline (RED-then-GREEN, no fabricated data). Saved query
+*history* remains out of scope as a user feature — FR-014 persists
+PII-minimised run *metrics* for evaluation/operability, not the query text or
+answers.
+
+## FR-014 Durable terminal run-history persistence
+
+- Actor: System (query-run pipeline).
+- Trigger: A query run reaches any terminal status (completed, partial, failed, timed out, blocked by cost, cancelled).
+- Behavior: The system writes one durable, PII-minimised row per terminal run to a persistent store (SQLite on the Fly volume) — run id, account id, correlation id, status, timestamps, elapsed time, model ids, demo/live/local counts, material-claim count, agreement numerator/denominator, citation ratio, cost source, estimated and actual cost, and failed/missing steps. The row holds metrics and model ids only — never the query text or provider answer prose. Cost provenance is copied verbatim from the value served by `GET /v1/query-runs/{id}` (never recomputed, never upgraded estimated→measured). Persistence is best-effort and idempotent on run id; a failure never affects the run's terminal state.
+- Outcome: Evaluation, trend, and (later) operability surfaces have durable data that outlives in-memory eviction and redeploys.
+- Source: `docs/09-roadmap.md` (Release 2), `docs/43-privacy-data-governance.md`, `docs/48-data-retention.md`.
+- Owner: Backend engineer.
+- Priority: Must.
+- Rationale: No trust/evaluation/operability signal can be measured or trended without a durable record; the MVP's in-memory runs are evicted after ~1h.
+- Acceptance criteria: AC-038, AC-039, AC-040.
+- Tests: TEST-FR-014 (`tests/unit/test_run_history_store.py`, `tests/integration/test_query_run_history_persist.py`).
+- Jira: Not created.
