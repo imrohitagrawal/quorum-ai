@@ -4,16 +4,30 @@
 **Pushed:** NO. **Merged:** NO. **Deployed:** NO. No paid path activated, no secret rotated.
 **Date:** 2026-07-20.
 
-> **SUPERSEDED IN PART — 2026-07-20 (R2-S2.1, HEAD `fa1c824`).** Everything
-> below describes the tree as of `01e69f2`. **DEBT-011 has since been FIXED**
-> and the four `xfail(strict=True)` acceptance tests it refers to are now
-> ordinary PASSING tests, so every statement below of the form "4 xfailed are
-> deliberate" / "the residual is unresolved" is HISTORY, not the current tree.
-> Current: 1015 passed / 4 skipped / **0 xfailed**, cov 89.51%. See
-> `docs/63-technical-debt-register.md` (DEBT-011 resolved, **DEBT-012** opened)
-> and `tests/unit/test_evaluation_refusal_decoupling.py`. What is NOT
-> superseded: S2 acceptance itself — the full adversarial re-review to a
-> fixpoint was not run in S2.1, so S2 remains **BUILT, NOT ACCEPTED**.
+> **SUPERSEDED IN PART — 2026-07-20 (R2-S2.1, HEAD `210aa98`).** Everything
+> below describes the tree as of `01e69f2` and is kept as the S2 record.
+> **DEBT-011 has since been FIXED** and the four `xfail(strict=True)`
+> acceptance tests it refers to are now ordinary PASSING tests, so every
+> statement below of the form "4 xfailed are deliberate" / "the residual is
+> unresolved" is HISTORY, not the current tree. **In particular the whole
+> section ">>> READ THIS BEFORE TOUCHING THE ENGINE: DEBT-011 <<<" is
+> HISTORICAL** — it records the three failed detector reformulations that
+> motivated the structural fix, not a live defect.
+> Measured at `210aa98`: **1119 passed / 4 skipped / 0 xfailed, cov
+> 89.65–89.70%** (two runs),
+> `make validate` green, ruff + mypy clean, `make perf-gate` 10/10.
+> Two other numbers below are also superseded: the grounding separation quoted
+> as **1.000 vs 0.038** re-measured to **0.850 vs 0.059** after DEBT-011 (the
+> live value is re-derived from the corpus by
+> `tests/test_findings_ledger_consistency.py::test_quoted_grounding_separations_are_the_measured_ones`),
+> and the commit table lists the 8 S2 commits only — S2.1 added 16 more.
+> See `docs/63-technical-debt-register.md` (DEBT-011 resolved, **DEBT-012**
+> opened), `tests/unit/test_evaluation_refusal_decoupling.py`, and the
+> **S2.1 reconciliation section** at the bottom of
+> `docs/analysis/R2-plan-review-findings.md`. What is NOT superseded: S2
+> acceptance itself — S2.1 ran its own three-round adversarial re-review and
+> **again hit the FS-7 bound without a fixpoint** (the round-3 fix diff was not
+> re-reviewed), so S2 remains **BUILT, NOT ACCEPTED**.
 
 This file is the durable handback. Chat evaporates and
 `docs/session-handoff.md` is regenerated wholesale by
@@ -29,7 +43,9 @@ which points here.
 headline output-correctness work is done — but a bounded three-round
 adversarial review reached its FS-7 bound **without a fixpoint**, and the
 residual (**DEBT-011**) is blocking for S3. Do not read the green suite as
-"S2 done".
+"S2 done". *(2026-07-20: DEBT-011 is now FIXED in S2.1 and **DEBT-012** is its
+recorded successor; the "not accepted / no fixpoint" half of this line still
+stands — S2.1's own three rounds also ended without one.)*
 
 ## Gates (re-run them; do not trust this table)
 
@@ -120,7 +136,20 @@ goes 27 killed / 2 no-tests → **40 killed / 0 no-tests**). DEBT-010 DONE
 
 ---
 
-## >>> READ THIS BEFORE TOUCHING THE ENGINE: DEBT-011 <<<
+## >>> HISTORICAL (DEBT-011, FIXED in R2-S2.1) <<<
+
+> **This entire section is history as of 2026-07-20.** It described the tree at
+> `01e69f2`, where DEBT-011 was an open, blocking residual pinned by four
+> `xfail(strict=True)` tests. Those four are now ordinary PASSING tests and the
+> defect is closed structurally — refusal is a signal, never an override;
+> synthesis ordinals have a ceiling of 0; an off-run URL is excluded as unknown
+> (cost carried as **DEBT-012**). It is kept verbatim because it is the argument
+> for *why* the fix had to be structural: three successive rewrites of
+> `detect_refusal` each moved the defect instead of removing it, which is the
+> evidence that a phrasing fix was never going to work. Do not read anything
+> below as describing the current engine — read
+> `docs/63-technical-debt-register.md` (DEBT-011, DEBT-012) and
+> `tests/evals/test_refusal_fabrication_residual.py` for that.
 
 `detect_refusal` was rewritten twice and **each attempt moved the defect rather
 than removing it**:
@@ -170,9 +199,11 @@ not, and both directions are now named.
 
 ## Operator-gated / deferred
 
-1. **DEBT-011** — decide the refusal/fabrication design before S3 surfaces any
-   label. A build prompt appears to exist at `S2.1-DEBT-011-BUILD-PROMPT.md`
-   (untracked; not written by the S2 session).
+1. ~~**DEBT-011** — decide the refusal/fabrication design before S3 surfaces any
+   label.~~ **CLOSED 2026-07-20 (R2-S2.1).** The operator decided the design and
+   it shipped; its successor **DEBT-012** (off-run URL liveness/support is
+   unverifiable without a fetch) is now the item that must be resolved before S3
+   surfaces any evaluation label.
 2. **OC-1 real labels** — captured four-model runs + **human** labels, especially
    medical/legal/financial, need a qualified reviewer. No paid run was made and
    no captured run was fabricated.
@@ -193,8 +224,11 @@ not, and both directions are now named.
 - **Untracked, not mine, left alone:** `MORNING-REPORT.md`,
   `S2-BUILD-PROMPT.md`, `S2.1-DEBT-011-BUILD-PROMPT.md`,
   `design_handoff_quorum_ui/`.
-- The 4 xfails are load-bearing records. Deleting them to get a "clean" suite
-  would destroy the residual.
+- ~~The 4 xfails are load-bearing records. Deleting them to get a "clean" suite
+  would destroy the residual.~~ **Superseded:** they were converted to ordinary
+  PASSING tests by the S2.1 fix (an XPASS on a strict xfail reds the suite), so
+  the suite now reports **0 xfailed**. They are still load-bearing — they are
+  the RED→GREEN acceptance evidence for DEBT-011 and must not be deleted.
 
 ## Review record (EN-5: findings live below the line, not in a commit message)
 
