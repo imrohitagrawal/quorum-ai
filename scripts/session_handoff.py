@@ -88,6 +88,16 @@ def main() -> int:
 ## Open questions
 - Update `docs/13-open-questions.md` when needed.
 
+## Durable records (this file is REGENERATED — it cannot hold session state)
+Everything below the "Current phase" line is derived from `make skill-route`,
+and this whole file is overwritten by `scripts/session_handoff.py`. Anything a
+session needs to survive into the next one lives in a tracked doc instead:
+- `docs/analysis/R2-plan-review-findings.md` — **PHASE STATUS** is the
+  authoritative phase, not the "Current phase" line above (which reports the
+  factory router's view, overridden for R2 under AGENTS.md precedence #2).
+- The current slice's handback, linked from that PHASE STATUS block.
+- `docs/63-technical-debt-register.md` — accepted debt and what blocks what.
+
 ## Risks/blockers
 - Update manually before closing the session.
 
@@ -107,6 +117,9 @@ make validate
 ## Suggested next Codex prompt
 ```text
 Continue from AGENTS.md, docs/00-factory-console.md, and docs/session-handoff.md.
+Read the PHASE STATUS block in docs/analysis/R2-plan-review-findings.md and the
+slice handback it links: the phase line in this file is the router's view, not
+the authoritative one.
 Do not redo completed work.
 Use the recommended driver skill and reviewer skills from make skill-route.
 Before editing, list the files you intend to modify.

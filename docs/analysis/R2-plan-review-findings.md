@@ -42,7 +42,9 @@ authoritative):**
   88.52%; FR-gate re-proven RED@`d7469ce`→GREEN@HEAD).
 - **Phase 1 (S2 — evaluation engine): BUILT, NOT ACCEPTED — operator decision
   required** (branch `feat/r2-s2-evaluation-engine`, unpushed, 8 commits on
-  `46adcc4`). FR-015, NFR-011/012, OC-1 (harness), OC-2, EN-7, DEBT-008 and
+  `46adcc4`). **Full handback: `docs/analysis/R2-S2-handback.md`** — read it
+  before continuing S2/S3; `docs/session-handoff.md` is regenerated wholesale by
+  `scripts/session_handoff.py` and cannot hold it. FR-015, NFR-011/012, OC-1 (harness), OC-2, EN-7, DEBT-008 and
   DEBT-010 are DONE and proven; all gates green (983 passed / 4 skipped /
   4 xfailed, cov 89.49%, diff-cover 99%, Schemathesis 29, perf 10/10).
   **It is NOT "S2 DONE":** a bounded three-round adversarial loop reached its
