@@ -153,6 +153,17 @@ jobs:
 
   mutation-baseline:
     name: Mutation score (ADVISORY - non-blocking)
+    # PULL-REQUEST ONLY — must NOT run on a push to main. The score is a per-PR,
+    # CHANGED-FUNCTIONS-vs-base concept; on a push to main there is no meaningful
+    # base and the scope explodes to the whole merged slice, running the full
+    # `timeout-minutes` below (measured 2026-07-20: 30m, then cancelled by its own
+    # timeout). Because this job lives in the deploy-gate-required "CI" workflow,
+    # that 30m kept "CI" `in_progress` past the gate's 900s wait, so the gate
+    # fail-safe refused to deploy and EVERY merge since 2026-07-17 (S1+Phase-0,
+    # S2) silently never reached prod. Gating to pull_request (as `codex-review`
+    # already does) keeps "CI" fast on push so the gate can pass. The invariant is
+    # pinned by tests/unit/test_deploy_gate_no_slow_push_jobs.py.
+    if: github.event_name == 'pull_request'
     # LOCKED decision: advisory until 2026-08-02, then re-evaluate (RB-7).
     # Scope is CHANGED FUNCTIONS vs the base branch, not whole modules — see
     # docs/metrics/mutation-baseline.md for the measured baseline, the derived
