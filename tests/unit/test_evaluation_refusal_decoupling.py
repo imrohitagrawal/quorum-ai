@@ -20,11 +20,20 @@ detector cannot re-open the hole without turning one of them red:
   The cap is a ``min()``; it is structurally incapable of lifting.
 * **INV-3** — ``run_wholly_refused`` is not read by either classifier at
   all. It stays a reported signal.
+* **INV-4** — the grounding SIGNAL itself is built independently of both
+  booleans. INV-1/2/3 are properties of the two classifiers, and round 3
+  measured what that leaves open: a refusal-keyed suppression of
+  ``citation_marker_grounding`` moved ONE level upstream, into
+  ``evaluate_layer_a``, re-opened the exact DEBT-011 laundering
+  (``unfaithful``/``high`` -> ``partial``/``low``) with INV-1/2/3, both
+  classifiers and every other test untouched and the ENTIRE suite green.
 
 Each is shown to BITE, and against BOTH mutations — measured, not asserted:
 
 * restoring the refusal-FIRST branch turns INV-1/INV-2/INV-3 red;
-* DELETING the cap turns INV-1, INV-2 and the explicit cap example red.
+* DELETING the cap turns INV-1, INV-2 and the explicit cap example red;
+* suppressing grounding on ``run_wholly_refused`` inside
+  ``evaluate_layer_a`` turns INV-4 red, and NOTHING else in the repo.
 
 The second half did not hold when this module was written: the shared signal
 strategy drew ``live_ratio``/``completeness`` from a continuous unit float
@@ -47,6 +56,7 @@ from product_app.evaluation import (
     GROUNDING_FABRICATION_THRESHOLD,
     FaithfulnessLabel,
     LayerASignals,
+    RunEvaluation,
     classify_faithfulness,
     classify_hallucination_risk,
 )
@@ -279,7 +289,7 @@ def test_unknown_grounding_is_the_only_place_refusal_moves_the_risk_band(
 # ---------------------------------------------------------------------------
 
 
-def _run(texts: list[str]):
+def _run(texts: list[str]) -> RunEvaluation:
     """One 4-slot run, each slot with a single-entry bibliography."""
     from tests.unit.test_evaluation_layer_a import _answer, _synthesis
 

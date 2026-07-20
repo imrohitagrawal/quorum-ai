@@ -437,12 +437,15 @@ REFUSAL_MAJORITY_THRESHOLD = 0.5
 #:
 #: It consumes the terminal punctuation plus AT MOST ONE whitespace
 #: character, so the text after a boundary can still START with whitespace
-#: (a markdown paragraph break leaves a ``\n`` behind). Both helpers below
-#: therefore strip leading whitespace BEFORE searching — without that the
-#: ``\n`` alternative matches at index 0 and the "sentence" is the empty
-#: string, which no phrase can ever match. That was a measured false
-#: negative in both positions: an answer opening with a blank line, and the
-#: markdown-paragraph form of the apology-then-decline refusal.
+#: (a markdown paragraph break leaves a ``\n`` behind), and it can match at
+#: index 0 — on the ``\n`` alternative, and on any text OPENING with
+#: terminal punctuation. Both were measured false negatives, in both
+#: anchor positions: an answer opening with a blank line, the
+#: markdown-paragraph form of the apology-then-decline refusal (round 1),
+#: and a second sentence opening with ``!`` or ``...`` (round 3). The fix
+#: is not in this pattern — it stays crude on purpose — but in
+#: :func:`_split_first_sentence`, which skips whitespace AND word-free
+#: fragments rather than trusting the first boundary it finds.
 _SENTENCE_BOUNDARY_RE = re.compile(r"[.!?][\"'’)\]]*(?:\s|\Z)|\n")
 
 
@@ -548,9 +551,12 @@ def detect_refusal(text: str) -> bool:
     """Whether a single provider answer is a refusal rather than an answer.
 
     The rule: a decline phrase anywhere in the answer's first ANSWERING
-    sentence makes it a refusal — the first sentence, unless that sentence
-    is a pure apology, in which case the second. Nothing else is consulted:
-    not length, not what the rest of the answer goes on to say.
+    sentence makes it a refusal — the first WORD-BEARING sentence, unless
+    that sentence is a pure apology, in which case the next one. Nothing
+    else is consulted: not length, not what the rest of the answer goes on
+    to say. "Word-bearing" is round 3's correction: a fragment of stray
+    punctuation is not a sentence, and letting one be the anchor silently
+    made every phrase inert (:func:`_split_first_sentence`).
 
     Why no character budget. An earlier version used a 200-character lead
     window and could not be justified against the corpus in EITHER
@@ -661,7 +667,10 @@ class LayerASignals(BaseModel):
     #: :func:`classify_faithfulness` nor :func:`classify_hallucination_risk`
     #: reads this field — it used to short-circuit both, which is exactly
     #: how a safety disclaimer laundered a fabricating run. INV-3 in
-    #: ``tests/unit/test_evaluation_refusal_decoupling.py`` holds it there.
+    #: ``tests/unit/test_evaluation_refusal_decoupling.py`` holds it there,
+    #: and INV-4 holds the grounding signal independent of BOTH booleans at
+    #: construction time — a guarantee INV-1/2/3 do not make, because they
+    #: are properties of the classifiers rather than of the signals.
     run_wholly_refused: bool
 
 
@@ -920,7 +929,11 @@ def classify_faithfulness(signals: LayerASignals) -> FaithfulnessLabel:
     reproductions are now ordinary passing tests in
     ``tests/evals/test_refusal_fabrication_residual.py``, and the property
     that keeps them closed for inputs those four examples do not cover is
-    INV-1/2/3 in ``tests/unit/test_evaluation_refusal_decoupling.py``.
+    INV-1/2/3/4 in ``tests/unit/test_evaluation_refusal_decoupling.py`` —
+    INV-4 because INV-1/2/3 constrain the CLASSIFIERS only, and round 3
+    measured that a refusal-keyed override moved one level upstream (into
+    the construction of the grounding signal in :func:`evaluate_layer_a`)
+    re-opened this hole with the entire suite green.
 
     Reproduces every label in ``tests/evals/corpus/`` (five hand-authored
     cases). Five cases pin direction, not accuracy.

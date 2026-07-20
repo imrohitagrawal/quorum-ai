@@ -19,7 +19,9 @@ structural, not phrasing: a refusal branch was being allowed to decide a
   synthesis ordinal resolves against a ceiling of 0 and never resolves.
 * **C.** An off-run URL marker is EXCLUDED from the grounding fraction
   rather than counted as unresolved — Layer A performs no I/O and cannot
-  tell an invented URL from an un-retrieved real one (cost: DEBT-012).
+  tell an invented URL from an un-retrieved real one (cost: DEBT-012, whose
+  MIXED-case half — one resolving ordinal carries any number of fabricated
+  URLs to ``faithful``/``low`` — was measured and recorded in round 3).
 * **D.** ``detect_refusal`` normalises the two-word spelling "can not" and
   skips a leading pure-apology sentence before anchoring.
 
@@ -29,7 +31,10 @@ is what makes R-1 a *laundering* defect rather than a general weakness.
 
 The invariants that stop the hole re-opening in a form these four examples
 would miss live in ``tests/unit/test_evaluation_refusal_decoupling.py``
-(INV-1/2/3, property tests over the whole signal space). The labels remain
+(INV-1/2/3 over the whole signal space, plus INV-4 over the CONSTRUCTION of
+the grounding signal — round 3 measured that INV-1/2/3 constrain the
+classifiers only, so an override moved one level upstream re-opened the
+hole with the whole suite green). The labels remain
 ADVISORY and uncalibrated (FS-6); this module proves the interaction is
 correct, not that the labels are.
 """
