@@ -238,8 +238,16 @@ def citation_marker_grounding(*, scopes: list[CitationScope]) -> float | None:
 #: They are NOT self-sufficient, and the list must not claim to be. Several
 #: ("i cannot provide", "i am unable to") are also ordinary mid-answer
 #: hedges, so :func:`detect_refusal` anchors the match to the answer's first
-#: ANSWERING sentence. Every phrase here is exercised by a fixture in
-#: ``tests/unit/test_evaluation_layer_a.py``.
+#: ANSWERING sentence.
+#:
+#: Every phrase here is exercised in BOTH directions by
+#: ``tests/unit/test_evaluation_layer_a.py`` — fires inside the anchor, inert
+#: outside it — against a literal copy of this tuple that is compared to it
+#: for exact equality. An earlier revision claimed the same coverage and was
+#: measurably wrong: eight of these eighteen phrases had no fixture anywhere,
+#: and deleting all eight left the entire refusal suite green. Parametrizing
+#: over this tuple would NOT have caught that (the parametrization shrinks
+#: with the tuple), which is why the fixture list is written out separately.
 #:
 #: This is a list of PHRASES, not of spellings. The two-word negation
 #: "can not" is normalised to "cannot" before matching
@@ -282,17 +290,35 @@ REFUSAL_MAJORITY_THRESHOLD = 0.5
 #: end of the text (closing quotes/brackets allowed in between), or a hard
 #: line break. Deliberately crude and deliberately CONSTANT-FREE — its only
 #: job is to find where the opening sentence stops.
+#:
+#: It consumes the terminal punctuation plus AT MOST ONE whitespace
+#: character, so the text after a boundary can still START with whitespace
+#: (a markdown paragraph break leaves a ``\n`` behind). Both helpers below
+#: therefore strip leading whitespace BEFORE searching — without that the
+#: ``\n`` alternative matches at index 0 and the "sentence" is the empty
+#: string, which no phrase can ever match. That was a measured false
+#: negative in both positions: an answer opening with a blank line, and the
+#: markdown-paragraph form of the apology-then-decline refusal.
 _SENTENCE_BOUNDARY_RE = re.compile(r"[.!?][\"'’)\]]*(?:\s|\Z)|\n")
 
 
 def _first_sentence(text: str) -> str:
-    match = _SENTENCE_BOUNDARY_RE.search(text)
-    return text if match is None else text[: match.start()]
+    """The leading sentence of ``text``, ignoring any leading whitespace.
+
+    Never returns an empty sentence for a non-blank ``text``: leading
+    whitespace is stripped first, so a boundary can only be found at an
+    index greater than zero.
+    """
+    stripped = text.lstrip()
+    match = _SENTENCE_BOUNDARY_RE.search(stripped)
+    return stripped if match is None else stripped[: match.start()]
 
 
 def _after_first_sentence(text: str) -> str:
-    match = _SENTENCE_BOUNDARY_RE.search(text)
-    return "" if match is None else text[match.end() :]
+    """Everything after the leading sentence, with its leading gap removed."""
+    stripped = text.lstrip()
+    match = _SENTENCE_BOUNDARY_RE.search(stripped)
+    return "" if match is None else stripped[match.end() :].lstrip()
 
 
 #: The two-word negation. Folded into "cannot" so ``_REFUSAL_PHRASES`` stays

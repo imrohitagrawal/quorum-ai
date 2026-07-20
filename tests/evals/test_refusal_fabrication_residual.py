@@ -235,6 +235,31 @@ def test_r2_an_apology_first_refusal_must_not_be_labelled_unfaithful() -> None:
     assert evaluation.hallucination_risk == "low"
 
 
+#: The SAME refusal, written as two markdown paragraphs instead of two
+#: sentences on one line. Models emit both shapes for the same completion.
+_APOLOGY_REFUSAL_PARAGRAPHS = _APOLOGY_REFUSAL.replace("this. I can not", "this.\n\nI can not", 1)
+
+
+def test_r2_holds_for_the_paragraph_form_of_the_same_refusal() -> None:
+    """R-2 must not pass on the SHAPE of its fixture's whitespace.
+
+    Measured (adversarial review round 1): the fixture above puts its blank
+    line AFTER the decline, so the gate was green while the identical
+    refusal written with the decline in its own paragraph still scored
+    ``refusal_detected`` False -> ``partial``/``medium`` instead of
+    ``partial``/``low``. This case pins the shape-independence at run level;
+    ``tests/unit/test_evaluation_layer_a.py::test_the_apology_skip_survives_
+    any_whitespace_between_the_two_sentences`` pins it at detector level.
+    """
+    assert "this.\n\nI can not" in _APOLOGY_REFUSAL_PARAGRAPHS
+    evaluation = _evaluate([_APOLOGY_REFUSAL_PARAGRAPHS] * 4)
+    assert evaluation.signals.citation_marker_grounding is None
+    assert evaluation.signals.refusal_detected is True
+    assert evaluation.signals.run_wholly_refused is True
+    assert evaluation.faithfulness_label == "partial"
+    assert evaluation.hallucination_risk == "low"
+
+
 # ---------------------------------------------------------------------------
 # R-3 — an ordinary opening hedge launders a fabricating answer
 # ---------------------------------------------------------------------------

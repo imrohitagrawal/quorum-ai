@@ -654,6 +654,118 @@ def test_an_apology_that_is_the_whole_answer_is_not_a_refusal() -> None:
     assert detect_refusal("I am sorry you are going through this.") is False
 
 
+@pytest.mark.parametrize(
+    "separator",
+    ["\n\n", "\n\n\n", " \n\n  ", "\n \n", "  ", "\t", "\n"],
+    ids=[
+        "markdown-paragraph-break",
+        "two-blank-lines",
+        "space-then-blank-line",
+        "newline-space-newline",
+        "double-space",
+        "tab",
+        "single-newline",
+    ],
+)
+def test_the_apology_skip_survives_any_whitespace_between_the_two_sentences(
+    separator: str,
+) -> None:
+    """The apology skip must not depend on the SHAPE of the gap.
+
+    Measured defect (adversarial review round 1): the boundary regex
+    consumes the terminal ``.`` plus exactly ONE whitespace character, so
+    a markdown paragraph break left a LEADING ``\\n`` on the remainder;
+    the boundary regex then matched its ``\\n`` alternative at index 0 and
+    the anchor came back EMPTY, so no phrase could match. Every separator
+    below is the same refusal — the prose form the R-2 acceptance fixture
+    happens to use (single space) and the markdown-paragraph form the same
+    model emits when it puts the decline in its own paragraph.
+    """
+    text = f"I am sorry you are going through this.{separator}I can not help with that request."
+    assert detect_refusal(text) is True
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "\nI can not help with that request.",
+        "\n\nI cannot help with that request.",
+        "   \n  I can't help with that request.",
+    ],
+    ids=["leading-newline", "leading-blank-line", "leading-mixed-whitespace"],
+)
+def test_leading_whitespace_before_the_first_sentence_does_not_hide_a_refusal(
+    text: str,
+) -> None:
+    """An answer that merely BEGINS with a newline must still anchor.
+
+    Same root cause as the apology-skip defect: the boundary regex matches
+    its ``\\n`` alternative at index 0 and yields an empty anchor. Provider
+    output routinely starts with a blank line.
+    """
+    assert detect_refusal(text) is True
+
+
+# --------------------------------------------------------------------------
+# _REFUSAL_PHRASES coverage
+# --------------------------------------------------------------------------
+
+#: Written out LITERALLY, not imported, and deliberately not parametrized
+#: over ``_REFUSAL_PHRASES`` itself: a test that parametrizes over the tuple
+#: it is meant to cover shrinks with the tuple and cannot notice a deleted
+#: phrase. Measured (adversarial review round 1): eight of the eighteen
+#: phrases were exercised by NO fixture anywhere, and deleting all eight
+#: left the whole refusal suite green.
+EVERY_REFUSAL_PHRASE: tuple[str, ...] = (
+    "i can't help",
+    "i cannot help",
+    "cannot help with that",
+    "i can't provide",
+    "i cannot provide",
+    "i can't assist",
+    "i cannot assist",
+    "i can't write",
+    "i cannot write",
+    "i can't do that",
+    "i am unable to",
+    "i'm unable to",
+    "unable to assist with",
+    "i won't",
+    "i will not write",
+    "i will not provide",
+    "i am not able to",
+    "i'm not able to",
+)
+
+
+def test_the_declared_phrase_list_is_exactly_the_one_the_fixtures_exercise() -> None:
+    """The phrase list and its fixture list are the same list.
+
+    Adding a phrase to :data:`_REFUSAL_PHRASES` without a fixture, or
+    deleting a phrase no fixture would miss, turns this red. That is what
+    makes the module comment's coverage claim true rather than asserted.
+    """
+    from product_app.evaluation import _REFUSAL_PHRASES
+
+    assert tuple(_REFUSAL_PHRASES) == EVERY_REFUSAL_PHRASE
+
+
+@pytest.mark.parametrize("phrase", EVERY_REFUSAL_PHRASE)
+def test_every_declared_phrase_fires_in_a_first_sentence(phrase: str) -> None:
+    """Each phrase, in the position the detector actually anchors on."""
+    assert detect_refusal(f"{phrase} with this request.") is True
+
+
+@pytest.mark.parametrize("phrase", EVERY_REFUSAL_PHRASE)
+def test_every_declared_phrase_is_inert_outside_the_anchor(phrase: str) -> None:
+    """...and each is a PHRASE, not a substring match over the whole answer.
+
+    Several are ordinary mid-answer hedges; none of them may fire from the
+    tail of a substantive answer.
+    """
+    assert detect_refusal(f"{_HEDGING_ANSWER} {phrase} more than that.") is False
+
+
 def test_a_refusal_that_links_a_crisis_resource_is_not_a_fabricating_run() -> None:
     """Safe-completion refusals link a policy or crisis page. That is not
     fabrication, and must not be served as the WORST trust labels.
