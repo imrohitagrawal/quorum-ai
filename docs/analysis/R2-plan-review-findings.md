@@ -40,9 +40,9 @@ authoritative):**
 - **Phase 0 (enforcement machinery): DONE** — accepted at commit `676413e`,
   independently verified (`make validate` green; 740 passed / 4 skipped; cov
   88.52%; FR-gate re-proven RED@`d7469ce`→GREEN@HEAD).
-- **Phase 1 (S2 + S2.1 — evaluation engine): BUILT, NOT ACCEPTED — operator
-  decision required** (branch `feat/r2-s2-evaluation-engine`, unpushed, 24
-  commits on `46adcc4`). **Full handback: `docs/analysis/R2-S2-handback.md`**
+- **Phase 1 (S2 + S2.1 — evaluation engine): ACCEPTED 2026-07-21 — fixpoint
+  reached** (branch `feat/r2-s2-evaluation-engine`, unpushed, HEAD `b3e83ef` on
+  `46adcc4`). **Full handback: `docs/analysis/R2-S2-handback.md`**
   (S2, historical in part) plus the **S2.1 reconciliation section at the bottom
   of this file** — read both before continuing S2/S3; `docs/session-handoff.md`
   is regenerated wholesale by `scripts/session_handoff.py` and cannot hold it.
@@ -60,16 +60,21 @@ authoritative):**
   four reproductions are now ordinary PASSING tests in
   `tests/evals/test_refusal_fabrication_residual.py`, backed by INV-1/2/3/4
   property tests in `tests/unit/test_evaluation_refusal_decoupling.py`.
-  **S2 is still NOT ACCEPTED, and the reason is precise:** S2.1 ran its own
-  bounded three-round adversarial re-review and **again hit the FS-7 bound
-  without a fixpoint** — round 3 confirmed 9 further findings (4 of them HIGH,
-  including two real laundering paths and one showing the DEBT-011 hole could
-  be re-opened one level upstream of the invariants). All 9 were fixed
-  test-first, but **the round-3 fix diff was never itself re-reviewed**, which
-  is exactly what a fixpoint requires. Accepting S2 therefore needs either a
-  fresh review round on `210aa98` that finds nothing new, or an explicit
-  operator risk acceptance. Then Phase 2 (S3 — trust UI), Phase 3 (S4 — eval
-  harness).
+  **S2 is ACCEPTED (2026-07-21) — the fixpoint was reached.** S2.1's own bounded
+  review hit the FS-7 bound without a fixpoint (round 3 confirmed 9 findings, all
+  fixed test-first but the round-3 fix diff un-re-reviewed). The reconciling
+  session then ran the missing fresh adversarial passes: over `210aa98` (two
+  independent executing agents) the DEBT-011 decoupling **held**, but a NEW latent
+  defect surfaced — `build_judge_evidence` and a coverage branch still excluded
+  real Tavily sources by `is_fallback` (a real Tavily page carries
+  `is_fallback=True` since #31/#32), which would mislabel a live run once the
+  key-gated judge is enabled. Fixed host-keyed via `_is_placeholder_source`
+  (`2595032`); a further independent pass caught that the fix **over-reached** onto
+  the intentionally-`is_fallback`-keyed citation-coverage metric (primary-only
+  doctrine), reverted precisely that hunk (`b3e83ef`) and pinned the distinction
+  (coverage excludes real Tavily / judge-evidence includes it) with real-host
+  fixtures. **A final independent pass over `b3e83ef` found NOTHING NEW —
+  fixpoint.** Next: Phase 2 (S3 — trust UI), Phase 3 (S4 — eval harness).
 - **Open residuals carried into S2+:** all closed or explicitly deferred in the
   **S2.1 reconciliation** section at the bottom of this file — EN-7 **DONE**,
   DEBT-008 **DONE**, DEBT-010 **DONE**, DEBT-011 **DONE**; DEBT-009 (perf gate
@@ -256,7 +261,14 @@ formatted · `uv run mypy src` → no issues in 22 source files.
 | **`query_runs.py:1478`** — one uncovered line on the S2 diff | **STILL UNCOVERED, retained as a guard** — the non-terminal early `return` in `_persist_run_evaluation`; argued unreachable today. Owner: backend engineer. Slice: **S3** (when FR-016 adds a second writer). | coverage report at `210aa98` |
 | **NEW — DEBT-012** — off-run URL markers excluded as unknown (DEBT-011 part C) | **OPEN, deferred with a recorded cost in BOTH directions** — a URL-only fabricating run is under-detected (`None` → `partial`/`medium`), and the mixed case is over-trusted (one resolving ordinal carries any number of fabricated URLs to `faithful`/`low`; the pre-part-C rule measured 0.0476 → `unfaithful`/`high`). Owner: backend engineer. Slice: **before S3 surfaces any evaluation label (FR-016)**. | `docs/63-technical-debt-register.md` DEBT-012; pinned in both directions by `tests/unit/test_evaluation_layer_a.py::test_a_run_whose_only_markers_are_off_run_urls_is_unknown_not_zero` and `::test_one_resolving_ordinal_launders_many_off_run_urls_to_maximum_trust` |
 
-### Why PHASE STATUS stays "BUILT, NOT ACCEPTED"
+### Why PHASE STATUS WAS "BUILT, NOT ACCEPTED" (RESOLVED — ACCEPTED 2026-07-21)
+
+> **Resolved 2026-07-21:** the missing fixpoint was reached in the reconciling
+> session (fresh adversarial passes over `210aa98` → found+fixed a latent
+> judge-evidence/coverage `is_fallback` inversion, `2595032`; caught+reverted a
+> coverage over-reach, `b3e83ef`; a final independent pass over `b3e83ef` found
+> nothing new). See the top **PHASE STATUS**. The narrative below is the
+> historical record of why acceptance was withheld until then.
 
 S2.1 ran a fresh bounded adversarial re-review of the whole S2 slice including
 its own fix diff. It confirmed and fixed, test-first, **22 findings across three
