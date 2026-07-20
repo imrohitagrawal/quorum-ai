@@ -59,6 +59,15 @@ from product_app.debate import (
     PositionMovement,
     debate_stub_service,
 )
+from product_app.evaluation import (
+    FaithfulnessLabel,
+    HallucinationRisk,
+    LayerASignals,
+    RunEvaluationResult,
+    TrustScore,
+    evaluate_run,
+)
+from product_app.feedback_store import record_event as _record_feedback_event
 from product_app.model_slots import (
     InvalidModelSlotError,
     ModelSlot,
@@ -75,6 +84,7 @@ from product_app.providers import (
 )
 from product_app.run_history_store import RunHistoryRow
 from product_app.run_history_store import record_terminal_run as _record_run_history
+from product_app.run_history_store import update_evaluation as _update_run_evaluation
 from product_app.safety import (
     SafetyAcknowledgement,
     SafetyWarning,
@@ -270,6 +280,29 @@ class ActiveQueryRunResponse(BaseModel):
     initial_answers: list[InitialModelAnswer]
 
 
+class QueryRunEvaluationProjection(BaseModel):
+    """The served S2 per-run evaluation (FR-015). Metrics only — never prose.
+
+    Deliberately NOT ``RunEvaluation`` itself: that model carries the optional
+    Layer-B ``judge`` verdict, whose ``rationale`` is free text written about
+    provider prose. The served projection has no judge field at all, so there
+    is no path — present or future — by which a rationale reaches a client.
+
+    ``trust`` is the engine's :class:`~product_app.evaluation.TrustScore`
+    verbatim. While ``support_verified`` is False (which, with no real Layer-B
+    judge, is every hermetic run) ``score`` IS ``None`` and ``band`` IS
+    ``"unverified"``; the only number in the payload is the explicitly-named
+    ``layer_a_composite_unverified`` diagnostic, which is not a confidence
+    figure and is named so a client cannot mistake it for one.
+    """
+
+    schema_version: str
+    signals: LayerASignals
+    faithfulness_label: FaithfulnessLabel
+    hallucination_risk: HallucinationRisk
+    trust: TrustScore
+
+
 class QueryRunResultResponse(BaseModel):
     query_run_id: UUID
     status: QueryRunStatus
@@ -339,6 +372,10 @@ class QueryRunResultResponse(BaseModel):
     #: "actual": an ``"estimated"`` receipt is labelled as such rather than
     #: implying the figure was reconciled against provider billing.
     cost_source: Literal["estimated", "measured"] = "estimated"
+    #: S2 per-run evaluation (FR-015). ``None`` for a run that has not reached
+    #: a terminal state — there is nothing finished to evaluate. Additive and
+    #: optional: a pre-S2 client that ignores this field is unaffected.
+    evaluation: QueryRunEvaluationProjection | None = None
 
 
 class QueryRunWarningsRequest(BaseModel):
@@ -1412,8 +1449,59 @@ def _persist_terminal_run(query_run_id: UUID) -> None:
             trust_json=None,
         )
         _record_run_history(row)
+        # Ordered AFTER the metrics row: ``update_evaluation`` is an UPDATE
+        # that does not check ``rowcount``, so attaching an evaluation to a
+        # row that does not exist yet would be a silent no-op.
+        _persist_run_evaluation(query_run=query_run, agreement=agreement)
     except Exception as exc:  # noqa: BLE001 — run-history persistence is best-effort
         logger.debug("run_history persistence failed: %s", exc)
+
+
+def _persist_run_evaluation(*, query_run: QueryRun, agreement: AgreementSummary) -> None:
+    """Attach the S2 evaluation to the durable row and mirror an audit event.
+
+    Guarded in its own right rather than relying on the caller's guard: an
+    evaluation is strictly downstream of the metrics row, so a bug here must
+    not be able to look like a run-history persistence failure — and it must
+    never fail a user run (the run's terminal state is already committed).
+
+    Idempotent: the payload is a pure function of the terminal run, so a
+    re-persist rewrites identical bytes.
+
+    The persisted and emitted payloads are METRICS ONLY —
+    ``RunEvaluation.to_eval_json`` drops the judge rationale, and nothing here
+    touches ``query_run.query_text`` or any answer prose.
+    """
+    try:
+        result = _evaluate_terminal_run(query_run, agreement=agreement)
+        if result is None:
+            return
+        eval_json = result.eval_json()
+        trust_json = result.trust_json()
+        _update_run_evaluation(
+            str(query_run.query_run_id),
+            eval_json=eval_json,
+            trust_json=trust_json,
+        )
+        _record_feedback_event(
+            recorder="evaluation",
+            event_type="run_evaluated",
+            account_id=query_run.account_id,
+            query_run_id=query_run.query_run_id,
+            payload={
+                "schema_version": result.evaluation.schema_version,
+                "faithfulness_label": result.evaluation.faithfulness_label,
+                "hallucination_risk": result.evaluation.hallucination_risk,
+                "trust_band": result.trust.band,
+                "support_verified": result.trust.support_verified,
+                "layer_a_composite_unverified": (
+                    result.trust.diagnostics.layer_a_composite_unverified
+                ),
+                "signals": result.evaluation.signals.model_dump(mode="json"),
+            },
+        )
+    except Exception as exc:  # noqa: BLE001 — evaluation is best-effort telemetry
+        logger.warning("run evaluation persistence failed: %s", exc)
 
 
 def _validated_model_slots(
@@ -1457,6 +1545,61 @@ def _estimate_reasons(estimate: CostEstimate) -> list[str]:
     if estimate.threshold_action is CostThresholdAction.REQUIRE_CONFIRMATION:
         return ["Estimated cost exceeds USD 0.15 and requires explicit confirmation."]
     return ["Estimated cost exceeds USD 0.25 and is blocked for this slice."]
+
+
+def _evaluate_terminal_run(
+    query_run: QueryRun,
+    *,
+    agreement: AgreementSummary,
+) -> RunEvaluationResult | None:
+    """Layer-A evaluation for a terminal run, or ``None`` if not terminal.
+
+    ``judge=None`` — the LLM judge is never invoked from the request or
+    pipeline path, so this performs ZERO I/O (NFR-011/NFR-012): no network, no
+    clock, no store. ``agreement`` is passed in rather than recomputed so the
+    evaluation is derived from the SAME value the endpoint serves and the S1
+    row persists.
+
+    ``query_text`` is deliberately not passed: it is only ever used to build
+    judge evidence, and no judge runs here.
+    """
+    if not query_run.is_terminal:
+        return None
+    return evaluate_run(
+        initial_answers=query_run.initial_answers,
+        final_synthesis=query_run.final_synthesis,
+        agreement=agreement,
+    )
+
+
+def _evaluation_projection(
+    query_run: QueryRun,
+    *,
+    agreement: AgreementSummary,
+) -> QueryRunEvaluationProjection | None:
+    """Project an evaluation for serving, dropping the judge entirely.
+
+    Guarded: the evaluation is additive metadata layered on top of a result
+    the user is entitled to see, so a bug in it degrades the field to ``null``
+    rather than turning a successful run into a 500 (and, because
+    ``_persist_terminal_run`` builds its row from this same response, rather
+    than taking the durable S1 metrics row down with it).
+    """
+    try:
+        result = _evaluate_terminal_run(query_run, agreement=agreement)
+    except Exception as exc:  # noqa: BLE001 — evaluation must never fail a read
+        logger.warning("run evaluation failed, serving no evaluation: %s", exc)
+        return None
+    if result is None:
+        return None
+    evaluation = result.evaluation
+    return QueryRunEvaluationProjection(
+        schema_version=evaluation.schema_version,
+        signals=evaluation.signals,
+        faithfulness_label=evaluation.faithfulness_label,
+        hallucination_risk=evaluation.hallucination_risk,
+        trust=result.trust,
+    )
 
 
 def _result_response(query_run: QueryRun) -> QueryRunResultResponse:
@@ -1529,6 +1672,7 @@ def _result_response(query_run: QueryRun) -> QueryRunResultResponse:
         actual_cost_usd=actual_cost_usd,
         actual_breakdown=actual_breakdown,
         cost_source=cost_source,
+        evaluation=_evaluation_projection(query_run, agreement=agreement),
     )
 
 

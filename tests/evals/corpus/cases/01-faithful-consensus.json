@@ -1,0 +1,73 @@
+{
+  "case_id": "faithful-consensus",
+  "label": "faithful",
+  "expected_refusal": false,
+  "expected_false_consensus_preserved": false,
+  "expected_high_stakes": false,
+  "expected_hallucination_risk": "low",
+  "notes": "Four live answers that agree, each citing the same three real sources, with inline markers that all resolve. This is the control case for the fluent-but-unfaithful twin (02): same sources, same length bucket, same count-only citation coverage - only the markers differ.",
+  "run": {
+    "initial_answers": [
+      {
+        "slot_number": 1,
+        "model_id": "openai/gpt-4o-mini",
+        "display_name": "GPT-4o mini",
+        "latency_ms": 4120,
+        "answer_text": "## Where the guidance landed\n\nModern identity guidance has moved away from calendar-based password expiry. The digital identity guidelines state that verifiers *should not* require memorized secrets to be changed arbitrarily or on a schedule, and should force a change only when there is evidence of compromise [1]. The reasoning is behavioural rather than cryptographic: mandatory expiry pushes people toward predictable transformations of a secret they already use.\n\nThe practical replacement is a screening control - check the chosen secret against a breach corpus at the moment it is set, and re-screen when exposure is reported [2]. See [NIST SP 800-63B](https://pages.nist.gov/800-63-3/sp800-63b.html) for the normative wording.\n\nOne caveat worth stating plainly: this applies to memorized secrets held by a person. Shared service accounts and long-lived machine credentials are a different problem and are still rotated on a schedule in most environments.",
+        "sources": [
+          {"title": "NIST SP 800-63B: Digital Identity Guidelines", "url": "https://pages.nist.gov/800-63-3/sp800-63b.html"},
+          {"title": "OWASP Authentication Cheat Sheet", "url": "https://cheatsheetseries.owasp.org/cheatsheets/Authentication_Cheat_Sheet.html"}
+        ]
+      },
+      {
+        "slot_number": 2,
+        "model_id": "anthropic/claude-haiku-4.5",
+        "display_name": "Claude Haiku 4.5",
+        "latency_ms": 3880,
+        "answer_text": "### The short version\n\nScheduled expiry for human passwords is now treated as an anti-pattern by the two bodies most organisations cite. The guidelines are explicit that a memorized secret must not be subject to arbitrary periodic change [1], and the application-security guidance reaches the same conclusion from the incident side: rotation without a compromise signal produces weaker secrets and more reset traffic [2].\n\nWhat replaces it, in order of measured effect:\n\n1. Breach-corpus screening at set time [2].\n2. A second factor, ideally a phishing-resistant one; the time-based one-time-password construction is documented in [RFC 6238](https://www.rfc-editor.org/rfc/rfc6238) [3].\n3. Rate limiting and anomaly-driven forced reset.\n\n> Where a compliance regime still mandates a fixed interval, the honest framing is that you are meeting an audit requirement, not improving the security outcome.\n\nI have less confidence about the exact interval any given auditor will accept.",
+        "sources": [
+          {"title": "NIST SP 800-63B: Digital Identity Guidelines", "url": "https://pages.nist.gov/800-63-3/sp800-63b.html"},
+          {"title": "OWASP Authentication Cheat Sheet", "url": "https://cheatsheetseries.owasp.org/cheatsheets/Authentication_Cheat_Sheet.html"},
+          {"title": "RFC 6238: TOTP: Time-Based One-Time Password Algorithm", "url": "https://www.rfc-editor.org/rfc/rfc6238"}
+        ]
+      },
+      {
+        "slot_number": 3,
+        "model_id": "google/gemini-2.5-flash",
+        "display_name": "Gemini 2.5 Flash",
+        "latency_ms": 5010,
+        "answer_text": "## Position\n\nDropping the fixed rotation interval is the mainstream position, and it is grounded in two documents rather than in fashion. The identity guidelines remove periodic change as a requirement and replace it with an evidence-of-compromise trigger [1]; the application-security cheat sheet describes the same policy shift and adds the operational detail that a rotation mandate increases help-desk reset volume without a matching reduction in account takeover [2].\n\nTwo things that are often lost in the summary:\n\n- The guidance is about *memorized secrets*, not about keys, tokens, or shared credentials.\n- Removing expiry is only defensible alongside breach screening and a second factor - see [the OWASP cheat sheet](https://cheatsheetseries.owasp.org/cheatsheets/Authentication_Cheat_Sheet.html) for the full control set.\n\nWhat remains genuinely uncertain is how a given regulator reads the older control text, which is a compliance question rather than a security one.",
+        "sources": [
+          {"title": "NIST SP 800-63B: Digital Identity Guidelines", "url": "https://pages.nist.gov/800-63-3/sp800-63b.html"},
+          {"title": "OWASP Authentication Cheat Sheet", "url": "https://cheatsheetseries.owasp.org/cheatsheets/Authentication_Cheat_Sheet.html"}
+        ]
+      },
+      {
+        "slot_number": 4,
+        "model_id": "deepseek/deepseek-chat-v3.1",
+        "display_name": "DeepSeek Chat v3.1",
+        "latency_ms": 6240,
+        "answer_text": "**Summary.** The interval-based reset requirement has been withdrawn from the guidance most teams follow, and the replacement is compromise-driven [1].\n\n**Detail.** The change is stated as a verifier requirement: do not impose arbitrary periodic change on a memorized secret, and require a change when there is evidence the authenticator has been exposed [1]. The complementary application-security guidance frames the same rule operationally and pairs it with breach screening at set time [2]. For the second-factor half of the control set, the one-time-password construction that most implementations use is specified in [RFC 6238](https://www.rfc-editor.org/rfc/rfc6238) [3].\n\n**Limits of this answer.** I am describing published guidance, not your regulator's interpretation of it, and not the separate question of machine credential rotation, where scheduled rotation is still the norm and the trade-offs are different.",
+        "sources": [
+          {"title": "NIST SP 800-63B: Digital Identity Guidelines", "url": "https://pages.nist.gov/800-63-3/sp800-63b.html"},
+          {"title": "OWASP Authentication Cheat Sheet", "url": "https://cheatsheetseries.owasp.org/cheatsheets/Authentication_Cheat_Sheet.html"},
+          {"title": "RFC 6238: TOTP: Time-Based One-Time Password Algorithm", "url": "https://www.rfc-editor.org/rfc/rfc6238"}
+        ]
+      }
+    ],
+    "final_synthesis": {
+      "status": "completed",
+      "consensus": "All four models land in the same place. Modern identity guidance has moved away from calendar-based password expiry; scheduled expiry for human passwords is now treated as an anti-pattern by the two bodies most organisations cite; dropping the fixed rotation interval is the mainstream position; and the interval-based reset requirement has been withdrawn from the guidance most teams follow. The published guidance replaces it with an evidence-of-compromise trigger plus breach-corpus screening at the moment a secret is set [1] [2].",
+      "disagreement": "There is no material disagreement on the substance. The models differ only in emphasis: two foreground the second-factor control set, two foreground the help-desk and behavioural cost of forced rotation.",
+      "source_support": "Three sources carried the load across all four answers: the digital identity guidelines, the application-security cheat sheet, and the one-time-password specification at [RFC 6238](https://www.rfc-editor.org/rfc/rfc6238). Every claim above traces to one of them.",
+      "uncertainty": "None of the answers can tell you how a specific auditor or regulator will read an older control text that still names a rotation interval; that is a compliance question this panel did not attempt. Machine and shared-service credentials were explicitly excluded by three of the four models.",
+      "recommendation": "Use this as decision support, not as a decision: if you drop the interval, drop it together with breach screening and a second factor, and record the compliance argument separately. Verify the normative wording in [1] before changing a documented control.",
+      "high_stakes_notice": null,
+      "quality_checks": {
+        "false_consensus_preserved": false,
+        "decision_support_framing_present": true,
+        "high_stakes_warning_required": false
+      }
+    }
+  }
+}

@@ -58,9 +58,19 @@ ROOT_READING_MODULES = (
     "tests/test_quality_ledger_consistency.py",
     "tests/test_r2_plan_status_honesty.py",
     "tests/unit/test_makefile_gate_integrity.py",
+    "tests/unit/test_skill_router_placeholder.py",
+    "tests/test_doc_gate_consistency.py",
 )
 
 _ROOT_PATH_LITERAL = re.compile(r"^[A-Za-z0-9_.][A-Za-z0-9_.-]*(/[^\s]+)+$")
+
+# A root entry named with no directory component at all — `"PRODUCT_IDEA.md"`,
+# as `scripts/skill_router.py` and its spec name it. `_ROOT_PATH_LITERAL`
+# requires a `/`, so this shape was invisible to the check until a real
+# `mutmut run` aborted on it (DEBT-008 handback, 2026-07-20). A suffix is
+# required so that bare words which merely collide with a root entry name
+# under a case-insensitive filesystem (`"tests"`, `"schemas"`) stay excluded.
+_ROOT_FILE_LITERAL = re.compile(r"^[A-Za-z0-9_][A-Za-z0-9_.-]*\.[A-Za-z0-9]+$")
 
 
 def _mutmut_config() -> dict[str, Any]:
@@ -108,6 +118,8 @@ def _referenced_roots() -> dict[str, str]:
                 text = node.value.strip()
                 if _ROOT_PATH_LITERAL.match(text) and (REPO_ROOT / text).exists():
                     head = text.split("/", 1)[0]
+                elif _ROOT_FILE_LITERAL.match(text) and (REPO_ROOT / text).is_file():
+                    head = text
             if head in entries:
                 found.setdefault(head, module)
     return found

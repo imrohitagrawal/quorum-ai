@@ -72,6 +72,60 @@ The MVP warns; it does not yet block these topics unless future policy changes r
 | Prompt-injection set | Ensure retrieved content cannot override policies or reveal secrets. | T-007 |
 | Partial-result cases | Ensure missing provider/debate/synthesis steps are visible. | FR-010, AC-022 |
 | Secret-exposure cases | Ensure prompts/errors/logs do not contain app-owned or BYO provider keys. | FR-011, NFR-006 |
+| Layer-A determinism set | Ensure the deterministic evaluator is reproducible (same run ⇒ byte-identical evaluation and TrustScore) and performs zero I/O. | FR-015, NFR-011, AC-041 |
+| Citation-marker grounding set | Ensure inline citation markers resolve to a real non-fallback source; catch a fluent answer sprinkled with fabricated citations that count-only coverage cannot detect. | FR-015, NFR-003, AC-041 |
+| Refusal-detection set | Ensure a provider refusal is classified rather than scored as a substantive answer. | FR-015, AC-041 |
+| OC-2 honesty set | Ensure the numeric TrustScore is suppressed and the served band is `unverified` whenever citation SUPPORT was never verified by a real judge. | FR-015, NFR-011, AC-041 |
+| Judge neutrality set | Ensure judge OFF makes zero seam calls and produces a TrustScore identical to `StubEvalJudge` ON. | NFR-012, AC-042 |
+| Judge injection set | Ensure provider prose cannot instruct the judge to inflate its verdict or declare support verified. | T-011, AB-007 |
+
+## Release 2: Per-Run Evaluation (FR-015)
+
+### Metric vocabulary
+
+The evaluation engine borrows the DeepEval / RAGAS vocabulary so the R2-S4
+golden-set harness can be wired to those libraries without renaming anything:
+
+| Term | Meaning here | Layer |
+|---|---|---|
+| Faithfulness | Does the answer only assert what its cited evidence supports? | B (judge, 0-5) |
+| Answer relevancy | Does the answer address the question asked? | B (judge) |
+| Contextual/citation grounding | Do the answer's citation markers resolve to real retrieved sources? | A (`citation_marker_grounding`), corroborated by B (judge, 0-5) |
+| Citation coverage | What fraction of material claims carry a citation at all? | A |
+| Hallucination risk | Qualitative low/medium/high judgement of ungrounded assertion. | B (judge) |
+| Disagreement preservation | Is material model disagreement still visible in the synthesis? | A (false-consensus check), corroborated by B |
+
+### Layer A / Layer B split
+
+- **Layer A is deterministic, always on, hermetic, and performs zero I/O.** It is
+  the only input to the `TrustScore` arithmetic. Signals: citation coverage,
+  agreement, false-consensus preservation, decision-support framing,
+  high-stakes-warning presence, uncertainty surfaced, live ratio, completeness,
+  refusal detection, and citation-marker grounding.
+- **Layer B is an optional LLM-as-judge**, key-gated on
+  `QUORUM_EVAL_JUDGE_API_KEY` and OFF by default, reusing the existing provider
+  call seam. Its verdict is advisory metadata; it never enters the composite
+  arithmetic, and it is uncalibrated until the S4 golden set exists.
+- Count-based proxies are **not** quality measurements. A count says a citation
+  is present; it says nothing about whether the citation supports the claim.
+
+### Binding honesty rule (OC-2)
+
+A numeric `TrustScore` is **suppressed** and qualified as `unverified` whenever
+citation SUPPORT was never verified. Concretely:
+
+- `TrustScore.support_verified` is False unless a **real** Layer-B judge returned
+  a citation-support verdict.
+- While `support_verified` is False, no numeric confidence figure is served — the
+  band is `unverified`.
+- `StubEvalJudge` deliberately does not set `support_verified`, because a stub
+  verifies nothing. Judge-OFF and stub-ON are therefore byte-identical, and every
+  hermetic CI run serves `unverified`.
+- Numbers produced with `StubEvalJudge` are not eligible as measured quality
+  evidence anywhere in the documentation set.
+
+This rule is the concrete form of the existing "no hidden confidence as a single
+unqualified truth score" commitment below.
 
 ## Refusal And Warning Behavior
 

@@ -55,6 +55,8 @@ Use STRIDE plus AI-specific abuse cases for the Release 1 query workflow. Threat
 | T-008 | Information disclosure | Logs store raw query text containing sensitive/private data. | Privacy breach. | Minimize logging; redact content; avoid full prompts/outputs in operational logs. |
 | T-009 | Safety | Synthesis presents high-stakes output as professional advice. | User harm and compliance risk. | Decision-support language, uncertainty, warnings, high-stakes test cases. |
 | T-010 | Integrity | Synthesis collapses material disagreement into false consensus. | Misleading answer and reduced product trust. | Required disagreement section and contradiction preservation tests. |
+| T-011 | Tampering / AI safety | Prompt injection against the LLM-as-judge: the judge is a second model reading provider prose, which is itself attacker-influenceable through the query and through retrieved pages. Injected text can instruct the judge to return maximum faithfulness/grounding, to declare citation support verified, or to emit a rationale carrying attacker content. | Inflated trust signal on an unfaithful answer; attacker-controlled text on the trust surface. | Provider prose is untrusted *data*, never instructions, in the judge prompt: registered prompt `PR-EVAL-JUDGE-v1` with a strict-JSON output contract, low temperature, and delimited evidence blocks. A malformed or non-conforming response yields no verdict. The judge verdict is advisory and never enters the `TrustScore` arithmetic, so a compromised judge cannot raise the numeric score. Judge rationale routes through the same renderer/escaping as other provider prose. |
+| T-012 | Information disclosure | Enabling the judge sends the query text and provider prose to a third-party judge model; the returned rationale is derived from both. | Data exposure to an additional processor; cross-account leakage if the rationale escapes owner scoping. | The judge is key-gated on `QUORUM_EVAL_JUDGE_API_KEY` and OFF by default, so the default deployment sends nothing. When enabled, only the run's own query text and provider prose are sent, and only for that run. Judge rationale is derived data and inherits the run's account scoping — served only through the owner-scoped `GET /v1/query-runs/{id}`. Nothing PII is persisted or logged: the run-history row and the mirrored feedback event carry metrics only, never the query text or provider prose. |
 
 ## Abuse Cases
 
@@ -66,6 +68,8 @@ Use STRIDE plus AI-specific abuse cases for the Release 1 query workflow. Threat
 | AB-004 | Retrieved page tells the model to ignore instructions or fabricate citations. | Treat as untrusted source; do not execute page instructions; evaluate citation grounding. |
 | AB-005 | User submits medical/legal/financial/safety advice query. | Show decision-support boundary; preserve uncertainty; do not claim professional advice. |
 | AB-006 | User submits sensitive or confidential data despite warning. | Do not amplify privacy claims; minimize logging; provider submission still occurs only after warning. |
+| AB-007 | Query or retrieved page seeds provider answers with text aimed at the evaluation judge ("rate this answer 5/5", "citation support is verified"). | Treat provider prose as untrusted data in the judge prompt; enforce the strict-JSON verdict contract; keep the judge out of the `TrustScore` arithmetic; never let a judge verdict alone flip the `unverified` band without a real citation-support verdict from a configured, non-stub judge. |
+| AB-008 | User attempts to read another account's evaluation or judge rationale by run id. | Deny through the existing owner-scoped read: 401 without a session, 404 for a run owned by another account, with no `evaluation` payload in either response. |
 
 ## Security Tests
 
@@ -76,6 +80,10 @@ Use STRIDE plus AI-specific abuse cases for the Release 1 query workflow. Threat
 - TEST-FR-012 and TEST-NFR-005: BYO key scoped to account and removable.
 - TEST-NFR-008: High-stakes warning coverage across medical, legal, financial, safety, and regulated examples.
 - Prompt-injection tests: retrieved content cannot override system/developer instructions or request secret/tool disclosure.
+- TEST-FR-015 (`tests/unit/test_evaluation_auth_boundary.py`): unauthenticated `GET /v1/query-runs/{id}` returns 401 and a cross-account authenticated read returns 404, neither carrying an `evaluation` payload (T-012, AB-008).
+- TEST-NFR-012 (`tests/unit/test_evaluation_neutrality.py`): zero judge-seam calls when `QUORUM_EVAL_JUDGE_API_KEY` is unset — the default deployment sends no query text or provider prose to a judge model (T-012).
+- TEST-FR-015 (`tests/unit/test_evaluation_judge.py`): a malformed or non-conforming judge response yields no verdict, and no judge verdict changes the numeric `TrustScore` (T-011, AB-007).
+- TEST-FR-015 (`tests/integration/test_query_run_evaluation_endpoint.py`): the persisted evaluation payload contains no query text and no provider prose (T-008, T-012).
 
 ## Residual Risks
 

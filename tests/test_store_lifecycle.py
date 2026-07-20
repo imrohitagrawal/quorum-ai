@@ -26,6 +26,15 @@ red build (deterministic when this module ran after ``tests/contract``). So we
 record warnings instead of erroring on them and assert only on the sqlite
 handle: see :func:`assert_no_sqlite_leak`.
 
+Tests here that reach the garbage collector (everything routed through
+:func:`assert_no_sqlite_leak`) are marked ``@pytest.mark.env_oracle``: they
+assert on CPython finalisation, which mutmut's trampoline invalidates by
+retaining frames. The mutation gate deselects that marker (ledger DEBT-008);
+the same lifecycle behaviour is covered for mutation by
+``tests/test_store_lifecycle_behaviour.py``, which asserts only on state the
+store owns. Do not add an unmarked GC/timing/subprocess test to this file — it
+aborts the whole mutation run at stats collection.
+
 Deliberately NOT tested/implemented: closing the displaced store inside
 ``configure()``. Callers such as ``tests/security/test_operations_info_leak.py``
 save the current store and ``configure(original)`` it back afterwards; closing
@@ -134,6 +143,7 @@ def _live_singleton_survives() -> Any:
             sentinel.close()
 
 
+@pytest.mark.env_oracle
 @pytest.mark.parametrize("factory", [RunHistoryStore, FeedbackStore])
 def test_dropped_store_releases_its_connection(factory: type) -> None:
     """Dropping the last reference must not leak an unclosed sqlite handle.
@@ -162,6 +172,7 @@ class _ForeignLeaker:
         warnings.warn("Unclosed <MemoryObjectReceiveStream at 0x0>", ResourceWarning, stacklevel=2)
 
 
+@pytest.mark.env_oracle
 def test_leak_guard_ignores_foreign_resource_warnings() -> None:
     """A leak that is not ours must not turn this module red.
 
@@ -247,6 +258,7 @@ def test_process_exit_hook_closes_the_live_singleton(module: ModuleType) -> None
         module.configure(previous)
 
 
+@pytest.mark.env_oracle
 @pytest.mark.parametrize("factory", [RunHistoryStore, FeedbackStore])
 def test_close_is_idempotent(factory: type) -> None:
     """Double ``close()`` is a no-op, not a crash.
@@ -283,6 +295,7 @@ def test_configure_does_not_close_the_displaced_store(module: ModuleType) -> Non
         replacement.close()
 
 
+@pytest.mark.env_oracle
 def test_configure_for_tests_leaves_no_open_handle() -> None:
     """The public test helper closes its store and drops out of the registry.
 
@@ -305,6 +318,7 @@ def test_configure_for_tests_leaves_no_open_handle() -> None:
                 module.configure(previous)
 
 
+@pytest.mark.env_oracle
 def test_importing_main_leaves_no_unclosed_singleton() -> None:
     """End-to-end shape of the original defect.
 

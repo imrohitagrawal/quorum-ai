@@ -103,6 +103,7 @@ baseline is "selected after eval harness design" in docs/55 and is not set here.
 from __future__ import annotations
 
 import math
+import os
 from concurrent.futures import ThreadPoolExecutor
 from time import monotonic, perf_counter
 from uuid import uuid4
@@ -114,6 +115,20 @@ from product_app.catalog_fetcher import _FALLBACK_CATALOG, openrouter_catalog_fe
 from product_app.config import settings
 from product_app.query_runs import TERMINAL_STATUSES, QueryRunStatus
 from product_app.safety import WARNING_VERSION, WarningType
+
+# DEBT-009: these p50/p95 latency-budget assertions are LOAD-SENSITIVE — the
+# macOS-measured budgets false-fail on a shared CI runner (observed: stub p95
+# 423.6ms > 300ms on ubuntu, while passing at ~40ms locally). They must NOT run
+# in the default BLOCKING suite (pytest tests / make test / make diff-cover), or
+# a load spike reds the build. They run ONLY in the advisory `perf-gate` CI job,
+# which sets QUORUM_RUN_PERF_BUDGET=1 and is `continue-on-error: true`. Re-promote
+# to blocking (and drop this gate) only after budgets are measured on the CI
+# runner — see DEBT-009.
+pytestmark = pytest.mark.skipif(
+    not os.environ.get("QUORUM_RUN_PERF_BUDGET"),
+    reason="load-sensitive latency budget; runs only in the advisory perf-gate "
+    "job (QUORUM_RUN_PERF_BUDGET=1) — see DEBT-009",
+)
 
 DEFAULT_MODEL_IDS = [
     "openai/gpt-4o-mini",

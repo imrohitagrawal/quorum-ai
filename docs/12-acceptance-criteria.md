@@ -296,3 +296,24 @@ Given a terminal run is persisted, when the in-memory run is later evicted, then
 
 - Requirement: FR-014, NFR-011
 - Test: TEST-FR-014 (`tests/unit/test_run_history_store.py` idempotency + best-effort; integration survives-eviction assertion)
+
+## AC-041 Layer-A evaluation is computed, honest, and persisted for every terminal run
+
+Given a query run reaches a terminal status, when its durable run-history row has been written, then a deterministic Layer-A evaluation and a `TrustScore` are computed with zero I/O and stored on that row via `update_evaluation`; recomputing over the same run yields byte-identical JSON; the stored payload contains metrics only (no query text, no provider prose); and the OC-2 honesty rule holds — because citation count coverage cannot verify that a citation supports its claim, `TrustScore.support_verified` is False unless a real Layer-B judge returned a citation-support verdict, and while it is False the numeric score is suppressed and the served band is `unverified` rather than any confidence figure.
+
+- Requirement: FR-015, NFR-011
+- Test: TEST-FR-015 (`tests/unit/test_evaluation_layer_a.py` determinism, `citation_marker_grounding`, `detect_refusal`, suppression; `tests/evals/test_output_correctness_gate.py` OC-2 honesty rule; `tests/integration/test_query_run_evaluation_endpoint.py` persistence)
+
+## AC-042 Judge OFF is a proven no-op versus the stub judge
+
+Given the LLM-as-judge key `QUORUM_EVAL_JUDGE_API_KEY` is unset, when a run is evaluated, then the judge seam (`providers.call_with_prompt`) is called zero times, no cost or latency is added, and the resulting `TrustScore` is identical to the score produced with `StubEvalJudge` enabled — the stub deliberately does not set `support_verified`, so both configurations serve the `unverified` band and every hermetic CI run stays byte-identical.
+
+- Requirement: FR-015, NFR-012, NFR-011
+- Test: TEST-NFR-012 (`tests/unit/test_evaluation_neutrality.py` seam-call spy and score equality; `tests/unit/test_evaluation_judge.py` key gate, strict-JSON contract, malformed response yields no verdict)
+
+## AC-043 Evaluation inherits the run's account boundary and is never anonymous
+
+Given a query run carries an evaluation, when `GET /v1/query-runs/{id}` is called without a session, then the response is 401 and no `evaluation` payload is returned; and when it is called with a valid session belonging to a different account, then the response is 404 `QUERY_RUN_NOT_FOUND` with no `evaluation` payload — judge rationale is derived data and inherits exactly the run's account scoping, so evaluation adds no new read path around the owner check.
+
+- Requirement: FR-015, NFR-005
+- Test: TEST-FR-015 (`tests/unit/test_evaluation_auth_boundary.py` unauthenticated 401 and cross-account 404 with no evaluation payload; `tests/integration/test_query_run_evaluation_endpoint.py` owner-only projection)

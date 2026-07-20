@@ -1,0 +1,72 @@
+{
+  "case_id": "simulated-low-live-ratio",
+  "label": "partial",
+  "expected_refusal": false,
+  "expected_false_consensus_preserved": false,
+  "expected_high_stakes": false,
+  "expected_hallucination_risk": "medium",
+  "notes": "No model was actually invoked: every slot is local_simulation with fabricated example.test fallback sources, and one slot failed outright. The prose carries NO inline citation markers at all, so citation_marker_grounding must be None (unknown) rather than 0.0 - a run that never claimed a citation has not fabricated one. Risk is medium because grounding is unknown, not because fabrication was observed.",
+  "run": {
+    "initial_answers": [
+      {
+        "slot_number": 1,
+        "model_id": "openai/gpt-4o-mini",
+        "display_name": "GPT-4o mini",
+        "latency_ms": 12,
+        "provider_path": "local_simulation",
+        "answer_text": "Cross-check summary for openai/gpt-4o-mini: compare the cited evidence, preserve disagreement, and verify important claims before acting. This answer is simulated in local demo mode; the model was not actually invoked.",
+        "sources": [
+          {"title": "Local demo source for slot 1", "url": "https://example.test/local-demo/1", "provider": "local_simulation", "is_fallback": true}
+        ]
+      },
+      {
+        "slot_number": 2,
+        "model_id": "anthropic/claude-haiku-4.5",
+        "display_name": "Claude Haiku 4.5",
+        "latency_ms": 11,
+        "provider_path": "local_simulation",
+        "answer_text": "Cross-check summary for anthropic/claude-haiku-4.5: compare the cited evidence, preserve disagreement, and verify important claims before acting. This answer is simulated in local demo mode; the model was not actually invoked.",
+        "sources": [
+          {"title": "Local demo source for slot 2", "url": "https://example.test/local-demo/2", "provider": "local_simulation", "is_fallback": true}
+        ]
+      },
+      {
+        "slot_number": 3,
+        "model_id": "google/gemini-2.5-flash",
+        "display_name": "Gemini 2.5 Flash",
+        "latency_ms": 10,
+        "provider_path": "local_simulation",
+        "answer_text": "Cross-check summary for google/gemini-2.5-flash: compare the cited evidence, preserve disagreement, and verify important claims before acting. This answer is simulated in local demo mode; the model was not actually invoked.",
+        "sources": [
+          {"title": "Local demo source for slot 3", "url": "https://example.test/local-demo/3", "provider": "local_simulation", "is_fallback": true}
+        ]
+      },
+      {
+        "slot_number": 4,
+        "model_id": "deepseek/deepseek-chat-v3.1",
+        "display_name": "DeepSeek Chat v3.1",
+        "latency_ms": 8,
+        "provider_path": "local_simulation",
+        "status": "failed",
+        "error_code": "PROVIDER_UNAVAILABLE",
+        "provider_notice": "This model did not return an answer for this run.",
+        "answer_text": "",
+        "sources": []
+      }
+    ],
+    "final_synthesis": {
+      "status": "completed",
+      "consensus": "The three simulated answers restate the same demo text, so there is no substantive agreement to report. Nothing in this run reflects a real model's position.",
+      "disagreement": "No disagreement can be assessed: the answers are templated demo output rather than independent model responses.",
+      "source_support": "Every source on this run is a local demo placeholder, not a retrieved document. No claim here is supported by real evidence.",
+      "uncertainty": "This entire run is simulated and one slot failed. Treat every number and every statement as illustrative only.",
+      "recommendation": "Do not use this run as decision support. Re-run with live execution enabled before relying on any part of it.",
+      "high_stakes_notice": null,
+      "quality_checks": {
+        "false_consensus_preserved": false,
+        "decision_support_framing_present": true,
+        "high_stakes_warning_required": false
+      }
+    }
+  }
+}

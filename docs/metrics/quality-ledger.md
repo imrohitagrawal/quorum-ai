@@ -24,7 +24,7 @@ These are measurable **today** from git history and tool output.
 | Slice | Scope | Review findings per slice | Mutation score | Escaped defects | Rework commits |
 |---|---|---|---|---|---|
 | **S1** | FR-014 run-history persistence (`run_history_store.py`, `query_runs.py`) | **15** (see derivation) | **88.7%** (changed-function scope; measured range 87.2-88.7%) | **10** escaped the feat commit `d7469ce`; **1** further escaped the fix commit `8c09a26` | **2 of 4** branch commits (50%) |
-| S2 | Eval engine (FR-015, NFR-011/012) | — | — | — | — |
+| **S2** | Eval engine (FR-015, NFR-011/012) + OC gate | **9** (32 raised by a 5-lens fan, 23 refuted by independent verifiers; +10 more across 2 further rounds) | — (not re-measured for S2 scope) | **0 escaped a merged commit** (the branch is unpushed; all 9 were caught pre-merge) | **1 of 7** branch commits (14%) |
 | S3 | Trust UI (FR-016) | — | — | — | — |
 | S4 | Eval harness + golden set (FR-017) | — | — | — | — |
 
@@ -126,9 +126,50 @@ hallucination. Without them the thesis is an assertion.
 | Slice | Hallucination rate | Faithfulness | False-consensus preservation | Citation **support** rate | Trust-vs-correctness calibration error |
 |---|---|---|---|---|---|
 | S1 | — | — | — | — | — |
-| S2 | — | — | — | — | — |
+| S2 | — (pending S4) | — (pending S4) | — (pending S4) | — (pending S4) | — (pending S4) |
 | S3 | — | — | — | — | — |
 | S4 | — | — | — | — | — |
+
+### Why S2 did NOT fill these cells (OC-4)
+
+The S2 brief asked for real numbers here. **They are not eligible, and putting
+them in would break this file's binding honesty rule** — so the cells stay em
+dashes and the reason is recorded instead.
+
+S2 built the *mechanism* (the engine, `citation_marker_grounding`, the
+suppression rule) and a frozen corpus, but that corpus is **five hand-authored
+real-SHAPED fixtures** whose labels encode what the engine's structural verdict
+must be — not an expert judgement about the subject matter
+(`tests/evals/corpus/README.md` states this in its own provenance header).
+The reporting rules above require the label source; "hand-authored by the agent
+that wrote the engine" is not a measurement of product quality, it is a
+regression oracle for the engine's own logic. A faithfulness figure derived
+from it would be the engine grading itself.
+
+What S2 *can* honestly report is engine-vs-label agreement on that oracle,
+which is a **process** number and belongs nowhere near Part 2:
+
+| S2 engine-vs-label agreement (regression oracle, NOT product quality) | Value |
+|---|---|
+| Frozen corpus cases | 5 (hand-authored, real-shaped) |
+| Engine structural verdicts matching hand-authored labels | 5 / 5 |
+| Adversarial pair separation on `citation_marker_grounding` | 0.850 (faithful) vs 0.059 (fluent-but-unfaithful) — re-measured 2026-07-20 after DEBT-011; it was 1.000 vs 0.038 before |
+| Judge configuration | OFF (`StubEvalJudge` sets `verifies_support=False`) |
+| Served trust in every one of these runs | `unverified`, score `None` |
+
+Five cases pin direction, not accuracy. The Part 2 cells need the S4 golden set
+with real captured runs and human labels — and, for the high-stakes rows, a
+qualified human reviewer (see the S2 handback's operator-flagged items).
+
+**Also material to any future number here:** the interaction between refusal
+detection and the fabrication verdict is now RESOLVED (**DEBT-011**, closed
+2026-07-20 — the four cases are ordinary passing tests in
+`tests/evals/test_refusal_fabrication_residual.py` and the invariants live in
+`tests/unit/test_evaluation_refusal_decoupling.py`). Two things still stand
+between this engine and a number that means what the column says: the labels
+remain ADVISORY and uncalibrated until the S4 golden set (FS-6), and
+**DEBT-012** — Layer A performs no I/O, so a run whose only citation markers
+are fabricated URLs is reported as *unknown* rather than as fabrication.
 
 ### Column definitions and what will populate them
 

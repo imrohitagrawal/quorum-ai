@@ -26,8 +26,9 @@
 | NFR-009 | Non-functional | Accessibility baseline | `docs/09-release-scope.md` | Engineering lead | Must | AC-035 | TEST-NFR-009 | Not created | Not published | Draft |
 | NFR-010 | Non-functional | Observability for MVP workflow | `docs/04-success-metrics.md`; `docs/09-release-scope.md` | Engineering lead | Must | AC-027, AC-036 | TEST-NFR-010 | Not created | Not published | Draft |
 | FR-014 | Functional | Durable terminal run-history persistence (R2) | `docs/09-roadmap.md`; `docs/43-privacy-data-governance.md`; `docs/48-data-retention.md` | Backend engineer | Must | AC-038, AC-039, AC-040 | TEST-FR-014 | Not created | Not published | Draft |
-| NFR-011 | Non-functional | Evaluation determinism and CI hermeticity (R2) | `docs/09-roadmap.md`; `docs/42-ai-safety-grounding.md` | Engineering lead | Must | AC-040 | TEST-NFR-011 | Not created | Not published | Draft |
-| NFR-012 | Non-functional | Evaluation cost/behaviour neutrality — judge OFF ⇒ zero delta (R2) | `docs/09-roadmap.md` | Engineering lead | Must | (S2, to allocate) | TEST-NFR-012 | Not created | Not published | Draft |
+| FR-015 | Functional | Per-run evaluation engine — deterministic Layer-A TrustScore + key-gated OFF-by-default LLM judge (R2) | `docs/09-roadmap.md`; `docs/42-ai-safety-grounding.md`; `docs/44-model-risk-register.md`; `docs/46-prompt-registry.md` | Backend engineer | Must | AC-041, AC-042, AC-043 | TEST-FR-015 | Not created | Not published | Draft |
+| NFR-011 | Non-functional | Evaluation determinism and CI hermeticity (R2) | `docs/09-roadmap.md`; `docs/42-ai-safety-grounding.md` | Engineering lead | Must | AC-040, AC-041, AC-042 | TEST-NFR-011 | Not created | Not published | Draft |
+| NFR-012 | Non-functional | Evaluation cost/behaviour neutrality — judge OFF ⇒ zero delta (R2) | `docs/09-roadmap.md` | Engineering lead | Must | AC-041, AC-042 | TEST-NFR-012 | Not created | Not published | Draft |
 
 ## Registry Notes
 

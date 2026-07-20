@@ -170,7 +170,7 @@ PERF_MIN_EXECUTED ?= $(shell expr $(PERF_MIN_TESTS) - 1)
 # instead of running it, and all of them stayed green while it exited 2.
 perf-gate:
 	@$(MAKE) --no-print-directory gate-min-collected GATE_NAME=perf-gate GATE_PATHS="$(PERF_TEST_PATHS)" GATE_MIN=$(PERF_MIN_TESTS)
-	SENTRY_DSN= UV_CACHE_DIR=$(UV_CACHE_DIR) OPENROUTER_LIVE_EXECUTION_ENABLED=false QUORUM_RUNTIME_ENVIRONMENT=ci uv run pytest $(PERF_TEST_PATHS) $(PERF_GATE_DESELECT) -q --no-cov --junitxml=build/gates/perf-gate.xml
+	SENTRY_DSN= UV_CACHE_DIR=$(UV_CACHE_DIR) OPENROUTER_LIVE_EXECUTION_ENABLED=false QUORUM_RUNTIME_ENVIRONMENT=ci QUORUM_RUN_PERF_BUDGET=1 uv run pytest $(PERF_TEST_PATHS) $(PERF_GATE_DESELECT) -q --no-cov --junitxml=build/gates/perf-gate.xml
 	@$(MAKE) --no-print-directory gate-min-executed GATE_NAME=perf-gate GATE_MIN=$(PERF_MIN_EXECUTED)
 
 # R2 P0-F: schemathesis contract fuzzing against the app's own /openapi.json,

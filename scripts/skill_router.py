@@ -9,10 +9,33 @@ from pathlib import Path
 from typing import Any
 
 ROOT = Path(__file__).resolve().parents[1]
+# A placeholder marker only counts when it sits in a *placeholder context*:
+# it must own a whole field -- a line, a Markdown table cell, a bullet, or the
+# value after a ``Key:`` label. Matching the bare words anywhere in prose made
+# finished documents that merely *mention* a marker (or assert the opposite,
+# e.g. docs/12 "not a pending activation") route as unfinished templates.
+#
+# ``_FIELD_START`` = start of line / table cell / field value, plus any
+# Markdown decoration (bullet, quote, heading, emphasis, backticks). Written as
+# a single flat character class -- a nested quantifier here backtracks
+# catastrophically on long ``---``/``***`` rules (measured: the sweep over
+# docs/ hung past 120s before this was flattened).
+_FIELD_START = r"(?:^|[|·:])[ \t>*_`~#+-]*"
+# ``_FIELD_END`` = the marker is the whole field: only trailing punctuation or
+# Markdown decoration may follow before the next cell boundary or end of line.
+_FIELD_END = r"[ \t]*[.,;!*_`~]*[ \t]*(?=$|[|·])"
+# Single-word markers: only a placeholder when they are the entire field value.
+_MARKER_WORD = r"(?:TBD|TODO|Pending|Placeholder)"
+# Imperative template stubs: inherently template text, so opening a field is
+# enough -- the rest of the sentence is the instruction ("Replace with ...").
+_MARKER_PHRASE = (
+    r"(?:Replace with|Write the idea here|Define after clarification|"
+    r"To be written after idea clarification)"
+)
 PLACEHOLDER_RE = re.compile(
-    r"\b(TBD|Placeholder|Replace with|TODO|Define after clarification|"
-    r"To be written after idea clarification|Pending|Write the idea here)\b",
-    re.I,
+    rf"{_FIELD_START}(?:{_MARKER_WORD}(?![A-Za-z0-9]){_FIELD_END}"
+    rf"|{_MARKER_PHRASE}(?![A-Za-z0-9]))",
+    re.I | re.M,
 )
 
 
