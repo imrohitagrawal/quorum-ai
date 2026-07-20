@@ -5,6 +5,7 @@ Every test here is hermetic and performs zero I/O.
 
 from __future__ import annotations
 
+import time
 from decimal import Decimal
 
 import pytest
@@ -435,6 +436,54 @@ def test_a_run_with_no_markers_is_not_punished_like_one_that_fabricated_them() -
         contribution.signal != "citation_marker_grounding"
         for contribution in build_trust_score(silent).diagnostics.contributions
     )
+
+
+# --------------------------------------------------------------------------
+# marker extraction: cost, not just correctness
+# --------------------------------------------------------------------------
+
+#: An UNTERMINATED markdown link opener, repeated. Each opener's URL run has
+#: no closing ``)``, so a URL pattern that can scan past the next ``[``
+#: rescans the rest of the document once per opener — O(n^2).
+_UNTERMINATED_OPENER = "[x](http://" + "a" * 50
+
+
+@pytest.mark.env_oracle
+@pytest.mark.parametrize("openers", [2000, 4000, 8000])
+def test_marker_extraction_stays_linear_in_unterminated_link_openers(
+    openers: int,
+) -> None:
+    """Measured (adversarial review round 1): this was quadratic.
+
+    ``[x](http://aaa…`` repeated, with no closing paren, cost 0.7 / 2.8 /
+    12.4 / 51.5 s at 61 / 122 / 244 / 488 KB — an exact 4x per doubling.
+    ``citation_marker_grounding`` is recomputed on EVERY read of a run (the
+    result projection re-evaluates rather than reading the stored eval), and
+    no length cap exists on ``answer_text`` anywhere on the path, so the
+    input is provider-controlled and unbounded.
+
+    The budget is deliberately loose (a 12-20x margin over the measured
+    post-fix cost of a few milliseconds) so this is a COMPLEXITY gate, not a
+    machine-speed gate: quadratic re-entry blows it by two orders of
+    magnitude on the largest size while a linear scan cannot approach it.
+    """
+    payload = _UNTERMINATED_OPENER * openers
+    started = time.perf_counter()
+    extract_citation_markers(payload)
+    elapsed = time.perf_counter() - started
+    assert elapsed < 0.5, f"{len(payload)} chars took {elapsed:.3f}s — is the URL scan quadratic?"
+
+
+def test_bounding_the_url_scan_did_not_stop_ordinary_links_matching() -> None:
+    """The bound is on the URL RUN, and real links are unaffected."""
+    assert extract_citation_markers(f"see [NIST SP 800-63B]({REAL_URL}) and more") == [REAL_URL]
+    assert extract_citation_markers("[x]( https://a.test/b?q=1&r=2#frag ) ") == [
+        "https://a.test/b?q=1&r=2#frag"
+    ]
+    # A URL longer than the bound is not a citation marker; it is also not a
+    # crash, and it must not swallow the ordinals that follow it.
+    over_long = "[x](http://a.test/" + "b" * 2100 + ") then [3]"
+    assert extract_citation_markers(over_long) == ["3"]
 
 
 # --------------------------------------------------------------------------

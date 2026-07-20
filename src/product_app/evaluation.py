@@ -77,7 +77,25 @@ TrustBand = Literal["unverified", "low", "moderate", "high"]
 #: constantly: ``[NIST SP 800-63B](https://pages.nist.gov/...)``. The link
 #: TEXT is bounded (no newlines, <= 200 chars) so a stray ``[`` early in a
 #: paragraph cannot swallow half the answer.
-_MARKDOWN_LINK_RE = re.compile(r"\[[^\]\n]{1,200}\]\(\s*(https?://[^\s)]+?)\s*\)")
+#:
+#: The URL RUN is bounded too, and both bounds are about COST, not taste.
+#: Measured (adversarial review round 1): with the URL written as
+#: ``[^\s)]+?`` — which excludes neither ``[`` nor ``]`` — a document of
+#: repeated UNTERMINATED openers (``[x](http://aaa…`` with no closing paren)
+#: made every opener rescan to end-of-text before failing: 0.7 / 2.8 / 12.4
+#: / 51.5 s at 61 / 122 / 244 / 488 KB, an exact 4x per doubling. The input
+#: is provider text with no length cap anywhere on the path, and
+#: :func:`citation_marker_grounding` is recomputed on every READ of a run.
+#: Excluding the brackets makes a failing opener stop at the next ``[``
+#: instead of at end-of-text, and the 2000-character bound caps the run;
+#: together they are linear (2.4 ms at 244 KB, ~2300x faster).
+#:
+#: The cost, honestly: a URL containing a literal ``[``/``]`` (an IPv6
+#: literal host, an unencoded bracket in a query string) or longer than 2000
+#: characters is no longer read as a citation marker. Neither appears in the
+#: corpus or in observed provider output, and the failure direction is a
+#: marker that goes UNCOUNTED rather than one that falsely resolves.
+_MARKDOWN_LINK_RE = re.compile(r"\[[^\]\n]{1,200}\]\(\s*(https?://[^\s)\[\]]{1,2000})\s*\)")
 
 #: An ordinal citation marker: ``[1]``, ``[2, 3]``, ``[10;11]``. Bounded to
 #: three digits — a four-digit bracket in provider prose is a year or a
