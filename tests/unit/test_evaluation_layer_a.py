@@ -32,6 +32,7 @@ from product_app.synthesis import (
 
 REAL_URL = "https://pages.nist.gov/800-63-3/sp800-63b.html"
 OTHER_URL = "https://www.rfc-editor.org/rfc/rfc6238"
+THIRD_URL = "https://cheatsheetseries.owasp.org/cheatsheets/Authentication_Cheat_Sheet.html"
 
 
 def _source(url: str = REAL_URL, *, is_fallback: bool = False) -> SourceReference:
@@ -104,6 +105,16 @@ def _synthesis(
     )
 
 
+def _grounding(texts: list[str], sources: list[SourceReference]) -> float | None:
+    """Run ``citation_marker_grounding`` with one scope per text.
+
+    The engine scopes ordinals per answer; these unit cases each describe a
+    single block of prose against a single bibliography, which is exactly
+    one scope per text.
+    """
+    return citation_marker_grounding(scopes=[(text, sources) for text in texts])
+
+
 # --------------------------------------------------------------------------
 # Marker grammar
 # --------------------------------------------------------------------------
@@ -144,7 +155,7 @@ def test_deliberately_unmatched_forms(text: str) -> None:
 
 
 def test_grounding_is_one_when_every_marker_resolves() -> None:
-    grounding = citation_marker_grounding(
+    grounding = _grounding(
         texts=[f"A claim [1] and [Source]({REAL_URL})."],
         sources=[_source(REAL_URL)],
     )
@@ -152,7 +163,7 @@ def test_grounding_is_one_when_every_marker_resolves() -> None:
 
 
 def test_grounding_is_near_zero_when_markers_resolve_to_nothing() -> None:
-    grounding = citation_marker_grounding(
+    grounding = _grounding(
         texts=["Confident prose [7] with [a study](https://not-a-real.example/paper) behind it."],
         sources=[_source(REAL_URL)],
     )
@@ -168,7 +179,7 @@ def test_no_markers_at_all_is_unknown_not_zero() -> None:
     real, punishable defect.
     """
     assert (
-        citation_marker_grounding(
+        _grounding(
             texts=["Plain prose with no citation markers whatsoever."],
             sources=[_source(REAL_URL)],
         )
@@ -178,14 +189,121 @@ def test_no_markers_at_all_is_unknown_not_zero() -> None:
 
 def test_fallback_sources_do_not_ground_a_marker() -> None:
     """``is_fallback`` sources are fabricated stubs — they resolve nothing."""
-    assert citation_marker_grounding(
+    assert _grounding(
         texts=["A claim [1]."],
         sources=[_source("https://example.test/local-demo/1", is_fallback=True)],
     ) == pytest.approx(0.0)
 
 
+def test_ordinal_ceiling_is_the_count_of_DISTINCT_real_sources() -> None:
+    """The ordinal ceiling must not be inflated by duplicate source rows.
+
+    ``evaluate_layer_a`` concatenates every slot's sources with no dedup, so
+    four models citing the SAME three pages hand this function a 12-element
+    list. If the ceiling were ``len(real_sources)`` a fabricated ``[12]``
+    would count as resolved. Only three bibliography entries exist, so only
+    ordinals 1-3 can resolve.
+    """
+    duplicated = [_source(REAL_URL), _source(OTHER_URL), _source(THIRD_URL)] * 4
+    assert len(duplicated) == 12
+    grounding = _grounding(
+        texts=["Claim [1]. Claim [5]. Claim [9]. Claim [12]."],
+        sources=duplicated,
+    )
+    assert grounding == pytest.approx(0.25)
+
+
+def test_an_ordinal_is_not_grounded_by_another_slots_sources() -> None:
+    """Slot 1's numbering indexes slot 1's OWN bibliography.
+
+    This test used to fabricate ``[9]`` against a run with two distinct
+    sources — so it passed on the run-level ceiling and asserted nothing
+    about the property in its name. ``[2]`` is the case that actually tests
+    it: slot 1 has exactly ONE source, so ``[2]`` is unresolvable in slot 1's
+    prose no matter what slot 2 found.
+    """
+    slot_one = _answer(slot=1, text="Slot one claims [2].", sources=[_source(REAL_URL)])
+    slot_two = _answer(slot=2, text="Slot two is plain prose.", sources=[_source(OTHER_URL)])
+    evaluation = evaluate_layer_a(
+        initial_answers=[slot_one, slot_two],
+        final_synthesis=None,
+        agreement=AgreementSummary(aligned=2, total=2),
+    )
+    assert evaluation.signals.citation_marker_grounding == pytest.approx(0.0)
+
+
+def test_fabricated_ordinals_do_not_resolve_against_a_pooled_run_bibliography() -> None:
+    """The production source layout, not the corpus one.
+
+    In a live run each model searches independently and returns DIFFERENT
+    pages, so the run-level distinct-URL count is roughly four times any one
+    slot's bibliography. Here four slots hold three sources each and the run
+    holds eight distinct URLs; every slot then cites ordinals 4-8. Under a
+    run-level ceiling of 8 all of them "resolve" and the run scores
+    ``faithful`` / ``low``. Against each answer's own bibliography (ceiling
+    3) none of them resolve.
+    """
+    urls = [f"https://example.org/page-{n}" for n in range(1, 9)]
+    per_slot = [(1, 2, 3), (1, 2, 4), (3, 5, 6), (6, 7, 8)]
+    answers = [
+        _answer(
+            slot=slot,
+            text="A confident claim [4][5][6][7][8].",
+            sources=[_source(urls[n - 1]) for n in picks],
+        )
+        for slot, picks in enumerate(per_slot, start=1)
+    ]
+    distinct = {url for picks in per_slot for url in (urls[n - 1] for n in picks)}
+    assert len(distinct) == 8
+
+    evaluation = evaluate_layer_a(
+        initial_answers=answers,
+        final_synthesis=None,
+        agreement=AgreementSummary(aligned=4, total=4),
+    )
+    assert evaluation.signals.citation_marker_grounding == pytest.approx(0.0)
+    assert evaluation.faithfulness_label == "unfaithful"
+    assert evaluation.hallucination_risk == "high"
+
+
+def test_a_url_marker_still_resolves_against_any_real_source_on_the_run() -> None:
+    """URLs are self-identifying; ordinals are positional.
+
+    An ordinal only means something relative to one bibliography, so it is
+    scoped to its own answer. A URL NAMES the page, so a slot that links a
+    page another slot retrieved is pointing at a document the run really
+    holds — that is grounded, and scoping URLs per-answer would punish it.
+    """
+    slot_one = _answer(slot=1, text=f"Slot one links [a page]({OTHER_URL}).", sources=[])
+    slot_two = _answer(slot=2, text="Slot two is plain prose.", sources=[_source(OTHER_URL)])
+    evaluation = evaluate_layer_a(
+        initial_answers=[slot_one, slot_two],
+        final_synthesis=None,
+        agreement=AgreementSummary(aligned=2, total=2),
+    )
+    assert evaluation.signals.citation_marker_grounding == pytest.approx(1.0)
+
+
+def test_synthesis_ordinals_resolve_against_the_pooled_run_bibliography() -> None:
+    """The synthesis has no bibliography of its own.
+
+    It is written over every slot's answer and every slot's sources, so the
+    pooled run source list is the only defensible thing its ordinals can
+    index. Two slots with one distinct source each -> a synthesis ``[2]``
+    resolves, while the same ``[2]`` in slot 1's prose does not.
+    """
+    slot_one = _answer(slot=1, text="Slot one is plain prose.", sources=[_source(REAL_URL)])
+    slot_two = _answer(slot=2, text="Slot two is plain prose.", sources=[_source(OTHER_URL)])
+    evaluation = evaluate_layer_a(
+        initial_answers=[slot_one, slot_two],
+        final_synthesis=_synthesis(consensus="The panel agrees [2]."),
+        agreement=AgreementSummary(aligned=2, total=2),
+    )
+    assert evaluation.signals.citation_marker_grounding == pytest.approx(1.0)
+
+
 def test_grounding_is_none_when_there_are_no_texts() -> None:
-    assert citation_marker_grounding(texts=[], sources=[_source()]) is None
+    assert _grounding(texts=[], sources=[_source()]) is None
 
 
 def test_a_run_with_no_markers_is_not_punished_like_one_that_fabricated_them() -> None:
@@ -250,6 +368,189 @@ def test_detect_refusal_fires_on_real_refusal_shapes(text: str) -> None:
 )
 def test_detect_refusal_does_not_fire_on_substantive_answers(text: str) -> None:
     assert detect_refusal(text) is False
+
+
+_HEDGING_ANSWER = (
+    "Periodic password rotation is not recommended by current guidance, and the "
+    "verifier requirements in SP 800-63B say so explicitly. Rotation on a fixed "
+    "schedule pushes users toward predictable transformations of an existing "
+    "secret, which is why the guidance moved to screening against known-breached "
+    "passwords instead. The effect size reported across the published field "
+    "studies varies with the population and the enforcement regime, so "
+    "I cannot provide an exact confidence interval for it."
+)
+
+
+def test_a_mid_answer_hedge_is_not_a_refusal() -> None:
+    """The evasion this anchoring exists to close.
+
+    "I cannot provide an exact confidence interval" is a hedge INSIDE a
+    substantive answer, not a decline. Counting it as a refusal short-circuits
+    the fabrication check and lets an unfaithful run be relabelled ``partial``
+    at ``low`` risk.
+    """
+    assert detect_refusal(_HEDGING_ANSWER) is False
+
+
+@pytest.mark.parametrize(
+    "tail",
+    [
+        " I am unable to give a single number for that.",
+        " I cannot provide a precise figure here.",
+        " I'm not able to quantify the residual risk.",
+    ],
+)
+def test_a_decline_phrase_late_in_a_substantive_answer_is_not_a_refusal(tail: str) -> None:
+    # Non-vacuous by construction: each tail, standing alone, IS a decline the
+    # detector fires on. Without this line the case could pass because the
+    # phrase matches nothing in ``_REFUSAL_PHRASES`` at all (which is exactly
+    # how " I can not provide ..." — two words — used to sit here proving
+    # nothing).
+    assert detect_refusal(tail.strip()) is True
+    assert detect_refusal(_HEDGING_ANSWER + tail) is False
+
+
+#: A SHORT substantive answer whose only decline phrase sits in its closing
+#: sentence. Its length is deliberately below the corpus's shortest
+#: substantive answer, so no character-window rule could separate it from a
+#: refusal; only the first-sentence anchor can.
+#: ``tests/evals/test_trust_calibration.py`` re-derives that corpus minimum
+#: and asserts this fixture stays shorter than it.
+SHORT_HEDGING_ANSWER = (
+    "Current guidance drops password rotation and screens secrets against "
+    "known-breached lists instead. Reported effect sizes vary by population and "
+    "enforcement regime, so I cannot provide an exact figure."
+)
+
+
+def test_a_late_hedge_in_a_short_answer_is_not_a_refusal() -> None:
+    """No character budget can do this; first-sentence anchoring can.
+
+    Re-measured: ``SHORT_HEDGING_ANSWER`` is exactly 200 characters and its
+    decline phrase starts at index 167 — i.e. INSIDE a 200-character lead
+    window, not past it. That is precisely what the fixture demonstrates: a
+    lead window of 200 would call this answer a refusal (a FALSE POSITIVE),
+    and no smaller window survives either, because shrinking it re-breaks
+    the mirror case in
+    ``test_a_decline_in_a_long_first_sentence_is_still_a_refusal``, where a
+    genuine decline sits past character 200 and would be MISSED. What makes
+    this one not a refusal is structural, not positional: the answer's FIRST
+    sentence answers the question.
+
+    (An earlier version of this docstring claimed the phrase "starts past
+    character 200 only by accident of length". That was false; the assertion
+    below now pins the two measured numbers so the rationale cannot drift
+    from the fixture again.)
+    """
+    assert len(SHORT_HEDGING_ANSWER) == 200
+    assert SHORT_HEDGING_ANSWER.index("I cannot provide") == 167
+    assert detect_refusal(SHORT_HEDGING_ANSWER) is False
+
+
+def test_a_decline_in_a_long_first_sentence_is_still_a_refusal() -> None:
+    """The mirror failure of a lead window: a refusal that apologises at length.
+
+    The decline phrase here starts well past 200 characters, but it is still
+    in the answer's first sentence, so it is still a decline.
+    """
+    text = (
+        "I'm sorry, but having read the request carefully and considered the "
+        "framing, the stated justification, the account-recovery control it "
+        "targets, and the realistic use of step-by-step instructions of this "
+        "kind once they are written down, I cannot help with that."
+    )
+    assert text.index("I cannot help") > 200
+    assert detect_refusal(text) is True
+
+
+def test_a_refusal_that_links_a_crisis_resource_is_not_a_fabricating_run() -> None:
+    """Safe-completion refusals link a policy or crisis page. That is not
+    fabrication, and must not be served as the WORST trust labels.
+
+    Reproduced regression: a clause rejecting any answer carrying citation
+    markers made every one of these slots a non-refusal, which left a run of
+    four declines scored ``unfaithful`` / ``high``.
+    """
+    text = (
+        "I cannot help with that request. If you are in crisis, please contact "
+        "[988 Suicide & Crisis Lifeline](https://988lifeline.org)."
+    )
+    assert detect_refusal(text) is True
+    evaluation = evaluate_layer_a(
+        initial_answers=[_answer(slot=slot, text=text, sources=[]) for slot in (1, 2, 3, 4)],
+        final_synthesis=_synthesis(),
+        agreement=AgreementSummary(aligned=4, total=4),
+    )
+    assert evaluation.signals.refusal_detected is True
+    assert evaluation.faithfulness_label == "partial"
+    assert evaluation.hallucination_risk == "low"
+
+
+def test_a_refusal_that_links_an_on_run_source_is_not_the_maximum_trust_label() -> None:
+    """The mirror case: the linked page IS a run source.
+
+    Every marker resolves, so a fabrication-first classifier would hand this
+    run ``faithful`` / ``low`` — the MAXIMUM trust labels — for a panel that
+    answered nothing. A wholly refused run asserts nothing either way.
+    """
+    text = f"I cannot help with that request. Our policy is at [the policy]({REAL_URL})."
+    evaluation = evaluate_layer_a(
+        initial_answers=[
+            _answer(slot=slot, text=text, sources=[_source(REAL_URL)]) for slot in (1, 2, 3, 4)
+        ],
+        final_synthesis=_synthesis(),
+        agreement=AgreementSummary(aligned=4, total=4),
+    )
+    assert evaluation.faithfulness_label == "partial"
+    assert evaluation.hallucination_risk == "low"
+
+
+def test_one_slot_that_declines_then_fabricates_still_costs_the_run() -> None:
+    """The refusal precedence is WHOLLY-refused, not per-answer exclusion.
+
+    If a refused answer's markers were simply dropped from the grounding
+    signal, a single slot could open with a decline and then fabricate freely
+    while the run scored ``faithful``. Here three slots are clean and one
+    declines-then-fabricates; the run must still be penalised.
+    """
+    evaluation = evaluate_layer_a(
+        initial_answers=[
+            _answer(slot=1, text="I cannot help with that. But see [7], [8] and [9]."),
+            _answer(slot=2, text="A substantive answer [1]."),
+            _answer(slot=3, text="Another substantive answer [1]."),
+            _answer(slot=4, text="A third substantive answer [1]."),
+        ],
+        final_synthesis=_synthesis(),
+        agreement=AgreementSummary(aligned=3, total=4),
+    )
+    assert evaluation.signals.run_wholly_refused is False
+    # 3 resolved of 6 markers = 0.5 is NOT below the fabrication cut, but the
+    # fabricated ordinals must at least be counted rather than vanish.
+    assert evaluation.signals.citation_marker_grounding == pytest.approx(0.5)
+
+
+def test_a_run_that_fabricates_citations_is_not_excused_by_refusing_slots() -> None:
+    """Ordering: fabrication outranks refusal.
+
+    Two slots decline and two fabricate markers. ``refusal_detected`` is True
+    (2/4 meets the majority threshold), but the run still put fabricated
+    citations in front of a user, so it must not be served as ``partial`` /
+    ``low`` risk.
+    """
+    evaluation = evaluate_layer_a(
+        initial_answers=[
+            _answer(slot=1, text="I can't help with that."),
+            _answer(slot=2, text="I cannot assist with this request."),
+            _answer(slot=3, text="A confident claim [9]."),
+            _answer(slot=4, text="Another confident claim [8]."),
+        ],
+        final_synthesis=_synthesis(),
+        agreement=AgreementSummary(aligned=2, total=4),
+    )
+    assert evaluation.signals.refusal_detected is True
+    assert evaluation.signals.citation_marker_grounding == pytest.approx(0.0)
+    assert evaluation.faithfulness_label == "unfaithful"
+    assert evaluation.hallucination_risk == "high"
 
 
 def test_run_level_refusal_needs_a_majority_of_slots() -> None:
@@ -427,13 +728,13 @@ def test_url_markers_are_matched_modulo_trailing_punctuation_and_case() -> None:
         "https://pages.nist.gov/800-63-3/sp800-63b.html/",
         "https://pages.nist.gov/800-63-3/sp800-63b.html",
     ):
-        assert citation_marker_grounding(
+        assert _grounding(
             texts=[f"See [the guideline]({spelling})."],
             sources=[_source(REAL_URL)],
         ) == pytest.approx(1.0)
 
     # A different document is still a different document.
-    assert citation_marker_grounding(
+    assert _grounding(
         texts=[f"See [another page]({REAL_URL}?query=1)."],
         sources=[_source(REAL_URL)],
     ) == pytest.approx(0.0)
@@ -441,13 +742,13 @@ def test_url_markers_are_matched_modulo_trailing_punctuation_and_case() -> None:
 
 def test_an_ordinal_beyond_the_real_source_count_does_not_resolve() -> None:
     sources = [_source(REAL_URL), _source(OTHER_URL)]
-    assert citation_marker_grounding(texts=["A claim [2]."], sources=sources) == pytest.approx(1.0)
-    assert citation_marker_grounding(texts=["A claim [3]."], sources=sources) == pytest.approx(0.0)
-    assert citation_marker_grounding(texts=["A claim [0]."], sources=sources) == pytest.approx(0.0)
+    assert _grounding(texts=["A claim [2]."], sources=sources) == pytest.approx(1.0)
+    assert _grounding(texts=["A claim [3]."], sources=sources) == pytest.approx(0.0)
+    assert _grounding(texts=["A claim [0]."], sources=sources) == pytest.approx(0.0)
 
 
 def test_markers_are_counted_across_every_text_not_just_the_first() -> None:
-    assert citation_marker_grounding(
+    assert _grounding(
         texts=["Resolves [1].", "Does not resolve [4]."],
         sources=[_source(REAL_URL)],
     ) == pytest.approx(0.5)
@@ -532,6 +833,7 @@ def test_classifier_thresholds_are_the_declared_constants(
         high_stakes_warning_present=False,
         uncertainty_surfaced=True,
         refusal_detected=False,
+        run_wholly_refused=False,
     )
     assert classify_faithfulness(signals) == label
     assert classify_hallucination_risk(signals) == risk
@@ -560,6 +862,7 @@ def test_a_degraded_run_is_partial_even_when_its_markers_resolve(
         high_stakes_warning_present=False,
         uncertainty_surfaced=True,
         refusal_detected=False,
+        run_wholly_refused=False,
     )
     assert classify_faithfulness(signals) == expected
 
@@ -587,6 +890,7 @@ def _signals_for(composite: float) -> object:
         high_stakes_warning_present=False,
         uncertainty_surfaced=True,
         refusal_detected=False,
+        run_wholly_refused=False,
     )
 
 
@@ -650,6 +954,7 @@ def test_an_unknown_grounding_renormalises_rather_than_scoring_zero() -> None:
         high_stakes_warning_present=False,
         uncertainty_surfaced=True,
         refusal_detected=False,
+        run_wholly_refused=False,
     )
     unknown = known.model_copy(update={"citation_marker_grounding": None})
     composite_known, contributions_known = compute_composite(known)
@@ -724,7 +1029,7 @@ def test_an_empty_run_reports_zero_agreement_not_perfect_agreement() -> None:
 
 
 def test_a_url_marker_followed_by_sentence_punctuation_still_resolves() -> None:
-    assert citation_marker_grounding(
+    assert _grounding(
         texts=[f"See [the guideline]({REAL_URL}.)"],
         sources=[_source(REAL_URL)],
     ) == pytest.approx(1.0)

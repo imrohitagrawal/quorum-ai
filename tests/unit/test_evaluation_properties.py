@@ -114,6 +114,7 @@ def _signals(draw: st.DrawFn, **overrides: Any) -> LayerASignals:
         "high_stakes_warning_present": draw(st.booleans()),
         "uncertainty_surfaced": draw(st.booleans()),
         "refusal_detected": draw(st.booleans()),
+        "run_wholly_refused": draw(st.booleans()),
     }
     values.update(overrides)
     return LayerASignals(**values)

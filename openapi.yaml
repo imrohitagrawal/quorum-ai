@@ -732,6 +732,9 @@ components:
         refusal_detected:
           type: boolean
           title: Refusal Detected
+        run_wholly_refused:
+          type: boolean
+          title: Run Wholly Refused
       type: object
       required:
       - citation_coverage_ratio
@@ -746,6 +749,7 @@ components:
       - high_stakes_warning_present
       - uncertainty_surfaced
       - refusal_detected
+      - run_wholly_refused
       title: LayerASignals
       description: Deterministic per-run signals. Metrics only — never prose.
     ModelDefaultsResponse:

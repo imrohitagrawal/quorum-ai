@@ -22,7 +22,7 @@ Network-free: the sim pipeline runs locally and ``evaluate_run`` is called with
 from __future__ import annotations
 
 from typing import Any
-from uuid import uuid4
+from uuid import UUID, uuid4
 
 import pytest
 from fastapi.testclient import TestClient
@@ -212,7 +212,17 @@ def test_non_terminal_run_serves_no_evaluation() -> None:
     assert qr._result_response(run).evaluation is None
 
 
-def test_evaluation_persistence_is_idempotent() -> None:
+def test_evaluation_persistence_is_idempotent(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A second persist rewrites identical bytes — and really runs.
+
+    The re-persist is driven with a real ``UUID``: the in-memory repository
+    keys on ``UUID``, so a ``str`` id raises ``KeyError`` inside
+    ``_persist_terminal_run`` and is swallowed by its best-effort guard,
+    which would make this whole spec vacuous (it would then re-read the same
+    untouched row and pass even if a re-persist wiped the evaluation). The
+    spy below is the anti-vacuity oracle: the evaluation write must actually
+    execute a second time.
+    """
     with run_history_store.configure_for_tests() as store:
         client = TestClient(app)
         account_id = uuid4()
@@ -220,8 +230,21 @@ def test_evaluation_persistence_is_idempotent() -> None:
         first = store.get(created["query_run_id"])
         assert first is not None and first.eval_json is not None
 
-        qr._persist_terminal_run(created["query_run_id"])
+        real_persist_evaluation = qr._persist_run_evaluation
+        repersists: list[dict[str, Any]] = []
 
+        def _spy(**kwargs: Any) -> None:
+            repersists.append(kwargs)
+            real_persist_evaluation(**kwargs)
+
+        monkeypatch.setattr(qr, "_persist_run_evaluation", _spy)
+
+        qr._persist_terminal_run(UUID(created["query_run_id"]))
+
+        assert len(repersists) == 1, (
+            "the re-persist under test never executed — this spec would pass "
+            "even if the second write wiped eval_json/trust_json"
+        )
         assert store.run_count() == 1
         second = store.get(created["query_run_id"])
         assert second is not None

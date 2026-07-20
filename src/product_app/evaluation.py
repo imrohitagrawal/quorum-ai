@@ -58,7 +58,7 @@ from product_app.synthesis_consensus import _has_polar_disagreement
 
 #: Bumped whenever the persisted shape or the meaning of a signal changes.
 #: Stored payloads from different versions are not comparable.
-EVAL_SCHEMA_VERSION = "s2-eval-v1"
+EVAL_SCHEMA_VERSION = "s2-eval-v2"
 
 #: Prompt registry id (docs/46). The version is part of the id because
 #: verdicts from different prompt versions are not comparable.
@@ -127,11 +127,14 @@ def _normalize_url(url: str) -> str:
     return url.strip().rstrip(".,;:").rstrip("/").lower()
 
 
-def citation_marker_grounding(
-    *,
-    texts: list[str],
-    sources: list[SourceReference],
-) -> float | None:
+#: One block of prose paired with the bibliography its ordinals index.
+#: For a model answer that is the answer's own ``sources``; for synthesis
+#: prose it is the pooled run source list (see
+#: :func:`citation_marker_grounding`).
+CitationScope = tuple[str, list[SourceReference]]
+
+
+def citation_marker_grounding(*, scopes: list[CitationScope]) -> float | None:
     """Fraction of inline citation markers that resolve to a REAL source.
 
     "Real" means a :class:`SourceReference` on this run with
@@ -139,10 +142,39 @@ def citation_marker_grounding(
     ``example.test`` stub (or an unattributed search filler) and grounds
     nothing.
 
-    Resolution rules:
+    Resolution rules, and why they differ by marker kind:
 
-    * an ordinal ``n`` resolves iff ``1 <= n <= len(real_sources)``;
-    * a URL resolves iff it normalises to the URL of a real source.
+    * an **ordinal** ``n`` is POSITIONAL: it means nothing except relative
+      to one bibliography. It therefore resolves against ITS OWN scope, iff
+      ``1 <= n <= (number of DISTINCT real source URLs in that scope)``.
+      Distinct URLs, not row count, because a scope may list one page twice.
+      Scoping matters most in production: each of the four models runs its
+      own search and returns different pages, so a pooled run bibliography
+      is roughly four times any single slot's and fabricated ordinals sail
+      through a run-level ceiling.
+    * a **URL** is SELF-IDENTIFYING: it names the document. It resolves iff
+      it normalises to the URL of any real source anywhere on the run. A
+      slot that links a page a sibling slot retrieved is pointing at a
+      document the run genuinely holds, and scoping URLs per-scope would
+      punish that.
+
+    Synthesis prose has no bibliography of its own — it is written over
+    every slot's answer and every slot's sources — so the caller passes it
+    with the POOLED run sources. That is the only defensible ceiling for it;
+    any narrower one would be invented.
+
+    KNOWN RESIDUAL in exactly that choice (R-4, reproduced, pinned in
+    ``tests/evals/test_refusal_fabrication_residual.py``). The pooled
+    ceiling is the widest one on the run — with four slots holding three
+    distinct URLs each it is 12 — and an ordinal invented anywhere inside
+    it resolves. Measured: four clean answers plus a synthesis inventing
+    ``[10]``, ``[11]`` and ``[12]`` scores grounding 1.0 and is served
+    ``faithful``/``low``. Since the synthesis carries no bibliography a
+    user ever sees, an in-range ordinal there is not evidence of anything,
+    so "resolves" is not the same as "grounded" for synthesis prose. This
+    is not fixed here: the three narrower ceilings considered across the
+    review rounds were each invented rather than measured, and per FS-7 the
+    loop was stopped and the residual escalated to the operator.
 
     Returns ``None`` — **unknown, not zero** — when the prose contains no
     citation markers at all. This distinction is the whole point: a run
@@ -153,23 +185,27 @@ def citation_marker_grounding(
 
     Pure: no I/O, no network, no clock.
     """
-    real_sources = [source for source in sources if not source.is_fallback]
-    real_urls = {_normalize_url(source.url) for source in real_sources}
+    run_urls = {
+        _normalize_url(source.url)
+        for _text, sources in scopes
+        for source in sources
+        if not source.is_fallback
+    }
 
-    markers: list[str] = []
-    for text in texts:
-        markers.extend(extract_citation_markers(text))
-    if not markers:
-        return None
-
+    total = 0
     resolved = 0
-    for marker in markers:
-        if marker.isdigit():
-            if 1 <= int(marker) <= len(real_sources):
+    for text, sources in scopes:
+        ceiling = len({_normalize_url(s.url) for s in sources if not s.is_fallback})
+        for marker in extract_citation_markers(text):
+            total += 1
+            if marker.isdigit():
+                if 1 <= int(marker) <= ceiling:
+                    resolved += 1
+            elif _normalize_url(marker) in run_urls:
                 resolved += 1
-        elif _normalize_url(marker) in real_urls:
-            resolved += 1
-    return resolved / len(markers)
+    if not total:
+        return None
+    return resolved / total
 
 
 # ---------------------------------------------------------------------------
@@ -178,11 +214,22 @@ def citation_marker_grounding(
 
 #: First-person decline phrasings observed in the corpus refusal case and in
 #: the published refusal styles of the four catalogued vendors. Deliberately
-#: first-person and deliberately narrow: "the provider cannot guarantee
-#: availability" is not a refusal, and neither is "I would not present this
-#: as settled". Every phrase here is exercised by a fixture in
-#: ``tests/unit/test_evaluation_layer_a.py``; adding one without a fixture
-#: is how this becomes a silent false-positive machine.
+#: first-person: "the provider cannot guarantee availability" is not a
+#: refusal, and neither is "I would not present this as settled".
+#:
+#: They are NOT self-sufficient, and the list must not claim to be. Several
+#: ("i cannot provide", "i am unable to") are also ordinary mid-answer
+#: hedges, so :func:`detect_refusal` anchors the match to the answer's FIRST
+#: SENTENCE. Note the list contains "i cannot provide" but not the
+#: two-word-negation spelling "i can not provide"; that spelling is not
+#: emitted by the catalogued vendors, and adding it without a fixture is how
+#: this becomes a silent false-positive machine. Every phrase here is
+#: exercised by a fixture in ``tests/unit/test_evaluation_layer_a.py``.
+#:
+#: That omission has a MEASURED cost, not just a hypothetical one: the
+#: two-word spelling is one of the two independent reasons the R-2
+#: apology-first refusal in ``tests/evals/test_refusal_fabrication_residual.py``
+#: is missed. The list is therefore known-incomplete, not known-sufficient.
 _REFUSAL_PHRASES: tuple[str, ...] = (
     "i can't help",
     "i cannot help",
@@ -212,11 +259,86 @@ _REFUSAL_PHRASES: tuple[str, ...] = (
 REFUSAL_MAJORITY_THRESHOLD = 0.5
 
 
+#: A sentence boundary: terminal punctuation followed by whitespace or the
+#: end of the text (closing quotes/brackets allowed in between), or a hard
+#: line break. Deliberately crude and deliberately CONSTANT-FREE — its only
+#: job is to find where the opening sentence stops.
+_SENTENCE_BOUNDARY_RE = re.compile(r"[.!?][\"'’)\]]*(?:\s|\Z)|\n")
+
+
+def _first_sentence(text: str) -> str:
+    match = _SENTENCE_BOUNDARY_RE.search(text)
+    return text if match is None else text[: match.start()]
+
+
 def detect_refusal(text: str) -> bool:
-    """Whether a single provider answer is a refusal rather than an answer."""
+    """Whether a single provider answer is a refusal rather than an answer.
+
+    The rule: a decline phrase anywhere in the answer's FIRST SENTENCE
+    makes it a refusal. Nothing else is consulted — not length, not what
+    the rest of the answer goes on to say.
+
+    Why no character budget. An earlier version used a 200-character lead
+    window and could not be justified against the corpus in EITHER
+    direction. Too large: a decline that arrives late in a long apologetic
+    opening sentence falls OUTSIDE the window and is MISSED (false
+    negative) — see
+    ``tests/unit/test_evaluation_layer_a.py::test_a_decline_in_a_long_first_sentence_is_still_a_refusal``.
+    Too small: an ordinary closing hedge in a short answer falls INSIDE
+    the window and is a FALSE POSITIVE — the hand-authored fixture
+    ``SHORT_HEDGING_ANSWER`` is exactly 200 characters with its hedge
+    starting at index 167, i.e. inside a 200-character window. Note that
+    the corpus itself does NOT exhibit that second case: its three
+    shortest substantive answers are 218, 223 and 226 characters (all
+    three simulated-low-live-ratio slots) and contain no decline phrase
+    anywhere at all, so they neither support nor refute a lead window.
+    The only artefact demonstrating the false-positive direction is the
+    unit fixture. A rule with no constant needs no calibration; that is
+    the whole of the argument, and it is not a claim of accuracy.
+
+    MEASURED support, re-derived from the corpus by
+    ``tests/evals/test_trust_calibration.py``: in the four genuine refusals
+    the decline phrase starts at offsets 15, 0, 0 and 8 — all inside the
+    first sentence — while no substantive answer in the corpus carries a
+    decline phrase in its first sentence at all.
+
+    KNOWN FAILURES, IN BOTH DIRECTIONS. The earlier claim that this errs
+    only in the safe direction is FALSE and was reproduced false. Both
+    directions are pinned as strict xfails in
+    ``tests/evals/test_refusal_fabrication_residual.py``:
+
+    * FALSE NEGATIVE, and NOT safe: an apology-first refusal ("I am sorry
+      you are going through this. I can not help with that request.")
+      returns False for TWO independent reasons — the decline is in the
+      second sentence, AND the two-word spelling "can not" matches no
+      entry in :data:`_REFUSAL_PHRASES` even when the whole text is
+      scanned (both re-measured). If its only marker is an off-run crisis
+      link, grounding computes 0.0 and the run is served
+      ``unfaithful``/``high`` — the maximum-distrust labels, for a panel
+      that asserted nothing (R-2, measured).
+    * FALSE POSITIVE, and it launders: an answer that OPENS with a decline
+      or hedge sentence and then answers anyway is read as a refusal. Four
+      such slots make ``run_wholly_refused`` True, which short-circuits
+      both classifiers, and a run full of fabricated ordinals is served
+      ``partial``/``low``. The identical text with the opening sentence
+      removed is correctly ``unfaithful``/``high`` (R-1 and R-3, measured).
+
+    Neither is compensated for here. Three adversarial review rounds each
+    fixed one direction and introduced a new mislabelling in the other;
+    per FS-7 the loop was stopped and the residual recorded rather than
+    ground on. The operator decides.
+
+    Notably NOT a condition: "and cites nothing". Safe-completion refusals
+    routinely link a policy or crisis resource, and rejecting any answer
+    carrying a citation marker turned those into fabricating runs.
+
+    ADVISORY (FS-6) and NOT calibrated. The refusal-vs-fabrication
+    interaction is UNRESOLVED; see
+    ``tests/evals/test_refusal_fabrication_residual.py``.
+    """
     if not text or not text.strip():
         return False
-    lowered = text.lower().replace("’", "'")
+    lowered = _first_sentence(text.lower().replace("’", "'"))
     return any(phrase in lowered for phrase in _REFUSAL_PHRASES)
 
 
@@ -243,6 +365,17 @@ class LayerASignals(BaseModel):
     high_stakes_warning_present: bool
     uncertainty_surfaced: bool
     refusal_detected: bool
+    #: Every substantive slot was CLASSIFIED as a decline by
+    #: :func:`detect_refusal` — which is not the same as "every substantive
+    #: slot declined". It carries no advisory constant of its own (it is an
+    #: ``all()``, unlike ``refusal_detected``), but it inherits every error
+    #: of the detector underneath it, in both directions: four slots that
+    #: merely OPEN with a decline or hedge sentence and then answer at
+    #: length set this True (see R-1/R-3 in
+    #: ``tests/evals/test_refusal_fabrication_residual.py``), and four
+    #: genuine apology-first refusals leave it False (R-2). Being
+    #: threshold-free makes it deterministic, not correct.
+    run_wholly_refused: bool
 
 
 #: Composite weights. ADVISORY (FS-6) — see the module docstring.
@@ -277,9 +410,24 @@ LAYER_A_WEIGHTS: dict[str, float] = {
 }
 
 #: Advisory (FS-6). Below this, resolved-marker share reads as fabrication
-#: rather than sloppiness. Chosen as "most markers point nowhere"; the
-#: corpus separation is 1.00 vs 0.04, so any cut in (0.04, 1.00) reproduces
-#: the labels and the corpus cannot pick one. Recorded, not measured.
+#: rather than sloppiness. Chosen as "most markers point nowhere".
+#:
+#: MEASURED corpus separation, RE-MEASURED after ordinal resolution moved
+#: from a run-level ceiling to a per-answer one. The separation did NOT
+#: move: the corpus's faithful answers cite only their own bibliographies,
+#: so narrowing each ceiling changed nothing. (Three cases carry markers;
+#: the refusal and the simulated case carry none and are excluded as
+#: unknown.)
+#: faithful side 1.0000 (``01-faithful-consensus`` and
+#: ``03-preserved-polar-disagreement``, every marker resolves) vs unfaithful
+#: side 0.0385 = 1/26 (``02-fluent-unfaithful``: one of its 26 markers
+#: resolves). Every cut in (0.0385, 1.00] therefore reproduces the corpus
+#: labels and the corpus cannot pick one within that interval; 0.5 is a
+#: judgement call inside it, not a measurement.
+#:
+#: These numbers are re-derived, and the interval endpoints are probed from
+#: both sides, by ``tests/evals/test_trust_calibration.py`` — if the corpus
+#: moves, that gate goes red rather than this comment going stale.
 GROUNDING_FABRICATION_THRESHOLD = 0.5
 #: Advisory (FS-6). Above this, grounding is treated as good. Mirrors the
 #: existing ``CITATION_COVERAGE_TARGET`` of 0.80 for consistency with the
@@ -353,13 +501,15 @@ def evaluate_layer_a(
         )
         coverage_ratio = float(aggregate.coverage_ratio)
 
-    sources: list[SourceReference] = []
+    # Each ANSWER's ordinals index that answer's OWN bibliography; the
+    # synthesis has none of its own, so it is scoped to the pooled run
+    # sources. See :func:`citation_marker_grounding`.
+    pooled_sources: list[SourceReference] = []
     for answer in initial_answers:
-        sources.extend(answer.sources)
-    grounding = citation_marker_grounding(
-        texts=[a.answer_text for a in initial_answers] + _synthesis_texts(final_synthesis),
-        sources=sources,
-    )
+        pooled_sources.extend(answer.sources)
+    scopes: list[CitationScope] = [(a.answer_text, a.sources) for a in initial_answers]
+    scopes.extend((text, pooled_sources) for text in _synthesis_texts(final_synthesis))
+    grounding = citation_marker_grounding(scopes=scopes)
 
     polar = _has_polar_disagreement([a.answer_text for a in completed])
     preserved = (
@@ -368,6 +518,7 @@ def evaluate_layer_a(
 
     refusals = sum(1 for a in completed if detect_refusal(a.answer_text))
     refusal_detected = bool(completed) and (refusals / len(completed) >= REFUSAL_MAJORITY_THRESHOLD)
+    wholly_refused = bool(completed) and refusals == len(completed)
 
     signals = LayerASignals(
         citation_coverage_ratio=min(max(coverage_ratio, 0.0), 1.0),
@@ -393,6 +544,7 @@ def evaluate_layer_a(
         ),
         uncertainty_surfaced=_uncertainty_surfaced(final_synthesis),
         refusal_detected=refusal_detected,
+        run_wholly_refused=wholly_refused,
     )
 
     return RunEvaluation(
@@ -409,21 +561,56 @@ def classify_faithfulness(signals: LayerASignals) -> FaithfulnessLabel:
     This is NOT a faithfulness measurement — Layer A cannot read meaning.
     It classifies what the deterministic signals can actually establish:
 
-    * a refused run has no answer to be faithful about → ``partial``;
-    * markers that resolve to nothing → ``unfaithful``;
+    * a WHOLLY refused run — every substantive slot declined — asserted
+      nothing, so it is ``partial`` and this is checked FIRST. Its markers
+      are not claim citations: safe-completion refusals link a policy or
+      crisis page, and judging that link would score the same declining
+      panel ``unfaithful`` when the link is off-run and ``faithful`` (the
+      maximum trust label) when it happens to be on-run. Both are wrong;
+    * otherwise markers that resolve to nothing → ``unfaithful``, checked
+      BEFORE the majority-refusal rule: a run whose surviving slots
+      fabricated citations put those citations in front of a user, so a
+      refusal elsewhere in the panel must not launder it into ``partial``;
+    * a partly refused run with nothing fabricated → ``partial``;
     * grounding unknown (no markers at all), or a degraded/incomplete run
       → ``partial``, because nothing was established either way;
     * otherwise ``faithful``.
 
     Reproduces every label in ``tests/evals/corpus/`` (five hand-authored
     cases). Five cases pin direction, not accuracy.
+
+    UNRESOLVED — the refusal-vs-fabrication interaction. The first bullet
+    above short-circuits everything below it on the strength of
+    :func:`detect_refusal`, which is wrong in both directions, so this
+    function is measurably wrong in both directions too. Four slots that
+    open with a safety disclaimer or an ordinary hedge and then cite
+    wholly fabricated ordinals are labelled ``partial`` here; the same
+    text with that one sentence deleted is correctly ``unfaithful``. Four
+    genuine apology-first refusals linking an off-run crisis page are
+    labelled ``unfaithful``. Three adversarial review rounds each traded
+    one of these for the other, so per FS-7 the loop was stopped and the
+    gap recorded rather than reworked a fourth time; the operator decides.
+    The reproduced cases are pinned as strict xfails in
+    ``tests/evals/test_refusal_fabrication_residual.py``.
+
+    This label is ADVISORY (FS-6) and NOT calibrated. The reason the
+    residual is tolerable to LAND — not the reason it is acceptable — is
+    that the served numeric TrustScore is suppressed (``support_verified``
+    False) in every run the product currently produces, so this label is
+    not surfaced to a user as a confidence today. Anything that begins
+    surfacing it must resolve the residual module first.
     """
+    if signals.run_wholly_refused:
+        return "partial"
+    if (
+        signals.citation_marker_grounding is not None
+        and signals.citation_marker_grounding < GROUNDING_FABRICATION_THRESHOLD
+    ):
+        return "unfaithful"
     if signals.refusal_detected:
         return "partial"
     if signals.citation_marker_grounding is None:
         return "partial"
-    if signals.citation_marker_grounding < GROUNDING_FABRICATION_THRESHOLD:
-        return "unfaithful"
     if signals.live_ratio < 1.0 or signals.completeness < 1.0:
         return "partial"
     return "faithful"
@@ -433,15 +620,47 @@ def classify_hallucination_risk(signals: LayerASignals) -> HallucinationRisk:
     """Layer-A risk band. ADVISORY (FS-6).
 
     A refusal asserts (almost) nothing, so its risk is low even though its
-    faithfulness label is ``partial``. Unknown grounding is ``medium``:
-    unknown is not safe, and it is not proven bad either.
+    faithfulness label is ``partial``. The precedence mirrors
+    :func:`classify_faithfulness` exactly: wholly-refused, then fabrication,
+    then majority refusal. Unknown grounding is ``medium``: unknown is not
+    safe, and it is not proven bad either.
+
+    CORRECTION. An earlier version of this docstring claimed a run that
+    fabricated citations is ``high`` "regardless of how many slots
+    declined". That is FALSE, and reproduced false: ``run_wholly_refused``
+    is checked FIRST and returns ``low``, so a run in which all four slots
+    fabricated ordinals — measured grounding 0.0 — is served ``low`` as
+    soon as each of those slots happens to open with a decline or hedge
+    sentence (R-1 and R-3). Fabrication wins over a MAJORITY refusal; it
+    loses to a WHOLLY-refused verdict.
+
+    UNRESOLVED — the refusal-vs-fabrication interaction, in both
+    directions, is recorded as strict xfails in
+    ``tests/evals/test_refusal_fabrication_residual.py``. Three adversarial
+    review rounds each traded one mislabelling for another, so per FS-7 the
+    loop was stopped and the residual escalated to the operator instead of
+    being reworked a fourth time.
+
+    This band is ADVISORY (FS-6) and NOT calibrated against correctness.
+    The reason the residual is tolerable to LAND — not the reason it is
+    acceptable — is that the served numeric TrustScore is suppressed
+    (``support_verified`` False) in every run the product currently
+    produces, because the only production path calls ``evaluate_run`` with
+    ``judge=None``. So this band is not surfaced to a user as a confidence
+    today. Anything that begins surfacing it must resolve the residual
+    module first.
     """
+    if signals.run_wholly_refused:
+        return "low"
+    if (
+        signals.citation_marker_grounding is not None
+        and signals.citation_marker_grounding < GROUNDING_FABRICATION_THRESHOLD
+    ):
+        return "high"
     if signals.refusal_detected:
         return "low"
     if signals.citation_marker_grounding is None:
         return "medium"
-    if signals.citation_marker_grounding < GROUNDING_FABRICATION_THRESHOLD:
-        return "high"
     if signals.citation_marker_grounding >= GROUNDING_GOOD_THRESHOLD:
         return "low"
     return "medium"
@@ -929,6 +1148,7 @@ __all__ = [
     "JUDGE_PROMPT_ID",
     "LAYER_A_WEIGHTS",
     "REFUSAL_MAJORITY_THRESHOLD",
+    "CitationScope",
     "EvalJudge",
     "EvalJudgeService",
     "EvalJudgeVerdict",

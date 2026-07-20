@@ -22,7 +22,10 @@ Design constraints that are load-bearing here
   has no ``continue-on-error`` and always passes because its only real step is
   commented out. Effective status is therefore a four-valued model
   (blocking / blocking-on-pull-requests-only / advisory / vacuous) and docs are
-  asked to state the *qualified* truth.
+  asked to state the *qualified* truth. ``continue-on-error`` is read at BOTH
+  levels: a flag on the step that does the gate's real work downgrades the gate
+  just as surely as one on the job, while a flag on checkout/setup/artifact
+  plumbing does not.
 * **Never key off the bare word "blocking".** It appears in ~20 docs with
   nothing to do with CI (a non-blocking persistence AC, async blocking calls,
   high-stakes topic blocking). Every claim here is anchored to a gate/job
@@ -46,6 +49,7 @@ from __future__ import annotations
 
 import os
 import re
+import shutil
 from collections.abc import Iterator
 from dataclasses import dataclass
 from pathlib import Path
@@ -87,6 +91,20 @@ def _docs_dir() -> Path:
 
 def _workflow_dir() -> Path:
     return Path(os.environ.get("QUORUM_DOC_GATE_WORKFLOWS", DEFAULT_WORKFLOW_DIR))
+
+
+def _display(path: Path) -> str:
+    """Repo-relative when possible, absolute otherwise.
+
+    The override env vars exist so this check can be proven RED against a
+    mutated copy *outside* the working tree; a bare ``relative_to(REPO_ROOT)``
+    at a reporting site raises ``ValueError`` there and destroys the very
+    assertion message the RED proof needs to show.
+    """
+    try:
+        return str(path.relative_to(REPO_ROOT))
+    except ValueError:
+        return str(path)
 
 
 def _normalise(text: str) -> str:
@@ -172,8 +190,53 @@ def _is_vacuous(job: dict[str, Any]) -> bool:
     return True
 
 
+#: Actions that are plumbing, never the gate's own assertion. A
+#: ``continue-on-error`` on one of these does not stop the gate step from
+#: failing the job, so it is not a downgrade — treating it as one would be a
+#: false alarm that pushes docs into stating something untrue.
+_INCIDENTAL_ACTION_PREFIXES = (
+    "actions/checkout",
+    "actions/setup-",
+    "actions/cache",
+    "actions/upload-artifact",
+    "actions/download-artifact",
+    "astral-sh/setup-uv",
+)
+
+
+def _is_gate_bearing(step: dict[str, Any]) -> bool:
+    """True when this step can actually fail the gate.
+
+    A job's conclusion is the AND of its steps that are NOT
+    ``continue-on-error``. Gate-bearing means the step runs repo commands
+    (``run:``) or a non-plumbing action — i.e. it is where the gate's check
+    actually happens.
+    """
+    if "run" in step:
+        return True
+    uses = str(step.get("uses", ""))
+    return bool(uses) and not uses.startswith(_INCIDENTAL_ACTION_PREFIXES)
+
+
+def _has_step_level_downgrade(job: dict[str, Any]) -> bool:
+    """A gate-bearing step marked ``continue-on-error`` cannot fail the job.
+
+    Mirrors :func:`test_e2e_workflow_has_no_effective_continue_on_error`,
+    which already knows step level matters: without this, moving the flag
+    from the job onto its ``make …`` step evades the whole EN-7 gate while
+    every doc still calls it blocking.
+    """
+    return any(
+        step.get("continue-on-error") is True
+        for step in (job.get("steps") or [])
+        if _is_gate_bearing(step)
+    )
+
+
 def _effective_status(job: dict[str, Any]) -> str:
     if job.get("continue-on-error") is True:
+        return ADVISORY
+    if _has_step_level_downgrade(job):
         return ADVISORY
     if _is_vacuous(job):
         return VACUOUS
@@ -254,7 +317,7 @@ def test_doc_status_claims_match_the_workflows(effective_statuses: dict[str, str
             for claim in _claims(gate, line):
                 if claim not in _ALLOWED_CLAIM[status]:
                     problems.append(
-                        f"{path.relative_to(REPO_ROOT)}:{number} calls the {gate.key!r} "
+                        f"{_display(path)}:{number} calls the {gate.key!r} "
                         f"gate {claim!r}, but its {gate.workflow} job is effectively "
                         f"{status!r}: {line.strip()[:160]}"
                     )
@@ -275,7 +338,7 @@ def test_no_doc_still_waits_to_flip_an_already_blocking_gate(
                     tail = line[anchor.end() : anchor.end() + 140]
                     if _PENDING_PROMOTION_RE.search(tail):
                         problems.append(
-                            f"{path.relative_to(REPO_ROOT)}:{number} still describes "
+                            f"{_display(path)}:{number} still describes "
                             f"{gate.key!r} as pending a flip to blocking, but its "
                             f"{gate.workflow} job already blocks "
                             f"({effective_statuses[gate.key]}): {line.strip()[:160]}"
@@ -295,7 +358,7 @@ def test_qualified_gates_are_recorded_in_the_machinery_doc(
         row = [line for line in text.splitlines() if gate.job in line and status in line]
         assert row, (
             f"the {gate.key!r} job is effectively {status!r}, but "
-            f"{MACHINERY_DOC.relative_to(REPO_ROOT)} has no line recording that. "
+            f"{_display(MACHINERY_DOC)} has no line recording that. "
             "A qualified gate that is documented nowhere reads as a hard gate."
         )
 
@@ -328,7 +391,7 @@ PERF_GATE_PATH = REPO_ROOT / "tests" / "perf" / "test_workflow_latency_percentil
 
 def _single(pattern: str, path: Path, *, label: str) -> str:
     match = re.search(pattern, path.read_text(encoding="utf-8"), re.MULTILINE)
-    assert match, f"could not parse {label} out of {path.relative_to(REPO_ROOT)} ({pattern})"
+    assert match, f"could not parse {label} out of {_display(path)} ({pattern})"
     return match.group(1)
 
 
@@ -385,8 +448,100 @@ def test_prose_thresholds_match_the_enforced_values() -> None:
                     quoted = tuple(match.groups())
                     if quoted != enforced[label]:
                         problems.append(
-                            f"{path.relative_to(REPO_ROOT)}:{number} quotes {label} as "
+                            f"{_display(path)}:{number} quotes {label} as "
                             f"{'/'.join(quoted)} but the enforced value is "
                             f"{'/'.join(enforced[label])}: {line.strip()[:160]}"
                         )
     assert not problems, "prose thresholds contradict the enforced values:\n" + "\n".join(problems)
+
+
+# --------------------------------------------------------------------------
+# Part C — the gate's own escape hatches, exercised as documented
+# --------------------------------------------------------------------------
+
+
+def _mutated_workflows(tmp_path: Path, mutate: Any) -> Path:
+    """A copy of the real workflow dir with ``mutate`` applied to ci.yml.
+
+    Never touches ``.github/workflows``: the copy lives under ``tmp_path``,
+    which is outside the repo, exactly as the module docstring prescribes.
+    """
+    workflows = tmp_path / "workflows"
+    shutil.copytree(DEFAULT_WORKFLOW_DIR, workflows)
+    document = yaml.safe_load((workflows / "ci.yml").read_text(encoding="utf-8"))
+    mutate(document)
+    (workflows / "ci.yml").write_text(yaml.safe_dump(document), encoding="utf-8")
+    return workflows
+
+
+FR_COMPLETENESS = next(gate for gate in GATES if gate.key == "fr-completeness")
+
+
+def test_a_step_level_downgrade_of_the_gate_step_is_reported_advisory(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """EN-7 evasion: ``continue-on-error`` moved from the job onto its step.
+
+    A gate whose real work cannot fail the job does not block, however clean
+    the job-level setting looks. Reading only the job level would let this
+    downgrade ship while every doc still called the gate blocking — the exact
+    drift class this module exists to catch.
+    """
+
+    def _downgrade_the_run_step(document: dict[str, Any]) -> None:
+        for step in document["jobs"]["fr-completeness"]["steps"]:
+            if "run" in step:
+                step["continue-on-error"] = True
+
+    monkeypatch.setenv(
+        "QUORUM_DOC_GATE_WORKFLOWS", str(_mutated_workflows(tmp_path, _downgrade_the_run_step))
+    )
+
+    assert _effective_status(_job(FR_COMPLETENESS)) == ADVISORY
+
+
+def test_a_continue_on_error_on_an_incidental_step_is_still_blocking(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The other direction: not every step-level flag is a downgrade.
+
+    ``continue-on-error`` on checkout/setup/cache/artifact plumbing leaves the
+    gate's own assertion able to fail the job, so the gate still blocks.
+    Calling it advisory would be a false alarm that pushes docs into stating
+    something untrue.
+    """
+
+    def _downgrade_the_plumbing(document: dict[str, Any]) -> None:
+        steps = document["jobs"]["fr-completeness"]["steps"]
+        for step in steps:
+            if "uses" in step:
+                step["continue-on-error"] = True
+        steps.append({"uses": "actions/upload-artifact@v4", "continue-on-error": True})
+
+    monkeypatch.setenv(
+        "QUORUM_DOC_GATE_WORKFLOWS", str(_mutated_workflows(tmp_path, _downgrade_the_plumbing))
+    )
+
+    assert _effective_status(_job(FR_COMPLETENESS)) == BLOCKING
+
+
+def test_the_documented_out_of_tree_red_proof_reports_instead_of_crashing(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """``QUORUM_DOC_GATE_DOCS`` must work when it points outside the repo.
+
+    That is the only way to prove the check RED without dirtying the working
+    tree, which is what the module docstring promises. Reporting a drift in
+    such a doc must produce the assertion message, not a ``ValueError`` from
+    ``Path.relative_to``.
+    """
+    docs = tmp_path / "docs"
+    docs.mkdir()
+    drift = docs / "drift.md"
+    drift.write_text("The coverage floor is 42.\n", encoding="utf-8")
+    monkeypatch.setenv("QUORUM_DOC_GATE_DOCS", str(docs))
+
+    with pytest.raises(AssertionError) as caught:
+        test_prose_thresholds_match_the_enforced_values()
+
+    assert str(drift) in str(caught.value)
