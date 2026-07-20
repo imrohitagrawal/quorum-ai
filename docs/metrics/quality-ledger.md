@@ -153,7 +153,7 @@ which is a **process** number and belongs nowhere near Part 2:
 |---|---|
 | Frozen corpus cases | 5 (hand-authored, real-shaped) |
 | Engine structural verdicts matching hand-authored labels | 5 / 5 |
-| Adversarial pair separation on `citation_marker_grounding` | 1.000 (faithful) vs 0.038 (fluent-but-unfaithful) |
+| Adversarial pair separation on `citation_marker_grounding` | 0.850 (faithful) vs 0.059 (fluent-but-unfaithful) — re-measured 2026-07-20 after DEBT-011; it was 1.000 vs 0.038 before |
 | Judge configuration | OFF (`StubEvalJudge` sets `verifies_support=False`) |
 | Served trust in every one of these runs | `unverified`, score `None` |
 
@@ -161,12 +161,15 @@ Five cases pin direction, not accuracy. The Part 2 cells need the S4 golden set
 with real captured runs and human labels — and, for the high-stakes rows, a
 qualified human reviewer (see the S2 handback's operator-flagged items).
 
-**Also material to any future number here:** three review rounds could not close
-the interaction between refusal detection and the fabrication verdict
-(**DEBT-011**, pinned as strict xfails in
-`tests/evals/test_refusal_fabrication_residual.py`). Until that is resolved, a
-hallucination-rate measured with this engine would inherit a known
-mislabelling in both directions, so it would not mean what the column says.
+**Also material to any future number here:** the interaction between refusal
+detection and the fabrication verdict is now RESOLVED (**DEBT-011**, closed
+2026-07-20 — the four cases are ordinary passing tests in
+`tests/evals/test_refusal_fabrication_residual.py` and the invariants live in
+`tests/unit/test_evaluation_refusal_decoupling.py`). Two things still stand
+between this engine and a number that means what the column says: the labels
+remain ADVISORY and uncalibrated until the S4 golden set (FS-6), and
+**DEBT-012** — Layer A performs no I/O, so a run whose only citation markers
+are fabricated URLs is reported as *unknown* rather than as fabrication.
 
 ### Column definitions and what will populate them
 

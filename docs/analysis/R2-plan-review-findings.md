@@ -47,14 +47,20 @@ authoritative):**
   `scripts/session_handoff.py` and cannot hold it. FR-015, NFR-011/012, OC-1 (harness), OC-2, EN-7, DEBT-008 and
   DEBT-010 are DONE and proven; all gates green (983 passed / 4 skipped /
   4 xfailed, cov 89.49%, diff-cover 99%, Schemathesis 29, perf 10/10).
-  **It is NOT "S2 DONE":** a bounded three-round adversarial loop reached its
-  FS-7 bound without a fixpoint. The refusal-vs-fabrication interaction is
-  unresolved (**DEBT-011**) — a one-sentence safety disclaimer currently
-  launders a wholly-fabricating run to the LOWEST risk band, and an
-  apology-first genuine refusal is reported at the HIGHEST. Both are pinned as
-  strict xfails in `tests/evals/test_refusal_fabrication_residual.py`. Bounded
-  today only because numeric trust is suppressed and no UI reads the labels;
-  **blocking for S3 (FR-016)**, which is what would first surface them.
+  **DEBT-011 is CLOSED (R2-S2.1, 2026-07-20).** The refusal-vs-fabrication
+  interaction was structural, not phrasing: a refusal branch was deciding a
+  grounding question. Refusal is now a signal, never an override — both
+  classifiers derive their verdict from grounding alone, `refusal_detected`
+  applies only as a downward cap / unknown-resolver, and `run_wholly_refused`
+  is read by neither. Synthesis ordinals resolve against a ceiling of 0, and
+  an off-run URL is excluded as unknown (cost carried as **DEBT-012**). The
+  four reproductions are now ordinary PASSING tests in
+  `tests/evals/test_refusal_fabrication_residual.py`, backed by INV-1/2/3
+  property tests in `tests/unit/test_evaluation_refusal_decoupling.py`.
+  **S2 acceptance is still an open question for the reconciling session:** this
+  slice fixed the blocking defect and re-measured the corpus, but the full
+  adversarial re-review of S2 to a fixpoint was not run here, so the PHASE
+  STATUS below is left as it stands rather than promoted.
   Then Phase 2 (S3 — trust UI), Phase 3 (S4 — eval harness).
 - **Open residuals carried into S2+:** EN-7 (consistency tests blind to prose
   drift — the S2 ops-housekeeping gate), DEBT-008 (mutation blind spot), DEBT-009
