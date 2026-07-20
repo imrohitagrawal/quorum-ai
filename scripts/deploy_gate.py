@@ -63,10 +63,15 @@ REQUIRED_WORKFLOWS: tuple[str, ...] = ("CI", "Tests", "E2E (axe + parity)")
 #: a pass. Fail-safe means: deploy ONLY on an explicit ``success``.
 _SUCCESS = "success"
 
-#: Default bounded-wait knobs. ``timeout`` comfortably exceeds the slowest
-#: required workflow (E2E ≈ 3 min) with headroom for a loaded runner; ``poll``
-#: is frequent enough to deploy promptly once the last check turns green.
-DEFAULT_TIMEOUT_SECONDS = 900.0
+#: Default bounded-wait knobs. ``timeout`` must exceed the LONGEST a required
+#: push job may legitimately run — its declared ``timeout-minutes`` ceiling — or
+#: the gate fail-safes before a slow-but-valid job finishes and strands the
+#: deploy (the 2026-07-17..21 incident: the 30-min mutation job kept CI pending
+#: past the old 900s and every merge silently skipped). deploy.yml sets 1500s
+#: explicitly (clears the 20-min blocking-job ceiling); this fallback matches it.
+#: The invariant is pinned by tests/unit/test_deploy_gate_no_slow_push_jobs.py.
+#: ``poll`` is frequent enough to deploy promptly once the last check turns green.
+DEFAULT_TIMEOUT_SECONDS = 1500.0
 DEFAULT_POLL_SECONDS = 15.0
 
 

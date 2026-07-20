@@ -10,6 +10,11 @@ permissions:
 jobs:
   validate-and-test:
     runs-on: ubuntu-latest
+    # Declared so the deploy-gate ceiling invariant (tests/unit/test_deploy_gate_
+    # no_slow_push_jobs.py) covers this heaviest push job too — an uncapped job
+    # defaults to 360 min and would be invisible to the ceiling math. Measured
+    # ~3 min on a1cf546; 20 stays under the 1500s gate wait with wide headroom.
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@v4
         with:
