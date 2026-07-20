@@ -340,3 +340,81 @@ def test_quoted_grounding_separations_are_the_measured_ones(
         f"{item} quotes a grounding separation that is no longer the measured one; "
         f"the corpus now separates the pair {quoted}. Status cell: {status!r}"
     )
+
+
+# ---------------------------------------------------------------------------
+# Rule 6 — the DEBT register's proof pointers must exist (round 3)
+# ---------------------------------------------------------------------------
+
+DEBT_REGISTER_PATH = REPO_ROOT / "docs" / "63-technical-debt-register.md"
+
+#: A backticked repo path in a register cell, with an optional ``::test``
+#: suffix and optional trailing ``.py`` member chain. Only tokens containing
+#: a ``/`` are treated as paths, so ``pyproject.toml [tool.mutmut]`` (a
+#: section reference, not a file claim) is left alone.
+_DEBT_PROOF_PATH_RE = re.compile(r"`([A-Za-z0-9_./-]+\.(?:py|md|toml|json|ya?ml|js|css|html))\b")
+
+#: The row-ID shape used by ``docs/63`` (``DEBT-011``), which is not the
+#: findings-ledger shape parsed above.
+_DEBT_ROW_ID_RE = re.compile(r"^DEBT-\d+$")
+
+
+def _debt_rows() -> dict[str, str]:
+    """Debt ID -> the whole row text."""
+    rows: dict[str, str] = {}
+    for line in DEBT_REGISTER_PATH.read_text(encoding="utf-8").splitlines():
+        if not line.startswith("|"):
+            continue
+        cells = [cell.strip() for cell in line.strip().strip("|").split("|")]
+        if len(cells) < 2 or not _DEBT_ROW_ID_RE.match(cells[0].strip("* ")):
+            continue
+        rows[cells[0].strip("* ")] = line
+    return rows
+
+
+def test_the_debt_register_cites_only_proof_pointers_that_exist() -> None:
+    """``docs/63`` had NO existence gate on its Evidence/proof column.
+
+    Measured (adversarial review round 3): rule 3 above reads only
+    ``docs/analysis/R2-plan-review-findings.md``, ``tests/test_doc_gate_consistency.py``
+    does not read ``docs/63`` at all, and the single gate that does
+    (``test_the_debt_register_quotes_todays_separation_interval``) checks one
+    numeric interval string. So a DEBT row could read RESOLVED/REPAID while
+    citing a test module that does not exist — the exact "DONE without an
+    artifact" gaming the R2 ledger gate was built to stop — with every gate
+    green (repro: rewrite DEBT-011's sole INV proof pointer to
+    ``tests/unit/test_totally_invented_does_not_exist.py``; measured 258
+    passed).
+
+    A resolved-debt row is where a reader goes to find out what was proved,
+    so a pointer at a file that is not there is worse than none.
+    """
+    rows = _debt_rows()
+    assert rows, f"no parsable debt rows in {DEBT_REGISTER_PATH}"
+
+    missing: dict[str, list[str]] = {}
+    for debt_id, row in rows.items():
+        cited = [p for p in _DEBT_PROOF_PATH_RE.findall(row) if "/" in p]
+        absent = sorted({p for p in cited if not _is_real_artifact(p)})
+        if absent:
+            missing[debt_id] = absent
+    assert not missing, (
+        "debt rows citing proof pointers that do not exist (or are empty). "
+        "Fix the pointer or do the work; do not leave a closure argument "
+        f"resting on a missing file: {missing}"
+    )
+
+
+def test_the_debt_register_proof_gate_sees_the_rows_it_claims_to() -> None:
+    """Anti-vacuity for the gate above: it must actually parse real rows.
+
+    A row-parsing bug would make the existence check pass by finding
+    nothing, which is how this class of gate fails open.
+    """
+    rows = _debt_rows()
+    assert len(rows) >= 12, f"only {len(rows)} debt rows parsed: {sorted(rows)}"
+    cited = {p for row in rows.values() for p in _DEBT_PROOF_PATH_RE.findall(row) if "/" in p}
+    assert len(cited) >= 10, f"only {len(cited)} proof paths found in the register: {cited}"
+    assert any(p.startswith("tests/") for p in cited), (
+        "no test module is cited anywhere in the register; the parse is wrong"
+    )

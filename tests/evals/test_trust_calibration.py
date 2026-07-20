@@ -589,3 +589,118 @@ def test_the_short_hedge_fixture_is_shorter_than_any_corpus_answer() -> None:
     from tests.unit.test_evaluation_layer_a import SHORT_HEDGING_ANSWER
 
     assert len(SHORT_HEDGING_ANSWER) <= SHORTEST_SUBSTANTIVE_ANSWER_CHARS
+
+
+# --------------------------------------------------------------------------
+# The remaining self-declared-MEASURED prose, made executable (round 3)
+# --------------------------------------------------------------------------
+
+
+def _source_block(start_marker: str, end_marker: str) -> str:
+    """The source text between two markers, with whitespace normalised.
+
+    Whitespace-normalised because these passages are hand-wrapped prose: a
+    reflow must not red the gate, and a changed DIGIT must.
+    """
+    source = Path(__file__).resolve().parents[2] / "src" / "product_app" / "evaluation.py"
+    text = source.read_text(encoding="utf-8")
+    assert start_marker in text, f"{start_marker!r} is gone; delete this gate or restore it"
+    block = text[text.index(start_marker) : text.index(end_marker)]
+    return " ".join(block.split())
+
+
+def test_the_refusal_docstring_quotes_todays_corpus_measurement() -> None:
+    """``detect_refusal``'s own paragraph says it is MEASURED. Re-derive it.
+
+    Measured (adversarial review round 3): the paragraph headed "MEASURED
+    support, re-derived from the corpus by
+    ``tests/evals/test_trust_calibration.py``" was read by NOTHING. The gate
+    it names re-derives the numbers into THIS module's constants and never
+    opens the source, so every digit in the paragraph — the decline offsets,
+    the three shortest substantive answers, and the neighbouring
+    ``SHORT_HEDGING_ANSWER`` claim — could be rewritten to fabricated values
+    with the entire suite green. That is the exact defect round 2 closed for
+    the separation block three paragraphs away
+    (``test_the_measured_separation_comment_quotes_todays_measurement``);
+    this applies the same mechanism to the block that most loudly claims to
+    be gated.
+
+    Expectations are FORMATTED from corpus-derived values, so the day the
+    corpus moves this goes red rather than the docstring going stale.
+    """
+    from tests.unit.test_evaluation_layer_a import SHORT_HEDGING_ANSWER
+
+    from product_app.evaluation import _REFUSAL_PHRASES, _substantive
+
+    lengths = sorted(
+        len(answer.answer_text)
+        for case in corpus.load_cases()
+        for answer in case.initial_answers
+        if _substantive(answer)
+    )
+    offsets = ", ".join(str(o) for o in FIRST_SENTENCE_DECLINE_OFFSETS[:-1])
+    hedge_at = min(
+        SHORT_HEDGING_ANSWER.lower().find(phrase)
+        for phrase in _REFUSAL_PHRASES
+        if phrase in SHORT_HEDGING_ANSWER.lower()
+    )
+
+    block = _source_block("Why no character budget.", "THE APOLOGY SKIP")
+    expected = {
+        "the decline offsets": f"offsets {offsets} and {FIRST_SENTENCE_DECLINE_OFFSETS[-1]}",
+        "the shortest substantive answers": (
+            f"{lengths[0]}, {lengths[1]} and {lengths[2]} characters"
+        ),
+        "the short-hedge fixture": (
+            f"exactly {len(SHORT_HEDGING_ANSWER)} characters with its hedge "
+            f"starting at index {hedge_at}"
+        ),
+    }
+    for what, quoted in expected.items():
+        assert quoted in block, (
+            f"the MEASURED refusal paragraph does not quote today's measurement of "
+            f"{what} ({quoted!r}). Re-measure and rewrite the docstring; do not edit "
+            "this expectation."
+        )
+
+
+def test_the_good_threshold_margin_arithmetic_is_todays_measurement() -> None:
+    """The MARGIN WARNING's arithmetic, re-derived rather than read.
+
+    Measured (adversarial review round 3): the sibling gate
+    ``test_the_good_threshold_comment_does_not_overstate_the_margin``
+    asserts two SUBSTRINGS and re-derives no digit, and the behavioural test
+    hard-codes 0.0462 test-side rather than reading the comment. So the
+    margin float and both worked examples could be rewritten to
+    arithmetically FALSE values (``0.1462``, ``19/20 = 0.9500``,
+    ``11/17 = 0.6471``) with the whole suite green — in a block explicitly
+    labelled "MARGIN WARNING, measured PER CASE".
+
+    Mutating the CONSTANT reds eight tests; only its prose copy was
+    unguarded. This closes that half.
+    """
+    from product_app.evaluation import GROUNDING_GOOD_THRESHOLD
+
+    block = _source_block("MARGIN WARNING", "GROUNDING_GOOD_THRESHOLD = ")
+
+    margin = FAITHFUL_SIDE_MIN - GROUNDING_GOOD_THRESHOLD
+    assert f"clears it by {margin:.4f}" in block, (
+        f"the margin warning does not quote today's margin ({margin:.4f})"
+    )
+
+    polar_resolved, polar_total = MEASURED_MARKER_COUNTS[POLAR]
+    faithful_resolved, faithful_total = MEASURED_MARKER_COUNTS[FAITHFUL]
+    for quoted in (
+        f"{polar_resolved}/{polar_total} = {polar_resolved / polar_total:.4f}",
+        f"{polar_resolved - 1}/{polar_total} = {(polar_resolved - 1) / polar_total:.4f}",
+        f"{polar_resolved}/{polar_total + 1} = {polar_resolved / (polar_total + 1):.4f}",
+        f"{faithful_resolved}/{faithful_total} = {faithful_resolved / faithful_total:.4f}",
+        f"{faithful_resolved - 1}/{faithful_total} = "
+        f"{(faithful_resolved - 1) / faithful_total:.4f}",
+        f"{faithful_resolved}/{faithful_total + 1} = "
+        f"{faithful_resolved / (faithful_total + 1):.4f}",
+    ):
+        assert quoted in block, (
+            f"the MARGIN WARNING does not quote today's arithmetic ({quoted!r}); "
+            "re-measure and rewrite the comment rather than editing this gate."
+        )
