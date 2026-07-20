@@ -15,7 +15,15 @@ Prose cannot enforce that. These tests do, mechanically:
    pointing at a non-empty file — so ``DONE`` cannot be claimed without an
    artifact of its own ("done = artifact + proven");
 4. every still-open ``BUILD`` row must name the slice that owns it, so the
-   out-of-scope confirmation the brief demands is unambiguous.
+   out-of-scope confirmation the brief demands is unambiguous;
+5. a row that quotes a MEASUREMENT must quote today's measurement — the
+   numbers are re-derived from the frozen corpus through the real engine.
+
+Rule 5 exists because rules 1-4 read status tokens and proof pointers only.
+Measured: the OC-2 row kept asserting the pre-DEBT-011 grounding separation
+in the present tense ("1.000 vs 0.038") for a full commit after the same
+slice re-measured it to 0.850 vs 0.059 elsewhere in the repo, and every gate
+stayed green.
 
 Rule 3 originally accepted *any* existing path, which made it decorative: a
 session that built nothing could rewrite all 27 status cells to
@@ -271,3 +279,64 @@ def test_open_build_rows_name_their_slice(ledger_rows: dict[str, str]) -> None:
         if "BUILD" in status and "DONE" not in status and not _SLICE_RE.search(status)
     }
     assert not offenders, f"BUILD rows with no owning slice: {offenders}"
+
+
+# ---------------------------------------------------------------------------
+# Rule 5 — a quoted MEASUREMENT must be the measurement
+# ---------------------------------------------------------------------------
+
+#: Item -> the corpus case ids whose ``citation_marker_grounding`` its status
+#: cell quotes. Rules 1-4 check status TOKENS and proof-pointer existence;
+#: none of them reads numeric prose, so a row could (and did) keep asserting
+#: a superseded measurement in the present tense while every gate stayed
+#: green. Measured defect: OC-2 quoted "1.000 vs 0.038" — the pre-DEBT-011
+#: endpoints — for a full commit after the same slice re-measured them to
+#: 0.850 vs 0.059 in ``docs/metrics/quality-ledger.md`` and wrote "the old
+#: comment's 1.0000 / 0.0385 are dead numbers and must not be quoted again"
+#: into ``src/product_app/evaluation.py``.
+GROUNDING_CLAIMS: dict[str, tuple[str, ...]] = {
+    "OC-2": ("faithful-consensus", "fluent-unfaithful"),
+}
+
+
+def _measured_grounding(case_id: str) -> float:
+    """Re-derive one corpus case's grounding through the real engine."""
+    import importlib.util
+    import sys
+
+    loader_path = REPO_ROOT / "tests" / "evals" / "corpus" / "loader.py"
+    spec = importlib.util.spec_from_file_location("ledger_corpus_loader", loader_path)
+    assert spec is not None and spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    sys.modules["ledger_corpus_loader"] = module
+    spec.loader.exec_module(module)
+
+    from product_app.evaluation import evaluate_layer_a
+
+    case = module.load_case(case_id)
+    grounding = evaluate_layer_a(
+        initial_answers=case.initial_answers,
+        final_synthesis=case.final_synthesis,
+        agreement=case.agreement,
+    ).signals.citation_marker_grounding
+    assert grounding is not None, case_id
+    return grounding
+
+
+@pytest.mark.parametrize("item", sorted(GROUNDING_CLAIMS))
+def test_quoted_grounding_separations_are_the_measured_ones(
+    item: str, ledger_rows: dict[str, str]
+) -> None:
+    """A row that quotes a separation must quote TODAY's separation.
+
+    The engine is the oracle, not the prose: the expected strings are
+    re-derived from the frozen corpus on every run, so the day the corpus or
+    the grounding rules move, this row goes red instead of going stale.
+    """
+    status = ledger_rows[item]
+    measured = [_measured_grounding(case_id) for case_id in GROUNDING_CLAIMS[item]]
+    quoted = f"{measured[0]:.3f} vs {measured[1]:.3f}"
+    assert quoted in status, (
+        f"{item} quotes a grounding separation that is no longer the measured one; "
+        f"the corpus now separates the pair {quoted}. Status cell: {status!r}"
+    )
