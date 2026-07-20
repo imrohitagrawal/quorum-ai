@@ -4,6 +4,17 @@
 **Pushed:** NO. **Merged:** NO. **Deployed:** NO. No paid path activated, no secret rotated.
 **Date:** 2026-07-20.
 
+> **SUPERSEDED IN PART — 2026-07-20 (R2-S2.1, HEAD `fa1c824`).** Everything
+> below describes the tree as of `01e69f2`. **DEBT-011 has since been FIXED**
+> and the four `xfail(strict=True)` acceptance tests it refers to are now
+> ordinary PASSING tests, so every statement below of the form "4 xfailed are
+> deliberate" / "the residual is unresolved" is HISTORY, not the current tree.
+> Current: 1015 passed / 4 skipped / **0 xfailed**, cov 89.51%. See
+> `docs/63-technical-debt-register.md` (DEBT-011 resolved, **DEBT-012** opened)
+> and `tests/unit/test_evaluation_refusal_decoupling.py`. What is NOT
+> superseded: S2 acceptance itself — the full adversarial re-review to a
+> fixpoint was not run in S2.1, so S2 remains **BUILT, NOT ACCEPTED**.
+
 This file is the durable handback. Chat evaporates and
 `docs/session-handoff.md` is regenerated wholesale by
 `scripts/session_handoff.py`, so neither can hold it. The authoritative phase
