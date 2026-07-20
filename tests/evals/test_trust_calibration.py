@@ -56,9 +56,16 @@ POLAR = "preserved-polar-disagreement"
 #: and the unfaithful side 0.0385 = 1/26 before the change.
 #:
 #: These numbers are re-derived from the corpus by
-#: :func:`test_the_documented_grounding_separation_is_the_measured_one`, which
-#: is what stops the derivation comment on ``GROUNDING_FABRICATION_THRESHOLD``
-#: from rotting into a fabricated number.
+#: :func:`test_the_documented_grounding_separation_is_the_measured_one`.
+#:
+#: That alone does NOT stop the derivation comment on
+#: ``GROUNDING_FABRICATION_THRESHOLD`` rotting — round 2 measured that it
+#: does not, because these are constants of THIS module and no gate read the
+#: source comment's text. The prose itself is gated by
+#: :func:`test_the_measured_separation_comment_quotes_todays_measurement`
+#: (and, for the DEBT-011 register row,
+#: :func:`test_the_debt_register_quotes_todays_separation_interval`), which
+#: format their expectations from these corpus-derived values.
 FAITHFUL_GROUNDING = 17.0 / 20.0  # 0.8500 — 17 of faithful-consensus's 20
 POLAR_GROUNDING = 11.0 / 13.0  # 0.8462 — 11 of preserved-polar's 13
 UNFAITHFUL_GROUNDING = 1.0 / 17.0  # 0.0588 — one of 17 resolvable markers
@@ -332,16 +339,21 @@ def test_the_shipped_threshold_is_inside_the_documented_interval() -> None:
     assert UNFAITHFUL_GROUNDING < GROUNDING_FABRICATION_THRESHOLD <= FAITHFUL_SIDE_MIN
 
 
-#: MEASURED resolved/total marker counts behind the two faithful-side
-#: groundings. Written as counts, not ratios, because the perturbation the
+#: MEASURED resolved/total marker counts behind every grounding this module
+#: documents. Written as counts, not ratios, because the perturbation the
 #: margin claim is about ("one more unresolved marker") is a change to the
 #: COUNTS; the ratios above are asserted against the corpus separately.
-FAITHFUL_MARKER_COUNTS = {FAITHFUL: (17, 20), POLAR: (11, 13)}
+MEASURED_MARKER_COUNTS = {FAITHFUL: (17, 20), POLAR: (11, 13), UNFAITHFUL: (1, 17)}
+
+#: The faithful side only — the two cases the margin arithmetic perturbs.
+FAITHFUL_MARKER_COUNTS = {
+    case_id: counts for case_id, counts in MEASURED_MARKER_COUNTS.items() if case_id != UNFAITHFUL
+}
 
 
 def test_the_documented_marker_counts_are_the_measured_ones() -> None:
     """The counts the margin arithmetic below is derived from."""
-    for case_id, (resolved, total) in FAITHFUL_MARKER_COUNTS.items():
+    for case_id, (resolved, total) in MEASURED_MARKER_COUNTS.items():
         measured = _evaluate(case_id).signals.citation_marker_grounding
         assert measured == pytest.approx(resolved / total), case_id
 
@@ -386,6 +398,78 @@ def test_one_more_unresolved_marker_crosses_the_good_cut_in_ONE_faithful_case() 
         FAITHFUL: {"measured": "low", "moved": "low", "added": "low"},
         POLAR: {"measured": "low", "moved": "medium", "added": "medium"},
     }, outcomes
+
+
+def _measured_separation_block() -> str:
+    source = Path(__file__).resolve().parents[2] / "src" / "product_app" / "evaluation.py"
+    text = source.read_text(encoding="utf-8")
+    marker = "MEASURED corpus separation"
+    assert marker in text, (
+        "the derivation comment on GROUNDING_FABRICATION_THRESHOLD is gone; "
+        "delete this gate or restore it"
+    )
+    return text[text.index(marker) : text.index("GROUNDING_FABRICATION_THRESHOLD = ")]
+
+
+def test_the_measured_separation_comment_quotes_todays_measurement() -> None:
+    """Prose gate on the block that CALLS ITSELF measured (review round 2).
+
+    The comment on ``GROUNDING_FABRICATION_THRESHOLD`` asserts that "these
+    numbers are re-derived ... by tests/evals/test_trust_calibration.py — if
+    the corpus moves, that gate goes red rather than this comment going
+    stale". Measured, that was only half true: this module re-derived its
+    OWN constants (``FAITHFUL_GROUNDING`` and friends) from the corpus, and
+    nothing anywhere read the source comment's text. Hand-editing all four
+    literals to ``0.9900 = 99/100`` / ``0.9100 = 91/100`` / ``0.0100 =
+    1/100`` / ``(0.0100, 0.9100]`` left the ENTIRE suite green — a block
+    labelled MEASURED shipping fabricated digits.
+
+    The mechanism was already in the repo one constant away
+    (:func:`test_the_good_threshold_comment_does_not_overstate_the_margin`
+    reads the real source text for the SIBLING threshold); this applies it
+    here. The expected strings are FORMATTED from the corpus-derived counts,
+    so the day the corpus or the grounding rules move, this goes red rather
+    than the comment going stale — which is what the comment claims.
+    """
+    block = _measured_separation_block()
+
+    for case_id, (resolved, total) in MEASURED_MARKER_COUNTS.items():
+        quoted = f"{resolved / total:.4f} = {resolved}/{total}"
+        assert quoted in block, (
+            f"the MEASURED block does not quote today's {case_id} grounding "
+            f"({quoted!r}). Re-measure and rewrite the comment; do not edit "
+            "this expectation."
+        )
+
+    interval = f"({UNFAITHFUL_GROUNDING:.4f}, {FAITHFUL_SIDE_MIN:.4f}]"
+    assert interval in block, (
+        f"the MEASURED block does not quote today's separation interval {interval}"
+    )
+
+
+def test_the_debt_register_quotes_todays_separation_interval() -> None:
+    """The same gate on the DEBT-011 closing row, for the same measured reason.
+
+    ``docs/63``'s DEBT-011 PROOF cell claims the re-measured separation
+    ``(0.0588, 0.8462]`` is "pinned from BOTH endpoints" by this module.
+    Round 2 measured that rewriting that interval to ``(0.0100, 0.9900]``
+    also left the entire suite green: rule 5 of
+    ``tests/test_findings_ledger_consistency.py`` reads only
+    ``docs/analysis/R2-plan-review-findings.md``, and only in the
+    ``"X vs Y"`` shape. A resolved-debt row is where a reader goes to find
+    out what was proved, so a fabricated number there is worse than none.
+    """
+    register = Path(__file__).resolve().parents[2] / "docs" / "63-technical-debt-register.md"
+    rows = [
+        line for line in register.read_text(encoding="utf-8").splitlines() if "| DEBT-011 " in line
+    ]
+    assert len(rows) == 1, f"expected exactly one DEBT-011 row, found {len(rows)}"
+
+    interval = f"({UNFAITHFUL_GROUNDING:.4f}, {FAITHFUL_SIDE_MIN:.4f}]"
+    assert interval in rows[0], (
+        f"the DEBT-011 row does not quote today's measured separation interval "
+        f"{interval}; re-measure and rewrite the row rather than editing this gate."
+    )
 
 
 def test_the_good_threshold_comment_does_not_overstate_the_margin() -> None:

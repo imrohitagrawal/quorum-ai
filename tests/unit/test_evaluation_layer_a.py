@@ -235,6 +235,51 @@ def test_a_run_whose_only_markers_are_off_run_urls_is_unknown_not_zero() -> None
     assert evaluation.hallucination_risk == "medium"
 
 
+def test_a_link_whose_url_the_scan_rejects_cannot_launder_its_TEXT_into_an_ordinal() -> None:
+    """Measured regression (adversarial review round 2), HIGH.
+
+    Bounding the URL run to ``[^\\s)\\[\\]]{1,2000}`` for cost made TWO
+    shapes stop matching: a URL containing a literal bracket (an unencoded
+    query key, an IPv6 literal host) and a URL longer than 2000 characters.
+    The comment on ``_MARKDOWN_LINK_RE`` claimed the failure direction was
+    "a marker that goes UNCOUNTED rather than one that falsely resolves".
+    Measured, it was the opposite whenever the link TEXT is numeric — the
+    canonical ``[1](url)`` shape: the link did not match, so the removal
+    pass left ``[1]`` standing and the ordinal scan read it as ordinal 1,
+    which resolves against the run's first real source.
+
+    Consequence, measured end to end: a wholly INVENTED URL citation scored
+    grounding 1.0 → ``faithful``/``low`` (the maximum trust labels) instead
+    of being EXCLUDED as unknown per part C / DEBT-012 — i.e. a silent
+    bypass of the behaviour
+    ``test_a_run_whose_only_markers_are_off_run_urls_is_unknown_not_zero``
+    exists to pin, triggered by one unencoded bracket.
+    """
+    bracketed = "Rotation is deprecated [1](https://invented.example/r?filter[status]=open)."
+    over_long = "Rotation is deprecated [1](https://invented.example/" + "b" * 2100 + ")."
+
+    # Whatever the scan does with these URLs, the link TEXT is never an ordinal.
+    assert "1" not in extract_citation_markers(bracketed)
+    assert "1" not in extract_citation_markers(over_long)
+
+    # ...so an off-run URL citation stays UNKNOWN rather than resolving.
+    for text in (bracketed, over_long):
+        assert _grounding(texts=[text], sources=[_source(REAL_URL)]) is None, text
+
+
+def test_a_bracket_in_a_url_query_is_still_read_as_a_citation_marker() -> None:
+    """The other half: the bracketed URL must still RESOLVE when it is real.
+
+    Excluding brackets from the URL run silently dropped this marker
+    entirely. Both halves matter — dropping it loses a real resolution,
+    and dropping it while leaving the link text behind invents a false one.
+    """
+    on_run = "https://a.test/r?filter[status]=open"
+    text = f"A claim [1]({on_run})."
+    assert extract_citation_markers(text) == [on_run]
+    assert _grounding(texts=[text], sources=[_source(on_run)]) == pytest.approx(1.0)
+
+
 def test_an_out_of_range_ordinal_stays_in_the_denominator() -> None:
     """The asymmetry between an off-run URL and an out-of-range ordinal.
 
@@ -447,11 +492,24 @@ def test_a_run_with_no_markers_is_not_punished_like_one_that_fabricated_them() -
 #: rescans the rest of the document once per opener — O(n^2).
 _UNTERMINATED_OPENER = "[x](http://" + "a" * 50
 
+#: The same shape with a BRACKET inside the URL run. Round 1 bounded the run
+#: by EXCLUDING ``[``/``]``, which made a failing opener stop at the next
+#: ``[`` — and was unsound (see
+#: ``test_a_link_whose_url_the_scan_rejects_cannot_launder_its_TEXT_into_an_ordinal``).
+#: Brackets are allowed in the run again, so the cost gate must cover the
+#: payload that exclusion used to be the defence against: here the run can
+#: only be stopped by the possessive bound itself.
+_BRACKETED_UNTERMINATED_OPENER = "[x](http://a.test/?f[" + "a" * 50
+
 
 @pytest.mark.env_oracle
+@pytest.mark.parametrize(
+    "opener", [_UNTERMINATED_OPENER, _BRACKETED_UNTERMINATED_OPENER], ids=["plain", "bracketed"]
+)
 @pytest.mark.parametrize("openers", [2000, 4000, 8000])
 def test_marker_extraction_stays_linear_in_unterminated_link_openers(
     openers: int,
+    opener: str,
 ) -> None:
     """Measured (adversarial review round 1): this was quadratic.
 
@@ -462,12 +520,13 @@ def test_marker_extraction_stays_linear_in_unterminated_link_openers(
     no length cap exists on ``answer_text`` anywhere on the path, so the
     input is provider-controlled and unbounded.
 
-    The budget is deliberately loose (a 12-20x margin over the measured
-    post-fix cost of a few milliseconds) so this is a COMPLEXITY gate, not a
-    machine-speed gate: quadratic re-entry blows it by two orders of
-    magnitude on the largest size while a linear scan cannot approach it.
+    The budget is deliberately loose (a ~10x margin over the round-2
+    re-measured post-fix cost of 14 / 27 / 53 ms at 122 / 244 / 488 KB, an
+    exact 2x per doubling) so this is a COMPLEXITY gate, not a machine-speed
+    gate: quadratic re-entry blows it by two orders of magnitude on the
+    largest size while a linear scan cannot approach it.
     """
-    payload = _UNTERMINATED_OPENER * openers
+    payload = opener * openers
     started = time.perf_counter()
     extract_citation_markers(payload)
     elapsed = time.perf_counter() - started
@@ -701,6 +760,81 @@ def test_a_leading_apology_before_a_substantive_answer_is_not_a_refusal() -> Non
 def test_an_apology_that_is_the_whole_answer_is_not_a_refusal() -> None:
     """Nothing follows the skipped sentence, so nothing anchors."""
     assert detect_refusal("I am sorry you are going through this.") is False
+
+
+def test_only_ONE_leading_apology_sentence_is_skipped() -> None:
+    """The DEPTH bound on part D, which nothing pinned (review round 2, LOW).
+
+    ``detect_refusal``'s docstring commits to a bounded skip — "Only a
+    sentence that answers nothing is skipped, and only one of them" — and
+    the sibling half of that sentence ("deliberately NOT widened to the
+    first two sentences") IS pinned, by
+    ``test_only_a_leading_APOLOGY_is_skipped_not_the_first_sentence_generally``.
+    The ONE-ness was not: turning the single ``if`` into a ``while`` that
+    skips every leading pure-apology sentence left the ENTIRE suite green,
+    so a later refactor could widen the skip arbitrarily in silence.
+
+    The cost of the bound, stated honestly rather than hidden: the third
+    sentence here IS a decline and this returns False — a false NEGATIVE.
+    That is the safe direction under part A (``refusal_detected`` only caps
+    a verdict downward or resolves an unknown risk band), whereas an
+    unbounded skip walks past arbitrarily much prose to find a decline
+    phrase, which is the false-POSITIVE direction. The bound is structural,
+    not a tunable constant, so it is a test and not a calibration (FS-6).
+    """
+    assert (
+        detect_refusal("I am sorry. I am truly sorry about this. I cannot help with that request.")
+        is False
+    )
+
+
+#: The apology/sympathy vocabulary, written out as a LITERAL fixture list and
+#: compared to :data:`_APOLOGY_TOKENS` for exact equality below.
+#:
+#: Measured defect (adversarial review round 2): the vocabulary shipped as an
+#: inline alternation ``(?:sorry|apolog\w*)`` and the ``apolog\w*`` half had
+#: no fixture ANYWHERE — deleting it left the whole suite green, while
+#: deleting ``sorry`` reddened 10 tests. That is the identical defect class
+#: the module already records as measured for ``_REFUSAL_PHRASES`` (eight of
+#: eighteen phrases unfixtured), and the remedy invented there — a literal
+#: fixture list compared to the tuple — simply was not applied here.
+#: Parametrizing over the tuple would NOT catch it, because the
+#: parametrization shrinks with the tuple.
+EVERY_APOLOGY_TOKEN: tuple[str, ...] = ("sorry", r"apolog\w*")
+
+#: One leading sentence per token, each a PURE apology (no decline in it), so
+#: the skip is what makes the following decline reachable.
+_APOLOGY_OPENINGS: tuple[str, ...] = (
+    "I am sorry you are going through this.",
+    "I apologize for the confusion.",
+    "I apologise for the confusion.",
+    "My apologies for the confusion.",
+    "Apologies for the delay.",
+)
+
+
+def test_the_declared_apology_tokens_are_exactly_the_ones_the_fixtures_exercise() -> None:
+    """Adding an apology token without a fixture turns this red."""
+    from product_app.evaluation import _APOLOGY_TOKENS
+
+    assert tuple(_APOLOGY_TOKENS) == EVERY_APOLOGY_TOKEN
+
+
+@pytest.mark.parametrize("opening", _APOLOGY_OPENINGS)
+def test_every_apology_spelling_is_skipped_so_the_next_sentence_anchors(opening: str) -> None:
+    """Each spelling, in the position the skip actually fires in."""
+    assert detect_refusal(f"{opening} I cannot help with that request.") is True
+
+
+@pytest.mark.parametrize("opening", _APOLOGY_OPENINGS)
+def test_every_apology_spelling_is_inert_before_a_substantive_answer(opening: str) -> None:
+    """...and the skip finds the next sentence, it does not assume it declines."""
+    assert (
+        detect_refusal(
+            f"{opening} The guidance says a verifier should not require periodic change."
+        )
+        is False
+    )
 
 
 @pytest.mark.parametrize(

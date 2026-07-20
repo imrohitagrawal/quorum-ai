@@ -78,24 +78,46 @@ TrustBand = Literal["unverified", "low", "moderate", "high"]
 #: TEXT is bounded (no newlines, <= 200 chars) so a stray ``[`` early in a
 #: paragraph cannot swallow half the answer.
 #:
-#: The URL RUN is bounded too, and both bounds are about COST, not taste.
-#: Measured (adversarial review round 1): with the URL written as
-#: ``[^\s)]+?`` — which excludes neither ``[`` nor ``]`` — a document of
-#: repeated UNTERMINATED openers (``[x](http://aaa…`` with no closing paren)
-#: made every opener rescan to end-of-text before failing: 0.7 / 2.8 / 12.4
-#: / 51.5 s at 61 / 122 / 244 / 488 KB, an exact 4x per doubling. The input
-#: is provider text with no length cap anywhere on the path, and
-#: :func:`citation_marker_grounding` is recomputed on every READ of a run.
-#: Excluding the brackets makes a failing opener stop at the next ``[``
-#: instead of at end-of-text, and the 2000-character bound caps the run;
-#: together they are linear (2.4 ms at 244 KB, ~2300x faster).
+#: The URL RUN is bounded too, and the bound is about COST, not taste.
+#: Measured (adversarial review round 1): with the URL written as the LAZY
+#: ``[^\s)]+?``, a document of repeated UNTERMINATED openers
+#: (``[x](http://aaa…`` with no closing paren) made every opener rescan to
+#: end-of-text before failing: 0.7 / 2.8 / 12.4 / 51.5 s at 61 / 122 / 244 /
+#: 488 KB, an exact 4x per doubling. The input is provider text with no
+#: length cap anywhere on the path, and :func:`citation_marker_grounding` is
+#: recomputed on every READ of a run.
 #:
-#: The cost, honestly: a URL containing a literal ``[``/``]`` (an IPv6
-#: literal host, an unencoded bracket in a query string) or longer than 2000
-#: characters is no longer read as a citation marker. Neither appears in the
-#: corpus or in observed provider output, and the failure direction is a
-#: marker that goes UNCOUNTED rather than one that falsely resolves.
-_MARKDOWN_LINK_RE = re.compile(r"\[[^\]\n]{1,200}\]\(\s*(https?://[^\s)\[\]]{1,2000})\s*\)")
+#: The fix is the POSSESSIVE ``{1,2000}+``: the run is capped at 2000
+#: characters and, having taken them, never gives one back, so a failing
+#: opener costs a bounded constant instead of a rescan. Measured on the same
+#: payload: 14 / 27 / 53 ms at 122 / 244 / 488 KB — linear, ~1000x faster.
+#:
+#: Round 2 measured that the FIRST attempt at this bound (excluding ``[``
+#: and ``]`` from the URL run) was not merely lossy, it was UNSOUND. A URL
+#: carrying an unencoded bracket stopped matching, and because the ordinal
+#: scan ran on ``_MARKDOWN_LINK_RE.sub(...)`` the unmatched link left its
+#: TEXT behind — so ``[1](https://invented.example/r?filter[status]=open)``
+#: was read as ORDINAL 1 and resolved against the run's first real source:
+#: a wholly fabricated citation scored grounding 1.0 → ``faithful``/``low``.
+#: Brackets are therefore allowed in the run again, and the residual
+#: "the scan did not match this link" case is handled structurally by
+#: :data:`_LINK_SHAPE_RE` below rather than by a claim about direction.
+_MARKDOWN_LINK_RE = re.compile(r"\[[^\]\n]{1,200}\]\(\s*+(https?://[^\s)]{1,2000}+)\s*+\)")
+
+#: The LINK SHAPE, independent of whether the URL inside it is one this
+#: module is willing to read as a marker. Everything ``_MARKDOWN_LINK_RE``
+#: matches, this matches too, plus the leftovers: a non-``http`` target, a
+#: URL past the 2000-character bound, an unterminated opener.
+#:
+#: It exists for one reason and it is a correctness reason, not a cost one:
+#: the ordinal scan must never see the TEXT of something that was written as
+#: a link. Removing only the links whose URL we could parse leaves ``[1](``
+#: standing for the ones we could not, and a numeric link text then becomes
+#: a resolving ordinal — the round-2 defect above. Consuming the shape makes
+#: the failure direction "the marker goes UNCOUNTED" TRUE BY CONSTRUCTION
+#: instead of true by argument. Possessive throughout, for the same cost
+#: reason as above.
+_LINK_SHAPE_RE = re.compile(r"\[[^\]\n]{1,200}\]\(\s*+[^\s)]*+\)?")
 
 #: An ordinal citation marker: ``[1]``, ``[2, 3]``, ``[10;11]``. Bounded to
 #: three digits — a four-digit bracket in provider prose is a year or a
@@ -120,13 +142,20 @@ def extract_citation_markers(text: str) -> list[str]:
     """Every inline citation marker in ``text``, in a resolvable form.
 
     Returns markdown-link URLs first (in order of appearance), then ordinal
-    markers (in order of appearance). Links are consumed BEFORE the ordinal
-    scan so link text containing digits can never be misread as an ordinal.
+    markers (in order of appearance). Link SHAPES are consumed before the
+    ordinal scan so link text containing digits can never be misread as an
+    ordinal.
+
+    Extraction and removal use two different patterns on purpose. Removal
+    (:data:`_LINK_SHAPE_RE`) is deliberately wider than extraction
+    (:data:`_MARKDOWN_LINK_RE`): a link whose URL this module declines to
+    read as a marker must still have its TEXT removed, or that text becomes
+    a false ordinal. Measured round-2 defect — see ``_MARKDOWN_LINK_RE``.
     """
     if not text:
         return []
     urls = _MARKDOWN_LINK_RE.findall(text)
-    remainder = _MARKDOWN_LINK_RE.sub(" ", text)
+    remainder = _LINK_SHAPE_RE.sub(" ", text)
     ordinals: list[str] = []
     for group in _ORDINAL_MARKER_RE.findall(remainder):
         ordinals.extend(part.strip() for part in re.split(r"[,;]", group) if part.strip())
@@ -343,9 +372,20 @@ def _after_first_sentence(text: str) -> str:
 #: a list of phrases rather than a list of spellings.
 _TWO_WORD_NEGATION_RE = re.compile(r"\bcan not\b")
 
-#: Apology / sympathy vocabulary. Used ONLY to recognise a leading sentence
-#: that answers nothing; it never makes anything a refusal by itself.
-_APOLOGY_RE = re.compile(r"\b(?:sorry|apolog\w*)\b")
+#: Apology / sympathy vocabulary, as a TUPLE of alternatives rather than an
+#: inline alternation. Used ONLY to recognise a leading sentence that answers
+#: nothing; it never makes anything a refusal by itself.
+#:
+#: A tuple, for the same measured reason ``_REFUSAL_PHRASES`` is one: written
+#: inline, ``apolog\w*`` had no fixture anywhere and deleting it left the
+#: entire suite green, while deleting ``sorry`` reddened ten tests
+#: (adversarial review round 2). Every alternative here is now exercised in
+#: BOTH directions by ``tests/unit/test_evaluation_layer_a.py`` — the skip
+#: fires, and the sentence it skips TO is not assumed to decline — against a
+#: literal copy of this tuple compared to it for exact equality.
+_APOLOGY_TOKENS: tuple[str, ...] = ("sorry", r"apolog\w*")
+
+_APOLOGY_RE = re.compile(r"\b(?:" + "|".join(_APOLOGY_TOKENS) + r")\b")
 
 
 def _normalize_decline_spelling(text: str) -> str:
@@ -414,8 +454,16 @@ def detect_refusal(text: str) -> bool:
     Deliberately NOT widened to "the first two sentences". The unit fixture
     ``SHORT_HEDGING_ANSWER`` carries its only decline phrase in sentence 2
     of 2, as an ordinary closing hedge, and a two-sentence anchor would turn
-    it into a false positive. Only a sentence that answers nothing is
-    skipped, and only one of them.
+    it into a false positive
+    (``test_only_a_leading_APOLOGY_is_skipped_not_the_first_sentence_generally``).
+    Only a sentence that answers nothing is skipped, and only ONE of them —
+    an ``if``, never a ``while``. Round 2 measured that the ONE-ness was
+    pinned by nothing (an unbounded skip left the whole suite green); it is
+    now pinned by ``test_only_ONE_leading_apology_sentence_is_skipped``,
+    which also records the cost: two stacked apologies before a decline is
+    a false NEGATIVE. That is the safe direction under part A, while an
+    unbounded skip walks arbitrarily far into the prose looking for a
+    decline phrase, which is the false-POSITIVE direction.
 
     PRECISION, honestly. This detector is still wrong in the false-positive
     direction: an answer that OPENS with a decline-shaped hedge and then
@@ -536,6 +584,18 @@ LAYER_A_WEIGHTS: dict[str, float] = {
 #: These numbers are re-derived, and the interval endpoints are probed from
 #: BOTH sides, by ``tests/evals/test_trust_calibration.py`` — if the corpus
 #: moves, that gate goes red rather than this comment going stale.
+#:
+#: That claim is now literally true of THIS TEXT, which it was not when it
+#: was written. Round 2 measured that the gate re-derived only the test
+#: module's own constants: hand-editing the four literals above to
+#: ``0.9900 = 99/100`` / ``0.9100 = 91/100`` / ``0.0100 = 1/100`` /
+#: ``(0.0100, 0.9100]`` left the entire suite green, i.e. a block labelled
+#: MEASURED could ship fabricated digits. The comment is a hand-maintained
+#: COPY of a gated truth, so the copy is now gated too:
+#: ``test_the_measured_separation_comment_quotes_todays_measurement`` reads
+#: this passage and asserts every literal above against the corpus-derived
+#: counts, and ``test_the_debt_register_quotes_todays_separation_interval``
+#: does the same for the DEBT-011 row in ``docs/63``.
 GROUNDING_FABRICATION_THRESHOLD = 0.5
 #: Advisory (FS-6). Above this, grounding is treated as good. Mirrors the
 #: existing ``CITATION_COVERAGE_TARGET`` of 0.80 for consistency with the
