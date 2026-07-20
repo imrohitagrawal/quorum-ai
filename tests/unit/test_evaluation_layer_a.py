@@ -311,29 +311,295 @@ def test_no_markers_at_all_is_unknown_not_zero() -> None:
 
 
 def test_fallback_sources_do_not_ground_a_marker() -> None:
-    """``is_fallback`` sources are fabricated stubs — they resolve nothing."""
+    """A LOCAL-SIMULATION stub resolves nothing.
+
+    The discriminator is the reserved ``example.test`` host the app's own
+    stubs are minted under (``providers.LOCAL_SIMULATION_URL_PREFIX``), NOT
+    the ``is_fallback`` flag — since issues #31/#32 that flag is also set on
+    REAL pages returned by the Tavily web search (see
+    ``test_a_real_web_search_source_grounds_even_though_it_is_flagged_fallback``).
+    """
     assert _grounding(
         texts=["A claim [1]."],
         sources=[_source("https://example.test/local-demo/1", is_fallback=True)],
     ) == pytest.approx(0.0)
 
 
-def test_ordinal_ceiling_is_the_count_of_DISTINCT_real_sources() -> None:
-    """The ordinal ceiling must not be inflated by duplicate source rows.
+def _tavily_source(url: str) -> SourceReference:
+    """A REAL page supplied by the Tavily supplement (providers.py:866).
 
-    ``evaluate_layer_a`` concatenates every slot's sources with no dedup, so
-    four models citing the SAME three pages hand this function a 12-element
-    list. If the ceiling were ``len(real_sources)`` a fabricated ``[12]``
-    would count as resolved. Only three bibliography entries exist, so only
-    ordinals 1-3 can resolve.
+    ``FALLBACK_SEARCH`` / ``is_fallback=True``, and a genuine URL — the exact
+    shape a live run gets when the ``:online`` model returns no citations.
+    """
+    return SourceReference(
+        title="A real page",
+        url=url,
+        provider=ProviderPath.FALLBACK_SEARCH,
+        is_fallback=True,
+    )
+
+
+def _stub_source(slot: int = 1) -> SourceReference:
+    """The fabricated stub, exactly as ``providers._fallback_sources`` mints it."""
+    return SourceReference(
+        title=f"Fallback search evidence for slot {slot}",
+        url=f"https://example.test/local-demo/fallback/{slot}",
+        provider=ProviderPath.FALLBACK_SEARCH,
+        is_fallback=True,
+    )
+
+
+def test_an_ordinal_is_POSITIONAL_against_the_list_the_user_is_shown() -> None:
+    """MEASURED defect (adversarial review round 3), HIGH.
+
+    The ceiling used to be a COUNT of distinct non-fallback URLs while an
+    ordinal is a POSITION in the source list the UI renders
+    (``app.js::renderSourceList`` walks ``sources`` in order, stub rows
+    included). The two disagree the moment a scope holds a stub or a
+    duplicate row, and they disagreed in the UNSAFE direction: with
+    ``[stub, real-a, real-b]`` the count ceiling was 2, so ``[1]`` — which
+    points at the FABRICATED stub — resolved, while ``[3]`` — which points
+    at a genuine source — did not.
+    """
+    sources = [_stub_source(), _source(REAL_URL), _source(OTHER_URL)]
+
+    # [1] is the stub row: a fabricated placeholder grounds nothing.
+    assert _grounding(texts=["Claim [1]."], sources=sources) == pytest.approx(0.0)
+    # [2] and [3] point at genuine rows and must resolve.
+    assert _grounding(texts=["Claim [2]."], sources=sources) == pytest.approx(1.0)
+    assert _grounding(texts=["Claim [3]."], sources=sources) == pytest.approx(1.0)
+    # [4] is past the end of the rendered list: resolvable-as-false.
+    assert _grounding(texts=["Claim [4]."], sources=sources) == pytest.approx(0.0)
+
+
+def test_a_duplicate_source_row_does_not_shift_the_ordinals_below_it() -> None:
+    """The same positional rule, for the duplicate case.
+
+    A scope listing one page twice renders three rows, so ``[3]`` names the
+    third rendered row. Under the old distinct-URL count the ceiling was 2
+    and the genuine third row scored as a fabrication.
+    """
+    sources = [_source(REAL_URL), _source(REAL_URL), _source(OTHER_URL)]
+    assert _grounding(texts=["Claim [3]."], sources=sources) == pytest.approx(1.0)
+    assert _grounding(texts=["Claim [4]."], sources=sources) == pytest.approx(0.0)
+
+
+def test_a_real_web_search_source_grounds_even_though_it_is_flagged_fallback() -> None:
+    """MEASURED defect (adversarial review round 3), HIGH — the live path.
+
+    Since #31/#32 a slot whose ``:online`` call returned no citations gets a
+    REAL Tavily web search attached, and every such source carries
+    ``is_fallback=True`` while being a genuine page. Keying "grounds
+    nothing" off that flag meant a fully live 4-model run whose every marker
+    was correct against its own rendered bibliography scored grounding 0.0
+    and was served ``unfaithful``/``high``.
+    """
+    tavily = [
+        _tavily_source("https://pages.nist.gov/800-63-3/sp800-63b.html"),
+        _tavily_source("https://owasp.org/www-project-asvs/"),
+    ]
+    text = (
+        "Password length minimums should be at least 8 characters [1]. "
+        "Composition rules are discouraged [2]. See "
+        "[the primary text](https://pages.nist.gov/800-63-3/sp800-63b.html)."
+    )
+    evaluation = evaluate_layer_a(
+        initial_answers=[
+            _answer(slot=slot, text=text, sources=list(tavily)) for slot in (1, 2, 3, 4)
+        ],
+        final_synthesis=None,
+        agreement=AgreementSummary(aligned=4, total=4),
+    )
+    assert evaluation.signals.citation_marker_grounding == pytest.approx(1.0)
+    assert evaluation.faithfulness_label == "faithful"
+    assert evaluation.hallucination_risk == "low"
+
+
+def test_a_simulated_stub_cited_BY_URL_does_not_ground_either() -> None:
+    """The URL arm of the same rule, which no test used to reach.
+
+    ``test_fallback_sources_do_not_ground_a_marker`` exercises the ORDINAL
+    path only, so the run-wide URL set's placeholder filter had NO oracle:
+    deleting it left the whole suite green while a fabricated
+    ``example.test`` stub cited by URL scored 1.0 → ``faithful``/``low``
+    (measured, adversarial review round 3).
+
+    A stub URL is not "unknown" the way an off-run URL is — the run holds
+    the row and Layer A can see it is a placeholder — but it is excluded
+    from the run-wide URL set, so the marker is treated as off-run and the
+    scope reports ``None`` (unknown) rather than resolving.
+    """
+    stub = _stub_source()
+    assert (
+        _grounding(
+            texts=[f"The answer is X, per [{stub.title}]({stub.url})."],
+            sources=[stub],
+        )
+        is None
+    )
+    # ...while a REAL page cited by URL resolves, fallback flag or not.
+    tavily = _tavily_source("https://owasp.org/www-project-asvs/")
+    assert _grounding(
+        texts=[f"The answer is X, per [ASVS]({tavily.url})."],
+        sources=[tavily],
+    ) == pytest.approx(1.0)
+
+
+def test_a_nested_bracket_or_a_newline_in_link_TEXT_cannot_launder_an_ordinal() -> None:
+    """MEASURED defect (adversarial review round 3), HIGH.
+
+    Round 2 fixed the case where the link's URL failed to parse by removing
+    the link SHAPE independently — and called that "TRUE BY CONSTRUCTION".
+    It was not: both the extraction and the removal pattern bounded the link
+    TEXT with ``[^\\]\\n]``, so a text containing a nested ``]`` or a newline
+    matched NEITHER. The shape survived the removal pass and the ordinal
+    scan read the surviving ``[1]`` as ordinal 1, which resolves against the
+    scope's own real bibliography: a wholly fabricated URL citation scored
+    grounding 1.0 → ``faithful``/``low`` instead of being EXCLUDED as
+    unknown (DEBT-012).
+    """
+    fake = "https://invented.example/totally-fake"
+    for text in (
+        f"The rate is 41% [[1]]({fake}).",
+        f"The rate is 41% [see [1]]({fake}).",
+        f"The rate is 41% [1\n]({fake}).",
+    ):
+        assert "1" not in extract_citation_markers(text), text
+        assert _grounding(texts=[text], sources=[_source(REAL_URL)]) is None, text
+
+
+def test_a_nested_bracket_link_to_a_REAL_page_still_resolves_as_a_URL() -> None:
+    """The other half: widening the shape must not drop a genuine marker.
+
+    ``[[1]](url)`` is ordinary provider output (a bracketed ordinal rendered
+    as the link text). Its URL must still be extracted and resolved, or the
+    fix would trade a false resolution for a lost one.
+    """
+    text = f"The rate is 41% [[1]]({REAL_URL})."
+    assert extract_citation_markers(text) == [REAL_URL]
+    assert _grounding(texts=[text], sources=[_source(REAL_URL)]) == pytest.approx(1.0)
+
+
+def test_a_four_digit_bracket_is_not_read_as_an_ordinal_marker() -> None:
+    """The three-digit bound on ``_ORDINAL_MARKER_RE``, which had no oracle.
+
+    A four-digit bracket in provider prose is a year or a line number far
+    more often than a citation. Widening the bound to ``\\d{1,4}`` left the
+    eval/layer-A/decoupling/properties suites fully green (measured,
+    adversarial review round 3) while a bracketed year became an ordinal
+    that can never resolve and dragged grounding down — the FALSE-ACCUSATION
+    direction: three years plus one real ordinal scored 0.25 →
+    ``unfaithful``/``high``.
+    """
+    text = "The rule took effect [2024] and is documented [1]."
+    assert extract_citation_markers(text) == ["1"]
+    assert _grounding(texts=[text], sources=[_source(REAL_URL)]) == pytest.approx(1.0)
+    # ...and the three-digit form is still a marker.
+    assert extract_citation_markers("A claim [999].") == ["999"]
+
+
+def test_one_resolving_ordinal_launders_many_off_run_urls_to_maximum_trust() -> None:
+    """The OTHER HALF of the DEBT-012 cost, measured and pinned (round 3).
+
+    DEBT-012 recorded only the URL-ONLY case ("scores unknown rather than
+    fabrication"), which reads conservative. Measured, the MIXED case is the
+    opposite direction: because an off-run URL leaves the DENOMINATOR
+    entirely, fabricated URL citations cannot dilute grounding at all, so
+    ONE resolving ordinal carries the run to the MAXIMUM trust labels no
+    matter how many invented URLs sit beside it. Under the pre-part-C
+    counting the same run measured 0.0476 → ``unfaithful``/``high``.
+
+    This asserts TODAY'S behaviour so the cost cannot silently rot. Closing
+    it needs a URL oracle (a fetch or the Layer-B judge), not a threshold
+    edit — capping grounding once excluded markers dominate would need a
+    calibrated cut, which FS-6 defers to the S4 golden set.
+    """
+    fabricated = " ".join(
+        f"[claim{i}](https://fabricated-{i}.example.org/paper)" for i in range(20)
+    )
+    evaluation = evaluate_layer_a(
+        initial_answers=[
+            _answer(
+                slot=slot,
+                text=f"Therapy reduces mortality by 42% [1]. {fabricated}",
+                sources=[_source(REAL_URL)],
+            )
+            for slot in (1, 2, 3, 4)
+        ],
+        final_synthesis=None,
+        agreement=AgreementSummary(aligned=4, total=4),
+    )
+    assert evaluation.signals.citation_marker_grounding == pytest.approx(1.0)
+    assert evaluation.faithfulness_label == "faithful"
+    assert evaluation.hallucination_risk == "low"
+
+
+def test_run_wholly_refused_needs_EVERY_substantive_slot_not_almost_every() -> None:
+    """The unanimity in ``run_wholly_refused`` had no oracle at all.
+
+    Relaxing ``refusals == len(completed)`` to ``>= len(completed) - 1`` left
+    all 1092 tests green (measured, adversarial review round 3) while
+    flipping the persisted, served signal to True on a run where one slot
+    genuinely answered. The two existing assertions on the computed value
+    are both ``is False`` on runs with ZERO refusals, which the mutant also
+    satisfies; nothing distinguished 3-of-4 from 4-of-4.
+    """
+    decline = "I cannot help with that request."
+    three_of_four = evaluate_layer_a(
+        initial_answers=[
+            _answer(slot=1, text=decline),
+            _answer(slot=2, text=decline),
+            _answer(slot=3, text=decline),
+            _answer(slot=4, text="The mechanism is well documented [1]."),
+        ],
+        final_synthesis=None,
+        agreement=AgreementSummary(aligned=1, total=4),
+    )
+    assert three_of_four.signals.refusal_detected is True
+    assert three_of_four.signals.run_wholly_refused is False
+
+    four_of_four = evaluate_layer_a(
+        initial_answers=[_answer(slot=slot, text=decline) for slot in (1, 2, 3, 4)],
+        final_synthesis=None,
+        agreement=AgreementSummary(aligned=1, total=4),
+    )
+    assert four_of_four.signals.run_wholly_refused is True
+
+
+def test_the_ordinal_ceiling_is_the_LENGTH_of_the_scopes_rendered_list() -> None:
+    """Replaces ``test_ordinal_ceiling_is_the_count_of_DISTINCT_real_sources``.
+
+    That test asserted the ceiling was the count of DISTINCT non-fallback
+    URLs, on a stated premise that is no longer true of the code: it said
+    "``evaluate_layer_a`` concatenates every slot's sources with no dedup,
+    so four models citing the SAME three pages hand this function a
+    12-element list". Since DEBT-011 part B the scopes are PER ANSWER
+    (``scopes = [(a.answer_text, a.sources) for a in initial_answers]``), so
+    a 12-row scope can only be one answer that really lists 12 rows — and
+    the UI renders all 12, in order.
+
+    Measured (adversarial review round 3), the distinct-URL count was
+    unsafe, not conservative: against ``[stub, real-a, real-b]`` it resolved
+    the ordinal pointing at the FABRICATED stub and refused the one pointing
+    at a genuine source
+    (``test_an_ordinal_is_POSITIONAL_against_the_list_the_user_is_shown``).
+    The property this test was protecting — that one slot's ordinals cannot
+    borrow another slot's bibliography — is per-SCOPE, not per-URL, and is
+    covered by ``test_an_ordinal_is_not_grounded_by_another_slots_sources``
+    and ``test_fabricated_ordinals_do_not_resolve_against_a_pooled_run_bibliography``.
+
+    The COST of the change, recorded honestly: a scope that lists one page
+    12 times now resolves ordinals 1-12. Each of those ordinals does name a
+    row the user is shown, so it is not a fabrication — but a duplicate-rich
+    bibliography is a wider ceiling than a distinct-URL count would give.
     """
     duplicated = [_source(REAL_URL), _source(OTHER_URL), _source(THIRD_URL)] * 4
     assert len(duplicated) == 12
     grounding = _grounding(
-        texts=["Claim [1]. Claim [5]. Claim [9]. Claim [12]."],
+        texts=["Claim [1]. Claim [5]. Claim [9]. Claim [12]. Claim [13]."],
         sources=duplicated,
     )
-    assert grounding == pytest.approx(0.25)
+    assert grounding == pytest.approx(0.8)
 
 
 def test_an_ordinal_is_not_grounded_by_another_slots_sources() -> None:
@@ -501,10 +767,27 @@ _UNTERMINATED_OPENER = "[x](http://" + "a" * 50
 #: only be stopped by the possessive bound itself.
 _BRACKETED_UNTERMINATED_OPENER = "[x](http://a.test/?f[" + "a" * 50
 
+#: Round 3 replaced the two link REGEXES with a bracket-balanced scan
+#: (``_scan_links``), because no fixed regex can consume a nested link text
+#: at arbitrary depth. A balanced scan has a different cost profile from a
+#: regex — a Python loop over bracket positions plus a stack — so the gate
+#: carries the payloads that stress THAT: an unbounded run of openers with
+#: no closer (stack growth, no shape ever completes) and an unbounded run of
+#: closers with no opener (pop on an empty stack).
+_NESTED_OPENER = "[[[[1"
+_UNMATCHED_CLOSER = "]]]]"
+
 
 @pytest.mark.env_oracle
 @pytest.mark.parametrize(
-    "opener", [_UNTERMINATED_OPENER, _BRACKETED_UNTERMINATED_OPENER], ids=["plain", "bracketed"]
+    "opener",
+    [
+        _UNTERMINATED_OPENER,
+        _BRACKETED_UNTERMINATED_OPENER,
+        _NESTED_OPENER,
+        _UNMATCHED_CLOSER,
+    ],
+    ids=["plain", "bracketed", "nested-openers", "unmatched-closers"],
 )
 @pytest.mark.parametrize("openers", [2000, 4000, 8000])
 def test_marker_extraction_stays_linear_in_unterminated_link_openers(
@@ -525,8 +808,14 @@ def test_marker_extraction_stays_linear_in_unterminated_link_openers(
     exact 2x per doubling) so this is a COMPLEXITY gate, not a machine-speed
     gate: quadratic re-entry blows it by two orders of magnitude on the
     largest size while a linear scan cannot approach it.
+
+    Round 3 measured the balanced-scan replacement on the same sizes: 2 ms
+    (plain and bracketed openers), 50 ms (nested openers), 62 ms (unmatched
+    closers) and 1 ms (plain prose) at 488 KB. Every payload is scaled to
+    the SAME byte size, so a short opener does not silently make its case
+    100x smaller than the one the budget was set from.
     """
-    payload = opener * openers
+    payload = opener * max(1, (len(_UNTERMINATED_OPENER) * openers) // len(opener))
     started = time.perf_counter()
     extract_citation_markers(payload)
     elapsed = time.perf_counter() - started
@@ -885,6 +1174,61 @@ def test_leading_whitespace_before_the_first_sentence_does_not_hide_a_refusal(
     Same root cause as the apology-skip defect: the boundary regex matches
     its ``\\n`` alternative at index 0 and yields an empty anchor. Provider
     output routinely starts with a blank line.
+    """
+    assert detect_refusal(text) is True
+
+
+@pytest.mark.parametrize(
+    ("text", "expected"),
+    [
+        (". x", "x"),
+        ("! I can't help with that.", "i can't help with that"),
+        ("? really", "really"),
+        ("... The answer is yes.", "the answer is yes"),
+    ],
+    ids=["period", "bang", "question", "ellipsis"],
+)
+def test_a_sentence_boundary_at_index_zero_never_yields_an_empty_anchor(
+    text: str, expected: str
+) -> None:
+    """MEASURED defect (adversarial review round 3).
+
+    ``_first_sentence``'s docstring claimed an empty sentence was
+    impossible for non-blank text "because leading whitespace is stripped
+    first, so a boundary can only be found at an index greater than zero".
+    Measured, ``_SENTENCE_BOUNDARY_RE`` matches at index 0 whenever the text
+    OPENS with terminal punctuation followed by whitespace, and the function
+    returned ``""``. An ellipsis opener returned ``".."`` — non-empty and
+    equally word-free. Either way no decline phrase can match the anchor.
+
+    The rule is therefore "the first sentence that carries a WORD", which is
+    what the surrounding argument (an anchor is the sentence that answers
+    the question) always meant.
+    """
+    from product_app.evaluation import _first_sentence
+
+    assert _first_sentence(text.lower()) == expected
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "I'm sorry. ! I can't help with that.",
+        "I am sorry. ... I cannot help with that request.",
+        ". I am sorry. I can not help with that request.",
+    ],
+    ids=["bang-opener", "ellipsis-opener", "leading-period"],
+)
+def test_a_punctuation_only_fragment_does_not_swallow_the_refusal_anchor(
+    text: str,
+) -> None:
+    """The consumer of the defect above: the Part-D apology skip.
+
+    The skip re-anchors on ``_first_sentence(_after_first_sentence(...))``.
+    When the sentence after the apology opened with stray punctuation the
+    anchor came back empty (or as ``".."``) and the refusal was missed —
+    measured, ``detect_refusal("I'm sorry. ! I can't help with that.")`` was
+    ``False`` while the same text without the ``!`` was ``True``.
     """
     assert detect_refusal(text) is True
 

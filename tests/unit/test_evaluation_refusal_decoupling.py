@@ -272,3 +272,73 @@ def test_unknown_grounding_is_the_only_place_refusal_moves_the_risk_band(
     assert classify_hallucination_risk(_with(unknown, refusal_detected=True)) == "low"
     assert classify_hallucination_risk(_with(unknown, refusal_detected=False)) == "medium"
     assert classify_faithfulness(unknown) == "partial"
+
+
+# ---------------------------------------------------------------------------
+# INV-4 — the SIGNAL, not just the classifiers
+# ---------------------------------------------------------------------------
+
+
+def _run(texts: list[str]):
+    """One 4-slot run, each slot with a single-entry bibliography."""
+    from tests.unit.test_evaluation_layer_a import _answer, _synthesis
+
+    from product_app.debate import AgreementSummary
+    from product_app.evaluation import evaluate_layer_a
+
+    return evaluate_layer_a(
+        initial_answers=[_answer(slot=i + 1, text=text) for i, text in enumerate(texts)],
+        final_synthesis=_synthesis(),
+        agreement=AgreementSummary(aligned=4, total=4),
+    )
+
+
+#: A body whose three ordinals are wholly fabricated against a one-entry
+#: bibliography: grounding is 1/3 (only ``[1]`` resolves).
+_FABRICATING_BODY = (
+    "First-line therapy reduces mortality by 42% [1], the effect holds "
+    "across every subgroup studied [7], and the committee graded the "
+    "evidence as high certainty [9]."
+)
+_DECLINE = "I cannot provide medical advice."
+
+
+def test_inv4_the_grounding_SIGNAL_is_built_independently_of_the_refusal_booleans() -> None:
+    """MEASURED enforcement gap (adversarial review round 3), HIGH.
+
+    INV-1/2/3 are properties of the two CLASSIFIERS. Nothing constrained
+    ``evaluate_layer_a``, which is what BUILDS the signals — so a
+    refusal-keyed override moved ONE level upstream (suppressing
+    ``citation_marker_grounding`` to ``None`` when ``run_wholly_refused``)
+    re-opened the exact DEBT-011 laundering, ``unfaithful``/``high`` →
+    ``partial``/``low``, with the ENTIRE suite green and INV-1/2/3, both
+    classifiers and every existing test untouched.
+
+    The property that closes it: prepending a decline SENTENCE to every slot
+    flips both refusal booleans and adds no citation marker, so the grounding
+    signal must be byte-identical. Grounding is a function of the run's
+    citation scopes and of nothing else.
+    """
+    answering = _run([_FABRICATING_BODY] * 4)
+    refusing = _run(
+        [f"{_DECLINE} That said, {_FABRICATING_BODY[0].lower()}{_FABRICATING_BODY[1:]}"] * 4
+    )
+
+    # Anti-vacuity: the two runs really do differ in the refusal booleans.
+    assert (answering.signals.refusal_detected, answering.signals.run_wholly_refused) == (
+        False,
+        False,
+    )
+    assert (refusing.signals.refusal_detected, refusing.signals.run_wholly_refused) == (
+        True,
+        True,
+    )
+
+    assert answering.signals.citation_marker_grounding == refusing.signals.citation_marker_grounding
+    # ...and it is the measured value, not two matching Nones.
+    assert refusing.signals.citation_marker_grounding is not None
+    assert abs(refusing.signals.citation_marker_grounding - 1 / 3) < 1e-9
+
+    # The end-to-end consequence, which is what DEBT-011 is about.
+    assert refusing.faithfulness_label == "unfaithful"
+    assert refusing.hallucination_risk == "high"

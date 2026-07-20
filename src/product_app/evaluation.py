@@ -40,12 +40,14 @@ import json
 import re
 from dataclasses import dataclass
 from typing import Literal, Protocol
+from urllib.parse import urlparse
 
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
 from product_app.config import settings
 from product_app.debate import AgreementSummary
 from product_app.providers import (
+    LOCAL_SIMULATION_URL_PREFIX,
     InitialAnswerStatus,
     InitialModelAnswer,
     ProviderPath,
@@ -73,51 +75,37 @@ TrustBand = Literal["unverified", "low", "moderate", "high"]
 # Citation-marker grammar
 # ---------------------------------------------------------------------------
 
-#: A markdown inline link. Provider output with web search on emits these
-#: constantly: ``[NIST SP 800-63B](https://pages.nist.gov/...)``. The link
-#: TEXT is bounded (no newlines, <= 200 chars) so a stray ``[`` early in a
-#: paragraph cannot swallow half the answer.
+#: The TARGET half of a markdown link — ``(https://…)`` — in the form that
+#: is READ AS A MARKER: an ``http(s)`` URL that actually closes.
 #:
-#: The URL RUN is bounded too, and the bound is about COST, not taste.
+#: The URL RUN is bounded, and the bound is about COST, not taste.
 #: Measured (adversarial review round 1): with the URL written as the LAZY
 #: ``[^\s)]+?``, a document of repeated UNTERMINATED openers
 #: (``[x](http://aaa…`` with no closing paren) made every opener rescan to
 #: end-of-text before failing: 0.7 / 2.8 / 12.4 / 51.5 s at 61 / 122 / 244 /
 #: 488 KB, an exact 4x per doubling. The input is provider text with no
 #: length cap anywhere on the path, and :func:`citation_marker_grounding` is
-#: recomputed on every READ of a run.
-#:
-#: The fix is the POSSESSIVE ``{1,2000}+``: the run is capped at 2000
-#: characters and, having taken them, never gives one back, so a failing
-#: opener costs a bounded constant instead of a rescan. Measured on the same
-#: payload: 14 / 27 / 53 ms at 122 / 244 / 488 KB — linear, ~1000x faster.
+#: recomputed on every READ of a run. The POSSESSIVE ``{1,2000}+`` caps the
+#: run and never gives a character back, so a failing opener costs a bounded
+#: constant instead of a rescan.
 #:
 #: Round 2 measured that the FIRST attempt at this bound (excluding ``[``
-#: and ``]`` from the URL run) was not merely lossy, it was UNSOUND. A URL
-#: carrying an unencoded bracket stopped matching, and because the ordinal
-#: scan ran on ``_MARKDOWN_LINK_RE.sub(...)`` the unmatched link left its
-#: TEXT behind — so ``[1](https://invented.example/r?filter[status]=open)``
-#: was read as ORDINAL 1 and resolved against the run's first real source:
-#: a wholly fabricated citation scored grounding 1.0 → ``faithful``/``low``.
-#: Brackets are therefore allowed in the run again, and the residual
-#: "the scan did not match this link" case is handled structurally by
-#: :data:`_LINK_SHAPE_RE` below rather than by a claim about direction.
-_MARKDOWN_LINK_RE = re.compile(r"\[[^\]\n]{1,200}\]\(\s*+(https?://[^\s)]{1,2000}+)\s*+\)")
+#: and ``]`` from the URL run) was not merely lossy, it was UNSOUND: a URL
+#: carrying an unencoded bracket stopped matching and the removal pass left
+#: its numeric link TEXT behind, so ``[1](https://invented.example/r?filter[status]=open)``
+#: was read as ORDINAL 1 and resolved against the run's first real source.
+#: Brackets are therefore allowed in the run.
+_LINK_TARGET_RE = re.compile(r"\(\s*+(https?://[^\s)]{1,2000}+)\s*+\)")
 
-#: The LINK SHAPE, independent of whether the URL inside it is one this
-#: module is willing to read as a marker. Everything ``_MARKDOWN_LINK_RE``
-#: matches, this matches too, plus the leftovers: a non-``http`` target, a
-#: URL past the 2000-character bound, an unterminated opener.
-#:
-#: It exists for one reason and it is a correctness reason, not a cost one:
-#: the ordinal scan must never see the TEXT of something that was written as
-#: a link. Removing only the links whose URL we could parse leaves ``[1](``
-#: standing for the ones we could not, and a numeric link text then becomes
-#: a resolving ordinal — the round-2 defect above. Consuming the shape makes
-#: the failure direction "the marker goes UNCOUNTED" TRUE BY CONSTRUCTION
-#: instead of true by argument. Possessive throughout, for the same cost
-#: reason as above.
-_LINK_SHAPE_RE = re.compile(r"\[[^\]\n]{1,200}\]\(\s*+[^\s)]*+\)?")
+#: The TARGET half in the wider form that is merely CONSUMED: anything of
+#: link shape, whether or not this module is willing to read it as a marker
+#: — a non-``http`` target, a URL past the 2000-character bound, an
+#: unterminated opener. Same possessive bound, same cost argument.
+_LINK_TARGET_SHAPE_RE = re.compile(r"\(\s*+[^\s)]{0,2000}+\s*+\)?")
+
+#: Where a bracket run starts or ends. Used to skip ordinary prose at C
+#: speed inside :func:`_scan_links`, which is otherwise a Python loop.
+_BRACKET_RE = re.compile(r"[\[\]]")
 
 #: An ordinal citation marker: ``[1]``, ``[2, 3]``, ``[10;11]``. Bounded to
 #: three digits — a four-digit bracket in provider prose is a year or a
@@ -138,24 +126,89 @@ _ORDINAL_MARKER_RE = re.compile(r"\[\s*(\d{1,3}(?:\s*[,;]\s*\d{1,3})*)\s*\]")
 # corpus before it could be claimed to work.
 
 
+def _scan_links(text: str) -> tuple[list[str], str]:
+    """Split ``text`` into (link URLs, prose with every link SHAPE removed).
+
+    A BRACKET-BALANCED single left-to-right pass, not a regex, and the
+    reason is measured (adversarial review round 3). Both previous patterns
+    bounded the link TEXT with ``[^\\]\\n]``, i.e. no nested bracket and no
+    newline, so ``[[1]](url)``, ``[see [1]](url)`` and ``[1\\n](url)``
+    matched NEITHER the extraction pattern NOR the wider removal pattern.
+    The shape survived the removal pass, the ordinal scan read the leftover
+    ``[1]`` as ordinal 1, and it resolved against the scope's own real
+    bibliography: a wholly fabricated URL citation scored grounding 1.0 →
+    ``faithful``/``low``, silently bypassing the DEBT-012 off-run-URL
+    exclusion. Round 2 had called that direction "TRUE BY CONSTRUCTION"; it
+    was true only of the shapes the pattern happened to cover.
+
+    A balanced scan makes it true at ANY nesting depth, which no fixed
+    regex can do: ``[`` pushes, ``]`` pops, and a pop whose next character
+    is ``(`` closes a link that spans from the OUTERMOST opener still on
+    the stack, so no inner ``[n]`` is ever left standing. A URL is
+    extracted only when the target is ``http(s)`` AND actually closes
+    (:data:`_LINK_TARGET_RE`); the shape is consumed either way
+    (:data:`_LINK_TARGET_SHAPE_RE`), so the failure direction stays "the
+    marker goes UNCOUNTED".
+
+    Linear, and bounded per step: ordinary prose is skipped by
+    :data:`_BRACKET_RE` at C speed and every target run is capped at 2000
+    characters. MEASURED at 488 KB — the size the round-1 quadratic blowup
+    was found at — 2 ms (unterminated openers, plain and bracket-bearing),
+    2 ms (``[](`` repeated), 50 ms (``[[[[1`` repeated), 62 ms (``]]]]``
+    repeated), 1 ms (plain prose). Gated by
+    ``test_marker_extraction_stays_linear_in_unterminated_link_openers``.
+    """
+    opens: list[int] = []
+    spans: list[tuple[int, int, str | None]] = []
+    index = 0
+    length = len(text)
+    while index < length:
+        bracket = _BRACKET_RE.search(text, index)
+        if bracket is None:
+            break
+        index = bracket.start()
+        if text[index] == "[":
+            opens.append(index)
+            index += 1
+            continue
+        if not opens:
+            index += 1
+            continue
+        start = opens.pop()
+        shape = _LINK_TARGET_SHAPE_RE.match(text, index + 1)
+        if shape is None:
+            index += 1
+            continue
+        target = _LINK_TARGET_RE.match(text, index + 1)
+        spans.append((start, shape.end(), target.group(1) if target else None))
+        index = shape.end()
+
+    spans.sort(key=lambda span: span[0])
+    urls = [url for _start, _end, url in spans if url is not None]
+    remainder: list[str] = []
+    consumed = 0
+    for start, end, _url in spans:
+        if start >= consumed:
+            remainder.append(text[consumed:start])
+            remainder.append(" ")
+        consumed = max(consumed, end)
+    remainder.append(text[consumed:])
+    return urls, "".join(remainder)
+
+
 def extract_citation_markers(text: str) -> list[str]:
     """Every inline citation marker in ``text``, in a resolvable form.
 
     Returns markdown-link URLs first (in order of appearance), then ordinal
     markers (in order of appearance). Link SHAPES are consumed before the
-    ordinal scan so link text containing digits can never be misread as an
-    ordinal.
-
-    Extraction and removal use two different patterns on purpose. Removal
-    (:data:`_LINK_SHAPE_RE`) is deliberately wider than extraction
-    (:data:`_MARKDOWN_LINK_RE`): a link whose URL this module declines to
-    read as a marker must still have its TEXT removed, or that text becomes
-    a false ordinal. Measured round-2 defect — see ``_MARKDOWN_LINK_RE``.
+    ordinal scan (:func:`_scan_links`) so link text containing digits can
+    never be misread as an ordinal — a link whose URL this module declines
+    to read as a marker must still have its TEXT removed, or that text
+    becomes a false ordinal.
     """
     if not text:
         return []
-    urls = _MARKDOWN_LINK_RE.findall(text)
-    remainder = _LINK_SHAPE_RE.sub(" ", text)
+    urls, remainder = _scan_links(text)
     ordinals: list[str] = []
     for group in _ORDINAL_MARKER_RE.findall(remainder):
         ordinals.extend(part.strip() for part in re.split(r"[,;]", group) if part.strip())
@@ -174,6 +227,29 @@ def _normalize_url(url: str) -> str:
     return url.strip().rstrip(".,;:").rstrip("/").lower()
 
 
+#: The reserved host every fabricated stub this app mints lives under
+#: (``providers.LOCAL_SIMULATION_URL_PREFIX``). ``.test`` is IANA-reserved
+#: (RFC 6761), so a source row pointing there CANNOT be a real page —
+#: which is what makes this a structural check rather than a heuristic.
+_PLACEHOLDER_SOURCE_HOST = urlparse(LOCAL_SIMULATION_URL_PREFIX).hostname or "example.test"
+
+
+def _is_placeholder_source(source: SourceReference) -> bool:
+    """Whether a source row is one of the app's own fabricated stubs.
+
+    Keyed on the reserved host, NOT on ``is_fallback``. Measured
+    (adversarial review round 3): since issues #31/#32 ``is_fallback=True``
+    is also set on every source returned by the REAL Tavily web search
+    (``providers._tavily_search``), so reading that flag as "fabricated"
+    scored a fully live run — every marker correct against the bibliography
+    the user is shown — as ``unfaithful``/``high``. The flag now means "not
+    the model's own ``:online`` citation", which is a provenance fact, not
+    an existence one. The host is the existence fact.
+    """
+    hostname = urlparse(source.url.strip().lower()).hostname or ""
+    return hostname == _PLACEHOLDER_SOURCE_HOST or hostname.endswith(f".{_PLACEHOLDER_SOURCE_HOST}")
+
+
 #: One block of prose paired with the bibliography its ordinals index.
 #: For a model answer that is the answer's own ``sources``; synthesis prose
 #: is passed with an EMPTY list, because it has no bibliography at all (see
@@ -184,21 +260,31 @@ CitationScope = tuple[str, list[SourceReference]]
 def citation_marker_grounding(*, scopes: list[CitationScope]) -> float | None:
     """Fraction of RESOLVABLE inline citation markers that resolve.
 
-    "Resolve" means: point at a :class:`SourceReference` on this run with
-    ``is_fallback=False`` — a fallback source is a fabricated
-    ``example.test`` stub (or an unattributed search filler) and grounds
-    nothing.
+    "Resolve" means: point at a :class:`SourceReference` on this run that is
+    not one of the app's own fabricated stubs (:func:`_is_placeholder_source`
+    — a row under the reserved ``example.test`` host, which cannot be a real
+    page). It is NOT keyed on ``is_fallback``: since issues #31/#32 that flag
+    is also set on REAL pages returned by the Tavily web search.
 
     Resolution rules, and why they differ by marker kind:
 
-    * an **ordinal** ``n`` is POSITIONAL: it means nothing except relative
-      to one bibliography. It therefore resolves against ITS OWN scope, iff
-      ``1 <= n <= (number of DISTINCT real source URLs in that scope)``.
-      Distinct URLs, not row count, because a scope may list one page twice.
-      Scoping matters most in production: each of the four models runs its
-      own search and returns different pages, so a pooled run bibliography
-      is roughly four times any single slot's and fabricated ordinals sail
-      through a run-level ceiling.
+    * an **ordinal** ``n`` is POSITIONAL, and positional means against the
+      LIST THE USER IS SHOWN. It resolves against ITS OWN scope, iff
+      ``1 <= n <= len(sources)`` **and the row at position ``n`` is not a
+      placeholder** — ``app.js::renderSourceList`` walks ``sources`` in
+      order and renders every row, stubs included, so position ``n`` in the
+      model's prose is row ``n`` on screen.
+
+      An earlier revision used a COUNT of distinct non-fallback URLs as the
+      ceiling. Measured (adversarial review round 3), a count and a position
+      disagree the moment a scope holds a stub row or a duplicate row, and
+      they disagreed in the UNSAFE direction: with ``[stub, real-a, real-b]``
+      the count ceiling was 2, so ``[1]`` — the FABRICATED stub — resolved
+      while ``[3]`` — a genuine source — did not.
+      Scoping to the answer matters most in production: each of the four
+      models runs its own search and returns different pages, so a pooled run
+      bibliography is roughly four times any single slot's and fabricated
+      ordinals sail through a run-level ceiling.
     * a **URL** is SELF-IDENTIFYING: it names the document. It resolves iff
       it normalises to the URL of any real source anywhere on the run. A
       slot that links a page a sibling slot retrieved is pointing at a
@@ -228,11 +314,20 @@ def citation_marker_grounding(*, scopes: list[CitationScope]) -> float | None:
       Counting it as unresolved would assert "not retrieved here ⇒
       fabricated", which is an assumption dressed as a measurement. This is
       the same "None is unknown, not zero" doctrine one level down. It has
-      a COST, recorded as DEBT-012 and pinned by
-      ``test_a_run_whose_only_markers_are_off_run_urls_is_unknown_not_zero``:
-      a run whose markers are ONLY fabricated URLs now scores *unknown*
-      instead of *fabricating*. Closing that needs URL liveness/support
-      verification, i.e. a fetch or a judge — neither of which Layer A has.
+      a COST, recorded as DEBT-012 and pinned in BOTH its directions:
+      ``test_a_run_whose_only_markers_are_off_run_urls_is_unknown_not_zero``
+      (a run whose markers are ONLY fabricated URLs scores *unknown*
+      instead of *fabricating*) and
+      ``test_one_resolving_ordinal_launders_many_off_run_urls_to_maximum_trust``
+      (measured round 3: leaving the denominator means fabricated URLs
+      cannot DILUTE grounding either, so one resolving ordinal beside 20
+      invented links scores 1.0 → ``faithful``/``low``, where the pre-part-C
+      counting measured 0.0476 → ``unfaithful``/``high``). Closing either
+      needs URL liveness/support verification, i.e. a fetch or a judge —
+      neither of which Layer A has. A cap on "excluded markers dominate"
+      would need a calibrated cut, which FS-6 defers to the S4 golden set.
+      A **placeholder** source cited BY URL is likewise off-run: it is
+      excluded from the run-wide URL set, so it can never ground anything.
     * an **out-of-range ordinal is NOT excluded**. It points at a
       bibliography slot that demonstrably does not exist on this run, which
       Layer A can check without any I/O. That is resolvable-as-false, and
@@ -252,17 +347,19 @@ def citation_marker_grounding(*, scopes: list[CitationScope]) -> float | None:
         _normalize_url(source.url)
         for _text, sources in scopes
         for source in sources
-        if not source.is_fallback
+        if not _is_placeholder_source(source)
     }
 
     total = 0
     resolved = 0
     for text, sources in scopes:
-        ceiling = len({_normalize_url(s.url) for s in sources if not s.is_fallback})
         for marker in extract_citation_markers(text):
             if marker.isdigit():
                 total += 1
-                if 1 <= int(marker) <= ceiling:
+                position = int(marker)
+                if 1 <= position <= len(sources) and not _is_placeholder_source(
+                    sources[position - 1]
+                ):
                     resolved += 1
             elif _normalize_url(marker) in run_urls:
                 total += 1
@@ -349,23 +446,59 @@ REFUSAL_MAJORITY_THRESHOLD = 0.5
 _SENTENCE_BOUNDARY_RE = re.compile(r"[.!?][\"'’)\]]*(?:\s|\Z)|\n")
 
 
-def _first_sentence(text: str) -> str:
-    """The leading sentence of ``text``, ignoring any leading whitespace.
+#: A sentence is a candidate ANCHOR only if it carries a word. See
+#: :func:`_split_first_sentence`.
+_WORD_RE = re.compile(r"\w")
 
-    Never returns an empty sentence for a non-blank ``text``: leading
-    whitespace is stripped first, so a boundary can only be found at an
-    index greater than zero.
+
+def _split_first_sentence(text: str) -> tuple[str, str]:
+    """``(first WORD-BEARING sentence, everything after it)``.
+
+    Leading whitespace is stripped, and so is any leading run of
+    punctuation-only fragments. Measured (adversarial review round 3): the
+    previous version documented "never returns an empty sentence for a
+    non-blank text, because leading whitespace is stripped first, so a
+    boundary can only be found at an index greater than zero", and that was
+    FALSE. ``_SENTENCE_BOUNDARY_RE`` matches at index 0 whenever the text
+    opens with terminal punctuation followed by whitespace or end-of-text,
+    so ``_first_sentence(". x")`` returned ``""`` and
+    ``_first_sentence("... I cannot help.")`` returned ``".."``. Through the
+    Part-D apology skip that fragment became the refusal ANCHOR, which no
+    phrase can match: ``detect_refusal("I'm sorry. ! I can't help with
+    that.")`` was False while the same text without the ``!`` was True.
+
+    "Word-bearing" is the rule the surrounding argument always meant — the
+    anchor is the sentence that ANSWERS the question, and a fragment with no
+    word in it answers nothing. Returns ``("", "")`` for text that carries no
+    word at all.
     """
-    stripped = text.lstrip()
-    match = _SENTENCE_BOUNDARY_RE.search(stripped)
-    return stripped if match is None else stripped[: match.start()]
+    rest = text.lstrip()
+    while rest:
+        match = _SENTENCE_BOUNDARY_RE.search(rest)
+        if match is None:
+            return (rest, "") if _WORD_RE.search(rest) else ("", "")
+        head = rest[: match.start()]
+        tail = rest[match.end() :].lstrip()
+        if _WORD_RE.search(head):
+            return head, tail
+        rest = tail
+    return "", ""
+
+
+def _first_sentence(text: str) -> str:
+    """The leading WORD-BEARING sentence of ``text``.
+
+    See :func:`_split_first_sentence`.
+    """
+    return _split_first_sentence(text)[0]
 
 
 def _after_first_sentence(text: str) -> str:
-    """Everything after the leading sentence, with its leading gap removed."""
-    stripped = text.lstrip()
-    match = _SENTENCE_BOUNDARY_RE.search(stripped)
-    return "" if match is None else stripped[match.end() :].lstrip()
+    """Everything after the leading word-bearing sentence.
+
+    See :func:`_split_first_sentence`.
+    """
+    return _split_first_sentence(text)[1]
 
 
 #: The two-word negation. Folded into "cannot" so ``_REFUSAL_PHRASES`` stays
