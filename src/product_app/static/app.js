@@ -2594,8 +2594,12 @@
       buildTrustCard({
         accent: "uncertainty",
         kicker: "Open uncertainty",
+        // D-16: do NOT truncate provider prose before rendering — a cut inside
+        // a `**bold**` run leaves a dangling `**` marker in a text node (the
+        // caption renders via setInlineProse). Render in full and clamp via CSS
+        // (.result-trust-caption -webkit-line-clamp).
         caption: uncertaintyText
-          ? truncateText(uncertaintyText, 180)
+          ? uncertaintyText
           : "No open uncertainty was flagged for this run.",
       }),
     );

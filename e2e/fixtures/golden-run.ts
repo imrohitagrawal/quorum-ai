@@ -83,8 +83,15 @@ const MESSY_DISAGREEMENT =
   "Two models **dissent** on the secondary point (whether to gate the export behind a manual review). Preserved here rather than smoothed over.";
 const MESSY_SOURCE_SUPPORT =
   "Backed by **cited** sources across all responding models. Coverage ratio 0.85 against a 0.80 target.";
+// Deliberately > 180 chars with a `**bold**` run STRADDLING character 180
+// (opening `**` at index 167, closing at 229): the old
+// `truncateText(uncertaintyText, 180)` sliced here mid-run, leaving a dangling
+// `**` in a text node that the no-raw-markdown invariant catches. See D-16.
 const MESSY_UNCERTAINTY =
-  "Confidence is **moderate-to-high** given corroborating citations, though the secondary sequencing point remains contested.";
+  "Confidence is moderate-to-high given corroborating citations across every " +
+  "responding model, though the secondary sequencing point about the cohort " +
+  "export gate remains **genuinely contested and unresolved between two of the " +
+  "panels** even after both debate rounds concluded.";
 
 // Block surfaces: a line-START heading + inline bold + an ordered list. A correct
 // fix routes these through the block formatter (heading→<h*>, **→<strong>,

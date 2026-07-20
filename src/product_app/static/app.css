@@ -2781,6 +2781,12 @@ html[data-theme="dark"] .landing-preview-caption {
   font-size: 0.8rem;
   line-height: 1.5;
   color: var(--text-secondary);
+  /* D-16: clamp full provider prose to 4 lines instead of slicing raw
+     characters (a slice mid-`**bold**` leaves a dangling marker). */
+  display: -webkit-box;
+  -webkit-line-clamp: 4;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
 }
 
 @media (max-width: 760px) {
