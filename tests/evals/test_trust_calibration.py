@@ -48,13 +48,23 @@ _spec.loader.exec_module(corpus)
 FAITHFUL = "faithful-consensus"
 UNFAITHFUL = "fluent-unfaithful"
 
-#: The MEASURED corpus separation on ``citation_marker_grounding``. These two
-#: numbers are re-derived from the corpus by
+#: The MEASURED corpus separation on ``citation_marker_grounding``, RE-MEASURED
+#: after the DEBT-011 grounding changes (synthesis ordinals resolve against a
+#: ceiling of 0; off-run URL markers are EXCLUDED as unknown rather than
+#: counted as unresolved). Both endpoints moved: the faithful side was 1.0000
+#: and the unfaithful side 0.0385 = 1/26 before the change.
+#:
+#: These numbers are re-derived from the corpus by
 #: :func:`test_the_documented_grounding_separation_is_the_measured_one`, which
 #: is what stops the derivation comment on ``GROUNDING_FABRICATION_THRESHOLD``
 #: from rotting into a fabricated number.
-FAITHFUL_GROUNDING = 1.0
-UNFAITHFUL_GROUNDING = 1.0 / 26.0  # 0.0385 — one of 26 markers resolves
+FAITHFUL_GROUNDING = 17.0 / 20.0  # 0.8500 — 17 of faithful-consensus's 20
+POLAR_GROUNDING = 11.0 / 13.0  # 0.8462 — 11 of preserved-polar's 13
+UNFAITHFUL_GROUNDING = 1.0 / 17.0  # 0.0588 — one of 17 resolvable markers
+
+#: The lower end of the faithful side, i.e. the UPPER endpoint of the interval
+#: of fabrication cuts that reproduce the corpus labels.
+FAITHFUL_SIDE_MIN = POLAR_GROUNDING
 
 
 def _evaluate(case_id: str) -> Any:
@@ -114,11 +124,13 @@ def test_citation_marker_grounding_separates_the_pair_the_counts_cannot() -> Non
     faithful = _evaluate(FAITHFUL)
     unfaithful = _evaluate(UNFAITHFUL)
 
-    assert faithful.signals.citation_marker_grounding == pytest.approx(1.0)
+    assert faithful.signals.citation_marker_grounding == pytest.approx(FAITHFUL_GROUNDING)
     # Exact, not "< 0.2": the loose bound was satisfiable by an inflated
     # ordinal ceiling (duplicate source rows raising the ceiling so that
-    # fabricated ordinals resolved). 1/26 is the measured value — exactly one
-    # of the case's 26 markers points at a source that exists on the run.
+    # fabricated ordinals resolved). 1/17 is the measured value — exactly one
+    # of the case's 17 RESOLVABLE markers points at a source that exists on
+    # the run. (Its off-run URL markers are excluded as unknown, which is why
+    # the denominator is 17 and not 26.)
     assert unfaithful.signals.citation_marker_grounding == pytest.approx(UNFAITHFUL_GROUNDING), (
         "fluent-unfaithful grounding moved. If the corpus changed, re-measure and "
         "update UNFAITHFUL_GROUNDING here AND the derivation comment on "
@@ -243,9 +255,11 @@ def test_the_documented_grounding_separation_is_the_measured_one() -> None:
         "preserved-polar-disagreement",
     ], grounding
 
-    faithful_side = [known["faithful-consensus"], known["preserved-polar-disagreement"]]
-    assert min(faithful_side) == pytest.approx(FAITHFUL_GROUNDING)
+    assert known["faithful-consensus"] == pytest.approx(FAITHFUL_GROUNDING)
+    assert known["preserved-polar-disagreement"] == pytest.approx(POLAR_GROUNDING)
     assert known["fluent-unfaithful"] == pytest.approx(UNFAITHFUL_GROUNDING)
+    faithful_side = [known["faithful-consensus"], known["preserved-polar-disagreement"]]
+    assert min(faithful_side) == pytest.approx(FAITHFUL_SIDE_MIN)
 
 
 def _labels_reproduce(monkeypatch: pytest.MonkeyPatch, cut: float) -> bool:
@@ -264,13 +278,18 @@ def _labels_reproduce(monkeypatch: pytest.MonkeyPatch, cut: float) -> bool:
 
 @pytest.mark.parametrize(
     "cut",
-    [0.05, 0.1, 0.2, 0.3, 0.5, 0.7, 0.8, 0.9, 1.0],
+    [0.06, 0.1, 0.2, 0.3, 0.5, 0.7, 0.8, FAITHFUL_SIDE_MIN],
 )
 def test_every_cut_inside_the_documented_interval_reproduces_the_labels(
     monkeypatch: pytest.MonkeyPatch, cut: float
 ) -> None:
-    """The documented interval is ``(0.0385, 1.0]`` — assert it, don't claim it."""
-    assert UNFAITHFUL_GROUNDING < cut <= FAITHFUL_GROUNDING
+    """The documented interval is ``(0.0588, 0.8462]`` — assert it, don't claim it.
+
+    It USED to be ``(0.0385, 1.0]``. Both endpoints moved when the DEBT-011
+    grounding changes landed; the parametrisation moved with the measurement,
+    not the other way round.
+    """
+    assert UNFAITHFUL_GROUNDING < cut <= FAITHFUL_SIDE_MIN
     assert _labels_reproduce(monkeypatch, cut), (
         f"cut {cut} is inside the documented interval but does not reproduce the labels"
     )
@@ -290,10 +309,46 @@ def test_a_cut_at_or_below_the_unfaithful_value_does_not_reproduce_the_labels(
     assert not _labels_reproduce(monkeypatch, cut)
 
 
+@pytest.mark.parametrize("cut", [0.847, 0.9, 1.0])
+def test_a_cut_above_the_faithful_side_does_not_reproduce_the_labels(
+    monkeypatch: pytest.MonkeyPatch, cut: float
+) -> None:
+    """The UPPER endpoint is real too, and it is new.
+
+    Before DEBT-011 the faithful side was exactly 1.0000, so the interval was
+    open-ended at the top and a cut of 1.0 was still safe. It is not any more:
+    ``preserved-polar-disagreement`` measures 0.8462, so any cut above that
+    labels a faithful case ``unfaithful``. Without this test the upper
+    endpoint would be a claim in a comment rather than a measurement.
+    """
+    assert cut > FAITHFUL_SIDE_MIN
+    assert not _labels_reproduce(monkeypatch, cut)
+
+
 def test_the_shipped_threshold_is_inside_the_documented_interval() -> None:
     from product_app.evaluation import GROUNDING_FABRICATION_THRESHOLD
 
-    assert UNFAITHFUL_GROUNDING < GROUNDING_FABRICATION_THRESHOLD <= FAITHFUL_GROUNDING
+    assert UNFAITHFUL_GROUNDING < GROUNDING_FABRICATION_THRESHOLD <= FAITHFUL_SIDE_MIN
+
+
+def test_the_good_threshold_clears_the_faithful_side_by_a_thin_measured_margin() -> None:
+    """``GROUNDING_GOOD_THRESHOLD`` used to clear the faithful side by 0.20.
+
+    It now clears it by 0.0462, because the faithful side dropped from 1.0000
+    to 0.8462 when synthesis ordinals stopped resolving. The margin is real
+    but THIN — one more unresolved marker in either faithful case would push
+    it under and turn a faithful corpus case into ``medium`` risk. This test
+    exists so the erosion is loud rather than silent; it is not a claim that
+    0.80 is calibrated (it is not — FS-6, advisory).
+    """
+    from product_app.evaluation import GROUNDING_GOOD_THRESHOLD
+
+    margin = FAITHFUL_SIDE_MIN - GROUNDING_GOOD_THRESHOLD
+    assert margin > 0.0, (
+        "the good-grounding cut no longer clears the corpus faithful side; a "
+        "faithful case is now served medium hallucination risk"
+    )
+    assert margin == pytest.approx(0.0462, abs=5e-5)
 
 
 # --------------------------------------------------------------------------

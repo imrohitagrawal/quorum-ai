@@ -250,20 +250,19 @@ def test_r3_an_opening_hedge_must_not_launder_fabricated_citations() -> None:
 # ---------------------------------------------------------------------------
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason=(
-        "R-4 (MED, ordinal residual in synthesis) UNRESOLVED after three review "
-        "rounds. Repro: four slots each carrying three DISTINCT real URLs (pooled "
-        "ceiling 12) with clean per-answer ordinals, while the SYNTHESIS prose "
-        "invents [10], [11], [12] -> every invented ordinal falls inside the pooled "
-        "ceiling, so citation_marker_grounding is 1.0 and the run is served "
-        "faithful/low. The synthesis has no bibliography a user ever sees, so an "
-        "in-range ordinal there is not evidence of anything; it should not be able "
-        "to score full grounding."
-    ),
-)
 def test_r4_invented_synthesis_ordinals_must_not_score_full_grounding() -> None:
+    """R-4, FIXED by DEBT-011 part B (was ``xfail(strict=True)``).
+
+    Pre-fix, measured: four slots each carrying three DISTINCT real URLs
+    (pooled ceiling 12) with clean per-answer ordinals, while the SYNTHESIS
+    invents ``[10] [11] [12]`` -> every invented ordinal fell inside the
+    pooled ceiling, ``citation_marker_grounding`` was 1.0 and the run was
+    served ``faithful``/``low``.
+
+    Post-fix, measured: the synthesis scope carries an EMPTY bibliography, so
+    its ordinal ceiling is 0 and none of the three resolve. 12 of 15 markers
+    resolve -> 0.8.
+    """
     urls_per_slot = tuple(_URLS[i * 3 : i * 3 + 3] for i in range(4))
     clean = "A claim [1], a second [2], and a third [3]."
     evaluation = _evaluate(
@@ -279,3 +278,7 @@ def test_r4_invented_synthesis_ordinals_must_not_score_full_grounding() -> None:
     grounding = evaluation.signals.citation_marker_grounding
     assert grounding is not None
     assert grounding < 1.0
+    # Exact, not just "< 1.0": a loose bound is satisfiable by any accident
+    # that drops one marker. 12 answer ordinals resolve, the 3 invented
+    # synthesis ordinals do not.
+    assert grounding == pytest.approx(12.0 / 15.0)

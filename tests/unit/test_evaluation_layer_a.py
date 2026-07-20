@@ -163,10 +163,87 @@ def test_grounding_is_one_when_every_marker_resolves() -> None:
 
 
 def test_grounding_is_near_zero_when_markers_resolve_to_nothing() -> None:
+    """The ORDINAL is what makes this 0.0, not the off-run link.
+
+    ``[7]`` points at bibliography slot 7 of a one-entry bibliography, which
+    Layer A can check with no I/O: it is resolvable-as-false. The off-run URL
+    is excluded as unknown (see
+    ``test_an_off_run_url_marker_is_unknown_not_unresolved``), so the
+    denominator here is 1, not 2.
+    """
     grounding = _grounding(
         texts=["Confident prose [7] with [a study](https://not-a-real.example/paper) behind it."],
         sources=[_source(REAL_URL)],
     )
+    assert grounding == pytest.approx(0.0)
+
+
+# --------------------------------------------------------------------------
+# DEBT-011 part C — an off-run URL is UNKNOWN, not unresolved
+# --------------------------------------------------------------------------
+
+
+def test_an_off_run_url_marker_is_unknown_not_unresolved() -> None:
+    """Layer A performs no I/O, so it cannot call an off-run URL fabricated.
+
+    One resolving ordinal plus one off-run URL. If the URL were counted as
+    unresolved the answer would be 0.5; it is excluded from BOTH numerator
+    and denominator instead, so the answer is 1.0 over a denominator of 1.
+
+    The engine cannot fetch. It therefore cannot distinguish an INVENTED URL
+    from a real page a model knew but did not retrieve on this run, and
+    scoring it zero would assert the former — an assumption dressed as a
+    measurement. This is the same "None is unknown, not zero" doctrine that
+    governs the ``None`` return, applied one level down.
+    """
+    grounding = _grounding(
+        texts=["A claim [1] and [a page](https://not-a-real.example/paper)."],
+        sources=[_source(REAL_URL)],
+    )
+    assert grounding == pytest.approx(1.0)
+
+
+def test_a_run_whose_only_markers_are_off_run_urls_is_unknown_not_zero() -> None:
+    """The RECORDED COST of the rule above, pinned so it cannot rot (DEBT-012).
+
+    A run that cites nothing but invented URLs used to score 0.0 —
+    ``unfaithful``/``high``. It now scores ``None``, which the classifiers
+    read as *unknown*: ``partial``/``medium``. That is a real loss of
+    detection and it is deliberate, because Layer A cannot tell an invented
+    URL from an un-retrieved real one without a fetch. Recorded as DEBT-012;
+    closing it needs URL liveness/support verification (a fetch or the
+    Layer-B judge), not a threshold change.
+
+    If a future change makes this ``0.0`` again, this test goes RED and
+    DEBT-012 must be revisited rather than the rule quietly re-flipped.
+    """
+    evaluation = evaluate_layer_a(
+        initial_answers=[
+            _answer(
+                slot=slot,
+                text="A confident claim [a study](https://not-a-real.example/paper).",
+                sources=[_source(REAL_URL)],
+            )
+            for slot in (1, 2, 3, 4)
+        ],
+        final_synthesis=_synthesis(),
+        agreement=AgreementSummary(aligned=4, total=4),
+    )
+    assert evaluation.signals.citation_marker_grounding is None
+    assert evaluation.faithfulness_label == "partial"
+    assert evaluation.hallucination_risk == "medium"
+
+
+def test_an_out_of_range_ordinal_stays_in_the_denominator() -> None:
+    """The asymmetry between an off-run URL and an out-of-range ordinal.
+
+    An ordinal names a POSITION in a bibliography Layer A holds in memory.
+    ``[9]`` against a one-entry bibliography points at a slot that
+    demonstrably does not exist on this run — resolvable-as-FALSE with no
+    I/O whatsoever. It is not "unknown", and excluding it would gut the
+    fabrication signal.
+    """
+    grounding = _grounding(texts=["A claim [9]."], sources=[_source(REAL_URL)])
     assert grounding == pytest.approx(0.0)
 
 
@@ -284,20 +361,46 @@ def test_a_url_marker_still_resolves_against_any_real_source_on_the_run() -> Non
     assert evaluation.signals.citation_marker_grounding == pytest.approx(1.0)
 
 
-def test_synthesis_ordinals_resolve_against_the_pooled_run_bibliography() -> None:
-    """The synthesis has no bibliography of its own.
+def test_a_synthesis_ordinal_never_resolves() -> None:
+    """DEBT-011 part B. The synthesis has no bibliography AT ALL.
 
-    It is written over every slot's answer and every slot's sources, so the
-    pooled run source list is the only defensible thing its ordinals can
-    index. Two slots with one distinct source each -> a synthesis ``[2]``
-    resolves, while the same ``[2]`` in slot 1's prose does not.
+    This test previously asserted the OPPOSITE — that a synthesis ``[2]``
+    resolves against the pooled run bibliography — on the argument that the
+    pooled list was "the only defensible ceiling". The argument was wrong in
+    a measurable way: the pooled list is the WIDEST ceiling on the run, no
+    numbered source list for the synthesis is ever shown to a user, and an
+    in-range ordinal against a bibliography nobody can see is not evidence
+    of anything (R-4, measured: an invented ``[10] [11] [12]`` scored
+    grounding 1.0 and was served ``faithful``/``low``).
+
+    The honest ceiling is 0. Two slots with one distinct source each; the
+    synthesis ``[2]`` resolves against nothing, and so would ``[1]``.
     """
     slot_one = _answer(slot=1, text="Slot one is plain prose.", sources=[_source(REAL_URL)])
     slot_two = _answer(slot=2, text="Slot two is plain prose.", sources=[_source(OTHER_URL)])
+    for ordinal in ("[1]", "[2]"):
+        evaluation = evaluate_layer_a(
+            initial_answers=[slot_one, slot_two],
+            final_synthesis=_synthesis(consensus=f"The panel agrees {ordinal}."),
+            agreement=AgreementSummary(aligned=2, total=2),
+        )
+        assert evaluation.signals.citation_marker_grounding == pytest.approx(0.0), ordinal
+
+
+def test_a_synthesis_url_marker_still_resolves_against_the_run() -> None:
+    """Part B narrows ORDINALS only. A URL is self-identifying.
+
+    The synthesis is passed an empty source list, but the run-wide URL set is
+    built from the ANSWER scopes, so a synthesis linking a page the run
+    actually retrieved is still grounded. Without this test, "pass the
+    synthesis an empty list" could silently be implemented as "the synthesis
+    grounds nothing".
+    """
+    slot_one = _answer(slot=1, text="Slot one is plain prose.", sources=[_source(REAL_URL)])
     evaluation = evaluate_layer_a(
-        initial_answers=[slot_one, slot_two],
-        final_synthesis=_synthesis(consensus="The panel agrees [2]."),
-        agreement=AgreementSummary(aligned=2, total=2),
+        initial_answers=[slot_one],
+        final_synthesis=_synthesis(consensus=f"The panel agrees, see [the page]({REAL_URL})."),
+        agreement=AgreementSummary(aligned=1, total=1),
     )
     assert evaluation.signals.citation_marker_grounding == pytest.approx(1.0)
 
@@ -733,11 +836,19 @@ def test_url_markers_are_matched_modulo_trailing_punctuation_and_case() -> None:
             sources=[_source(REAL_URL)],
         ) == pytest.approx(1.0)
 
-    # A different document is still a different document.
-    assert _grounding(
-        texts=[f"See [another page]({REAL_URL}?query=1)."],
-        sources=[_source(REAL_URL)],
-    ) == pytest.approx(0.0)
+    # A different document is still a different document. Since DEBT-011
+    # part C an unmatched URL is EXCLUDED rather than counted as unresolved,
+    # so the discriminating observation is ``None`` (nothing resolvable in
+    # the prose) versus 1.0 above — not 0.0 versus 1.0. Either way a
+    # normalisation that folded the query string would resolve it and this
+    # would read 1.0.
+    assert (
+        _grounding(
+            texts=[f"See [another page]({REAL_URL}?query=1)."],
+            sources=[_source(REAL_URL)],
+        )
+        is None
+    )
 
 
 def test_an_ordinal_beyond_the_real_source_count_does_not_resolve() -> None:

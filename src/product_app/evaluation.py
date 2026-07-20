@@ -128,16 +128,16 @@ def _normalize_url(url: str) -> str:
 
 
 #: One block of prose paired with the bibliography its ordinals index.
-#: For a model answer that is the answer's own ``sources``; for synthesis
-#: prose it is the pooled run source list (see
+#: For a model answer that is the answer's own ``sources``; synthesis prose
+#: is passed with an EMPTY list, because it has no bibliography at all (see
 #: :func:`citation_marker_grounding`).
 CitationScope = tuple[str, list[SourceReference]]
 
 
 def citation_marker_grounding(*, scopes: list[CitationScope]) -> float | None:
-    """Fraction of inline citation markers that resolve to a REAL source.
+    """Fraction of RESOLVABLE inline citation markers that resolve.
 
-    "Real" means a :class:`SourceReference` on this run with
+    "Resolve" means: point at a :class:`SourceReference` on this run with
     ``is_fallback=False`` — a fallback source is a fabricated
     ``example.test`` stub (or an unattributed search filler) and grounds
     nothing.
@@ -158,30 +158,46 @@ def citation_marker_grounding(*, scopes: list[CitationScope]) -> float | None:
       document the run genuinely holds, and scoping URLs per-scope would
       punish that.
 
-    Synthesis prose has no bibliography of its own — it is written over
-    every slot's answer and every slot's sources — so the caller passes it
-    with the POOLED run sources. That is the only defensible ceiling for it;
-    any narrower one would be invented.
+    The synthesis ordinal ceiling is ZERO, and that is the point (DEBT-011
+    part B). Synthesis prose has no bibliography of its own: it is written
+    over every slot's answer, and no numbered source list for it is ever
+    shown to a user. ``evaluate_layer_a`` therefore passes each synthesis
+    section with an EMPTY source list, so a synthesis ordinal can never
+    resolve. An earlier revision passed the POOLED run sources instead and
+    called that "the only defensible ceiling"; it was measurably the widest
+    ceiling on the run (four slots holding three distinct URLs each gives
+    12), so a synthesis inventing ``[10]``, ``[11]`` and ``[12]`` scored
+    grounding 1.0 and was served ``faithful``/``low`` (R-4, measured). An
+    in-range ordinal against a bibliography nobody can see is not evidence
+    of anything. URL markers in synthesis prose are unaffected — a URL is
+    self-identifying, so it still resolves against the run-wide URL set,
+    which is built from the ANSWER scopes and did not change.
 
-    KNOWN RESIDUAL in exactly that choice (R-4, reproduced, pinned in
-    ``tests/evals/test_refusal_fabrication_residual.py``). The pooled
-    ceiling is the widest one on the run — with four slots holding three
-    distinct URLs each it is 12 — and an ordinal invented anywhere inside
-    it resolves. Measured: four clean answers plus a synthesis inventing
-    ``[10]``, ``[11]`` and ``[12]`` scores grounding 1.0 and is served
-    ``faithful``/``low``. Since the synthesis carries no bibliography a
-    user ever sees, an in-range ordinal there is not evidence of anything,
-    so "resolves" is not the same as "grounded" for synthesis prose. This
-    is not fixed here: the three narrower ceilings considered across the
-    review rounds were each invented rather than measured, and per FS-7 the
-    loop was stopped and the residual escalated to the operator.
+    Two kinds of "we cannot tell", both EXCLUDED rather than scored zero:
+
+    * an **off-run URL** is excluded from BOTH numerator and denominator.
+      The engine performs no I/O, so it cannot distinguish an invented URL
+      from a real page a model knew but did not retrieve on this run.
+      Counting it as unresolved would assert "not retrieved here ⇒
+      fabricated", which is an assumption dressed as a measurement. This is
+      the same "None is unknown, not zero" doctrine one level down. It has
+      a COST, recorded as DEBT-012 and pinned by
+      ``test_a_run_whose_only_markers_are_off_run_urls_is_unknown_not_zero``:
+      a run whose markers are ONLY fabricated URLs now scores *unknown*
+      instead of *fabricating*. Closing that needs URL liveness/support
+      verification, i.e. a fetch or a judge — neither of which Layer A has.
+    * an **out-of-range ordinal is NOT excluded**. It points at a
+      bibliography slot that demonstrably does not exist on this run, which
+      Layer A can check without any I/O. That is resolvable-as-false, and
+      it stays in the denominator as unresolved.
 
     Returns ``None`` — **unknown, not zero** — when the prose contains no
-    citation markers at all. This distinction is the whole point: a run
-    that never claimed a citation has not fabricated one, and must not be
-    punished as if it had. ``None`` is EXCLUDED from the composite
-    (see :func:`compute_composite`); ``0.0`` means markers were made and
-    resolved to nothing, which is the fluent-but-unfaithful signature.
+    resolvable citation markers at all. This distinction is the whole
+    point: a run that never claimed a citation has not fabricated one, and
+    must not be punished as if it had. ``None`` is EXCLUDED from the
+    composite (see :func:`compute_composite`); ``0.0`` means resolvable
+    markers were made and resolved to nothing, which is the
+    fluent-but-unfaithful signature.
 
     Pure: no I/O, no network, no clock.
     """
@@ -197,12 +213,14 @@ def citation_marker_grounding(*, scopes: list[CitationScope]) -> float | None:
     for text, sources in scopes:
         ceiling = len({_normalize_url(s.url) for s in sources if not s.is_fallback})
         for marker in extract_citation_markers(text):
-            total += 1
             if marker.isdigit():
+                total += 1
                 if 1 <= int(marker) <= ceiling:
                     resolved += 1
             elif _normalize_url(marker) in run_urls:
+                total += 1
                 resolved += 1
+            # else: an off-run URL. UNKNOWN, not zero — see the docstring.
     if not total:
         return None
     return resolved / total
@@ -412,26 +430,35 @@ LAYER_A_WEIGHTS: dict[str, float] = {
 #: Advisory (FS-6). Below this, resolved-marker share reads as fabrication
 #: rather than sloppiness. Chosen as "most markers point nowhere".
 #:
-#: MEASURED corpus separation, RE-MEASURED after ordinal resolution moved
-#: from a run-level ceiling to a per-answer one. The separation did NOT
-#: move: the corpus's faithful answers cite only their own bibliographies,
-#: so narrowing each ceiling changed nothing. (Three cases carry markers;
-#: the refusal and the simulated case carry none and are excluded as
-#: unknown.)
-#: faithful side 1.0000 (``01-faithful-consensus`` and
-#: ``03-preserved-polar-disagreement``, every marker resolves) vs unfaithful
-#: side 0.0385 = 1/26 (``02-fluent-unfaithful``: one of its 26 markers
-#: resolves). Every cut in (0.0385, 1.00] therefore reproduces the corpus
-#: labels and the corpus cannot pick one within that interval; 0.5 is a
-#: judgement call inside it, not a measurement.
+#: MEASURED corpus separation, RE-MEASURED after the DEBT-011 grounding
+#: changes (synthesis ordinal ceiling 0; off-run URL markers EXCLUDED as
+#: unknown). Both endpoints MOVED — the old comment's 1.0000 / 0.0385 are
+#: dead numbers and must not be quoted again. (Three cases carry resolvable
+#: markers; the refusal and the simulated case carry none and are excluded
+#: as unknown.)
+#:
+#:   faithful side  0.8500 = 17/20 (``01-faithful-consensus``)
+#:                  0.8462 = 11/13 (``03-preserved-polar-disagreement``)
+#:   unfaithful side 0.0588 = 1/17 (``02-fluent-unfaithful``)
+#:
+#: Every cut in (0.0588, 0.8462] reproduces the corpus labels; the corpus
+#: cannot pick one within that interval, so 0.5 stays a judgement call
+#: inside it, not a measurement.
 #:
 #: These numbers are re-derived, and the interval endpoints are probed from
-#: both sides, by ``tests/evals/test_trust_calibration.py`` — if the corpus
+#: BOTH sides, by ``tests/evals/test_trust_calibration.py`` — if the corpus
 #: moves, that gate goes red rather than this comment going stale.
 GROUNDING_FABRICATION_THRESHOLD = 0.5
 #: Advisory (FS-6). Above this, grounding is treated as good. Mirrors the
 #: existing ``CITATION_COVERAGE_TARGET`` of 0.80 for consistency with the
 #: number the product already shows a user, not from independent data.
+#:
+#: MARGIN WARNING, measured: the faithful side of the corpus now sits at
+#: 0.8462 (it used to be exactly 1.0000), so this cut clears it by 0.0462 —
+#: one unresolved marker in either faithful case would flip it to
+#: ``medium`` risk. The margin is thin and it is not calibrated; it is
+#: pinned by ``test_the_good_threshold_clears_the_faithful_side_by_a_thin_
+#: measured_margin`` so it cannot erode unnoticed.
 GROUNDING_GOOD_THRESHOLD = 0.8
 #: Advisory (FS-6). Band cuts on the 0-100 composite. These are NOT
 #: calibrated against correctness and are unreachable in hermetic CI (the
@@ -501,14 +528,14 @@ def evaluate_layer_a(
         )
         coverage_ratio = float(aggregate.coverage_ratio)
 
-    # Each ANSWER's ordinals index that answer's OWN bibliography; the
-    # synthesis has none of its own, so it is scoped to the pooled run
-    # sources. See :func:`citation_marker_grounding`.
-    pooled_sources: list[SourceReference] = []
-    for answer in initial_answers:
-        pooled_sources.extend(answer.sources)
+    # Each ANSWER's ordinals index that answer's OWN bibliography. The
+    # synthesis has NO bibliography — no numbered source list for it is ever
+    # shown to a user — so it is passed with an EMPTY scope and its ordinal
+    # ceiling is 0: a synthesis ordinal never resolves. Its URL markers are
+    # unaffected (URLs resolve against the run-wide set, which is built from
+    # the answer scopes). See :func:`citation_marker_grounding`.
     scopes: list[CitationScope] = [(a.answer_text, a.sources) for a in initial_answers]
-    scopes.extend((text, pooled_sources) for text in _synthesis_texts(final_synthesis))
+    scopes.extend((text, []) for text in _synthesis_texts(final_synthesis))
     grounding = citation_marker_grounding(scopes=scopes)
 
     polar = _has_polar_disagreement([a.answer_text for a in completed])
