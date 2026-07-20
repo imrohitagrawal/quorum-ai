@@ -77,6 +77,23 @@ PHASE0_ARTIFACTS: dict[str, tuple[str, ...]] = {
     "P0-H": ("docs/analysis/09-enforcement-hooks.md",),
 }
 
+#: Item ID -> the artifact(s) whose existence proves an **R2-S2** item was
+#: built. Same contract as :data:`PHASE0_ARTIFACTS` (and the same
+#: absent-at-``S1_BASELINE_SHA`` check applies): only files *created* by the
+#: slice are listed, because a pre-existing file proves nothing about the item.
+#: Kept as its own mapping so a reader can tell which phase paid for which row.
+S2_ARTIFACTS: dict[str, tuple[str, ...]] = {
+    "OC-1": (
+        "tests/evals/test_output_correctness_gate.py",
+        "tests/evals/corpus/loader.py",
+    ),
+    "OC-2": (
+        "src/product_app/evaluation.py",
+        "tests/evals/test_trust_calibration.py",
+    ),
+    "EN-7": ("tests/test_doc_gate_consistency.py",),
+}
+
 #: Item ID -> the file(s) a *doc-fix* item legitimately proves itself with.
 #: These are edits to pre-existing docs, so existence proves nothing on its own
 #: — their job here is to key the proof pointer to the item, so a row cannot
@@ -121,7 +138,9 @@ _SLICE_RE = re.compile(r"\bS[234]\b")
 
 def _registered_proofs(item: str) -> tuple[str, ...]:
     """Every path that may stand as proof for ``item`` (build + doc-fix)."""
-    merged = PHASE0_ARTIFACTS.get(item, ()) + DOC_FIX_PROOFS.get(item, ())
+    merged = (
+        PHASE0_ARTIFACTS.get(item, ()) + S2_ARTIFACTS.get(item, ()) + DOC_FIX_PROOFS.get(item, ())
+    )
     return tuple(dict.fromkeys(merged))
 
 
@@ -161,17 +180,17 @@ def test_every_status_uses_a_legend_token(ledger_rows: dict[str, str]) -> None:
     assert not bad, f"status cells with no legend token: {bad}"
 
 
-@pytest.mark.parametrize("item", sorted(PHASE0_ARTIFACTS))
+@pytest.mark.parametrize("item", sorted(PHASE0_ARTIFACTS | S2_ARTIFACTS))
 def test_built_items_read_done(item: str, ledger_rows: dict[str, str]) -> None:
     """If the artifacts exist, the ledger may not still say BUILD/DOC-FIX."""
     assert item in ledger_rows, f"{item} has no row in the ledger"
-    missing = [p for p in PHASE0_ARTIFACTS[item] if not _is_real_artifact(p)]
+    built = PHASE0_ARTIFACTS.get(item, ()) + S2_ARTIFACTS.get(item, ())
+    missing = [p for p in built if not _is_real_artifact(p)]
     if missing:
         pytest.skip(f"{item} artifacts not built yet: {missing}")
     status = ledger_rows[item]
     assert "DONE" in status, (
-        f"{item}: every artifact exists ({', '.join(PHASE0_ARTIFACTS[item])}) "
-        f"but the ledger still reads {status!r}"
+        f"{item}: every artifact exists ({', '.join(built)}) but the ledger still reads {status!r}"
     )
 
 
@@ -218,16 +237,19 @@ def test_done_rows_cite_an_existing_proof_pointer(
     )
 
 
-@pytest.mark.parametrize("item", sorted(PHASE0_ARTIFACTS))
+@pytest.mark.parametrize("item", sorted(PHASE0_ARTIFACTS | S2_ARTIFACTS))
 def test_phase0_artifacts_are_new_since_the_s1_baseline(item: str) -> None:
-    """The registry may only claim files Phase 0 actually created.
+    """The registry may only claim files the slice actually created.
 
-    ``git cat-file -e`` on the baseline tree is the cheap, deterministic form of
-    "added since ``S1_BASELINE_SHA``" — the artifacts are still untracked while
-    Phase 0 runs, so ``git log --diff-filter=A`` cannot see them yet.
+    Covers the Phase-0 and the R2-S2 registries alike: a row may not prove
+    itself with a file that already existed before the work it claims credit
+    for. ``git cat-file -e`` on the baseline tree is the cheap, deterministic
+    form of "added since ``S1_BASELINE_SHA``" — the artifacts are still
+    untracked while a slice runs, so ``git log --diff-filter=A`` cannot see
+    them yet.
     """
     preexisting = []
-    for rel_path in PHASE0_ARTIFACTS[item]:
+    for rel_path in PHASE0_ARTIFACTS.get(item, ()) + S2_ARTIFACTS.get(item, ()):
         probe = subprocess.run(
             ["git", "cat-file", "-e", f"{S1_BASELINE_SHA}:{rel_path}"],
             cwd=REPO_ROOT,
@@ -237,7 +259,7 @@ def test_phase0_artifacts_are_new_since_the_s1_baseline(item: str) -> None:
             preexisting.append(rel_path)
     assert not preexisting, (
         f"{item}: these already existed at {S1_BASELINE_SHA}, so they prove "
-        f"nothing about Phase-0 work: {preexisting}"
+        f"nothing about the work the row claims credit for: {preexisting}"
     )
 
 
