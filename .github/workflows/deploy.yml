@@ -67,9 +67,16 @@ jobs:
           SHA: ${{ github.event.workflow_run.head_sha }}
           GITHUB_EVENT_NAME: ${{ github.event_name }}
           # The gate WAITS (bounded) for pending required workflows rather than
-          # skipping. Comfortably exceeds the slowest required workflow
-          # (E2E ≈ 3 min) with runner-load headroom.
-          GATE_TIMEOUT_SECONDS: "900"
+          # skipping. It must exceed the LONGEST a required push job may legitimately
+          # run — its declared `timeout-minutes` ceiling — or the gate fail-safes and
+          # strands the deploy before a slow-but-valid job finishes. The blocking
+          # push jobs in the required workflows (perf-gate [advisory], api-contract,
+          # validate-and-test, e2e) cap at `timeout-minutes: 20` (1200s), so 1500s
+          # clears the longest ceiling with headroom. (The 30-min mutation job is
+          # now pull_request-only and never runs here.) Was 900s, which timed out
+          # under the mutation job and stranded every merge 2026-07-17..21. Invariant
+          # pinned by tests/unit/test_deploy_gate_no_slow_push_jobs.py.
+          GATE_TIMEOUT_SECONDS: "1500"
           GATE_POLL_SECONDS: "15"
         run: python scripts/deploy_gate.py
 
