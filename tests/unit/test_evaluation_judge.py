@@ -382,6 +382,36 @@ def test_build_judge_evidence_carries_exactly_the_documented_material() -> None:
     assert evidence.synthesis_sections[0][1] == "Consensus prose."
 
 
+def test_build_judge_evidence_includes_real_web_search_sources_despite_is_fallback() -> None:
+    """Regression (adversarial fixpoint pass, 2026-07-20): a REAL Tavily page
+    carries ``is_fallback=True`` since issues #31/#32, so judge evidence must key
+    source exclusion on the placeholder HOST (like the grounding signal does),
+    NOT on ``is_fallback`` — otherwise a fully-live run's real sources are dropped
+    from the list shown to the judge, and it scores a well-grounded run as
+    low-grounding / high-hallucination (the same class as the round-3 inversion,
+    in the judge-evidence path the round-3 fix did not reach)."""
+    from product_app.providers import SourceReference
+
+    real_live = SourceReference(
+        title="Live web result",
+        url="https://www.rfc-editor.org/rfc/rfc6238",
+        provider=ProviderPath.OPENROUTER_SEARCH,
+        is_fallback=True,  # real Tavily page: fallback *provenance*, real *existence*
+    )
+    answer = _answer(text="Answer citing a live source [1].")
+    live_answer = answer.model_copy(update={"sources": [real_live]})
+
+    evidence = build_judge_evidence(
+        query_text="A question",
+        initial_answers=[answer, live_answer],
+        final_synthesis=_synthesis(consensus="Consensus prose."),
+    )
+    assert any("rfc6238" in line for line in evidence.source_lines), (
+        "a real web-search source with is_fallback=True was dropped from judge "
+        f"evidence: {evidence.source_lines}"
+    )
+
+
 def test_build_judge_evidence_without_a_synthesis_has_no_sections() -> None:
     evidence = build_judge_evidence(
         query_text="A question", initial_answers=[_answer()], final_synthesis=None

@@ -822,7 +822,12 @@ def evaluate_layer_a(
                 a.citation_coverage.material_claim_count for a in initial_answers
             ),
             cited_claim_count=sum(
-                1 for a in initial_answers if any(not s.is_fallback for s in a.sources)
+                # Same doctrine as build_judge_evidence / grounding: a real
+                # web-search page (is_fallback=True since #31/#32) is a real
+                # citation; only the placeholder-host stub is not.
+                1
+                for a in initial_answers
+                if any(not _is_placeholder_source(s) for s in a.sources)
             ),
         )
         coverage_ratio = float(aggregate.coverage_ratio)
@@ -1077,7 +1082,16 @@ def build_judge_evidence(
     source_lines = tuple(
         f"[{index}] {source.title} :: {source.url}"
         for index, source in enumerate(
-            (s for answer in initial_answers for s in answer.sources if not s.is_fallback),
+            (
+                s
+                for answer in initial_answers
+                for s in answer.sources
+                # Exclude only the app's own placeholder stubs, keyed on the
+                # reserved HOST — NOT on is_fallback (a REAL Tavily page carries
+                # is_fallback=True since #31/#32, and dropping it would hide a
+                # live run's real sources from the judge). See _is_placeholder_source.
+                if not _is_placeholder_source(s)
+            ),
             start=1,
         )
     )
