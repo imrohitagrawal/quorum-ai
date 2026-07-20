@@ -1857,6 +1857,28 @@ def test_coverage_without_a_synthesis_counts_answers_with_a_real_source() -> Non
     assert only_fallback.signals.citation_coverage_ratio == pytest.approx(0.0)
 
 
+def test_no_synthesis_coverage_excludes_real_web_search_sources_like_production() -> None:
+    """Coverage is PRIMARY-ONLY and must reproduce the production aggregate.
+
+    A REAL Tavily page (real host, ``is_fallback=True`` since #31/#32) is
+    deliberately NOT counted toward citation coverage — the metric measures the
+    model's OWN ``:online`` citations, and fallback/web-search sources are
+    excluded (SYNTHESIS_AUDIT.md; synthesis.py; providers.py). This is the
+    OPPOSITE of grounding / judge-evidence, which ARE host-keyed. The
+    no-synthesis branch must therefore stay ``is_fallback``-keyed, not
+    placeholder-keyed. Pins the distinction the ``example.test``-only fixtures
+    above could not (they are excluded under either rule)."""
+    real_web = evaluate_layer_a(
+        initial_answers=[
+            _answer(slot=1, sources=[_source(OTHER_URL, is_fallback=True)]),
+            _answer(slot=2, sources=[_source(THIRD_URL, is_fallback=True)]),
+        ],
+        final_synthesis=None,
+        agreement=AgreementSummary(aligned=0, total=2),
+    )
+    assert real_web.signals.citation_coverage_ratio == pytest.approx(0.0)
+
+
 def test_an_empty_run_reports_zero_agreement_not_perfect_agreement() -> None:
     evaluation = evaluate_layer_a(
         initial_answers=[],

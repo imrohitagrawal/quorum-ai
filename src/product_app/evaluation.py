@@ -822,12 +822,16 @@ def evaluate_layer_a(
                 a.citation_coverage.material_claim_count for a in initial_answers
             ),
             cited_claim_count=sum(
-                # Same doctrine as build_judge_evidence / grounding: a real
-                # web-search page (is_fallback=True since #31/#32) is a real
-                # citation; only the placeholder-host stub is not.
+                # COVERAGE is deliberately PRIMARY-ONLY and stays ``is_fallback``-
+                # keyed — the OPPOSITE of grounding / judge-evidence (host-keyed).
+                # The citation-coverage metric measures the MODEL's OWN ``:online``
+                # citations and excludes fallback/web-search sources (a real
+                # Tavily page has is_fallback=True); this reproduces the production
+                # aggregate (synthesis.py) and providers.py. See SYNTHESIS_AUDIT.md.
+                # Do NOT switch this to _is_placeholder_source.
                 1
                 for a in initial_answers
-                if any(not _is_placeholder_source(s) for s in a.sources)
+                if any(not s.is_fallback for s in a.sources)
             ),
         )
         coverage_ratio = float(aggregate.coverage_ratio)
