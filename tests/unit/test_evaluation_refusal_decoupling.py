@@ -21,11 +21,23 @@ detector cannot re-open the hole without turning one of them red:
 * **INV-3** — ``run_wholly_refused`` is not read by either classifier at
   all. It stays a reported signal.
 
-Each is shown to BITE in the handback record: reverting the classifier to a
-refusal-first branch turns INV-1/INV-2/INV-3 red.
+Each is shown to BITE, and against BOTH mutations — measured, not asserted:
+
+* restoring the refusal-FIRST branch turns INV-1/INV-2/INV-3 red;
+* DELETING the cap turns INV-1, INV-2 and the explicit cap example red.
+
+The second half did not hold when this module was written: the shared signal
+strategy drew ``live_ratio``/``completeness`` from a continuous unit float
+and so never produced ``faithful`` at all (0 of 200 examples), which made
+the maximum-trust-label property vacuous and let cap deletion pass all seven
+tests. The strategy now hits 1.0 exactly, and
+``test_the_signal_strategy_reaches_the_faithful_region`` fails loudly if that
+reachability is ever lost again.
 """
 
 from __future__ import annotations
+
+from collections import Counter
 
 from hypothesis import given
 from hypothesis import strategies as st
@@ -127,8 +139,71 @@ def test_inv2_refusal_never_raises_the_verdict_to_the_maximum_trust_label(
 
     A panel that declined asserted nothing, so it cannot earn the MAXIMUM
     trust label however cleanly it linked its policy page.
+
+    This property is only meaningful while the strategy can actually PRODUCE
+    ``faithful``; :func:`test_the_signal_strategy_reaches_the_faithful_region`
+    is what keeps it non-vacuous.
     """
     assert classify_faithfulness(_with(signals, refusal_detected=True)) != "faithful"
+
+
+_LABELS_SEEN_WITHOUT_REFUSAL: Counter[str] = Counter()
+
+
+@_SETTINGS
+@given(_signals())
+def test_collect_the_labels_the_strategy_reaches(signals: LayerASignals) -> None:
+    """Bookkeeping for the reachability guard below; asserts nothing itself."""
+    _LABELS_SEEN_WITHOUT_REFUSAL[classify_faithfulness(_with(signals, refusal_detected=False))] += 1
+
+
+def test_the_signal_strategy_reaches_the_faithful_region() -> None:
+    """The anti-vacuity guard for INV-2, measured rather than assumed.
+
+    Measured defect (adversarial review round 1): ``live_ratio`` and
+    ``completeness`` were drawn from a continuous unit float, and
+    ``faithful`` requires BOTH to be exactly 1.0. Over 200 derandomized
+    examples the strategy produced ``faithful`` ZERO times, so
+    ``test_inv2_refusal_never_raises_the_verdict_to_the_maximum_trust_label``
+    held trivially and INV-1's cap clause was never taken — deleting the cap
+    from :func:`classify_faithfulness` left all seven tests in this module
+    GREEN. Ordering note: this runs after the collector above (pytest
+    executes in file order), which is where the counts come from.
+    """
+    assert _LABELS_SEEN_WITHOUT_REFUSAL, "the collector above did not run"
+    assert _LABELS_SEEN_WITHOUT_REFUSAL["faithful"] > 0, (
+        "the signal strategy never produces `faithful`, so every property "
+        f"about the maximum trust label is vacuous: {dict(_LABELS_SEEN_WITHOUT_REFUSAL)}"
+    )
+
+
+def test_the_cap_is_exercised_by_an_explicit_example_too() -> None:
+    """A property that goes vacuous fails open; an example does not.
+
+    The one signal shape the cap exists for, written out: everything the
+    classifier needs for ``faithful``, plus a refusal. Deleting the cap
+    turns this red on its own, independent of any strategy.
+    """
+    faithful_shape = LayerASignals(
+        citation_coverage_ratio=1.0,
+        citation_marker_grounding=1.0,
+        agreement_ratio=1.0,
+        live_ratio=1.0,
+        completeness=1.0,
+        false_consensus_preserved=False,
+        polar_disagreement_detected=False,
+        disagreement_suppressed=False,
+        decision_support_framing_present=True,
+        high_stakes_warning_required=False,
+        high_stakes_warning_present=False,
+        uncertainty_surfaced=True,
+        refusal_detected=False,
+        run_wholly_refused=False,
+    )
+    assert classify_faithfulness(faithful_shape) == "faithful"
+    assert classify_faithfulness(_with(faithful_shape, refusal_detected=True)) == "partial"
+    # ...and INV-3 on the same shape: the other boolean stays inert.
+    assert classify_faithfulness(_with(faithful_shape, run_wholly_refused=True)) == "faithful"
 
 
 # ---------------------------------------------------------------------------

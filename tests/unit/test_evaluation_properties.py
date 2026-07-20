@@ -97,15 +97,25 @@ def test_mutated_verdict_payloads_are_accepted_only_when_fully_valid(
 
 _UNIT = st.floats(min_value=0.0, max_value=1.0, allow_nan=False, allow_infinity=False)
 
+#: A unit float that ALSO lands exactly on 1.0 with non-negligible
+#: probability. ``classify_faithfulness`` reaches ``faithful`` only when
+#: ``live_ratio`` and ``completeness`` are BOTH exactly 1.0, and two
+#: independent continuous draws hit that corner essentially never — measured
+#: at 0 occurrences of ``faithful`` in 200 derandomized examples, which made
+#: every property about the maximum trust label VACUOUS (a deleted refusal
+#: cap left the whole INV-1/2/3 module green). ``st.just(1.0)`` is a
+#: reachability fix, not a bias: the surrounding region is still drawn.
+_UNIT_OR_EXACTLY_ONE = st.just(1.0) | _UNIT
+
 
 @st.composite
 def _signals(draw: st.DrawFn, **overrides: Any) -> LayerASignals:
     values: dict[str, Any] = {
         "citation_coverage_ratio": draw(_UNIT),
-        "citation_marker_grounding": draw(st.none() | _UNIT),
+        "citation_marker_grounding": draw(st.none() | st.just(1.0) | _UNIT),
         "agreement_ratio": draw(_UNIT),
-        "live_ratio": draw(_UNIT),
-        "completeness": draw(_UNIT),
+        "live_ratio": draw(_UNIT_OR_EXACTLY_ONE),
+        "completeness": draw(_UNIT_OR_EXACTLY_ONE),
         "false_consensus_preserved": draw(st.booleans()),
         "polar_disagreement_detected": draw(st.booleans()),
         "disagreement_suppressed": draw(st.booleans()),
