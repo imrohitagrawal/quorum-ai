@@ -1,28 +1,37 @@
-"""RESIDUAL RECORD: the refusal-vs-fabrication interaction in Layer A.
+"""ENFORCED RECORD: refusal is orthogonal to fabrication in Layer A.
 
-This module is not a test suite in the usual sense. It is the mechanical
-record of an UNRESOLVED defect class, pinned so it cannot rot into prose.
+This module used to be the mechanical record of an UNRESOLVED defect class
+(DEBT-011): every test below asserted the desired behaviour and was marked
+``xfail(strict=True)``, because three bounded adversarial review rounds each
+fixed one direction of the refusal/fabrication interaction and introduced a
+new mislabelling in the other.
 
-A bounded three-round adversarial review of :mod:`product_app.evaluation`
-hit its bound (repo doctrine FS-7: three rounds, then record residuals and
-escalate). Each of the three attempted redesigns of
-:func:`product_app.evaluation.detect_refusal` fixed one direction and
-introduced a new mislabelling in the other. The operator decides the next
-move; nothing here is a proposed fix.
+It is now the mechanical record of what is ENFORCED. The root cause was
+structural, not phrasing: a refusal branch was being allowed to decide a
+*grounding* question. The operator-decided fix removed the branch —
 
-Every test below asserts the CORRECT (desired) behaviour and is marked
-``xfail(strict=True)``. Strictness is the point: if someone later changes
-the classifiers so a case starts passing, the XPASS turns the suite RED and
-forces them to come back here and update the record. A residual that cannot
-silently heal is a residual that cannot silently rot.
+* **A.** ``classify_faithfulness`` / ``classify_hallucination_risk`` derive
+  their verdict from the GROUNDING signal alone. ``refusal_detected`` is
+  applied only as a downward CAP (faithfulness) and as an unknown-resolver
+  (risk, and only when grounding is ``None``). ``run_wholly_refused`` is no
+  longer consulted by either classifier at all.
+* **B.** Synthesis prose is scoped with an EMPTY bibliography, so a
+  synthesis ordinal resolves against a ceiling of 0 and never resolves.
+* **C.** An off-run URL marker is EXCLUDED from the grounding fraction
+  rather than counted as unresolved — Layer A performs no I/O and cannot
+  tell an invented URL from an un-retrieved real one (cost: DEBT-012).
+* **D.** ``detect_refusal`` normalises the two-word spelling "can not" and
+  skips a leading pure-apology sentence before anchoring.
 
-Why this is tolerable to LAND rather than fine: the served numeric
-TrustScore is suppressed (``support_verified`` is False) in every run the
-product currently produces, so these labels are not surfaced to a user as a
-confidence number today. That is the only reason the gap ships. It is not a
-statement that the labels are correct — they are ADVISORY (FS-6) and
-uncalibrated, and any change that begins surfacing them must resolve this
-module first.
+The four cases below are the RED→GREEN acceptance evidence for that fix and
+are now ordinary passing tests. ``test_r1_control`` was green throughout and
+is what makes R-1 a *laundering* defect rather than a general weakness.
+
+The invariants that stop the hole re-opening in a form these four examples
+would miss live in ``tests/unit/test_evaluation_refusal_decoupling.py``
+(INV-1/2/3, property tests over the whole signal space). The labels remain
+ADVISORY and uncalibrated (FS-6); this module proves the interaction is
+correct, not that the labels are.
 """
 
 from __future__ import annotations
@@ -164,22 +173,22 @@ def test_r1_control_the_same_fabrication_without_the_disclaimer_is_caught() -> N
     assert evaluation.hallucination_risk == "high"
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason=(
-        "R-1 (HIGH, laundering) UNRESOLVED after three review rounds. Repro: "
-        "four slots of 'I cannot provide medical advice. That said, first-line "
-        "therapy reduces mortality by 42% [7] ...' with a one-entry bibliography "
-        "-> detect_refusal fires on the first sentence, run_wholly_refused=True "
-        "short-circuits classify_faithfulness/classify_hallucination_risk, and "
-        "the fabricating run is served partial/low. The identical text with the "
-        "disclaimer removed is correctly unfaithful/high "
-        "(test_r1_control_the_same_fabrication_without_the_disclaimer_is_caught). "
-        "A safety disclaimer is a one-sentence trust launderer, in exactly the "
-        "high-stakes domains this product targets."
-    ),
-)
 def test_r1_a_safety_disclaimer_must_not_launder_fabricated_citations() -> None:
+    """R-1, FIXED by DEBT-011 part A (was ``xfail(strict=True)``).
+
+    Pre-fix, measured: four slots of "I cannot provide medical advice. That
+    said, first-line therapy reduces mortality by 42% [7] ..." against a
+    one-entry bibliography -> ``detect_refusal`` fired on the first sentence,
+    ``run_wholly_refused`` was True and short-circuited both classifiers, and
+    the wholly-fabricating run was served ``partial``/``low``. The identical
+    text minus the disclaimer was correctly ``unfaithful``/``high``
+    (``test_r1_control_...``). A safety disclaimer was a one-sentence trust
+    launderer, in exactly the high-stakes domains this product targets.
+
+    Post-fix: the verdict comes from grounding (0.0, every ordinal invented).
+    ``run_wholly_refused`` is not consulted, and the refusal CAP can only
+    lower a verdict, so it cannot lift ``unfaithful``.
+    """
     evaluation = _evaluate([_DISCLAIMER + _FABRICATED_BODY] * 4)
     assert evaluation.faithfulness_label == "unfaithful"
     assert evaluation.hallucination_risk == "high"
@@ -189,31 +198,39 @@ def test_r1_a_safety_disclaimer_must_not_launder_fabricated_citations() -> None:
 # R-2 — an apology-first refusal is accused of fabricating
 # ---------------------------------------------------------------------------
 
-#: A genuine safe-completion refusal. Its FIRST sentence is pure apology, so
-#: the first-sentence anchor never sees the decline in sentence two. The only
-#: marker in the text is an OFF-RUN crisis resource, so grounding computes
-#: 0.0 and the run is served the maximum-distrust labels.
+#: A genuine safe-completion refusal. Its FIRST sentence is pure apology and
+#: its decline uses the two-word spelling, which is why the pre-fix detector
+#: missed it for two independent reasons. The only marker in the text is an
+#: OFF-RUN crisis resource.
 _APOLOGY_REFUSAL = (
     "I am sorry you are going through this. I can not help with that request.\n\n"
     f"If you are in crisis, please contact [988 Suicide & Crisis Lifeline]({CRISIS_URL})."
 )
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason=(
-        "R-2 (HIGH, false accusation) UNRESOLVED after three review rounds. Repro: "
-        "four slots of 'I am sorry you are going through this. I can not help with "
-        "that request.\\n\\nIf you are in crisis, please contact [988 Suicide & "
-        "Crisis Lifeline](https://988lifeline.org).' -> the first sentence is pure "
-        "apology so detect_refusal returns False, the sole marker is the off-run "
-        "crisis URL so citation_marker_grounding is 0.0, and a panel that asserted "
-        "nothing is served unfaithful/high. Desired: partial/low, or at minimum not "
-        "the maximum-distrust labels."
-    ),
-)
 def test_r2_an_apology_first_refusal_must_not_be_labelled_unfaithful() -> None:
+    """R-2, FIXED by DEBT-011 parts C and D (was ``xfail(strict=True)``).
+
+    Pre-fix, measured: the first sentence is pure apology so
+    ``detect_refusal`` returned False (and the two-word "can not" matched no
+    phrase even under a whole-text scan), the sole marker is the OFF-RUN
+    crisis URL so grounding computed 0.0, and a panel that asserted nothing
+    was served ``unfaithful``/``high`` — the maximum-distrust labels.
+
+    Post-fix: the off-run URL is excluded as unknown (part C), so grounding
+    is ``None`` and faithfulness is ``partial`` because nothing was
+    established either way; the apology sentence is skipped and "can not" is
+    normalised (part D), so ``refusal_detected`` is True and resolves the
+    unknown risk band to ``low``.
+
+    Both halves are load-bearing and are asserted below: without part C the
+    grounding is 0.0 and the cap cannot lift the run out of ``unfaithful``.
+    """
     evaluation = _evaluate([_APOLOGY_REFUSAL] * 4)
+    # Part C: the off-run crisis link is UNKNOWN, not a fabricated citation.
+    assert evaluation.signals.citation_marker_grounding is None
+    # Part D: both reasons the decline was missed are closed.
+    assert evaluation.signals.refusal_detected is True
     assert evaluation.faithfulness_label == "partial"
     assert evaluation.hallucination_risk == "low"
 
@@ -227,19 +244,21 @@ def test_r2_an_apology_first_refusal_must_not_be_labelled_unfaithful() -> None:
 _HEDGE_OPENING = "I cannot provide a definitive figure here, but the direction is well established."
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason=(
-        "R-3 (HIGH, laundering via an opening hedge) UNRESOLVED after three review "
-        "rounds. Repro: four slots of 'I cannot provide a definitive figure here, "
-        "but ...' followed by fabricated ordinals ([7], [9], [12]) against a "
-        "one-entry bibliography -> the hedge sits in the first sentence, so "
-        "detect_refusal treats an ANSWERING slot as a decline and the run is served "
-        "partial/low instead of unfaithful/high. R-1 needs a deliberate safety "
-        "disclaimer; R-3 needs only ordinary hedging prose."
-    ),
-)
 def test_r3_an_opening_hedge_must_not_launder_fabricated_citations() -> None:
+    """R-3, FIXED by DEBT-011 part A (was ``xfail(strict=True)``).
+
+    Pre-fix, measured: four slots of "I cannot provide a definitive figure
+    here, but ..." followed by fabricated ordinals -> the hedge sits in the
+    first sentence, so an ANSWERING slot was read as a decline and the run
+    was served ``partial``/``low``. R-1 needed a deliberate safety
+    disclaimer; R-3 needed only ordinary hedging prose.
+
+    Post-fix: ``detect_refusal`` still (deliberately) reads this opening as a
+    decline — part D did not tighten that, and part A is what makes it
+    harmless. The verdict is grounding's (0.0), and the cap only lowers.
+    That is the point of decoupling: the detector's precision stopped being
+    load-bearing for the fabrication verdict.
+    """
     evaluation = _evaluate([_HEDGE_OPENING + _FABRICATED_BODY] * 4)
     assert evaluation.faithfulness_label == "unfaithful"
     assert evaluation.hallucination_risk == "high"

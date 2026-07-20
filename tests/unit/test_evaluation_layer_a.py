@@ -566,6 +566,94 @@ def test_a_decline_in_a_long_first_sentence_is_still_a_refusal() -> None:
     assert detect_refusal(text) is True
 
 
+# --------------------------------------------------------------------------
+# DEBT-011 part D — the two measured reasons R-2 was missed
+# --------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "I can not help with that request.",
+        "I can not provide that.",
+        "I can not assist with this.",
+    ],
+)
+def test_the_two_word_spelling_of_cannot_is_the_same_decline(text: str) -> None:
+    """A SPELLING normalisation, not a new phrase.
+
+    ``_REFUSAL_PHRASES`` deliberately lists one spelling of each phrase. The
+    two-word negation "can not" is the same decline as "cannot", and it is
+    one of the two measured reasons the R-2 apology-first refusal was missed
+    (``tests/evals/test_refusal_fabrication_residual.py``). Normalising it
+    alongside the typographic apostrophe keeps the phrase list a list of
+    PHRASES rather than a list of spellings.
+    """
+    assert detect_refusal(text) is True
+    assert detect_refusal(text.replace("can not", "cannot")) is True
+
+
+def test_a_leading_pure_apology_sentence_is_skipped_before_anchoring() -> None:
+    """The other measured reason R-2 was missed: the decline is in sentence 2.
+
+    An apology is not an answer. The discriminator this detector rests on is
+    structural — "the answer's FIRST sentence answers the question"
+    (``test_a_late_hedge_in_a_short_answer_is_not_a_refusal``) — and a pure
+    apology answers nothing, so it is skipped and the NEXT sentence is the
+    anchor.
+    """
+    assert (
+        detect_refusal("I am sorry you are going through this. I can not help with that request.")
+        is True
+    )
+    assert detect_refusal("I'm sorry. I cannot help with that.") is True
+
+
+def test_only_a_leading_APOLOGY_is_skipped_not_the_first_sentence_generally() -> None:
+    """The bound on part D: this is not "look at the first two sentences".
+
+    ``SHORT_HEDGING_ANSWER``'s decline sits in sentence 2 OF 2 and is an
+    ordinary closing hedge. Widening the anchor to two sentences would turn
+    that fixture — and this one, its minimal form — into a false positive.
+    Only a leading sentence that ANSWERS NOTHING is skipped.
+    """
+    assert (
+        detect_refusal(
+            "Current guidance drops password rotation and screens against breached "
+            "lists. Reported effect sizes vary, so I cannot provide an exact figure."
+        )
+        is False
+    )
+    assert detect_refusal(SHORT_HEDGING_ANSWER) is False
+
+
+def test_an_apologetic_sentence_that_itself_declines_is_not_skipped() -> None:
+    """Skipping must not skip the decline itself.
+
+    "I'm sorry, but I can't help with that request." contains an apology AND
+    the decline in ONE sentence. If the skip rule keyed on the apology token
+    alone it would step over the decline and return False — the exact
+    opposite of the fix.
+    """
+    assert detect_refusal("I'm sorry, but I can't help with that request.") is True
+
+
+def test_a_leading_apology_before_a_substantive_answer_is_not_a_refusal() -> None:
+    """The skip finds the next sentence; it does not assume it declines."""
+    assert (
+        detect_refusal(
+            "I'm sorry for the confusion. The guidance says a verifier should not "
+            "require periodic change."
+        )
+        is False
+    )
+
+
+def test_an_apology_that_is_the_whole_answer_is_not_a_refusal() -> None:
+    """Nothing follows the skipped sentence, so nothing anchors."""
+    assert detect_refusal("I am sorry you are going through this.") is False
+
+
 def test_a_refusal_that_links_a_crisis_resource_is_not_a_fabricating_run() -> None:
     """Safe-completion refusals link a policy or crisis page. That is not
     fabrication, and must not be served as the WORST trust labels.

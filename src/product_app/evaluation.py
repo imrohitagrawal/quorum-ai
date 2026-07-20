@@ -237,17 +237,18 @@ def citation_marker_grounding(*, scopes: list[CitationScope]) -> float | None:
 #:
 #: They are NOT self-sufficient, and the list must not claim to be. Several
 #: ("i cannot provide", "i am unable to") are also ordinary mid-answer
-#: hedges, so :func:`detect_refusal` anchors the match to the answer's FIRST
-#: SENTENCE. Note the list contains "i cannot provide" but not the
-#: two-word-negation spelling "i can not provide"; that spelling is not
-#: emitted by the catalogued vendors, and adding it without a fixture is how
-#: this becomes a silent false-positive machine. Every phrase here is
-#: exercised by a fixture in ``tests/unit/test_evaluation_layer_a.py``.
+#: hedges, so :func:`detect_refusal` anchors the match to the answer's first
+#: ANSWERING sentence. Every phrase here is exercised by a fixture in
+#: ``tests/unit/test_evaluation_layer_a.py``.
 #:
-#: That omission has a MEASURED cost, not just a hypothetical one: the
-#: two-word spelling is one of the two independent reasons the R-2
-#: apology-first refusal in ``tests/evals/test_refusal_fabrication_residual.py``
-#: is missed. The list is therefore known-incomplete, not known-sufficient.
+#: This is a list of PHRASES, not of spellings. The two-word negation
+#: "can not" is normalised to "cannot" before matching
+#: (:func:`_normalize_decline_spelling`), the same way a typographic
+#: apostrophe is normalised — so it deliberately does NOT appear here.
+#: Leaving the two spellings unfolded had a measured cost: it was one of the
+#: two independent reasons the R-2 apology-first refusal in
+#: ``tests/evals/test_refusal_fabrication_residual.py`` was missed.
+#: The list remains known-incomplete, not known-sufficient.
 _REFUSAL_PHRASES: tuple[str, ...] = (
     "i can't help",
     "i cannot help",
@@ -289,12 +290,50 @@ def _first_sentence(text: str) -> str:
     return text if match is None else text[: match.start()]
 
 
+def _after_first_sentence(text: str) -> str:
+    match = _SENTENCE_BOUNDARY_RE.search(text)
+    return "" if match is None else text[match.end() :]
+
+
+#: The two-word negation. Folded into "cannot" so ``_REFUSAL_PHRASES`` stays
+#: a list of phrases rather than a list of spellings.
+_TWO_WORD_NEGATION_RE = re.compile(r"\bcan not\b")
+
+#: Apology / sympathy vocabulary. Used ONLY to recognise a leading sentence
+#: that answers nothing; it never makes anything a refusal by itself.
+_APOLOGY_RE = re.compile(r"\b(?:sorry|apolog\w*)\b")
+
+
+def _normalize_decline_spelling(text: str) -> str:
+    """Fold spelling variants of one decline into one spelling.
+
+    Two folds, both spelling-level and neither of them a new phrase: the
+    typographic apostrophe (``can’t`` → ``can't``) and the two-word negation
+    (``can not`` → ``cannot``).
+    """
+    return _TWO_WORD_NEGATION_RE.sub("cannot", text.replace("’", "'"))
+
+
+def _is_pure_apology(sentence: str) -> bool:
+    """Whether a (lowered, normalised) sentence apologises and nothing else.
+
+    "Nothing else" is operationalised as "and does not itself decline": a
+    sentence carrying both the apology and the decline ("I'm sorry, but I
+    can't help with that") must NOT be skipped, or the skip would step over
+    the very phrase it exists to reach.
+    """
+    return bool(_APOLOGY_RE.search(sentence)) and not any(
+        phrase in sentence for phrase in _REFUSAL_PHRASES
+    )
+
+
 def detect_refusal(text: str) -> bool:
     """Whether a single provider answer is a refusal rather than an answer.
 
-    The rule: a decline phrase anywhere in the answer's FIRST SENTENCE
-    makes it a refusal. Nothing else is consulted — not length, not what
-    the rest of the answer goes on to say.
+    The rule: a decline phrase anywhere in the answer's first ANSWERING
+    sentence makes it a refusal — the first sentence, unless that sentence
+    is a pure apology, in which case the second. Nothing else is consulted:
+    not length, not what the rest of the answer goes on to say.
 
     Why no character budget. An earlier version used a 200-character lead
     window and could not be justified against the corpus in EITHER
@@ -320,44 +359,46 @@ def detect_refusal(text: str) -> bool:
     first sentence — while no substantive answer in the corpus carries a
     decline phrase in its first sentence at all.
 
-    KNOWN FAILURES, IN BOTH DIRECTIONS. The earlier claim that this errs
-    only in the safe direction is FALSE and was reproduced false. Both
-    directions are pinned as strict xfails in
-    ``tests/evals/test_refusal_fabrication_residual.py``:
+    THE APOLOGY SKIP (DEBT-011 part D). A LEADING PURE-APOLOGY sentence is
+    stepped over and the next sentence becomes the anchor. The justification
+    is the same structural one, not a new one: the discriminator is that an
+    answer's first ANSWERING sentence answers the question, and an apology
+    answers nothing. A sentence that apologises AND declines in one breath
+    ("I'm sorry, but I can't help with that") is NOT skipped — skipping it
+    would step over the decline itself.
 
-    * FALSE NEGATIVE, and NOT safe: an apology-first refusal ("I am sorry
-      you are going through this. I can not help with that request.")
-      returns False for TWO independent reasons — the decline is in the
-      second sentence, AND the two-word spelling "can not" matches no
-      entry in :data:`_REFUSAL_PHRASES` even when the whole text is
-      scanned (both re-measured). If its only marker is an off-run crisis
-      link, grounding computes 0.0 and the run is served
-      ``unfaithful``/``high`` — the maximum-distrust labels, for a panel
-      that asserted nothing (R-2, measured).
-    * FALSE POSITIVE, and it launders: an answer that OPENS with a decline
-      or hedge sentence and then answers anyway is read as a refusal. Four
-      such slots make ``run_wholly_refused`` True, which short-circuits
-      both classifiers, and a run full of fabricated ordinals is served
-      ``partial``/``low``. The identical text with the opening sentence
-      removed is correctly ``unfaithful``/``high`` (R-1 and R-3, measured).
+    Deliberately NOT widened to "the first two sentences". The unit fixture
+    ``SHORT_HEDGING_ANSWER`` carries its only decline phrase in sentence 2
+    of 2, as an ordinary closing hedge, and a two-sentence anchor would turn
+    it into a false positive. Only a sentence that answers nothing is
+    skipped, and only one of them.
 
-    Neither is compensated for here. Three adversarial review rounds each
-    fixed one direction and introduced a new mislabelling in the other;
-    per FS-7 the loop was stopped and the residual recorded rather than
-    ground on. The operator decides.
+    PRECISION, honestly. This detector is still wrong in the false-positive
+    direction: an answer that OPENS with a decline-shaped hedge and then
+    answers anyway is read as a decline (R-3). That is not fixed here, and
+    the claim is NOT that it is harmless in general — it is that it can no
+    longer LAUNDER a fabrication verdict. Since DEBT-011 part A,
+    ``refusal_detected`` enters :func:`classify_faithfulness` only as a
+    downward cap and :func:`classify_hallucination_risk` only when grounding
+    is unknown, and ``run_wholly_refused`` enters neither. So a false
+    positive can lower a verdict or resolve an unknown risk band to ``low``;
+    it cannot raise one. The residual cost is real and bounded: on a run
+    with NO resolvable markers at all, a majority of hedging-but-answering
+    slots reads ``low`` risk where ``medium`` is the honest band.
 
     Notably NOT a condition: "and cites nothing". Safe-completion refusals
     routinely link a policy or crisis resource, and rejecting any answer
     carrying a citation marker turned those into fabricating runs.
 
-    ADVISORY (FS-6) and NOT calibrated. The refusal-vs-fabrication
-    interaction is UNRESOLVED; see
-    ``tests/evals/test_refusal_fabrication_residual.py``.
+    ADVISORY (FS-6) and NOT calibrated.
     """
     if not text or not text.strip():
         return False
-    lowered = _first_sentence(text.lower().replace("’", "'"))
-    return any(phrase in lowered for phrase in _REFUSAL_PHRASES)
+    lowered = _normalize_decline_spelling(text.lower())
+    anchor = _first_sentence(lowered)
+    if _is_pure_apology(anchor):
+        anchor = _first_sentence(_after_first_sentence(lowered))
+    return any(phrase in anchor for phrase in _REFUSAL_PHRASES)
 
 
 # ---------------------------------------------------------------------------
@@ -387,12 +428,15 @@ class LayerASignals(BaseModel):
     #: :func:`detect_refusal` — which is not the same as "every substantive
     #: slot declined". It carries no advisory constant of its own (it is an
     #: ``all()``, unlike ``refusal_detected``), but it inherits every error
-    #: of the detector underneath it, in both directions: four slots that
-    #: merely OPEN with a decline or hedge sentence and then answer at
-    #: length set this True (see R-1/R-3 in
-    #: ``tests/evals/test_refusal_fabrication_residual.py``), and four
-    #: genuine apology-first refusals leave it False (R-2). Being
-    #: threshold-free makes it deterministic, not correct.
+    #: of the detector underneath it: four slots that merely OPEN with a
+    #: decline-shaped hedge and then answer at length still set this True.
+    #: Being threshold-free makes it deterministic, not correct.
+    #:
+    #: REPORTED ONLY. Since DEBT-011 part A neither
+    #: :func:`classify_faithfulness` nor :func:`classify_hallucination_risk`
+    #: reads this field — it used to short-circuit both, which is exactly
+    #: how a safety disclaimer laundered a fabricating run. INV-3 in
+    #: ``tests/unit/test_evaluation_refusal_decoupling.py`` holds it there.
     run_wholly_refused: bool
 
 
@@ -582,115 +626,109 @@ def evaluate_layer_a(
     )
 
 
+#: The faithfulness labels in TRUST ORDER, least trusting first. The refusal
+#: cap is ``min`` in this order, which is what makes it structurally
+#: incapable of raising a verdict (INV-2).
+_FAITHFULNESS_TRUST_ORDER: tuple[FaithfulnessLabel, ...] = (
+    "unfaithful",
+    "partial",
+    "faithful",
+)
+
+
+def _cap_faithfulness(label: FaithfulnessLabel, ceiling: FaithfulnessLabel) -> FaithfulnessLabel:
+    """``min(label, ceiling)`` in :data:`_FAITHFULNESS_TRUST_ORDER`."""
+    if _FAITHFULNESS_TRUST_ORDER.index(label) <= _FAITHFULNESS_TRUST_ORDER.index(ceiling):
+        return label
+    return ceiling
+
+
 def classify_faithfulness(signals: LayerASignals) -> FaithfulnessLabel:
     """Layer-A structural verdict. ADVISORY (FS-6).
 
     This is NOT a faithfulness measurement — Layer A cannot read meaning.
-    It classifies what the deterministic signals can actually establish:
+    It classifies what the deterministic signals can actually establish,
+    and it decides that from the GROUNDING signal ALONE:
 
-    * a WHOLLY refused run — every substantive slot declined — asserted
-      nothing, so it is ``partial`` and this is checked FIRST. Its markers
-      are not claim citations: safe-completion refusals link a policy or
-      crisis page, and judging that link would score the same declining
-      panel ``unfaithful`` when the link is off-run and ``faithful`` (the
-      maximum trust label) when it happens to be on-run. Both are wrong;
-    * otherwise markers that resolve to nothing → ``unfaithful``, checked
-      BEFORE the majority-refusal rule: a run whose surviving slots
-      fabricated citations put those citations in front of a user, so a
-      refusal elsewhere in the panel must not launder it into ``partial``;
-    * a partly refused run with nothing fabricated → ``partial``;
-    * grounding unknown (no markers at all), or a degraded/incomplete run
-      → ``partial``, because nothing was established either way;
+    * markers that resolve to nothing → ``unfaithful``;
+    * grounding unknown (no resolvable markers), or a degraded/incomplete
+      run → ``partial``, because nothing was established either way;
     * otherwise ``faithful``.
+
+    Refusal is then applied as a downward CAP and nothing else: if
+    ``refusal_detected``, the verdict is capped at ``partial``. A panel that
+    declined asserted nothing, so it cannot earn the MAXIMUM trust label
+    however cleanly it linked its policy page — but the cap is a ``min`` in
+    :data:`_FAITHFULNESS_TRUST_ORDER`, so it can never LIFT a verdict either.
+    ``run_wholly_refused`` is not consulted here at all; it stays a reported
+    signal.
+
+    THE DEFECT THIS SHAPE REMOVES (DEBT-011). Refusal used to be a BRANCH,
+    checked before grounding. A wholly-refused verdict returned ``partial``
+    outright, so four slots that merely OPENED with a safety disclaimer and
+    then cited wholly fabricated ordinals were labelled ``partial`` while
+    the identical text minus that one sentence was correctly ``unfaithful``
+    (R-1/R-3, measured). Refusal is a refusal question; fabrication is a
+    grounding question, and letting one decide the other is what made three
+    adversarial review rounds trade one mislabelling for another. The
+    reproductions are now ordinary passing tests in
+    ``tests/evals/test_refusal_fabrication_residual.py``, and the property
+    that keeps them closed for inputs those four examples do not cover is
+    INV-1/2/3 in ``tests/unit/test_evaluation_refusal_decoupling.py``.
 
     Reproduces every label in ``tests/evals/corpus/`` (five hand-authored
     cases). Five cases pin direction, not accuracy.
 
-    UNRESOLVED — the refusal-vs-fabrication interaction. The first bullet
-    above short-circuits everything below it on the strength of
-    :func:`detect_refusal`, which is wrong in both directions, so this
-    function is measurably wrong in both directions too. Four slots that
-    open with a safety disclaimer or an ordinary hedge and then cite
-    wholly fabricated ordinals are labelled ``partial`` here; the same
-    text with that one sentence deleted is correctly ``unfaithful``. Four
-    genuine apology-first refusals linking an off-run crisis page are
-    labelled ``unfaithful``. Three adversarial review rounds each traded
-    one of these for the other, so per FS-7 the loop was stopped and the
-    gap recorded rather than reworked a fourth time; the operator decides.
-    The reproduced cases are pinned as strict xfails in
-    ``tests/evals/test_refusal_fabrication_residual.py``.
-
-    This label is ADVISORY (FS-6) and NOT calibrated. The reason the
-    residual is tolerable to LAND — not the reason it is acceptable — is
-    that the served numeric TrustScore is suppressed (``support_verified``
-    False) in every run the product currently produces, so this label is
-    not surfaced to a user as a confidence today. Anything that begins
-    surfacing it must resolve the residual module first.
+    This label is ADVISORY (FS-6) and NOT calibrated. It is additionally
+    not surfaced to a user as a confidence today: the served numeric
+    TrustScore is suppressed (``support_verified`` False) in every run the
+    product currently produces. That bounds the blast radius; it is not an
+    argument that the label is accurate.
     """
-    if signals.run_wholly_refused:
-        return "partial"
-    if (
-        signals.citation_marker_grounding is not None
-        and signals.citation_marker_grounding < GROUNDING_FABRICATION_THRESHOLD
-    ):
-        return "unfaithful"
+    grounding = signals.citation_marker_grounding
+    if grounding is not None and grounding < GROUNDING_FABRICATION_THRESHOLD:
+        base: FaithfulnessLabel = "unfaithful"
+    elif grounding is None or signals.live_ratio < 1.0 or signals.completeness < 1.0:
+        base = "partial"
+    else:
+        base = "faithful"
     if signals.refusal_detected:
-        return "partial"
-    if signals.citation_marker_grounding is None:
-        return "partial"
-    if signals.live_ratio < 1.0 or signals.completeness < 1.0:
-        return "partial"
-    return "faithful"
+        return _cap_faithfulness(base, "partial")
+    return base
 
 
 def classify_hallucination_risk(signals: LayerASignals) -> HallucinationRisk:
     """Layer-A risk band. ADVISORY (FS-6).
 
-    A refusal asserts (almost) nothing, so its risk is low even though its
-    faithfulness label is ``partial``. The precedence mirrors
-    :func:`classify_faithfulness` exactly: wholly-refused, then fabrication,
-    then majority refusal. Unknown grounding is ``medium``: unknown is not
-    safe, and it is not proven bad either.
+    While grounding is KNOWN this is a pure function of grounding, and
+    neither refusal signal is consulted: below the fabrication cut →
+    ``high``, at or above the good cut → ``low``, otherwise ``medium``. A
+    run that fabricated citations is ``high`` regardless of how many slots
+    declined — which is a claim this function can now actually make. An
+    earlier revision made it and it was FALSE: ``run_wholly_refused`` was
+    checked first and returned ``low``, so a run whose four slots all
+    fabricated ordinals (measured grounding 0.0) was served ``low`` as soon
+    as each slot opened with a decline or hedge sentence (R-1/R-3).
 
-    CORRECTION. An earlier version of this docstring claimed a run that
-    fabricated citations is ``high`` "regardless of how many slots
-    declined". That is FALSE, and reproduced false: ``run_wholly_refused``
-    is checked FIRST and returns ``low``, so a run in which all four slots
-    fabricated ordinals — measured grounding 0.0 — is served ``low`` as
-    soon as each of those slots happens to open with a decline or hedge
-    sentence (R-1 and R-3). Fabrication wins over a MAJORITY refusal; it
-    loses to a WHOLLY-refused verdict.
+    When grounding is UNKNOWN — no resolvable markers at all — nothing was
+    established either way, and the refusal signal is the only thing left to
+    resolve it: a panel that declined asserted nothing, so ``low``; an
+    ANSWERING panel that cited nothing checkable stays ``medium``, because
+    unknown is not safe and is not proven bad either. That is the ONLY place
+    ``refusal_detected`` enters this function, and ``run_wholly_refused``
+    never does.
 
-    UNRESOLVED — the refusal-vs-fabrication interaction, in both
-    directions, is recorded as strict xfails in
-    ``tests/evals/test_refusal_fabrication_residual.py``. Three adversarial
-    review rounds each traded one mislabelling for another, so per FS-7 the
-    loop was stopped and the residual escalated to the operator instead of
-    being reworked a fourth time.
-
-    This band is ADVISORY (FS-6) and NOT calibrated against correctness.
-    The reason the residual is tolerable to LAND — not the reason it is
-    acceptable — is that the served numeric TrustScore is suppressed
-    (``support_verified`` False) in every run the product currently
-    produces, because the only production path calls ``evaluate_run`` with
-    ``judge=None``. So this band is not surfaced to a user as a confidence
-    today. Anything that begins surfacing it must resolve the residual
-    module first.
+    This band is ADVISORY (FS-6) and NOT calibrated against correctness, and
+    it is not surfaced to a user as a confidence today (the served numeric
+    TrustScore is suppressed because the only production path calls
+    ``evaluate_run`` with ``judge=None``).
     """
-    if signals.run_wholly_refused:
-        return "low"
-    if (
-        signals.citation_marker_grounding is not None
-        and signals.citation_marker_grounding < GROUNDING_FABRICATION_THRESHOLD
-    ):
-        return "high"
-    if signals.refusal_detected:
-        return "low"
-    if signals.citation_marker_grounding is None:
-        return "medium"
-    if signals.citation_marker_grounding >= GROUNDING_GOOD_THRESHOLD:
-        return "low"
-    return "medium"
+    grounding = signals.citation_marker_grounding
+    if grounding is not None:
+        if grounding < GROUNDING_FABRICATION_THRESHOLD:
+            return "high"
+        return "low" if grounding >= GROUNDING_GOOD_THRESHOLD else "medium"
+    return "low" if signals.refusal_detected else "medium"
 
 
 # ---------------------------------------------------------------------------
