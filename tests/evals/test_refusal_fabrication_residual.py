@@ -46,7 +46,7 @@ from decimal import Decimal
 import pytest
 
 from product_app.debate import AgreementSummary
-from product_app.evaluation import evaluate_layer_a
+from product_app.evaluation import RunEvaluation, evaluate_layer_a
 from product_app.providers import (
     CitationCoverage,
     InitialAnswerStatus,
@@ -139,7 +139,7 @@ def _evaluate(
     *,
     urls_per_slot: tuple[tuple[str, ...], ...] | None = None,
     synthesis: FinalSynthesis | None = None,
-):
+) -> RunEvaluation:
     if urls_per_slot is None:
         urls_per_slot = tuple((_URLS[0],) for _ in texts)
     answers = [_answer(i + 1, text, urls_per_slot[i]) for i, text in enumerate(texts)]

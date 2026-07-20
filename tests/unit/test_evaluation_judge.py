@@ -8,7 +8,7 @@ from __future__ import annotations
 
 import json
 from decimal import Decimal
-from typing import Any
+from typing import Any, Literal, TypedDict, cast
 
 import pytest
 
@@ -92,7 +92,18 @@ def _synthesis(*, consensus: str = "The panel agrees on the mechanism.") -> Fina
     )
 
 
-VALID_VERDICT = {
+class _VerdictDict(TypedDict):
+    faithfulness: int
+    grounding: int
+    disagreement_preserved: bool
+    hallucination_risk: Literal["low", "medium", "high"]
+    rationale: str
+    model_id: str
+
+
+# Typed so ``EvalJudgeVerdict(**VALID_VERDICT)`` type-checks under strict mypy
+# (``make type-check`` runs mypy over tests too, not just src).
+VALID_VERDICT: _VerdictDict = {
     "faithfulness": 4,
     "grounding": 3,
     "disagreement_preserved": True,
@@ -332,7 +343,7 @@ def test_persisted_evaluation_json_carries_no_judge_rationale() -> None:
     )
     payload = evaluation.to_eval_json()
     assert "rationale" not in json.dumps(payload)
-    assert payload["judge"]["faithfulness"] == 4
+    assert cast(dict[str, object], payload["judge"])["faithfulness"] == 4
 
 
 # --------------------------------------------------------------------------

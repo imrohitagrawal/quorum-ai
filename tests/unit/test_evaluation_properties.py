@@ -109,7 +109,7 @@ _UNIT_OR_EXACTLY_ONE = st.just(1.0) | _UNIT
 
 
 @st.composite
-def _signals(draw: st.DrawFn, **overrides: Any) -> LayerASignals:
+def _signals(draw: st.DrawFn, /, **overrides: Any) -> LayerASignals:
     values: dict[str, Any] = {
         "citation_coverage_ratio": draw(_UNIT),
         "citation_marker_grounding": draw(st.none() | st.just(1.0) | _UNIT),
