@@ -523,12 +523,21 @@ GROUNDING_FABRICATION_THRESHOLD = 0.5
 #: existing ``CITATION_COVERAGE_TARGET`` of 0.80 for consistency with the
 #: number the product already shows a user, not from independent data.
 #:
-#: MARGIN WARNING, measured: the faithful side of the corpus now sits at
-#: 0.8462 (it used to be exactly 1.0000), so this cut clears it by 0.0462 —
-#: one unresolved marker in either faithful case would flip it to
-#: ``medium`` risk. The margin is thin and it is not calibrated; it is
-#: pinned by ``test_the_good_threshold_clears_the_faithful_side_by_a_thin_
-#: measured_margin`` so it cannot erode unnoticed.
+#: MARGIN WARNING, measured PER CASE (an earlier revision of this comment
+#: claimed the perturbation below for BOTH faithful cases; that was
+#: arithmetically false for ``01-faithful-consensus`` and is now gated):
+#: the faithful side of the corpus now sits at 0.8462 (it used to be exactly
+#: 1.0000), so this cut clears it by 0.0462. One more unresolved marker in
+#: ``03-preserved-polar-disagreement`` — the LOWER of the two faithful
+#: cases — flips it to ``medium`` risk (11/13 = 0.8462 → 10/13 = 0.7692, or
+#: 11/14 = 0.7857). ``01-faithful-consensus`` at 17/20 = 0.8500 survives the
+#: same perturbation in both directions (16/20 = 0.8000, which this ``>=``
+#: cut still reads as ``low``, and 17/21 = 0.8095).
+#: The margin is thin and it is not calibrated. The labels are measured by
+#: ``test_one_more_unresolved_marker_crosses_the_good_cut_in_ONE_faithful_case``,
+#: the margin float by ``test_the_good_threshold_clears_the_faithful_side_by_
+#: a_thin_measured_margin``, and this paragraph itself by
+#: ``test_the_good_threshold_comment_does_not_overstate_the_margin``.
 GROUNDING_GOOD_THRESHOLD = 0.8
 #: Advisory (FS-6). Band cuts on the 0-100 composite. These are NOT
 #: calibrated against correctness and are unreachable in hermetic CI (the

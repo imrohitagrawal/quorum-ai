@@ -47,6 +47,7 @@ _spec.loader.exec_module(corpus)
 
 FAITHFUL = "faithful-consensus"
 UNFAITHFUL = "fluent-unfaithful"
+POLAR = "preserved-polar-disagreement"
 
 #: The MEASURED corpus separation on ``citation_marker_grounding``, RE-MEASURED
 #: after the DEBT-011 grounding changes (synthesis ordinals resolve against a
@@ -331,15 +332,99 @@ def test_the_shipped_threshold_is_inside_the_documented_interval() -> None:
     assert UNFAITHFUL_GROUNDING < GROUNDING_FABRICATION_THRESHOLD <= FAITHFUL_SIDE_MIN
 
 
+#: MEASURED resolved/total marker counts behind the two faithful-side
+#: groundings. Written as counts, not ratios, because the perturbation the
+#: margin claim is about ("one more unresolved marker") is a change to the
+#: COUNTS; the ratios above are asserted against the corpus separately.
+FAITHFUL_MARKER_COUNTS = {FAITHFUL: (17, 20), POLAR: (11, 13)}
+
+
+def test_the_documented_marker_counts_are_the_measured_ones() -> None:
+    """The counts the margin arithmetic below is derived from."""
+    for case_id, (resolved, total) in FAITHFUL_MARKER_COUNTS.items():
+        measured = _evaluate(case_id).signals.citation_marker_grounding
+        assert measured == pytest.approx(resolved / total), case_id
+
+
+def test_one_more_unresolved_marker_crosses_the_good_cut_in_ONE_faithful_case() -> None:
+    """The margin claim, measured PER CASE instead of asserted for both.
+
+    Round-1 adversarial finding: the comment on ``GROUNDING_GOOD_THRESHOLD``
+    said "one unresolved marker in EITHER faithful case would flip it to
+    medium risk", and the docstring of the test cited as pinning it repeated
+    the sentence. Measured, it is true only for the polar case:
+
+      03-preserved-polar-disagreement  11/13 = 0.8462
+          move one marker  10/13 = 0.7692 -> medium
+          add one unresolved 11/14 = 0.7857 -> medium
+      01-faithful-consensus            17/20 = 0.8500
+          move one marker  16/20 = 0.8000 -> low   (the cut is ``>=``)
+          add one unresolved 17/21 = 0.8095 -> low
+
+    The old test asserted only the margin FLOAT, which is a fact about the
+    minimum of the two, so it could not notice that the sentence it carried
+    was false for one of the cases it named. This one asserts the labels.
+    """
+    from product_app.evaluation import classify_hallucination_risk
+
+    def _risk_at(case_id: str, grounding: float) -> str:
+        signals = _evaluate(case_id).signals
+        return classify_hallucination_risk(
+            signals.model_copy(update={"citation_marker_grounding": grounding})
+        )
+
+    outcomes = {
+        case_id: {
+            "measured": _risk_at(case_id, resolved / total),
+            "moved": _risk_at(case_id, (resolved - 1) / total),
+            "added": _risk_at(case_id, resolved / (total + 1)),
+        }
+        for case_id, (resolved, total) in FAITHFUL_MARKER_COUNTS.items()
+    }
+
+    assert outcomes == {
+        FAITHFUL: {"measured": "low", "moved": "low", "added": "low"},
+        POLAR: {"measured": "low", "moved": "medium", "added": "medium"},
+    }, outcomes
+
+
+def test_the_good_threshold_comment_does_not_overstate_the_margin() -> None:
+    """Prose gate: the comment may not claim the perturbation for both cases.
+
+    ``GROUNDING_GOOD_THRESHOLD``'s comment is explicitly labelled "MARGIN
+    WARNING, measured". A passage labelled measured that is arithmetically
+    wrong is worse than no passage, and no other gate reads it — the test
+    above measures the behaviour, this one keeps the sentence honest.
+    """
+    source = Path(__file__).resolve().parents[2] / "src" / "product_app" / "evaluation.py"
+    text = source.read_text(encoding="utf-8")
+    marker = "MARGIN WARNING"
+    assert marker in text, "the margin warning is gone; delete this gate or restore it"
+    warning = text[text.index(marker) : text.index("GROUNDING_GOOD_THRESHOLD = ")]
+    assert "either faithful case" not in warning, (
+        "the margin warning claims one unresolved marker flips EITHER faithful "
+        "case to medium risk; measured, 01-faithful-consensus (17/20) stays low "
+        "under both perturbations — see "
+        "test_one_more_unresolved_marker_crosses_the_good_cut_in_ONE_faithful_case"
+    )
+    assert "preserved-polar-disagreement" in warning, (
+        "the margin warning must name the case the perturbation is true for"
+    )
+
+
 def test_the_good_threshold_clears_the_faithful_side_by_a_thin_measured_margin() -> None:
     """``GROUNDING_GOOD_THRESHOLD`` used to clear the faithful side by 0.20.
 
     It now clears it by 0.0462, because the faithful side dropped from 1.0000
     to 0.8462 when synthesis ordinals stopped resolving. The margin is real
-    but THIN — one more unresolved marker in either faithful case would push
-    it under and turn a faithful corpus case into ``medium`` risk. This test
-    exists so the erosion is loud rather than silent; it is not a claim that
-    0.80 is calibrated (it is not — FS-6, advisory).
+    but THIN — one more unresolved marker in ``03-preserved-polar-disagreement``
+    (the LOWER of the two faithful cases, and the one this margin is measured
+    against) pushes it under and turns a faithful corpus case into ``medium``
+    risk. ``01-faithful-consensus`` at 17/20 survives the same perturbation;
+    the per-case measurement is
+    ``test_one_more_unresolved_marker_crosses_the_good_cut_in_ONE_faithful_case``.
+    This test exists so the erosion is loud rather than silent; it is not a
+    claim that 0.80 is calibrated (it is not — FS-6, advisory).
     """
     from product_app.evaluation import GROUNDING_GOOD_THRESHOLD
 
