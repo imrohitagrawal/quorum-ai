@@ -147,14 +147,21 @@ def test_inv2_refusal_never_raises_the_verdict_to_the_maximum_trust_label(
     assert classify_faithfulness(_with(signals, refusal_detected=True)) != "faithful"
 
 
-_LABELS_SEEN_WITHOUT_REFUSAL: Counter[str] = Counter()
+def _labels_the_strategy_reaches() -> Counter[str]:
+    """Drive the shared strategy and tally the faithfulness labels it hits.
 
+    Self-contained on purpose: the collection runs INSIDE the caller, under
+    the same ``_SETTINGS`` budget as every property in this module.
+    """
+    seen: Counter[str] = Counter()
 
-@_SETTINGS
-@given(_signals())
-def test_collect_the_labels_the_strategy_reaches(signals: LayerASignals) -> None:
-    """Bookkeeping for the reachability guard below; asserts nothing itself."""
-    _LABELS_SEEN_WITHOUT_REFUSAL[classify_faithfulness(_with(signals, refusal_detected=False))] += 1
+    @_SETTINGS
+    @given(_signals())
+    def _collect(signals: LayerASignals) -> None:
+        seen[classify_faithfulness(_with(signals, refusal_detected=False))] += 1
+
+    _collect()
+    return seen
 
 
 def test_the_signal_strategy_reaches_the_faithful_region() -> None:
@@ -167,13 +174,23 @@ def test_the_signal_strategy_reaches_the_faithful_region() -> None:
     ``test_inv2_refusal_never_raises_the_verdict_to_the_maximum_trust_label``
     held trivially and INV-1's cap clause was never taken — deleting the cap
     from :func:`classify_faithfulness` left all seven tests in this module
-    GREEN. Ordering note: this runs after the collector above (pytest
-    executes in file order), which is where the counts come from.
+    GREEN.
+
+    Measured defect (round 2): this guard used to read a module-global
+    ``Counter`` filled by a separate collector test, and its own docstring
+    rested on "pytest executes in file order". Run alone, or under ``-k``,
+    it failed with "the collector above did not run" — a FALSE RED on a
+    healthy tree, on the one guard ``docs/63``'s DEBT-011 row cites as
+    keeping INV-2 non-vacuous. A guard that reds for a reason unrelated to
+    the invariant teaches people to ignore it. It now drives the strategy
+    itself, so it is order-, selection- and ``-p randomly``-independent.
     """
-    assert _LABELS_SEEN_WITHOUT_REFUSAL, "the collector above did not run"
-    assert _LABELS_SEEN_WITHOUT_REFUSAL["faithful"] > 0, (
+    seen = _labels_the_strategy_reaches()
+
+    assert seen, "the strategy produced no examples at all"
+    assert seen["faithful"] > 0, (
         "the signal strategy never produces `faithful`, so every property "
-        f"about the maximum trust label is vacuous: {dict(_LABELS_SEEN_WITHOUT_REFUSAL)}"
+        f"about the maximum trust label is vacuous: {dict(seen)}"
     )
 
 
