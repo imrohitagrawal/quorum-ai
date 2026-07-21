@@ -501,6 +501,19 @@
 
               <div id="result-trust" class="result-trust" role="group" aria-label="Trust signals"></div>
 
+              <!-- FR-016 (S3): what was and was NOT checked. A SIBLING of
+                   #result-trust, not a fourth trust card (D-12) — a fourth child
+                   would break the 3-up grid and the ARIA group of #result-trust.
+                   Rendering contract (D-2): zero digits, zero advisory-label
+                   words. Hidden until renderTrustScore populates it. -->
+              <section
+                id="result-trust-score"
+                class="result-trust-score"
+                role="group"
+                aria-label="What was and was not checked"
+                hidden
+              ></section>
+
               <div
                 id="result-positions"
                 class="result-positions"

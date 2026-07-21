@@ -233,6 +233,74 @@ export const goldenCompletedResp = () => ({
 
 const fulfil = (body: unknown, status = 200) => ({ status, contentType: "application/json", body: JSON.stringify(body) });
 
+// ---- FR-016 (S3) evaluation fixtures (D-13) ---------------------------------
+// goldenCompletedResp() deliberately carries NO `evaluation` key — it IS the
+// canonical ABSENT case the "hide, don't render —" rule (D-14) is about, and it
+// is consumed unchanged by the degraded/invariants/visual/a11y/ui-parity specs.
+//
+// The six named variants are loaded from a SHARED JSON (evaluation-variants.json)
+// that the Python contract test validates against the real
+// QueryRunEvaluationProjection, so a shape the server can never emit fails in
+// Python rather than greening a mocked e2e run. Import them from that single
+// source; do not hand-duplicate the shapes here.
+import EVAL_VARIANTS from "./evaluation-variants.json";
+
+/** The served QueryRunEvaluationProjection shape. */
+export type EvaluationProjection = (typeof EVAL_VARIANTS)["EVAL_CLEAN"];
+
+export const EVAL_CLEAN = EVAL_VARIANTS.EVAL_CLEAN as EvaluationProjection;
+export const EVAL_NON_CONSENSUS = EVAL_VARIANTS.EVAL_NON_CONSENSUS as EvaluationProjection;
+export const EVAL_UNKNOWN_GROUNDING_REFUSAL =
+  EVAL_VARIANTS.EVAL_UNKNOWN_GROUNDING_REFUSAL as EvaluationProjection;
+export const EVAL_LAUNDERED = EVAL_VARIANTS.EVAL_LAUNDERED as EvaluationProjection;
+export const EVAL_MISSING_HIGH_STAKES =
+  EVAL_VARIANTS.EVAL_MISSING_HIGH_STAKES as EvaluationProjection;
+export const EVAL_SUPPRESSED_DISAGREEMENT =
+  EVAL_VARIANTS.EVAL_SUPPRESSED_DISAGREEMENT as EvaluationProjection;
+
+/** The six well-formed variants, in a stable order — for parameterised specs. */
+export const EVAL_ALL_VARIANTS: { name: string; ev: EvaluationProjection }[] = [
+  { name: "EVAL_CLEAN", ev: EVAL_CLEAN },
+  { name: "EVAL_NON_CONSENSUS", ev: EVAL_NON_CONSENSUS },
+  { name: "EVAL_UNKNOWN_GROUNDING_REFUSAL", ev: EVAL_UNKNOWN_GROUNDING_REFUSAL },
+  { name: "EVAL_LAUNDERED", ev: EVAL_LAUNDERED },
+  { name: "EVAL_MISSING_HIGH_STAKES", ev: EVAL_MISSING_HIGH_STAKES },
+  { name: "EVAL_SUPPRESSED_DISAGREEMENT", ev: EVAL_SUPPRESSED_DISAGREEMENT },
+];
+
+/**
+ * The FAIL-CLOSED case (D-3): a persisted `s2-eval-v2`-shaped row read back,
+ * whose `label_confidence` field does not exist. The whitelist
+ * (`label_confidence === "reportable"`) must render the INDETERMINATE treatment
+ * on it, not the confident branch. Deliberately NOT in EVAL_ALL_VARIANTS and NOT
+ * validated by the Python contract test — it is by construction invalid under
+ * the current required schema (label_confidence has no default), which is the
+ * whole point.
+ */
+export const EVAL_S2_SHAPED = (() => {
+  const ev = JSON.parse(JSON.stringify(EVAL_CLEAN)) as Record<string, unknown>;
+  delete ev.label_confidence;
+  return ev;
+})();
+
+/** Build a clean evaluation projection, with shallow overrides for ad-hoc cases. */
+export function goldenEvaluation(
+  overrides: Partial<EvaluationProjection> & { signals?: Record<string, unknown> } = {},
+): EvaluationProjection {
+  const base = JSON.parse(JSON.stringify(EVAL_CLEAN)) as EvaluationProjection;
+  const { signals, ...top } = overrides;
+  return {
+    ...base,
+    ...top,
+    signals: { ...base.signals, ...(signals ?? {}) },
+  } as EvaluationProjection;
+}
+
+/** Attach an evaluation projection to a completed response (top-level key). */
+export function withEvaluation<T extends Record<string, unknown>>(resp: T, ev: unknown): T {
+  return { ...resp, evaluation: ev };
+}
+
 // ---- navigation helpers (self-contained; mirror axe-all-views patterns) -----
 export async function boot(page: Page) {
   await page.addInitScript(() => {

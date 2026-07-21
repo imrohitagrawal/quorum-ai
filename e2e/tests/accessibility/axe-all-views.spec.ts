@@ -1,5 +1,6 @@
 import { test, expect, Page } from "@playwright/test";
 import AxeBuilder from "@axe-core/playwright";
+import { withEvaluation, EVAL_MISSING_HIGH_STAKES } from "../../fixtures/golden-run";
 
 /**
  * AC-035 accessibility gate — a REAL axe-core drive over every SPA view in
@@ -267,6 +268,91 @@ test.describe("AC-035 — axe over every view (both themes)", () => {
     await page.locator("#result-transcript-link").click();
     await expect(page.locator('[data-view="transcript"]')).toBeVisible();
     await scanBothThemes(page, "transcript");
+  });
+
+  // FR-016 (S3): the trust-score surface reuses the alpha-tinted --warning-soft /
+  // --info-soft tokens, and axe reports body-text contrast over an alpha layer as
+  // INCOMPLETE ("could not tell"), not a violation — so a violations-only filter
+  // reads "axe could not tell" as "pass". This scoped scan fails on both a
+  // critical/serious violation AND any incomplete `color-contrast` entry, and
+  // additionally composites the alpha layers itself to assert >= 4.5:1.
+  test("result — trust-score surface (scoped, both themes, contrast composited)", async ({ page }) => {
+    await boot(page);
+    // Missing-high-stakes carries the amber caveat row + why-lines + the state
+    // line, so the scan covers every text-on-tint the surface can render.
+    const body = withEvaluation(completedResp(false), EVAL_MISSING_HIGH_STAKES);
+    await routeRun(page, body);
+    await clickRunNow(page);
+    await expect(page.locator("#result-trust-score")).toBeVisible();
+
+    for (const theme of ["light", "dark"] as const) {
+      await setTheme(page, theme);
+      await freeze(page);
+      const results = await new AxeBuilder({ page }).include("#result-trust-score").withTags(AXE_TAGS).analyze();
+      const serious = results.violations.filter((v) => v.impact === "critical" || v.impact === "serious");
+      expect(serious, `trust-score [${theme}] critical/serious axe violations:\n` +
+        serious.map((v) => `  ${v.impact} ${v.id} @ ${v.nodes.map((n) => n.target.join(" ")).join(", ")}`).join("\n"),
+      ).toEqual([]);
+      // "axe could not tell" must NEVER read as "pass": fail on incomplete contrast.
+      const incompleteContrast = results.incomplete.filter((r) => r.id === "color-contrast");
+      expect(incompleteContrast, `trust-score [${theme}] incomplete color-contrast entries must be resolved`).toEqual([]);
+
+      // Deterministic in-spec contrast: composite each text node over its first
+      // non-transparent ancestor background and assert >= 4.5:1 (>= 3:1 for
+      // >=18.66px bold).
+      const failures = await page.locator("#result-trust-score").evaluate((root) => {
+        const parseRgba = (s: string) => {
+          const m = s.match(/rgba?\(([^)]+)\)/);
+          if (!m) return null;
+          const p = m[1].split(/[,\s/]+/).map(Number);
+          return { r: p[0], g: p[1], b: p[2], a: p.length > 3 && !Number.isNaN(p[3]) ? p[3] : 1 };
+        };
+        const over = (fg: { r: number; g: number; b: number; a: number }, bg: { r: number; g: number; b: number }) => ({
+          r: fg.r * fg.a + bg.r * (1 - fg.a),
+          g: fg.g * fg.a + bg.g * (1 - fg.a),
+          b: fg.b * fg.a + bg.b * (1 - fg.a),
+        });
+        const lum = (c: { r: number; g: number; b: number }) => {
+          const f = (v: number) => {
+            v /= 255;
+            return v <= 0.03928 ? v / 12.92 : Math.pow((v + 0.055) / 1.055, 2.4);
+          };
+          return 0.2126 * f(c.r) + 0.7152 * f(c.g) + 0.0722 * f(c.b);
+        };
+        const bgOf = (el: Element): { r: number; g: number; b: number } => {
+          let node: Element | null = el;
+          while (node) {
+            const c = parseRgba(getComputedStyle(node).backgroundColor);
+            if (c && c.a > 0) {
+              const parentBg = node.parentElement ? bgOf(node.parentElement) : { r: 255, g: 255, b: 255 };
+              return over(c, parentBg);
+            }
+            node = node.parentElement;
+          }
+          return { r: 255, g: 255, b: 255 };
+        };
+        const fails: string[] = [];
+        const texts = Array.from(root.querySelectorAll("*")).filter(
+          (el) => Array.from(el.childNodes).some((n) => n.nodeType === 3 && (n.textContent || "").trim().length > 0),
+        );
+        for (const el of texts) {
+          const cs = getComputedStyle(el);
+          const fg = parseRgba(cs.color);
+          if (!fg) continue;
+          const composited = fg.a < 1 ? { ...over(fg, bgOf(el)), a: 1 } : fg;
+          const bg = bgOf(el);
+          const L1 = lum(composited) + 0.05;
+          const L2 = lum(bg) + 0.05;
+          const ratio = Math.max(L1, L2) / Math.min(L1, L2);
+          const px = parseFloat(cs.fontSize);
+          const bold = parseInt(cs.fontWeight, 10) >= 700;
+          const min = px >= 18.66 && bold ? 3 : 4.5;
+          if (ratio < min) fails.push(`${(el.className || el.tagName)}: ${ratio.toFixed(2)} < ${min}`);
+        }
+        return fails;
+      });
+      expect(failures, `trust-score [${theme}] contrast failures:\n${failures.join("\n")}`).toEqual([]);
+    }
   });
 
   test("result — divided (amber)", async ({ page }) => {

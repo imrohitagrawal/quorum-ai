@@ -138,8 +138,20 @@ DOC_FIX_PROOFS: dict[str, tuple[str, ...]] = {
     "CF-3": ("docs/DAY-ONE-PROMPT.md",),
 }
 
+#: Item ID -> artifact(s) proving an S3 (FR-016) item. TypeScript specs are
+#: first-class proof here — the trust surface's contract lives in e2e specs —
+#: so the pointer regex below accepts ``ts``/``tsx``. Only artifacts CREATED by
+#: S3 are listed (checked new-since-baseline), so a row cannot prove itself with
+#: a pre-existing file (e.g. the degraded-banner spec, which predates S3).
+S3_ARTIFACTS: dict[str, tuple[str, ...]] = {
+    "OC-5": (
+        "e2e/tests/invariants/trust-score-invariants.spec.ts",
+        "e2e/fixtures/evaluation-variants.json",
+    ),
+}
+
 #: A path-shaped backtick span in a status cell, e.g. `tests/perf/x.py`.
-_PROOF_POINTER_RE = re.compile(r"`([^`]+?\.(?:py|md|toml|json|ya?ml))`")
+_PROOF_POINTER_RE = re.compile(r"`([^`]+?\.(?:py|md|toml|json|ya?ml|ts|tsx))`")
 _ROW_ID_RE = re.compile(r"^[A-Z][A-Z0-9]-[0-9A-Z]+$")
 _SLICE_RE = re.compile(r"\bS[234]\b")
 
@@ -147,7 +159,10 @@ _SLICE_RE = re.compile(r"\bS[234]\b")
 def _registered_proofs(item: str) -> tuple[str, ...]:
     """Every path that may stand as proof for ``item`` (build + doc-fix)."""
     merged = (
-        PHASE0_ARTIFACTS.get(item, ()) + S2_ARTIFACTS.get(item, ()) + DOC_FIX_PROOFS.get(item, ())
+        PHASE0_ARTIFACTS.get(item, ())
+        + S2_ARTIFACTS.get(item, ())
+        + S3_ARTIFACTS.get(item, ())
+        + DOC_FIX_PROOFS.get(item, ())
     )
     return tuple(dict.fromkeys(merged))
 
@@ -188,11 +203,11 @@ def test_every_status_uses_a_legend_token(ledger_rows: dict[str, str]) -> None:
     assert not bad, f"status cells with no legend token: {bad}"
 
 
-@pytest.mark.parametrize("item", sorted(PHASE0_ARTIFACTS | S2_ARTIFACTS))
+@pytest.mark.parametrize("item", sorted(PHASE0_ARTIFACTS | S2_ARTIFACTS | S3_ARTIFACTS))
 def test_built_items_read_done(item: str, ledger_rows: dict[str, str]) -> None:
     """If the artifacts exist, the ledger may not still say BUILD/DOC-FIX."""
     assert item in ledger_rows, f"{item} has no row in the ledger"
-    built = PHASE0_ARTIFACTS.get(item, ()) + S2_ARTIFACTS.get(item, ())
+    built = PHASE0_ARTIFACTS.get(item, ()) + S2_ARTIFACTS.get(item, ()) + S3_ARTIFACTS.get(item, ())
     missing = [p for p in built if not _is_real_artifact(p)]
     if missing:
         pytest.skip(f"{item} artifacts not built yet: {missing}")
@@ -245,7 +260,7 @@ def test_done_rows_cite_an_existing_proof_pointer(
     )
 
 
-@pytest.mark.parametrize("item", sorted(PHASE0_ARTIFACTS | S2_ARTIFACTS))
+@pytest.mark.parametrize("item", sorted(PHASE0_ARTIFACTS | S2_ARTIFACTS | S3_ARTIFACTS))
 def test_phase0_artifacts_are_new_since_the_s1_baseline(item: str) -> None:
     """The registry may only claim files the slice actually created.
 
@@ -257,7 +272,9 @@ def test_phase0_artifacts_are_new_since_the_s1_baseline(item: str) -> None:
     them yet.
     """
     preexisting = []
-    for rel_path in PHASE0_ARTIFACTS.get(item, ()) + S2_ARTIFACTS.get(item, ()):
+    for rel_path in (
+        PHASE0_ARTIFACTS.get(item, ()) + S2_ARTIFACTS.get(item, ()) + S3_ARTIFACTS.get(item, ())
+    ):
         probe = subprocess.run(
             ["git", "cat-file", "-e", f"{S1_BASELINE_SHA}:{rel_path}"],
             cwd=REPO_ROOT,
@@ -352,7 +369,9 @@ DEBT_REGISTER_PATH = REPO_ROOT / "docs" / "63-technical-debt-register.md"
 #: suffix and optional trailing ``.py`` member chain. Only tokens containing
 #: a ``/`` are treated as paths, so ``pyproject.toml [tool.mutmut]`` (a
 #: section reference, not a file claim) is left alone.
-_DEBT_PROOF_PATH_RE = re.compile(r"`([A-Za-z0-9_./-]+\.(?:py|md|toml|json|ya?ml|js|css|html))\b")
+_DEBT_PROOF_PATH_RE = re.compile(
+    r"`([A-Za-z0-9_./-]+\.(?:py|md|toml|json|ya?ml|js|css|html|ts|tsx))\b"
+)
 
 #: The row-ID shape used by ``docs/63`` (``DEBT-011``), which is not the
 #: findings-ledger shape parsed above.

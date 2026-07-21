@@ -2798,6 +2798,91 @@ html[data-theme="dark"] .landing-preview-caption {
   }
 }
 
+/* --- FR-016 (S3): trust-score surface (what was and was NOT checked) ---
+   Rendering contract (D-2): zero digits, zero advisory-label words. The GREEN
+   RULE (D-6): this surface NEVER references --c-green / --success /
+   --success-soft / --success-border / --verdict-surface / --shadow-verdict, in
+   EITHER theme — a green "pass" here would be the false-confidence surface the
+   whole slice exists to prevent. The band accent is amber (caution) / blue
+   (neutral-informational) / ink only, carried through a custom property so the
+   D-6 guard can audit every paint channel. */
+.result-trust-score {
+  --trust-score-accent: var(--line-strong);
+  margin-top: var(--space-3);
+  padding: var(--space-4);
+  background: var(--surface);
+  border: 1px solid var(--line-2);
+  border-left: 4px solid var(--trust-score-accent);
+  border-radius: var(--radius-md);
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+}
+
+/* Accent by state. NONE of these is green — an indeterminate or refused run
+   reads as caution/neutral, and even the "passed" branch is INFORMATIONAL blue,
+   never a confident green, because structural checks are not a fact-check. */
+.result-trust-score[data-state="indeterminate"],
+.result-trust-score[data-state="no-marker"],
+.result-trust-score[data-state="caution"] {
+  --trust-score-accent: var(--warning);
+  background: var(--warning-soft);
+}
+
+.result-trust-score[data-state="refused"] {
+  --trust-score-accent: var(--line-strong);
+}
+
+.result-trust-score[data-state="passed"] {
+  --trust-score-accent: var(--info);
+  background: var(--info-soft);
+}
+
+.result-trust-score-disclosure {
+  margin: 0;
+  font-size: 0.74rem;
+  font-weight: 700;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  color: var(--text-secondary);
+}
+
+.result-trust-score-state {
+  margin: 0;
+  font-size: 0.92rem;
+  line-height: 1.5;
+  color: var(--ink);
+}
+
+.result-trust-score-why {
+  margin: 0;
+  padding-left: 1.1rem;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+
+.result-trust-score-why-item {
+  font-size: 0.82rem;
+  line-height: 1.45;
+  color: var(--text-secondary);
+}
+
+/* Amber alert row. Text is --ink (not --warning) so it clears 4.5:1 over the
+   amber tint — dark-amber-on-light-amber composites to ~3.4:1 and fails the
+   scoped axe contrast gate. The amber reads through the left border + soft fill. */
+.result-trust-score-missing-caveat {
+  margin: 0;
+  padding: var(--space-2) var(--space-3);
+  border-radius: var(--radius-md);
+  border-left: 3px solid var(--warning);
+  background: var(--warning-soft);
+  color: var(--ink);
+  font-size: 0.85rem;
+  font-weight: 600;
+  line-height: 1.45;
+}
+
 /* The verdict ring DRAW is the one long motion — disable it under
    reduced-motion (the ring stays at its final value, just static). */
 @media (prefers-reduced-motion: reduce) {

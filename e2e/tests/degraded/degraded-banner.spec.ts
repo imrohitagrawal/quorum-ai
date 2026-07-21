@@ -1,5 +1,15 @@
 import { test, expect, Page } from "@playwright/test";
-import { boot, goldenCreateResp, goldenCompletedResp } from "../../fixtures/golden-run";
+import {
+  boot,
+  goldenCreateResp,
+  goldenCompletedResp,
+  withEvaluation,
+  goldenEvaluation,
+  EVAL_LAUNDERED,
+  EVAL_UNKNOWN_GROUNDING_REFUSAL,
+  EVAL_MISSING_HIGH_STAKES,
+  EVAL_SUPPRESSED_DISAGREEMENT,
+} from "../../fixtures/golden-run";
 
 /**
  * #26 — degraded-mode banner on the PRIMARY result view.
@@ -92,5 +102,103 @@ test.describe("degraded-mode result banner (#26)", () => {
     const banner = page.locator("#result-degraded");
     await expect(banner).toBeVisible();
     await expect(banner).toContainText(/2 of 4/i);
+  });
+});
+
+/**
+ * OC-5 — the misleading-output gate (S3, FR-016). The DEBT-012 laundering shape
+ * is the strongest possible case for it: a run whose engine labels read
+ * confident but whose provenance is unknown must never present as trustworthy.
+ * Unlike the #26 count-driven banner above, this is FAITHFULNESS-driven — a
+ * fully-LIVE unfaithful run has no simulated count to trip on.
+ */
+const SURFACE = "#result-trust-score";
+
+test.describe("misleading-output gate (OC-5)", () => {
+  test.skip(({ browserName }) => browserName !== "chromium", "reference run is chromium-only");
+
+  test("a fully-LIVE unfaithful run renders the caution treatment", async ({ page }) => {
+    const ev = goldenEvaluation({
+      faithfulness_label: "unfaithful",
+      hallucination_risk: "high",
+      signals: { citation_marker_grounding: 0.2, citation_coverage_ratio: 0.3 },
+    });
+    const completed = withEvaluation(
+      { ...goldenCompletedResp(), demo_mode: false, live_count: 4, local_count: 0 },
+      ev,
+    );
+    await driveWithCompleted(page, completed);
+
+    // The simulated-count path CANNOT fire on a fully-live run — so this is a
+    // genuinely new, faithfulness-driven gate.
+    await expect(page.locator("#result-degraded"), "fully-live: no simulated banner").toBeHidden();
+
+    const surface = page.locator(SURFACE);
+    await expect(surface).toBeVisible();
+    await expect(surface).toHaveAttribute("data-state", "caution");
+    const text = await surface.innerText();
+    expect(text).not.toMatch(/\d/);
+    expect(text).not.toMatch(/\bfaithful\b|low risk|trustworth|confiden/i);
+  });
+
+  test("the laundered evaluation renders the degraded treatment and no confident token", async ({ page }) => {
+    const completed = withEvaluation(goldenCompletedResp(), EVAL_LAUNDERED);
+    await driveWithCompleted(page, completed);
+
+    const surface = page.locator(SURFACE);
+    await expect(surface).toBeVisible();
+    await expect(surface).toHaveAttribute("data-state", "indeterminate");
+    const text = await surface.innerText();
+    expect(text).not.toContain("100");
+    expect(text).not.toContain("82");
+    expect(text).not.toMatch(/\bfaithful\b/i);
+  });
+
+  test("a refusal renders a neutral state, never a trust word", async ({ page }) => {
+    const completed = withEvaluation(goldenCompletedResp(), EVAL_UNKNOWN_GROUNDING_REFUSAL);
+    await driveWithCompleted(page, completed);
+
+    const surface = page.locator(SURFACE);
+    await expect(surface).toBeVisible();
+    // Grounding is null on this fixture, so the higher-priority no-marker branch
+    // wins over refused — pin it so the two neutral states can't be conflated.
+    await expect(surface).toHaveAttribute("data-state", "no-marker");
+    const text = await surface.innerText();
+    expect(text).toMatch(/could be checked/i);
+    expect(text).not.toMatch(/low risk|trustworth|confiden|\bfaithful\b/i);
+  });
+
+  test("a missing mandatory safety caveat is surfaced (with a paired negative)", async ({ page }) => {
+    // Required && absent ⇒ the amber row is visible.
+    await driveWithCompleted(page, withEvaluation(goldenCompletedResp(), EVAL_MISSING_HIGH_STAKES));
+    await expect(page.locator(`${SURFACE} .result-trust-score-missing-caveat`)).toBeVisible();
+
+    // Paired negative: required && present ⇒ the row is absent (not vacuous).
+    const present = goldenEvaluation({
+      signals: { high_stakes_warning_required: true, high_stakes_warning_present: true },
+    });
+    await driveWithCompleted(page, withEvaluation(goldenCompletedResp(), present));
+    await expect(page.locator(`${SURFACE} .result-trust-score-missing-caveat`)).toHaveCount(0);
+  });
+
+  test("a suppressed disagreement loses the green Agreement treatment (with a paired positive)", async ({ page }) => {
+    const base = goldenCompletedResp();
+    // 4/4 aligned + false_consensus_preserved:false ⇒ isConsensus true, so the
+    // ONLY thing that can flip the green treatment is disagreement_suppressed.
+    const fourFour = { ...base, result: { ...base.result, agreement: { aligned: 4, total: 4 } } };
+    const agreementCard = page.locator('#result-trust [data-accent="agreement"]');
+    const chip = agreementCard.locator(".result-trust-chip");
+
+    // Suppressed ⇒ the card loses green.
+    await driveWithCompleted(page, withEvaluation(fourFour, EVAL_SUPPRESSED_DISAGREEMENT));
+    await expect(agreementCard).toHaveAttribute("data-consensus", "false");
+    const suppressedChip = await chip.evaluate((n) => getComputedStyle(n).backgroundColor);
+
+    // Paired positive ⇒ not suppressed keeps green.
+    await driveWithCompleted(page, withEvaluation(fourFour, goldenEvaluation()));
+    await expect(agreementCard).toHaveAttribute("data-consensus", "true");
+    const keptChip = await chip.evaluate((n) => getComputedStyle(n).backgroundColor);
+
+    expect(suppressedChip, "suppression must change the agreement chip colour").not.toEqual(keptChip);
   });
 });

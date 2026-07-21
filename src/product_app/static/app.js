@@ -2193,6 +2193,7 @@
     renderResultReceipt(result, res);
     renderVerdictBand(result, fs, { isConsensus, aligned, total, revisedCount, movements });
     renderTrustTriangle(result, res, fs, { isConsensus, aligned, total });
+    renderTrustScore(result);
     renderResultPositions(res);
     renderResultSynthesis(fs, res);
 
@@ -2536,17 +2537,31 @@
     trust.textContent = "";
     const { isConsensus, aligned, total } = ctx;
 
-    // Agreement — green accent ONLY when isConsensus.
+    // D-17: a run where a polar disagreement was DETECTED and then flattened in
+    // the synthesis must LOSE the green consensus treatment, even if the raw
+    // aligned/total reads as consensus — that is exactly the AC-019
+    // false-consensus failure the green rule exists to prevent. The evaluation
+    // signal (``disagreement_suppressed``), not the agreement tally, is the
+    // authority here.
+    const ev = result && result.evaluation;
+    const suppressed = Boolean(
+      ev && ev.signals && ev.signals.disagreement_suppressed === true,
+    );
+    const agreementConsensus = isConsensus && !suppressed;
+
+    // Agreement — green accent ONLY when isConsensus AND not suppressed.
     trust.appendChild(
       buildTrustCard({
         accent: "agreement",
-        consensus: isConsensus,
+        consensus: agreementConsensus,
         kicker: "Agreement",
         value: `${aligned} of ${total}`,
         valueSub: "aligned",
-        caption: isConsensus
-          ? "How many models the final synthesis places in agreement — inferred, not a tallied vote."
-          : "How many models the final synthesis places in agreement — inferred, not a tallied vote; the panel did not fully align, so the disagreement is preserved below.",
+        caption: suppressed
+          ? "Disagreement was flattened in the synthesis."
+          : isConsensus
+            ? "How many models the final synthesis places in agreement — inferred, not a tallied vote."
+            : "How many models the final synthesis places in agreement — inferred, not a tallied vote; the panel did not fully align, so the disagreement is preserved below.",
       }),
     );
 
@@ -2597,6 +2612,150 @@
           : "No open uncertainty was flagged for this run.",
       }),
     );
+  }
+
+  // --- FR-016 (S3): the trust-score surface -----------------------------
+  //
+  // RENDERING CONTRACT (D-2), each rule mechanically enforced by
+  // e2e/tests/invariants/trust-score-invariants.spec.ts:
+  //   R1 — no digits anywhere in the surface's innerText;
+  //   R2 — none of the advisory-label words (faithful/partial/low risk/…);
+  //   R3 — no raw signal identifiers;
+  //   R4 — the standing disclosure literal is always present.
+  // Every string below is an app-authored CONSTANT selected from the served
+  // metrics — never interpolated provider prose. D-15: this surface uses
+  // textContent/mkEl ONLY, never setProse/setInlineProse, so no provider-text
+  // path is ever normalised onto it. The projection carries no free-text field
+  // (enforced by test), so there is nothing here to escape.
+  const TRUST_DISCLOSURE =
+    "Not verified — these are automated structural checks, not a fact-check.";
+  // State line, priority order (first match wins) — D-2 state table.
+  const TRUST_STATE_INDETERMINATE =
+    "Some citations on this run point to pages that were never retrieved here, so the structural checks could not be applied.";
+  const TRUST_STATE_NO_MARKER =
+    "No citation marker on this run could be checked.";
+  const TRUST_STATE_REFUSED =
+    "The panel declined. Nothing was asserted, and nothing was verified.";
+  // FAITHFULNESS branch — the run's own advisory labels sit at the WARNING end.
+  // Rendered WITHOUT naming the label (R2), so a caution is surfaced but no
+  // confident-label word leaks. This is what makes the OC-5 gate genuinely
+  // faithfulness-driven rather than a rename of the simulated-count banner.
+  const TRUST_STATE_CAUTION =
+    "The structural checks did not clear this run — treat its answer with added caution.";
+  const TRUST_STATE_PASSED =
+    "Structural checks passed — citations were not verified against their sources.";
+  const TRUST_MISSING_CAVEAT =
+    "This question needed a safety caveat and the synthesis did not include one.";
+  // "Why we could not fully check" lines — fixed hand-written English keyed on
+  // the signal name. A line is emitted only for a contribution PRESENT in
+  // trust.diagnostics.contributions whose value < 1.0, sorted ascending by
+  // value (the reasons to DOUBT, never the highest contribution), capped at 3.
+  const TRUST_WHY = {
+    citation_marker_grounding:
+      "Some citation markers did not point at a source on this run.",
+    live_ratio: "Not every answer came from a live model.",
+    citation_coverage_ratio: "Not every material claim carried a citation.",
+    completeness: "Not every model slot produced a usable answer.",
+    disagreement_integrity:
+      "A polar disagreement was flattened in the synthesis.",
+    uncertainty_surfaced: "The synthesis flagged no open uncertainty.",
+    decision_support_framing_present:
+      "The synthesis did not frame itself as decision support.",
+  };
+
+  function renderTrustScore(result) {
+    const box = el("result-trust-score");
+    if (!box) return;
+    // D-12: renderResult has THREE call sites — reset UNCONDITIONALLY, before
+    // any early return, or a re-render leaves a STALE band.
+    box.textContent = "";
+    box.hidden = true;
+    box.removeAttribute("data-state");
+
+    const ev = result && result.evaluation;
+    // D-14: an absent / null / malformed evaluation ⇒ hidden, zero text. (An
+    // em-dash would read as "nothing wrong found"; silence is honest here.)
+    if (!ev || typeof ev !== "object") return;
+    const sig = ev.signals && typeof ev.signals === "object" ? ev.signals : null;
+    if (!sig) return;
+
+    // D-3: fail CLOSED on the served string — a strict WHITELIST. Anything
+    // else (undefined, null, an unknown future value, a persisted s2-eval-v2
+    // row read back) renders the indeterminate treatment. A blacklist
+    // (`unverifiable_marker_count > 0`) would evaluate `undefined > 0 === false`
+    // and show the CONFIDENT treatment on exactly the runs whose provenance is
+    // unknown.
+    const reportable = ev.label_confidence === "reportable";
+
+    // R4: the standing disclosure is always the first line.
+    box.appendChild(mkEl("p", "result-trust-score-disclosure", TRUST_DISCLOSURE));
+
+    // State line — D-2 priority table, first match wins.
+    let state;
+    let stateText;
+    if (!reportable) {
+      state = "indeterminate";
+      stateText = TRUST_STATE_INDETERMINATE;
+    } else if (
+      sig.citation_marker_grounding === null ||
+      sig.citation_marker_grounding === undefined
+    ) {
+      state = "no-marker";
+      stateText = TRUST_STATE_NO_MARKER;
+    } else if (sig.refusal_detected === true) {
+      state = "refused";
+      stateText = TRUST_STATE_REFUSED;
+    } else if (ev.faithfulness_label !== "faithful" || ev.hallucination_risk !== "low") {
+      // Warning-end labels (unfaithful/partial, high/medium risk) — surface a
+      // caution without naming the label. Deleting this branch reds OC-5
+      // degraded case 1 (a fully-LIVE unfaithful run) while the count-driven
+      // degraded tests stay green.
+      state = "caution";
+      stateText = TRUST_STATE_CAUTION;
+    } else {
+      state = "passed";
+      stateText = TRUST_STATE_PASSED;
+    }
+    box.dataset.state = state;
+    box.appendChild(mkEl("p", "result-trust-score-state", stateText));
+
+    // "Why we could not fully check" lines — lowest value first, capped at 3.
+    const diag = ev.trust && ev.trust.diagnostics;
+    const contributions =
+      diag && Array.isArray(diag.contributions) ? diag.contributions : [];
+    const whys = contributions
+      .filter(
+        (c) =>
+          c &&
+          typeof c.signal === "string" &&
+          Object.prototype.hasOwnProperty.call(TRUST_WHY, c.signal) &&
+          Number.isFinite(Number(c.value)) &&
+          Number(c.value) < 1.0,
+      )
+      .slice()
+      .sort((a, b) => Number(a.value) - Number(b.value))
+      .slice(0, 3);
+    if (whys.length) {
+      const list = mkEl("ul", "result-trust-score-why");
+      for (const c of whys) {
+        list.appendChild(mkEl("li", "result-trust-score-why-item", TRUST_WHY[c.signal]));
+      }
+      box.appendChild(list);
+    }
+
+    // OC5-5: a mandatory safety caveat that the synthesis did not include is
+    // the highest-consequence silent state in the payload — surface it as a
+    // persistent amber row, independent of the verdict caveat.
+    if (
+      sig.high_stakes_warning_required === true &&
+      sig.high_stakes_warning_present !== true
+    ) {
+      box.appendChild(
+        mkEl("p", "result-trust-score-missing-caveat", TRUST_MISSING_CAVEAT),
+      );
+    }
+
+    box.hidden = false;
   }
 
   // --- Slice 4b: run receipt + cost reconciliation -----------------------

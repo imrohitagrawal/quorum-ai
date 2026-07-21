@@ -1170,7 +1170,7 @@ visual spec fail (no `#result-trust-score` in the DOM).
 **BITE proofs.**
 | Mutation | Reds |
 |---|---|
-| Replace `renderTrustScore`'s body with `box.textContent = "—"` | invariants 4, 9, 11; degraded cases 2–5 |
+| Replace `renderTrustScore`'s body with `box.textContent = "—"` | invariants 4, 9, 11; degraded cases 1–4 (case 5 asserts on the #result-trust Agreement card, which this mutation does not touch) |
 | Move the `box.textContent = ""` reset **below** the `evaluation == null` early return | invariant 10 (stale band on re-render) |
 | Change the whitelist to `ev.label_confidence !== "indeterminate"` | invariant 11 (fail-closed) |
 | Render `trust.diagnostics.layer_a_composite_unverified` | invariant 1 (73.4) |

@@ -122,6 +122,7 @@ jobs:
         run: >-
           npx playwright test
           tests/invariants/rendering-invariants.spec.ts
+          tests/invariants/trust-score-invariants.spec.ts
           --project=chromium
           --retries=0
 
@@ -135,9 +136,15 @@ jobs:
         # masked/hidden so the diff never flakes.
         env:
           CI: "true"
+        # trust-score-visual.spec.ts is BLOCKING alongside visual-snapshots (the
+        # repo forbids continue-on-error in e2e.yml — the invariants are hard
+        # gates). Its PNGs are seeded by the glob-driven seed-visual-baselines.yml
+        # and HUMAN-REVIEWED before merge (§5.3): the operator runs the seed
+        # workflow, reviews every new/changed PNG, then this compare goes green.
         run: >-
           npx playwright test
           tests/invariants/visual-snapshots.spec.ts
+          tests/invariants/trust-score-visual.spec.ts
           --project=chromium
           --retries=0
 
