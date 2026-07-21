@@ -137,6 +137,10 @@ also_copy = [
   # with it absent: that spec fails inside ./mutants/ and mutmut aborts with
   # "failed to collect stats" before scoring a mutant.
   "PRODUCT_IDEA.md",
+  # ``Dockerfile`` carries the deployed uvicorn argv, including which peers may
+  # set X-Forwarded-For. tests/security/test_trusted_proxy_ips.py reads it from
+  # ``REPO_ROOT`` to prove the per-IP rate limiter is not header-spoofable.
+  "Dockerfile",
 ]
 # -m "not env_oracle": environmental oracles — GC/ResourceWarning finalisation,
 #   wall-clock thread timing, a child interpreter's exit status — do not survive

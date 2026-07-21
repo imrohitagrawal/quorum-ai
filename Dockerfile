@@ -41,7 +41,18 @@ EXPOSE 8000
 # Production uvicorn settings:
 # - 4 workers (single instance, but each handles requests in parallel)
 # - bind to 0.0.0.0 so Fly's proxy can reach it
-# - proxy headers enabled so we get the real client IP from Fly's edge
+# - proxy headers enabled so we get the real client IP from Fly's edge, but
+#   TRUSTED ONLY from Fly's private proxy networks. This was "*", which believed
+#   X-Forwarded-For from ANY peer — so a client could forge the header and mint a
+#   fresh rate-limit bucket per request. Reproduced against these exact flags: 40
+#   requests rotating a forged IP returned 40x200 and ZERO 429s, defeating the
+#   /v1/session limiter completely (main.py keys it on request.client.host).
+#   Ranges measured on the running machine: its own routes are 172.19.4.128-135,
+#   the health-check peer is 172.19.4.129, and its 6PN address is fdaa:87:4c93:...
+#   Public traffic can never originate inside these, so a forged header from the
+#   internet is now ignored — while the real client IP Fly forwards is still
+#   honoured, which keeps the limit per-user rather than one global bucket.
+#   Behaviour (both directions) is pinned by tests/security/test_trusted_proxy_ips.py.
 # - timeout 60s (queries can take that long for synthesis)
 # - graceful shutdown on SIGTERM (Fly's default kill signal)
 CMD ["uvicorn", "product_app.main:app", \
@@ -49,6 +60,6 @@ CMD ["uvicorn", "product_app.main:app", \
      "--port", "8000", \
      "--workers", "1", \
      "--proxy-headers", \
-     "--forwarded-allow-ips", "*", \
+     "--forwarded-allow-ips", "172.16.0.0/12,fdaa::/16,127.0.0.1,::1", \
      "--timeout-keep-alive", "30", \
      "--timeout-graceful-shutdown", "30"]
