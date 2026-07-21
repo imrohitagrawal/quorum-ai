@@ -1,0 +1,102 @@
+name: Deploy drift watchdog
+
+# COST-FREE self-healing deploy watchdog (Actions is free/unlimited on this
+# public repo). It fixes the failure mode we hit on #54: main got a new commit
+# but no deploy fired (a dropped Actions event / skipped-or-failed deploy gate /
+# a flake), leaving prod stale with no one watching.
+#
+# WHAT IT CHECKS (honest scope): whether main HEAD has a SUCCESSFUL
+# "Deploy to Fly.io" run — the deploy JOB, not a `/health` 200 (per the
+# deploy-job-skip-vs-health lesson). It does NOT track an out-of-band local
+# `flyctl deploy`; if one happened, the watchdog will re-trigger a pipeline that
+# just redeploys the same code (idempotent, harmless).
+#
+# WHAT IT DOES on drift: re-dispatches only the CI/Tests/E2E workflows that lack
+# a success for main HEAD (they re-fire the workflow_run deploy gate); if all
+# three are already green but no deploy happened, it dispatches the deploy
+# workflow directly. Either way it opens/updates a single `deploy-drift` issue
+# so a human is alerted (e.g. if the parity flake, RB-4, keeps blocking E2E).
+
+on:
+  schedule:
+    - cron: "*/30 * * * *" # every 30 minutes
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  actions: write # dispatch CI/Tests/E2E/Deploy
+  issues: write # open/update the drift alert
+
+concurrency:
+  group: deploy-drift-watchdog
+  cancel-in-progress: false
+
+jobs:
+  watchdog:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Detect deploy drift on main HEAD and self-heal
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          HEALTH_URL: https://quorum-ai.fly.dev/health
+        run: |
+          set -euo pipefail
+
+          SHA=$(gh api "repos/$REPO/commits/main" -q '.sha')
+          SHORT=${SHA:0:8}
+          echo "main HEAD = $SHORT"
+
+          RUNS_JSON=$(gh api "repos/$REPO/actions/runs?head_sha=$SHA&per_page=100")
+          success_for() { jq -r --arg n "$1" '[.workflow_runs[] | select(.name==$n and .conclusion=="success")] | length' <<<"$RUNS_JSON"; }
+          inprogress_total() { jq -r '[.workflow_runs[] | select(.status=="in_progress" or .status=="queued")] | length' <<<"$RUNS_JSON"; }
+
+          open_drift_issue() { gh issue list --repo "$REPO" --state open --label deploy-drift --json number -q '.[0].number // ""' 2>/dev/null || true; }
+
+          DEPLOYED=$(success_for "Deploy to Fly.io")
+          if [ "$DEPLOYED" -gt 0 ]; then
+            echo "OK: main HEAD ($SHORT) has a successful Fly deploy. No drift."
+            NUM=$(open_drift_issue)
+            if [ -n "$NUM" ]; then gh issue close "$NUM" --repo "$REPO" -c "Resolved — \`$SHORT\` now has a successful deploy."; fi
+            exit 0
+          fi
+
+          INPROG=$(inprogress_total)
+          if [ "$INPROG" -gt 0 ]; then
+            echo "WAIT: $INPROG pipeline run(s) in progress for $SHORT. No action this cycle."
+            exit 0
+          fi
+
+          echo "DRIFT: $SHORT has no successful Fly deploy and nothing is in progress. Self-healing."
+          DISPATCHED=""
+          MISSING=0
+          for pair in "CI:ci.yml" "Tests:test.yml" "E2E (axe + parity):e2e.yml"; do
+            name="${pair%%:*}"; file="${pair##*:}"
+            if [ "$(success_for "$name")" -eq 0 ]; then
+              MISSING=$((MISSING+1))
+              if gh workflow run "$file" --repo "$REPO" --ref main; then DISPATCHED="$DISPATCHED $file"; fi
+            fi
+          done
+          if [ "$MISSING" -eq 0 ]; then
+            # All checks green but no deploy (gate hiccup) → dispatch deploy directly.
+            if gh workflow run "deploy.yml" --repo "$REPO" --ref main; then DISPATCHED="$DISPATCHED deploy.yml"; fi
+          fi
+
+          HEALTH=$(curl -s -m 10 "$HEALTH_URL" || echo "unreachable")
+          BODY=$(printf '%s\n' \
+            "Automated **deploy-drift** alert." \
+            "" \
+            "- main HEAD: \`$SHA\`" \
+            "- No successful **Deploy to Fly.io** run for this SHA, and no pipeline in progress." \
+            "- Prod \`/health\`: \`$HEALTH\`" \
+            "- Self-heal: re-dispatched ->$DISPATCHED on \`main\`." \
+            "" \
+            "If this recurs, the pipeline is likely failing to conclude (e.g. the parity boot flake, RB-4) — check the latest E2E run and quarantine/fix it.")
+
+          NUM=$(open_drift_issue)
+          if [ -n "$NUM" ]; then
+            gh issue comment "$NUM" --repo "$REPO" --body "$BODY"
+          else
+            gh label create deploy-drift --repo "$REPO" --color B60205 --description "Automated deploy-drift alerts" 2>/dev/null || true
+            gh issue create --repo "$REPO" --title "Deploy drift: main HEAD not deployed" --label deploy-drift --body "$BODY"
+          fi
