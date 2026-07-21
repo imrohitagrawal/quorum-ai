@@ -317,3 +317,24 @@ Given a query run carries an evaluation, when `GET /v1/query-runs/{id}` is calle
 
 - Requirement: FR-015, NFR-005
 - Test: TEST-FR-015 (`tests/unit/test_evaluation_auth_boundary.py` unauthenticated 401 and cross-account 404 with no evaluation payload; `tests/integration/test_query_run_evaluation_endpoint.py` owner-only projection)
+
+## AC-044 The trust surface renders no number and no confident label
+
+Given a completed run whose result payload carries an `evaluation` — which in the default judge-OFF deployment always has `trust.support_verified` False, `trust.score` null and `trust.band` `unverified` — when the owner opens the result view, then the trust summary surface renders a standing "Not verified" disclosure, exactly one plain-language state line and at most three "why" lines; and its rendered text contains no digit of any kind, none of the words `faithful`, `partial`, `unfaithful`, `low risk`, `medium risk`, `high risk`, `confidence`, `accuracy`, `trustworthy`, `reliable`, `score` or `grade`, and no raw Layer-A signal identifier; and no descendant carries an ARIA `meter`, `progressbar` or `slider` role or an `aria-valuenow` attribute. And given the payload has no `evaluation`, or a `null` one, or a malformed one, then the surface is hidden and emits zero text.
+
+- Requirement: FR-016, NFR-011
+- Test: TEST-FR-016 (`e2e/tests/invariants/trust-score-invariants.spec.ts` no-digits / no-label-words / no-identifiers / disclosure-present / no-ARIA-value-widget / absent-renders-nothing; `e2e/tests/invariants/real-integration-smoke.spec.ts` the same no-digit assertion against the REAL server projection with no mocks)
+
+## AC-045 A run whose citations could not be checked never presents a confident verdict
+
+Given a run carrying at least one unverifiable off-run URL citation marker whose engine labels sit at the confident end — the DEBT-012 laundering shape, one resolving ordinal beside many fabricated links, which the engine still labels `faithful` / `low` — when the result view is rendered, then the API serves `label_confidence: "indeterminate"` and the surface renders the indeterminate state line stating that some citations point to pages never retrieved on this run; and a payload from which `label_confidence` is absent altogether renders the same indeterminate treatment, so the guard fails closed; and a warning-labelled run is never suppressed, so the guard can only ever under-claim. And given `high_stakes_warning_required` is true while `high_stakes_warning_present` is false, then a persistent amber row states that the question needed a safety caveat and the synthesis did not include one, independent of whether the synthesis carries its own notice.
+
+- Requirement: FR-016, NFR-008
+- Test: TEST-FR-016 (`e2e/tests/degraded/degraded-banner.spec.ts` misleading-output gate: laundered / refusal / missing-high-stakes / suppressed-disagreement / fully-live-unfaithful, each with its paired negative; `tests/unit/test_evaluation_presentation_confidence.py` the monotone-downward property; `tests/integration/test_query_run_evaluation_endpoint.py` the fail-closed s2-eval-v2 case)
+
+## AC-046 The trust surface is never green, is accessible, and does not clip or overlap
+
+Given every evaluation shape in the golden fixture, when the result view is rendered at 375, 768 and 1440 px in the pinned Linux CI browser in both the light and the dark theme, then no element of the trust-score surface or any of its descendants or pseudo-elements resolves to a green token in `color`, `background-color`, `background-image`, any `border-*-color`, `outline-color`, `box-shadow`, `text-decoration-color`, `caret-color`, `accent-color`, `fill` or `stroke` — where the expected greens are read from the CSS token source at runtime in each theme, never retyped — and no descendant carries `data-consensus` or a consensus/agreement class; a run whose disagreement was suppressed loses the green Agreement treatment; an axe-core scan scoped to the surface reports no critical or serious violation and no `color-contrast` incomplete result; no two elements' bounding boxes intersect inside `#main-content`; the surface and each trust card neither clip nor truncate; and the human-reviewed element-scoped screenshot baselines match in both themes at all three viewports.
+
+- Requirement: FR-016, NFR-009
+- Test: TEST-FR-016 (`e2e/tests/invariants/trust-score-invariants.spec.ts` GREEN-RULE / token-source computed style / overlap / clipping, parameterised over 3 viewports × 2 themes; `e2e/tests/accessibility/axe-all-views.spec.ts` scoped scan failing on violations AND on color-contrast incompletes; `e2e/tests/invariants/trust-score-visual.spec.ts` element-scoped `maxDiffPixels` baselines)
