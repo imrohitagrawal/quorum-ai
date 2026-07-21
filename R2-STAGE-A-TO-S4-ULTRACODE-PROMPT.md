@@ -28,8 +28,11 @@ quoted text before editing.
 
 - `main` is at `43c8f90`. Three PRs already merged, deployed, prod-verified:
   - `#57` RB-4 flake mechanism · `#58` X-Forwarded-For security fix · `#59` plan v2
-- **Stage A is IN PROGRESS on branch `feat/debt-009-perf-publication`**, as
-  **uncommitted working-tree changes (0 commits)**. Confirm with `git status`.
+- **Stage A is BUILT, COMMITTED and PUSHED** on branch
+  `feat/debt-009-perf-publication` (commit `d251020`). Nothing is uncommitted.
+  Confirm with `git log --oneline -1` and `git status`.
+  **All local gates are GREEN**: `make validate` · `format-check` · `lint` ·
+  `type-check` all pass, and `uv run pytest -q` → **1185 passed, 7 skipped**.
 
 **What Stage A already has (done and proven):**
 - `_publish()` in `tests/perf/test_workflow_latency_percentiles.py` writing
@@ -46,13 +49,27 @@ quoted text before editing.
 - End-to-end verified: `make perf-gate` now emits both `[PERF]` lines AND
   persists the JSON — including on an **over-budget** run
 
-**What Stage A still needs (~5 minutes):**
-- 6 trivial errors in `tests/unit/test_perf_percentiles_artifact.py`:
-  3 ruff (`X <= d.keys()` → `d.keys() >= X` rewrites) and 3 mypy
-  (`_load_publish` needs a return type; two `Any` returns).
-  `make lint` and `make type-check` are currently RED **only** for these.
-- Then: full `uv run pytest -q`, `make diff-cover`, review fan, PR, merge,
-  verify the deploy JOB ran.
+**What Stage A still needs — START HERE:**
+1. `make diff-cover` (≥95 on the slice).
+2. **Review fan** — LIGHT depth (one round, 4–5 lenses) *including* the
+   executing output-correctness lens. Give one lens this specific job: the
+   `_publish` heredoc/JSON path, `perf-sample.yml` and the two new `ci.yml`
+   steps are workflow/instrumentation code that has never run in CI — run the
+   YAML through a parser, run the artifact logic against synthetic inputs
+   (empty file, truncated JSON, missing file, over-budget run), and confirm the
+   upload name is unique per run.
+3. Open the PR, get it green on the real runner, re-verify the rollup, merge,
+   then **confirm the deploy JOB ran** (not skipped/cancelled).
+4. **Merging Stage A starts the ≥20-sample / ≥5-calendar-day clock** for the
+   later budget-flip PR. Note the date it merged in `docs/63`.
+5. Then proceed to Stage B.
+
+**Expected, NOT a bug:** `make perf-gate` may exit non-zero locally or in CI on
+a loaded runner because the concurrent p95 exceeds the macOS-derived 1500ms
+budget. That is the debt itself, the job is advisory, and
+`test_make_perf_gate_reaches_the_measurement_stage` deliberately tolerates a
+`regressed:` failure while still asserting the gate MEASURED. Do not "fix" it by
+moving a budget.
 
 ---
 
