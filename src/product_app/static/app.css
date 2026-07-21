@@ -2819,6 +2819,13 @@ html[data-theme="dark"] .landing-preview-caption {
   gap: var(--space-2);
 }
 
+/* Respect the `hidden` attribute: `display: flex` above otherwise OVERRIDES the
+   UA `[hidden] { display: none }`, so an absent evaluation would render an empty
+   bordered box (D-14 requires it to render NOTHING). Higher specificity wins. */
+.result-trust-score[hidden] {
+  display: none;
+}
+
 /* Accent by state. NONE of these is green — an indeterminate or refused run
    reads as caution/neutral, and even the "passed" branch is INFORMATIONAL blue,
    never a confident green, because structural checks are not a fact-check. */
@@ -2838,12 +2845,13 @@ html[data-theme="dark"] .landing-preview-caption {
   background: var(--info-soft);
 }
 
+/* Sentence case, NOT text-transform:uppercase — innerText reflects the CSS
+   transform, and the D-2 R4 contract requires the exact literal disclosure to
+   appear in innerText. Uppercasing a full sentence is also poor typography. */
 .result-trust-score-disclosure {
   margin: 0;
-  font-size: 0.74rem;
+  font-size: 0.8rem;
   font-weight: 700;
-  letter-spacing: 0.05em;
-  text-transform: uppercase;
   color: var(--text-secondary);
 }
 
