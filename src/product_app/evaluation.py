@@ -300,6 +300,17 @@ def citation_marker_census(*, scopes: list[CitationScope]) -> MarkerCensus:
         for source in sources
         if not _is_placeholder_source(source)
     }
+    # PR-S3-2 (D-4): the app's OWN placeholder stubs (reserved-host rows this
+    # run holds), keyed by URL. A marker citing one BY URL is resolvable-as-
+    # FALSE with no I/O — exactly like an out-of-range ordinal — NOT an off-run
+    # URL. It therefore counts toward the denominator (unresolved), not as
+    # unverifiable.
+    placeholder_urls = {
+        _normalize_url(source.url)
+        for _text, sources in scopes
+        for source in sources
+        if _is_placeholder_source(source)
+    }
 
     resolved = 0
     unresolved = 0
@@ -318,6 +329,9 @@ def citation_marker_census(*, scopes: list[CitationScope]) -> MarkerCensus:
                     unresolved += 1
             elif _normalize_url(marker) in run_urls:
                 resolved += 1
+            elif _normalize_url(marker) in placeholder_urls:
+                # A stub URL the run holds: resolvable-as-FALSE (D-4).
+                unresolved += 1
             else:
                 # An off-run URL. UNKNOWN, not zero — see the docstring.
                 unverifiable += 1

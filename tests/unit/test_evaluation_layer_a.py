@@ -553,8 +553,11 @@ def test_the_corpus_confident_cases_keep_their_reportable_presentation() -> None
         ), case_id
 
 
-def test_a_simulated_stub_cited_BY_URL_does_not_ground_either() -> None:
-    """The URL arm of the same rule, which no test used to reach.
+def test_a_simulated_stub_cited_BY_URL_is_resolvable_as_FALSE_not_unknown() -> None:
+    """A stub URL the run holds is resolvable-as-FALSE, scored 0.0 (D-4).
+
+    Old name (for ``git log -S``):
+    ``test_a_simulated_stub_cited_BY_URL_does_not_ground_either``.
 
     ``test_fallback_sources_do_not_ground_a_marker`` exercises the ORDINAL
     path only, so the run-wide URL set's placeholder filter had NO oracle:
@@ -562,19 +565,21 @@ def test_a_simulated_stub_cited_BY_URL_does_not_ground_either() -> None:
     ``example.test`` stub cited by URL scored 1.0 → ``faithful``/``low``
     (measured, adversarial review round 3).
 
-    A stub URL is not "unknown" the way an off-run URL is — the run holds
-    the row and Layer A can see it is a placeholder — but it is excluded
-    from the run-wide URL set, so the marker is treated as off-run and the
-    scope reports ``None`` (unknown) rather than resolving.
+    A stub URL is NOT "unknown" the way an off-run URL is — the run holds the
+    row and ``.test`` is IANA-reserved, so Layer A can see it cannot be a real
+    page with NO network, exactly like an out-of-range ordinal. It is therefore
+    counted in the denominator as resolvable-as-FALSE (``unresolved``) and the
+    scope scores ``0.0``, not ``None``. This restores symmetry with
+    ``test_fallback_sources_do_not_ground_a_marker``, which already scores the
+    ORDINAL form of the identical run ``0.0``. ``0.0`` is strictly more
+    punishing than ``None``, so the property this test protects (a stub URL can
+    never GROUND anything) strengthens.
     """
     stub = _stub_source()
-    assert (
-        _grounding(
-            texts=[f"The answer is X, per [{stub.title}]({stub.url})."],
-            sources=[stub],
-        )
-        is None
-    )
+    assert _grounding(
+        texts=[f"The answer is X, per [{stub.title}]({stub.url})."],
+        sources=[stub],
+    ) == pytest.approx(0.0)
     # ...while a REAL page cited by URL resolves, fallback flag or not.
     tavily = _tavily_source("https://owasp.org/www-project-asvs/")
     assert _grounding(
