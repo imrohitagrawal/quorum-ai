@@ -407,12 +407,15 @@ def citation_marker_grounding(*, scopes: list[CitationScope]) -> float | None:
       needs URL liveness/support verification, i.e. a fetch or a judge —
       neither of which Layer A has. A cap on "excluded markers dominate"
       would need a calibrated cut, which FS-6 defers to the S4 golden set.
-      A **placeholder** source cited BY URL is likewise off-run: it is
-      excluded from the run-wide URL set, so it can never ground anything.
     * an **out-of-range ordinal is NOT excluded**. It points at a
       bibliography slot that demonstrably does not exist on this run, which
       Layer A can check without any I/O. That is resolvable-as-false, and
-      it stays in the denominator as unresolved.
+      it stays in the denominator as unresolved. A **placeholder** source
+      cited BY URL is treated the same way (DEBT-012 D-4, R2-S3): a reserved-
+      host stub the run itself holds is resolvable-as-false with zero I/O, so
+      it counts as ``unresolved`` (denominator, scored 0.0) — symmetric with
+      its ordinal form — NOT excluded. Only a genuinely off-run URL (a page
+      this run never retrieved) stays unverifiable and excluded.
 
     Returns ``None`` — **unknown, not zero** — when the prose contains no
     resolvable citation markers at all. This distinction is the whole
@@ -424,11 +427,13 @@ def citation_marker_grounding(*, scopes: list[CitationScope]) -> float | None:
 
     Pure: no I/O, no network, no clock.
 
-    Reimplemented over :func:`citation_marker_census` (DEBT-012, R2-S3) with
-    its value semantics UNCHANGED: the denominator is the census's
-    ``resolvable`` (resolved + resolvable-as-false), off-run URLs are
-    EXCLUDED from both numerator and denominator, and ``None`` means no
-    resolvable markers at all.
+    Reimplemented over :func:`citation_marker_census` (DEBT-012, R2-S3). Value
+    semantics are UNCHANGED except for the one intended D-4 reclassification
+    above (a placeholder stub cited by URL moves from excluded/None-contributing
+    to ``unresolved``/0.0, symmetric with its ordinal form): the denominator is
+    the census's ``resolvable`` (resolved + resolvable-as-false), genuinely
+    off-run URLs are EXCLUDED from both numerator and denominator, and ``None``
+    means no resolvable markers at all.
     """
     census = citation_marker_census(scopes=scopes)
     if not census.resolvable:
@@ -1422,22 +1427,21 @@ class TrustScore(BaseModel):
 def compute_composite(signals: LayerASignals) -> tuple[float, list[TrustContribution]]:
     """The transparent weighted composite over Layer-A signals ONLY.
 
-    Signals whose value is unknown (``citation_marker_grounding is None``)
-    are EXCLUDED and the remaining weights are renormalised, so "we could
-    not tell" never reads as "we measured zero". Returns the 0-100
-    composite and the per-component contributions, which sum to it exactly.
+    Signals whose value is unknown (``citation_marker_grounding is None``,
+    i.e. the run carried no resolvable citation marker at all) are EXCLUDED
+    and the remaining weights are renormalised, so "we could not tell" never
+    reads as "we measured zero". A *known* grounding is ALWAYS scored — the
+    presence of off-run URL markers never renormalises it away (DEBT-012,
+    R2-S3): grounding is computed only over resolvable markers, so it is
+    already clean of those URLs, and dropping a correctly-low grounding would
+    INFLATE the composite of a fabricating run and delete its strongest
+    reason-to-doubt from the contribution list. The laundering defence lives
+    entirely in :func:`presentation_confidence` + the zero-digit UI, which are
+    orthogonal to this composite. Returns the 0-100 composite and the
+    per-component contributions, which sum to it exactly.
     """
     values: dict[str, float | None] = {
-        # DEBT-012 (D-1.5): when the run carries any unverifiable off-run URL
-        # marker, grounding is EXCLUDED — treated as unknown and renormalised
-        # away, reusing the module's None-is-excluded doctrine — rather than
-        # scored. This is NOT a penalty (a penalty would be an uncalibrated
-        # constant); it is the same "we could not tell" handling one level up,
-        # so a 95%-fabricated run cannot name grounding at value 1.0 as its
-        # top contributor.
-        "citation_marker_grounding": (
-            None if signals.unverifiable_marker_count > 0 else signals.citation_marker_grounding
-        ),
+        "citation_marker_grounding": signals.citation_marker_grounding,
         "live_ratio": signals.live_ratio,
         "citation_coverage_ratio": signals.citation_coverage_ratio,
         "completeness": signals.completeness,

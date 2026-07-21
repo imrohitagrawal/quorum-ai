@@ -2009,12 +2009,6 @@
     }
   }
 
-  function truncateText(text, max) {
-    const value = String(text || "").trim();
-    if (value.length <= max) return value;
-    return `${value.slice(0, max - 1).trimEnd()}…`;
-  }
-
   // UTC wall-clock only, e.g. "09:41:44 UTC" — used by the run-receipt
   // Started/Finished rows. Accepts a Date or an ISO string; guards a
   // missing/invalid value and any ICU rejection.
