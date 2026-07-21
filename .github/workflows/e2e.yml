@@ -91,6 +91,24 @@ jobs:
         working-directory: e2e
         run: npx playwright install --with-deps chromium
 
+      - name: Run UI rendering + trust-score invariants (BLOCKING)
+        working-directory: e2e
+        # DETERMINISTIC gates run FIRST (fail-fast) — before the slower axe/parity
+        # suites — so a real regression here surfaces immediately and is never
+        # masked or delayed by an unrelated flake in a later step. These assert no
+        # raw Markdown / no overflow / a monotonic timer (rendering-invariants) and
+        # the FR-016 trust-surface contract (trust-score-invariants). HARD gate:
+        # continue-on-error was removed (the enforcement handoff); a red here is a
+        # real regression and blocks the merge.
+        env:
+          CI: "true"
+        run: >-
+          npx playwright test
+          tests/invariants/rendering-invariants.spec.ts
+          tests/invariants/trust-score-invariants.spec.ts
+          --project=chromium
+          --retries=0
+
       - name: Run axe + parity + real-integration suites (blocking)
         working-directory: e2e
         # Playwright's webServer self-starts the FastAPI app (see
@@ -106,23 +124,6 @@ jobs:
           tests/docs/docs-under-csp.spec.ts
           tests/invariants/real-integration-smoke.spec.ts
           tests/degraded/degraded-banner.spec.ts
-          --project=chromium
-          --retries=0
-
-      - name: Run UI rendering invariants (BLOCKING)
-        working-directory: e2e
-        # These assert no raw Markdown / no overflow / a monotonic timer against
-        # the golden messy fixture. The #29 (monotonic timer) and #30 (markdown
-        # on all provider-prose surfaces + underscore/blockquote formatter
-        # extension) fixes have landed and turn these GREEN, so the gate is now
-        # HARD: continue-on-error was removed (the enforcement handoff). A red
-        # here is a real regression and blocks the merge.
-        env:
-          CI: "true"
-        run: >-
-          npx playwright test
-          tests/invariants/rendering-invariants.spec.ts
-          tests/invariants/trust-score-invariants.spec.ts
           --project=chromium
           --retries=0
 
