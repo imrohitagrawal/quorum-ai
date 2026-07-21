@@ -1,5 +1,10 @@
 name: CI
 on:
+  # Manual lever: re-run the pipeline on-demand (e.g. after a flake or
+  # an Actions hiccup) without inventing a commit. A workflow_dispatch run
+  # on main still completes CI/Tests/E2E, which re-fires the workflow_run
+  # deploy gate — so it can force a fresh deploy + live verification.
+  workflow_dispatch:
   pull_request:
   push:
     branches: [ main ]
