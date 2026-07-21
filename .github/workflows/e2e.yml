@@ -135,6 +135,13 @@ jobs:
         # seed-visual-baselines.yml (--update-snapshots) and committed; here they
         # are COMPARED like-for-like. Dynamic regions (timer/run-id) + toasts are
         # masked/hidden so the diff never flakes.
+        #
+        # `if: !cancelled()` — run REGARDLESS of a prior step's outcome (but not
+        # on cancellation). This is still a HARD gate (it fails the job if IT
+        # fails; no continue-on-error), but it is no longer SKIPPED when an
+        # earlier step reds — so a flake in the axe/parity suite can never mask a
+        # real visual regression here. Independent gates, each reporting itself.
+        if: ${{ !cancelled() }}
         env:
           CI: "true"
         # trust-score-visual.spec.ts is BLOCKING alongside visual-snapshots (the
