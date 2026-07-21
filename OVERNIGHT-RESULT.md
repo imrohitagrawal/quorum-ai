@@ -26,7 +26,7 @@ Reviewed by a 5-lens adversarial workflow → 3 findings confirmed & fixed (a no
    - 6 new `e2e/tests/invariants/trust-score-visual.spec.ts-snapshots/trust-score-{light,dark}-{375,768,1440}.png`
    - updated `visual-snapshots.spec.ts-snapshots/result-verdict-chromium-linux.png`
    I did a first-pass look (both themes: no green, no digits, state+why+amber-caveat render; result-verdict surface correctly hidden on the no-eval fixture). **A human must still confirm each PNG.**
-2. After review, ensure the final e2e run is green (visual step compares against the seeded baselines), then `gh pr merge 54 --squash`.
+2. After review, get one clean full e2e run and `gh pr merge 54 --squash`. **Note:** across 6 e2e runs the invariants + axe + degraded + smoke steps passed every time, but the *visual-compare* step (step 3) has not yet been *observed* green because the parity flake below reds step 2 first and skips step 3. The visual compare passes by construction (baselines were just `--update-snapshots`-generated from the exact stabilized render, and I visually confirmed all 3 key PNGs). To observe it, re-run e2e until step 2's parity flake does not fire, **or** quarantine the flaky parity spec first (see below).
 3. **Monitor the deploy JOB actually runs** (not skipped) → `/health` 200 + `/ready` state:live (memory `deploy-job-skip-vs-health`).
 
 ## Known pre-existing issue (NOT S3; surfaced by CI)
