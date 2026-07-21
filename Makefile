@@ -25,10 +25,14 @@ CONTRACT_TEST_PATHS ?= tests/contract
 # deleted/emptied suite. That job needs it ABOVE the largest single contract
 # module — measured: schemathesis 17, hand-authored OpenAPI 6 — or deleting the
 # hand-authored half leaves 17 over a floor of 10 and api-contract stays green.
-# 18 clears 17 and leaves 5 of slack for a legitimately shrinking API surface;
-# tests/unit/test_contract_gate_collection_floor.py re-measures both modules.
+# R2-S3 added tests/contract/test_evaluation_signal_schema_additive.py (3 stable
+# hand-authored cases), so tests/contract now collects 32. 22 clears the largest
+# single module (schemathesis 17) and leaves 10 of slack for a legitimately
+# shrinking API surface — it is deliberately NOT pinned to the exact 32, per
+# the collection-floor test's documented rationale (schemathesis moves with the
+# schema); tests/unit/test_contract_gate_collection_floor.py re-measures both.
 PERF_MIN_TESTS ?= 11
-CONTRACT_MIN_TESTS ?= 18
+CONTRACT_MIN_TESTS ?= 22
 # An aggregate floor cannot protect a *particular* spec. PERF_MIN_TESTS is an
 # equality assert against the live collection, so deleting the hermeticity probe
 # and lowering the floor to match is a one-line edit that leaves every guard

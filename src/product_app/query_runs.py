@@ -63,9 +63,11 @@ from product_app.evaluation import (
     FaithfulnessLabel,
     HallucinationRisk,
     LayerASignals,
+    PresentationConfidence,
     RunEvaluationResult,
     TrustScore,
     evaluate_run,
+    presentation_confidence,
 )
 from product_app.feedback_store import record_event as _record_feedback_event
 from product_app.model_slots import (
@@ -300,6 +302,11 @@ class QueryRunEvaluationProjection(BaseModel):
     signals: LayerASignals
     faithfulness_label: FaithfulnessLabel
     hallucination_risk: HallucinationRisk
+    #: DEBT-012 presentation guard (D-3). NO default — fail CLOSED: a
+    #: projection constructed without it raises rather than silently serving
+    #: the confident branch. ``"indeterminate"`` whenever the run carries an
+    #: unverifiable off-run URL marker whose labels sit at the confident end.
+    label_confidence: PresentationConfidence
     trust: TrustScore
 
 
@@ -1598,6 +1605,11 @@ def _evaluation_projection(
         signals=evaluation.signals,
         faithfulness_label=evaluation.faithfulness_label,
         hallucination_risk=evaluation.hallucination_risk,
+        label_confidence=presentation_confidence(
+            evaluation.signals,
+            faithfulness_label=evaluation.faithfulness_label,
+            hallucination_risk=evaluation.hallucination_risk,
+        ),
         trust=result.trust,
     )
 
