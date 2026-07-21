@@ -421,6 +421,17 @@ golden loader must reuse `corpus/loader.py` primitives, not fork them),
 
 ---
 
+## Decision status (recorded 2026-07-21)
+
+**DECIDED:** D6 (security bypass — fixed and verified, #58) · D1 (RB-6: own
+workflow + evidence-based promotion trigger) · D3 (fix `live_count` inside RB-5)
+· review depth (**full for S4**, light-with-an-executing-lens for the rest).
+
+**STILL OPEN — needed before the stage they gate:** D0 (approve the rate-limit
+seam design), D2 (NFR-004: assert-what-exists vs build the deadline), D4
+(DeepEval/RAGAS: vocabulary-only vs a real extra), D5 (the 18 golden cases
+needing human labels). None blocks DEBT-009, which is why it goes first.
+
 ## Decisions required from the operator
 
 | # | Decision | Recommendation |
@@ -429,7 +440,7 @@ golden loader must reuse `corpus/loader.py` primitives, not fork them),
 | ~~D6~~ | **CLOSED 2026-07-21.** The IP limiter was bypassable via trusted `X-Forwarded-For`. Narrowed to Fly's measured private ranges in its own security PR (#58, `d588815`), verified against production. | Done. |
 | D1 | **RB-6 placement.** `e2e.yml` (blocking, gates prod deploys, cannot be advisory) or its own workflow (advisory-capable, does **not** gate deploy)? | **Own workflow, advisory — with a written promotion trigger, not a date.** Review's criticism is fair and historically grounded: this repo has advisory gates that never promoted (perf-gate is *still* advisory). So "one week" is withdrawn. Promotion criterion: **N consecutive green cross-engine runs with ≥1 executed test per engine, recorded with run ids** — the same evidence bar RB-4 set. If that is not met, the job does not promote, and the ledger says so. |
 | D2 | **RB-5 / NFR-004.** No 180s deadline exists. Assert what exists and file the gap, or build the deadline? | **Assert + file.** Building a run deadline is a product change deserving its own PR. |
-| D3 | **`live_count` counts failed slots as live.** Fix in RB-5, or document and fix separately? | **Prove with a failing test in RB-5; fix in its own PR** — it changes a served number and the "2 of 4" banner. |
+| **D3 — DECIDED** | **`live_count` counts failed slots as live.** | **DECIDED 2026-07-21: fix it INSIDE RB-5** (operator call, overriding the recommendation to split it out). Both call sites — `query_runs.py:1646` AND the duplicate in `evaluation.py` — must be fixed together, or the trust surface stays inconsistent. Ships with a test proven to bite, and the served-number change is called out in the PR body. |
 | D4 | **DeepEval/RAGAS.** Vocabulary-only, or a real nightly-only extra? | **Vocabulary-only**, on the measured 113-package/`openai`/`posthog` evidence. |
 | D5 | **S4 human labels.** 18 cases need a subject-matter label (4 clinical, 5 tax/financial, 2 as-of-date, 1 self-harm policy). | Ship the gate asserting **structural** signals only; surface the 18 as an operator queue. |
 
