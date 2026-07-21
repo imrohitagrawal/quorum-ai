@@ -8,7 +8,15 @@ export default defineConfig({
   },
   fullyParallel: true,
   forbidOnly: !!process.env.CI,
-  retries: process.env.CI ? 2 : 0,
+  // RB-4 flake policy: ZERO retries by default, CI included. A retry converts
+  // a real intermittent regression into a green check — the gate keeps saying
+  // "pass" while the contract it guards holds only two runs in three. Masking
+  // is explicit opt-in (`PW_RETRIES=2 npx playwright test ...`) for local
+  // triage only; the blocking lane additionally pins `--retries=0` at the call
+  // site (see tests/unit/test_e2e_flake_policy.py). A spec that fails >0/10 in
+  // flake-scan.yml is QUARANTINED with a ledger row — never retried, never
+  // given a wider timeout.
+  retries: Number(process.env.PW_RETRIES ?? 0),
   workers: process.env.CI ? 1 : undefined,
   reporter: [
     ["html"],
@@ -28,7 +36,12 @@ export default defineConfig({
   },
   use: {
     baseURL: "http://127.0.0.1:18085",
-    trace: "on-first-retry",
+    // NOT "on-first-retry": with the RB-4 zero-retry policy there is never a
+    // first retry, so that setting would capture a trace exactly never —
+    // removing the masking and the diagnostics in one move. A failure now has
+    // to be debuggable from its single run, so the trace is retained whenever
+    // that run fails.
+    trace: "retain-on-failure",
     screenshot: "only-on-failure",
     video: "retain-on-failure",
   },

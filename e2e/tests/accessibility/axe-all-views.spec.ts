@@ -6,6 +6,7 @@ import {
   goldenCompletedResp,
   goldenCreateResp,
 } from "../../fixtures/golden-run";
+import { freeze, waitForComposerReady } from "../../fixtures/stabilize";
 
 /**
  * AC-035 accessibility gate — a REAL axe-core drive over every SPA view in
@@ -123,13 +124,11 @@ const fulfil = (body: unknown, status = 200) => ({ status, contentType: "applica
 
 // ---- helpers ----------------------------------------------------------------
 const QUESTION = "What are the key metrics for measuring SaaS customer retention?";
-const FREEZE = "*,*::before,*::after{transition:none !important;animation:none !important;transition-duration:0s !important;animation-duration:0s !important;}";
-
-async function freeze(page: Page) {
-  await page.addStyleTag({ content: FREEZE });
-  // Stop the live-run poll/ticker timers so nothing re-renders mid-scan.
-  await page.evaluate(() => { for (let i = 1; i < 100000; i++) { clearInterval(i); clearTimeout(i); } });
-}
+// `freeze` (freeze motion + stop the live-run poll/ticker timers so nothing
+// re-renders mid-scan) now comes from the shared fixture — see the import
+// above. Deliberately `freeze`, not `stabilize`: the latter HIDES the toast
+// region, and a hidden element leaves the accessibility tree, which would
+// silently shrink this scan's coverage (RB-4).
 async function setTheme(page: Page, theme: "light" | "dark") {
   await page.evaluate((t) => document.documentElement.setAttribute("data-theme", t), theme);
   await expect(page.locator("html")).toHaveAttribute("data-theme", theme);
@@ -159,11 +158,8 @@ async function boot(page: Page) {
   // Wait until the four model slots are populated before interacting. The
   // estimate handler calls getModelIds() → renderModelInputs(); clicking
   // before the slots carry values makes it resolve display names for empty
-  // ids and throw. This is the deterministic "composer ready" signal.
-  await page.waitForFunction(() => {
-    const slots = [...document.querySelectorAll("[data-model-slot]")];
-    return slots.length === 4 && slots.every((s) => (s as HTMLInputElement).value?.trim().length > 0);
-  }, { timeout: 15000 });
+  // ids and throw.
+  await waitForComposerReady(page);
 }
 async function routeRun(page: Page, pollBody: unknown) {
   await page.route("**/v1/query-runs/estimate", (r) => r.fulfill(fulfil(estimateResp("0.100", "allow"))));

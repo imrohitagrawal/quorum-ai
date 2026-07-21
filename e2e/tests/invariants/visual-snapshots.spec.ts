@@ -1,5 +1,6 @@
-import { test, expect, Page } from "@playwright/test";
+import { test, expect } from "@playwright/test";
 import { driveToResult, driveToTranscript } from "../../fixtures/golden-run";
+import { stabilize, masks } from "../../fixtures/stabilize";
 
 /**
  * VISUAL REGRESSION baselines (toHaveScreenshot) for the two views where the
@@ -19,27 +20,9 @@ import { driveToResult, driveToTranscript } from "../../fixtures/golden-run";
  * cost) are masked so they never flake the diff.
  */
 
-const FREEZE =
-  "*,*::before,*::after{transition:none !important;animation:none !important;transition-duration:0s !important;animation-duration:0s !important;caret-color:transparent !important;}";
-
-async function stabilize(page: Page) {
-  await page.addStyleTag({ content: FREEZE });
-  await page.evaluate(() => { for (let i = 1; i < 100000; i++) { clearInterval(i); clearTimeout(i); } });
-  // Hide transient run toasts: they are timer-driven overlays whose presence
-  // depends on run timing, so freezing them into the baseline would flake the
-  // diff. They are app chrome, not the layout under test.
-  await page.addStyleTag({ content: ".toast-region{display:none !important;}" });
-  await page.waitForTimeout(100);
-}
-
-// Regions whose text changes run-to-run and must not drive a pixel diff.
-function masks(page: Page) {
-  return [
-    page.locator("#live-elapsed"),
-    page.locator("[data-run-id]"),
-    page.locator("#result-run-id"),
-  ];
-}
+// `stabilize` (freeze + stop timers + hide toasts) and `masks` live in the
+// shared fixture so this baseline and the axe scan freeze the page the SAME
+// way — a divergent freeze is its own flake source (RB-4).
 
 test.describe("visual snapshots (golden fixture)", () => {
   test.skip(({ browserName }) => browserName !== "chromium", "visual baselines are chromium-only");

@@ -148,6 +148,15 @@ S3_ARTIFACTS: dict[str, tuple[str, ...]] = {
         "e2e/tests/invariants/trust-score-invariants.spec.ts",
         "e2e/fixtures/evaluation-variants.json",
     ),
+    # RB-4 ships the flake MECHANISM; the rate itself is still unmeasured, and
+    # flake-rate.md is registered precisely so the gate keeps pointing at the
+    # page where a real, run-id-bearing number has to land.
+    "RB-4": (
+        "tests/unit/test_e2e_flake_policy.py",
+        ".github/workflows/flake-scan.yml",
+        "e2e/fixtures/stabilize.ts",
+        "docs/metrics/flake-rate.md",
+    ),
 }
 
 #: A path-shaped backtick span in a status cell, e.g. `tests/perf/x.py`.

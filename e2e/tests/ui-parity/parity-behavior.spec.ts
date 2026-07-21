@@ -1,4 +1,5 @@
 import { test, expect, Page } from "@playwright/test";
+import { waitForComposerReady } from "../../fixtures/stabilize";
 
 /**
  * Behavioural regression suite for the design-comp parity change.
@@ -111,10 +112,7 @@ async function boot(page: Page) {
   });
   await page.goto("/ui", { waitUntil: "domcontentloaded" });
   await expect(page.locator('[data-view="composer"]')).toBeVisible();
-  await page.waitForFunction(() => {
-    const slots = [...document.querySelectorAll("[data-model-slot]")];
-    return slots.length === 4 && slots.every((s) => (s as HTMLInputElement).value?.trim().length > 0);
-  }, { timeout: 15000 });
+  await waitForComposerReady(page);
 }
 async function fill(page: Page) { await page.getByRole("textbox").first().fill(QUESTION); }
 async function clickEstimate(page: Page) {
