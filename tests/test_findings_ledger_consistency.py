@@ -176,10 +176,38 @@ def _registered_proofs(item: str) -> tuple[str, ...]:
     return tuple(dict.fromkeys(merged))
 
 
+def _tracked_files() -> frozenset[str]:
+    """Every path git tracks, as repo-relative POSIX strings."""
+    completed = subprocess.run(
+        ["git", "ls-files", "-z"],
+        cwd=REPO_ROOT,
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+    return frozenset(p for p in completed.stdout.split("\0") if p)
+
+
 def _is_real_artifact(rel_path: str) -> bool:
-    """Exists *and* has content — ``touch docs/metrics/x.md`` proves nothing."""
+    """Tracked by git *and* has content.
+
+    Existence-on-disk alone is NOT enough. Measured (Stage A review): the
+    DEBT-009 row cited ``build/gates/perf-percentiles.json``, a GENERATED,
+    gitignored file. It was present on the author's machine — left behind by an
+    earlier ``make perf-gate`` — so the whole suite read 1185 passed locally
+    while the blocking ``validate-and-test`` job would go red on every fresh
+    checkout, where ``build/`` does not exist. A proof pointer that only exists
+    on the laptop of the person claiming the proof is not proof, so the check
+    is "did you commit it", not "is it lying around".
+
+    Measured before tightening: all 51 registered artifacts and all 29 other
+    cited debt-row pointers are already tracked, so this rejects exactly the
+    generated-file class and nothing else.
+    """
     path = REPO_ROOT / rel_path
-    return path.is_file() and path.stat().st_size > 0
+    if not (path.is_file() and path.stat().st_size > 0):
+        return False
+    return rel_path in _tracked_files()
 
 
 def _rows() -> dict[str, str]:
@@ -398,6 +426,42 @@ def _debt_rows() -> dict[str, str]:
             continue
         rows[cells[0].strip("* ")] = line
     return rows
+
+
+def test_a_generated_untracked_file_does_not_count_as_a_proof_pointer(
+    tmp_path: Path,
+) -> None:
+    """A gitignored build output must never satisfy a proof-pointer claim.
+
+    RED before the ``_is_real_artifact`` tightening: the probe below is a real,
+    non-empty file on disk, so the old ``path.is_file() and size > 0`` returned
+    True and a row could cite a generated artifact. That is precisely how the
+    DEBT-009 row passed locally (stale ``build/gates/perf-percentiles.json``
+    from an earlier run) while failing on any fresh checkout.
+
+    Both directions are asserted: the untracked probe is rejected AND a
+    genuinely tracked file is still accepted, so the tightening cannot be
+    "fixed" by making the predicate return False for everything.
+    """
+    probe = REPO_ROOT / "build" / "gates" / "_proof_pointer_probe.json"
+    probe.parent.mkdir(parents=True, exist_ok=True)
+    probe.write_text('{"generated": true}\n', encoding="utf-8")
+    try:
+        rel = probe.relative_to(REPO_ROOT).as_posix()
+        assert probe.is_file() and probe.stat().st_size > 0, (
+            "probe must be a real non-empty file, or this test proves nothing"
+        )
+        assert rel not in _tracked_files(), "probe must be untracked to be a probe"
+        assert not _is_real_artifact(rel), (
+            "a generated, gitignored file satisfied a proof-pointer claim; "
+            "a pointer that exists only on the author's machine is not proof"
+        )
+    finally:
+        probe.unlink(missing_ok=True)
+
+    assert _is_real_artifact("tests/test_findings_ledger_consistency.py"), (
+        "the tightening must still ACCEPT a tracked, non-empty artifact"
+    )
 
 
 def test_the_debt_register_cites_only_proof_pointers_that_exist() -> None:

@@ -90,6 +90,15 @@ def test_make_perf_gate_reaches_the_measurement_stage() -> None:
     A budget assertion is the ONLY tolerated failure. Any other non-zero exit
     (an import error, an empty suite, a broken recipe) is a hard red here.
     """
+    # Remove any sample left by an EARLIER run first, so the persistence
+    # assertion below cannot pass on a stale file. Measured (Stage A review):
+    # with a leftover artifact on disk, a `_publish()` mutated into a complete
+    # no-op left this test green — `artifact.exists()` cannot tell a fresh
+    # write from last week's. Deleting first makes the assertion mean "THIS run
+    # published", which is what the docstring claims.
+    artifact = REPO_ROOT / "build" / "gates" / "perf-percentiles.json"
+    artifact.unlink(missing_ok=True)
+
     result = subprocess.run(
         ["make", "perf-gate"],
         cwd=REPO_ROOT,
@@ -120,8 +129,8 @@ def test_make_perf_gate_reaches_the_measurement_stage() -> None:
         f"the concurrent percentiles never reached stdout:\n{output[-3000:]}"
     )
 
-    # And they were persisted, with enough provenance to be usable later.
-    artifact = REPO_ROOT / "build" / "gates" / "perf-percentiles.json"
+    # And they were persisted BY THIS RUN (the file was deleted above), with
+    # enough provenance to be usable later.
     assert artifact.exists(), (
         f"the gate produced no {artifact.name}; a sample nobody can read cannot "
         f"retire an unmeasured budget:\n{output[-3000:]}"
