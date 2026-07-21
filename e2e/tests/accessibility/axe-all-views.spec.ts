@@ -1,6 +1,11 @@
 import { test, expect, Page } from "@playwright/test";
 import AxeBuilder from "@axe-core/playwright";
-import { withEvaluation, EVAL_MISSING_HIGH_STAKES } from "../../fixtures/golden-run";
+import {
+  withEvaluation,
+  EVAL_MISSING_HIGH_STAKES,
+  goldenCompletedResp,
+  goldenCreateResp,
+} from "../../fixtures/golden-run";
 
 /**
  * AC-035 accessibility gate — a REAL axe-core drive over every SPA view in
@@ -278,11 +283,20 @@ test.describe("AC-035 — axe over every view (both themes)", () => {
   // additionally composites the alpha layers itself to assert >= 4.5:1.
   test("result — trust-score surface (scoped, both themes, contrast composited)", async ({ page }) => {
     await boot(page);
-    // Missing-high-stakes carries the amber caveat row + why-lines + the state
-    // line, so the scan covers every text-on-tint the surface can render.
-    const body = withEvaluation(completedResp(false), EVAL_MISSING_HIGH_STAKES);
-    await routeRun(page, body);
+    // Drive with the GOLDEN completed fixture (id-matched create+poll) — the same
+    // path the passing OC-5 degraded tests use — so the run reaches the result
+    // view deterministically. Missing-high-stakes carries the amber caveat row +
+    // why-lines + the state line, covering every text-on-tint the surface renders.
+    const body = withEvaluation(goldenCompletedResp(), EVAL_MISSING_HIGH_STAKES);
+    await page.route("**/v1/query-runs/estimate", (r) => r.fulfill(fulfil(estimateResp("0.100", "allow"))));
+    await page.route("**/v1/query-runs/warnings", (r) => r.fulfill(fulfil({ warnings: [] })));
+    await page.route("**/v1/query-runs/active", (r) => r.fulfill(fulfil({ query_run_id: null })));
+    await page.route(/\/v1\/query-runs\/[0-9a-f-]{36}$/, (r) => r.fulfill(fulfil(body)));
+    await page.route(/\/v1\/query-runs$/, (r) =>
+      r.request().method() === "POST" ? r.fulfill(fulfil(goldenCreateResp())) : r.continue());
+    await fill(page);
     await clickRunNow(page);
+    await expect(page.locator("#result-verdict[data-consensus]")).toBeVisible({ timeout: 20000 });
     await expect(page.locator("#result-trust-score")).toBeVisible();
 
     for (const theme of ["light", "dark"] as const) {
