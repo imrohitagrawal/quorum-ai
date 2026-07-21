@@ -59,9 +59,12 @@ jobs:
         working-directory: e2e
         env:
           CI: "true"
+        # Glob-driven so a NEW visual spec (e.g. trust-score-visual.spec.ts) is
+        # seeded automatically instead of being silently skipped by a hardcoded
+        # single path.
         run: >-
           npx playwright test
-          tests/invariants/visual-snapshots.spec.ts
+          tests/invariants/
           --project=chromium
           --update-snapshots
 
@@ -70,7 +73,9 @@ jobs:
           set -euo pipefail
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add e2e/tests/invariants/*-snapshots/ || true
+          # No `|| true`: a path miss must fail LOUDLY, not silently commit zero
+          # files (which would leave the blocking compare with no baseline).
+          git add e2e/tests/invariants/*-snapshots/
           if git diff --cached --quiet; then
             echo "No baseline changes to commit."
             exit 0

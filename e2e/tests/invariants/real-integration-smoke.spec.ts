@@ -56,6 +56,15 @@ test.describe("real-integration smoke (no mocks)", () => {
     await expect(verdict).toBeVisible({ timeout: 90000 });
     await expect(verdict).not.toBeEmpty();
 
+    // FR-016: the trust-score surface must render from the SERVER's own
+    // evaluation projection (this is the only spec with no page.route, so it is
+    // the only one proving the projection reaches the DOM rather than a mock),
+    // and it must still obey the no-digit contract on real server data.
+    const surface = page.locator("#result-trust-score");
+    await expect(surface).toBeVisible();
+    await expect(surface).not.toBeEmpty();
+    expect(await surface.innerText(), "the trust-score surface must render no digit").not.toMatch(/\d/);
+
     expect(mocked, "this smoke must NOT use page.route — it exercises the real backend").toBe(false);
   });
 });

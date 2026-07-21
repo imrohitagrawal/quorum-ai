@@ -180,4 +180,29 @@ export class WorkspacePage {
     }
     return null;
   }
+
+  // ---- FR-016 (S3): trust-score surface ----------------------------------
+  // DELIBERATELY no numeric `trustScore()` accessor. The rendering contract is
+  // zero-digits; a page object that could express a confidence number would
+  // invite a test that asserts one, which is precisely what the surface forbids.
+
+  /** The trust-score surface container ("what was and was not checked"). */
+  trustScoreSurface(): Locator {
+    return this.page.locator("#result-trust-score");
+  }
+
+  /** The single state line (e.g. "Structural checks passed …"). */
+  trustStateLine(): Locator {
+    return this.page.locator("#result-trust-score .result-trust-score-state");
+  }
+
+  /** The zero-or-more "what we could not check" reasons. */
+  trustWhyLines(): Locator {
+    return this.page.locator("#result-trust-score .result-trust-score-why-item");
+  }
+
+  /** The persistent amber missing-safety-caveat row (OC5-5), when present. */
+  missingHighStakesWarning(): Locator {
+    return this.page.locator("#result-trust-score .result-trust-score-missing-caveat");
+  }
 }

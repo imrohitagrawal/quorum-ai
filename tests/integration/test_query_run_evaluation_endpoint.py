@@ -21,22 +21,34 @@ Network-free: the sim pipeline runs locally and ``evaluate_run`` is called with
 
 from __future__ import annotations
 
+import logging
 from typing import Any
 from uuid import UUID, uuid4
 
 import pytest
 from fastapi.testclient import TestClient
+from pydantic import ValidationError
+from tests.unit.test_evaluation_layer_a import REAL_URL, _answer, _source
 
 from product_app import evaluation, run_history_store
 from product_app import query_runs as qr
 from product_app.config import settings
 from product_app.costs import cost_estimation_service
-from product_app.debate import debate_event_recorder
-from product_app.evaluation import EVAL_SCHEMA_VERSION
+from product_app.debate import AgreementSummary, debate_event_recorder
+from product_app.evaluation import (
+    EVAL_SCHEMA_VERSION,
+    LayerASignals,
+    TrustDiagnostics,
+    TrustScore,
+)
 from product_app.main import app
 from product_app.model_slots import validate_model_slots_with_search
 from product_app.providers import provider_event_recorder, provider_execution_service
-from product_app.query_runs import query_run_repository
+from product_app.query_runs import (
+    QueryRunEvaluationProjection,
+    QueryRunStatus,
+    query_run_repository,
+)
 from product_app.safety import WARNING_VERSION, WarningType
 from product_app.synthesis import synthesis_event_recorder
 
@@ -144,6 +156,8 @@ def test_result_endpoint_serves_unverified_evaluation_for_a_terminal_run() -> No
         assert served["schema_version"] == EVAL_SCHEMA_VERSION
         assert served["faithfulness_label"] in {"faithful", "unfaithful", "partial"}
         assert served["hallucination_risk"] in {"low", "medium", "high"}
+        # DEBT-012 presentation guard is served on the projection.
+        assert served["label_confidence"] in {"reportable", "indeterminate"}
 
         trust = served["trust"]
         assert trust["support_verified"] is False
@@ -341,3 +355,179 @@ def test_terminal_run_makes_zero_llm_judge_calls(monkeypatch: pytest.MonkeyPatch
 
     assert calls == [], f"the evaluation path called the LLM seam {len(calls)} time(s)"
     assert evidence_builds == []
+
+
+def _laundered_answers() -> list[Any]:
+    """The DEBT-012 laundering shape: 1 resolving ordinal + 20 off-run links/slot."""
+    fabricated = " ".join(
+        f"[claim{i}](https://fabricated-{i}.example.org/paper)" for i in range(20)
+    )
+    return [
+        _answer(
+            slot=slot,
+            text=f"Therapy reduces mortality by 42% [1]. {fabricated}",
+            sources=[_source(REAL_URL)],
+        )
+        for slot in (1, 2, 3, 4)
+    ]
+
+
+def _terminal_run_with(client: TestClient, account_id: Any, answers: list[Any]) -> Any:
+    """Create a run and force it terminal with the given initial answers."""
+    model_slots = validate_model_slots_with_search(DEFAULT_MODEL_IDS)
+    estimate = cost_estimation_service.estimate(query_text=QUERY_TEXT, model_slots=model_slots)
+    run = query_run_repository.create(
+        account_id=account_id,
+        query_text=QUERY_TEXT,
+        model_slots=model_slots,
+        cost_estimate=estimate,
+    )
+    run.initial_answers = answers
+    run.final_synthesis = None
+    run.status = QueryRunStatus.COMPLETED
+    return run
+
+
+def test_a_laundered_run_is_served_as_indeterminate() -> None:
+    """The DEBT-012 laundering shape is served ``label_confidence: indeterminate``.
+
+    Its engine labels are still ``faithful``/``low`` (unchanged), but it carries
+    80 unverifiable off-run URL markers, so the presentation guard downgrades it.
+    """
+    client = TestClient(app)
+    account_id = uuid4()
+    run = _terminal_run_with(client, account_id, _laundered_answers())
+
+    response = client.get(
+        f"/v1/query-runs/{run.query_run_id}",
+        headers={"X-Account-Id": str(account_id)},
+    )
+    assert response.status_code == 200
+    served = response.json()["evaluation"]
+    assert served is not None
+    # The engine label is unchanged and still confident...
+    assert served["faithfulness_label"] == "faithful"
+    assert served["hallucination_risk"] == "low"
+    assert served["signals"]["unverifiable_marker_count"] == 80
+    # ...but the presentation guard closes the exposure.
+    assert served["label_confidence"] == "indeterminate"
+
+
+def test_the_persisted_eval_json_key_set_is_unchanged_by_the_new_signals() -> None:
+    """The two new signals live INSIDE ``signals``; the top-level key set is frozen.
+
+    ``label_confidence`` is a projection-only presentation fact and is NOT
+    persisted, so ``set(eval_json)`` is untouched (D-8).
+    """
+    with run_history_store.configure_for_tests() as store:
+        client = TestClient(app)
+        account_id = uuid4()
+        body = _create_terminal_run(client, account_id)
+
+        row = store.get(body["query_run_id"])
+        assert row is not None and row.eval_json is not None
+        assert set(row.eval_json) == {
+            "schema_version",
+            "signals",
+            "faithfulness_label",
+            "hallucination_risk",
+            "judge",
+        }
+        # The new signals are present INSIDE the signals sub-object...
+        assert "unverifiable_marker_count" in row.eval_json["signals"]
+        assert "unverifiable_marker_ratio" in row.eval_json["signals"]
+        # ...and label_confidence is NEVER persisted (projection-only).
+        assert "label_confidence" not in row.eval_json
+
+
+def test_an_s2_eval_v2_row_missing_the_new_signals_is_presented_as_indeterminate() -> None:
+    """A persisted ``s2-eval-v2`` row fails CLOSED (D-3 / D-7).
+
+    Nothing re-validates on read, so an old row's signals lack the
+    ``unverifiable_*`` keys — loading them back gives the DEFAULT
+    ``unverifiable_marker_count == 0``, which a BLACKLIST (``count > 0``) would
+    read as the CONFIDENT branch on a run of unknown provenance. The guard is a
+    WHITELIST instead: ``label_confidence`` has NO default on the projection, so
+    an ``s2`` row can never be served as ``reportable`` — the UI treats an absent
+    value as ``indeterminate``.
+    """
+    # An s2-eval-v2 signals dict for a laundering-shaped run: faithful/low, but
+    # WITHOUT the new unverifiable_* keys.
+    s2_signals = {
+        "citation_coverage_ratio": 1.0,
+        "citation_marker_grounding": 1.0,
+        "agreement_ratio": 1.0,
+        "live_ratio": 1.0,
+        "completeness": 1.0,
+        "false_consensus_preserved": False,
+        "polar_disagreement_detected": False,
+        "disagreement_suppressed": False,
+        "decision_support_framing_present": True,
+        "high_stakes_warning_required": False,
+        "high_stakes_warning_present": False,
+        "uncertainty_surfaced": True,
+        "refusal_detected": False,
+        "run_wholly_refused": False,
+    }
+    loaded = LayerASignals.model_validate(s2_signals)
+    # The trap: the additive default hides the laundering shape.
+    assert loaded.unverifiable_marker_count == 0
+    assert loaded.unverifiable_marker_ratio is None
+
+    trust = TrustScore(
+        support_verified=False,
+        band="unverified",
+        score=None,
+        diagnostics=TrustDiagnostics(layer_a_composite_unverified=0.0, contributions=[]),
+    )
+    # Fail-closed: a projection cannot be built from an s2 row without an
+    # explicit label_confidence — it raises rather than defaulting to reportable.
+    with pytest.raises(ValidationError):
+        QueryRunEvaluationProjection(  # type: ignore[call-arg]
+            schema_version="s2-eval-v2",
+            signals=loaded,
+            faithfulness_label="faithful",
+            hallucination_risk="low",
+            trust=trust,
+        )
+
+
+def test_a_non_terminal_run_writes_nothing_and_logs_no_warning(
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """D-10: the non-terminal early return writes nothing and logs no warning.
+
+    ``_persist_run_evaluation`` on a non-terminal run must return before any
+    store write or feedback event, and — critically — WITHOUT tripping the
+    broad ``except`` that logs ``run evaluation persistence failed``. Deleting
+    the ``if result is None: return`` guard makes ``result.eval_json()`` raise
+    ``AttributeError`` on ``None``, which the guard swallows into that exact
+    WARNING; the caplog assertion (b) is what makes this test bite.
+    """
+    account_id = uuid4()
+    model_slots = validate_model_slots_with_search(DEFAULT_MODEL_IDS)
+    estimate = cost_estimation_service.estimate(query_text="still running", model_slots=model_slots)
+    run = query_run_repository.create(
+        account_id=account_id,
+        query_text="still running",
+        model_slots=model_slots,
+        cost_estimate=estimate,
+    )
+    assert not run.is_terminal
+
+    update_calls: list[Any] = []
+    feedback_calls: list[Any] = []
+    monkeypatch.setattr(qr, "_update_run_evaluation", lambda *a, **k: update_calls.append((a, k)))
+    monkeypatch.setattr(qr, "_record_feedback_event", lambda *a, **k: feedback_calls.append((a, k)))
+
+    with caplog.at_level(logging.WARNING):
+        qr._persist_run_evaluation(query_run=run, agreement=AgreementSummary(aligned=0, total=0))
+
+    # (a) zero store writes, zero feedback events.
+    assert update_calls == []
+    assert feedback_calls == []
+    # (b) no swallowed-exception warning — the load-bearing assertion.
+    assert not any(
+        "run evaluation persistence failed" in record.getMessage() for record in caplog.records
+    )

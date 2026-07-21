@@ -50,8 +50,10 @@ from collections import Counter
 
 from hypothesis import given
 from hypothesis import strategies as st
+from tests.unit.test_evaluation_layer_a import REAL_URL, _answer, _source
 from tests.unit.test_evaluation_properties import _SETTINGS, _UNIT, _signals
 
+from product_app.debate import AgreementSummary
 from product_app.evaluation import (
     GROUNDING_FABRICATION_THRESHOLD,
     FaithfulnessLabel,
@@ -59,6 +61,7 @@ from product_app.evaluation import (
     RunEvaluation,
     classify_faithfulness,
     classify_hallucination_risk,
+    evaluate_layer_a,
 )
 
 #: Least trusting first. ``min`` in this order is what "cap" means.
@@ -352,3 +355,91 @@ def test_inv4_the_grounding_SIGNAL_is_built_independently_of_the_refusal_boolean
     # The end-to-end consequence, which is what DEBT-011 is about.
     assert refusing.faithfulness_label == "unfaithful"
     assert refusing.hallucination_risk == "high"
+
+
+# ---------------------------------------------------------------------------
+# INV-5 — the unverifiable-marker COUNT, built independently of refusal + labels
+# ---------------------------------------------------------------------------
+
+
+@_SETTINGS
+@given(
+    st.lists(
+        st.tuples(
+            st.integers(min_value=0, max_value=5),  # off-run URL markers
+            st.integers(min_value=0, max_value=3),  # resolving ordinals
+            st.booleans(),  # leading decline sentence
+        ),
+        min_size=1,
+        max_size=4,
+    )
+)
+def test_inv5_the_unverifiable_marker_count_is_built_independently_of_the_refusal_booleans_and_of_the_labels(  # noqa: E501
+    specs: list[tuple[int, int, bool]],
+) -> None:
+    """INV-4's sibling one field over: the DEBT-012 census count.
+
+    ``unverifiable_marker_count`` is a straight recount of off-run URL markers
+    on the run — it must be unaffected by refusal text (which flips both
+    refusal booleans) and by any classifier output. INV-1/2/3 constrain the
+    CLASSIFIERS only, and DEBT-011 round 3 measured that a refusal-keyed
+    override moved one level upstream — into signal CONSTRUCTION in
+    ``evaluate_layer_a`` — re-opened the laundering with the whole suite green.
+    A guard reading only classifier outputs repeats that exact shape, so the
+    engine-side count must be provably independent at construction time.
+
+    BITE: monkeypatching a refusal-keyed suppression of the census into
+    ``evaluate_layer_a`` (zeroing ``unverifiable`` whenever a slot declines)
+    turns this red while every classifier-level invariant stays green.
+    """
+    answers = []
+    expected_unverifiable = 0
+    for i, (n_urls, n_ord, decline) in enumerate(specs):
+        prefix = "I cannot provide medical advice. " if decline else ""
+        urls = " ".join(f"[c](https://off-{i}-{j}.example/paper)" for j in range(n_urls))
+        ordinals = " ".join("[1]" for _ in range(n_ord))
+        text = f"{prefix}A confident claim about the mechanism. {ordinals} {urls}"
+        answers.append(_answer(slot=i + 1, text=text, sources=[_source(REAL_URL)]))
+        expected_unverifiable += n_urls
+
+    evaluation = evaluate_layer_a(
+        initial_answers=answers,
+        final_synthesis=None,
+        agreement=AgreementSummary(aligned=1, total=1),
+    )
+    assert evaluation.signals.unverifiable_marker_count == expected_unverifiable
+
+
+def test_inv5_is_not_vacuous_the_strategy_reaches_a_declining_run_with_off_run_urls() -> None:
+    """Anti-vacuity for INV-5: the region under test is actually reached.
+
+    A run that BOTH declines AND carries off-run URL markers is exactly the
+    laundering-adjacent shape a refusal-keyed census suppression would zero;
+    if the strategy never produced one, INV-5 would hold trivially.
+    """
+    from collections import Counter
+
+    seen: Counter[str] = Counter()
+
+    @_SETTINGS
+    @given(
+        st.integers(min_value=1, max_value=5),
+        st.booleans(),
+    )
+    def _collect(n_urls: int, decline: bool) -> None:
+        prefix = "I cannot provide medical advice. " if decline else ""
+        urls = " ".join(f"[c](https://off-{j}.example/paper)" for j in range(n_urls))
+        answer = _answer(slot=1, text=f"{prefix}A claim. {urls}", sources=[_source(REAL_URL)])
+        evaluation = evaluate_layer_a(
+            initial_answers=[answer],
+            final_synthesis=None,
+            agreement=AgreementSummary(aligned=1, total=1),
+        )
+        if evaluation.signals.refusal_detected and evaluation.signals.unverifiable_marker_count > 0:
+            seen["declining_with_off_run_urls"] += 1
+
+    _collect()
+    assert seen["declining_with_off_run_urls"] > 0, (
+        "the strategy never produced a declining run carrying off-run URL markers, "
+        "so INV-5 is vacuous"
+    )

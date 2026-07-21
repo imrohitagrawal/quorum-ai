@@ -60,7 +60,7 @@ from product_app.synthesis_consensus import _has_polar_disagreement
 
 #: Bumped whenever the persisted shape or the meaning of a signal changes.
 #: Stored payloads from different versions are not comparable.
-EVAL_SCHEMA_VERSION = "s2-eval-v2"
+EVAL_SCHEMA_VERSION = "s3-eval-v3"
 
 #: Prompt registry id (docs/46). The version is part of the id because
 #: verdicts from different prompt versions are not comparable.
@@ -69,6 +69,9 @@ JUDGE_PROMPT_ID = "PR-EVAL-JUDGE-v1"
 FaithfulnessLabel = Literal["faithful", "unfaithful", "partial"]
 HallucinationRisk = Literal["low", "medium", "high"]
 TrustBand = Literal["unverified", "low", "moderate", "high"]
+#: Whether a run's ADVISORY labels may be presented as a confident claim
+#: at all (DEBT-012). Derived by :func:`presentation_confidence`.
+PresentationConfidence = Literal["reportable", "indeterminate"]
 
 
 # ---------------------------------------------------------------------------
@@ -257,6 +260,84 @@ def _is_placeholder_source(source: SourceReference) -> bool:
 CitationScope = tuple[str, list[SourceReference]]
 
 
+class MarkerCensus(BaseModel):
+    """Every inline citation marker on a run, classified by what Layer A
+    can establish about it with ZERO I/O.
+
+    ``resolved``     — points at a real, non-placeholder row this run holds.
+    ``unresolved``   — resolvable-as-FALSE: an ordinal outside its own
+                       scope's bibliography, or one pointing at a
+                       placeholder row. No I/O needed to know it is wrong.
+    ``unverifiable`` — an off-run URL. The engine performs no I/O, so it
+                       cannot distinguish an invented URL from a real page
+                       a model knew but did not retrieve here. UNKNOWN,
+                       not zero — the doctrine DEBT-011 part C established
+                       and DEBT-012 records the cost of.
+    """
+
+    model_config = ConfigDict(frozen=True)
+    resolved: int = Field(ge=0)
+    unresolved: int = Field(ge=0)
+    unverifiable: int = Field(ge=0)
+
+    @property
+    def resolvable(self) -> int:
+        return self.resolved + self.unresolved
+
+
+def citation_marker_census(*, scopes: list[CitationScope]) -> MarkerCensus:
+    """Classify every inline citation marker on a run into the three
+    :class:`MarkerCensus` buckets.
+
+    This is the single source of truth for marker classification;
+    :func:`citation_marker_grounding` is derived from it so the two can
+    never drift. The classification rules are documented in full on
+    :func:`citation_marker_grounding`. Pure: no I/O, no network, no clock.
+    """
+    run_urls = {
+        _normalize_url(source.url)
+        for _text, sources in scopes
+        for source in sources
+        if not _is_placeholder_source(source)
+    }
+    # PR-S3-2 (D-4): the app's OWN placeholder stubs (reserved-host rows this
+    # run holds), keyed by URL. A marker citing one BY URL is resolvable-as-
+    # FALSE with no I/O — exactly like an out-of-range ordinal — NOT an off-run
+    # URL. It therefore counts toward the denominator (unresolved), not as
+    # unverifiable.
+    placeholder_urls = {
+        _normalize_url(source.url)
+        for _text, sources in scopes
+        for source in sources
+        if _is_placeholder_source(source)
+    }
+
+    resolved = 0
+    unresolved = 0
+    unverifiable = 0
+    for text, sources in scopes:
+        for marker in extract_citation_markers(text):
+            if marker.isdigit():
+                position = int(marker)
+                if 1 <= position <= len(sources) and not _is_placeholder_source(
+                    sources[position - 1]
+                ):
+                    resolved += 1
+                else:
+                    # An out-of-range ordinal, or one pointing at a
+                    # placeholder row: resolvable-as-FALSE, no I/O needed.
+                    unresolved += 1
+            elif _normalize_url(marker) in run_urls:
+                resolved += 1
+            elif _normalize_url(marker) in placeholder_urls:
+                # A stub URL the run holds: resolvable-as-FALSE (D-4).
+                unresolved += 1
+            else:
+                # An off-run URL. UNKNOWN, not zero — see the docstring.
+                unverifiable += 1
+    return MarkerCensus(resolved=resolved, unresolved=unresolved, unverifiable=unverifiable)
+
+
 def citation_marker_grounding(*, scopes: list[CitationScope]) -> float | None:
     """Fraction of RESOLVABLE inline citation markers that resolve.
 
@@ -326,12 +407,15 @@ def citation_marker_grounding(*, scopes: list[CitationScope]) -> float | None:
       needs URL liveness/support verification, i.e. a fetch or a judge —
       neither of which Layer A has. A cap on "excluded markers dominate"
       would need a calibrated cut, which FS-6 defers to the S4 golden set.
-      A **placeholder** source cited BY URL is likewise off-run: it is
-      excluded from the run-wide URL set, so it can never ground anything.
     * an **out-of-range ordinal is NOT excluded**. It points at a
       bibliography slot that demonstrably does not exist on this run, which
       Layer A can check without any I/O. That is resolvable-as-false, and
-      it stays in the denominator as unresolved.
+      it stays in the denominator as unresolved. A **placeholder** source
+      cited BY URL is treated the same way (DEBT-012 D-4, R2-S3): a reserved-
+      host stub the run itself holds is resolvable-as-false with zero I/O, so
+      it counts as ``unresolved`` (denominator, scored 0.0) — symmetric with
+      its ordinal form — NOT excluded. Only a genuinely off-run URL (a page
+      this run never retrieved) stays unverifiable and excluded.
 
     Returns ``None`` — **unknown, not zero** — when the prose contains no
     resolvable citation markers at all. This distinction is the whole
@@ -342,32 +426,19 @@ def citation_marker_grounding(*, scopes: list[CitationScope]) -> float | None:
     fluent-but-unfaithful signature.
 
     Pure: no I/O, no network, no clock.
-    """
-    run_urls = {
-        _normalize_url(source.url)
-        for _text, sources in scopes
-        for source in sources
-        if not _is_placeholder_source(source)
-    }
 
-    total = 0
-    resolved = 0
-    for text, sources in scopes:
-        for marker in extract_citation_markers(text):
-            if marker.isdigit():
-                total += 1
-                position = int(marker)
-                if 1 <= position <= len(sources) and not _is_placeholder_source(
-                    sources[position - 1]
-                ):
-                    resolved += 1
-            elif _normalize_url(marker) in run_urls:
-                total += 1
-                resolved += 1
-            # else: an off-run URL. UNKNOWN, not zero — see the docstring.
-    if not total:
+    Reimplemented over :func:`citation_marker_census` (DEBT-012, R2-S3). Value
+    semantics are UNCHANGED except for the one intended D-4 reclassification
+    above (a placeholder stub cited by URL moves from excluded/None-contributing
+    to ``unresolved``/0.0, symmetric with its ordinal form): the denominator is
+    the census's ``resolvable`` (resolved + resolvable-as-false), genuinely
+    off-run URLs are EXCLUDED from both numerator and denominator, and ``None``
+    means no resolvable markers at all.
+    """
+    census = citation_marker_census(scopes=scopes)
+    if not census.resolvable:
         return None
-    return resolved / total
+    return census.resolved / census.resolvable
 
 
 # ---------------------------------------------------------------------------
@@ -644,6 +715,15 @@ class LayerASignals(BaseModel):
 
     citation_coverage_ratio: float = Field(ge=0.0, le=1.0)
     citation_marker_grounding: float | None = Field(default=None, ge=0.0, le=1.0)
+    #: Off-run URL markers on this run: cited documents the engine cannot
+    #: check without I/O. NOT weighted (see LAYER_A_WEIGHTS) — weighting it
+    #: is a calibrated cut, deferred to S4 (FS-6). It exists so a consumer
+    #: can tell "1 marker, resolved" from "1 marker resolved + 80 fabricated
+    #: links", which grounding alone cannot (DEBT-012).
+    unverifiable_marker_count: int = Field(default=0, ge=0)
+    #: unverifiable / (resolved + unresolved + unverifiable). ``None`` iff
+    #: the run carried no citation markers at all.
+    unverifiable_marker_ratio: float | None = Field(default=None, ge=0.0, le=1.0)
     agreement_ratio: float = Field(ge=0.0, le=1.0)
     live_ratio: float = Field(ge=0.0, le=1.0)
     completeness: float = Field(ge=0.0, le=1.0)
@@ -844,7 +924,12 @@ def evaluate_layer_a(
     # the answer scopes). See :func:`citation_marker_grounding`.
     scopes: list[CitationScope] = [(a.answer_text, a.sources) for a in initial_answers]
     scopes.extend((text, []) for text in _synthesis_texts(final_synthesis))
-    grounding = citation_marker_grounding(scopes=scopes)
+    # ONE census, from which both the grounding signal and the two
+    # unverifiable-marker signals are derived, so they can never drift.
+    census = citation_marker_census(scopes=scopes)
+    grounding = (census.resolved / census.resolvable) if census.resolvable else None
+    marker_total = census.resolvable + census.unverifiable
+    unverifiable_ratio = (census.unverifiable / marker_total) if marker_total else None
 
     polar = _has_polar_disagreement([a.answer_text for a in completed])
     preserved = (
@@ -858,6 +943,8 @@ def evaluate_layer_a(
     signals = LayerASignals(
         citation_coverage_ratio=min(max(coverage_ratio, 0.0), 1.0),
         citation_marker_grounding=grounding,
+        unverifiable_marker_count=census.unverifiable,
+        unverifiable_marker_ratio=unverifiable_ratio,
         agreement_ratio=(agreement.aligned / agreement.total) if agreement.total else 0.0,
         live_ratio=(live_count / slot_count) if slot_count else 0.0,
         completeness=(len(completed) / slot_count) if slot_count else 0.0,
@@ -997,6 +1084,32 @@ def classify_hallucination_risk(signals: LayerASignals) -> HallucinationRisk:
             return "high"
         return "low" if grounding >= GROUNDING_GOOD_THRESHOLD else "medium"
     return "low" if signals.refusal_detected else "medium"
+
+
+def presentation_confidence(
+    signals: LayerASignals,
+    *,
+    faithfulness_label: FaithfulnessLabel,
+    hallucination_risk: HallucinationRisk,
+) -> PresentationConfidence:
+    """Whether this run's ADVISORY labels may be presented at all.
+
+    ``"indeterminate"`` iff the run carries ANY unverifiable marker AND
+    its labels sit at the CONFIDENT end. It is monotone-downward by
+    construction: a warning label (``unfaithful``/``high``,
+    ``partial``/``medium``) is NEVER suppressed, so the guard can only
+    ever UNDER-claim. It chooses no constant — zero tolerance at the
+    confident end, which is why it does not need the calibrated cut FS-6
+    defers to S4.
+
+    MEASURED (see the DEBT-012 row): on the frozen corpus this degrades
+    0 of the 2 confident cases — both have unverifiable_marker_count 0.
+    """
+    if signals.unverifiable_marker_count <= 0:
+        return "reportable"
+    if faithfulness_label == "faithful" or hallucination_risk == "low":
+        return "indeterminate"
+    return "reportable"
 
 
 # ---------------------------------------------------------------------------
@@ -1314,10 +1427,18 @@ class TrustScore(BaseModel):
 def compute_composite(signals: LayerASignals) -> tuple[float, list[TrustContribution]]:
     """The transparent weighted composite over Layer-A signals ONLY.
 
-    Signals whose value is unknown (``citation_marker_grounding is None``)
-    are EXCLUDED and the remaining weights are renormalised, so "we could
-    not tell" never reads as "we measured zero". Returns the 0-100
-    composite and the per-component contributions, which sum to it exactly.
+    Signals whose value is unknown (``citation_marker_grounding is None``,
+    i.e. the run carried no resolvable citation marker at all) are EXCLUDED
+    and the remaining weights are renormalised, so "we could not tell" never
+    reads as "we measured zero". A *known* grounding is ALWAYS scored — the
+    presence of off-run URL markers never renormalises it away (DEBT-012,
+    R2-S3): grounding is computed only over resolvable markers, so it is
+    already clean of those URLs, and dropping a correctly-low grounding would
+    INFLATE the composite of a fabricating run and delete its strongest
+    reason-to-doubt from the contribution list. The laundering defence lives
+    entirely in :func:`presentation_confidence` + the zero-digit UI, which are
+    orthogonal to this composite. Returns the 0-100 composite and the
+    per-component contributions, which sum to it exactly.
     """
     values: dict[str, float | None] = {
         "citation_marker_grounding": signals.citation_marker_grounding,
@@ -1496,6 +1617,8 @@ __all__ = [
     "EvalJudgeVerdict",
     "JudgeEvidence",
     "LayerASignals",
+    "MarkerCensus",
+    "PresentationConfidence",
     "RunEvaluation",
     "RunEvaluationResult",
     "StubEvalJudge",
@@ -1505,11 +1628,13 @@ __all__ = [
     "build_judge_evidence",
     "build_judge_prompt",
     "build_trust_score",
+    "citation_marker_census",
     "citation_marker_grounding",
     "classify_faithfulness",
     "classify_hallucination_risk",
     "compute_composite",
     "detect_refusal",
+    "presentation_confidence",
     "evaluate_layer_a",
     "evaluate_run",
     "extract_citation_markers",

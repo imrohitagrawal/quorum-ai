@@ -78,6 +78,7 @@ The MVP warns; it does not yet block these topics unless future policy changes r
 | OC-2 honesty set | Ensure the numeric TrustScore is suppressed and the served band is `unverified` whenever citation SUPPORT was never verified by a real judge. | FR-015, NFR-011, AC-041 |
 | Judge neutrality set | Ensure judge OFF makes zero seam calls and produces a TrustScore identical to `StubEvalJudge` ON. | NFR-012, AC-042 |
 | Judge injection set | Ensure provider prose cannot instruct the judge to inflate its verdict or declare support verified. | T-011, AB-007 |
+| Trust-surface honesty set | Ensure no digit and no advisory label word is rendered while `support_verified` is False, and an absent evaluation hides the surface rather than rendering a fabricated or ambiguous value. | FR-016, AC-044 |
 
 ## Release 2: Per-Run Evaluation (FR-015)
 
@@ -108,6 +109,38 @@ golden-set harness can be wired to those libraries without renaming anything:
   arithmetic, and it is uncalibrated until the S4 golden set exists.
 - Count-based proxies are **not** quality measurements. A count says a citation
   is present; it says nothing about whether the citation supports the claim.
+
+### What the trust surface claims — and does not claim
+
+The served `unverified` band is a statement that citation SUPPORT was never
+verified. It is not a low-confidence score, and the surface never renders it as
+one: it renders **no digit at all**, so `layer_a_composite_unverified` and every
+per-signal contribution are structurally unrenderable.
+
+The advisory `faithfulness_label` and `hallucination_risk` are **not rendered as
+words** in any branch. Two reasons, both measured. First, DEBT-012: one resolving
+ordinal carries any number of fabricated URL citations to `faithful` / `low`, and
+there is no dilution at any dose — a single fabricated link beside one good ordinal
+already scores 1.0. Second, `layer_a_composite_unverified` is biased UPWARD exactly
+on the runs that deserve least trust, because when grounding is unknown the largest
+weight (0.30) is dropped and the remainder renormalised, so an un-checkable run is
+scored purely on liveness, coverage, completeness and framing and can out-score a
+run whose grounding was measured bad.
+
+What closes the S3 exposure is the presentation guard, not a label change. The
+engine serves `label_confidence`; a run carrying any unverifiable off-run URL marker
+whose labels sit at the confident end is `indeterminate` and can never present a
+confident verdict. The guard is cut-free (it chooses no constant) and
+monotone-downward (it never suppresses a warning), so it can only under-claim.
+
+Even on the reportable branch the surface qualifies itself — "Structural checks
+passed — citations were not verified against their sources" — because a model that
+invents plausible SOURCE ROWS and then cites `[1]`, `[2]` reaches grounding 1.0 with
+zero unverifiable markers, and Layer A with zero I/O cannot detect that at all.
+
+The Layer-B judge is not surfaced in S3 and has no client-visible field. The served
+projection has no `judge` key at any depth, and that is asserted by
+`tests/unit/test_evaluation_projection_has_no_judge.py`.
 
 ### Binding honesty rule (OC-2)
 

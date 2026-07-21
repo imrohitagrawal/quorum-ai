@@ -693,6 +693,18 @@ components:
             minimum: 0.0
           - type: 'null'
           title: Citation Marker Grounding
+        unverifiable_marker_count:
+          type: integer
+          minimum: 0.0
+          title: Unverifiable Marker Count
+          default: 0
+        unverifiable_marker_ratio:
+          anyOf:
+          - type: number
+            maximum: 1.0
+            minimum: 0.0
+          - type: 'null'
+          title: Unverifiable Marker Ratio
         agreement_ratio:
           type: number
           maximum: 1.0
@@ -983,6 +995,12 @@ components:
           - medium
           - high
           title: Hallucination Risk
+        label_confidence:
+          type: string
+          enum:
+          - reportable
+          - indeterminate
+          title: Label Confidence
         trust:
           $ref: '#/components/schemas/TrustScore'
       type: object
@@ -991,6 +1009,7 @@ components:
       - signals
       - faithfulness_label
       - hallucination_risk
+      - label_confidence
       - trust
       title: QueryRunEvaluationProjection
       description: 'The served S2 per-run evaluation (FR-015). Metrics only — never prose.

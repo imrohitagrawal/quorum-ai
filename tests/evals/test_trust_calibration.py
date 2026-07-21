@@ -29,6 +29,7 @@ from typing import Any
 import pytest
 
 from product_app.evaluation import (
+    LAYER_A_WEIGHTS,
     build_trust_score,
     evaluate_layer_a,
 )
@@ -213,25 +214,44 @@ def test_a_consumer_cannot_read_a_high_confidence_number_for_the_unfaithful_case
 
 
 def test_the_unfaithful_case_never_outranks_the_faithful_one() -> None:
-    """Calibration direction: fluency must not buy trust."""
-    faithful = build_trust_score(_evaluate(FAITHFUL))
-    unfaithful = build_trust_score(_evaluate(UNFAITHFUL))
+    """Calibration direction: fluency must not buy trust.
+
+    Two separations, both real. The BINDING one a consumer sees is the LABEL —
+    the faithful case is ``faithful``/``low``; the fluent-unfaithful case is
+    ``unfaithful``/``high`` (grounding 0.0588, driven by its 16 fabricated
+    ordinals). And the (suppressed) composite separates them by the full
+    grounding weight: a KNOWN grounding is always scored — the presence of
+    off-run URL markers never renormalises it away (DEBT-012, R2-S3; the
+    composite-exclusion special case was REMOVED after review found it
+    inflated exactly this case's composite ≈59 → 82.86, deleting its strongest
+    reason-to-doubt and letting fluency nearly outrank faithfulness). So the
+    identity ``delta == 100 · w_grounding · (g_faithful − g_unfaithful)`` holds
+    exactly, and the gap is a robust ~23.7 points, not a fragile accident.
+    """
+    faithful_eval = _evaluate(FAITHFUL)
+    unfaithful_eval = _evaluate(UNFAITHFUL)
+
+    # The label is the surfaced, binding separation.
+    assert faithful_eval.faithfulness_label == "faithful"
+    assert faithful_eval.hallucination_risk == "low"
+    assert unfaithful_eval.faithfulness_label == "unfaithful"
+    assert unfaithful_eval.hallucination_risk == "high"
+
+    # The suppressed composite separates them by exactly the grounding weight —
+    # a known grounding is never dropped, so the identity holds and the gap is
+    # wide, not a 0.64-point coincidence.
+    faithful = build_trust_score(faithful_eval)
+    unfaithful = build_trust_score(unfaithful_eval)
     delta = (
         faithful.diagnostics.layer_a_composite_unverified
         - unfaithful.diagnostics.layer_a_composite_unverified
     )
-    # The gap is entirely the citation-marker-grounding weight (advisory,
-    # FS-6): both cases are identical on every other Layer-A signal, so the
-    # measured delta is the weight itself times the grounding delta. Assert
-    # that identity rather than a loose floor, so the claim stays checkable.
-    from product_app.evaluation import LAYER_A_WEIGHTS
-
     expected = (
         100.0
         * LAYER_A_WEIGHTS["citation_marker_grounding"]
         * (FAITHFUL_GROUNDING - UNFAITHFUL_GROUNDING)
     )
-    assert delta == pytest.approx(expected)  # 28.85 points
+    assert delta == pytest.approx(expected)  # 23.7353
     assert delta > 20.0
 
 

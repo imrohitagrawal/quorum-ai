@@ -130,6 +130,7 @@ of a live run.
 | `StubEvalJudge` | Deterministic in-process stand-in used by CI. Deliberately does not set `support_verified`, so judge-OFF and stub-ON are byte-identical. | None. |
 | Evaluation persistence | Writes `eval_json` / `trust_json` onto the existing run-history row via `run_history_store.update_evaluation`, and mirrors an `evaluation` event to the feedback store. Metrics only — never query text or provider prose. | `run_history_store`, `feedback_store`. |
 | Result projection | Optional `evaluation` field on `QueryRunResultResponse` (additive; existing clients are unaffected), served through the same owner-scoped `GET /v1/query-runs/{id}` path. | `query_runs`. |
+| Trust surface (`app.js` / `app.css` / `workspace.html`) | Renders the served `evaluation` projection read-only: a standing disclosure, one state line, up to three "why" lines, and the missing-safety-caveat row. Computes no score, re-derives no arithmetic, holds no threshold, and renders no digit — every honesty decision is made server-side and inherited via `label_confidence`. Absent / `null` / malformed ⇒ hidden with zero text. | `QueryRunResultResponse.evaluation` only. |
 
 Boundary rules:
 
@@ -141,6 +142,7 @@ Boundary rules:
 |---|---|---|
 | Evaluation raises after the terminal transition | Terminal state and the run-history row are unaffected; no evaluation is attached. | FR-015, AC-041 |
 | Judge key set but the provider call fails or returns malformed JSON | No verdict; `support_verified` stays False; the served band remains `unverified`. | FR-015, AC-042 |
+| The `evaluation` field is absent, null, or partially populated (including a persisted `s2-eval-v2` row) | The trust surface hides, or renders the indeterminate state — never the confident one. The existing trust triangle and result view are unaffected. | FR-016, AC-044, AC-045 |
 
 ## Deployment Topology
 

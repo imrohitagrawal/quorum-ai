@@ -65,6 +65,8 @@ Invariants:
 - A numeric `TrustScore` is never served while `support_verified` is False; the band is `unverified` instead, because citation *count* coverage cannot verify that a citation supports its claim. Trace: FR-015, AC-041.
 - `StubEvalJudge` never sets `support_verified` — a stub verifies nothing. Trace: NFR-011, NFR-012.
 - An `EvalJudgeVerdict` and its rationale are derived data and inherit the run's account scoping; they are readable only by the run's owner. Trace: FR-015, NFR-005, AC-043.
+- No presentation surface renders a numeric confidence, percentage or score derived from a `TrustScore` while `support_verified` is False, and no presentation surface renders the advisory `FaithfulnessLabel` or `HallucinationRisk` vocabulary as a user-facing word at all. The rule is enforced server-side by structural suppression (`score` IS `None`) and client-side by the FR-016 no-digit / no-label-word e2e gate; the client re-derives nothing. Trace: FR-016, AC-044.
+- A `RunEvaluation` carrying any unverifiable citation marker whose labels sit at the confident end is presented as `indeterminate`. The guard is monotone-downward: it never raises a presented state above its raw label. Trace: FR-016, AC-045, DEBT-012.
 
 ## Domain Services
 

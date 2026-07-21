@@ -5,18 +5,23 @@ Every test here is hermetic and performs zero I/O.
 
 from __future__ import annotations
 
+import importlib.util
+import sys
 import time
 from decimal import Decimal
+from pathlib import Path
 
 import pytest
 
 from product_app.debate import AgreementSummary
 from product_app.evaluation import (
     LAYER_A_WEIGHTS,
+    citation_marker_census,
     citation_marker_grounding,
     detect_refusal,
     evaluate_layer_a,
     extract_citation_markers,
+    presentation_confidence,
 )
 from product_app.providers import (
     CitationCoverage,
@@ -30,6 +35,13 @@ from product_app.synthesis import (
     SynthesisQualityChecks,
     SynthesisStatus,
 )
+
+_LOADER_PATH = Path(__file__).resolve().parent.parent / "evals" / "corpus" / "loader.py"
+_spec = importlib.util.spec_from_file_location("s2_corpus_loader", _LOADER_PATH)
+assert _spec is not None and _spec.loader is not None
+_corpus = importlib.util.module_from_spec(_spec)
+sys.modules.setdefault("s2_corpus_loader", _corpus)
+_spec.loader.exec_module(_corpus)
 
 REAL_URL = "https://pages.nist.gov/800-63-3/sp800-63b.html"
 OTHER_URL = "https://www.rfc-editor.org/rfc/rfc6238"
@@ -217,6 +229,11 @@ def test_a_run_whose_only_markers_are_off_run_urls_is_unknown_not_zero() -> None
 
     If a future change makes this ``0.0`` again, this test goes RED and
     DEBT-012 must be revisited rather than the rule quietly re-flipped.
+
+    R2-S3: the ENGINE label is unchanged and still wrong; what closes the S3
+    exposure is the presentation guard asserted below. Here the labels are
+    already a warning (``partial``/``medium``), so the guard must NOT suppress
+    them — it can only ever under-claim.
     """
     evaluation = evaluate_layer_a(
         initial_answers=[
@@ -233,6 +250,15 @@ def test_a_run_whose_only_markers_are_off_run_urls_is_unknown_not_zero() -> None
     assert evaluation.signals.citation_marker_grounding is None
     assert evaluation.faithfulness_label == "partial"
     assert evaluation.hallucination_risk == "medium"
+    assert evaluation.signals.unverifiable_marker_count == 4
+    assert (
+        presentation_confidence(
+            evaluation.signals,
+            faithfulness_label=evaluation.faithfulness_label,
+            hallucination_risk=evaluation.hallucination_risk,
+        )
+        == "reportable"
+    )
 
 
 def test_a_link_whose_url_the_scan_rejects_cannot_launder_its_TEXT_into_an_ordinal() -> None:
@@ -415,8 +441,123 @@ def test_a_real_web_search_source_grounds_even_though_it_is_flagged_fallback() -
     assert evaluation.hallucination_risk == "low"
 
 
-def test_a_simulated_stub_cited_BY_URL_does_not_ground_either() -> None:
-    """The URL arm of the same rule, which no test used to reach.
+def test_the_marker_census_separates_resolved_unresolved_and_unverifiable() -> None:
+    """The census is the single source of truth for marker classification.
+
+    The DEBT-012 laundering shape — one resolving ordinal beside 20 off-run
+    URL markers, per slot, over four slots — is classified as 4 resolved,
+    0 resolvable-as-false, 80 unverifiable. ``citation_marker_grounding`` is
+    derived from ``resolved / resolvable`` and so is 1.0, VALUE unchanged.
+    """
+    fabricated = " ".join(
+        f"[claim{i}](https://fabricated-{i}.example.org/paper)" for i in range(20)
+    )
+    scopes = [
+        (f"Therapy reduces mortality by 42% [1]. {fabricated}", [_source(REAL_URL)])
+        for _slot in range(4)
+    ]
+    census = citation_marker_census(scopes=scopes)
+    assert census.resolved == 4
+    assert census.unresolved == 0
+    assert census.unverifiable == 80
+    assert census.resolvable == 4
+    # Value semantics of grounding are the census ratio, unchanged.
+    assert citation_marker_grounding(scopes=scopes) == pytest.approx(4 / 4)
+
+
+def test_unverifiable_marker_ratio_is_None_when_the_prose_has_no_markers_at_all() -> None:
+    """``unverifiable_marker_ratio`` is ``None`` iff the run carried no markers.
+
+    A run that never cited anything has no unverifiable markers to report a
+    ratio OVER, which is distinct from a run whose markers were all resolvable
+    (ratio 0.0).
+    """
+    evaluation = evaluate_layer_a(
+        initial_answers=[
+            _answer(
+                slot=slot,
+                text="Plain prose, no citation markers.",
+                sources=[_source(REAL_URL)],
+            )
+            for slot in (1, 2, 3, 4)
+        ],
+        final_synthesis=None,
+        agreement=AgreementSummary(aligned=4, total=4),
+    )
+    assert evaluation.signals.unverifiable_marker_count == 0
+    assert evaluation.signals.unverifiable_marker_ratio is None
+
+
+def test_one_off_run_url_beside_one_resolving_ordinal_is_already_indeterminate() -> None:
+    """DOSE 1: the case a dominance cut misses; why D-1.4 is zero-tolerance.
+
+    One fabricated off-run URL beside one resolving ordinal yields grounding
+    1.0 → ``faithful``/``low`` (measured today), and its unverifiable RATIO is
+    exactly 0.5 — BELOW a strict-majority cut. A dominance rule would pass this
+    while failing the 20-link case. Zero-tolerance at the confident end catches
+    both.
+    """
+    evaluation = evaluate_layer_a(
+        initial_answers=[
+            _answer(
+                slot=slot,
+                text="Effective [1]. [claim](https://fabricated.example.org/paper)",
+                sources=[_source(REAL_URL)],
+            )
+            for slot in (1, 2, 3, 4)
+        ],
+        final_synthesis=None,
+        agreement=AgreementSummary(aligned=4, total=4),
+    )
+    assert evaluation.signals.citation_marker_grounding == pytest.approx(1.0)
+    assert evaluation.faithfulness_label == "faithful"
+    assert evaluation.hallucination_risk == "low"
+    # 4 unverifiable of 8 markers total → ratio exactly 0.5.
+    assert evaluation.signals.unverifiable_marker_count == 4
+    assert evaluation.signals.unverifiable_marker_ratio == pytest.approx(0.5)
+    assert (
+        presentation_confidence(
+            evaluation.signals,
+            faithfulness_label=evaluation.faithfulness_label,
+            hallucination_risk=evaluation.hallucination_risk,
+        )
+        == "indeterminate"
+    )
+
+
+def test_the_corpus_confident_cases_keep_their_reportable_presentation() -> None:
+    """The MEASURED under-claim cost, gated so it cannot rot (DEBT-012).
+
+    On the frozen corpus the guard degrades 0 of the 2 confident cases: both
+    the ``faithful-consensus`` (census 17 resolved / 3 resolvable-as-false /
+    0 unverifiable) and ``preserved-polar-disagreement`` (11 / 2 / 0) cases
+    carry ``unverifiable_marker_count == 0``, so their presentation stays
+    ``reportable``. If a corpus edit introduces an off-run URL marker into a
+    confident case this goes RED rather than silently under-claiming.
+    """
+    for case_id in ("faithful-consensus", "preserved-polar-disagreement"):
+        case = _corpus.load_case(case_id)
+        evaluation = evaluate_layer_a(
+            initial_answers=case.initial_answers,
+            final_synthesis=case.final_synthesis,
+            agreement=case.agreement,
+        )
+        assert evaluation.signals.unverifiable_marker_count == 0, case_id
+        assert (
+            presentation_confidence(
+                evaluation.signals,
+                faithfulness_label=evaluation.faithfulness_label,
+                hallucination_risk=evaluation.hallucination_risk,
+            )
+            == "reportable"
+        ), case_id
+
+
+def test_a_simulated_stub_cited_BY_URL_is_resolvable_as_FALSE_not_unknown() -> None:
+    """A stub URL the run holds is resolvable-as-FALSE, scored 0.0 (D-4).
+
+    Old name (for ``git log -S``):
+    ``test_a_simulated_stub_cited_BY_URL_does_not_ground_either``.
 
     ``test_fallback_sources_do_not_ground_a_marker`` exercises the ORDINAL
     path only, so the run-wide URL set's placeholder filter had NO oracle:
@@ -424,19 +565,21 @@ def test_a_simulated_stub_cited_BY_URL_does_not_ground_either() -> None:
     ``example.test`` stub cited by URL scored 1.0 → ``faithful``/``low``
     (measured, adversarial review round 3).
 
-    A stub URL is not "unknown" the way an off-run URL is — the run holds
-    the row and Layer A can see it is a placeholder — but it is excluded
-    from the run-wide URL set, so the marker is treated as off-run and the
-    scope reports ``None`` (unknown) rather than resolving.
+    A stub URL is NOT "unknown" the way an off-run URL is — the run holds the
+    row and ``.test`` is IANA-reserved, so Layer A can see it cannot be a real
+    page with NO network, exactly like an out-of-range ordinal. It is therefore
+    counted in the denominator as resolvable-as-FALSE (``unresolved``) and the
+    scope scores ``0.0``, not ``None``. This restores symmetry with
+    ``test_fallback_sources_do_not_ground_a_marker``, which already scores the
+    ORDINAL form of the identical run ``0.0``. ``0.0`` is strictly more
+    punishing than ``None``, so the property this test protects (a stub URL can
+    never GROUND anything) strengthens.
     """
     stub = _stub_source()
-    assert (
-        _grounding(
-            texts=[f"The answer is X, per [{stub.title}]({stub.url})."],
-            sources=[stub],
-        )
-        is None
-    )
+    assert _grounding(
+        texts=[f"The answer is X, per [{stub.title}]({stub.url})."],
+        sources=[stub],
+    ) == pytest.approx(0.0)
     # ...while a REAL page cited by URL resolves, fallback flag or not.
     tavily = _tavily_source("https://owasp.org/www-project-asvs/")
     assert _grounding(
@@ -513,6 +656,11 @@ def test_one_resolving_ordinal_launders_many_off_run_urls_to_maximum_trust() -> 
     it needs a URL oracle (a fetch or the Layer-B judge), not a threshold
     edit — capping grounding once excluded markers dominate would need a
     calibrated cut, which FS-6 defers to the S4 golden set.
+
+    R2-S3: the ENGINE label is unchanged and still wrong; what closes the S3
+    exposure is the presentation guard asserted below — the laundering shape
+    now carries a measurable ``unverifiable_marker_count`` and its confident
+    labels are downgraded to ``indeterminate`` for presentation.
     """
     fabricated = " ".join(
         f"[claim{i}](https://fabricated-{i}.example.org/paper)" for i in range(20)
@@ -532,6 +680,16 @@ def test_one_resolving_ordinal_launders_many_off_run_urls_to_maximum_trust() -> 
     assert evaluation.signals.citation_marker_grounding == pytest.approx(1.0)
     assert evaluation.faithfulness_label == "faithful"
     assert evaluation.hallucination_risk == "low"
+    assert evaluation.signals.unverifiable_marker_count == 80
+    assert evaluation.signals.unverifiable_marker_ratio == pytest.approx(80 / 84)
+    assert (
+        presentation_confidence(
+            evaluation.signals,
+            faithfulness_label=evaluation.faithfulness_label,
+            hallucination_risk=evaluation.hallucination_risk,
+        )
+        == "indeterminate"
+    )
 
 
 def test_run_wholly_refused_needs_EVERY_substantive_slot_not_almost_every() -> None:

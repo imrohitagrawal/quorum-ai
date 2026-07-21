@@ -29,6 +29,7 @@
 | FR-015 | Functional | Per-run evaluation engine — deterministic Layer-A TrustScore + key-gated OFF-by-default LLM judge (R2) | `docs/09-roadmap.md`; `docs/42-ai-safety-grounding.md`; `docs/44-model-risk-register.md`; `docs/46-prompt-registry.md` | Backend engineer | Must | AC-041, AC-042, AC-043 | TEST-FR-015 | Not created | Not published | Draft |
 | NFR-011 | Non-functional | Evaluation determinism and CI hermeticity (R2) | `docs/09-roadmap.md`; `docs/42-ai-safety-grounding.md` | Engineering lead | Must | AC-040, AC-041, AC-042 | TEST-NFR-011 | Not created | Not published | Draft |
 | NFR-012 | Non-functional | Evaluation cost/behaviour neutrality — judge OFF ⇒ zero delta (R2) | `docs/09-roadmap.md` | Engineering lead | Must | AC-041, AC-042 | TEST-NFR-012 | Not created | Not published | Draft |
+| FR-016 | Functional | Trust and confidence result surface — number-free, judge-OFF-safe, DEBT-012-guarded evaluation rendering (R2) | `docs/09-roadmap.md`; `docs/30-ux-design.md`; `docs/32-ui-state-matrix.md`; `docs/42-ai-safety-grounding.md`; `docs/63-technical-debt-register.md` | Frontend engineer | Must | AC-044, AC-045, AC-046 | TEST-FR-016 | Not created | Not published | Draft |
 
 ## Registry Notes
 
