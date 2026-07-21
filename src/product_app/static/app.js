@@ -6831,7 +6831,17 @@
       // the "Current time" card should read "Not started" rather
       // than the wall-clock at the moment ``boot()`` ran.
       resetRunTime();
+      // Deterministic readiness signal. The model slots are painted by
+      // ``refreshDefaults`` above, i.e. only AFTER two network round-trips —
+      // so "the composer is usable" is not observable from the initial HTML.
+      // Stamping the outcome here gives automation a single settled fact to
+      // wait on, and — critically — stamps ``error`` on the failure path too,
+      // so a broken bootstrap fails fast and loudly instead of leaving a
+      // waiter to spin until its timeout. Presentation-free (a data attribute
+      // on <html>), so it cannot affect layout, pixels, or the a11y tree.
+      document.documentElement.dataset.appState = "ready";
     } catch (error) {
+      document.documentElement.dataset.appState = "error";
       handleError(error);
       setConnectionPill("error", "Disconnected");
     }
@@ -6850,5 +6860,22 @@
     }
   }
 
-  boot();
+  // Last-resort readiness stamp. ``boot()`` stamps ``data-app-state`` around
+  // its session/defaults phase, but everything BEFORE that — setView, the
+  // init* wiring, the addEventListener calls, which assume their elements
+  // exist — runs outside that try. A throw there (a renamed id, a template
+  // change) would leave the attribute unset, and anything waiting on it would
+  // sit until its timeout with no cause reported. ``boot`` is async, so a
+  // synchronous throw anywhere in it surfaces here as a rejection: this
+  // guarantees the signal is ALWAYS written, exactly once, on every path.
+  boot().catch((error) => {
+    if (!document.documentElement.dataset.appState) {
+      document.documentElement.dataset.appState = "error";
+    }
+    try {
+      handleError(error);
+    } catch (_) {
+      /* the error reporter itself failed; the state stamp above still stands */
+    }
+  });
 })();

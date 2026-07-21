@@ -32,9 +32,17 @@ name: E2E (axe + parity)
 # egress. The real-integration smoke uses the same self-started sim backend but
 # no per-test mock.
 #
-# retries are set to 0 here on purpose — the suites are deterministic by
-# construction (per-test isolation, no shared run-state dependence), so a
-# failure is a real failure, never something to paper over with a re-run.
+# RETRIES ARE ZERO — twice over, on purpose (RB-4):
+#   * e2e/playwright.config.ts defaults `retries` to 0 for every lane, CI
+#     included. Masking is explicit opt-in via `PW_RETRIES`, for local triage
+#     only; it is never ambient and never on here.
+#   * every invocation below ALSO passes `--retries=0`, so the gate declares
+#     its own terms rather than inheriting whatever the config happens to say.
+# The suites are deterministic by construction (per-test isolation, no shared
+# run-state dependence), so a failure is a real failure. When one turns out to
+# be intermittent anyway, the answer is flake-scan.yml (`--repeat-each=10`,
+# measures the true rate) followed by QUARANTINE — never a retry, never a
+# widened timeout. Pinned by tests/unit/test_e2e_flake_policy.py.
 
 on:
   # Manual lever: re-run the pipeline on-demand (e.g. after a flake or

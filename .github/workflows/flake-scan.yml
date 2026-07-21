@@ -1,0 +1,208 @@
+name: Flake scan N=10 (advisory)
+
+# RB-4 — MEASURE the flake rate instead of masking it.
+#
+# The blocking e2e lane runs every spec exactly once with `--retries=0`, so a
+# spec that fails one run in ten reds the pipeline one PR in ten and looks like
+# bad luck. This job turns that impression into a number: each timing-sensitive
+# spec is run `--repeat-each=10` on its own matrix leg, unmasked, so the output
+# is a measured rate attributable to a run id.
+#
+# READ THE DENOMINATOR LITERALLY. `--repeat-each=10` repeats every test IN the
+# spec ten times, so a 53-test spec reports out of 530 executed repetitions, not
+# out of 10. The summary step prints the denominator it actually computed —
+# never assume it is 10 — and it counts only tests that EXECUTED, because a
+# skipped repetition is not a passing one.
+#
+# POLICY — what a result means (recorded in docs/metrics/flake-rate.md):
+#   0 failures  -> the spec stays in the blocking lane.
+#   >0 failures -> the spec is QUARANTINED: moved behind a `@flaky` tag excluded from
+#            the blocking steps, with a ledger row naming an owner and the root
+#            cause under investigation. NEVER a retry. NEVER a widened timeout.
+#            Both of those keep the pipeline green while the product bug that
+#            makes the spec intermittent ships to users.
+#
+# Advisory (`continue-on-error: true`): this job MEASURES, it does not gate. A
+# scan that could block a merge would create pressure to quarantine for
+# convenience — exactly the incentive the policy exists to remove.
+#
+# Scheduled rather than per-PR: 10x every spec on every push would dominate CI
+# minutes for a signal that only changes meaningfully over days.
+#
+# !! KNOWN CONFOUND — the first results are NOT yet a flake rate. Every spec
+# boot GETs /v1/session, which is per-IP rate limited to 30/minute (measured:
+# request 31 is 429ed, refilling one token per two seconds). At
+# --repeat-each=10 the parity leg alone attempts 530 boots from one IP, so a
+# dirty result here may be the limiter rather than a flaky spec. Do NOT
+# transcribe a rate or quarantine a spec on that basis — read the CONFOUND
+# section of docs/metrics/flake-rate.md first. Resolving it needs a decision
+# about a security control and is an explicit operator hand-off.
+
+on:
+  schedule:
+    # 05:00 UTC daily — after the nightly quiet period, before the working day.
+    - cron: "0 5 * * *"
+  # On demand: a quarantine decision cannot wait for the next cron tick, and
+  # re-measuring right after a stabilisation fix is the whole point.
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  flake-scan:
+    name: flake scan ${{ matrix.spec }} (N=10)
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    continue-on-error: true
+    strategy:
+      # Never cancel a sibling: each leg is an independent measurement, and a
+      # failure is the DATA POINT this job exists to collect.
+      fail-fast: false
+      matrix:
+        # The timing-sensitive contracts. `rendering-invariants` asserts a
+        # MONOTONIC elapsed timer — the one genuinely time-dependent assertion
+        # in the suite. `real-integration-smoke` drives the real sim backend
+        # with no mock, so it inherits real scheduling variance. The trust
+        # specs (FR-016) poll a surface painted from an async evaluation.
+        spec:
+          - tests/invariants/rendering-invariants.spec.ts
+          - tests/invariants/real-integration-smoke.spec.ts
+          - tests/invariants/trust-score-invariants.spec.ts
+          - tests/ui-parity/parity-behavior.spec.ts
+          - tests/accessibility/axe-all-views.spec.ts
+    env:
+      OPENROUTER_LIVE_EXECUTION_ENABLED: "false"
+      QUORUM_RUNTIME_ENVIRONMENT: "ci"
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v5
+        with:
+          version: "latest"
+          enable-cache: true
+
+      - name: Set up Python
+        run: uv python install 3.12
+
+      - name: Install backend dependencies
+        run: uv sync --all-extras --dev
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: "npm"
+          cache-dependency-path: e2e/package-lock.json
+
+      - name: Install e2e dependencies
+        working-directory: e2e
+        run: npm ci
+
+      - name: Install Playwright Chromium (+ system deps)
+        working-directory: e2e
+        run: npx playwright install --with-deps chromium
+
+      - name: Discard any pre-existing junit report
+        working-directory: e2e
+        # Absence of a report must MEAN something. `e2e/results.xml` was once
+        # committed by accident (gitignoring a tracked file does not untrack
+        # it), so `actions/checkout` restored a stale June-2026 report on every
+        # run — and a leg that crashed before writing anything would have had
+        # that stale file summarised and published as *this* run's rate, run id
+        # attached. That is precisely the fabricated number this whole job
+        # exists to prevent. The file is untracked now; this line keeps the
+        # guarantee even if it ever comes back, and is what makes the
+        # "NO REPORT — treat as unmeasured" branch below reachable.
+        run: rm -f flake-results.xml results.xml
+
+      - name: Repeat the spec 10x, unmasked
+        working-directory: e2e
+        # `--repeat-each` is Playwright's built-in vehicle: it reports each
+        # repetition as its own test, so the junit XML carries the per-run
+        # verdicts a bash loop would flatten into one exit code.
+        # `--retries=0` is mandatory here — a retry would measure the MASKED
+        # rate, which is always 0 and always a lie.
+        #
+        # PLAYWRIGHT_JUNIT_OUTPUT_NAME is REQUIRED, not decoration: a
+        # `--reporter=junit` on the command line REPLACES the config's reporter
+        # list outright, and the bare junit reporter then writes the XML to
+        # STDOUT — no results.xml is created. Verified empirically against
+        # Playwright 1.61.1. Without this the summary step below would report
+        # every leg as UNMEASURED and the upload step would fail the job on
+        # `if-no-files-found: error`, every single night.
+        env:
+          CI: "true"
+          PLAYWRIGHT_JUNIT_OUTPUT_NAME: flake-results.xml
+        run: >-
+          npx playwright test
+          ${{ matrix.spec }}
+          --project=chromium
+          --retries=0
+          --repeat-each=10
+          --reporter=junit
+
+      - name: Summarise the measured rate
+        if: ${{ !cancelled() }}
+        working-directory: e2e
+        # Reads the junit XML rather than the step's exit code so the summary
+        # reports k/N, not merely pass/fail. This is the number that gets
+        # transcribed — WITH this run id — into docs/metrics/flake-rate.md.
+        env:
+          SPEC: ${{ matrix.spec }}
+        run: |
+          python3 - "$GITHUB_STEP_SUMMARY" "$SPEC" <<'PY'
+          import os, sys, xml.etree.ElementTree as ET
+          from pathlib import Path
+
+          summary, spec = Path(sys.argv[1]), sys.argv[2]
+          report = Path("flake-results.xml")
+          if not report.exists():
+              with summary.open("a") as fh:
+                  fh.write(f"## flake scan — `{spec}`\n\nno junit report produced\n")
+              print(f"[FLAKE] {spec}: NO REPORT — treat as unmeasured, not as clean")
+              sys.exit(0)
+          root = ET.parse(report).getroot()
+          suites = root.iter("testsuite") if root.tag == "testsuites" else [root]
+          collected = skipped = failed = 0
+          for suite in suites:
+              collected += int(suite.get("tests", 0))
+              skipped += int(suite.get("skipped", 0))
+              failed += int(suite.get("failures", 0)) + int(suite.get("errors", 0))
+          # A SKIPPED test is not a passing test. Playwright counts skips in the
+          # `tests` attribute, so dividing by it would let a spec that skipped
+          # every repetition (a browser guard, a `test.skip`, a quarantine tag)
+          # report a serene `0/N` — a spec that ran nothing looking exactly like
+          # a spec that ran clean. Denominator is what actually EXECUTED.
+          executed = collected - skipped
+          rate = f"{failed}/{executed}"
+          if executed <= 0:
+              verdict = "UNMEASURED — every repetition was skipped; do NOT record as clean"
+              rate = f"0/0 (of {collected} collected, {skipped} skipped)"
+          elif failed:
+              verdict = "QUARANTINE (>0 failures)"
+          else:
+              verdict = "clean"
+          with summary.open("a") as fh:
+              fh.write(f"## flake scan — `{spec}`\n\n")
+              fh.write(f"- measured: **{rate}** failed of EXECUTED repetitions\n")
+              fh.write(f"- collected {collected}, skipped {skipped} (10 repetitions x the spec's test count)\n")
+              fh.write(f"- verdict: **{verdict}**\n")
+              fh.write(f"- run id: `{os.environ.get('GITHUB_RUN_ID', 'unknown')}`\n")
+          print(f"[FLAKE] {spec}: {rate} failed of executed — {verdict}")
+          PY
+
+      - name: Upload the junit report
+        if: ${{ !cancelled() }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: flake-scan-${{ strategy.job-index }}-${{ github.run_id }}-${{ github.run_attempt }}
+          path: e2e/flake-results.xml
+          if-no-files-found: error
+          retention-days: 30
