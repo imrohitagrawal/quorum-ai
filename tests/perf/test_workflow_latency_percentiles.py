@@ -130,6 +130,66 @@ pytestmark = pytest.mark.skipif(
     "job (QUORUM_RUN_PERF_BUDGET=1) — see DEBT-009",
 )
 
+#: Where a measured sample is persisted, relative to the working directory the
+#: gate runs from (the repo root).
+_ARTIFACT_PATH = "build/gates/perf-percentiles.json"
+
+
+def _publish(section: str, payload: dict[str, float | int]) -> None:
+    """Persist one measured sample to ``build/gates/perf-percentiles.json``.
+
+    DEBT-009: the ``[PERF]`` prints only reach a human when the gate is already
+    RED (pytest capture swallows stdout on a passing run), so the numbers needed
+    to *re-derive* the budgets were exactly the ones nobody could collect. This
+    writes them to a machine-readable file that CI uploads on every run, pass or
+    fail.
+
+    MERGE-writes rather than overwrites: the sequential and concurrent tests run
+    as separate tests, so a clobbering write would keep only whichever finished
+    last and silently discard the other half of the sample.
+
+    The ``meta`` block is what makes a number usable months later. A bare p95 is
+    an orphan — without the platform, core count and run id there is no way to
+    tell whether two samples are even comparable, and a budget derived from
+    mixed hardware is exactly the unmeasured guess DEBT-009 exists to retire.
+
+    Best-effort by construction: this is instrumentation, and a publication
+    failure must never turn a green performance run red.
+    """
+    import json
+    import platform
+    import sys
+    from datetime import UTC, datetime
+    from pathlib import Path
+
+    try:
+        artifact = Path(_ARTIFACT_PATH)
+        artifact.parent.mkdir(parents=True, exist_ok=True)
+
+        existing: dict[str, object] = {}
+        if artifact.exists():
+            try:
+                existing = json.loads(artifact.read_text(encoding="utf-8"))
+            except (json.JSONDecodeError, OSError):
+                # A truncated file from a killed run must not abort this one.
+                existing = {}
+
+        existing[section] = payload
+        existing["meta"] = {
+            "platform": platform.platform(),
+            "cpu_count": os.cpu_count(),
+            "python": sys.version,
+            "run_id": os.environ.get("GITHUB_RUN_ID", "local"),
+            "sha": os.environ.get("GITHUB_SHA", "local"),
+            "runner_os": os.environ.get("RUNNER_OS", platform.system()),
+            "captured_at_utc": datetime.now(UTC).isoformat(),
+        }
+        artifact.write_text(json.dumps(existing, indent=2, sort_keys=True), encoding="utf-8")
+    except OSError:
+        # Instrumentation must never fail the measurement it is instrumenting.
+        pass
+
+
 DEFAULT_MODEL_IDS = [
     "openai/gpt-4o-mini",
     "anthropic/claude-haiku-4.5",
@@ -269,6 +329,19 @@ def test_sequential_workflow_latency_percentiles_stay_within_budget(
         f"\n[PERF] sequential n={len(samples)} min={samples[0]:.1f}ms "
         f"p50={p50:.1f}ms p95={p95:.1f}ms max={samples[-1]:.1f}ms"
     )
+    # BEFORE the asserts, deliberately: an over-budget run is the single most
+    # valuable sample for re-deriving the budget, and publishing afterwards
+    # would be the one case that never gets recorded.
+    _publish(
+        "sequential",
+        {
+            "n": len(samples),
+            "min": round(samples[0], 1),
+            "p50": round(p50, 1),
+            "p95": round(p95, 1),
+            "max": round(samples[-1], 1),
+        },
+    )
 
     # The regression budget — this is the assertion that bites.
     assert p50 <= SEQUENTIAL_P50_BUDGET_MS, (
@@ -297,6 +370,16 @@ def test_twenty_concurrent_runs_all_reach_terminal_state_within_budget(
     print(
         f"\n[PERF] concurrent n={len(samples)} p50={p50:.1f}ms "
         f"p95={p95:.1f}ms max={samples[-1]:.1f}ms statuses={sorted(set(statuses))}"
+    )
+    # Published before the asserts for the same reason as the sequential case.
+    _publish(
+        "concurrent",
+        {
+            "n": len(samples),
+            "p50": round(p50, 1),
+            "p95": round(p95, 1),
+            "max": round(samples[-1], 1),
+        },
     )
 
     assert len(outcomes) == CONCURRENT_RUN_COUNT
