@@ -1,7 +1,10 @@
 # OVERNIGHT-RESULT — R2-S3 (FR-016 trust surface) — PR #54
 
 **Branch:** `feat/r2-s3-trust-ui` · **PR:** https://github.com/imrohitagrawal/quorum-ai/pull/54
-**Status:** BUILT + VERIFIED on the real CI runner. **Merge is operator-gated on one human step** (visual-baseline review, below). Judge stayed OFF; zero paid runs.
+**Status:** BUILT + **ALL CI CHECKS GREEN, PR MERGEABLE** (verified on the real runner, incl. the visual-compare step observed green). **Merge deliberately left to the operator** — the one remaining gate is a human sign-off on the seeded visual baselines (§5.3), and merge triggers a production deploy. Judge stayed OFF; zero paid runs.
+
+## Final CI rollup (commit on PR #54) — all SUCCESS
+`validate-and-test` · `FR traceability completeness` · `Schemathesis API contract` · `Changed-lines coverage ≥95%` · `codex-review` · `pytest (Python 3.12)` · `E2E axe+parity (chromium)` [invariants + axe/parity/smoke/degraded + **visual-compare all green**]. Advisory (perf, mutation) also green. `mergeable: MERGEABLE`.
 
 ## What shipped (PR-S3-4 + PR-INFRA-C + PR-S3-5)
 The S2 evaluation now renders to a user under the blunt D-2 contract: `#result-trust-score` shows **zero digits, zero advisory-label words**, always the standing disclosure, and **never any green** — closing DEBT-012's *surfacing* half and the OC-5 misleading-output gate.
@@ -26,7 +29,7 @@ Reviewed by a 5-lens adversarial workflow → 3 findings confirmed & fixed (a no
    - 6 new `e2e/tests/invariants/trust-score-visual.spec.ts-snapshots/trust-score-{light,dark}-{375,768,1440}.png`
    - updated `visual-snapshots.spec.ts-snapshots/result-verdict-chromium-linux.png`
    I did a first-pass look (both themes: no green, no digits, state+why+amber-caveat render; result-verdict surface correctly hidden on the no-eval fixture). **A human must still confirm each PNG.**
-2. After review, get one clean full e2e run and `gh pr merge 54 --squash`. **Note:** across 6 e2e runs the invariants + axe + degraded + smoke steps passed every time, but the *visual-compare* step (step 3) has not yet been *observed* green because the parity flake below reds step 2 first and skips step 3. The visual compare passes by construction (baselines were just `--update-snapshots`-generated from the exact stabilized render, and I visually confirmed all 3 key PNGs). To observe it, re-run e2e until step 2's parity flake does not fire, **or** quarantine the flaky parity spec first (see below).
+2. After review, `gh pr merge 54 --squash`. All checks are green (the visual-compare step was made `if: !cancelled()` so it runs independently of the parity flake and was observed green). The parity flake below can still intermittently red the axe/parity step on a given run — if it does, re-run that job; it is not an S3 defect.
 3. **Monitor the deploy JOB actually runs** (not skipped) → `/health` 200 + `/ready` state:live (memory `deploy-job-skip-vs-health`).
 
 ## Known pre-existing issue (NOT S3; surfaced by CI)
