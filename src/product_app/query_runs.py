@@ -1231,25 +1231,32 @@ def _degrade_run_for_deadline(
 ) -> bool:
     """Write the NFR-004 deadline degrade, unless a cancel already won.
 
-    ``update_status`` does not validate transitions, so without this guard a
-    cancel landing between the executor's last ``_should_stop`` check and the
-    degrade write would be silently overwritten CANCELLED → TIMED_OUT — a
-    terminal→terminal rewrite of a label the user was already shown. The
-    cancel wins; returns whether the degrade was applied.
+    The status flip goes through ``transition()``, which VALIDATES under the
+    repository lock: ``CANCELLED`` (like every terminal status) has no
+    outgoing transitions, so a cancel that landed first — even between this
+    function's entry and the write — makes the flip raise instead of
+    silently rewriting a label the user was already shown (atomic, not a
+    check-then-act). The stage/detail annotation is applied only after the
+    flip succeeds. Returns whether the degrade was applied; a False caller
+    must not stamp deadline attribution onto the cancelled run.
     """
-    if query_run_repository.get(query_run_id).status is QueryRunStatus.CANCELLED:
+    try:
+        query_run_repository.transition(
+            query_run_id,
+            QueryRunStatus.TIMED_OUT,
+            failed_steps=failed_steps,
+            missing_steps=missing_steps,
+        )
+    except InvalidQueryRunTransitionError:
         return False
     query_run_repository.update_status(
         query_run_id,
-        status_value=QueryRunStatus.TIMED_OUT,
         stage_name=stage_name,
         stage_state=StageState.FAILED,
         detail=(
             f"Run exceeded the {deadline_seconds:g}s wall-clock deadline "
             "(NFR-004); serving the completed portion."
         ),
-        failed_steps=failed_steps,
-        missing_steps=missing_steps,
     )
     return True
 
@@ -1274,8 +1281,8 @@ def _execute_query_run(query_run_id: UUID, account_id: UUID) -> None:
 
     def _degrade_for_deadline(
         *, stage_name: str, failed_steps: list[str], missing_steps: list[str]
-    ) -> None:
-        _degrade_run_for_deadline(
+    ) -> bool:
+        return _degrade_run_for_deadline(
             query_run_id,
             deadline_seconds=_run_deadline_seconds,
             stage_name=stage_name,
@@ -1362,12 +1369,14 @@ def _execute_query_run(query_run_id: UUID, account_id: UUID) -> None:
         query_run_repository.record_initial_answer(query_run_id, answer)
 
     if deadline_breached:
-        _degrade_for_deadline(
+        # ``and``-gate: when the cancel won the race the run is CANCELLED and
+        # must not receive deadline stage attribution either.
+        if _degrade_for_deadline(
             stage_name="initial_answers",
             failed_steps=["initial_answers"],
             missing_steps=["debate_round_1", "debate_round_2", "synthesis"],
-        )
-        _mark_remaining_stages(query_run_id, ["debate_round_1", "debate_round_2", "synthesis"])
+        ):
+            _mark_remaining_stages(query_run_id, ["debate_round_1", "debate_round_2", "synthesis"])
         return
 
     refreshed = query_run_repository.get(query_run_id)
@@ -1402,12 +1411,12 @@ def _execute_query_run(query_run_id: UUID, account_id: UUID) -> None:
     if _should_stop(query_run_id):
         return
     if _budget_remaining() <= 0:
-        _degrade_for_deadline(
+        if _degrade_for_deadline(
             stage_name="debate_round_1",
             failed_steps=[],
             missing_steps=["debate_round_1", "debate_round_2", "synthesis"],
-        )
-        _mark_remaining_stages(query_run_id, ["debate_round_2", "synthesis"])
+        ):
+            _mark_remaining_stages(query_run_id, ["debate_round_2", "synthesis"])
         return
     debate_result = debate_stub_service.run_debate_rounds(
         account_id=account_id,

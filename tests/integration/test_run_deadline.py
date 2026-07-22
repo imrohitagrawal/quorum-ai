@@ -315,6 +315,11 @@ def test_a_worker_raised_timeout_error_is_not_a_deadline_breach(
     )
     answers = body["result"]["model_answers"]
     assert not any(a.get("error_code") == "RUN_DEADLINE_EXCEEDED" for a in answers)
+    # Pinned CONVENTION (matches every escaped-worker exception, the
+    # pre-existing ``except Exception: continue`` path): the raising slot is
+    # simply absent from the recorded answers — it is not silently mislabeled
+    # as a deadline cut, and the run's own label stays correct.
+    assert {a["slot_number"] for a in answers} == {1, 3, 4}
 
 
 def test_the_deadline_degrade_never_overwrites_a_cancelled_run() -> None:
