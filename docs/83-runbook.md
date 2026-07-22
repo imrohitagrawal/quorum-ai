@@ -7,6 +7,7 @@ Real runbooks live under **`docs/runbooks/`**:
   symptom, detection gap, diagnosis, resolution, operator playbook,
   prevention.
 
-Generic triage order (kept from the original stub, still correct):
+Generic triage order (the original stub's order, extended with the OD-2
+dashboard):
 `/ready` → `/ui/ops` → JSON logs (grep the `X-Request-ID`) → recent
 deploys → rollback per `DEPLOY.md` (`fly releases rollback`).
