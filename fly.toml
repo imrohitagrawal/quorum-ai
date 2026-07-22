@@ -23,7 +23,7 @@ kill_timeout = "5s"
   RUNTIME_ENVIRONMENT = "production"
   SESSION_COOKIE_SECURE = "true"
   ACCOUNT_LEGACY_HEADER_ENABLED = "false"
-  OPENROUTER_APP_URL = "https://quorum-ai.fly.dev"
+  OPENROUTER_APP_URL = "https://quorum.stackclimb.com"
   OPENROUTER_LIVE_EXECUTION_ENABLED = "false"  # Operator must enable after setting OPENROUTER_API_KEY
   # issue #27: keep the feedback-event SQLite trail on the persistent volume
   # (mounted at /data below), NOT the ephemeral rootfs default (.data/…) which

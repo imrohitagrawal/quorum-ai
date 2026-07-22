@@ -610,7 +610,7 @@ def _call_audit_model(
         headers={
             "Authorization": f"Bearer {openrouter_key}",
             "Content-Type": "application/json",
-            "HTTP-Referer": "https://quorum-ai.fly.dev",
+            "HTTP-Referer": "https://quorum.stackclimb.com",
             "X-Title": "Quorum-AI Feedback Audit",
         },
         method="POST",
