@@ -236,3 +236,36 @@ def test_the_operator_queue_names_every_human_label_case() -> None:
                 f"structural case {case.case_id!r} appears in the operator queue, which is "
                 "only for deferred subject-matter labels"
             )
+
+
+def test_completed_queue_entries_reproduce_the_operator_labels_verbatim() -> None:
+    """A completed queue entry must carry its operator label VERBATIM.
+
+    The queue doc claims each completed label "lives verbatim" in
+    ``tests/evals/pilot/operator_labels.json`` while also rendering the label
+    inline. Two renderings of one operator-authored label must not diverge —
+    a paraphrase is indistinguishable from a silent edit, which is exactly
+    what the queue exists to prevent. Whitespace is normalised (the doc wraps
+    at ~80 columns); every other byte of every field must match.
+    """
+    labels_path = Path(__file__).resolve().parent / "pilot" / "operator_labels.json"
+    labels = json.loads(labels_path.read_text(encoding="utf-8"))
+    doc = " ".join(OPERATOR_QUEUE.read_text(encoding="utf-8").split())
+    human_ids = {case.case_id for case in CASES if case.needs_human_label}
+
+    covered = 0
+    for label in labels:
+        if label["case_id"] not in human_ids:
+            continue
+        covered += 1
+        for field in ("correctness", "error_if_any", "source", "reviewer", "note"):
+            normalized = " ".join(str(label[field]).split())
+            assert normalized in doc, (
+                f"{label['case_id']!r}: the queue doc's rendering of {field!r} is not the "
+                "verbatim operator label from operator_labels.json — regenerate the doc "
+                "block from the JSON; never paraphrase a human-authored label"
+            )
+    # The guard must actually bite: every human-label case is labeled now.
+    assert covered == len(human_ids), (
+        f"expected a JSON label for each of the {len(human_ids)} human-label cases, found {covered}"
+    )

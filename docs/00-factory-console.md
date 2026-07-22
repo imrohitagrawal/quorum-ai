@@ -11,9 +11,15 @@ Operate, learn, and improve
 
 **Demo-readiness P1–P3 is COMPLETE and deploy-verified (2026-07-22).** P1 #72
 `b2848e5` (real Layer-B judge, OFF by default), P3 #73 `c663ad5` (NFR-004
-run-level deadline ENFORCED), P2 #74 `96eb281` (measured-accuracy pilot,
-n = 7, computed agreement 7/7 — see `docs/metrics/accuracy-pilot.md`;
-quality-ledger Part 2 stays em-dash). Evidence: `DEMO-READINESS-P1-P3-RESULT.md`.
+run-level deadline ENFORCED), P2 #74 `96eb281` (measured-accuracy pilot).
+Evidence: `DEMO-READINESS-P1-P3-RESULT.md`.
+
+**D5 operator-label queue is COMPLETE (2026-07-23).** The operator authored the
+3 remaining specialist-domain labels (clinical, tax-financial, self-harm-safety;
+specialist-reviewer requirements waived by operator decision, recorded per
+label). Pilot extended to n = 10, computed agreement 10/10 — see
+`docs/metrics/accuracy-pilot.md` and `docs/metrics/operator-label-queue.md`;
+quality-ledger Part 2 stays em-dash.
 
 **The next action is the deferred, OPERATOR-GATED funding step:** fund the
 OpenRouter key and set `QUORUM_EVAL_JUDGE_API_KEY` + `QUORUM_EVAL_JUDGE_MODEL_ID`

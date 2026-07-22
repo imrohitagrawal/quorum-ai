@@ -1,11 +1,12 @@
-"""P2: the measured-accuracy PILOT harness (n = 7, operator-authored labels).
+"""P2: the measured-accuracy PILOT harness (n = 10, operator-authored labels).
 
 This suite makes ``docs/metrics/accuracy-pilot.md`` a *measurement* instead of
 an assertion. The pilot's integrity spine, mechanised:
 
-1. **The labels are operator-authored and read-only.** The 7 subject-matter
+1. **The labels are operator-authored and read-only.** The 10 subject-matter
    correctness labels in ``pilot/operator_labels.json`` were authored by the
-   operator (Rohit Agrawal, 2026-07-22) and transcribed verbatim. The harness
+   operator (Rohit Agrawal — 7 on 2026-07-22, the 3 remaining D5 queue cases
+   on 2026-07-23) and transcribed verbatim. The harness
    authors ZERO labels; it only scores the engine against them. The loader
    REJECTS an empty label set (an unlabeled pilot must never silently report
    100%), a ``correctness`` outside the engine's own three-value enum, and a
@@ -29,7 +30,7 @@ an assertion. The pilot's integrity spine, mechanised:
    disagrees with a human label, the doc must record the real number or this
    suite goes red; it must never be "fixed" by editing a label.
 
-This pilot is PROCESS-ADJACENT scope: n = 7 human-labeled verdicts on
+This pilot is PROCESS-ADJACENT scope: n = 10 human-labeled verdicts on
 hand-authored golden fixtures. It is NOT the quality-ledger Part 2 measurement
 (real captured runs), and ``quality-ledger.md`` Part 2 stays em-dash.
 
@@ -56,12 +57,14 @@ _spec.loader.exec_module(pilot)
 PILOT_DOC = Path(__file__).resolve().parents[2] / "docs" / "metrics" / "accuracy-pilot.md"
 QUALITY_LEDGER = Path(__file__).resolve().parents[2] / "docs" / "metrics" / "quality-ledger.md"
 
-#: The exact scope the operator labeled on 2026-07-22. Pins the pilot's n so a
-#: silently dropped or smuggled-in label cannot change the denominator unnoticed.
-#: …and pins each label's CORRECTNESS value (transcribed from the same verbatim
-#: operator handoff, 2026-07-22) so a silently flipped label cannot keep the
-#: suite green — an intentional operator re-label must edit this pin in the
-#: same reviewed diff, making the change visible. (Review finding CT-F1.)
+#: The exact scope the operator labeled (7 on 2026-07-22; the 3 remaining D5
+#: queue cases — clinical, tax-financial, self-harm-safety — on 2026-07-23).
+#: Pins the pilot's n so a silently dropped or smuggled-in label cannot change
+#: the denominator unnoticed. …and pins each label's CORRECTNESS value
+#: (transcribed from the same verbatim operator handoffs) so a silently flipped
+#: label cannot keep the suite green — an intentional operator re-label must
+#: edit this pin in the same reviewed diff, making the change visible.
+#: (Review finding CT-F1.)
 EXPECTED_CORRECTNESS = {
     "grounded-consensus": "faithful",
     "fabricated-citation-launder": "unfaithful",
@@ -70,6 +73,9 @@ EXPECTED_CORRECTNESS = {
     "human-as-of-date-fact": "partial",
     "preserved-false-consensus": "faithful",
     "partial-grounding-medium": "faithful",
+    "human-clinical-interaction": "faithful",
+    "human-tax-deduction": "faithful",
+    "human-self-harm-safety": "partial",
 }
 EXPECTED_CASE_IDS = frozenset(EXPECTED_CORRECTNESS)
 
@@ -82,7 +88,7 @@ EXPECTED_CASE_IDS = frozenset(EXPECTED_CORRECTNESS)
 def test_the_committed_label_set_is_exactly_the_operator_authored_pilot() -> None:
     labels = pilot.load_operator_labels()
     assert {label.case_id for label in labels} == EXPECTED_CASE_IDS
-    assert len(labels) == 7
+    assert len(labels) == 10
     for label in labels:
         assert label.correctness == EXPECTED_CORRECTNESS[label.case_id], (
             f"{label.case_id}: committed correctness {label.correctness!r} does not match "
@@ -150,7 +156,7 @@ def test_rejects_a_blank_or_null_provenance_field(tmp_path: Path, bad_value: Any
 
 def test_agreement_is_derived_by_running_the_real_engine() -> None:
     result = pilot.compute_pilot()
-    assert result.n == 7
+    assert result.n == 10
     assert 0 <= result.agreed <= result.n
     for row in result.rows:
         # Every engine verdict must come from the engine's own vocabulary…
@@ -174,7 +180,7 @@ def test_the_engine_verdict_is_recomputed_not_copied_from_the_fixture() -> None:
     # Under an engine that says 'unfaithful' for everything, only the one
     # operator-labeled 'unfaithful' case can agree.
     assert result.agreed == 1
-    assert result.n == 7
+    assert result.n == 10
 
 
 def test_agreement_consults_the_operator_label_not_the_fixture_label(tmp_path: Path) -> None:
@@ -183,15 +189,15 @@ def test_agreement_consults_the_operator_label_not_the_fixture_label(tmp_path: P
     On the committed set the operator labels coincide with the golden fixtures'
     own ``label`` fields, so a harness bug comparing engine-vs-fixture would
     stay green everywhere else. Flipping ONE operator label in a throwaway copy
-    must drop agreement to 6/7 — only possible if the harness scores against
+    must drop agreement to 9/10 — only possible if the harness scores against
     the operator file it was given.
     """
     rows = _committed_rows()
     flipped = next(row for row in rows if row["case_id"] == "grounded-consensus")
     flipped["correctness"] = "partial"  # test-only perturbation, never committed
     result = pilot.compute_pilot(labels_path=_write(tmp_path, rows))
-    assert result.n == 7
-    assert result.agreed == 6
+    assert result.n == 10
+    assert result.agreed == 9
     (disagreement,) = [row for row in result.rows if not row.agree]
     assert disagreement.case_id == "grounded-consensus"
     assert disagreement.operator_correctness == "partial"
@@ -232,7 +238,7 @@ def test_the_pilot_doc_carries_its_scoping_caveats_on_its_face() -> None:
     # check by wrapping across a newline.
     text = " ".join(PILOT_DOC.read_text(encoding="utf-8").split())
     for required in (
-        "n = 7",
+        "n = 10",
         "human-labeled",
         "hand-authored golden fixtures",
         "pilot — not a population estimate",
