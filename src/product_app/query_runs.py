@@ -337,9 +337,15 @@ class QueryRunResultResponse(BaseModel):
     #: ``demo_mode is False``.
     live_count: int = Field(ge=0, default=0)
     #: Number of model answers produced by Quorum's local simulation
-    #: helpers (LOCAL_SIMULATION or FALLBACK_SEARCH) on this run. The
-    #: sum ``live_count + local_count`` always equals the number of
-    #: initial answers.
+    #: helpers (LOCAL_SIMULATION or FALLBACK_SEARCH) on this run. For a
+    #: fully-answered run ``live_count + local_count`` equals the number of
+    #: initial answers. RB-5 / D3: a slot that FAILED on the OpenRouter path
+    #: (``_failed_answer`` / ``cancelled_answer``) is counted in NEITHER —
+    #: it is not a live answer (``live_count`` now requires COMPLETED) and it
+    #: is not a local simulation — so on a run with provider failures the sum
+    #: is the count of slots that actually returned an answer, not the total
+    #: slot count. This is deliberate: a failed slot must not be laundered into
+    #: either honest bucket.
     local_count: int = Field(ge=0, default=0)
     #: Sum of the four models' ``material_claim_count`` values. The UI
     #: surfaces this alongside the citation coverage so the user can
@@ -1675,10 +1681,16 @@ def _result_response(query_run: QueryRun) -> QueryRunResultResponse:
         for answer in query_run.initial_answers
         if answer.provider_path in {ProviderPath.LOCAL_SIMULATION, ProviderPath.FALLBACK_SEARCH}
     )
+    # RB-5 / D3 honesty fix: a slot that FAILED on the OpenRouter path is NOT a
+    # live answer. ``providers._failed_answer`` / ``cancelled_answer`` stamp
+    # ``provider_path=OPENROUTER_SEARCH`` on FAILED slots, so the path alone
+    # over-counts and inflates the served ``live_count`` / "N of 4" banner.
+    # Require COMPLETED, mirroring the STRICT gate in ``_actual_cost`` below.
     live_count = sum(
         1
         for answer in query_run.initial_answers
         if answer.provider_path is ProviderPath.OPENROUTER_SEARCH
+        and answer.status is InitialAnswerStatus.COMPLETED
     )
     material_claim_count = sum(
         answer.citation_coverage.material_claim_count for answer in query_run.initial_answers

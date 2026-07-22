@@ -2,7 +2,13 @@ from uuid import uuid4
 
 import pytest
 
-from product_app.debate import DebateRoundStatus, debate_event_recorder, debate_stub_service
+from product_app.debate import (
+    DEBATE_HARD_TIMEOUT_MS,
+    DebateOrchestrationService,
+    DebateRoundStatus,
+    debate_event_recorder,
+    debate_stub_service,
+)
 from product_app.model_slots import validate_model_slots
 from product_app.providers import provider_execution_service, provider_stub_service
 
@@ -12,6 +18,28 @@ DEFAULT_MODEL_IDS = [
     "google/gemini-2.5-flash",
     "deepseek/deepseek-chat-v3.1",
 ]
+
+
+def test_debate_hard_timeout_budget_is_180s_and_gates_round_two_at_the_boundary() -> None:
+    """RB-5 / D2 — assert the budget that GENUINELY exists (NFR-004 honesty).
+
+    The ONLY 180s behavioural mechanism in ``src`` is
+    ``DEBATE_HARD_TIMEOUT_MS``: it gates whether debate *round 2* runs, measured
+    from round-1 start. It is NOT a run-level deadline — nothing terminates a
+    stuck run at 180s (see ``docs/18`` NFR-004, recorded UNENFORCED). This test
+    pins the mechanism that exists at its exact boundary so no future edit can
+    silently move the debate budget while NFR-004 is documented as unenforced.
+
+    Bite proof: change ``180_000`` → the constant assertion reds; change the
+    ``>`` in ``_should_skip_round_two`` to ``>=`` → the 180_000-exact boundary
+    assertion reds.
+    """
+    assert DEBATE_HARD_TIMEOUT_MS == 180_000
+    orchestrator = DebateOrchestrationService(hard_timeout_ms=DEBATE_HARD_TIMEOUT_MS)
+    # Strictly OVER budget skips round two; exactly AT and just under do not.
+    assert orchestrator._should_skip_round_two(elapsed_ms=180_001, query_text="q") is True
+    assert orchestrator._should_skip_round_two(elapsed_ms=180_000, query_text="q") is False
+    assert orchestrator._should_skip_round_two(elapsed_ms=179_999, query_text="q") is False
 
 
 def test_debate_stub_runs_two_structured_critique_rounds() -> None:

@@ -159,6 +159,18 @@ S3_ARTIFACTS: dict[str, tuple[str, ...]] = {
     ),
 }
 
+#: Item ID -> artifact(s) proving an **RB-5** (hermetic fault-injection lane)
+#: item. Same contract as the phase dicts: only files CREATED by the RB-5 slice
+#: are listed (checked new-since-baseline). The D3 ``live_count`` honesty fix and
+#: the debate-budget boundary pin land as edits to PRE-EXISTING source/test files
+#: (``query_runs.py``, ``evaluation.py``, ``test_agreement_positions.py``,
+#: ``test_evaluation_layer_a.py``, ``test_debate_orchestration.py``), which prove
+#: nothing about the slice by their existence — so the slice's own new file, the
+#: fault-injection lane, is the registered proof pointer.
+RB5_ARTIFACTS: dict[str, tuple[str, ...]] = {
+    "RB-5": ("tests/resilience/test_fault_injection_lane.py",),
+}
+
 #: A path-shaped backtick span in a status cell, e.g. `tests/perf/x.py`.
 _PROOF_POINTER_RE = re.compile(r"`([^`]+?\.(?:py|md|toml|json|ya?ml|ts|tsx))`")
 _ROW_ID_RE = re.compile(r"^[A-Z][A-Z0-9]-[0-9A-Z]+$")
@@ -171,6 +183,7 @@ def _registered_proofs(item: str) -> tuple[str, ...]:
         PHASE0_ARTIFACTS.get(item, ())
         + S2_ARTIFACTS.get(item, ())
         + S3_ARTIFACTS.get(item, ())
+        + RB5_ARTIFACTS.get(item, ())
         + DOC_FIX_PROOFS.get(item, ())
     )
     return tuple(dict.fromkeys(merged))
@@ -240,11 +253,18 @@ def test_every_status_uses_a_legend_token(ledger_rows: dict[str, str]) -> None:
     assert not bad, f"status cells with no legend token: {bad}"
 
 
-@pytest.mark.parametrize("item", sorted(PHASE0_ARTIFACTS | S2_ARTIFACTS | S3_ARTIFACTS))
+@pytest.mark.parametrize(
+    "item", sorted(PHASE0_ARTIFACTS | S2_ARTIFACTS | S3_ARTIFACTS | RB5_ARTIFACTS)
+)
 def test_built_items_read_done(item: str, ledger_rows: dict[str, str]) -> None:
     """If the artifacts exist, the ledger may not still say BUILD/DOC-FIX."""
     assert item in ledger_rows, f"{item} has no row in the ledger"
-    built = PHASE0_ARTIFACTS.get(item, ()) + S2_ARTIFACTS.get(item, ()) + S3_ARTIFACTS.get(item, ())
+    built = (
+        PHASE0_ARTIFACTS.get(item, ())
+        + S2_ARTIFACTS.get(item, ())
+        + S3_ARTIFACTS.get(item, ())
+        + RB5_ARTIFACTS.get(item, ())
+    )
     missing = [p for p in built if not _is_real_artifact(p)]
     if missing:
         pytest.skip(f"{item} artifacts not built yet: {missing}")
@@ -297,7 +317,9 @@ def test_done_rows_cite_an_existing_proof_pointer(
     )
 
 
-@pytest.mark.parametrize("item", sorted(PHASE0_ARTIFACTS | S2_ARTIFACTS | S3_ARTIFACTS))
+@pytest.mark.parametrize(
+    "item", sorted(PHASE0_ARTIFACTS | S2_ARTIFACTS | S3_ARTIFACTS | RB5_ARTIFACTS)
+)
 def test_phase0_artifacts_are_new_since_the_s1_baseline(item: str) -> None:
     """The registry may only claim files the slice actually created.
 
@@ -310,7 +332,10 @@ def test_phase0_artifacts_are_new_since_the_s1_baseline(item: str) -> None:
     """
     preexisting = []
     for rel_path in (
-        PHASE0_ARTIFACTS.get(item, ()) + S2_ARTIFACTS.get(item, ()) + S3_ARTIFACTS.get(item, ())
+        PHASE0_ARTIFACTS.get(item, ())
+        + S2_ARTIFACTS.get(item, ())
+        + S3_ARTIFACTS.get(item, ())
+        + RB5_ARTIFACTS.get(item, ())
     ):
         probe = subprocess.run(
             ["git", "cat-file", "-e", f"{S1_BASELINE_SHA}:{rel_path}"],

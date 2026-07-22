@@ -889,8 +889,17 @@ def evaluate_layer_a(
     """
     slot_count = len(initial_answers)
 
+    # RB-5 / D3 honesty fix: a slot that FAILED on the OpenRouter path is NOT a
+    # live answer. ``providers._failed_answer`` and ``cancelled_answer`` both
+    # stamp ``provider_path=OPENROUTER_SEARCH`` on a slot with status FAILED, so
+    # the path alone over-counts live slots and inflates the served ``live_ratio``
+    # (and the "N of 4" banner). Require COMPLETED, mirroring the STRICT gate in
+    # ``query_runs._actual_cost`` and ``_substantive``.
     live_count = sum(
-        1 for a in initial_answers if a.provider_path is ProviderPath.OPENROUTER_SEARCH
+        1
+        for a in initial_answers
+        if a.provider_path is ProviderPath.OPENROUTER_SEARCH
+        and a.status is InitialAnswerStatus.COMPLETED
     )
     completed = [a for a in initial_answers if _substantive(a)]
 
