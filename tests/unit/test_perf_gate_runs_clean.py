@@ -24,6 +24,7 @@ three claims about its output.
 
 from __future__ import annotations
 
+import json
 import os
 import subprocess
 from pathlib import Path
@@ -66,3 +67,83 @@ def test_make_perf_gate_is_green_on_a_clean_tree() -> None:
         f"gate-min-collected did not report the measured floor:\n{output}"
     )
     assert "0 skipped" in output, f"gate-min-executed did not report a skip-free run:\n{output}"
+
+
+def test_make_perf_gate_reaches_the_measurement_stage() -> None:
+    """The gate must actually MEASURE — asserted in every lane, no skipif.
+
+    DEBT-009 found that the only end-to-end guard on this recipe
+    (``test_make_perf_gate_is_green_on_a_clean_tree``) is unreachable: it skips
+    unless ``QUORUM_RUN_PERF_BUDGET`` is set, ``make test`` never sets it, and
+    ``make perf-gate`` sets it only for ``PERF_TEST_PATHS`` — which excludes
+    ``tests/unit``. So the recipe that guards latency was itself unguarded, and
+    could have silently stopped collecting, skipping, or printing anything
+    without a single test noticing.
+
+    This test closes that hole. It deliberately does NOT assert exit 0: the
+    budgets are macOS-derived and load-sensitive, so a red budget on a shared
+    runner is expected and is the very thing DEBT-009 exists to re-measure.
+    What it asserts is that the gate got far enough to PRODUCE A MEASUREMENT —
+    the collection floor held, nothing was skipped, both ``[PERF]`` lines
+    reached stdout, and the sample was persisted with provenance.
+
+    A budget assertion is the ONLY tolerated failure. Any other non-zero exit
+    (an import error, an empty suite, a broken recipe) is a hard red here.
+    """
+    # Remove any sample left by an EARLIER run first, so the persistence
+    # assertion below cannot pass on a stale file. Measured (Stage A review):
+    # with a leftover artifact on disk, a `_publish()` mutated into a complete
+    # no-op left this test green — `artifact.exists()` cannot tell a fresh
+    # write from last week's. Deleting first makes the assertion mean "THIS run
+    # published", which is what the docstring claims.
+    artifact = REPO_ROOT / "build" / "gates" / "perf-percentiles.json"
+    artifact.unlink(missing_ok=True)
+
+    result = subprocess.run(
+        ["make", "perf-gate"],
+        cwd=REPO_ROOT,
+        capture_output=True,
+        text=True,
+        timeout=600,
+    )
+    output = result.stdout + result.stderr
+
+    # The suite ran, in full, and was not silently emptied.
+    assert "perf-gate: 11 tests collected" in output, (
+        f"gate-min-collected did not report the measured floor:\n{output[-3000:]}"
+    )
+    # `gate-min-executed` (which prints the skip-free line) runs only AFTER
+    # pytest exits 0, so on the tolerated budget-failure path it never runs and
+    # the line cannot exist. Asserting it unconditionally would make this test
+    # fail for the one reason it is explicitly meant to tolerate.
+    if result.returncode == 0:
+        assert "0 skipped" in output, f"a skipped spec measures nothing:\n{output[-3000:]}"
+
+    # The numbers survived a run — the whole point of the slice. Without `-s`
+    # these are swallowed by capture on any PASSING run.
+    assert "[PERF] sequential" in output, (
+        "the sequential percentiles never reached stdout; is `-s` still on the "
+        f"perf-gate pytest line?\n{output[-3000:]}"
+    )
+    assert "[PERF] concurrent" in output, (
+        f"the concurrent percentiles never reached stdout:\n{output[-3000:]}"
+    )
+
+    # And they were persisted BY THIS RUN (the file was deleted above), with
+    # enough provenance to be usable later.
+    assert artifact.exists(), (
+        f"the gate produced no {artifact.name}; a sample nobody can read cannot "
+        f"retire an unmeasured budget:\n{output[-3000:]}"
+    )
+    payload = json.loads(artifact.read_text(encoding="utf-8"))
+    assert {"sequential", "concurrent", "meta"} <= payload.keys(), (
+        f"the published sample is missing a section: {sorted(payload)}"
+    )
+    assert payload["meta"].get("runner_os"), "a sample without provenance is an orphan number"
+
+    if result.returncode != 0:
+        assert "regressed:" in output, (
+            "`make perf-gate` failed for a reason OTHER than a latency budget. "
+            "A budget miss is tolerated here (the budgets are macOS-derived and "
+            f"load-sensitive); anything else is a real breakage:\n{output[-3000:]}"
+        )

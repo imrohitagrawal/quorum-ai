@@ -111,6 +111,36 @@ jobs:
       - name: Perf gate
         run: make perf-gate
 
+      # DEBT-009 — the measurement must OUTLIVE the run.
+      #
+      # `if: always()` on both steps is mandatory, not decoration. The job's
+      # `continue-on-error` is JOB level: a budget failure still fails the
+      # `make perf-gate` STEP, and every later step would be skipped by
+      # default — losing precisely the over-budget sample that a budget
+      # re-derivation most needs.
+      - name: Publish the measured percentiles
+        if: always()
+        run: |
+          if [ -f build/gates/perf-percentiles.json ]; then
+            echo "## Perf percentiles (advisory sample)" >> "$GITHUB_STEP_SUMMARY"
+            echo '```json' >> "$GITHUB_STEP_SUMMARY"
+            cat build/gates/perf-percentiles.json >> "$GITHUB_STEP_SUMMARY"
+            echo '```' >> "$GITHUB_STEP_SUMMARY"
+            cat build/gates/perf-percentiles.json
+          else
+            echo "no perf-percentiles.json produced — treat as UNMEASURED, not as clean" \
+              | tee -a "$GITHUB_STEP_SUMMARY"
+          fi
+
+      - name: Upload the percentiles artifact
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: perf-percentiles-${{ github.run_id }}-${{ github.run_attempt }}
+          path: build/gates/perf-percentiles.json
+          if-no-files-found: error
+          retention-days: 90
+
   api-contract:
     name: Schemathesis API contract (blocking)
     runs-on: ubuntu-latest

@@ -1,0 +1,84 @@
+name: perf-sample (nightly, advisory)
+
+# DEBT-009 — accumulate ubuntu perf samples so the budgets can eventually be
+# re-derived from data instead of from one macOS laptop.
+#
+# The regression budgets (150/300/1500 ms) were measured on a single developer
+# machine. On a shared CI runner they false-fail, which is why the perf-gate job
+# in ci.yml is `continue-on-error: true`. Promoting it back to blocking needs
+# >=20 samples from THIS runner class across >=5 calendar days — and nothing
+# accrues until something collects them nightly. That is this workflow's whole
+# job: it measures and stores, it decides nothing.
+#
+# Deliberately a SEPARATE file from ci.yml so the cron never appears as a pull
+# request check, and can never enter the deploy gate's required-check set. A
+# slow job on the push path is what silently stopped every deploy from
+# 2026-07-17 (pinned by tests/unit/test_deploy_gate_no_slow_push_jobs.py).
+#
+# ADVISORY, permanently: this workflow must never fail a build. An over-budget
+# night is a DATA POINT, not a regression to block on — and treating it as one
+# would create pressure to loosen the budget rather than to understand it.
+
+on:
+  schedule:
+    # 04:00 UTC daily — an hour before the flake scan, so the two never contend
+    # for the same runner and skew each other's timings.
+    - cron: "0 4 * * *"
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  perf-sample:
+    name: perf sample (advisory — collects, decides nothing)
+    runs-on: ubuntu-latest
+    continue-on-error: true
+    timeout-minutes: 20
+    env:
+      OPENROUTER_LIVE_EXECUTION_ENABLED: "false"
+      QUORUM_RUNTIME_ENVIRONMENT: "ci"
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+      - name: Set up Python
+        run: uv python install 3.12
+      - name: Install dependencies
+        run: uv sync --all-extras
+
+      - name: Discard any pre-existing sample
+        # Absence must MEAN something. If the gate dies before writing, an
+        # inherited file would be uploaded and read as tonight's measurement.
+        run: rm -f build/gates/perf-percentiles.json
+
+      - name: Measure
+        run: make perf-gate
+
+      - name: Publish the measured percentiles
+        if: always()
+        run: |
+          if [ -f build/gates/perf-percentiles.json ]; then
+            echo "## Perf sample $(date -u +%Y-%m-%d)" >> "$GITHUB_STEP_SUMMARY"
+            echo '```json' >> "$GITHUB_STEP_SUMMARY"
+            cat build/gates/perf-percentiles.json >> "$GITHUB_STEP_SUMMARY"
+            echo '```' >> "$GITHUB_STEP_SUMMARY"
+            cat build/gates/perf-percentiles.json
+          else
+            echo "no sample produced — UNMEASURED tonight, NOT a clean result" \
+              | tee -a "$GITHUB_STEP_SUMMARY"
+          fi
+
+      - name: Upload the sample
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: perf-percentiles-${{ github.run_id }}-${{ github.run_attempt }}
+          path: build/gates/perf-percentiles.json
+          # A silently missing sample would look like a night that passed.
+          if-no-files-found: error
+          # Long enough to still be downloadable when >=20 samples have accrued.
+          retention-days: 90
