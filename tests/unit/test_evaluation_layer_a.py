@@ -1596,6 +1596,77 @@ def test_live_ratio_and_completeness_are_measured_from_the_slots() -> None:
     assert evaluation.signals.completeness == pytest.approx(0.75)
 
 
+def test_failed_openrouter_slot_is_not_counted_as_live() -> None:
+    """RB-5 / D3 honesty fix: a slot that FAILED on the OpenRouter path is
+    NOT a live answer, even though ``providers._failed_answer`` /
+    ``cancelled_answer`` stamp it with ``provider_path=OPENROUTER_SEARCH``.
+
+    ``live_count`` must additionally require ``status is COMPLETED``, or a
+    provider 5xx inflates the served ``live_ratio`` (and the "N of 4" banner)
+    with slots that returned nothing.
+
+    Bite proof: drop the ``status is InitialAnswerStatus.COMPLETED`` clause
+    from ``evaluate_layer_a``'s ``live_count`` sum → all 4 slots are counted →
+    ``live_ratio`` reads 1.0 (not the asserted 0.75) → red.
+    """
+    evaluation = evaluate_layer_a(
+        initial_answers=[
+            _answer(slot=1),
+            _answer(slot=2),
+            _answer(slot=3),
+            # A provider failure on the OpenRouter path: FAILED status but the
+            # path is still OPENROUTER_SEARCH (exactly what _failed_answer /
+            # cancelled_answer produce).
+            _answer(
+                slot=4,
+                status=InitialAnswerStatus.FAILED,
+                text="",
+                sources=[],
+                path=ProviderPath.OPENROUTER_SEARCH,
+            ),
+        ],
+        final_synthesis=_synthesis(),
+        agreement=AgreementSummary(aligned=3, total=4),
+    )
+    # 3 genuinely live slots out of 4 — the failed OPENROUTER_SEARCH slot is
+    # excluded from live_count but still counts toward slot_count.
+    assert evaluation.signals.live_ratio == pytest.approx(0.75)
+    # The failed slot is also not substantive, so completeness agrees.
+    assert evaluation.signals.completeness == pytest.approx(0.75)
+
+
+def test_failed_live_slot_does_not_silently_flip_faithfulness_verdict() -> None:
+    """RB-5 / D3: the ``live_ratio`` change must not silently flip a trust
+    verdict. ``classify_faithfulness`` reads ``live_ratio < 1.0`` (partial),
+    but a failed slot already drops ``completeness`` below 1.0, so the verdict
+    is "partial" both before and after the fix. This pins that equivalence so
+    the honesty fix cannot quietly move the served faithfulness label.
+
+    Bite proof: were the fix to instead flip a run from faithful→unfaithful,
+    this assertion on the stable "partial" verdict would red.
+    """
+    evaluation = evaluate_layer_a(
+        initial_answers=[
+            _answer(slot=1),
+            _answer(slot=2),
+            _answer(slot=3),
+            _answer(
+                slot=4,
+                status=InitialAnswerStatus.FAILED,
+                text="",
+                sources=[],
+                path=ProviderPath.OPENROUTER_SEARCH,
+            ),
+        ],
+        final_synthesis=_synthesis(),
+        agreement=AgreementSummary(aligned=3, total=4),
+    )
+    # completeness < 1.0 (slot 4 not substantive) forces "partial" regardless
+    # of the live_ratio honesty fix — the verdict is unchanged by it.
+    assert evaluation.signals.completeness < 1.0
+    assert evaluation.faithfulness_label == "partial"
+
+
 def test_high_stakes_warning_presence_is_reported_separately_from_the_requirement() -> None:
     missing = evaluate_layer_a(
         initial_answers=[_answer()],

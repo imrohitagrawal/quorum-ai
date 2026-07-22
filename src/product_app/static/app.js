@@ -2116,7 +2116,27 @@
     if (!banner) return;
     const liveCount = Number.isFinite(result.live_count) ? result.live_count : null;
     const localCount = Number.isFinite(result.local_count) ? result.local_count : null;
-    const total = liveCount != null && localCount != null ? liveCount + localCount : null;
+    // RB-5/D3: the denominator is the TRUE slot count, not ``live + local``.
+    // A slot that FAILED on the OpenRouter path is counted in NEITHER live_count
+    // nor local_count (it is neither a live answer nor a simulation), so
+    // ``live + local`` under-counts the panel and would render a dishonest "N of
+    // M" on a run with a provider failure. Fall back to ``live + local`` (then 4)
+    // only when the slot list is absent from an older payload.
+    // ``|| null`` (not the bare ternary) so an empty ``model_slots: []`` also
+    // falls back to ``live + local`` rather than yielding a "N of 0" denominator.
+    const slotCount =
+      Array.isArray(result.model_slots) && result.model_slots.length
+        ? result.model_slots.length
+        : null;
+    const total =
+      slotCount ?? (liveCount != null && localCount != null ? liveCount + localCount : null);
+    // RB-5/D3: a slot that FAILED on the OpenRouter path is counted in NEITHER
+    // live_count nor local_count. The remaining-answers narrative must not
+    // attribute those failed slots to "local simulation".
+    const failedCount =
+      slotCount != null && liveCount != null && localCount != null
+        ? Math.max(0, slotCount - liveCount - localCount)
+        : 0;
     // Degraded when any answer was NOT live. Prefer the explicit counts; fall
     // back to the ``demo_mode`` boolean when counts are absent (older payload).
     const degraded =
@@ -2134,9 +2154,16 @@
         : "Partly simulated result";
     }
     if (msgEl) {
+      // Name the failed slots explicitly rather than folding them into "the
+      // rest are from local simulation" (which would be false for a failed slot).
+      const remainderClause =
+        failedCount > 0
+          ? `${localCount} ${localCount === 1 ? "is" : "are"} from Quorum's local simulation and ` +
+            `${failedCount} could not be retrieved because the provider failed`
+          : "the rest are from Quorum's local simulation";
       msgEl.textContent = allLocal
         ? "Live execution was unavailable, so this whole result — the answers, the debate, and the synthesis — comes from Quorum's local simulation, not from GPT, Claude, Gemini, or Deepseek. Treat it as a demo, not a real model panel."
-        : `Only ${liveCount} of ${total ?? 4} answers came from a live provider; the rest are from Quorum's local simulation. The verdict and synthesis below mix real and simulated output — do not rely on them as a fully live result.`;
+        : `Only ${liveCount} of ${total ?? 4} answers came from a live provider; ${remainderClause}. The verdict and synthesis below mix real and simulated output — do not rely on them as a fully live result.`;
     }
     banner.hidden = false;
   }
@@ -3661,22 +3688,42 @@
       } else {
         const liveCount = Number.isFinite(result.live_count) ? result.live_count : null;
         const localCount = Number.isFinite(result.local_count) ? result.local_count : null;
-        const fallbackCount =
-          liveCount != null && localCount != null ? liveCount + localCount : null;
+        // RB-5/D3: the denominator is the TRUE slot count. A slot that FAILED on
+        // the OpenRouter path is counted in NEITHER live_count nor local_count,
+        // so ``live + local`` is < slot count on a provider-failure run. Keying
+        // the "N of M" and the all-live check on ``live + local`` produced the
+        // contradictory "3 of 3 ... remaining 0 from simulation" copy on such a
+        // run (and silently dropped the failed slot). Use the slot count, and
+        // surface the failed slots explicitly.
+        const slotCount =
+          Array.isArray(result.model_slots) && result.model_slots.length
+            ? result.model_slots.length
+            : null;
+        const total =
+          slotCount ?? (liveCount != null && localCount != null ? liveCount + localCount : null);
+        const failedCount =
+          slotCount != null && liveCount != null && localCount != null
+            ? Math.max(0, slotCount - liveCount - localCount)
+            : 0;
         let bannerState;
         let bannerCopy = "";
-        if (liveCount === 4) {
+        if (liveCount != null && total != null && liveCount === total) {
           bannerState = "all-live";
           bannerCopy = "";
-        } else if (liveCount === 0) {
+        } else if (liveCount === 0 && failedCount === 0) {
           bannerState = "all-local";
           bannerCopy =
             "Live execution is turned off, so all four model answers and the synthesis below come from Quorum's local simulation helpers. They look like real output but are not generated by GPT, Claude, Gemini, or Deepseek. Ask the operator to enable live execution to run against real models.";
         } else {
           bannerState = "mixed";
+          const failedClause =
+            failedCount > 0
+              ? `${failedCount} could not be retrieved because the provider failed. `
+              : "";
           bannerCopy =
-            `${liveCount} of ${fallbackCount ?? 4} model answers came from a live provider; ` +
-            `the remaining ${localCount ?? fallbackCount - liveCount} are from Quorum's local simulation helpers. ` +
+            `${liveCount} of ${total ?? 4} model answers came from a live provider; ` +
+            `${localCount ?? 0} are from Quorum's local simulation helpers. ` +
+            failedClause +
             `The synthesis below is also produced by a configured synthesis model. ` +
             `Ask the operator to enable live execution for all four models to run everything against real providers.`;
         }

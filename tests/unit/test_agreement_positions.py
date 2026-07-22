@@ -416,6 +416,45 @@ def _seed_completed_run(
     return query_run.query_run_id
 
 
+def test_result_response_excludes_failed_openrouter_slot_from_live_count() -> None:
+    """RB-5 / D3: the served ``live_count`` must not count a slot that FAILED
+    on the OpenRouter path. ``providers._failed_answer`` / ``cancelled_answer``
+    stamp ``provider_path=OPENROUTER_SEARCH`` on FAILED slots, so keying
+    ``live_count`` on the path alone inflates the "N of 4" banner with slots
+    that returned nothing.
+
+    Bite proof: drop the ``status is InitialAnswerStatus.COMPLETED`` clause
+    from ``_result_response``'s ``live_count`` sum → the failed slot is counted
+    → ``live_count`` reads 4 → red.
+    """
+    repository = InMemoryQueryRunRepository()
+    account_id = uuid4()
+    query_run_id = _seed_completed_run(repository, account_id, "compare options")
+    # Replace the recorded answers with three genuinely-live COMPLETED slots
+    # plus one that FAILED on the OpenRouter path (path stays OPENROUTER_SEARCH).
+    answers = [
+        _answer(1, _AGREE_TEXT, provider_path=ProviderPath.OPENROUTER_SEARCH),
+        _answer(2, _AGREE_TEXT, provider_path=ProviderPath.OPENROUTER_SEARCH),
+        _answer(3, _AGREE_TEXT, provider_path=ProviderPath.OPENROUTER_SEARCH),
+        _answer(
+            4,
+            "",
+            status=InitialAnswerStatus.FAILED,
+            provider_path=ProviderPath.OPENROUTER_SEARCH,
+        ),
+    ]
+    repository.record_initial_answers(query_run_id, answers)
+    query_run = repository.get(query_run_id)
+
+    response = _result_response(query_run)
+
+    # Three live, one failed-but-OPENROUTER_SEARCH slot excluded from live_count.
+    assert response.live_count == 3
+    # The failed slot is neither live nor local (LOCAL_SIMULATION/FALLBACK), so
+    # the live+local invariant no longer sums to 4 — a failed slot is neither.
+    assert response.local_count == 0
+
+
 def test_demo_run_actual_cost_equals_estimate_and_reuses_breakdown() -> None:
     repository = InMemoryQueryRunRepository()
     account_id = uuid4()

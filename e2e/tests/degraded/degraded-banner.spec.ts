@@ -103,6 +103,68 @@ test.describe("degraded-mode result banner (#26)", () => {
     await expect(banner).toBeVisible();
     await expect(banner).toContainText(/2 of 4/i);
   });
+
+  test("a run with a FAILED provider slot keeps the honest 'of 4' denominator (RB-5/D3)", async ({
+    page,
+  }) => {
+    // A slot that FAILED on the OpenRouter path is counted in NEITHER live_count
+    // nor local_count. With 4 model_slots, live=2 + local=1 leaves 1 failed slot.
+    // The denominator must stay the true slot count (4), never live+local (3).
+    const completed = {
+      ...goldenCompletedResp(),
+      demo_mode: true,
+      live_count: 2,
+      local_count: 1,
+    };
+    await driveWithCompleted(page, completed);
+
+    const banner = page.locator("#result-degraded");
+    await expect(banner).toBeVisible();
+    // Honest denominator: 2 of 4 (four slots), not the dishonest 2 of 3.
+    await expect(banner).toContainText(/2 of 4/i);
+    await expect(banner).not.toContainText(/2 of 3/i);
+    // Honest narrative: the 1 failed slot must be named as a failure, NOT
+    // folded into "the rest are from local simulation" (which would be false).
+    await expect(banner).toContainText(/could not be retrieved because the provider failed/i);
+    await expect(banner).not.toContainText(/the rest are from Quorum's local simulation/i);
+  });
+});
+
+/**
+ * RB-5 / D3 — the TRANSCRIPT-view demo-mode banner (#demo-mode-banner, rendered
+ * by renderModelPanels) also derives its "N of M" from the served counts. Before
+ * the fix it keyed the denominator and the all-live check on live_count +
+ * local_count, so a provider-failure run (a FAILED OpenRouter slot is in neither
+ * bucket) rendered the self-contradictory "3 of 3 model answers came from a live
+ * provider; the remaining 0 are from ... simulation" and silently dropped the
+ * failed slot. This gate pins the honest copy: "3 of 4 ... 1 could not be
+ * retrieved", never "3 of 3".
+ */
+test.describe("transcript demo-mode banner — failed-slot honesty (RB-5/D3)", () => {
+  test.skip(({ browserName }) => browserName !== "chromium", "reference run is chromium-only");
+
+  test("a provider-failure run shows 'N of slotCount' and names the failed slot", async ({
+    page,
+  }) => {
+    // 3 live + 0 local across 4 slots ⇒ 1 slot FAILED (neither live nor local).
+    const completed = {
+      ...goldenCompletedResp(),
+      demo_mode: false,
+      live_count: 3,
+      local_count: 0,
+    };
+    await driveWithCompleted(page, completed);
+
+    // Assert on the message target directly — the banner container can flicker
+    // hidden→visible as the result settles, but toContainText auto-retries until
+    // the honest copy lands.
+    const message = page.locator("#demo-mode-banner [data-demo-mode-target]");
+    // Honest denominator + the failed slot surfaced.
+    await expect(message).toContainText(/3 of 4 model answers came from a live provider/i);
+    await expect(message).toContainText(/could not be retrieved because the provider failed/i);
+    // The regression this fixes: never the contradictory "3 of 3".
+    await expect(message).not.toContainText(/3 of 3/i);
+  });
 });
 
 /**
