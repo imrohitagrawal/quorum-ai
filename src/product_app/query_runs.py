@@ -43,7 +43,7 @@ from fastapi import APIRouter, Depends, HTTPException, Request, status
 from pydantic import BaseModel, Field
 
 from product_app.auth import SessionContext, enforce_csrf, require_session
-from product_app.config import settings
+from product_app.config import RuntimeEnvironment, settings
 from product_app.costs import (
     CostBreakdown,
     CostConfirmation,
@@ -670,6 +670,11 @@ class _InMemoryIpRateLimiter:
     rest of the application does not change.
     """
 
+    #: Default per-IP capacity/refill. Kept as class constants so the
+    #: production posture (30/min) is pinned and greppable, but the
+    #: instance seeds ``self.CAPACITY``/``self.REFILL_PER_MINUTE`` from
+    #: them so a LOCAL-only override (Stage B / D0) can raise the bucket
+    #: for the hermetic e2e lanes without touching production.
     CAPACITY = 30
     REFILL_PER_MINUTE = 30
     # SEC-H3: stale buckets are evicted after 5 minutes of full
@@ -677,7 +682,19 @@ class _InMemoryIpRateLimiter:
     # add 65K entries that never expire.
     STALE_BUCKET_SECONDS = 300.0
 
-    def __init__(self) -> None:
+    def __init__(
+        self,
+        *,
+        capacity: int | None = None,
+        refill_per_minute: int | None = None,
+    ) -> None:
+        # Instance attributes shadow the class constants. ``allow()`` reads
+        # ``self.CAPACITY``/``self.REFILL_PER_MINUTE``, so seeding these here
+        # is what makes the override effective.
+        self.CAPACITY = self.CAPACITY if capacity is None else capacity
+        self.REFILL_PER_MINUTE = (
+            self.REFILL_PER_MINUTE if refill_per_minute is None else refill_per_minute
+        )
         self._buckets: dict[str, tuple[float, float]] = {}
         self._lock = RLock()
 
@@ -705,7 +722,22 @@ class _InMemoryIpRateLimiter:
             self._buckets.clear()
 
 
-_ip_rate_limiter = _InMemoryIpRateLimiter()
+# Stage B / D0: seed the per-IP limiter from the LOCAL-only override when
+# set, else keep the pinned production default (30/min). Both capacity and
+# refill move together so an overridden bucket does not refill to N but cap
+# at 30. The override is applied ONLY in LOCAL — belt-and-suspenders behind
+# ``validate_production_environment()``, which additionally REFUSES TO START
+# if the override is set in any non-LOCAL environment. So even if that
+# startup guard were bypassed, a deployed limiter stays at 30/min.
+_session_limit = (
+    settings.session_rate_limit_per_minute
+    if settings.runtime_environment is RuntimeEnvironment.LOCAL
+    else None
+)
+_ip_rate_limiter = _InMemoryIpRateLimiter(
+    capacity=_session_limit,
+    refill_per_minute=_session_limit,
+)
 
 
 # SEC-C3: per-account rate limiter for expensive mutating endpoints

@@ -40,6 +40,16 @@ def test_session_endpoint_rate_limited_after_burst() -> None:
     """After exceeding the per-IP token bucket the session endpoint
     returns 429 with the ``RATE_LIMITED`` code.
     """
+    # Precondition: the resolved per-IP capacity is the production 30. A stray
+    # SESSION_RATE_LIMIT_PER_MINUTE (Stage B exports it into the e2e lanes)
+    # would flip this bucket to N and make the burst assertion green-but-
+    # meaningless — the 31st request would pass. Fail loudly instead.
+    from product_app.query_runs import _ip_rate_limiter
+
+    assert _ip_rate_limiter.CAPACITY == 30, (
+        f"expected the pinned production capacity 30, got {_ip_rate_limiter.CAPACITY}; "
+        "SESSION_RATE_LIMIT_PER_MINUTE must not be set in the pytest lane."
+    )
     client = _client()
     # Drain the bucket: 30 sessions should all return 200.
     for i in range(30):

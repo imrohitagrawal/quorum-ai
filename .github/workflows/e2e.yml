@@ -72,7 +72,15 @@ jobs:
       # local_simulation, which is exactly what the mocked suites expect. No
       # network egress is required.
       OPENROUTER_LIVE_EXECUTION_ENABLED: "false"
-      QUORUM_RUNTIME_ENVIRONMENT: "ci"
+      # Stage B: the real env var is RUNTIME_ENVIRONMENT (Settings has no
+      # env_prefix, so QUORUM_RUNTIME_ENVIRONMENT bound to nothing and "ci" is
+      # not a valid enum member). "local" is REQUIRED here: the session
+      # rate-limit override below is LOCAL-only and refused at startup outside
+      # LOCAL, so this lane must run as LOCAL for the override to take effect.
+      RUNTIME_ENVIRONMENT: "local"
+      # Raise the per-IP /v1/session bucket so a --repeat-each e2e run measures
+      # the product, not the 30/min limiter (parity ≈ 53 boots/run × 10 repeats).
+      SESSION_RATE_LIMIT_PER_MINUTE: "600"
     steps:
       - name: Check out repository
         uses: actions/checkout@v4

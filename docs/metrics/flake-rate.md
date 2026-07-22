@@ -77,6 +77,26 @@ in the hermetic workflows; (b) per-worker IP variation; (c) letting specs share
 one session. Until then the scan runs and reports, but **its output is not a
 flake rate.**
 
+### AMENDMENT (Stage B / D0) — the seam landed; not yet demonstrated
+
+Option **(a)** was taken. The operator pre-authorised it as **D0**: a
+default-`None`, LOCAL-only override `SESSION_RATE_LIMIT_PER_MINUTE`
+(`src/product_app/config.py`), bounded `[1, 10000]`, refused at startup outside
+LOCAL, seeding `_InMemoryIpRateLimiter` capacity/refill. `flake-scan.yml` now
+sets `RUNTIME_ENVIRONMENT: "local"` and `SESSION_RATE_LIMIT_PER_MINUTE: "600"`
+(≈530 parity boots + headroom), so the scan lane's per-IP bucket is 600/min, not
+30. The old `QUORUM_RUNTIME_ENVIRONMENT: "ci"` was a **no-op** (no `env_prefix`;
+`"ci"` is not a valid enum) — the lane only ran as LOCAL by accident; it is now
+explicit.
+
+- **Landed at:** Stage B PR (branch `feat/r2-stage-b-session-rate-seam`).
+  Record the squash SHA here once merged: `SHA: <to-be-filled-at-merge>`.
+- **Status: believed removed for scans dispatched AFTER that SHA — pending a
+  scan that demonstrates it.** Do NOT mark the confound "resolved" or transcribe
+  a flake rate until a real `flake-scan` run id exists on the post-seam side and
+  its boots are shown not to 429. The block stays here, and the Measurements
+  table stays all-dashes, until then.
+
 ## Measurements
 
 | spec | executed repetitions | failures | rate | date (UTC) | run id |
