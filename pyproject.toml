@@ -19,6 +19,7 @@ dependencies = [
   # present, exceptions and performance traces are reported to
   # the Sentry project configured for this deployment.
   "sentry-sdk[fastapi]>=2.0.0,<3.0",
+  "prometheus-fastapi-instrumentator>=8.0.2",
 ]
 
 [project.optional-dependencies]
