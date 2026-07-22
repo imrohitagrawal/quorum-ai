@@ -246,10 +246,25 @@ const fulfil = (body: unknown, status = 200) => ({ status, contentType: "applica
 // source; do not hand-duplicate the shapes here.
 import EVAL_VARIANTS from "./evaluation-variants.json";
 
-/** The served QueryRunEvaluationProjection shape. */
-export type EvaluationProjection = (typeof EVAL_VARIANTS)["EVAL_CLEAN"];
+/** The served QueryRunEvaluationProjection shape. `trust` is widened past the
+ * EVAL_CLEAN literal (score: null) so the verified variant — support_verified
+ * true with a NUMERIC score and a low/moderate/high band — types cleanly. */
+type CleanShape = (typeof EVAL_VARIANTS)["EVAL_CLEAN"];
+export type EvaluationProjection = Omit<CleanShape, "trust"> & {
+  trust: Omit<CleanShape["trust"], "support_verified" | "band" | "score"> & {
+    support_verified: boolean;
+    band: string;
+    score: number | null;
+  };
+};
 
 export const EVAL_CLEAN = EVAL_VARIANTS.EVAL_CLEAN as EvaluationProjection;
+// P1 / FR-015: the ONE verified variant — a real-judge run. Its trust object is
+// engine-derived and the Python contract test RECOMPUTES it, so a fabricated
+// score/band cannot ride in. Deliberately NOT in EVAL_ALL_VARIANTS: the
+// six-variant loop asserts the zero-digit unverified treatment, which does not
+// apply to a verified run (it renders the numeric score by design).
+export const EVAL_VERIFIED_HIGH = EVAL_VARIANTS.EVAL_VERIFIED_HIGH as EvaluationProjection;
 export const EVAL_NON_CONSENSUS = EVAL_VARIANTS.EVAL_NON_CONSENSUS as EvaluationProjection;
 export const EVAL_UNKNOWN_GROUNDING_REFUSAL =
   EVAL_VARIANTS.EVAL_UNKNOWN_GROUNDING_REFUSAL as EvaluationProjection;

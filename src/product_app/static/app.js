@@ -2656,6 +2656,20 @@
   // (enforced by test), so there is nothing here to escape.
   const TRUST_DISCLOSURE =
     "Not verified — these are automated structural checks, not a fact-check.";
+  // P1 / FR-015: the VERIFIED disclosure — used ONLY when a REAL Layer-B judge
+  // confirmed citation support (trust.support_verified === true). Still honest:
+  // the judge is an automated model, not a human fact-check.
+  const TRUST_DISCLOSURE_VERIFIED =
+    "Citation support was checked by an independent judge model — an automated review, not a human fact-check.";
+  // App-authored band labels for the verified treatment. Keys are the ONLY
+  // bands the server can emit alongside a numeric score (build_trust_score);
+  // anything else fails the verified guard and falls back to the unverified
+  // treatment (fail closed).
+  const TRUST_BAND_LABELS = {
+    low: "low trust",
+    moderate: "moderate trust",
+    high: "high trust",
+  };
   // State line, priority order (first match wins) — D-2 state table.
   const TRUST_STATE_INDETERMINATE =
     "Some citations on this run point to pages that were never retrieved here, so the structural checks could not be applied.";
@@ -2698,6 +2712,7 @@
     box.textContent = "";
     box.hidden = true;
     box.removeAttribute("data-state");
+    box.removeAttribute("data-band");
 
     const ev = result && result.evaluation;
     // D-14: an absent / null / malformed evaluation ⇒ hidden, zero text. (An
@@ -2714,37 +2729,72 @@
     // unknown.
     const reportable = ev.label_confidence === "reportable";
 
-    // R4: the standing disclosure is always the first line.
-    box.appendChild(mkEl("p", "result-trust-score-disclosure", TRUST_DISCLOSURE));
-
-    // State line — D-2 priority table, first match wins.
-    let state;
-    let stateText;
-    if (!reportable) {
-      state = "indeterminate";
-      stateText = TRUST_STATE_INDETERMINATE;
-    } else if (
-      sig.citation_marker_grounding === null ||
-      sig.citation_marker_grounding === undefined
-    ) {
-      state = "no-marker";
-      stateText = TRUST_STATE_NO_MARKER;
-    } else if (sig.refusal_detected === true) {
-      state = "refused";
-      stateText = TRUST_STATE_REFUSED;
-    } else if (ev.faithfulness_label !== "faithful" || ev.hallucination_risk !== "low") {
-      // Warning-end labels (unfaithful/partial, high/medium risk) — surface a
-      // caution without naming the label. Deleting this branch reds OC-5
-      // degraded case 1 (a fully-LIVE unfaithful run) while the count-driven
-      // degraded tests stay green.
-      state = "caution";
-      stateText = TRUST_STATE_CAUTION;
+    // P1 / FR-015: the VERIFIED branch. Unlocked ONLY by the exact shape the
+    // server emits when a REAL judge verified citation support: every guard
+    // below fails CLOSED to the unverified (zero-digit) treatment — including
+    // a non-"reportable" label_confidence, so a laundered/indeterminate run
+    // can never show a confident number even with a verified judge (DEBT-012).
+    const trust = ev.trust && typeof ev.trust === "object" ? ev.trust : null;
+    const verifiedBand =
+      trust !== null &&
+      trust.support_verified === true &&
+      Number.isInteger(trust.score) &&
+      trust.score >= 0 &&
+      trust.score <= 100 &&
+      Object.prototype.hasOwnProperty.call(TRUST_BAND_LABELS, trust.band)
+        ? trust.band
+        : null;
+    if (reportable && verifiedBand !== null) {
+      box.dataset.state = "verified";
+      box.dataset.band = verifiedBand;
+      box.appendChild(
+        mkEl("p", "result-trust-score-disclosure", TRUST_DISCLOSURE_VERIFIED),
+      );
+      const scoreLine = mkEl("p", "result-trust-score-verified-value");
+      scoreLine.appendChild(
+        mkEl("span", "result-trust-score-number", String(trust.score)),
+      );
+      scoreLine.appendChild(
+        mkEl(
+          "span",
+          "result-trust-score-band-label",
+          ` of 100 — ${TRUST_BAND_LABELS[verifiedBand]}`,
+        ),
+      );
+      box.appendChild(scoreLine);
     } else {
-      state = "passed";
-      stateText = TRUST_STATE_PASSED;
+      // R4: the standing disclosure is always the first line.
+      box.appendChild(mkEl("p", "result-trust-score-disclosure", TRUST_DISCLOSURE));
+
+      // State line — D-2 priority table, first match wins.
+      let state;
+      let stateText;
+      if (!reportable) {
+        state = "indeterminate";
+        stateText = TRUST_STATE_INDETERMINATE;
+      } else if (
+        sig.citation_marker_grounding === null ||
+        sig.citation_marker_grounding === undefined
+      ) {
+        state = "no-marker";
+        stateText = TRUST_STATE_NO_MARKER;
+      } else if (sig.refusal_detected === true) {
+        state = "refused";
+        stateText = TRUST_STATE_REFUSED;
+      } else if (ev.faithfulness_label !== "faithful" || ev.hallucination_risk !== "low") {
+        // Warning-end labels (unfaithful/partial, high/medium risk) — surface a
+        // caution without naming the label. Deleting this branch reds OC-5
+        // degraded case 1 (a fully-LIVE unfaithful run) while the count-driven
+        // degraded tests stay green.
+        state = "caution";
+        stateText = TRUST_STATE_CAUTION;
+      } else {
+        state = "passed";
+        stateText = TRUST_STATE_PASSED;
+      }
+      box.dataset.state = state;
+      box.appendChild(mkEl("p", "result-trust-score-state", stateText));
     }
-    box.dataset.state = state;
-    box.appendChild(mkEl("p", "result-trust-score-state", stateText));
 
     // "Why we could not fully check" lines — lowest value first, capped at 3.
     const diag = ev.trust && ev.trust.diagnostics;

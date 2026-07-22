@@ -8,6 +8,7 @@ import {
   EVAL_ALL_VARIANTS,
   EVAL_CLEAN,
   EVAL_UNKNOWN_GROUNDING_REFUSAL,
+  EVAL_VERIFIED_HIGH,
   EVAL_S2_SHAPED,
 } from "../../fixtures/golden-run";
 import { readTokens, scanSubtreeForGreen } from "../../fixtures/tokens";
@@ -50,6 +51,10 @@ const SIGNAL_IDENTIFIERS = [
 // R4 — the standing disclosure literal (must match app.js exactly).
 const DISCLOSURE =
   "Not verified — these are automated structural checks, not a fact-check.";
+
+// P1 / FR-015 — the VERIFIED disclosure literal (must match app.js exactly).
+const VERIFIED_DISCLOSURE =
+  "Citation support was checked by an independent judge model — an automated review, not a human fact-check.";
 
 const VIEWPORTS = [375, 768, 1440] as const;
 const THEMES = ["light", "dark"] as const;
@@ -326,4 +331,89 @@ test.describe("trust-score invariants (FR-016)", () => {
     expect(text).not.toMatch(/\d/);
     expect(text).not.toMatch(LABEL_WORDS);
   });
+
+  // ---- P1 / FR-015: the VERIFIED branch --------------------------------
+  //
+  // EVAL_VERIFIED_HIGH is the ONE shape whose digits are sanctioned: a REAL
+  // Layer-B judge verified citation support, so trust.score renders. The
+  // zero-digit contract R1 stays binding on every unverified shape — the
+  // tamper loop below proves each near-miss falls back to it (both
+  // directions of the loosened gate).
+  test("EVAL_VERIFIED_HIGH renders the numeric score, band, and verified disclosure", async ({
+    page,
+  }) => {
+    await page.setViewportSize({ width: 1440, height: 1200 });
+    await driveWithEval(page, EVAL_VERIFIED_HIGH);
+
+    const surface = page.locator(SURFACE);
+    await expect(surface).toBeVisible();
+    await expect(surface).toHaveAttribute("data-state", "verified");
+    await expect(surface).toHaveAttribute("data-band", "high");
+
+    // The score renders EXACTLY as served — no rounding, no re-derivation.
+    await expect(page.locator(`${SURFACE} .result-trust-score-number`)).toHaveText(
+      String(EVAL_VERIFIED_HIGH.trust.score),
+    );
+    const text = await surfaceText(page);
+    expect(text).toContain(VERIFIED_DISCLOSURE);
+    expect(text, "the unverified disclosure must NOT appear on a verified run").not.toContain(
+      DISCLOSURE,
+    );
+    expect(text).toContain("of 100");
+    expect(text).toContain("high trust");
+    // Only the sanctioned score reaches the surface — never the diagnostic
+    // composite or any contribution arithmetic.
+    expect(text).not.toContain("91.75");
+    expect(text).not.toContain("24");
+    expect(text).not.toContain("12.75");
+    // R3 still binds: raw signal identifiers stay off the surface.
+    for (const id of SIGNAL_IDENTIFIERS) {
+      expect(text, `verified: R3 — identifier "${id}" must not appear`).not.toContain(id);
+    }
+    // The reasons-to-doubt list still renders (grounding 0.8 / coverage 0.85).
+    const whys = await page.locator(`${SURFACE} .result-trust-score-why-item`).allInnerTexts();
+    expect(whys.length).toBeGreaterThan(0);
+  });
+
+  test("GREEN RULE holds on the verified surface too", async ({ page }) => {
+    await page.setViewportSize({ width: 1440, height: 1200 });
+    await driveWithEval(page, EVAL_VERIFIED_HIGH);
+    const violations = await scanSubtreeForGreen(page, SURFACE);
+    expect(violations, "no green paint on a verified surface (green = consensus only)").toEqual(
+      [],
+    );
+  });
+
+  // Every near-miss of the verified shape falls back to the zero-digit
+  // unverified treatment — the guard fails CLOSED.
+  const TAMPERED: { label: string; mutate: (ev: any) => void; wantState?: string }[] = [
+    { label: "score null", mutate: (ev) => (ev.trust.score = null) },
+    { label: "score out of range", mutate: (ev) => (ev.trust.score = 250) },
+    { label: "score non-integer", mutate: (ev) => (ev.trust.score = 91.75) },
+    { label: "band unverified", mutate: (ev) => (ev.trust.band = "unverified") },
+    { label: "band unknown", mutate: (ev) => (ev.trust.band = "certified") },
+    { label: "support_verified false", mutate: (ev) => (ev.trust.support_verified = false) },
+    { label: "support_verified truthy-but-not-true", mutate: (ev) => (ev.trust.support_verified = 1) },
+    {
+      label: "laundered provenance (label_confidence indeterminate)",
+      mutate: (ev) => (ev.label_confidence = "indeterminate"),
+      wantState: "indeterminate",
+    },
+  ];
+  for (const { label, mutate, wantState } of TAMPERED) {
+    test(`tampered verified shape falls back to zero digits: ${label}`, async ({ page }) => {
+      await page.setViewportSize({ width: 1440, height: 1200 });
+      const ev = JSON.parse(JSON.stringify(EVAL_VERIFIED_HIGH));
+      mutate(ev);
+      await driveWithEval(page, ev);
+      const surface = page.locator(SURFACE);
+      await expect(surface).toBeVisible();
+      const state = await surface.getAttribute("data-state");
+      expect(state, `${label}: must not render the verified treatment`).not.toEqual("verified");
+      if (wantState) expect(state).toEqual(wantState);
+      const text = await surfaceText(page);
+      expect(text, `${label}: R1 — no digits`).not.toMatch(/\d/);
+      expect(text, `${label}: the unverified disclosure returns`).toContain(DISCLOSURE);
+    });
+  }
 });

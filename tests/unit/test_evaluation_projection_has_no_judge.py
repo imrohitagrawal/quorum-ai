@@ -55,11 +55,43 @@ def test_the_served_result_schema_has_no_judge_or_rationale_anywhere() -> None:
     assert not leaked, f"served schema exposes forbidden key(s): {sorted(leaked)}"
 
 
-def test_the_frontend_contains_no_judge_identifier() -> None:
+#: Patterns that would constitute a judge-READING code path in the frontend:
+#: property access (``ev.judge``), subscript (``ev["judge"]``), or a ``judge``
+#: binding/key (``judge =``, ``judge:``). P1 deliberately loosened this from a
+#: bare-word ban: the verified disclosure names the judge model in app-authored
+#: PROSE (honest attribution), which reads nothing — the served projection
+#: still has no ``judge`` key at any depth (test above), and no code may read
+#: one. Both directions are pinned by
+#: ``test_the_ban_still_catches_a_judge_reading_path``.
+_JUDGE_READ_PATTERNS = (
+    r"\.judge\b",
+    r"\[\s*[\"']judge[\"']\s*\]",
+    r"\bjudge\s*[:=]",
+)
+
+
+def test_the_frontend_reads_no_judge_field() -> None:
     source = APP_JS.read_text(encoding="utf-8")
-    # Word-boundary match so "judgement" in a comment would flag, but we assert
-    # the bare identifier is entirely absent from the shipped script.
-    assert not re.search(r"\bjudge\b", source), (
-        "app.js must not reference a 'judge' identifier (D-5): the served "
-        "projection has no judge field and no judge-reading path may exist"
+    for pattern in _JUDGE_READ_PATTERNS:
+        match = re.search(pattern, source)
+        assert match is None, (
+            f"app.js matches judge-reading pattern {pattern!r} at "
+            f"{match.start() if match else '?'} (D-5): the served projection "
+            "has no judge field and no judge-reading path may exist"
+        )
+
+
+def test_the_ban_still_catches_a_judge_reading_path() -> None:
+    """The genuine cases the loosened check must still catch, each red-proven
+    against the patterns rather than trusted by inspection."""
+    offenders = (
+        "const v = ev.judge;",
+        'const v = result.evaluation["judge"];',
+        "const v = trust[ 'judge' ];",
+        "let judge = payload.evaluation;",
+        "const cfg = { judge: verdict };",
     )
+    for snippet in offenders:
+        assert any(re.search(p, snippet) for p in _JUDGE_READ_PATTERNS), (
+            f"loosened D-5 check no longer catches: {snippet!r}"
+        )

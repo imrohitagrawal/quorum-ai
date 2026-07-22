@@ -1,5 +1,5 @@
 {
-  "_comment": "FR-016 (S3) shared evaluation fixtures — the SINGLE source of truth for both the e2e fixture (e2e/fixtures/golden-run.ts imports this) and the Python contract test (tests/contract/test_golden_fixture_matches_served_schema.py validates each against the real QueryRunEvaluationProjection). Each block is the served projection shape: metrics only, never prose. support_verified is always false (every hermetic run), so score is null and band is 'unverified' — an impossible shape (e.g. score on an unverified band) fails the Python validation rather than greening a mocked e2e run. The distinctive 73.4 / 21.5 numbers exist so the no-digit invariant has a concrete target to search for; they must NEVER reach the surface innerText.",
+  "_comment": "FR-016 (S3) shared evaluation fixtures — the SINGLE source of truth for both the e2e fixture (e2e/fixtures/golden-run.ts imports this) and the Python contract test (tests/contract/test_golden_fixture_matches_served_schema.py validates each against the real QueryRunEvaluationProjection). Each block is the served projection shape: metrics only, never prose. The six unverified variants keep support_verified false (every hermetic run), so score is null and band is 'unverified' — an impossible shape (e.g. score on an unverified band) fails the Python validation rather than greening a mocked e2e run. EVAL_VERIFIED_HIGH (P1 / FR-015 judge wiring) is the ONE verified variant: its trust object is derived from the REAL engine (build_trust_score with support_verified=True over EVAL_CLEAN's signals) and the contract test RECOMPUTES it, so a fabricated score or band cannot ride in. The distinctive 73.4 / 21.5 numbers in the unverified variants exist so the no-digit invariant has a concrete target to search for; they must NEVER reach the surface innerText.",
   "EVAL_CLEAN": {
     "schema_version": "s3-eval-v3",
     "signals": {
@@ -37,6 +37,47 @@
           { "signal": "disagreement_integrity", "weight": 0.10, "value": 1.0, "contribution": 9.6 },
           { "signal": "uncertainty_surfaced", "weight": 0.05, "value": 1.0, "contribution": 4.8 },
           { "signal": "decision_support_framing_present", "weight": 0.05, "value": 1.0, "contribution": 4.8 }
+        ]
+      }
+    }
+  },
+  "EVAL_VERIFIED_HIGH": {
+    "schema_version": "s3-eval-v3",
+    "signals": {
+      "citation_coverage_ratio": 0.85,
+      "citation_marker_grounding": 0.8,
+      "unverifiable_marker_count": 0,
+      "unverifiable_marker_ratio": 0.0,
+      "agreement_ratio": 1.0,
+      "live_ratio": 1.0,
+      "completeness": 1.0,
+      "false_consensus_preserved": false,
+      "polar_disagreement_detected": false,
+      "disagreement_suppressed": false,
+      "decision_support_framing_present": true,
+      "high_stakes_warning_required": false,
+      "high_stakes_warning_present": false,
+      "uncertainty_surfaced": true,
+      "refusal_detected": false,
+      "run_wholly_refused": false
+    },
+    "faithfulness_label": "faithful",
+    "hallucination_risk": "low",
+    "label_confidence": "reportable",
+    "trust": {
+      "support_verified": true,
+      "band": "high",
+      "score": 92,
+      "diagnostics": {
+        "layer_a_composite_unverified": 91.75,
+        "contributions": [
+          { "signal": "citation_marker_grounding", "weight": 0.3, "value": 0.8, "contribution": 24.0 },
+          { "signal": "live_ratio", "weight": 0.2, "value": 1.0, "contribution": 20.0 },
+          { "signal": "citation_coverage_ratio", "weight": 0.15, "value": 0.85, "contribution": 12.75 },
+          { "signal": "completeness", "weight": 0.15, "value": 1.0, "contribution": 15.0 },
+          { "signal": "disagreement_integrity", "weight": 0.1, "value": 1.0, "contribution": 10.0 },
+          { "signal": "uncertainty_surfaced", "weight": 0.05, "value": 1.0, "contribution": 5.0 },
+          { "signal": "decision_support_framing_present", "weight": 0.05, "value": 1.0, "contribution": 5.0 }
         ]
       }
     }

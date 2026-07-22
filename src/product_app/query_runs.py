@@ -29,6 +29,7 @@ from __future__ import annotations
 import contextlib
 import logging
 import time as _time_module
+from collections import OrderedDict
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
@@ -60,12 +61,16 @@ from product_app.debate import (
     debate_stub_service,
 )
 from product_app.evaluation import (
+    EvalJudgeService,
+    EvalJudgeVerdict,
     FaithfulnessLabel,
     HallucinationRisk,
+    JudgeEvidence,
     LayerASignals,
     PresentationConfidence,
     RunEvaluationResult,
     TrustScore,
+    _judge_enabled,
     evaluate_run,
     presentation_confidence,
 )
@@ -295,7 +300,12 @@ class QueryRunEvaluationProjection(BaseModel):
     judge, is every hermetic run) ``score`` IS ``None`` and ``band`` IS
     ``"unverified"``; the only number in the payload is the explicitly-named
     ``layer_a_composite_unverified`` diagnostic, which is not a confidence
-    figure and is named so a client cannot mistake it for one.
+    figure and is named so a client cannot mistake it for one. When the
+    operator configures BOTH ``QUORUM_EVAL_JUDGE_API_KEY`` and
+    ``QUORUM_EVAL_JUDGE_MODEL_ID`` (P1 wiring, ``_request_path_judge``) a
+    conforming real-judge verdict flips ``support_verified`` and the numeric
+    ``score`` + ``low``/``moderate``/``high`` band serve verbatim — still
+    metrics only; the judge rationale remains dropped.
     """
 
     schema_version: str
@@ -1510,8 +1520,10 @@ def _persist_run_evaluation(*, query_run: QueryRun, agreement: AgreementSummary)
     not be able to look like a run-history persistence failure — and it must
     never fail a user run (the run's terminal state is already committed).
 
-    Idempotent: the payload is a pure function of the terminal run, so a
-    re-persist rewrites identical bytes.
+    Idempotent: the payload is a pure function of the terminal run — plus,
+    when the operator has configured the Layer-B judge, its per-run memoised
+    verdict (``_judge_verdict_memo``, first outcome wins) — so a re-persist
+    rewrites identical bytes and never repeats the paid judge call.
 
     The persisted and emitted payloads are METRICS ONLY —
     ``RunEvaluation.to_eval_json`` drops the judge rationale, and nothing here
@@ -1592,28 +1604,97 @@ def _estimate_reasons(estimate: CostEstimate) -> list[str]:
     return ["Estimated cost exceeds USD 0.25 and is blocked for this slice."]
 
 
+#: Per-run memo of the Layer-B judge verdict (P1 / FR-015 wiring). The judge
+#: is a PAID, advisory, per-run call and ``_evaluate_terminal_run`` runs on
+#: every result read: without a memo, N polls of one terminal run would make
+#: N judge calls and the served score could flicker whenever a later call
+#: failed. Keyed by ``query_run_id``; a ``None`` value memoises a FAILED (or
+#: non-conforming) judge call so reads never retry the spend — first outcome
+#: wins, and the persisted row and every served projection carry the SAME
+#: verdict. In-process only (matches the single-process deploy); bounded LRU
+#: so it can never grow with run history.
+_JUDGE_VERDICT_MEMO_MAX = 512
+_judge_verdict_memo: OrderedDict[str, EvalJudgeVerdict | None] = OrderedDict()
+
+
+def _judge_verdict_memo_clear_for_tests() -> None:
+    _judge_verdict_memo.clear()
+
+
+class _MemoisedRunJudge:
+    """The real ``EvalJudgeService``, memoised per run for the request path.
+
+    A thin cache, NOT a judge implementation: the verdict always comes from
+    ``EvalJudgeService`` (never any stub), and ``verifies_support`` MIRRORS
+    the service's — this class must never be able to unlock a score the
+    real service would not.
+    """
+
+    verifies_support = EvalJudgeService.verifies_support
+
+    def __init__(self, query_run_id: str) -> None:
+        self._query_run_id = query_run_id
+
+    def evaluate(self, evidence: JudgeEvidence) -> EvalJudgeVerdict | None:
+        memo = _judge_verdict_memo
+        if self._query_run_id in memo:
+            memo.move_to_end(self._query_run_id)
+            return memo[self._query_run_id]
+        verdict = EvalJudgeService().evaluate(evidence)
+        memo[self._query_run_id] = verdict
+        while len(memo) > _JUDGE_VERDICT_MEMO_MAX:
+            memo.popitem(last=False)
+        return verdict
+
+
+def _request_path_judge(query_run: QueryRun) -> _MemoisedRunJudge | None:
+    """The judge for the request/serving path, or ``None`` (the default).
+
+    ON only when BOTH ``QUORUM_EVAL_JUDGE_API_KEY`` and
+    ``QUORUM_EVAL_JUDGE_MODEL_ID`` are configured — gated HERE, before any
+    judge object exists, so the OFF path builds no evidence and performs
+    zero I/O (NFR-011/NFR-012), byte-identical to the pre-wiring behaviour.
+    Reuses ``_judge_enabled`` + ``EvalJudgeService``; no fork, no stub.
+    """
+    if not (_judge_enabled() and settings.quorum_eval_judge_model_id):
+        return None
+    return _MemoisedRunJudge(str(query_run.query_run_id))
+
+
 def _evaluate_terminal_run(
     query_run: QueryRun,
     *,
     agreement: AgreementSummary,
 ) -> RunEvaluationResult | None:
-    """Layer-A evaluation for a terminal run, or ``None`` if not terminal.
+    """Layer-A (+ optionally Layer-B) evaluation for a terminal run.
 
-    ``judge=None`` — the LLM judge is never invoked from the request or
-    pipeline path, so this performs ZERO I/O (NFR-011/NFR-012): no network, no
-    clock, no store. ``agreement`` is passed in rather than recomputed so the
-    evaluation is derived from the SAME value the endpoint serves and the S1
-    row persists.
+    With the judge unconfigured — the default, and the only configuration in
+    CI — this passes ``judge=None`` and performs ZERO I/O (NFR-011/NFR-012):
+    no network, no clock, no store, no evidence built. With a key AND a
+    pinned model configured, the REAL ``EvalJudgeService`` (memoised per run)
+    is passed, whose verdict may flip ``support_verified`` and unlock the
+    numeric TrustScore; the judge stays advisory and can never fail the run.
 
-    ``query_text`` is deliberately not passed: it is only ever used to build
-    judge evidence, and no judge runs here.
+    ``agreement`` is passed in rather than recomputed so the evaluation is
+    derived from the SAME value the endpoint serves and the S1 row persists.
+    ``query_text`` is threaded only alongside a judge — it is only ever used
+    to build judge evidence.
     """
     if not query_run.is_terminal:
         return None
+    judge = _request_path_judge(query_run)
+    if judge is None:
+        return evaluate_run(
+            initial_answers=query_run.initial_answers,
+            final_synthesis=query_run.final_synthesis,
+            agreement=agreement,
+        )
     return evaluate_run(
         initial_answers=query_run.initial_answers,
         final_synthesis=query_run.final_synthesis,
         agreement=agreement,
+        judge=judge,
+        query_text=query_run.query_text,
     )
 
 
