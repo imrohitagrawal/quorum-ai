@@ -28,6 +28,7 @@ from fastapi.exceptions import RequestValidationError
 from fastapi.openapi.docs import get_swagger_ui_html
 from fastapi.responses import HTMLResponse, JSONResponse, PlainTextResponse, Response
 from fastapi.staticfiles import StaticFiles
+from prometheus_fastapi_instrumentator import Instrumentator
 from sentry_sdk.types import Event as SentryEvent
 
 from product_app.auth import (
@@ -226,6 +227,17 @@ app = _build_fastapi(settings)
 _register_docs_routes(app, settings)
 app.include_router(query_runs_router)
 app.mount("/static", StaticFiles(directory=str(STATIC_DIR)), name="static")
+
+# OD-1 observability: Prometheus exposition at /metrics. Routes are grouped
+# by route TEMPLATE (instrumentator default), so raw paths/UUIDs never become
+# label values; /metrics itself is excluded so a scrape does not count itself;
+# include_in_schema=False keeps the plain-text route out of app.openapi(),
+# leaving the byte-faithful openapi.yaml drift guard and the Schemathesis
+# conformance gate untouched. Public-unauthenticated by design, like
+# /health, /ready and /status (pre-authorised decision, OD-1).
+Instrumentator(
+    excluded_handlers=["/metrics"],
+).instrument(app).expose(app, include_in_schema=False)
 
 # Monotonic start reference for /status uptime. Captured after the
 # app is constructed so the value reflects "when the process began
