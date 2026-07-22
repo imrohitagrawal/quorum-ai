@@ -32,11 +32,26 @@ not a test artefact — ships to users. The scan job is deliberately
 `continue-on-error: true`: it measures, it does not gate, so there is never
 pressure to quarantine for convenience.
 
-## KNOWN CONFOUND — read before transcribing the first scan
+## KNOWN CONFOUND — RESOLVED 2026-07-22 (run `29911231157`)
 
-**The first scan may measure the session rate limiter rather than flakiness.**
-Do not record its output as a flake rate, and do not quarantine on it, until
-this is resolved.
+**RESOLVED.** The seam landed (Stage B, D0, `bba01c78`) and a real post-seam scan
+now demonstrates it. Run
+[`29911231157`](https://github.com/imrohitagrawal/quorum-ai/actions/runs/29911231157)
+ran with `SESSION_RATE_LIMIT_PER_MINUTE=600` (confirmed in the job env) and the
+historically-affected legs came back **clean**: `parity-behavior` 0/530 and
+`axe-all-views` 0/150 — i.e. all 530 parity boots and 150 axe boots succeeded,
+with **zero HTTP 429s** in the run (the only "429" strings in the log are
+timestamps, node PIDs, and the `SESSION_RATE_LIMIT_PER_MINUTE` env line). Under
+the old 30-token bucket the 53-boots-per-run parity spec could not have passed
+530/530. The scan therefore measured the **product**, not the limiter — the
+number in Measurements is a real flake rate. The original text is retained below
+for the record.
+
+---
+
+**[Original confound — the first scan may measure the session rate limiter rather
+than flakiness.** Do not record its output as a flake rate, and do not quarantine
+on it, until this is resolved.]
 
 `/v1/session` is rate limited per IP at 30 requests/minute
 (`_InMemoryIpRateLimiter`, `src/product_app/query_runs.py`). Every spec's
@@ -89,31 +104,37 @@ sets `RUNTIME_ENVIRONMENT: "local"` and `SESSION_RATE_LIMIT_PER_MINUTE: "600"`
 `"ci"` is not a valid enum) — the lane only ran as LOCAL by accident; it is now
 explicit.
 
-- **Landed at:** Stage B PR (branch `feat/r2-stage-b-session-rate-seam`).
-  Record the squash SHA here once merged: `SHA: <to-be-filled-at-merge>`.
-- **Status: believed removed for scans dispatched AFTER that SHA — pending a
-  scan that demonstrates it.** Do NOT mark the confound "resolved" or transcribe
-  a flake rate until a real `flake-scan` run id exists on the post-seam side and
-  its boots are shown not to 429. The block stays here, and the Measurements
-  table stays all-dashes, until then.
+- **Landed at:** Stage B PR #66, squash `bba01c78` (deployed Fly v28).
+- **Status: RESOLVED 2026-07-22.** Demonstrated by run `29911231157` on the
+  post-seam SHA `7fbf1a1`: boots did not 429 (parity 0/530, axe 0/150, zero HTTP
+  429s in the run), so the Measurements table now carries a real, run-id-bearing
+  flake rate (0/960 across the five specs) rather than dashes.
 
 ## Measurements
 
 | spec | executed repetitions | failures | rate | date (UTC) | run id |
 | --- | --- | --- | --- | --- | --- |
-| `tests/invariants/rendering-invariants.spec.ts` | — | — | — | — | — |
-| `tests/invariants/real-integration-smoke.spec.ts` | — | — | — | — | — |
-| `tests/invariants/trust-score-invariants.spec.ts` | — | — | — | — | — |
-| `tests/ui-parity/parity-behavior.spec.ts` | — | — | — | — | — |
-| `tests/accessibility/axe-all-views.spec.ts` | — | — | — | — | — |
+| `tests/invariants/rendering-invariants.spec.ts` | 50 | 0 | 0/50 | 2026-07-22 | 29911231157 |
+| `tests/invariants/real-integration-smoke.spec.ts` | 10 | 0 | 0/10 | 2026-07-22 | 29911231157 |
+| `tests/invariants/trust-score-invariants.spec.ts` | 220 | 0 | 0/220 | 2026-07-22 | 29911231157 |
+| `tests/ui-parity/parity-behavior.spec.ts` | 530 | 0 | 0/530 | 2026-07-22 | 29911231157 |
+| `tests/accessibility/axe-all-views.spec.ts` | 150 | 0 | 0/150 | 2026-07-22 | 29911231157 |
 
-> **Status: unmeasured.** `flake-scan.yml` lands with this change; the first
-> scan populates these rows. Recording a rate here before a scan has run would
-> be fabricating the one number the whole mechanism exists to produce.
+> **Status: MEASURED (first scan, 2026-07-22).** Run
+> [`29911231157`](https://github.com/imrohitagrawal/quorum-ai/actions/runs/29911231157),
+> dispatched on the post-seam SHA `7fbf1a1` (RB-5 merge, which carries Stage B's
+> 600/min seam), `RUNTIME_ENVIRONMENT=local` + `SESSION_RATE_LIMIT_PER_MINUTE=600`
+> confirmed in the job env. Every leg ran `--repeat-each=10 --retries=0` and came
+> back **0 failures** across its executed repetitions (denominators transcribed
+> literally from each leg's `[FLAKE]` summary: 50 / 10 / 220 / 530 / 150). No leg
+> was UNMEASURED (none all-skipped). **Measured flake rate: 0/960 across the five
+> timing-sensitive specs.** Every spec stays in the blocking lane; nothing is
+> quarantined.
 >
-> **And the first scan alone will not be enough to fill them** — see the
-> confound above. A leg that comes back dirty must be attributed to the rate
-> limiter or exonerated of it *before* a number lands in this table.
+> This does not make "flaky" impossible forever — it is one clean scan, not a
+> proof. The mechanism keeps running (nightly + dispatch); a future dirty leg is
+> QUARANTINED behind `@flaky`, never retried, and its rate lands here with its
+> own run id.
 
 ## Diagnosed, partly fixed
 
