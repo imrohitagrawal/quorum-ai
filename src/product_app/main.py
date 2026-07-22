@@ -63,6 +63,7 @@ from product_app.query_runs import router as query_runs_router
 from product_app.readiness import (
     run_startup_probe,
 )
+from product_app.request_id import RequestIdMiddleware
 from product_app.run_history_store import RunHistoryStore
 from product_app.run_history_store import configure as configure_run_history_store
 
@@ -273,6 +274,13 @@ class _NormalizeMethodLabelMiddleware:
 
 
 app.add_middleware(_NormalizeMethodLabelMiddleware)
+
+# OD-3: per-request ID correlation. Added LAST so it is the outermost
+# add_middleware layer: the contextvar is bound before the instrumentator
+# and every handler run, and every log record emitted inside the request
+# (including middleware logs) carries the id. See product_app.request_id
+# for the echo-vs-regenerate safety rules on the inbound header.
+app.add_middleware(RequestIdMiddleware)
 
 # Monotonic start reference for /status uptime. Captured after the
 # app is constructed so the value reflects "when the process began

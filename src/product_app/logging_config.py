@@ -100,6 +100,16 @@ def setup_json_logging(log_level: str = "INFO") -> None:
     handler = logging.StreamHandler()
     handler.setFormatter(formatter)
     root.addHandler(handler)
+    # OD-3: stamp the per-request id (bound by RequestIdMiddleware) onto
+    # every record created while a request is in flight — a record-factory
+    # hook so ALL handlers see it, not just this one. A no-op outside
+    # request context, so scripts that reuse this setup (e.g. the feedback
+    # audit) keep the exact pre-OD-3 record shape. Imported here (not at
+    # module top) to keep the import graph acyclic; both modules are
+    # stdlib-only.
+    from product_app.request_id import install_request_id_record_factory
+
+    install_request_id_record_factory()
     try:
         root.setLevel(getattr(logging, log_level.upper()))
     except AttributeError:
