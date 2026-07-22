@@ -38,13 +38,28 @@ changed here on the strength of one laptop.
 from __future__ import annotations
 
 import importlib.util
+import os
 import statistics
 import sys
 import time
 from pathlib import Path
 from typing import Any
 
+import pytest
+
 from product_app.evaluation import build_trust_score, evaluate_layer_a
+
+# Machine-dependent, so it runs ONLY where every other perf spec runs: the
+# advisory perf-gate job (which sets QUORUM_RUN_PERF_BUDGET=1 and is
+# continue-on-error) and the advisory eval.yml schedule. It must NEVER execute
+# in the blocking validate-and-test suite, where a latency number would gate a
+# merge — exactly the DEBT-009 failure the sibling
+# tests/perf/test_workflow_latency_percentiles.py guards against the same way.
+pytestmark = pytest.mark.skipif(
+    not os.environ.get("QUORUM_RUN_PERF_BUDGET"),
+    reason="advisory machine-dependent eval-batch baseline; runs only in the "
+    "perf-gate / eval.yml lanes (QUORUM_RUN_PERF_BUDGET=1) — see DEBT-009",
+)
 
 _LOADER_PATH = Path(__file__).resolve().parents[1] / "evals" / "golden" / "loader.py"
 _spec = importlib.util.spec_from_file_location("s4_golden_loader_perf", _LOADER_PATH)

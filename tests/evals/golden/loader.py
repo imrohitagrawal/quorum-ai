@@ -124,13 +124,18 @@ def _golden_from_raw(raw: dict[str, Any]) -> GoldenCase:
             f"{raw['case_id']}: human-label case declares domain {domain!r}, "
             f"not one of {HUMAN_LABEL_DOMAINS}"
         )
-    if needs_human_label and "correctness" in raw:
-        # The single load-bearing invariant of D5: a fabricated subject-matter
+    if "correctness" in raw:
+        # The single load-bearing invariant of D5, enforced UNCONDITIONALLY — on
+        # every case, structural or human-label. A fabricated subject-matter
         # correctness label is indistinguishable from a real one and silently
-        # corrupts the eval forever. It is NEVER authored in the fixture.
+        # corrupts the eval forever; a structural case has no more business
+        # carrying one than a human-label case does. Subject-matter correctness
+        # lives ONLY in the operator queue, never in a fixture. (README.md and
+        # docs/metrics/operator-label-queue.md both promise this is unconditional.)
         raise ValueError(
-            f"{raw['case_id']}: a needs_human_label case must NOT carry a "
-            "'correctness' field — that judgment is deferred to the operator queue"
+            f"{raw['case_id']}: a golden case must NOT carry a 'correctness' field — "
+            "subject-matter correctness is deferred to the operator queue for "
+            "every case, structural or human-label"
         )
     return GoldenCase(
         case_id=raw["case_id"],

@@ -71,5 +71,10 @@ jobs:
         # Advisory: a machine-dependent latency number must never gate a merge
         # (the DEBT-009 lesson — macOS-derived budgets false-fail a slower CI
         # runner). The test asserts only a generous hermetic ceiling and records
-        # the measured batch runtime to the step summary.
+        # the measured batch runtime to the step summary. QUORUM_RUN_PERF_BUDGET
+        # is REQUIRED here: the spec skips itself everywhere that var is unset
+        # (so it never runs in the blocking validate-and-test suite), and this
+        # advisory job is one of the two lanes meant to execute it.
+        env:
+          QUORUM_RUN_PERF_BUDGET: "1"
         run: uv run pytest tests/perf/test_eval_batch_baseline.py -q --no-cov -s | tee "$GITHUB_STEP_SUMMARY"

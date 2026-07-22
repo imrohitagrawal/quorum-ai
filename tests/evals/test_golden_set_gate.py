@@ -158,6 +158,24 @@ def test_evaluation_is_deterministic_and_carries_no_prose(case: object) -> None:
 # --------------------------------------------------------------------------
 
 
+def test_no_golden_case_carries_a_subject_matter_correctness_field() -> None:
+    """The D5 correctness ban is UNCONDITIONAL — every case, not just human ones.
+
+    Adversarial review (round 1) caught the loader rejecting a ``correctness``
+    field only when ``needs_human_label`` was true, while README.md and the
+    operator queue both promise the rejection is unconditional: a STRUCTURAL
+    case carrying a fabricated subject-matter label loaded silently. This walks
+    the raw fixtures directly and asserts NO case — structural or human-label —
+    carries one. (The loader now also raises on load; this is the explicit,
+    case-naming statement of the invariant.)
+    """
+    offenders = [cid for cid in CASE_IDS if "correctness" in _raw_case(cid)]
+    assert not offenders, (
+        f"golden cases carry a forbidden subject-matter 'correctness' field: {offenders}. "
+        "Subject-matter correctness is deferred to the operator queue for EVERY case."
+    )
+
+
 def test_human_label_cases_defer_subject_matter_correctness_and_carry_no_label() -> None:
     """The D5 boundary, mechanised — NOT a skip.
 
