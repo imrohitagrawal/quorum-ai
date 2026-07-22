@@ -63,10 +63,16 @@ def test_the_served_result_schema_has_no_judge_or_rationale_anywhere() -> None:
 #: still has no ``judge`` key at any depth (test above), and no code may read
 #: one. Both directions are pinned by
 #: ``test_the_ban_still_catches_a_judge_reading_path``.
+#: Scope note: these catch the accidental/habitual read shapes (property
+#: access incl. optional chaining, quoted/backtick subscript, binding or
+#: object key, destructuring shorthand). Deliberately-obfuscated reads
+#: (computed keys built from fragments) are not greppable and remain a
+#: review-time concern, which is honest about what a lexical guard can do.
 _JUDGE_READ_PATTERNS = (
     r"\.judge\b",
-    r"\[\s*[\"']judge[\"']\s*\]",
+    r"\[\s*[\"'`]judge[\"'`]\s*\]",
     r"\bjudge\s*[:=]",
+    r"[{,]\s*judge\s*[,}]",
 )
 
 
@@ -86,10 +92,15 @@ def test_the_ban_still_catches_a_judge_reading_path() -> None:
     against the patterns rather than trusted by inspection."""
     offenders = (
         "const v = ev.judge;",
+        "const v = ev?.judge;",
         'const v = result.evaluation["judge"];',
         "const v = trust[ 'judge' ];",
+        "const v = trust[`judge`];",
         "let judge = payload.evaluation;",
         "const cfg = { judge: verdict };",
+        "const { judge } = payload.evaluation;",
+        "const { signals, judge } = ev;",
+        "const { judge, signals } = ev;",
     )
     for snippet in offenders:
         assert any(re.search(p, snippet) for p in _JUDGE_READ_PATTERNS), (

@@ -1295,9 +1295,16 @@ def build_judge_prompt(evidence: JudgeEvidence) -> tuple[str, str]:
 class EvalJudge(Protocol):
     """What ``evaluate_run`` needs from a judge."""
 
-    #: True only for a judge that actually verifies citation support. This
-    #: is what gates ``TrustScore.support_verified``.
-    verifies_support: bool
+    @property
+    def verifies_support(self) -> bool:
+        """True only for a judge that actually verifies citation support.
+
+        This is what gates ``TrustScore.support_verified``. A read-only
+        property in the protocol so implementations may either pin a class
+        attribute (``EvalJudgeService``, ``StubEvalJudge``) or delegate at
+        call time (the request path's memo wrapper).
+        """
+        ...
 
     def evaluate(self, evidence: JudgeEvidence) -> EvalJudgeVerdict | None: ...
 

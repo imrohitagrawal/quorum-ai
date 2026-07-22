@@ -30,7 +30,8 @@ import contextlib
 import logging
 import time as _time_module
 from collections import OrderedDict
-from concurrent.futures import ThreadPoolExecutor
+from concurrent.futures import Future, ThreadPoolExecutor
+from concurrent.futures import TimeoutError as FuturesTimeoutError
 from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal, InvalidOperation
@@ -1611,39 +1612,79 @@ def _estimate_reasons(estimate: CostEstimate) -> list[str]:
 #: failed. Keyed by ``query_run_id``; a ``None`` value memoises a FAILED (or
 #: non-conforming) judge call so reads never retry the spend — first outcome
 #: wins, and the persisted row and every served projection carry the SAME
-#: verdict. In-process only (matches the single-process deploy); bounded LRU
-#: so it can never grow with run history.
+#: verdict. Concurrency: the persist path and poll threads race on the FIRST
+#: evaluation, so an in-flight ``Future`` claims the run under
+#: ``_judge_memo_lock`` BEFORE the HTTP call; late arrivals wait on it rather
+#: than paying for a second call. In-process only (matches the single-process
+#: deploy); bounded LRU so it can never grow with run history — the 512 cap
+#: comfortably exceeds the runs servable inside ``QUERY_RUN_TERMINAL_TTL``
+#: (1h) at one-run-at-a-time-per-account traffic; an evicted entry would cost
+#: one fresh judge call, never a correctness break.
 _JUDGE_VERDICT_MEMO_MAX = 512
+#: How long a non-owning reader waits for the in-flight verdict. On timeout it
+#: serves the suppressed shape ONCE (no spend, no memo write); the owner still
+#: finishes and memoises, so later reads converge on the one verdict.
+_JUDGE_INFLIGHT_WAIT_SECONDS = 30.0
 _judge_verdict_memo: OrderedDict[str, EvalJudgeVerdict | None] = OrderedDict()
+_judge_inflight: dict[str, Future[EvalJudgeVerdict | None]] = {}
+_judge_memo_lock = RLock()
 
 
 def _judge_verdict_memo_clear_for_tests() -> None:
-    _judge_verdict_memo.clear()
+    with _judge_memo_lock:
+        _judge_verdict_memo.clear()
+        _judge_inflight.clear()
 
 
 class _MemoisedRunJudge:
     """The real ``EvalJudgeService``, memoised per run for the request path.
 
     A thin cache, NOT a judge implementation: the verdict always comes from
-    ``EvalJudgeService`` (never any stub), and ``verifies_support`` MIRRORS
-    the service's — this class must never be able to unlock a score the
-    real service would not.
+    ``EvalJudgeService`` (never any stub), and ``verifies_support`` reads the
+    service's flag AT CALL TIME — this class must never be able to unlock a
+    score the real service would not, even if the service is substituted or
+    downgraded after import.
     """
 
-    verifies_support = EvalJudgeService.verifies_support
+    @property
+    def verifies_support(self) -> bool:
+        return EvalJudgeService.verifies_support
 
     def __init__(self, query_run_id: str) -> None:
         self._query_run_id = query_run_id
 
     def evaluate(self, evidence: JudgeEvidence) -> EvalJudgeVerdict | None:
-        memo = _judge_verdict_memo
-        if self._query_run_id in memo:
-            memo.move_to_end(self._query_run_id)
-            return memo[self._query_run_id]
-        verdict = EvalJudgeService().evaluate(evidence)
-        memo[self._query_run_id] = verdict
-        while len(memo) > _JUDGE_VERDICT_MEMO_MAX:
-            memo.popitem(last=False)
+        run_id = self._query_run_id
+        with _judge_memo_lock:
+            if run_id in _judge_verdict_memo:
+                _judge_verdict_memo.move_to_end(run_id)
+                return _judge_verdict_memo[run_id]
+            future = _judge_inflight.get(run_id)
+            owner = future is None
+            if future is None:
+                future = Future()
+                _judge_inflight[run_id] = future
+        if not owner:
+            # Another thread owns the paid call; share its outcome. A timeout
+            # serves suppressed once — never a second call, never a fabricated
+            # verdict.
+            try:
+                return future.result(timeout=_JUDGE_INFLIGHT_WAIT_SECONDS)
+            except FuturesTimeoutError:
+                return None
+        verdict: EvalJudgeVerdict | None = None
+        try:
+            # ``EvalJudgeService.evaluate`` is contractually non-raising (the
+            # judge is advisory), but the finally block guarantees the future
+            # resolves and the in-flight claim clears even if that ever breaks.
+            verdict = EvalJudgeService().evaluate(evidence)
+        finally:
+            with _judge_memo_lock:
+                _judge_verdict_memo[run_id] = verdict
+                while len(_judge_verdict_memo) > _JUDGE_VERDICT_MEMO_MAX:
+                    _judge_verdict_memo.popitem(last=False)
+                _judge_inflight.pop(run_id, None)
+            future.set_result(verdict)
         return verdict
 
 
@@ -1655,8 +1696,25 @@ def _request_path_judge(query_run: QueryRun) -> _MemoisedRunJudge | None:
     judge object exists, so the OFF path builds no evidence and performs
     zero I/O (NFR-011/NFR-012), byte-identical to the pre-wiring behaviour.
     Reuses ``_judge_enabled`` + ``EvalJudgeService``; no fork, no stub.
+
+    Even when configured, contentless or unsettled runs are never judged:
+
+    * ``CANCELLED`` — observable TRANSIENTLY mid-run (``update_status`` does
+      not validate transitions, so a cancel landing mid-debate can later be
+      overwritten back to a running state). Memoising a verdict formed in
+      that window would let the eventually-COMPLETED run serve a verdict the
+      judge produced without its synthesis. No judge, no memo, no stickiness.
+    * ``BLOCKED_BY_COST`` / no COMPLETED initial answer — nothing to judge; a
+      paid call over empty evidence is pure spend and could stamp "verified"
+      on a run that never produced content.
     """
     if not (_judge_enabled() and settings.quorum_eval_judge_model_id):
+        return None
+    if query_run.status in {QueryRunStatus.CANCELLED, QueryRunStatus.BLOCKED_BY_COST}:
+        return None
+    if not any(
+        answer.status is InitialAnswerStatus.COMPLETED for answer in query_run.initial_answers
+    ):
         return None
     return _MemoisedRunJudge(str(query_run.query_run_id))
 

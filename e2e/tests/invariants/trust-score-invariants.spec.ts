@@ -399,6 +399,34 @@ test.describe("trust-score invariants (FR-016)", () => {
       mutate: (ev) => (ev.label_confidence = "indeterminate"),
       wantState: "indeterminate",
     },
+    { label: "band as array (JS key coercion)", mutate: (ev) => (ev.trust.band = ["high"]) },
+    // Review M3: server-emittable warning-end shapes — score/band derive from
+    // the Layer-A composite alone, so a verified judge verdict CAN coexist
+    // with a refusal or warning-end labels. The confident numeric treatment
+    // must never silence those states.
+    {
+      label: "refused run (refusal_detected)",
+      mutate: (ev) => {
+        ev.signals.refusal_detected = true;
+        ev.signals.run_wholly_refused = true;
+      },
+      wantState: "refused",
+    },
+    {
+      label: "unfaithful label",
+      mutate: (ev) => (ev.faithfulness_label = "unfaithful"),
+      wantState: "caution",
+    },
+    {
+      label: "medium hallucination risk",
+      mutate: (ev) => (ev.hallucination_risk = "medium"),
+      wantState: "caution",
+    },
+    {
+      label: "unknown grounding (no resolvable marker)",
+      mutate: (ev) => (ev.signals.citation_marker_grounding = null),
+      wantState: "no-marker",
+    },
   ];
   for (const { label, mutate, wantState } of TAMPERED) {
     test(`tampered verified shape falls back to zero digits: ${label}`, async ({ page }) => {

@@ -36,7 +36,7 @@ from product_app import query_runs as qr
 from product_app import run_history_store
 from product_app.config import settings
 from product_app.debate import AgreementSummary, debate_event_recorder
-from product_app.evaluation import StubEvalJudge, evaluate_run
+from product_app.evaluation import EvalJudgeService, StubEvalJudge, evaluate_run
 from product_app.main import app
 from product_app.providers import (
     LiveProviderResult,
@@ -336,6 +336,153 @@ def test_the_wiring_site_never_selects_the_stub(monkeypatch: pytest.MonkeyPatch)
         _get_result(client, account_id, body["query_run_id"])
 
     assert stub_evals == [], "the stub judge must never run on the request path"
+
+
+def _forced_run(account_id: Any, *, status: qr.QueryRunStatus, answers: list[Any]) -> Any:
+    """Create a run and force it into a specific terminal shape."""
+    from product_app.costs import cost_estimation_service
+    from product_app.model_slots import validate_model_slots_with_search
+
+    model_slots = validate_model_slots_with_search(DEFAULT_MODEL_IDS)
+    estimate = cost_estimation_service.estimate(query_text=QUERY_TEXT, model_slots=model_slots)
+    run = query_run_repository.create(
+        account_id=account_id,
+        query_text=QUERY_TEXT,
+        model_slots=model_slots,
+        cost_estimate=estimate,
+    )
+    run.initial_answers = answers
+    run.final_synthesis = None
+    run.status = status
+    return run
+
+
+def test_contentless_or_unsettled_terminal_runs_get_no_judge_call(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Review M2/minor: a configured judge must NOT fire on a terminal run with
+    nothing to judge, nor on a CANCELLED run.
+
+    * CANCELLED can be transiently observed mid-run (the cancel-resurrection
+      window): memoising a partial-evidence verdict there would let a later
+      COMPLETED run serve a verdict the judge formed without its synthesis.
+    * BLOCKED_BY_COST / all-answers-failed runs have no judgeable content —
+      a paid call over empty evidence is pure spend and could stamp
+      "verified" on a run that never executed.
+    """
+    from tests.unit.test_evaluation_layer_a import _answer as _la_answer
+
+    from product_app.providers import InitialAnswerStatus
+
+    _enable_judge(monkeypatch)
+    calls = _judge_seam(monkeypatch)
+    agreement = AgreementSummary(aligned=0, total=4)
+    account_id = uuid4()
+
+    contentless = [
+        ("cancelled", qr.QueryRunStatus.CANCELLED, [_la_answer(slot=1)]),
+        ("blocked_by_cost", qr.QueryRunStatus.BLOCKED_BY_COST, []),
+        (
+            "no_completed_answers",
+            qr.QueryRunStatus.PARTIAL,
+            [_la_answer(slot=1, status=InitialAnswerStatus.FAILED, text="")],
+        ),
+    ]
+    for label, status, answers in contentless:
+        run = _forced_run(account_id, status=status, answers=answers)
+        result = qr._evaluate_terminal_run(run, agreement=agreement)
+        assert calls == [], f"{label}: the judge must not be called"
+        if result is not None:
+            assert result.trust.support_verified is False, label
+            assert result.trust.score is None, label
+
+    # Positive control: the SAME configuration judges a settled completed run.
+    run = _forced_run(account_id, status=qr.QueryRunStatus.COMPLETED, answers=[_la_answer(slot=1)])
+    result = qr._evaluate_terminal_run(run, agreement=agreement)
+    assert result is not None
+    assert len(calls) == 1, "the positive control must reach the judge"
+    assert result.trust.support_verified is True
+
+
+def test_concurrent_first_reads_make_exactly_one_judge_call(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Review M1: the memo must hold under CONCURRENT first reads.
+
+    The production shape: the executor's persist path and a poll thread both
+    evaluate the same terminal run while the judge HTTP call is in flight.
+    Without an in-flight guard both threads miss the memo and each pays for a
+    judge call — and, because the judge is non-deterministic, the served and
+    persisted verdicts could diverge. One call, one shared outcome.
+    """
+    import threading
+    import time
+
+    _enable_judge(monkeypatch)
+    calls: list[dict[str, Any]] = []
+    release = threading.Event()
+
+    def _slow(**kwargs: Any) -> LiveProviderResult:
+        calls.append(kwargs)
+        release.wait(timeout=5)
+        return LiveProviderResult(answer_text=json.dumps(VALID_VERDICT), sources=[])
+
+    monkeypatch.setattr(provider_execution_service, "call_with_prompt", _slow)
+
+    judge = qr._MemoisedRunJudge("run-concurrent")
+    evidence = _evidence()
+    results: list[Any] = []
+
+    def _evaluate() -> None:
+        results.append(judge.evaluate(evidence))
+
+    threads = [threading.Thread(target=_evaluate) for _ in range(3)]
+    for t in threads:
+        t.start()
+    time.sleep(0.2)  # let every thread reach the memo before the call resolves
+    release.set()
+    for t in threads:
+        t.join(timeout=10)
+
+    assert len(calls) == 1, f"expected ONE judge call under concurrency, saw {len(calls)}"
+    assert len(results) == 3
+    assert all(r == results[0] for r in results), "every reader must share the one verdict"
+    assert results[0] is not None
+
+
+def test_a_reader_waiting_on_a_stuck_inflight_call_serves_suppressed_once(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A non-owning reader that outwaits the in-flight verdict serves the
+    suppressed shape ONCE — it never issues a second paid call and never
+    fabricates a verdict."""
+    from concurrent.futures import Future
+
+    monkeypatch.setattr(qr, "_JUDGE_INFLIGHT_WAIT_SECONDS", 0.05)
+    _enable_judge(monkeypatch)
+    calls = _judge_seam(monkeypatch)
+
+    stuck: Future[Any] = Future()  # never resolves: the owner is still paying
+    qr._judge_inflight["run-stuck"] = stuck
+    try:
+        verdict = qr._MemoisedRunJudge("run-stuck").evaluate(_evidence())
+    finally:
+        qr._judge_inflight.pop("run-stuck", None)
+
+    assert verdict is None
+    assert calls == [], "the waiting reader must never issue its own judge call"
+
+
+def test_memo_judge_mirrors_the_service_flag_at_call_time(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Review minor: ``verifies_support`` must READ the real service's flag,
+    not carry a definition-time copy — a substituted or downgraded service
+    must never leave the memo wrapper advertising verification it lost."""
+    judge = qr._MemoisedRunJudge("run-mirror")
+    assert judge.verifies_support is True
+    monkeypatch.setattr(EvalJudgeService, "verifies_support", False)
+    assert judge.verifies_support is False
 
 
 def test_the_verdict_memo_is_bounded_lru(monkeypatch: pytest.MonkeyPatch) -> None:

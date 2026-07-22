@@ -2734,6 +2734,12 @@
     // below fails CLOSED to the unverified (zero-digit) treatment — including
     // a non-"reportable" label_confidence, so a laundered/indeterminate run
     // can never show a confident number even with a verified judge (DEBT-012).
+    // The run must ALSO be at the "passed" end of the D-2 state table:
+    // score/band derive from the Layer-A composite alone, so a verified
+    // verdict CAN coexist with a refusal, unknown grounding, or warning-end
+    // labels — and the confident numeric treatment must never silence those
+    // states (review M3). Any such run keeps its refused/no-marker/caution
+    // rendering.
     const trust = ev.trust && typeof ev.trust === "object" ? ev.trust : null;
     const verifiedBand =
       trust !== null &&
@@ -2741,10 +2747,17 @@
       Number.isInteger(trust.score) &&
       trust.score >= 0 &&
       trust.score <= 100 &&
+      typeof trust.band === "string" &&
       Object.prototype.hasOwnProperty.call(TRUST_BAND_LABELS, trust.band)
         ? trust.band
         : null;
-    if (reportable && verifiedBand !== null) {
+    const passedState =
+      sig.citation_marker_grounding !== null &&
+      sig.citation_marker_grounding !== undefined &&
+      sig.refusal_detected !== true &&
+      ev.faithfulness_label === "faithful" &&
+      ev.hallucination_risk === "low";
+    if (reportable && passedState && verifiedBand !== null) {
       box.dataset.state = "verified";
       box.dataset.band = verifiedBand;
       box.appendChild(
