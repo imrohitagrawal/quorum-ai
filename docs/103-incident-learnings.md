@@ -49,8 +49,16 @@ follow-up commit can land while a just-merged commit's CI is still running, and
 concurrency cancels the older runs.
 
 **Durable fix.** Never push to `main` while a just-merged commit's CI is in
-flight — branch + PR for every change, including docs. Enforcement tracked by
-**#61** (branch protection: required checks + no direct push + up-to-date branch).
+flight — branch + PR for every change, including docs. **Enforced 2026-07-22 via
+#61**: `main` branch protection now requires a PR (no direct push, admins
+included), requires the six blocking checks (`validate-and-test`, `pytest (Python
+3.12)`, `Changed-lines coverage >= 95% (blocking)`, `Schemathesis API contract
+(blocking)`, `FR traceability completeness (blocking)`, `e2e axe + parity
+(chromium)`), and requires branches be up to date before merge (`strict`) so a
+merge cannot race a just-merged commit's CI. Config lives in
+`docs/70-ci-cd-plan.md`. Note: the issue text listed the E2E check as `E2E (axe +
+parity)`; the name CI actually reports is `e2e axe + parity (chromium)` — the
+enforced protection uses the real name so merges aren't blocked on a phantom check.
 
 ## 2026-07-17..21 — Merges stranded undeployed; `/health` 200 masked it
 
