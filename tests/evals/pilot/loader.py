@@ -1,8 +1,9 @@
 """P2 accuracy-pilot loader: operator labels + engine-derived agreement.
 
-The pilot scores the real Layer-A engine against 7 OPERATOR-AUTHORED
-subject-matter correctness labels (Rohit Agrawal, 2026-07-22), transcribed
-verbatim into ``operator_labels.json`` next to this module. Three integrity
+The pilot scores the real Layer-A engine against 10 OPERATOR-AUTHORED
+subject-matter correctness labels (Rohit Agrawal — 7 on 2026-07-22, the 3
+remaining D5 queue cases on 2026-07-23), transcribed verbatim into
+``operator_labels.json`` next to this module. Three integrity
 rules, all load-bearing:
 
 1. **This module authors ZERO labels.** It loads, validates, and scores. A
