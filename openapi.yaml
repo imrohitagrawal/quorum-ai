@@ -1034,7 +1034,17 @@ components:
 
         ``layer_a_composite_unverified`` diagnostic, which is not a confidence
 
-        figure and is named so a client cannot mistake it for one.'
+        figure and is named so a client cannot mistake it for one. When the
+
+        operator configures BOTH ``QUORUM_EVAL_JUDGE_API_KEY`` and
+
+        ``QUORUM_EVAL_JUDGE_MODEL_ID`` (P1 wiring, ``_request_path_judge``) a
+
+        conforming real-judge verdict flips ``support_verified`` and the numeric
+
+        ``score`` + ``low``/``moderate``/``high`` band serve verbatim — still
+
+        metrics only; the judge rationale remains dropped.'
     QueryRunProgress:
       properties:
         current_stage:

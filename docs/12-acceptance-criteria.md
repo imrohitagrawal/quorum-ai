@@ -352,3 +352,10 @@ Given the golden cases flagged `needs_human_label` (one per subject-matter domai
 
 - Requirement: FR-017, NFR-012
 - Test: TEST-FR-017 (`tests/evals/test_golden_set_gate.py::test_human_label_cases_defer_subject_matter_correctness_and_carry_no_label` and `::test_the_operator_queue_names_every_human_label_case`; `tests/evals/golden/loader.py` correctness-field rejection)
+
+## AC-049 The real judge is wired into the request path, unlocks a score only when configured, and is OFF by default
+
+Given `QUORUM_EVAL_JUDGE_API_KEY` and `QUORUM_EVAL_JUDGE_MODEL_ID` are both configured, when a terminal run is evaluated on the request/serving path, then the real `EvalJudgeService` — never any stub, and never any judge whose `verifies_support` is False — is passed to `evaluate_run`; a conforming verdict flips `support_verified` so the served projection carries a numeric `score` (0–100) and a `low`/`moderate`/`high` band; the persisted trust row agrees byte-for-byte with the served projection; the paid judge call is memoised per run so N reads of one result make at most one judge call (a failed or non-conforming call is memoised too, serves the suppressed `unverified` shape, and never fails the run); and the result view renders the numeric score with a verified disclosure only for the exact verified shape — any tampered near-miss (null/out-of-range/non-integer score, unknown or `unverified` band, non-True `support_verified`, or a non-`reportable` provenance) falls back to the zero-digit unverified treatment. And given either variable is unset — the default in every environment until the operator funds the key — then no judge object is constructed, no evidence is built, zero I/O is performed, and the served evaluation is byte-identical to `evaluate_run(judge=None)`.
+
+- Requirement: FR-015, NFR-011, NFR-012
+- Test: TEST-FR-015 (`tests/integration/test_judge_request_path_wiring.py` unlock, memoisation, half-configured/OFF byte-identity, stub-suppression regression; `tests/contract/test_golden_fixture_matches_served_schema.py` engine-recomputed verified fixture; `e2e/tests/invariants/trust-score-invariants.spec.ts` verified render + tamper fail-closed)

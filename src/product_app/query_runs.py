@@ -29,7 +29,9 @@ from __future__ import annotations
 import contextlib
 import logging
 import time as _time_module
-from concurrent.futures import ThreadPoolExecutor
+from collections import OrderedDict
+from concurrent.futures import Future, ThreadPoolExecutor
+from concurrent.futures import TimeoutError as FuturesTimeoutError
 from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal, InvalidOperation
@@ -60,12 +62,16 @@ from product_app.debate import (
     debate_stub_service,
 )
 from product_app.evaluation import (
+    EvalJudgeService,
+    EvalJudgeVerdict,
     FaithfulnessLabel,
     HallucinationRisk,
+    JudgeEvidence,
     LayerASignals,
     PresentationConfidence,
     RunEvaluationResult,
     TrustScore,
+    _judge_enabled,
     evaluate_run,
     presentation_confidence,
 )
@@ -295,7 +301,12 @@ class QueryRunEvaluationProjection(BaseModel):
     judge, is every hermetic run) ``score`` IS ``None`` and ``band`` IS
     ``"unverified"``; the only number in the payload is the explicitly-named
     ``layer_a_composite_unverified`` diagnostic, which is not a confidence
-    figure and is named so a client cannot mistake it for one.
+    figure and is named so a client cannot mistake it for one. When the
+    operator configures BOTH ``QUORUM_EVAL_JUDGE_API_KEY`` and
+    ``QUORUM_EVAL_JUDGE_MODEL_ID`` (P1 wiring, ``_request_path_judge``) a
+    conforming real-judge verdict flips ``support_verified`` and the numeric
+    ``score`` + ``low``/``moderate``/``high`` band serve verbatim — still
+    metrics only; the judge rationale remains dropped.
     """
 
     schema_version: str
@@ -1510,8 +1521,10 @@ def _persist_run_evaluation(*, query_run: QueryRun, agreement: AgreementSummary)
     not be able to look like a run-history persistence failure — and it must
     never fail a user run (the run's terminal state is already committed).
 
-    Idempotent: the payload is a pure function of the terminal run, so a
-    re-persist rewrites identical bytes.
+    Idempotent: the payload is a pure function of the terminal run — plus,
+    when the operator has configured the Layer-B judge, its per-run memoised
+    verdict (``_judge_verdict_memo``, first outcome wins) — so a re-persist
+    rewrites identical bytes and never repeats the paid judge call.
 
     The persisted and emitted payloads are METRICS ONLY —
     ``RunEvaluation.to_eval_json`` drops the judge rationale, and nothing here
@@ -1592,28 +1605,162 @@ def _estimate_reasons(estimate: CostEstimate) -> list[str]:
     return ["Estimated cost exceeds USD 0.25 and is blocked for this slice."]
 
 
+#: Per-run memo of the Layer-B judge verdict (P1 / FR-015 wiring). The judge
+#: is a PAID, advisory, per-run call and ``_evaluate_terminal_run`` runs on
+#: every result read: without a memo, N polls of one terminal run would make
+#: N judge calls and the served score could flicker whenever a later call
+#: failed. Keyed by ``query_run_id``; a ``None`` value memoises a FAILED (or
+#: non-conforming) judge call so reads never retry the spend — first outcome
+#: wins, and the persisted row and every served projection carry the SAME
+#: verdict. Concurrency: the persist path and poll threads race on the FIRST
+#: evaluation, so an in-flight ``Future`` claims the run under
+#: ``_judge_memo_lock`` BEFORE the HTTP call; late arrivals wait on it rather
+#: than paying for a second call. In-process only (matches the single-process
+#: deploy); bounded LRU so it can never grow with run history — the 512 cap
+#: comfortably exceeds the runs servable inside ``QUERY_RUN_TERMINAL_TTL``
+#: (1h) at one-run-at-a-time-per-account traffic; an evicted entry would cost
+#: one fresh judge call, never a correctness break.
+_JUDGE_VERDICT_MEMO_MAX = 512
+#: How long a non-owning reader waits for the in-flight verdict. On timeout it
+#: serves the suppressed shape ONCE (no spend, no memo write); the owner still
+#: finishes and memoises, so later reads converge on the one verdict.
+_JUDGE_INFLIGHT_WAIT_SECONDS = 30.0
+_judge_verdict_memo: OrderedDict[str, EvalJudgeVerdict | None] = OrderedDict()
+_judge_inflight: dict[str, Future[EvalJudgeVerdict | None]] = {}
+_judge_memo_lock = RLock()
+
+
+def _judge_verdict_memo_clear_for_tests() -> None:
+    with _judge_memo_lock:
+        _judge_verdict_memo.clear()
+        _judge_inflight.clear()
+
+
+class _MemoisedRunJudge:
+    """The real ``EvalJudgeService``, memoised per run for the request path.
+
+    A thin cache, NOT a judge implementation: the verdict always comes from
+    ``EvalJudgeService`` (never any stub), and ``verifies_support`` reads the
+    service's flag AT CALL TIME — this class must never be able to unlock a
+    score the real service would not, even if the service is substituted or
+    downgraded after import.
+    """
+
+    @property
+    def verifies_support(self) -> bool:
+        return EvalJudgeService.verifies_support
+
+    def __init__(self, query_run_id: str) -> None:
+        self._query_run_id = query_run_id
+
+    def evaluate(self, evidence: JudgeEvidence) -> EvalJudgeVerdict | None:
+        run_id = self._query_run_id
+        with _judge_memo_lock:
+            if run_id in _judge_verdict_memo:
+                _judge_verdict_memo.move_to_end(run_id)
+                return _judge_verdict_memo[run_id]
+            future = _judge_inflight.get(run_id)
+            owner = future is None
+            if future is None:
+                future = Future()
+                _judge_inflight[run_id] = future
+        if not owner:
+            # Another thread owns the paid call; share its outcome. On timeout
+            # (only reachable if the provider seam outlives its own 8s HTTP
+            # timeout), re-check the memo once — the owner may have finished
+            # between the wait expiring and now — then serve suppressed for
+            # THIS read: never a second call, never a fabricated verdict.
+            # (One read can therefore diverge from the eventual memo; the
+            # docstring's same-verdict guarantee holds for every memo-served
+            # read, which is all of them once the owner resolves.)
+            try:
+                return future.result(timeout=_JUDGE_INFLIGHT_WAIT_SECONDS)
+            except FuturesTimeoutError:
+                with _judge_memo_lock:
+                    if run_id in _judge_verdict_memo:
+                        return _judge_verdict_memo[run_id]
+                return None
+        verdict: EvalJudgeVerdict | None = None
+        try:
+            # ``EvalJudgeService.evaluate`` is contractually non-raising (the
+            # judge is advisory), but the finally block guarantees the future
+            # resolves and the in-flight claim clears even if that ever breaks.
+            verdict = EvalJudgeService().evaluate(evidence)
+        finally:
+            with _judge_memo_lock:
+                _judge_verdict_memo[run_id] = verdict
+                while len(_judge_verdict_memo) > _JUDGE_VERDICT_MEMO_MAX:
+                    _judge_verdict_memo.popitem(last=False)
+                _judge_inflight.pop(run_id, None)
+            future.set_result(verdict)
+        return verdict
+
+
+def _request_path_judge(query_run: QueryRun) -> _MemoisedRunJudge | None:
+    """The judge for the request/serving path, or ``None`` (the default).
+
+    ON only when BOTH ``QUORUM_EVAL_JUDGE_API_KEY`` and
+    ``QUORUM_EVAL_JUDGE_MODEL_ID`` are configured — gated HERE, before any
+    judge object exists, so the OFF path builds no evidence and performs
+    zero I/O (NFR-011/NFR-012), byte-identical to the pre-wiring behaviour.
+    Reuses ``_judge_enabled`` + ``EvalJudgeService``; no fork, no stub.
+
+    Even when configured, contentless or unsettled runs are never judged:
+
+    * ``CANCELLED`` — observable TRANSIENTLY mid-run (``update_status`` does
+      not validate transitions, so a cancel landing mid-debate can later be
+      overwritten back to a running state). Memoising a verdict formed in
+      that window would let the eventually-COMPLETED run serve a verdict the
+      judge produced without its synthesis. No judge, no memo, no stickiness.
+    * ``BLOCKED_BY_COST`` / no COMPLETED initial answer — nothing to judge; a
+      paid call over empty evidence is pure spend and could stamp "verified"
+      on a run that never produced content.
+    """
+    if not (_judge_enabled() and settings.quorum_eval_judge_model_id):
+        return None
+    if query_run.status in {QueryRunStatus.CANCELLED, QueryRunStatus.BLOCKED_BY_COST}:
+        return None
+    if not any(
+        answer.status is InitialAnswerStatus.COMPLETED for answer in query_run.initial_answers
+    ):
+        return None
+    return _MemoisedRunJudge(str(query_run.query_run_id))
+
+
 def _evaluate_terminal_run(
     query_run: QueryRun,
     *,
     agreement: AgreementSummary,
 ) -> RunEvaluationResult | None:
-    """Layer-A evaluation for a terminal run, or ``None`` if not terminal.
+    """Layer-A (+ optionally Layer-B) evaluation for a terminal run.
 
-    ``judge=None`` — the LLM judge is never invoked from the request or
-    pipeline path, so this performs ZERO I/O (NFR-011/NFR-012): no network, no
-    clock, no store. ``agreement`` is passed in rather than recomputed so the
-    evaluation is derived from the SAME value the endpoint serves and the S1
-    row persists.
+    With the judge unconfigured — the default, and the only configuration in
+    CI — this passes ``judge=None`` and performs ZERO I/O (NFR-011/NFR-012):
+    no network, no clock, no store, no evidence built. With a key AND a
+    pinned model configured, the REAL ``EvalJudgeService`` (memoised per run)
+    is passed, whose verdict may flip ``support_verified`` and unlock the
+    numeric TrustScore; the judge stays advisory and can never fail the run.
 
-    ``query_text`` is deliberately not passed: it is only ever used to build
-    judge evidence, and no judge runs here.
+    ``agreement`` is passed in rather than recomputed so the evaluation is
+    derived from the SAME value the endpoint serves and the S1 row persists.
+    ``query_text`` is threaded only alongside a judge — it is only ever used
+    to build judge evidence.
     """
     if not query_run.is_terminal:
         return None
+    judge = _request_path_judge(query_run)
+    if judge is None:
+        return evaluate_run(
+            initial_answers=query_run.initial_answers,
+            final_synthesis=query_run.final_synthesis,
+            agreement=agreement,
+        )
     return evaluate_run(
         initial_answers=query_run.initial_answers,
         final_synthesis=query_run.final_synthesis,
         agreement=agreement,
+        judge=judge,
+        query_text=query_run.query_text,
     )
 
 

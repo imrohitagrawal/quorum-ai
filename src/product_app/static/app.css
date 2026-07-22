@@ -2845,6 +2845,37 @@ html[data-theme="dark"] .landing-preview-caption {
   background: var(--info-soft);
 }
 
+/* P1 / FR-015: the VERIFIED treatment — a real Layer-B judge confirmed
+   citation support, so the numeric score renders. Informational blue, still
+   never green (green stays reserved for consensus); a verified LOW band keeps
+   the warning accent so a poor score never borrows a confident treatment. */
+.result-trust-score[data-state="verified"] {
+  --trust-score-accent: var(--info);
+  background: var(--info-soft);
+}
+
+.result-trust-score[data-state="verified"][data-band="low"] {
+  --trust-score-accent: var(--warning);
+  background: var(--warning-soft);
+}
+
+.result-trust-score-verified-value {
+  margin: 0;
+  color: var(--ink);
+}
+
+.result-trust-score-number {
+  font-size: 1.6rem;
+  font-weight: 700;
+  line-height: 1.2;
+}
+
+.result-trust-score-band-label {
+  font-size: 0.92rem;
+  font-weight: 600;
+  color: var(--text-secondary);
+}
+
 /* Sentence case, NOT text-transform:uppercase — innerText reflects the CSS
    transform, and the D-2 R4 contract requires the exact literal disclosure to
    appear in innerText. Uppercasing a full sentence is also poor typography. */
