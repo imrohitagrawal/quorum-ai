@@ -11,6 +11,7 @@ defaults that the auth layer refuses to bypass.
 
 from __future__ import annotations
 
+import math
 import os
 from enum import StrEnum
 from typing import ClassVar
@@ -141,15 +142,23 @@ class Settings(BaseSettings):
     @field_validator("quorum_run_deadline_seconds", mode="after")
     @classmethod
     def _run_deadline_within_bounds(cls, value: float) -> float:
-        if value <= 0:
+        # ``isfinite`` first: NaN compares False to BOTH range bounds, so a
+        # pure range check would ACCEPT it — and a NaN timeout makes
+        # ``Future.result`` raise immediately, cutting every run at t=0.
+        if not math.isfinite(value) or value <= 0:
             raise ValueError(
-                "QUORUM_RUN_DEADLINE_SECONDS must be > 0; 0/negative would "
-                "cut every run immediately, never mean 'unlimited'"
+                "QUORUM_RUN_DEADLINE_SECONDS must be a finite number > 0; "
+                "0/negative/NaN would cut every run immediately, never mean "
+                "'unlimited'"
             )
         if value > cls.RUN_DEADLINE_MAX_SECONDS:
             raise ValueError(
                 "QUORUM_RUN_DEADLINE_SECONDS must be <= "
-                f"{cls.RUN_DEADLINE_MAX_SECONDS:g}; the documented budget is 180"
+                f"{cls.RUN_DEADLINE_MAX_SECONDS:g}; the documented budget is 180. "
+                "Keep it comfortably ABOVE the worst-case healthy run implied by "
+                "the per-call timeouts (openrouter_timeout_seconds / "
+                "tavily_timeout_seconds and their retry chains) — raising those "
+                "without revisiting this deadline shrinks the do-no-harm margin."
             )
         return value
 

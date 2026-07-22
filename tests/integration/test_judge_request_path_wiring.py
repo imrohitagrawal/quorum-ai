@@ -409,6 +409,25 @@ def test_contentless_or_unsettled_terminal_runs_get_no_judge_call(
     assert result.trust.support_verified is True
 
 
+def test_a_timed_out_run_with_completed_answers_is_judged(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """DELIBERATE P3 interaction: a deadline-cut (TIMED_OUT) run with
+    completed answers IS judged, synthesis-less evidence and all —
+    ``support_verified`` describes the SERVED content (the completed
+    answers); the run's own status/notice discloses what is missing."""
+    from tests.unit.test_evaluation_layer_a import _answer as _la_answer
+
+    _enable_judge(monkeypatch)
+    calls = _judge_seam(monkeypatch)
+    run = _forced_run(uuid4(), status=qr.QueryRunStatus.TIMED_OUT, answers=[_la_answer(slot=1)])
+    assert run.final_synthesis is None
+    result = qr._evaluate_terminal_run(run, agreement=AgreementSummary(aligned=0, total=4))
+    assert result is not None
+    assert len(calls) == 1
+    assert result.trust.support_verified is True
+
+
 def test_concurrent_first_reads_make_exactly_one_judge_call(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

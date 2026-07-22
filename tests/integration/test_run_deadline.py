@@ -275,12 +275,74 @@ def test_a_run_degraded_for_another_reason_keeps_its_own_label(
 # ---------------------------------------------------------------------------
 
 
-def test_a_non_positive_deadline_is_rejected() -> None:
+def test_a_non_positive_or_non_finite_deadline_is_rejected() -> None:
     from pydantic import ValidationError
 
     from product_app.config import Settings
 
-    for bad in (0, -1, -0.5, 3_601, float("inf")):
+    # NaN compares False to BOTH bounds (nan <= 0 and nan > max are False), so
+    # it would sail through a pure range check — and a NaN timeout makes
+    # ``Future.result`` raise immediately, cutting EVERY run at t=0 (review
+    # finding, proven by execution). It must be rejected explicitly.
+    for bad in (0, -1, -0.5, 3_601, float("inf"), float("nan")):
         with pytest.raises(ValidationError):
             Settings(quorum_run_deadline_seconds=bad)
     assert Settings(quorum_run_deadline_seconds=3_600).quorum_run_deadline_seconds == 3_600
+
+
+def test_a_worker_raised_timeout_error_is_not_a_deadline_breach(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """On Python >=3.11 ``concurrent.futures.TimeoutError`` IS builtin
+    ``TimeoutError``, so a TimeoutError raised INSIDE a worker re-raises from
+    ``future.result()`` with the same type as a budget expiry. With ~180s of
+    budget left it must be treated as that slot's own failure — never
+    relabel the whole healthy run as a run-deadline breach."""
+    original = provider_execution_service.produce_initial_answer
+
+    def _slot_two_times_out(**kwargs: Any) -> Any:
+        if kwargs["model_slot"].slot_number == 2:
+            raise TimeoutError("socket timeout escaping a worker")
+        return original(**kwargs)
+
+    monkeypatch.setattr(provider_execution_service, "produce_initial_answer", _slot_two_times_out)
+
+    client = TestClient(app)
+    body = _run(client, uuid4())
+
+    assert body["status"] != "timed_out", (
+        "a worker-raised TimeoutError must not masquerade as a run-deadline breach"
+    )
+    answers = body["result"]["model_answers"]
+    assert not any(a.get("error_code") == "RUN_DEADLINE_EXCEEDED" for a in answers)
+
+
+def test_the_deadline_degrade_never_overwrites_a_cancelled_run() -> None:
+    """A cancel landing just before the degrade write must win: CANCELLED is
+    what the user was told, and a terminal→terminal overwrite would be a
+    permanently wrong label."""
+    from product_app.costs import cost_estimation_service
+    from product_app.model_slots import validate_model_slots_with_search
+    from product_app.query_runs import QueryRunStatus
+
+    model_slots = validate_model_slots_with_search(DEFAULT_MODEL_IDS)
+    estimate = cost_estimation_service.estimate(query_text=QUERY_TEXT, model_slots=model_slots)
+    run = query_run_repository.create(
+        account_id=uuid4(),
+        query_text=QUERY_TEXT,
+        model_slots=model_slots,
+        cost_estimate=estimate,
+    )
+    run.status = QueryRunStatus.CANCELLED
+
+    from product_app import query_runs as qr
+
+    applied = qr._degrade_run_for_deadline(
+        run.query_run_id,
+        deadline_seconds=180.0,
+        stage_name="synthesis",
+        failed_steps=[],
+        missing_steps=["synthesis"],
+    )
+    assert applied is False
+    assert query_run_repository.get(run.query_run_id).status is QueryRunStatus.CANCELLED

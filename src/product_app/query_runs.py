@@ -1221,6 +1221,39 @@ def _execute_query_run_with_semaphore_release(query_run_id: UUID, account_id: UU
         _run_semaphore.release()
 
 
+def _degrade_run_for_deadline(
+    query_run_id: UUID,
+    *,
+    deadline_seconds: float,
+    stage_name: str,
+    failed_steps: list[str],
+    missing_steps: list[str],
+) -> bool:
+    """Write the NFR-004 deadline degrade, unless a cancel already won.
+
+    ``update_status`` does not validate transitions, so without this guard a
+    cancel landing between the executor's last ``_should_stop`` check and the
+    degrade write would be silently overwritten CANCELLED → TIMED_OUT — a
+    terminal→terminal rewrite of a label the user was already shown. The
+    cancel wins; returns whether the degrade was applied.
+    """
+    if query_run_repository.get(query_run_id).status is QueryRunStatus.CANCELLED:
+        return False
+    query_run_repository.update_status(
+        query_run_id,
+        status_value=QueryRunStatus.TIMED_OUT,
+        stage_name=stage_name,
+        stage_state=StageState.FAILED,
+        detail=(
+            f"Run exceeded the {deadline_seconds:g}s wall-clock deadline "
+            "(NFR-004); serving the completed portion."
+        ),
+        failed_steps=failed_steps,
+        missing_steps=missing_steps,
+    )
+    return True
+
+
 def _execute_query_run(query_run_id: UUID, account_id: UUID) -> None:
     query_run = query_run_repository.get(query_run_id)
     # NFR-004 (P3): the run-level wall-clock budget. Measured with the same
@@ -1242,15 +1275,10 @@ def _execute_query_run(query_run_id: UUID, account_id: UUID) -> None:
     def _degrade_for_deadline(
         *, stage_name: str, failed_steps: list[str], missing_steps: list[str]
     ) -> None:
-        query_run_repository.update_status(
+        _degrade_run_for_deadline(
             query_run_id,
-            status_value=QueryRunStatus.TIMED_OUT,
+            deadline_seconds=_run_deadline_seconds,
             stage_name=stage_name,
-            stage_state=StageState.FAILED,
-            detail=(
-                f"Run exceeded the {_run_deadline_seconds:g}s wall-clock deadline "
-                "(NFR-004); serving the completed portion."
-            ),
             failed_steps=failed_steps,
             missing_steps=missing_steps,
         )
@@ -1316,6 +1344,14 @@ def _execute_query_run(query_run_id: UUID, account_id: UUID) -> None:
             # recorded.
             answer = future.result(timeout=max(_budget_remaining(), 0.0))
         except FuturesTimeoutError:
+            # On Python >= 3.11 ``concurrent.futures.TimeoutError`` IS builtin
+            # ``TimeoutError``, so this clause ALSO catches a TimeoutError
+            # raised INSIDE the worker (e.g. an escaped socket timeout) and
+            # re-raised by a DONE future. Only the budget actually expiring is
+            # a run-deadline breach; a worker-raised timeout with budget left
+            # is that slot's own failure and must not relabel the whole run.
+            if _budget_remaining() > 0:
+                continue
             deadline_breached = True
             answer = provider_execution_service.deadline_exceeded_answer(model_slot)
         except Exception:
@@ -1781,6 +1817,14 @@ def _request_path_judge(query_run: QueryRun) -> _MemoisedRunJudge | None:
     * ``BLOCKED_BY_COST`` / no COMPLETED initial answer — nothing to judge; a
       paid call over empty evidence is pure spend and could stamp "verified"
       on a run that never produced content.
+
+    DELIBERATE (P3 interaction): a ``PARTIAL`` or ``TIMED_OUT`` run WITH
+    completed answers IS judged — including a deadline-cut run whose
+    synthesis never ran (``build_judge_evidence`` then carries empty
+    synthesis sections). ``support_verified`` describes citation support of
+    the SERVED content, which for such a run is exactly its completed
+    answers; the run's own status/notice discloses what is missing. Pinned
+    by ``test_a_timed_out_run_with_completed_answers_is_judged``.
     """
     if not (_judge_enabled() and settings.quorum_eval_judge_model_id):
         return None
