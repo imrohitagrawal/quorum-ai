@@ -39,27 +39,66 @@ def test_suites_cover_every_eval_test_file() -> None:
 
 def test_parse_passed_only() -> None:
     out = "....\n4 passed, 1 warning in 0.42s\n"
-    assert parse_pytest_summary(out) == (4, 0, 0)
+    assert parse_pytest_summary(out) == (4, 0, 0, 0)
 
 
 def test_parse_failed_and_passed() -> None:
     out = "..F.\n1 failed, 3 passed in 1.00s\n"
-    assert parse_pytest_summary(out) == (3, 1, 0)
+    assert parse_pytest_summary(out) == (3, 1, 0, 0)
 
 
 def test_parse_with_skips() -> None:
     out = "2 failed, 5 passed, 3 skipped in 2.5s\n"
-    assert parse_pytest_summary(out) == (5, 2, 3)
+    assert parse_pytest_summary(out) == (5, 2, 3, 0)
 
 
 def test_parse_uses_the_last_summary_line() -> None:
     out = "1 passed in 0.1s\nsome noise\n7 passed, 2 skipped in 0.9s\n"
-    assert parse_pytest_summary(out) == (7, 0, 2)
+    assert parse_pytest_summary(out) == (7, 0, 2, 0)
 
 
 def test_parse_raises_on_garbage_never_silent_zero() -> None:
     with pytest.raises(ValueError):
         parse_pytest_summary("no summary here\n")
+
+
+def test_parse_counts_errors_review_finding() -> None:
+    """Review finding (OD-4, major): '1 passed, 1 error in 0.05s' parsed as
+    100% green — a fixture/setup ERROR must surface as red."""
+    assert parse_pytest_summary("1 passed, 1 error in 0.05s\n") == (1, 0, 0, 1)
+    assert parse_pytest_summary("2 passed, 3 errors in 0.05s\n") == (2, 0, 0, 3)
+
+
+def test_parse_never_silently_matches_zero_review_finding() -> None:
+    """Review finding (OD-4, minor): all-optional regex groups matched the
+    empty string, turning unfamiliar summary shapes into silent (0,0,0)."""
+    with pytest.raises(ValueError):
+        parse_pytest_summary("3 deselected, 2 passed in 0.10s\n")
+    # the bordered non-quiet form must parse, not zero out
+    assert parse_pytest_summary("===== 3 passed in 0.40s =====\n") == (3, 0, 0, 0)
+
+
+def test_run_suite_red_on_nonzero_exit_even_without_parsed_failures(
+    tmp_path: Path,
+) -> None:
+    """Review finding (OD-4, major): run_suite ignored proc.returncode, so a
+    suite that pytest itself calls red could render a green row."""
+    from evals_summary import run_suite
+
+    bad = tmp_path / "test_error_case.py"
+    bad.write_text(
+        "import pytest\n"
+        "@pytest.fixture\n"
+        "def boom():\n"
+        "    raise RuntimeError('setup boom')\n"
+        "def test_ok():\n"
+        "    assert True\n"
+        "def test_uses_bad(boom):\n"
+        "    assert True\n"
+    )
+    result = run_suite("error case", str(bad))
+    assert result.errors == 1
+    assert result.red, "a suite with an ERROR must be red"
 
 
 def test_pass_rate_arithmetic_from_the_run_not_invented() -> None:
