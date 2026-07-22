@@ -55,7 +55,7 @@ class RequestIdMiddleware:
         # only because h11 validates outbound headers — but the guard must
         # be airtight on its own).
         request_id = inbound if _SAFE_REQUEST_ID.fullmatch(inbound) else str(uuid.uuid4())
-        token = request_id_var.set(request_id)
+        reset_token = request_id_var.set(request_id)
 
         async def send_with_header(message: Any) -> None:
             if message["type"] == "http.response.start":
@@ -73,7 +73,7 @@ class RequestIdMiddleware:
         try:
             await self._app(scope, receive, send_with_header)
         finally:
-            request_id_var.reset(token)
+            request_id_var.reset(reset_token)
 
 
 def install_request_id_record_factory() -> None:
