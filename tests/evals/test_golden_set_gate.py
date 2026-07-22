@@ -267,6 +267,5 @@ def test_completed_queue_entries_reproduce_the_operator_labels_verbatim() -> Non
             )
     # The guard must actually bite: every human-label case is labeled now.
     assert covered == len(human_ids), (
-        f"expected a JSON label for each of the {len(human_ids)} human-label cases, "
-        f"found {covered}"
+        f"expected a JSON label for each of the {len(human_ids)} human-label cases, found {covered}"
     )
