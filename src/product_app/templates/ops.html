@@ -1,0 +1,64 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Quorum-AI — Ops</title>
+    <link rel="stylesheet" href="/static/ops.css">
+  </head>
+  <body>
+    <a class="skip-link" href="#main-content">Skip to main content</a>
+    <header class="ops-topbar">
+      <h1>Quorum-AI ops</h1>
+      <p class="ops-sub">
+        Live SLO dashboard — every current value below is computed in this page
+        from same-origin <code>/metrics</code>, <code>/status</code> and
+        <code>/ready</code> responses; nothing is hardcoded. Auto-refreshes
+        every 10&nbsp;s. The sparkline shows the most recent ~10 minutes of
+        samples collected <strong>since page open</strong> (this page keeps no
+        server-side history).
+      </p>
+      <p class="ops-meta">
+        <span id="last-refresh" aria-live="polite">Loading…</span>
+        <span id="fetch-error" class="ops-error" role="alert" hidden></span>
+      </p>
+    </header>
+    <main id="main-content" class="ops-grid">
+      <section class="tile" id="tile-rate" aria-labelledby="tile-rate-h">
+        <h2 id="tile-rate-h">Request rate</h2>
+        <p class="tile-value"><span data-current="rate">—</span> <span class="tile-unit">req/s</span></p>
+        <p class="tile-note">avg over the last refresh interval</p>
+        <svg class="spark" data-spark="rate" viewBox="0 0 120 28" preserveAspectRatio="none" role="img" aria-label="Request rate sparkline, most recent 10 minutes since page open"></svg>
+      </section>
+      <section class="tile" id="tile-p95" aria-labelledby="tile-p95-h">
+        <h2 id="tile-p95-h">HTTP p95 latency</h2>
+        <p class="tile-value"><span data-current="p95">—</span> <span class="tile-unit">s</span></p>
+        <p class="tile-slo" data-slo="p95">SLO: &lt; 1 s · <span data-verdict="p95"></span></p>
+        <p class="tile-note">bucket-derived: the upper bound of the p95 histogram bucket, process lifetime. Conservative — the true p95 may sit anywhere at or below this bound.</p>
+      </section>
+      <section class="tile" id="tile-errors" aria-labelledby="tile-errors-h">
+        <h2 id="tile-errors-h">5xx error rate</h2>
+        <p class="tile-value"><span data-current="err">—</span> <span class="tile-unit">%</span></p>
+        <p class="tile-slo" data-slo="err">SLO: &lt; 1% · <span data-verdict="err"></span></p>
+        <p class="tile-note">5xx / all requests, process lifetime</p>
+      </section>
+      <section class="tile" id="tile-ready" aria-labelledby="tile-ready-h">
+        <h2 id="tile-ready-h">Readiness</h2>
+        <p class="tile-value"><span data-current="ready">—</span></p>
+        <p class="tile-slo" data-slo="ready">SLO: live · <span data-verdict="ready"></span></p>
+        <p class="tile-note" data-current="ready-reasons"></p>
+      </section>
+      <section class="tile" id="tile-uptime" aria-labelledby="tile-uptime-h">
+        <h2 id="tile-uptime-h">Uptime</h2>
+        <p class="tile-value"><span data-current="uptime">—</span></p>
+        <p class="tile-note">process uptime from /status</p>
+      </section>
+      <section class="tile" id="tile-version" aria-labelledby="tile-version-h">
+        <h2 id="tile-version-h">Version</h2>
+        <p class="tile-value"><span data-current="version">—</span></p>
+        <p class="tile-note"><span data-current="environment"></span></p>
+      </section>
+    </main>
+    <script src="/static/ops.js" defer></script>
+  </body>
+</html>

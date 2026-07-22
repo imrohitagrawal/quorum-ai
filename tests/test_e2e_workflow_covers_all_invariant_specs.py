@@ -17,11 +17,18 @@ import pytest
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 INVARIANTS_DIR = REPO_ROOT / "e2e" / "tests" / "invariants"
+# OD-2 review finding: gate-family dirs added later (e.g. tests/ops/) sat
+# outside this guard, recreating the exact silently-never-runs failure mode
+# it exists to prevent. Every dir listed here is swept the same way.
+GATED_SPEC_DIRS = (
+    INVARIANTS_DIR,
+    REPO_ROOT / "e2e" / "tests" / "ops",
+)
 E2E_WORKFLOW = REPO_ROOT / ".github" / "workflows" / "e2e.yml"
 
 
 def _invariant_specs() -> list[Path]:
-    return sorted(INVARIANTS_DIR.glob("*.spec.ts"))
+    return sorted(p for d in GATED_SPEC_DIRS for p in d.glob("*.spec.ts"))
 
 
 def test_the_invariants_dir_and_workflow_exist() -> None:

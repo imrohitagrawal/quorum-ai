@@ -684,6 +684,19 @@ def browser_session(
     return response
 
 
+@app.get("/ui/ops", response_class=HTMLResponse, include_in_schema=False)
+def ops_dashboard() -> HTMLResponse:
+    """OD-2: self-contained ops dashboard.
+
+    A static page (no data islands, no session) whose JS fetches same-origin
+    ``/metrics``, ``/status`` and ``/ready`` and renders SLO tiles — every
+    current value computed client-side from those live responses.  Kept out
+    of the OpenAPI schema like ``/metrics`` so the byte-faithful
+    ``openapi.yaml`` drift guard and the Schemathesis gate are untouched.
+    """
+    return HTMLResponse((TEMPLATES_DIR / "ops.html").read_text())
+
+
 @app.get("/ui", response_class=HTMLResponse, tags=["browser-ui"])
 def browser_ui(request: Request) -> HTMLResponse:
     session_id = get_session_cookie_from_request(request)
