@@ -36,7 +36,12 @@ from product_app import query_runs as qr
 from product_app import run_history_store
 from product_app.config import settings
 from product_app.debate import AgreementSummary, debate_event_recorder
-from product_app.evaluation import EvalJudgeService, StubEvalJudge, evaluate_run
+from product_app.evaluation import (
+    EvalJudgeService,
+    EvalJudgeVerdict,
+    StubEvalJudge,
+    evaluate_run,
+)
 from product_app.main import app
 from product_app.providers import (
     LiveProviderResult,
@@ -457,6 +462,7 @@ def test_a_reader_waiting_on_a_stuck_inflight_call_serves_suppressed_once(
     suppressed shape ONCE — it never issues a second paid call and never
     fabricates a verdict."""
     from concurrent.futures import Future
+    from concurrent.futures import TimeoutError as FuturesTimeoutError
 
     monkeypatch.setattr(qr, "_JUDGE_INFLIGHT_WAIT_SECONDS", 0.05)
     _enable_judge(monkeypatch)
@@ -471,6 +477,25 @@ def test_a_reader_waiting_on_a_stuck_inflight_call_serves_suppressed_once(
 
     assert verdict is None
     assert calls == [], "the waiting reader must never issue its own judge call"
+
+    # And if the owner DID land its memo write between the wait expiring and
+    # the fallback re-check, the timed-out reader serves that verdict, not
+    # None. Deterministic: a future whose wait "expires" exactly as the memo
+    # write lands.
+    landed = EvalJudgeVerdict(**VALID_VERDICT)
+
+    class _TimesOutAsTheOwnerLands(Future):  # type: ignore[type-arg]
+        def result(self, timeout: float | None = None) -> Any:
+            qr._judge_verdict_memo["run-landed"] = landed
+            raise FuturesTimeoutError()
+
+    qr._judge_inflight["run-landed"] = _TimesOutAsTheOwnerLands()
+    try:
+        verdict = qr._MemoisedRunJudge("run-landed").evaluate(_evidence())
+    finally:
+        qr._judge_inflight.pop("run-landed", None)
+    assert verdict == landed
+    assert calls == []
 
 
 def test_memo_judge_mirrors_the_service_flag_at_call_time(

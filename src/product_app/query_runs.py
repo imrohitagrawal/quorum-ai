@@ -1665,12 +1665,20 @@ class _MemoisedRunJudge:
                 future = Future()
                 _judge_inflight[run_id] = future
         if not owner:
-            # Another thread owns the paid call; share its outcome. A timeout
-            # serves suppressed once — never a second call, never a fabricated
-            # verdict.
+            # Another thread owns the paid call; share its outcome. On timeout
+            # (only reachable if the provider seam outlives its own 8s HTTP
+            # timeout), re-check the memo once — the owner may have finished
+            # between the wait expiring and now — then serve suppressed for
+            # THIS read: never a second call, never a fabricated verdict.
+            # (One read can therefore diverge from the eventual memo; the
+            # docstring's same-verdict guarantee holds for every memo-served
+            # read, which is all of them once the owner resolves.)
             try:
                 return future.result(timeout=_JUDGE_INFLIGHT_WAIT_SECONDS)
             except FuturesTimeoutError:
+                with _judge_memo_lock:
+                    if run_id in _judge_verdict_memo:
+                        return _judge_verdict_memo[run_id]
                 return None
         verdict: EvalJudgeVerdict | None = None
         try:
