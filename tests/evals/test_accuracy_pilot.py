@@ -58,17 +58,20 @@ QUALITY_LEDGER = Path(__file__).resolve().parents[2] / "docs" / "metrics" / "qua
 
 #: The exact scope the operator labeled on 2026-07-22. Pins the pilot's n so a
 #: silently dropped or smuggled-in label cannot change the denominator unnoticed.
-EXPECTED_CASE_IDS = frozenset(
-    {
-        "grounded-consensus",
-        "fabricated-citation-launder",
-        "wholly-refused",
-        "partial-live-two-failed",
-        "human-as-of-date-fact",
-        "preserved-false-consensus",
-        "partial-grounding-medium",
-    }
-)
+#: …and pins each label's CORRECTNESS value (transcribed from the same verbatim
+#: operator handoff, 2026-07-22) so a silently flipped label cannot keep the
+#: suite green — an intentional operator re-label must edit this pin in the
+#: same reviewed diff, making the change visible. (Review finding CT-F1.)
+EXPECTED_CORRECTNESS = {
+    "grounded-consensus": "faithful",
+    "fabricated-citation-launder": "unfaithful",
+    "wholly-refused": "partial",
+    "partial-live-two-failed": "partial",
+    "human-as-of-date-fact": "partial",
+    "preserved-false-consensus": "faithful",
+    "partial-grounding-medium": "faithful",
+}
+EXPECTED_CASE_IDS = frozenset(EXPECTED_CORRECTNESS)
 
 
 # --------------------------------------------------------------------------
@@ -81,6 +84,11 @@ def test_the_committed_label_set_is_exactly_the_operator_authored_pilot() -> Non
     assert {label.case_id for label in labels} == EXPECTED_CASE_IDS
     assert len(labels) == 7
     for label in labels:
+        assert label.correctness == EXPECTED_CORRECTNESS[label.case_id], (
+            f"{label.case_id}: committed correctness {label.correctness!r} does not match "
+            "the operator's verbatim label — never flip a label; if the operator re-labels, "
+            "update this pin in the same reviewed diff"
+        )
         # Provenance fields must be present and non-empty on every label.
         assert label.reviewer.strip(), label.case_id
         assert label.source.strip(), label.case_id
@@ -120,7 +128,18 @@ def test_rejects_duplicate_case_ids(tmp_path: Path) -> None:
 def test_rejects_a_label_missing_a_provenance_field(tmp_path: Path) -> None:
     rows = _committed_rows()
     del rows[0]["reviewer"]
-    with pytest.raises((ValueError, KeyError), match="reviewer"):
+    # ValueError ONLY — an incidental KeyError from a later line must not mask
+    # removal of the loader's own provenance check (review finding EA-F1).
+    with pytest.raises(ValueError, match="reviewer"):
+        pilot.load_operator_labels(_write(tmp_path, rows))
+
+
+@pytest.mark.parametrize("bad_value", ["", "   ", None], ids=["empty", "blank", "null"])
+def test_rejects_a_blank_or_null_provenance_field(tmp_path: Path, bad_value: Any) -> None:
+    """JSON null must not slip through as the string 'None' (review finding IC-F2)."""
+    rows = _committed_rows()
+    rows[0]["reviewer"] = bad_value
+    with pytest.raises(ValueError, match="reviewer"):
         pilot.load_operator_labels(_write(tmp_path, rows))
 
 
@@ -156,6 +175,26 @@ def test_the_engine_verdict_is_recomputed_not_copied_from_the_fixture() -> None:
     # operator-labeled 'unfaithful' case can agree.
     assert result.agreed == 1
     assert result.n == 7
+
+
+def test_agreement_consults_the_operator_label_not_the_fixture_label(tmp_path: Path) -> None:
+    """The comparison target must be the OPERATOR's label (review finding CT-F2).
+
+    On the committed set the operator labels coincide with the golden fixtures'
+    own ``label`` fields, so a harness bug comparing engine-vs-fixture would
+    stay green everywhere else. Flipping ONE operator label in a throwaway copy
+    must drop agreement to 6/7 — only possible if the harness scores against
+    the operator file it was given.
+    """
+    rows = _committed_rows()
+    flipped = next(row for row in rows if row["case_id"] == "grounded-consensus")
+    flipped["correctness"] = "partial"  # test-only perturbation, never committed
+    result = pilot.compute_pilot(labels_path=_write(tmp_path, rows))
+    assert result.n == 7
+    assert result.agreed == 6
+    (disagreement,) = [row for row in result.rows if not row.agree]
+    assert disagreement.case_id == "grounded-consensus"
+    assert disagreement.operator_correctness == "partial"
 
 
 class _FixedVerdict:

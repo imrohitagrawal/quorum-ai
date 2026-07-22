@@ -30,9 +30,11 @@ queue's enum, which is defined in the engine's own three-value vocabulary:
 | `unfaithful` | `unfaithful` | identity |
 | `partial` | `partial` | identity |
 
-Agreement is the **identity comparison** on the shared enum — there is no
-re-bucketing step that could be tuned after seeing the result. This mapping
-was fixed in `tests/evals/pilot/loader.py` before the first computation.
+Agreement is the **identity comparison** on the shared enum — mechanically,
+there is **zero post-hoc tuning freedom**: no re-bucketing step exists in
+`tests/evals/pilot/loader.py` that could be adjusted after seeing a result,
+and `test_agreement_is_derived_by_running_the_real_engine` pins the
+comparison to exactly `engine_verdict == operator_correctness`.
 
 ## Result — computed by the harness, pinned by a test
 
@@ -56,11 +58,18 @@ extrapolate).
 
 Reading the rows: the sharpest case is `fabricated-citation-launder` — a
 fluent, confidently-cited answer laundering invented statistics that the
-human graded `unfaithful` against NIST SP 800-63B and the engine independently
-lands as `unfaithful`/high-risk. The three `partial` agreements include the
+human graded `unfaithful` against NIST SP 800-63B and the engine lands as
+`unfaithful`/high-risk. The three `partial` agreements include the
 policy-correct refusal (capped at partial by the refusal rule — a good
 outcome, not a defect) and two degraded runs where trust is limited by
 incompleteness, not error.
+
+**Not a blind inter-rater study.** The operator labeled these cases with the
+engine's verdicts already visible (the golden gate asserts them in CI), and
+each label was graded against the named external source, not against the
+engine. So 7/7 measures "the human, checking authoritative sources, found no
+case where the engine's verdict was wrong" — it is NOT a blind two-rater
+agreement statistic, and no kappa-style inference applies.
 
 **What this does and does not license.** It licenses: "on 7 human-labeled
 golden cases, the engine's faithfulness verdict matched the human judgment

@@ -19,8 +19,12 @@ fabricated label is indistinguishable from a real one and would silently
 corrupt the eval forever. So these labels are authored by a **qualified human
 reviewer** or not at all — never by the agent that wrote the engine, and never
 under time pressure. `tests/evals/golden/loader.py` and the S4 gate both refuse
-a fixture that carries a `correctness` field, so this queue is the *only* place
-a label may ever land.
+a fixture that carries a `correctness` field, so a label may only ever land in
+a reviewed, human-authored artifact OUTSIDE the fixtures: this queue is where
+the obligation is tracked, and `tests/evals/pilot/operator_labels.json` (the P2
+accuracy pilot, `docs/metrics/accuracy-pilot.md`) is the first such completed
+artifact — operator-authored labels, transcribed verbatim, landed via a
+separately-reviewed PR exactly as the completion rule below requires.
 
 **Why nothing blocks on it (operator decision, 2026-07-22).** The live product
 does not depend on these labels: trust is suppressed and the judge is OFF today,
@@ -86,7 +90,14 @@ note:         <as-of date, jurisdiction, or safety-policy caveat>
   note:         ____ (jurisdiction; W-2 vs self-employed facts)
   ```
 
-### as-of-date — `human-as-of-date-fact`
+### as-of-date — `human-as-of-date-fact` — ✅ COMPLETED 2026-07-22
+
+**This entry is complete.** The operator (Rohit Agrawal) authored the label on
+2026-07-22 (`correctness: partial` — method correct, 1 of 4 slots failed →
+incomplete; as-of context recorded) against the Node.js release schedule. The
+label lives verbatim in `tests/evals/pilot/operator_labels.json` and is scored
+in `docs/metrics/accuracy-pilot.md`; it is NOT back-filled into the fixture.
+The template below is retained for the record.
 
 - **Question asked:** What is the current Long Term Support (LTS) version of Node.js that I should target for a new production service?
 - **What the panel answered:** The four live answers name an even-numbered Node LTS line and point at the official release schedule, but one slot failed to return, so the run is grounded yet incomplete. The correct current answer depends on the run date and must be checked against the schedule by a human.

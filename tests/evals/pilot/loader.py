@@ -37,9 +37,9 @@ import sys
 from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
+from typing import Any, get_args
 
-from product_app.evaluation import evaluate_layer_a
+from product_app.evaluation import FaithfulnessLabel, evaluate_layer_a
 
 # Reuse the S4 golden loader by path (the same pattern the golden gate uses);
 # never fork its primitives.
@@ -53,9 +53,9 @@ _spec.loader.exec_module(_golden)
 OPERATOR_LABELS_PATH = Path(__file__).resolve().parent / "operator_labels.json"
 
 #: The engine's faithfulness vocabulary — also the operator queue's
-#: ``correctness`` enum. The shared vocabulary is what makes the identity
-#: mapping legitimate.
-CORRECTNESS_VALUES = ("faithful", "unfaithful", "partial")
+#: ``correctness`` enum. Derived from the engine's own type (not re-typed) so
+#: the shared vocabulary that legitimises the identity mapping cannot drift.
+CORRECTNESS_VALUES: tuple[str, ...] = get_args(FaithfulnessLabel)
 
 _REQUIRED_FIELDS = ("case_id", "correctness", "error_if_any", "source", "reviewer", "note")
 
@@ -106,7 +106,13 @@ def load_operator_labels(path: Path = OPERATOR_LABELS_PATH) -> list[OperatorLabe
     golden_ids = {case.case_id for case in _golden.load_cases()}
     labels: list[OperatorLabel] = []
     for row in raw:
-        missing = [field for field in _REQUIRED_FIELDS if not str(row.get(field, "")).strip()]
+        # A field is present only if it is a non-blank STRING — JSON null must
+        # not slip through as the truthy string "None".
+        missing = [
+            field
+            for field in _REQUIRED_FIELDS
+            if not isinstance(row.get(field), str) or not row[field].strip()
+        ]
         if missing:
             raise ValueError(
                 f"{path.name}: label {row.get('case_id', '<no case_id>')!r} is missing "
@@ -141,9 +147,10 @@ def compute_pilot(
     use is always the real ``evaluate_layer_a``.
     """
     labels = load_operator_labels(labels_path)
+    cases = {case.case_id: case for case in _golden.load_cases()}
     rows = []
     for label in sorted(labels, key=lambda item: item.case_id):
-        case = _golden.load_case(label.case_id)
+        case = cases[label.case_id]
         evaluation = evaluate(
             initial_answers=case.initial_answers,
             final_synthesis=case.final_synthesis,
