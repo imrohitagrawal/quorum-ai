@@ -9,8 +9,25 @@ Operate, learn, and improve
 
 ## Next best action
 
-Use driver skill `production-feedback-loop` to complete the missing/placeholder evidence
-listed below. Reviewer skills must review, not overwrite, the driver output.
+**Demo-readiness P1–P3 is COMPLETE and deploy-verified (2026-07-22).** P1 #72
+`b2848e5` (real Layer-B judge, OFF by default), P3 #73 `c663ad5` (NFR-004
+run-level deadline ENFORCED), P2 #74 `96eb281` (measured-accuracy pilot,
+n = 7, computed agreement 7/7 — see `docs/metrics/accuracy-pilot.md`;
+quality-ledger Part 2 stays em-dash). Evidence: `DEMO-READINESS-P1-P3-RESULT.md`.
+
+**The next action is the deferred, OPERATOR-GATED funding step:** fund the
+OpenRouter key and set `QUORUM_EVAL_JUDGE_API_KEY` + `QUORUM_EVAL_JUDGE_MODEL_ID`
+as Fly secrets, then perform ONE deliberate measured run to verify live
+four-model execution and the real judge in prod (also closes the #24
+measured-cost item). Do not perform without the operator. Until then, use
+driver skill `production-feedback-loop` for evidence-driven iteration.
+Reviewer skills must review, not overwrite, the driver output.
+
+### Validation status (2026-07-22)
+
+All local gates green at `96eb281`: `make validate`, format, lint, type-check,
+full pytest (1293 passed), diff-cover, Playwright list. CI + Tests + E2E +
+Deploy JOB success for all three squash SHAs; prod `/ready` state=live.
 
 ## Recommended driver skill
 
