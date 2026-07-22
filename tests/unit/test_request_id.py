@@ -50,6 +50,92 @@ def test_unsafe_inbound_id_is_replaced_not_echoed() -> None:
         assert UUID_RE.match(rid), rid
 
 
+@pytest.mark.anyio
+async def test_trailing_newline_id_is_never_echoed_raw_asgi() -> None:
+    """Adversarial review finding (OD-3, major): ``$`` matches before a
+    trailing newline, so ``b'abc\\n'`` passed the SAFE check and was echoed
+    verbatim into the response header.  Driven at the raw ASGI layer because
+    the HTTP stack itself cannot deliver an LF-bearing header value."""
+    from typing import Any
+
+    from product_app.request_id import RequestIdMiddleware
+
+    async def inner_app(scope: Any, receive: Any, send: Any) -> None:
+        await send({"type": "http.response.start", "status": 200, "headers": []})
+        await send({"type": "http.response.body", "body": b"ok"})
+
+    async def run_one(bad: bytes) -> list[dict[str, Any]]:
+        sent: list[dict[str, Any]] = []
+
+        async def send(message: dict[str, Any]) -> None:
+            sent.append(message)
+
+        async def receive() -> dict[str, Any]:  # pragma: no cover - not called
+            return {"type": "http.request"}
+
+        scope = {
+            "type": "http",
+            "method": "GET",
+            "path": "/x",
+            "headers": [(b"x-request-id", bad)],
+        }
+        await RequestIdMiddleware(inner_app)(scope, receive, send)
+        return sent
+
+    for bad in (b"abc\n", b"abc\r", b"abc\r\n", b"abc\x00evil"):
+        sent = await run_one(bad)
+        start = next(m for m in sent if m["type"] == "http.response.start")
+        echoed = [v for k, v in start["headers"] if k == b"x-request-id"]
+        assert echoed and echoed[0] != bad, f"echoed unsafe value {bad!r}"
+        assert UUID_RE.match(echoed[0].decode()), echoed
+
+
+def test_middleware_replaces_a_downstream_x_request_id_header() -> None:
+    """Adversarial review finding (OD-3, minor): the response must carry
+    exactly ONE X-Request-ID — ours — even if a handler sets its own."""
+    from fastapi.responses import JSONResponse
+
+    @app.get("/__od3_own_header__")
+    def _own_header() -> JSONResponse:  # pragma: no cover - via client
+        return JSONResponse({"ok": True}, headers={"X-Request-ID": "handler-set"})
+
+    try:
+        client = TestClient(app)
+        response = client.get("/__od3_own_header__", headers={"X-Request-ID": "od3-mine"})
+        values = response.headers.get_list("X-Request-ID")
+        assert values == ["od3-mine"]
+    finally:
+        app.router.routes[:] = [
+            r for r in app.router.routes if getattr(r, "path", None) != "/__od3_own_header__"
+        ]
+
+
+def test_explicit_request_id_extra_raises_inside_a_request() -> None:
+    """Pin the REAL stdlib semantics (review finding: the docstring claimed
+    the opposite): the factory stamps ``request_id`` before ``extra`` is
+    applied, so a call site passing ``extra={"request_id": ...}`` inside a
+    request raises ``KeyError``.  Call sites must never do that — this test
+    is the tripwire that documents it."""
+    test_logger = logging.getLogger("od3.test.extra")
+
+    @app.get("/__od3_extra__")
+    def _extra_route() -> dict[str, bool]:  # pragma: no cover - via client
+        try:
+            test_logger.info("boom", extra={"request_id": "explicit"})
+        except KeyError:
+            return {"raised": True}
+        return {"raised": False}
+
+    try:
+        client = TestClient(app)
+        response = client.get("/__od3_extra__", headers={"X-Request-ID": "ctx-id"})
+        assert response.json() == {"raised": True}
+    finally:
+        app.router.routes[:] = [
+            r for r in app.router.routes if getattr(r, "path", None) != "/__od3_extra__"
+        ]
+
+
 def test_two_requests_get_distinct_generated_ids() -> None:
     client = TestClient(app)
     a = client.get("/health").headers["X-Request-ID"]

@@ -50,12 +50,22 @@ class RequestIdMiddleware:
             if key.lower() == b"x-request-id":
                 inbound = value.decode("latin-1")
                 break
-        request_id = inbound if _SAFE_REQUEST_ID.match(inbound) else str(uuid.uuid4())
+        # fullmatch, not match: "$" tolerates a trailing "\n", so match()
+        # would echo b"abc\n" verbatim (adversarial-review finding, latent
+        # only because h11 validates outbound headers — but the guard must
+        # be airtight on its own).
+        request_id = inbound if _SAFE_REQUEST_ID.fullmatch(inbound) else str(uuid.uuid4())
         token = request_id_var.set(request_id)
 
         async def send_with_header(message: Any) -> None:
             if message["type"] == "http.response.start":
-                headers = list(message.get("headers") or ())
+                # Set-or-replace: the response carries exactly ONE
+                # X-Request-ID — ours — even if a handler set its own.
+                headers = [
+                    (key, value)
+                    for key, value in (message.get("headers") or ())
+                    if key.lower() != b"x-request-id"
+                ]
                 headers.append((b"x-request-id", request_id.encode("latin-1")))
                 message = {**message, "headers": headers}
             await send(message)
@@ -74,10 +84,21 @@ def install_request_id_record_factory() -> None:
     caplog, any library-installed handler) — a filter would only cover the
     one handler it is attached to. Outside request context the hook is a
     no-op: the record gains no ``request_id`` attribute at all, so
-    non-request logs keep their exact pre-OD-3 shape. An explicit
-    ``extra={"request_id": ...}`` from a call site wins over the contextvar
-    (``extra`` is applied after the factory runs and would raise on a
-    duplicate key otherwise — the ``hasattr`` guard prevents that).
+    non-request logs keep their exact pre-OD-3 shape.
+
+    CALL-SITE RULE (review-corrected): a call site must NEVER pass
+    ``extra={"request_id": ...}`` — the factory runs BEFORE
+    ``Logger.makeRecord`` applies ``extra``, so inside a request the key
+    already exists on the record and stdlib logging raises
+    ``KeyError("Attempt to overwrite 'request_id' in LogRecord")``. A test
+    pins this semantics as a tripwire. The ``hasattr`` guard below protects
+    against stacked factory chains only, not ``extra`` collisions.
+
+    THREAD GAP (documented, deliberate): production query runs execute in a
+    ``threading.Thread``, and a new thread starts with a fresh contextvars
+    context — so run-pipeline log records carry NO ``request_id`` (they are
+    correlated via the structured ``query_run_id`` extras instead). Safe by
+    construction: no id can bleed across requests through threads.
 
     Idempotent: re-installing over an already-wrapped factory is a no-op.
     """
