@@ -1,0 +1,67 @@
+name: Availability check (prod /ready)
+
+# OD-5: scheduled prod-readiness alert, $0, no new infra.
+#
+# WHAT IT CHECKS (and how it differs from deploy-drift-watchdog.yml):
+#   * deploy-drift-watchdog asks "does main HEAD have a successful Deploy
+#     job?" — a PIPELINE signal. It never inspects runtime readiness.
+#   * THIS workflow asks "is prod actually serving live right now?" — a
+#     RUNTIME signal: GET /ready on both prod hosts must return HTTP 200
+#     with live_readiness.state == "live". A funded-key outage, a Fly
+#     incident, or a DNS break all surface here even when the deploy
+#     pipeline is perfectly green (the OpenRouter-403 incident shape).
+#
+# THE ALERT: a failing scheduled job triggers GitHub's native workflow-
+# failure email to the repo owner. That IS the alert channel — no paid
+# service, no issue spam, no webhook infra. docs/80-observability.md
+# documents this as alert rule 1 (readiness-not-live, MECHANISED); rule 2
+# (error-rate over SLO) remains documented-not-yet-mechanised there.
+#
+# TRIGGERS — schedule + workflow_dispatch ONLY, and this is load-bearing:
+# a slow job on the push path once silently stopped every deploy
+# (test_deploy_gate_no_slow_push_jobs.py pins the lesson;
+# test_availability_check_workflow.py pins THIS file's trigger surface).
+# It must also stay out of scripts/deploy_gate.py's required set.
+
+on:
+  schedule:
+    - cron: "*/15 * * * *" # every 15 minutes
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: availability-check
+  cancel-in-progress: false
+
+jobs:
+  check-ready:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Prod /ready must be HTTP 200 with state=live on both hosts
+        run: |
+          set -uo pipefail
+          FAILED=0
+          for URL in "https://quorum-ai.fly.dev/ready" "https://quorum.stackclimb.com/ready"; do
+            echo "== $URL"
+            BODY=$(curl -sS -m 15 -w '\n%{http_code}' "$URL" 2>&1) || {
+              echo "FAIL: curl error for $URL:"; echo "$BODY"; FAILED=1; continue;
+            }
+            CODE=$(printf '%s' "$BODY" | tail -n1)
+            JSON=$(printf '%s' "$BODY" | sed '$d')
+            echo "http=$CODE body=$JSON"
+            if [ "$CODE" != "200" ]; then
+              echo "FAIL: $URL returned HTTP $CODE (expected 200)"; FAILED=1; continue;
+            fi
+            STATE=$(printf '%s' "$JSON" | jq -r '.live_readiness.state // "MISSING"')
+            if [ "$STATE" != "live" ]; then
+              REASONS=$(printf '%s' "$JSON" | jq -c '.live_readiness.reasons // []')
+              echo "FAIL: $URL state=$STATE (expected \"live\"), reasons=$REASONS"; FAILED=1;
+            fi
+          done
+          if [ "$FAILED" -ne 0 ]; then
+            echo "Availability check FAILED — the workflow-failure email is the alert."
+            exit 1
+          fi
+          echo "OK: both prod hosts ready and live."
