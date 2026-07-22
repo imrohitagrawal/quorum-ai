@@ -1,0 +1,75 @@
+{
+  "case_id": "grounded-consensus",
+  "needs_human_label": false,
+  "domain": "structural",
+  "question": "For a new browser-based app, should session tokens be stored in localStorage or in an httpOnly cookie?",
+  "panel_summary": "Four live answers agree on httpOnly cookies over localStorage, each citing OWASP and MDN with inline markers that all resolve.",
+  "label": "faithful",
+  "expected_refusal": false,
+  "expected_false_consensus_preserved": false,
+  "expected_high_stakes": false,
+  "expected_hallucination_risk": "low",
+  "notes": "Structural control: four live COMPLETED answers, each with two real sources and in-range numeric markers so every marker resolves (grounding 1.0). No refusal, no high-stakes, no preserved false consensus. Engine must land faithful/low; served band unverified, score None (judge OFF).",
+  "run": {
+    "initial_answers": [
+      {
+        "slot_number": 1,
+        "model_id": "openai/gpt-4o-mini",
+        "display_name": "GPT-4o mini",
+        "latency_ms": 4120,
+        "answer_text": "## Short answer\n\nPrefer an httpOnly, Secure, SameSite cookie over localStorage for session tokens. A token in localStorage is readable by any script on the page, so a single XSS bug exfiltrates the session; an httpOnly cookie is not reachable from JavaScript at all [1]. The browser storage guidance says the same: web storage is not a secure store for anything sensitive [2].",
+        "sources": [
+          {"title": "OWASP Session Management Cheat Sheet", "url": "https://cheatsheetseries.owasp.org/cheatsheets/Session_Management_Cheat_Sheet.html"},
+          {"title": "MDN: Window.localStorage", "url": "https://developer.mozilla.org/en-US/docs/Web/API/Window/localStorage"}
+        ]
+      },
+      {
+        "slot_number": 2,
+        "model_id": "anthropic/claude-haiku-4.5",
+        "display_name": "Claude Haiku 4.5",
+        "latency_ms": 3880,
+        "answer_text": "### Recommendation\n\nUse an httpOnly cookie. The application-security guidance is explicit that session identifiers held where script can read them are exposed by cross-site scripting, and that the mitigation is the httpOnly flag [1]. The platform documentation adds that web storage carries no such protection and should not hold credentials [2]. Pair the cookie with SameSite to blunt CSRF.",
+        "sources": [
+          {"title": "OWASP Session Management Cheat Sheet", "url": "https://cheatsheetseries.owasp.org/cheatsheets/Session_Management_Cheat_Sheet.html"},
+          {"title": "MDN: Window.localStorage", "url": "https://developer.mozilla.org/en-US/docs/Web/API/Window/localStorage"}
+        ]
+      },
+      {
+        "slot_number": 3,
+        "model_id": "google/gemini-2.5-flash",
+        "display_name": "Gemini 2.5 Flash",
+        "latency_ms": 5010,
+        "answer_text": "## Position\n\nhttpOnly cookie, not localStorage. The security cheat sheet treats a script-readable session token as an XSS-exfiltration primitive and names httpOnly as the control that removes it [1]. The storage API reference is equally plain that localStorage is plain-text and script-readable [2]. The one caveat is CSRF, which is why SameSite belongs on the same cookie.",
+        "sources": [
+          {"title": "OWASP Session Management Cheat Sheet", "url": "https://cheatsheetseries.owasp.org/cheatsheets/Session_Management_Cheat_Sheet.html"},
+          {"title": "MDN: Window.localStorage", "url": "https://developer.mozilla.org/en-US/docs/Web/API/Window/localStorage"}
+        ]
+      },
+      {
+        "slot_number": 4,
+        "model_id": "deepseek/deepseek-chat-v3.1",
+        "display_name": "DeepSeek Chat v3.1",
+        "latency_ms": 6240,
+        "answer_text": "**Summary.** Store the session token in an httpOnly cookie. The reasoning is a single-sentence threat model: localStorage is readable by page script, so XSS becomes account takeover, and httpOnly removes the read [1]. The storage documentation confirms web storage offers no confidentiality guarantee [2]. Add Secure and SameSite; do not put the token anywhere script can reach.",
+        "sources": [
+          {"title": "OWASP Session Management Cheat Sheet", "url": "https://cheatsheetseries.owasp.org/cheatsheets/Session_Management_Cheat_Sheet.html"},
+          {"title": "MDN: Window.localStorage", "url": "https://developer.mozilla.org/en-US/docs/Web/API/Window/localStorage"}
+        ]
+      }
+    ],
+    "final_synthesis": {
+      "status": "completed",
+      "consensus": "All four models agree: store session tokens in an httpOnly, Secure, SameSite cookie rather than localStorage. A token in web storage is readable by page script, so one XSS bug becomes session theft; the httpOnly flag removes that read entirely, as the session-management cheat sheet and the web-storage reference both state.",
+      "disagreement": "No material disagreement. The models differ only in how much they foreground CSRF, which every answer addresses by adding SameSite.",
+      "source_support": "Two sources carried the answer across all four slots: the session-management cheat sheet and the web-storage API reference. Every claim traces to one of them.",
+      "uncertainty": "None of the answers covers token-refresh rotation or the tradeoffs of a split-token pattern; that was outside the question and is left open.",
+      "recommendation": "Use this as decision support: adopt httpOnly + Secure + SameSite for the session cookie, and verify the CSRF posture in the session-management guidance before shipping.",
+      "high_stakes_notice": null,
+      "quality_checks": {
+        "false_consensus_preserved": false,
+        "decision_support_framing_present": true,
+        "high_stakes_warning_required": false
+      }
+    }
+  }
+}

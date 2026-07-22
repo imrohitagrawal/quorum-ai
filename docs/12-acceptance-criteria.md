@@ -338,3 +338,17 @@ Given every evaluation shape in the golden fixture, when the result view is rend
 
 - Requirement: FR-016, NFR-009
 - Test: TEST-FR-016 (`e2e/tests/invariants/trust-score-invariants.spec.ts` GREEN-RULE / token-source computed style / overlap / clipping, parameterised over 3 viewports × 2 themes; `e2e/tests/accessibility/axe-all-views.spec.ts` scoped scan failing on violations AND on color-contrast incompletes; `e2e/tests/invariants/trust-score-visual.spec.ts` element-scoped `maxDiffPixels` baselines)
+
+## AC-047 The golden set pins the engine's structural verdicts hermetically
+
+Given the hermetic golden set (`tests/evals/golden/cases/`) of hand-authored real-shaped four-model runs, when the deterministic Layer-A engine of FR-015 is run over every case with the judge OFF, then each case's engine-derived STRUCTURAL verdict — faithfulness label, hallucination-risk band, refusal detection, false-consensus preservation, high-stakes-warning presence — equals that case's declared, MEASURED expectation and the gate names any case that drifts; every case is served band `unverified` with score `None`; the set exercises all three faithfulness labels, all three risk bands, and the refusal, false-consensus and high-stakes signals; and the whole gate performs zero I/O and makes zero paid calls. The gate contains no `skip` and no `xfail`, so `make gate-min-executed` passes.
+
+- Requirement: FR-017, NFR-011
+- Test: TEST-FR-017 (`tests/evals/test_golden_set_gate.py` structural-verdict parametrised gate + signal-space coverage + judge-OFF suppression; `tests/evals/golden/loader.py` metric derivation reused from the S2 corpus primitives)
+
+## AC-048 Subject-matter labels are deferred, never fabricated
+
+Given the golden cases flagged `needs_human_label` (one per subject-matter domain: clinical, tax/financial, as-of-date, self-harm/safety), when the gate runs, then it asserts ONLY those cases' structural signals and never a subject-matter correctness label; the loader and the gate both reject any fixture that carries a `correctness` field; each such case is surfaced in the operator queue (`docs/metrics/operator-label-queue.md`) by case id with its question verbatim, a panel summary, and a blank fill-in template; a structural case never appears in that queue; and the queue records that the debt is optional, has no deadline, requires a safety case first, and does not affect the live product (trust suppressed, judge OFF).
+
+- Requirement: FR-017, NFR-012
+- Test: TEST-FR-017 (`tests/evals/test_golden_set_gate.py::test_human_label_cases_defer_subject_matter_correctness_and_carry_no_label` and `::test_the_operator_queue_names_every_human_label_case`; `tests/evals/golden/loader.py` correctness-field rejection)

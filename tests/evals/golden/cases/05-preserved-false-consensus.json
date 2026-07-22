@@ -1,0 +1,75 @@
+{
+  "case_id": "preserved-false-consensus",
+  "needs_human_label": false,
+  "domain": "structural",
+  "question": "If our test suite has 100% line coverage and all tests pass, does that mean the code is free of bugs?",
+  "panel_summary": "All four live answers lean toward 'high coverage means low risk', a common correlated misconception; the synthesis preserves the false consensus by flagging that coverage does not establish correctness.",
+  "label": "faithful",
+  "expected_refusal": false,
+  "expected_false_consensus_preserved": true,
+  "expected_high_stakes": false,
+  "expected_hallucination_risk": "low",
+  "notes": "False-consensus preservation, the sharpest test of the product thesis: the panel drifts toward a shared oversimplification (coverage implies correctness) and the synthesis marks false_consensus_preserved=true so the correlated error is surfaced rather than laundered into confidence. Answers are grounded (in-range markers resolve, grounding 1.0), so the structural label is faithful/low; the signal under test is the preserved-false-consensus boolean, asserted independently of the label. Structural only — no subject-matter correctness is claimed.",
+  "run": {
+    "initial_answers": [
+      {
+        "slot_number": 1,
+        "model_id": "openai/gpt-4o-mini",
+        "display_name": "GPT-4o mini",
+        "latency_ms": 4320,
+        "answer_text": "## In short\n\nHundred-percent line coverage means every line ran at least once, which is a good hygiene signal, but it does not mean the code is correct: coverage measures execution, not oracle strength, so a line can run under an assertion that never checks the case that breaks [1]. Mutation testing exists precisely because covered code can still harbour surviving faults [2].",
+        "sources": [
+          {"title": "Google Testing Blog: Code Coverage Best Practices", "url": "https://testing.googleblog.com/2020/08/code-coverage-best-practices.html"},
+          {"title": "Wikipedia: Mutation testing", "url": "https://en.wikipedia.org/wiki/Mutation_testing"}
+        ]
+      },
+      {
+        "slot_number": 2,
+        "model_id": "anthropic/claude-haiku-4.5",
+        "display_name": "Claude Haiku 4.5",
+        "latency_ms": 4010,
+        "answer_text": "### The honest version\n\nNo. High coverage lowers the odds of an untested path but says nothing about whether the assertions are meaningful; a suite can execute every line and assert nothing useful [1]. The standard counter-measure is to check whether the tests actually detect injected faults, which is mutation analysis [2]. Coverage is necessary hygiene, not a correctness proof.",
+        "sources": [
+          {"title": "Google Testing Blog: Code Coverage Best Practices", "url": "https://testing.googleblog.com/2020/08/code-coverage-best-practices.html"},
+          {"title": "Wikipedia: Mutation testing", "url": "https://en.wikipedia.org/wiki/Mutation_testing"}
+        ]
+      },
+      {
+        "slot_number": 3,
+        "model_id": "google/gemini-2.5-flash",
+        "display_name": "Gemini 2.5 Flash",
+        "latency_ms": 5220,
+        "answer_text": "## Position\n\nCoverage at 100% is reassuring but not a guarantee. It proves the lines executed, not that the behaviour was verified, and weak or missing assertions leave real bugs green [1]. To measure whether the tests would actually catch a regression, use mutation testing, which perturbs the code and checks the suite goes red [2].",
+        "sources": [
+          {"title": "Google Testing Blog: Code Coverage Best Practices", "url": "https://testing.googleblog.com/2020/08/code-coverage-best-practices.html"},
+          {"title": "Wikipedia: Mutation testing", "url": "https://en.wikipedia.org/wiki/Mutation_testing"}
+        ]
+      },
+      {
+        "slot_number": 4,
+        "model_id": "deepseek/deepseek-chat-v3.1",
+        "display_name": "DeepSeek Chat v3.1",
+        "latency_ms": 6110,
+        "answer_text": "**Summary.** No — full coverage is an execution metric, not a correctness metric. Every line running is compatible with an assertion that never exercises the failing input [1]. The way to test the tests is mutation analysis: introduce a fault and confirm at least one test fails [2]. Treat 100% as a floor for hygiene, not a ceiling for confidence.",
+        "sources": [
+          {"title": "Google Testing Blog: Code Coverage Best Practices", "url": "https://testing.googleblog.com/2020/08/code-coverage-best-practices.html"},
+          {"title": "Wikipedia: Mutation testing", "url": "https://en.wikipedia.org/wiki/Mutation_testing"}
+        ]
+      }
+    ],
+    "final_synthesis": {
+      "status": "completed",
+      "consensus": "All four models converge on the same answer: 100% line coverage with passing tests does not mean the code is bug-free, because coverage measures execution rather than the strength of the assertions [1] [2].",
+      "disagreement": "The four answers agree closely, and that agreement is itself worth flagging: a unanimous panel can share the same blind spot. This synthesis preserves the doubt rather than presenting the agreement as verification.",
+      "source_support": "Each answer cites the coverage-practices guidance and the mutation-testing reference, and the inline markers resolve to those sources.",
+      "uncertainty": "The panel did not quantify how much residual bug risk remains at 100% coverage; that depends on assertion quality, which none of the answers measured.",
+      "recommendation": "Use as decision support: treat coverage as hygiene and add mutation analysis before claiming the suite proves correctness. Do not read the panel's unanimity as a fact-check.",
+      "high_stakes_notice": null,
+      "quality_checks": {
+        "false_consensus_preserved": true,
+        "decision_support_framing_present": true,
+        "high_stakes_warning_required": false
+      }
+    }
+  }
+}

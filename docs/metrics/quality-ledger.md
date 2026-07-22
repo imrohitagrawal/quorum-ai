@@ -26,7 +26,7 @@ These are measurable **today** from git history and tool output.
 | **S1** | FR-014 run-history persistence (`run_history_store.py`, `query_runs.py`) | **15** (see derivation) | **88.7%** (changed-function scope; measured range 87.2-88.7%) | **10** escaped the feat commit `d7469ce`; **1** further escaped the fix commit `8c09a26` | **2 of 4** branch commits (50%) |
 | **S2** | Eval engine (FR-015, NFR-011/012) + OC gate | **9** (32 raised by a 5-lens fan, 23 refuted by independent verifiers; +10 more across 2 further rounds) | — (not re-measured for S2 scope) | **0 escaped a merged commit** (the branch is unpushed; all 9 were caught pre-merge) | **1 of 7** branch commits (14%) |
 | S3 | Trust UI (FR-016) | — | — | — | — |
-| S4 | Eval harness + golden set (FR-017) | — | — | — | — |
+| S4 | Eval harness + golden set (FR-017) | — (pending the S4 review fan's landed findings) | — (not re-measured for S4 scope) | **0 escaped a merged commit** (caught pre-merge on the S4 branch) | — (pending the S4 branch commit count at merge) |
 
 ### Column definitions
 

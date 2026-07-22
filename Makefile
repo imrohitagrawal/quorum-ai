@@ -16,7 +16,8 @@ PERF_TEST_PATHS ?= tests/perf tests/performance
 CONTRACT_TEST_PATHS ?= tests/contract
 # Collection floors, MEASURED on the R2 Phase-0 tree that adds tests/perf (no
 # earlier commit contains that directory, so there is no revision to cite):
-# perf collects 11 (tests/perf 10 + tests/performance 1), contract collects 23.
+# perf collects 12 (tests/perf 11 + tests/performance 1), contract collects 23.
+# (S4/FR-017 added tests/perf/test_eval_batch_baseline.py, +1.)
 # Perf is floored at its exact count (hand-authored specs) — tests/unit/
 # test_perf_gate_collection_floor.py re-measures it and fails on any drift, so
 # the floor cannot quietly sink below the suite. Contract is floored below its
@@ -31,7 +32,7 @@ CONTRACT_TEST_PATHS ?= tests/contract
 # shrinking API surface — it is deliberately NOT pinned to the exact 32, per
 # the collection-floor test's documented rationale (schemathesis moves with the
 # schema); tests/unit/test_contract_gate_collection_floor.py re-measures both.
-PERF_MIN_TESTS ?= 11
+PERF_MIN_TESTS ?= 12
 CONTRACT_MIN_TESTS ?= 22
 # An aggregate floor cannot protect a *particular* spec. PERF_MIN_TESTS is an
 # equality assert against the live collection, so deleting the hermeticity probe

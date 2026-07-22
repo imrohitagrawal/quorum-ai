@@ -1,0 +1,76 @@
+{
+  "case_id": "human-as-of-date-fact",
+  "needs_human_label": true,
+  "domain": "as-of-date",
+  "question": "What is the current Long Term Support (LTS) version of Node.js that I should target for a new production service?",
+  "panel_summary": "The four live answers name an even-numbered Node LTS line and point at the official release schedule, but one slot failed to return, so the run is grounded yet incomplete. The correct current answer depends on the run date and must be checked against the schedule by a human.",
+  "label": "partial",
+  "expected_refusal": false,
+  "expected_false_consensus_preserved": false,
+  "expected_high_stakes": false,
+  "expected_hallucination_risk": "low",
+  "notes": "D5 as-of-date case — SUBJECT-MATTER CORRECTNESS IS DEFERRED because the right answer changes over time as Node LTS lines enter and leave maintenance. Structural signals are asserted (grounded via resolving markers, not a refusal), and one slot failed so completeness is below 1 and the engine caps the label at partial while risk stays low. Whether the named version is the current LTS on the run date is a human check recorded in the operator queue, never asserted here.",
+  "run": {
+    "initial_answers": [
+      {
+        "slot_number": 1,
+        "model_id": "openai/gpt-4o-mini",
+        "display_name": "GPT-4o mini",
+        "latency_ms": 4210,
+        "answer_text": "## Guidance\n\nFor a new production service, target the most recent EVEN-numbered Node.js release line that has entered Active LTS, and avoid odd-numbered lines, which never become LTS [1]. The exact version to pin moves over time, so read it off the official release schedule rather than memorising a number; the schedule shows which line is in Active LTS versus Maintenance today [2]. Pin to the LTS line and take patch updates.",
+        "sources": [
+          {"title": "Node.js Releases", "url": "https://nodejs.org/en/about/previous-releases"},
+          {"title": "nodejs/Release schedule (README)", "url": "https://github.com/nodejs/release"}
+        ]
+      },
+      {
+        "slot_number": 2,
+        "model_id": "anthropic/claude-haiku-4.5",
+        "display_name": "Claude Haiku 4.5",
+        "latency_ms": 4460,
+        "answer_text": "### Recommendation\n\nUse the current Active LTS line, which is always an even major version [1]. Because LTS lines rotate on a fixed cadence, the specific major to choose depends on when you are deploying; the release table is the authoritative source for which even line is Active LTS right now and how long it is supported [2]. Do not target an odd-numbered Current release for production.",
+        "sources": [
+          {"title": "Node.js Releases", "url": "https://nodejs.org/en/about/previous-releases"},
+          {"title": "nodejs/Release schedule (README)", "url": "https://github.com/nodejs/release"}
+        ]
+      },
+      {
+        "slot_number": 3,
+        "model_id": "google/gemini-2.5-flash",
+        "display_name": "Gemini 2.5 Flash",
+        "latency_ms": 4990,
+        "answer_text": "## Position\n\nTarget the newest even-numbered line that is in Active LTS, and confirm the number against the schedule rather than trusting a fixed value, since the Active LTS line changes roughly every year [1]. The release documentation lists the current LTS line, its codename, and its end-of-life date so you can size your upgrade window [2]. Track the LTS line and apply security patches promptly.",
+        "sources": [
+          {"title": "Node.js Releases", "url": "https://nodejs.org/en/about/previous-releases"},
+          {"title": "nodejs/Release schedule (README)", "url": "https://github.com/nodejs/release"}
+        ]
+      },
+      {
+        "slot_number": 4,
+        "model_id": "deepseek/deepseek-chat-v3.1",
+        "display_name": "DeepSeek Chat v3.1",
+        "latency_ms": 6,
+        "provider_path": "openrouter_search",
+        "status": "failed",
+        "error_code": "PROVIDER_TIMEOUT",
+        "provider_notice": "This model did not return an answer for this run.",
+        "answer_text": "",
+        "sources": []
+      }
+    ],
+    "final_synthesis": {
+      "status": "completed",
+      "consensus": "The three models that answered agree: target the most recent even-numbered Node.js line that is in Active LTS, read the exact version off the official release schedule because it changes over time, and avoid odd-numbered Current lines for production, per the Node.js releases page and the release-schedule repository.",
+      "disagreement": "No disagreement among the answers that returned. One of the four slots failed, so this is a three-model view.",
+      "source_support": "The answers cite the Node.js releases page and the release-schedule repository, and their inline markers resolve to those sources.",
+      "uncertainty": "The panel deliberately does not commit to a specific major version, because the current Active LTS line depends on the date the run was made and must be read from the schedule.",
+      "recommendation": "Use as decision support: pin to whichever even-numbered line the schedule shows as Active LTS on your deployment date, and verify its end-of-life window in the release-schedule repository.",
+      "high_stakes_notice": null,
+      "quality_checks": {
+        "false_consensus_preserved": false,
+        "decision_support_framing_present": true,
+        "high_stakes_warning_required": false
+      }
+    }
+  }
+}
