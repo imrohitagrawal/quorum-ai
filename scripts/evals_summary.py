@@ -125,7 +125,7 @@ def run_suite(name: str, target: str) -> SuiteResult:
         raise ValueError(
             f"pytest exited {proc.returncode} for {target} but the summary "
             f"showed no failures/errors — refusing to render a green row.\n"
-            f"{proc.stdout[-2000:]}"
+            f"{proc.stdout[-2000:]}\n{proc.stderr[-1000:]}"
         )
     return SuiteResult(name=name, passed=passed, failed=failed, skipped=skipped, errors=errors)
 
