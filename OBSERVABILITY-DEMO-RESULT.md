@@ -21,7 +21,7 @@ round-2 pass on the fix diff. Bite proofs used file-copy restore, never
 | OD-3 request-ID correlation | #79 | `c728f45` | `29961670893` success | `/ready` echoes inbound `X-Request-ID` |
 | OD-4 `make evals` | #80 | `3fec293` | `29963515232` success | no served delta; `/ready` live |
 | OD-5 availability check + alert | #81 | `7fbc1f9` | `29964846338` success | dispatch proof run `29964680225` (both hosts live) |
-| OD-6 incident runbook + doc review | #82 | `7002f8a` | `29964...` success (see below) | docs-only; `/ready` live |
+| OD-6 incident runbook + doc review | #82 | `7002f8a` | `29967261947` success | docs-only; `/ready` live |
 | OD-7 evidence page + demo script | #83 | `<SHA>` | `<run>` | docs-only; `/ready` live |
 
 > OD-6/OD-7 deploy-run ids: docs-only stages carry no served-asset delta, so
