@@ -1,9 +1,12 @@
 # Observability & demo-evidence backbone — RESULT
 
-All seven stages (OD-1 → OD-7) shipped, each: branch → PR → green blocking
-checks → squash-merge → deploy-verified (Deploy JOB `success` + prod
-`/ready` state=live, plus a prod-surface curl for served deltas). Every
-stage left `main` coherent and demo-able. Prod: <https://quorum.stackclimb.com>.
+Stages OD-1 → OD-6 are merged and deploy-verified, each: branch → PR →
+green blocking checks → squash-merge → Deploy JOB `success` + prod `/ready`
+state=live (plus a prod-surface curl for served deltas). OD-7 is this
+evidence page itself — it merges WITH this file, so its own squash SHA and
+deploy run cannot appear here; they are recorded post-merge in
+`docs/00-factory-console.md` / `docs/session-handoff.md`. Every stage left
+`main` coherent and demo-able. Prod: <https://quorum.stackclimb.com>.
 
 Working rule held throughout: **evidence-first, no fabricated number**. SLO
 *targets* are declarations; every *measured* value cites its source. Reviews
@@ -17,12 +20,12 @@ round-2 pass on the fix diff. Bite proofs used file-copy restore, never
 | Stage | PR | Squash SHA | Deploy JOB run | Prod-surface proof |
 | --- | --- | --- | --- | --- |
 | OD-1 `/metrics` + docs/80 SLOs | #77 | `0b014d3` | `29956496654` success | `curl /metrics` serves Prometheus text; `/ready` live |
-| OD-2 ops dashboard `/ui/ops` | #78 | `5845409` | `29958936194` success | `/ui/ops` 200 (8 live tiles), `/static/ops.js` 200 |
+| OD-2 ops dashboard `/ui/ops` | #78 | `5845409` | `29958936194` success | `/ui/ops` 200 (6 tiles, 8 live `data-current` slots), `/static/ops.js` 200 |
 | OD-3 request-ID correlation | #79 | `c728f45` | `29961670893` success | `/ready` echoes inbound `X-Request-ID` |
 | OD-4 `make evals` | #80 | `3fec293` | `29963515232` success | no served delta; `/ready` live |
 | OD-5 availability check + alert | #81 | `7fbc1f9` | `29964846338` success | dispatch proof run `29964680225` (both hosts live) |
 | OD-6 incident runbook + doc review | #82 | `7002f8a` | `29967261947` success | docs-only; `/ready` live |
-| OD-7 evidence page + demo script | #83 | `<SHA>` | `<run>` | docs-only; `/ready` live |
+| OD-7 evidence page + demo script | (this PR) | recorded post-merge | recorded post-merge | docs-only; `/ready` live |
 
 > OD-6/OD-7 deploy-run ids: docs-only stages carry no served-asset delta, so
 > the Deploy JOB `success` + prod `/ready` live is the deploy signal (the

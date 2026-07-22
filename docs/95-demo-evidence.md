@@ -23,7 +23,7 @@ authoring time. Prod host: <https://quorum.stackclimb.com> (also
 | 11 | Deploy pipeline verified by the Deploy JOB (not a `/health` 200) | deploy workflow | `deploy.yml`; each OD stage's Deploy-to-Fly.io JOB `success` (see `OBSERVABILITY-DEMO-RESULT.md`) |
 | 12 | Pipeline-drift self-healing watchdog | workflow | `.github/workflows/deploy-drift-watchdog.yml` (PR #56) |
 
-![Ops dashboard at 1440px — live SLO tiles (request rate, p95, 5xx rate, readiness, uptime, version) with PASS/FAIL treatment](assets/od7-ops-dashboard.png)
+![Ops dashboard captured from PROD (quorum.stackclimb.com/ui/ops, environment: production) at 1440px — six live SLO tiles (request rate, p95, 5xx rate, readiness, uptime, version) with PASS/FAIL treatment](assets/od7-ops-dashboard.png)
 
 ## Demo click-path (60–90 s)
 
