@@ -115,7 +115,12 @@ def test_explicit_request_id_extra_raises_inside_a_request() -> None:
     the opposite): the factory stamps ``request_id`` before ``extra`` is
     applied, so a call site passing ``extra={"request_id": ...}`` inside a
     request raises ``KeyError``.  Call sites must never do that — this test
-    is the tripwire that documents it."""
+    is the tripwire that documents it.
+
+    If the implementation ever moves off the record factory, replace this
+    test with one asserting the stronger contract directly: a call site's
+    ``extra={"request_id": ...}`` must never silently override the
+    request-bound id."""
     test_logger = logging.getLogger("od3.test.extra")
 
     @app.get("/__od3_extra__")
