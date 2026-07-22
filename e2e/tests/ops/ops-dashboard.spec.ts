@@ -98,6 +98,17 @@ test.describe("ops dashboard", () => {
     await expect(page.locator('[data-current="version"]')).not.toHaveText("—", {
       timeout: 10_000,
     });
+    // OD-2 review finding: a long unbroken token (an env-var name in the
+    // readiness reasons) clipped INSIDE its tile while the document-level
+    // scrollWidth stayed clean. Inject a worst-case token so the check
+    // exercises the wrap behaviour deterministically, then measure BOTH the
+    // document and every element inside the tiles.
+    await page.evaluate(() => {
+      const note = document.querySelector('[data-current="ready-reasons"]');
+      if (note)
+        note.textContent =
+          "reasons: OPENROUTER_LIVE_EXECUTION_ENABLED_EXTREMELY_LONG_UNBROKEN_TOKEN_FOR_OVERFLOW_CHECK is not set";
+    });
     for (const width of [1440, 375]) {
       await page.setViewportSize({ width, height: 900 });
       const overflow = await page.evaluate(
@@ -106,6 +117,15 @@ test.describe("ops dashboard", () => {
           document.documentElement.clientWidth,
       );
       expect(overflow, `horizontal overflow at ${width}px`).toBeLessThanOrEqual(0);
+      const clipped = await page.evaluate(() =>
+        Array.from(document.querySelectorAll(".tile, .tile *"))
+          .filter((el) => el.scrollWidth > el.clientWidth + 1)
+          .map(
+            (el) =>
+              `${el.tagName}.${el.className} ${el.scrollWidth}>${el.clientWidth}`,
+          ),
+      );
+      expect(clipped, `clipped tile content at ${width}px`).toEqual([]);
     }
   });
 

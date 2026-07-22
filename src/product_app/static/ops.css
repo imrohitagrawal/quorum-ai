@@ -66,11 +66,18 @@ body {
 }
 .tile-value { margin: 0; font-size: 1.8rem; font-weight: 650; overflow-wrap: anywhere; }
 .tile-unit { font-size: 0.9rem; font-weight: 400; color: var(--secondary); }
-.tile-slo { margin: 4px 0 0; font-size: 0.85rem; }
+.tile-slo { margin: 4px 0 0; font-size: 0.85rem; overflow-wrap: anywhere; }
 .tile-slo .slo-pass { color: var(--ok); font-weight: 650; }
 .tile-slo .slo-fail { color: var(--bad); font-weight: 650; }
 .tile-slo .slo-unknown { color: var(--secondary); }
-.tile-note { margin: 4px 0 0; font-size: 0.78rem; color: var(--secondary); }
+.tile-note {
+  margin: 4px 0 0;
+  font-size: 0.78rem;
+  color: var(--secondary);
+  /* OD-2 review finding: unbroken tokens (e.g. env-var names in readiness
+     reasons) clipped at the tile border at 1440px. Break anywhere. */
+  overflow-wrap: anywhere;
+}
 
 .spark {
   display: block;

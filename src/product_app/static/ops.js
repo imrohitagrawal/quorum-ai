@@ -146,7 +146,11 @@
           setCurrent("p95", "> largest bucket");
           setVerdict("p95", false);
         } else {
-          setCurrent("p95", p95.toFixed(3));
+          /* Display the bucket's own bound verbatim ("≤ 0.5"), never a
+           * toFixed() rendering that implies precision the buckets cannot
+           * support. Verdict stays conservative: a bound at/over the SLO
+           * reads FAIL even though the true p95 may sit below it. */
+          setCurrent("p95", "≤ " + String(p95));
           setVerdict("p95", p95 < 1);
         }
 
