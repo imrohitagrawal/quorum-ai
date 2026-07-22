@@ -141,6 +141,11 @@ also_copy = [
   # set X-Forwarded-For. tests/security/test_trusted_proxy_ips.py reads it from
   # ``REPO_ROOT`` to prove the per-IP rate limiter is not header-spoofable.
   "Dockerfile",
+  # ``fly.toml`` pins the deployed posture (RUNTIME_ENVIRONMENT=production,
+  # secure cookies, no session-rate override). Stage B's
+  # tests/unit/test_session_rate_lane_posture.py reads it from ``REPO_ROOT``;
+  # absent inside ./mutants/ it aborts stats collection.
+  "fly.toml",
 ]
 # -m "not env_oracle": environmental oracles — GC/ResourceWarning finalisation,
 #   wall-clock thread timing, a child interpreter's exit status — do not survive

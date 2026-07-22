@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import os
 from enum import StrEnum
+from typing import ClassVar
 
 from pydantic import Field, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
@@ -127,6 +128,62 @@ class Settings(BaseSettings):
     # setting the flag in non-local environments is a startup error.
     # Defaults to False for security; explicitly enable only in local dev.
     account_legacy_header_enabled: bool = False
+
+    # --- Session rate-limit override (Stage B / D0) --------------------
+    # The ``GET /v1/session`` endpoint is per-IP token-bucket limited to
+    # ``_InMemoryIpRateLimiter.CAPACITY`` (30/min) in production. Every
+    # browser spec's ``boot()`` GETs it once, so a ``--repeat-each`` e2e
+    # run exhausts the bucket and measures the limiter instead of the
+    # product (the long-standing parity/axe flake). This override raises
+    # the per-IP capacity *only in the hermetic test lanes*.
+    #
+    # SECURITY: this is a rate-limit control. It is ``None`` (unset) by
+    # default, applied ONLY when ``runtime_environment is LOCAL``, and
+    # ``validate_production_environment()`` REFUSES TO START if it is set
+    # in any non-LOCAL environment. The value is bounded: ``0``/negative
+    # (which would lock the app out — a zero bucket never opens) and an
+    # absurd upper bound are rejected, so it can never silently disable
+    # the limiter or become an unbounded ``session_repository`` growth
+    # sink. Env var: ``SESSION_RATE_LIMIT_PER_MINUTE``.
+    session_rate_limit_per_minute: int | None = None
+
+    #: Inclusive upper bound on the session-rate override. Sized to admit
+    #: the measured e2e need (parity ≈ 53 boots/run × 10 repeats ≈ 530)
+    #: with headroom, while still bounding in-memory session growth in the
+    #: lanes that mint the most sessions. Not configurable.
+    SESSION_RATE_LIMIT_MAX: ClassVar[int] = 10_000
+
+    @field_validator("session_rate_limit_per_minute", mode="before")
+    @classmethod
+    def _blank_session_rate_is_unset(cls, value: object) -> object:
+        """Treat a blank ``SESSION_RATE_LIMIT_PER_MINUTE`` as unset (``None``).
+
+        Same footgun as ``EXPOSE_API_DOCS``: a stray empty value in a deploy
+        config should mean "I didn't set this", not crash the int parser.
+        """
+        if isinstance(value, str) and value.strip() == "":
+            return None
+        return value
+
+    @field_validator("session_rate_limit_per_minute", mode="after")
+    @classmethod
+    def _session_rate_within_bounds(cls, value: int | None) -> int | None:
+        """Reject a zero/negative/absurd override.
+
+        ``0`` must never mean "unlimited": a zero-capacity bucket locks the
+        endpoint out entirely rather than opening it. An unbounded value
+        would remove the only cap on in-memory ``session_repository`` growth
+        in the lanes that mint the most sessions.
+        """
+        if value is None:
+            return None
+        if value < 1 or value > cls.SESSION_RATE_LIMIT_MAX:
+            raise ValueError(
+                "SESSION_RATE_LIMIT_PER_MINUTE must be between 1 and "
+                f"{cls.SESSION_RATE_LIMIT_MAX} (got {value}); "
+                "0 or negative would lock the endpoint out, not open it."
+            )
+        return value
 
     # --- Pipeline tuning ------------------------------------------------
     # Synthetic per-stage delay used by the test suite to make state
@@ -281,6 +338,14 @@ def validate_production_environment() -> None:
             + settings.runtime_environment.value
             + " requires ACCOUNT_LEGACY_HEADER_ENABLED=false. "
             "The X-Account-Id header is not part of the production auth contract."
+        )
+    if settings.session_rate_limit_per_minute is not None:
+        raise RuntimeError(
+            "Refusing to start: runtime_environment="
+            + settings.runtime_environment.value
+            + " requires SESSION_RATE_LIMIT_PER_MINUTE to be unset. "
+            "The session rate-limit override is a hermetic-test-lane control "
+            "and must never weaken the per-IP limiter in a deployed environment."
         )
     # SEC-H2: enforce QUORUM_TOKEN_SECRET in non-local environments.
     # An auto-generated per-process secret breaks multi-instance

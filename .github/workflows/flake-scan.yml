@@ -77,7 +77,12 @@ jobs:
           - tests/accessibility/axe-all-views.spec.ts
     env:
       OPENROUTER_LIVE_EXECUTION_ENABLED: "false"
-      QUORUM_RUNTIME_ENVIRONMENT: "ci"
+      # Stage B: real var is RUNTIME_ENVIRONMENT; "local" is required so the
+      # LOCAL-only session rate-limit override below applies (it is refused at
+      # startup outside LOCAL). This is the whole point of the flake scan —
+      # measure the product under --repeat-each, not the 30/min IP limiter.
+      RUNTIME_ENVIRONMENT: "local"
+      SESSION_RATE_LIMIT_PER_MINUTE: "600"
     steps:
       - name: Check out repository
         uses: actions/checkout@v4

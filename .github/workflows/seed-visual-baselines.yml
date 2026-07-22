@@ -21,7 +21,12 @@ jobs:
     timeout-minutes: 20
     env:
       OPENROUTER_LIVE_EXECUTION_ENABLED: "false"
-      QUORUM_RUNTIME_ENVIRONMENT: "ci"
+      # Stage B: real var is RUNTIME_ENVIRONMENT; "local" is required so the
+      # LOCAL-only session rate-limit override applies. This lane WRITES visual
+      # baselines — a 429 during boot here would bake a broken baseline into the
+      # repo, so raising the bucket matters most here.
+      RUNTIME_ENVIRONMENT: "local"
+      SESSION_RATE_LIMIT_PER_MINUTE: "600"
     steps:
       - name: Check out the dispatched branch
         uses: actions/checkout@v4
