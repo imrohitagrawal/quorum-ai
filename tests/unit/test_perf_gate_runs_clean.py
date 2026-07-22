@@ -63,7 +63,7 @@ def test_make_perf_gate_is_green_on_a_clean_tree() -> None:
     )
     # The gate is only meaningful if it also *measured*: assert the two
     # fail-closed guards printed their pass lines rather than being bypassed.
-    assert "perf-gate: 11 tests collected" in output, (
+    assert "perf-gate: 12 tests collected" in output, (
         f"gate-min-collected did not report the measured floor:\n{output}"
     )
     assert "0 skipped" in output, f"gate-min-executed did not report a skip-free run:\n{output}"
@@ -109,7 +109,7 @@ def test_make_perf_gate_reaches_the_measurement_stage() -> None:
     output = result.stdout + result.stderr
 
     # The suite ran, in full, and was not silently emptied.
-    assert "perf-gate: 11 tests collected" in output, (
+    assert "perf-gate: 12 tests collected" in output, (
         f"gate-min-collected did not report the measured floor:\n{output[-3000:]}"
     )
     # `gate-min-executed` (which prints the skip-free line) runs only AFTER

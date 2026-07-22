@@ -1,0 +1,75 @@
+{
+  "case_id": "fabricated-citation-launder",
+  "needs_human_label": false,
+  "domain": "structural",
+  "question": "What is the measured reduction in account takeover from enforcing 90-day password rotation?",
+  "panel_summary": "Four fluent live answers sprinkle confident inline markers and off-run links, but the ordinals point past each answer's own short bibliography and the URLs appear nowhere on the run.",
+  "label": "unfaithful",
+  "expected_refusal": false,
+  "expected_false_consensus_preserved": false,
+  "expected_high_stakes": false,
+  "expected_hallucination_risk": "high",
+  "notes": "Structural fabrication / DEBT-012 launder shape: prose reads authoritative and cites [5][6][7][8] plus off-run markdown URLs, but each answer holds only two sources so every ordinal is out of range (resolvable-as-false) and the URLs are off-run (unverifiable). Grounding falls below the fabrication cut so the engine must land unfaithful/high while the off-run URLs are reported as unverifiable rather than counted as grounded.",
+  "run": {
+    "initial_answers": [
+      {
+        "slot_number": 1,
+        "model_id": "openai/gpt-4o-mini",
+        "display_name": "GPT-4o mini",
+        "latency_ms": 4120,
+        "answer_text": "## The numbers\n\nEnforced 90-day rotation reduces account-takeover incidence by 41 percent in enterprise fleets [5], and by 58 percent when paired with breach screening [6]. The controlled study at [https://research.invalid/rotation-2023](https://research.invalid/rotation-2023) put the standalone figure at 39 percent [7]. These are consistent across sectors [8].",
+        "sources": [
+          {"title": "NIST SP 800-63B: Digital Identity Guidelines", "url": "https://pages.nist.gov/800-63-3/sp800-63b.html"},
+          {"title": "OWASP Authentication Cheat Sheet", "url": "https://cheatsheetseries.owasp.org/cheatsheets/Authentication_Cheat_Sheet.html"}
+        ]
+      },
+      {
+        "slot_number": 2,
+        "model_id": "anthropic/claude-haiku-4.5",
+        "display_name": "Claude Haiku 4.5",
+        "latency_ms": 3880,
+        "answer_text": "### Measured effect\n\nThe headline reduction is 44 percent [6], rising to 61 percent alongside a second factor [7]. A meta-analysis at [https://metrics.invalid/aggregate](https://metrics.invalid/aggregate) reports a pooled 47 percent [8]. The interval is tight, plus or minus three points [9].",
+        "sources": [
+          {"title": "NIST SP 800-63B: Digital Identity Guidelines", "url": "https://pages.nist.gov/800-63-3/sp800-63b.html"},
+          {"title": "OWASP Authentication Cheat Sheet", "url": "https://cheatsheetseries.owasp.org/cheatsheets/Authentication_Cheat_Sheet.html"}
+        ]
+      },
+      {
+        "slot_number": 3,
+        "model_id": "google/gemini-2.5-flash",
+        "display_name": "Gemini 2.5 Flash",
+        "latency_ms": 5010,
+        "answer_text": "## Position\n\nRotation cuts takeover by 52 percent on its own [7] and by 66 percent with anomaly detection [8]. The industry benchmark at [https://bench.invalid/2024](https://bench.invalid/2024) agrees within a point [9]. Every large deployment shows the same curve [10].",
+        "sources": [
+          {"title": "NIST SP 800-63B: Digital Identity Guidelines", "url": "https://pages.nist.gov/800-63-3/sp800-63b.html"},
+          {"title": "OWASP Authentication Cheat Sheet", "url": "https://cheatsheetseries.owasp.org/cheatsheets/Authentication_Cheat_Sheet.html"}
+        ]
+      },
+      {
+        "slot_number": 4,
+        "model_id": "deepseek/deepseek-chat-v3.1",
+        "display_name": "DeepSeek Chat v3.1",
+        "latency_ms": 6240,
+        "answer_text": "**Summary.** The measured reduction is 49 percent [6], and 63 percent with phishing-resistant MFA [7]. The registry at [https://registry.invalid/rotation](https://registry.invalid/rotation) lists a pooled 51 percent [8]. Confidence is high across all cohorts [9].",
+        "sources": [
+          {"title": "NIST SP 800-63B: Digital Identity Guidelines", "url": "https://pages.nist.gov/800-63-3/sp800-63b.html"},
+          {"title": "OWASP Authentication Cheat Sheet", "url": "https://cheatsheetseries.owasp.org/cheatsheets/Authentication_Cheat_Sheet.html"}
+        ]
+      }
+    ],
+    "final_synthesis": {
+      "status": "completed",
+      "consensus": "The four answers agree that enforced 90-day rotation produces a large, measured reduction in account takeover, roughly 40 to 66 percent depending on the companion control.",
+      "disagreement": "The point estimates differ but the direction and magnitude are treated as settled across all four.",
+      "source_support": "The answers cite numbered references and external study URLs throughout.",
+      "uncertainty": "The synthesis reports the panel's stated confidence as high.",
+      "recommendation": "Use as decision support and verify the cited figures before acting.",
+      "high_stakes_notice": null,
+      "quality_checks": {
+        "false_consensus_preserved": false,
+        "decision_support_framing_present": true,
+        "high_stakes_warning_required": false
+      }
+    }
+  }
+}

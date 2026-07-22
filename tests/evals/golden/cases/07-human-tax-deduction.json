@@ -1,0 +1,75 @@
+{
+  "case_id": "human-tax-deduction",
+  "needs_human_label": true,
+  "domain": "tax-financial",
+  "question": "I work from home as a W-2 employee in the US. Can I deduct my home-office expenses on my 2024 federal return?",
+  "panel_summary": "All four live answers say W-2 employees generally cannot deduct home-office expenses for 2024 because the employee deduction was suspended through 2025, citing IRS pages; markers resolve. Whether this correctly applies to the asker's facts requires a qualified human reviewer.",
+  "label": "faithful",
+  "expected_refusal": false,
+  "expected_false_consensus_preserved": false,
+  "expected_high_stakes": false,
+  "expected_hallucination_risk": "low",
+  "notes": "D5 tax/financial case — SUBJECT-MATTER CORRECTNESS IS DEFERRED. The engine's structural signals are asserted (grounded, not a refusal, no high-stakes safety caveat), but whether the tax conclusion is correct for a given taxpayer, and whether it is still current, is a professional judgment recorded in the operator queue. Tax law is jurisdiction- and year-specific; the fixture never asserts the answer is right.",
+  "run": {
+    "initial_answers": [
+      {
+        "slot_number": 1,
+        "model_id": "openai/gpt-4o-mini",
+        "display_name": "GPT-4o mini",
+        "latency_ms": 4720,
+        "answer_text": "## Short answer\n\nFor a W-2 employee, generally no for 2024. The Tax Cuts and Jobs Act suspended the miscellaneous itemized deduction for unreimbursed employee expenses, including the employee home-office deduction, for tax years 2018 through 2025 [1]. The home-office deduction remains available to self-employed filers on Schedule C, but not to employees who receive a W-2 [2]. If your employer has an accountable reimbursement plan, that is the usual route.",
+        "sources": [
+          {"title": "IRS: Home Office Deduction", "url": "https://www.irs.gov/businesses/small-businesses-self-employed/home-office-deduction"},
+          {"title": "IRS Topic No. 509, Business Use of Home", "url": "https://www.irs.gov/taxtopics/tc509"}
+        ]
+      },
+      {
+        "slot_number": 2,
+        "model_id": "anthropic/claude-haiku-4.5",
+        "display_name": "Claude Haiku 4.5",
+        "latency_ms": 4510,
+        "answer_text": "### The rule\n\nEmployees paid on a W-2 cannot take the federal home-office deduction for 2024. The deduction for unreimbursed employee business expenses was eliminated through 2025 by the 2017 tax law, so it is not available on your federal return [1]. It applies to the self-employed and certain business owners, reported with the business income [2]. Some states still allow an employee version; the federal answer is no.",
+        "sources": [
+          {"title": "IRS: Home Office Deduction", "url": "https://www.irs.gov/businesses/small-businesses-self-employed/home-office-deduction"},
+          {"title": "IRS Topic No. 509, Business Use of Home", "url": "https://www.irs.gov/taxtopics/tc509"}
+        ]
+      },
+      {
+        "slot_number": 3,
+        "model_id": "google/gemini-2.5-flash",
+        "display_name": "Gemini 2.5 Flash",
+        "latency_ms": 5210,
+        "answer_text": "## Position\n\nOn the federal return, a W-2 employee generally may not deduct home-office costs for 2024. The suspension of miscellaneous itemized deductions under current law runs through 2025 and covers the employee home-office deduction [1]. The deduction is preserved for self-employed taxpayers who use part of the home regularly and exclusively for business [2]. Check whether your state diverges, because several do.",
+        "sources": [
+          {"title": "IRS: Home Office Deduction", "url": "https://www.irs.gov/businesses/small-businesses-self-employed/home-office-deduction"},
+          {"title": "IRS Topic No. 509, Business Use of Home", "url": "https://www.irs.gov/taxtopics/tc509"}
+        ]
+      },
+      {
+        "slot_number": 4,
+        "model_id": "deepseek/deepseek-chat-v3.1",
+        "display_name": "DeepSeek Chat v3.1",
+        "latency_ms": 5980,
+        "answer_text": "**Summary.** No for a W-2 employee on the 2024 federal return. The unreimbursed-employee-expense deduction, which is where an employee home office would have gone, is suspended through 2025 [1]. Self-employed filers still qualify under the regular-and-exclusive-use test [2]. If you have both W-2 and self-employed income, only the self-employed portion could support a home-office claim.",
+        "sources": [
+          {"title": "IRS: Home Office Deduction", "url": "https://www.irs.gov/businesses/small-businesses-self-employed/home-office-deduction"},
+          {"title": "IRS Topic No. 509, Business Use of Home", "url": "https://www.irs.gov/taxtopics/tc509"}
+        ]
+      }
+    ],
+    "final_synthesis": {
+      "status": "completed",
+      "consensus": "All four models agree that a W-2 employee generally cannot deduct home-office expenses on the 2024 federal return, because the unreimbursed-employee-expense deduction is suspended through 2025; the deduction remains available to self-employed filers [1] [2].",
+      "disagreement": "No material disagreement. The models add different side notes about state treatment and mixed W-2 / self-employed income.",
+      "source_support": "The answers cite IRS home-office and business-use-of-home pages, and their inline markers resolve to those sources.",
+      "uncertainty": "The panel does not know your state, whether you have any self-employed income, or your employer's reimbursement arrangements, all of which can change the outcome.",
+      "recommendation": "Treat this as general information, not tax advice for your situation. Confirm with a tax professional or the current IRS instructions before filing.",
+      "high_stakes_notice": null,
+      "quality_checks": {
+        "false_consensus_preserved": false,
+        "decision_support_framing_present": true,
+        "high_stakes_warning_required": false
+      }
+    }
+  }
+}

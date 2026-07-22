@@ -243,3 +243,17 @@ answers.
 - Acceptance criteria: AC-044, AC-045, AC-046.
 - Tests: TEST-FR-016 (`e2e/tests/invariants/trust-score-invariants.spec.ts`, `e2e/tests/invariants/trust-score-visual.spec.ts`, `e2e/tests/degraded/degraded-banner.spec.ts`, `e2e/tests/invariants/rendering-invariants.spec.ts`, `e2e/tests/accessibility/axe-all-views.spec.ts`, `e2e/fixtures/golden-run.ts`).
 - Jira: Not created.
+
+## FR-017 Hermetic evaluation harness and golden set (R2)
+
+- Actor: System / offline evaluation (CI and an operator running the scaffold), not an end user.
+- Trigger: The evaluation gate runs on every push (the blocking golden-set structural gate in the default `pytest` suite) and, additionally, on a schedule and on manual dispatch (`.github/workflows/eval.yml`), which is deliberately kept off the deploy path.
+- Behavior: The system carries a hermetic golden evaluation set (`tests/evals/golden/cases/`) of hand-authored, real-SHAPED four-model runs, and a loader (`tests/evals/golden/loader.py`) that reuses the S2 corpus primitives and DERIVES every coverage/agreement number so a case cannot lie about its own metrics. A blocking hermetic gate (`tests/evals/test_golden_set_gate.py`) runs the deterministic Layer-A engine of FR-015 over each case and asserts the engine's STRUCTURAL verdicts — faithfulness label, hallucination-risk band, refusal, false-consensus preservation, high-stakes presence, and the judge-OFF suppression (band `unverified`, score `None`) — against each case's declared, MEASURED expectations, naming the case on failure. The set exercises every faithfulness label, every risk band, and the refusal / false-consensus / high-stakes signals. A deliberately small subset (one case per subject-matter domain: clinical, tax/financial, as-of-date, self-harm/safety) is flagged `needs_human_label`: for these the gate asserts ONLY the structural signals and the SUBJECT-MATTER correctness label is deferred to an operator queue (`docs/metrics/operator-label-queue.md`), never authored in the fixture — the loader and the gate both reject a fixture carrying a `correctness` field. No third-party evaluation dependency (DeepEval/RAGAS) is installed; their metric names are used as vocabulary only. The harness performs zero I/O and makes zero paid calls; the LLM judge stays OFF.
+- Outcome: The engine's structural behaviour is pinned by a broad regression oracle beyond the five S2 corpus cases, the calibration debt that a future measured-accuracy claim depends on is surfaced honestly as an operator obligation rather than faked, and none of it can stall a production deploy.
+- Source: `docs/09-roadmap.md` (Release 2), `docs/42-ai-safety-grounding.md`, `docs/44-model-risk-register.md`, `docs/50-test-strategy.md`, `docs/55-performance-baseline.md` (PERF-010).
+- Owner: Backend engineer.
+- Priority: Must.
+- Rationale: FR-015's structural engine had only five hand-authored corpus cases as an oracle, and the product-quality thesis (cross-validation reduces hallucination) cannot ever be measured without a labeled golden set; building the hermetic scaffold and surfacing the human-label debt is the honest precondition for that number, with the judge OFF and off the deploy path so it costs nothing and cannot break shipping.
+- Acceptance criteria: AC-047, AC-048.
+- Tests: TEST-FR-017 (`tests/evals/test_golden_set_gate.py`, `tests/evals/golden/loader.py`, `tests/perf/test_eval_batch_baseline.py`).
+- Jira: Not created.

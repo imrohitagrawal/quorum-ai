@@ -171,6 +171,30 @@ RB5_ARTIFACTS: dict[str, tuple[str, ...]] = {
     "RB-5": ("tests/resilience/test_fault_injection_lane.py",),
 }
 
+#: Item ID -> artifact(s) proving an **S4** (hermetic evaluation scaffold) item.
+#: Same contract as the phase dicts: only files CREATED by the S4 slice are
+#: listed (checked new-since-baseline). Two rows are proven here:
+#:  * OC-1 — the HARNESS half. S4 adds a broader hermetic blocking gate
+#:    (``test_golden_set_gate.py``) over a new golden set with its own loader
+#:    that reuses the corpus primitives. The row stays PARTIAL because the
+#:    "real captured 4-model runs + human labels" half is deferred (operator
+#:    queue, D5); these files prove the harness expansion, not that deferred
+#:    half. OC-1's status already carries "harness DONE", which the built-items
+#:    check keys on.
+#:  * RB-2 — the PERF-010 eval-batch baseline, the one piece of RB-2 that was
+#:    left "BUILD (S4)". The workflow-latency gate that proved the rest predates
+#:    this slice and is registered under PHASE0_ARTIFACTS; the NEW file is the
+#:    eval-batch baseline, so that is the registered S4 proof.
+#: The golden set is NOT registered under OC-3, which stays PARTIAL: anchoring
+#: the ``expected`` bands to HUMAN labels is deferred, so no S4 file proves it.
+S4_ARTIFACTS: dict[str, tuple[str, ...]] = {
+    "OC-1": (
+        "tests/evals/golden/loader.py",
+        "tests/evals/test_golden_set_gate.py",
+    ),
+    "RB-2": ("tests/perf/test_eval_batch_baseline.py",),
+}
+
 #: A path-shaped backtick span in a status cell, e.g. `tests/perf/x.py`.
 _PROOF_POINTER_RE = re.compile(r"`([^`]+?\.(?:py|md|toml|json|ya?ml|ts|tsx))`")
 _ROW_ID_RE = re.compile(r"^[A-Z][A-Z0-9]-[0-9A-Z]+$")
@@ -184,6 +208,7 @@ def _registered_proofs(item: str) -> tuple[str, ...]:
         + S2_ARTIFACTS.get(item, ())
         + S3_ARTIFACTS.get(item, ())
         + RB5_ARTIFACTS.get(item, ())
+        + S4_ARTIFACTS.get(item, ())
         + DOC_FIX_PROOFS.get(item, ())
     )
     return tuple(dict.fromkeys(merged))
@@ -254,7 +279,7 @@ def test_every_status_uses_a_legend_token(ledger_rows: dict[str, str]) -> None:
 
 
 @pytest.mark.parametrize(
-    "item", sorted(PHASE0_ARTIFACTS | S2_ARTIFACTS | S3_ARTIFACTS | RB5_ARTIFACTS)
+    "item", sorted(PHASE0_ARTIFACTS | S2_ARTIFACTS | S3_ARTIFACTS | RB5_ARTIFACTS | S4_ARTIFACTS)
 )
 def test_built_items_read_done(item: str, ledger_rows: dict[str, str]) -> None:
     """If the artifacts exist, the ledger may not still say BUILD/DOC-FIX."""
@@ -264,6 +289,7 @@ def test_built_items_read_done(item: str, ledger_rows: dict[str, str]) -> None:
         + S2_ARTIFACTS.get(item, ())
         + S3_ARTIFACTS.get(item, ())
         + RB5_ARTIFACTS.get(item, ())
+        + S4_ARTIFACTS.get(item, ())
     )
     missing = [p for p in built if not _is_real_artifact(p)]
     if missing:
@@ -318,7 +344,7 @@ def test_done_rows_cite_an_existing_proof_pointer(
 
 
 @pytest.mark.parametrize(
-    "item", sorted(PHASE0_ARTIFACTS | S2_ARTIFACTS | S3_ARTIFACTS | RB5_ARTIFACTS)
+    "item", sorted(PHASE0_ARTIFACTS | S2_ARTIFACTS | S3_ARTIFACTS | RB5_ARTIFACTS | S4_ARTIFACTS)
 )
 def test_phase0_artifacts_are_new_since_the_s1_baseline(item: str) -> None:
     """The registry may only claim files the slice actually created.
@@ -336,6 +362,7 @@ def test_phase0_artifacts_are_new_since_the_s1_baseline(item: str) -> None:
         + S2_ARTIFACTS.get(item, ())
         + S3_ARTIFACTS.get(item, ())
         + RB5_ARTIFACTS.get(item, ())
+        + S4_ARTIFACTS.get(item, ())
     ):
         probe = subprocess.run(
             ["git", "cat-file", "-e", f"{S1_BASELINE_SHA}:{rel_path}"],

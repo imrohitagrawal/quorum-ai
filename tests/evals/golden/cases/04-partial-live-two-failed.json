@@ -1,0 +1,77 @@
+{
+  "case_id": "partial-live-two-failed",
+  "needs_human_label": false,
+  "domain": "structural",
+  "question": "Is it safe to run a PostgreSQL VACUUM FULL on a busy production table during peak traffic?",
+  "panel_summary": "Two live answers agree it is unsafe during peak and cite the Postgres docs with resolving markers; the other two slots failed to return, so the run is grounded but incomplete.",
+  "label": "partial",
+  "expected_refusal": false,
+  "expected_false_consensus_preserved": false,
+  "expected_high_stakes": false,
+  "expected_hallucination_risk": "low",
+  "notes": "Degraded-but-grounded shape, distinct from the fully-simulated corpus case: two slots are live COMPLETED with in-range markers (grounding 1.0) and two slots FAILED, so live_ratio and completeness are both 0.5. Grounding is high, but an incomplete run cannot earn the maximum label, so the engine caps at partial while risk stays low. Proves partial is reached by completeness, not only by fabrication or refusal.",
+  "run": {
+    "initial_answers": [
+      {
+        "slot_number": 1,
+        "model_id": "openai/gpt-4o-mini",
+        "display_name": "GPT-4o mini",
+        "latency_ms": 4880,
+        "answer_text": "## Short answer\n\nNo — not during peak. VACUUM FULL rewrites the whole table and takes an ACCESS EXCLUSIVE lock for the duration, so every read and write on that table blocks until it finishes [1]. On a busy table that is an outage. If you need to reclaim space online, the routine-vacuuming guidance points to autovacuum plus pg_repack rather than VACUUM FULL [2].",
+        "sources": [
+          {"title": "PostgreSQL: SQL-VACUUM", "url": "https://www.postgresql.org/docs/current/sql-vacuum.html"},
+          {"title": "PostgreSQL: Routine Vacuuming", "url": "https://www.postgresql.org/docs/current/routine-vacuuming.html"}
+        ]
+      },
+      {
+        "slot_number": 2,
+        "model_id": "anthropic/claude-haiku-4.5",
+        "display_name": "Claude Haiku 4.5",
+        "latency_ms": 5120,
+        "answer_text": "### Recommendation\n\nAvoid it at peak. The command documentation states that VACUUM FULL requires an exclusive lock and rewrites the table into a new file, which serialises all access [1]. The maintenance guidance is that ordinary autovacuum, or an online tool, is the right way to control bloat without the lock [2]. Schedule any VACUUM FULL for a maintenance window.",
+        "sources": [
+          {"title": "PostgreSQL: SQL-VACUUM", "url": "https://www.postgresql.org/docs/current/sql-vacuum.html"},
+          {"title": "PostgreSQL: Routine Vacuuming", "url": "https://www.postgresql.org/docs/current/routine-vacuuming.html"}
+        ]
+      },
+      {
+        "slot_number": 3,
+        "model_id": "google/gemini-2.5-flash",
+        "display_name": "Gemini 2.5 Flash",
+        "latency_ms": 9,
+        "provider_path": "openrouter_search",
+        "status": "failed",
+        "error_code": "PROVIDER_TIMEOUT",
+        "provider_notice": "This model did not return an answer for this run.",
+        "answer_text": "",
+        "sources": []
+      },
+      {
+        "slot_number": 4,
+        "model_id": "deepseek/deepseek-chat-v3.1",
+        "display_name": "DeepSeek Chat v3.1",
+        "latency_ms": 7,
+        "provider_path": "openrouter_search",
+        "status": "failed",
+        "error_code": "PROVIDER_UNAVAILABLE",
+        "provider_notice": "This model did not return an answer for this run.",
+        "answer_text": "",
+        "sources": []
+      }
+    ],
+    "final_synthesis": {
+      "status": "completed",
+      "consensus": "The two models that answered agree: do not run VACUUM FULL on a busy table at peak because it holds an ACCESS EXCLUSIVE lock and rewrites the table, blocking all access; use autovacuum or an online tool instead, per the VACUUM reference and the routine-vacuuming guidance.",
+      "disagreement": "No disagreement among the answers that returned. Two of the four slots failed to return, so the panel is smaller than intended.",
+      "source_support": "Both answers cite the Postgres VACUUM reference and the routine-vacuuming guidance, and their inline markers resolve to those sources.",
+      "uncertainty": "Two slots failed, so this is a two-model view rather than a four-model cross-check; treat the agreement as narrower than a full run.",
+      "recommendation": "Use as decision support with the caveat that only two models answered: schedule VACUUM FULL for a maintenance window, and verify the online-repack path in the routine-vacuuming guidance.",
+      "high_stakes_notice": null,
+      "quality_checks": {
+        "false_consensus_preserved": false,
+        "decision_support_framing_present": true,
+        "high_stakes_warning_required": false
+      }
+    }
+  }
+}

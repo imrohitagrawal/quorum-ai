@@ -1,0 +1,80 @@
+name: Evaluation harness (advisory)
+
+# FR-017 / S4 — the hermetic evaluation scaffold, run on a schedule and on
+# demand. It is DELIBERATELY off the deploy path.
+#
+# WHY schedule + workflow_dispatch ONLY (do not add `push`/`pull_request`):
+# a slow job on the push path is exactly what silently stopped every deploy from
+# 2026-07-17 (a 30-minute mutation job left CI `in_progress` past the deploy
+# gate's window). `scripts/deploy_gate.py` waits for CI / Tests / E2E to conclude
+# for the pushed SHA; any workflow that runs on push and does not conclude in
+# time strands the merge undeployed. This job therefore never runs on push, is
+# NOT in the deploy gate's required set, and carries `continue-on-error: true`.
+# `tests/unit/test_deploy_gate_no_slow_push_jobs.py` and
+# `tests/test_doc_gate_consistency.py` pin that posture.
+#
+# WHAT actually gates: the golden-set structural gate
+# (`tests/evals/test_golden_set_gate.py`) is a HERMETIC, zero-paid-call gate that
+# ALSO runs in the default blocking `pytest` suite (`validate-and-test` /
+# `pytest (Python 3.12)`), so engine-verdict drift is caught on every PR. This
+# workflow re-runs it on a cadence and adds the ADVISORY eval-batch latency
+# baseline (`tests/perf/test_eval_batch_baseline.py`, PERF-010), which is
+# machine-dependent and must never block a merge.
+#
+# The LLM judge stays OFF and no third-party eval dependency (DeepEval/RAGAS) is
+# installed — their metric names are used as vocabulary only. Zero paid calls.
+
+on:
+  schedule:
+    # 04:30 UTC daily — in the nightly quiet window, before the flake scan.
+    - cron: "30 4 * * *"
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  eval-harness:
+    name: golden-set gate + eval-batch baseline (advisory)
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    continue-on-error: true
+    env:
+      # Hermetic: never call a provider, never enable the judge. The golden gate
+      # is deterministic and offline; these vars make the intent explicit.
+      OPENROUTER_LIVE_EXECUTION_ENABLED: "false"
+      RUNTIME_ENVIRONMENT: "local"
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v5
+        with:
+          version: "latest"
+          enable-cache: true
+
+      - name: Set up Python
+        run: uv python install 3.12
+
+      - name: Install backend dependencies
+        run: uv sync --all-extras --dev
+
+      - name: Golden-set structural gate (hermetic, blocking in the default suite)
+        run: uv run pytest tests/evals/test_golden_set_gate.py -q --no-cov
+
+      - name: Eval-batch latency baseline (PERF-010, ADVISORY)
+        # Advisory: a machine-dependent latency number must never gate a merge
+        # (the DEBT-009 lesson — macOS-derived budgets false-fail a slower CI
+        # runner). The test asserts only a generous hermetic ceiling and records
+        # the measured batch runtime to the step summary. QUORUM_RUN_PERF_BUDGET
+        # is REQUIRED here: the spec skips itself everywhere that var is unset
+        # (so it never runs in the blocking validate-and-test suite), and this
+        # advisory job is one of the two lanes meant to execute it.
+        env:
+          QUORUM_RUN_PERF_BUDGET: "1"
+        run: uv run pytest tests/perf/test_eval_batch_baseline.py -q --no-cov -s | tee "$GITHUB_STEP_SUMMARY"

@@ -1,0 +1,75 @@
+{
+  "case_id": "partial-grounding-medium",
+  "needs_human_label": false,
+  "domain": "structural",
+  "question": "What are the most common causes of memory leaks in long-running Node.js services?",
+  "panel_summary": "Four live answers agree on the usual causes and cite two real sources each, but every answer over-cites with one extra out-of-range marker, so only some markers resolve and grounding lands in the middle band.",
+  "label": "faithful",
+  "expected_refusal": false,
+  "expected_false_consensus_preserved": false,
+  "expected_high_stakes": false,
+  "expected_hallucination_risk": "medium",
+  "notes": "Middle-band structural case: each answer resolves its two in-range markers but adds a third out-of-range ordinal (over-citation), so grounding sits between the fabrication and good cuts. Live and complete with no refusal, so the label is faithful, but the risk is medium rather than low because a run that over-cites is neither clearly grounded nor clearly fabricating. Exercises the 0.5-0.8 grounding band the other golden cases do not.",
+  "run": {
+    "initial_answers": [
+      {
+        "slot_number": 1,
+        "model_id": "openai/gpt-4o-mini",
+        "display_name": "GPT-4o mini",
+        "latency_ms": 4320,
+        "answer_text": "## Common causes\n\nThe usual culprits are unbounded caches and closures that keep references alive longer than intended [1], and event listeners or timers that are registered but never removed, so their captured scope cannot be collected [2]. Detached DOM-like object graphs and global arrays that only ever grow round out the list [3].",
+        "sources": [
+          {"title": "Node.js: Memory Diagnostics", "url": "https://nodejs.org/en/learn/diagnostics/memory"},
+          {"title": "V8: Trash talk (garbage collection)", "url": "https://v8.dev/blog/trash-talk"}
+        ]
+      },
+      {
+        "slot_number": 2,
+        "model_id": "anthropic/claude-haiku-4.5",
+        "display_name": "Claude Haiku 4.5",
+        "latency_ms": 4010,
+        "answer_text": "### The short list\n\nLeaks in long-running services usually come from caches without an eviction policy and from long-lived closures holding large objects [1]. The second big source is listeners and intervals that accumulate because nothing calls removeListener or clearInterval [2]. Module-level singletons that append forever are a frequent third [3].",
+        "sources": [
+          {"title": "Node.js: Memory Diagnostics", "url": "https://nodejs.org/en/learn/diagnostics/memory"},
+          {"title": "V8: Trash talk (garbage collection)", "url": "https://v8.dev/blog/trash-talk"}
+        ]
+      },
+      {
+        "slot_number": 3,
+        "model_id": "google/gemini-2.5-flash",
+        "display_name": "Gemini 2.5 Flash",
+        "latency_ms": 5220,
+        "answer_text": "## Position\n\nMost production leaks trace to two patterns: caches that grow without bound and closures that pin more state than the developer expects [1], and forgotten event or timer registrations that keep their scope reachable [2]. Growing global collections and promise chains that never settle are a common third pattern [3].",
+        "sources": [
+          {"title": "Node.js: Memory Diagnostics", "url": "https://nodejs.org/en/learn/diagnostics/memory"},
+          {"title": "V8: Trash talk (garbage collection)", "url": "https://v8.dev/blog/trash-talk"}
+        ]
+      },
+      {
+        "slot_number": 4,
+        "model_id": "deepseek/deepseek-chat-v3.1",
+        "display_name": "DeepSeek Chat v3.1",
+        "latency_ms": 6110,
+        "answer_text": "**Summary.** The dominant causes are unbounded in-memory caches and over-capturing closures [1], followed by listeners, subscriptions, and timers that are added but never cleaned up [2]. A steadily growing module-level array or map is the classic slow leak [3].",
+        "sources": [
+          {"title": "Node.js: Memory Diagnostics", "url": "https://nodejs.org/en/learn/diagnostics/memory"},
+          {"title": "V8: Trash talk (garbage collection)", "url": "https://v8.dev/blog/trash-talk"}
+        ]
+      }
+    ],
+    "final_synthesis": {
+      "status": "completed",
+      "consensus": "All four models agree the leading causes are unbounded caches and over-capturing closures, and un-removed event listeners or timers, with steadily growing global collections as a common third cause, per the Node.js memory-diagnostics guide and the V8 garbage-collection notes.",
+      "disagreement": "No material disagreement; the models order the same causes slightly differently and name different examples of the growing-collection pattern.",
+      "source_support": "Each answer cites the Node.js memory-diagnostics page and the V8 GC write-up; two of the three markers per answer resolve to those sources and the third points past the answer's own list.",
+      "uncertainty": "The panel does not quantify how often each cause occurs in practice, and none profiled a real service, so the ranking is qualitative.",
+      "recommendation": "Use as decision support: instrument heap snapshots before assuming a cause, and confirm the eviction and listener-teardown paths in the Node.js diagnostics guide.",
+      "high_stakes_notice": null,
+      "quality_checks": {
+        "false_consensus_preserved": false,
+        "decision_support_framing_present": true,
+        "high_stakes_warning_required": false
+      }
+    }
+  }
+}
