@@ -104,3 +104,35 @@ def test_route_templates_not_raw_paths_as_labels() -> None:
 
 def test_metrics_not_in_openapi_schema() -> None:
     assert "/metrics" not in app.openapi()["paths"]
+
+
+def test_bogus_http_method_never_becomes_a_label_value() -> None:
+    """Adversarial review finding (OD-1, major): attacker-chosen method tokens.
+
+    Every unique bogus HTTP method a public client sends would otherwise mint
+    a new persistent time series (unauthenticated slow memory growth + scrape
+    blowup).  Non-standard methods must be normalised to the ``OTHER``
+    sentinel before instrumentation sees them.
+    """
+    client = TestClient(app)
+    client.request("FOOBAR42XYZ", "/health")
+    text = _scrape(client)
+    assert 'method="FOOBAR42XYZ"' not in text
+    assert 'method="OTHER"' in text
+
+
+def test_404_path_containing_metrics_is_still_counted() -> None:
+    """Adversarial review finding (OD-1, minor): unanchored exclusion regex.
+
+    ``excluded_handlers`` is applied with ``re.search`` against the raw path
+    for untemplated requests, so a bare ``/metrics`` pattern silently drops
+    any 404 whose path merely contains the substring — hiding scanner
+    traffic.  The pattern must be anchored to the exact route.
+    """
+    client = TestClient(app)
+    before = _requests_total(_scrape(client), "none", "4xx")
+    assert client.get("/probe/metrics/x").status_code == 404
+    after = _requests_total(_scrape(client), "none", "4xx")
+    assert after == before + 1
+    # And the real /metrics route stays excluded (self-scrape guard intact).
+    assert 'handler="/metrics"' not in _scrape(client)

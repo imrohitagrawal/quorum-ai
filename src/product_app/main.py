@@ -230,14 +230,46 @@ app.mount("/static", StaticFiles(directory=str(STATIC_DIR)), name="static")
 
 # OD-1 observability: Prometheus exposition at /metrics. Routes are grouped
 # by route TEMPLATE (instrumentator default), so raw paths/UUIDs never become
-# label values; /metrics itself is excluded so a scrape does not count itself;
+# label values; /metrics itself is excluded so a scrape does not count itself
+# (the pattern is ANCHORED — excluded_handlers is applied with re.search
+# against the raw path for untemplated requests, so a bare "/metrics" would
+# silently drop any 404 whose path merely contains the substring);
 # include_in_schema=False keeps the plain-text route out of app.openapi(),
 # leaving the byte-faithful openapi.yaml drift guard and the Schemathesis
 # conformance gate untouched. Public-unauthenticated by design, like
 # /health, /ready and /status (pre-authorised decision, OD-1).
 Instrumentator(
-    excluded_handlers=["/metrics"],
+    excluded_handlers=["^/metrics$"],
 ).instrument(app).expose(app, include_in_schema=False)
+
+# Adversarial-review fix (OD-1, major): the instrumentator's `method` label
+# takes the request method verbatim, and uvicorn/h11 accept ARBITRARY method
+# tokens — so every unique bogus method a public client sends would mint a
+# new persistent time series (unauthenticated slow memory growth + scrape
+# blowup). Normalise unknown methods to a fixed sentinel BEFORE the metrics
+# middleware sees them. Added after .instrument(), so this wrapper is
+# outermost (Starlette: last added runs first). Routing semantics are
+# unchanged: no route accepts a non-standard method, so the response is 405
+# either way.
+_KNOWN_HTTP_METHODS = frozenset(
+    {"GET", "HEAD", "POST", "PUT", "DELETE", "CONNECT", "OPTIONS", "TRACE", "PATCH"}
+)
+
+
+class _NormalizeMethodLabelMiddleware:
+    """Replace non-standard HTTP method tokens with ``OTHER`` in the scope."""
+
+    def __init__(self, app: Any) -> None:
+        self._app = app
+
+    async def __call__(self, scope: Any, receive: Any, send: Any) -> None:
+        if scope.get("type") == "http" and scope.get("method") not in _KNOWN_HTTP_METHODS:
+            scope = dict(scope)
+            scope["method"] = "OTHER"
+        await self._app(scope, receive, send)
+
+
+app.add_middleware(_NormalizeMethodLabelMiddleware)
 
 # Monotonic start reference for /status uptime. Captured after the
 # app is constructed so the value reflects "when the process began
