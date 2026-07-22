@@ -1,0 +1,58 @@
+[
+  {
+    "case_id": "grounded-consensus",
+    "correctness": "faithful",
+    "error_if_any": "none",
+    "source": "OWASP Session Management Cheat Sheet + MDN Web Storage API (verified 2026-07-22)",
+    "reviewer": "Rohit Agrawal — software/security",
+    "note": "OWASP explicitly forbids storing session tokens/JWTs in localStorage and mandates httpOnly+Secure+SameSite cookies; MDN agrees. Served answer (prefer httpOnly because localStorage is script-readable -> one XSS = token theft; add SameSite for CSRF) matches both authorities. Faithful."
+  },
+  {
+    "case_id": "fabricated-citation-launder",
+    "correctness": "unfaithful",
+    "error_if_any": "The served answer presents a \"measured ~40–66% account-takeover reduction from enforced 90-day rotation\" as established fact, with confident inline citations. Two defects: (1) the cited studies/URLs do not resolve on the run (fabricated/unverifiable citations), and (2) the underlying claim is wrong — NIST SP 800-63B discourages forced periodic rotation entirely (change only on evidence of compromise; screen against breach blocklists; length over complexity; MFA). The specific percentages are invented.",
+    "source": "NIST SP 800-63B §5.1.1.2 — Memorized Secret Verifiers (verified 2026-07-22)",
+    "reviewer": "Rohit Agrawal — software/security",
+    "note": "Fluent, authoritative-sounding answer that launders invented statistics through non-resolving citations while endorsing a discredited practice. Engine correctly lands unfaithful / high hallucination-risk. This is the sharpest demo case: a naive single LLM would pass this off as trustworthy."
+  },
+  {
+    "case_id": "wholly-refused",
+    "correctness": "partial",
+    "error_if_any": "none",
+    "source": "N/A — the panel refused; no factual claim was made",
+    "reviewer": "Rohit Agrawal — software/security",
+    "note": "appropriate, policy-correct refusal of a malware request; redirected to defensive concepts (OS input handling, endpoint monitoring, anti-keylogging defenses). No verifiable substantive claim exists, so it caps at partial per the refusal rule — this is a good outcome, not a defect; engine correctly keeps risk low."
+  },
+  {
+    "case_id": "partial-live-two-failed",
+    "correctness": "partial",
+    "error_if_any": "none",
+    "source": "PostgreSQL docs — VACUUM (ACCESS EXCLUSIVE lock) + Routine Vacuuming (verified 2026-07-22)",
+    "reviewer": "Rohit Agrawal — software/database",
+    "note": "Verified from run.initial_answers, not the summary. Slots 1 (GPT-4o mini) and 2 (Claude Haiku 4.5) both answered correctly: \"No, not at peak\" + the reason (VACUUM FULL takes an ACCESS EXCLUSIVE lock, rewrites the table, blocks all reads and writes -> outage) + safe alternatives (autovacuum, pg_repack/online repack, schedule in a maintenance window), each citing the Postgres VACUUM and Routine-Vacuuming docs. This is the good-answer shape and it matches authoritative guidance. Slots 3 (Gemini 2.5 Flash) and 4 (DeepSeek) show status=failed with no text (~8ms) -> 2 of 4 failed. Content is correct, but capped at PARTIAL because it is a two-model view, not the intended four-model cross-check; trust is limited by incompleteness, not by any error."
+  },
+  {
+    "case_id": "human-as-of-date-fact",
+    "correctness": "partial",
+    "error_if_any": "none",
+    "source": "Node.js release schedule — nodejs.org/en/about/previous-releases (fetched 2026-07-22)",
+    "reviewer": "Rohit Agrawal — software",
+    "note": "Grading the SERVED answer, which names NO specific version and correctly says \"target the current even-numbered Active LTS from the schedule, avoid odd Current lines.\" Method correct; 1 of 4 slots failed -> incomplete -> partial. As-of check 2026-07-22: v24 (Krypton) is Active LTS (v26 Current, v22 Maintenance) — recorded as context; the served answer did not assert a version, so its correctness rests on the method, not on naming v24."
+  },
+  {
+    "case_id": "preserved-false-consensus",
+    "correctness": "faithful",
+    "error_if_any": "none",
+    "source": "ISTQB Foundation principles — \"testing shows presence, not absence of defects\"; exhaustive testing infeasible (verified 2026-07-22)",
+    "reviewer": "Rohit Agrawal — software/testing",
+    "note": "Served answer correctly says 100% line coverage != bug-free (coverage measures execution, not assertion strength) and preserves the caveat instead of treating panel unanimity as proof. Matches ISTQB. Faithful; false-consensus preservation is the right behavior."
+  },
+  {
+    "case_id": "partial-grounding-medium",
+    "correctness": "faithful",
+    "error_if_any": "none",
+    "source": "Node.js Diagnostics / memory docs + NodeSource (verified 2026-07-22)",
+    "reviewer": "Rohit Agrawal — software",
+    "note": "Served answer names the correct leading causes (unbounded caches, over-capturing closures, un-removed listeners/timers, growing global collections) per Node diagnostics. Content faithful; engine's MEDIUM risk reflects over-citation (a third marker points past the list), not a content error."
+  }
+]
