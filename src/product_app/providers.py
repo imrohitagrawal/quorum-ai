@@ -573,6 +573,42 @@ class ProviderExecutionService:
             provider_notice="Cancelled before model call started.",
         )
 
+    def deadline_exceeded_answer(self, model_slot: ModelSlot) -> InitialModelAnswer:
+        """Build a stub ``InitialModelAnswer`` for a slot cut by the run-level
+        wall-clock deadline (NFR-004 / P3).
+
+        Sibling of :meth:`cancelled_answer` — same field set, same FAILED
+        status, same rationale for existing as a thin helper (field drift
+        between failure constructors is a known footgun). The differences:
+
+        * ``error_code="RUN_DEADLINE_EXCEEDED"`` — the run's budget expired,
+          which is neither a user cancel nor a provider failure; the audit /
+          drift layer and the served payload must not misattribute it.
+        * ``provider_notice`` names the deadline so the UI's failure notice
+          is honest about WHY the slot has no answer.
+
+        FAILED status keeps the RB-5 rule automatic: a cut slot is never a
+        live answer, so it can never inflate the served ``live_count``.
+        """
+        return InitialModelAnswer(
+            slot_number=model_slot.slot_number,
+            model_id=model_slot.model_id,
+            display_name=_resolve_display_name(model_slot.model_id),
+            answer_text="",
+            sources=[],
+            provider_attempt_order=[ProviderPath.OPENROUTER_SEARCH],
+            provider_path=ProviderPath.OPENROUTER_SEARCH,
+            fallback_used=False,
+            status=InitialAnswerStatus.FAILED,
+            latency_ms=0,
+            citation_coverage=calculate_citation_coverage(
+                material_claim_count=0,
+                cited_claim_count=0,
+            ),
+            error_code="RUN_DEADLINE_EXCEEDED",
+            provider_notice="Run deadline reached before this model answered.",
+        )
+
     def _live_openrouter_response(
         self,
         *,

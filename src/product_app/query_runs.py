@@ -1223,6 +1223,38 @@ def _execute_query_run_with_semaphore_release(query_run_id: UUID, account_id: UU
 
 def _execute_query_run(query_run_id: UUID, account_id: UUID) -> None:
     query_run = query_run_repository.get(query_run_id)
+    # NFR-004 (P3): the run-level wall-clock budget. Measured with the same
+    # ``perf_counter`` idiom ``debate.py`` already uses for its own 180s
+    # round-2 gate — but bounding TOTAL run wall-clock, which nothing did
+    # before this slice. Checked at the blocking future-collection point and
+    # at each stage boundary; on breach the run degrades to an HONEST
+    # ``timed_out`` partial carrying everything completed so far (never a
+    # bare 500, never blank). Generous by default (180s, docs/11), so a
+    # normal-latency run — bounded far lower by per-call HTTP timeouts — is
+    # never cut; the checks themselves are two clock reads per boundary,
+    # nothing on the per-answer hot path.
+    _run_deadline_seconds = settings.quorum_run_deadline_seconds
+    _run_clock_start = _time_module.perf_counter()
+
+    def _budget_remaining() -> float:
+        return _run_deadline_seconds - (_time_module.perf_counter() - _run_clock_start)
+
+    def _degrade_for_deadline(
+        *, stage_name: str, failed_steps: list[str], missing_steps: list[str]
+    ) -> None:
+        query_run_repository.update_status(
+            query_run_id,
+            status_value=QueryRunStatus.TIMED_OUT,
+            stage_name=stage_name,
+            stage_state=StageState.FAILED,
+            detail=(
+                f"Run exceeded the {_run_deadline_seconds:g}s wall-clock deadline "
+                "(NFR-004); serving the completed portion."
+            ),
+            failed_steps=failed_steps,
+            missing_steps=missing_steps,
+        )
+
     openrouter_key = settings.openrouter_api_key or ""
     credential_source = ProviderCredentialSource.APP_OWNED
     if settings.openrouter_live_execution_enabled and not settings.openrouter_api_key:
@@ -1273,15 +1305,34 @@ def _execute_query_run(query_run_id: UUID, account_id: UUID) -> None:
         _initial_answer_pool.submit(_produce_one_initial_answer, slot)
         for slot in query_run.model_slots
     ]
-    for future in futures:
+    deadline_breached = False
+    for model_slot, future in zip(query_run.model_slots, futures, strict=True):
         try:
-            answer = future.result()
+            # ``result(timeout=0)`` returns a DONE future's answer immediately
+            # and raises for a pending one, so once the budget is spent every
+            # finished slot is still collected and only the genuinely
+            # unfinished ones are cut. The cut future keeps running on its
+            # pool thread (like a cancel); its late answer is simply never
+            # recorded.
+            answer = future.result(timeout=max(_budget_remaining(), 0.0))
+        except FuturesTimeoutError:
+            deadline_breached = True
+            answer = provider_execution_service.deadline_exceeded_answer(model_slot)
         except Exception:
             # Future failed unexpectedly; skip and continue
             continue
         if _should_stop(query_run_id):
             return
         query_run_repository.record_initial_answer(query_run_id, answer)
+
+    if deadline_breached:
+        _degrade_for_deadline(
+            stage_name="initial_answers",
+            failed_steps=["initial_answers"],
+            missing_steps=["debate_round_1", "debate_round_2", "synthesis"],
+        )
+        _mark_remaining_stages(query_run_id, ["debate_round_1", "debate_round_2", "synthesis"])
+        return
 
     refreshed = query_run_repository.get(query_run_id)
     if not any(
@@ -1313,6 +1364,14 @@ def _execute_query_run(query_run_id: UUID, account_id: UUID) -> None:
     )
     sleep(settings.stage_delay_ms / 1000)
     if _should_stop(query_run_id):
+        return
+    if _budget_remaining() <= 0:
+        _degrade_for_deadline(
+            stage_name="debate_round_1",
+            failed_steps=[],
+            missing_steps=["debate_round_1", "debate_round_2", "synthesis"],
+        )
+        _mark_remaining_stages(query_run_id, ["debate_round_2", "synthesis"])
         return
     debate_result = debate_stub_service.run_debate_rounds(
         account_id=account_id,
@@ -1381,6 +1440,13 @@ def _execute_query_run(query_run_id: UUID, account_id: UUID) -> None:
     )
     sleep(settings.stage_delay_ms / 1000)
     if _should_stop(query_run_id):
+        return
+    if _budget_remaining() <= 0:
+        _degrade_for_deadline(
+            stage_name="synthesis",
+            failed_steps=[],
+            missing_steps=["synthesis"],
+        )
         return
     latest = query_run_repository.get(query_run_id)
     synthesis_result = synthesis_stub_service.produce_final_synthesis(

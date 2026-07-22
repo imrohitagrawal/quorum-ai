@@ -118,6 +118,41 @@ class Settings(BaseSettings):
     #: definition and yields no verdict.
     quorum_eval_judge_max_tokens: int = 512
 
+    # --- Run-level wall-clock deadline (NFR-004 / NFR-001, P3) -----------
+    #: Total wall-clock budget for ONE query run, in seconds. docs/11 pins
+    #: the number: NFR-001 "hard timeout at 180 seconds", NFR-004 "a
+    #: completed result or a partial-result explanation within 180 seconds".
+    #: On breach the executor degrades the run to an HONEST partial result
+    #: (status ``timed_out``) carrying every slot completed so far — never a
+    #: bare 500, never a blank. Deliberately generous: the pipeline's own
+    #: per-call HTTP timeouts keep a healthy run far below this, so it is a
+    #: safety net, not a scheduler, and a normal-latency run is never cut.
+    #: Env var: ``QUORUM_RUN_DEADLINE_SECONDS``. Values <= 0 are rejected —
+    #: 0 must never mean "unlimited".
+    quorum_run_deadline_seconds: float = 180.0
+
+    #: Inclusive upper bound on the run deadline (1 hour). A larger value is
+    #: a config mistake, not a policy: the documented budget is 180s, and an
+    #: enormous float would overflow the underlying future-wait primitives
+    #: (observed: ``inf`` raises ``OverflowError`` inside ``Future.result``,
+    #: which would silently degrade healthy runs). Not configurable.
+    RUN_DEADLINE_MAX_SECONDS: ClassVar[float] = 3_600.0
+
+    @field_validator("quorum_run_deadline_seconds", mode="after")
+    @classmethod
+    def _run_deadline_within_bounds(cls, value: float) -> float:
+        if value <= 0:
+            raise ValueError(
+                "QUORUM_RUN_DEADLINE_SECONDS must be > 0; 0/negative would "
+                "cut every run immediately, never mean 'unlimited'"
+            )
+        if value > cls.RUN_DEADLINE_MAX_SECONDS:
+            raise ValueError(
+                "QUORUM_RUN_DEADLINE_SECONDS must be <= "
+                f"{cls.RUN_DEADLINE_MAX_SECONDS:g}; the documented budget is 180"
+            )
+        return value
+
     # --- Auth configuration ---------------------------------------------
     # Cookie security: in production we require Secure cookies. The auth
     # layer refuses to start otherwise.
