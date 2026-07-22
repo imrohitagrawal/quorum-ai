@@ -247,8 +247,11 @@ Instrumentator(
 # tokens — so every unique bogus method a public client sends would mint a
 # new persistent time series (unauthenticated slow memory growth + scrape
 # blowup). Normalise unknown methods to a fixed sentinel BEFORE the metrics
-# middleware sees them. Added after .instrument(), so this wrapper is
-# outermost (Starlette: last added runs first). Routing semantics are
+# middleware sees them. Added after .instrument(), so this wrapper runs
+# BEFORE the instrumentator middleware (the decorator-registered
+# security-headers middleware still wraps both — it only sets response
+# headers and never reads the method, verified in round-2 review).
+# Routing semantics are
 # unchanged: no route accepts a non-standard method, so the response is 405
 # either way.
 _KNOWN_HTTP_METHODS = frozenset(
