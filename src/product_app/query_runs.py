@@ -1562,6 +1562,9 @@ def _log_estimate_accuracy(query_run_id: UUID) -> None:
             estimated,
             actual,
             ratio,
+            # OD-3: structured field so aggregators can filter on the run id
+            # without regexing the message text (added, message unchanged).
+            extra={"query_run_id": str(query_run_id)},
         )
     except Exception as exc:  # noqa: BLE001 — telemetry must never crash a run
         logger.debug("cost_estimate_accuracy logging failed: %s", exc)
@@ -1670,7 +1673,11 @@ def _persist_run_evaluation(*, query_run: QueryRun, agreement: AgreementSummary)
             },
         )
     except Exception as exc:  # noqa: BLE001 — evaluation is best-effort telemetry
-        logger.warning("run evaluation persistence failed: %s", exc)
+        logger.warning(
+            "run evaluation persistence failed: %s",
+            exc,
+            extra={"query_run_id": str(query_run.query_run_id)},
+        )
 
 
 def _validated_model_slots(
@@ -1899,7 +1906,11 @@ def _evaluation_projection(
     try:
         result = _evaluate_terminal_run(query_run, agreement=agreement)
     except Exception as exc:  # noqa: BLE001 — evaluation must never fail a read
-        logger.warning("run evaluation failed, serving no evaluation: %s", exc)
+        logger.warning(
+            "run evaluation failed, serving no evaluation: %s",
+            exc,
+            extra={"query_run_id": str(query_run.query_run_id)},
+        )
         return None
     if result is None:
         return None
