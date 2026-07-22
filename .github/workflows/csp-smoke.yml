@@ -1,0 +1,108 @@
+name: CSP smoke (cross-engine, advisory)
+
+# RB-6 (PR-INFRA-D) — prove the workspace FUNCTIONS under the enforced
+# Content-Security-Policy on every browser engine, not just chromium.
+#
+# WHY ITS OWN WORKFLOW. The blocking lane `e2e.yml` bans `continue-on-error`
+# and gates production deploys (deploy.yml -> scripts/deploy_gate.py). A
+# brand-new cross-engine job placed there could block a production deploy on a
+# firefox/webkit quirk on day one. So this job lives in its own workflow and is
+# NOT a required status check — a red here does not block a merge. It is
+# advisory by construction, NOT by `continue-on-error` (which would mask the
+# very failures it exists to surface): the job fails honestly and visibly, it
+# simply does not gate.
+#
+# WHY NOT tests/invariants/. Any spec under `e2e/tests/invariants/*.spec.ts` is
+# FORCED into the blocking, deploy-gating `e2e.yml` by
+# test_e2e_workflow_covers_all_invariant_specs.py. So the smoke lives in
+# `e2e/tests/csp/` while advisory. Promotion to blocking then means MOVING it to
+# tests/invariants/ AND naming it in e2e.yml, in one deliberate PR.
+#
+# ---------------------------------------------------------------------------
+# D1 — PROMOTION TRIGGER (evidence-based, NOT a date). Advisory-by-date has
+# stalled twice in this repo. Promote this smoke into the blocking lane only
+# after **5 consecutive green runs on this workflow, each with >=1 EXECUTED
+# test per engine (chromium, firefox, webkit)** — a skipped or zero-executed
+# engine does not count. Record the 5 run ids in
+# docs/analysis/R2-remaining-stages-build-plan.md (RB-6 section) before opening
+# the promotion PR. Until then it stays here, advisory.
+# ---------------------------------------------------------------------------
+#
+# --retries=0 is mandatory (RB-4 policy): a retry would mask an intermittent
+# cross-engine CSP break. Pinned at the call site AND enforced by
+# tests/unit/test_e2e_flake_policy.py, which reads THIS workflow too.
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  csp-smoke:
+    name: CSP smoke ${{ matrix.browser }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    strategy:
+      # Each engine is an independent signal; never cancel a sibling on one
+      # engine's failure.
+      fail-fast: false
+      matrix:
+        browser: [chromium, firefox, webkit]
+    env:
+      OPENROUTER_LIVE_EXECUTION_ENABLED: "false"
+      # Stage B: the real var is RUNTIME_ENVIRONMENT (no env_prefix; "ci" is not
+      # a valid enum). "local" + the bounded override keep the /ui boot()'s
+      # /v1/session GET from tripping the 30/min per-IP limiter across engines.
+      RUNTIME_ENVIRONMENT: "local"
+      SESSION_RATE_LIMIT_PER_MINUTE: "600"
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v5
+        with:
+          version: "latest"
+          enable-cache: true
+
+      - name: Set up Python
+        run: uv python install 3.12
+
+      - name: Install backend dependencies
+        run: uv sync --all-extras --dev
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: "npm"
+          cache-dependency-path: e2e/package-lock.json
+
+      - name: Install e2e dependencies
+        working-directory: e2e
+        run: npm ci
+
+      - name: Install Playwright ${{ matrix.browser }} (+ system deps)
+        working-directory: e2e
+        # Only chromium is installed by the other lanes; this job needs the
+        # matrix engine's browser + its system deps.
+        run: npx playwright install --with-deps ${{ matrix.browser }}
+
+      - name: Run the CSP smoke on ${{ matrix.browser }}, unmasked
+        working-directory: e2e
+        # LITERAL spec path (not a directory, not a bare `tests/`): RB-4's
+        # D-18 guard is fail-closed and reds on a directory/omitted path arg.
+        # --project pins the engine; --retries=0 forbids masking.
+        run: >-
+          npx playwright test
+          tests/csp/csp-smoke.spec.ts
+          --project=${{ matrix.browser }}
+          --retries=0

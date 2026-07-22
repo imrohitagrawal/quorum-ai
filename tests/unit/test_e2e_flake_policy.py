@@ -34,6 +34,7 @@ PW_CONFIG = REPO_ROOT / "e2e" / "playwright.config.ts"
 WORKFLOW_DIR = REPO_ROOT / ".github" / "workflows"
 E2E_WORKFLOW = WORKFLOW_DIR / "e2e.yml"
 FLAKE_SCAN_WORKFLOW = WORKFLOW_DIR / "flake-scan.yml"
+CSP_SMOKE_WORKFLOW = WORKFLOW_DIR / "csp-smoke.yml"
 
 # Specs that compare pixels against a committed baseline. A baseline is
 # environment- AND engine-specific, so these may only ever run on the engine
@@ -153,6 +154,34 @@ def test_every_playwright_invocation_in_e2e_yml_passes_retries_zero() -> None:
             "every playwright invocation in the BLOCKING e2e lane must pass "
             f"--retries=0. Offending invocation:\n{command.strip()[:400]}"
         )
+
+
+def test_csp_smoke_workflow_pins_retries_zero() -> None:
+    """RB-6: the advisory cross-engine CSP smoke lives in its OWN workflow, which
+    escapes the e2e.yml-only ``--retries=0`` pin above — so pin it here too.
+
+    A retry would silently convert an intermittent cross-engine CSP break into a
+    green check, exactly the masking RB-4 forbids. Advisory (non-gating) does not
+    exempt it: an advisory signal that is quietly wrong is worse than none.
+    """
+    text = _read(CSP_SMOKE_WORKFLOW)
+    commands = _playwright_invocations(text)
+    assert commands, "csp-smoke.yml must invoke playwright at least once"
+    for command in commands:
+        assert "--retries=0" in command, (
+            "every playwright invocation in the advisory CSP-smoke lane must pass "
+            "--retries=0 (no masking, even advisory). Offending invocation:\n"
+            f"{command.strip()[:400]}"
+        )
+    # Advisory means NOT masked: the job must not hide failures behind
+    # continue-on-error (that is how a broken cross-engine signal goes unnoticed).
+    # It is advisory by not being a required status check, not by swallowing reds.
+    # Match the YAML KEY (`continue-on-error:`), not the bare word — the workflow
+    # comment explains *why it is banned* and must not trip its own gate.
+    assert not re.search(r"^\s*continue-on-error\s*:", text, re.MULTILINE), (
+        "csp-smoke.yml must fail honestly; it is advisory by not being a required "
+        "check, not by continue-on-error masking (RB-4 policy)."
+    )
 
 
 def test_a_flake_scan_workflow_exists_with_repeat_each_at_least_ten() -> None:
