@@ -81,7 +81,7 @@ exclude = ["^mutants/"]
 # ``sys.path`` insert. None are type-checkable here, so silence the
 # missing-import errors without weakening strictness elsewhere.
 [[tool.mypy.overrides]]
-module = ["yaml", "export_openapi", "validate_openapi_contract"]
+module = ["yaml", "export_openapi", "validate_openapi_contract", "evals_summary"]
 ignore_missing_imports = true
 
 [tool.pytest.ini_options]

@@ -51,7 +51,7 @@ PERF_REQUIRED_SPECS ?= tests/perf/test_perf_gate_hermeticity.py:6 tests/perf/tes
 DIFF_BASE ?= origin/main
 MUTMUT_PATHS ?= src/product_app
 
-.PHONY: check-python publishing-check skill-onboarding-check skill-discover handoff check-breaking apply-orbi-profile skill-route start next capture-idea validate validate-strict fr-completeness openapi-export openapi-check quality format format-check lint type-check test test-report gate-min-collected gate-min-executed perf-gate api-contract mutation-baseline diff-cover security-scan ci-evidence run docker-build feedback-audit
+.PHONY: check-python publishing-check skill-onboarding-check skill-discover handoff check-breaking apply-orbi-profile skill-route start next capture-idea validate validate-strict fr-completeness openapi-export openapi-check quality format format-check lint type-check test evals test-report gate-min-collected gate-min-executed perf-gate api-contract mutation-baseline diff-cover security-scan ci-evidence run docker-build feedback-audit
 
 check-python:
 	@if [ -z "$(PYTHON)" ]; then 		echo "ERROR: Python 3 is required. Install python3, or set PYTHON=/path/to/python3."; 		exit 127; 	fi
@@ -104,6 +104,12 @@ type-check:
 
 test:
 	UV_CACHE_DIR=$(UV_CACHE_DIR) uv run pytest
+
+# OD-4: run the eval suites and print an honest per-suite summary table.
+# Counts come from the real pytest run; the two pinned pilot measurements
+# are cited with their pinning docs, never restated as fresh numbers.
+evals:
+	UV_CACHE_DIR=$(UV_CACHE_DIR) uv run python scripts/evals_summary.py
 
 test-report:
 	mkdir -p build/test-results build/coverage
