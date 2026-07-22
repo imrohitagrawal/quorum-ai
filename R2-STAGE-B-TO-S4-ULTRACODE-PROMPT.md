@@ -65,6 +65,29 @@ Stage B `§ line 91`, RB-6 `§263`, RB-5 `§317`, S4 `§371`, execution protocol
 
 ---
 
+## REPO PROCESS FIXES (tracked issues — respect these every stage)
+
+These came out of Stage A's close-out and are logged as GitHub issues. Follow
+the behaviour now even before the mechanisms land; do NOT re-derive them the hard
+way. Full write-ups: `docs/103-incident-learnings.md`, practices in
+`docs/59-backend-engineering-practices.md` (§ CI/CD and deploy verification).
+
+- **#61 — `main` is single-writer and gated.** NEVER push to `main` directly,
+  not even a docs file. A follow-up push while a just-merged commit's CI is in
+  flight cancels that CI (per-SHA concurrency) and strands/reroutes the deploy —
+  this happened at Stage A close-out. Every change, including updating THIS
+  prompt or any doc, goes through a branch + PR.
+- **#62 — a green Deploy *run* is not a deploy.** The `deploy` job is conditional
+  (`if: needs.gate.outputs.proceed == 'true'`); when the gate declines it is
+  *skipped* while the run still reports `success`. Verify the per-SHA Deploy
+  **job** conclusion, never the run conclusion or a `/health` 200 (see step 7).
+- **#63 — close live risk first.** Stage B is first because it closes a
+  reachable paid/live-call exposure; the others are advisory/quality. Keep that
+  order unless the operator says otherwise.
+
+If you make progress on any of these (e.g. implement #62's fail-loud gate),
+do it as its own PR — do not fold it into a stage slice.
+
 ## PRE-AUTHORISED DECISIONS (operator has delegated these — implement them)
 
 ### D0 — APPROVED: build the rate-limit seam (Stage B)
@@ -166,6 +189,7 @@ If you ever feel pressure to fill one in — stop and ask.
 ## PER-STAGE LOOP
 
 1. Branch off updated `main` (`git fetch origin main && git switch -c <branch> origin/main`).
+   **Always branch — never commit to `main` directly, for code OR docs (#61).**
 2. Build per the plan. TDD, bite proofs.
 3. Local gates, stop on first red: `make validate` · `format-check` · `lint` ·
    `type-check` · `uv run pytest -q` · `make diff-cover` (≥95 on the slice) ·
@@ -183,8 +207,16 @@ If you ever feel pressure to fill one in — stop and ask.
    Read the actual failing log before deciding a failure is tolerable.
 6. **Auto-merge** when blocking-green + fixpoint:
    `gh pr merge <n> --squash --delete-branch`.
-7. Verify the deploy **JOB ran** (not `skipped`/`cancelled`) and prod serves the
-   new build — **grep a served asset**, never trust a `/health` 200 alone.
+7. Verify the deploy by the per-SHA Deploy **JOB** conclusion, not the run's (#62):
+   ```bash
+   gh run view <deploy-run-id> --json jobs \
+     --jq '.jobs[] | select(.name|startswith("Deploy to Fly")) | .conclusion'
+   # must print "success" — "skipped" means NOT deployed even if the run is green.
+   ```
+   Then confirm prod serves the new build — **grep a served asset** or the
+   `/ready` build stamp — never trust a `/health` 200 alone. After the merge,
+   do NOT push anything else to `main` until this commit's CI has finished, or
+   you will cancel it (#61).
 8. Update the ledger / DEBT rows citing REAL, new-since-baseline, **git-tracked**
    artifacts. Register new proof artifacts in
    `tests/test_findings_ledger_consistency.py` or the DONE-row gate hard-fails —

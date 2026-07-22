@@ -48,6 +48,27 @@ This document captures the backend engineering bar for generated services. It ap
 - Add metrics and traces for critical flows.
 - Record evidence in `docs/57-test-evidence.md` and `docs/73-release-evidence.md`.
 
+## CI/CD and deploy verification
+
+Learned the hard way; see `docs/103-incident-learnings.md` for the incidents.
+
+- **`main` is single-writer and gated.** Change it only through a PR that passes
+  the required checks — never a direct push, not even for docs. A follow-up push
+  while a just-merged commit's CI is in flight cancels that CI (per-SHA
+  concurrency) and can strand or reroute the deploy. Tracked: #61.
+- **A green Deploy *run* is not a deploy.** The deploy job is conditional; when
+  the gate declines it is *skipped* while the run still reports `success`. Verify
+  the per-SHA Deploy **job** conclusion is `success` (not `skipped`/`cancelled`),
+  and that prod serves the new build — grep a served asset or the `/ready` build
+  stamp, never a bare `/health` 200. A stranded merge should fail loud; tracked: #62.
+- **"Green" is a claim, not a proof.** A local test run can pass on stale
+  gitignored `build/` artifacts from a previous run. For anything that reads
+  generated files, control the inputs before trusting the result — simulate a
+  fresh checkout (`mv build /tmp/b && uv run pytest -q; mv /tmp/b build`).
+- **Order work to close live risk first.** When sequencing independent slices,
+  schedule the one that closes an open security/safety exposure ahead of advisory
+  or quality slices. Tracked: #63.
+
 ## Driver skill
 
 Use `python-fastapi-backend-guardrails` as reviewer for Python/FastAPI/backend work.
