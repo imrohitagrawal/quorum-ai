@@ -12,10 +12,25 @@ name: Availability check (prod /ready)
 #     pipeline is perfectly green (the OpenRouter-403 incident shape).
 #
 # THE ALERT: a failing scheduled job triggers GitHub's native workflow-
-# failure email to the repo owner. That IS the alert channel — no paid
-# service, no issue spam, no webhook infra. docs/80-observability.md
-# documents this as alert rule 1 (readiness-not-live, MECHANISED); rule 2
-# (error-rate over SLO) remains documented-not-yet-mechanised there.
+# failure email. That IS the alert channel — no paid service, no issue
+# spam, no webhook infra. docs/80-observability.md documents this as alert
+# rule 1 (readiness-not-live, MECHANISED); rule 2 (error-rate over SLO)
+# remains documented-not-yet-mechanised there.
+#
+# HONEST LIMITS of this channel (review finding — know them, they are
+# accepted trade-offs for a $0 demo alert):
+#   * GitHub auto-disables SCHEDULED workflows after ~60 days without
+#     repo activity — the alert dies silently on an abandoned repo.
+#   * The failure email goes to the actor attributed to the cron run
+#     (the last committer to touch the schedule) and honours that user's
+#     Actions notification settings.
+#   * GitHub emails on EVERY failed run — a sustained outage at */15 is
+#     ~96 emails/day. Loud by design; the operator can pause via the
+#     workflow's Disable button during a known incident.
+#   * Single-sample check, NO retry (deliberate): one runner-side blip
+#     = one email; at a 15-min cadence a transient false positive
+#     self-clears on the next run, and a retry loop would mask real
+#     flapping. Honest signal over quiet signal.
 #
 # TRIGGERS — schedule + workflow_dispatch ONLY, and this is load-bearing:
 # a slow job on the push path once silently stopped every deploy
@@ -54,9 +69,13 @@ jobs:
             if [ "$CODE" != "200" ]; then
               echo "FAIL: $URL returned HTTP $CODE (expected 200)"; FAILED=1; continue;
             fi
-            STATE=$(printf '%s' "$JSON" | jq -r '.live_readiness.state // "MISSING"')
+            # Guarded assignment: on a non-JSON body (e.g. a 200 HTML error
+            # page) jq exits non-zero and its // fallback never fires; the
+            # guard keeps the diagnostic honest AND keeps the runner's
+            # default `bash -e` from aborting the loop mid-way.
+            STATE=$(printf '%s' "$JSON" | jq -r '.live_readiness.state // "MISSING"' 2>/dev/null) || STATE="UNPARSEABLE"
             if [ "$STATE" != "live" ]; then
-              REASONS=$(printf '%s' "$JSON" | jq -c '.live_readiness.reasons // []')
+              REASONS=$(printf '%s' "$JSON" | jq -c '.live_readiness.reasons // []' 2>/dev/null) || REASONS="[unparseable body]"
               echo "FAIL: $URL state=$STATE (expected \"live\"), reasons=$REASONS"; FAILED=1;
             fi
           done

@@ -51,12 +51,35 @@ def test_schedule_is_roughly_every_15_minutes() -> None:
     assert crons == ["*/15 * * * *"]
 
 
-def test_job_curls_ready_and_fails_on_not_live() -> None:
-    text = WORKFLOW.read_text(encoding="utf-8")
-    assert "/ready" in text
-    assert '"live"' in text or "'live'" in text or "state" in text
-    # the failure IS the alert — no issue creation, no extra infra
-    assert "exit 1" in text
+def _run_script() -> str:
+    """The job's actual shell script — comments in the file must not be able
+    to satisfy these assertions (review finding: whole-file text matching
+    let the header comment carry the test)."""
+    data = _load()
+    steps = data["jobs"]["check-ready"]["steps"]
+    scripts = [s["run"] for s in steps if "run" in s]
+    assert scripts, "check-ready job has no run step"
+    return "\n".join(scripts)
+
+
+def test_job_script_curls_ready_on_both_prod_hosts() -> None:
+    script = _run_script()
+    assert "https://quorum-ai.fly.dev/ready" in script
+    assert "https://quorum.stackclimb.com/ready" in script
+
+
+def test_job_script_fails_on_not_live_and_non_200() -> None:
+    script = _run_script()
+    assert '!= "live"' in script or "!= 'live'" in script
+    assert '"200"' in script
+    # the failure IS the alert — the script must be able to exit non-zero
+    assert "exit 1" in script
+
+
+def test_job_script_guards_unparseable_bodies() -> None:
+    """A 200 HTML error page must fail loudly, not crash confusingly."""
+    script = _run_script()
+    assert "UNPARSEABLE" in script
 
 
 def test_not_in_deploy_gate_required_set() -> None:

@@ -51,8 +51,16 @@ Two alert rules are declared; mechanisation status is stated honestly:
    `.github/workflows/availability-check.yml` runs every 15 minutes
    (`schedule` + `workflow_dispatch` only — never the push path; trigger
    surface pinned by `tests/unit/test_availability_check_workflow.py`);
-   a failing job triggers GitHub's native workflow-failure email to the
-   operator, which is the alert channel ($0, no new infra).
+   a failing job triggers GitHub's native workflow-failure email, which
+   is the alert channel ($0, no new infra). Verify it is live at any
+   time: `gh run list --workflow=availability-check.yml` (the schedule
+   activates once the file is on `main`; the post-merge
+   `workflow_dispatch` proof run is recorded in
+   `OBSERVABILITY-DEMO-RESULT.md`). Known, accepted limits of the
+   channel — 60-day scheduled-workflow auto-disable on repo inactivity,
+   actor-attributed notification routing, one email per failed run
+   (~96/day on a sustained outage at this cadence), single-sample
+   no-retry check — are documented in the workflow header.
 2. **Error rate over SLO** — 5xx rate above the 1% SLO over a sustained
    window. Status: **documented, not yet mechanised** (needs a scrape
    history; candidate follow-up after OD-5).
