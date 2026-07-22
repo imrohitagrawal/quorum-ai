@@ -1,0 +1,90 @@
+/* OD-2 ops dashboard — self-contained, same-origin, CSP-clean.
+   Palette mirrors the workspace tokens (cool paper / ink) without
+   depending on app.css, so the page stands alone. */
+
+:root {
+  --paper: #f6f5f2;
+  --surface: #ffffff;
+  --ink: #14171c;
+  --secondary: #5c6370;
+  --line: rgba(20, 23, 28, 0.12);
+  --ok: #1d7a4f;
+  --bad: #b3261e;
+}
+
+* { box-sizing: border-box; }
+
+body {
+  margin: 0;
+  background: var(--paper);
+  color: var(--ink);
+  font-family: system-ui, -apple-system, "Segoe UI", sans-serif;
+  font-size: 16px;
+  line-height: 1.5;
+}
+
+.skip-link {
+  position: absolute;
+  left: -9999px;
+  top: 0;
+  background: var(--surface);
+  padding: 8px 12px;
+}
+.skip-link:focus { left: 8px; z-index: 10; }
+
+:focus-visible { outline: 3px solid var(--ink); outline-offset: 3px; }
+
+.ops-topbar { padding: 24px 32px 8px; }
+.ops-topbar h1 { margin: 0 0 4px; font-size: 1.4rem; }
+.ops-sub { margin: 0; max-width: 72ch; color: var(--secondary); font-size: 0.9rem; }
+.ops-sub code { font-family: ui-monospace, monospace; font-size: 0.85em; }
+.ops-meta { margin: 8px 0 0; font-size: 0.85rem; color: var(--secondary); }
+.ops-error { color: var(--bad); font-weight: 600; margin-left: 12px; }
+
+.ops-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+  gap: 16px;
+  padding: 16px 32px 32px;
+  max-width: 1400px;
+}
+
+.tile {
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  padding: 16px 18px;
+  min-width: 0; /* grid item: never force horizontal overflow */
+}
+.tile h2 {
+  margin: 0 0 8px;
+  font-size: 0.8rem;
+  font-weight: 650;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--secondary);
+}
+.tile-value { margin: 0; font-size: 1.8rem; font-weight: 650; overflow-wrap: anywhere; }
+.tile-unit { font-size: 0.9rem; font-weight: 400; color: var(--secondary); }
+.tile-slo { margin: 4px 0 0; font-size: 0.85rem; }
+.tile-slo .slo-pass { color: var(--ok); font-weight: 650; }
+.tile-slo .slo-fail { color: var(--bad); font-weight: 650; }
+.tile-slo .slo-unknown { color: var(--secondary); }
+.tile-note { margin: 4px 0 0; font-size: 0.78rem; color: var(--secondary); }
+
+.spark {
+  display: block;
+  width: 100%;
+  height: 28px;
+  margin-top: 8px;
+}
+.spark polyline {
+  fill: none;
+  stroke: var(--ink);
+  stroke-width: 1.5;
+}
+
+@media (max-width: 480px) {
+  .ops-topbar, .ops-grid { padding-left: 16px; padding-right: 16px; }
+  .tile-value { font-size: 1.4rem; }
+}
