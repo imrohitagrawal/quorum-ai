@@ -123,6 +123,20 @@ code {
   overflow-wrap: anywhere;
 }
 
+/* Per-tile relevance copy: static explanation, visually quiet — the value
+   stays the loudest thing on the tile. Separated from .tile-note by a hair
+   rule so "what it is" and "why it matters" read as distinct registers. */
+.tile-why,
+.tile-red {
+  margin: var(--space-2) 0 0;
+  font-size: 0.78rem;
+  color: var(--text-secondary);
+  overflow-wrap: anywhere;
+}
+.tile-why { border-top: 1px solid var(--line); padding-top: var(--space-2); }
+.tile-why strong,
+.tile-red strong { font-weight: 650; color: var(--ink); }
+
 .spark {
   display: block;
   width: 100%;

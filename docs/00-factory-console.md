@@ -32,6 +32,18 @@ label). Pilot extended to n = 10, computed agreement 10/10 — see
 `docs/metrics/accuracy-pilot.md` and `docs/metrics/operator-label-queue.md`;
 quality-ledger Part 2 stays em-dash.
 
+**Ops-page self-explanation is COMPLETE (2026-07-23).** PR #85 ("Metrics,
+explained" + shared `tokens.css`) merged and deploy-verified (Deploy JOB
+`29986199802` success, prod content-verified). Follow-up PR (branch
+`feat/ops-tile-relevance`): every SLO tile on `/ui/ops` now carries a static
+"Why this matters" line and — where a red/non-live state exists — a
+"When it's red" first-action hint; values stay live-computed, `/metrics`
+bytes untouched. Two-reviewer adversarial pass iterated to a fixpoint over
+two rounds (ready-state naming corrected to the real `ReadinessState`
+literals; static-explanation guard hardened against same-element and
+ancestor sink placement). CSP `base-uri`/`form-action` hardening is
+deliberately unbundled and tracked as issue #86.
+
 **The next action is the deferred, OPERATOR-GATED funding step:** fund the
 OpenRouter key and set `QUORUM_EVAL_JUDGE_API_KEY` + `QUORUM_EVAL_JUDGE_MODEL_ID`
 as Fly secrets, then perform ONE deliberate measured run to verify live

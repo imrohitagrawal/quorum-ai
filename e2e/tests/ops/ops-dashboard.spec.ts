@@ -224,6 +224,43 @@ test.describe("ops dashboard", () => {
     }
   });
 
+  test("every tile carries visible relevance copy (why + when-red where apt)", async ({
+    page,
+  }) => {
+    await page.goto("/ui/ops");
+    await expect(page.locator('[data-current="version"]')).not.toHaveText("—", {
+      timeout: 10_000,
+    });
+    // All six tiles explain why the number matters…
+    for (const key of ["rate", "p95", "err", "ready", "uptime", "version"]) {
+      const why = page.locator(`[data-why="${key}"]`);
+      await expect(why, `tile ${key} why-copy`).toBeVisible();
+      const text = (await why.textContent()) ?? "";
+      expect(text.trim().length, `tile ${key} why-copy is substantive`).toBeGreaterThan(
+        30,
+      );
+    }
+    // …and the tiles with a red/non-live state carry a first-action hint.
+    for (const key of ["rate", "p95", "err", "ready"]) {
+      await expect(
+        page.locator(`[data-red="${key}"]`),
+        `tile ${key} red-hint`,
+      ).toBeVisible();
+    }
+    // The copy is explanation, not measurement: no relevance node may BE,
+    // CONTAIN, or SIT INSIDE a live-value slot (same-element, descendant and
+    // ancestor cases — breaker findings across two review rounds; in the
+    // real template every data-current element is a leaf, so the ancestor
+    // clauses can never match legitimately).
+    await expect(
+      page.locator(
+        "[data-why][data-current], [data-why] [data-current], " +
+          "[data-red][data-current], [data-red] [data-current], " +
+          "[data-current] [data-why], [data-current] [data-red]",
+      ),
+    ).toHaveCount(0);
+  });
+
   test("axe: no critical/serious violations", async ({ page }) => {
     await page.goto("/ui/ops");
     await expect(page.locator('[data-current="version"]')).not.toHaveText("—", {
