@@ -1,26 +1,26 @@
-/* OD-2 ops dashboard — self-contained, same-origin, CSP-clean.
-   Palette mirrors the workspace tokens (cool paper / ink) without
-   depending on app.css, so the page stands alone. */
-
-:root {
-  --paper: #f6f5f2;
-  --surface: #ffffff;
-  --ink: #14171c;
-  --secondary: #5c6370;
-  --line: rgba(20, 23, 28, 0.12);
-  --ok: #1d7a4f;
-  --bad: #b3261e;
-}
+/* OD-2 ops dashboard — same-origin, CSP-clean.
+ *
+ * Built ON the shared workspace design tokens (/static/tokens.css —
+ * loaded by ops.html BEFORE this file): palette, typography, spacing,
+ * radii and shadows are the exact tokens the workspace uses, so the
+ * two surfaces can never drift. This file declares NO tokens of its
+ * own — component styles only.
+ *
+ * Green rule honoured: green appears ONLY on the brand Q tile and
+ * PASS verdicts (a completed/healthy state); errors are --danger;
+ * everything decorative stays ink/paper.
+ */
 
 * { box-sizing: border-box; }
 
 body {
   margin: 0;
-  background: var(--paper);
+  background: var(--bg);
   color: var(--ink);
-  font-family: system-ui, -apple-system, "Segoe UI", sans-serif;
+  font-family: var(--font-sans);
   font-size: 16px;
   line-height: 1.5;
+  -webkit-font-smoothing: antialiased;
 }
 
 .skip-link {
@@ -28,52 +28,96 @@ body {
   left: -9999px;
   top: 0;
   background: var(--surface);
-  padding: 8px 12px;
+  padding: var(--space-2) var(--space-3);
+  border-radius: var(--radius-xs);
 }
-.skip-link:focus { left: 8px; z-index: 10; }
+.skip-link:focus { left: var(--space-2); z-index: 10; }
 
-:focus-visible { outline: 3px solid var(--ink); outline-offset: 3px; }
+:focus-visible { outline: 3px solid var(--focus-ring); outline-offset: 3px; }
 
-.ops-topbar { padding: 24px 32px 8px; }
-.ops-topbar h1 { margin: 0 0 4px; font-size: 1.4rem; }
-.ops-sub { margin: 0; max-width: 72ch; color: var(--secondary); font-size: 0.9rem; }
-.ops-sub code { font-family: ui-monospace, monospace; font-size: 0.85em; }
-.ops-meta { margin: 8px 0 0; font-size: 0.85rem; color: var(--secondary); }
-.ops-error { color: var(--bad); font-weight: 600; margin-left: 12px; }
+a { color: var(--info); text-underline-offset: 2px; }
+a:hover { color: var(--ink); }
+
+code {
+  font-family: var(--font-mono);
+  font-size: 0.85em;
+  background: var(--inset);
+  border-radius: var(--radius-xs);
+  padding: 1px 5px;
+  /* Long metric tokens (http_request_duration_seconds_bucket) sit inline in
+     prose that is NOT inside a scroll box — break them rather than push past
+     the panel edge on a very narrow viewport. */
+  overflow-wrap: anywhere;
+}
+
+/* ----- Topbar ---------------------------------------------------------- */
+
+.ops-topbar { padding: var(--space-6) var(--space-7) var(--space-2); max-width: 1400px; }
+.ops-brand { display: flex; align-items: center; gap: var(--space-3); }
+.ops-brand h1 { margin: 0; font-size: 1.4rem; font-weight: 650; letter-spacing: -0.01em; }
+/* The one sanctioned green surface on this page: the brand Q tile
+   (theme-invariant, same as the workspace wordmark). */
+.ops-brand-tile {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 32px;
+  height: 32px;
+  border-radius: var(--radius-xs);
+  background: var(--brand-tile-bg);
+  color: var(--brand-tile-fg);
+  font-family: var(--font-serif);
+  font-weight: 600;
+  font-size: 1.15rem;
+}
+.ops-sub { margin: var(--space-2) 0 0; max-width: 72ch; color: var(--text-secondary); font-size: 0.9rem; }
+.ops-meta { margin: var(--space-2) 0 0; font-size: 0.85rem; color: var(--muted); font-family: var(--font-mono); }
+.ops-error { color: var(--danger); font-weight: 600; margin-left: var(--space-3); font-family: var(--font-sans); }
+
+/* ----- SLO tiles -------------------------------------------------------- */
 
 .ops-grid {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
-  gap: 16px;
-  padding: 16px 32px 32px;
+  gap: var(--space-4);
+  padding: var(--space-4) var(--space-7) var(--space-6);
   max-width: 1400px;
 }
 
 .tile {
   background: var(--surface);
-  border: 1px solid var(--line);
-  border-radius: 10px;
-  padding: 16px 18px;
+  border: 1px solid var(--line-2);
+  border-radius: var(--radius-md);
+  box-shadow: var(--shadow-sm);
+  padding: var(--space-4) var(--space-5);
   min-width: 0; /* grid item: never force horizontal overflow */
 }
 .tile h2 {
-  margin: 0 0 8px;
+  margin: 0 0 var(--space-2);
   font-size: 0.8rem;
   font-weight: 650;
   text-transform: uppercase;
   letter-spacing: 0.06em;
-  color: var(--secondary);
+  color: var(--text-secondary);
 }
-.tile-value { margin: 0; font-size: 1.8rem; font-weight: 650; overflow-wrap: anywhere; }
-.tile-unit { font-size: 0.9rem; font-weight: 400; color: var(--secondary); }
-.tile-slo { margin: 4px 0 0; font-size: 0.85rem; overflow-wrap: anywhere; }
-.tile-slo .slo-pass { color: var(--ok); font-weight: 650; }
-.tile-slo .slo-fail { color: var(--bad); font-weight: 650; }
-.tile-slo .slo-unknown { color: var(--secondary); }
+/* Counters/timings render in the mono face, per the workspace type rules
+   (Geist Mono = money/IDs/timings/counters). */
+.tile-value {
+  margin: 0;
+  font-size: 1.8rem;
+  font-weight: 600;
+  font-family: var(--font-mono);
+  overflow-wrap: anywhere;
+}
+.tile-unit { font-size: 0.9rem; font-weight: 400; color: var(--text-secondary); font-family: var(--font-sans); }
+.tile-slo { margin: var(--space-1) 0 0; font-size: 0.85rem; overflow-wrap: anywhere; }
+.tile-slo .slo-pass { color: var(--success); font-weight: 650; }
+.tile-slo .slo-fail { color: var(--danger); font-weight: 650; }
+.tile-slo .slo-unknown { color: var(--muted); }
 .tile-note {
-  margin: 4px 0 0;
+  margin: var(--space-1) 0 0;
   font-size: 0.78rem;
-  color: var(--secondary);
+  color: var(--muted);
   /* OD-2 review finding: unbroken tokens (e.g. env-var names in readiness
      reasons) clipped at the tile border at 1440px. Break anywhere. */
   overflow-wrap: anywhere;
@@ -83,15 +127,112 @@ body {
   display: block;
   width: 100%;
   height: 28px;
-  margin-top: 8px;
+  margin-top: var(--space-2);
 }
 .spark polyline {
   fill: none;
-  stroke: var(--ink);
+  stroke: var(--info);
   stroke-width: 1.5;
 }
 
+/* ----- Metrics, explained ---------------------------------------------- */
+
+.explained {
+  padding: 0 var(--space-7) var(--space-8);
+  max-width: 1100px;
+}
+.explained-header { margin: var(--space-6) 0 var(--space-5); max-width: 72ch; }
+/* Display heading in the workspace serif, echoing the workspace's
+   display type (Newsreader). */
+.explained-title {
+  margin: 0 0 var(--space-2);
+  font-family: var(--font-serif);
+  font-weight: 500;
+  font-size: 1.9rem;
+  letter-spacing: -0.01em;
+}
+.explained-lede { margin: 0; color: var(--text-secondary); }
+
+.explainer {
+  background: var(--surface);
+  border: 1px solid var(--line-2);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-sm);
+  padding: var(--space-6);
+  margin: 0 0 var(--space-5);
+}
+.explainer h3 { margin: 0 0 var(--space-3); font-size: 1.15rem; font-weight: 650; }
+.explainer p { margin: 0 0 var(--space-3); max-width: 76ch; color: var(--body); }
+.explainer p:last-child { margin-bottom: 0; }
+.explainer-note {
+  border-left: 3px solid var(--warning);
+  background: var(--warning-soft);
+  border-radius: 0 var(--radius-xs) var(--radius-xs) 0;
+  padding: var(--space-3) var(--space-4);
+  font-size: 0.9rem;
+}
+
+/* Catalog groups + tables. */
+.catalog-group { margin-top: var(--space-5); }
+.catalog-group h4 { margin: 0 0 var(--space-1); font-size: 1rem; font-weight: 650; }
+.catalog-group-note { font-size: 0.88rem; color: var(--text-secondary); }
+.catalog-empty { font-size: 0.88rem; color: var(--muted); font-style: italic; }
+/* Wide content scrolls INSIDE its own box — the page never scrolls
+   horizontally (the e2e overflow gate exempts exactly this pattern). */
+.catalog-scroll { overflow-x: auto; }
+.catalog-table {
+  border-collapse: collapse;
+  width: 100%;
+  font-size: 0.88rem;
+}
+.catalog-table th {
+  text-align: left;
+  font-size: 0.72rem;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--muted);
+  font-weight: 650;
+  padding: var(--space-2) var(--space-4) var(--space-2) 0;
+  border-bottom: 1px solid var(--line-strong);
+  white-space: nowrap;
+}
+.catalog-table td {
+  padding: var(--space-2) var(--space-4) var(--space-2) 0;
+  border-bottom: 1px solid var(--line);
+  vertical-align: top;
+}
+.catalog-table td:first-child {
+  font-family: var(--font-mono);
+  font-size: 0.82rem;
+  white-space: nowrap;
+}
+.catalog-table td:nth-child(2),
+.catalog-table td:nth-child(3) {
+  font-family: var(--font-mono);
+  font-size: 0.82rem;
+  color: var(--text-secondary);
+  white-space: nowrap;
+}
+.slo-table td:first-child { font-family: var(--font-sans); font-size: 0.88rem; white-space: normal; }
+.slo-table td:nth-child(2) { font-family: var(--font-sans); font-size: 0.88rem; color: var(--body); white-space: normal; }
+.slo-table td:nth-child(3) { font-family: var(--font-sans); font-size: 0.88rem; color: var(--text-secondary); white-space: normal; }
+
+/* How-to-read block. */
+.howto-code {
+  background: var(--inset);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+  padding: var(--space-3) var(--space-4);
+  overflow-x: auto;
+  margin: 0 0 var(--space-4);
+}
+.howto-code code { background: none; padding: 0; font-size: 0.85rem; }
+.howto-list { margin: 0; }
+.howto-list dt { font-weight: 650; margin-top: var(--space-3); }
+.howto-list dd { margin: var(--space-1) 0 0 0; max-width: 76ch; color: var(--body); }
+
 @media (max-width: 480px) {
-  .ops-topbar, .ops-grid { padding-left: 16px; padding-right: 16px; }
+  .ops-topbar, .ops-grid, .explained { padding-left: var(--space-4); padding-right: var(--space-4); }
   .tile-value { font-size: 1.4rem; }
+  .explainer { padding: var(--space-4); }
 }

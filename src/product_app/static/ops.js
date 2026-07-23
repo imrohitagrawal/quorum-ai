@@ -62,6 +62,112 @@
     return { totals: totals, buckets: buckets };
   }
 
+  /* Metric-family catalog parsing: every "# HELP"/"# TYPE" comment plus a
+   * per-family series count, so the "Metrics, explained" catalog renders
+   * the LIVE family set — never a hardcoded list. */
+  function parseFamilies(text) {
+    var families = {}; // name -> {name, type, help, series}
+    var order = [];
+    var lines = text.split("\n");
+    var i, line;
+    for (i = 0; i < lines.length; i++) {
+      line = lines[i];
+      if (line.indexOf("# HELP ") === 0) {
+        var rest = line.slice(7);
+        var sph = rest.indexOf(" ");
+        var hname = sph < 0 ? rest : rest.slice(0, sph);
+        if (!families[hname]) {
+          families[hname] = { name: hname, type: "untyped", help: "", series: 0 };
+          order.push(hname);
+        }
+        families[hname].help = sph < 0 ? "" : rest.slice(sph + 1);
+      } else if (line.indexOf("# TYPE ") === 0) {
+        var restT = line.slice(7);
+        var spt = restT.indexOf(" ");
+        var tname = spt < 0 ? restT : restT.slice(0, spt);
+        if (!families[tname]) {
+          families[tname] = { name: tname, type: "untyped", help: "", series: 0 };
+          order.push(tname);
+        }
+        families[tname].type = spt < 0 ? "untyped" : restT.slice(spt + 1);
+      }
+    }
+    /* Series counts: a sample belongs to a family when its base name is the
+     * family name or the family name + a histogram/summary suffix. */
+    var suffixes = ["", "_bucket", "_count", "_sum"];
+    for (i = 0; i < lines.length; i++) {
+      line = lines[i];
+      if (!line || line.charAt(0) === "#") continue;
+      var brace = line.indexOf("{");
+      var space = line.indexOf(" ");
+      var end = brace >= 0 && (space < 0 || brace < space) ? brace : space;
+      if (end < 0) continue;
+      var base = line.slice(0, end);
+      for (var s = 0; s < suffixes.length; s++) {
+        var candidate = suffixes[s] ? base.slice(0, base.length - suffixes[s].length) : base;
+        if (suffixes[s] && base.slice(-suffixes[s].length) !== suffixes[s]) continue;
+        if (families[candidate]) {
+          families[candidate].series += 1;
+          break;
+        }
+      }
+    }
+    return order.map(function (name) { return families[name]; });
+  }
+
+  var GROUPS = ["http", "process", "python"];
+
+  function groupOf(familyName) {
+    var prefix = familyName.split("_")[0];
+    return GROUPS.indexOf(prefix) >= 0 ? prefix : "other";
+  }
+
+  /* Rebuild the catalog tables from the freshly parsed families. DOM nodes
+   * are created element-by-element and filled via textContent ONLY — provider
+   * help text never becomes markup. */
+  function renderCatalog(families) {
+    var byGroup = { http: [], process: [], python: [], other: [] };
+    for (var i = 0; i < families.length; i++) {
+      byGroup[groupOf(families[i].name)].push(families[i]);
+    }
+    var nonEmptyGroups = 0;
+    var keys = ["http", "process", "python", "other"];
+    for (var g = 0; g < keys.length; g++) {
+      var key = keys[g];
+      var body = document.querySelector('[data-group-body="' + key + '"]');
+      if (!body) continue;
+      while (body.firstChild) body.removeChild(body.firstChild);
+      var rows = byGroup[key];
+      if (rows.length) nonEmptyGroups += 1;
+      var section = document.querySelector('[data-group="' + key + '"]');
+      if (section && key === "other") section.hidden = rows.length === 0;
+      /* Empty known group (e.g. process_* off-Linux): show the honest
+       * empty-state note and hide the bare table headers. */
+      var emptyNote = document.querySelector('[data-group-empty="' + key + '"]');
+      if (emptyNote) emptyNote.hidden = rows.length > 0;
+      var scroll = section ? section.querySelector(".catalog-scroll") : null;
+      if (scroll) scroll.hidden = rows.length === 0;
+      for (var r = 0; r < rows.length; r++) {
+        var tr = document.createElement("tr");
+        tr.setAttribute("data-family", rows[r].name);
+        var cells = [
+          rows[r].name,
+          rows[r].type,
+          String(rows[r].series),
+          rows[r].help,
+        ];
+        for (var c = 0; c < cells.length; c++) {
+          var td = document.createElement("td");
+          td.textContent = cells[c];
+          tr.appendChild(td);
+        }
+        body.appendChild(tr);
+      }
+    }
+    setCurrent("family-count", String(families.length));
+    setCurrent("group-count", String(nonEmptyGroups));
+  }
+
   /* p95 from cumulative histogram buckets, aggregated across handlers.
    * Returns the upper bound of the first bucket whose cumulative count
    * reaches 95% of observations — bucket-derived, labelled so in the page. */
@@ -121,6 +227,7 @@
     ])
       .then(function (results) {
         var parsed = parseMetrics(results[0]);
+        renderCatalog(parseFamilies(results[0]));
         var statusJson = results[1];
         var readyJson = results[2];
         var now = Date.now();
