@@ -9,6 +9,17 @@ Operate, learn, and improve
 
 ## Next best action
 
+**Observability & demo-evidence backbone OD-1 → OD-7 is COMPLETE (2026-07-23).**
+All seven stages merged serially, each with green blocking checks + Deploy JOB
+success + prod verification: OD-1 `/metrics` (#77 `0b014d3`), OD-2 `/ui/ops`
+dashboard (#78 `5845409`), OD-3 request-ID correlation (#79 `c728f45`), OD-4
+`make evals` (#80 `3fec293`), OD-5 scheduled availability alert (#81 `7fbc1f9`,
+dispatch proof run `29964680225`), OD-6 incident runbook (#82 `7002f8a`), OD-7
+evidence page + demo script (#83 `77d82cc`, Deploy JOB run `29968918666`
+success). Full ledger, review findings, and
+deferred items: `OBSERVABILITY-DEMO-RESULT.md`; demo evidence:
+`docs/95-demo-evidence.md`.
+
 **Demo-readiness P1–P3 is COMPLETE and deploy-verified (2026-07-22).** P1 #72
 `b2848e5` (real Layer-B judge, OFF by default), P3 #73 `c663ad5` (NFR-004
 run-level deadline ENFORCED), P2 #74 `96eb281` (measured-accuracy pilot).
@@ -29,11 +40,13 @@ measured-cost item). Do not perform without the operator. Until then, use
 driver skill `production-feedback-loop` for evidence-driven iteration.
 Reviewer skills must review, not overwrite, the driver output.
 
-### Validation status (2026-07-22)
+### Validation status (2026-07-23)
 
-All local gates green at `96eb281`: `make validate`, format, lint, type-check,
-full pytest (1293 passed), diff-cover, Playwright list. CI + Tests + E2E +
-Deploy JOB success for all three squash SHAs; prod `/ready` state=live.
+All local gates green through the OD backbone (full pytest 1342 passed at
+OD-6; `make evals` 114/114). CI + Tests + E2E + Deploy JOB success for every
+OD squash SHA; prod `/ready` state=live; `/metrics`, `/ui/ops`, and
+`X-Request-ID` echo verified live on prod. Scheduled availability alert
+active (`gh run list --workflow=availability-check.yml`).
 
 ## Recommended driver skill
 
