@@ -44,6 +44,28 @@ literals; static-explanation guard hardened against same-element and
 ancestor sink placement). CSP `base-uri`/`form-action` hardening is
 deliberately unbundled and tracked as issue #86.
 
+**Ops-page navigation + glossary + site favicon is COMPLETE (2026-07-23).**
+PR #89 `4976f95` merged with all 12 checks green; Deploy JOB `29994616462`
+success (the parallel cancelled run was concurrency dedupe); prod verified by
+content AND by a live browser drive (TOC scroll-spy correct, 2 "feeds" / 18
+"informational" badges, 0px overflow at 375px, favicon 200 on both assets).
+Shipped in one PR: (a) sticky jump-bar TOC with IntersectionObserver
+scroll-spy (`aria-current="location"`, current-line derived live from
+`scroll-padding-top`, dense thresholds + `scrollend` + rAF click-poll — no
+per-frame scroll handler); (b) "Used by" honesty column keyed off the family
+names `ops.js` actually parses, unknown families default to informational;
+(c) glossary panel (8 entries) with dotted jargon links in page-authored copy
+only, machine `# HELP` text verbatim, null-prototype parser maps; (d) same-
+origin favicon (`favicon.svg` + `favicon-32.png` Safari fallback) on both
+`ops.html` and `workspace.html`. Two adversarial review cycles (correctness /
+breaker / ux-a11y, findings adversarially verified) — notable catches: an
+XML-invalid `--` in the SVG comment found only by LIVE render (200 + right
+content-type still failed to decode), a scroll-offset double-count
+(scroll-margin + scroll-padding), rem-drift of a hardcoded spy threshold under
+enlarged fonts, and a stale-highlight zone on manual scroll — all fixed with
+RED-proven regression tests; scroll specs flake-scanned 96/96 across 4
+browser projects.
+
 **The next action is the deferred, OPERATOR-GATED funding step:** fund the
 OpenRouter key and set `QUORUM_EVAL_JUDGE_API_KEY` + `QUORUM_EVAL_JUDGE_MODEL_ID`
 as Fly secrets, then perform ONE deliberate measured run to verify live
