@@ -24,7 +24,9 @@ SECURITY_HEADERS = {
         "img-src 'self' data:; "
         "font-src 'self' https://fonts.gstatic.com; "
         "connect-src 'self'; "
-        "frame-ancestors 'none'"
+        "frame-ancestors 'none'; "
+        "base-uri 'none'; "
+        "form-action 'none'"
     ),
 }
 
@@ -36,7 +38,20 @@ def client() -> TestClient:
 
 @pytest.mark.parametrize(
     "path",
-    ["/health", "/ready", "/v1/session", "/", "/v1/models/defaults"],
+    [
+        "/health",
+        "/ready",
+        "/v1/session",
+        "/",
+        "/v1/models/defaults",
+        # Issue #86: the HTML surfaces and an unmatched route must carry
+        # the hardened policy too — the middleware runs on every response,
+        # including 404s.
+        "/ui",
+        "/ui/ops",
+        "/status",
+        "/no-such-route",
+    ],
 )
 def test_security_headers_present_on_every_response(client: TestClient, path: str) -> None:
     response = client.get(path)
@@ -46,6 +61,19 @@ def test_security_headers_present_on_every_response(client: TestClient, path: st
     for header_name, expected in SECURITY_HEADERS.items():
         actual = response.headers.get(header_name)
         assert actual == expected, f"{path}: expected {header_name}={expected!r}, got {actual!r}"
+
+
+def test_csp_refuses_base_and_form_injection_vectors(client: TestClient) -> None:
+    """Issue #86: ``base-uri 'none'`` + ``form-action 'none'`` must be present.
+
+    Keyed off the parsed directive list (not the exact-string pin above) so a
+    reordering refactor cannot silently drop either directive while the
+    full-string test is updated to match.
+    """
+    csp = client.get("/ui").headers.get("content-security-policy", "")
+    directives = {d.strip().split(" ", 1)[0]: d.strip() for d in csp.split(";") if d.strip()}
+    assert directives.get("base-uri") == "base-uri 'none'"
+    assert directives.get("form-action") == "form-action 'none'"
 
 
 def test_server_header_is_replaced(client: TestClient) -> None:

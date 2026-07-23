@@ -1,0 +1,66 @@
+name: Error-rate check (prod 5xx SLO)
+
+# Alert rule 2 of docs/80-observability.md, mechanised — $0, no new infra.
+#
+# WHAT IT CHECKS (vs. its siblings):
+#   * availability-check.yml (rule 1) asks "is prod live right now?" — a
+#     point-in-time readiness signal.
+#   * THIS workflow asks "is prod ERRORING for its users?" — the 5xx share
+#     of the request-count delta between two /metrics scrapes taken ~2 min
+#     apart must stay under the documented 1% SLO. A deploy that boots
+#     "ready" but 500s on real traffic surfaces here, not in rule 1.
+#
+# HOW: scripts/error_rate_probe.py (unit-tested in
+# tests/unit/test_error_rate_probe.py) scrapes twice, sleeps a measured
+# window, and judges the DELTA — two samples, no storage. Three guards:
+#   1. below a minimum request delta the run SKIPS (a 1% ratio judged on a
+#      handful of requests is noise — at this app's background traffic,
+#      quiet windows regularly skip; that is honest, not a bug);
+#   2. a negative delta = counter reset from a deploy → skip, never a
+#      false alert;
+#   3. a malformed/unreachable scrape is a REAL failure (the metrics
+#      surface itself broke) → alert, never a silent skip.
+#
+# THE ALERT: a failing scheduled job triggers GitHub's native workflow-
+# failure email — the same $0 channel as rule 1.
+#
+# HONEST LIMITS (same channel, same trade-offs as availability-check.yml):
+#   * GitHub auto-disables SCHEDULED workflows after ~60 days without repo
+#     activity — the alert dies silently on an abandoned repo.
+#   * The failure email goes to the actor attributed to the cron run (the
+#     last committer to touch the schedule) and honours that user's
+#     Actions notification settings.
+#   * A sustained 5xx storm at */30 is ~48 emails/day — loud by design;
+#     pause via the workflow's Disable button during a known incident.
+#   * Quiet windows skip below the request-delta floor, so a 5xx burst in
+#     an otherwise-silent half hour can go unjudged. Accepted: at that
+#     traffic level rule 1 (readiness) is the meaningful signal.
+#
+# TRIGGERS — schedule + workflow_dispatch ONLY (a slow push-path job once
+# silently stopped every deploy). THIS file's trigger surface and its
+# non-membership in scripts/deploy_gate.py's required set are pinned by
+# tests/unit/test_error_rate_check_workflow.py.
+
+on:
+  schedule:
+    - cron: "7,37 * * * *" # every 30 min, offset from availability-check's */15
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: error-rate-check
+  cancel-in-progress: false
+
+jobs:
+  check-error-rate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - name: 5xx share of the request delta must stay under the 1% SLO
+        # Stdlib-only script — no dependency install. Threshold/floor/window
+        # defaults live IN the script beside their rationale; the job logs
+        # the measured window and both raw samples for every run.
+        run: python3 scripts/error_rate_probe.py --url https://quorum.stackclimb.com/metrics

@@ -54,7 +54,10 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
-          ref: ${{ github.event.workflow_run.head_sha || github.ref }}
+          # Same pin as the deploy job's checkout: for a dispatch, github.sha
+          # (event-time commit) rather than the branch ref, so the gate and
+          # the deploy always run from the same tree.
+          ref: ${{ github.event.workflow_run.head_sha || github.sha }}
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
@@ -89,9 +92,12 @@ jobs:
       - uses: actions/checkout@v4
         with:
           # For a workflow_run trigger, check out the EXACT commit that passed
-          # CI (main's HEAD may have advanced since). For a manual dispatch this
-          # resolves to the default ref. This guarantees we deploy the tested SHA.
-          ref: ${{ github.event.workflow_run.head_sha || github.ref }}
+          # CI (main's HEAD may have advanced since). For a manual dispatch,
+          # pin to github.sha — the commit the dispatch event was created at —
+          # rather than the branch ref: a branch ref resolves to the tip AT
+          # FETCH TIME, so a push landing mid-run would make the built tree
+          # diverge from the GIT_SHA stamped into /status.build_sha below.
+          ref: ${{ github.event.workflow_run.head_sha || github.sha }}
 
       - name: Guard — only deploy if this SHA is still main's tip
         id: fresh
@@ -107,9 +113,9 @@ jobs:
           # shipped — deploying the older one would regress production. Deploy
           # only when this SHA is still main's tip; otherwise the newer commit's
           # own deploy handles it. (Manual dispatch has no workflow_run SHA →
-          # always deploy the default ref.)
+          # deploy the dispatch-time commit, github.sha, which checkout pinned.)
           if [ -z "${SHA}" ]; then
-            echo "Manual dispatch — deploying default ref."
+            echo "Manual dispatch — deploying the dispatch-time commit (github.sha)."
             echo "deploy=true" >> "$GITHUB_OUTPUT"; exit 0
           fi
           TIP=$(gh api "repos/${REPO}/commits/main" --jq .sha)
@@ -132,7 +138,14 @@ jobs:
         if: steps.fresh.outputs.deploy == 'true'
         env:
           FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
-        run: flyctl deploy --remote-only --strategy immediate
+        # GIT_SHA: the exact commit being deployed (workflow_run's head SHA;
+        # for a manual dispatch, the dispatching ref's SHA). The Dockerfile
+        # bakes it into BUILD_SHA and /status serves it as ``build_sha`` —
+        # deploy verification is then one line:
+        #   curl -s https://quorum.stackclimb.com/status | jq -r .build_sha
+        run: >-
+          flyctl deploy --remote-only --strategy immediate
+          --build-arg GIT_SHA=${{ github.event.workflow_run.head_sha || github.sha }}
 
       - name: Smoke test - GET /health
         if: steps.fresh.outputs.deploy == 'true'

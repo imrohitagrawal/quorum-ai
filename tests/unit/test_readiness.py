@@ -22,14 +22,14 @@ report offline-mode (or live-with-warning) so the app still starts.
 
 from __future__ import annotations
 
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
 
 import pytest
 
 from product_app.catalog_fetcher import ModelCatalogEntry
 from product_app.config import settings
 from product_app.model_slots import DEFAULT_MODEL_IDS, openrouter_model_catalog_service
-from product_app.readiness import run_startup_probe
+from product_app.readiness import APPROVED_REASON_PREFIXES, run_startup_probe
 
 
 @pytest.fixture
@@ -213,6 +213,78 @@ def test_probe_reasons_never_include_api_key_value(
 
     for reason in report.reasons:
         assert secret_value not in reason, f"API key value leaked into reason: {reason!r}"
+
+
+def test_probe_reasons_never_echo_raw_exception_text(
+    monkeypatch: pytest.MonkeyPatch, reset_settings: None
+) -> None:
+    """Reasons are served verbatim on the PUBLIC /ready endpoint.
+
+    A provider/catalog failure can raise with a message embedding hostnames,
+    file paths, or credential fragments from an HTTP error body. None of that
+    may flow into ``reasons`` — the public text must be the fixed vocabulary
+    entry, keyed off the leaked VALUES (not line substrings) so a rephrasing
+    of the fixed text cannot mask a real leak.
+    """
+    scary_bits = (
+        "internal-db-host.fly.internal",
+        "/etc/secrets/openrouter.key",
+        "sk-or-v1-leaked-from-error-body",
+    )
+
+    def _explode() -> list[ModelCatalogEntry]:
+        raise RuntimeError(
+            f"connect to {scary_bits[0]} failed; key file {scary_bits[1]} "
+            f"rejected; token {scary_bits[2]} invalid"
+        )
+
+    monkeypatch.setattr(openrouter_model_catalog_service, "_entries", _explode)
+    _set_live(monkeypatch, enabled=True, key="sk-or-v1-fake-key-for-tests-only")
+
+    report = run_startup_probe()
+
+    joined = "\n".join(report.reasons)
+    for value in scary_bits:
+        assert value not in joined, f"raw exception text leaked into /ready reasons: {value!r}"
+    # And the exception's class name stays in the log, not the public payload.
+    assert "RuntimeError" not in joined
+
+
+def test_every_probe_reason_comes_from_the_approved_vocabulary(
+    monkeypatch: pytest.MonkeyPatch, reset_settings: None
+) -> None:
+    """Every reason, in every reachable probe state, starts with an entry of
+    ``APPROVED_REASON_PREFIXES`` — the closed operator-facing vocabulary.
+
+    A new inline f-string reason (the leak vector this guards against) fails
+    here until it is added to the closed set in ``readiness.py``.
+    """
+
+    def _explode() -> list[ModelCatalogEntry]:
+        raise RuntimeError("boom")
+
+    scenarios: list[tuple[bool, str, Callable[[], object]]] = [
+        # (enabled, key, catalog setup)
+        (True, "sk-or-v1-fake", lambda: _set_catalog(monkeypatch, list(DEFAULT_MODEL_IDS))),
+        (True, "", lambda: _set_catalog(monkeypatch, list(DEFAULT_MODEL_IDS))),
+        (False, "", lambda: _set_catalog(monkeypatch, list(DEFAULT_MODEL_IDS))),
+        # drift: one default missing from the catalog
+        (True, "sk-or-v1-fake", lambda: _set_catalog(monkeypatch, list(DEFAULT_MODEL_IDS)[:-1])),
+        # catalog unreachable
+        (
+            True,
+            "sk-or-v1-fake",
+            lambda: monkeypatch.setattr(openrouter_model_catalog_service, "_entries", _explode),
+        ),
+    ]
+    for enabled, key, set_catalog in scenarios:
+        _set_live(monkeypatch, enabled=enabled, key=key)
+        set_catalog()
+        report = run_startup_probe()
+        for reason in report.reasons:
+            assert reason.startswith(APPROVED_REASON_PREFIXES), (
+                f"reason not drawn from the closed vocabulary (state={report.state}): {reason!r}"
+            )
 
 
 # PR-0 / Bug 11: ``catalog_loaded`` is the new field that

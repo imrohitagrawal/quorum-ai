@@ -849,7 +849,10 @@ def generate_status_md(
             "feedback_events_total": events_total,
             "latest_audit": _latest_audit_date(output_dir),
             "model_catalog_loaded": True,
-            "sentry": "active" if sentry_configured else "inactive",
+            # Mirrors /status's vendor-neutral key (was ``sentry`` — renamed
+            # with the endpoint in the #86 closeout so the self-built
+            # snapshot stays shape-compatible with a real /status capture).
+            "error_tracking": "active" if sentry_configured else "inactive",
             "uptime_seconds": 0.0,
         }
 
@@ -872,7 +875,9 @@ def generate_status_md(
     lines.append(f"| Feedback DB | {status.get('feedback_db')} |")
     lines.append(f"| Feedback events | {events_display} |")
     lines.append(f"| Latest audit | {latest_audit_value} |")
-    lines.append(f"| Sentry | {status.get('sentry')} |")
+    # ``error_tracking`` is the current /status key; fall back to ``sentry``
+    # so a snapshot captured before the #86-closeout rename still renders.
+    lines.append(f"| Error tracking | {status.get('error_tracking', status.get('sentry'))} |")
     lines.append(f"| Uptime | {uptime} |")
     lines.append("")
     md_path = output_dir / "STATUS.md"

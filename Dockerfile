@@ -14,7 +14,13 @@ COPY src ./src
 
 # Stage 2: Runtime image - minimal, non-root, production-ready
 FROM python:3.12-slim AS runtime
-ENV PATH="/opt/venv/bin:$PATH" \
+# Build-time SHA passthrough (deploy.yml passes --build-arg GIT_SHA=<commit>).
+# Surfaced as ``build_sha`` on /status so "is the merged commit actually the
+# one serving?" is a one-line curl, not an inference from an unchanged
+# /health 200. Defaults to "unknown" for local builds.
+ARG GIT_SHA=unknown
+ENV BUILD_SHA=${GIT_SHA} \
+    PATH="/opt/venv/bin:$PATH" \
     PYTHONUNBUFFERED=1 \
     PYTHONDONTWRITEBYTECODE=1 \
     # Tell uv where the venv lives (matches builder stage)

@@ -231,6 +231,83 @@ def test_perf_gate_still_collects_its_load_bearing_specs(
     )
 
 
+def test_executed_guard_rejects_a_missing_junit_xml() -> None:
+    """A gate whose suite never wrote its JUnit XML must fail, not echo success.
+
+    The original recipe piped a python traceback into ``$$counts``: ``set --``
+    then set no positional params, ``[ "" -ne 0 ]`` / ``[ "" -lt N ]`` were
+    shell *errors* that fell through as false, and the recipe printed the
+    success line and exited 0 — a blocking gate reporting green on a report
+    that does not exist.
+    """
+    xml = REPO_ROOT / "build" / "gates" / "guard-no-xml.xml"
+    xml.unlink(missing_ok=True)
+    result = _make("gate-min-executed", "GATE_NAME=guard-no-xml", "GATE_MIN=1")
+    assert result.returncode != 0, (
+        "gate-min-executed passed with no JUnit XML on disk — the false-green "
+        f"fall-through is back:\n{result.stdout}\n{result.stderr}"
+    )
+    assert "missing" in (result.stdout + result.stderr).lower(), (
+        f"failed, but not with the loud missing-report message:\n{result.stdout}"
+    )
+
+
+def test_executed_guard_rejects_a_malformed_junit_xml() -> None:
+    """Same fall-through, second door: unparseable XML must also fail loudly."""
+    xml = REPO_ROOT / "build" / "gates" / "guard-bad-xml.xml"
+    xml.parent.mkdir(parents=True, exist_ok=True)
+    xml.write_text("<unclosed", encoding="utf-8")
+    try:
+        result = _make("gate-min-executed", "GATE_NAME=guard-bad-xml", "GATE_MIN=1")
+        assert result.returncode != 0, (
+            "gate-min-executed passed on unparseable XML — it measured "
+            f"nothing:\n{result.stdout}\n{result.stderr}"
+        )
+    finally:
+        xml.unlink(missing_ok=True)
+
+
+def test_executed_guard_counts_every_suite_in_a_testsuites_wrapper() -> None:
+    """Cycle-1 review finding: the counter used to read only the FIRST
+    ``<testsuite>`` child, so skips hidden in a second suite passed a
+    blocking gate. The counts must be summed across ALL suites."""
+    xml = REPO_ROOT / "build" / "gates" / "guard-two-suites.xml"
+    xml.parent.mkdir(parents=True, exist_ok=True)
+    xml.write_text(
+        "<testsuites>"
+        '<testsuite tests="5" skipped="0" failures="0" errors="0"/>'
+        '<testsuite tests="5" skipped="5" failures="0" errors="0"/>'
+        "</testsuites>",
+        encoding="utf-8",
+    )
+    try:
+        result = _make("gate-min-executed", "GATE_NAME=guard-two-suites", "GATE_MIN=5")
+        assert result.returncode != 0, (
+            "5 skips in the second testsuite were invisible — the gate "
+            f"counted only the first suite:\n{result.stdout}\n{result.stderr}"
+        )
+        assert "skipped" in (result.stdout + result.stderr).lower()
+    finally:
+        xml.unlink(missing_ok=True)
+
+
+def test_executed_guard_still_accepts_a_healthy_junit_xml() -> None:
+    """The fail-fast checks must not reject a genuine, passing report."""
+    xml = REPO_ROOT / "build" / "gates" / "guard-good-xml.xml"
+    xml.parent.mkdir(parents=True, exist_ok=True)
+    xml.write_text(
+        '<testsuite tests="3" skipped="0" failures="0" errors="0"/>',
+        encoding="utf-8",
+    )
+    try:
+        result = _make("gate-min-executed", "GATE_NAME=guard-good-xml", "GATE_MIN=1")
+        assert result.returncode == 0, (
+            f"a healthy report was rejected (false red):\n{result.stdout}\n{result.stderr}"
+        )
+    finally:
+        xml.unlink(missing_ok=True)
+
+
 @pytest.mark.parametrize("target", ["perf-gate", "api-contract"])
 def test_gate_runs_the_collection_guard(target: str) -> None:
     result = _make("-n", target)

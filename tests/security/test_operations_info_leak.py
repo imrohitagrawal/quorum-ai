@@ -100,6 +100,56 @@ def test_status_stays_public_and_unauthenticated(restore_store: None) -> None:
 
 
 # ---------------------------------------------------------------------------
+# Recon trim (#86 closeout PR): /status must not name the error-tracking
+# vendor on an unauthenticated surface.
+# ---------------------------------------------------------------------------
+
+
+def test_status_does_not_name_the_error_tracking_vendor(restore_store: None) -> None:
+    """The old ``"sentry": "active"`` field handed an attacker the exact
+    vendor of the error-tracking pipeline for free. The field is now the
+    vendor-neutral ``error_tracking`` with the same health-only values.
+
+    Keyed off the VALUE surface (the whole response text), not just the
+    renamed key, so re-introducing the vendor name anywhere in the payload
+    fails here.
+    """
+    configure(None)
+    client = TestClient(app)
+    response = client.get("/status")
+
+    assert response.status_code == 200
+    body = response.json()
+    assert "sentry" not in body, "/status re-grew the vendor-named field"
+    assert "sentry" not in response.text.lower(), "vendor name present in /status payload"
+    assert body["error_tracking"] in ("active", "inactive")
+
+
+def test_status_build_sha_defaults_to_unknown(
+    monkeypatch: pytest.MonkeyPatch, restore_store: None
+) -> None:
+    """Without BUILD_SHA in the environment (local dev, tests), /status
+    reports the honest ``"unknown"`` — never a fabricated commit."""
+    monkeypatch.delenv("BUILD_SHA", raising=False)
+    configure(None)
+    client = TestClient(app)
+    assert client.get("/status").json()["build_sha"] == "unknown"
+
+
+def test_status_build_sha_reflects_the_baked_commit(
+    monkeypatch: pytest.MonkeyPatch, restore_store: None
+) -> None:
+    """With BUILD_SHA baked into the image (Dockerfile ARG GIT_SHA →
+    ENV BUILD_SHA), /status serves it verbatim — that one line IS the
+    deploy verification (`jq -r .build_sha` == merged SHA)."""
+    sha = "0123456789abcdef0123456789abcdef01234567"
+    monkeypatch.setenv("BUILD_SHA", sha)
+    configure(None)
+    client = TestClient(app)
+    assert client.get("/status").json()["build_sha"] == sha
+
+
+# ---------------------------------------------------------------------------
 # Finding 2: /feedback/audit must require a valid session.
 # ---------------------------------------------------------------------------
 
