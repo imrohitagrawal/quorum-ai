@@ -374,7 +374,15 @@ _CSP_POLICY = (
     "img-src 'self' data:; "
     "font-src 'self' https://fonts.gstatic.com; "
     "connect-src 'self'; "
-    "frame-ancestors 'none'"
+    "frame-ancestors 'none'; "
+    # Issue #86 hardening. ``base-uri 'none'``: no page uses a <base>
+    # element, so an injected one (which would silently re-root every
+    # relative script/style/fetch URL) is refused outright.
+    # ``form-action 'none'``: the app has zero <form> elements — both
+    # UIs submit via fetch() — so any form submission at all is an
+    # injection, and 'none' blocks it regardless of target origin.
+    "base-uri 'none'; "
+    "form-action 'none'"
 )
 
 _HSTS_HEADER = "max-age=31536000; includeSubDomains"
@@ -611,11 +619,14 @@ def status_snapshot() -> dict[str, object]:
 
     The ``/status`` endpoint is the operator's single page for
     observability: environment, live-execution readiness, feedback DB
-    health, Sentry state, and process uptime. No authentication is
-    required — the endpoint never surfaces query text, account ids,
+    health, error-tracking state, and process uptime. No authentication
+    is required — the endpoint never surfaces query text, account ids,
     session tokens, or internal filesystem paths. ``feedback_db`` is
     reported as ``connected``/``disconnected`` health only; the on-disk
     database path is deliberately not exposed in this public response.
+    ``error_tracking`` is likewise a generic ``active``/``inactive``
+    health value: the concrete vendor (and anything else useful for
+    targeting it) is deliberately not named on this public surface.
     """
     # Use the live probe rather than the boot-time snapshot so /status
     # reflects current state, not "the state at process start".
@@ -649,13 +660,22 @@ def status_snapshot() -> dict[str, object]:
     return {
         "app": settings.app_name,
         "version": "0.2.0",
+        # The exact commit baked into this image (Dockerfile ARG GIT_SHA →
+        # ENV BUILD_SHA, set by deploy.yml). "unknown" for local/dev/test
+        # runs. Public by design: the repo is public, so the SHA reveals
+        # nothing GitHub does not already publish — and it turns deploy
+        # verification into `jq -r .build_sha` == merged SHA.
+        "build_sha": os.environ.get("BUILD_SHA", "unknown"),
         "environment": settings.runtime_environment.value,
         "live_execution": report.state in ("live",),
         "feedback_db": feedback_db,
         "feedback_events_total": feedback_events_total,
         "latest_audit": latest_audit,
         "model_catalog_loaded": report.catalog_loaded,
-        "sentry": sentry_state,
+        # Generic key on purpose (was ``sentry``): naming the vendor on an
+        # unauthenticated endpoint is free recon for an attacker probing
+        # the error-tracking pipeline. Health-only, vendor-neutral.
+        "error_tracking": sentry_state,
         "uptime_seconds": round(uptime_seconds, 1),
     }
 

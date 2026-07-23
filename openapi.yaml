@@ -209,15 +209,21 @@ paths:
 
         observability: environment, live-execution readiness, feedback DB
 
-        health, Sentry state, and process uptime. No authentication is
+        health, error-tracking state, and process uptime. No authentication
 
-        required — the endpoint never surfaces query text, account ids,
+        is required — the endpoint never surfaces query text, account ids,
 
         session tokens, or internal filesystem paths. ``feedback_db`` is
 
         reported as ``connected``/``disconnected`` health only; the on-disk
 
-        database path is deliberately not exposed in this public response.'
+        database path is deliberately not exposed in this public response.
+
+        ``error_tracking`` is likewise a generic ``active``/``inactive``
+
+        health value: the concrete vendor (and anything else useful for
+
+        targeting it) is deliberately not named on this public surface.'
       operationId: status_snapshot_status_get
       responses:
         '200':

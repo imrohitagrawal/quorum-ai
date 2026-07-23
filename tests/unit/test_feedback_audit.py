@@ -8,6 +8,7 @@ integration test that mocks the HTTP call.
 from __future__ import annotations
 
 from datetime import UTC, datetime, timedelta
+from pathlib import Path
 from uuid import uuid4
 
 import pytest
@@ -25,6 +26,7 @@ from product_app.feedback_audit import (
     _parse_audit_response,
     build_audit_user_prompt,
     collect_statistics,
+    generate_status_md,
     render_report,
 )
 from product_app.feedback_store import (
@@ -430,3 +432,28 @@ def _debate_event_aggregate() -> DebateStats:
         avg_round_one_ms=0.0,
         avg_round_two_ms=0.0,
     )
+
+
+def test_status_md_renders_error_tracking_from_a_current_status_snapshot(
+    tmp_path: Path,
+) -> None:
+    """The documented ``--status-json`` path feeds a REAL /status payload,
+    whose error-tracking key is ``error_tracking`` after the #86-closeout
+    rename. Cycle-2 review finding: the renderer still read the old
+    ``sentry`` key and produced ``| Sentry | None |``."""
+    md_path, _ = generate_status_md(
+        status={"error_tracking": "active", "uptime_seconds": 5.0},
+        output_dir=tmp_path,
+    )
+    text = md_path.read_text(encoding="utf-8")
+    assert "| Error tracking | active |" in text
+    assert "| Sentry |" not in text
+
+
+def test_status_md_falls_back_to_the_legacy_sentry_key(tmp_path: Path) -> None:
+    """A snapshot captured BEFORE the rename must still render its value."""
+    md_path, _ = generate_status_md(
+        status={"sentry": "inactive", "uptime_seconds": 5.0},
+        output_dir=tmp_path,
+    )
+    assert "| Error tracking | inactive |" in md_path.read_text(encoding="utf-8")

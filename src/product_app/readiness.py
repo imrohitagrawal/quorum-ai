@@ -40,6 +40,45 @@ _log = logging.getLogger(__name__)
 ReadinessState = Literal["live", "offline_by_config", "offline_by_no_key"]
 
 
+# ---------------------------------------------------------------------------
+# Closed set of operator-facing reason texts.
+#
+# ``reasons`` is served verbatim on the PUBLIC, unauthenticated ``/ready``
+# endpoint, so every entry must come from this fixed vocabulary — never from
+# interpolated runtime data (exception messages can carry hostnames, file
+# paths, or credential fragments; those belong in the process log only).
+# The single allowed variable part is the catalog-drift model-id list, which
+# is provider catalog metadata already exposed via ``catalog_drift_ids``.
+# ``tests/unit/test_readiness.py`` asserts every produced reason starts with
+# one of ``APPROVED_REASON_PREFIXES`` — add new reasons HERE, not inline.
+# ---------------------------------------------------------------------------
+
+REASON_NO_KEY = (
+    "OPENROUTER_LIVE_EXECUTION_ENABLED=true but OPENROUTER_API_KEY is "
+    "missing. Every query will fall back to local_simulation. Set "
+    "OPENROUTER_API_KEY in the environment (or .env) and restart to "
+    "enable live execution."
+)
+REASON_OFFLINE_BY_CONFIG = (
+    "OPENROUTER_LIVE_EXECUTION_ENABLED is not set to 'true'. Every "
+    "query will fall back to local_simulation. Set it to 'true' in "
+    "the environment (or .env) and restart to enable live execution."
+)
+REASON_CATALOG_UNREACHABLE = (
+    "Could not fetch the live model catalog at startup. The static "
+    "default model list will still be served; live pricing is unavailable."
+)
+REASON_CATALOG_DRIFT_PREFIX = "Default model ids not in current catalog: "
+
+#: Every reason the probe may emit must start with one of these.
+APPROVED_REASON_PREFIXES = (
+    REASON_NO_KEY,
+    REASON_OFFLINE_BY_CONFIG,
+    REASON_CATALOG_UNREACHABLE,
+    REASON_CATALOG_DRIFT_PREFIX,
+)
+
+
 @dataclass(frozen=True)
 class ReadinessReport:
     """The outcome of the startup probe.
@@ -118,19 +157,10 @@ def run_startup_probe() -> ReadinessReport:
         state: ReadinessState = "live"
     elif live_flag and not has_key:
         state = "offline_by_no_key"
-        reasons.append(
-            "OPENROUTER_LIVE_EXECUTION_ENABLED=true but OPENROUTER_API_KEY is "
-            "missing. Every query will fall back to local_simulation. Set "
-            "OPENROUTER_API_KEY in the environment (or .env) and restart to "
-            "enable live execution."
-        )
+        reasons.append(REASON_NO_KEY)
     else:
         state = "offline_by_config"
-        reasons.append(
-            "OPENROUTER_LIVE_EXECUTION_ENABLED is not set to 'true'. Every "
-            "query will fall back to local_simulation. Set it to 'true' in "
-            "the environment (or .env) and restart to enable live execution."
-        )
+        reasons.append(REASON_OFFLINE_BY_CONFIG)
 
     # Catalog drift check. The probe goes through the catalog
     # SERVICE (not the raw fetcher) so the service's
@@ -145,11 +175,18 @@ def run_startup_probe() -> ReadinessReport:
         catalog_loaded = True
         drift = tuple(model_id for model_id in DEFAULT_MODEL_IDS if model_id not in catalog_ids)
     except Exception as exc:  # noqa: BLE001 — probe is best-effort
-        reasons.append(
-            "Could not fetch the live  catalog at startup: "
-            f"{type(exc).__name__}. The static default model list "
-            "will still be served; live pricing is unavailable."
+        # The exception's class name and message stay in the process log
+        # ONLY. ``reasons`` is served on the public /ready endpoint, so a
+        # raw exception string (which can embed hostnames, paths, or key
+        # material from a provider error body) must never flow into it —
+        # the public reason is the fixed vocabulary entry.
+        _log.warning(
+            "live-execution probe: catalog fetch failed (%s: %s); serving the "
+            "fixed catalog-unreachable reason on /ready",
+            type(exc).__name__,
+            exc,
         )
+        reasons.append(REASON_CATALOG_UNREACHABLE)
         # Catalog unreachable: do not flag static ids as drifted
         # (we don't actually know). The route layer's drift check
         # will populate the per-request diagnostic.
@@ -163,7 +200,7 @@ def run_startup_probe() -> ReadinessReport:
         # operator-facing text detailed (and end-user-facing text plain)
         # is the split.
         reasons.append(
-            "Default model ids not in current  catalog: "
+            REASON_CATALOG_DRIFT_PREFIX
             + ", ".join(drift)
             + ". May have been renamed, deprecated, or moved."
         )
@@ -178,7 +215,10 @@ def run_startup_probe() -> ReadinessReport:
     # Log at WARNING when degraded so the operator sees it in the
     # startup banner; log at INFO when live so a healthy startup
     # leaves a paper trail.
-    if state == "live" and not drift:
+    # Key the healthy-summary line off "no reasons at all", not state+drift:
+    # a live state with an unreachable catalog still carries a reason, and
+    # logging "catalog reachable" over it would lie to the operator.
+    if not reasons:
         _log.info("live-execution probe: state=live (4 default models, catalog reachable)")
     else:
         for reason in reasons:

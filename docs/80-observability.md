@@ -75,15 +75,34 @@ Two alert rules are declared; mechanisation status is stated honestly:
    (~96/day on a sustained outage at this cadence), single-sample
    no-retry check — are documented in the workflow header.
 2. **Error rate over SLO** — 5xx rate above the 1% SLO over a sustained
-   window. Status: **documented, not yet mechanised** (needs a scrape
-   history; candidate follow-up after OD-5).
+   window. Status: **MECHANISED** —
+   `.github/workflows/error-rate-check.yml` runs every 30 minutes
+   (`schedule` + `workflow_dispatch` only, same trigger discipline as
+   rule 1). No scrape history is needed: `scripts/error_rate_probe.py`
+   (unit-tested, `tests/unit/test_error_rate_probe.py`) scrapes
+   `/metrics` twice ~2 minutes apart and judges the 5xx share of the
+   request-count **delta** — two samples, zero storage. Three guards
+   keep the signal honest: below a minimum request delta the run skips
+   (a 1% ratio judged on a handful of requests is noise; quiet windows
+   regularly skip at this app's background traffic), a negative delta
+   (counter reset from a deploy) skips rather than false-alerting, and
+   a malformed/unreachable scrape **alerts** (the metrics surface
+   itself broke) rather than silently skipping. The alert channel is
+   the same native workflow-failure email as rule 1, with the same
+   known, accepted limits (60-day scheduled-workflow auto-disable on
+   repo inactivity, actor-attributed notification routing, one email
+   per failed run — ~48/day on a sustained storm at this cadence),
+   documented in the workflow header.
 
-Division of labour between the two scheduled watchers (deliberate, not
+Division of labour between the three scheduled watchers (deliberate, not
 duplication): `deploy-drift-watchdog.yml` watches the **pipeline** signal
 ("does main HEAD have a successful Deploy job?") and self-heals by
-re-dispatching workflows; `availability-check.yml` watches the **runtime**
-signal ("is prod serving `live` right now?") — a funded-key outage, a Fly
-incident, or a DNS break surface here even when the pipeline is green (the
+re-dispatching workflows; `availability-check.yml` watches the **runtime
+liveness** signal ("is prod serving `live` right now?");
+`error-rate-check.yml` watches the **runtime quality** signal ("is prod
+ERRORING for its users?" — the 5xx share of served requests). A funded-key
+outage, a Fly incident, or a DNS break surface in the liveness check even
+when the pipeline is green (the
 OpenRouter-403 incident shape).
 
 ## Deliberate gaps (honestly absent, not forgotten)
@@ -96,11 +115,12 @@ OpenRouter-403 incident shape).
   (no auto-rollback on a failed smoke test; deliberate).
 - **Incident runbook**: `docs/runbooks/live-provider-outage.md` (OD-6) —
   written from the real 2026-07-15 incident.
-- **CSP `base-uri`/`form-action`**: the app-wide `_CSP_POLICY`
-  (`src/product_app/main.py`) lacks both directives. Pre-existing,
-  low-risk (host-exact directives; no `<form>`/`<base>` on `/ui/ops`),
-  and it governs every page — tracked as its own change in issue #86,
-  deliberately not bundled into an ops-page copy PR.
+- ~~**CSP `base-uri`/`form-action`**~~: CLOSED by the #86 closeout PR —
+  the app-wide `_CSP_POLICY` (`src/product_app/main.py`) now carries
+  `base-uri 'none'; form-action 'none'` (no page uses `<base>` and the
+  app has zero `<form>` elements), pinned by
+  `tests/integration/test_security_headers.py` and exercised
+  cross-engine by `csp-smoke.yml`.
 
 ## Provenance rules (binding for edits to this file)
 

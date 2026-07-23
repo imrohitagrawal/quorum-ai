@@ -144,8 +144,15 @@ gate-min-collected:
 # and refuses any skip/xfail in a gate suite — a gate measures or it fails.
 # Called as: $(MAKE) gate-min-executed GATE_NAME=.. GATE_MIN=..
 gate-min-executed:
-	@counts=$$(UV_CACHE_DIR=$(UV_CACHE_DIR) uv run python -c "import sys, xml.etree.ElementTree as ET; r = ET.parse(sys.argv[1]).getroot(); s = r if r.tag == 'testsuite' else r[0]; a = s.attrib; g = lambda k: int(a.get(k, 0)); print(g('tests') - g('skipped') - g('failures') - g('errors'), g('skipped'))" build/gates/$(GATE_NAME).xml); \
+	@if [ ! -f "build/gates/$(GATE_NAME).xml" ]; then \
+		echo "$(GATE_NAME): build/gates/$(GATE_NAME).xml is missing — the gate suite never produced its JUnit XML."; \
+		echo "  A gate measures or it fails; a missing report must never pass silently."; \
+		exit 1; fi
+	@counts=$$(UV_CACHE_DIR=$(UV_CACHE_DIR) uv run python -c "import sys, xml.etree.ElementTree as ET; r = ET.parse(sys.argv[1]).getroot(); suites = [r] if r.tag == 'testsuite' else [s for s in r if s.tag == 'testsuite']; g = lambda s, k: int(s.attrib.get(k, 0)); print(sum(g(s, 'tests') - g(s, 'skipped') - g(s, 'failures') - g(s, 'errors') for s in suites), sum(g(s, 'skipped') for s in suites))" build/gates/$(GATE_NAME).xml); \
 	set -- $$counts; \
+	if [ $$# -ne 2 ]; then \
+		echo "$(GATE_NAME): could not derive executed/skipped counts from build/gates/$(GATE_NAME).xml — refusing to pass a gate it cannot measure."; \
+		exit 1; fi; \
 	if [ "$$2" -ne 0 ]; then \
 		echo "$(GATE_NAME): $$2 test(s) were skipped — a blocking gate must not be silenced."; \
 		echo "  Remove the skip, or delete the test deliberately and re-measure the floor."; \
