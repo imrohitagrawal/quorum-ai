@@ -1,10 +1,10 @@
 # Session Handoff
 
 ## Date/time
-2026-07-23T14:50:52+05:30
+2026-07-23T21:21:27+05:30
 
 ## Current branch/worktree
-docs/ops-nav-glossary-closeout
+docs/ops-hardening-closeout
 
 ## Current phase
 Operate, learn, and improve
@@ -64,6 +64,8 @@ Operate, learn, and improve
 M docs/00-factory-console.md
 ?? DEMO-READINESS-P1-P3-ULTRACODE-PROMPT.md
 ?? OBSERVABILITY-DEMO-ULTRACODE-PROMPT.md
+?? OPS-HARDENING-CLOSEOUT-RESULT.md
+?? OPS-HARDENING-CLOSEOUT-ULTRACODE-PROMPT.md
 ?? OPS-NAV-GLOSSARY-FAVICON-ULTRACODE-PROMPT.md
 ?? OPS-TILE-RELEVANCE-ULTRACODE-PROMPT.md
 ?? P2-CLOSEOUT-ULTRACODE-PROMPT.md
@@ -71,7 +73,6 @@ M docs/00-factory-console.md
 ?? R2-RB5-S4-ULTRACODE-PROMPT.md
 ?? R2-S4-CLOSEOUT-ULTRACODE-PROMPT.md
 ?? design_handoff_quorum_ui/
-?? e2e/measure-classic.mjs
 ?? e2e/tests/invariants/trust-score-visual.spec.ts-snapshots/trust-score-dark-1440-chromium-darwin.png
 ?? e2e/tests/invariants/trust-score-visual.spec.ts-snapshots/trust-score-dark-375-chromium-darwin.png
 ?? e2e/tests/invariants/trust-score-visual.spec.ts-snapshots/trust-score-dark-768-chromium-darwin.png
@@ -85,15 +86,28 @@ M docs/00-factory-console.md
 
 ## Diff stat
 ```text
-docs/00-factory-console.md | 22 ++++++++++++++++++++++
- 1 file changed, 22 insertions(+)
+docs/00-factory-console.md | 16 ++++++++++++++++
+ 1 file changed, 16 insertions(+)
 ```
 
 ## Completed in this session
-- Update manually before closing the session.
+- Ops hardening + observability deferred-item closeout: PR #91 `9555701`
+  (closes #86) — CSP base-uri/form-action, /ready closed reason vocabulary,
+  /status sentry→error_tracking + build_sha, gate-min-executed false-green
+  fix, alert rule 2 mechanised ($0). Deploy JOB `30022024397` success; prod
+  content-verified; rule-2 proof dispatch `30022211861` green.
+- Full ledger: `OPS-HARDENING-CLOSEOUT-RESULT.md`.
 
 ## Decisions made
-- Update manually before closing the session.
+- `form-action 'none'` (not 'self'): the app has zero <form> elements, so any
+  form submission is an injection.
+- /status error-tracking key is vendor-neutral by design; value stays
+  active/inactive.
+- Probe alerts at >= the 1% threshold (the SLO is "< 1%", so exactly 1% is a
+  breach); min-delta floor 25 with rationale documented in the script.
+- **Deploy verification is now one line:**
+  `curl -s https://quorum.stackclimb.com/status | jq -r .build_sha` == merged
+  SHA. Use it in every future session instead of inferring from /health.
 
 ## Assumptions recorded
 - Update `docs/ASSUMPTIONS.md` when needed.
@@ -122,7 +136,10 @@ make validate
 ```
 
 ## Validation result
-- Update after running checks.
+- make validate + make quality green (1403 passed, 10 skipped, cov 90%);
+  api-contract 43 executed (floor 22); openapi-check green; csp-smoke + ops
+  e2e green on chromium/firefox/webkit; changed-lines coverage gate green
+  after `4b3641f`.
 
 ## Next best action
 Review production signals, incidents, support feedback, and product metrics. Propose the next iteration with evidence.

@@ -9,6 +9,22 @@ Operate, learn, and improve
 
 ## Next best action
 
+**Ops hardening + observability deferred-item closeout is COMPLETE
+(2026-07-23).** PR #91 `9555701` (closes #86) merged with all checks green;
+Deploy JOB `30022024397` success; prod verified by content. Shipped in one PR:
+CSP `base-uri 'none'; form-action 'none'` app-wide (cross-engine verified);
+`/ready` reasons drawn from a closed vocabulary (raw exception text can no
+longer reach the public payload); `/status` `sentry` → vendor-neutral
+`error_tracking` + new `build_sha` (deploy verification is now
+`curl -s https://quorum.stackclimb.com/status | jq -r .build_sha` == merged
+SHA); `gate-min-executed` fails loudly on missing/malformed/multi-suite JUnit
+XML (was a proven exit-0 false-green); alert rule 2 (5xx-rate over the 1% SLO)
+MECHANISED at $0 via `error-rate-check.yml` + unit-tested
+`scripts/error_rate_probe.py` (proof dispatch `30022211861` green — honest
+low-traffic skip on real prod data). Two adversarial review cycles, 13
+confirmed findings, all fixed in-diff. Full ledger:
+`OPS-HARDENING-CLOSEOUT-RESULT.md`.
+
 **Observability & demo-evidence backbone OD-1 → OD-7 is COMPLETE (2026-07-23).**
 All seven stages merged serially, each with green blocking checks + Deploy JOB
 success + prod verification: OD-1 `/metrics` (#77 `0b014d3`), OD-2 `/ui/ops`
