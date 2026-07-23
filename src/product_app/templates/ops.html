@@ -9,6 +9,8 @@
     <link href="https://fonts.googleapis.com/css2?family=Newsreader:ital,opsz,wght@0,6..72,400;0,6..72,500;0,6..72,600;0,6..72,700;1,6..72,400;1,6..72,500&family=Geist:wght@400;500;550;600;650;700&family=Geist+Mono:wght@400;500;600&display=swap" rel="stylesheet">
     <link rel="stylesheet" href="/static/tokens.css">
     <link rel="stylesheet" href="/static/ops.css">
+    <link rel="icon" type="image/png" sizes="32x32" href="/static/favicon-32.png">
+    <link rel="icon" type="image/svg+xml" href="/static/favicon.svg">
   </head>
   <body>
     <a class="skip-link" href="#main-content">Skip to main content</a>
@@ -30,8 +32,16 @@
         <span id="fetch-error" class="ops-error" role="alert" hidden></span>
       </p>
     </header>
+    <nav class="ops-toc" aria-label="Page sections">
+      <a href="#live-tiles">Live tiles</a>
+      <a href="#explainer-about">What /metrics is</a>
+      <a href="#explainer-catalog">Catalog</a>
+      <a href="#explainer-howto">How to read it</a>
+      <a href="#explainer-slo">SLOs</a>
+      <a href="#explainer-glossary">Glossary</a>
+    </nav>
     <main id="main-content">
-      <div class="ops-grid">
+      <div class="ops-grid" id="live-tiles">
         <section class="tile" id="tile-rate" aria-labelledby="tile-rate-h">
           <h2 id="tile-rate-h">Request rate</h2>
           <p class="tile-value"><span data-current="rate">—</span> <span class="tile-unit">req/s</span></p>
@@ -98,7 +108,7 @@
             own runtime numbers. It looks like raw text on purpose: it is a
             <em>contract for machines</em>, not a page for people. A monitoring
             system (Prometheus, Grafana Cloud, Datadog, or a plain
-            <code>curl</code>) scrapes it on an interval and turns the counters
+            <code>curl</code>) <a class="term" href="#term-scrape">scrapes</a> it on an interval and turns the counters
             into rates, graphs and alerts. This dashboard is one such consumer:
             every tile above is computed live from the same three surfaces —
             <a href="/metrics">the metric exposition</a>, the
@@ -106,14 +116,21 @@
             <a href="/ready">readiness probe</a>.
           </p>
           <p>
-            Each metric is one of three types. A <strong>counter</strong> only
+            Each metric is one of three types. A
+            <a class="term" href="#term-counter-gauge"><strong>counter</strong></a> only
             ever goes up (total requests served) — consumers derive rates from
-            its deltas. A <strong>gauge</strong> goes up and down (resident
-            memory right now). A <strong>histogram</strong> counts observations
-            into cumulative latency buckets, which is how the p95 tile is
+            its deltas. A
+            <a class="term" href="#term-counter-gauge"><strong>gauge</strong></a>
+            goes up and down (<a class="term" href="#term-rss">resident
+            memory</a> right now). A
+            <a class="term" href="#term-histogram"><strong>histogram</strong></a>
+            counts observations
+            into cumulative latency buckets, which is how the
+            <a class="term" href="#term-percentile">p95</a> tile is
             derived. Series carry <strong>labels</strong> — the parameters to
             watch: <code>handler</code> (the route <em>template</em>, never a
-            raw path or UUID, so cardinality stays bounded),
+            raw path or UUID, so
+            <a class="term" href="#term-cardinality">cardinality</a> stays bounded),
             <code>method</code> (non-standard tokens are normalised to
             <code>OTHER</code>), and <code>status</code> (the response class:
             2xx/4xx/5xx).
@@ -122,8 +139,10 @@
             Deliberate exposure: the endpoint is <strong>public and
             unauthenticated</strong> by design, like the health probes — a
             recorded decision (OD-1) for this demo product. It also emits
-            interpreter/process telemetry (Python GC, memory, file
-            descriptors), which is accepted and documented, never a surprise.
+            interpreter/process telemetry (Python
+            <a class="term" href="#term-gc">GC</a>, memory,
+            <a class="term" href="#term-fd">file descriptors</a>), which is
+            accepted and documented, never a surprise.
           </p>
         </section>
 
@@ -135,6 +154,11 @@
             <strong><span data-current="family-count">—</span> metric
             families</strong> in <span data-current="group-count">—</span>
             groups. Wide tables scroll sideways inside their own box.
+            The SLOs on this page are computed from the <code>http_*</code>
+            group only; every other family is informational — exposed for
+            external monitoring (a future Prometheus/Grafana) and for
+            diagnosis, not read by any tile. The "Used by" column says which
+            is which, per family.
           </p>
           <section class="catalog-group" data-group="http" aria-labelledby="catalog-http-h">
             <h4 id="catalog-http-h"><code>http_*</code> — request traffic</h4>
@@ -148,7 +172,7 @@
             <div class="catalog-scroll" tabindex="0" role="region" aria-label="HTTP request metric families (scrollable table)">
               <table class="catalog-table">
                 <thead>
-                  <tr><th scope="col">Family</th><th scope="col">Type</th><th scope="col">Series</th><th scope="col">What it measures</th></tr>
+                  <tr><th scope="col">Family</th><th scope="col">Type</th><th scope="col">Series</th><th scope="col">What it measures</th><th scope="col">Used by</th></tr>
                 </thead>
                 <tbody data-group-body="http"></tbody>
               </table>
@@ -165,7 +189,7 @@
             <div class="catalog-scroll" tabindex="0" role="region" aria-label="Process metric families (scrollable table)">
               <table class="catalog-table">
                 <thead>
-                  <tr><th scope="col">Family</th><th scope="col">Type</th><th scope="col">Series</th><th scope="col">What it measures</th></tr>
+                  <tr><th scope="col">Family</th><th scope="col">Type</th><th scope="col">Series</th><th scope="col">What it measures</th><th scope="col">Used by</th></tr>
                 </thead>
                 <tbody data-group-body="process"></tbody>
               </table>
@@ -181,7 +205,7 @@
             <div class="catalog-scroll" tabindex="0" role="region" aria-label="Python interpreter metric families (scrollable table)">
               <table class="catalog-table">
                 <thead>
-                  <tr><th scope="col">Family</th><th scope="col">Type</th><th scope="col">Series</th><th scope="col">What it measures</th></tr>
+                  <tr><th scope="col">Family</th><th scope="col">Type</th><th scope="col">Series</th><th scope="col">What it measures</th><th scope="col">Used by</th></tr>
                 </thead>
                 <tbody data-group-body="python"></tbody>
               </table>
@@ -197,7 +221,7 @@
             <div class="catalog-scroll" tabindex="0" role="region" aria-label="Other metric families (scrollable table)">
               <table class="catalog-table">
                 <thead>
-                  <tr><th scope="col">Family</th><th scope="col">Type</th><th scope="col">Series</th><th scope="col">What it measures</th></tr>
+                  <tr><th scope="col">Family</th><th scope="col">Type</th><th scope="col">Series</th><th scope="col">What it measures</th><th scope="col">Used by</th></tr>
                 </thead>
                 <tbody data-group-body="other"></tbody>
               </table>
@@ -271,6 +295,84 @@
             breached in a sustained way, the runbook in the same doc is the
             first stop.
           </p>
+        </section>
+
+        <section class="panel explainer" id="explainer-glossary" aria-labelledby="explainer-glossary-h">
+          <h3 id="explainer-glossary-h">Glossary</h3>
+          <p>
+            Plain-language definitions of the jargon above. Dotted-underlined
+            terms elsewhere on this page jump here.
+          </p>
+          <dl class="glossary-list">
+            <div class="glossary-entry" id="term-gc">
+              <dt>GC (garbage collection)</dt>
+              <dd>
+                How Python reclaims memory no code references any more. The
+                <code>python_gc_*</code> counters track collections and
+                collected objects per generation; a sudden climb hints at
+                allocation churn, not necessarily a leak.
+              </dd>
+            </div>
+            <div class="glossary-entry" id="term-histogram">
+              <dt>Histogram &amp; bucket</dt>
+              <dd>
+                A metric that counts observations into cumulative
+                "at-or-under this bound" buckets (the <code>le=</code> label).
+                Consumers derive percentiles from the bucket counts — no
+                individual timing is ever stored.
+              </dd>
+            </div>
+            <div class="glossary-entry" id="term-percentile">
+              <dt>p95 / percentile</dt>
+              <dd>
+                The value 95% of observations sit at or below. p95 latency is
+                what a slow-but-normal request experiences; it deliberately
+                ignores the worst 5% of outliers.
+              </dd>
+            </div>
+            <div class="glossary-entry" id="term-cardinality">
+              <dt>Cardinality</dt>
+              <dd>
+                The number of distinct label combinations (series) a metric
+                family produces. Kept bounded here by labelling route
+                <em>templates</em>, never raw paths or IDs — unbounded
+                cardinality is what blows up a metrics store.
+              </dd>
+            </div>
+            <div class="glossary-entry" id="term-rss">
+              <dt>Resident memory (RSS)</dt>
+              <dd>
+                The physical RAM the process occupies right now, as opposed
+                to virtual address space it merely reserved. The number to
+                watch for creep between deploys.
+              </dd>
+            </div>
+            <div class="glossary-entry" id="term-fd">
+              <dt>File descriptor</dt>
+              <dd>
+                The kernel's handle for anything the process holds open —
+                sockets, files, pipes. Hitting the per-process maximum breaks
+                new connections, so open-vs-max is a leak canary.
+              </dd>
+            </div>
+            <div class="glossary-entry" id="term-scrape">
+              <dt>Scrape &amp; exposition</dt>
+              <dd>
+                A monitoring system "scrapes" (fetches) <code>/metrics</code>
+                on an interval; the text it reads is the "exposition".
+                Nothing is pushed anywhere — the service just answers when
+                asked.
+              </dd>
+            </div>
+            <div class="glossary-entry" id="term-counter-gauge">
+              <dt>Counter vs gauge</dt>
+              <dd>
+                A counter only increases (and restarts at zero on deploy) —
+                consumers read its rate of change, never its absolute value.
+                A gauge is a right-now value that moves both ways.
+              </dd>
+            </div>
+          </dl>
         </section>
       </div>
     </main>

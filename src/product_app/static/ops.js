@@ -41,7 +41,10 @@
   /* Minimal Prometheus text-format parsing: only the series the tiles need. */
   function parseMetrics(text) {
     var totals = { all: 0, err5xx: 0 };
-    var buckets = {}; // le -> summed count across handlers
+    /* Null-prototype: keys come from parsed metric text, so inherited
+     * names (__proto__, constructor) must be ordinary keys, never
+     * prototype hits. */
+    var buckets = Object.create(null); // le -> summed count across handlers
     var lines = text.split("\n");
     for (var i = 0; i < lines.length; i++) {
       var line = lines[i];
@@ -66,7 +69,11 @@
    * per-family series count, so the "Metrics, explained" catalog renders
    * the LIVE family set — never a hardcoded list. */
   function parseFamilies(text) {
-    var families = {}; // name -> {name, type, help, series}
+    /* Null-prototype (review finding): with a plain {}, a family named
+     * __proto__ evaluates truthy via Object.prototype — it is silently
+     * dropped from the catalog AND `.help = ...` pollutes every object
+     * on the page. With no prototype, such names are ordinary keys. */
+    var families = Object.create(null); // name -> {name, type, help, series}
     var order = [];
     var lines = text.split("\n");
     var i, line;
@@ -117,6 +124,24 @@
 
   var GROUPS = ["http", "process", "python"];
 
+  /* "Used by" honesty: the ONLY families whose samples the tiles read are
+   * the two parseMetrics() consumes above — http_requests_total (rate + 5xx
+   * tiles) and http_request_duration_seconds, whose _bucket series feed the
+   * p95 tile. Keyed off the family NAME so the marker stays truthful as
+   * families come and go; any family NOT in this map — including brand-new
+   * ones — defaults to informational. */
+  var CONSUMED = {
+    "http_requests_total": "→ feeds the rate + 5xx error tiles",
+    "http_request_duration_seconds": "→ feeds the p95 tile (its _bucket series)",
+  };
+
+  function usedByOf(familyName) {
+    if (Object.prototype.hasOwnProperty.call(CONSUMED, familyName)) {
+      return { text: CONSUMED[familyName], cls: "used-feeds" };
+    }
+    return { text: "informational — not read by any tile", cls: "used-info" };
+  }
+
   function groupOf(familyName) {
     var prefix = familyName.split("_")[0];
     return GROUPS.indexOf(prefix) >= 0 ? prefix : "other";
@@ -161,6 +186,12 @@
           td.textContent = cells[c];
           tr.appendChild(td);
         }
+        /* "Used by" cell — page-authored text, still via textContent only. */
+        var usedBy = usedByOf(rows[r].name);
+        var usedTd = document.createElement("td");
+        usedTd.className = usedBy.cls;
+        usedTd.textContent = usedBy.text;
+        tr.appendChild(usedTd);
         body.appendChild(tr);
       }
     }
@@ -299,6 +330,127 @@
       });
   }
 
+  /* Scroll-spy for the jump-bar TOC. IntersectionObserver only — no scroll
+   * handler. The TOC links and their targets are static template nodes
+   * (refresh() re-renders only table BODIES, never these sections), so the
+   * observer is created exactly once for the page's life and never leaks. */
+  function initTocSpy() {
+    var nav = document.querySelector(".ops-toc");
+    if (!nav || typeof IntersectionObserver === "undefined") return;
+    var links = nav.querySelectorAll('a[href^="#"]');
+    var byId = {};
+    var targets = [];
+    for (var i = 0; i < links.length; i++) {
+      var id = links[i].getAttribute("href").slice(1);
+      var el = document.getElementById(id);
+      if (el) {
+        byId[id] = links[i];
+        targets.push(el);
+      }
+    }
+    if (!targets.length) return;
+    /* The current-line is READ from the resolved scroll-padding-top so JS
+     * and CSS can never drift (cycle-2 finding: a hardcoded 73px only
+     * matched 4.5rem at the default 16px root font — an enlarged browser
+     * font left the spy one section behind on every click). Re-read on
+     * every compute, not once at init: the root font can change
+     * mid-session (user text-size setting) and rem-derived padding moves
+     * with it. One getComputedStyle per recompute — recomputes are
+     * event-driven and rare, never per-frame. */
+    function currentLine() {
+      var pad = parseFloat(
+        window.getComputedStyle(document.documentElement).scrollPaddingTop
+      );
+      return (isNaN(pad) || pad <= 0 ? 72 : pad) + 1;
+    }
+    /* Classic scroll-spy: the LAST target whose top has passed the sticky
+     * bar's lower edge (the scroll-padding line, +1 for rounding) is
+     * current. Position-based, so the final section still wins when the
+     * page bottom-clamps an anchor jump and several sections straddle the
+     * bar. Falls back to the first target above the fold. */
+    function computeCurrent() {
+      var line = currentLine();
+      var currentId = targets[0].id;
+      for (var t = 0; t < targets.length; t++) {
+        if (targets[t].getBoundingClientRect().top <= line) {
+          currentId = targets[t].id;
+        }
+      }
+      for (var l = 0; l < targets.length; l++) {
+        var link = byId[targets[l].id];
+        if (targets[l].id === currentId) {
+          link.setAttribute("aria-current", "location");
+        } else {
+          link.removeAttribute("aria-current");
+        }
+      }
+    }
+    /* The observer is purely the TRIGGER (no scroll handler, no jank):
+     * every intersection change recomputes, and a trailing 150ms settle
+     * recompute covers the gap between the last intersection change and
+     * where smooth scrolling actually stops. DENSE thresholds (every 0.5%
+     * of a section's height) — cycle-2 finding: with the default single
+     * threshold, a tall section's top could cross the current-line
+     * mid-band without ANY event, leaving aria-current stale for a manual
+     * scroll that stops there (~160px stale zone). Dense steps shrink
+     * that to a few px and re-arm the settle recompute continuously. */
+    var thresholds = [];
+    for (var th = 0; th <= 200; th++) thresholds.push(th / 200);
+    var settle = null;
+    var observer = new IntersectionObserver(
+      function () {
+        computeCurrent();
+        if (settle !== null) window.clearTimeout(settle);
+        settle = window.setTimeout(computeCurrent, 150);
+      },
+      {
+        /* Margin is fixed at observe-time (observers cannot re-margin);
+         * it only shapes TRIGGER timing — the chosen section always comes
+         * from computeCurrent's live currentLine(). */
+        rootMargin: "-" + Math.round(currentLine() - 1) + "px 0px -50% 0px",
+        threshold: thresholds,
+      }
+    );
+    for (var o = 0; o < targets.length; o++) observer.observe(targets[o]);
+    /* Exact final correction where supported (Chrome 114+/FF 109+/Safari
+     * 18.4+): scrollend fires ONCE when scrolling stops — not a per-frame
+     * scroll handler, no jank. Older engines rely on the dense-threshold
+     * settle above. */
+    if ("onscrollend" in window) {
+      window.addEventListener("scrollend", computeCurrent);
+    }
+    /* A TOC click's smooth scroll can outlive the last intersection
+     * change (observed on Firefox: the settle recompute ran mid-scroll
+     * and the spy stuck one section behind). On click, poll scrollY via
+     * requestAnimationFrame — NOT a scroll handler — and recompute once
+     * the position has been still for ~30 frames (capped at ~10s).
+     * 30, not 3: smooth scrolling starts ASYNCHRONOUSLY after the click
+     * (Firefox), so a short stillness window can elapse before any
+     * movement and freeze the spy one section behind. */
+    nav.addEventListener("click", function () {
+      var lastY = null;
+      var still = 0;
+      var frames = 0;
+      function tick() {
+        frames += 1;
+        if (window.scrollY === lastY) {
+          still += 1;
+        } else {
+          still = 0;
+          lastY = window.scrollY;
+        }
+        if (still >= 30 || frames > 600) {
+          computeCurrent();
+        } else {
+          window.requestAnimationFrame(tick);
+        }
+      }
+      window.requestAnimationFrame(tick);
+    });
+    computeCurrent();
+  }
+
+  initTocSpy();
   refresh();
   window.setInterval(refresh, REFRESH_MS);
 })();
