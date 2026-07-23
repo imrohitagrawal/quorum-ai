@@ -1,10 +1,10 @@
 # Session Handoff
 
 ## Date/time
-2026-07-23T05:56:28+05:30
+2026-07-23T12:44:39+05:30
 
 ## Current branch/worktree
-docs/observability-closeout
+main
 
 ## Current phase
 Operate, learn, and improve
@@ -61,22 +61,28 @@ Operate, learn, and improve
 
 ## Git status
 ```text
-M docs/00-factory-console.md
- M docs/session-handoff.md
 ?? DEMO-READINESS-P1-P3-ULTRACODE-PROMPT.md
 ?? OBSERVABILITY-DEMO-ULTRACODE-PROMPT.md
+?? OPS-TILE-RELEVANCE-ULTRACODE-PROMPT.md
 ?? P2-CLOSEOUT-ULTRACODE-PROMPT.md
 ?? R2-RB5-S4-RESULT.md
 ?? R2-RB5-S4-ULTRACODE-PROMPT.md
 ?? R2-S4-CLOSEOUT-ULTRACODE-PROMPT.md
 ?? design_handoff_quorum_ui/
+?? e2e/tests/invariants/trust-score-visual.spec.ts-snapshots/trust-score-dark-1440-chromium-darwin.png
+?? e2e/tests/invariants/trust-score-visual.spec.ts-snapshots/trust-score-dark-375-chromium-darwin.png
+?? e2e/tests/invariants/trust-score-visual.spec.ts-snapshots/trust-score-dark-768-chromium-darwin.png
+?? e2e/tests/invariants/trust-score-visual.spec.ts-snapshots/trust-score-light-1440-chromium-darwin.png
+?? e2e/tests/invariants/trust-score-visual.spec.ts-snapshots/trust-score-light-375-chromium-darwin.png
+?? e2e/tests/invariants/trust-score-visual.spec.ts-snapshots/trust-score-light-768-chromium-darwin.png
+?? e2e/tests/invariants/visual-snapshots.spec.ts-snapshots/result-verdict-chromium-darwin.png
+?? e2e/tests/invariants/visual-snapshots.spec.ts-snapshots/transcript-full-chromium-darwin.png
+?? e2e/undefined/
 ```
 
 ## Diff stat
 ```text
-docs/00-factory-console.md | 21 +++++++++++++++++----
- docs/session-handoff.md    | 10 +++++-----
- 2 files changed, 22 insertions(+), 9 deletions(-)
+no unstaged diff
 ```
 
 ## Completed in this session
