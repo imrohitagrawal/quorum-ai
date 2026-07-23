@@ -1,0 +1,8 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32">
+  <!-- Brand "Q" mark: white serif Q on the brand green #0E6B50 (the
+       tokens.css brand-tile-bg value). Same-origin, no external
+       references. NOTE: XML comments must never contain a double
+       hyphen, so token names are spelled without their prefix here. -->
+  <rect width="32" height="32" rx="7" fill="#0E6B50"/>
+  <text x="16" y="23.5" text-anchor="middle" font-family="Georgia, 'Times New Roman', serif" font-weight="600" font-size="21" fill="#FFFFFF">Q</text>
+</svg>

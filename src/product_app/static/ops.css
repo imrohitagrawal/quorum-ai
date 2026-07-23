@@ -50,6 +50,23 @@ code {
   overflow-wrap: anywhere;
 }
 
+/* Smooth in-page jumps for the TOC — but ONLY for users who have not
+   asked for reduced motion (their jumps stay instant by default). */
+@media (prefers-reduced-motion: no-preference) {
+  html { scroll-behavior: smooth; }
+}
+
+/* Everything scrolled into view sits clear of the sticky TOC bar —
+   4.5rem covers the bar PLUS a classic (non-overlay) horizontal
+   scrollbar inside it on narrow viewports (review finding: ~62px on
+   Windows/Linux/headless at 375px). scroll-padding-top on the root
+   protects ALL scroll-into-view operations, including keyboard-focus
+   scrolling of id-less elements (WCAG 2.2 SC 2.4.11 — a.term links,
+   prose links, tabindex'd scroll regions). NOTE: a per-target scroll
+   margin would ADD to this padding (double offset — live-debug finding:
+   targets landed 144px down), so root padding alone is the rule. */
+html { scroll-padding-top: 4.5rem; }
+
 /* ----- Topbar ---------------------------------------------------------- */
 
 .ops-topbar { padding: var(--space-6) var(--space-7) var(--space-2); max-width: 1400px; }
@@ -73,6 +90,51 @@ code {
 .ops-sub { margin: var(--space-2) 0 0; max-width: 72ch; color: var(--text-secondary); font-size: 0.9rem; }
 .ops-meta { margin: var(--space-2) 0 0; font-size: 0.85rem; color: var(--muted); font-family: var(--font-mono); }
 .ops-error { color: var(--danger); font-weight: 600; margin-left: var(--space-3); font-family: var(--font-sans); }
+
+/* ----- Jump-bar TOC ----------------------------------------------------- */
+
+/* Slim sticky strip under the header. On narrow viewports the strip
+   scrolls INSIDE its own box (overflow-x: auto) — the page itself never
+   scrolls horizontally (blocking e2e invariant). */
+.ops-toc {
+  position: sticky;
+  top: 0;
+  z-index: 5;
+  display: flex;
+  gap: var(--space-5);
+  overflow-x: auto;
+  white-space: nowrap;
+  padding: var(--space-2) var(--space-7);
+  background: var(--bg);
+  border-bottom: 1px solid var(--line-2);
+  font-size: 0.85rem;
+}
+.ops-toc a {
+  color: var(--text-secondary);
+  text-decoration: none;
+  padding: var(--space-1) 0;
+  border-bottom: 2px solid transparent;
+}
+.ops-toc a:hover { color: var(--ink); }
+/* Scroll-spy state — ink, not green (green stays reserved for the brand
+   tile and PASS verdicts). */
+.ops-toc a[aria-current="location"] {
+  color: var(--ink);
+  font-weight: 650;
+  border-bottom-color: var(--ink);
+}
+
+/* ----- Jargon links to the glossary ------------------------------------- */
+
+/* Dotted underline (no hover-only tooltips: invisible on touch). Inherits
+   the surrounding text colour so the prose register stays intact. */
+a.term {
+  color: inherit;
+  text-decoration: underline dotted;
+  text-decoration-thickness: 1px;
+  text-underline-offset: 3px;
+}
+a.term:hover { color: var(--info); }
 
 /* ----- SLO tiles -------------------------------------------------------- */
 
@@ -230,6 +292,29 @@ code {
 .slo-table td:first-child { font-family: var(--font-sans); font-size: 0.88rem; white-space: normal; }
 .slo-table td:nth-child(2) { font-family: var(--font-sans); font-size: 0.88rem; color: var(--body); white-space: normal; }
 .slo-table td:nth-child(3) { font-family: var(--font-sans); font-size: 0.88rem; color: var(--text-secondary); white-space: normal; }
+
+/* "Used by" honesty column: which families actually feed a tile. */
+.catalog-table td.used-feeds {
+  font-family: var(--font-sans);
+  font-size: 0.8rem;
+  color: var(--info);
+  font-weight: 650;
+  white-space: normal;
+  min-width: 12ch;
+}
+.catalog-table td.used-info {
+  font-family: var(--font-sans);
+  font-size: 0.8rem;
+  color: var(--muted);
+  font-style: italic;
+  white-space: normal;
+  min-width: 12ch;
+}
+
+/* Glossary. */
+.glossary-list { margin: 0; display: grid; gap: var(--space-3); }
+.glossary-entry dt { font-weight: 650; }
+.glossary-entry dd { margin: var(--space-1) 0 0 0; max-width: 76ch; color: var(--body); }
 
 /* How-to-read block. */
 .howto-code {

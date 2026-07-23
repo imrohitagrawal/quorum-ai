@@ -313,3 +313,166 @@ def test_ready_red_hint_states_simulation_fallback() -> None:
     match = re.search(r'<p[^>]*data-red="ready"[^>]*>(.*?)</p>', html, re.S)
     assert match is not None
     assert "simulat" in match.group(1).lower()
+
+
+# --- Jump-bar TOC, "Used by" honesty, glossary, favicon ---------------------
+#
+# Four additive pieces (one PR): a sticky section TOC with scroll-spy, a
+# truthful "Used by" marker per catalog family, a plain-language glossary
+# with jargon links from page-authored copy, and a same-origin favicon on
+# both product templates.
+
+_TOC_EXPECTED_TARGETS = (
+    "live-tiles",
+    "explainer-about",
+    "explainer-catalog",
+    "explainer-howto",
+    "explainer-slo",
+    "explainer-glossary",
+)
+
+
+def test_ops_page_has_jump_bar_toc_targeting_real_anchors() -> None:
+    """Every TOC href must resolve to a real element id on the page."""
+    html = (TEMPLATES_DIR / "ops.html").read_text()
+    nav = re.search(r'<nav[^>]*class="[^"]*ops-toc[^"]*"[^>]*>(.*?)</nav>', html, re.S)
+    assert nav is not None, "missing .ops-toc nav"
+    hrefs = re.findall(r'href="#([^"]+)"', nav.group(1))
+    assert tuple(hrefs) == _TOC_EXPECTED_TARGETS
+    for target in hrefs:
+        assert f'id="{target}"' in html, f"TOC target #{target} does not exist"
+
+
+def test_toc_is_ordered_after_the_skip_link() -> None:
+    """Keyboard order: skip-link stays the first focusable thing on the page."""
+    html = (TEMPLATES_DIR / "ops.html").read_text()
+    assert html.index('class="skip-link"') < html.index("ops-toc")
+
+
+def test_toc_scroll_spy_uses_intersection_observer_not_scroll_handler() -> None:
+    js = (STATIC_DIR / "ops.js").read_text()
+    assert "IntersectionObserver" in js
+    assert "aria-current" in js
+    # No scroll-handler jank: the spy must not hang off a per-frame scroll
+    # listener. The ban keys on the exact event name ("scroll",) so the
+    # once-per-gesture "scrollend" listener — which cannot jank — stays
+    # allowed.
+    assert 'addEventListener("scroll",' not in js
+    assert "addEventListener('scroll'," not in js
+
+
+def test_toc_targets_never_hide_under_the_sticky_bar() -> None:
+    """scroll-padding-top on the root shields ALL scroll-into-view ops
+    (anchor jumps AND keyboard-focus scrolling of id-less elements) from
+    the sticky bar; reduced motion honoured. scroll-margin-top on targets
+    is forbidden — it would ADD to the padding (double offset)."""
+    css = (STATIC_DIR / "ops.css").read_text()
+    assert "scroll-padding-top" in css
+    assert "scroll-margin-top" not in css
+    assert "prefers-reduced-motion" in css
+
+
+def test_glossary_panel_has_the_eight_entries() -> None:
+    html = (TEMPLATES_DIR / "ops.html").read_text()
+    assert 'id="explainer-glossary"' in html
+    for term_id in (
+        "term-gc",
+        "term-histogram",
+        "term-percentile",
+        "term-cardinality",
+        "term-rss",
+        "term-fd",
+        "term-scrape",
+        "term-counter-gauge",
+    ):
+        assert f'id="{term_id}"' in html, f"missing glossary entry {term_id}"
+
+
+def test_every_jargon_link_targets_an_existing_glossary_entry() -> None:
+    """Term links live in page-authored copy and resolve to real entries."""
+    html = (TEMPLATES_DIR / "ops.html").read_text()
+    term_links = re.findall(r'class="term"[^>]*href="#(term-[^"]+)"', html)
+    term_links += re.findall(r'href="#(term-[^"]+)"[^>]*class="term"', html)
+    assert term_links, "no jargon links found in page-authored copy"
+    for target in term_links:
+        assert f'id="{target}"' in html, f"term link #{target} has no glossary entry"
+
+
+def test_glossary_terms_are_not_injected_into_machine_help_text() -> None:
+    """The raw `# HELP` text renders verbatim — ops.js must not linkify it.
+
+    The catalog help cell is machine text; the glossary sits beside it. The
+    guard: ops.js never creates anchor elements (all its DOM writes are
+    td/tr/polyline/textContent), so parsed provider text can never become a
+    link — belt to the existing innerHTML-ban braces.
+    """
+    js = (STATIC_DIR / "ops.js").read_text()
+    assert 'createElement("a")' not in js
+    assert "innerHTML" not in js  # restated locally so this test bites alone
+
+
+_CONSUMED_FAMILIES = ("http_requests_total", "http_request_duration_seconds")
+
+
+def test_used_by_badges_key_off_the_families_the_page_parses() -> None:
+    """Badge truth is keyed off family NAME, defaulting to informational.
+
+    The two families whose samples the tiles actually read (`ops.js
+    parseMetrics` reads `http_requests_total{` and
+    `http_request_duration_seconds_bucket{`) get a "feeds" marker; every
+    other — including unknown/new — family reads "informational".
+    """
+    js = (STATIC_DIR / "ops.js").read_text()
+    for family in _CONSUMED_FAMILIES:
+        assert f'"{family}"' in js, f"badge map must key {family}"
+    assert "informational" in js  # the default for non-consumed families
+    # The map keys must be the same names parseMetrics actually reads.
+    assert 'indexOf("http_requests_total{")' in js
+    assert 'indexOf("http_request_duration_seconds_bucket{")' in js
+
+
+def test_catalog_tables_gain_a_used_by_column() -> None:
+    html = (TEMPLATES_DIR / "ops.html").read_text()
+    assert html.count("Used by") >= 4  # one header cell per group table
+
+
+def test_catalog_intro_states_slo_source_group_honestly() -> None:
+    """One sentence: SLOs come from http_* only; the rest is informational."""
+    html = (TEMPLATES_DIR / "ops.html").read_text()
+    catalog = re.search(r'id="explainer-catalog".*?<section class="catalog-group"', html, re.S)
+    assert catalog is not None
+    assert "http_" in catalog.group(0)
+    assert "informational" in catalog.group(0).lower()
+
+
+def test_favicon_linked_in_both_templates_and_served_same_origin() -> None:
+    for template in ("ops.html", "workspace.html"):
+        html = (TEMPLATES_DIR / template).read_text()
+        assert 'rel="icon"' in html, f"{template} missing favicon link"
+        assert "/static/favicon.svg" in html, f"{template} favicon not same-origin"
+    client = TestClient(app)
+    response = client.get("/static/favicon.svg")
+    assert response.status_code == 200
+    assert "image/svg+xml" in response.headers["content-type"]
+    # Same-origin guard applies to the icon too: no external host inside it.
+    assert _external_hosts(response.text) == set()
+    # The asset must be WELL-FORMED XML, or browsers show a broken icon.
+    # (Live-look finding: a ``--token-name`` inside an XML comment is
+    # illegal XML — a 200 + right content-type still failed to decode.)
+    import xml.etree.ElementTree as ET
+
+    root = ET.fromstring(response.text)
+    assert root.tag.endswith("svg")
+    # Safari ignores SVG favicons — a PNG fallback must exist and be linked
+    # BEFORE the SVG (browsers that support SVG still prefer it; Safari
+    # takes the PNG instead of showing a blank globe).
+    png = client.get("/static/favicon-32.png")
+    assert png.status_code == 200
+    assert "image/png" in png.headers["content-type"]
+    assert png.content[:8] == b"\x89PNG\r\n\x1a\n"
+    for template in ("ops.html", "workspace.html"):
+        html = (TEMPLATES_DIR / template).read_text()
+        assert "/static/favicon-32.png" in html, f"{template} missing PNG fallback"
+        assert html.index("favicon-32.png") < html.index("favicon.svg"), (
+            f"{template}: PNG fallback must be linked before the SVG icon"
+        )

@@ -146,6 +146,7 @@ jobs:
           tests/invariants/real-integration-smoke.spec.ts
           tests/degraded/degraded-banner.spec.ts
           tests/ops/ops-dashboard.spec.ts
+          tests/ops/ops-navigation.spec.ts
           --project=chromium
           --retries=0
 
