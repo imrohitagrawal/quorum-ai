@@ -118,14 +118,109 @@ test.describe("ops dashboard", () => {
       );
       expect(overflow, `horizontal overflow at ${width}px`).toBeLessThanOrEqual(0);
       const clipped = await page.evaluate(() =>
-        Array.from(document.querySelectorAll(".tile, .tile *"))
-          .filter((el) => el.scrollWidth > el.clientWidth + 1)
+        Array.from(
+          document.querySelectorAll(
+            ".tile, .tile *, #metrics-explained, #metrics-explained *",
+          ),
+        )
+          .filter((el) => {
+            const style = getComputedStyle(el);
+            // A container that DECLARES horizontal scrolling (overflow-x:
+            // auto/scroll) is the sanctioned home for wide content (the
+            // catalog table) — scrolling inside it is not clipping. Anything
+            // else that overflows its box is a real defect.
+            if (style.overflowX === "auto" || style.overflowX === "scroll")
+              return false;
+            // Inline boxes have clientWidth 0 BY SPEC, so the comparison is
+            // meaningless for them (they wrap, they cannot clip). Chromium
+            // also reports scrollWidth 0 for inline elements so the check
+            // never fired there; Firefox reports the content width, turning
+            // every inline span into a false positive. Measure block-level
+            // boxes only — the elements that can actually clip content.
+            if (style.display === "inline") return false;
+            return el.scrollWidth > el.clientWidth + 1;
+          })
           .map(
             (el) =>
               `${el.tagName}.${el.className} ${el.scrollWidth}>${el.clientWidth}`,
           ),
       );
       expect(clipped, `clipped tile content at ${width}px`).toEqual([]);
+    }
+  });
+
+  test("metric catalog renders live families consistent with a direct /metrics fetch", async ({
+    page,
+    request,
+  }) => {
+    await page.goto("/ui/ops");
+    await expect(page.locator('[data-current="family-count"]')).not.toHaveText(
+      "—",
+      { timeout: 10_000 },
+    );
+
+    // Direct fetch AFTER the page has scraped: the family set is stable
+    // within a running process (families register at import/first-request
+    // time), so the counts must match exactly.
+    const metricsText = await (await request.get("/metrics")).text();
+    const directFamilies = metricsText
+      .split("\n")
+      .filter((l) => l.startsWith("# HELP "))
+      .map((l) => l.split(" ")[2]);
+    expect(directFamilies.length).toBeGreaterThan(0);
+
+    await expect(page.locator('[data-current="family-count"]')).toHaveText(
+      String(directFamilies.length),
+    );
+
+    // Every group container renders one row per family in that group,
+    // with the family name and its TYPE visible.
+    for (const group of ["http", "process", "python"] as const) {
+      const expected = directFamilies.filter((f) => f.startsWith(`${group}_`));
+      const rows = page.locator(`[data-group="${group}"] [data-family]`);
+      await expect(rows).toHaveCount(expected.length);
+      for (const family of expected) {
+        const row = page.locator(`[data-family="${family}"]`);
+        await expect(row).toBeVisible();
+        await expect(row).toContainText(family);
+      }
+      // Empty-group honesty: a known group with no families (process_* is
+      // Linux-only) must show the empty-state note instead of bare table
+      // headers — and never both states at once.
+      const emptyNote = page.locator(`[data-group-empty="${group}"]`);
+      const scroll = page.locator(`[data-group="${group}"] .catalog-scroll`);
+      if (expected.length === 0) {
+        await expect(emptyNote).toBeVisible();
+        await expect(scroll).toBeHidden();
+      } else {
+        await expect(emptyNote).toBeHidden();
+        await expect(scroll).toBeVisible();
+      }
+    }
+
+    // Row content is real: a known histogram family shows its type.
+    await expect(
+      page.locator('[data-family="http_request_duration_seconds"]'),
+    ).toContainText("histogram");
+  });
+
+  test("explainer sections state purpose, read-path and SLO source of truth", async ({
+    page,
+  }) => {
+    await page.goto("/ui/ops");
+    await expect(page.locator("#explainer-about")).toContainText(/prometheus/i);
+    await expect(page.locator("#explainer-about")).toContainText(
+      /public|unauthenticated/i,
+    );
+    await expect(page.locator("#explainer-howto")).toContainText("curl");
+    await expect(page.locator("#explainer-slo")).toContainText(
+      "docs/80-observability.md",
+    );
+    // Same-origin links to the raw surfaces the page explains.
+    for (const href of ["/metrics", "/status", "/ready"]) {
+      await expect(
+        page.locator(`#metrics-explained a[href="${href}"]`),
+      ).toHaveCount(1);
     }
   });
 

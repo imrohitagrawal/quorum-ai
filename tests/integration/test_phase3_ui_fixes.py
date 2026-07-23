@@ -81,15 +81,21 @@ _FORBIDDEN_COMPONENT_HEXES = {
 
 @pytest.fixture
 def css_text() -> str:
-    """Load app.css once per session.
+    """Load the workspace's effective stylesheet cascade.
+
+    The design tokens were extracted VERBATIM from app.css into the shared
+    ``tokens.css`` (loaded by workspace.html immediately before app.css) so
+    the ops dashboard shares the exact same palette. The browser sees the
+    concatenation, so the token-presence and hex-banishment pins assert
+    against exactly that.
 
     pytest rootdir = project root, so ``__file__`` resolves to
     ``.../tests/integration/test_phase3_ui_fixes.py`` as an absolute path.
     parents[2] = project root.
     """
 
-    css_path = Path(__file__).resolve().parents[2] / "src/product_app/static/app.css"
-    return css_path.read_text()
+    static = Path(__file__).resolve().parents[2] / "src/product_app/static"
+    return (static / "tokens.css").read_text() + (static / "app.css").read_text()
 
 
 @pytest.fixture

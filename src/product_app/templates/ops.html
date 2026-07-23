@@ -4,12 +4,19 @@
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <title>Quorum-AI — Ops</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Newsreader:ital,opsz,wght@0,6..72,400;0,6..72,500;0,6..72,600;0,6..72,700;1,6..72,400;1,6..72,500&family=Geist:wght@400;500;550;600;650;700&family=Geist+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="/static/tokens.css">
     <link rel="stylesheet" href="/static/ops.css">
   </head>
   <body>
     <a class="skip-link" href="#main-content">Skip to main content</a>
     <header class="ops-topbar">
-      <h1>Quorum-AI ops</h1>
+      <div class="ops-brand">
+        <span class="ops-brand-tile" aria-hidden="true">Q</span>
+        <h1>Quorum-AI ops</h1>
+      </div>
       <p class="ops-sub">
         Live SLO dashboard — every current value below is computed in this page
         from same-origin <code>/metrics</code>, <code>/status</code> and
@@ -23,41 +30,239 @@
         <span id="fetch-error" class="ops-error" role="alert" hidden></span>
       </p>
     </header>
-    <main id="main-content" class="ops-grid">
-      <section class="tile" id="tile-rate" aria-labelledby="tile-rate-h">
-        <h2 id="tile-rate-h">Request rate</h2>
-        <p class="tile-value"><span data-current="rate">—</span> <span class="tile-unit">req/s</span></p>
-        <p class="tile-note">avg over the last refresh interval</p>
-        <svg class="spark" data-spark="rate" viewBox="0 0 120 28" preserveAspectRatio="none" role="img" aria-label="Request rate sparkline, most recent 10 minutes since page open"></svg>
-      </section>
-      <section class="tile" id="tile-p95" aria-labelledby="tile-p95-h">
-        <h2 id="tile-p95-h">HTTP p95 latency</h2>
-        <p class="tile-value"><span data-current="p95">—</span> <span class="tile-unit">s</span></p>
-        <p class="tile-slo" data-slo="p95">SLO: &lt; 1 s · <span data-verdict="p95"></span></p>
-        <p class="tile-note">bucket-derived: the upper bound of the p95 histogram bucket, process lifetime. Conservative — the true p95 may sit anywhere at or below this bound.</p>
-      </section>
-      <section class="tile" id="tile-errors" aria-labelledby="tile-errors-h">
-        <h2 id="tile-errors-h">5xx error rate</h2>
-        <p class="tile-value"><span data-current="err">—</span> <span class="tile-unit">%</span></p>
-        <p class="tile-slo" data-slo="err">SLO: &lt; 1% · <span data-verdict="err"></span></p>
-        <p class="tile-note">5xx / all requests, process lifetime</p>
-      </section>
-      <section class="tile" id="tile-ready" aria-labelledby="tile-ready-h">
-        <h2 id="tile-ready-h">Readiness</h2>
-        <p class="tile-value"><span data-current="ready">—</span></p>
-        <p class="tile-slo" data-slo="ready">SLO: live · <span data-verdict="ready"></span></p>
-        <p class="tile-note" data-current="ready-reasons"></p>
-      </section>
-      <section class="tile" id="tile-uptime" aria-labelledby="tile-uptime-h">
-        <h2 id="tile-uptime-h">Uptime</h2>
-        <p class="tile-value"><span data-current="uptime">—</span></p>
-        <p class="tile-note">process uptime from /status</p>
-      </section>
-      <section class="tile" id="tile-version" aria-labelledby="tile-version-h">
-        <h2 id="tile-version-h">Version</h2>
-        <p class="tile-value"><span data-current="version">—</span></p>
-        <p class="tile-note"><span data-current="environment"></span></p>
-      </section>
+    <main id="main-content">
+      <div class="ops-grid">
+        <section class="tile" id="tile-rate" aria-labelledby="tile-rate-h">
+          <h2 id="tile-rate-h">Request rate</h2>
+          <p class="tile-value"><span data-current="rate">—</span> <span class="tile-unit">req/s</span></p>
+          <p class="tile-note">avg over the last refresh interval</p>
+          <svg class="spark" data-spark="rate" viewBox="0 0 120 28" preserveAspectRatio="none" role="img" aria-label="Request rate sparkline, most recent 10 minutes since page open"></svg>
+        </section>
+        <section class="tile" id="tile-p95" aria-labelledby="tile-p95-h">
+          <h2 id="tile-p95-h">HTTP p95 latency</h2>
+          <p class="tile-value"><span data-current="p95">—</span> <span class="tile-unit">s</span></p>
+          <p class="tile-slo" data-slo="p95">SLO: &lt; 1 s · <span data-verdict="p95"></span></p>
+          <p class="tile-note">bucket-derived: the upper bound of the p95 histogram bucket, process lifetime. Conservative — the true p95 may sit anywhere at or below this bound.</p>
+        </section>
+        <section class="tile" id="tile-errors" aria-labelledby="tile-errors-h">
+          <h2 id="tile-errors-h">5xx error rate</h2>
+          <p class="tile-value"><span data-current="err">—</span> <span class="tile-unit">%</span></p>
+          <p class="tile-slo" data-slo="err">SLO: &lt; 1% · <span data-verdict="err"></span></p>
+          <p class="tile-note">5xx / all requests, process lifetime</p>
+        </section>
+        <section class="tile" id="tile-ready" aria-labelledby="tile-ready-h">
+          <h2 id="tile-ready-h">Readiness</h2>
+          <p class="tile-value"><span data-current="ready">—</span></p>
+          <p class="tile-slo" data-slo="ready">SLO: live · <span data-verdict="ready"></span></p>
+          <p class="tile-note" data-current="ready-reasons"></p>
+        </section>
+        <section class="tile" id="tile-uptime" aria-labelledby="tile-uptime-h">
+          <h2 id="tile-uptime-h">Uptime</h2>
+          <p class="tile-value"><span data-current="uptime">—</span></p>
+          <p class="tile-note">process uptime from /status</p>
+        </section>
+        <section class="tile" id="tile-version" aria-labelledby="tile-version-h">
+          <h2 id="tile-version-h">Version</h2>
+          <p class="tile-value"><span data-current="version">—</span></p>
+          <p class="tile-note"><span data-current="environment"></span></p>
+        </section>
+      </div>
+
+      <div id="metrics-explained" class="explained">
+        <header class="explained-header">
+          <h2 class="explained-title">Metrics, explained</h2>
+          <p class="explained-lede">
+            Everything the tiles above are computed from, in plain language:
+            what the raw telemetry endpoint is, every metric it currently
+            emits, how to read it yourself, and the service-level objectives
+            this product is held to.
+          </p>
+        </header>
+
+        <section class="panel explainer" id="explainer-about" aria-labelledby="explainer-about-h">
+          <h3 id="explainer-about-h">What <code>/metrics</code> is</h3>
+          <p>
+            <code>/metrics</code> is this product's telemetry
+            endpoint in the <strong>Prometheus text exposition format</strong> —
+            the industry-standard, machine-readable way a service publishes its
+            own runtime numbers. It looks like raw text on purpose: it is a
+            <em>contract for machines</em>, not a page for people. A monitoring
+            system (Prometheus, Grafana Cloud, Datadog, or a plain
+            <code>curl</code>) scrapes it on an interval and turns the counters
+            into rates, graphs and alerts. This dashboard is one such consumer:
+            every tile above is computed live from the same three surfaces —
+            <a href="/metrics">the metric exposition</a>, the
+            <a href="/status">operator status snapshot</a> and the
+            <a href="/ready">readiness probe</a>.
+          </p>
+          <p>
+            Each metric is one of three types. A <strong>counter</strong> only
+            ever goes up (total requests served) — consumers derive rates from
+            its deltas. A <strong>gauge</strong> goes up and down (resident
+            memory right now). A <strong>histogram</strong> counts observations
+            into cumulative latency buckets, which is how the p95 tile is
+            derived. Series carry <strong>labels</strong> — the parameters to
+            watch: <code>handler</code> (the route <em>template</em>, never a
+            raw path or UUID, so cardinality stays bounded),
+            <code>method</code> (non-standard tokens are normalised to
+            <code>OTHER</code>), and <code>status</code> (the response class:
+            2xx/4xx/5xx).
+          </p>
+          <p class="explainer-note">
+            Deliberate exposure: the endpoint is <strong>public and
+            unauthenticated</strong> by design, like the health probes — a
+            recorded decision (OD-1) for this demo product. It also emits
+            interpreter/process telemetry (Python GC, memory, file
+            descriptors), which is accepted and documented, never a surprise.
+          </p>
+        </section>
+
+        <section class="panel explainer" id="explainer-catalog" aria-labelledby="explainer-catalog-h">
+          <h3 id="explainer-catalog-h">Live metric catalog</h3>
+          <p>
+            Parsed from the exposition on every refresh — nothing below is
+            hardcoded. Currently
+            <strong><span data-current="family-count">—</span> metric
+            families</strong> in <span data-current="group-count">—</span>
+            groups. Wide tables scroll sideways inside their own box.
+          </p>
+          <section class="catalog-group" data-group="http" aria-labelledby="catalog-http-h">
+            <h4 id="catalog-http-h"><code>http_*</code> — request traffic</h4>
+            <p class="catalog-group-note">
+              What the service is doing for its users: request counts by route,
+              method and status class; request/response sizes; latency
+              histograms. The availability, error-rate and latency SLOs are
+              read from this group.
+            </p>
+            <p class="catalog-empty" data-group-empty="http" hidden>No <code>http_*</code> families are emitted yet — they appear once the process has served requests.</p>
+            <div class="catalog-scroll" tabindex="0" role="region" aria-label="HTTP request metric families (scrollable table)">
+              <table class="catalog-table">
+                <thead>
+                  <tr><th scope="col">Family</th><th scope="col">Type</th><th scope="col">Series</th><th scope="col">What it measures</th></tr>
+                </thead>
+                <tbody data-group-body="http"></tbody>
+              </table>
+            </div>
+          </section>
+          <section class="catalog-group" data-group="process" aria-labelledby="catalog-process-h">
+            <h4 id="catalog-process-h"><code>process_*</code> — the operating-system view</h4>
+            <p class="catalog-group-note">
+              Resource footprint of the server process: CPU time, virtual and
+              resident memory, open file descriptors, start time. Watch these
+              for leaks and creep between deploys.
+            </p>
+            <p class="catalog-empty" data-group-empty="process" hidden>No <code>process_*</code> families are emitted by the current runtime — this group appears on Linux deployments, not on a macOS dev server.</p>
+            <div class="catalog-scroll" tabindex="0" role="region" aria-label="Process metric families (scrollable table)">
+              <table class="catalog-table">
+                <thead>
+                  <tr><th scope="col">Family</th><th scope="col">Type</th><th scope="col">Series</th><th scope="col">What it measures</th></tr>
+                </thead>
+                <tbody data-group-body="process"></tbody>
+              </table>
+            </div>
+          </section>
+          <section class="catalog-group" data-group="python" aria-labelledby="catalog-python-h">
+            <h4 id="catalog-python-h"><code>python_*</code> — interpreter internals</h4>
+            <p class="catalog-group-note">
+              Python garbage-collector activity and platform info. Mostly
+              background noise day to day; useful when chasing a memory issue.
+            </p>
+            <p class="catalog-empty" data-group-empty="python" hidden>No <code>python_*</code> families are emitted by the current runtime.</p>
+            <div class="catalog-scroll" tabindex="0" role="region" aria-label="Python interpreter metric families (scrollable table)">
+              <table class="catalog-table">
+                <thead>
+                  <tr><th scope="col">Family</th><th scope="col">Type</th><th scope="col">Series</th><th scope="col">What it measures</th></tr>
+                </thead>
+                <tbody data-group-body="python"></tbody>
+              </table>
+            </div>
+          </section>
+          <section class="catalog-group" data-group="other" aria-labelledby="catalog-other-h" hidden>
+            <h4 id="catalog-other-h">Other families</h4>
+            <p class="catalog-group-note">
+              Families that appeared in the exposition outside the three known
+              groups — shown so the catalog never silently drops a metric.
+            </p>
+            <p class="catalog-empty" data-group-empty="other" hidden>No families outside the known groups are emitted by the current runtime.</p>
+            <div class="catalog-scroll" tabindex="0" role="region" aria-label="Other metric families (scrollable table)">
+              <table class="catalog-table">
+                <thead>
+                  <tr><th scope="col">Family</th><th scope="col">Type</th><th scope="col">Series</th><th scope="col">What it measures</th></tr>
+                </thead>
+                <tbody data-group-body="other"></tbody>
+              </table>
+            </div>
+          </section>
+        </section>
+
+        <section class="panel explainer" id="explainer-howto" aria-labelledby="explainer-howto-h">
+          <h3 id="explainer-howto-h">How to read it yourself</h3>
+          <p>
+            The shell is the reference read-path — the same one the SLO table
+            in the observability doc names:
+          </p>
+          <pre class="howto-code" tabindex="0" role="region" aria-label="Shell command to read the metrics endpoint"><code>curl -s https://quorum.stackclimb.com/metrics</code></pre>
+          <dl class="howto-list">
+            <dt>5xx error rate</dt>
+            <dd>
+              Sum every <code>http_requests_total</code> sample, then the
+              subset labelled <code>status="5xx"</code>; the rate is
+              <code>5xx&nbsp;/&nbsp;total</code>. That is exactly what the
+              error-rate tile does on each refresh.
+            </dd>
+            <dt>p95 latency (bucket-derived)</dt>
+            <dd>
+              <code>http_request_duration_seconds_bucket</code> counts requests
+              at or under each <code>le</code> ("less-or-equal") bound,
+              cumulatively. The p95 shown above is the bound of the first
+              bucket holding ≥95% of observations — honest but conservative:
+              the true p95 sits at or below it, and the page shows the bound
+              verbatim ("≤ 0.5") rather than implying precision the buckets
+              cannot support.
+            </dd>
+            <dt>Counters reset on restart</dt>
+            <dd>
+              All <code>_total</code> counters are process-lifetime; a deploy
+              or restart starts them at zero. Consumers (and the rate tile)
+              treat a decrease as a restart, never a negative rate.
+            </dd>
+          </dl>
+        </section>
+
+        <section class="panel explainer" id="explainer-slo" aria-labelledby="explainer-slo-h">
+          <h3 id="explainer-slo-h">The SLOs — what this service promises</h3>
+          <p>
+            A <strong>service-level objective</strong> is a declared,
+            measurable target for how well the service behaves — the line
+            between "healthy" and "needs attention". The verdicts on the tiles
+            above are these targets, evaluated live:
+          </p>
+          <div class="catalog-scroll" tabindex="0" role="region" aria-label="Declared SLO targets (scrollable table)">
+            <table class="catalog-table slo-table">
+              <thead>
+                <tr><th scope="col">SLO</th><th scope="col">Declared target</th><th scope="col">Read from</th></tr>
+              </thead>
+              <tbody>
+                <tr><td>Availability</td><td>99% of requests answered non-5xx</td><td><code>http_requests_total</code> status classes</td></tr>
+                <tr><td>HTTP 5xx error rate</td><td>&lt; 1% of requests</td><td>same series — the error-rate tile</td></tr>
+                <tr><td>HTTP request latency</td><td>p95 &lt; 1 s (non-run routes)</td><td>duration histogram buckets — the p95 tile</td></tr>
+                <tr><td>End-to-end query latency</td><td>P50 ≤ 45 s · P95 ≤ 120 s · hard timeout 180 s (NFR-001)</td><td>run-level deadline enforcement + histograms</td></tr>
+                <tr><td>Readiness honesty</td><td>readiness state reflects real capability</td><td>the readiness probe — the readiness tile</td></tr>
+              </tbody>
+            </table>
+          </div>
+          <p>
+            The single source of truth for these targets — and for the full
+            incident runbook when one is breached — is the repository's
+            observability doc, <code>docs/80-observability.md</code>
+            (the SLO stub <code>docs/81-slo.md</code> points there). Each row
+            of that table states <em>how to read the live value</em>, so no
+            current number is ever frozen into prose. When a target is
+            breached in a sustained way, the runbook in the same doc is the
+            first stop.
+          </p>
+        </section>
+      </div>
     </main>
     <script src="/static/ops.js" defer></script>
   </body>
