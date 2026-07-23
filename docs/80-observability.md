@@ -43,6 +43,18 @@ Shipped (OD-2, PR #78): `/ui/ops` — a self-contained, same-origin ops page
 computed live from `/metrics`, `/status` and `/ready`, auto-refreshing every
 10 s. The `curl` commands in the SLO table remain the shell-level read path.
 
+Extended (PR #85): a human-facing **"Metrics, explained"** section below the
+tiles — what `/metrics` is, a live-parsed metric catalog (never hardcoded),
+the shell read path, and the declared SLOs — plus shared design tokens
+(`static/tokens.css`) so the ops page and workspace can never drift.
+
+Extended (ops-tile-relevance): every SLO tile carries a static
+**"Why this matters"** line, and the tiles with a red/non-live state
+(request rate, p95, 5xx, readiness) a **"When it's red"** first-action
+hint — static explanation only; every current value still flows live from
+the three surfaces (guarded by `tests/unit/test_ops_dashboard.py` and
+`e2e/tests/ops/ops-dashboard.spec.ts`).
+
 ## Alerting policy
 
 Two alert rules are declared; mechanisation status is stated honestly:
@@ -84,6 +96,11 @@ OpenRouter-403 incident shape).
   (no auto-rollback on a failed smoke test; deliberate).
 - **Incident runbook**: `docs/runbooks/live-provider-outage.md` (OD-6) —
   written from the real 2026-07-15 incident.
+- **CSP `base-uri`/`form-action`**: the app-wide `_CSP_POLICY`
+  (`src/product_app/main.py`) lacks both directives. Pre-existing,
+  low-risk (host-exact directives; no `<form>`/`<base>` on `/ui/ops`),
+  and it governs every page — tracked as its own change in issue #86,
+  deliberately not bundled into an ops-page copy PR.
 
 ## Provenance rules (binding for edits to this file)
 

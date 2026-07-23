@@ -246,3 +246,70 @@ def test_explainer_slo_names_source_of_truth_doc() -> None:
     """The SLO section must point at the declared-targets source of truth."""
     html = (TEMPLATES_DIR / "ops.html").read_text()
     assert "docs/80-observability.md" in html
+
+
+# --- Per-tile relevance copy (why-it-matters / when-red follow-up) ----------
+#
+# Every SLO tile must be self-explanatory to someone who has never seen
+# Prometheus: a "why this matters" line on all six tiles, and a "when it's
+# red" first-action hint where a red state exists. Keyed off stable data-*
+# hooks (data-why / data-red), never brittle prose.
+
+_ALL_TILE_KEYS = ("rate", "p95", "err", "ready", "uptime", "version")
+_RED_HINT_KEYS = ("rate", "p95", "err", "ready")
+
+
+def test_every_tile_carries_why_it_matters_copy() -> None:
+    html = (TEMPLATES_DIR / "ops.html").read_text()
+    for key in _ALL_TILE_KEYS:
+        assert f'data-why="{key}"' in html, f"tile {key} missing data-why copy"
+
+
+def test_red_hint_present_exactly_where_a_red_state_exists() -> None:
+    """Uptime and version have no red state — an invented hint would lie."""
+    html = (TEMPLATES_DIR / "ops.html").read_text()
+    for key in _RED_HINT_KEYS:
+        assert f'data-red="{key}"' in html, f"tile {key} missing data-red hint"
+    for key in ("uptime", "version"):
+        assert f'data-red="{key}"' not in html, f"tile {key} must not fake a red state"
+
+
+def test_relevance_copy_is_static_explanation_not_a_value_sink() -> None:
+    """The copy explains; the values keep flowing through data-current only.
+
+    ops.js must never write into a relevance slot, and no relevance paragraph
+    may embed a live-value slot — explanation and measurement stay separate,
+    so a hardcoded number can never masquerade as a current value.
+    """
+    js = (STATIC_DIR / "ops.js").read_text()
+    assert "data-why" not in js and "data-red" not in js
+    html = (TEMPLATES_DIR / "ops.html").read_text()
+    # Match the WHOLE element (group 0), not just the body: a data-current
+    # attribute on the relevance <p> tag itself must fail too — ops.js's
+    # querySelector takes the first document-order match, so such a
+    # regression would silently reroute a live value into the copy.
+    paras = [
+        m.group(0)
+        for m in re.finditer(r'<p[^>]*data-(?:why|red)="[^"]+"[^>]*>(.*?)</p>', html, re.S)
+    ]
+    assert len(paras) == len(_ALL_TILE_KEYS) + len(_RED_HINT_KEYS)
+    for element in paras:
+        assert element.count("data-") == 1  # exactly the data-why/data-red hook
+        assert "data-current" not in element
+
+
+def test_err_red_hint_names_request_id_and_runbook() -> None:
+    """The 5xx first action is the real one: logs by request_id, then runbook."""
+    html = (TEMPLATES_DIR / "ops.html").read_text()
+    match = re.search(r'<p[^>]*data-red="err"[^>]*>(.*?)</p>', html, re.S)
+    assert match is not None
+    assert "request_id" in match.group(1)
+    assert "docs/80-observability.md" in match.group(1)
+
+
+def test_ready_red_hint_states_simulation_fallback() -> None:
+    """Any non-live state must be explained honestly: runs fall back to simulation."""
+    html = (TEMPLATES_DIR / "ops.html").read_text()
+    match = re.search(r'<p[^>]*data-red="ready"[^>]*>(.*?)</p>', html, re.S)
+    assert match is not None
+    assert "simulat" in match.group(1).lower()

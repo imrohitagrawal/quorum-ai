@@ -37,34 +37,44 @@
           <p class="tile-value"><span data-current="rate">—</span> <span class="tile-unit">req/s</span></p>
           <p class="tile-note">avg over the last refresh interval</p>
           <svg class="spark" data-spark="rate" viewBox="0 0 120 28" preserveAspectRatio="none" role="img" aria-label="Request rate sparkline, most recent 10 minutes since page open"></svg>
+          <p class="tile-why" data-why="rate"><strong>Why this matters:</strong> throughput this process is actually serving — the baseline every other tile is judged against.</p>
+          <p class="tile-red" data-red="rate"><strong>If it drops:</strong> a sudden fall to ~0 while traffic is expected points at routing or an upstream proxy, not at this box.</p>
         </section>
         <section class="tile" id="tile-p95" aria-labelledby="tile-p95-h">
           <h2 id="tile-p95-h">HTTP p95 latency</h2>
           <p class="tile-value"><span data-current="p95">—</span> <span class="tile-unit">s</span></p>
           <p class="tile-slo" data-slo="p95">SLO: &lt; 1 s · <span data-verdict="p95"></span></p>
           <p class="tile-note">bucket-derived: the upper bound of the p95 histogram bucket, process lifetime. Conservative — the true p95 may sit anywhere at or below this bound.</p>
+          <p class="tile-why" data-why="p95"><strong>Why this matters:</strong> 95% of requests finished at or under this — slowness is what users feel before anything breaks outright.</p>
+          <p class="tile-red" data-red="p95"><strong>When it's red:</strong> look for a slow dependency or a cold cache first, before suspecting the app code.</p>
         </section>
         <section class="tile" id="tile-errors" aria-labelledby="tile-errors-h">
           <h2 id="tile-errors-h">5xx error rate</h2>
           <p class="tile-value"><span data-current="err">—</span> <span class="tile-unit">%</span></p>
           <p class="tile-slo" data-slo="err">SLO: &lt; 1% · <span data-verdict="err"></span></p>
           <p class="tile-note">5xx / all requests, process lifetime</p>
+          <p class="tile-why" data-why="err"><strong>Why this matters:</strong> the share of requests the server itself failed — the most direct "is it broken" signal on this page.</p>
+          <p class="tile-red" data-red="err"><strong>When it's red:</strong> read the structured logs by <code>request_id</code>, then follow the incident runbook in <code>docs/80-observability.md</code>.</p>
         </section>
         <section class="tile" id="tile-ready" aria-labelledby="tile-ready-h">
           <h2 id="tile-ready-h">Readiness</h2>
           <p class="tile-value"><span data-current="ready">—</span></p>
           <p class="tile-slo" data-slo="ready">SLO: live · <span data-verdict="ready"></span></p>
           <p class="tile-note" data-current="ready-reasons"></p>
+          <p class="tile-why" data-why="ready"><strong>Why this matters:</strong> whether live execution is actually available (real models and catalog reachable) — not just "process up".</p>
+          <p class="tile-red" data-red="ready"><strong>When it's not live:</strong> any state other than <code>live</code> means runs fall back to simulation — the reasons above say exactly why.</p>
         </section>
         <section class="tile" id="tile-uptime" aria-labelledby="tile-uptime-h">
           <h2 id="tile-uptime-h">Uptime</h2>
           <p class="tile-value"><span data-current="uptime">—</span></p>
           <p class="tile-note">process uptime from /status</p>
+          <p class="tile-why" data-why="uptime"><strong>Why this matters:</strong> a reset means a deploy or restart — every process-lifetime counter above resets with it.</p>
         </section>
         <section class="tile" id="tile-version" aria-labelledby="tile-version-h">
           <h2 id="tile-version-h">Version</h2>
           <p class="tile-value"><span data-current="version">—</span></p>
           <p class="tile-note"><span data-current="environment"></span></p>
+          <p class="tile-why" data-why="version"><strong>Why this matters:</strong> which build is live — cross-check it against the intended deploy SHA when verifying a release.</p>
         </section>
       </div>
 
