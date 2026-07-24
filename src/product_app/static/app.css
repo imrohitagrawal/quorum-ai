@@ -209,6 +209,45 @@ a { color: var(--accent); text-underline-offset: 2px; }
 }
 .toggle:hover { border-color: var(--line-strong); transform: translateY(-1px); }
 
+/* PR1/#6: the theme toggle lives as a fixed floating control OUTSIDE the top bar
+   so it stays reachable on every view — the top bar is hidden on landing /
+   result / live-run / transcript (see below), but dark mode must work everywhere.
+   ``position: fixed`` keeps it in the corner regardless of viewport scroll; the
+   z-index sits above the toast region but below the error banner stack. */
+.theme-toggle-floating {
+  position: fixed;
+  top: var(--space-4);
+  right: var(--space-4);
+  z-index: 50;
+  width: 44px;
+  height: 44px;
+  font-size: 1.25rem;
+  /* No shadow on the float — it lives on a paper/panel background on the
+     landing (which already has its own panel card), but on the result/live-run
+     / transcript views the shell is the same var(--paper), so it reads as a
+     floating action without a shadow halo that would distract from verdict-band
+     / synthesis content. */
+}
+
+/* On views that carry a full brand header (result / live-run / transcript)
+   the fixed position keeps the toggle from colliding with their own header bar. */
+[data-active-view="result"] .theme-toggle-floating,
+[data-active-view="live-run"] .theme-toggle-floating,
+[data-active-view="transcript"] .theme-toggle-floating {
+  top: var(--space-4);
+}
+
+/* Mobile: nudge it slightly inward so it does not touch the screen edge. */
+@media (max-width: 600px) {
+  .theme-toggle-floating {
+    top: var(--space-3);
+    right: var(--space-3);
+    width: 40px;
+    height: 40px;
+    font-size: 1.1rem;
+  }
+}
+
 /* Reach-the-landing affordance in the persistent top bar. Text button (no
    money semantics), ink on hover. Not the default view — clicking it swaps to
    the marketing landing; every landing CTA returns to the composer. */
@@ -2859,8 +2898,28 @@ html[data-theme="dark"] .landing-preview-caption {
    is a purely visual cue and is not double-announced. */
 .result-receipt-copy[data-copied="true"]::after,
 .live-corr-copy[data-copied="true"]::after,
-.meta-value-copy[data-copied="true"]::after {
+.meta-value-copy[data-copied="true"]::after,
+.result-meta-runid-copy[data-copied="true"]::after,
+.result-action[data-copied="true"]::after {
   content: " \2713";
+  font-weight: 700;
+}
+
+/* PR1/#13: the header run-id button looked clickable but its only feedback was
+   an invisible title/aria change. Give it the same visible "✓ Copied" cue as
+   the receipt button (above), and a visible failure cue when the clipboard is
+   blocked/unavailable (incognito, insecure context) — paired with the toast the
+   shared copy helper raises on rejection. All four copy buttons get the failure
+   cue, matching the data-copied coverage above. */
+.result-meta-runid-copy[data-copyfailed="true"],
+.result-receipt-copy[data-copyfailed="true"],
+.live-corr-copy[data-copyfailed="true"],
+.meta-value-copy[data-copyfailed="true"] { color: var(--danger); }
+.result-meta-runid-copy[data-copyfailed="true"]::after,
+.result-receipt-copy[data-copyfailed="true"]::after,
+.live-corr-copy[data-copyfailed="true"]::after,
+.meta-value-copy[data-copyfailed="true"]::after {
+  content: " \2717 copy failed";
   font-weight: 700;
 }
 

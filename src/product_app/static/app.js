@@ -724,6 +724,43 @@
     window.setTimeout(() => card.remove(), 220);
   }
 
+  // PR1/#9: a single, sticky "connection lost" indicator for the 750ms poll.
+  // A dropped connection used to toast EVERY rejection verbatim ("Failed to
+  // fetch" ×N, 6s each) → up to ~8 stacked toasts. Instead we show ONE
+  // persistent indicator while consecutive network failures continue and clear
+  // it on the first successful poll (or when polling stops). Static app copy →
+  // plain text is fine (no provider text flows through here).
+  let networkIndicatorEl = null;
+  function showNetworkIndicator() {
+    // Idempotent: never stack. If one is already up, leave it.
+    if (networkIndicatorEl && networkIndicatorEl.isConnected) return;
+    const card = mkEl("div", "toast toast-warn toast-network");
+    card.setAttribute("role", "status");
+    card.dataset.networkIndicator = "true";
+    card.append(mkEl("div", "toast-body", "Connection lost — retrying…"));
+    toastRegion.appendChild(card);
+    networkIndicatorEl = card;
+  }
+  function clearNetworkIndicator() {
+    if (networkIndicatorEl) {
+      networkIndicatorEl.remove();
+      networkIndicatorEl = null;
+    }
+  }
+  function handlePollError(error) {
+    // A dropped connection surfaces as ``NETWORK_UNREACHABLE`` (status 0) from
+    // the ``api()`` wrapper. Those get the single sticky indicator. A genuine
+    // API error (4xx/5xx with a real body) is NOT swallowed — it keeps its
+    // per-tick toast so real backend failures still surface loudly.
+    const isNetwork =
+      error && (error.code === "NETWORK_UNREACHABLE" || error.status === 0);
+    if (isNetwork) {
+      showNetworkIndicator();
+      return;
+    }
+    toast({ message: error.message, tone: "error", timeout: 6000 });
+  }
+
   // ---------------------------------------------------------------------------
   // Connection pill and status pill
   // ---------------------------------------------------------------------------
@@ -3654,7 +3691,7 @@
       if (parsedUrl.protocol === "http:" || parsedUrl.protocol === "https:") {
         link.href = parsedUrl.toString();
         link.target = "_blank";
-        link.rel = "noreferrer";
+        link.rel = "noreferrer noopener";
         return link;
       }
     } catch (_) {
@@ -3978,9 +4015,22 @@
         restore();
       }, 1500);
     } catch (_) {
+      // PR1/#13: the clipboard API can be unavailable or blocked (incognito,
+      // insecure context, permissions). Make the failure VISIBLE, not just an
+      // aria/title change: flip a data flag the CSS turns into a "✗ copy failed"
+      // cue, and raise a toast telling the user to select and copy manually.
+      button.dataset.copyfailed = "true";
       button.title = "Copy failed — select and copy manually.";
       button.setAttribute("aria-label", "Copy failed — select and copy manually");
-      setTimeout(restore, 1500);
+      toast({
+        message: "Couldn't copy automatically — select the ID and copy it manually.",
+        tone: "warn",
+        timeout: 6000,
+      });
+      setTimeout(() => {
+        delete button.dataset.copyfailed;
+        restore();
+      }, 1500);
     }
   }
 
@@ -5666,6 +5716,11 @@
         return;
       }
       state.terminalHandled = true;
+      // PR1/#14: the run is over — clear the post-submit error latch. A later
+      // "Start fresh" writes "" and dispatches an ``input`` event; without this
+      // reset that trips the "enter a question" error on an intentionally-empty
+      // composer the moment the user arrives (the flag never reset after submit).
+      state.submissionAttempted = false;
       stopPolling();
       setRunning(false);
       // PR-0 / Bug 8: replace the displayed time with the
@@ -5689,6 +5744,16 @@
         renderResult(result);
         setView("result");
         focusResultHeading();
+        // PR1/#10: the question has been answered — clear the composer so the
+        // old question does not linger behind the result on the next visit.
+        // ``submissionAttempted`` is already reset above, so this ``input``
+        // dispatch cannot paint a false error. Follow-up (re-fills from
+        // ``state.liveQueryText``) and Back-to-edit / Esc-from-cost-gate (which
+        // never enter the result view) keep their text — separate paths.
+        if (queryTextarea) {
+          queryTextarea.value = "";
+          queryTextarea.dispatchEvent(new Event("input", { bubbles: true }));
+        }
       }
       if (result.status === "completed") {
         toast({ message: "Run completed. See the synthesis below.", tone: "success" });
@@ -5725,15 +5790,11 @@
   function startPolling() {
     stopPolling();
     state.pollingTimer = window.setInterval(() => {
-      pollRun().catch((error) => {
-        // Polling errors are non-blocking; show a toast but keep the
-        // last good result on screen.
-        toast({ message: error.message, tone: "error", timeout: 6000 });
-      });
+      // Polling errors are non-blocking; keep the last good result on screen.
+      // A successful tick clears any sticky "connection lost" indicator.
+      pollRun().then(clearNetworkIndicator, handlePollError);
     }, 750);
-    pollRun().catch((error) => {
-      toast({ message: error.message, tone: "error", timeout: 6000 });
-    });
+    pollRun().then(clearNetworkIndicator, handlePollError);
   }
 
   function stopPolling() {
@@ -5743,6 +5804,9 @@
     }
     // Slice 3 (04 Live run): the elapsed ticker must never outlive polling.
     stopLiveElapsedTicker();
+    // PR1/#9: polling has stopped (run terminal or navigated away) — the sticky
+    // "connection lost" indicator must not outlive it.
+    clearNetworkIndicator();
   }
 
   async function cancelRun() {
@@ -6199,17 +6263,29 @@
   // Wiring
   // ---------------------------------------------------------------------------
 
+  const QUORUM_THEME_KEY = "quorum.theme";
+
   function initThemeToggle() {
     const root = document.documentElement;
     const button = el("theme-toggle");
-    // The glyph advertises the ACTION the click performs — the TARGET theme —
-    // so it agrees with the ``aria-label``. In light mode the button shows ☾
-    // ("click to go dark"); in dark mode it shows ☀ ("click to go light").
-    // (Previously it showed the CURRENT state — ☀ while light — which
-    // contradicted the "Switch to dark theme" label a screen reader announces.)
-    // We seed the glyph from the current ``data-theme`` so the first paint is
-    // already consistent — important on browsers that re-hydrate the page
-    // mid-session.
+    if (!button) return;
+    // PR1/#6: honour stored choice on boot, else ``prefers-color-scheme``, else
+    // the inline-bootstrap default ("light" from the no-JS fallback). ``data-theme``
+    // is already set by the pre-paint snippet in workspace.html, but we re-read it
+    // here so a returning visitor who cleared storage still gets ``prefers-color-scheme``.
+    const applyStored = () => {
+      let theme;
+      try {
+        const stored = window.localStorage.getItem(QUORUM_THEME_KEY);
+        if (stored === "dark" || stored === "light") { theme = stored; }
+      } catch (_) { /* storage unavailable */ }
+      if (!theme) {
+        theme = window.matchMedia?.("(prefers-color-scheme: dark)").matches
+          ? "dark" : "light";
+      }
+      root.dataset.theme = theme;
+    };
+    applyStored();
     const setGlyph = () => {
       const isDark = root.dataset.theme === "dark";
       button.textContent = isDark ? "☀" : "☾";
@@ -6221,6 +6297,9 @@
     setGlyph();
     button.addEventListener("click", () => {
       root.dataset.theme = root.dataset.theme === "dark" ? "light" : "dark";
+      // PR1/#6: persist the choice so it survives reload. Guarded because
+      // ``localStorage`` throws in private-mode / storage-disabled browsers.
+      try { window.localStorage.setItem(QUORUM_THEME_KEY, root.dataset.theme); } catch (_) {}
       setGlyph();
     });
   }
@@ -6516,6 +6595,29 @@
     for (const chip of qsa("[data-landing-chip]")) {
       chip.addEventListener("click", () => {
         const question = chip.dataset.landingChip || "";
+        // PR1/#1: a LANDING chip must give the same hand-off guidance as a typed
+        // landing submit — the transition note + dwell — not an instant jump.
+        // (Composer example chips are already on the composer, so they keep the
+        // in-place fill: there is nothing to hand off to.)
+        const isLandingChip = !!chip.closest(".landing-chips");
+        if (isLandingChip && landingQuery) {
+          if (landingHandoffPending) {
+            // Change of mind — update the question to this chip's text
+            // before cancelling the dwell, so the second click's question
+            // wins instead of silently keeping the first chip's text.
+            landingQuery.value = question;
+            landingQuery.dispatchEvent(new Event("input", { bubbles: true }));
+            goToComposer();
+            return;
+          }
+          // Route through the shared typed-submit hand-off: fill the landing
+          // field, then show the note + reuse LANDING_HANDOFF_DWELL_MS before it
+          // carries the question into the composer. One timing system, not two.
+          landingQuery.value = question;
+          landingQuery.dispatchEvent(new Event("input", { bubbles: true }));
+          handoffFromLanding("run");
+          return;
+        }
         if (queryTextarea) {
           queryTextarea.value = question;
           // Native input event so the composer's own validation, character
@@ -6553,6 +6655,10 @@
     if (freshBtn) freshBtn.addEventListener("click", () => setNextMode(false));
     if (nextRun) {
       nextRun.addEventListener("click", async () => {
+        // PR1/#14: arriving at the composer is a fresh attempt — clear the
+        // post-submit error latch so a Start-fresh (empty) navigation never
+        // shows "enter a question" before the user has submitted anything.
+        state.submissionAttempted = false;
         const typed = (nextInput && nextInput.value.trim()) || "";
         // Follow-up pre-fills the answered question so the user can refine it;
         // Start fresh (or a typed refinement) uses the box verbatim.
@@ -6865,25 +6971,17 @@
     // Slice 4a (05 Result): Copy + Export the result summary. Both read the
     // plain-text ``state.lastResultSummary`` built by ``renderResult`` (question
     // + verdict + agreement line) — textContent-safe, no HTML.
+    // Use the shared copy helper so the header "Copy" button gets the same
+    // data-copied / data-copyfailed flags + ::after cues as the other copy buttons.
     const resultCopyButton = el("result-copy");
     if (resultCopyButton) {
       resultCopyButton.addEventListener("click", async () => {
         const summary = state.lastResultSummary;
         if (!summary) return;
-        try {
-          await navigator.clipboard.writeText(summary);
-          resultCopyButton.dataset.copied = "true";
-          resultCopyButton.textContent = "Copied";
-          window.setTimeout(() => {
-            delete resultCopyButton.dataset.copied;
-            resultCopyButton.textContent = "Copy";
-          }, 1500);
+        await copyRunIdToClipboard(resultCopyButton, summary, "Copy result");
+        // Surface a success toast on copy (the shared helper doesn't toast).
+        if (resultCopyButton.dataset.copied === "true") {
           toast({ message: "Result summary copied.", tone: "success" });
-        } catch (_) {
-          resultCopyButton.textContent = "Copy failed";
-          window.setTimeout(() => {
-            resultCopyButton.textContent = "Copy";
-          }, 1500);
         }
       });
     }
