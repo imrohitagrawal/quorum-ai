@@ -4398,13 +4398,37 @@
 
   // Inline markdown renderer. Escaped text is the input (so we
   // never reintroduce unescaped HTML). Recognises: **bold**, *italic*,
-  // `code`, [text](url). Designed for the markdown flavour LLMs
-  // actually emit; not CommonMark-complete.
+  // `code`, [text](url), and bullet lists (consecutive lines starting
+  // with "- " or "* ", optionally indented, become <ul><li>).
+  // Designed for the markdown flavour LLMs actually emit; not
+  // CommonMark-complete.
   function mdInline(escaped) {
     let s = escaped;
     // Inline code first — everything inside backticks is verbatim and
     // must not be touched by the bold/italic/link rules below.
     s = s.replace(/`([^`]+)`/g, (_m, code) => `<code>${code}</code>`);
+    // Bullet lists: consecutive lines that START (after optional indent)
+    // with "- " or "* " become a single <ul>. Each <li> carries the
+    // line content (marker stripped, indentation kept); bold/italic/
+    // link/underscore rules run on the whole result afterwards and
+    // applyOutsideTags leaves the <ul>/<li> scaffolding alone while
+    // processing the text inside. The marker regex uses word-boundary
+    // logic: it matches only at the START of a line (or start of the
+    // string), never mid-word — so a lone "*" in "x* y" is never eaten.
+    s = s.replace(
+      /(?:^|\n)((?:[ \t]*[-*][ \t]+[^\n]*\n?)+)/g,
+      (match) => {
+        const block = match.trimStart();
+        const items = block
+          .split("\n")
+          .filter((l) => /^[ \t]*[-*][ \t]/.test(l))
+          .map(
+            (line) =>
+              `<li>${line.replace(/^[ \t]*[-*][ \t]+/, "")}</li>`,
+          );
+        return `\n<ul>${items.join("")}</ul>`;
+      },
+    );
     // Bold then italic. Order matters: ** must be tried before *, or
     // the ** would each be consumed as empty italics.
     s = s.replace(/\*\*([^*]+)\*\*/g, (_m, t) => `<strong>${t}</strong>`);
