@@ -46,9 +46,10 @@ from product_app.safety import (
 
 DEBATE_HARD_TIMEOUT_MS = 180_000
 
-#: Token cap per debate round. Raised to 2000 for data completeness —
-#: critiques can now be substantive (1200+ chars) without clipping.
-DEBATE_ROUND_MAX_TOKENS = 2000
+#: Token cap per debate round. The plan calls for ~600 tokens of
+#: output per round; we round to a hard cap of 700 to leave a small
+#: safety margin for the model's tendency to emit a leading phrase.
+DEBATE_ROUND_MAX_TOKENS = 700
 
 FOCUS_AREAS: tuple[str, ...] = ("disagreement", "weak_support", "missing_reasoning")
 HIGH_STAKES_NOTICE_FRAGMENT = (
@@ -203,6 +204,7 @@ class DebateOrchestrationService:
         model_slots: list[ModelSlot] | None = None,
         safety_acknowledgements: list[SafetyAcknowledgement] | None = None,
         openrouter_key: str = "",
+        context: dict | None = None,
     ) -> DebateResult:
         if model_slots is None:
             model_slots = []
@@ -224,6 +226,7 @@ class DebateOrchestrationService:
             initial_answers=initial_answers,
             query_text=query_text,
             openrouter_key=openrouter_key,
+            context=context,
         )
         round_one_ms = max(1, round((perf_counter() - round_one_started) * 1000))
         round_timings_ms[1] = round_one_ms
@@ -289,6 +292,7 @@ class DebateOrchestrationService:
             query_text=query_text,
             round_one_text=round_one_text,
             openrouter_key=openrouter_key,
+            context=context,
         )
         round_two_ms = max(1, round((perf_counter() - round_two_started) * 1000))
         round_timings_ms[2] = round_two_ms
@@ -342,6 +346,7 @@ class DebateOrchestrationService:
         initial_answers: list[InitialModelAnswer],
         query_text: str,
         openrouter_key: str,
+        context: dict | None = None,
     ) -> tuple[str, str | None, LiveProviderResult | None]:
         disagreement = self._extract_disagreement(initial_answers=initial_answers)
         weak_support = self._extract_weak_support(initial_answers=initial_answers)
@@ -361,6 +366,7 @@ class DebateOrchestrationService:
                 initial_answers=initial_answers,
                 prior_round=None,
             ),
+            context=context,
         )
         if live is None:
             return templated, self._debate_fallback_notice(round_number=1), None
@@ -373,6 +379,7 @@ class DebateOrchestrationService:
         query_text: str,
         round_one_text: str,
         openrouter_key: str,
+        context: dict | None = None,
     ) -> tuple[str, str | None, LiveProviderResult | None]:
         disagreement = self._extract_disagreement(initial_answers=initial_answers)
         weak_support = self._extract_weak_support(initial_answers=initial_answers)
@@ -392,6 +399,7 @@ class DebateOrchestrationService:
                 initial_answers=initial_answers,
                 prior_round=round_one_text,
             ),
+            context=context,
         )
         if live is None:
             return templated, self._debate_fallback_notice(round_number=2), None
@@ -403,6 +411,7 @@ class DebateOrchestrationService:
         openrouter_key: str,
         system_prompt: str,
         user_prompt: str,
+        context: dict | None = None,
     ) -> LiveProviderResult | None:
         """Call the configured debate model. Returns the live provider result
         (carrying the answer text and captured token usage) or ``None`` on any
@@ -425,6 +434,7 @@ class DebateOrchestrationService:
             system_prompt=system_prompt,
             user_prompt=user_prompt,
             max_tokens=DEBATE_ROUND_MAX_TOKENS,
+            context=context,
         )
         if result is None or not result.answer_text.strip():
             return None
@@ -444,9 +454,9 @@ class DebateOrchestrationService:
         lines.append("User query (do NOT repeat in your response):")
         lines.append(query_text)
         lines.append("")
-        lines.append("Four model answers (model name, status):")
+        lines.append("Four model answers (model name, status, first 200 chars):")
         for answer in initial_answers:
-            excerpt = (answer.answer_text or "").strip().replace("\n", " ")
+            excerpt = (answer.answer_text or "").strip().replace("\n", " ")[:200]
             # ``display_name`` is the catalog's short label
             # ("Claude Haiku 4.5"). Falling back to ``model_id`` keeps
             # the prompt well-formed even if the catalog is unaware

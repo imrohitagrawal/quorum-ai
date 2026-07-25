@@ -42,7 +42,7 @@ from typing import Annotated, Literal
 from uuid import UUID, uuid4
 
 from fastapi import APIRouter, Depends, HTTPException, Request, status
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
 
 from product_app.auth import SessionContext, enforce_csrf, require_session
 from product_app.config import RuntimeEnvironment, settings
@@ -264,8 +264,25 @@ class QueryRunCreateRequest(BaseModel):
     # L2: optional per-slot web-search opt-in. See
     # ``QueryRunEstimateRequest.slot_search`` for the contract.
     slot_search: list[bool] | None = None
+    # L4: optional follow-up context from a previous query run. ``None``
+    # (default) means no prior context — a fresh query.
+    context: dict | None = Field(default=None)
     safety_acknowledgements: list[SafetyAcknowledgement] = Field(default_factory=list)
     cost_confirmation: CostConfirmation | None = None
+
+    @model_validator(mode="after")
+    def _validate_context_keys(self) -> "QueryRunCreateRequest":
+        ctx = self.context
+        if ctx is None:
+            return self
+        allowed = {"prior_question", "prior_synthesis"}
+        extra = set(ctx.keys()) - allowed
+        if extra:
+            raise ValueError(
+                f"context may only contain {sorted(allowed)}; "
+                f"unexpected keys: {sorted(extra)}"
+            )
+        return self
 
 
 class QueryRunCreateResponse(BaseModel):
@@ -438,10 +455,15 @@ class QueryRun:
     missing_steps: list[str] = field(default_factory=list)
     #: Real per-call token usage captured from the live debate/synthesis calls
     #: (P2). One entry per billed live call; ``None`` inside a list means the
-    #: call went live but the provider omitted its usage object. Read by
-    #: ``_actual_cost`` to decide whether the run's actual cost can be measured.
+    # call went live but the provider omitted its usage object. Read by
+    # ``_actual_cost`` to decide whether the run's actual cost can be measured.
     debate_call_usages: list[tuple[int, TokenUsage | None]] = field(default_factory=list)
     synthesis_call_usages: list[TokenUsage | None] = field(default_factory=list)
+    #: L4: optional follow-up context from a previous query run. ``None``
+    #: when this run was not triggered as a follow-up. Stored so the
+    #: pipeline can inject prior context into debate/synthesis prompts
+    #: and the cost estimator can account for the extra tokens.
+    context: dict | None = None
 
     @property
     def is_terminal(self) -> bool:
@@ -470,6 +492,7 @@ class InMemoryQueryRunRepository:
         query_text: str,
         model_slots: list[ModelSlot],
         cost_estimate: CostEstimate,
+        context: dict | None = None,
     ) -> QueryRun:
         with self._lock:
             self._purge_expired_locked()
@@ -489,6 +512,7 @@ class InMemoryQueryRunRepository:
                 model_slots=model_slots,
                 cost_estimate=cost_estimate,
                 progress=_initial_progress(),
+                context=context,
             )
             self._query_runs[query_run_id] = query_run
             return query_run
@@ -859,6 +883,7 @@ def estimate_query_run(
         query_text=payload.query_text,
         model_slots=model_slots,
         account_id=session.account_id,
+        context=getattr(payload, "context", None),
     )
     cost_estimation_service.record_guardrail_event(
         account_id=session.account_id,
@@ -914,6 +939,7 @@ def create_query_run(
         query_text=payload.query_text,
         model_slots=model_slots,
         account_id=session.account_id,
+        context=payload.context,
     )
     cost_decision = cost_estimation_service.evaluate_confirmation(
         estimate=cost_estimate,
@@ -962,6 +988,7 @@ def create_query_run(
             query_text=payload.query_text,
             model_slots=model_slots,
             cost_estimate=cost_estimate,
+            context=payload.context,
         )
     except ActiveQueryRunExistsError as exc:
         raise HTTPException(
@@ -1424,6 +1451,7 @@ def _execute_query_run(query_run_id: UUID, account_id: UUID) -> None:
         query_text=query_run.query_text,
         initial_answers=refreshed.initial_answers,
         openrouter_key=openrouter_key,
+        context=query_run.context,
     )
     query_run_repository.record_debate_outputs(
         query_run_id,
