@@ -4,9 +4,9 @@ The synthesis was previously producing wall-of-caveats output on
 high-stakes queries (see Defect 4 in ``docs/SYNTHESIS_AUDIT.md``).
 PR-2 introduces a soft cap on each section's character count:
 
-* ``DEFAULT_SECTION_MAX_CHARS = 280`` for the four short sections
+* ``DEFAULT_SECTION_MAX_CHARS = 4000`` for the four short sections
   (Consensus, Disagreement, Source support, Uncertainty).
-* ``RECOMMENDATION_MAX_CHARS = 420`` for the Recommendation
+* ``RECOMMENDATION_MAX_CHARS = 2000`` for the Recommendation
   section, which must also carry the mandatory decision-support
   caveat.
 
@@ -27,11 +27,11 @@ from __future__ import annotations
 import re
 
 #: Soft cap for the four short sections.
-DEFAULT_SECTION_MAX_CHARS = 280
+DEFAULT_SECTION_MAX_CHARS = 4000
 
 #: Soft cap for the Recommendation section, which must also carry
 #: the mandatory decision-support caveat.
-RECOMMENDATION_MAX_CHARS = 420
+RECOMMENDATION_MAX_CHARS = 2000
 
 #: The mandatory decision-support caveat substring. The verbatim
 #: sentence in ``HIGH_STAKES_NOTICE_FRAGMENT`` is the long form;

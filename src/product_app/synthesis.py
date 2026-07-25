@@ -85,7 +85,7 @@ HIGH_STAKES_NOTICE_FRAGMENT = (
 #: budget is the safety margin the older value used to leave for the
 #: prompt's leading phrase — a margin that turned out to be too tight
 #: for the model to finish the citation-coverage / failed-count lines.
-SYNTHESIS_SECTION_MAX_TOKENS = 800
+SYNTHESIS_SECTION_MAX_TOKENS = 3000
 
 
 # System prompts for the five synthesis sections. Each prompt is
@@ -487,12 +487,8 @@ class SynthesisOrchestrationService:
         lines.append("")
         lines.append("Four model answers (model name, status, first 600 chars):")
         for answer in initial_answers:
-            # Workstream-2: bumped from 250 to 600 chars per answer.
-            # 250 was too short to capture the model's full stance and
-            # any inline citation links; the synthesis could only see
-            # a sliver of the answer and the disagreement section had
-            # nothing concrete to quote.
-            excerpt = (answer.answer_text or "").strip().replace("\n", " ")[:600]
+            # Full text — no excerpt slicing (PR2 data completeness).
+            excerpt = (answer.answer_text or "").strip().replace("\n", " ")
             sources_str = ", ".join(f"{s.title} ({s.url})" for s in (answer.sources or [])[:3])
             # ``display_name`` is the catalog's short label
             # ("Claude Haiku 4.5"). Falling back to ``model_id`` keeps
@@ -506,11 +502,8 @@ class SynthesisOrchestrationService:
             lines.append("")
             lines.append("Debate rounds (round 1 then round 2 critique):")
             for round_output in debate_outputs:
-                # Workstream-2: bumped from 300 to 700 chars per debate round.
-                # The critique lines are what the uncertainty section leans
-                # on; 300 was cutting off the actual claim in the middle of
-                # the sentence, leaving the model to fill in the gap.
-                excerpt = (round_output.critique_text or "").strip().replace("\n", " ")[:700]
+                # Full text — no excerpt slicing (PR2 data completeness).
+                excerpt = (round_output.critique_text or "").strip().replace("\n", " ")
                 lines.append(f"- round {round_output.round_number}: {excerpt}")
         return "\n".join(lines)
 

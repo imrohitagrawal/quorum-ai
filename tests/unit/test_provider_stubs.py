@@ -24,7 +24,7 @@ DEFAULT_MODEL_IDS = [
     "openai/gpt-4o-mini",
     "anthropic/claude-haiku-4.5",
     "google/gemini-2.5-flash",
-    "deepseek/deepseek-chat-v3.1",
+    "nvidia/nemotron-3-super-120b-a12b",
 ]
 
 
@@ -131,7 +131,7 @@ def test_estimate_material_claim_count_with_real_stub_text_returns_2() -> None:
             "openai/gpt-4o-mini",
             "anthropic/claude-haiku-4.5",
             "google/gemini-2.5-flash",
-            "deepseek/deepseek-chat-v3.1",
+            "nvidia/nemotron-3-super-120b-a12b",
         ]
     )[0]
     stub = provider_stub_service._local_simulation_text(model_slot=slot)
@@ -245,7 +245,8 @@ class _FakeLiveResult:
     """Minimal stand-in for ``LiveProviderResult`` that doesn't require
     pulling the dataclass into the test module. Mirrors the real fields,
     including the ``usage`` record added for measured-cost capture (defaults
-    to ``None`` — these tests do not exercise the usage path)."""
+    to ``None`` — these tests do not exercise the usage path) and
+    ``is_truncated`` added for the (shortened) surface."""
 
     def __init__(
         self,
@@ -253,10 +254,12 @@ class _FakeLiveResult:
         answer_text: str,
         sources: list[SourceReference],
         usage: TokenUsage | None = None,
+        is_truncated: bool = False,
     ) -> None:
         self.answer_text = answer_text
         self.sources = sources
         self.usage = usage
+        self.is_truncated = is_truncated
 
 
 def test_live_response_uses_online_suffix_for_search(

@@ -1,22 +1,32 @@
+from decimal import Decimal
+
 from uuid import uuid4
 
 import pytest
 
 from product_app.debate import (
     DEBATE_HARD_TIMEOUT_MS,
+    DEBATE_ROUND_MAX_TOKENS,
     DebateOrchestrationService,
     DebateRoundStatus,
     debate_event_recorder,
     debate_stub_service,
 )
 from product_app.model_slots import validate_model_slots
-from product_app.providers import provider_execution_service, provider_stub_service
+from product_app.providers import (
+    CitationCoverage,
+    InitialAnswerStatus,
+    InitialModelAnswer,
+    ProviderPath,
+    provider_execution_service,
+    provider_stub_service,
+)
 
 DEFAULT_MODEL_IDS = [
     "openai/gpt-4o-mini",
     "anthropic/claude-haiku-4.5",
     "google/gemini-2.5-flash",
-    "deepseek/deepseek-chat-v3.1",
+    "nvidia/nemotron-3-super-120b-a12b",
 ]
 
 
@@ -208,3 +218,53 @@ def test_debate_falls_back_to_template_when_live_execution_disabled(
     # test asserts on.
     assert result.debate_outputs[0].critique_text.startswith("Round 1 critique.")
     assert called["count"] == 0
+
+
+def test_debate_round_max_tokens_is_2000() -> None:
+    """RB-5 / D2 — the token cap was raised to 2000 for data completeness
+    so substantive critiques (1200+ chars) don't clip.
+
+    Bite proof: change ``2000`` → the assertion reds.
+    """
+    assert DEBATE_ROUND_MAX_TOKENS == 2000
+
+
+def test_debate_user_prompt_includes_full_answer_excerpt() -> None:
+    """The debate user prompt must include the full (untruncated) answer text
+    from each initial model answer — not just the first 200 chars.
+
+    Previously the prompt sliced answers to [:200], which hid substantive
+    content the debate moderator needs to critique. This test proves the
+    slice was removed.
+
+    Bite proof: re-add ``[:200]`` → the assertion reds.
+    """
+    long_text = "x" * 500
+    answers = [
+        InitialModelAnswer(
+            slot_number=1,
+            model_id="openai/gpt-4o-mini",
+            display_name="GPT-4o Mini",
+            answer_text=long_text,
+            sources=[],
+            provider_attempt_order=[ProviderPath.LOCAL_SIMULATION],
+            provider_path=ProviderPath.LOCAL_SIMULATION,
+            fallback_used=False,
+            status=InitialAnswerStatus.COMPLETED,
+            latency_ms=100,
+            citation_coverage=CitationCoverage(
+                material_claim_count=1,
+                cited_claim_count=1,
+                coverage_ratio=Decimal("1.0"),
+                target_ratio=Decimal("1.0"),
+                target_met=True,
+            ),
+        )
+    ]
+    service = DebateOrchestrationService()
+    prompt = service._debate_user_prompt(
+        query_text="Compare vendors",
+        initial_answers=answers,
+        prior_round=None,
+    )
+    assert long_text in prompt

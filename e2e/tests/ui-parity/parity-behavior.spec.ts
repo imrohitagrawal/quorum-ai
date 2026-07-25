@@ -18,14 +18,14 @@ const SLOTS = [
   { slot_number: 1, model_id: "openai/gpt-4o-mini", display_label: "GPT-4o-mini" },
   { slot_number: 2, model_id: "anthropic/claude-haiku-4.5", display_label: "Claude Haiku 4.5" },
   { slot_number: 3, model_id: "google/gemini-2.5-flash", display_label: "Gemini 2.5 Flash" },
-  { slot_number: 4, model_id: "deepseek/deepseek-v3.1", display_label: "DeepSeek V3.1" },
+  { slot_number: 4, model_id: "nvidia/nemotron-3-super-120b-a12b", display_label: "Nemotron 3 Super 120B" },
 ];
 const CC = { material_claim_count: 12, cited_claim_count: 10, coverage_ratio: "0.85", target_ratio: "0.80", target_met: true };
 const BY_MODEL = [
   { model_id: "openai/gpt-4o-mini", display_name: "GPT-4o-mini", usd: "0.034", kind: "model" },
   { model_id: "anthropic/claude-haiku-4.5", display_name: "Claude Haiku 4.5", usd: "0.062", kind: "model" },
   { model_id: "google/gemini-2.5-flash", display_name: "Gemini 2.5 Flash", usd: "0.031", kind: "model" },
-  { model_id: "deepseek/deepseek-v3.1", display_name: "DeepSeek V3.1", usd: "0.039", kind: "model" },
+  { model_id: "nvidia/nemotron-3-super-120b-a12b", display_name: "Nemotron 3 Super 120B", usd: "0.039", kind: "model" },
   { model_id: "synthesis", display_name: "Debate + synthesis", usd: "0.024", kind: "synthesis" },
 ];
 const BY_STAGE = [
@@ -165,7 +165,7 @@ test.describe("UI parity — behaviour", () => {
     await boot(page);
     const vendors = await page.locator("#model-inputs .model-slot-avatar").evaluateAll(
       (els) => els.map((e) => (e as HTMLElement).dataset.vendor));
-    expect(vendors).toEqual(["openai", "anthropic", "google", "deepseek"]);
+    expect(vendors).toEqual(["openai", "anthropic", "google", "nvidia"]);
   });
 
   test("cost-gate confirm band shows only Confirm/Back; block-band buttons hidden", async ({ page }) => {
@@ -1259,7 +1259,7 @@ test.describe("UI parity — behaviour", () => {
 
   test("item 3.2 — 'How positions moved' avatars carry the SAME per-vendor tint as the composer slots, not a flat grey", async ({ page }) => {
     // The composer's four model slots each get a per-vendor tint (openai teal /
-    // anthropic amber / google blue / deepseek purple). The "How positions moved"
+    // anthropic amber / google blue / nvidia green). The "How positions moved"
     // avatars used to render a single flat grey (no data-vendor), losing that
     // colour identity — so a model that is teal in the composer went grey here.
     await driveToResult(page, completedResp());
@@ -1270,7 +1270,7 @@ test.describe("UI parity — behaviour", () => {
     // Each avatar is tagged with its model's vendor, matching the SLOTS order.
     const vendors = await avatars.evaluateAll((els) =>
       els.map((e) => (e as HTMLElement).dataset.vendor));
-    expect(vendors).toEqual(["openai", "anthropic", "google", "deepseek"]);
+    expect(vendors).toEqual(["openai", "anthropic", "google", "nvidia"]);
     // ...and they render four DISTINCT tints (the vendor colours), not one grey.
     const bgs = await avatars.evaluateAll((els) =>
       els.map((e) => getComputedStyle(e as HTMLElement).backgroundColor));

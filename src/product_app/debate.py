@@ -46,10 +46,9 @@ from product_app.safety import (
 
 DEBATE_HARD_TIMEOUT_MS = 180_000
 
-#: Token cap per debate round. The plan calls for ~600 tokens of
-#: output per round; we round to a hard cap of 700 to leave a small
-#: safety margin for the model's tendency to emit a leading phrase.
-DEBATE_ROUND_MAX_TOKENS = 700
+#: Token cap per debate round. Raised to 2000 for data completeness —
+#: critiques can now be substantive (1200+ chars) without clipping.
+DEBATE_ROUND_MAX_TOKENS = 2000
 
 FOCUS_AREAS: tuple[str, ...] = ("disagreement", "weak_support", "missing_reasoning")
 HIGH_STAKES_NOTICE_FRAGMENT = (
@@ -445,9 +444,9 @@ class DebateOrchestrationService:
         lines.append("User query (do NOT repeat in your response):")
         lines.append(query_text)
         lines.append("")
-        lines.append("Four model answers (model name, status, first 200 chars):")
+        lines.append("Four model answers (model name, status):")
         for answer in initial_answers:
-            excerpt = (answer.answer_text or "").strip().replace("\n", " ")[:200]
+            excerpt = (answer.answer_text or "").strip().replace("\n", " ")
             # ``display_name`` is the catalog's short label
             # ("Claude Haiku 4.5"). Falling back to ``model_id`` keeps
             # the prompt well-formed even if the catalog is unaware

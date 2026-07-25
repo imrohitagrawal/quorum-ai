@@ -144,6 +144,11 @@ class InitialModelAnswer(BaseModel):
     #: (no real billing) or when the provider omitted the usage object. Read
     #: by the cost layer to compute a measured actual cost.
     token_usage: TokenUsage | None = None
+    #: True when the provider signal-indicated truncation
+    #: (``finish_reason == "length"`` or the completion hit max_tokens).
+    #: The UI surfaces this as "(shortened)" so users know the answer was
+    #: cut by the model, not by Quorum.
+    shortened: bool = False
 
 
 @dataclass(frozen=True)
@@ -357,6 +362,7 @@ class ProviderExecutionService:
                 fallback_used=False,
                 provider_notice=search_disabled_notice,
                 token_usage=live_response.usage,
+                shortened=live_response.is_truncated,
             )
 
         # No live response, or live response returned no usable text.
@@ -441,6 +447,7 @@ class ProviderExecutionService:
         fallback_used: bool,
         provider_notice: str | None = None,
         token_usage: TokenUsage | None = None,
+        shortened: bool = False,
     ) -> InitialModelAnswer:
         duration_ms = max(1, round((perf_counter() - started_at) * 1000))
         provider_event_recorder.record(
@@ -487,6 +494,7 @@ class ProviderExecutionService:
             ),
             provider_notice=provider_notice,
             token_usage=token_usage,
+            shortened=shortened,
         )
 
     def _failed_answer(
@@ -793,7 +801,18 @@ class ProviderExecutionService:
         # omitted it). Threaded up so the run's actual cost can be measured
         # rather than estimated when every contributing call reported usage.
         usage = _extract_usage(parsed)
-        return LiveProviderResult(answer_text=content, sources=citations, usage=usage)
+        # Detect provider-side truncation: finish_reason == "length" means
+        # the model hit its max_tokens cap and the output is incomplete.
+        is_truncated = False
+        try:
+            choices = parsed.get("choices") if isinstance(parsed, dict) else None
+            if isinstance(choices, list) and choices:
+                is_truncated = (choices[0].get("finish_reason") or "") == "length"
+        except Exception:
+            pass
+        return LiveProviderResult(
+            answer_text=content, sources=citations, usage=usage, is_truncated=is_truncated
+        )
 
     def call_with_prompt(
         self,
@@ -976,6 +995,10 @@ class LiveProviderResult:
     #: when the response omitted the ``usage`` object. Threaded up to the
     #: cost layer so a fully-captured run can report a measured actual cost.
     usage: TokenUsage | None = None
+    #: True when the provider signal-indicated truncation
+    #: (``finish_reason == "length"``), meaning the output was cut short
+    #: by the model's own max_tokens limit.
+    is_truncated: bool = False
 
 
 #: Internal sentinel returned by ``_post_openrouter`` when ````

@@ -12,12 +12,21 @@ envelope that leaked a trust score or a judge rationale would still be a 401 /
 
 from __future__ import annotations
 
+from decimal import Decimal
 from typing import Any
+from unittest.mock import MagicMock, patch
 from uuid import uuid4
 
 import pytest
 from fastapi.testclient import TestClient
 
+from product_app.costs import (
+    CostBreakdown,
+    CostEstimate,
+    CostLineByModel,
+    CostLineByStage,
+    CostThresholdAction,
+)
 from product_app.main import app
 from product_app.query_runs import query_run_repository
 from product_app.safety import WARNING_VERSION, WarningType
@@ -26,7 +35,7 @@ DEFAULT_MODEL_IDS = [
     "openai/gpt-4o-mini",
     "anthropic/claude-haiku-4.5",
     "google/gemini-2.5-flash",
-    "deepseek/deepseek-chat-v3.1",
+    "nvidia/nemotron-3-super-120b-a12b",
 ]
 
 #: Substrings that only ever appear in an evaluation payload. If any of these
@@ -41,6 +50,34 @@ EVAL_MARKERS = (
     "rationale",
     "trust",
 )
+
+
+def _cheap_cost_estimate(*_args, **_kwargs):
+    """Return a fake cheap estimate so cost guardrails don't block auth tests."""
+    return CostEstimate(
+        estimated_cost_usd=Decimal("0.01"),
+        threshold_action=CostThresholdAction.ALLOW,
+        confirmation_token="tok",
+        reasons=[],
+        max_cost_usd=Decimal("0.02"),
+        breakdown=CostBreakdown(
+            by_model=[
+                CostLineByModel(model_id="m", display_name="m", usd=Decimal("0.01"), kind="model")
+            ],
+            by_stage=[CostLineByStage(stage="initial_answers", usd=Decimal("0.01"))],
+            total=Decimal("0.01"),
+        ),
+    )
+
+
+@pytest.fixture(autouse=True)
+def _patch_cost_for_auth_tests():
+    """Patch cost estimation in query_runs so auth tests don't get 402'd."""
+    with patch("product_app.query_runs.cost_estimation_service") as mock:
+        mock.estimate.side_effect = _cheap_cost_estimate
+        mock.evaluate_confirmation.return_value = MagicMock(confirmed=True)
+        mock.record_guardrail_event.return_value = None
+        yield
 
 
 @pytest.fixture(autouse=True)

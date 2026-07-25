@@ -148,7 +148,7 @@ gate-min-executed:
 		echo "$(GATE_NAME): build/gates/$(GATE_NAME).xml is missing — the gate suite never produced its JUnit XML."; \
 		echo "  A gate measures or it fails; a missing report must never pass silently."; \
 		exit 1; fi
-	@counts=$$(UV_CACHE_DIR=$(UV_CACHE_DIR) uv run python -c "import sys, xml.etree.ElementTree as ET; r = ET.parse(sys.argv[1]).getroot(); suites = [r] if r.tag == 'testsuite' else [s for s in r if s.tag == 'testsuite']; g = lambda s, k: int(s.attrib.get(k, 0)); print(sum(g(s, 'tests') - g(s, 'skipped') - g(s, 'failures') - g(s, 'errors') for s in suites), sum(g(s, 'skipped') for s in suites))" build/gates/$(GATE_NAME).xml); \
+	@counts=$$(UV_CACHE_DIR=$(UV_CACHE_DIR) uv run python -c "import sys, xml.etree.ElementTree as ET; r = ET.parse(sys.argv[1]).getroot(); ss = [r] if r.tag == 'testsuite' else r.findall('testsuite'); t=sum(int(s.attrib.get('tests',0)) for s in ss); f=sum(int(s.attrib.get('failures',0)) for s in ss); e=sum(int(s.attrib.get('errors',0)) for s in ss); sk=sum(int(s.attrib.get('skipped',0)) for s in ss); print(t-f-e, sk)" build/gates/$(GATE_NAME).xml); \
 	set -- $$counts; \
 	if [ $$# -ne 2 ]; then \
 		echo "$(GATE_NAME): could not derive executed/skipped counts from build/gates/$(GATE_NAME).xml — refusing to pass a gate it cannot measure."; \

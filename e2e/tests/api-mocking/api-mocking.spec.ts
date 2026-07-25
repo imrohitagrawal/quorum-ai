@@ -44,7 +44,7 @@ test.describe("Network Mocking", () => {
                 { model: "openai/gpt-4o-mini", cost: 0.009 },
                 { model: "anthropic/claude-3-haiku", cost: 0.008 },
                 { model: "google/gemini-2.5-flash-lite", cost: 0.004 },
-                { model: "deepseek/deepseek-chat-v3.1", cost: 0.004 },
+                { model: "nvidia/nemotron-3-super-120b-a12b", cost: 0.004 },
               ],
               threshold_action: "proceed",
             },

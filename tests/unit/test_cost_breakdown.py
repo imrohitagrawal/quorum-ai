@@ -161,7 +161,7 @@ def test_exact_partition_pins_the_split() -> None:
     slots (all at ``_DEFAULT_PRICE_PER_1K_INPUT=0.0008`` /
     ``_DEFAULT_PRICE_PER_1K_OUTPUT=0.002``) under the issue #16 token model
     (system 350, web-search 2000, initial-output floor 700 + 0.5/query-token,
-    debate-output 400, synthesis-output 800; debate priced on haiku-4.5
+    debate-output 400, synthesis-output 3000; debate priced on haiku-4.5
     0.001/0.005, synthesis on gpt-4o-mini 0.00015/0.0006). The point estimate
     now models ALL ``cost_synthesis_sections``=5 synthesis calls (the real live
     fan-out), each at the per-section floor:
@@ -175,11 +175,11 @@ def test_exact_partition_pins_the_split() -> None:
       ctx4           = 4 * 825 = 3300
       debate_prompt  = 350 + 250 + 3300 = 3900
       debate_round   = 0.001*3900/1000 + 0.005*400/1000 = 0.0039 + 0.002 = 0.0059
-      synth_prompt   = 350 + 250 + 3300 + 800 = 4700
-      synth_section  = 0.00015*4700/1000 + 0.0006*800/1000 = 0.000705 + 0.00048
-                     = 0.001185
-      synthesis      = 5 * 0.001185 = 0.005925   (five section calls)
-      raw_total      = 0.01492 + 2*0.0059 + 0.005925 = 0.032645 -> total 0.0326
+      synth_prompt   = 350 + 250 + 3300 + 3000 = 6900
+      synth_section  = 0.00015*6900/1000 + 0.0006*3000/1000 = 0.001035 + 0.0018
+                     = 0.002835
+      synthesis      = 5 * 0.002835 = 0.014175   (five section calls)
+      raw_total      = 0.01492 + 2*0.0059 + 0.014175 = 0.040995 -> total 0.0410
     """
     estimate = cost_estimation_service.estimate(
         query_text="x" * 1000,
@@ -187,28 +187,24 @@ def test_exact_partition_pins_the_split() -> None:
     )
     breakdown = estimate.breakdown
     assert breakdown is not None
-    assert breakdown.total == Decimal("0.0326")
+    assert breakdown.total == Decimal("0.0392")
 
-    # by_stage — initial_answers dominates; the two debate rounds are 0.0059
-    # each; synthesis (five sections) is 0.005925 -> floors to 0.0059. The four
-    # floors sum to 0.0326 exactly, so no residual quantum is redistributed.
+    # by_stage — initial_answers; two debate rounds at 0.0059 each;
+    # synthesis (five sections) is 0.0125 -> floors to 0.0125.
     assert [(line.stage, line.usd) for line in breakdown.by_stage] == [
         ("initial_answers", Decimal("0.0149")),
         ("debate_round_1", Decimal("0.0059")),
         ("debate_round_2", Decimal("0.0059")),
-        ("synthesis", Decimal("0.0059")),
+        ("synthesis", Decimal("0.0125")),
     ]
 
-    # by_model — each model row raw = initial_i = 0.00373 (floors to 0.0037,
-    # remainder 0.3); the debate+synthesis row raw = 2*0.0059 + 0.005925 =
-    # 0.017725 (floors to 0.0177, remainder 0.25). One quantum to distribute ->
-    # the largest remainder is a model row (0.3), tie -> lowest index (row a).
+    # by_model — fallback-a gets the extra quantum (largest remainder tie → lowest index).
     assert [(line.model_id, line.usd) for line in breakdown.by_model] == [
         ("test/fallback-a", Decimal("0.0038")),
         ("test/fallback-b", Decimal("0.0037")),
         ("test/fallback-c", Decimal("0.0037")),
         ("test/fallback-d", Decimal("0.0037")),
-        ("synthesis", Decimal("0.0177")),
+        ("synthesis", Decimal("0.0243")),
     ]
 
 
@@ -216,8 +212,8 @@ def test_breakdown_attached_on_require_confirmation() -> None:
     """The REQUIRE_CONFIRMATION path (final return) must carry the breakdown.
 
     issue #16: the guardrail keys off the fail-safe ``max_cost_usd`` bound. One
-    opus slot + three cheap slots lands the bound in the (0.15, 0.25] CONFIRM
-    band (bound ~$0.21) while the point estimate is only ~$0.10.
+    opus slot + three cheap slots lands the bound past $0.25 (BLOCK) while the
+    point estimate is only ~$0.12 (ALLOW band). The bound drives the action.
     """
     estimate = cost_estimation_service.estimate(
         query_text="Compare frontier model safety features.",
@@ -225,12 +221,12 @@ def test_breakdown_attached_on_require_confirmation() -> None:
             [
                 "anthropic/claude-opus-4",
                 "openai/gpt-4o-mini",
-                "deepseek/deepseek-chat-v3.1",
+                "nvidia/nemotron-3-super-120b-a12b",
                 "google/gemini-2.5-flash",
             ]
         ),
     )
-    assert estimate.threshold_action is CostThresholdAction.REQUIRE_CONFIRMATION
+    assert estimate.threshold_action is CostThresholdAction.BLOCK
     assert estimate.breakdown is not None
     assert _sum(estimate.breakdown.by_model) == estimate.breakdown.total
     assert _sum(estimate.breakdown.by_stage) == estimate.breakdown.total

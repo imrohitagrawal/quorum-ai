@@ -12,7 +12,7 @@ DEFAULT_MODEL_IDS = [
     "openai/gpt-4o-mini",
     "anthropic/claude-haiku-4.5",
     "google/gemini-2.5-flash",
-    "deepseek/deepseek-chat-v3.1",
+    "nvidia/nemotron-3-super-120b-a12b",
 ]
 
 
@@ -452,25 +452,23 @@ def test_extract_citations_accepts_pre_extracted_content() -> None:
 
 
 def test_synthesis_section_max_tokens_is_workstream_two_value() -> None:
-    """Workstream-2 bumped the per-section token cap from 500 to 800 so
-    the model can finish citation-coverage and failed-count sentences
-    without truncating mid-sentence. This test pins the new value so
-    an accidental revert is caught.
+    """PR2 raised the per-section token cap from 800 to 3000 for data
+    completeness — full-text responses without clipping. This test pins
+    the new value so an accidental revert is caught.
     """
     from product_app.synthesis import SYNTHESIS_SECTION_MAX_TOKENS
 
-    assert SYNTHESIS_SECTION_MAX_TOKENS == 800
+    assert SYNTHESIS_SECTION_MAX_TOKENS == 3000
 
 
 def test_user_prompt_includes_full_600_char_excerpt() -> None:
-    """Workstream-2 bumped the per-answer excerpt cap from 250 to 600
-    chars. The synthesis user_prompt must carry the longer excerpt
-    through so the LLM sees the model's actual stance (and any inline
-    citation links) instead of a truncated sliver.
+    """PR2 removed excerpt slicing — the full answer text (no `[:600]`) is
+    threaded into the synthesis prompt so the LLM sees the model's actual
+    stance and inline citation links instead of a truncated sliver.
     """
     from product_app import synthesis as synth_mod
 
-    # 800 chars of deterministic text so we can prove the slice point.
+    # 800 chars of deterministic text so we can prove no truncation.
     long_answer = "x" * 800
     answer = provider_stub_service.produce_initial_answers(
         account_id=uuid4(),
@@ -478,11 +476,6 @@ def test_user_prompt_includes_full_600_char_excerpt() -> None:
         query_text="dummy",
         model_slots=validate_model_slots(DEFAULT_MODEL_IDS),
     )[0]
-    # Override the answer_text with a long slice-friendly string.
-    # ``InitialModelAnswer`` is not frozen, so plain attribute
-    # assignment works and goes through Pydantic validation (the
-    # ``object.__setattr__`` form bypasses validation, so it would
-    # silently swallow any future ``Field(max_length=...)`` constraint).
     answer.answer_text = long_answer
 
     user_prompt = synth_mod.synthesis_stub_service._user_prompt(
@@ -491,16 +484,14 @@ def test_user_prompt_includes_full_600_char_excerpt() -> None:
         failed_count=0,
         coverage_ratio=type("R", (), {"__str__": lambda self: "0.0"})(),
     )
-    # 800 chars in, sliced to 600; the prompt must carry the full 600.
-    assert ("x" * 600) in user_prompt
-    # And must NOT carry the trailing 200 that the old cap would have dropped.
-    assert ("x" * 601) not in user_prompt
+    # Full 800 chars must be present — no excerpt slicing.
+    assert ("x" * 800) in user_prompt
 
 
 def test_user_prompt_includes_full_700_char_debate_excerpt() -> None:
-    """Workstream-2 bumped the per-round debate excerpt cap from 300 to
-    700 chars so the uncertainty section can see the actual claim in
-    the critique instead of a truncated prefix.
+    """PR2 removed excerpt slicing — the full critique text (no `[:700]`) is
+    threaded into the synthesis prompt so the uncertainty section can see
+    the actual claim in the critique instead of a truncated prefix.
     """
     from dataclasses import dataclass
 
@@ -522,8 +513,8 @@ def test_user_prompt_includes_full_700_char_debate_excerpt() -> None:
         failed_count=0,
         coverage_ratio=type("R", (), {"__str__": lambda self: "0.0"})(),
     )
-    assert ("y" * 700) in user_prompt
-    assert ("y" * 701) not in user_prompt
+    # Full 800 chars must be present — no excerpt slicing.
+    assert ("y" * 800) in user_prompt
 
 
 def test_recommendation_prompt_enforces_decision_support_caveat_and_gates() -> None:

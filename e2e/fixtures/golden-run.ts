@@ -98,7 +98,12 @@ const MESSY_UNCERTAINTY =
 // fix routes these through the block formatter (heading→<h*>, **→<strong>,
 // list→<ol>), leaving no `**`/`## ` in any text node.
 const MESSY_CRITIQUE_1 =
-  "## Round 1 critique\n\n**Alignment:** the models largely agree on the core recommendation. Residual gaps:\n\n1. Scope of the export slice.\n2. Whether citations meet the 0.80 target (they do — 0.85).";
+  "## Round 1 critique\n\n" +
+  "**Alignment:** the models largely agree on the core recommendation, but the residual gaps are real and worth tracking before the rollout advances. The panel converged on instrumenting retention events first, yet the specific scope of that instrumentation slice, the validation criteria for the cohort export, and the sequencing of manual review gates all remain under-specified in the model outputs.\n\n" +
+  "1. **Scope of the export slice.** The models diverge on whether the export should be scoped to activated accounts only, or to all accounts in the cohort. One panel member argued that scoping to activated accounts introduces a selection bias that undermines the cohort comparison; another countered that unactivated accounts are noise for retention analysis and should be excluded by definition. This disagreement is substantive, not cosmetic, because it changes the denominator for every retention metric downstream.\n\n" +
+  "2. **Validation criteria for the cohort export.** Whether the export should be gated by a minimum cohort size, a minimum observation window, or both is not agreed. One model suggested a 30-day minimum window, another a 100-account minimum, and a third suggested both. The panel did not reconcile these criteria, which means the export as currently specified could produce underpowered or incomparable cohorts.\n\n" +
+  "3. **Sequencing of manual review gates.** Whether the manual review gate should happen before or after the export is another unresolved point. The \"before\" position argues that bad data should never leave the system; the \"after\" position argues that the review should happen on the post-cohort data, where context is richer. The live pipeline's sequencing decision should be explicit and documented.\n\n" +
+  "4. **Citation coverage.** Whether citations meet the 0.80 target — they do (0.85). This is one point of genuine consensus across all four models, which is notable given how divisive the other three items are.";
 const MESSY_CRITIQUE_2 =
   "## Round 2 critique\n\n**Resolved:** the residual disagreement on sequencing; citations _re-verified_. See the [round-2 log](https://example.com/round2) and the `citation_check` output.\n\n> Residual __caveat__: the export slice still needs a manual review gate.";
 
@@ -141,7 +146,7 @@ export const SLOTS = [
   { slot_number: 1, model_id: "openai/gpt-4o-mini", display_label: "GPT-4o-mini" },
   { slot_number: 2, model_id: "anthropic/claude-haiku-4.5", display_label: "Claude Haiku 4.5" },
   { slot_number: 3, model_id: "google/gemini-2.5-flash", display_label: "Gemini 2.5 Flash" },
-  { slot_number: 4, model_id: "deepseek/deepseek-v3.1", display_label: "DeepSeek V3.1" },
+  { slot_number: 4, model_id: "nvidia/nemotron-3-super-120b-a12b", display_label: "Nemotron 3 Super 120B" },
 ];
 const CC = { material_claim_count: 12, cited_claim_count: 10, coverage_ratio: "0.85", target_ratio: "0.80", target_met: true };
 // The empty-citation case (#31 shape): a slot that answered but returned NO sources.
@@ -150,7 +155,7 @@ const BY_MODEL = [
   { model_id: "openai/gpt-4o-mini", display_name: "GPT-4o-mini", usd: "0.034", kind: "model" },
   { model_id: "anthropic/claude-haiku-4.5", display_name: "Claude Haiku 4.5", usd: "0.062", kind: "model" },
   { model_id: "google/gemini-2.5-flash", display_name: "Gemini 2.5 Flash", usd: "0.031", kind: "model" },
-  { model_id: "deepseek/deepseek-v3.1", display_name: "DeepSeek V3.1", usd: "0.039", kind: "model" },
+  { model_id: "nvidia/nemotron-3-super-120b-a12b", display_name: "Nemotron 3 Super 120B", usd: "0.039", kind: "model" },
   { model_id: "synthesis", display_name: "Debate + synthesis", usd: "0.024", kind: "synthesis" },
 ];
 const BY_STAGE = [

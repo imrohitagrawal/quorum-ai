@@ -16,7 +16,7 @@ DEFAULT_MODEL_IDS = [
     "openai/gpt-4o-mini",
     "anthropic/claude-haiku-4.5",
     "google/gemini-2.5-flash",
-    "deepseek/deepseek-chat-v3.1",
+    "meta-llama/llama-3.1-8b-instruct",
 ]
 
 
@@ -39,14 +39,14 @@ def test_high_cost_query_requires_matching_confirmation() -> None:
     # estimate. The CONFIRM band (bound in (0.15, 0.25]) is a narrow window —
     # cheap mixes bound well under $0.15, and any opus-tier model jumps the
     # bound over $0.25. One opus slot + three cheap slots lands the bound at
-    # ~$0.21 (CONFIRM) while the point estimate is only ~$0.10 — so this also
+    # ~$0.22 (CONFIRM) while the point estimate is only ~$0.10 — so this also
     # proves the rail evaluates the bound, not the (ALLOW-band) point estimate.
     model_slots = validate_model_slots(
         [
             "anthropic/claude-opus-4",
             "openai/gpt-4o-mini",
-            "deepseek/deepseek-chat-v3.1",
             "google/gemini-2.5-flash",
+            "meta-llama/llama-3.1-8b-instruct",
         ]
     )
     estimate = cost_estimation_service.estimate(
@@ -55,6 +55,7 @@ def test_high_cost_query_requires_matching_confirmation() -> None:
     )
     assert estimate.max_cost_usd is not None
     assert estimate.estimated_cost_usd < Decimal("0.15") < estimate.max_cost_usd
+    assert estimate.threshold_action == CostThresholdAction.REQUIRE_CONFIRMATION
 
     missing_decision = cost_estimation_service.evaluate_confirmation(
         estimate=estimate,
@@ -68,7 +69,6 @@ def test_high_cost_query_requires_matching_confirmation() -> None:
         ),
     )
 
-    assert estimate.threshold_action == CostThresholdAction.REQUIRE_CONFIRMATION
     assert not missing_decision.confirmed
     assert matching_decision.confirmed
 

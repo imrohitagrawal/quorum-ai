@@ -302,11 +302,11 @@ class Settings(BaseSettings):
     #: (the point estimate keeps the lower typical floor above). MUST stay in
     #: sync with ``debate.DEBATE_ROUND_MAX_TOKENS`` — the value the live debate
     #: call actually enforces.
-    cost_debate_output_tokens_cap: int = 700
+    cost_debate_output_tokens_cap: int = 2000
     #: Output-token floor for one synthesis section call (the reconciled
     #: answer). Synthesis fans out into up to ``cost_synthesis_sections``
     #: independent live calls, each re-sending the full context.
-    cost_synthesis_output_tokens: int = 800
+    cost_synthesis_output_tokens: int = 3000
 
     #: Number of independent synthesis section calls the pipeline can make
     #: (``synthesis.SYNTHESIS_SECTION_MAX_TOKENS`` caps each). The live pipeline

@@ -1,0 +1,12 @@
+# Copy to the repository root as .pre-commit-config.yaml (or merge into an existing one).
+# Replace <DOCS_PATH>, <FORMAT>, and <SKILL_NAME> per the table in this folder's README.
+repos:
+  - repo: local
+    hooks:
+      - id: verify-docs
+        name: verify docs (banned words, scope, links, readability, licence footer)
+        entry: python3 scripts/verify.py <DOCS_PATH> --format <FORMAT> --skill <SKILL_NAME> --profile docs/project-profile.md --license LICENSE
+        language: python
+        pass_filenames: false
+        files: ^docs/.*\.(md|html)$
+        additional_dependencies: ["pyyaml"]   # REQUIRED: without it the profile is ignored and scope wrongly defaults to public
