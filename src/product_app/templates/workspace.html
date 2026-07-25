@@ -802,6 +802,17 @@
         </aside>
       </div>
 
+      <!-- PR8 — Conversation trail (ephemeral). Full-width panel below the
+           two-column layout so it is visible on every view (not hidden with
+           the aside). Rendered by app.js; cleared by "Start fresh". -->
+      <div class="session-trail-panel" role="region" aria-label="Conversation trail">
+        <div class="session-trail-head">
+          <span class="session-trail-title">This session</span>
+          <button id="session-trail-clear" type="button" class="session-trail-clear" hidden>Clear</button>
+        </div>
+        <div id="session-trail-list" class="session-trail-list" hidden></div>
+      </div>
+
       <section class="panel panel-section">
         <h2>Debate and synthesis</h2>
         <div class="stack">

@@ -240,6 +240,14 @@
     // different slots from collapsing/misattributing. Consumed by
     // ``renderModelInputs`` to label each slot card.
     perModelEstimates: [],
+    // PR8 — Conversation trail. A capped list of completed/terminal runs
+    // the user can click to revisit. Each entry carries the displayed
+    // question (truncated to 80 chars), the run id, a UNIX timestamp, and
+    // the terminal status string. Mutable state: mutated by
+    // ``appendSessionTrailEntry`` and ``clearSessionTrail``; read by
+    // ``renderSessionTrail`` and the restore-click handler. NOT persisted
+    // server-side; ephemeral to the browser tab.
+    sessionTrail: [],
   };
 
   // ---------------------------------------------------------------------------
@@ -2553,7 +2561,16 @@
       ),
     );
 
-    // Agreement headline — derived from real fields, no banned verbs.
+    const recommendation = fs.recommendation ? String(fs.recommendation).trim() : "";
+    content.appendChild(
+      setProse(
+        mkEl("div", "result-verdict-text"),
+        recommendation,
+        "No recommendation was recorded for this run.",
+      ),
+    );
+
+    // Honest summary line — derived from real fields, no banned verbs.
     let summary;
     if (isConsensus) {
       summary = `${aligned} of ${total} models aligned`;
@@ -2563,36 +2580,7 @@
     } else {
       summary = `${aligned} of ${total} models aligned — the rest are preserved as disagreement below.`;
     }
-    content.appendChild(mkEl("span", "result-verdict-agreement", summary));
-
-    // Coverage caution — separate second line when citation coverage is below target.
-    const coverage = fs && fs.citation_coverage ? fs.citation_coverage : null;
-    if (coverage && !coverage.target_met) {
-      const ratio = Math.round(Number(coverage.coverage_ratio) * 100);
-      content.appendChild(
-        mkEl(
-          "span",
-          "result-verdict-coverage",
-          `Only ${ratio}% of material claims carried citations — treat the consensus as provisional.`,
-        ),
-      );
-    }
-
-    // Badge: "Automated summary" when synthesis_mode != "live".
-    if (fs.synthesis_mode && fs.synthesis_mode !== "live") {
-      const badgeLabel = fs.synthesis_mode === "fallback" ? "Partially automated" : "Automated summary";
-      content.appendChild(mkEl("span", "badge badge-summary", badgeLabel));
-    }
-
-    // Recommendation prose (block, rendered through markdown pipeline).
-    const recommendation = fs.recommendation ? String(fs.recommendation).trim() : "";
-    content.appendChild(
-      setProse(
-        mkEl("div", "result-verdict-text"),
-        recommendation,
-        "No recommendation was recorded for this run.",
-      ),
-    );
+    content.appendChild(mkEl("span", "result-verdict-summary", summary));
 
     // High-stakes caveat, if the synthesis carries one.
     if (fs.high_stakes_notice) {
@@ -3778,6 +3766,114 @@
       list.appendChild(li);
     }
     return list;
+  }
+
+  // ===================================================================
+  // PR8 — Conversation trail (ephemeral, in-memory, NOT server-side)
+  // ===================================================================
+
+  const SESSION_TRAIL_CAP = 10;
+  const SESSION_TRAIL_QUESTION_MAX = 80;
+
+  function truncateTrailQuestion(q) {
+    if (!q) return "";
+    const t = String(q).trim();
+    return t.length > SESSION_TRAIL_QUESTION_MAX ? t.slice(0, SESSION_TRAIL_QUESTION_MAX) + "…" : t;
+  }
+
+  /** Append an entry to the session trail. Caps at SESSION_TRAIL_CAP; newest last. */
+  function appendSessionTrailEntry(entry) {
+    if (!entry || !entry.runId) return;
+    state.sessionTrail = state.sessionTrail.filter((e) => e.runId !== entry.runId);
+    state.sessionTrail.push(entry);
+    if (state.sessionTrail.length > SESSION_TRAIL_CAP) {
+      state.sessionTrail = state.sessionTrail.slice(state.sessionTrail.length - SESSION_TRAIL_CAP);
+    }
+    renderSessionTrail();
+  }
+
+  /** Clear the entire session trail. */
+  function clearSessionTrail() {
+    state.sessionTrail = [];
+    renderSessionTrail();
+  }
+
+  const TRAIL_STATUS_MUTED = new Set(["failed", "timed_out", "cancelled", "degraded", "simulated"]);
+
+  function trailEntryClass(status) {
+    const s = (status || "").toLowerCase();
+    if (TRAIL_STATUS_MUTED.has(s) || s === "partial") return "session-trail-entry session-trail-entry--muted";
+    return "session-trail-entry";
+  }
+
+  function trailTimeLabel(ts) {
+    try {
+      const d = new Date(ts);
+      if (Number.isNaN(d.getTime())) return "";
+      return d.toLocaleTimeString(undefined, { hour: "2-digit", minute: "2-digit" });
+    } catch (_) {
+      return "";
+    }
+  }
+
+  function renderSessionTrail() {
+    const host = el("session-trail-list");
+    if (!host) return;
+    const entries = state.sessionTrail;
+    if (!entries.length) {
+      host.hidden = true;
+      host.replaceChildren();
+      return;
+    }
+    host.hidden = false;
+    host.replaceChildren();
+    // Newest first.
+    for (let i = entries.length - 1; i >= 0; i--) {
+      const e = entries[i];
+      const btn = document.createElement("button");
+      btn.type = "button";
+      btn.className = trailEntryClass(e.status);
+      btn.dataset.trailRunId = e.runId;
+      const statusLabel = (e.status || "").toLowerCase();
+      const statusTag = statusLabel
+        ? `<span class="session-trail-status">${escapeHtml(statusLabel)}</span>`
+        : "";
+      btn.innerHTML =
+        `<span class="session-trail-question" title="${escapeHtml(e.question)}">${escapeHtml(e.question)}</span>` +
+        statusTag +
+        `<span class="session-trail-time mono">${escapeHtml(trailTimeLabel(e.timestamp))}</span>`;
+      btn.addEventListener("click", () => restoreTrailRun(e.runId));
+      host.appendChild(btn);
+    }
+    const clearBtn = el("session-trail-clear");
+    if (clearBtn) clearBtn.hidden = false;
+  }
+
+  function restoreTrailRun(runId) {
+    if (!runId) return;
+    state.currentRunId = runId;
+    state.terminalHandled = true;
+    stopPolling();
+    setRunning(false);
+    // Re-fetch the run to populate lastResult, then render.
+    api(`/v1/query-runs/${runId}`, { method: "GET" })
+      .then((result) => {
+        state.lastResult = result;
+        const res = result.result || {};
+        const question = state.liveQueryText || (res && res.model_answers && res.model_answers.length && res.model_answers[0].answer_text ? res.model_answers[0].answer_text.slice(0, 120) : "") || "";
+        state.liveQueryText = question;
+        renderResult(result);
+        setView("result");
+        focusResultHeading();
+        renderSessionTrail();
+      })
+      .catch((err) => {
+        handleError(err);
+      });
+  }
+
+  function escapeHtml(str) {
+    return String(str ?? "").replace(/[&<>"']/g, (ch) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[ch] || ch));
   }
 
   function renderModelPanels(modelAnswers = [], result = null) {
@@ -5055,24 +5151,15 @@
         gateReason.textContent = `${COPY_004_COST_BLOCK}${serverReasons}`;
       }
       if (gateBlockNote) {
-        // Distinguish which guard triggered the block.
-        const isCumulative = reasons.length > 1 && reasons[1].includes("Cumulative spend");
-        const isDailyCap = reasons.length > 1 && reasons[1].includes("Account has spent");
-        if (isCumulative) {
-          gateBlockNote.textContent =
-            `This run's worst-case cost (up to ${gateUsd(ceiling)}) would push cumulative ` +
-            "account spend over the $0.25 hard cap. Nothing ran and nothing was charged. " +
-            "Try shorter queries or fewer questions until the window resets.";
-        } else if (isDailyCap) {
-          gateBlockNote.textContent =
-            `This run's worst-case cost (up to ${gateUsd(ceiling)}) exceeds the daily cap. ` +
-            "Nothing ran and nothing was charged. Try again after the 24-hour window resets.";
-        } else {
-          gateBlockNote.textContent =
-            `This run's worst-case cost (up to ${gateUsd(ceiling)}) is over the ` +
-            "$0.25 hard cap and no override exists in this release. Nothing " +
-            "ran and nothing was charged.";
-        }
+        // The guardrail blocks on the WORST-CASE (max_cost_usd), which can
+        // exceed the $0.25 cap even when the typical estimate shown above is
+        // under it — so the note names the worst case, not the point estimate.
+        const maxCost = Number(ce.max_cost_usd);
+        const ceiling = Number.isFinite(maxCost) && maxCost > total ? maxCost : total;
+        gateBlockNote.textContent =
+          `This run's worst-case cost (up to ${gateUsd(ceiling)}) is over the ` +
+          "$0.25 hard cap and no override exists in this release. Nothing " +
+          "ran and nothing was charged.";
         gateBlockNote.hidden = false;
       }
       if (gateBlockFooter) {
@@ -5623,6 +5710,8 @@
       // the drill-down can never render stale openings/critiques for a new run.
       state.lastResult = null;
       state.terminalHandled = false;
+      // PR8: a new run starts a fresh session thread; clear the old trail.
+      clearSessionTrail();
       // Fix 3: a NEW run must re-render every live block even if its first
       // payload is byte-identical to the previous run's — reset the guards.
       state.liveSig = {
@@ -5813,6 +5902,16 @@
       } else if (result.status === "cancelled") {
         toast({ message: "Run cancelled.", tone: "info" });
       }
+      // PR8: record the terminal run in the session trail.
+      const demoMode = !!(result.demo_mode || (result.result && result.result.demo_mode));
+      const liveCount = Number(result.live_count ?? (result.result && result.result.live_count) ?? 0);
+      const trailStatus = demoMode && liveCount === 0 ? "simulated" : result.status;
+      appendSessionTrailEntry({
+        question: truncateTrailQuestion(state.liveQueryText),
+        runId: result.query_run_id || result.correlation_id,
+        timestamp: Date.now(),
+        status: trailStatus,
+      });
     }
   }
 
@@ -6681,7 +6780,10 @@
       if (nextInput) nextInput.focus({ preventScroll: true });
     }
     if (followBtn) followBtn.addEventListener("click", () => setNextMode(true));
-    if (freshBtn) freshBtn.addEventListener("click", () => setNextMode(false));
+    if (freshBtn) freshBtn.addEventListener("click", () => {
+      setNextMode(false);
+      clearSessionTrail();
+    });
     if (nextRun) {
       nextRun.addEventListener("click", async () => {
         // PR1/#14: arriving at the composer is a fresh attempt — clear the
@@ -6875,6 +6977,16 @@
     initKeyboardShortcuts();
     initBannerDismiss();
     initWorkflowKeyboard();
+    // PR8: wire the session-trail clear button and render the initial (empty) state.
+    const trailClearBtn = el("session-trail-clear");
+    if (trailClearBtn) {
+      trailClearBtn.addEventListener("click", () => {
+        clearSessionTrail();
+        // "Start fresh" also clears the trail so the user's next session
+        // begins with a clean slate.
+      });
+    }
+    renderSessionTrail();
     initInfoIcons();
     // Workstream 3: seed the readiness + drift caches from the
     // page-load data islands and render the banners. This paints
