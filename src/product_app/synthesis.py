@@ -85,7 +85,7 @@ HIGH_STAKES_NOTICE_FRAGMENT = (
 #: budget is the safety margin the older value used to leave for the
 #: prompt's leading phrase — a margin that turned out to be too tight
 #: for the model to finish the citation-coverage / failed-count lines.
-SYNTHESIS_SECTION_MAX_TOKENS = 3000
+SYNTHESIS_SECTION_MAX_TOKENS = 800
 
 
 # System prompts for the five synthesis sections. Each prompt is
@@ -251,6 +251,7 @@ class SynthesisOrchestrationService:
         debate_outputs: list[DebateOutput],
         safety_acknowledgements: list[SafetyAcknowledgement] | None = None,
         openrouter_key: str = "",
+        context: dict | None = None,
     ) -> SynthesisResult:
         started_at = perf_counter()
         if safety_acknowledgements is None:
@@ -314,6 +315,7 @@ class SynthesisOrchestrationService:
             consensus_strength=consensus_strength,
             openrouter_key=openrouter_key,
             user_prompt=user_prompt,
+            context=context,
         )
         disagreement_future = _submit_section(
             "Disagreement",
@@ -322,6 +324,7 @@ class SynthesisOrchestrationService:
             consensus_strength=consensus_strength,
             openrouter_key=openrouter_key,
             user_prompt=user_prompt,
+            context=context,
         )
         source_future = _submit_section(
             "Source support",
@@ -329,6 +332,7 @@ class SynthesisOrchestrationService:
             initial_answers=initial_answers,
             openrouter_key=openrouter_key,
             user_prompt=user_prompt,
+            context=context,
         )
         uncertainty_future = _submit_section(
             "Uncertainty",
@@ -337,6 +341,7 @@ class SynthesisOrchestrationService:
             debate_outputs=debate_outputs,
             openrouter_key=openrouter_key,
             user_prompt=user_prompt,
+            context=context,
         )
         recommendation_future = _submit_section(
             "Recommendation",
@@ -346,6 +351,7 @@ class SynthesisOrchestrationService:
             failed_count=failed_count,
             openrouter_key=openrouter_key,
             user_prompt=user_prompt,
+            context=context,
         )
 
         # PR-2 Item 3: per-section failure isolation. The
@@ -487,8 +493,12 @@ class SynthesisOrchestrationService:
         lines.append("")
         lines.append("Four model answers (model name, status, first 600 chars):")
         for answer in initial_answers:
-            # Full text — no excerpt slicing (PR2 data completeness).
-            excerpt = (answer.answer_text or "").strip().replace("\n", " ")
+            # Workstream-2: bumped from 250 to 600 chars per answer.
+            # 250 was too short to capture the model's full stance and
+            # any inline citation links; the synthesis could only see
+            # a sliver of the answer and the disagreement section had
+            # nothing concrete to quote.
+            excerpt = (answer.answer_text or "").strip().replace("\n", " ")[:600]
             sources_str = ", ".join(f"{s.title} ({s.url})" for s in (answer.sources or [])[:3])
             # ``display_name`` is the catalog's short label
             # ("Claude Haiku 4.5"). Falling back to ``model_id`` keeps
@@ -502,8 +512,11 @@ class SynthesisOrchestrationService:
             lines.append("")
             lines.append("Debate rounds (round 1 then round 2 critique):")
             for round_output in debate_outputs:
-                # Full text — no excerpt slicing (PR2 data completeness).
-                excerpt = (round_output.critique_text or "").strip().replace("\n", " ")
+                # Workstream-2: bumped from 300 to 700 chars per debate round.
+                # The critique lines are what the uncertainty section leans
+                # on; 300 was cutting off the actual claim in the middle of
+                # the sentence, leaving the model to fill in the gap.
+                excerpt = (round_output.critique_text or "").strip().replace("\n", " ")[:700]
                 lines.append(f"- round {round_output.round_number}: {excerpt}")
         return "\n".join(lines)
 
@@ -515,6 +528,7 @@ class SynthesisOrchestrationService:
         consensus_strength: ConsensusStrength,
         openrouter_key: str,
         user_prompt: str,
+        context: dict | None = None,
     ) -> tuple[str, str | None, LiveProviderResult | None]:
         successful = [
             answer for answer in initial_answers if answer.status is InitialAnswerStatus.COMPLETED
@@ -567,6 +581,7 @@ class SynthesisOrchestrationService:
             openrouter_key=openrouter_key,
             system_prompt=_CONSENSUS_PROMPT,
             user_prompt=user_prompt,
+            context=context,
         )
         if live is None:
             return truncate_section(templated, max_chars=DEFAULT_SECTION_MAX_CHARS), None, None
@@ -583,6 +598,7 @@ class SynthesisOrchestrationService:
         consensus_strength: ConsensusStrength,
         openrouter_key: str,
         user_prompt: str,
+        context: dict | None = None,
     ) -> tuple[str, str | None, LiveProviderResult | None]:
         fallback_paths = {answer.provider_path for answer in initial_answers}
         if ProviderPath.FALLBACK_SEARCH in fallback_paths and len(fallback_paths) > 1:
@@ -606,6 +622,7 @@ class SynthesisOrchestrationService:
             openrouter_key=openrouter_key,
             system_prompt=_DISAGREEMENT_PROMPT,
             user_prompt=user_prompt,
+            context=context,
         )
         if live is None:
             return truncate_section(templated, max_chars=DEFAULT_SECTION_MAX_CHARS), None, None
@@ -621,6 +638,7 @@ class SynthesisOrchestrationService:
         initial_answers: list[InitialModelAnswer],
         openrouter_key: str,
         user_prompt: str,
+        context: dict | None = None,
     ) -> tuple[str, str | None, LiveProviderResult | None]:
         cited = sum(
             1
@@ -656,6 +674,7 @@ class SynthesisOrchestrationService:
         debate_outputs: list[DebateOutput],
         openrouter_key: str,
         user_prompt: str,
+        context: dict | None = None,
     ) -> tuple[str, str | None, LiveProviderResult | None]:
         failed = sum(1 for answer in initial_answers if answer.status is InitialAnswerStatus.FAILED)
         if failed:
@@ -682,6 +701,7 @@ class SynthesisOrchestrationService:
             openrouter_key=openrouter_key,
             system_prompt=_UNCERTAINTY_PROMPT,
             user_prompt=user_prompt,
+            context=context,
         )
         if live is None:
             return truncate_section(templated, max_chars=DEFAULT_SECTION_MAX_CHARS), None, None
@@ -699,6 +719,7 @@ class SynthesisOrchestrationService:
         failed_count: int,
         openrouter_key: str,
         user_prompt: str,
+        context: dict | None = None,
     ) -> tuple[str, str | None, LiveProviderResult | None]:
         target_met = coverage.target_met
         if target_met and failed_count == 0:
@@ -725,6 +746,7 @@ class SynthesisOrchestrationService:
             openrouter_key=openrouter_key,
             system_prompt=_RECOMMENDATION_PROMPT,
             user_prompt=user_prompt,
+            context=context,
         )
         if live is None:
             return truncate_recommendation(templated), None, None
@@ -736,6 +758,7 @@ class SynthesisOrchestrationService:
         openrouter_key: str,
         system_prompt: str,
         user_prompt: str,
+        context: dict | None = None,
     ) -> LiveProviderResult | None:
         # Same operator-opt-in guard as in ``debate._call_debate_model``:
         # if live execution is disabled, return ``None`` and let the
@@ -752,6 +775,7 @@ class SynthesisOrchestrationService:
             system_prompt=system_prompt,
             user_prompt=user_prompt,
             max_tokens=SYNTHESIS_SECTION_MAX_TOKENS,
+            context=context,
         )
         if result is None or not result.answer_text.strip():
             return None

@@ -274,8 +274,13 @@ class CostEstimationService:
         model_slots: list[ModelSlot],
         account_id: UUID | None = None,
         query_run_id: UUID | None = None,
+        context: dict | None = None,
     ) -> CostEstimate:
-        breakdown = self._estimate_breakdown(query_text=query_text, model_slots=model_slots)
+        breakdown = self._estimate_breakdown(
+            query_text=query_text,
+            model_slots=model_slots,
+            context=context,
+        )
         # ``breakdown.total`` is the quantized grand total (same value the
         # old ``_estimate_total(...).quantize(...)`` produced). Compute the
         # breakdown ONCE and attach it to every returned estimate — including
@@ -291,7 +296,9 @@ class CostEstimationService:
         # figure. The cumulative / daily-cap accounting below stays on the
         # realistic ``estimated`` — those track accumulated REAL spend, which
         # tracks the point estimate, not the worst case.
-        bound = self._estimate_bound_usd(query_text=query_text, model_slots=model_slots)
+        bound = self._estimate_bound_usd(
+            query_text=query_text, model_slots=model_slots, context=context
+        )
         threshold_action, reasons = self._threshold_for(bound)
         # C8: cumulative-spend guard. A user can issue many small
         # queries that each stay below ``HARD_LIMIT_USD`` but together
@@ -476,7 +483,7 @@ class CostEstimationService:
     # -- internals --------------------------------------------------------
 
     def _estimate_breakdown(
-        self, *, query_text: str, model_slots: list[ModelSlot]
+        self, *, query_text: str, model_slots: list[ModelSlot], context: dict | None = None
     ) -> CostBreakdown:
         """Compute the itemized cost partition (by model AND by stage).
 
@@ -510,6 +517,21 @@ class CostEstimationService:
             + (Decimal(str(settings.cost_output_tokens_per_query_token)) * query_tokens),
             Decimal(settings.initial_answer_max_tokens),
         )
+        # L4: compute extra context tokens from the optional follow-up context.
+        # The context dict carries { prior_question, prior_synthesis }; when
+        # present we price the prior_question as additional input tokens
+        # (it is injected into the system prompt of every debate/synthesis call).
+        # The prior_synthesis is re-sent as part of the user prompt and is
+        # priced in the upstream_answers_tokens term below; we add its length
+        # to the synthesis prompt token count explicitly.
+        context_tokens = Decimal(0)
+        if context:
+            prior_q = (context.get("prior_question") or "").strip()
+            prior_s = (context.get("prior_synthesis") or "").strip()
+            if prior_q:
+                context_tokens += Decimal(len(prior_q)) / CHARS_PER_TOKEN
+            if prior_s:
+                context_tokens += Decimal(len(prior_s)) / CHARS_PER_TOKEN
         (
             initial_per_model,
             initial_total,
@@ -531,6 +553,7 @@ class CostEstimationService:
             # per-section floor, not the enforced cap, so the point estimate
             # stays strictly <= the ``_estimate_bound_usd`` ceiling.
             synthesis_sections=Decimal(settings.cost_synthesis_sections),
+            context_tokens=context_tokens,
         )
         total = raw_total.quantize(COST_DISPLAY_QUANTUM, rounding=ROUND_HALF_UP)
 
@@ -594,6 +617,7 @@ class CostEstimationService:
         init_output_tokens: Decimal,
         synthesis_sections: Decimal = Decimal(1),
         debate_output_override: Decimal | None = None,
+        context_tokens: Decimal = Decimal(0),
     ) -> tuple[list[Decimal], Decimal, Decimal, Decimal, Decimal]:
         """The shared per-call token model, parameterised by the initial-answer
         output token count and the synthesis section count.
@@ -607,6 +631,11 @@ class CostEstimationService:
         differing only in the per-call output assumption (typical floor vs
         enforced cap), so the point estimate is always <= the bound and the two
         can never drift.
+
+        ``context_tokens`` is the extra input tokens from a follow-up context
+        (prior_question + prior_synthesis). It is priced into debate and synthesis
+        calls (those that receive context via the system prompt) but NOT into the
+        initial-answer calls.
         """
         if not model_slots:
             raise ValueError("model_slots must not be empty")
@@ -667,8 +696,16 @@ class CostEstimationService:
         # writers), not a rate borrowed from the four slot models. Their prompt
         # scales with the initial answers they consume (``init_output_tokens``),
         # so the guardrail bound's larger initial output flows through here too.
+        # L4: when a follow-up context is present, the prior_question is
+        # injected into the system prompt (same for every debate + synthesis
+        # call) and the prior_synthesis is re-sent in the user prompt (same
+        # for every synthesis section). Both are modelled as additional
+        # input tokens.
+        context_input_tokens = context_tokens  # same prefix for debate (system) and synthesis (user)
         upstream_answers_tokens = Decimal(4) * init_output_tokens
-        debate_prompt_tokens = system_tokens + query_tokens + upstream_answers_tokens
+        debate_prompt_tokens = (
+            system_tokens + query_tokens + upstream_answers_tokens + context_input_tokens
+        )
         # Both rounds share the same token model (the invariant the UI and the
         # breakdown tests rely on: ``by_stage`` round_1 == round_2).
         debate_round_cost = _cost(
@@ -678,6 +715,8 @@ class CostEstimationService:
             system_tokens
             + query_tokens
             + upstream_answers_tokens
+            + context_input_tokens  # prior_question in system prompt
+            + context_input_tokens  # prior_synthesis in user prompt (re-sent)
             + Decimal(2) * debate_output_tokens
         )
         # Synthesis fans out into ``synthesis_sections`` independent live calls,
@@ -690,7 +729,9 @@ class CostEstimationService:
         raw_total = initial_total + Decimal(2) * debate_round_cost + synthesis_cost
         return initial_per_model, initial_total, debate_round_cost, synthesis_cost, raw_total
 
-    def _estimate_bound_usd(self, *, query_text: str, model_slots: list[ModelSlot]) -> Decimal:
+    def _estimate_bound_usd(
+        self, *, query_text: str, model_slots: list[ModelSlot], context: dict | None = None
+    ) -> Decimal:
         """Fail-safe upper bound on real cost — the "up to $Y" figure the cost
         guardrail is evaluated against (issue #16 rec #2/#3).
 
@@ -708,6 +749,16 @@ class CostEstimationService:
         total is a true ceiling on real cost: the guardrail keying off it can
         only ever over-protect, never wave through a run that then bills more.
         """
+        # Compute context tokens once; both the point estimate and the bound
+        # must model the same context so the point <= bound invariant holds.
+        context_tokens = Decimal(0)
+        if context:
+            prior_q = (context.get("prior_question") or "").strip()
+            prior_s = (context.get("prior_synthesis") or "").strip()
+            if prior_q:
+                context_tokens += Decimal(len(prior_q)) / CHARS_PER_TOKEN
+            if prior_s:
+                context_tokens += Decimal(len(prior_s)) / CHARS_PER_TOKEN
         init_output_tokens = Decimal(settings.initial_answer_max_tokens)
         *_, raw_total = self._cost_components(
             query_text=query_text,
@@ -715,6 +766,7 @@ class CostEstimationService:
             init_output_tokens=init_output_tokens,
             synthesis_sections=Decimal(settings.cost_synthesis_sections),
             debate_output_override=Decimal(settings.cost_debate_output_tokens_cap),
+            context_tokens=context_tokens,
         )
         return raw_total.quantize(COST_DISPLAY_QUANTUM, rounding=ROUND_HALF_UP)
 
