@@ -2553,16 +2553,7 @@
       ),
     );
 
-    const recommendation = fs.recommendation ? String(fs.recommendation).trim() : "";
-    content.appendChild(
-      setProse(
-        mkEl("div", "result-verdict-text"),
-        recommendation,
-        "No recommendation was recorded for this run.",
-      ),
-    );
-
-    // Honest summary line — derived from real fields, no banned verbs.
+    // Agreement headline — derived from real fields, no banned verbs.
     let summary;
     if (isConsensus) {
       summary = `${aligned} of ${total} models aligned`;
@@ -2572,7 +2563,36 @@
     } else {
       summary = `${aligned} of ${total} models aligned — the rest are preserved as disagreement below.`;
     }
-    content.appendChild(mkEl("span", "result-verdict-summary", summary));
+    content.appendChild(mkEl("span", "result-verdict-agreement", summary));
+
+    // Coverage caution — separate second line when citation coverage is below target.
+    const coverage = fs && fs.citation_coverage ? fs.citation_coverage : null;
+    if (coverage && !coverage.target_met) {
+      const ratio = Math.round(Number(coverage.coverage_ratio) * 100);
+      content.appendChild(
+        mkEl(
+          "span",
+          "result-verdict-coverage",
+          `Only ${ratio}% of material claims carried citations — treat the consensus as provisional.`,
+        ),
+      );
+    }
+
+    // Badge: "Automated summary" when synthesis_mode != "live".
+    if (fs.synthesis_mode && fs.synthesis_mode !== "live") {
+      const badgeLabel = fs.synthesis_mode === "fallback" ? "Partially automated" : "Automated summary";
+      content.appendChild(mkEl("span", "badge badge-summary", badgeLabel));
+    }
+
+    // Recommendation prose (block, rendered through markdown pipeline).
+    const recommendation = fs.recommendation ? String(fs.recommendation).trim() : "";
+    content.appendChild(
+      setProse(
+        mkEl("div", "result-verdict-text"),
+        recommendation,
+        "No recommendation was recorded for this run.",
+      ),
+    );
 
     // High-stakes caveat, if the synthesis carries one.
     if (fs.high_stakes_notice) {

@@ -1577,7 +1577,10 @@ html[data-theme="dark"] .landing-preview-caption {
 .live-run {
   gap: 0;
   padding: 0;
+  overflow: hidden;
 }
+
+.live-run-header {
   display: flex;
   align-items: center;
   justify-content: space-between;
@@ -2170,6 +2173,7 @@ html[data-theme="dark"] .landing-preview-caption {
 .result {
   gap: 0;
   padding: 0;
+  overflow: hidden;
 }
 
 .result-header {
@@ -2496,17 +2500,25 @@ html[data-theme="dark"] .landing-preview-caption {
   text-wrap: pretty;
 }
 
-.result-verdict-summary {
+.result-verdict-agreement {
   font-size: 0.9rem;
   line-height: 1.55;
 }
 
-.result-verdict[data-consensus="true"] .result-verdict-summary {
+.result-verdict[data-consensus="true"] .result-verdict-agreement {
   color: color-mix(in srgb, var(--verdict-on) 90%, transparent);
 }
 
-.result-verdict[data-consensus="false"] .result-verdict-summary {
+.result-verdict[data-consensus="false"] .result-verdict-agreement {
   color: var(--body);
+}
+
+.result-verdict-coverage {
+  font-size: 0.8rem;
+  line-height: 1.5;
+  color: var(--warning);
+  display: block;
+  margin-top: 2px;
 }
 
 .result-verdict-caveat {
@@ -2611,11 +2623,12 @@ html[data-theme="dark"] .landing-preview-caption {
   font-size: 0.8rem;
   line-height: 1.5;
   color: var(--text-secondary);
-  /* D-16: clamp full provider prose to 8 lines instead of slicing raw
+  /* D-16: clamp full provider prose to 4 lines instead of slicing raw
      characters (a slice mid-`**bold**` leaves a dangling marker). */
   display: -webkit-box;
-  -webkit-line-clamp: 8;
+  -webkit-line-clamp: 4;
   -webkit-box-orient: vertical;
+  overflow: hidden;
 }
 
 @media (max-width: 760px) {
@@ -3423,7 +3436,10 @@ a.result-source-chip:hover { border-color: var(--info); color: var(--info); }
 .transcript {
   gap: 0;
   padding: 0;
+  overflow: hidden;
 }
+
+.transcript-header {
   display: flex;
   align-items: center;
   justify-content: space-between;
@@ -4077,6 +4093,7 @@ html[data-theme="dark"] .workflow-step[data-state="completed"] .workflow-step-nu
 }
 
 .badge-fallback { background: var(--warning-soft); color: var(--warning); }
+.badge-summary { background: var(--info-soft); color: var(--info); }
 
 /* ----- Debate and synthesis ------------------------------------------- */
 
@@ -4089,6 +4106,7 @@ html[data-theme="dark"] .workflow-step[data-state="completed"] .workflow-step-nu
   flex-direction: column;
   gap: var(--space-3);
   position: relative;
+  overflow: hidden;
   box-shadow: var(--shadow-sm);
 }
 .round-card::before {
