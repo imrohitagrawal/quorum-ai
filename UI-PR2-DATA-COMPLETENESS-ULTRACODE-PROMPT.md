@@ -136,6 +136,19 @@ Before merging, prove each change bites:
 - `make mutation-baseline` — the suite must collect and score mutants (not abort).
 - Zero new warnings in CI.
 
+## What changed
+
+All six PR2 changes shipped in commit `f25696e`:
+
+1. **providers.py** — removed excerpt slicing, added `shortened: bool` field on `InitialModelAnswer`, threaded `finish_reason == "length"` detection through `_post_messages` → `is_truncated` → `shortened`
+2. **debate.py** — raised `DEBATE_ROUND_MAX_TOKENS` to 2000, removed `[:200]` slice from `_debate_user_prompt`
+3. **synthesis.py** — removed `[:600]` and `[:700]` excerpt slicing, raised `SYNTHESIS_SECTION_MAX_TOKENS` to 3000
+4. **synthesis_length.py** — raised `DEFAULT_SECTION_MAX_CHARS` to 4000, `RECOMMENDATION_MAX_CHARS` to 2000
+5. **config.py** — raised `cost_synthesis_output_tokens` to 3000, `cost_debate_output_tokens_cap` to 2000
+6. **model_slots.py** — updated `DEFAULT_MODEL_IDS` to current catalog (gpt-4o-mini, haiku-4.5, gemini-2.5-flash, nemotron-3-super-120b-a12b)
+
+Tests: 797 passed, 1 pre-existing flake (not related to PR2). Cost guardrail confirmed under $0.15 for all DEFAULT_MODEL_IDS.
+
 ## Definition of done
 - [ ] All six source files listed above updated per the spec.
 - [ ] Unit suite passes (excluding the pre-existing catalog failures).

@@ -116,10 +116,10 @@ For each of these five changes, write a proof that shows the test failing
 | # | Change | Key test to prove it |
 |---|--------|---------------------|
 | 1 | synthesis.py: removed `[:600]` and `[:700]` excerpt slicing | `test_user_prompt_includes_full_600_char_excerpt` |
-| 2 | synthesis.py: `SYNTHESIS_SECTION_MAX_TOKENS` 800→3000 | `test_synthesis_section_max_tokens_is_3000` |
+| 2 | synthesis.py: `SYNTHESIS_SECTION_MAX_TOKENS` 800→3000 | `test_synthesis_section_max_tokens_is_workstream_two_value` |
 | 3 | debate.py: `DEBATE_ROUND_MAX_TOKENS` 700→2000 | `test_debate_round_max_tokens_is_2000` |
-| 4 | debate.py: removed `[:200]` answer slice | No dedicated test yet — write one |
-| 5 | providers.py: `shortened` field + finish_reason detection | `test_shortened_true_when_finish_reason_length` |
+| 4 | debate.py: removed `[:200]` answer slice | `test_debate_user_prompt_includes_full_answer_excerpt` |
+| 5 | providers.py: `shortened` field + finish_reason detection | `test_shortened_true_when_provider_signal_length` |
 
 For each change:
 1. **RED**: Temporarily revert the change. Run the specific test. Capture the
@@ -228,17 +228,31 @@ Update `UI-PR2-DATA-COMPLETENESS-ULTRACODE-PROMPT.md`:
 | Golden fixture answer length | ~2173 chars |
 | Golden fixture critique 1 length | ~2000+ chars |
 | Golden fixture critique 2 length | ~800+ chars |
+| Trust caption line-clamp | 8 (was 4) |
+| DEFAULT_MODEL_IDS | gpt-4o-mini, haiku-4.5, gemini-2.5-flash, nemotron-3-super-120b-a12b |
 
 ---
 
 ## Definition of Done
 
-- [ ] PR3 CSS pass — no content clipping on result/transcript surfaces
-- [ ] E2E invariants pass (rendering, degraded-banner, visual-snapshots)
-- [ ] Golden fixture e2e model lists updated (deepseek → nvidia)
-- [ ] RED-GREEN proof documented in PR2-RED-GREEN-PROOF.md
-- [ ] Cost guardrail bound verified under $0.15 for DEFAULT_MODEL_IDS
-- [ ] `make validate && make quality` green
-- [ ] Committed with closeout message
-- [ ] `make handoff` run
-- [ ] Handoff prompt files updated to COMPLETE with deploy SHA
+- [x] PR3 CSS pass — no content clipping on result/transcript surfaces
+- [x] E2E invariants pass (rendering, degraded-banner, visual-snapshots)
+- [x] Golden fixture e2e model lists updated (deepseek → nvidia)
+- [x] RED-GREEN proof documented in PR2-RED-GREEN-PROOF.md
+- [x] Cost guardrail bound verified under $0.15 for DEFAULT_MODEL_IDS
+- [x] `make validate && make quality` green
+- [x] Committed with closeout message
+- [x] `make handoff` run
+- [x] Handoff prompt files updated to COMPLETE with deploy SHA
+
+## COMPLETE — Closeout Summary
+
+**Commit:** `f25696e` on `feat/ui-pr1-quickfixes`
+**PR:** #93
+
+**What shipped:**
+- PR3: Removed `overflow:hidden` from 5 layout containers (.result, .live-run, .transcript, .round-card); raised trust-caption line-clamp from 4 to 8 lines
+- PR3: Updated deepseek→nvidia in e2e test fixtures (3 files, 8 refs cleaned)
+- Phase 3: Wrote `PR2-RED-GREEN-PROOF.md` with RED→GREEN documentation for all 5 PR2 changes; added 2 bite-proof tests for debate token cap + answer excerpt
+- Phase 4: Cost guardrail verified — all 6 parametrized variants under $0.15
+- Phase 5: 797 passed, 1 pre-existing flake (not caused by our changes)
