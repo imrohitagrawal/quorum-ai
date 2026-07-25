@@ -4398,37 +4398,13 @@
 
   // Inline markdown renderer. Escaped text is the input (so we
   // never reintroduce unescaped HTML). Recognises: **bold**, *italic*,
-  // `code`, [text](url), and bullet lists (consecutive lines starting
-  // with "- " or "* ", optionally indented, become <ul><li>).
-  // Designed for the markdown flavour LLMs actually emit; not
-  // CommonMark-complete.
+  // `code`, [text](url). Designed for the markdown flavour LLMs
+  // actually emit; not CommonMark-complete.
   function mdInline(escaped) {
     let s = escaped;
     // Inline code first — everything inside backticks is verbatim and
     // must not be touched by the bold/italic/link rules below.
     s = s.replace(/`([^`]+)`/g, (_m, code) => `<code>${code}</code>`);
-    // Bullet lists: consecutive lines that START (after optional indent)
-    // with "- " or "* " become a single <ul>. Each <li> carries the
-    // line content (marker stripped, indentation kept); bold/italic/
-    // link/underscore rules run on the whole result afterwards and
-    // applyOutsideTags leaves the <ul>/<li> scaffolding alone while
-    // processing the text inside. The marker regex uses word-boundary
-    // logic: it matches only at the START of a line (or start of the
-    // string), never mid-word — so a lone "*" in "x* y" is never eaten.
-    s = s.replace(
-      /(?:^|\n)((?:[ \t]*[-*][ \t]+[^\n]*\n?)+)/g,
-      (match) => {
-        const block = match.trimStart();
-        const items = block
-          .split("\n")
-          .filter((l) => /^[ \t]*[-*][ \t]/.test(l))
-          .map(
-            (line) =>
-              `<li>${line.replace(/^[ \t]*[-*][ \t]+/, "")}</li>`,
-          );
-        return `\n<ul>${items.join("")}</ul>`;
-      },
-    );
     // Bold then italic. Order matters: ** must be tried before *, or
     // the ** would each be consumed as empty italics.
     s = s.replace(/\*\*([^*]+)\*\*/g, (_m, t) => `<strong>${t}</strong>`);
@@ -5059,15 +5035,24 @@
         gateReason.textContent = `${COPY_004_COST_BLOCK}${serverReasons}`;
       }
       if (gateBlockNote) {
-        // The guardrail blocks on the WORST-CASE (max_cost_usd), which can
-        // exceed the $0.25 cap even when the typical estimate shown above is
-        // under it — so the note names the worst case, not the point estimate.
-        const maxCost = Number(ce.max_cost_usd);
-        const ceiling = Number.isFinite(maxCost) && maxCost > total ? maxCost : total;
-        gateBlockNote.textContent =
-          `This run's worst-case cost (up to ${gateUsd(ceiling)}) is over the ` +
-          "$0.25 hard cap and no override exists in this release. Nothing " +
-          "ran and nothing was charged.";
+        // Distinguish which guard triggered the block.
+        const isCumulative = reasons.length > 1 && reasons[1].includes("Cumulative spend");
+        const isDailyCap = reasons.length > 1 && reasons[1].includes("Account has spent");
+        if (isCumulative) {
+          gateBlockNote.textContent =
+            `This run's worst-case cost (up to ${gateUsd(ceiling)}) would push cumulative ` +
+            "account spend over the $0.25 hard cap. Nothing ran and nothing was charged. " +
+            "Try shorter queries or fewer questions until the window resets.";
+        } else if (isDailyCap) {
+          gateBlockNote.textContent =
+            `This run's worst-case cost (up to ${gateUsd(ceiling)}) exceeds the daily cap. ` +
+            "Nothing ran and nothing was charged. Try again after the 24-hour window resets.";
+        } else {
+          gateBlockNote.textContent =
+            `This run's worst-case cost (up to ${gateUsd(ceiling)}) is over the ` +
+            "$0.25 hard cap and no override exists in this release. Nothing " +
+            "ran and nothing was charged.";
+        }
         gateBlockNote.hidden = false;
       }
       if (gateBlockFooter) {
