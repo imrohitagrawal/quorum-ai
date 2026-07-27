@@ -65,24 +65,17 @@ def get_session_cookie_name() -> str:
 
 
 def get_session_cookie_from_request(request: Request) -> str | None:
-    """Read the session cookie from a request, handling both prefixed and
-    unprefixed names for backwards compatibility during migration.
+    """Read the session cookie from a request.
+
+    Exactly ONE name is valid per environment, and it is the same name
+    :func:`attach_session_cookie` sets — the name you read is the name you
+    set. Accepting the other name would void the ``__Host-`` guarantee: a
+    network attacker who can answer for a sibling subdomain over plain HTTP
+    can set an unprefixed ``Domain=``-scoped cookie, and the resume path
+    would then re-stamp that id under the ``__Host-`` name (F-02).
     """
-    # Try the current environment's cookie name first
-    current_name = get_session_cookie_name()
-    value = request.cookies.get(current_name)
-    if value:
-        return value
-    # Fall back to the other name for migration compatibility
-    if current_name == _SESSION_COOKIE_NAME_PREFIXED:
-        return request.cookies.get(_SESSION_COOKIE_NAME_UNPREFIXED)
-    return request.cookies.get(_SESSION_COOKIE_NAME_PREFIXED)
+    return request.cookies.get(get_session_cookie_name())
 
-
-#: Backwards-compatible module-level constant. Resolved at import time
-#: using the *current* settings; tests that need a specific environment
-#: should call :func:`get_session_cookie_name` directly.
-SESSION_COOKIE_NAME = get_session_cookie_name()
 
 #: Inert CSRF token used in the legacy ``X-Account-Id`` path. The legacy
 #: path never validates CSRF (see ``enforce_csrf``), so the value just

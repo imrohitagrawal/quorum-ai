@@ -111,8 +111,8 @@ def test_cumulative_is_per_account() -> None:
 
 
 def test_only_accepted_events_count() -> None:
-    """BLOCK and REQUIRE_CONFIRMATION events must NOT count toward
-    the cumulative total — those estimates were never billed.
+    """BLOCK, REQUIRE_CONFIRMATION and (F-01) estimate-preview events must
+    NOT count toward the cumulative total — those estimates were never billed.
     """
     service = CostEstimationService()
     account = uuid4()
@@ -124,6 +124,17 @@ def test_only_accepted_events_count() -> None:
             query_run_id=None,
             estimated_cost_usd=Decimal("1.00"),  # each would be > hard limit
             threshold_action=CostThresholdAction.BLOCK,
+            confirmed=False,
+        )
+    # F-01: a preview from POST /estimate is not a charge either — the run
+    # has not started, and may never start.
+    for _ in range(10):
+        cost_event_recorder.record(
+            event_type="cost_estimate_previewed",
+            account_id=account,
+            query_run_id=None,
+            estimated_cost_usd=Decimal("1.00"),
+            threshold_action=CostThresholdAction.ALLOW,
             confirmed=False,
         )
     estimate = service.estimate(
