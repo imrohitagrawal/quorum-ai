@@ -11,6 +11,7 @@ the e2e gate proves the browser strips "- " / "* " markers from text
 nodes; these tests prove the underlying regex in the source cannot eat
 a lone asterisk mid-word and does produce <ul>/<li> scaffolding.
 """
+
 from __future__ import annotations
 
 import pathlib
@@ -18,10 +19,7 @@ import re
 
 import pytest
 
-JS_PATH = (
-    pathlib.Path(__file__).resolve().parents[2]
-    / "src/product_app/static/app.js"
-)
+JS_PATH = pathlib.Path(__file__).resolve().parents[2] / "src/product_app/static/app.js"
 
 
 @pytest.fixture(scope="module")
@@ -77,8 +75,7 @@ def test_mdInline_bullet_regex_not_mid_word(app_js_text: str) -> None:
         re.DOTALL,
     )
     assert bullet_replace is not None, (
-        "mdInline bullet list regex replace not found "
-        "(expected the iteratee to receive `match`)"
+        "mdInline bullet list regex replace not found (expected the iteratee to receive `match`)"
     )
     bullet_regex_src = bullet_replace.group(1)
     # It must have (?:^|\\n) or \\n at the start to anchor at line boundary.
@@ -107,12 +104,8 @@ def test_mdInline_emits_ul_li_structure(app_js_text: str) -> None:
 
     # There must be a replace call whose iteratee produces `<ul>...<li>...`.
     # We search for the specific string building pattern.
-    assert "<ul>" in body, (
-        "mdInline must contain a `<ul>` construction for bullet lists"
-    )
-    assert "<li>" in body, (
-        "mdInline must contain a `<li>` construction for bullet items"
-    )
+    assert "<ul>" in body, "mdInline must contain a `<ul>` construction for bullet lists"
+    assert "<li>" in body, "mdInline must contain a `<li>` construction for bullet items"
 
 
 # ---- regex behaviour tests (Python-side mirrors the JS logic) -------------------
@@ -131,7 +124,7 @@ def _md_inline_bullets_python(text: str) -> str:
     return result
 
 
-def _md_inline_bullets_replace(match: re.Match) -> str:
+def _md_inline_bullets_replace(match: re.Match[str]) -> str:
     block = match.group(1)
     items = []
     for line in block.split("\n"):
@@ -183,9 +176,7 @@ def test_bullet_marker_not_mid_word() -> None:
     # Example: "foo*bar" — the * is in the middle of a word.
     raw = "foo*bar\nbaz*qux"
     out = _md_inline_bullets_python(raw)
-    assert "<ul>" not in out, (
-        f"Lone mid-word '*' must not trigger a <ul>; got: {out!r}"
-    )
+    assert "<ul>" not in out, f"Lone mid-word '*' must not trigger a <ul>; got: {out!r}"
     # The text must be preserved as-is (the bullet step is a no-op).
     assert "foo*bar" in out
     assert "baz*qux" in out
@@ -198,9 +189,7 @@ def test_bullet_marker_at_mid_sentence_not_consumed() -> None:
     raw = "see also - the appendix\nfoo * bar"
     out = _md_inline_bullets_python(raw)
     # These are NOT list markers (not at line start), so no <ul>.
-    assert "<ul>" not in out, (
-        f"Mid-line '- ' must not trigger a <ul>; got: {out!r}"
-    )
+    assert "<ul>" not in out, f"Mid-line '- ' must not trigger a <ul>; got: {out!r}"
     # The raw text should be unchanged.
     assert "see also - the appendix" in out
     assert "foo * bar" in out

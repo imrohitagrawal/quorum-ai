@@ -12,6 +12,7 @@ envelope that leaked a trust score or a judge rationale would still be a 401 /
 
 from __future__ import annotations
 
+from collections.abc import Iterator
 from decimal import Decimal
 from typing import Any
 from unittest.mock import MagicMock, patch
@@ -52,7 +53,7 @@ EVAL_MARKERS = (
 )
 
 
-def _cheap_cost_estimate(*_args, **_kwargs):
+def _cheap_cost_estimate(*_args: Any, **_kwargs: Any) -> CostEstimate:
     """Return a fake cheap estimate so cost guardrails don't block auth tests."""
     return CostEstimate(
         estimated_cost_usd=Decimal("0.01"),
@@ -71,7 +72,7 @@ def _cheap_cost_estimate(*_args, **_kwargs):
 
 
 @pytest.fixture(autouse=True)
-def _patch_cost_for_auth_tests():
+def _patch_cost_for_auth_tests() -> Iterator[None]:
     """Patch cost estimation in query_runs so auth tests don't get 402'd."""
     with patch("product_app.query_runs.cost_estimation_service") as mock:
         mock.estimate.side_effect = _cheap_cost_estimate

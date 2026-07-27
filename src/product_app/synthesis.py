@@ -259,7 +259,7 @@ class SynthesisOrchestrationService:
         debate_outputs: list[DebateOutput],
         safety_acknowledgements: list[SafetyAcknowledgement] | None = None,
         openrouter_key: str = "",
-        context: dict | None = None,
+        context: dict[str, Any] | None = None,
     ) -> SynthesisResult:
         started_at = perf_counter()
         if safety_acknowledgements is None:
@@ -433,9 +433,7 @@ class SynthesisOrchestrationService:
 
         live_count = len(live_call_usages)
         synthesis_mode = (
-            "live" if live_count == 5
-            else "fallback" if live_count > 0
-            else "simulated"
+            "live" if live_count == 5 else "fallback" if live_count > 0 else "simulated"
         )
 
         synthesis = FinalSynthesis(
@@ -544,7 +542,7 @@ class SynthesisOrchestrationService:
         consensus_strength: ConsensusStrength,
         openrouter_key: str,
         user_prompt: str,
-        context: dict | None = None,
+        context: dict[str, Any] | None = None,
     ) -> tuple[str, str | None, LiveProviderResult | None]:
         successful = [
             answer for answer in initial_answers if answer.status is InitialAnswerStatus.COMPLETED
@@ -614,7 +612,7 @@ class SynthesisOrchestrationService:
         consensus_strength: ConsensusStrength,
         openrouter_key: str,
         user_prompt: str,
-        context: dict | None = None,
+        context: dict[str, Any] | None = None,
     ) -> tuple[str, str | None, LiveProviderResult | None]:
         fallback_paths = {answer.provider_path for answer in initial_answers}
         if ProviderPath.FALLBACK_SEARCH in fallback_paths and len(fallback_paths) > 1:
@@ -654,7 +652,7 @@ class SynthesisOrchestrationService:
         initial_answers: list[InitialModelAnswer],
         openrouter_key: str,
         user_prompt: str,
-        context: dict | None = None,
+        context: dict[str, Any] | None = None,
     ) -> tuple[str, str | None, LiveProviderResult | None]:
         cited = sum(
             1
@@ -690,7 +688,7 @@ class SynthesisOrchestrationService:
         debate_outputs: list[DebateOutput],
         openrouter_key: str,
         user_prompt: str,
-        context: dict | None = None,
+        context: dict[str, Any] | None = None,
     ) -> tuple[str, str | None, LiveProviderResult | None]:
         failed = sum(1 for answer in initial_answers if answer.status is InitialAnswerStatus.FAILED)
         if failed:
@@ -735,7 +733,7 @@ class SynthesisOrchestrationService:
         failed_count: int,
         openrouter_key: str,
         user_prompt: str,
-        context: dict | None = None,
+        context: dict[str, Any] | None = None,
     ) -> tuple[str, str | None, LiveProviderResult | None]:
         target_met = coverage.target_met
         if target_met and failed_count == 0:
@@ -774,7 +772,7 @@ class SynthesisOrchestrationService:
         openrouter_key: str,
         system_prompt: str,
         user_prompt: str,
-        context: dict | None = None,
+        context: dict[str, Any] | None = None,
     ) -> LiveProviderResult | None:
         # Same operator-opt-in guard as in ``debate._call_debate_model``:
         # if live execution is disabled, return ``None`` and let the

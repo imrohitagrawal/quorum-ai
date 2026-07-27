@@ -38,7 +38,7 @@ from decimal import Decimal, InvalidOperation
 from enum import StrEnum
 from threading import BoundedSemaphore, RLock, Thread
 from time import sleep
-from typing import Annotated, Literal
+from typing import Annotated, Any, Literal
 from uuid import UUID, uuid4
 
 from fastapi import APIRouter, Depends, HTTPException, Request, status
@@ -266,12 +266,12 @@ class QueryRunCreateRequest(BaseModel):
     slot_search: list[bool] | None = None
     # L4: optional follow-up context from a previous query run. ``None``
     # (default) means no prior context — a fresh query.
-    context: dict | None = Field(default=None)
+    context: dict[str, Any] | None = Field(default=None)
     safety_acknowledgements: list[SafetyAcknowledgement] = Field(default_factory=list)
     cost_confirmation: CostConfirmation | None = None
 
     @model_validator(mode="after")
-    def _validate_context_keys(self) -> "QueryRunCreateRequest":
+    def _validate_context_keys(self) -> QueryRunCreateRequest:
         ctx = self.context
         if ctx is None:
             return self
@@ -279,8 +279,7 @@ class QueryRunCreateRequest(BaseModel):
         extra = set(ctx.keys()) - allowed
         if extra:
             raise ValueError(
-                f"context may only contain {sorted(allowed)}; "
-                f"unexpected keys: {sorted(extra)}"
+                f"context may only contain {sorted(allowed)}; unexpected keys: {sorted(extra)}"
             )
         return self
 
@@ -463,7 +462,7 @@ class QueryRun:
     #: when this run was not triggered as a follow-up. Stored so the
     #: pipeline can inject prior context into debate/synthesis prompts
     #: and the cost estimator can account for the extra tokens.
-    context: dict | None = None
+    context: dict[str, Any] | None = None
 
     @property
     def is_terminal(self) -> bool:
@@ -492,7 +491,7 @@ class InMemoryQueryRunRepository:
         query_text: str,
         model_slots: list[ModelSlot],
         cost_estimate: CostEstimate,
-        context: dict | None = None,
+        context: dict[str, Any] | None = None,
     ) -> QueryRun:
         with self._lock:
             self._purge_expired_locked()

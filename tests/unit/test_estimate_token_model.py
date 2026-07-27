@@ -155,7 +155,12 @@ def test_bound_does_not_run_away_with_query_length() -> None:
     through unbounded output. This is what neutralises the 'write 20,000 words'
     exploit: the same expensive mix stays in the same band regardless of how
     verbose the output demand is, because the live call is capped too."""
-    o3 = ["openai/o3", "openai/gpt-4.1", "google/gemini-2.5-pro", "nvidia/nemotron-3-super-120b-a12b"]
+    o3 = [
+        "openai/o3",
+        "openai/gpt-4.1",
+        "google/gemini-2.5-pro",
+        "nvidia/nemotron-3-super-120b-a12b",
+    ]
     short = cost_estimation_service.estimate(query_text="report.", model_slots=_slots(o3))
     verbose = cost_estimation_service.estimate(
         query_text="Write an exhaustive 20000-word report.", model_slots=_slots(o3)

@@ -37,6 +37,7 @@ from enum import StrEnum
 from math import ceil
 from threading import RLock
 from time import perf_counter
+from typing import Any
 from urllib.error import HTTPError, URLError
 from urllib.parse import urlparse
 from urllib.request import Request, urlopen
@@ -705,7 +706,7 @@ class ProviderExecutionService:
         model_id: str,
         system_prompt: str | None = None,
         max_tokens: int | None = None,
-        context: dict | None = None,
+        context: dict[str, Any] | None = None,
     ) -> LiveProviderResult | _SearchRejected | None:
         # ``_post_openrouter`` accepts a custom system prompt and
         # ``max_tokens`` cap. The debate and synthesis services pass their
@@ -718,12 +719,13 @@ class ProviderExecutionService:
         context_prefix = ""
         if context and context.get("prior_question"):
             context_prefix = f"Previous question: {context['prior_question']}\n"
-        system_message = (
-            context_prefix + (system_prompt or (
+        system_message = context_prefix + (
+            system_prompt
+            or (
                 "Answer the user query with explicit source-backed reasoning. "
                 "Include citations or source URLs where possible, and explain "
                 "uncertainty instead of fabricating support."
-            ))
+            )
         )
         messages: list[dict[str, str]] = [
             {"role": "system", "content": system_message},
@@ -812,7 +814,7 @@ class ProviderExecutionService:
         system_prompt: str,
         user_prompt: str,
         max_tokens: int | None = None,
-        context: dict | None = None,
+        context: dict[str, Any] | None = None,
     ) -> LiveProviderResult | None:
         """Public entry point for internal callers (debate, synthesis)
         that need to call a specific model with a custom system prompt

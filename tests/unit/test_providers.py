@@ -14,8 +14,7 @@ This module verifies:
 from __future__ import annotations
 
 import json
-from io import BytesIO
-from types import SimpleNamespace
+from typing import Any
 from unittest.mock import MagicMock, patch
 from uuid import uuid4
 
@@ -23,15 +22,22 @@ import pytest
 
 from product_app.config import RuntimeEnvironment, settings
 from product_app.model_slots import validate_model_slots
+from product_app.provider_keys import ProviderCredentialSource
 from product_app.providers import (
-    InitialModelAnswer,
     InitialAnswerStatus,
     LiveProviderResult,
-    ProviderPath,
     TokenUsage,
     provider_execution_service,
     provider_stub_service,
 )
+
+# ``is_truncated`` on ``LiveProviderResult`` and ``shortened`` on
+# ``InitialModelAnswer`` do not exist yet — they are WP-D (F-07). These tests are
+# RED BY DESIGN and pin the contract WP-D must satisfy. The ``type: ignore``
+# comments below exist only so a deliberately-red *runtime* test does not also
+# turn the blocking ``make type-check`` gate red. mypy runs with
+# ``warn_unused_ignores`` (strict), so the moment WP-D adds the fields these
+# ignores become errors and MUST be deleted in that same change.
 
 
 # ---------------------------------------------------------------------------
@@ -46,7 +52,7 @@ def _make_openrouter_response(
     prompt_tokens: int = 100,
     completion_tokens: int = 50,
     total_tokens: int = 150,
-) -> dict:
+) -> dict[str, Any]:
     """Build a fake  chat-completions response."""
     return {
         "id": "chatcml-fake",
@@ -69,7 +75,7 @@ def _make_openrouter_response(
     }
 
 
-def _fake_urlopen_response(body: dict) -> MagicMock:
+def _fake_urlopen_response(body: dict[str, Any]) -> MagicMock:
     """Return a mock urlopen context manager that yields *body* as JSON."""
     raw = json.dumps(body).encode()
     mock_resp = MagicMock()
@@ -114,7 +120,7 @@ class TestTruncationPropagation:
             answer_text="This answer was cut short by the model's max_tokens limit.",
             sources=[],
             usage=TokenUsage(prompt_tokens=100, completion_tokens=1999, total_tokens=2099),
-            is_truncated=True,
+            is_truncated=True,  # type: ignore[call-arg]  # WP-D adds this field
         )
 
         # Monkeypatch _post_openrouter to return our truncated result.
@@ -128,11 +134,11 @@ class TestTruncationPropagation:
                 query_run_id=uuid4(),
                 query_text="Explain quantum entanglement in detail",
                 model_slot=slots[0],
-                credential_source="app_owned",
+                credential_source=ProviderCredentialSource.APP_OWNED,
                 openrouter_key="sk-test",
             )
 
-        assert answer.shortened is True
+        assert answer.shortened is True  # type: ignore[attr-defined]  # WP-D adds this field
         assert answer.status == InitialAnswerStatus.COMPLETED
 
     def test_shortened_false_on_normal_response(self) -> None:
@@ -151,7 +157,7 @@ class TestTruncationPropagation:
             answer_text="Here is a complete answer that was not truncated.",
             sources=[],
             usage=TokenUsage(prompt_tokens=100, completion_tokens=50, total_tokens=150),
-            is_truncated=False,
+            is_truncated=False,  # type: ignore[call-arg]  # WP-D adds this field
         )
 
         with patch.object(
@@ -164,11 +170,11 @@ class TestTruncationPropagation:
                 query_run_id=uuid4(),
                 query_text="What is 2+2?",
                 model_slot=slots[0],
-                credential_source="app_owned",
+                credential_source=ProviderCredentialSource.APP_OWNED,
                 openrouter_key="sk-test",
             )
 
-        assert answer.shortened is False
+        assert answer.shortened is False  # type: ignore[attr-defined]  # WP-D adds this field
         assert answer.status == InitialAnswerStatus.COMPLETED
 
     def test_shortened_false_on_simulated_answer(self) -> None:
@@ -187,11 +193,11 @@ class TestTruncationPropagation:
             query_run_id=uuid4(),
             query_text="test query",
             model_slot=slots[0],
-            credential_source="app_owned",
+            credential_source=ProviderCredentialSource.APP_OWNED,
             openrouter_key="",
         )
 
-        assert answer.shortened is False
+        assert answer.shortened is False  # type: ignore[attr-defined]  # WP-D adds this field
 
 
 # ---------------------------------------------------------------------------
@@ -223,7 +229,7 @@ class TestPostMessagesTruncationDetection:
 
         assert result is not None
         assert isinstance(result, LiveProviderResult)
-        assert result.is_truncated is True
+        assert result.is_truncated is True  # type: ignore[attr-defined]  # WP-D adds this field
         assert result.answer_text == "Truncated output..."
 
     def test_is_truncated_false_when_finish_reason_stop(self) -> None:
@@ -244,7 +250,7 @@ class TestPostMessagesTruncationDetection:
 
         assert result is not None
         assert isinstance(result, LiveProviderResult)
-        assert result.is_truncated is False
+        assert result.is_truncated is False  # type: ignore[attr-defined]  # WP-D adds this field
         assert result.answer_text == "Complete answer."
 
     def test_is_truncated_false_when_no_finish_reason(self) -> None:
@@ -270,4 +276,4 @@ class TestPostMessagesTruncationDetection:
             )
 
         assert result is not None
-        assert result.is_truncated is False
+        assert result.is_truncated is False  # type: ignore[union-attr]  # WP-D adds this field

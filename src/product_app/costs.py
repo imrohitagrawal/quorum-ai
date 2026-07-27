@@ -27,6 +27,7 @@ from datetime import UTC, datetime, timedelta
 from decimal import ROUND_FLOOR, ROUND_HALF_UP, Decimal
 from enum import StrEnum
 from threading import RLock
+from typing import Any
 from uuid import UUID, uuid4
 
 from pydantic import BaseModel, Field
@@ -274,7 +275,7 @@ class CostEstimationService:
         model_slots: list[ModelSlot],
         account_id: UUID | None = None,
         query_run_id: UUID | None = None,
-        context: dict | None = None,
+        context: dict[str, Any] | None = None,
     ) -> CostEstimate:
         breakdown = self._estimate_breakdown(
             query_text=query_text,
@@ -483,7 +484,11 @@ class CostEstimationService:
     # -- internals --------------------------------------------------------
 
     def _estimate_breakdown(
-        self, *, query_text: str, model_slots: list[ModelSlot], context: dict | None = None
+        self,
+        *,
+        query_text: str,
+        model_slots: list[ModelSlot],
+        context: dict[str, Any] | None = None,
     ) -> CostBreakdown:
         """Compute the itemized cost partition (by model AND by stage).
 
@@ -701,7 +706,8 @@ class CostEstimationService:
         # call) and the prior_synthesis is re-sent in the user prompt (same
         # for every synthesis section). Both are modelled as additional
         # input tokens.
-        context_input_tokens = context_tokens  # same prefix for debate (system) and synthesis (user)
+        # Same prefix for debate (system) and synthesis (user).
+        context_input_tokens = context_tokens
         upstream_answers_tokens = Decimal(4) * init_output_tokens
         debate_prompt_tokens = (
             system_tokens + query_tokens + upstream_answers_tokens + context_input_tokens
@@ -730,7 +736,11 @@ class CostEstimationService:
         return initial_per_model, initial_total, debate_round_cost, synthesis_cost, raw_total
 
     def _estimate_bound_usd(
-        self, *, query_text: str, model_slots: list[ModelSlot], context: dict | None = None
+        self,
+        *,
+        query_text: str,
+        model_slots: list[ModelSlot],
+        context: dict[str, Any] | None = None,
     ) -> Decimal:
         """Fail-safe upper bound on real cost — the "up to $Y" figure the cost
         guardrail is evaluated against (issue #16 rec #2/#3).

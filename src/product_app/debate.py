@@ -25,6 +25,7 @@ from dataclasses import asdict, dataclass, field
 from enum import StrEnum
 from threading import RLock
 from time import perf_counter
+from typing import Any
 from uuid import UUID
 
 from pydantic import BaseModel, Field
@@ -204,7 +205,7 @@ class DebateOrchestrationService:
         model_slots: list[ModelSlot] | None = None,
         safety_acknowledgements: list[SafetyAcknowledgement] | None = None,
         openrouter_key: str = "",
-        context: dict | None = None,
+        context: dict[str, Any] | None = None,
     ) -> DebateResult:
         if model_slots is None:
             model_slots = []
@@ -346,7 +347,7 @@ class DebateOrchestrationService:
         initial_answers: list[InitialModelAnswer],
         query_text: str,
         openrouter_key: str,
-        context: dict | None = None,
+        context: dict[str, Any] | None = None,
     ) -> tuple[str, str | None, LiveProviderResult | None]:
         disagreement = self._extract_disagreement(initial_answers=initial_answers)
         weak_support = self._extract_weak_support(initial_answers=initial_answers)
@@ -379,7 +380,7 @@ class DebateOrchestrationService:
         query_text: str,
         round_one_text: str,
         openrouter_key: str,
-        context: dict | None = None,
+        context: dict[str, Any] | None = None,
     ) -> tuple[str, str | None, LiveProviderResult | None]:
         disagreement = self._extract_disagreement(initial_answers=initial_answers)
         weak_support = self._extract_weak_support(initial_answers=initial_answers)
@@ -411,7 +412,7 @@ class DebateOrchestrationService:
         openrouter_key: str,
         system_prompt: str,
         user_prompt: str,
-        context: dict | None = None,
+        context: dict[str, Any] | None = None,
     ) -> LiveProviderResult | None:
         """Call the configured debate model. Returns the live provider result
         (carrying the answer text and captured token usage) or ``None`` on any
