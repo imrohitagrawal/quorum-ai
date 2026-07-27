@@ -57,6 +57,11 @@ from product_app.providers import (
 )
 from product_app.synthesis import FinalSynthesis
 from product_app.synthesis_consensus import _has_polar_disagreement
+from product_app.untrusted_text import (
+    UNTRUSTED_BEGIN,
+    UNTRUSTED_END,
+    neutralize_delimiters,
+)
 
 #: Bumped whenever the persisted shape or the meaning of a signal changes.
 #: Stored payloads from different versions are not comparable.
@@ -1181,8 +1186,14 @@ def parse_judge_verdict(raw: str | None) -> EvalJudgeVerdict | None:
         return None
 
 
-JUDGE_EVIDENCE_START = "<<<UNTRUSTED_EVIDENCE_BEGIN>>>"
-JUDGE_EVIDENCE_END = "<<<UNTRUSTED_EVIDENCE_END>>>"
+#: Aliases of the shared primitives in :mod:`product_app.untrusted_text`, which
+#: this module's fencing was extracted into when WP-D (F-08) needed the same
+#: protection for the debate and synthesis prompts. Kept under the original
+#: names so existing callers and tests read unchanged; the VALUES are shared,
+#: so the judge and the debate/synthesis stages can never drift onto different
+#: delimiters.
+JUDGE_EVIDENCE_START = UNTRUSTED_BEGIN
+JUDGE_EVIDENCE_END = UNTRUSTED_END
 
 
 @dataclass(frozen=True)
@@ -1238,11 +1249,9 @@ def build_judge_evidence(
     )
 
 
-def _neutralize_delimiters(text: str) -> str:
-    """Stop untrusted prose from forging an end-of-evidence delimiter."""
-    return text.replace(JUDGE_EVIDENCE_START, "[redacted-delimiter]").replace(
-        JUDGE_EVIDENCE_END, "[redacted-delimiter]"
-    )
+#: Shared with the debate/synthesis fencing — see
+#: :func:`product_app.untrusted_text.neutralize_delimiters`.
+_neutralize_delimiters = neutralize_delimiters
 
 
 _JUDGE_SYSTEM_PROMPT = f"""\

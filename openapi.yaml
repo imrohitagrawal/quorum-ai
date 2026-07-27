@@ -705,6 +705,10 @@ components:
           anyOf:
           - $ref: '#/components/schemas/TokenUsage'
           - type: 'null'
+        shortened:
+          type: boolean
+          title: Shortened
+          default: false
       type: object
       required:
       - slot_number

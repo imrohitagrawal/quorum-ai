@@ -175,11 +175,20 @@ def test_exact_partition_pins_the_split() -> None:
       ctx4           = 4 * 825 = 3300
       debate_prompt  = 350 + 250 + 3300 = 3900
       debate_round   = 0.001*3900/1000 + 0.005*400/1000 = 0.0039 + 0.002 = 0.0059
-      synth_prompt   = 350 + 250 + 3300 + 3000 = 6900
-      synth_section  = 0.00015*6900/1000 + 0.0006*3000/1000 = 0.001035 + 0.0018
-                     = 0.002835
-      synthesis      = 5 * 0.002835 = 0.014175   (five section calls)
-      raw_total      = 0.01492 + 2*0.0059 + 0.014175 = 0.040995 -> total 0.0410
+      synth_prompt   = 350 + 250 + 3300 + 2*400 = 4700
+      synth_section  = 0.00015*4700/1000 + 0.0006*3000/1000 = 0.000705 + 0.0018
+                     = 0.002505
+      synthesis      = 5 * 0.002505 = 0.012525   (five section calls)
+      raw_total      = 0.01492 + 2*0.0059 + 0.012525 = 0.039245 -> total 0.0392
+
+    NOTE the term that is deliberately ABSENT here. WP-D made ``max_cost_usd``
+    a true ceiling by pricing round 2's prompt, which carries round 1's
+    critique in full. That term is applied to the BOUND ONLY
+    (``_cost_components(price_round_two_prior_critique=True)``, set solely by
+    ``_estimate_bound_usd``). Charging it on this POINT path would either
+    inflate both rounds — measured: 9 of 495 shipped-catalog mixes flipping
+    CONFIRM -> BLOCK, a hard refusal of an affordable run — or break the
+    reconciliation invariant, since it belongs to no single displayed stage.
     """
     estimate = cost_estimation_service.estimate(
         query_text="x" * 1000,
@@ -190,7 +199,7 @@ def test_exact_partition_pins_the_split() -> None:
     assert breakdown.total == Decimal("0.0392")
 
     # by_stage — initial_answers; two debate rounds at 0.0059 each;
-    # synthesis (five sections) is 0.0125 -> floors to 0.0125.
+    # synthesis (five sections) is 0.012525 -> floors to 0.0125.
     assert [(line.stage, line.usd) for line in breakdown.by_stage] == [
         ("initial_answers", Decimal("0.0149")),
         ("debate_round_1", Decimal("0.0059")),
@@ -208,12 +217,19 @@ def test_exact_partition_pins_the_split() -> None:
     ]
 
 
-def test_breakdown_attached_on_require_confirmation() -> None:
-    """The REQUIRE_CONFIRMATION path (final return) must carry the breakdown.
+def test_breakdown_attached_when_the_bound_drives_a_gated_action() -> None:
+    """A gated estimate must still carry its breakdown, so the UI can show the
+    user WHY they were gated.
 
     issue #16: the guardrail keys off the fail-safe ``max_cost_usd`` bound. One
     opus slot + three cheap slots lands the bound past $0.25 (BLOCK) while the
-    point estimate is only ~$0.12 (ALLOW band). The bound drives the action.
+    point estimate is only ~$0.11 (ALLOW band). The bound drives the action.
+
+    Renamed in WP-D: this was ``test_breakdown_attached_on_require_confirmation``
+    while asserting ``is BLOCK`` — a title outliving its assertion, which is the
+    gate-erosion smell the plan's prevention playbook calls out. The subject is
+    "a gated action carries a breakdown", so the title now says that and the
+    band is asserted as a derived fact rather than baked into the name.
     """
     estimate = cost_estimation_service.estimate(
         query_text="Compare frontier model safety features.",

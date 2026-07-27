@@ -32,7 +32,9 @@ from uuid import UUID
 from pydantic import BaseModel
 
 from product_app.config import settings
+from product_app.costs import CHARS_PER_TOKEN
 from product_app.debate import (
+    DEBATE_ROUND_MAX_TOKENS,
     AgreementSummary,
     DebateOutput,
     PositionMovement,
@@ -41,6 +43,7 @@ from product_app.debate import (
 )
 from product_app.feedback_store import record_event as _record_feedback_event
 from product_app.providers import (
+    _MAX_SOURCE_TITLE_LEN,
     CitationCoverage,
     InitialAnswerStatus,
     InitialModelAnswer,
@@ -66,6 +69,7 @@ from product_app.synthesis_length import (
     truncate_recommendation,
     truncate_section,
 )
+from product_app.untrusted_text import UNTRUSTED_DATA_SYSTEM_RULE, fence
 
 #: PR6/#8/#15: templated-section provenance is now carried STRUCTURALLY by
 #: ``FinalSynthesis.synthesis_mode`` and rendered as an "Automated summary"
@@ -85,43 +89,111 @@ HIGH_STAKES_NOTICE_FRAGMENT = (
 )
 
 #: Token cap per synthesis section. Workstream-2 raised this from 500
-#: to 800 so each section has room to enumerate up to four models with
-#: quoted phrases, attribution, and the decision-support caveat without
-#: the model truncating mid-sentence. The plan's "~400 tokens of output
-#: per section" target is still met on well-formed answers; the extra
-#: budget is the safety margin the older value used to leave for the
-#: prompt's leading phrase — a margin that turned out to be too tight
-#: for the model to finish the citation-coverage / failed-count lines.
-SYNTHESIS_SECTION_MAX_TOKENS = 800
+#: to 800; WP-D (F-07) raises it again to 3000 so a section can carry a
+#: full multi-model reconciliation rather than stopping mid-sentence.
+#:
+#: This MUST stay in sync with ``settings.cost_synthesis_output_tokens``
+#: (``config.py``), which is what both the point estimate and the
+#: fail-safe ``max_cost_usd`` bound price each of the
+#: ``cost_synthesis_sections`` section calls at. Pinned by
+#: ``tests/unit/test_estimate_token_model.py::
+#: test_bound_cap_assumptions_match_the_enforced_caps``.
+#:
+#: NOTE the downstream storage cap: a 3000-token section is ~12_000
+#: chars, but ``truncate_section`` still hard-cuts stored section text
+#: at ``synthesis_length.DEFAULT_SECTION_MAX_CHARS`` (4000), and the
+#: Recommendation at ``RECOMMENDATION_MAX_CHARS`` (2000). So the raise
+#: buys headroom for the model to *finish a thought*, not 12_000 chars
+#: of visible output.
+SYNTHESIS_SECTION_MAX_TOKENS = 3000
+
+#: How much of each initial answer the synthesis sections get to see.
+#: WP-D (F-08) replaced a hardcoded ``[:600]``. Bounded by the token cap on
+#: the call that produced the answer, so it is "as much as can exist".
+SYNTHESIS_ANSWER_EXCERPT_MAX_CHARS = int(settings.initial_answer_max_tokens * CHARS_PER_TOKEN)
+
+#: How much of each debate-round critique the synthesis sections get to see.
+#: WP-D (F-08) replaced a hardcoded ``[:700]``.
+#:
+#: DERIVED FROM ``DEBATE_ROUND_MAX_TOKENS`` — and that derivation, not the
+#: number it currently produces, is the point. A critique cannot be longer
+#: than the debate call that produced it was allowed to be, so the ordering
+#: matters: at the old 700-token debate cap the correct value here was 2800,
+#: and only because F-07 raised that cap to 2000 is it now 8000. Hardcoding
+#: 8000 would have been wrong before F-07 landed and would silently decouple
+#: the next time the debate cap moves. The plan's blanket "→ 8000 chars" is
+#: right for the answer excerpts above and wrong for this one.
+SYNTHESIS_DEBATE_EXCERPT_MAX_CHARS = int(DEBATE_ROUND_MAX_TOKENS * CHARS_PER_TOKEN)
 
 
 # System prompts for the five synthesis sections. Each prompt is
 # intentionally narrow so the model stays on task and produces
 # quotable, falsifiable output rather than hedging.
-_CONSENSUS_PROMPT = (
+#
+# Every one of them is built through ``_section_prompt``, which appends the
+# untrusted-data rule. That is deliberate: the user prompt these accompany is
+# fenced (``fence(...)`` in ``_synthesis_user_prompt``), and fencing without
+# the rule protects nothing. Routing all five through one constructor means a
+# sixth section cannot be added that silently omits it.
+
+
+def _section_prompt(instruction: str) -> str:
+    """A section's system prompt: its instruction, plus the untrusted-data rule."""
+    return f"{instruction}\n\n{UNTRUSTED_DATA_SYSTEM_RULE}"
+
+
+#: Longest source URL inlined into a prompt. Bounds a hostile URL's ability to
+#: blow the char budget the rest of the prompt is sized against.
+_MAX_SOURCE_URL_LEN = 500
+
+#: Line separators a hostile string can use to forge its own prompt line.
+#: ``\n``/``\r`` are the obvious ones; U+2028/U+2029/U+0085 are line breaks to
+#: many renderers and tokenizers, and ``\v``/``\f`` end a line in others.
+_LINE_BREAKING_CHARS = "\n\r\v\f\x1c\x1d\x1e\x85\u2028\u2029"
+
+
+def _flatten_for_prompt(value: str, *, max_chars: int) -> str:
+    """Make a provider-controlled string safe to inline on one prompt line.
+
+    Applied to BOTH the source title and the source URL. They render on the
+    same line, so flattening only one leaves the line forgeable through the
+    other — which is exactly the gap the first version of this helper had.
+
+    Belt and braces with ``providers._sanitize_source_url``, which now rejects
+    a URL carrying any whitespace or control character at the producer. This
+    is the consumer-side half: it holds even for a ``SourceReference``
+    constructed by some future path that skips that sanitizer.
+    """
+    flattened = value or ""
+    for ch in _LINE_BREAKING_CHARS:
+        flattened = flattened.replace(ch, " ")
+    return flattened[:max_chars]
+
+
+_CONSENSUS_PROMPT = _section_prompt(
     "Given the four model answers below, list the 2-4 points where "
     "they agree. Use bullet points. Quote specific phrases from the "
     "answers. Do not invent consensus that is not in the answers. "
     "Output is shown to the user as 'Consensus'."
 )
-_DISAGREEMENT_PROMPT = (
+_DISAGREEMENT_PROMPT = _section_prompt(
     "Given the four model answers below, list the 2-4 points where "
     "they disagree. Name the specific models and quote the specific "
     "passages that disagree. Do not invent disagreement that is not "
     "in the answers. Output is shown to the user as 'Disagreement'."
 )
-_SOURCE_SUPPORT_PROMPT = (
+_SOURCE_SUPPORT_PROMPT = _section_prompt(
     "For each of the four model answers, list the sources it cited "
     "(title and URL if available). Note which sources appear in two "
     "or more answers. Be concrete. Output is shown to the user as "
     "'Source support'."
 )
-_UNCERTAINTY_PROMPT = (
+_UNCERTAINTY_PROMPT = _section_prompt(
     "Given the four model answers and the debate rounds above, list "
     "1-3 things you cannot determine from the available evidence. Be "
     "honest. Do not pad. Output is shown to the user as 'Uncertainty'."
 )
-_RECOMMENDATION_PROMPT = (
+_RECOMMENDATION_PROMPT = _section_prompt(
     "Write a one-paragraph recommendation using the consensus, "
     "disagreement, sources, and uncertainty above. Hard rules:\n"
     "1. Always end with this sentence verbatim: 'This summary is "
@@ -499,32 +571,52 @@ class SynthesisOrchestrationService:
         should already have the user's question in mind from the
         debate rounds.
         """
-        lines: list[str] = []
-        lines.append("User query (do NOT repeat verbatim in your response):")
-        # The orchestrator passes the query in via the caller, but
-        # the synthesis user_prompt is reused across sections; we
-        # therefore include the answer excerpts (which themselves
-        # carry the relevant question context). The orchestrator
-        # does NOT include the raw user query text in the user
-        # prompt for two reasons: (a) it never leaves the
-        # server-side debounce path, (b) each section prompt is
-        # already focused on a specific lens.
-        lines.append("")
-        lines.append(
+        # TWO parts. Our own directives and OUR OWN COMPUTED FACTS stay outside
+        # the fence; only provider-originated text goes inside. The coverage
+        # ratio and failed-model count are computed by this application from
+        # its own run data — putting them inside a block the system rule labels
+        # untrusted would invite the model to discount the very figures the
+        # Recommendation prompt requires it to act on.
+        #
+        # The orchestrator does NOT include the raw user query text in the
+        # synthesis user prompt for two reasons: (a) it never leaves the
+        # server-side debounce path, (b) each section prompt is already focused
+        # on a specific lens. The answer excerpts carry the question context.
+        directives: list[str] = [
+            "Do NOT repeat the user's question verbatim in your response.",
             f"Source coverage: {Decimal(str(coverage_ratio)) * 100:.0f}% of the answers "
-            "carried at least one primary source."
+            "carried at least one primary source.",
+            f"Failed model count: {failed_count}.",
+        ]
+
+        # Untrusted from here down.
+        lines: list[str] = []
+        lines.append(
+            "Four model answers (model name, status, first "
+            f"{SYNTHESIS_ANSWER_EXCERPT_MAX_CHARS} chars):"
         )
-        lines.append(f"Failed model count: {failed_count}.")
-        lines.append("")
-        lines.append("Four model answers (model name, status, first 600 chars):")
         for answer in initial_answers:
-            # Workstream-2: bumped from 250 to 600 chars per answer.
-            # 250 was too short to capture the model's full stance and
-            # any inline citation links; the synthesis could only see
-            # a sliver of the answer and the disagreement section had
-            # nothing concrete to quote.
-            excerpt = (answer.answer_text or "").strip().replace("\n", " ")[:600]
-            sources_str = ", ".join(f"{s.title} ({s.url})" for s in (answer.sources or [])[:3])
+            # Workstream-2 bumped this 250 -> 600; WP-D (F-08) takes it to the
+            # full answer. Even 600 chars left the disagreement section quoting
+            # from a fragment, which is the same defect at a larger size.
+            excerpt = (
+                (answer.answer_text or "")
+                .strip()
+                .replace("\n", " ")[:SYNTHESIS_ANSWER_EXCERPT_MAX_CHARS]
+            )
+            # Source titles are provider-controlled (`:online` annotations, and
+            # the title of whatever page a web search returned), so they get the
+            # SAME treatment as every other untrusted value here: newlines
+            # flattened so a title cannot forge its own prompt lines, and a
+            # length cap so it cannot blow the char budget the rest of this
+            # prompt is sized against. `_MAX_SOURCE_TITLE_LEN` already bounds
+            # the Tavily path at the producer; the annotation path has no such
+            # cap, so bound it at the consumer too.
+            sources_str = ", ".join(
+                f"{_flatten_for_prompt(s.title, max_chars=_MAX_SOURCE_TITLE_LEN)}"
+                f" ({_flatten_for_prompt(s.url, max_chars=_MAX_SOURCE_URL_LEN)})"
+                for s in (answer.sources or [])[:3]
+            )
             # ``display_name`` is the catalog's short label
             # ("Claude Haiku 4.5"). Falling back to ``model_id`` keeps
             # the prompt well-formed even if the catalog is unaware
@@ -537,13 +629,20 @@ class SynthesisOrchestrationService:
             lines.append("")
             lines.append("Debate rounds (round 1 then round 2 critique):")
             for round_output in debate_outputs:
-                # Workstream-2: bumped from 300 to 700 chars per debate round.
-                # The critique lines are what the uncertainty section leans
-                # on; 300 was cutting off the actual claim in the middle of
-                # the sentence, leaving the model to fill in the gap.
-                excerpt = (round_output.critique_text or "").strip().replace("\n", " ")[:700]
+                # Workstream-2 bumped this 300 -> 700; WP-D (F-08) derives it
+                # from the debate round's own token cap instead. The critique
+                # lines are what the uncertainty section leans on, and a
+                # critique cut mid-claim left the model to fill in the gap.
+                excerpt = (
+                    (round_output.critique_text or "")
+                    .strip()
+                    .replace("\n", " ")[:SYNTHESIS_DEBATE_EXCERPT_MAX_CHARS]
+                )
                 lines.append(f"- round {round_output.round_number}: {excerpt}")
-        return "\n".join(lines)
+        # Provider-originated text throughout — fenced as untrusted evidence,
+        # with the matching rule carried on each section's system prompt. See
+        # ``untrusted_text``.
+        return "\n".join(directives) + "\n\n" + fence("\n".join(lines))
 
     def _build_consensus(
         self,

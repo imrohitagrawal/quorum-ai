@@ -127,12 +127,34 @@ _FALLBACK_CATALOG: tuple[ModelCatalogEntry, ...] = (
         output_price_per_1k=Decimal("0.075"),
     ),
     ModelCatalogEntry(
+        # WP-D: output price corrected 0.0012 -> 0.0025. MEASURED against the
+        # live public catalog (https://openrouter.ai/api/v1/models,
+        # unauthenticated, $0) on 2026-07-27: completion 0.0000025/token ->
+        # 0.0025 per 1K. The stale row understated it by 52%.
+        #
+        # This row is corrected here, alone, because it is slot 3 of the
+        # SHIPPED default mix and therefore feeds
+        # ``PINNED_DEFAULT_MIX_UNIT_USD`` — ratifying a money envelope computed
+        # from a price known to be 52% wrong is not ratification. The input
+        # price (0.0003) was already exact and is unchanged.
+        #
+        # Five OTHER rows in this catalog are also stale (gemini-2.5-pro,
+        # gemini-2.5-flash-lite, deepseek-chat-v3.1, llama-3.1-8b-instruct,
+        # and openai/o3 which is 650% OVER and therefore over-blocks). They are
+        # deliberately NOT corrected here: they do not feed the shipped default
+        # mix, correcting prices upward makes estimates higher and pushes more
+        # runs into the cost rails, and that is a guardrail-input change that
+        # deserves its own diff and its own operator ratification. See the
+        # routing decision in WP-D-TO-CLOSEOUT-ULTRACODE-PROMPT.md §2.
+        #
+        # All of these apply ONLY in degraded mode (catalog fetch failed);
+        # normal operation prices from the live catalog.
         model_id="google/gemini-2.5-flash",
         name="Google: Gemini 2.5 Flash",
         vendor="google",
         short_name="Gemini 2.5 Flash",
         input_price_per_1k=Decimal("0.0003"),
-        output_price_per_1k=Decimal("0.0012"),
+        output_price_per_1k=Decimal("0.0025"),
     ),
     ModelCatalogEntry(
         model_id="google/gemini-2.5-flash-lite",

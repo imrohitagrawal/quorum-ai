@@ -49,6 +49,7 @@ from product_app.config import RuntimeEnvironment, settings
 from product_app.feedback_store import record_event as _record_feedback_event
 from product_app.model_slots import ModelSlot, openrouter_model_catalog_service
 from product_app.provider_keys import ProviderCredentialSource
+from product_app.untrusted_text import fence
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -188,6 +189,16 @@ class InitialModelAnswer(BaseModel):
     #: (no real billing) or when the provider omitted the usage object. Read
     #: by the cost layer to compute a measured actual cost.
     token_usage: TokenUsage | None = None
+    #: WP-D (F-07): this answer was cut short by the provider's token ceiling
+    #: (``finish_reason == "length"``), so the text below is incomplete. Only
+    #: a live provider call can set this — simulated, fallback, failed,
+    #: cancelled and deadline-exceeded answers all keep the ``False`` default,
+    #: because none of them was truncated BY A MODEL.
+    #:
+    #: This crosses the API boundary so the UI can mark the answer
+    #: "(shortened)" instead of presenting a mid-sentence stop as the model's
+    #: complete view. It is INERT until that surface exists (WP-F).
+    shortened: bool = False
 
 
 @dataclass(frozen=True)
@@ -401,6 +412,7 @@ class ProviderExecutionService:
                 fallback_used=False,
                 provider_notice=search_disabled_notice,
                 token_usage=live_response.usage,
+                shortened=live_response.is_truncated,
             )
 
         # No live response, or live response returned no usable text.
@@ -413,6 +425,14 @@ class ProviderExecutionService:
         use_fallback = self._should_force_fallback(query_text=query_text, model_slot=model_slot)
         if use_fallback:
             provider_attempt_order = [ProviderPath.LOCAL_SIMULATION, ProviderPath.FALLBACK_SEARCH]
+            # NOTE: the ``live_response.answer_text`` arm here is unreachable —
+            # the ``openrouter_search`` branch above returns whenever there IS
+            # usable live text, so control only arrives here when there is
+            # none. Kept as-is (pre-existing) rather than "simplified" inside
+            # WP-D, but it is why this branch needs no ``shortened=``: the text
+            # it emits is always locally simulated, and simulated text was
+            # never truncated by a model. Pinned by
+            # ``test_simulated_text_on_the_fallback_branch_is_never_shortened``.
             answer_text = (
                 live_response.answer_text
                 if live_response is not None and live_response.answer_text
@@ -485,6 +505,7 @@ class ProviderExecutionService:
         fallback_used: bool,
         provider_notice: str | None = None,
         token_usage: TokenUsage | None = None,
+        shortened: bool = False,
     ) -> InitialModelAnswer:
         duration_ms = max(1, round((perf_counter() - started_at) * 1000))
         provider_event_recorder.record(
@@ -528,6 +549,7 @@ class ProviderExecutionService:
             ),
             provider_notice=provider_notice,
             token_usage=token_usage,
+            shortened=shortened,
         )
 
     def _failed_answer(
@@ -763,17 +785,38 @@ class ProviderExecutionService:
         # L4: when context is provided (a follow-up query), inject the
         # prior question into the system prompt so the model is aware
         # of the conversation history without re-quoting the user query.
-        context_prefix = ""
-        if context and context.get("prior_question"):
-            context_prefix = f"Previous question: {context['prior_question']}\n"
-        system_message = context_prefix + (
-            system_prompt
-            or (
-                "Answer the user query with explicit source-backed reasoning. "
-                "Include citations or source URLs where possible, and explain "
-                "uncertainty instead of fabricating support."
-            )
+        # WP-D (F-08): ``prior_question`` is CLIENT-SUPPLIED and lands in the
+        # SYSTEM message, so it is the one untrusted channel the user-message
+        # fence cannot cover. Two rules therefore apply to it:
+        #
+        #   1. It goes AFTER the caller's system prompt, never before. Prepended,
+        #      an attacker-authored follow-up was literally the first instruction
+        #      the model read — above the untrusted-data rule — and could
+        #      countermand the entire fencing scheme.
+        #   2. Its delimiters are neutralized, so it cannot forge a decoy
+        #      evidence block inside the trusted half of the prompt.
+        #
+        # It is still labelled so the model knows it is quoted user input rather
+        # than an instruction from us.
+        base_system_prompt = system_prompt or (
+            "Answer the user query with explicit source-backed reasoning. "
+            "Include citations or source URLs where possible, and explain "
+            "uncertainty instead of fabricating support."
         )
+        context_suffix = ""
+        if context and context.get("prior_question"):
+            # FENCED, not merely neutralized and repositioned. Position alone
+            # cannot solve this: before the untrusted-data rule the client text
+            # reads as a governing instruction, and after it, it is the last
+            # thing the model sees and can pose as an amendment to the rule
+            # ("the paragraph above no longer applies"). Wrapping it in the
+            # same delimiters the rule already governs makes it unambiguously
+            # DATA wherever it sits — the same treatment the answers get in the
+            # user message.
+            context_suffix = "\n\nThe user's previous question, as data:\n" + fence(
+                str(context["prior_question"])
+            )
+        system_message = base_system_prompt + context_suffix
         messages: list[dict[str, str]] = [
             {"role": "system", "content": system_message},
             {"role": "user", "content": query_text},
@@ -851,7 +894,12 @@ class ProviderExecutionService:
         # omitted it). Threaded up so the run's actual cost can be measured
         # rather than estimated when every contributing call reported usage.
         usage = _extract_usage(parsed)
-        return LiveProviderResult(answer_text=content, sources=citations, usage=usage)
+        return LiveProviderResult(
+            answer_text=content,
+            sources=citations,
+            usage=usage,
+            is_truncated=_finish_reason_indicates_truncation(parsed),
+        )
 
     def call_with_prompt(
         self,
@@ -1036,6 +1084,12 @@ class LiveProviderResult:
     #: when the response omitted the ``usage`` object. Threaded up to the
     #: cost layer so a fully-captured run can report a measured actual cost.
     usage: TokenUsage | None = None
+    #: WP-D (F-07): the provider told us it stopped because it hit the
+    #: ``max_tokens`` ceiling (``finish_reason == "length"``), so this answer
+    #: is the model's output CUT SHORT, not its complete one. Defaults to
+    #: ``False`` — the honest reading of a response that carried no signal is
+    #: "no evidence of truncation", never "definitely truncated".
+    is_truncated: bool = False
 
 
 #: Internal sentinel returned by ``_post_openrouter`` when ````
@@ -1048,6 +1102,31 @@ class _SearchRejected:
 
 
 _SEARCH_REJECTED: _SearchRejected = _SearchRejected()
+
+
+def _finish_reason_indicates_truncation(payload: object) -> bool:
+    """Did the provider stop because it hit the token ceiling?
+
+    Reads ``choices[0].finish_reason`` and reports ``True`` only for the
+    documented ``"length"`` value. Every other shape — a payload that is not
+    a mapping, a missing/empty/non-list ``choices``, a non-mapping element,
+    an absent ``finish_reason``, or any other reason (``"stop"``,
+    ``"content_filter"``, a provider-specific string) — reports ``False``.
+
+    The asymmetry is deliberate and is the whole point: ``shortened`` becomes
+    a "(shortened)" marker on a user-visible answer, so a malformed or
+    unfamiliar response must never be able to *assert* truncation. Absence of
+    evidence is reported as absence, not as a defect we invented.
+    """
+    if not isinstance(payload, dict):
+        return False
+    choices = payload.get("choices")
+    if not isinstance(choices, list) or not choices:
+        return False
+    first = choices[0]
+    if not isinstance(first, dict):
+        return False
+    return first.get("finish_reason") == "length"
 
 
 def _extract_usage(payload: object) -> TokenUsage | None:
@@ -1214,6 +1293,26 @@ def _sanitize_source_url(url: str) -> str | None:
     metadata services is not a real citation.
     """
     if not isinstance(url, str) or not url:
+        return None
+    # Strip the ends FIRST, then judge what remains. Providers routinely emit a
+    # trailing newline or surrounding spaces on an otherwise perfectly good
+    # citation, and the inline-markdown path already strips before validating —
+    # rejecting those outright would silently DROP real sources and depress
+    # citation coverage, which is a product defect in a tool whose claim is
+    # source-backed answers. Reject injection, not sloppiness.
+    url = url.strip()
+    if not url:
+        return None
+    # A URL is a single token. One carrying a line break — or any other
+    # whitespace/control character — is not a URL, it is a payload: inlined
+    # into a prompt it forges its own line, and every downstream consumer
+    # (debate, synthesis, the evaluation judge) inlines sources this way.
+    # ``urlparse`` strips these for its own host check and then hands the
+    # ORIGINAL string back, so the host check passing says nothing about what
+    # the rest of the string will do. Reject here, at the producer, rather
+    # than flattening at each consumer — three consumers means the next one
+    # forgets. Unicode line separators (U+2028/U+2029/U+0085) count too.
+    if any(ch.isspace() or ord(ch) < 0x20 or ch in "  " for ch in url):
         return None
     if not url.startswith(("http://", "https://")):
         return None

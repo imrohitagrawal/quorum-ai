@@ -57,6 +57,21 @@ HARD_LIMIT_USD = Decimal("0.25")
 #: per-account 24h envelope, ~$0.078 -> ~$0.183 (3 -> 7 runs), which is a
 #: money decision rather than a side effect of a bug fix.
 #:
+#: WP-D RE-MEASURED AND RATIFIED (operator-approved). The figures above are
+#: F-01's and are kept for the audit trail; they are NOT current. The default
+#: mix now prices at **$0.0317/run**, so this cap admits **6 runs**, not the
+#: 7 F-01 measured. Two honest corrections moved it: the
+#: ``google/gemini-2.5-flash`` fallback output price (0.0012 -> 0.0025,
+#: measured against the live public catalog) and pricing the round-2 debate
+#: prompt's prior-critique input, without which ``max_cost_usd`` was not a
+#: true ceiling. Note the 8 -> 6 drop predates WP-D: the branch's earlier
+#: ``config.py`` cap raise (700->2000, 800->3000) already put the real figure
+#: at 6, and a stale test pin had been hiding it. This cap STAYS at 0.20 —
+#: raising it to hold the run count constant would be counter-tuning a safety
+#: weight to preserve a metric. Pinned by
+#: ``tests/integration/test_query_run_cost_guardrails.py::
+#: test_daily_cap_admits_the_number_of_runs_its_dollar_value_pays_for``.
+#:
 #: The decision that ships with F-01 is to LEAVE this at 0.20, because 0.20 was
 #: never derived from watching production spend and so was never calibrated
 #: against the inflated meter. ``git log -S 'DAILY_CAP_USD = Decimal("0.20")'``
@@ -697,6 +712,7 @@ class CostEstimationService:
         synthesis_sections: Decimal = Decimal(1),
         debate_output_override: Decimal | None = None,
         context_tokens: Decimal = Decimal(0),
+        price_round_two_prior_critique: bool = False,
     ) -> tuple[list[Decimal], Decimal, Decimal, Decimal, Decimal]:
         """The shared per-call token model, parameterised by the initial-answer
         output token count and the synthesis section count.
@@ -785,6 +801,25 @@ class CostEstimationService:
         upstream_answers_tokens = Decimal(4) * init_output_tokens
         debate_prompt_tokens = (
             system_tokens + query_tokens + upstream_answers_tokens + context_input_tokens
+            # Round 2's prompt also carries round 1's critique in full
+            # (``debate._debate_user_prompt`` appends ``prior_round``, sliced
+            # nowhere), so debate input is NOT the same for both rounds. Without
+            # this term ``max_cost_usd`` was not a true ceiling: real debate
+            # input exceeded the priced figure by up to one full critique, and
+            # WP-D's 700 -> 2000 raise nearly tripled the gap. The synthesis
+            # term below has always added ``2 * debate_output_tokens`` for
+            # exactly this reason, which is what marks the omission an
+            # oversight rather than a modelling choice.
+            #
+            # Added ONCE to ``raw_total`` below, NOT to this per-round figure.
+            # An earlier revision charged it to both rounds "to be safe"; that
+            # over-priced every estimate by one critique's input and MEASURED
+            # 9 of the 495 four-slot mixes over the shipped catalog flipping
+            # CONFIRM -> BLOCK on the over-charge alone. BLOCK is a HARD refusal
+            # (``confirmation_token`` is ``None``), so the user cannot proceed
+            # at all — "over-protective" is the wrong word for denying a run the
+            # exact model says is affordable. A fail-safe bound must be a
+            # ceiling, not an inflation.
         )
         # Both rounds share the same token model (the invariant the UI and the
         # breakdown tests rely on: ``by_stage`` round_1 == round_2).
@@ -806,7 +841,40 @@ class CostEstimationService:
         synthesis_cost = synthesis_sections * _cost(
             settings.synthesis_model_id, synthesis_prompt_tokens, synthesis_output_tokens
         )
-        raw_total = initial_total + Decimal(2) * debate_round_cost + synthesis_cost
+        # ROUND 2 ONLY: its prompt carries round 1's critique in full
+        # (``debate._debate_user_prompt`` appends ``prior_round``, sliced
+        # nowhere). Added here, once, rather than to ``debate_round_cost`` —
+        # that keeps the bound EXACT (no over-charge, so no affordable run is
+        # hard-refused) while leaving the displayed ``by_stage`` round_1 ==
+        # round_2 invariant intact. Without the term at all, ``max_cost_usd``
+        # was not a true ceiling, and WP-D's 700 -> 2000 raise nearly tripled
+        # the shortfall.
+        # Applied ONCE, and only for the BOUND
+        # (``price_round_two_prior_critique`` is set solely by
+        # :meth:`_estimate_bound_usd`, which returns a scalar and no
+        # breakdown). Two earlier shapes were both wrong:
+        #   * folding it into ``debate_prompt_tokens`` charged it to BOTH
+        #     rounds — MEASURED 9 of the 495 shipped-catalog mixes flipping
+        #     CONFIRM -> BLOCK on that over-charge alone, and BLOCK is a hard
+        #     refusal with no confirmation token, so a run the exact model
+        #     says is affordable became unrunnable;
+        #   * adding it to ``raw_total`` on the POINT path broke the
+        #     reconciliation invariant — ``by_stage`` stopped summing to
+        #     ``total``, because the term belongs to no single displayed stage.
+        # Bound-only keeps the ceiling EXACT and leaves both displayed
+        # contracts (round_1 == round_2, and both partitions reconciling)
+        # untouched.
+        prior_critique_input_cost = (
+            _cost(settings.debate_model_id, debate_output_tokens, Decimal(0))
+            if price_round_two_prior_critique
+            else Decimal(0)
+        )
+        raw_total = (
+            initial_total
+            + Decimal(2) * debate_round_cost
+            + prior_critique_input_cost
+            + synthesis_cost
+        )
         return initial_per_model, initial_total, debate_round_cost, synthesis_cost, raw_total
 
     def _estimate_bound_usd(
@@ -851,6 +919,9 @@ class CostEstimationService:
             synthesis_sections=Decimal(settings.cost_synthesis_sections),
             debate_output_override=Decimal(settings.cost_debate_output_tokens_cap),
             context_tokens=context_tokens,
+            # The bound is the only caller that must be a true CEILING, and the
+            # only one with no breakdown to reconcile.
+            price_round_two_prior_critique=True,
         )
         return raw_total.quantize(COST_DISPLAY_QUANTUM, rounding=ROUND_HALF_UP)
 

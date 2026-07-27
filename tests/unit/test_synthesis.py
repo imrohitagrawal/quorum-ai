@@ -457,27 +457,47 @@ def test_extract_citations_accepts_pre_extracted_content() -> None:
     assert [ref.url for ref in refs] == ["https://spec.example/page"]
 
 
-def test_synthesis_section_max_tokens_is_workstream_two_value() -> None:
-    """Workstream-2 bumped the per-section token cap from 500 to 800 so
-    the model can finish citation-coverage and failed-count sentences
-    without truncating mid-sentence. This test pins the new value so
-    an accidental revert is caught.
+def test_synthesis_section_max_tokens_matches_the_priced_cap() -> None:
+    """WP-D (F-07) raised the per-section token cap from 800 to 3000.
+
+    The value is pinned here so an accidental revert is caught, and it is
+    pinned *against ``settings.cost_synthesis_output_tokens``* rather than
+    against a bare literal alone: the enforced cap and the cap the cost
+    bound prices must move together, or ``max_cost_usd`` stops being a
+    true ceiling. Deriving the second assertion from config is what makes
+    this test catch the real failure mode (the two drifting apart) and not
+    merely a typo.
+
+    Bite proof: set either value to 800 and this reds.
     """
+    from product_app.config import settings
     from product_app.synthesis import SYNTHESIS_SECTION_MAX_TOKENS
 
-    assert SYNTHESIS_SECTION_MAX_TOKENS == 800
+    assert SYNTHESIS_SECTION_MAX_TOKENS == 3000
+    assert settings.cost_synthesis_output_tokens == SYNTHESIS_SECTION_MAX_TOKENS
 
 
-def test_user_prompt_includes_full_600_char_excerpt() -> None:
-    """Workstream-2 bumped the per-answer excerpt cap from 250 to 600
-    chars. The synthesis user_prompt must carry the longer excerpt
-    through so the LLM sees the model's actual stance (and any inline
-    citation links) instead of a truncated sliver.
+def test_user_prompt_carries_the_answer_up_to_the_derived_cap() -> None:
+    """WP-D (F-08) replaced the hardcoded 600-char per-answer excerpt with
+    ``SYNTHESIS_ANSWER_EXCERPT_MAX_CHARS``, derived from the token cap on the
+    call that produced the answer.
+
+    This asserts BOTH directions against the derived constant rather than a
+    literal, so it keeps biting when the cap moves:
+
+    * everything up to the cap survives — a regression back to 600 (or any
+      smaller slice) reds the first assertion;
+    * the cap is still enforced — deleting the slice entirely reds the second.
+
+    The old version of this test pinned 600 as a *feature* (``"x" * 601 not
+    in prompt``), which is exactly what F-08 set out to remove.
     """
     from product_app import synthesis as synth_mod
+    from product_app.config import settings
+    from product_app.synthesis import SYNTHESIS_ANSWER_EXCERPT_MAX_CHARS as CAP
 
-    # 800 chars of deterministic text so we can prove the slice point.
-    long_answer = "x" * 800
+    # Deliberately longer than the cap so the slice point is observable.
+    long_answer = "x" * (CAP + 200)
     answer = provider_stub_service.produce_initial_answers(
         account_id=uuid4(),
         query_run_id=uuid4(),
@@ -497,22 +517,47 @@ def test_user_prompt_includes_full_600_char_excerpt() -> None:
         failed_count=0,
         coverage_ratio=type("R", (), {"__str__": lambda self: "0.0"})(),
     )
-    # 800 chars in, sliced to 600; the prompt must carry the full 600.
-    assert ("x" * 600) in user_prompt
-    # And must NOT carry the trailing 200 that the old cap would have dropped.
-    assert ("x" * 601) not in user_prompt
+    # Everything up to the derived cap reaches the model...
+    assert ("x" * CAP) in user_prompt
+    # ...and the cap is still a cap.
+    assert ("x" * (CAP + 1)) not in user_prompt
+    # The behavioural invariant, not the tautology `CAP == max_tokens * 4`
+    # (which merely restates the definition and rescales with it): an answer of
+    # the longest length a slot is allowed to produce must reach synthesis
+    # whole. This reds if the excerpt is ever hardcoded below the answer cap.
+    longest_possible = "w" * (settings.initial_answer_max_tokens * 4)
+    answer.answer_text = longest_possible
+    prompt2 = synth_mod.synthesis_stub_service._user_prompt(
+        initial_answers=[answer],
+        debate_outputs=[],
+        failed_count=0,
+        coverage_ratio=type("R", (), {"__str__": lambda self: "0.0"})(),
+    )
+    assert longest_possible in prompt2, (
+        "a full-length initial answer is being truncated on its way into "
+        "synthesis — the excerpt cap is smaller than what a slot can emit"
+    )
 
 
-def test_user_prompt_includes_full_700_char_debate_excerpt() -> None:
-    """Workstream-2 bumped the per-round debate excerpt cap from 300 to
-    700 chars so the uncertainty section can see the actual claim in
-    the critique instead of a truncated prefix.
+def test_user_prompt_carries_the_critique_up_to_the_debate_derived_cap() -> None:
+    """WP-D (F-08): the per-round critique excerpt is now
+    ``SYNTHESIS_DEBATE_EXCERPT_MAX_CHARS``, derived from
+    ``DEBATE_ROUND_MAX_TOKENS`` — a critique cannot be longer than the debate
+    call that produced it was allowed to be.
+
+    The derivation is the contract, and the last assertion is what makes this
+    test worth having: pinning the literal 8000 would keep passing if someone
+    changed the debate cap without changing this excerpt, which is the exact
+    drift the derived form exists to prevent. (At the pre-F-07 cap of 700
+    tokens the correct value here was 2800, not 8000.)
     """
     from dataclasses import dataclass
 
     from product_app import synthesis as synth_mod
+    from product_app.debate import DEBATE_ROUND_MAX_TOKENS
+    from product_app.synthesis import SYNTHESIS_DEBATE_EXCERPT_MAX_CHARS as CAP
 
-    long_critique = "y" * 800
+    long_critique = "y" * (CAP + 200)
 
     @dataclass(frozen=True)
     class _FakeRound:
@@ -528,8 +573,31 @@ def test_user_prompt_includes_full_700_char_debate_excerpt() -> None:
         failed_count=0,
         coverage_ratio=type("R", (), {"__str__": lambda self: "0.0"})(),
     )
-    assert ("y" * 700) in user_prompt
-    assert ("y" * 701) not in user_prompt
+    assert ("y" * CAP) in user_prompt
+    assert ("y" * (CAP + 1)) not in user_prompt
+
+    # The assertion that actually bites. `CAP == DEBATE_ROUND_MAX_TOKENS * 4`
+    # would be a tautology — it restates the definition, so reverting F-07's
+    # cap to 700 rescales CAP, the fixture and both assertions above together
+    # and the test still passes. State the BEHAVIOURAL invariant instead: a
+    # critique of the longest length the debate is allowed to emit must reach
+    # the synthesis UNTRUNCATED. That reds if this excerpt is ever hardcoded
+    # (to 700, 2800 or 8000) while the debate cap says otherwise — which is
+    # the real defect, and the reason the plan ordered #3 before #4.
+    longest_possible = "z" * (DEBATE_ROUND_MAX_TOKENS * 4)
+    prompt2 = synth_mod.synthesis_stub_service._user_prompt(
+        initial_answers=[],
+        debate_outputs=cast(
+            "list[DebateOutput]",
+            [_FakeRound(round_number=1, critique_text=longest_possible)],
+        ),
+        failed_count=0,
+        coverage_ratio=type("R", (), {"__str__": lambda self: "0.0"})(),
+    )
+    assert longest_possible in prompt2, (
+        "a full-length debate critique is being truncated on its way into "
+        "synthesis — the excerpt cap is smaller than what the debate can emit"
+    )
 
 
 def test_recommendation_prompt_enforces_decision_support_caveat_and_gates() -> None:

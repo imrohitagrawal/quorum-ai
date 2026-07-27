@@ -20,7 +20,14 @@ from decimal import Decimal
 import pytest
 
 from product_app.config import settings
-from product_app.costs import CostBreakdown, cost_estimation_service
+from product_app.costs import (
+    CHARS_PER_TOKEN,
+    COST_DISPLAY_QUANTUM,
+    SOFT_THRESHOLD_USD,
+    CostBreakdown,
+    CostThresholdAction,
+    cost_estimation_service,
+)
 from product_app.model_slots import ModelSlot
 
 DEFAULT_MODEL_IDS = [
@@ -128,11 +135,23 @@ def test_max_cost_bound_is_at_or_above_the_point_estimate() -> None:
 
 
 def test_guardrail_keys_off_the_bound_not_the_point_estimate() -> None:
-    """The fail-safe: a run whose realistic point estimate is in the ALLOW band
-    (< $0.15) can still REQUIRE_CONFIRMATION because its worst-case bound crosses
-    the soft threshold. One opus slot + three cheap slots is exactly that case —
-    point ~$0.10 (ALLOW on its own) but bound ~$0.22 → confirmation required. The
-    old point-estimate rail would have waved it through."""
+    """The fail-safe: a run whose realistic point estimate sits in the ALLOW
+    band can still be gated, because the guardrail reads the worst-case BOUND.
+    One opus slot + three cheap slots is exactly that case — the old
+    point-estimate rail would have waved it through.
+
+    ASSERT THE INVARIANT, DERIVE THE LITERALS. This test used to pin
+    ``threshold_action is REQUIRE_CONFIRMATION``, which over-specified it: the
+    subject is *which figure the rail reads*, not which of the two gated bands
+    it lands in. That pin sat 0.7% below ``HARD_LIMIT_USD``, so WP-D's
+    correction to the debate bound (round 2 carries round 1's critique) tipped
+    the same mix into BLOCK and reddened a test whose invariant still held
+    perfectly. A fixture that close to a threshold is a hair-trigger either way.
+
+    So: assert the point estimate would have been ALLOWed, that the bound
+    crosses the soft threshold, and that the run was consequently NOT allowed.
+    That is the whole fail-safe, and it survives the band moving.
+    """
     est = cost_estimation_service.estimate(
         query_text="Compare frontier model safety features.",
         model_slots=_slots(
@@ -144,9 +163,20 @@ def test_guardrail_keys_off_the_bound_not_the_point_estimate() -> None:
             ]
         ),
     )
-    assert est.estimated_cost_usd < Decimal("0.15")  # ALLOW band on the point estimate
-    assert est.max_cost_usd is not None and est.max_cost_usd > Decimal("0.15")
-    assert est.threshold_action.name == "REQUIRE_CONFIRMATION"
+    # Derived from the live thresholds, not from hardcoded copies of them.
+    assert est.max_cost_usd is not None
+    # 1. On the point estimate alone this run would have been waved through...
+    assert est.estimated_cost_usd <= SOFT_THRESHOLD_USD
+    # 2. ...but its worst case crosses the soft threshold...
+    assert est.max_cost_usd > SOFT_THRESHOLD_USD
+    # 3. ...so it was gated. Either gated band proves the rail read the bound;
+    #    ALLOW would prove it read the point estimate, which is the defect.
+    assert est.threshold_action is not CostThresholdAction.ALLOW
+    # And state the counterfactual explicitly, so the test cannot pass for the
+    # wrong reason if the point estimate later drifts above the threshold too.
+    assert cost_estimation_service._threshold_for(est.estimated_cost_usd)[0] is (
+        CostThresholdAction.ALLOW
+    ), "the point estimate no longer lands in ALLOW; this fixture no longer tests the fail-safe"
 
 
 def test_bound_does_not_run_away_with_query_length() -> None:
@@ -250,3 +280,80 @@ def test_estimate_is_conservative_not_7x_low() -> None:
     assert cost >= Decimal("0.0123")
     # And not absurdly conservative — within ~3× of the measured baseline.
     assert cost <= Decimal("0.04")
+
+
+def test_bound_covers_the_round_two_prompt_that_carries_round_ones_critique() -> None:
+    """``max_cost_usd`` must be a TRUE ceiling on real debate spend.
+
+    Round 2's prompt carries the full round-1 critique (``debate.py``:
+    ``prior_round=round_one_text``, sliced nowhere), so round 2's INPUT is
+    larger than round 1's by up to one full critique. The token model priced
+    both rounds with one identical ``debate_prompt_tokens`` that had no
+    prior-round term at all — while the synthesis term right below it already
+    adds ``2 * debate_output_tokens`` for exactly the same reason, which is
+    what makes the omission an oversight rather than a modelling choice.
+
+    Inputs -> wrong output: any live run whose round-1 critique fills the cap.
+    Real debate input exceeds what the bound priced, so ``max_cost_usd`` — the
+    number the confirmation token binds the user to, and which ``costs.py``
+    documents as able to "only ever over-protect" — is below real worst-case
+    cost. F-07's 700 -> 2000 raise nearly tripled the unpriced term.
+
+    Bite proof: drop the prior-critique term from ``debate_prompt_tokens`` and
+    this reds.
+    """
+    from product_app.config import settings
+    from product_app.model_slots import openrouter_model_catalog_service
+
+    query = "Compare frontier model safety features."
+    slots = _slots(DEFAULT_MODEL_IDS)
+    est = cost_estimation_service.estimate(query_text=query, model_slots=slots)
+    assert est.max_cost_usd is not None
+
+    prices = openrouter_model_catalog_service.price_index()
+
+    def _cost(model_id: str, prompt_tokens: Decimal, output_tokens: Decimal) -> Decimal:
+        pin, pout = prices[model_id]
+        return pin * prompt_tokens / Decimal(1000) + pout * output_tokens / Decimal(1000)
+
+    # Reconstruct the true worst case from the ENFORCED caps, independently of
+    # the estimator's own arithmetic.
+    query_tokens = Decimal(len(query)) / CHARS_PER_TOKEN
+    system_tokens = Decimal(settings.cost_system_prompt_tokens)
+    search_tokens = Decimal(settings.cost_web_search_context_tokens)
+    search_fee = Decimal(str(settings.cost_web_search_request_fee_usd))
+    init_max = Decimal(settings.initial_answer_max_tokens)
+    debate_cap = Decimal(settings.cost_debate_output_tokens_cap)
+    upstream = Decimal(4) * init_max
+
+    initial = sum(
+        (
+            _cost(
+                slot.model_id,
+                system_tokens + (search_tokens if slot.search else Decimal(0)) + query_tokens,
+                init_max,
+            )
+            + (search_fee if slot.search else Decimal(0))
+            for slot in slots
+        ),
+        Decimal("0"),
+    )
+    round_one = _cost(settings.debate_model_id, system_tokens + query_tokens + upstream, debate_cap)
+    # The term the bound used to miss: round 2 also reads round 1's critique.
+    round_two = _cost(
+        settings.debate_model_id,
+        system_tokens + query_tokens + upstream + debate_cap,
+        debate_cap,
+    )
+    synthesis = Decimal(settings.cost_synthesis_sections) * _cost(
+        settings.synthesis_model_id,
+        system_tokens + query_tokens + upstream + Decimal(2) * debate_cap,
+        Decimal(settings.cost_synthesis_output_tokens),
+    )
+    true_worst_case = initial + round_one + round_two + synthesis
+
+    # Allow the 4dp display quantum, no more.
+    assert est.max_cost_usd >= true_worst_case - COST_DISPLAY_QUANTUM, (
+        f"max_cost_usd {est.max_cost_usd} is BELOW the true worst case "
+        f"{true_worst_case}: the bound is not a ceiling"
+    )
