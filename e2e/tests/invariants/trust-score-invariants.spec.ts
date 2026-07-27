@@ -439,6 +439,19 @@ test.describe("trust-score invariants (FR-016)", () => {
       const state = await surface.getAttribute("data-state");
       expect(state, `${label}: must not render the verified treatment`).not.toEqual("verified");
       if (wantState) expect(state).toEqual(wantState);
+      // The tampered input must NOT produce the verified band. In that path the
+      // score number element is removed entirely — confirm it is absent, not
+      // just blank. Headed mode is slower so use expect.poll for the settle.
+      const numberEl = surface.locator(".result-trust-score-number");
+      await expect
+        .poll(async () => await numberEl.count(), { timeout: 15_000 })
+        .toBe(0, `${label}: R1 — no score digit element after render settles`);
+      // WP-B/F-27: the poll above is a SETTLE, not the invariant. It was
+      // introduced as a REPLACEMENT for the line below, which left this test
+      // titled "zero digits" while asserting only that one known element is
+      // absent — a regression that emitted the score through ANY other node
+      // would have passed all ten tampered shapes. R1 (FR-016) is that the
+      // surface carries no digits at all; assert exactly that.
       const text = await surfaceText(page);
       expect(text, `${label}: R1 — no digits`).not.toMatch(/\d/);
       expect(text, `${label}: the unverified disclosure returns`).toContain(DISCLOSURE);

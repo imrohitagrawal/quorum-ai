@@ -153,6 +153,13 @@ const LONG_MESSY_ANSWER = (label: string) =>
   "3. **Expansion / contraction** — seat, usage, or tier changes, timestamped and attributable to a cohort.\n" +
   "4. **Churn signal** — the leading indicators (support escalations, usage decay) that precede a cancellation.\n\n" +
   "Without those events, every retention metric is a lagging autopsy. With them, you can build cohorted curves and, more importantly, intervene while a save is still possible. See https://example.com/retention/instrumentation for a reference event schema.\n\n" +
+  // A single UNBREAKABLE token far wider than a 375px column. Real provider
+  // output routinely contains one — a tracking URL, a content hash, a fully
+  // qualified identifier. Without it the golden fixture cannot exercise the
+  // `overflow-wrap` rule that stops such a token forcing horizontal page
+  // scroll, and that rule would ship untested (the same trap that let the
+  // `li::marker` override go unexercised).
+  "Reference build: `quorum_retention_instrumentation_reference_schema_v4_20260727_a1b2c3d4e5f6a7b8c9d0.json` — see https://example.com/retention/instrumentation/reference/schema/v4/quorum-retention-instrumentation-reference-schema-20260727.json for the canonical copy.\n\n" +
   "### Cohorting and the common trap\n\n" +
   "Cohort by **signup month** for acquisition-quality questions, but cohort by **activation month** for product questions — mixing the two is the single most common source of misleading retention charts. Always state the cohort definition on the chart itself; a curve without a stated denominator is not interpretable.\n\n" +
   "### What good looks like\n\n" +
@@ -169,6 +176,11 @@ export const SLOTS = [
 const CC = { material_claim_count: 12, cited_claim_count: 10, coverage_ratio: "0.85", target_ratio: "0.80", target_met: true };
 // The empty-citation case (#31 shape): a slot that answered but returned NO sources.
 const CC_EMPTY = { material_claim_count: 9, cited_claim_count: 0, coverage_ratio: "0.00", target_ratio: "0.80", target_met: false };
+// BELOW-TARGET coverage on an otherwise healthy run — the shape the server
+// actually emits today (F-03: cited_claim_count is a boolean per answer while
+// material_claim_count is ~1 per 200 chars, so a 4×1500-char run tops out near
+// 12.5%). Drives the verdict band's caution line.
+const CC_BELOW = { material_claim_count: 32, cited_claim_count: 4, coverage_ratio: "0.13", target_ratio: "0.80", target_met: false };
 const BY_MODEL = [
   { model_id: "openai/gpt-4o-mini", display_name: "GPT-4o-mini", usd: "0.034", kind: "model" },
   { model_id: "anthropic/claude-haiku-4.5", display_name: "Claude Haiku 4.5", usd: "0.062", kind: "model" },
@@ -254,6 +266,48 @@ export const goldenCompletedResp = () => ({
   result_generated_at_utc: "2026-07-10T12:00:00Z", demo_mode: false, live_count: 4, local_count: 0, material_claim_count: 12,
   actual_cost_usd: "0.188", actual_breakdown: breakdown("0.188"),
 });
+
+/**
+ * The CONSENSUS shape — 4 of 4 aligned, so `isConsensusResult()` is true and the
+ * band paints the one sanctioned large green surface.
+ *
+ * WHY this exists: `goldenCompletedResp()` is 3 of 4 — a DIVIDED panel — and
+ * carries `target_met: true` with no `synthesis_mode`. It therefore never
+ * renders the consensus band, the coverage caution line, or the provenance
+ * badge, so every `[data-consensus="true"]` rule was untested. That is exactly
+ * how F-04 shipped fully green with an amber caution and a blue badge rendering
+ * at ~1.15:1 on the dark-green band — invisible, on nearly every production run
+ * (the server defaults `synthesis_mode` to "simulated").
+ *
+ * It deliberately combines all three: green band + below-target coverage +
+ * non-live synthesis_mode. `revisedCount` stays 3 so the inferred-narration
+ * caption renders on the green surface too.
+ */
+export const goldenConsensusResp = () => {
+  const resp = goldenCompletedResp() as Record<string, any>;
+  resp.result.agreement = { aligned: 4, total: 4 };
+  resp.result.final_synthesis = {
+    ...resp.result.final_synthesis,
+    citation_coverage: CC_BELOW,
+    synthesis_mode: "simulated",
+    // Keep every field that RESTATES the numbers consistent with CC_BELOW and
+    // with 4-of-4. A fixture whose prose contradicts its own structured values
+    // is the dishonest shape these gates exist to catch, and it would quietly
+    // undermine any future assertion that reads that prose.
+    quality_checks: {
+      ...resp.result.final_synthesis.quality_checks,
+      citation_coverage_target_met: false,
+    },
+    source_support:
+      "Backed by **cited** sources on one of four responding models. Coverage ratio 0.13 against a 0.80 target.",
+    disagreement:
+      "No model **dissents**: all four converged on the same recommendation, including the secondary point about gating the export behind a manual review.",
+  };
+  // The top-level mirror of the same count (rendered elsewhere in the result
+  // view) must agree with citation_coverage.material_claim_count.
+  resp.material_claim_count = CC_BELOW.material_claim_count;
+  return resp;
+};
 
 const fulfil = (body: unknown, status = 200) => ({ status, contentType: "application/json", body: JSON.stringify(body) });
 
@@ -382,6 +436,39 @@ export async function driveToResult(page: Page) {
   // late-rendering surface cannot slip past as a spurious pass.
   await expect(page.locator("#result-verdict[data-consensus]")).toBeVisible({ timeout: 20000 });
   await expect(page.locator("#result-transcript-link")).toBeVisible({ timeout: 20000 });
+}
+
+/**
+ * Drive composer → run and STOP on the live-run view (the poll never
+ * completes). The live-run view hides the top bar and — unlike landing — does
+ * NOT get the floating control, so `#theme-toggle-live` is the only theme
+ * control a user has while a run is in flight.
+ */
+export async function driveToLiveRun(page: Page) {
+  await boot(page);
+  await baseRoutes(page);
+  let elapsed = 1000;
+  await page.route(/\/v1\/query-runs\/[0-9a-f-]{36}$/, (r) => {
+    elapsed += 1000;
+    r.fulfill(fulfil(goldenRunningResp(elapsed)));
+  });
+  await page.route(/\/v1\/query-runs$/, (r) =>
+    r.request().method() === "POST" ? r.fulfill(fulfil(goldenCreateResp())) : r.continue());
+  await fill(page);
+  await clickRunNow(page);
+  await expect(page.locator('[data-view="live-run"]')).toBeVisible({ timeout: 15000 });
+}
+
+/** Drive composer → "see the estimate" and stop on the cost-gate view. */
+export async function driveToCostGate(page: Page) {
+  await boot(page);
+  await page.route("**/v1/query-runs/estimate", (r) =>
+    r.fulfill(fulfil({ correlation_id: "corr-golden-est", cost_estimate: costEstimate("0.190", "require_confirmation"), model_slots: SLOTS, reasons: [] })));
+  await page.route("**/v1/query-runs/warnings", (r) => r.fulfill(fulfil({ warnings: [] })));
+  await page.route("**/v1/query-runs/active", (r) => r.fulfill(fulfil({ query_run_id: null })));
+  await fill(page);
+  await page.getByRole("button", { name: /see the estimate|estimate cost/i }).click();
+  await expect(page.locator("#gate-confirm")).toBeVisible({ timeout: 15000 });
 }
 
 /** From the result view, open the full debate transcript view. */

@@ -57,6 +57,22 @@
       } catch (e) {
         /* storage disabled (private mode): fall through to workspace-first. */
       }
+      // PR1/#6 theme gate (pre-paint): resolve the theme HERE, before the body
+      // paints, so a user whose stored choice (or OS preference) is dark never
+      // sees a flash of the light theme while the deferred app.js loads. The
+      // <html> element ships with data-theme="light" as the no-JS fallback;
+      // this overwrites it. ``initThemeToggle`` in app.js re-runs the identical
+      // resolution — this snippet is the paint-timing half, not the authority.
+      try {
+        var stored = window.localStorage.getItem("quorum.theme");
+        if (stored === "dark" || stored === "light") {
+          document.documentElement.setAttribute("data-theme", stored);
+        } else if (window.matchMedia && window.matchMedia("(prefers-color-scheme: dark)").matches) {
+          document.documentElement.setAttribute("data-theme", "dark");
+        }
+      } catch (e) {
+        /* storage disabled: keep the light default from the markup. */
+      }
     </script>
   </head>
   <body>
@@ -84,9 +100,23 @@
             <span class="status-pill-dot" aria-hidden="true"></span>
             <span id="connection-pill-text">Connecting</span>
           </span>
-          <button id="theme-toggle" class="toggle" type="button" aria-label="Toggle dark mode">&#9680;</button>
+          <button id="theme-toggle" class="toggle" data-theme-toggle type="button" aria-label="Toggle dark mode">&#9680;</button>
         </div>
       </header>
+
+      <!-- PR1/#6: the top bar is hidden on landing / result / live-run /
+           transcript (see app.css), which left those views with NO way to
+           reach dark mode. This floating control is the toggle for exactly
+           those views — app.css shows it only where the top bar is hidden, so
+           the user never sees two toggles at once. Both carry
+           ``data-theme-toggle`` and are wired by the same handler. -->
+      <button
+        id="theme-toggle-float"
+        class="toggle theme-toggle-floating"
+        data-theme-toggle
+        type="button"
+        aria-label="Toggle dark mode"
+      >&#9680;</button>
 
       <section id="error-region" class="status-banner" data-severity="error" tabindex="-1" role="alert" hidden>
         <div class="status-banner-icon" id="error-region-icon" aria-hidden="true">!</div>
@@ -399,6 +429,9 @@
               <div class="live-run-header-meta">
                 <span id="live-elapsed" class="live-elapsed mono" aria-hidden="true">0.0s elapsed</span>
                 <button id="live-stop" class="button live-stop" type="button">Stop run</button>
+                <!-- PR1/#6: see the result-header toggle for why this is
+                     in-header rather than a fixed floating control. -->
+                <button id="theme-toggle-live" class="toggle" data-theme-toggle type="button" aria-label="Toggle dark mode">&#9680;</button>
               </div>
             </div>
             <button
@@ -455,6 +488,11 @@
               <div class="result-header-actions">
                 <button id="result-copy" type="button" class="button result-action">Copy</button>
                 <button id="result-export" type="button" class="button result-action">Export</button>
+                <!-- PR1/#6: in-header toggle. A fixed floating control would
+                     overlay page content on narrow viewports (it visibly
+                     covered the trust-score card at 375/768). This view has a
+                     real header, so the control belongs in it. -->
+                <button id="theme-toggle-result" class="toggle" data-theme-toggle type="button" aria-label="Toggle dark mode">&#9680;</button>
               </div>
             </div>
 
@@ -595,6 +633,9 @@
                 <span id="transcript-meta" class="transcript-meta mono"></span>
               </div>
               <span id="transcript-status" class="transcript-status" data-consensus="false"></span>
+              <!-- PR1/#6: see the result-header toggle for why this is
+                   in-header rather than a fixed floating control. -->
+              <button id="theme-toggle-transcript" class="toggle" data-theme-toggle type="button" aria-label="Toggle dark mode">&#9680;</button>
             </div>
 
             <div class="transcript-body">

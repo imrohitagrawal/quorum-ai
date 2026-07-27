@@ -121,12 +121,21 @@ jobs:
         # the FR-016 trust-surface contract (trust-score-invariants). HARD gate:
         # continue-on-error was removed (the enforcement handoff); a red here is a
         # real regression and blocks the merge.
+        #
+        # WP-B/F-15: verdict-band + theme-toggle were written as blocking gates
+        # but never registered here — they were only swept by the visual-baseline
+        # SEEDING workflow, which does not gate a merge. An unregistered gate is
+        # not a gate. verdict-band pins the #8/#15 agreement-led band (incl. the
+        # AA contrast of every band surface on the green consensus state and the
+        # "never fabricate a coverage %" rule); theme-toggle pins #6 view by view.
         env:
           CI: "true"
         run: >-
           npx playwright test
           tests/invariants/rendering-invariants.spec.ts
           tests/invariants/trust-score-invariants.spec.ts
+          tests/invariants/verdict-band.spec.ts
+          tests/invariants/theme-toggle.spec.ts
           --project=chromium
           --retries=0
 

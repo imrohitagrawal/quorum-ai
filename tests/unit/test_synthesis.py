@@ -549,3 +549,59 @@ def test_recommendation_prompt_enforces_decision_support_caveat_and_gates() -> N
     # the failure disclosure are non-negotiable.
     assert "verbatim" in _RECOMMENDATION_PROMPT
     assert "first sentence" in _RECOMMENDATION_PROMPT
+
+
+def test_no_templating_prefix_leaks_into_sections() -> None:
+    """PR6/#8/#15: templated provenance must NOT ride in the prose.
+
+    The old code prepended "Heuristic fallback: " (later "[Template] ") to
+    every templated section, so internal jargon surfaced verbatim in the
+    user-facing recommendation. Provenance now travels structurally as
+    ``FinalSynthesis.synthesis_mode`` and is rendered as a badge.
+
+    This pins the PRODUCER, not the renderer: a client-side scrub would also
+    mangle genuine provider prose that happens to contain these words.
+    """
+    account_id = uuid4()
+    query_run_id = uuid4()
+    query = "Compare source-backed options with material disagreement"
+    model_slots = validate_model_slots(DEFAULT_MODEL_IDS)
+    initial_answers = provider_stub_service.produce_initial_answers(
+        account_id=account_id,
+        query_run_id=query_run_id,
+        query_text=query,
+        model_slots=model_slots,
+    )
+    debate_result = debate_stub_service.run_debate_rounds(
+        account_id=account_id,
+        query_run_id=query_run_id,
+        query_text=query,
+        initial_answers=initial_answers,
+    )
+    # No openrouter_key => every section takes the TEMPLATED path, which is
+    # exactly the path that used to carry the prefix.
+    result = synthesis_stub_service.produce_final_synthesis(
+        account_id=account_id,
+        query_run_id=query_run_id,
+        query_text=query,
+        initial_answers=initial_answers,
+        debate_outputs=debate_result.debate_outputs,
+    )
+    synthesis = result.final_synthesis
+    assert synthesis is not None
+
+    banned = ("[Template]", "Heuristic fallback", "Template]")
+    sections = {
+        "consensus": synthesis.consensus,
+        "disagreement": synthesis.disagreement,
+        "source_support": synthesis.source_support,
+        "uncertainty": synthesis.uncertainty,
+        "recommendation": synthesis.recommendation,
+    }
+    for name, text in sections.items():
+        for token in banned:
+            assert token not in (text or ""), f"{name} leaked internal jargon {token!r}: {text!r}"
+
+    # ...and the provenance the prefix used to convey is still available,
+    # structurally. Without a key no live call happens, so this is templated.
+    assert synthesis.synthesis_mode == "simulated"

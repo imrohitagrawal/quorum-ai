@@ -173,6 +173,85 @@ test.describe("rendering invariants (golden fixture)", () => {
     await driveToTranscript(page);
     expect(await pageScrollsHorizontally(page), "transcript view forces horizontal page scroll").toBe(false);
   });
+
+  // The test above NEVER calls setViewportSize, so for its whole life it has
+  // only ever asserted this at Playwright's 1280px default — where the layout is
+  // comfortable and nothing overflows. A 77px blowout at 375px sat behind that
+  // blind spot: `.result-synth-row` is `grid-template-columns: 132px 1fr` with no
+  // mobile breakpoint, and `1fr` resolves to `minmax(auto, 1fr)` whose auto
+  // minimum is the content's MIN-CONTENT — so a long unbreakable token in the
+  // synthesis body (`retention_flag=true`) pushed the row past the viewport and
+  // the session panel painted over the verdict band.
+  //
+  // Mobile is where a horizontal-scroll bug actually bites, so sweep the real
+  // breakpoints. 375 = iPhone SE/mini, 768 = tablet, 1440 = the design comp.
+  // Page-level scroll is NOT the whole story. A card that clips its own
+  // overflow hides the damage from the document: the transcript's opening cards
+  // measured clientWidth 271 with scrollWidth 624 — 353px of provider text
+  // silently cut off — while `document.scrollWidth` stayed clean. Content the
+  // user cannot read is a defect whether or not the page scrolls.
+  //
+  // Intentional scroll containers (overflow-x: auto/scroll, e.g. the wide
+  // positions table) are exempt: scrolling INSIDE a container that advertises
+  // itself as scrollable is the designed behaviour.
+  for (const width of [375, 768] as const) {
+    test(`no element silently clips its own content @ ${width}px`, async ({ page }) => {
+      await page.setViewportSize({ width, height: 900 });
+      await driveToResult(page);
+      await driveToTranscript(page);
+      await page.evaluate(() => (document as unknown as { fonts?: { ready: Promise<unknown> } }).fonts?.ready);
+
+      const clipped = await page.evaluate(() => {
+        const bad: { tag: string; cls: string; client: number; scroll: number; text: string }[] = [];
+        const root = document.getElementById("main-content");
+        if (!root) return bad;
+        for (const el of Array.from(root.querySelectorAll<HTMLElement>("*"))) {
+          if (el.scrollWidth <= el.clientWidth + 1) continue;
+          // Exempt this element or any ancestor that opts into scrolling.
+          let scrollable = false;
+          for (let n: HTMLElement | null = el; n && n !== root.parentElement; n = n.parentElement) {
+            const ox = getComputedStyle(n).overflowX;
+            if (ox === "auto" || ox === "scroll") { scrollable = true; break; }
+          }
+          if (scrollable) continue;
+          const cs = getComputedStyle(el);
+          if (cs.display === "none" || cs.visibility === "hidden") continue;
+          bad.push({
+            tag: el.tagName,
+            cls: (el.className || "").toString().slice(0, 45),
+            client: el.clientWidth,
+            scroll: el.scrollWidth,
+            text: (el.textContent || "").trim().slice(0, 45),
+          });
+        }
+        return bad;
+      });
+
+      expect(
+        clipped,
+        `elements clipping their own content at ${width}px:\n${clipped
+          .map((c) => `  ${c.tag}.${c.cls} client=${c.client} scroll=${c.scroll} — "${c.text}"`)
+          .join("\n")}`,
+      ).toEqual([]);
+    });
+  }
+
+  for (const width of [375, 768, 1440] as const) {
+    test(`the page never scrolls horizontally @ ${width}px (result + transcript)`, async ({ page }) => {
+      await page.setViewportSize({ width, height: 900 });
+      await driveToResult(page);
+      expect(
+        await pageScrollsHorizontally(page),
+        `result view forces horizontal page scroll at ${width}px`,
+      ).toBe(false);
+
+      await driveToTranscript(page);
+      expect(
+        await pageScrollsHorizontally(page),
+        `transcript view forces horizontal page scroll at ${width}px`,
+      ).toBe(false);
+    });
+  }
 });
 
 // The universally-valid layout invariant: the PAGE (document) must not scroll

@@ -591,6 +591,10 @@ components:
           $ref: '#/components/schemas/CitationCoverage'
         quality_checks:
           $ref: '#/components/schemas/SynthesisQualityChecks'
+        synthesis_mode:
+          type: string
+          title: Synthesis Mode
+          default: simulated
       type: object
       required:
       - status
@@ -882,6 +886,12 @@ components:
             type: array
           - type: 'null'
           title: Slot Search
+        context:
+          anyOf:
+          - additionalProperties: true
+            type: object
+          - type: 'null'
+          title: Context
         safety_acknowledgements:
           items:
             $ref: '#/components/schemas/SafetyAcknowledgement'

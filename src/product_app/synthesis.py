@@ -67,8 +67,17 @@ from product_app.synthesis_length import (
     truncate_section,
 )
 
-#: Prefix added to every templated fallback string.
-TEMPLATED_FALLBACK_PREFIX = "[Template] "
+#: PR6/#8/#15: templated-section provenance is now carried STRUCTURALLY by
+#: ``FinalSynthesis.synthesis_mode`` and rendered as an "Automated summary"
+#: badge, not smuggled into the prose as a text prefix. The old prefixes
+#: ("Heuristic fallback: ", then "[Template] ") leaked internal jargon into
+#: the user-visible recommendation — the exact complaint in issues #8/#15.
+#:
+#: Kept as an empty string rather than deleted so the concatenation sites read
+#: unchanged and a future reviewer can see where provenance USED to be encoded.
+#: If you are tempted to put text back here, add a ``synthesis_mode`` value and
+#: badge it instead — prose is not a metadata channel.
+TEMPLATED_FALLBACK_PREFIX = ""
 
 HIGH_STAKES_NOTICE_FRAGMENT = (
     "This summary is decision support only and is not medical, legal, "
@@ -944,7 +953,7 @@ def _safe_section_result(future: SectionFuture, label: str) -> SectionResult:
             extra={"section": label, "error": str(exc), "error_type": type(exc).__name__},
         )
         return (
-            TEMPLATED_FALLBACK_PREFIX + f"{label} section failed to build.",
+            f"The {label.lower()} section could not be produced for this run.",
             f"{label} section raised an exception: {type(exc).__name__}",
             None,
         )

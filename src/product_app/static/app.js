@@ -2533,6 +2533,46 @@
     if (resultDetailsToggleNode) meta.appendChild(resultDetailsToggleNode);
   }
 
+  /**
+   * WP-B/F-18. Parse a server ``coverage_ratio`` into a finite number, or null
+   * when the server did not actually measure one.
+   *
+   * The trap this closes: ``Number("")``, ``Number(null)``, ``Number("   ")``
+   * and ``Number([])`` are ALL 0 — and 0 is finite. So a `Number.isFinite`
+   * guard happily turned an absent measurement into "0% of material claims
+   * carried citations", which is a number the data cannot support, printed on
+   * the surface whose entire job is honesty about evidence.
+   *
+   * A genuine measured zero ("0.00", or the number 0) still returns 0. Only
+   * absence — or a value outside [0,1], which no honest measurement can be —
+   * returns null, and null renders the "—" no-data treatment rather than a
+   * number. Clamping was considered and rejected: a clamped 16 would print
+   * "Only 100% of material claims carried citations", indistinguishable from a
+   * legitimate 100% and self-contradictory as prose. Suppressing the figure is
+   * the honest failure mode; inventing a plausible one is not.
+   *
+   * SCOPE, honestly stated: the server's `CitationCoverage.coverage_ratio` is a
+   * required `Decimal` bounded `ge=0, le=1` (providers.py:97), so a conforming
+   * backend cannot send ""/null/out-of-range — FastAPI response validation
+   * rejects it first. This is defence in depth against a schema regression or a
+   * hand-rolled payload, not a fix for something observed in production. The
+   * `Number.isFinite`-only guard it replaces was genuinely wrong (Number("") is
+   * a finite 0); the exposure was narrower than "nearly every run".
+   */
+  function coverageRatioOrNull(raw) {
+    if (raw === null || raw === undefined) return null;
+    if (typeof raw === "number") return inUnitRange(raw) ? raw : null;
+    if (typeof raw !== "string") return null;
+    const trimmed = raw.trim();
+    if (trimmed === "") return null;
+    const parsed = Number(trimmed);
+    return inUnitRange(parsed) ? parsed : null;
+  }
+
+  function inUnitRange(n) {
+    return Number.isFinite(n) && n >= 0 && n <= 1;
+  }
+
   function renderVerdictBand(result, fs, ctx) {
     const band = el("result-verdict");
     if (!band) return;
@@ -2561,16 +2601,13 @@
       ),
     );
 
-    const recommendation = fs.recommendation ? String(fs.recommendation).trim() : "";
-    content.appendChild(
-      setProse(
-        mkEl("div", "result-verdict-text"),
-        recommendation,
-        "No recommendation was recorded for this run.",
-      ),
-    );
-
-    // Honest summary line — derived from real fields, no banned verbs.
+    // PR6/#8/#15: the band is AGREEMENT-LED. Previously the headline was
+    // ``fs.recommendation`` verbatim — which is citation-coverage-driven
+    // ("do not act on this without...") — sitting directly above "4 of 4 models
+    // aligned". Two different authorities stacked as one statement, which read
+    // as a self-contradiction. The deterministic tally now leads; the
+    // coverage caution is its own subordinate line; the recommendation prose
+    // follows as supporting detail.
     let summary;
     if (isConsensus) {
       summary = `${aligned} of ${total} models aligned`;
@@ -2580,7 +2617,53 @@
     } else {
       summary = `${aligned} of ${total} models aligned — the rest are preserved as disagreement below.`;
     }
-    content.appendChild(mkEl("span", "result-verdict-summary", summary));
+    content.appendChild(mkEl("span", "result-verdict-agreement", summary));
+
+    // Coverage caution — a SEPARATE line, only when coverage missed its target.
+    // Kept out of the agreement line on purpose: merging them is what produced
+    // the contradiction. ``coverage_ratio`` is a decimal string from the server.
+    const coverage = fs.citation_coverage || null;
+    if (coverage && coverage.target_met === false) {
+      // WP-B/F-18: ``Number.isFinite`` alone is NOT enough — Number(""),
+      // Number(null) and Number("   ") are all 0, which is finite, so a MISSING
+      // ratio rendered "Only 0% of material claims carried citations": a
+      // fabricated measurement on the most trust-sensitive line in the product.
+      // Reject anything that is not a non-empty numeric string/number BEFORE
+      // coercing. A genuine measured "0.00" still reports 0% — see
+      // verdict-band.spec.ts, which pins both directions.
+      const ratio = coverageRatioOrNull(coverage.coverage_ratio);
+      if (ratio !== null) {
+        content.appendChild(
+          mkEl(
+            "span",
+            "result-verdict-coverage",
+            `Only ${Math.round(ratio * 100)}% of material claims carried citations — treat this as provisional.`,
+          ),
+        );
+      }
+    }
+
+    // Provenance badge. ``synthesis_mode`` is the backend's own account of how
+    // this synthesis was produced; badging it replaces the "[Template] " /
+    // "Heuristic fallback: " prefix that used to leak into the prose itself.
+    if (fs.synthesis_mode && fs.synthesis_mode !== "live") {
+      content.appendChild(
+        mkEl(
+          "span",
+          "badge badge-summary",
+          fs.synthesis_mode === "fallback" ? "Partially automated" : "Automated summary",
+        ),
+      );
+    }
+
+    const recommendation = fs.recommendation ? String(fs.recommendation).trim() : "";
+    content.appendChild(
+      setProse(
+        mkEl("div", "result-verdict-text"),
+        recommendation,
+        "No recommendation was recorded for this run.",
+      ),
+    );
 
     // High-stakes caveat, if the synthesis carries one.
     if (fs.high_stakes_notice) {
@@ -2642,8 +2725,10 @@
     const coverage = fs && fs.citation_coverage ? fs.citation_coverage : null;
     let coveragePct = null;
     if (coverage) {
-      const ratio = Number(coverage.coverage_ratio);
-      if (Number.isFinite(ratio)) coveragePct = Math.round(ratio * 100);
+      // WP-B/F-18: same trap as the verdict band's caution line — an absent
+      // ratio must render the "—" no-data treatment, never a fabricated 0%.
+      const ratio = coverageRatioOrNull(coverage.coverage_ratio);
+      if (ratio !== null) coveragePct = Math.round(ratio * 100);
     }
     const answers = Array.isArray(res.model_answers) ? res.model_answers : [];
     // Count DISTINCT non-fallback sources (de-dupe by url/title) so two
@@ -6417,8 +6502,11 @@
 
   function initThemeToggle() {
     const root = document.documentElement;
-    const button = el("theme-toggle");
-    if (!button) return;
+    // PR1/#6: there are TWO toggles — the top-bar one and the floating one for
+    // the views that hide the top bar (app.css shows exactly one at a time).
+    // Wire every marked control so the pair can never drift out of sync.
+    const buttons = qsa("[data-theme-toggle]");
+    if (!buttons.length) return;
     // PR1/#6: honour stored choice on boot, else ``prefers-color-scheme``, else
     // the inline-bootstrap default ("light" from the no-JS fallback). ``data-theme``
     // is already set by the pre-paint snippet in workspace.html, but we re-read it
@@ -6438,20 +6526,26 @@
     applyStored();
     const setGlyph = () => {
       const isDark = root.dataset.theme === "dark";
-      button.textContent = isDark ? "☀" : "☾";
-      button.setAttribute(
-        "aria-label",
-        isDark ? "Switch to light theme" : "Switch to dark theme",
-      );
+      for (const button of buttons) {
+        button.textContent = isDark ? "☀" : "☾";
+        button.setAttribute(
+          "aria-label",
+          isDark ? "Switch to light theme" : "Switch to dark theme",
+        );
+      }
     };
     setGlyph();
-    button.addEventListener("click", () => {
-      root.dataset.theme = root.dataset.theme === "dark" ? "light" : "dark";
-      // PR1/#6: persist the choice so it survives reload. Guarded because
-      // ``localStorage`` throws in private-mode / storage-disabled browsers.
-      try { window.localStorage.setItem(QUORUM_THEME_KEY, root.dataset.theme); } catch (_) {}
-      setGlyph();
-    });
+    for (const button of buttons) {
+      button.addEventListener("click", () => {
+        root.dataset.theme = root.dataset.theme === "dark" ? "light" : "dark";
+        // PR1/#6: persist the choice so it survives reload. Guarded because
+        // ``localStorage`` throws in private-mode / storage-disabled browsers.
+        try { window.localStorage.setItem(QUORUM_THEME_KEY, root.dataset.theme); } catch (_) {}
+        // Update BOTH controls, not just the clicked one: the user can switch
+        // views and must not find a glyph contradicting the active theme.
+        setGlyph();
+      });
+    }
   }
 
   // First-visit gate for the marketing landing (screen 01).
