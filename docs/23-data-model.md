@@ -57,9 +57,109 @@ Retention is not finalized. Until product owner approval:
 
 See `docs/48-data-retention.md` for the retention decision record.
 
+## Shipped durable stores (SQLite) — not the planning baseline above
+
+Everything above this heading is the Release 1 **planning baseline** (see `## Scope`): a relational design that has not been built. Nothing in `## Tables` above exists as a real table today. This section is the opposite — it records the durable schema that actually ships, so the two are never confused.
+
+Source of truth: `src/product_app/feedback_store.py`. Every DDL and log string below is quoted verbatim from it.
+
+### Where it lives
+
+| Environment | Path | Set by |
+|---|---|---|
+| Production (Fly) | `/data/feedback_events.sqlite3` | `FEEDBACK_DB_PATH` in `fly.toml` `[env]`, on the `quorum_data` volume mounted at `/data` (`[[mounts]]`) |
+| Dev (default) | `.data/feedback_events.sqlite3` | `feedback_store.DEFAULT_DB_PATH`; `from_env()` creates the parent directory. `.data/` is gitignored |
+| Tests | `:memory:` | `feedback_store.configure_for_tests()`, which constructs `FeedbackStore(":memory:")` |
+
+The production path is pinned to the persistent volume deliberately: the rootfs default is wiped on every deploy, which previously erased the self-improving-loop history (issue #27, recorded in the `fly.toml` comment).
+
+Unlike its sibling `RUN_HISTORY_DB_PATH` — which `tests/conftest.py` pins to `:memory:` for the whole suite — `FEEDBACK_DB_PATH` is **not** pinned in tests. A test that imports `product_app.main` without setting it opens the on-disk dev default; only tests that opt into `configure_for_tests()` get `:memory:`.
+
+Ownership and concurrency are decided in [`docs/adr/0002-sqlite-single-writer-ceiling.md`](adr/0002-sqlite-single-writer-ceiling.md): one connection, one `RLock`, `journal_mode=DELETE`, no WAL. In production the application process is the **only** process that opens this file at all — the nightly `feedback-audit.yml` workflow runs on a GitHub runner and does not set `FEEDBACK_DB_PATH`, so it reads its own empty checkout-local database, not the volume. `run_history.sqlite3` is a sibling store on the same volume under the same ADR; its schema is out of scope here.
+
+**Neither opener is read-only.** `FeedbackStore.__init__` — reached both by the app at boot and by the audit job's own `feedback_audit._load_events_by_recorder` / `generate_status_md` (both call `FeedbackStore.from_env()`) — always opens an ordinary read-write `sqlite3.connect` and always runs the migration check in the same call. There is no separate read path that skips it. In production this is moot only because the audit job never sees the real volume (previous paragraph); it stops being moot the moment anyone points `FEEDBACK_DB_PATH` at `/data` by hand (e.g. to run the audit against the live file from `fly ssh console`, as the runbook's locked-database section describes) — whichever process opens that file first after a migration ships is the one that applies it, app or audit script alike.
+
+### Tables
+
+`events` — one row per recorder call. Created unguarded on every open (`FeedbackStore._SCHEMA`):
+
+```sql
+CREATE TABLE IF NOT EXISTS events (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    recorder TEXT NOT NULL,
+    event_type TEXT NOT NULL,
+    account_id TEXT,
+    query_run_id TEXT,
+    recorded_at TEXT NOT NULL,
+    payload TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS events_recorded_at_idx
+    ON events (recorded_at);
+CREATE INDEX IF NOT EXISTS events_recorder_idx
+    ON events (recorder, event_type);
+```
+
+`schema_migrations` — the applied-migration ledger (`FeedbackStore._MIGRATIONS_DDL`):
+
+```sql
+CREATE TABLE IF NOT EXISTS schema_migrations (name TEXT PRIMARY KEY, applied_at TEXT NOT NULL)
+```
+
+**Why `schema_migrations` is deliberately not part of `_SCHEMA`.** `_SCHEMA` runs unguarded in `__init__`. On an existing database every statement in it is already a no-op, so it needs no write. Adding a brand-new `CREATE TABLE` there would make the *first* open of an existing **read-only** database raise `attempt to write a readonly database` — turning "the relabel could not run" back into "Quorum does not start". So `schema_migrations` is created inside the migration runner's best-effort `try` instead. The source records this as measured, not theorised.
+
+### Applied migrations
+
+| Name | What it does | Rollback |
+|---|---|---|
+| `f01_preview_billing_relabel` | Relabels pre-F-01 estimate previews out of the billed event type | None; see below |
+
+#### `f01_preview_billing_relabel`
+
+Shipped with the F-01 fix (PR #95). Before that fix, `POST /v1/query-runs/estimate` — a pure preview — recorded `cost_guardrail_accepted`, the one event type both spend guards count, with a NULL `query_run_id`. The code fix stops *new* rows of that shape but is not retroactive, and this table is durable. `FeedbackStore.daily_spend_for` filters on `event_type` alone, so without the migration every preview written in the 24 h before the fix shipped keeps double-metering its account for a full rolling day afterwards — real users stay wrongly over-capped by the very bug that was just fixed.
+
+**Selection** (`_F01_PREVIEW_SELECT`):
+
+```sql
+SELECT id, payload FROM events
+WHERE recorder = 'cost'
+AND event_type = 'cost_guardrail_accepted'
+AND query_run_id IS NULL
+```
+
+**Rewrite.** For each matched row, both the `event_type` column and the `event_type` key inside the row's `payload` JSON are set to `cost_estimate_previewed`, via `UPDATE events SET event_type = ?, payload = ? WHERE id = ?`. Both, because the audit job keys off payload field names: a row whose column says "previewed" while its payload still says "accepted" is not an audit trail, it is two contradictory claims.
+
+**One-shot.** A marker row is inserted with `INSERT INTO schema_migrations (name, applied_at) VALUES (?, ?)`, where `name` is `f01_preview_billing_relabel` and `applied_at` is `datetime.now(UTC).isoformat()`. Every open creates the table `IF NOT EXISTS`, then checks for the marker (`_migration_applied`) and returns immediately when it is present.
+
+**Atomic.** The rewrite and the marker insert run inside one `BEGIN IMMEDIATE` transaction, with `ROLLBACK` on any exception. A crash mid-way leaves the database in the pre-migration state and the next open retries; there is no half-relabelled-and-marked state. `tests/integration/test_f01_preview_billing_backfill.py` pins this with a deliberately corrupt row.
+
+**Why it is marker-guarded rather than run on every boot.** The `WHERE` clause is a *policy* ("an accepted cost event with no run id is not a charge") and nothing enforces that policy on the write side. Run unguarded on every open, it would silently zero any *future* row of that shape. That is a **fail-open spend guard**: the direction it fails in is "the account is under-metered" — free money. Applying it exactly once, over the rows that exist the first time the fixed code opens the database (pre-fix rows by construction), bounds the blast radius to the migration it is, and needs no assumption about what any later writer does.
+
+**Rollback note** (required by `## Migration Strategy` below). The migration ships **no inverse and one is not safe to add**. `POST /v1/query-runs/estimate` passes `query_run_id=None, preview=True` (`query_runs.py`), which `costs.py` maps to `cost_estimate_previewed` — the exact shape the migration produces. A relabelled row and a natively-written post-fix preview are therefore **indistinguishable by content** — same `event_type`, same payload shape.
+
+`recorded_at < applied_at` is a **probable** signal that a row was touched by the migration, not a **sound** one — it is only guaranteed correct if the migration is guaranteed to run on the very first open of the fixed code, and it is not: the runner is best-effort (see the runbook's locked-database failure modes), so a transient failure can skip it on one boot while leaving the store fully able to write. Concretely: if an earlier boot hits the RESERVED-lock case and skips the migration, the app keeps writing *native* `cost_estimate_previewed` rows with `recorded_at` timestamps before the migration eventually succeeds on a later boot and stamps `applied_at` — and those native rows then satisfy `recorded_at < applied_at` despite never having been touched by the migration. The tell that this signal might be unreliable for a given database is the same one the runbook keys off: a `feedback_store: F-01 preview backfill did not run` `WARNING` in that instance's boot history means at least one boot skipped the migration, and the timestamp test cannot be trusted for rows recorded in that window. Absent any such warning across the database's whole history, the signal holds.
+
+An inverse would have to re-bill both the genuinely-relabelled rows and any native rows the timestamp test wrongly catches, restoring exactly the over-metering the migration exists to remove. The remedy for a bad relabel is a volume-snapshot restore, not an inverse migration.
+
+### Boot behaviour and operator signals
+
+The runner is invoked from `FeedbackStore.__init__`, so it runs on *every* store open. In production that is one open: the app process at startup. It is not retried inside a running process.
+
+Log lines, verbatim (`%s` are the runtime substitutions):
+
+| Level | Message | When |
+|---|---|---|
+| `INFO` | `feedback_store: relabelled %s pre-F-01 estimate-preview rows from cost_guardrail_accepted to cost_estimate_previewed` | Only when at least one row was repaired |
+| `WARNING` | `feedback_store: F-01 preview backfill did not run: %s` | The repair was attempted and failed (e.g. read-only volume) |
+
+> **Operator trap.** The `INFO` line is behind an `if relabelled:` guard. **Absence of the log line does not mean the migration did not run** — a successful migration that matched zero rows still writes its marker and logs nothing. The marker row in `schema_migrations` is the only reliable evidence.
+
+For what a read-only or locked volume means for the operator, and for the read-only checks that confirm the migration landed, see [`docs/runbooks/feedback-store-schema-migration.md`](runbooks/feedback-store-schema-migration.md).
+
 ## Migration Strategy
 
 - Use forward-only migrations once implementation begins.
 - Migration PRs must include rollback notes or a documented reason rollback is not safe.
 - Every table carrying account-owned data must include ownership and deletion/retention strategy before release.
 - Seed data must be synthetic and must not contain real prompts, credentials, provider responses, or personal data.
+
+The first migration actually applied under these rules is `f01_preview_billing_relabel`; its rollback note is in `### Applied migrations` above.
