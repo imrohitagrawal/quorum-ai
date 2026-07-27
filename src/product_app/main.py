@@ -649,10 +649,18 @@ def status_snapshot() -> dict[str, object]:
     reported as ``connected``/``disconnected``/``error`` health only; the
     on-disk database path is deliberately not exposed in this public
     response. The two unhealthy values are different faults with different
-    fixes: ``disconnected`` means no store was ever opened (the boot-time
-    open failed on a locked or unwritable volume, so persistence AND the 24h
-    per-account spend cap are off until the process is restarted), while
-    ``error`` means a store is present but its health query raised.
+    fixes: ``disconnected`` means no store was ever opened, so persistence AND
+    the 24h per-account spend cap are off until the process is restarted. It is
+    a NARROWER fault than "the volume is unhappy". MEASURED causes of a failed
+    boot-time open: an EXCLUSIVE lock, a RESERVED lock on a database with no
+    schema yet, and an unwritable volume with no database FILE yet. MEASURED
+    NOT to cause it: an unwritable volume whose database file already exists —
+    the production shape, since ``fly.toml`` pins ``FEEDBACK_DB_PATH`` to a file
+    on the mounted volume — and a RESERVED lock on an already-schema'd database.
+    Both of those open fine and report ``connected`` while every write is
+    swallowed, so ``connected`` is NOT by itself evidence that writes are
+    landing or that the spend cap is being fed. ``error`` means a store is
+    present but its health query raised.
     ``error_tracking`` is likewise a generic ``active``/``inactive``
     health value: the concrete vendor (and anything else useful for
     targeting it) is deliberately not named on this public surface.

@@ -21,6 +21,7 @@ import hmac
 import logging
 import os
 import secrets
+import time
 import warnings
 from collections.abc import Callable
 from dataclasses import asdict, dataclass
@@ -104,9 +105,20 @@ DAILY_CAP_USD = Decimal("0.20")
 #: guard that is still off. One record per minute is the middle: bounded at
 #: <=1440/day (nothing, next to the request log), and frequent enough that an
 #: alert rule on a multi-minute evaluation window keeps re-firing for as long as
-#: the store is down. Cardinality is asserted in
+#: the store is down.
+#:
+#: The window is measured against ``time.monotonic()``, NOT the wall clock. A
+#: wall clock can step backwards (NTP correction, VM clock resync, snapshot
+#: restore); ``now - last`` then goes negative and stays under the interval
+#: until real time has caught the step back up, so the "keeps re-firing"
+#: property above would not hold. MEASURED on the wall-clock version: a 1 h
+#: backward step followed by 1 h of traffic emitted 1 record where 61 were due
+#: — the only signal a bypassed money guard has, silenced for an hour by a
+#: clock event unrelated to the fault. Cardinality (both the ordinary window
+#: and the backward step) is asserted in
 #: ``tests/integration/test_feedback_store_locked_database.py::
-#: test_missing_store_skips_the_daily_cap_and_logs_it_once_per_window``.
+#: test_missing_store_skips_the_daily_cap_and_logs_it_once_per_window`` and
+#: ``::test_a_backward_wall_clock_step_does_not_silence_the_bypass_error``.
 DAILY_CAP_BYPASS_LOG_INTERVAL_S = 60.0
 
 #: Quantization step for ``CostEstimate.estimated_cost_usd``. The
@@ -300,6 +312,7 @@ class CostEstimationService:
         *,
         binding_secret: str | None = None,
         now_provider: Callable[[], datetime] | None = None,
+        monotonic_provider: Callable[[], float] | None = None,
     ) -> None:
         # C13: surface a warning when the binding secret is auto-
         # generated because ``QUORUM_TOKEN_SECRET`` is not set.
@@ -324,15 +337,25 @@ class CostEstimationService:
         self._binding_secret = (binding_secret or env_secret or secrets.token_hex(32)).encode()
         self._tokens: dict[str, _BoundToken] = {}
         self._lock = RLock()
-        #: When the "daily cap not enforced" ERROR was last emitted, for the
-        #: rate limit described on ``DAILY_CAP_BYPASS_LOG_INTERVAL_S``. Per
+        #: Monotonic reading at the last "daily cap not enforced" ERROR, for
+        #: the rate limit described on ``DAILY_CAP_BYPASS_LOG_INTERVAL_S``. A
+        #: MONOTONIC float, not a wall-clock ``datetime``: a backward wall-clock
+        #: step must not be able to silence a money guard's only signal. Per
         #: instance rather than module-global so the app's one singleton keeps
         #: one window while a test's throwaway service starts from silence.
-        self._cap_bypass_logged_at: datetime | None = None
+        self._cap_bypass_logged_at: float | None = None
         if now_provider is None:
             self._now: Callable[[], datetime] = lambda: datetime.now(UTC)
         else:
             self._now = now_provider
+        #: Separate seam from ``now_provider`` on purpose. ``_now`` drives token
+        #: TTL/expiry, which needs a real calendar timestamp; the suppression
+        #: window only needs elapsed seconds and must be immune to clock steps.
+        #: Injectable so the cardinality tests can drive elapsed time without
+        #: sleeping.
+        self._monotonic: Callable[[], float] = (
+            time.monotonic if monotonic_provider is None else monotonic_provider
+        )
 
     def estimate(
         self,
@@ -405,16 +428,24 @@ class CostEstimationService:
 
             store = get_store()
             if store is None:
-                # P1 / issue #101. The store is gone (a locked or unwritable
-                # volume at boot — ``FeedbackStore.__init__`` raises and
-                # ``main`` swallows it), so this guard is about to be skipped.
-                # The recorded operator decision is LOUD ONLY: the request is
-                # NOT denied and ``threshold_action`` is NOT changed, because
-                # failing closed here would refuse every priced request on a
-                # storage fault. What changes is that the bypass stops being
-                # invisible — before this, a spend guard could be off for the
-                # whole life of a process with nothing but one boot-time
-                # WARNING about "persistence".
+                # P1 / issue #101. The store is gone — the boot-time open
+                # raised out of ``FeedbackStore.__init__`` and ``main``
+                # swallowed it (MEASURED: an EXCLUSIVE lock, a RESERVED lock on
+                # a database with no schema yet, or an unwritable volume with
+                # no database FILE yet; an unwritable volume whose file already
+                # exists opens fine) — so this guard is about to be skipped.
+                # The decision taken in the working session on issue #101's
+                # "operator decision required" item is LOUD ONLY: the request
+                # is NOT denied and ``threshold_action`` is NOT changed,
+                # because failing closed here would refuse every priced request
+                # on a storage fault. That decision is REAL but not yet written
+                # down anywhere durable — as of this change #101 carries no
+                # comment recording it — so treat this comment as the rationale
+                # and the issue as the place it still needs to land. What
+                # changes here is that the bypass stops being invisible: before
+                # this, a spend guard could be off for the whole life of a
+                # process with nothing but one boot-time WARNING about
+                # "persistence".
                 self._log_daily_cap_bypassed()
             else:
                 already_spent = store.daily_spend_for(account_id)
@@ -471,11 +502,16 @@ class CostEstimationService:
         request threads cannot both decide they are the first — the point of a
         rate limit is a bounded record count, and a check-then-set race would
         emit one record per thread instead of one per window.
+
+        Elapsed time comes from ``self._monotonic()``, never the wall clock: see
+        ``DAILY_CAP_BYPASS_LOG_INTERVAL_S`` for the measured cost of getting
+        that wrong. The record's own timestamp still comes from the logging
+        framework's wall clock, so the line reads normally.
         """
-        now = self._now()
+        now = self._monotonic()
         with self._lock:
             last = self._cap_bypass_logged_at
-            if last is not None and (now - last).total_seconds() < DAILY_CAP_BYPASS_LOG_INTERVAL_S:
+            if last is not None and (now - last) < DAILY_CAP_BYPASS_LOG_INTERVAL_S:
                 return
             self._cap_bypass_logged_at = now
         _log.error(

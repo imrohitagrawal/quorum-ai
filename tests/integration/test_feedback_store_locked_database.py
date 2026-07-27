@@ -8,12 +8,18 @@ database is locked``; ``product_app.main`` catches it and the app boots with
 skipped** — measured A/B on the same account at the cap: BLOCK with the store,
 ALLOW plus a minted confirmation token without it.
 
-**The operator decision recorded for this change is LOUD ONLY, no behaviour
-change.** The cap stays skipped when the store is down — it stops being
+**The decision taken for this change is LOUD ONLY, no behaviour change.** It
+came out of the working session on issue #101's "operator decision required"
+item (item 3), where fail-closed was considered and declined: denying every
+priced request on a storage fault is the worse outage. That decision has **not
+yet been recorded on the issue** — #101 carries no comment stating it and no PR
+references it — so this docstring and the ``costs.py`` comment are currently its
+only written form. The cap stays skipped when the store is down; it stops being
 *silent*. So every test here that touches the money path asserts the returned
 ``CostEstimate`` is byte-identical to the one a healthy-store call produces,
 and asserts on the *log records* for the loudness. A test that made the
-degraded path BLOCK would be testing a policy the human explicitly rejected.
+degraded path BLOCK would be testing a policy that was explicitly declined —
+reopen the decision first, do not change it here.
 
 Two things this file pins that nothing else in the tree did:
 
@@ -89,7 +95,14 @@ _AT_THE_CAP_USD = DAILY_CAP_USD
 
 
 class _Clock:
-    """Injectable ``now`` for :class:`CostEstimationService`."""
+    """Injectable wall clock (``now_provider``) for :class:`CostEstimationService`.
+
+    Drives the token TTL/expiry logic. It does **not** drive the bypass-log
+    suppression window — see :class:`_MonoClock` — because a wall clock can step
+    backwards and a suppression window that trusts it goes quiet for the length
+    of the step (measured in
+    :func:`test_a_backward_wall_clock_step_does_not_silence_the_bypass_error`).
+    """
 
     def __init__(self, start: datetime) -> None:
         self._now = start
@@ -99,6 +112,23 @@ class _Clock:
 
     def advance(self, seconds: float) -> None:
         self._now += timedelta(seconds=seconds)
+
+
+class _MonoClock:
+    """Injectable monotonic source (``monotonic_provider``), in seconds.
+
+    Mirrors :func:`time.monotonic`: never decreases, and its zero point is
+    arbitrary. Only elapsed differences are meaningful.
+    """
+
+    def __init__(self, start: float = 1000.0) -> None:
+        self._t = start
+
+    def now(self) -> float:
+        return self._t
+
+    def advance(self, seconds: float) -> None:
+        self._t += seconds
 
 
 @pytest.fixture
@@ -433,7 +463,12 @@ def test_missing_store_skips_the_daily_cap_and_logs_it_once_per_window(
     """
     configure(None)
     clock = _Clock(datetime(2026, 7, 28, 12, 0, tzinfo=UTC))
-    service = CostEstimationService(binding_secret="x" * 32, now_provider=clock.now)
+    mono = _MonoClock()
+    service = CostEstimationService(
+        binding_secret="x" * 32,
+        now_provider=clock.now,
+        monotonic_provider=mono.now,
+    )
     account_id = uuid4()
 
     with caplog.at_level(logging.ERROR, logger=_COSTS_LOGGER):
@@ -446,7 +481,7 @@ def test_missing_store_skips_the_daily_cap_and_logs_it_once_per_window(
         assert len(_records(caplog, _COSTS_LOGGER, logging.ERROR)) == 1
 
         # The window re-opens, so the outage keeps announcing itself.
-        clock.advance(DAILY_CAP_BYPASS_LOG_INTERVAL_S + 1)
+        mono.advance(DAILY_CAP_BYPASS_LOG_INTERVAL_S + 1)
         service.estimate(query_text=_QUERY, model_slots=_SLOTS, account_id=account_id)
         assert len(_records(caplog, _COSTS_LOGGER, logging.ERROR)) == 2
 
@@ -458,6 +493,59 @@ def test_missing_store_skips_the_daily_cap_and_logs_it_once_per_window(
     # ...and the guard's OUTPUT is untouched: still fail-open, still a token.
     assert estimates[0].threshold_action is not CostThresholdAction.BLOCK
     assert estimates[0].confirmation_token is not None
+
+
+def test_a_backward_wall_clock_step_does_not_silence_the_bypass_error(
+    caplog: pytest.LogCaptureFixture,
+    restore_store: None,
+) -> None:
+    """The suppression window must not be steerable by the wall clock.
+
+    ``DAILY_CAP_BYPASS_LOG_INTERVAL_S`` claims the record is "frequent enough
+    that an alert rule on a multi-minute evaluation window keeps re-firing for
+    as long as the store is down". A window measured with ``datetime.now(UTC)``
+    cannot honour that: one backward step (NTP correction, VM clock resync, a
+    hypervisor snapshot restore) makes ``now - last`` negative, and it stays
+    below the interval until real time has caught the step back up. MEASURED on
+    the wall-clock implementation: a 1 h backward step followed by 1 h of
+    traffic emitted **1** record where 61 were due — the only signal a bypassed
+    money guard has, silenced for the whole hour by a clock event that has
+    nothing to do with the fault.
+
+    So the window reads a MONOTONIC source, which by contract never decreases.
+    The wall clock still drives token expiry (``now_provider``) and is what a
+    log line's timestamp is made of; it just no longer decides *whether* to log.
+    """
+    configure(None)
+    clock = _Clock(datetime(2026, 7, 28, 12, 0, tzinfo=UTC))
+    mono = _MonoClock()
+    service = CostEstimationService(
+        binding_secret="x" * 32,
+        now_provider=clock.now,
+        monotonic_provider=mono.now,
+    )
+    account_id = uuid4()
+
+    step_back_s = 3600.0
+    tick_s = 30.0
+    ticks = 120  # 1 h of traffic at one estimate per 30 s
+
+    with caplog.at_level(logging.ERROR, logger=_COSTS_LOGGER):
+        service.estimate(query_text=_QUERY, model_slots=_SLOTS, account_id=account_id)
+        assert len(_records(caplog, _COSTS_LOGGER, logging.ERROR)) == 1
+
+        # One NTP correction backwards by an hour. Real time keeps moving.
+        clock.advance(-step_back_s)
+
+        for _ in range(ticks):
+            clock.advance(tick_s)
+            mono.advance(tick_s)
+            service.estimate(query_text=_QUERY, model_slots=_SLOTS, account_id=account_id)
+
+        # 1 (the first call) + one per elapsed window over the following hour.
+        expected = 1 + int(ticks * tick_s // DAILY_CAP_BYPASS_LOG_INTERVAL_S)
+        assert expected == 61, expected  # guards the arithmetic above, not the code
+        assert len(_records(caplog, _COSTS_LOGGER, logging.ERROR)) == expected
 
 
 def test_the_bypass_log_does_not_change_the_returned_estimate(
