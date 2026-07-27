@@ -178,6 +178,43 @@ PNG before merge.
 - **Visual baseline seeding** via `seed-visual-baselines.yml` (workflow_dispatch)
   — once, at WP-H, never per-WP.
 
+### Open follow-ups from the second adversarial review (real, non-blocking)
+
+Verified by the reviewers, not fixed — none blocks WP-D, all deserve a home.
+
+1. **No price-drift detection anywhere.** `model_slots.py:519-530` and
+   `readiness.py:176` compare model **ids** only. Measured against live:
+   `google/gemini-2.5-flash` output is `0.0012` in `_FALLBACK_CATALOG` vs
+   **`0.0025`** live (52% under), `deepseek/deepseek-chat-v3.1` `0.00028` vs
+   **`0.00095`** (71% under). Degraded-mode estimates silently under-protect.
+   (WP-G1's own nvidia row is exact.) Pre-existing; worth its own issue.
+2. **Estimate/create can disagree for an API client.** `QueryRunEstimateRequest`
+   has no `context` field, so `query_runs.py:894` always reads `None`.
+   Reproduced: preview `200 allow est=0.0316`, create `402 COST_LIMIT_EXCEEDED
+   est=0.2066`, same account and query. Not reachable from the shipped UI. From
+   `4990b8a` (PR7), ships with #96. **WP-G2 must fix this anyway** — it is the
+   same-commit estimate+create trap.
+3. **Non-string `context` values 500 the create endpoint.** `{'prior_question':
+   5}`, `['a']`, `{'a': 1}` all → 500; should be 422. `query_runs.py:276-285`
+   validates keys only, then `costs.py` calls `.strip()`. Same provenance.
+4. **`prior_synthesis` is billed but never sent** — `providers.py:766-769`
+   injects only `prior_question` while `costs.py:779-780` prices the full
+   context. Already WP-G2's; now has evidence.
+5. **`validate_quality_contracts.py` residual evasions.** The anchored check
+   still passes `## Anti-examples-lite`, and headings inside fenced blocks or
+   HTML comments. Strictly tighter than what it replaced, so an unfinished
+   improvement rather than a regression — and it ships with **no test**.
+6. **The workflow-coverage guard is satisfied by comments.**
+   `tests/test_e2e_workflow_covers_all_invariant_specs.py:44` does
+   `assert spec in workflow` on raw text, so a spec named in a comment counts.
+   Four specs currently appear twice; delete their `run:` line and the guard
+   stays green. Pre-existing.
+7. **The drift tests are self-referential.** Deriving from `DEFAULT_MODEL_IDS`
+   was necessary (the old literals had inverted), but the replacement anchor is
+   missing: add `set(DEFAULT_MODEL_IDS) <= {e.model_id for e in
+   _FALLBACK_CATALOG}` — the one-line guard that would have caught WP-G1's
+   half-done swap on day one.
+
 ### Cleanup owed
 
 - `e2e/tests/review/` and `e2e/review-screenshots/` are throwaway and now
@@ -209,11 +246,20 @@ PNG before merge.
    both flags ~95 phantom failures appear.
 6. **Adding a UI surface means adding its shape to `e2e/fixtures/golden-run.ts`
    in the SAME change**, or the gate cannot see it.
-7. **Fan out review, never construction.** Subagents share one working tree.
+7. **Fan out review, never construction — and treat it as MANDATORY, not
+   optional polish.** Two fan-outs over this work found **12 confirmed
+   defects in code that was already RED/GREEN-proved, mutation-proved and
+   browser-checked**, including a money bug, a UI surface contradicting itself
+   on screen, and three tests that could not fail. Six were introduced by the
+   commit under review. **Review the fixes too** — the second pass existed
+   only because the first pass's fixes were unreviewed, and three findings
+   were in exactly that code. Distinct lenses beat headcount; the adjudicator
+   must be told to reject its own reviewers.
+8. **Fan out review, never construction.** Subagents share one working tree.
    Read-only recon and adversarial review in parallel; one sole tree-writer.
    The WP-C review — five refuters plus an adjudicator told to reject its own
    reviewers — found a genuine blocker the author had missed.
-8. **Don't counter-tune a safety weight** to hold a metric constant. Record the
+9. **Don't counter-tune a safety weight** to hold a metric constant. Record the
    shift and leave the weight alone.
 
 ---
@@ -260,7 +306,14 @@ subagents only for read-only recon and adversarial review, and have the
 adjudicator reject its own reviewers' unverified claims. A green test is not
 proof — look at a screenshot. Run e2e as:
   cd e2e && SESSION_RATE_LIMIT_PER_MINUTE=600 npx playwright test <spec> --project=chromium --workers=1
-Stop after WP-D is green and report before starting WP-E.
+Before calling WP-D done, run an adversarial fan-out over it (4-6 read-only
+refuters with distinct lenses + an adjudicator told to reject its own
+reviewers). This is MANDATORY, not optional: two such reviews on the preceding
+work found 12 confirmed defects that RED/GREEN proofs, mutation proofs and a
+browser check had all missed — including a money bug and three tests that
+could not fail. Review the FIXES it produces too.
+
+Stop after WP-D is green AND reviewed, then report before starting WP-E.
 
 SEPARATELY, and more urgent than the remaining UI work: Stream B's F-05 (a
 cancel is silently reverted — the pipeline keeps making billed calls and the run

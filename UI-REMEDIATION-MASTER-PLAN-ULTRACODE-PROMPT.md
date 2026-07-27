@@ -326,8 +326,56 @@ corrupt each other.**
 - **Contract-drift guard.** `openapi.yaml` already has an exact-bytes guard — F-25 proves it
   works. Extend the same pattern to the `/status` monitoring contract consumed by `ops.js`.
 
+### The rule that outranks the rest: fan out, or you are grading your own homework
+
+**Measured on this work, twice.** Two adversarial fan-outs (4-6 read-only
+refuters with distinct lenses + an adjudicator told to reject its own reviewers)
+found **12 confirmed defects in code that had already been RED/GREEN-proved,
+mutation-proved, and driven in a browser.** Six of them were introduced by the
+very commit under review, including:
+
+- a **money bug** — the cost accumulation rails added a worst-case *bound* to a
+  meter of *point* spend, so an account that had spent nothing could be told it
+  was out of budget, and the daily cap admitted one fewer run than it pays for;
+- a UI surface rendering `Source support 100%` directly above `3 of 4 models`,
+  under a tooltip *the same commit had just written* naming the wrong
+  denominator;
+- **three separate tests that could not fail**, each written by the author as
+  proof of the fix it was covering.
+
+It also **falsified a stated root cause**: "all 14 failures share one cause" was
+wrong, and a two-variable probe run by a reviewer showed a second defect masking
+them.
+
+The lesson is not "review is good". It is that **an author cannot see these
+classes of defect in their own work** — a vacuous test looks green, a wrong
+denominator looks consistent with the number beside it, and a confident
+attribution feels settled. Self-review, mutation proofs and a screenshot are all
+necessary here and were all insufficient.
+
+So: **no non-trivial change is done until an independent fan-out has tried to
+break it — including the fixes from the previous fan-out.** The second review
+existed only because the first review's fixes went unreviewed, and three of its
+findings were in exactly that code.
+
+Practical shape: distinct lenses beat headcount (money / "the author rewrote
+failing tests" / the gates themselves / contracts and persistence / scope); every
+finding must state inputs → wrong output; and any anomaly the author could not
+explain goes in as an **explicit target** — both times a reviewer bisected it to
+a single line.
+
 ### Prevention playbook — for a new project
 
+- **Budget for the fan-out from day one** (see above). Treat "the author says it
+  is done" as the *start* of verification, not the end. Encode it: a
+  non-trivial PR is not reviewable until an independent adversarial pass has run
+  over it, and over the fixes it produced.
+- **Assume your own tests are vacuous until mutated.** Every test ships with the
+  mutation that proves it fails without the change. Three tests in this project
+  passed against the exact defect they existed to catch.
+- **Never state a root cause without the probe that could falsify it.** If the
+  claim is "these N failures share one cause", revert that one cause and count
+  what remains. Twice here the answer was "nothing changed".
 - Decide the **honesty invariants first** ("no number on screen the data cannot support"),
   encode them as blocking tests before the UI exists.
 - Build the **messy golden fixture on day one** from real provider output — headings, bold,
