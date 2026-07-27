@@ -20,7 +20,7 @@ As of 2026-06-21, the following have been completed:
 **Implementation:**
 - Full MVP functionality: 4-model orchestration, debate, synthesis, cost guardrail, readiness probe
 - 218 tests passing, 93% coverage
-- Security: `__Host-` cookie prefix actually applied in production, `__Host-` migration helper, legacy header disabled by default, rate limiting on expensive endpoints, `QUORUM_TOKEN_SECRET` enforced at startup, time-based GC for in-memory state
+- Security: `__Host-` cookie prefix actually applied in production and read strictly — the unprefixed name is rejected outright, so the prefix guarantee cannot be bypassed (F-02) — legacy header disabled by default, rate limiting on expensive endpoints, `QUORUM_TOKEN_SECRET` enforced at startup, time-based GC for in-memory state
 - Performance: 4× parallelization of initial-answer calls (4× → 1× per-call latency), 5× parallelization of synthesis sections, single-flight catalog fetch with prewarm, O(1) price/short-name lookups
 
 **Operations:**
