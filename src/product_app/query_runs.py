@@ -142,6 +142,47 @@ class StageState(StrEnum):
     SKIPPED = "skipped"
 
 
+class BillableStage(StrEnum):
+    """The pipeline stages that can dispatch a BILLED provider call.
+
+    The initial-answer stage is absent on purpose: it is gated separately by
+    ``initial_fully_captured``, which already requires one recorded answer per
+    slot and so cannot be fooled by an empty list.
+    """
+
+    DEBATE = "debate"
+    SYNTHESIS = "synthesis"
+
+
+class StageBillingState(StrEnum):
+    """Where a billable stage got to in the usage-recording handshake (E2).
+
+    ``_actual_cost``'s honesty gate is ``all(usage is not None for ... in
+    <list>)``, and ``all([])`` is True — so an EMPTY usage list means two
+    opposite things and the gate could not tell them apart:
+
+    * the stage RAN and dispatched nothing billable (an HTTP 403/404 refusal,
+      no configured model id, live execution off) — the empty list is exact;
+    * the stage was ENTERED, calls were BILLED, and the code that records them
+      never ran — the empty list hides real dollars.
+
+    This marker supplies the missing fact. It keys off whether the RECORDING
+    code path itself ran, never off a downstream artifact: ``debate_outputs``
+    is appended on every run that reaches the debate stage whether or not
+    anything was billed, so gating on it would force ``estimated`` for honest
+    unbilled runs and re-open the ~4.8x overstatement PR #99 measured.
+    """
+
+    #: Never reached. Nothing could have been billed.
+    NOT_ENTERED = "not_entered"
+    #: Started — calls may have been dispatched and BILLED — and recording
+    #: never completed. Blocks ``measured``.
+    ENTERED = "entered"
+    #: The recording handshake completed. The usage list is authoritative, so
+    #: the ``all(usage is not None ...)`` check decides.
+    RECORDED = "recorded"
+
+
 TERMINAL_STATUSES = frozenset(
     {
         QueryRunStatus.COMPLETED,
@@ -443,6 +484,13 @@ class QueryRun:
     #: ``_actual_cost`` to decide whether the run's actual cost can be measured.
     debate_call_usages: list[tuple[int, TokenUsage | None]] = field(default_factory=list)
     synthesis_call_usages: list[TokenUsage | None] = field(default_factory=list)
+    #: E2: how far each billable stage got in the usage-recording handshake.
+    #: Read by ``_actual_cost`` to tell an honestly-empty usage list (nothing
+    #: was billable) from a silently-empty one (billed, never recorded). Both
+    #: stages start ``NOT_ENTERED``; see :class:`StageBillingState`.
+    billing_stages: dict[BillableStage, StageBillingState] = field(
+        default_factory=lambda: dict.fromkeys(BillableStage, StageBillingState.NOT_ENTERED)
+    )
 
     @property
     def is_terminal(self) -> bool:
@@ -651,6 +699,20 @@ class InMemoryQueryRunRepository:
             return self._query_runs[query_run_id]
         return last
 
+    def mark_billable_stage_entered(self, query_run_id: UUID, stage: BillableStage) -> QueryRun:
+        """Record that ``stage`` is about to run and may bill (E2).
+
+        Called immediately BEFORE the stage's orchestrator, so any path that
+        leaves without reaching the matching ``record_*`` — a raise, or an
+        early return that skips the recording call — leaves the marker on
+        ``ENTERED`` and blocks ``measured``.
+        """
+        with self._lock:
+            query_run = self._query_runs[query_run_id]
+            query_run.billing_stages[stage] = StageBillingState.ENTERED
+            query_run.updated_at = datetime.now(UTC)
+            return query_run
+
     def record_debate_outputs(
         self,
         query_run_id: UUID,
@@ -662,6 +724,10 @@ class InMemoryQueryRunRepository:
             query_run.debate_outputs = debate_outputs
             if live_call_usages is not None:
                 query_run.debate_call_usages = live_call_usages
+            # E2: reaching here IS the recording handshake, so the usage list
+            # from this point on is authoritative — empty means "nothing was
+            # billable", not "we never looked".
+            query_run.billing_stages[BillableStage.DEBATE] = StageBillingState.RECORDED
             query_run.updated_at = datetime.now(UTC)
             return query_run
 
@@ -676,6 +742,8 @@ class InMemoryQueryRunRepository:
             query_run.final_synthesis = final_synthesis
             if live_call_usages is not None:
                 query_run.synthesis_call_usages = live_call_usages
+            # E2: see ``record_debate_outputs``.
+            query_run.billing_stages[BillableStage.SYNTHESIS] = StageBillingState.RECORDED
             query_run.updated_at = datetime.now(UTC)
             return query_run
 
@@ -1617,6 +1685,11 @@ def _execute_query_run(query_run_id: UUID, account_id: UUID) -> None:
         ):
             _mark_remaining_stages(query_run_id, ["debate_round_2", "synthesis"])
         return
+    # E2: from here the debate stage may dispatch BILLED calls. Marked before
+    # the call, so a raise inside the orchestrator — or any path that returns
+    # without reaching ``record_debate_outputs`` — leaves ``ENTERED`` behind
+    # and the receipt cannot claim ``measured``.
+    query_run_repository.mark_billable_stage_entered(query_run_id, BillableStage.DEBATE)
     debate_result = debate_stub_service.run_debate_rounds(
         account_id=account_id,
         query_run_id=query_run_id,
@@ -1699,6 +1772,11 @@ def _execute_query_run(query_run_id: UUID, account_id: UUID) -> None:
         )
         return
     latest = query_run_repository.get(query_run_id)
+    # E2: same contract as the debate stage above. This one is not theoretical
+    # — ``final_synthesis is None`` below returns PARTIAL WITHOUT calling
+    # ``record_final_synthesis``, so five billed section calls would otherwise
+    # leave an empty list that ``all([])`` waves through as ``measured``.
+    query_run_repository.mark_billable_stage_entered(query_run_id, BillableStage.SYNTHESIS)
     synthesis_result = synthesis_stub_service.produce_final_synthesis(
         account_id=account_id,
         query_run_id=query_run_id,
@@ -2214,6 +2292,26 @@ def _result_response(query_run: QueryRun) -> QueryRunResultResponse:
     )
 
 
+def _stage_captured(stage: StageBillingState, usages_captured: bool) -> bool:
+    """Whether a billable stage's contribution to the bill is fully known (E2).
+
+    ``usages_captured`` is the pre-existing ``all(usage is not None ...)``
+    check over the stage's usage list. On its own it is vacuously True for an
+    EMPTY list, which is why the marker decides first:
+
+    * ``NOT_ENTERED`` — the stage never ran, so there is nothing to know.
+    * ``ENTERED``     — it ran and never finished recording; whatever the list
+      holds, it is not the whole story.
+    * ``RECORDED``    — the handshake completed, so the list is authoritative
+      and the usual check applies.
+    """
+    if stage is StageBillingState.NOT_ENTERED:
+        return True
+    if stage is StageBillingState.ENTERED:
+        return False
+    return usages_captured
+
+
 def _actual_cost(
     query_run: QueryRun,
 ) -> tuple[Decimal, CostBreakdown | None, Literal["estimated", "measured"]]:
@@ -2235,6 +2333,15 @@ def _actual_cost(
       billed-but-uncaptured call), or any live call omitted its usage, the run
       stays ``estimated``. It is the only way to guarantee that no billed call
       is silently omitted from a figure the UI presents as measured billing.
+    * E2: a debate/synthesis stage that was ENTERED but never completed its
+      usage recording also stays ``estimated``. An empty usage list is only
+      trustworthy once the stage's marker says the recording ran — see
+      :class:`StageBillingState` and :func:`_stage_captured`.
+
+    Deliberately NOT consulted: the run's STATUS. A cancelled/partial/timed-out
+    run whose captured calls are all present is still ``measured``, because its
+    figure is exact; swapping it for a pre-run estimate would overstate the
+    bill. Pinned by ``test_actual_cost_ignores_run_status_today``.
     """
     estimate = query_run.cost_estimate
 
@@ -2251,8 +2358,14 @@ def _actual_cost(
             for answer in initial_answers
         )
     )
-    debate_captured = all(usage is not None for _, usage in query_run.debate_call_usages)
-    synthesis_captured = all(usage is not None for usage in query_run.synthesis_call_usages)
+    debate_captured = _stage_captured(
+        query_run.billing_stages[BillableStage.DEBATE],
+        all(usage is not None for _, usage in query_run.debate_call_usages),
+    )
+    synthesis_captured = _stage_captured(
+        query_run.billing_stages[BillableStage.SYNTHESIS],
+        all(usage is not None for usage in query_run.synthesis_call_usages),
+    )
     if not (initial_fully_captured and debate_captured and synthesis_captured):
         return estimate.estimated_cost_usd, estimate.breakdown, "estimated"
 
