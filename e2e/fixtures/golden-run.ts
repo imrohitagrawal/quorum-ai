@@ -91,7 +91,7 @@ const MESSY_CONSENSUS =
 const MESSY_DISAGREEMENT =
   "Two models **dissent** on the secondary point (whether to gate the export behind a manual review). Preserved here rather than smoothed over.";
 const MESSY_SOURCE_SUPPORT =
-  "Backed by **cited** sources across all responding models. Source coverage 1.00 against a 0.80 target.";
+  "Backed by **cited** sources on three of four responding models. Source coverage 0.75 against a 0.80 target.";
 // Deliberately > 180 chars with a `**bold**` run STRADDLING character 180
 // (opening `**` at index 167, closing at 229): the old
 // `truncateText(uncertaintyText, 180)` sliced here mid-run, leaving a dangling
@@ -233,8 +233,14 @@ const goldenMovements = (revised: number) => SLOTS.map((s, i) => ({
 const goldenSynthesis = () => ({
   status: "completed", consensus: MESSY_CONSENSUS, disagreement: MESSY_DISAGREEMENT,
   source_support: MESSY_SOURCE_SUPPORT, uncertainty: MESSY_UNCERTAINTY,
-  recommendation: MESSY_RECOMMENDATION, citation_coverage: CC,
-  quality_checks: { citation_coverage_target_met: true, false_consensus_preserved: false, decision_support_framing_present: true, high_stakes_warning_required: true },
+  // Review A6: this is the RUN-level shape, so it must be the run-level
+  // constant, not the per-answer CC. goldenAnswer(2) is the zero-source slot,
+  // so a real server on these four answers emits 3 of 4 = 0.75, below target.
+  // It previously carried CC (answer_count: 1), which no server can emit for a
+  // run — and goldenCompletedResp() is what the blocking invariant, visual,
+  // degraded and a11y lanes all consume.
+  recommendation: MESSY_RECOMMENDATION, citation_coverage: CC_BELOW,
+  quality_checks: { citation_coverage_target_met: false, false_consensus_preserved: false, decision_support_framing_present: true, high_stakes_warning_required: true },
   high_stakes_notice: MESSY_CAVEAT, latency_ms: 4200, summary: MESSY_SUMMARY,
 });
 const progress = (stage: string, states: string[]) => ({

@@ -278,7 +278,12 @@ class SynthesisOrchestrationService:
         sourced_answer_count = sum(
             1
             for answer in initial_answers
-            if any(not source.is_fallback for source in answer.sources)
+            # Gated on the SAME field as the denominator (review A4): an answer
+            # that produced no text cannot contribute to the numerator, even if
+            # a caller hands one sources. Ungated, the ratio could exceed 1 and
+            # fail CitationCoverage's ``le=1`` bound with an opaque Decimal error.
+            if answer.citation_coverage.answer_count
+            and any(not source.is_fallback for source in answer.sources)
         )
         coverage = calculate_citation_coverage(
             answer_count=answer_count,
@@ -660,16 +665,26 @@ class SynthesisOrchestrationService:
         user_prompt: str,
         context: dict[str, Any] | None = None,
     ) -> tuple[str, str | None, LiveProviderResult | None]:
+        # WP-C review A1/A4: this prose sits directly under the "Source support"
+        # tile that renders ``sourced_answer_ratio``. It MUST use the same
+        # denominator, or a run with a failed slot shows "100%" above "3 of 4
+        # models" — two different denominators on one screen, which is the exact
+        # misreading WP-C exists to remove. ``answer_count`` is 1 for an answer
+        # that produced text and 0 otherwise, so this counts answers that came
+        # back. The numerator is gated on the same field so it can never exceed
+        # the denominator.
         cited = sum(
             1
             for answer in initial_answers
-            if any(not source.is_fallback for source in answer.sources)
+            if answer.citation_coverage.answer_count
+            and any(not source.is_fallback for source in answer.sources)
         )
-        total = len(initial_answers)
+        total = sum(answer.citation_coverage.answer_count for answer in initial_answers)
         if cited == 0:
             return "No model returned visible source references for this query.", None, None
         base = (
-            f"{cited} of {total} models returned visible source references. The references come "
+            f"{cited} of {total} responding model{'' if total == 1 else 's'} returned visible "
+            "source references. The references come "
             "from the primary provider; fallback sources are listed separately and are not "
             "counted toward the source coverage target."
         )

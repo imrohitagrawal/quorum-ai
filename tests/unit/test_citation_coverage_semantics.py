@@ -235,6 +235,94 @@ def test_three_of_four_sourced_still_misses_the_eighty_percent_target() -> None:
     assert target_met is False
 
 
+def _failed_answer(slot_index: int = 3) -> InitialModelAnswer:
+    """A slot that failed outright — no text, so nothing to source."""
+    slots = validate_model_slots(DEFAULT_MODEL_IDS)
+    answer = provider_execution_service._failed_answer(
+        account_id=uuid4(),
+        query_run_id=uuid4(),
+        model_slot=slots[slot_index],
+        credential_source=ProviderCredentialSource.APP_OWNED,
+        started_at=0.0,
+    )
+    assert answer.status is InitialAnswerStatus.FAILED, "precondition: the answer must fail"
+    return answer
+
+
+# ---------------------------------------------------------------------------
+# Runs that are NOT four clean successes — the shapes the first cut missed
+# ---------------------------------------------------------------------------
+
+
+def test_a_failed_slot_leaves_the_coverage_denominator_and_does_not_dilute_it() -> None:
+    """A slot that produced no text is out of the denominator entirely.
+
+    This pins the judgement call WP-C makes: a missing slot is penalised by
+    ``completeness``, not twice. Reverting ``_failed_answer``'s ``answer_count``
+    to 1 silently flips this run from 3/3 to 3/4 and changes the recommendation,
+    and before this test the whole suite stayed green when it did.
+    """
+    answers = _four_answers(texts=[_LONG_ANSWER] * 3, sourced=[True] * 3) + [_failed_answer()]
+    account_id, query_run_id = uuid4(), uuid4()
+    debate = debate_stub_service.run_debate_rounds(
+        account_id=account_id,
+        query_run_id=query_run_id,
+        query_text="Does the evidence support the proposal?",
+        initial_answers=answers,
+    )
+    result = synthesis_stub_service.produce_final_synthesis(
+        account_id=account_id,
+        query_run_id=query_run_id,
+        query_text="Does the evidence support the proposal?",
+        initial_answers=answers,
+        debate_outputs=debate.debate_outputs,
+    )
+    assert result.final_synthesis is not None
+    coverage = result.final_synthesis.citation_coverage
+    assert coverage.answer_count == 3, "the failed slot must not be in the denominator"
+    assert coverage.sourced_answer_count == 3
+    assert coverage.sourced_answer_ratio == Decimal("1.00")
+    assert coverage.target_met is True
+
+    # ...and the prose under the trust tile must state the SAME denominator.
+    # A "100%" tile above "3 of 4 models" is two denominators on one screen —
+    # the misreading this work package exists to remove (review A1).
+    assert "3 of 3 responding models" in result.final_synthesis.source_support, (
+        "source_support must count the answers that came back, not the slot count: "
+        f"{result.final_synthesis.source_support!r}"
+    )
+
+
+def test_the_prose_denominator_tracks_the_tile_on_a_mostly_failed_run() -> None:
+    """One survivor of four: the tile says 100%, so the prose must say 1 of 1."""
+    answers = _four_answers(texts=[_LONG_ANSWER], sourced=[True]) + [
+        _failed_answer(slot_index=i) for i in (1, 2, 3)
+    ]
+    ratio, target_met, _ = _run_coverage(answers)
+    assert ratio == Decimal("1.00")
+    assert target_met is True
+
+
+def test_a_run_sourced_only_by_fallbacks_reports_zero_at_RUN_level() -> None:
+    """The fallback exclusion must hold on the AGGREGATE, not just per answer.
+
+    Deleting the ``not source.is_fallback`` gate in synthesis.py used to be
+    invisible: the old denominator kept the mutant at ~0.33, still under target.
+    Under the new math the same mutation flips ``target_met`` False -> True and
+    turns "do not act on the consensus yet" into "the source coverage target is
+    met" (review A3).
+    """
+    slots = validate_model_slots(DEFAULT_MODEL_IDS)
+    answers = [
+        _answer_with(answer_text=_LONG_ANSWER, sources=[_fallback_source()], model_slot=slots[i])
+        for i in range(4)
+    ]
+    ratio, target_met, quality_check = _run_coverage(answers)
+    assert ratio == Decimal("0.00")
+    assert target_met is False
+    assert quality_check is False
+
+
 # ---------------------------------------------------------------------------
 # Per-answer semantics, and the fallback exclusion that must survive
 # ---------------------------------------------------------------------------

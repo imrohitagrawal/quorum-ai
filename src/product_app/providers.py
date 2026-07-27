@@ -43,7 +43,7 @@ from urllib.parse import urlparse
 from urllib.request import Request, urlopen
 from uuid import UUID
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
 
 from product_app.config import RuntimeEnvironment, settings
 from product_app.feedback_store import record_event as _record_feedback_event
@@ -123,6 +123,24 @@ class CitationCoverage(BaseModel):
     sourced_answer_ratio: Decimal = Field(ge=Decimal("0"), le=Decimal("1"))
     target_ratio: Decimal = CITATION_COVERAGE_TARGET
     target_met: bool
+
+    @model_validator(mode="after")
+    def _numerator_cannot_outrun_denominator(self) -> CitationCoverage:
+        """More sourced answers than answers is not a number, it is a bug.
+
+        Reachable only by a caller that gates the numerator on a different
+        predicate than the denominator — which is exactly the class of defect
+        WP-C removed. Without this the failure surfaces as ``sourced_answer_ratio
+        Input should be <= 1``, an opaque Decimal-range error that names neither
+        field. Say what actually went wrong instead.
+        """
+        if self.sourced_answer_count > self.answer_count:
+            raise ValueError(
+                f"sourced_answer_count ({self.sourced_answer_count}) exceeds "
+                f"answer_count ({self.answer_count}): the numerator and the "
+                "denominator must be gated on the same predicate"
+            )
+        return self
 
 
 #: Upper bound on a plausible per-call token count. Real completions are far

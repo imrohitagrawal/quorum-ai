@@ -2008,7 +2008,15 @@ def _result_response(query_run: QueryRun) -> QueryRunResultResponse:
     # summed off ``citation_coverage``, back when coverage's denominator WAS
     # this figure; coverage now counts answers, so the two are independent.
     material_claim_count = sum(
-        estimate_material_claim_count(answer.answer_text) for answer in query_run.initial_answers
+        estimate_material_claim_count(answer.answer_text)
+        for answer in query_run.initial_answers
+        # Review A5: ``estimate_material_claim_count`` floors at 1 even for
+        # empty text, so summing over EVERY slot invents a claim for each
+        # failed / cancelled / deadline-exceeded answer — a run where all four
+        # slots timed out would report 4 material claims over zero characters
+        # of output, and that value is persisted to SQLite. Skip the slots that
+        # produced nothing. (Before WP-C these paths carried an explicit 0.)
+        if answer.answer_text.strip()
     )
     agreement, position_movements = build_agreement_and_positions(
         initial_answers=query_run.initial_answers,

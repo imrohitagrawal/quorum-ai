@@ -120,7 +120,9 @@ def _aggregate_coverage(answers: list[InitialModelAnswer]) -> CitationCoverage:
     """Reproduce ``synthesis.py``'s aggregate coverage exactly."""
     answer_count = sum(a.citation_coverage.answer_count for a in answers)
     sourced_answer_count = sum(
-        1 for a in answers if any(not source.is_fallback for source in a.sources)
+        1
+        for a in answers
+        if a.citation_coverage.answer_count and any(not source.is_fallback for source in a.sources)
     )
     return calculate_citation_coverage(
         answer_count=answer_count,

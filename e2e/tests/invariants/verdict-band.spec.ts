@@ -356,7 +356,23 @@ test.describe("PR6 — verdict band is agreement-led (#8/#15)", () => {
   });
 
   test("coverage at target renders NO caution line", async ({ page }) => {
-    await driveWith(page, goldenCompletedResp()); // CC.target_met === true
+    // The other direction of the caution-line rule. This used to lean on
+    // goldenCompletedResp() being at target, but that fixture is now honestly
+    // BELOW target (slot 3 returns no sources -> 3 of 4 = 0.75; review A6), so
+    // the at-target shape is supplied explicitly. Keeping this test is the
+    // point: without it, "always render the caution" would pass.
+    await driveWith(
+      page,
+      withSynthesis({
+        citation_coverage: {
+          answer_count: 4,
+          sourced_answer_count: 4,
+          sourced_answer_ratio: "1.00",
+          target_ratio: "0.80",
+          target_met: true,
+        },
+      }),
+    );
     await expect(page.locator(".result-verdict-coverage")).toHaveCount(0);
   });
 

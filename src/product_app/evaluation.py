@@ -918,6 +918,8 @@ def evaluate_layer_a(
             # synthesis.py. Failed / cancelled slots carry ``answer_count = 0``.
             answer_count=sum(a.citation_coverage.answer_count for a in initial_answers),
             sourced_answer_count=sum(
+                # Gated on ``answer_count`` for the same reason as synthesis.py
+                # (review A4): the numerator must never outrun the denominator.
                 # COVERAGE is deliberately PRIMARY-ONLY and stays ``is_fallback``-
                 # keyed — the OPPOSITE of grounding / judge-evidence (host-keyed).
                 # The citation-coverage metric measures the MODEL's OWN ``:online``
@@ -927,7 +929,7 @@ def evaluate_layer_a(
                 # Do NOT switch this to _is_placeholder_source.
                 1
                 for a in initial_answers
-                if any(not s.is_fallback for s in a.sources)
+                if a.citation_coverage.answer_count and any(not s.is_fallback for s in a.sources)
             ),
         )
         coverage_ratio = float(aggregate.sourced_answer_ratio)
