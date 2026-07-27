@@ -298,7 +298,15 @@ Verified by the reviewers, not fixed — none blocks WP-D, all deserve a home.
 
 ## 4. Fresh-session prompt
 
+> The leading `ultracode` is deliberate and should not be stripped. It turns the
+> multi-agent opt-in on for the WHOLE session rather than for one authorised
+> step, which is what §3 rule 7 requires: fan out for the read-only recon at the
+> start of WP-D, again over WP-D itself, and again over the fixes that review
+> produces. Without it each fan-out depends on a single sentence further down.
+
 ```text
+ultracode
+
 Read AGENTS.md, then UI-REMEDIATION-MASTER-PLAN-ULTRACODE-PROMPT.md, then
 WP-D-TO-CLOSEOUT-ULTRACODE-PROMPT.md in full before editing anything.
 
