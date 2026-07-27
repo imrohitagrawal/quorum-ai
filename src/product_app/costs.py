@@ -45,6 +45,48 @@ HARD_LIMIT_USD = Decimal("0.25")
 #: daily cap reads from the durable SQLite feedback store (not the
 #: bounded in-memory ring buffer) and rejects any estimate that, when
 #: added to the account's 24h spend, would exceed this value.
+#:
+#: THE MONEY ENVELOPE (recorded decision, F-01).
+#: Until F-01 the meter behind this cap counted every run twice — ``POST
+#: /v1/query-runs/estimate`` recorded ``cost_guardrail_accepted`` for a run
+#: that had not started — so the cap admitted only HALF the runs its dollar
+#: value pays for. MEASURED on the default 4-slot mix ($0.0261/run):
+#: 3 completed runs before the 402, against a meter reading $0.1827 of which
+#: only ~$0.078 was real spend. Fixing the meter therefore MOVES the real
+#: per-account 24h envelope, ~$0.078 -> ~$0.183 (3 -> 7 runs), which is a
+#: money decision rather than a side effect of a bug fix.
+#:
+#: The decision that ships with F-01 is to LEAVE this at 0.20, because 0.20 was
+#: never derived from watching production spend and so was never calibrated
+#: against the inflated meter. ``git log -S 'DAILY_CAP_USD = Decimal("0.20")'``
+#: gives commit 9c50239 ("cost: raise daily cap to $0.20 so confirmation band
+#: is reachable"): the value comes from an ORDERING constraint —
+#: ``SOFT_THRESHOLD_USD < DAILY_CAP_USD < HARD_LIMIT_USD``, or the
+#: require-confirmation band is unreachable and the confirmation flow becomes
+#: dead code. VERIFIED the other way: setting this back to 0.10 to preserve
+#: the pre-fix real envelope re-breaks
+#: ``test_high_cost_query_requires_confirmation_before_creation`` and
+#: ``test_high_cost_query_accepts_matching_confirmation_token`` — exactly the
+#: regression 9c50239 fixed. Lowering the envelope, if the operator wants that,
+#: therefore has to move the whole three-threshold ladder, not this constant
+#: alone.
+#:
+#: WHAT THIS IS NOT. The envelope above is PER ACCOUNT, and an account is a
+#: free, self-issued identity: ``GET /v1/session`` mints one on demand
+#: (``main.browser_session`` -> ``auth.issue_or_resume_session``), no payment
+#: instrument, no email, no proof of anything. So this constant is NOT a bound
+#: on what the deployment can be made to spend — the deployment-level bound is
+#: (accounts an attacker can mint) x this value, and the only thing limiting
+#: the first factor is the per-IP session bucket
+#: (``query_runs._InMemoryIpRateLimiter.CAPACITY`` = 30/min, per IP, in-process
+#: only). Read as an operator ratification, "$0.20" is the per-user blast
+#: radius of an honest mistake, not the day's worst case. A real spend ceiling
+#: for the deployment is a separate control and does not exist yet.
+#:
+#: The envelope is now asserted, not emergent:
+#: ``tests/integration/test_query_run_cost_guardrails.py::
+#: test_daily_cap_admits_the_number_of_runs_its_dollar_value_pays_for``
+#: fails if either the meter or this value moves.
 DAILY_CAP_USD = Decimal("0.20")
 
 #: Quantization step for ``CostEstimate.estimated_cost_usd``. The
@@ -422,6 +464,7 @@ class CostEstimationService:
         estimated_cost_usd: Decimal,
         threshold_action: CostThresholdAction,
         confirmed: bool,
+        preview: bool = False,
     ) -> None:
         # Map the (threshold_action, confirmed) pair to an event type.
         #  - BLOCK  → cost_guardrail_blocked (the request was refused)
@@ -429,10 +472,22 @@ class CostEstimationService:
         #  - REQUIRE_CONFIRMATION + confirmed=True → cost_guardrail_accepted
         #  - ALLOW  → cost_guardrail_accepted (the request was allowed
         #    without confirmation, ``confirmed=False``)
+        #
+        # F-01: ``preview=True`` marks a call from ``POST /estimate``, which
+        # only shows the user what a run *would* cost — nothing has been spent.
+        # It must NOT record ``cost_guardrail_accepted``, because both spend
+        # guards (``_cumulative_spend_for`` here and
+        # ``FeedbackStore.daily_spend_for``) count exactly that type, so a
+        # preview would bill the account for a run that never happened — and
+        # bill it again when the user actually starts the run. The preview is
+        # still recorded, under a name that says what happened, so the audit
+        # trail and the estimate-time BLOCK/Sentry path are untouched.
         if threshold_action is CostThresholdAction.BLOCK:
             event_type = "cost_guardrail_blocked"
         elif threshold_action is CostThresholdAction.REQUIRE_CONFIRMATION and not confirmed:
             event_type = "cost_confirmation_required"
+        elif preview:
+            event_type = "cost_estimate_previewed"
         else:
             event_type = "cost_guardrail_accepted"
         cost_event_recorder.record(
@@ -778,7 +833,9 @@ class CostEstimationService:
 
         Only ``cost_guardrail_accepted`` events count — these are
         the events where the estimate was charged. ``BLOCK`` events
-        were never billed, and ``REQUIRE_CONFIRMATION`` events are
+        were never billed, ``cost_estimate_previewed`` events are a
+        ``POST /estimate`` preview of a run that has not started
+        (F-01), and ``REQUIRE_CONFIRMATION`` events are
         also not charged because the request was abandoned or the
         user cancelled.
         """
