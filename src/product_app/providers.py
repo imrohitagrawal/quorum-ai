@@ -34,6 +34,7 @@ import re
 from dataclasses import asdict, dataclass
 from decimal import Decimal
 from enum import StrEnum
+from http.client import HTTPException
 from math import ceil
 from threading import RLock
 from time import perf_counter
@@ -643,7 +644,25 @@ class ProviderExecutionService:
             query_text=query_text,
             model_slot=model_slot,
         )
-        if result is None or isinstance(result, _SearchRejected):
+        if result is None or isinstance(result, _SearchRejected | _DispatchedUnmeasured):
+            return None
+        # F-06: ``_post_openrouter`` now returns a real result for an EMPTY
+        # completion so the debate/synthesis path can record the usage the
+        # provider charged for. The initial-answer path must NOT see that
+        # change: before F-06 an empty completion arrived here as ``None``, and
+        # a non-``None`` result flips ``provider_attempt_order`` to
+        # OPENROUTER_SEARCH in ``produce_initial_answer``, so an empty slot
+        # would report a live attempt it never usefully made.
+        # ``provider_attempt_order`` is a user-visible response field
+        # (openapi.yaml), which is the actual casualty — MEASURED: dropping this
+        # guard does NOT corrupt ``initial_fully_captured``, because that gate
+        # also requires ``provider_path is OPENROUTER_SEARCH`` and
+        # ``token_usage is not None``, and both stay wrong either way. The
+        # guard is deliberately ``not
+        # result.answer_text`` and NOT ``.strip()`` — a whitespace-only
+        # completion was served as a COMPLETED live answer before F-06 and
+        # still is.
+        if not result.answer_text:
             return None
         return result
 
@@ -653,7 +672,7 @@ class ProviderExecutionService:
         openrouter_key: str,
         query_text: str,
         model_slot: ModelSlot,
-    ) -> LiveProviderResult | _SearchRejected | None:
+    ) -> LiveProviderResult | _SearchRejected | _DispatchedUnmeasured | None:
         bare_model_id = model_slot.model_id
 
         # L2: per-slot search opt-out. When ``model_slot.search`` is
@@ -705,7 +724,7 @@ class ProviderExecutionService:
         model_id: str,
         system_prompt: str | None = None,
         max_tokens: int | None = None,
-    ) -> LiveProviderResult | _SearchRejected | None:
+    ) -> LiveProviderResult | _SearchRejected | _DispatchedUnmeasured | None:
         # ``_post_openrouter`` accepts a custom system prompt and
         # ``max_tokens`` cap. The debate and synthesis services pass their
         # own caps; the initial-answer search path now passes
@@ -734,7 +753,7 @@ class ProviderExecutionService:
         model_id: str,
         messages: list[dict[str, str]],
         max_tokens: int | None = None,
-    ) -> LiveProviderResult | _SearchRejected | None:
+    ) -> LiveProviderResult | _SearchRejected | _DispatchedUnmeasured | None:
         payload: dict[str, object] = {
             "model": model_id,
             "messages": messages,
@@ -759,8 +778,6 @@ class ProviderExecutionService:
             # 404 / 400 on the ``:online`` variant is the documented
             # signal that this model does not support the search
             # suffix; the caller retries with the bare model id.
-            # All other HTTP errors (401, 429, 5xx) bubble up as
-            # ``None`` so the local-simulation fallback fires.
             # Log non-benign errors at WARNING so a revoked key or
             # rate limit is visible to operators (detection gap if
             # we silently return).
@@ -774,25 +791,102 @@ class ProviderExecutionService:
                     "model_id": model_id,
                 },
             )
+            # F-06 billing classification. A rejected REQUEST (bad JSON body,
+            # bad/insufficient credentials, unknown model, rate limit) is
+            # refused before any token is generated, so nothing was billed and
+            # the caller must be free to keep the run ``measured``. Any other
+            # status — 5xx above all — can follow a generation that already
+            # consumed tokens, so it is reported as dispatched-but-unmeasured.
+            if exc.code in _UNBILLED_HTTP_STATUSES:
+                return None
+            return _DISPATCH_UNMEASURED
+        except URLError as exc:
+            # ``URLError`` is CPython's own signal that the OPENER failed, i.e.
+            # before the request reached the model: DNS failure, connection
+            # refused, TLS handshake failure. Nothing was billed.
+            #
+            # A CONNECT timeout arrives here as ``URLError(reason=TimeoutError())``
+            # and demonstrably never reached the model, so on the evidence it is
+            # unbilled. It is nevertheless classified as possibly-billed: the
+            # opener does not tell us which phase timed out, and misreading a
+            # post-generation timeout as unbilled would understate a CHARGE.
+            # Erring the other way only overstates a receipt's uncertainty.
+            # (The timeout that genuinely cannot be told apart from a slow
+            # generation is the one out of ``getresponse()``, which arrives as a
+            # BARE ``TimeoutError`` and is handled by the catch-all below.)
+            if isinstance(exc.reason, TimeoutError):
+                return _DISPATCH_UNMEASURED
             return None
-        except (URLError, TimeoutError):
-            return None
+        except Exception as exc:
+            # F-06 (finding A): the catch-all is the point. A torn body
+            # (``http.client.IncompleteRead``), a dropped keep-alive
+            # (``RemoteDisconnected``), a TLS record error (``ssl.SSLError``) or
+            # a non-UTF-8 body (``UnicodeDecodeError``) are none of the classes
+            # above, so before this clause they escaped the whole provider stack
+            # — and ``_safe_section_result`` swallowed them into ``live=None``,
+            # leaving a BILLED call with no usage entry at all. The invariant
+            # this establishes: once ``urlopen`` has been called, this method
+            # RETURNS; it never raises.
+            #
+            # The classification is deliberately ASYMMETRIC. A handful of
+            # PRE-dispatch failures are not ``URLError`` and land here too — a
+            # non-latin-1 header value raises ``UnicodeEncodeError`` out of
+            # ``http.client.putheader`` before a byte leaves the process — and
+            # they are reported as possibly-billed. That errs toward
+            # ``estimated``, which overstates a receipt's uncertainty; the
+            # opposite error understates a CHARGE, which is the dishonesty this
+            # whole change exists to prevent. When in doubt, assume billed.
+            #
+            # NOTE for test authors: an ``AssertionError`` raised inside a
+            # ``urlopen`` double is an ``Exception`` and is swallowed here. To
+            # assert that no request is dispatched, count calls and assert the
+            # count — do not rely on an assertion inside the double.
+            _log_post_dispatch_failure(
+                "upstream_provider_transport_error",
+                exc=exc,
+                model_id=model_id,
+                expected=_EXPECTED_TRANSPORT_ERRORS,
+            )
+            return _DISPATCH_UNMEASURED
 
         try:
             parsed = json.loads(raw_body)
-        except json.JSONDecodeError:
-            return None
-        content = _extract_message_content(parsed)
-        # Pass ``content`` in so ``_extract_citations`` reuses the already
-        # extracted message text for its inline-link fallback instead of
-        # walking the choices/message tree a second time.
-        citations = _extract_citations(parsed, content=content)
-        if not content:
-            return None
-        # Capture the provider-reported token usage (``None`` if the response
-        # omitted it). Threaded up so the run's actual cost can be measured
-        # rather than estimated when every contributing call reported usage.
-        usage = _extract_usage(parsed)
+            content = _extract_message_content(parsed)
+            # Pass ``content`` in so ``_extract_citations`` reuses the already
+            # extracted message text for its inline-link fallback instead of
+            # walking the choices/message tree a second time.
+            citations = _extract_citations(parsed, content=content)
+            # Capture the provider-reported token usage (``None`` if the response
+            # omitted it). Threaded up so the run's actual cost can be measured
+            # rather than estimated when every contributing call reported usage.
+            #
+            # F-06 (finding C): this used to sit BELOW an ``if not content:
+            # return None`` guard, so an HTTP 200 whose completion was empty
+            # (``finish_reason="length"`` against a tight token cap) threw away
+            # the provider's own statement of what it had just charged. The
+            # usage is now extracted first and an empty completion is returned
+            # as a real result carrying it; deciding what an empty answer MEANS
+            # belongs to the caller, not here.
+            usage = _extract_usage(parsed)
+        except Exception as exc:
+            # A body arrived, so the call billed. This clause spans json.loads
+            # AND the three extractors, so it covers two different situations:
+            # an unreadable body, and OUR OWN code failing on a perfectly good,
+            # priceable response (a RecursionError out of ``json.loads`` on a
+            # pathologically nested body; a bug in ``_extract_usage``). The
+            # second silently degrades a measurable run to ``estimated``, which
+            # is the safe direction but is a real cost of the breadth — so the
+            # log event is the signal to watch. The breadth is deliberate: on
+            # the DEBATE path there is no ``_safe_section_result`` to swallow an
+            # escaping exception, so anything raised here would otherwise take
+            # the billed call's usage down with it.
+            _log_post_dispatch_failure(
+                "upstream_provider_body_unreadable",
+                exc=exc,
+                model_id=model_id,
+                expected=_EXPECTED_BODY_ERRORS,
+            )
+            return _DISPATCH_UNMEASURED
         return LiveProviderResult(answer_text=content, sources=citations, usage=usage)
 
     def call_with_prompt(
@@ -812,9 +906,23 @@ class ProviderExecutionService:
         does NOT attempt the ``:online`` suffix — the debate and
         synthesis stages are second-pass analysis over the model
         answers already gathered, and a fresh web search is not what
-        we want at that point. It also does not retry on 404: any
-        failure is treated as a hard ``None`` so the caller can fall
-        back to the templated path.
+        we want at that point. It also does not retry on 404.
+
+        F-06 — the return value carries BILLING provenance, and callers
+        depend on the distinction:
+
+        * ``None`` — no charge is possible. Either no request left this
+          process, or the provider refused it before inference (see
+          :data:`_UNBILLED_HTTP_STATUSES`, or a connection that never
+          landed). The caller must record NO usage entry, so a run whose
+          only failure was an unbilled 404 stays honestly ``measured``.
+        * a result with BLANK ``answer_text`` — a request was dispatched and
+          may have been billed. ``usage`` is the provider's own statement of
+          the charge when the response body reached us (an empty completion),
+          and ``None`` when it did not (5xx, timeout, torn body). The caller
+          must record an entry, so an unmeasurable charge forces
+          ``estimated`` instead of vanishing from an ``all([])`` gate.
+        * a result with text — the normal case.
         """
         if not openrouter_key or not model_id:
             return None
@@ -825,6 +933,8 @@ class ProviderExecutionService:
             system_prompt=system_prompt,
             max_tokens=max_tokens,
         )
+        if isinstance(result, _DispatchedUnmeasured):
+            return LiveProviderResult(answer_text="", sources=[], usage=None)
         if result is None or isinstance(result, _SearchRejected):
             return None
         return result
@@ -988,6 +1098,73 @@ class _SearchRejected:
 
 
 _SEARCH_REJECTED: _SearchRejected = _SearchRejected()
+
+
+#: Internal sentinel returned by ``_post_openrouter`` when a request WAS
+#: dispatched — so the provider may already have generated (and billed for) a
+#: completion — and we captured no usage for it. Distinct from ``None``, which
+#: after F-06 means the strictly stronger "the request was refused before
+#: inference, so nothing was billed". The distinction is what lets a run whose
+#: only failure was an unbilled 404 stay ``measured`` while a run with a torn
+#: body, a read timeout or a 5xx is correctly downgraded to ``estimated``.
+class _DispatchedUnmeasured:
+    """Sentinel class; the module exports a single instance below."""
+
+
+_DISPATCH_UNMEASURED: _DispatchedUnmeasured = _DispatchedUnmeasured()
+
+
+#: HTTP statuses OpenRouter returns by REJECTING the request outright: a
+#: malformed body (400), a missing/invalid/revoked key (401), no credit (402),
+#: a forbidden model or region (403), an unknown model id (404), and a rate
+#: limit (429). Each is decided before any token is generated, so no charge is
+#: possible. Every other status is treated as possibly-billed.
+_UNBILLED_HTTP_STATUSES: frozenset[int] = frozenset({400, 401, 402, 403, 404, 429})
+
+
+#: Post-dispatch failures a healthy deployment genuinely produces: a torn or
+#: truncated body and a dropped keep-alive (``http.client.HTTPException``), a
+#: TLS record error or reset socket (``OSError``, which ``ssl.SSLError``
+#: subclasses), and a non-UTF-8 body (``UnicodeDecodeError``).
+_EXPECTED_TRANSPORT_ERRORS: tuple[type[BaseException], ...] = (
+    HTTPException,
+    OSError,
+    UnicodeDecodeError,
+)
+
+#: Post-dispatch failures that are genuinely the BODY's fault rather than ours:
+#: malformed JSON (``JSONDecodeError`` ⊂ ``ValueError``) and pathologically
+#: nested JSON (``RecursionError``).
+_EXPECTED_BODY_ERRORS: tuple[type[BaseException], ...] = (ValueError, RecursionError)
+
+
+def _log_post_dispatch_failure(
+    event: str,
+    *,
+    exc: BaseException,
+    model_id: str,
+    expected: tuple[type[BaseException], ...],
+) -> None:
+    """Log a failure that reached us AFTER the request was dispatched.
+
+    ``expected`` selects the LEVEL ONLY — every exception, recognised or not,
+    is classified ``_DISPATCH_UNMEASURED`` by the caller regardless. Guessing a
+    RETURN VALUE from an exception class is exactly what F-06 finding A was, so
+    the classification stays a catch-all; but an unrecognised class is far more
+    likely to be a bug in our own response handling than a real network event,
+    and it now degrades a receipt to ``estimated``, so it is logged at ERROR
+    rather than lost among transient WARNINGs.
+
+    Only the exception's CLASS NAME is recorded — never ``str(exc)`` and never
+    a traceback. An exception message here can carry key material verbatim: a
+    non-latin-1 character in an ``Authorization`` header raises
+    ``UnicodeEncodeError`` whose payload is the header value.
+    """
+    _LOGGER.log(
+        logging.WARNING if isinstance(exc, expected) else logging.ERROR,
+        event,
+        extra={"error_type": type(exc).__name__, "model_id": model_id},
+    )
 
 
 def _extract_usage(payload: object) -> TokenUsage | None:
