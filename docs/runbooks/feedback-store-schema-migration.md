@@ -192,24 +192,32 @@ migration is likewise retried on the next store *open*, not continuously —
 nothing re-attempts it inside a running process. Re-run the read-only checks
 above and confirm the marker now exists and that new `events` rows appear.
 Treat a sustained run of the `failed to persist event` WARNING as a spend-guard
-outage: it is the only signal this fault produces.
+outage. Once the F-01 marker is applied — the production steady state — it is
+the only signal this fault produces: MEASURED 2026-07-28, a read-only open
+against an already-marked database emits no record at all. Before the marker is
+applied you also get the boot `F-01 preview backfill did not run` WARNING in
+the Symptom above, but that one fires once, at the open, and does not repeat
+for as long as the fault lasts.
 
 ## Failure mode: locked database
 
 "Locked" is not one case. SQLite has more than one lock level, and which one
 the *other* connection holds decides whether the app gets no store at all, or
-a store that boots and runs fine minus one migration. **Tell the two apart by
-which boot record appears — and note the two sit at different log levels: case
-(a) is an `ERROR`, case (b) a `WARNING`.** Grep for the message text across
-both levels, never for one level alone: filtering on `WARNING` matches only the
-benign case (b) and would let you conclude you have the harmless fault while
-the spend cap is actually off. Do not triage on the word "locked" in isolation
-either — it appears in both.
+a store that *opens* but whose writes are swallowed for as long as the lock is
+held — the ledger freezes and the daily spend cap silently stops firing.
+**Neither case is benign: MEASURED 2026-07-28, the per-account 24 h daily spend
+cap stops being enforced in both.** They differ in blast radius and in
+recovery, not in whether money leaks. **Tell the two apart by which boot record
+appears — and note the two sit at different log levels: case (a) is an `ERROR`,
+case (b) a `WARNING`.** Grep for the message text across both levels, never for
+one level alone: filtering on `WARNING` matches only case (b) and hides case
+(a) entirely — and do not read case (b)'s lower log level as a lower severity.
+Do not triage on the word "locked" in isolation either — it appears in both.
 
 | Appears | Does *not* appear | Case |
 | --- | --- | --- |
 | `ERROR feedback_store: could not open SQLite sink — persistence is disabled AND the per-account 24h daily spend cap will not be enforced … database is locked` | `F-01 preview backfill did not run` | (a) no store at all — EXCLUSIVE, **or** RESERVED on a database with no schema yet |
-| `F-01 preview backfill did not run: … database is locked` | `could not open SQLite sink` | (b) RESERVED on an already-schema'd database — store is fine, only the migration was skipped |
+| `F-01 preview backfill did not run: … database is locked` | `could not open SQLite sink` | (b) RESERVED on an already-schema'd database — the store *opens*, but every write made while the lock is held is swallowed: the ledger freezes and the spend cap silently stops firing. Writes resume by themselves once the holder releases (no restart needed, unlike (a)); the events lost in between never come back |
 
 Case (a) also produces, at most once a minute for as long as the process
 lives, `ERROR costs: feedback store unavailable, so the USD 0.20 per-account
@@ -307,7 +315,7 @@ states the per-fault matrix, and both lock levels are covered by
 The read-only path is covered separately by
 `tests/integration/test_f01_preview_billing_backfill.py`.
 
-### (b) RESERVED lock on an already-schema'd database — store opens fine, only the migration is skipped
+### (b) RESERVED lock on an already-schema'd database — the store opens, but its writes are swallowed while the lock is held
 
 **Symptom.** On boot, `WARNING feedback_store: F-01 preview backfill did not
 run: database is locked`. **No** `could not open SQLite sink` ERROR, and **no**
