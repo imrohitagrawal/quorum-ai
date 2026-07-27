@@ -20,10 +20,14 @@ other three pass ``None`` and produce ``cost_guardrail_blocked``,
 
 from __future__ import annotations
 
+import logging
+import os
 from datetime import UTC, datetime
 from decimal import Decimal
 from pathlib import Path
 from uuid import UUID, uuid4
+
+import pytest
 
 from product_app.feedback_store import FeedbackStore
 
@@ -155,3 +159,117 @@ def test_backfill_is_idempotent_and_a_no_op_on_a_post_fix_store(tmp_path: Path) 
             assert store.event_count() == 2
         finally:
             store.close()
+
+
+# ---------------------------------------------------------------------------
+# The backfill is a one-shot repair, not a precondition for serving traffic.
+# It runs inside ``FeedbackStore.__init__``, so if it were allowed to raise,
+# a DB the process cannot write would take the whole app down at boot —
+# turning "the 24h relabel could not run" into "Quorum does not start". The
+# ``except`` degrades to exactly the pre-backfill behaviour instead.
+# ---------------------------------------------------------------------------
+
+
+def _make_readonly(db: Path) -> None:
+    """Produce a genuinely unwritable SQLite database.
+
+    Both the file and its directory are dropped to read-only: SQLite needs to
+    create a ``-journal`` sibling in the directory to start a write
+    transaction, so leaving the directory writable would only exercise half
+    the failure. No monkeypatching — the ``sqlite3.OperationalError`` this
+    raises ("attempt to write a readonly database") is the real one a
+    read-only Fly volume produces.
+    """
+    db.chmod(0o444)
+    db.parent.chmod(0o555)
+
+
+def _restore_writable(db: Path) -> None:
+    db.parent.chmod(0o755)
+    db.chmod(0o644)
+
+
+def test_read_only_database_degrades_to_pre_backfill_behaviour_instead_of_failing_to_boot(
+    tmp_path: Path,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """Opening a store whose DB cannot be written must not raise, must say so
+    in the log, and must leave every row exactly as it found it."""
+    # ``chmod`` is advisory for uid 0, so a root test runner would silently
+    # get a writable DB and a green-but-meaningless test. Fail loudly rather
+    # than skip, which would leave the branch uncovered without saying so.
+    assert os.geteuid() != 0, (
+        "this test needs a non-root uid: root bypasses the read-only file mode, "
+        "so the backfill would succeed and the degradation path would not run"
+    )
+
+    db = tmp_path / "feedback_events.sqlite3"
+    account = uuid4()
+    real_run = uuid4()
+
+    # A pre-fix DB: two preview rows the backfill *would* relabel if it could,
+    # plus a genuine charge it must never touch.
+    pre_fix = FeedbackStore(str(db))
+    _cost_row(pre_fix, event_type="cost_guardrail_accepted", account_id=account, query_run_id=None)
+    _cost_row(pre_fix, event_type="cost_guardrail_accepted", account_id=account, query_run_id=None)
+    _cost_row(
+        pre_fix, event_type="cost_guardrail_accepted", account_id=account, query_run_id=real_run
+    )
+    pre_fix.close()
+
+    untouched = [
+        ("cost_guardrail_accepted", None),
+        ("cost_guardrail_accepted", None),
+        ("cost_guardrail_accepted", str(real_run)),
+    ]
+    relabelled = [
+        ("cost_estimate_previewed", None),
+        ("cost_estimate_previewed", None),
+        ("cost_guardrail_accepted", str(real_run)),
+    ]
+
+    _make_readonly(db)
+    try:
+        with caplog.at_level(logging.WARNING, logger="product_app.feedback_store"):
+            # 1. The constructor does NOT raise: the app still boots.
+            store = FeedbackStore(str(db))
+        try:
+            # 2. The operator is told, by the module that failed, with the
+            #    underlying SQLite reason attached — not a silent swallow.
+            warnings = [
+                record
+                for record in caplog.records
+                if record.levelno == logging.WARNING and record.name == "product_app.feedback_store"
+            ]
+            assert len(warnings) == 1, [r.getMessage() for r in caplog.records]
+            message = warnings[0].getMessage()
+            assert "F-01 preview backfill did not run" in message
+            assert "readonly database" in message
+
+            # 3. The rows are exactly as they were — nothing half-written,
+            #    nothing lost. This is the documented degradation: the
+            #    account keeps over-metering for at most the 24h window,
+            #    which is the behaviour without the backfill at all.
+            after = [(r.event_type, r.query_run_id) for r in store.iter_events()]
+            assert after != relabelled, (
+                "the read-only DB was relabelled anyway — the UPDATE must have "
+                "succeeded, so this test is not exercising the failure path"
+            )
+            assert after == untouched
+            assert store.daily_spend_for(account) == UNIT * 3
+        finally:
+            store.close()
+    finally:
+        _restore_writable(db)
+
+    # ...and the repair still lands the moment the volume is writable again.
+    recovered = FeedbackStore(str(db))
+    try:
+        assert [r.event_type for r in recovered.iter_events()] == [
+            "cost_estimate_previewed",
+            "cost_estimate_previewed",
+            "cost_guardrail_accepted",
+        ]
+        assert recovered.daily_spend_for(account) == UNIT
+    finally:
+        recovered.close()
