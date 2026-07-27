@@ -182,12 +182,44 @@ PNG before merge.
 
 Verified by the reviewers, not fixed — none blocks WP-D, all deserve a home.
 
-1. **No price-drift detection anywhere.** `model_slots.py:519-530` and
-   `readiness.py:176` compare model **ids** only. Measured against live:
-   `google/gemini-2.5-flash` output is `0.0012` in `_FALLBACK_CATALOG` vs
-   **`0.0025`** live (52% under), `deepseek/deepseek-chat-v3.1` `0.00028` vs
-   **`0.00095`** (71% under). Degraded-mode estimates silently under-protect.
-   (WP-G1's own nvidia row is exact.) Pre-existing; worth its own issue.
+1. **Stale `_FALLBACK_CATALOG` prices, and no price-drift detection.**
+   `model_slots.py:519-530` and `readiness.py:176` compare model **ids** only,
+   never prices. Full measurement against the live catalog (2026-07-27):
+
+   | model | fallback | live | drift |
+   |---|---|---|---|
+   | `google/gemini-2.5-flash` **(slot 3 default)** out | 0.0012 | 0.0025 | **-52%** |
+   | `google/gemini-2.5-pro` out | 0.0050 | 0.0100 | -50% |
+   | `google/gemini-2.5-flash-lite` in/out | — | — | -25% |
+   | `deepseek/deepseek-chat-v3.1` out | 0.00028 | 0.00095 | **-71%** |
+   | `meta-llama/llama-3.1-8b-instruct` out | 0.00005 | 0.00008 | -38% |
+   | `openai/o3` in/out | 0.015 / 0.060 | 0.002 / 0.008 | **+650% (OVER)** |
+
+   These apply **only in degraded mode** (catalog fetch failed); normal
+   operation prices from the live catalog.
+
+   **Blast radius on the shipped default config is small, and that is measured,
+   not assumed.** Of the four defaults only gemini-2.5-flash drifts, and the
+   synthesis and debate models — `openai/gpt-4o-mini` and
+   `anthropic/claude-haiku-4.5`, which are **70% of the unit cost** — are
+   **exact**. The default mix prices at `unit=0.0318` with slot 3 contributing
+   `0.0025`, so correcting it moves the unit by roughly 5%.
+
+   **ROUTING DECISION (operator-agreed):**
+   - **WP-D takes ONE narrow piece:** correct the `google/gemini-2.5-flash`
+     output price before re-measuring `PINNED_DEFAULT_MIX_UNIT_USD`. That row
+     feeds the pin WP-D must ratify, and ratifying a constant computed from a
+     price known to be 52% wrong is not ratification. ~2 lines plus a test.
+   - **Everything else — the other five rows and the drift-detection
+     mechanism — is its OWN small PR off `main`, after WP-D merges.** It is a
+     change to a safety guardrail's inputs, so it needs its own diff and its own
+     operator ratification (correcting prices UP makes estimates higher and more
+     runs hit the rails). It is deliberately NOT bundled into WP-D and NOT given
+     to the F-05/F-06 chat, which should stay a clean lifecycle/cost-attribution
+     PR that can merge fast.
+   - Note `openai/o3` is the opposite problem — 650% OVER, so it over-blocks —
+     and it appears in `test_estimate_token_model.py` fixtures. Correcting it
+     will move those tests.
 2. **Estimate/create can disagree for an API client.** `QueryRunEstimateRequest`
    has no `context` field, so `query_runs.py:894` always reads `None`.
    Reproduced: preview `200 allow est=0.0316`, create `402 COST_LIMIT_EXCEEDED
