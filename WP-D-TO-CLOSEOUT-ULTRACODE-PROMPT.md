@@ -22,36 +22,49 @@ a known failure.
 | `make validate` / `lint` / `format-check` / `type-check` / `openapi-check` | **all green** |
 | e2e blocking invariants lane (5 specs) | **96 passed / 0 failed** |
 | e2e axe + parity + docs + smoke + degraded + ops lane | **94 passed / 0 failed** |
-| `pytest tests` | **1458 passed / 14 failed / 10 skipped** (merged with `main` @ `025bd83`) |
+| `pytest tests` | **1462 passed / 13 failed / 10 skipped** (merged with `main` @ `025bd83`) |
 
 Both e2e lanes are fully green for the first time on this branch.
 
-### The 14 failing tests are ONE root cause and they are WP-D's
+### The 13 failing tests are WP-D's — and this is now VERIFIED, not assumed
 
 ```
 tests/unit/test_providers.py                         6   is_truncated / shortened do not exist yet
 tests/unit/test_debate_orchestration.py              2   DEBATE_ROUND_MAX_TOKENS, full answer excerpt
 tests/unit/test_estimate_token_model.py              1   bound-cap assumptions vs enforced caps
-tests/integration/test_query_run_cost_guardrails.py  4   cost bands moved; incl. the PINNED envelope
+tests/integration/test_query_run_cost_guardrails.py  3   cost bands moved; incl. the PINNED envelope
 tests/unit/test_cost_breakdown.py                    1   same
 ```
 
-**The pinned envelope is the one to read first.**
-`test_daily_cap_admits_the_number_of_runs_its_dollar_value_pays_for` fails with
-*"the pinned static catalog's default-mix price moved to 0.0310; re-measure the
-envelope before updating this constant"* — a deliberate tripwire installed by
-main's F-01 work. Measured attribution, so nobody has to guess:
+**How this was verified** (an earlier draft of this file asserted it and was
+wrong): with `costs.py`'s unit bug fixed AND `config.py`'s caps reverted to
+main's 700/800, exactly **10** failures remain — the genuine WP-D truncation
+set. Reverting the caps *alone* previously fixed **nothing**, because a separate
+defect was masking them. Re-run that two-variable probe if you doubt the
+attribution; do not take it on trust.
+
+**The pinned envelope: the unit bug is FIXED, the re-measure is still owed.**
+`test_daily_cap_admits_the_number_of_runs_its_dollar_value_pays_for` was
+reporting *"7 runs completed, expected 8"*. Root cause found by review and fixed
+in `6f5179e`: `costs.py` added the worst-case **bound** to a meter of **point**
+spend, so the cap admitted `floor((CAP - bound)/unit) + 1` runs. It also meant an
+account that had spent nothing could be refused outright.
+
+What remains for WP-D is the honest part: the unit price itself still moves with
+the caps, so `PINNED_DEFAULT_MIX_UNIT_USD` must be **re-measured and ratified**,
+not edited to whatever the suite prints. Measured attribution:
 
 ```
 pinned constant on main             0.0244
 main caps (700/800)  + deepseek     0.0262
 main caps (700/800)  + nvidia nano  0.0252   <- the slot swap alone LOWERS it
 branch caps (2000/3000) + deepseek  0.0328
-branch caps (2000/3000) + nano      0.0318   <- what CI sees
+branch caps (2000/3000) + nano      0.0318
 ```
 
-The **cap raise** moves the envelope; the nvidia swap partially offsets it. Do
-what the tripwire asks: re-measure, decide, then update the constant.
+Note also `tests/integration/test_query_run_cost_guardrails.py:28-33` still
+carries its own `DEFAULT_MODEL_IDS` ending in `deepseek/deepseek-chat-v3.1` — a
+mix the product no longer ships. Re-measure against the real default mix.
 
 `config.py` **already carries the raised cost caps** (`cost_debate_output_tokens_cap`
 700→2000, `cost_synthesis_output_tokens` 800→3000) from an earlier commit on this
@@ -75,6 +88,7 @@ the decision, then change the test.
 | `e6b489f` | WP-C adversarial-review fixes (six confirmed findings) |
 | `f7e3ca3` | Gate integrity — `session-trail.spec.ts` registered in `e2e.yml`; skill-contract check anchored to `^##` |
 | `3bf13a6` | **WP-G1 / F-11** — slot 4 → `nvidia/nemotron-3-nano-30b-a3b`, vendor plumbing, tints, fixture |
+| `6f5179e` | Adversarial-review fixes — **the cost accumulation rails' unit bug**, a vacuous blocking gate removed, a weakened cross-check restored, wrong model labels, two doc contradictions |
 
 **⚠️ The doc-suite skills' contract block is repo-added.** An upstream refresh
 replaces those folders wholesale and `make validate` goes red again. Each block
@@ -86,7 +100,7 @@ says so in its own text.
 
 ### Stream A — this branch, in this order
 
-**WP-D — data completeness (F-07 then F-08). Closes all 14 failing tests.**
+**WP-D — data completeness (F-07 then F-08). Closes all 13 failing tests.**
 - Enforced caps: debate 700→**2000**, synthesis 800→**3000** (`config.py` is
   already pricing them). `finish_reason` capture → `is_truncated` on
   `LiveProviderResult` → `shortened` on `InitialModelAnswer`.
@@ -213,16 +227,17 @@ WP-D-TO-CLOSEOUT-ULTRACODE-PROMPT.md in full before editing anything.
 STATE: branch feat/ui-pr1-quickfixes, PR #96 open against main and merged up to
 main @ 025bd83. WP-A, WP-B, Task 0, WP-C and WP-G1 are COMPLETE and committed.
 All five gates are green and BOTH e2e lanes are fully green. pytest is 1458
-passed / 14 failed, and all 14 are WP-D with one root cause (config.py's cost
-caps were raised ahead of the enforcement and the is_truncated/shortened
-plumbing). Visual-snapshot baselines are a THIRD, separate blocking CI step and
-are deliberately unseeded until WP-H — expect that step red until then.
+passed / 13 failed, and all 13 are WP-D (config.py's cost caps were raised
+ahead of the enforcement and the is_truncated/shortened
+plumbing) — VERIFIED by a two-variable probe, not assumed. Visual-snapshot
+baselines are a THIRD, separate blocking CI step inside the "e2e axe + parity"
+job and are deliberately unseeded until WP-H — expect that step red until then.
 
 FIRST: re-verify that state yourself before building on it — make validate lint
 format-check type-check openapi-check, then both e2e lanes, then pytest. If the
 numbers differ from §1, find out why before writing any code.
 
-THEN WP-D (F-07 then F-08), which closes all 14. Strict order #3 before #4:
+THEN WP-D (F-07 then F-08), which closes all 13. Strict order #3 before #4:
 SYNTHESIS_DEBATE_EXCERPT_MAX_CHARS derives from DEBATE_ROUND_MAX_TOKENS, and #4
 alone needs 2800 not 8000. Two decisions are yours to surface, not to make
 silently: the BLOCK/keep call on tests/unit/test_estimate_token_model.py, and
