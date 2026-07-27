@@ -48,7 +48,18 @@ def validate_skill_contracts(rules: dict) -> None:
             fail(f"{path.relative_to(ROOT)} missing name frontmatter")
         if not re.search(r"(?m)^description:\s*.{20,}", text):
             fail(f"{path.relative_to(ROOT)} missing meaningful description")
-        missing = [section for section in required if f"## {section}" not in text]
+        # Anchored at line start, at H2 exactly. A bare substring test passes on
+        # `### Anti-examples` (a DEMOTED heading still contains "## Anti-examples")
+        # and on the string appearing mid-sentence in prose — so a contract
+        # section could be quietly downgraded out of the document's structure
+        # while this gate stayed green. That is the gate-erosion failure mode the
+        # remediation plan calls out; F-27 was the same class, caught by hand.
+        # Measured when this was tightened: 112 skills scanned, 0 newly red.
+        missing = [
+            section
+            for section in required
+            if not re.search(rf"(?m)^##[ \t]+{re.escape(section)}\b", text)
+        ]
         if missing:
             fail(f"{path.relative_to(ROOT)} missing skill contract sections: {missing}")
 
