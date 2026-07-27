@@ -14,10 +14,10 @@
 | Gate | Result |
 |---|---|
 | `make validate` / `lint` / `format-check` / `type-check` / `openapi-check` | **all green** |
-| `pytest tests` | **1538 passed / 0 failed / 10 skipped** |
+| `pytest tests` | **1632 passed / 0 failed / 10 skipped** |
 | e2e blocking invariants lane (5 specs) | **95 passed / 0 failed** |
 | e2e axe + parity + docs + smoke + degraded + ops lane | **94 passed / 0 failed** |
-| `make diff-cover DIFF_BASE=origin/main` | **97%** (blocking min 95) |
+| `make diff-cover DIFF_BASE=origin/main` | **96%** (blocking min 95) |
 
 **Re-verify before building on this.** A stale baseline is how a regression gets
 mistaken for a known failure. Note the e2e invariants lane contains exactly
@@ -27,6 +27,14 @@ mistaken for a known failure. Note the e2e invariants lane contains exactly
 committed. WP-D is commit `70dd7d4`; read its message before touching
 `costs.py`, `providers.py`, `synthesis.py` or `debate.py` — it records why each
 money decision landed the way it did.
+
+**`main` IS MERGED IN, as of `c8c41ee`** (main `1792655`), so Stream B's F-05
+(#98) and F-06 (#99) are already here. Read that merge commit too: it was not
+clean, and it records a product-honesty defect the merge CREATED which existed
+in neither branch alone — `synthesis_mode` labelled a fully-templated run as
+`"live"` because F-06 returns a billed-but-blank live result while WP-A had
+made that field the provenance channel. Provenance now counts sections with
+USABLE TEXT; `live_call_usages` is untouched so F-06's cost contract stands.
 
 ### The visual-snapshot step is expected RED
 
@@ -125,9 +133,10 @@ but a dead end with no explanation is a poor product surface.
    with no flatten and no cap. It is the one consumer the shared primitive has
    not reached. Small, and it belongs with a security pass.
 3. **The daily meter accumulates the point estimate**, which under-models worst
-   case (measured +62% before F-08, +137% after). The right fix is metering
-   MEASURED spend — that is **F-06**. Do not "fix" it by accumulating the bound:
-   that is precisely the money bug commit `6f5179e` removed.
+   case (measured +62% before F-08, +137% after). F-06 (now merged) fixed how a
+   failed call is CLASSIFIED, but the meter still sums the estimate. Do not
+   "fix" it by accumulating the bound: that is precisely the money bug commit
+   `6f5179e` removed. Belongs with the Stream B chat's E2.
 4. **No deployment-wide spend ceiling — [issue #100](https://github.com/imrohitagrawal/quorum-ai/issues/100).**
    `DAILY_CAP_USD` is per-account and accounts are free to self-issue, so
    exposure is (accounts mintable × $0.20). Harmless today because the key is
@@ -145,12 +154,26 @@ but a dead end with no explanation is a poor product surface.
 
 - **F-02** session fixation — DONE (PR #94).
 - **F-01** double billing — DONE (PR #95, `025bd83`).
-- **F-05 — a cancel is silently reverted.** `query_runs.py:582`. A cancel
-  landing mid-stage is overwritten; the pipeline keeps making billed calls and
-  the run ends `completed` after the user was told `cancelled`. **Not started.**
-- **F-06 — `measured` cost is a lie.** `query_runs.py:2077` labels a run
-  `measured` while dropping billed calls whose usage was not captured; the
-  capture gate is vacuously true. **Not started.** Owns open item 3 above.
+- **F-05 — DONE** (PR #98, `651cbb9`). A terminal run is now final in every
+  field, not just its label.
+- **F-06 — DONE** (PR #99, `1792655`). A provider failure is classified by
+  whether it could have BILLED: `_DispatchedUnmeasured` means "dispatched, so
+  possibly charged, but unmeasurable", distinct from `None` = "refused before
+  inference, nothing billed".
+
+**Both are merged into this branch** (`c8c41ee`). Open item 3 below is
+therefore PARTLY addressed — F-06 fixed the classification, but the daily
+meter still accumulates the point estimate.
+
+Still open on the cost layer, being carried by the Stream B chat (do NOT start
+these here; that chat holds the design context):
+- **P1 — the spend cap fails OPEN.** A locked feedback DB makes `get_store()`
+  return `None` and `costs.py` guards on `if store is not None:`, so the 24h
+  cap silently vanishes. Related to issue #100 below — same rail, different
+  failure mode. Recommend failing CLOSED: a guardrail that disappears when
+  storage is unavailable is worse than a refused run.
+- **E2 — positive evidence in `_actual_cost`**, retiring the "some path forgot
+  to record" class rather than playing whack-a-mole.
 
 Also off `main`, its own small PR: the **five remaining stale
 `_FALLBACK_CATALOG` prices + drift detection**. Measured 2026-07-27 against the
@@ -238,10 +261,12 @@ Read AGENTS.md, then UI-REMEDIATION-MASTER-PLAN-ULTRACODE-PROMPT.md, then
 WP-E-TO-CLOSEOUT-ULTRACODE-PROMPT.md in full before editing anything.
 
 STATE: branch feat/ui-pr1-quickfixes, PR #96 open against main. WP-A, WP-B,
-Task 0, WP-C, WP-G1 and WP-D are COMPLETE and committed (WP-D is 70dd7d4 —
-read its commit message before touching costs.py, providers.py, synthesis.py
-or debate.py). All five gates are green, BOTH e2e lanes are green (95/0 and
-94/0), pytest is 1538 passed / 0 failed, diff-cover is 97%.
+Task 0, WP-C, WP-G1 and WP-D are COMPLETE and committed (WP-D is 70dd7d4).
+main is MERGED IN at c8c41ee, so Stream B's F-05 (#98) and F-06 (#99) are
+already here — read BOTH those commit messages before touching costs.py,
+providers.py, synthesis.py or debate.py. All five gates are green, BOTH e2e
+lanes are green (95/0 and 94/0), pytest is 1632 passed / 0 failed, diff-cover
+is 96%.
 
 FIRST: re-verify that state yourself — make validate lint format-check
 type-check openapi-check, then both e2e lanes, then pytest, then
@@ -289,7 +314,9 @@ survive inspection.
 
 Stop after WP-E is green AND reviewed, then report before starting WP-F.
 
-SEPARATELY, and more urgent than the remaining UI work: Stream B's F-05 (a
-cancel is silently reverted, query_runs.py:582) and F-06 (`measured` cost is a
-lie, query_runs.py:2077). Fresh branch off main, not this one.
+DO NOT start the remaining cost-layer work (the fail-open spend cap, positive
+evidence in _actual_cost, the five stale catalog prices). A separate chat owns
+Stream B and holds the design context; F-05 and F-06 are already done and
+merged here. If you find something in that area, file it rather than fixing
+it.
 ```
