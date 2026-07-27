@@ -106,8 +106,15 @@ def test_debate_records_none_when_provider_omits_usage(monkeypatch: pytest.Monke
 
 
 def test_debate_round2_only_is_attributed_to_round2(monkeypatch: pytest.MonkeyPatch) -> None:
-    """If round 1 falls back to templated but round 2 goes live, the usage must
-    be tagged round 2 — not silently positioned as round 1."""
+    """If round 1's live call is not billed but round 2 succeeds, round 2's usage
+    must be tagged round 2 — not silently positioned as round 1.
+
+    ``None`` from ``call_with_prompt`` is the NOT-BILLED signal (no request left
+    the process, or the provider refused it before inference), so round 1
+    correctly leaves no entry. The billed-but-unusable case is a BLANK-TEXT
+    result, not ``None``, and is covered by
+    ``test_debate_records_billed_calls_that_returned_unusable_content``.
+    """
     monkeypatch.setattr(config.settings, "openrouter_live_execution_enabled", True, raising=False)
 
     def selective_call(**kwargs: object) -> LiveProviderResult | None:
@@ -125,6 +132,33 @@ def test_debate_round2_only_is_attributed_to_round2(monkeypatch: pytest.MonkeyPa
         openrouter_key="sk-or-test-live",
     )
     assert result.live_call_usages == [(2, _USAGE)]
+
+
+def test_debate_round1_billed_but_unusable_is_recorded_against_round1(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The other half of the attribution story: a BILLED round-1 failure.
+
+    A blank-text result means the request was dispatched and may have been
+    billed. Its entry must be tagged round 1 — folding it into round 2 (or
+    dropping it, as before F-06) both misstate the receipt.
+    """
+    monkeypatch.setattr(config.settings, "openrouter_live_execution_enabled", True, raising=False)
+
+    def selective_call(**kwargs: object) -> LiveProviderResult:
+        if kwargs.get("system_prompt") == ROUND_ONE_SYSTEM_PROMPT:
+            return LiveProviderResult(answer_text="", sources=[], usage=None)
+        return LiveProviderResult(answer_text="round 2 critique", sources=[], usage=_USAGE)
+
+    monkeypatch.setattr(provider_execution_service, "call_with_prompt", selective_call)
+    result = debate_stub_service.run_debate_rounds(
+        account_id=uuid4(),
+        query_run_id=uuid4(),
+        query_text="Compare durable options",
+        initial_answers=_answers(),
+        openrouter_key="sk-or-test-live",
+    )
+    assert result.live_call_usages == [(1, None), (2, _USAGE)]
 
 
 def test_debate_templated_run_records_no_usage(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -167,17 +201,19 @@ def test_synthesis_collects_usage_from_live_sections(monkeypatch: pytest.MonkeyP
 
 
 def test_synthesis_mixed_live_and_templated_sections(monkeypatch: pytest.MonkeyPatch) -> None:
-    """A section that falls back to templated contributes no usage entry.
+    """Verifies the entries↔billed-calls invariant across the section boundary.
 
-    Verifies the entries↔billed-calls invariant across the live/templated
-    boundary: forcing only the recommendation section to fail its live call
-    yields four usage entries, not five.
+    One entry per BILLED call, and no entry for a call that was not billed.
+    Here ``call_with_prompt`` returns ``None`` for the recommendation section,
+    which is the not-billed signal, so four entries are recorded for four
+    billed sections. The billed-but-unusable variant of this scenario — where
+    a fifth ``None`` entry MUST appear — is the test immediately below.
     """
     monkeypatch.setattr(config.settings, "openrouter_live_execution_enabled", True, raising=False)
 
     def selective_call(**kwargs: object) -> LiveProviderResult | None:
         if kwargs.get("system_prompt") == _RECOMMENDATION_PROMPT:
-            return None  # recommendation falls back to templated (not billed)
+            return None  # not billed -> templated section, no usage entry
         return LiveProviderResult(answer_text="section text", sources=[], usage=_USAGE)
 
     monkeypatch.setattr(provider_execution_service, "call_with_prompt", selective_call)
@@ -192,6 +228,35 @@ def test_synthesis_mixed_live_and_templated_sections(monkeypatch: pytest.MonkeyP
     assert result.live_call_usages == [_USAGE] * 4
 
 
+def test_synthesis_billed_but_unusable_section_still_records_an_entry(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Same shape, opposite billing verdict — and it must NOT collapse to four.
+
+    That collapse was the F-06 defect: the entry was not merely ``None``, it
+    was ABSENT, so ``all([...4 good...])`` passed and the run was served
+    ``measured`` with the fifth section's dollars missing.
+    """
+    monkeypatch.setattr(config.settings, "openrouter_live_execution_enabled", True, raising=False)
+
+    def selective_call(**kwargs: object) -> LiveProviderResult:
+        if kwargs.get("system_prompt") == _RECOMMENDATION_PROMPT:
+            # Dispatched, possibly billed, nothing usable came back.
+            return LiveProviderResult(answer_text="", sources=[], usage=None)
+        return LiveProviderResult(answer_text="section text", sources=[], usage=_USAGE)
+
+    monkeypatch.setattr(provider_execution_service, "call_with_prompt", selective_call)
+    result = synthesis_stub_service.produce_final_synthesis(
+        account_id=uuid4(),
+        query_run_id=uuid4(),
+        query_text="Compare durable options",
+        initial_answers=_answers(),
+        debate_outputs=_debate_outputs(),
+        openrouter_key="sk-or-test-live",
+    )
+    assert result.live_call_usages == [_USAGE] * 4 + [None]
+
+
 def test_synthesis_templated_run_records_no_usage(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(config.settings, "openrouter_live_execution_enabled", False, raising=False)
     result = synthesis_stub_service.produce_final_synthesis(
@@ -203,3 +268,73 @@ def test_synthesis_templated_run_records_no_usage(monkeypatch: pytest.MonkeyPatc
         openrouter_key="sk-or-test-live",
     )
     assert result.live_call_usages == []
+
+
+# -- F-06: a BILLED call whose content is unusable must still be recorded ------
+#
+# The gates in ``_actual_cost`` are ``all(usage is not None for ...)``, and
+# ``all([])`` is True. So a billed call that is never APPENDED to the usage list
+# is invisible to the honesty gate — unlike one appended as ``None``, which the
+# gate catches. The tests below assert CARDINALITY (entries == billed calls),
+# not just "the flag is right on a clean run"; a clean-path outcome assertion is
+# exactly what let this defect survive.
+#
+# Reachability: ``_post_openrouter`` returns the raw message content, so a
+# whitespace-only completion yields a real ``LiveProviderResult`` carrying
+# captured usage — the provider charged for the tokens. ``_call_debate_model`` /
+# ``_call_synthesis_model`` used to collapse that to ``None`` on
+# ``not result.answer_text.strip()``, and the collector drops ``None``. They now
+# pass the result through untouched; the round/section builders decide what
+# blank text MEANS for the served prose, and the collector records the entry.
+
+
+def _mock_live_billed_but_unusable(monkeypatch: pytest.MonkeyPatch) -> list[int]:
+    """Every live call succeeds and reports usage, but returns blank content.
+
+    Returns a one-element list used as a call counter, so the assertions can
+    compare recorded usage entries against calls actually BILLED.
+    """
+    monkeypatch.setattr(config.settings, "openrouter_live_execution_enabled", True, raising=False)
+    calls = [0]
+
+    def blank_content_call(**kwargs: object) -> LiveProviderResult:
+        calls[0] += 1
+        # A 200 response: tokens were consumed and billed, usage was captured,
+        # but the completion carried no usable text.
+        return LiveProviderResult(answer_text="   \n  ", sources=[], usage=_USAGE)
+
+    monkeypatch.setattr(provider_execution_service, "call_with_prompt", blank_content_call)
+    return calls
+
+
+def test_debate_records_billed_calls_that_returned_unusable_content(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    calls = _mock_live_billed_but_unusable(monkeypatch)
+    result = debate_stub_service.run_debate_rounds(
+        account_id=uuid4(),
+        query_run_id=uuid4(),
+        query_text="Compare durable options",
+        initial_answers=_answers(),
+        openrouter_key="sk-or-test-live",
+    )
+    # CARDINALITY: one usage entry per billed call. Dropping them entirely makes
+    # ``debate_captured`` vacuously true and the run dishonestly ``measured``.
+    assert calls[0] > 0, "no live debate call was made — the test is not exercising the path"
+    assert len(result.live_call_usages) == calls[0]
+
+
+def test_synthesis_records_billed_calls_that_returned_unusable_content(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    calls = _mock_live_billed_but_unusable(monkeypatch)
+    result = synthesis_stub_service.produce_final_synthesis(
+        account_id=uuid4(),
+        query_run_id=uuid4(),
+        query_text="Compare durable options",
+        initial_answers=_answers(),
+        debate_outputs=_debate_outputs(),
+        openrouter_key="sk-or-test-live",
+    )
+    assert calls[0] > 0, "no live synthesis call was made — the test is not exercising the path"
+    assert len(result.live_call_usages) == calls[0]

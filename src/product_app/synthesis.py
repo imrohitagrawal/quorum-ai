@@ -387,10 +387,15 @@ class SynthesisOrchestrationService:
             )
             if step is not None
         ]
-        # One usage entry per section that actually made a billed live call
-        # (a templated section has ``live is None`` and is skipped). The entry
-        # is the call's captured usage, which may itself be ``None`` if the
-        # provider omitted it — the cost layer treats that as unmeasurable.
+        # One usage entry per section whose request was DISPATCHED, billed or
+        # not knowable. ``live is None`` now means "provably not billed" (live
+        # execution off, no key/model, or a pre-inference provider refusal) and
+        # is the only case skipped. A section that fell back to templated TEXT
+        # may still have a non-``None`` ``live`` — that is the F-06 fix, and it
+        # is what stops a billed call vanishing from the receipt. The entry is
+        # the call's captured usage, which may itself be ``None`` when the
+        # response never reached us; the cost layer treats that as unmeasurable
+        # and downgrades the run to ``estimated``.
         live_call_usages: list[TokenUsage | None] = [
             live.usage
             for live in (
@@ -575,10 +580,17 @@ class SynthesisOrchestrationService:
             system_prompt=_CONSENSUS_PROMPT,
             user_prompt=user_prompt,
         )
-        if live is None:
-            return truncate_section(templated, max_chars=DEFAULT_SECTION_MAX_CHARS), None, None
+        # F-06: ``live`` is non-None whenever the call MAY HAVE BEEN BILLED,
+        # even if its output was unusable — a request the provider refused
+        # before inference (404, bad key, rate limit) arrives as ``None``
+        # instead, with nothing to record. Blank text therefore means "use the
+        # templated section" while STILL returning the result, so its usage is
+        # recorded and a billed call cannot vanish from the receipt.
+        text = "" if live is None else live.answer_text.strip()
+        if not text:
+            return truncate_section(templated, max_chars=DEFAULT_SECTION_MAX_CHARS), None, live
         return (
-            truncate_section(live.answer_text.strip(), max_chars=DEFAULT_SECTION_MAX_CHARS),
+            truncate_section(text, max_chars=DEFAULT_SECTION_MAX_CHARS),
             None,
             live,
         )
@@ -614,10 +626,17 @@ class SynthesisOrchestrationService:
             system_prompt=_DISAGREEMENT_PROMPT,
             user_prompt=user_prompt,
         )
-        if live is None:
-            return truncate_section(templated, max_chars=DEFAULT_SECTION_MAX_CHARS), None, None
+        # F-06: ``live`` is non-None whenever the call MAY HAVE BEEN BILLED,
+        # even if its output was unusable — a request the provider refused
+        # before inference (404, bad key, rate limit) arrives as ``None``
+        # instead, with nothing to record. Blank text therefore means "use the
+        # templated section" while STILL returning the result, so its usage is
+        # recorded and a billed call cannot vanish from the receipt.
+        text = "" if live is None else live.answer_text.strip()
+        if not text:
+            return truncate_section(templated, max_chars=DEFAULT_SECTION_MAX_CHARS), None, live
         return (
-            truncate_section(live.answer_text.strip(), max_chars=DEFAULT_SECTION_MAX_CHARS),
+            truncate_section(text, max_chars=DEFAULT_SECTION_MAX_CHARS),
             None,
             live,
         )
@@ -648,10 +667,17 @@ class SynthesisOrchestrationService:
             system_prompt=_SOURCE_SUPPORT_PROMPT,
             user_prompt=user_prompt,
         )
-        if live is None:
-            return truncate_section(templated, max_chars=DEFAULT_SECTION_MAX_CHARS), None, None
+        # F-06: ``live`` is non-None whenever the call MAY HAVE BEEN BILLED,
+        # even if its output was unusable — a request the provider refused
+        # before inference (404, bad key, rate limit) arrives as ``None``
+        # instead, with nothing to record. Blank text therefore means "use the
+        # templated section" while STILL returning the result, so its usage is
+        # recorded and a billed call cannot vanish from the receipt.
+        text = "" if live is None else live.answer_text.strip()
+        if not text:
+            return truncate_section(templated, max_chars=DEFAULT_SECTION_MAX_CHARS), None, live
         return (
-            truncate_section(live.answer_text.strip(), max_chars=DEFAULT_SECTION_MAX_CHARS),
+            truncate_section(text, max_chars=DEFAULT_SECTION_MAX_CHARS),
             None,
             live,
         )
@@ -690,10 +716,17 @@ class SynthesisOrchestrationService:
             system_prompt=_UNCERTAINTY_PROMPT,
             user_prompt=user_prompt,
         )
-        if live is None:
-            return truncate_section(templated, max_chars=DEFAULT_SECTION_MAX_CHARS), None, None
+        # F-06: ``live`` is non-None whenever the call MAY HAVE BEEN BILLED,
+        # even if its output was unusable — a request the provider refused
+        # before inference (404, bad key, rate limit) arrives as ``None``
+        # instead, with nothing to record. Blank text therefore means "use the
+        # templated section" while STILL returning the result, so its usage is
+        # recorded and a billed call cannot vanish from the receipt.
+        text = "" if live is None else live.answer_text.strip()
+        if not text:
+            return truncate_section(templated, max_chars=DEFAULT_SECTION_MAX_CHARS), None, live
         return (
-            truncate_section(live.answer_text.strip(), max_chars=DEFAULT_SECTION_MAX_CHARS),
+            truncate_section(text, max_chars=DEFAULT_SECTION_MAX_CHARS),
             None,
             live,
         )
@@ -733,9 +766,12 @@ class SynthesisOrchestrationService:
             system_prompt=_RECOMMENDATION_PROMPT,
             user_prompt=user_prompt,
         )
-        if live is None:
-            return truncate_recommendation(templated), None, None
-        return truncate_recommendation(live.answer_text.strip()), None, live
+        # F-06: see the other section builders — blank text means a call that
+        # may have been billed came back unusable, not that no call was made.
+        text = "" if live is None else live.answer_text.strip()
+        if not text:
+            return truncate_recommendation(templated), None, live
+        return truncate_recommendation(text), None, live
 
     def _call_synthesis_model(
         self,
@@ -753,16 +789,19 @@ class SynthesisOrchestrationService:
             return None
         if not openrouter_key or not settings.synthesis_model_id:
             return None
-        result: LiveProviderResult | None = provider_execution_service.call_with_prompt(
+        # No post-processing — see ``debate._call_debate_model`` for the F-06
+        # billing contract this preserves. ``None`` means nothing was billed
+        # (so the section records no usage entry and the run may stay
+        # ``measured``); a blank-text result means a request was dispatched and
+        # may have been billed (so the section serves the templated text but
+        # still records the entry).
+        return provider_execution_service.call_with_prompt(
             openrouter_key=openrouter_key,
             model_id=settings.synthesis_model_id,
             system_prompt=system_prompt,
             user_prompt=user_prompt,
             max_tokens=SYNTHESIS_SECTION_MAX_TOKENS,
         )
-        if result is None or not result.answer_text.strip():
-            return None
-        return result
 
     def _synthesis_fallback_notice(self, section_label: str) -> str:
         return (
@@ -871,8 +910,11 @@ _synthesis_section_pool = ThreadPoolExecutor(max_workers=20, thread_name_prefix=
 
 
 #: A built section: ``(section_text, failed_step, live_result)``. ``live_result``
-#: is the :class:`LiveProviderResult` when the section made a billed live call
-#: (``None`` for a templated section), and carries the captured token usage.
+#: is the :class:`LiveProviderResult` whenever the section's request was
+#: DISPATCHED — including when it came back unusable and the section text fell
+#: back to the template — and carries the captured token usage. ``None`` means
+#: provably NOT billed (live execution off, no key/model, or a pre-inference
+#: provider refusal), which is the only case the cost layer may ignore.
 SectionResult = tuple[str, str | None, LiveProviderResult | None]
 SectionFuture = Future[SectionResult]
 SectionBuilder = Callable[..., SectionResult]

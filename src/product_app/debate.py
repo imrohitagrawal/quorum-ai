@@ -363,9 +363,16 @@ class DebateOrchestrationService:
                 prior_round=None,
             ),
         )
-        if live is None:
-            return templated, self._debate_fallback_notice(round_number=1), None
-        return live.answer_text.strip(), None, live
+        # F-06: ``live`` is non-None whenever the call MAY HAVE BEEN BILLED,
+        # even if its output was unusable — a request the provider refused
+        # before inference (404, bad key, rate limit) arrives as ``None``
+        # instead, with nothing to record. Blank text therefore means "fall
+        # back to the templated critique" while STILL returning the result, so
+        # its usage is recorded and a billed call cannot vanish.
+        text = "" if live is None else live.answer_text.strip()
+        if not text:
+            return templated, self._debate_fallback_notice(round_number=1), live
+        return text, None, live
 
     def _build_round_two_text(
         self,
@@ -394,9 +401,12 @@ class DebateOrchestrationService:
                 prior_round=round_one_text,
             ),
         )
-        if live is None:
-            return templated, self._debate_fallback_notice(round_number=2), None
-        return live.answer_text.strip(), None, live
+        # F-06: see ``_build_round_one_text`` — blank text means a call that may
+        # have been billed came back unusable, not that no call was made.
+        text = "" if live is None else live.answer_text.strip()
+        if not text:
+            return templated, self._debate_fallback_notice(round_number=2), live
+        return text, None, live
 
     def _call_debate_model(
         self,
@@ -405,11 +415,24 @@ class DebateOrchestrationService:
         system_prompt: str,
         user_prompt: str,
     ) -> LiveProviderResult | None:
-        """Call the configured debate model. Returns the live provider result
-        (carrying the answer text and captured token usage) or ``None`` on any
-        failure so the caller can fall back to the templated text. The four
-        model answers are summarised, not re-quoted, to keep the prompt within
-        budget.
+        """Call the configured debate model.
+
+        Returns exactly what ``call_with_prompt`` returned, and its F-06
+        billing contract is the reason this method adds nothing of its own:
+
+        * ``None`` — nothing was billed. Either an opt-in guard below stopped
+          us before any request left the process, or the provider refused the
+          request before inference. The caller records NO usage entry.
+        * a result with BLANK ``answer_text`` — a request was dispatched and
+          may have been billed (an empty completion that still consumed
+          tokens, a 5xx, a read timeout, a torn body). The caller falls back
+          to the templated critique but STILL records the entry, so an
+          unmeasurable charge downgrades the receipt to ``estimated`` instead
+          of vanishing through ``_actual_cost``'s ``all([])`` gate.
+        * a result with text — the normal case.
+
+        The four model answers are summarised, not re-quoted, to keep the
+        prompt within budget.
         """
         # The live-execution flag is the operator's opt-in switch;
         # we honour it here the same way ``provider_execution_service``
@@ -420,16 +443,16 @@ class DebateOrchestrationService:
             return None
         if not openrouter_key or not settings.debate_model_id:
             return None
-        result: LiveProviderResult | None = provider_execution_service.call_with_prompt(
+        # No post-processing: the provider seam already encodes "not billed"
+        # (``None``) versus "dispatched, maybe billed, unusable" (blank text).
+        # Collapsing the two here is precisely the F-06 defect.
+        return provider_execution_service.call_with_prompt(
             openrouter_key=openrouter_key,
             model_id=settings.debate_model_id,
             system_prompt=system_prompt,
             user_prompt=user_prompt,
             max_tokens=DEBATE_ROUND_MAX_TOKENS,
         )
-        if result is None or not result.answer_text.strip():
-            return None
-        return result
 
     def _debate_user_prompt(
         self,
