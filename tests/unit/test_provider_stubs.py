@@ -371,7 +371,15 @@ def test_live_response_returns_none_when_both_online_and_bare_fail(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """L2: when both ``:online`` and the bare retry fail, the
-    dispatcher returns ``None`` so the local-simulation fallback fires.
+    dispatcher yields no usable answer so the local-simulation fallback fires.
+
+    F-06 UPDATE: the assertion moved from the INTERNAL dispatcher to
+    ``_live_openrouter_response``, the boundary this test actually cares
+    about. Internally a 5xx is now ``_DISPATCH_UNMEASURED`` ("dispatched, may
+    have been billed") rather than ``None`` ("provably not billed"), because
+    the debate/synthesis path needs that distinction to keep a receipt honest.
+    The initial-answer path's observable contract is unchanged: still ``None``,
+    still one POST, still no surprise retry.
     """
     from urllib.error import HTTPError
 
@@ -384,16 +392,15 @@ def test_live_response_returns_none_when_both_online_and_bare_fail(
 
     monkeypatch.setattr("product_app.providers.urlopen", fake_urlopen)
 
-    result = provider_stub_service._call_openrouter_with_optional_search(
+    result = provider_stub_service._live_openrouter_response(
         openrouter_key="sk-or-v1-test",
         query_text="compare vendors",
         model_slot=ModelSlot(slot_number=1, model_id="openai/gpt-4o-mini"),
     )
 
-    # 500 is not a "search rejected" condition; the first attempt
-    # returns None and we do NOT retry. The test asserts the current
-    # behavior — failure of the online call is treated as a hard
-    # failure, not a search rejection.
+    # 500 is not a "search rejected" condition; the first attempt fails and we
+    # do NOT retry. The test asserts the current behavior — failure of the
+    # online call is treated as a hard failure, not a search rejection.
     assert call_count == 1
     assert result is None
 
@@ -520,10 +527,16 @@ def test_per_slot_search_off_returns_none_when_bare_call_fails(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """L2: when ``ModelSlot.search`` is ``False`` and the bare-id POST
-    fails, the dispatcher returns ``None``. There is no retry, and no
-    local-simulation fallback from inside this method — that's the
+    fails, no usable answer is produced. There is no retry, and no
+    local-simulation fallback from inside this path — that's the
     caller's job. The point of this test is to lock down the contract:
     one POST, one chance, no surprise retries.
+
+    F-06 UPDATE: asserted at ``_live_openrouter_response`` rather than the
+    internal dispatcher — see
+    ``test_live_response_returns_none_when_both_online_and_bare_fail`` for why
+    a 5xx is no longer a bare ``None`` inside the provider seam. The
+    search-off contract itself is unchanged.
     """
     from urllib.error import HTTPError
 
@@ -542,7 +555,7 @@ def test_per_slot_search_off_returns_none_when_bare_call_fails(
 
     monkeypatch.setattr("product_app.providers.urlopen", fake_urlopen)
 
-    result = provider_stub_service._call_openrouter_with_optional_search(
+    result = provider_stub_service._live_openrouter_response(
         openrouter_key="sk-or-v1-test",
         query_text="what is x",
         model_slot=ModelSlot(

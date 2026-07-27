@@ -6,7 +6,11 @@ import pytest
 
 from product_app.debate import DebateOutput, debate_stub_service
 from product_app.model_slots import validate_model_slots
-from product_app.providers import provider_execution_service, provider_stub_service
+from product_app.providers import (
+    TokenUsage,
+    provider_execution_service,
+    provider_stub_service,
+)
 from product_app.synthesis import SynthesisStatus, synthesis_event_recorder, synthesis_stub_service
 
 DEFAULT_MODEL_IDS = [
@@ -676,3 +680,65 @@ def test_no_templating_prefix_leaks_into_sections() -> None:
     # ...and the provenance the prefix used to convey is still available,
     # structurally. Without a key no live call happens, so this is templated.
     assert synthesis.synthesis_mode == "simulated"
+
+
+def test_synthesis_mode_reports_usable_live_text_not_merely_a_billed_call() -> None:
+    """``synthesis_mode`` is the PROVENANCE channel. It must say "live" only
+    when the user is actually reading live model prose.
+
+    This is a defect the WP-D <- main merge created, present in neither side
+    alone. F-06 deliberately returns a non-``None`` live result even when the
+    completion is BLANK, so the billed usage is recorded and a charged call
+    cannot vanish from the receipt — correct, and it must stay. But
+    ``live_call_usages`` is built from those results, so ``live_count`` counts
+    calls that were DISPATCHED, not calls that produced text. Meanwhile WP-A
+    moved provenance out of the prose (``TEMPLATED_FALLBACK_PREFIX`` is now
+    "") and into ``synthesis_mode``.
+
+    Inputs -> wrong output: all five synthesis calls return HTTP 200 with an
+    empty completion. Every section falls back to templated text, yet
+    ``live_count == 5`` so the run is labelled ``synthesis_mode == "live"`` —
+    the product presents templated prose as live model output. That is the
+    exact failure the degraded-banner contract exists to prevent.
+
+    Bite proof: compute ``synthesis_mode`` from ``len(live_call_usages)`` and
+    this reds.
+    """
+    from product_app import config
+    from product_app.providers import LiveProviderResult
+
+    def blank_but_billed(**kwargs: object) -> LiveProviderResult:
+        # A billed call whose completion came back empty.
+        return LiveProviderResult(
+            answer_text="   ",
+            sources=[],
+            usage=TokenUsage(prompt_tokens=10, completion_tokens=0, total_tokens=10),
+        )
+
+    with pytest.MonkeyPatch.context() as mp:
+        mp.setattr(provider_execution_service, "call_with_prompt", blank_but_billed)
+        mp.setattr(config.settings, "openrouter_live_execution_enabled", True, raising=False)
+        account_id, query_run_id = uuid4(), uuid4()
+        slots = validate_model_slots(DEFAULT_MODEL_IDS)
+        answers = provider_stub_service.produce_initial_answers(
+            account_id=account_id,
+            query_run_id=query_run_id,
+            query_text="Compare source-backed options",
+            model_slots=slots,
+        )
+        result = synthesis_stub_service.produce_final_synthesis(
+            account_id=account_id,
+            query_run_id=query_run_id,
+            query_text="Compare source-backed options",
+            initial_answers=answers,
+            debate_outputs=[],
+            openrouter_key="sk-or-test-live",
+        )
+
+    assert result.final_synthesis is not None
+    # The billed usage is still recorded — F-06's contract is untouched.
+    assert len(result.live_call_usages) == 5
+    # ...but the user is reading TEMPLATED prose, so it is not a live run.
+    assert result.final_synthesis.synthesis_mode != "live", (
+        "templated sections were labelled as live model output"
+    )

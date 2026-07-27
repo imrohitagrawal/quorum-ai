@@ -583,9 +583,67 @@ class InMemoryQueryRunRepository:
         failed_steps: list[str] | None = None,
         missing_steps: list[str] | None = None,
         mark_started: bool = False,
+        allow_terminal: bool = False,
     ) -> QueryRun:
+        """Apply a pipeline progress write, unless the run is already terminal.
+
+        F-05: a TERMINAL run is FINAL — every field of it, not just the label.
+        ``transition()`` already enforced that for the status
+        (``ALLOWED_TRANSITIONS[<terminal>]`` is the empty set) but
+        ``update_status`` assigned unconditionally, and eleven pipeline call
+        sites pass ``status_value``. Because ``_should_stop`` reads ONLY the
+        status field — there is no separate cancel Event — overwriting
+        ``CANCELLED`` with the next running stage did not merely mislabel the
+        run, it ERASED the cancel signal: every later ``_should_stop``
+        returned False and the run kept billing provider calls before ending
+        ``completed``, after the user had been told ``cancelled``. The same
+        write let ``_execute_query_run_safely``'s ``except BaseException``
+        backstop relabel an already-terminal run as ``failed``.
+
+        The refusal covers the WHOLE write, not just the status branch,
+        because every other argument is just as wrong on a finished run:
+
+        * the backstop's ``failed_steps=['pipeline']`` / ``missing_steps`` /
+          FAILED stage detail brand a cancelled run with a pipeline crash it
+          never suffered — and ``partial_failure_notice`` is emitted only for
+          PARTIAL/FAILED/TIMED_OUT, so the UI renders those failed steps with
+          no explanatory sentence at all;
+        * the pipeline's status-NEUTRAL ``stage_state=RUNNING`` writes leave a
+          terminal run with a stage spinning in progress forever;
+        * ``updated_at`` drives the served ``elapsed_time_ms``, which must
+          stop at the terminal event, not creep on with the doomed run.
+
+        ``allow_terminal=True`` is the narrow opt-in for the two callers that
+        legitimately annotate a run they THEMSELVES just made terminal:
+        ``cancel_query_run`` (stage → SKIPPED) and ``_degrade_run_for_deadline``
+        (stage → FAILED, plus ``_mark_remaining_stages`` behind it).
+
+        The refusal is a NO-OP, not an exception: the eleven pipeline call
+        sites are plain forward-progress statements that do not expect to
+        catch anything, and the backstop itself runs inside an ``except``
+        handler. Callers that need strict check-and-raise semantics already
+        use ``transition()``.
+
+        "Never stuck" is preserved: the guard only ever refuses a run that is
+        ALREADY terminal, so any non-terminal run can still be driven to a
+        terminal state.
+        """
         with self._lock:
+            # Read and decide under the SAME lock acquisition that writes: a
+            # check hoisted above ``with self._lock`` would be a check-then-act
+            # and a cancel landing in the window would be silently reverted.
             query_run = self._query_runs[query_run_id]
+            if query_run.status in TERMINAL_STATUSES and not allow_terminal:
+                logger.info(
+                    "query_run_terminal_write_refused",
+                    extra={
+                        "query_run_id": str(query_run_id),
+                        "current_status": query_run.status.value,
+                        "attempted_status": status_value.value if status_value else None,
+                        "attempted_stage": stage_name,
+                    },
+                )
+                return query_run
             now = datetime.now(UTC)
             if status_value is not None:
                 query_run.status = status_value
@@ -1317,11 +1375,15 @@ def cancel_query_run(
             account_id=session.account_id,
         )
         return _result_response(refreshed or query_run)
+    # ``allow_terminal``: this handler is the party that just made the run
+    # terminal, so its own stage stamp is the one post-terminal write that
+    # belongs. Everything else the pipeline still tries to write is refused.
     query_run_repository.update_status(
         query_run_id,
         stage_name=_running_stage_name(cancelled.progress),
         stage_state=StageState.SKIPPED,
         detail="Cancelled by the user.",
+        allow_terminal=True,
     )
     refreshed = query_run_repository.get(query_run_id)
     return _result_response(refreshed)
@@ -1410,6 +1472,9 @@ def _degrade_run_for_deadline(
         )
     except InvalidQueryRunTransitionError:
         return False
+    # ``allow_terminal``: the ``transition`` above is what made the run
+    # terminal, and it only got here by succeeding, so this annotation is
+    # this function's own — never a stale write onto someone else's cancel.
     query_run_repository.update_status(
         query_run_id,
         stage_name=stage_name,
@@ -1418,6 +1483,7 @@ def _degrade_run_for_deadline(
             f"Run exceeded the {deadline_seconds:g}s wall-clock deadline "
             "(NFR-004); serving the completed portion."
         ),
+        allow_terminal=True,
     )
     return True
 
@@ -1454,7 +1520,7 @@ def _execute_query_run(query_run_id: UUID, account_id: UUID) -> None:
     openrouter_key = settings.openrouter_api_key or ""
     credential_source = ProviderCredentialSource.APP_OWNED
     if settings.openrouter_live_execution_enabled and not settings.openrouter_api_key:
-        query_run_repository.update_status(
+        halted = query_run_repository.update_status(
             query_run_id,
             status_value=QueryRunStatus.FAILED,
             stage_name="initial_answers",
@@ -1463,7 +1529,10 @@ def _execute_query_run(query_run_id: UUID, account_id: UUID) -> None:
             failed_steps=["initial_answers", "debate_round_1", "debate_round_2", "synthesis"],
             missing_steps=["initial_answers", "debate_round_1", "debate_round_2", "synthesis"],
         )
-        _mark_remaining_stages(query_run_id, ["debate_round_1", "debate_round_2", "synthesis"])
+        # Only stamp the skipped stages if OUR terminal write actually
+        # landed; a cancel that won the race owns the run's story instead.
+        if halted.status is QueryRunStatus.FAILED:
+            _mark_remaining_stages(query_run_id, ["debate_round_1", "debate_round_2", "synthesis"])
         return
     query_run_repository.update_status(
         query_run_id,
@@ -1544,7 +1613,7 @@ def _execute_query_run(query_run_id: UUID, account_id: UUID) -> None:
     if not any(
         answer.status is InitialAnswerStatus.COMPLETED for answer in refreshed.initial_answers
     ):
-        query_run_repository.update_status(
+        halted = query_run_repository.update_status(
             query_run_id,
             status_value=QueryRunStatus.PARTIAL,
             stage_name="initial_answers",
@@ -1553,7 +1622,10 @@ def _execute_query_run(query_run_id: UUID, account_id: UUID) -> None:
             failed_steps=["initial_answers", "debate_round_1", "debate_round_2", "synthesis"],
             missing_steps=["debate_round_1", "debate_round_2", "synthesis"],
         )
-        _mark_remaining_stages(query_run_id, ["debate_round_1", "debate_round_2", "synthesis"])
+        # Only stamp the skipped stages if OUR terminal write actually
+        # landed; a cancel that won the race owns the run's story instead.
+        if halted.status is QueryRunStatus.PARTIAL:
+            _mark_remaining_stages(query_run_id, ["debate_round_1", "debate_round_2", "synthesis"])
         return
     query_run_repository.update_status(
         query_run_id,
@@ -1593,7 +1665,7 @@ def _execute_query_run(query_run_id: UUID, account_id: UUID) -> None:
         live_call_usages=debate_result.live_call_usages,
     )
     if not debate_result.debate_outputs:
-        query_run_repository.update_status(
+        halted = query_run_repository.update_status(
             query_run_id,
             status_value=QueryRunStatus.PARTIAL,
             stage_name="debate_round_1",
@@ -1602,7 +1674,10 @@ def _execute_query_run(query_run_id: UUID, account_id: UUID) -> None:
             failed_steps=debate_result.failed_steps,
             missing_steps=debate_result.missing_steps,
         )
-        _mark_remaining_stages(query_run_id, ["debate_round_2", "synthesis"])
+        # Only stamp the skipped stages if OUR terminal write actually
+        # landed; a cancel that won the race owns the run's story instead.
+        if halted.status is QueryRunStatus.PARTIAL:
+            _mark_remaining_stages(query_run_id, ["debate_round_2", "synthesis"])
         return
     query_run_repository.update_status(
         query_run_id,
@@ -1612,7 +1687,7 @@ def _execute_query_run(query_run_id: UUID, account_id: UUID) -> None:
         detail="Debate round 1 completed.",
     )
     if debate_result.timed_out:
-        query_run_repository.update_status(
+        halted = query_run_repository.update_status(
             query_run_id,
             status_value=QueryRunStatus.PARTIAL,
             stage_name="debate_round_2",
@@ -1621,7 +1696,10 @@ def _execute_query_run(query_run_id: UUID, account_id: UUID) -> None:
             failed_steps=debate_result.failed_steps,
             missing_steps=debate_result.missing_steps,
         )
-        _mark_remaining_stages(query_run_id, ["synthesis"])
+        # Only stamp the skipped stages if OUR terminal write actually
+        # landed; a cancel that won the race owns the run's story instead.
+        if halted.status is QueryRunStatus.PARTIAL:
+            _mark_remaining_stages(query_run_id, ["synthesis"])
         return
     query_run_repository.update_status(
         query_run_id,
@@ -2315,12 +2393,25 @@ def _running_stage_name(stages: list[QueryRunStageProgress]) -> str:
 
 
 def _mark_remaining_stages(query_run_id: UUID, stage_names: list[str]) -> None:
+    """Stamp the stages a run that JUST failed or timed out never reached.
+
+    Every call site runs immediately after this pipeline drove the run
+    terminal, so the stamp is legitimately post-terminal and opts in with
+    ``allow_terminal=True``. That opt-in is only sound because each caller
+    first confirms its own terminal write actually LANDED — ``transition``'s
+    boolean for the deadline degrades, the returned status for the direct
+    ``update_status`` ones. If a cancel won the race instead, calling this
+    would brand the cancelled run "an earlier stage failed or timed out",
+    which is both untrue and (for a cancelled run) unexplained: no
+    ``partial_failure_notice`` is emitted to account for it.
+    """
     for stage_name in stage_names:
         query_run_repository.update_status(
             query_run_id,
             stage_name=stage_name,
             stage_state=StageState.SKIPPED,
             detail="Not executed because an earlier stage failed or timed out.",
+            allow_terminal=True,
         )
 
 
