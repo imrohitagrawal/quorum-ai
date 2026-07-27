@@ -319,9 +319,9 @@ test.describe("PR6 — verdict band is agreement-led (#8/#15)", () => {
       page,
       withSynthesis({
         citation_coverage: {
-          material_claim_count: 9,
-          cited_claim_count: 2,
-          coverage_ratio: "0.22",
+          answer_count: 4,
+          sourced_answer_count: 1,
+          sourced_answer_ratio: "0.25",
           target_ratio: "0.80",
           target_met: false,
         },
@@ -330,7 +330,7 @@ test.describe("PR6 — verdict band is agreement-led (#8/#15)", () => {
 
     const caution = page.locator(".result-verdict-coverage");
     await expect(caution, "a below-target coverage must surface its own caution line").toHaveCount(1);
-    await expect(caution).toContainText("22%");
+    await expect(caution).toContainText("25%");
 
     // It must be its OWN node, not folded into the agreement line.
     //
@@ -342,7 +342,7 @@ test.describe("PR6 — verdict band is agreement-led (#8/#15)", () => {
     await expect(agreementLine, "the agreement line must exist for this assertion to mean anything").toHaveCount(1);
     const agreementText = await agreementLine.first().textContent();
     expect(agreementText).toBeTruthy();
-    expect(agreementText as string).not.toContain("22%");
+    expect(agreementText as string).not.toContain("25%");
 
     // ...and it must sit between the agreement line and the prose.
     //
@@ -536,7 +536,7 @@ test.describe("WP-B — verdict band regressions (F-04, F-18, F-21, F-22)", () =
         r.result.final_synthesis = {
           ...r.result.final_synthesis,
           synthesis_mode: "simulated",
-          citation_coverage: { material_claim_count: 32, cited_claim_count: 4, coverage_ratio: "0.13", target_ratio: "0.80", target_met: false },
+          citation_coverage: { answer_count: 4, sourced_answer_count: 3, sourced_answer_ratio: "0.75", target_ratio: "0.80", target_met: false },
         };
         return r;
       })(),
@@ -606,21 +606,21 @@ test.describe("WP-B — verdict band regressions (F-04, F-18, F-21, F-22)", () =
   // ---- F-18: never fabricate a coverage number ----------------------------
   //
   // `Number("") === 0` and `Number(null) === 0` are both finite, so a MISSING
-  // ratio renders "Only 0% of material claims carried citations" — a number the
-  // data does not support, on the most trust-sensitive line in the product.
+  // ratio renders "Only 0% of the answers carried a primary source" — a number
+  // the data does not support, on the most trust-sensitive line in the product.
   for (const [label, ratio] of [
     ["empty string", ""],
     ["null", null],
     ["whitespace", "   "],
   ] as [string, unknown][]) {
-    test(`a ${label} coverage_ratio renders NO fabricated percentage`, async ({ page }) => {
+    test(`a ${label} sourced_answer_ratio renders NO fabricated percentage`, async ({ page }) => {
       await driveWith(
         page,
         withSynthesis({
           citation_coverage: {
-            material_claim_count: 32,
-            cited_claim_count: 4,
-            coverage_ratio: ratio,
+            answer_count: 4,
+            sourced_answer_count: 3,
+            sourced_answer_ratio: ratio,
             target_ratio: "0.80",
             target_met: false,
           },
@@ -642,9 +642,9 @@ test.describe("WP-B — verdict band regressions (F-04, F-18, F-21, F-22)", () =
       page,
       withSynthesis({
         citation_coverage: {
-          material_claim_count: 32,
-          cited_claim_count: 0,
-          coverage_ratio: "0.00",
+          answer_count: 4,
+          sourced_answer_count: 0,
+          sourced_answer_ratio: "0.00",
           target_ratio: "0.80",
           target_met: false,
         },

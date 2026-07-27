@@ -252,9 +252,9 @@ def test_debate_user_prompt_includes_full_answer_excerpt() -> None:
             status=InitialAnswerStatus.COMPLETED,
             latency_ms=100,
             citation_coverage=CitationCoverage(
-                material_claim_count=1,
-                cited_claim_count=1,
-                coverage_ratio=Decimal("1.0"),
+                answer_count=1,
+                sourced_answer_count=1,
+                sourced_answer_ratio=Decimal("1.0"),
                 target_ratio=Decimal("1.0"),
                 target_met=True,
             ),

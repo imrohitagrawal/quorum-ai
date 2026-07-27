@@ -354,7 +354,7 @@ def test_online_answer_without_citations_is_supplemented_by_tavily(
         assert all(s.is_fallback for s in answer.sources)
         assert "fallback web search" in (answer.provider_notice or "")
         # Fallback sources do not count toward the model's citation coverage.
-        assert answer.citation_coverage.cited_claim_count == 0
+        assert answer.citation_coverage.sourced_answer_count == 0
 
 
 def test_online_answer_without_citations_stays_empty_without_key(

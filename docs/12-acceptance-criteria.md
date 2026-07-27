@@ -226,7 +226,7 @@ Given query cost telemetry is available, when cost is reviewed, then average, pe
 
 ## AC-031 Citation coverage measured
 
-Given a sampled set of source-backed completed queries is reviewed, when material factual claims are evaluated, then citation coverage is scored against the 80 percent target in NFR-003.
+Given a sampled set of source-backed completed queries is reviewed, when each model answer is checked for a visible primary source, then the share of answers carrying one is scored against the 80 percent target in NFR-003.
 
 - Requirement: NFR-003
 - Test: TEST-NFR-003

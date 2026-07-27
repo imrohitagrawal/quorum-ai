@@ -1,3 +1,4 @@
+from decimal import Decimal
 from typing import cast
 from uuid import uuid4
 
@@ -53,14 +54,16 @@ def test_synthesis_stub_returns_required_sections_and_quality_checks() -> None:
     assert synthesis.uncertainty
     assert "decision support only" in synthesis.recommendation
     assert synthesis.synthesis_mode == "simulated"
-    # L5d: with the honest heuristic the four ~218-char stub
-    # answers each yield 2 material claims → 8 total; 4 cited
-    # produces a 0.50 coverage ratio, which is below the 0.80
-    # target. Assert the honest ratio rather than the boolean.
-    assert synthesis.citation_coverage.material_claim_count >= 4
-    assert synthesis.citation_coverage.cited_claim_count == 4
-    assert not synthesis.citation_coverage.target_met
-    assert not synthesis.quality_checks.citation_coverage_target_met
+    # WP-C / F-03: coverage is the share of ANSWERS carrying a primary source.
+    # Four stub answers, four primary sources -> 4/4, target met. The old math
+    # divided this same boolean numerator by a chars-per-claim denominator and
+    # reported 0.50, so every run was labelled provisional.
+    # Length invariance is pinned in tests/unit/test_citation_coverage_semantics.py.
+    assert synthesis.citation_coverage.answer_count == 4
+    assert synthesis.citation_coverage.sourced_answer_count == 4
+    assert synthesis.citation_coverage.sourced_answer_ratio == Decimal("1.00")
+    assert synthesis.citation_coverage.target_met
+    assert synthesis.quality_checks.citation_coverage_target_met
     # PR-2 Defect 3 fix: with all four stub answers being
     # identical, the consensus strength is "strong", so
     # ``false_consensus_preserved`` is now correctly False.

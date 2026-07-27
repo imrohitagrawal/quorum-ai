@@ -713,6 +713,13 @@ class LayerASignals(BaseModel):
 
     model_config = ConfigDict(frozen=True)
 
+    #: WP-C / F-03: the share of ANSWERS carrying at least one primary
+    #: (non-fallback) source. Deliberately NOT renamed alongside
+    #: ``CitationCoverage``'s fields: this name is persisted verbatim inside
+    #: historical ``trust_json`` blobs and is the key of a served
+    #: ``TrustContribution``, so renaming it would make old and new records
+    #: disagree for no user-visible gain. Its MEANING changed at the WP-C
+    #: deploy; see docs/63-technical-debt-register.md.
     citation_coverage_ratio: float = Field(ge=0.0, le=1.0)
     citation_marker_grounding: float | None = Field(default=None, ge=0.0, le=1.0)
     #: Off-run URL markers on this run: cited documents the engine cannot
@@ -904,13 +911,13 @@ def evaluate_layer_a(
     completed = [a for a in initial_answers if _substantive(a)]
 
     if final_synthesis is not None:
-        coverage_ratio = float(final_synthesis.citation_coverage.coverage_ratio)
+        coverage_ratio = float(final_synthesis.citation_coverage.sourced_answer_ratio)
     else:
         aggregate = calculate_citation_coverage(
-            material_claim_count=sum(
-                a.citation_coverage.material_claim_count for a in initial_answers
-            ),
-            cited_claim_count=sum(
+            # WP-C / F-03: denominator is answers-that-produced-text, mirroring
+            # synthesis.py. Failed / cancelled slots carry ``answer_count = 0``.
+            answer_count=sum(a.citation_coverage.answer_count for a in initial_answers),
+            sourced_answer_count=sum(
                 # COVERAGE is deliberately PRIMARY-ONLY and stays ``is_fallback``-
                 # keyed — the OPPOSITE of grounding / judge-evidence (host-keyed).
                 # The citation-coverage metric measures the MODEL's OWN ``:online``
@@ -923,7 +930,7 @@ def evaluate_layer_a(
                 if any(not s.is_fallback for s in a.sources)
             ),
         )
-        coverage_ratio = float(aggregate.coverage_ratio)
+        coverage_ratio = float(aggregate.sourced_answer_ratio)
 
     # Each ANSWER's ordinals index that answer's OWN bibliography. The
     # synthesis has NO bibliography — no numbered source list for it is ever

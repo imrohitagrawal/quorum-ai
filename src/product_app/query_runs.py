@@ -88,6 +88,7 @@ from product_app.providers import (
     InitialModelAnswer,
     ProviderPath,
     TokenUsage,
+    estimate_material_claim_count,
     provider_execution_service,
 )
 from product_app.run_history_store import RunHistoryRow
@@ -374,11 +375,18 @@ class QueryRunResultResponse(BaseModel):
     #: slot count. This is deliberate: a failed slot must not be laundered into
     #: either honest bucket.
     local_count: int = Field(ge=0, default=0)
-    #: Sum of the four models' ``material_claim_count`` values. The UI
-    #: surfaces this alongside the citation coverage so the user can
-    #: audit the denominator, not just the ratio. ``0`` for runs whose
-    #: initial-answers list is empty (e.g. cost-blocked before any model
-    #: was called).
+    #: Informational only: how many material claims the four answers were
+    #: LONG ENOUGH to hold, from ``providers.estimate_material_claim_count``
+    #: (a ~200-chars-per-claim heuristic).
+    #:
+    #: WP-C / F-03: this is NOT the citation-coverage denominator any more, and
+    #: it never should have been — dividing a per-answer boolean by it made the
+    #: 80% target unreachable at any realistic answer length. Coverage now
+    #: divides answers by answers (see ``CitationCoverage``). The field is kept
+    #: because it is part of the served pre-S2 contract
+    #: (tests/contract/test_query_run_evaluation_additive.py), not because
+    #: anything computes from it. ``0`` for runs whose initial-answers list is
+    #: empty (e.g. cost-blocked before any model was called).
     material_claim_count: int = Field(ge=0, default=0)
     #: Actual cost incurred by this run, for the receipt's est→actual
     #: reconciliation. Per-call provider-usage capture is NOT yet plumbed
@@ -1620,7 +1628,7 @@ def _persist_terminal_run(query_run_id: UUID) -> None:
         citation_ratio = None
         final_synthesis = query_run.final_synthesis
         if final_synthesis is not None and final_synthesis.citation_coverage is not None:
-            citation_ratio = final_synthesis.citation_coverage.coverage_ratio
+            citation_ratio = final_synthesis.citation_coverage.sourced_answer_ratio
         row = RunHistoryRow(
             query_run_id=str(query_run.query_run_id),
             account_id=str(query_run.account_id),
@@ -1996,8 +2004,11 @@ def _result_response(query_run: QueryRun) -> QueryRunResultResponse:
         if answer.provider_path is ProviderPath.OPENROUTER_SEARCH
         and answer.status is InitialAnswerStatus.COMPLETED
     )
+    # WP-C / F-03: read straight from the length estimator. It used to be
+    # summed off ``citation_coverage``, back when coverage's denominator WAS
+    # this figure; coverage now counts answers, so the two are independent.
     material_claim_count = sum(
-        answer.citation_coverage.material_claim_count for answer in query_run.initial_answers
+        estimate_material_claim_count(answer.answer_text) for answer in query_run.initial_answers
     )
     agreement, position_movements = build_agreement_and_positions(
         initial_answers=query_run.initial_answers,

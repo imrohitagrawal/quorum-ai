@@ -91,7 +91,7 @@ const MESSY_CONSENSUS =
 const MESSY_DISAGREEMENT =
   "Two models **dissent** on the secondary point (whether to gate the export behind a manual review). Preserved here rather than smoothed over.";
 const MESSY_SOURCE_SUPPORT =
-  "Backed by **cited** sources across all responding models. Coverage ratio 0.85 against a 0.80 target.";
+  "Backed by **cited** sources across all responding models. Source coverage 1.00 against a 0.80 target.";
 // Deliberately > 180 chars with a `**bold**` run STRADDLING character 180
 // (opening `**` at index 167, closing at 229): the old
 // `truncateText(uncertaintyText, 180)` sliced here mid-run, leaving a dangling
@@ -173,14 +173,21 @@ export const SLOTS = [
   { slot_number: 3, model_id: "google/gemini-2.5-flash", display_label: "Gemini 2.5 Flash" },
   { slot_number: 4, model_id: "deepseek/deepseek-v3.1", display_label: "DeepSeek V3.1" },
 ];
-const CC = { material_claim_count: 12, cited_claim_count: 10, coverage_ratio: "0.85", target_ratio: "0.80", target_met: true };
+// WP-C / F-03: coverage is the share of ANSWERS carrying a primary source, so
+// a PER-ANSWER shape is always out of 1. The old fixture used 12/10 = 0.85,
+// which is not a shape the server can emit for one answer at all.
+const CC = { answer_count: 1, sourced_answer_count: 1, sourced_answer_ratio: "1.00", target_ratio: "0.80", target_met: true };
 // The empty-citation case (#31 shape): a slot that answered but returned NO sources.
-const CC_EMPTY = { material_claim_count: 9, cited_claim_count: 0, coverage_ratio: "0.00", target_ratio: "0.80", target_met: false };
-// BELOW-TARGET coverage on an otherwise healthy run — the shape the server
-// actually emits today (F-03: cited_claim_count is a boolean per answer while
-// material_claim_count is ~1 per 200 chars, so a 4×1500-char run tops out near
-// 12.5%). Drives the verdict band's caution line.
-const CC_BELOW = { material_claim_count: 32, cited_claim_count: 4, coverage_ratio: "0.13", target_ratio: "0.80", target_met: false };
+const CC_EMPTY = { answer_count: 1, sourced_answer_count: 0, sourced_answer_ratio: "0.00", target_ratio: "0.80", target_met: false };
+// BELOW-TARGET coverage at RUN level, and now internally consistent with the
+// four per-answer shapes above: slot 3 is CC_EMPTY, so 3 of 4 answers carry a
+// primary source -> 0.75, just under the 0.80 target. Drives the verdict band's
+// caution line.
+//
+// This replaces a 4/32 = 0.13 shape that was the F-03 defect itself: a boolean
+// numerator over a chars-per-claim denominator. That number was UNREACHABLE by
+// any well-sourced run, so the caution line it drove fired on every run.
+const CC_BELOW = { answer_count: 4, sourced_answer_count: 3, sourced_answer_ratio: "0.75", target_ratio: "0.80", target_met: false };
 const BY_MODEL = [
   { model_id: "openai/gpt-4o-mini", display_name: "GPT-4o-mini", usd: "0.034", kind: "model" },
   { model_id: "anthropic/claude-haiku-4.5", display_name: "Claude Haiku 4.5", usd: "0.062", kind: "model" },
@@ -299,13 +306,17 @@ export const goldenConsensusResp = () => {
       citation_coverage_target_met: false,
     },
     source_support:
-      "Backed by **cited** sources on one of four responding models. Coverage ratio 0.13 against a 0.80 target.",
+      "Backed by **cited** sources on three of four responding models. Source coverage 0.75 against a 0.80 target.",
     disagreement:
       "No model **dissents**: all four converged on the same recommendation, including the secondary point about gating the export behind a manual review.",
   };
-  // The top-level mirror of the same count (rendered elsewhere in the result
-  // view) must agree with citation_coverage.material_claim_count.
-  resp.material_claim_count = CC_BELOW.material_claim_count;
+  // WP-C / F-03: ``material_claim_count`` is an INDEPENDENT length estimate now
+  // (chars/200 across the four answers), not the coverage denominator, so it is
+  // deliberately NOT derived from CC_BELOW any more. Nothing renders it — the
+  // "Claims inspected" card was removed with the redefinition — but the served
+  // field is still part of the pre-S2 contract, so the fixture carries a
+  // plausible value.
+  resp.material_claim_count = 32;
   return resp;
 };
 

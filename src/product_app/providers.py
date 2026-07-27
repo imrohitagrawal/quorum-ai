@@ -93,9 +93,34 @@ class SourceReference(BaseModel):
 
 
 class CitationCoverage(BaseModel):
-    material_claim_count: int = Field(ge=0)
-    cited_claim_count: int = Field(ge=0)
-    coverage_ratio: Decimal = Field(ge=Decimal("0"), le=Decimal("1"))
+    """How much of the panel's output carries a primary source.
+
+    WP-C / F-03. The metric is **the fraction of answers that carry at least
+    one primary (non-fallback) source** — nothing more, and the field names say
+    so. It used to divide a per-answer BOOLEAN by a characters-based estimate
+    of "material claims", so the numerator and denominator did not share units
+    and a run of four long, fully-sourced answers scored ~12% against an 80%
+    target. Every run was therefore labelled provisional and the recommendation
+    always said "pause for human review".
+
+    What this metric does NOT claim: that each individual assertion inside an
+    answer is supported. Counting sources says a citation is present; it says
+    nothing about whether the citation supports the claim. The signal that
+    checks whether a citation marker resolves to a real source is
+    ``citation_marker_grounding`` in :mod:`product_app.evaluation` — a
+    different, host-keyed authority. Do not conflate the two.
+    """
+
+    #: Answers in scope. ``1`` for a completed answer; ``0`` for a failed,
+    #: cancelled or deadline-exceeded answer, which produced no text to source.
+    #: At run level this is the number of answers that produced text.
+    answer_count: int = Field(ge=0)
+    #: Of those, how many carried at least one ``is_fallback=False`` source.
+    #: Fallback sources are real pages, but they are not the model's own
+    #: research, so they deliberately do not count toward the target.
+    sourced_answer_count: int = Field(ge=0)
+    #: ``sourced_answer_count / answer_count``, quantized to 2dp.
+    sourced_answer_ratio: Decimal = Field(ge=Decimal("0"), le=Decimal("1"))
     target_ratio: Decimal = CITATION_COVERAGE_TARGET
     target_met: bool
 
@@ -460,17 +485,14 @@ class ProviderExecutionService:
         # the model's own research, so we exclude them from the coverage
         # metric to avoid inflating the score.
         #
-        # L5d: ``material_claim_count`` is now an honest heuristic
-        # rather than a constant 1. We estimate one material claim per
-        # ~200 characters of answer text (industry rule-of-thumb:
-        # roughly one factual assertion per paragraph). For a 500-char
-        # answer this gives 2-3 claims; with a single citation the
-        # coverage ratio is 33-50%, which surfaces as ``target_met =
-        # false`` — the honest number. The ``max(1, …)`` floor keeps
-        # zero-length / placeholder answers valid for the calculator.
-        material_claim_count = estimate_material_claim_count(answer_text)
+        # WP-C / F-03: one completed answer is exactly ONE unit of coverage,
+        # and it either carries a primary source or it does not. The previous
+        # denominator was ``estimate_material_claim_count(answer_text)`` — a
+        # characters-based figure — against this same boolean numerator, so a
+        # long, fully-sourced answer scored a low ratio purely for being long.
         primary_source_count = sum(1 for source in sources if not source.is_fallback)
-        cited_claim_count = 1 if primary_source_count > 0 else 0
+        answer_count = 1
+        sourced_answer_count = 1 if primary_source_count > 0 else 0
         return InitialModelAnswer(
             slot_number=model_slot.slot_number,
             model_id=model_slot.model_id,
@@ -483,8 +505,8 @@ class ProviderExecutionService:
             status=InitialAnswerStatus.COMPLETED,
             latency_ms=duration_ms,
             citation_coverage=calculate_citation_coverage(
-                material_claim_count=material_claim_count,
-                cited_claim_count=cited_claim_count,
+                answer_count=answer_count,
+                sourced_answer_count=sourced_answer_count,
             ),
             provider_notice=provider_notice,
             token_usage=token_usage,
@@ -522,9 +544,16 @@ class ProviderExecutionService:
             fallback_used=False,
             status=InitialAnswerStatus.FAILED,
             latency_ms=duration_ms,
+            # WP-C / F-03: a FAILED answer produced no text to source, so it
+            # is out of the coverage denominator entirely — the same treatment
+            # the cancelled and deadline-exceeded paths below already had. A
+            # missing slot is penalised by the ``completeness`` signal; charging
+            # it against coverage too would re-create a floor the metric cannot
+            # reach. (It previously passed ``estimate_material_claim_count("")``
+            # == 1, so a failed answer silently diluted the run's ratio.)
             citation_coverage=calculate_citation_coverage(
-                material_claim_count=estimate_material_claim_count(""),
-                cited_claim_count=0,
+                answer_count=0,
+                sourced_answer_count=0,
             ),
             error_code="PROVIDER_UNAVAILABLE",
             provider_notice=(
@@ -567,8 +596,8 @@ class ProviderExecutionService:
             status=InitialAnswerStatus.FAILED,
             latency_ms=0,
             citation_coverage=calculate_citation_coverage(
-                material_claim_count=0,
-                cited_claim_count=0,
+                answer_count=0,
+                sourced_answer_count=0,
             ),
             error_code="CANCELLED",
             provider_notice="Cancelled before model call started.",
@@ -603,8 +632,8 @@ class ProviderExecutionService:
             status=InitialAnswerStatus.FAILED,
             latency_ms=0,
             citation_coverage=calculate_citation_coverage(
-                material_claim_count=0,
-                cited_claim_count=0,
+                answer_count=0,
+                sourced_answer_count=0,
             ),
             error_code="RUN_DEADLINE_EXCEEDED",
             provider_notice="Run deadline reached before this model answered.",
@@ -1277,23 +1306,26 @@ def _extract_citations(
 _INLINE_MARKDOWN_LINK_RE = re.compile(r"\[([^\]]+)\]\((https?://[^\s)]+)\)")
 
 
-#: L5d: characters-per-material-claim heuristic. Industry rule of
-#: thumb is one factual assertion per ~150-250 characters of
-#: generated text (i.e. one per short paragraph). 200 is a
-#: defensible mid-point: short enough to make coverage honest
-#: (a 600-char answer gets 3 claims; a single citation is 33%),
-#: long enough that a 200-char answer still gets 1 claim.
+#: Characters-per-material-claim heuristic. Industry rule of thumb is one
+#: factual assertion per ~150-250 characters of generated text (i.e. one per
+#: short paragraph); 200 is a defensible mid-point.
+#:
+#: WP-C / F-03: this is a LENGTH ESTIMATE, not the citation-coverage
+#: denominator. It used to be, and that was the defect — dividing a per-answer
+#: boolean by it made the 80% target unreachable at any realistic answer
+#: length. Its only remaining job is the informational
+#: ``QueryRunResultResponse.material_claim_count`` figure. Do not reintroduce
+#: it into :func:`calculate_citation_coverage`.
 MATERIAL_CLAIM_CHAR_DENOMINATOR = 200
 
 
 def estimate_material_claim_count(answer_text: str) -> int:
-    """Estimate the number of material claims in ``answer_text``.
+    """Roughly how many material claims ``answer_text`` is long enough to hold.
 
-    The estimate is a heuristic — true claim extraction would need
-    an LLM call. ``max(1, ceil(len / 200))`` gives a defensible
-    number that matches the plan's "500-token answer → 2-3 material
-    claims" target. The floor of 1 keeps the citation-coverage
-    calculator valid for empty / placeholder answers.
+    A length heuristic, not claim extraction — true extraction would need its
+    own LLM call. Reported for information only; see
+    :data:`MATERIAL_CLAIM_CHAR_DENOMINATOR` for why it is NOT the coverage
+    denominator.
     """
     text = (answer_text or "").strip()
     if not text:
@@ -1303,24 +1335,31 @@ def estimate_material_claim_count(answer_text: str) -> int:
 
 def calculate_citation_coverage(
     *,
-    material_claim_count: int,
-    cited_claim_count: int,
+    answer_count: int,
+    sourced_answer_count: int,
 ) -> CitationCoverage:
-    if material_claim_count <= 0:
+    """Coverage = the share of answers carrying at least one primary source.
+
+    Both arguments are counted in the SAME unit — answers. That is the whole
+    point of WP-C / F-03: the previous signature took a boolean numerator and a
+    characters-derived denominator, so the ratio fell as answers got longer
+    even when every one of them was sourced.
+    """
+    if answer_count <= 0:
         return CitationCoverage(
-            material_claim_count=0,
-            cited_claim_count=0,
-            coverage_ratio=Decimal("0"),
+            answer_count=0,
+            sourced_answer_count=0,
+            sourced_answer_ratio=Decimal("0"),
             target_met=False,
         )
-    coverage_ratio = (Decimal(cited_claim_count) / Decimal(material_claim_count)).quantize(
+    sourced_answer_ratio = (Decimal(sourced_answer_count) / Decimal(answer_count)).quantize(
         Decimal("0.01")
     )
     return CitationCoverage(
-        material_claim_count=material_claim_count,
-        cited_claim_count=cited_claim_count,
-        coverage_ratio=coverage_ratio,
-        target_met=coverage_ratio >= CITATION_COVERAGE_TARGET,
+        answer_count=answer_count,
+        sourced_answer_count=sourced_answer_count,
+        sourced_answer_ratio=sourced_answer_ratio,
+        target_met=sourced_answer_ratio >= CITATION_COVERAGE_TARGET,
     )
 
 

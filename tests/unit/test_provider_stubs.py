@@ -91,20 +91,24 @@ def test_provider_events_are_non_secret_and_record_source_count() -> None:
 
 
 def test_citation_coverage_scores_against_target() -> None:
-    passing = calculate_citation_coverage(material_claim_count=5, cited_claim_count=4)
-    failing = calculate_citation_coverage(material_claim_count=5, cited_claim_count=3)
+    # WP-C / F-03: both arguments are counted in ANSWERS. 4 of 5 answers
+    # sourced clears the 0.80 bar; 3 of 5 does not.
+    passing = calculate_citation_coverage(answer_count=5, sourced_answer_count=4)
+    failing = calculate_citation_coverage(answer_count=5, sourced_answer_count=3)
 
-    assert passing.coverage_ratio == Decimal("0.8")
+    assert passing.sourced_answer_ratio == Decimal("0.8")
     assert passing.target_met
-    assert failing.coverage_ratio == Decimal("0.6")
+    assert failing.sourced_answer_ratio == Decimal("0.6")
     assert not failing.target_met
 
 
 def test_estimate_material_claim_count_uses_200_char_heuristic() -> None:
-    # L5d: the estimator must (a) floor at 1, (b) cap to one
-    # claim per 200 chars, and (c) never return 0 even for
-    # empty / placeholder input. These cases are the contract
-    # that the rest of the citation-coverage math depends on.
+    # The estimator must (a) floor at 1, (b) cap to one claim per 200 chars,
+    # and (c) never return 0 even for empty / placeholder input.
+    #
+    # WP-C / F-03: this is now a LENGTH estimate reported for information only.
+    # Nothing in the citation-coverage math depends on it any more — that
+    # dependency was the defect. See tests/unit/test_citation_coverage_semantics.py.
     empty = estimate_material_claim_count("")
     short = estimate_material_claim_count("x" * 100)
     medium = estimate_material_claim_count("x" * 200)
@@ -121,11 +125,14 @@ def test_estimate_material_claim_count_uses_200_char_heuristic() -> None:
 
 
 def test_estimate_material_claim_count_with_real_stub_text_returns_2() -> None:
-    # L5d: the local-simulation stub answer is exactly 218 chars
-    # long, which yields 2 material claims. This locks in the
-    # integration-test expectation that the stub text produces
-    # coverage_ratio = 0.50 (2 claims, 1 citation), not the
-    # dishonest 1.0 (1 claim, 1 citation).
+    # The local-simulation stub answer is exactly 218 chars long, which yields
+    # 2 material claims. Pinned because the served, informational
+    # ``QueryRunResultResponse.material_claim_count`` is summed from it.
+    #
+    # WP-C / F-03: this figure NO LONGER feeds the coverage ratio. It used to,
+    # and that made a fully-sourced 218-char answer score 0.50 while the same
+    # answer at 1500 chars scored 0.13 — the same evidence, a different number,
+    # purely because of length.
     slot = validate_model_slots(
         [
             "openai/gpt-4o-mini",
@@ -644,10 +651,11 @@ def test_cancelled_answer_has_expected_shape() -> None:
     assert answer.error_code == "CANCELLED"
     assert answer.provider_notice is not None
     assert "Cancelled" in answer.provider_notice
-    # Empty answer produces zero-claim coverage.
-    assert answer.citation_coverage.material_claim_count == 0
-    assert answer.citation_coverage.cited_claim_count == 0
-    assert answer.citation_coverage.coverage_ratio == Decimal("0")
+    # A cancelled answer produced no text, so it is out of the coverage
+    # denominator entirely (WP-C / F-03).
+    assert answer.citation_coverage.answer_count == 0
+    assert answer.citation_coverage.sourced_answer_count == 0
+    assert answer.citation_coverage.sourced_answer_ratio == Decimal("0")
 
 
 class _FakeResponse:

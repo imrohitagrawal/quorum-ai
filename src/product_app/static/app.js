@@ -2534,25 +2534,25 @@
   }
 
   /**
-   * WP-B/F-18. Parse a server ``coverage_ratio`` into a finite number, or null
+   * WP-B/F-18. Parse a server ``sourced_answer_ratio`` into a finite number, or null
    * when the server did not actually measure one.
    *
    * The trap this closes: ``Number("")``, ``Number(null)``, ``Number("   ")``
    * and ``Number([])`` are ALL 0 — and 0 is finite. So a `Number.isFinite`
-   * guard happily turned an absent measurement into "0% of material claims
-   * carried citations", which is a number the data cannot support, printed on
+   * guard happily turned an absent measurement into "0% of the answers carried
+   * a primary source", which is a number the data cannot support, printed on
    * the surface whose entire job is honesty about evidence.
    *
    * A genuine measured zero ("0.00", or the number 0) still returns 0. Only
    * absence — or a value outside [0,1], which no honest measurement can be —
    * returns null, and null renders the "—" no-data treatment rather than a
    * number. Clamping was considered and rejected: a clamped 16 would print
-   * "Only 100% of material claims carried citations", indistinguishable from a
-   * legitimate 100% and self-contradictory as prose. Suppressing the figure is
+   * "Only 100% of the answers carried a primary source", indistinguishable from
+   * a legitimate 100% and self-contradictory as prose. Suppressing the figure is
    * the honest failure mode; inventing a plausible one is not.
    *
-   * SCOPE, honestly stated: the server's `CitationCoverage.coverage_ratio` is a
-   * required `Decimal` bounded `ge=0, le=1` (providers.py:97), so a conforming
+   * SCOPE, honestly stated: the server's `CitationCoverage.sourced_answer_ratio`
+   * is a required `Decimal` bounded `ge=0, le=1`, so a conforming
    * backend cannot send ""/null/out-of-range — FastAPI response validation
    * rejects it first. This is defence in depth against a schema regression or a
    * hand-rolled payload, not a fix for something observed in production. The
@@ -2621,23 +2621,26 @@
 
     // Coverage caution — a SEPARATE line, only when coverage missed its target.
     // Kept out of the agreement line on purpose: merging them is what produced
-    // the contradiction. ``coverage_ratio`` is a decimal string from the server.
+    // the contradiction. ``sourced_answer_ratio`` is a decimal string from the
+    // server: WP-C/F-03, the share of ANSWERS carrying a primary source. It used
+    // to be a boolean over a chars-per-claim estimate, so this caution fired on
+    // essentially every run no matter how well-sourced it was.
     const coverage = fs.citation_coverage || null;
     if (coverage && coverage.target_met === false) {
       // WP-B/F-18: ``Number.isFinite`` alone is NOT enough — Number(""),
       // Number(null) and Number("   ") are all 0, which is finite, so a MISSING
-      // ratio rendered "Only 0% of material claims carried citations": a
+      // ratio rendered "Only 0% of the answers carried a primary source": a
       // fabricated measurement on the most trust-sensitive line in the product.
       // Reject anything that is not a non-empty numeric string/number BEFORE
       // coercing. A genuine measured "0.00" still reports 0% — see
       // verdict-band.spec.ts, which pins both directions.
-      const ratio = coverageRatioOrNull(coverage.coverage_ratio);
+      const ratio = coverageRatioOrNull(coverage.sourced_answer_ratio);
       if (ratio !== null) {
         content.appendChild(
           mkEl(
             "span",
             "result-verdict-coverage",
-            `Only ${Math.round(ratio * 100)}% of material claims carried citations — treat this as provisional.`,
+            `Only ${Math.round(ratio * 100)}% of the answers carried a primary source — treat this as provisional.`,
           ),
         );
       }
@@ -2720,14 +2723,18 @@
       }),
     );
 
-    // Source support — BLUE. Percentage from citation_coverage; source count is
-    // NON-fallback sources across model_answers. Degrade gracefully if absent.
+    // Source support — BLUE. Percentage is ``sourced_answer_ratio`` (the share
+    // of ANSWERS carrying a primary source, WP-C/F-03); the sub-count is the
+    // number of DISTINCT non-fallback sources across model_answers. The two are
+    // deliberately different quantities — the caption names the percentage's
+    // denominator so they cannot be read as numerator/denominator of each other.
+    // Degrade gracefully if absent.
     const coverage = fs && fs.citation_coverage ? fs.citation_coverage : null;
     let coveragePct = null;
     if (coverage) {
       // WP-B/F-18: same trap as the verdict band's caution line — an absent
       // ratio must render the "—" no-data treatment, never a fabricated 0%.
-      const ratio = coverageRatioOrNull(coverage.coverage_ratio);
+      const ratio = coverageRatioOrNull(coverage.sourced_answer_ratio);
       if (ratio !== null) coveragePct = Math.round(ratio * 100);
     }
     const answers = Array.isArray(res.model_answers) ? res.model_answers : [];
@@ -2750,7 +2757,7 @@
         kicker: "Source support",
         value: coveragePct != null ? `${coveragePct}%` : "—",
         valueSub: sourceSub,
-        caption: "Material claims scored against citations.",
+        caption: "Share of answers carrying a primary source.",
       }),
     );
 
@@ -2825,7 +2832,7 @@
     citation_marker_grounding:
       "Some citation markers did not point at a source on this run.",
     live_ratio: "Not every answer came from a live model.",
-    citation_coverage_ratio: "Not every material claim carried a citation.",
+    citation_coverage_ratio: "Not every answer carried a primary source.",
     completeness: "Not every model slot produced a usable answer.",
     disagreement_integrity:
       "A polar disagreement was flattened in the synthesis.",
@@ -4170,11 +4177,11 @@
   // they are never generated by a model, even with a live API key.
   const SYNTHESIS_TOOLTIPS = {
     "Consensus":
-      "A templated summary of how many of the four models returned a usable answer, and what fraction of claims were supported by visible sources. Templated by Quorum; no model generates this.",
+      "A templated summary of how many of the four models returned a usable answer, and what share of those answers carried a visible source. Templated by Quorum; no model generates this.",
     "Disagreement":
       "A templated note about preserved disagreement — typically whether the four answers diverged on which provider path was used. Templated by Quorum; no model generates this.",
     "Source support":
-      "The average ratio of visible source references to inspected claims across the four answers, expressed as a percentage. Templated by Quorum; no model generates this.",
+      "The share of the four answers that carried at least one primary source reference, as a percentage. It counts whether a source is PRESENT on each answer — it does not check that the source supports what the answer says. Templated by Quorum; no model generates this.",
     "Uncertainty":
       "A templated statement about how much of the run's evidence is uncertain, based on failed answers and low coverage. Templated by Quorum; no model generates this.",
     "Recommendation":
@@ -4931,21 +4938,15 @@
     // wrappers from ``proceedWithRun`` / ``pollRun``.
     // A status update in the middle of a run is not a time
     // change, so we do not touch the time card from here.
-    // Surface the citation coverage denominator so users can audit the
-    // ratio itself. ``material_claim_count`` is the sum of the four
-    // models' material-claim counts. We avoid displaying this when the
-    // run has no initial answers yet (cost-blocked, pending, etc.).
-    const claimMeta = el("claim-meta");
-    if (claimMeta) {
-      const rawCount = result?.material_claim_count ?? 0;
-      const count = Number.isFinite(Number(rawCount)) ? Number(rawCount) : 0;
-      const finished = status === "completed" || status === "partial" || status === "failed" || status === "timed_out";
-      if (finished && count > 0) {
-        claimMeta.textContent = `${count.toLocaleString()} material claim${count === 1 ? "" : "s"} inspected`;
-      } else {
-        claimMeta.textContent = "";
-      }
-    }
+    // WP-C / F-03: the "Claims inspected" meta card is GONE. Its stated job was
+    // "surface the citation coverage denominator so users can audit the ratio
+    // itself" — and after the redefinition it was no longer that denominator.
+    // Coverage now counts answers, while ``material_claim_count`` remained a
+    // characters-per-claim LENGTH estimate. Standing beside the "Source support"
+    // percentage it invited exactly the numerator/denominator misreading this
+    // work package exists to remove, so the card was deleted rather than
+    // relabelled. The API field is retained (served pre-S2 contract) but nothing
+    // renders it.
   }
 
   function updateQueryValidation() {

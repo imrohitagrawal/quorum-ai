@@ -58,14 +58,13 @@ def test_query_run_response_marks_local_simulation_when_live_execution_is_disabl
     )
     assert all(answer["provider_path"] == "local_simulation" for answer in body["initial_answers"])
     assert all(answer["sources"] for answer in body["initial_answers"])
-    # L5d: the stub text is ~218 chars → 2 material claims; with one
-    # citation that is 50% coverage, so target_met is intentionally
-    # False (this is the honest ratio, not the dishonest constant-1
-    # denominator). Assert the heuristic, not the boolean.
+    # WP-C / F-03: one completed answer is one unit of coverage, and each stub
+    # answer carries a primary source — so every answer is 1/1 and meets the
+    # target. Answer LENGTH no longer moves this number.
     assert all(
-        answer["citation_coverage"]["material_claim_count"] >= 2
-        and answer["citation_coverage"]["cited_claim_count"] == 1
-        and not answer["citation_coverage"]["target_met"]
+        answer["citation_coverage"]["answer_count"] == 1
+        and answer["citation_coverage"]["sourced_answer_count"] == 1
+        and answer["citation_coverage"]["target_met"]
         for answer in body["initial_answers"]
     )
     assert all(

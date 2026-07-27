@@ -20,7 +20,7 @@ const SLOTS = [
   { slot_number: 3, model_id: "google/gemini-2.5-flash", display_label: "Gemini 2.5 Flash" },
   { slot_number: 4, model_id: "nvidia/nemotron-3-super-120b-a12b", display_label: "Nemotron 3 Super 120B" },
 ];
-const CC = { material_claim_count: 12, cited_claim_count: 10, coverage_ratio: "0.85", target_ratio: "0.80", target_met: true };
+const CC = { answer_count: 1, sourced_answer_count: 1, sourced_answer_ratio: "1.00", target_ratio: "0.80", target_met: true };
 const BY_MODEL = [
   { model_id: "openai/gpt-4o-mini", display_name: "GPT-4o-mini", usd: "0.034", kind: "model" },
   { model_id: "anthropic/claude-haiku-4.5", display_name: "Claude Haiku 4.5", usd: "0.062", kind: "model" },

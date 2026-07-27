@@ -129,7 +129,8 @@ _RECOMMENDATION_PROMPT = (
     "safety, or regulated professional advice.'\n"
     "2. If `failed_count > 0`, lead with that fact in the first "
     "sentence — do not bury it.\n"
-    "3. If citation coverage is below 80%, recommend pausing for "
+    "3. If source coverage — the share of answers carrying a primary "
+    "source — is below 80%, recommend pausing for "
     "human review before any action.\n"
     "4. Otherwise recommend acting on the consensus pending a "
     "human source audit.\n"
@@ -265,19 +266,23 @@ class SynthesisOrchestrationService:
         if safety_acknowledgements is None:
             safety_acknowledgements = []
 
-        # Aggregated coverage excludes fallback citations to avoid inflating
-        # the score. See providers.calculate_citation_coverage for context.
-        material_claim_count = sum(
-            answer.citation_coverage.material_claim_count for answer in initial_answers
-        )
-        primary_cited_claim_count = sum(
+        # WP-C / F-03: coverage is the share of ANSWERS carrying at least one
+        # primary source. Both terms are counted in answers. The denominator
+        # sums the per-answer ``answer_count``, so failed / cancelled /
+        # deadline-exceeded slots (which carry 0) are out of scope — they
+        # produced no text to source, and ``completeness`` already penalises
+        # them. Aggregated coverage still excludes fallback citations, so a
+        # fallback-sourced answer counts in the denominator but not the
+        # numerator. See providers.calculate_citation_coverage.
+        answer_count = sum(answer.citation_coverage.answer_count for answer in initial_answers)
+        sourced_answer_count = sum(
             1
             for answer in initial_answers
             if any(not source.is_fallback for source in answer.sources)
         )
         coverage = calculate_citation_coverage(
-            material_claim_count=material_claim_count,
-            cited_claim_count=primary_cited_claim_count,
+            answer_count=answer_count,
+            sourced_answer_count=sourced_answer_count,
         )
 
         failed_count = sum(
@@ -301,7 +306,7 @@ class SynthesisOrchestrationService:
             initial_answers=initial_answers,
             debate_outputs=debate_outputs,
             failed_count=failed_count,
-            coverage_ratio=coverage.coverage_ratio,
+            coverage_ratio=coverage.sourced_answer_ratio,
         )
 
         # PERF-P0: parallelize the 5 synthesis section calls. The
@@ -461,7 +466,7 @@ class SynthesisOrchestrationService:
             query_run_id=query_run_id,
             status=SynthesisStatus.COMPLETED,
             duration_ms=duration_ms,
-            citation_coverage_ratio=str(coverage.coverage_ratio),
+            citation_coverage_ratio=str(coverage.sourced_answer_ratio),
             false_consensus_preserved=false_consensus_preserved,
             high_stakes_warning_required=high_stakes_required,
         )
@@ -501,7 +506,8 @@ class SynthesisOrchestrationService:
         # already focused on a specific lens.
         lines.append("")
         lines.append(
-            f"Coverage ratio: {Decimal(str(coverage_ratio)) * 100:.0f}% of material claims cited."
+            f"Source coverage: {Decimal(str(coverage_ratio)) * 100:.0f}% of the answers "
+            "carried at least one primary source."
         )
         lines.append(f"Failed model count: {failed_count}.")
         lines.append("")
@@ -563,7 +569,7 @@ class SynthesisOrchestrationService:
                 None,
                 None,
             )
-        avg_cited = round(coverage.coverage_ratio * 100)
+        sourced_pct = round(coverage.sourced_answer_ratio * 100)
         # PR-2: the templated consensus text now varies by
         # strength. "strong" and "weak" both describe a real
         # signal; "divided" frames the section as "the models
@@ -571,23 +577,23 @@ class SynthesisOrchestrationService:
         if consensus_strength == "strong":
             base = (
                 f"Four models were asked the same question; {len(successful)} returned "
-                f"a usable response and broadly agree. Average visible source references "
-                f"support roughly {avg_cited}% of the claims that were inspected. "
+                f"a usable response and broadly agree. Roughly {sourced_pct}% of those "
+                "answers carried at least one visible source reference. "
                 "Treat the consensus as a working hypothesis, not a verdict."
             )
         elif consensus_strength == "divided":
             base = (
                 f"Four models were asked the same question; {len(successful)} returned "
-                f"a usable response but did not agree. Average visible source references "
-                f"support roughly {avg_cited}% of the claims that were inspected. "
+                f"a usable response but did not agree. Roughly {sourced_pct}% of those "
+                "answers carried at least one visible source reference. "
                 "Disagreement is preserved as the dominant signal — do not treat the "
                 "consensus as a verdict."
             )
         else:
             base = (
                 f"Four models were asked the same question; {len(successful)} returned "
-                f"a usable response. Average visible source references support roughly "
-                f"{avg_cited}% of the claims that were inspected. Some models disagreed "
+                f"a usable response. Roughly {sourced_pct}% of those answers carried at "
+                "least one visible source reference. Some models disagreed "
                 "on points; treat the consensus as a working hypothesis, not a verdict."
             )
         templated = TEMPLATED_FALLBACK_PREFIX + base
@@ -665,7 +671,7 @@ class SynthesisOrchestrationService:
         base = (
             f"{cited} of {total} models returned visible source references. The references come "
             "from the primary provider; fallback sources are listed separately and are not "
-            "counted toward the citation coverage target."
+            "counted toward the source coverage target."
         )
         templated = TEMPLATED_FALLBACK_PREFIX + base
         live = self._call_synthesis_model(
@@ -739,14 +745,18 @@ class SynthesisOrchestrationService:
         if target_met and failed_count == 0:
             base = (
                 "Recommendation: act on the consensus only after a human reviewer has audited "
-                "the visible source references. The citation coverage target is met, but this is "
+                "the visible source references. The source coverage target is met, but this is "
                 "decision support only and is not medical, legal, financial, safety, or regulated "
                 "professional advice."
             )
         else:
             base = (
                 "Recommendation: do not act on the consensus yet. "
-                + ("The citation coverage target is below 80%. " if not target_met else "")
+                + (
+                    "Fewer than 80% of the answers carried a primary source. "
+                    if not target_met
+                    else ""
+                )
                 + (
                     f"At least one model ({failed_count}) failed to return a usable response. "
                     if failed_count > 0

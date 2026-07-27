@@ -78,14 +78,15 @@ def test_result_endpoint_projects_model_answers_debate_cost_elapsed_and_synthesi
     assert "disagreement" in synthesis["disagreement"]
     assert "visible source references" in synthesis["source_support"]
     assert "decision support only" in synthesis["recommendation"]
-    # L5d: with the honest heuristic the stub answers yield 2
-    # material claims each → 8 total; 4 cited produces a 0.50
-    # coverage ratio, below the 0.80 target. Assert the honest
-    # ratio rather than the boolean.
-    assert synthesis["citation_coverage"]["material_claim_count"] >= 4
-    assert synthesis["citation_coverage"]["cited_claim_count"] == 4
-    assert synthesis["citation_coverage"]["target_met"] is False
-    assert synthesis["quality_checks"]["citation_coverage_target_met"] is False
+    # WP-C / F-03: coverage is the share of ANSWERS carrying a primary source.
+    # All four local-simulation answers cite one, so 4/4 = 1.00 and the target
+    # is met. The old chars-per-claim denominator reported 0.50 for this exact
+    # run and told the user to pause for human review.
+    assert synthesis["citation_coverage"]["answer_count"] == 4
+    assert synthesis["citation_coverage"]["sourced_answer_count"] == 4
+    assert synthesis["citation_coverage"]["sourced_answer_ratio"] == "1.00"
+    assert synthesis["citation_coverage"]["target_met"] is True
+    assert synthesis["quality_checks"]["citation_coverage_target_met"] is True
     # PR-2 Defect 3 fix: stub answers are identical, so
     # ``consensus_strength`` is "strong" and
     # ``false_consensus_preserved`` is now correctly False.
@@ -219,11 +220,14 @@ def test_result_endpoint_projects_material_claim_count_and_live_counts() -> None
     assert "material_claim_count" in body
     assert isinstance(body["material_claim_count"], int)
     assert body["material_claim_count"] >= 0
-    # L5d: the stub text is ~218 chars → 2 material claims per
-    # model → 8 total across four local-simulation answers. The
-    # old constant-1 denominator gave 4; the honest heuristic
-    # gives 2 per answer. Live runs may differ; this test
-    # exercises the local path only.
+    # The stub text is ~218 chars → 2 material claims per model → 8 across the
+    # four local-simulation answers. Live runs may differ; this exercises the
+    # local path only.
+    #
+    # WP-C / F-03: this is now an INFORMATIONAL length estimate, read straight
+    # from ``estimate_material_claim_count``. It is no longer the citation-
+    # coverage denominator, which is why the value survives the redefinition
+    # unchanged while the coverage ratio above moved from 0.50 to 1.00.
     assert body["material_claim_count"] == 8
     # L1 / L5: the per-run live/local counts are present and
     # mutually exclusive and sum to 4.

@@ -78,9 +78,9 @@ def _answer(
         status=status,
         latency_ms=100,
         citation_coverage=CitationCoverage(
-            material_claim_count=2,
-            cited_claim_count=2 if resolved else 0,
-            coverage_ratio=Decimal("1.00") if resolved else Decimal("0"),
+            answer_count=1,
+            sourced_answer_count=1 if resolved else 0,
+            sourced_answer_ratio=Decimal("1.00") if resolved else Decimal("0"),
             target_met=bool(resolved),
         ),
     )
@@ -104,9 +104,9 @@ def _synthesis(
         recommendation="Treat this as decision support, not a decision.",
         high_stakes_notice=high_stakes_notice,
         citation_coverage=CitationCoverage(
-            material_claim_count=8,
-            cited_claim_count=4,
-            coverage_ratio=Decimal("0.50"),
+            answer_count=4,
+            sourced_answer_count=2,
+            sourced_answer_ratio=Decimal("0.50"),
             target_met=False,
         ),
         quality_checks=SynthesisQualityChecks(
@@ -2071,9 +2071,10 @@ def test_coverage_without_a_synthesis_counts_answers_with_a_real_source() -> Non
         final_synthesis=None,
         agreement=AgreementSummary(aligned=0, total=2),
     )
-    # 2 answers x material_claim_count 2 = 4 material claims, 2 answers with a
-    # non-fallback source = 2 cited claims -> 0.50.
-    assert with_real.signals.citation_coverage_ratio == pytest.approx(0.5)
+    # WP-C / F-03: 2 answers, both carrying a non-fallback source -> 2/2 = 1.00.
+    # Under the old math this was 2 cited / 4 estimated claims = 0.50, i.e. the
+    # metric penalised two fully-sourced answers for being longer than 200 chars.
+    assert with_real.signals.citation_coverage_ratio == pytest.approx(1.0)
 
     only_fallback = evaluate_layer_a(
         initial_answers=[

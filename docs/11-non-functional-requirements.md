@@ -35,15 +35,17 @@ These NFRs apply to the Release 1 MVP query workflow and supporting browser-sess
 ## NFR-003 Citation coverage
 
 - Category: Grounding quality.
-- Target: At least 80 percent of material factual claims in the final synthesis reference at least one visible source link when source-backed search succeeds.
-- Measurement: Evaluation rubric over sampled completed queries comparing material claims to displayed sources.
+- Target: At least 80 percent of the model answers in a run carry at least one visible primary source link when source-backed search succeeds.
+- Measurement: `providers.calculate_citation_coverage` — sourced answers divided by answers that produced text, per run. Fallback/web-search sources are excluded; only the model's own primary citations count.
+- Scope limit (state it, do not imply otherwise): this measures whether a citation is PRESENT on each answer. It does not verify that the citation supports the claim. Whether a citation marker resolves to a real source is a separate signal, `citation_marker_grounding`.
+- History: until WP-C (2026-07-27) the target read "material factual claims" and the code divided a per-answer boolean by a ~1-claim-per-200-characters estimate. Numerator and denominator did not share units, so a run of four long, fully-sourced answers scored about 12 percent and the target was unreachable in practice. Recorded in `docs/63-technical-debt-register.md`.
 - Owner: Product owner.
 - Priority: Must.
 - Rationale: Citation visibility is a core success signal for reducing hallucination risk.
 - Acceptance criteria: AC-011, AC-018, AC-031.
 - Tests: TEST-NFR-003.
-- Dashboard: Citation coverage score by query sample and provider path.
-- Alert: Ticket when sampled citation coverage falls below 80 percent for two consecutive review batches.
+- Dashboard: Source coverage (share of answers carrying a primary source) by query sample and provider path.
+- Alert: Ticket when sampled source coverage falls below 80 percent for two consecutive review batches. Note the series steps UP at the WP-C changeover; compare like-for-like across that boundary.
 - Source: `docs/04-success-metrics.md`.
 
 ## NFR-004 Dependency resilience
