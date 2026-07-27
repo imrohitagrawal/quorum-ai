@@ -72,10 +72,12 @@ Open an interactive shell and paste it.
 
 Use the `mode=ro` URI. A plain read-write `sqlite3.connect` against the live
 production database takes locks and can create a `-journal` sidecar on the
-volume the app is actively writing — and, per "Locked database" below, a lock
-held against this file is the one failure mode that silently disables a spend
-guard. (A raw `sqlite3.connect` does *not* apply the migration — only
-`FeedbackStore.__init__` does — but there is no reason to take the write path
+volume the app is actively writing — and, per "Locked database" below, holding
+a lock against this file yourself risks becoming case (a) or (b) for the *next*
+process that opens it, up to and including silently disabling the daily spend
+guard (case (a)). (A raw `sqlite3.connect` does *not* apply the migration —
+only `FeedbackStore.__init__`/`FeedbackStore.from_env()` do that, since only
+they run the migration check — but there is no reason to take the write path
 to read a handful of counts.)
 
 ```bash
@@ -166,19 +168,33 @@ confirm the marker now exists.
 
 ## Failure mode: locked database
 
+"Locked" is not one case. SQLite has more than one lock level, and which one
+the *other* connection holds decides whether the app gets no store at all, or
+a store that boots and runs fine minus one migration. **Tell the two apart by
+which `WARNING` appears** — not by the word "locked" in isolation:
+
+| Appears | Does *not* appear | Case |
+| --- | --- | --- |
+| `could not open SQLite sink, persistence disabled: database is locked` | `F-01 preview backfill did not run` | (a) EXCLUSIVE — no store at all |
+| `F-01 preview backfill did not run: … database is locked` | `could not open SQLite sink` | (b) RESERVED — store is fine, only the migration was skipped |
+
+### (a) EXCLUSIVE lock — no store at all
+
 **Symptom.** On boot, `WARNING feedback_store: could not open SQLite sink,
 persistence disabled: database is locked`, roughly 5 s after the store open is
 attempted — Python's `sqlite3.connect` default `timeout` of 5.0 s, which
-`FeedbackStore` does not override. No backfill `WARNING` — the migration is
-never reached.
+`FeedbackStore` does not override. **No** `F-01 preview backfill did not run`
+warning — the migration runner is never reached.
 
 **What it means — this is worse than the read-only case, and worse than the
-source docstring implies.** A `BEGIN EXCLUSIVE` held by another connection makes
-the unguarded `self._conn.executescript(self._SCHEMA)` in `__init__` raise
-`sqlite3.OperationalError: database is locked` *before* the best-effort
-migration runner is entered. The constructor therefore never returns. The app
-does **not** crash — `main.py` wraps the construction in
-`try/except Exception` — but it starts with **no store at all**:
+source docstring implies.** An EXCLUSIVE hold by another connection blocks
+even reads, so the unguarded `self._conn.executescript(self._SCHEMA)` in
+`__init__` raises `sqlite3.OperationalError: database is locked` *before* the
+best-effort migration runner is entered — even though every statement in
+`_SCHEMA` is `IF NOT EXISTS` and would otherwise be a no-op. The constructor
+therefore never returns. The app does **not** crash — `main.py` wraps the
+construction in `try/except Exception` — but it starts with **no store at
+all**:
 
 - `feedback_store.get_store()` returns `None` for the lifetime of the process.
 - Every `record_event` call is a silent no-op. **Nothing is persisted**, not
@@ -195,10 +211,10 @@ does **not** crash — `main.py` wraps the construction in
 
 **Action.**
 
-1. Find the lock holder. On a single-instance app the only legitimate writer is
-   the app process, so a stale exclusive lock usually means a second process
-   touching `/data/feedback_events.sqlite3` (a manual `sqlite3` shell left open
-   in `fly ssh console`, an interrupted maintenance script). Close it.
+1. Find the lock holder. A true EXCLUSIVE hold blocks reads too, so it is
+   rarer than case (b) below — look for another connection mid-`VACUUM`,
+   mid-commit, or one that issued an explicit `BEGIN EXCLUSIVE` against
+   `/data/feedback_events.sqlite3`. Close it.
 2. Restart the machine. The store is a process-wide singleton configured once at
    import; there is no reconnect path.
 3. Confirm recovery by the presence of the store, not by the absence of the
@@ -208,10 +224,57 @@ does **not** crash — `main.py` wraps the construction in
 **Known code/doc discrepancy.** `_backfill_f01_preview_rows`'s docstring says a
 "read-only or locked DB leaves the rows as they were … the repair still lands
 the moment the volume is writable again". That is accurate for read-only and
-inaccurate for locked, in both halves: the locked case loses the whole sink
+inaccurate for the EXCLUSIVE case, in both halves: it loses the whole sink
 (not just the repair), and nothing lands until the process is restarted. Only
-the read-only path has a test; the locked path has none. Filed as a follow-up;
-this runbook documents the measured behaviour, not the docstring's claim.
+the read-only path has a test; the EXCLUSIVE path has none. Filed as a
+follow-up; this runbook documents the measured behaviour, not the docstring's
+claim.
+
+### (b) RESERVED lock — store opens fine, only the migration is skipped
+
+**Symptom.** On boot, `WARNING feedback_store: F-01 preview backfill did not
+run: database is locked`. **No** `could not open SQLite sink` warning.
+
+**What it means — this is the case the "Find the lock holder" step above is
+actually describing when the holder is a `sqlite3` shell.** A RESERVED lock
+(taken by any connection that has issued `BEGIN` and a write statement, e.g. an
+operator's `sqlite3` shell that ran `BEGIN;` then an `UPDATE`, and never
+`COMMIT`/`ROLLBACK`) blocks *other writers* but not readers, and not
+`CREATE TABLE IF NOT EXISTS`/`SELECT`s against objects that already exist. So
+`self._conn.executescript(self._SCHEMA)` in `__init__` **succeeds** — it is a
+no-op on an existing database, exactly as designed — and the store
+constructs normally. Only `_backfill_f01_preview_rows`'s
+`self._conn.execute("BEGIN IMMEDIATE")` needs a write lock, and that is the
+one call that raises `database is locked` and is caught by its own
+best-effort `except`. Measured directly against the two lock levels
+(`tests/scratch_docsfix` during doc review, since neither this runbook nor
+the source has a test for either lock case today):
+
+- `feedback_store.get_store()` returns a **working** store — this is not the
+  same failure as (a).
+- The F-01 migration did not run this boot; no marker row appears in
+  `schema_migrations`.
+- The daily spend cap keeps working (`store is not None`), reading whatever is
+  already on disk — same as the read-only case, affected accounts stay
+  over-metered for the 24 h window, nothing more.
+- Ordinary `record()` calls made *while the RESERVED lock is held* also fail
+  and are swallowed one event at a time
+  (`feedback_store: failed to persist event recorder=%s type=%s: %s`), and
+  resume succeeding the moment the other connection commits or rolls back —
+  no restart needed for that half, unlike case (a).
+
+**Action.**
+
+1. Find the lock holder — almost always a manual `sqlite3` shell left open in
+   `fly ssh console` with an uncommitted `BEGIN`/`UPDATE`, or an interrupted
+   maintenance script. `COMMIT` or `ROLLBACK` it (or kill the process).
+2. Ordinary writes resume on their own once the lock clears — no restart
+   required for that. The migration itself is **not** retried automatically
+   (`_backfill_f01_preview_rows` only runs from `__init__`); if getting
+   `schema_migrations` populated now matters, restart the machine so the next
+   `__init__` gets a clear lock.
+3. Confirm recovery: new `events` rows appear right away once the lock is
+   released; the marker row only appears after the restart in step 2.
 
 ## Adding the next migration
 

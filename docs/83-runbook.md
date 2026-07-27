@@ -11,9 +11,10 @@ Real runbooks live under **`docs/runbooks/`**:
   (`/data/feedback_events.sqlite3`) and its `schema_migrations` table:
   what runs on boot, the `INFO` line that is absent on a healthy no-op
   boot (so absence proves nothing), the read-only checks that confirm a
-  migration landed, and the read-only-volume vs locked-database failure
-  modes — the locked one silently disables the daily spend cap. Schema
-  itself: `docs/23-data-model.md`.
+  migration landed, and three failure modes — read-only volume, an
+  EXCLUSIVE lock (worst: no store at all, silently disables the daily
+  spend cap), and a RESERVED lock (store is fine, only that boot's
+  migration is skipped). Schema itself: `docs/23-data-model.md`.
 
 Generic triage order (the original stub's order, extended with the OD-2
 dashboard):
