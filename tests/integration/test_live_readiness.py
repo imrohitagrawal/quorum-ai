@@ -63,6 +63,20 @@ def _set_catalog(monkeypatch: pytest.MonkeyPatch, model_ids: list[str]) -> None:
     monkeypatch.setattr(openrouter_model_catalog_service, "_entries", _fake)
 
 
+#: The drift tests below all share one shape: the live catalog has every static
+#: default EXCEPT one, so exactly that one must be reported stale. These used to
+#: hardcode `anthropic/claude-3-haiku` / `deepseek/deepseek-chat-v3.1` /
+#: `google/gemini-2.5-flash-lite` — a default set this repo stopped shipping
+#: several commits ago — so all four defaults read as stale and the assertions
+#: failed for a reason that had nothing to do with drift detection. Deriving the
+#: ids from DEFAULT_MODEL_IDS keeps the test about the BEHAVIOUR (one missing ->
+#: one stale) and makes it immune to the next slot change.
+_MISSING_DEFAULT: str = DEFAULT_MODEL_IDS[2]
+_DEFAULTS_EXCEPT_MISSING: list[str] = [
+    model_id for model_id in DEFAULT_MODEL_IDS if model_id != _MISSING_DEFAULT
+]
+
+
 def test_ready_endpoint_exposes_live_readiness_state(
     client: TestClient, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -89,18 +103,14 @@ def test_ready_endpoint_includes_drift_when_a_static_default_is_missing(
     # Catalog lists only three of the four static defaults.
     _set_catalog(
         monkeypatch,
-        [
-            "openai/gpt-4o-mini",
-            "anthropic/claude-3-haiku",
-            "deepseek/deepseek-chat-v3.1",
-        ],
+        _DEFAULTS_EXCEPT_MISSING,
     )
 
     response = client.get("/ready")
     payload = response.json()
 
     drift = payload["live_readiness"]["catalog_drift_ids"]
-    assert drift == ["google/gemini-2.5-flash-lite"]
+    assert drift == [_MISSING_DEFAULT]
 
 
 def test_ready_endpoint_reasons_never_leak_api_key(
@@ -131,12 +141,7 @@ def test_models_defaults_endpoint_returns_stale_model_ids(
     # AND checks drift on each call.
     _set_catalog(
         monkeypatch,
-        [
-            "openai/gpt-4o-mini",
-            "anthropic/claude-3-haiku",
-            # google/gemini-2.5-flash-lite missing
-            "deepseek/deepseek-chat-v3.1",
-        ],
+        _DEFAULTS_EXCEPT_MISSING,
     )
 
     # /v1/models/defaults requires a session cookie. /v1/session is a
@@ -153,7 +158,7 @@ def test_models_defaults_endpoint_returns_stale_model_ids(
     # The four returned slots are still the static defaults.
     assert [slot["model_id"] for slot in payload["model_slots"]] == list(DEFAULT_MODEL_IDS)
     # And drift is surfaced alongside.
-    assert payload["stale_model_ids"] == ["google/gemini-2.5-flash-lite"]
+    assert payload["stale_model_ids"] == [_MISSING_DEFAULT]
 
 
 def test_workspace_html_embeds_stale_model_ids_for_drift_banner(
@@ -164,12 +169,7 @@ def test_workspace_html_embeds_stale_model_ids_for_drift_banner(
     """
     _set_catalog(
         monkeypatch,
-        [
-            "openai/gpt-4o-mini",
-            "anthropic/claude-3-haiku",
-            # google/gemini-2.5-flash-lite missing
-            "deepseek/deepseek-chat-v3.1",
-        ],
+        _DEFAULTS_EXCEPT_MISSING,
     )
 
     response = client.get("/ui")
@@ -188,7 +188,7 @@ def test_workspace_html_embeds_stale_model_ids_for_drift_banner(
     end = html.index(";", start)
     literal = html[start:end].strip()
     stale = json.loads(literal)
-    assert stale == ["google/gemini-2.5-flash-lite"]
+    assert stale == [_MISSING_DEFAULT]
 
 
 def test_workspace_html_no_drift_when_catalog_matches_defaults(

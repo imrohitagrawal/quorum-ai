@@ -24,7 +24,7 @@ DEFAULT_MODEL_IDS = [
     "openai/gpt-4o-mini",
     "anthropic/claude-haiku-4.5",
     "google/gemini-2.5-flash",
-    "nvidia/nemotron-3-super-120b-a12b",
+    "nvidia/nemotron-3-nano-30b-a3b",
 ]
 
 
@@ -138,7 +138,7 @@ def test_estimate_material_claim_count_with_real_stub_text_returns_2() -> None:
             "openai/gpt-4o-mini",
             "anthropic/claude-haiku-4.5",
             "google/gemini-2.5-flash",
-            "nvidia/nemotron-3-super-120b-a12b",
+            "nvidia/nemotron-3-nano-30b-a3b",
         ]
     )[0]
     stub = provider_stub_service._local_simulation_text(model_slot=slot)

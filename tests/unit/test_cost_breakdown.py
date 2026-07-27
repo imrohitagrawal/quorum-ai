@@ -221,7 +221,7 @@ def test_breakdown_attached_on_require_confirmation() -> None:
             [
                 "anthropic/claude-opus-4",
                 "openai/gpt-4o-mini",
-                "nvidia/nemotron-3-super-120b-a12b",
+                "nvidia/nemotron-3-nano-30b-a3b",
                 "google/gemini-2.5-flash",
             ]
         ),

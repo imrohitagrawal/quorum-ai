@@ -51,7 +51,7 @@ DEFAULT_MODEL_IDS = [
     "openai/gpt-4o-mini",
     "anthropic/claude-haiku-4.5",
     "google/gemini-2.5-flash",
-    "nvidia/nemotron-3-super-120b-a12b",
+    "nvidia/nemotron-3-nano-30b-a3b",
 ]
 
 #: Long enough that the old ~1-claim-per-200-chars denominator would have put a

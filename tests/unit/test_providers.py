@@ -110,7 +110,7 @@ class TestTruncationPropagation:
                 "openai/gpt-4o-mini",
                 "anthropic/claude-haiku-4.5",
                 "google/gemini-2.5-flash",
-                "nvidia/nemotron-3-super-120b-a12b",
+                "nvidia/nemotron-3-nano-30b-a3b",
             ]
         )
 
@@ -149,7 +149,7 @@ class TestTruncationPropagation:
                 "openai/gpt-4o-mini",
                 "anthropic/claude-haiku-4.5",
                 "google/gemini-2.5-flash",
-                "nvidia/nemotron-3-super-120b-a12b",
+                "nvidia/nemotron-3-nano-30b-a3b",
             ]
         )
 
@@ -184,7 +184,7 @@ class TestTruncationPropagation:
                 "openai/gpt-4o-mini",
                 "anthropic/claude-haiku-4.5",
                 "google/gemini-2.5-flash",
-                "nvidia/nemotron-3-super-120b-a12b",
+                "nvidia/nemotron-3-nano-30b-a3b",
             ]
         )
 

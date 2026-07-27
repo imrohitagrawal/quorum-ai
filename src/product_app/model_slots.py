@@ -52,16 +52,16 @@ EXPECTED_SLOT_COUNT = 4
 #: | 1    | ``openai/gpt-4o-mini``            | 0.000150   |
 #: | 2    | ``anthropic/claude-haiku-4.5``    | 0.001000   |
 #: | 3    | ``google/gemini-2.5-flash``       | 0.000150   |
-#: | 4    | ``nvidia/nemotron-3-super-120b-a12b`` | 0.000140 |
+#: | 4    | ``nvidia/nemotron-3-nano-30b-a3b``    | 0.000050   |
 #:
-#: Combined input cost is **$0.00144 / 1K** tokens. The per-run hard
+#: Combined input cost is **$0.00135 / 1K** tokens. The per-run hard
 #: cap at ``costs.py`` is unchanged; this list only lowers the average
 #: cost by choosing cheaper per-vendor options.
 DEFAULT_MODEL_IDS: tuple[str, ...] = (
     "openai/gpt-4o-mini",  # slot 1 — OpenAI
     "anthropic/claude-haiku-4.5",  # slot 2 — Anthropic (debate)
     "google/gemini-2.5-flash",  # slot 3 — Google
-    "nvidia/nemotron-3-super-120b-a12b",  # slot 4 — NVIDIA (replaces deepseek)
+    "nvidia/nemotron-3-nano-30b-a3b",  # slot 4 — NVIDIA (replaces deepseek)
 )
 
 #: Curated-default id set, computed once at module load. The validator

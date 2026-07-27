@@ -15,6 +15,8 @@ present on exactly one option per slot.
 
 from __future__ import annotations
 
+import re
+
 import pytest
 from fastapi.testclient import TestClient
 
@@ -88,24 +90,34 @@ def test_workspace_html_default_slot_values_match_server_defaults(
 def test_workspace_html_no_legacy_hardcoded_models(
     client: TestClient,
 ) -> None:
-    """Regression guard: the pre-PR-0 hardcoded values must not return.
+    """Regression guard: no slot option may carry a STALE hardcoded model id.
 
-    The buggy template hardcoded ``anthropic/claude-haiku-4.5`` in
-    slot 2 and ``google/gemini-2.5-flash`` in slot 3. If a future
-    refactor accidentally restores that template, the test catches
-    it before the slow-network flash returns.
+    The buggy pre-PR-0 template hardcoded slots 2 and 3, so on a slow network
+    the user saw the wrong default for 1-3 seconds before the JS rebuilt the
+    dropdowns.
+
+    This guard used to name the two offending ids literally
+    (``anthropic/claude-haiku-4.5``, ``google/gemini-2.5-flash``) and assert
+    they were ABSENT. Both have since been promoted to actual server defaults,
+    so the guard began failing on correct behaviour — a hardcoded expectation
+    that inverted underneath the test. It now states the invariant it always
+    meant: **every option a slot renders must be a current server default**.
+    That still catches a re-hardcoded stale id (the real regression), and it
+    cannot invert again the next time a slot changes.
     """
-    legacy_ids = [
-        "anthropic/claude-haiku-4.5",
-        "google/gemini-2.5-flash",
-    ]
-    response = client.get("/ui")
-    html = response.text
-    for legacy in legacy_ids:
-        # The legacy model id should not appear as a static <option value="...">
-        # anywhere in the HTML.
-        assert f'value="{legacy}"' not in html, (
-            f"regression: legacy hardcoded value {legacy!r} found in workspace HTML"
+    # /ui first: it issues the session cookie that /v1/models/defaults requires
+    # (the TestClient carries the jar between calls), same as the test above.
+    html = client.get("/ui").text
+    defaults = client.get("/v1/models/defaults").json()
+    server_defaults = {item["model_id"] for item in defaults["model_slots"]}
+    assert server_defaults, "precondition: the server must return defaults"
+    for slot in range(1, 5):
+        rendered = set(re.findall(r'<option value="([^"]+)"', _select_html(html, slot)))
+        stale = rendered - server_defaults
+        assert not stale, (
+            f"slot {slot} renders option value(s) {sorted(stale)} that are not current "
+            f"server defaults {sorted(server_defaults)} — a stale hardcoded id would "
+            "flash before the JS rebuild"
         )
 
 

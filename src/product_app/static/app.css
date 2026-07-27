@@ -4841,6 +4841,9 @@ main:focus { outline: none; }
 .model-slot-avatar[data-vendor="deepseek"],
 .transcript-opening-avatar[data-vendor="deepseek"],
 .result-pos-avatar[data-vendor="deepseek"] { background: var(--vendor-deepseek-soft); color: var(--vendor-deepseek-ink); }
+.model-slot-avatar[data-vendor="nvidia"],
+.transcript-opening-avatar[data-vendor="nvidia"],
+.result-pos-avatar[data-vendor="nvidia"] { background: var(--vendor-nvidia-soft); color: var(--vendor-nvidia-ink); }
 .model-slot-info { flex: 1; min-width: 0; }
 .model-slot-name {
   display: flex;

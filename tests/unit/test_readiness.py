@@ -115,7 +115,7 @@ def test_probe_reports_live_with_drift_when_catalog_missing_an_id(
         [
             "openai/gpt-4o-mini",
             "anthropic/claude-haiku-4.5",
-            "nvidia/nemotron-3-super-120b-a12b",
+            "nvidia/nemotron-3-nano-30b-a3b",
             # google/gemini-2.5-flash deliberately omitted
         ],
     )
@@ -307,7 +307,7 @@ def test_catalog_loaded_true_when_catalog_fetch_succeeds(
         [
             "openai/gpt-4o-mini",
             "anthropic/claude-haiku-4.5",
-            "nvidia/nemotron-3-super-120b-a12b",
+            "nvidia/nemotron-3-nano-30b-a3b",
         ],
     )
 

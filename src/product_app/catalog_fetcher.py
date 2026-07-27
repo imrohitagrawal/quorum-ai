@@ -48,7 +48,7 @@ OPENROUTER_CATALOG_URL = "https://openrouter.ai/api/v1/models"
 
 #: Vendors the UI defaults to a slot from. The order is preserved in
 #: ``cheapest_per_vendor`` so slot 1/2/3/4 map to a stable family.
-DEFAULT_VENDORS: tuple[str, ...] = ("openai", "anthropic", "google", "deepseek")
+DEFAULT_VENDORS: tuple[str, ...] = ("openai", "anthropic", "google", "nvidia")
 
 
 @dataclass(frozen=True)
@@ -151,6 +151,27 @@ _FALLBACK_CATALOG: tuple[ModelCatalogEntry, ...] = (
         output_price_per_1k=Decimal("0.005"),
     ),
     ModelCatalogEntry(
+        # WP-G1: slot 4's vendor. Prices READ FROM the live public catalog
+        # (https://openrouter.ai/api/v1/models, unauthenticated, $0) on
+        # 2026-07-27: prompt 0.00000005/token, completion 0.0000002/token ->
+        # 0.00005 / 0.0002 per 1K. Not estimated, not carried over from the
+        # super variant.
+        #
+        # This entry must exist BEFORE nvidia enters DEFAULT_VENDORS: without a
+        # catalog row, slot 4 falls back to the 0.0008 default input price —
+        # 16x the real rate — and every cost estimate for the slot is wrong.
+        model_id="nvidia/nemotron-3-nano-30b-a3b",
+        name="NVIDIA: Nemotron 3 Nano 30B A3B",
+        vendor="nvidia",
+        short_name="Nemotron 3 Nano",
+        input_price_per_1k=Decimal("0.00005"),
+        output_price_per_1k=Decimal("0.0002"),
+    ),
+    ModelCatalogEntry(
+        # RETAINED, deliberately. deepseek is no longer a DEFAULT_VENDORS slot,
+        # but it is still a selectable catalog option and ~40 test files name
+        # it. Deleting the row and migrating the references are separate jobs;
+        # doing both at once is how a mechanical rename turns into a bad day.
         model_id="deepseek/deepseek-chat-v3.1",
         name="DeepSeek: DeepSeek Chat v3.1",
         vendor="deepseek",

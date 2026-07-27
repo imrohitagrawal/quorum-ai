@@ -1174,6 +1174,7 @@
     if (prefix === "anthropic") return "anthropic";
     if (prefix === "google") return "google";
     if (prefix === "deepseek") return "deepseek";
+    if (prefix === "nvidia") return "nvidia";
     if (prefix === "meta-llama" || prefix === "meta") return "meta";
     if (prefix === "mistralai" || prefix === "mistral") return "mistral";
     return "generic";

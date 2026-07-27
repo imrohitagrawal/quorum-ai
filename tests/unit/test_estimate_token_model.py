@@ -27,7 +27,7 @@ DEFAULT_MODEL_IDS = [
     "openai/gpt-4o-mini",
     "anthropic/claude-haiku-4.5",
     "google/gemini-2.5-flash",
-    "nvidia/nemotron-3-super-120b-a12b",
+    "nvidia/nemotron-3-nano-30b-a3b",
 ]
 
 QUERY = "What are the key metrics for SaaS retention?"
@@ -139,7 +139,7 @@ def test_guardrail_keys_off_the_bound_not_the_point_estimate() -> None:
             [
                 "anthropic/claude-opus-4",
                 "openai/gpt-4o-mini",
-                "nvidia/nemotron-3-super-120b-a12b",
+                "nvidia/nemotron-3-nano-30b-a3b",
                 "google/gemini-2.5-flash",
             ]
         ),
@@ -159,7 +159,7 @@ def test_bound_does_not_run_away_with_query_length() -> None:
         "openai/o3",
         "openai/gpt-4.1",
         "google/gemini-2.5-pro",
-        "nvidia/nemotron-3-super-120b-a12b",
+        "nvidia/nemotron-3-nano-30b-a3b",
     ]
     short = cost_estimation_service.estimate(query_text="report.", model_slots=_slots(o3))
     verbose = cost_estimation_service.estimate(

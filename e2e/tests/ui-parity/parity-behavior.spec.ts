@@ -18,14 +18,14 @@ const SLOTS = [
   { slot_number: 1, model_id: "openai/gpt-4o-mini", display_label: "GPT-4o-mini" },
   { slot_number: 2, model_id: "anthropic/claude-haiku-4.5", display_label: "Claude Haiku 4.5" },
   { slot_number: 3, model_id: "google/gemini-2.5-flash", display_label: "Gemini 2.5 Flash" },
-  { slot_number: 4, model_id: "nvidia/nemotron-3-super-120b-a12b", display_label: "Nemotron 3 Super 120B" },
+  { slot_number: 4, model_id: "nvidia/nemotron-3-nano-30b-a3b", display_label: "Nemotron 3 Super 120B" },
 ];
 const CC = { answer_count: 1, sourced_answer_count: 1, sourced_answer_ratio: "1.00", target_ratio: "0.80", target_met: true };
 const BY_MODEL = [
   { model_id: "openai/gpt-4o-mini", display_name: "GPT-4o-mini", usd: "0.034", kind: "model" },
   { model_id: "anthropic/claude-haiku-4.5", display_name: "Claude Haiku 4.5", usd: "0.062", kind: "model" },
   { model_id: "google/gemini-2.5-flash", display_name: "Gemini 2.5 Flash", usd: "0.031", kind: "model" },
-  { model_id: "nvidia/nemotron-3-super-120b-a12b", display_name: "Nemotron 3 Super 120B", usd: "0.039", kind: "model" },
+  { model_id: "nvidia/nemotron-3-nano-30b-a3b", display_name: "Nemotron 3 Super 120B", usd: "0.039", kind: "model" },
   { model_id: "synthesis", display_name: "Debate + synthesis", usd: "0.024", kind: "synthesis" },
 ];
 const BY_STAGE = [
@@ -1141,9 +1141,20 @@ test.describe("UI parity — behaviour", () => {
     await page.getByRole("textbox").first().fill(longQ);
     const cells = page.locator("#model-inputs .model-slot-estimate");
     await expect(cells).toHaveCount(4);
-    // Every slot shows a real ``~$0.NNN`` figure — not the "—" placeholder.
+    // Every slot shows a real figure — not the "—" placeholder.
+    //
+    // Two shapes are legitimate: `~$0.NNN`, and `<$0.001` for a model whose
+    // per-slot cost rounds below the display quantum. The second is deliberate
+    // honesty in the renderer (app.js:1199 — "$0.000" would claim the model is
+    // free), and slot 4 hits it now that WP-G1 moved it to nvidia nano at
+    // $0.00005/1K input. The regex previously accepted only the first shape,
+    // which is a hardcoded assumption that no slot is ever genuinely that
+    // cheap. The `MATCHES the server` half of this test is what pins the value
+    // itself; this loop only rejects a missing/placeholder figure.
     for (const text of await cells.allTextContents()) {
-      expect(text.trim(), `slot estimate was not a real figure: ${text}`).toMatch(/^~\$\d+\.\d{3}$/);
+      expect(text.trim(), `slot estimate was not a real figure: ${text}`).toMatch(
+        /^(~\$\d+\.\d{3}|<\$0\.001)$/,
+      );
     }
     // HONESTY GUARD: the client figures must equal what the REAL server
     // ``/v1/query-runs/estimate`` returns for the same query + models (the

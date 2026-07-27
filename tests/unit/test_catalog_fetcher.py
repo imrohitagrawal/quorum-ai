@@ -221,7 +221,15 @@ def test_cheapest_per_vendor_picks_lowest_priced_entry() -> None:
                 _model(id="anthropic/claude-haiku-4.5", prompt="0.001", completion="0.005"),
                 _model(id="google/gemini-2.5-flash-lite", prompt="0.000075", completion="0.0003"),
                 _model(id="google/gemini-2.5-flash", prompt="0.0003", completion="0.0012"),
-                _model(id="deepseek/deepseek-chat-v3.1", prompt="0.00014", completion="0.00028"),
+                # WP-G1: nvidia replaced deepseek in DEFAULT_VENDORS, so the
+                # nvidia rows are what this exercises now. Two of them, so the
+                # "picks the LOWEST priced" claim in the test name is actually
+                # tested for this vendor rather than being a single-candidate
+                # pass-through.
+                _model(id="nvidia/nemotron-3-nano-30b-a3b", prompt="0.00005", completion="0.0002"),
+                _model(
+                    id="nvidia/nemotron-3-ultra-550b-a55b", prompt="0.0005", completion="0.0022"
+                ),
             )
         )
     )
@@ -230,7 +238,7 @@ def test_cheapest_per_vendor_picks_lowest_priced_entry() -> None:
         "openai": "openai/gpt-3.5-turbo",
         "anthropic": "anthropic/claude-3-haiku",
         "google": "google/gemini-2.5-flash-lite",
-        "deepseek": "deepseek/deepseek-chat-v3.1",
+        "nvidia": "nvidia/nemotron-3-nano-30b-a3b",
     }
 
 

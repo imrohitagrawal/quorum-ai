@@ -67,7 +67,7 @@ def test_model_slot_validator_rejects_malformed_model_id() -> None:
                 "openai/gpt-4o-mini",
                 "not a model",
                 "google/gemini-2.5-flash-lite",
-                "nvidia/nemotron-3-super-120b-a12b",
+                "nvidia/nemotron-3-nano-30b-a3b",
             ],
         )
 
@@ -82,7 +82,7 @@ def test_model_slot_validator_rejects_duplicate_model_ids() -> None:
                 "openai/gpt-4o-mini",
                 "anthropic/claude-haiku-4.5",
                 "openai/gpt-4o-mini",  # duplicate of slot 1
-                "nvidia/nemotron-3-super-120b-a12b",
+                "nvidia/nemotron-3-nano-30b-a3b",
             ],
         )
 
@@ -221,7 +221,7 @@ def test_default_model_ids_reports_drift_when_a_static_id_missing_from_catalog(
         _make_entry(
             "google/gemini-3.1-flash-lite", "google", input_price="0.00000025"
         ),  # renamed → gemini-2.5-flash
-        _make_entry("nvidia/nemotron-3-super-120b-a12b", "nvidia", input_price="0.00014"),
+        _make_entry("nvidia/nemotron-3-nano-30b-a3b", "nvidia", input_price="0.00014"),
     ]
     service = OpenRouterModelCatalogService()
     monkeypatch.setattr(service, "_entries", lambda: list(catalog))
@@ -247,7 +247,7 @@ def test_default_model_ids_no_drift_when_catalog_lists_all_static_ids(
             ("openai/gpt-4o-mini", "openai"),
             ("anthropic/claude-haiku-4.5", "anthropic"),
             ("google/gemini-2.5-flash", "google"),
-            ("nvidia/nemotron-3-super-120b-a12b", "nvidia"),
+            ("nvidia/nemotron-3-nano-30b-a3b", "nvidia"),
         )
     ]
     # Plus some unrelated catalog drift that must not affect defaults.
