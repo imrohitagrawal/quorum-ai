@@ -1,8 +1,9 @@
 # WP-B — RESULT, and the fresh-session handoff for WP-C
 
-> **Status:** WP-B COMPLETE and green. **NOT committed** — but see §4: committing is NOT
-> blocked (the pre-commit hook is disarmed). The blocker is CI, and every failing CI gate is
-> a regression introduced on this branch, not pre-existing debt.
+> **Status:** WP-A + WP-B COMPLETE, green, and **COMMITTED as `b176d49`** on
+> `feat/ui-pr1-quickfixes`. CI is still red on validate/lint/format-check/type-check — all
+> four are green on `origin/main` and were broken by EARLIER commits on this branch, not by
+> `b176d49`. Clearing them is Task 0 (§7).
 > **Branch:** `feat/ui-pr1-quickfixes` (carries WP-A + WP-B, both uncommitted).
 > **Written:** 2026-07-27. Companion to `UI-REMEDIATION-MASTER-PLAN-ULTRACODE-PROMPT.md`,
 > which remains the plan of record for WP-C..WP-H.
@@ -113,9 +114,22 @@ branch cannot merge until each is green.
 ### 4.3 The 4 doc-suite skills STAY — they are intentional
 
 `architecture-and-decisions`, `doc-critic`, `onboarding-companion`, `operations-runbook`
-were authored by the operator (via Codex) specifically to raise and hold documentation
-quality. **Do not remove them.** An earlier draft recommended removal; that was wrong,
-made without asking why they were there.
+are **FIRST-PARTY**, not third-party. Evidence: `assets/project-profile.md` records
+`owner_name: "Rohit Agrawal"` and `github: imrohitagrawal`; there is no upstream source URL,
+no vendored/fetched marker and no third-party licence anywhere in the bundles. Each carries
+its own CHANGELOG (v0.1.0 / 1.1.0 / 1.3.0). They were authored by the operator via Codex to
+raise and hold documentation quality.
+
+**They STAY, and they stay COMMITTED.** An earlier draft of this file recommended removing
+them; that was wrong, and was made without asking why they were there. They are tracked in
+git (added in `f25696e`, not gitignored) — which is exactly why CI sees them.
+
+**Operating model (operator-confirmed):** they are maintained in a separate skills repo and
+copied in; a new upstream version REPLACES the folder wholesale. Two consequences:
+- Reformatting the bundles is wrong — every update would undo it. Exclude, don't conform.
+- Their provenance is currently unrecorded. Add an entry per skill to
+  `configs/external-skill-registry.json` (name, source, version from CHANGELOG) per
+  AGENTS.md §V5.2, so a stale copy is detectable.
 
 What they actually broke, and the honest fix for each:
 
@@ -264,12 +278,12 @@ and .git/hooks has no installed hooks) — CI is the blocker. See §4.
       configs/external-skill-registry.json per AGENTS.md §V5.2.
 
   0b. make lint: 72 of the 81 errors are E501/I001 inside those 4 skills' own
-      scripts/verify.py. ASK THE OPERATOR which they want:
-        - conform: ruff check --fix + ruff format on those 4 files (matches the
-          existing precedent — webapp-testing's Python passes clean); or
-        - exclude .agents/skills/*/scripts/ in pyproject.toml, if these skills
-          will be REGENERATED from Codex and reformatting would fight the source.
-      The answer depends on whether the skills are repo-owned or regenerated.
+      scripts/verify.py. DECIDED BY THE OPERATOR — do NOT re-ask:
+      add `.agents/skills/*/scripts/` to ruff's extend-exclude in pyproject.toml.
+      Do NOT reformat the bundles: a new upstream version replaces the folder
+      wholesale, so any reformatting would be undone on every update.
+      Also add a registry entry per skill in configs/external-skill-registry.json
+      (name, source, version from each CHANGELOG) per AGENTS.md §V5.2.
 
   0c. The remaining 9 lint errors, all 6 make format-check files, and all 36
       make type-check errors are in REAL code (src/product_app/query_runs.py,
@@ -287,7 +301,8 @@ answer (providers.py:471) while material_claim_count is ~1 per 200 chars
 target — which is why every run says "pause for human review".
 The master plan recommends option (b): redefine coverage as the fraction of
 answers carrying primary sources, and rename the field + UI copy to match.
-THAT DECISION IS OPERATOR-GATED (master plan §8) — ask before implementing.
+OPTION (b) IS APPROVED BY THE OPERATOR — implement it, do not re-ask. Rename the
+field and every piece of UI copy so the label says exactly what it measures.
 Blast radius: target_met flips on many runs -> verdict band, trust triangle,
 recommendation template, synthesis.py:701-737, evaluation signals, baselines.
 
