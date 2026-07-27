@@ -53,10 +53,15 @@ from uuid import UUID
 _log = logging.getLogger(__name__)
 
 #: Default on-disk location. Operators can override via the
-#: ``FEEDBACK_DB_PATH`` env var (set in ``fly.toml`` or by the audit
-#: cron job). A Fly volume is the production home; ``:memory:`` is
-#: the test home; a local file under ``.data/`` is the dev default
-#: so dev runs do not pollute the repo.
+#: ``FEEDBACK_DB_PATH`` env var, which is set in ``fly.toml``'s ``[env]``
+#: block and nowhere else. It is NOT set by the nightly audit workflow —
+#: VERIFIED: zero occurrences of ``FEEDBACK_DB_PATH`` across every file under
+#: ``.github/``, and ``feedback_audit.py`` neither sets nor reads it — so the
+#: audit job's ``FeedbackStore.from_env()`` opens its own empty,
+#: checkout-local default rather than the production volume (issue #103).
+#: A Fly volume is the production home; ``:memory:`` is the test home; a
+#: local file under ``.data/`` is the dev default so dev runs do not pollute
+#: the repo.
 DEFAULT_DB_PATH = ".data/feedback_events.sqlite3"
 
 #: How long :meth:`FeedbackStore.close` waits for the store lock before closing
@@ -215,11 +220,35 @@ class FeedbackStore:
         state and the next boot retries — never half-relabelled-and-marked.
 
         Best-effort, like :meth:`record`: opening the store must not fail
-        because a one-shot repair could not run. A read-only or locked DB
-        leaves the rows as they were — over-metering for at most the 24h
-        window, which is the behaviour without this method at all — and, since
-        the marker is written in the same transaction, the repair still lands
-        the moment the volume is writable again.
+        because a one-shot repair could not run. What that degradation costs
+        depends on the fault, and only ONE of the faults is this method's to
+        degrade (measured in
+        ``tests/integration/test_feedback_store_locked_database.py`` and
+        ``tests/integration/test_f01_preview_billing_backfill.py``):
+
+        * **Read-only DB** — an unwritable volume. ``_SCHEMA`` one line
+          earlier is a no-op against an existing schema and needs no write, so
+          the store opens and the ``except`` below catches. The rows stay as
+          they were: the account is OVER-metered for at most the 24h window
+          ``daily_spend_for`` reads, which is the behaviour without this
+          method at all. Nothing is marked applied, so the repair lands on the
+          next store OPEN once the volume is writable — which means a process
+          restart, not "the moment the volume recovers". The store is a
+          process-wide singleton and nothing re-attempts the migration inside
+          a running process.
+        * **Locked DB** — this method is often not reached at all, so the
+          degradation is NOT the one above. An EXCLUSIVE hold blocks readers
+          too, and a RESERVED hold blocks writers, so
+          ``self._conn.executescript(self._SCHEMA)`` ONE LINE EARLIER raises
+          ``database is locked``: always under EXCLUSIVE, and under RESERVED
+          whenever the schema is not yet present (a fresh volume — RESERVED is
+          only benign once it is). That raise propagates out of ``__init__``;
+          ``main`` catches it and the process runs with NO store. The account
+          is then UNDER-metered, not over-metered — with no store ``costs.py``
+          skips the 24h spend cap entirely, which is the fail-open direction
+          (P1 / issue #101; both the boot and the per-estimate bypass now log
+          at ERROR). Only a RESERVED hold on an already-schema'd DB reaches
+          the ``except`` below, and that case behaves like read-only.
         """
         relabelled = 0
         try:

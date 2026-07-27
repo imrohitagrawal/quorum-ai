@@ -84,6 +84,50 @@ def test_status_reports_disconnected_when_store_absent(restore_store: None) -> N
     assert body["feedback_db"] == "disconnected"
 
 
+# ---------------------------------------------------------------------------
+# P1 / issue #101: "disconnected" used to mean two unrelated faults at once.
+# ---------------------------------------------------------------------------
+
+
+def test_status_distinguishes_an_absent_store_from_a_failing_one(
+    tmp_path: Path, restore_store: None
+) -> None:
+    """The two faults need different operator actions, so they need different
+    values.
+
+    ``store is None`` means the open at boot failed outright (a locked or
+    unwritable volume — issue #101): nothing is persisted, the 24 h spend cap
+    is skipped, and the store is a process-wide singleton with no reconnect
+    path, so the fix is *restart the machine*. A store that is present but
+    whose ``event_count()`` raises is a live handle that went bad underneath a
+    running process — a different diagnosis entirely. Both reported
+    ``"disconnected"``, so /status could not tell an operator which one they
+    had.
+
+    ``"disconnected"`` keeps its original meaning (no store) so the sibling
+    test above still means what it says; the *other* branch gets the new value.
+    """
+    db_file = tmp_path / "status_health_probe.sqlite3"
+    store = FeedbackStore(str(db_file))
+    # A closed handle is a real fault, not a stub: ``event_count()`` raises
+    # ``sqlite3.ProgrammingError: Cannot operate on a closed database``.
+    store.close()
+    configure(store)
+
+    client = TestClient(app)
+    response = client.get("/status")
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["feedback_db"] == "error"
+    assert body["feedback_db"] != "disconnected", (
+        "a live-but-failing store must be distinguishable from no store at all"
+    )
+    assert body["feedback_events_total"] == 0
+    # Redaction is not regressed by the new value.
+    assert "status_health_probe.sqlite3" not in response.text
+
+
 def test_status_stays_public_and_unauthenticated(restore_store: None) -> None:
     """Redaction must not regress the public-health contract: /status is
     still reachable without any session."""

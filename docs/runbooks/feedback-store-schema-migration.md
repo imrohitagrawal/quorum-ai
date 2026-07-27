@@ -57,11 +57,19 @@ Two log lines, quoted verbatim from `src/product_app/feedback_store.py`:
 > `schema_migrations` is the only reliable evidence. Do not infer status from
 > the log.
 
-A third line comes from the *call site*, not the store, and means something
-much bigger — see "Locked database" below:
+Two more lines come from the *call sites*, not the store, and mean something
+much bigger — see "Locked database" below. Both are `ERROR`:
 
 ```
-feedback_store: could not open SQLite sink, persistence disabled: %s
+feedback_store: could not open SQLite sink — persistence is disabled AND the
+per-account 24h daily spend cap will not be enforced for the life of this
+process (no reconnect path; restart once the database is reachable): %s
+```
+
+```
+costs: feedback store unavailable, so the USD 0.20 per-account 24h daily spend
+cap is NOT being enforced — every estimate is passing the cap check unmetered.
+… Repeats suppressed for 60.0s.
 ```
 
 ## Confirming the migration landed (read-only, $0)
@@ -175,25 +183,38 @@ which `WARNING` appears** — not by the word "locked" in isolation:
 
 | Appears | Does *not* appear | Case |
 | --- | --- | --- |
-| `could not open SQLite sink, persistence disabled: database is locked` | `F-01 preview backfill did not run` | (a) EXCLUSIVE — no store at all |
-| `F-01 preview backfill did not run: … database is locked` | `could not open SQLite sink` | (b) RESERVED — store is fine, only the migration was skipped |
+| `ERROR feedback_store: could not open SQLite sink — persistence is disabled AND the per-account 24h daily spend cap will not be enforced … database is locked` | `F-01 preview backfill did not run` | (a) no store at all — EXCLUSIVE, **or** RESERVED on a database with no schema yet |
+| `F-01 preview backfill did not run: … database is locked` | `could not open SQLite sink` | (b) RESERVED on an already-schema'd database — store is fine, only the migration was skipped |
 
-### (a) EXCLUSIVE lock — no store at all
+Case (a) also produces, at most once a minute for as long as the process
+lives, `ERROR costs: feedback store unavailable, so the USD 0.20 per-account
+24h daily spend cap is NOT being enforced …`. That record is the one to alert
+on: it fires from the money path itself, so it is present even if the boot log
+has already rotated away.
 
-**Symptom.** On boot, `WARNING feedback_store: could not open SQLite sink,
-persistence disabled: database is locked`, roughly 5 s after the store open is
-attempted — Python's `sqlite3.connect` default `timeout` of 5.0 s, which
-`FeedbackStore` does not override. **No** `F-01 preview backfill did not run`
+### (a) No store at all — EXCLUSIVE, or RESERVED before the schema exists
+
+**Symptom.** On boot, `ERROR feedback_store: could not open SQLite sink —
+persistence is disabled AND the per-account 24h daily spend cap will not be
+enforced …: database is locked`, roughly 5 s after the store open is attempted
+(MEASURED 5.37 s — Python's `sqlite3.connect` default `timeout` of 5.0 s, which
+`FeedbackStore` does not override). **No** `F-01 preview backfill did not run`
 warning — the migration runner is never reached.
 
-**What it means — this is worse than the read-only case, and worse than the
-source docstring implies.** An EXCLUSIVE hold by another connection blocks
-even reads, so the unguarded `self._conn.executescript(self._SCHEMA)` in
-`__init__` raises `sqlite3.OperationalError: database is locked` *before* the
-best-effort migration runner is entered — even though every statement in
-`_SCHEMA` is `IF NOT EXISTS` and would otherwise be a no-op. The constructor
-therefore never returns. The app does **not** crash — `main.py` wraps the
-construction in `try/except Exception` — but it starts with **no store at
+**Which lock levels land here.** EXCLUSIVE always. RESERVED **also** lands here
+when the database has no schema yet — see case (b) for why that is not the
+contradiction it looks like.
+
+**What it means — this is worse than the read-only case.** An EXCLUSIVE hold by
+another connection blocks even reads, so the unguarded
+`self._conn.executescript(self._SCHEMA)` in `__init__` raises
+`sqlite3.OperationalError: database is locked` *before* the best-effort
+migration runner is entered — even though every statement in `_SCHEMA` is
+`IF NOT EXISTS` and would otherwise be a no-op. (A RESERVED hold on a
+database with no `events` table yet gets there by the other route: on a fresh
+file those statements are real writes.) The constructor therefore never
+returns. The app does **not** crash — `main._configure_feedback_store` wraps
+the construction in `try/except Exception` — but it starts with **no store at
 all**:
 
 - `feedback_store.get_store()` returns `None` for the lifetime of the process.
@@ -201,7 +222,15 @@ all**:
   just the migration.
 - `costs.py` guards the daily spend cap with `if store is not None:` — so with
   no store the **24 h per-account daily cap is skipped entirely**. This is the
-  headline operational consequence: a spend guard is silently absent.
+  headline operational consequence: a spend guard is absent. As of P1 / issue
+  #101 it is no longer *silently* absent — the boot `ERROR` above names it, and
+  `costs` repeats it at `ERROR` at most once a minute for as long as the
+  process serves estimates. The behaviour is unchanged and deliberately so:
+  the recorded operator decision is **loud only, do not fail closed**, because
+  denying every priced request on a storage fault is the worse outage.
+- `/status` reports `feedback_db: "disconnected"` — reserved for exactly this
+  fault. A store that is present but whose health query raises reports
+  `"error"` instead; do not confuse the two.
 - Anything else that calls `FeedbackStore.from_env()` — the
   `feedback_audit` entry points `_load_events_by_recorder` and
   `generate_status_md` — does so **unguarded** and would raise outright. On the
@@ -214,26 +243,44 @@ all**:
 1. Find the lock holder. A true EXCLUSIVE hold blocks reads too, so it is
    rarer than case (b) below — look for another connection mid-`VACUUM`,
    mid-commit, or one that issued an explicit `BEGIN EXCLUSIVE` against
-   `/data/feedback_events.sqlite3`. Close it.
+   `/data/feedback_events.sqlite3`. Close it. If the volume is brand new and
+   the file has no `events` table yet, an ordinary uncommitted
+   `BEGIN;`/`UPDATE` (RESERVED) is enough to land here too — check for that
+   before concluding the holder must be doing something exotic.
 2. Restart the machine. The store is a process-wide singleton configured once at
    import; there is no reconnect path.
 3. Confirm recovery by the presence of the store, not by the absence of the
    warning: the marker checks above should succeed and new `events` rows should
    appear after a query run.
 
-**Known code/doc discrepancy.** `_backfill_f01_preview_rows`'s docstring says a
-"read-only or locked DB leaves the rows as they were … the repair still lands
-the moment the volume is writable again". That is accurate for read-only and
-inaccurate for the EXCLUSIVE case, in both halves: it loses the whole sink
-(not just the repair), and nothing lands until the process is restarted. Only
-the read-only path has a test; the EXCLUSIVE path has none. Filed as a
-follow-up; this runbook documents the measured behaviour, not the docstring's
-claim.
+**Code/doc discrepancy — CLOSED (P1 / issue #101).**
+`_backfill_f01_preview_rows`'s docstring used to say a "read-only or locked DB
+leaves the rows as they were … the repair still lands the moment the volume is
+writable again", which was accurate for read-only and wrong for the locked
+case in three ways: the whole sink is lost (not just the repair), the account
+ends up **under**-metered rather than over-metered because the spend cap is
+skipped, and nothing lands until the process is restarted. The docstring now
+states the per-fault matrix, and both lock levels are covered by
+`tests/integration/test_feedback_store_locked_database.py`:
 
-### (b) RESERVED lock — store opens fine, only the migration is skipped
+| Test | Pins |
+| --- | --- |
+| `test_exclusive_lock_on_a_fresh_database_prevents_the_store_from_opening` | EXCLUSIVE, fresh DB → raises; no backfill warning |
+| `test_exclusive_lock_still_blocks_when_the_schema_is_already_present` | EXCLUSIVE blocks readers too, so an existing schema does not save the open |
+| `test_reserved_lock_on_a_fresh_database_also_prevents_the_store_from_opening` | RESERVED, fresh DB → **also** raises |
+| `test_reserved_lock_with_the_migration_applied_opens_cleanly_and_enforces_the_cap` | the benign case, and that the cap really does BLOCK with a store |
+| `test_reserved_lock_with_the_migration_unapplied_opens_but_skips_the_migration` | exactly one backfill warning, marker still absent |
+| `test_boot_against_a_locked_database_logs_an_error_naming_the_skipped_cap` | the app boots, `get_store()` is `None`, exactly one ERROR naming the cap |
+| `test_missing_store_skips_the_daily_cap_and_logs_it_once_per_window` | the cap is skipped, the estimate is unchanged, one ERROR per minute |
+
+The read-only path is covered separately by
+`tests/integration/test_f01_preview_billing_backfill.py`.
+
+### (b) RESERVED lock on an already-schema'd database — store opens fine, only the migration is skipped
 
 **Symptom.** On boot, `WARNING feedback_store: F-01 preview backfill did not
-run: database is locked`. **No** `could not open SQLite sink` warning.
+run: database is locked`. **No** `could not open SQLite sink` ERROR, and **no**
+`costs: … daily spend cap is NOT being enforced` ERROR.
 
 **What it means — this is the case the "Find the lock holder" step above is
 actually describing when the holder is a `sqlite3` shell.** A RESERVED lock
@@ -246,9 +293,20 @@ no-op on an existing database, exactly as designed — and the store
 constructs normally. Only `_backfill_f01_preview_rows`'s
 `self._conn.execute("BEGIN IMMEDIATE")` needs a write lock, and that is the
 one call that raises `database is locked` and is caught by its own
-best-effort `except`. Measured directly against the two lock levels
-(`tests/scratch_docsfix` during doc review, since neither this runbook nor
-the source has a test for either lock case today):
+best-effort `except`.
+
+> **"RESERVED is benign" holds ONLY once the schema exists.** On a fresh
+> database every statement in `_SCHEMA` is a real write, so a RESERVED hold
+> blocks `executescript` and the open fails exactly like case (a) — spend cap
+> and all. MEASURED, and pinned by
+> `test_reserved_lock_on_a_fresh_database_also_prevents_the_store_from_opening`.
+> First boot against a brand-new volume is precisely when a maintenance shell
+> is most likely to be attached, so treat "RESERVED" as mild only after
+> confirming the `events` table is already there.
+
+Measured directly against both lock levels, with a real second connection
+holding a real `BEGIN EXCLUSIVE` / `BEGIN IMMEDIATE`, in
+`tests/integration/test_feedback_store_locked_database.py`:
 
 - `feedback_store.get_store()` returns a **working** store — this is not the
   same failure as (a).

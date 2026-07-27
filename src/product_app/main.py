@@ -306,6 +306,7 @@ current_readiness = run_startup_probe()
 # are swallowed; the next call to ``list_models`` will retry.
 openrouter_catalog_fetcher.prewarm()
 
+
 # Feedback audit storage. The store is append-only and powers the
 # nightly feedback_audit job. The on-disk path defaults to
 # ``.data/feedback_events.sqlite3``; the audit job reads the same
@@ -313,13 +314,36 @@ openrouter_catalog_fetcher.prewarm()
 # store is optional — the in-memory recorders continue to work
 # without it. A failed open is logged and the app continues
 # without persistence (the audit job will simply see no data).
-try:
-    configure_feedback_store(FeedbackStore.from_env())
-except Exception as exc:  # noqa: BLE001 - persistence is optional
-    logging.getLogger(__name__).warning(
-        "feedback_store: could not open SQLite sink, persistence disabled: %s",
-        exc,
-    )
+def _configure_feedback_store() -> None:
+    """Open the feedback sink at boot; on failure log LOUDLY and continue.
+
+    A module-level function rather than bare module code so the degraded
+    branch is reachable from a test — before P1 / issue #101 it was not, and
+    the branch shipped for months with the wrong severity and an incomplete
+    message.
+
+    Still catching, deliberately: a storage fault must not stop the app from
+    serving. But ERROR, not WARNING, and the message names the consequence
+    that actually costs money. Losing the store does not only disable
+    persistence — ``costs.CostEstimationService.estimate`` guards the 24h
+    ``DAILY_CAP_USD`` spend cap behind ``store is not None``, so this boot also
+    turns that cap off for the life of the process (there is no reconnect
+    path). ``costs`` re-states it per estimate window; this is the first and
+    earliest place an operator can see it.
+    """
+    try:
+        configure_feedback_store(FeedbackStore.from_env())
+    except Exception as exc:  # noqa: BLE001 - persistence is optional
+        logging.getLogger(__name__).error(
+            "feedback_store: could not open SQLite sink — persistence is "
+            "disabled AND the per-account 24h daily spend cap will not be "
+            "enforced for the life of this process (no reconnect path; "
+            "restart once the database is reachable): %s",
+            exc,
+        )
+
+
+_configure_feedback_store()
 
 # Durable terminal run-history sink (S1 / FR-014). Sibling of the feedback
 # store on the same Fly volume, path from ``RUN_HISTORY_DB_PATH``. As with the
@@ -622,8 +646,13 @@ def status_snapshot() -> dict[str, object]:
     health, error-tracking state, and process uptime. No authentication
     is required — the endpoint never surfaces query text, account ids,
     session tokens, or internal filesystem paths. ``feedback_db`` is
-    reported as ``connected``/``disconnected`` health only; the on-disk
-    database path is deliberately not exposed in this public response.
+    reported as ``connected``/``disconnected``/``error`` health only; the
+    on-disk database path is deliberately not exposed in this public
+    response. The two unhealthy values are different faults with different
+    fixes: ``disconnected`` means no store was ever opened (the boot-time
+    open failed on a locked or unwritable volume, so persistence AND the 24h
+    per-account spend cap are off until the process is restarted), while
+    ``error`` means a store is present but its health query raised.
     ``error_tracking`` is likewise a generic ``active``/``inactive``
     health value: the concrete vendor (and anything else useful for
     targeting it) is deliberately not named on this public surface.
@@ -646,7 +675,13 @@ def status_snapshot() -> dict[str, object]:
             # unauthenticated operator snapshot.
             feedback_db = "connected"
         except Exception:  # noqa: BLE001 - status must not 500
-            feedback_db = "disconnected"
+            # Distinct from the ``store is None`` branch above on purpose (P1 /
+            # issue #101). Both used to report "disconnected", which collapsed
+            # two faults an operator has to act on differently: no store at all
+            # (boot-time open failed; nothing is persisted and the daily spend
+            # cap is skipped; needs a restart) versus a live handle whose query
+            # raised. One string could not tell them apart.
+            feedback_db = "error"
             feedback_events_total = 0
     # Latest audit date
     latest_report = _latest_feedback_report()

@@ -215,9 +215,19 @@ paths:
 
         session tokens, or internal filesystem paths. ``feedback_db`` is
 
-        reported as ``connected``/``disconnected`` health only; the on-disk
+        reported as ``connected``/``disconnected``/``error`` health only; the
 
-        database path is deliberately not exposed in this public response.
+        on-disk database path is deliberately not exposed in this public
+
+        response. The two unhealthy values are different faults with different
+
+        fixes: ``disconnected`` means no store was ever opened (the boot-time
+
+        open failed on a locked or unwritable volume, so persistence AND the 24h
+
+        per-account spend cap are off until the process is restarted), while
+
+        ``error`` means a store is present but its health query raised.
 
         ``error_tracking`` is likewise a generic ``active``/``inactive``
 

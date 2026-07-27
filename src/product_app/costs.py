@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import hashlib
 import hmac
+import logging
 import os
 import secrets
 import warnings
@@ -34,6 +35,8 @@ from pydantic import BaseModel, Field
 from product_app.config import settings
 from product_app.feedback_store import record_event as _record_feedback_event
 from product_app.model_slots import ModelSlot, openrouter_model_catalog_service
+
+_log = logging.getLogger(__name__)
 
 SOFT_THRESHOLD_USD = Decimal("0.15")
 HARD_LIMIT_USD = Decimal("0.25")
@@ -88,6 +91,23 @@ HARD_LIMIT_USD = Decimal("0.25")
 #: test_daily_cap_admits_the_number_of_runs_its_dollar_value_pays_for``
 #: fails if either the meter or this value moves.
 DAILY_CAP_USD = Decimal("0.20")
+
+#: Minimum gap between two "the daily cap is not being enforced" ERROR records
+#: (P1 / issue #101).
+#:
+#: The bypass is re-evaluated on EVERY estimate — one per
+#: ``POST /v1/query-runs/estimate`` and one per run submission — so an
+#: unconditional log would emit thousands of identical lines an hour and bury
+#: the signal it exists to raise. Logging only once per process fails the other
+#: way: the record would land at the first request after boot and then go quiet,
+#: so an operator who arrives an hour into the outage sees a *silent* log for a
+#: guard that is still off. One record per minute is the middle: bounded at
+#: <=1440/day (nothing, next to the request log), and frequent enough that an
+#: alert rule on a multi-minute evaluation window keeps re-firing for as long as
+#: the store is down. Cardinality is asserted in
+#: ``tests/integration/test_feedback_store_locked_database.py::
+#: test_missing_store_skips_the_daily_cap_and_logs_it_once_per_window``.
+DAILY_CAP_BYPASS_LOG_INTERVAL_S = 60.0
 
 #: Quantization step for ``CostEstimate.estimated_cost_usd``. The
 #: internal arithmetic runs at full Decimal precision, but every
@@ -304,6 +324,11 @@ class CostEstimationService:
         self._binding_secret = (binding_secret or env_secret or secrets.token_hex(32)).encode()
         self._tokens: dict[str, _BoundToken] = {}
         self._lock = RLock()
+        #: When the "daily cap not enforced" ERROR was last emitted, for the
+        #: rate limit described on ``DAILY_CAP_BYPASS_LOG_INTERVAL_S``. Per
+        #: instance rather than module-global so the app's one singleton keeps
+        #: one window while a test's throwaway service starts from silence.
+        self._cap_bypass_logged_at: datetime | None = None
         if now_provider is None:
             self._now: Callable[[], datetime] = lambda: datetime.now(UTC)
         else:
@@ -379,7 +404,19 @@ class CostEstimationService:
             from product_app.feedback_store import get_store  # local import to avoid cycles
 
             store = get_store()
-            if store is not None:
+            if store is None:
+                # P1 / issue #101. The store is gone (a locked or unwritable
+                # volume at boot — ``FeedbackStore.__init__`` raises and
+                # ``main`` swallows it), so this guard is about to be skipped.
+                # The recorded operator decision is LOUD ONLY: the request is
+                # NOT denied and ``threshold_action`` is NOT changed, because
+                # failing closed here would refuse every priced request on a
+                # storage fault. What changes is that the bypass stops being
+                # invisible — before this, a spend guard could be off for the
+                # whole life of a process with nothing but one boot-time
+                # WARNING about "persistence".
+                self._log_daily_cap_bypassed()
+            else:
                 already_spent = store.daily_spend_for(account_id)
                 if already_spent + estimated > DAILY_CAP_USD:
                     return CostEstimate(
@@ -421,6 +458,34 @@ class CostEstimationService:
             confirmation_token=confirmation_token,
             reasons=reasons,
             breakdown=breakdown,
+        )
+
+    def _log_daily_cap_bypassed(self) -> None:
+        """Announce a skipped daily cap, at most once per window.
+
+        Emits nothing else and returns nothing: the caller's ``CostEstimate``
+        must be identical with and without this call (asserted by
+        ``test_the_bypass_log_does_not_change_the_returned_estimate``).
+
+        The window bookkeeping runs under the service lock so two concurrent
+        request threads cannot both decide they are the first — the point of a
+        rate limit is a bounded record count, and a check-then-set race would
+        emit one record per thread instead of one per window.
+        """
+        now = self._now()
+        with self._lock:
+            last = self._cap_bypass_logged_at
+            if last is not None and (now - last).total_seconds() < DAILY_CAP_BYPASS_LOG_INTERVAL_S:
+                return
+            self._cap_bypass_logged_at = now
+        _log.error(
+            "costs: feedback store unavailable, so the USD %s per-account 24h "
+            "daily spend cap is NOT being enforced — every estimate is passing "
+            "the cap check unmetered. The store is a process-wide singleton with "
+            "no reconnect path: restart the process once the database is "
+            "reachable (see /status feedback_db). Repeats suppressed for %ss.",
+            DAILY_CAP_USD,
+            DAILY_CAP_BYPASS_LOG_INTERVAL_S,
         )
 
     def evaluate_confirmation(
