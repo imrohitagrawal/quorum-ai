@@ -128,6 +128,38 @@ class FeedbackStore:
         ON events (recorder, event_type);
     """
 
+    #: F-01 backfill, run once per store open.
+    #:
+    #: Before the F-01 fix, ``POST /v1/query-runs/estimate`` — a pure preview —
+    #: recorded ``cost_guardrail_accepted``, the one event type both spend
+    #: guards count, with a NULL ``query_run_id``. The code fix stops NEW rows
+    #: of that shape, but it is not retroactive, and this table is durable in
+    #: production (``fly.toml`` pins ``FEEDBACK_DB_PATH`` to
+    #: ``/data/feedback_events.sqlite3`` on the persistent volume precisely so
+    #: it survives a deploy). ``daily_spend_for`` filters on ``event_type``
+    #: alone, so without this statement every preview written in the 24h before
+    #: the fix ships keeps double-metering its account for a full rolling day
+    #: after it ships — real users stay wrongly over-capped by the very bug
+    #: that was just fixed.
+    #:
+    #: Safe by construction: a real charge ALWAYS carries a ``query_run_id``.
+    #: ``record_guardrail_event`` has exactly four call sites (all in
+    #: ``query_runs.py``); the only one that can produce
+    #: ``cost_guardrail_accepted`` is the successful ``POST /v1/query-runs``
+    #: path, which passes ``query_run.query_run_id``. The other three pass
+    #: ``None`` and produce ``cost_guardrail_blocked``,
+    #: ``cost_confirmation_required``, or (post-fix) ``cost_estimate_previewed``.
+    #: The rows are relabelled, never deleted, so the audit trail is intact.
+    #:
+    #: Self-limiting rather than a rewrite that runs every boot: on a DB
+    #: written by the fixed code this matches zero rows, forever.
+    _F01_PREVIEW_BACKFILL = (
+        "UPDATE events SET event_type = 'cost_estimate_previewed' "
+        "WHERE recorder = 'cost' "
+        "AND event_type = 'cost_guardrail_accepted' "
+        "AND query_run_id IS NULL"
+    )
+
     def __init__(self, db_path: str) -> None:
         self._db_path = db_path
         self._lock = threading.RLock()
@@ -143,7 +175,30 @@ class FeedbackStore:
         self._conn.row_factory = sqlite3.Row
         with self._lock:
             self._conn.executescript(self._SCHEMA)
+        self._backfill_f01_preview_rows()
         _open_stores.add(self)
+
+    def _backfill_f01_preview_rows(self) -> None:
+        """Relabel pre-F-01 ``/estimate`` preview rows. See
+        ``_F01_PREVIEW_BACKFILL``.
+
+        Best-effort, like :meth:`record`: opening the store must not fail
+        because a one-shot repair could not run. A read-only or locked DB
+        leaves the rows as they were — over-metering for at most the 24h
+        window, which is the behaviour without this method at all.
+        """
+        try:
+            with self._lock:
+                cursor = self._conn.execute(self._F01_PREVIEW_BACKFILL)
+        except Exception as exc:  # noqa: BLE001 — repair is best-effort
+            _log.warning("feedback_store: F-01 preview backfill did not run: %s", exc)
+            return
+        if cursor.rowcount:
+            _log.info(
+                "feedback_store: relabelled %s pre-F-01 estimate-preview rows "
+                "from cost_guardrail_accepted to cost_estimate_previewed",
+                cursor.rowcount,
+            )
 
     @classmethod
     def from_env(cls) -> FeedbackStore:
@@ -269,7 +324,9 @@ class FeedbackStore:
 
         Only ``cost_guardrail_accepted`` events count (these are the events
         where the estimate was actually charged). ``BLOCK`` events were
-        never billed; ``REQUIRE_CONFIRMATION`` events were also not charged
+        never billed; ``cost_estimate_previewed`` events are a
+        ``POST /estimate`` preview of a run that has not started (F-01);
+        ``REQUIRE_CONFIRMATION`` events were also not charged
         because the user abandoned or cancelled.
 
         Args:

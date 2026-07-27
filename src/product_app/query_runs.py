@@ -50,6 +50,7 @@ from product_app.costs import (
     CostBreakdown,
     CostConfirmation,
     CostEstimate,
+    CostGuardrailDecision,
     CostThresholdAction,
     build_measured_breakdown,
     cost_estimation_service,
@@ -866,6 +867,11 @@ def estimate_query_run(
         estimated_cost_usd=estimate.estimated_cost_usd,
         threshold_action=estimate.threshold_action,
         confirmed=False,
+        # F-01: this is a preview, not a charge. Without this flag an
+        # ALLOW-band estimate records ``cost_guardrail_accepted``, which both
+        # spend guards count — so one logical run is billed twice (once here,
+        # once at create) and an abandoned preview is billed for nothing.
+        preview=True,
     )
     return QueryRunEstimateResponse(
         correlation_id=f"estimate_{uuid4().hex}",
@@ -956,6 +962,69 @@ def create_query_run(
             },
         )
 
+    # C9 + F-01: reserve the in-flight run slot BEFORE anything that charges
+    # the account or claims the account's single active-run slot. The capacity
+    # check used to sit after ``query_run_repository.create`` and after the
+    # ``cost_guardrail_accepted`` record, so a 503 left the caller billed for a
+    # run whose worker was never started AND holding a non-terminal run that
+    # nothing would ever finish — a permanent ACTIVE_QUERY_EXISTS lockout on
+    # top of the phantom charge (both MEASURED). The non-blocking
+    # ``acquire(blocking=False)`` is intentional: we don't want to queue
+    # requests and run them all sequentially if the process is already
+    # saturated. The permit is held from here until
+    # ``_execute_query_run_with_semaphore_release`` releases it at the end of
+    # the run; every path that fails before the worker owns it releases it.
+    #
+    # The legacy/test path is synchronous and deliberately bypasses the
+    # semaphore to keep unit-test determinism, so it reserves nothing.
+    capacity_reserved = False
+    if not session.legacy:
+        if not _run_semaphore.acquire(blocking=False):
+            raise HTTPException(
+                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                detail={
+                    "code": "RUN_CAPACITY_EXCEEDED",
+                    "message": (
+                        "Quorum is at capacity for concurrent query runs. "
+                        "Retry after a short backoff."
+                    ),
+                },
+            )
+        capacity_reserved = True
+
+    try:
+        return _start_reserved_query_run(
+            payload=payload,
+            session=session,
+            model_slots=model_slots,
+            cost_estimate=cost_estimate,
+            cost_decision=cost_decision,
+        )
+    except BaseException:
+        # Nothing below took ownership of the permit (the worker thread only
+        # owns it once ``Thread.start()`` has returned, and that is the last
+        # statement in the helper), so release it here. ``BoundedSemaphore``
+        # raises on an over-release, so a double release cannot pass silently.
+        if capacity_reserved:
+            _run_semaphore.release()
+        raise
+
+
+def _start_reserved_query_run(
+    *,
+    payload: QueryRunCreateRequest,
+    session: SessionContext,
+    model_slots: list[ModelSlot],
+    cost_estimate: CostEstimate,
+    cost_decision: CostGuardrailDecision,
+) -> QueryRunCreateResponse:
+    """Create, bill and launch a run whose capacity permit is already held.
+
+    Split out of :func:`create_query_run` so that ONE ``except BaseException``
+    there covers every step between reserving the permit and handing it to the
+    worker thread — including the 409 and the audit/billing writes — instead of
+    a per-step ``try/finally`` ladder that a later edit can fall out of.
+    """
     try:
         query_run = query_run_repository.create(
             account_id=session.account_id,
@@ -1012,37 +1081,24 @@ def create_query_run(
         # Legacy/test path runs inline (no safety wrapper), so persist the
         # terminal run here. Idempotent with the production choke point.
         _persist_terminal_run(query_run.query_run_id)
-    else:
-        # C9: do not spawn a thread if the in-flight run cap is
-        # already at capacity. Returning 503 with a clear error
-        # message lets the client retry after a backoff. We hold
-        # the semaphore briefly to perform this check, then release
-        # it (the actual run will re-acquire it). The non-blocking
-        # ``acquire(blocking=False)`` is intentional: we don't want
-        # to queue requests and run them all sequentially if the
-        # process is already saturated.
-        if not _run_semaphore.acquire(blocking=False):
-            raise HTTPException(
-                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-                detail={
-                    "code": "RUN_CAPACITY_EXCEEDED",
-                    "message": (
-                        "Quorum is at capacity for concurrent query runs. "
-                        "Retry after a short backoff."
-                    ),
-                },
-            )
-        try:
-            Thread(
-                target=_execute_query_run_with_semaphore_release,
-                args=(query_run.query_run_id, session.account_id),
-                daemon=True,
-            ).start()
-        except RuntimeError:
-            # Threading failure (e.g. on shutdown). Release the
-            # semaphore so it doesn't leak.
-            _run_semaphore.release()
-            raise
+        return _create_response_for(query_run)
+
+    # The capacity permit was reserved by the caller. Build the response
+    # FIRST so that ``Thread.start()`` is genuinely the last statement that
+    # can fail: once it returns, the worker owns the permit and releases it in
+    # its ``finally``. Anything that raises before that propagates to the
+    # caller's handler, which releases it — so the permit can neither leak nor
+    # be double-released.
+    response = _create_response_for(query_run)
+    Thread(
+        target=_execute_query_run_with_semaphore_release,
+        args=(query_run.query_run_id, session.account_id),
+        daemon=True,
+    ).start()
+    return response
+
+
+def _create_response_for(query_run: QueryRun) -> QueryRunCreateResponse:
     return QueryRunCreateResponse(
         query_run_id=query_run.query_run_id,
         status=query_run.status,
