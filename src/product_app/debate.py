@@ -363,9 +363,14 @@ class DebateOrchestrationService:
                 prior_round=None,
             ),
         )
-        if live is None:
-            return templated, self._debate_fallback_notice(round_number=1), None
-        return live.answer_text.strip(), None, live
+        # F-06: ``live`` is non-None whenever a request was DISPATCHED, even if
+        # its output was unusable. Blank text therefore means "fall back to the
+        # templated critique" — but the result is still returned so its usage is
+        # recorded and a billed call cannot vanish.
+        text = "" if live is None else live.answer_text.strip()
+        if not text:
+            return templated, self._debate_fallback_notice(round_number=1), live
+        return text, None, live
 
     def _build_round_two_text(
         self,
@@ -394,9 +399,12 @@ class DebateOrchestrationService:
                 prior_round=round_one_text,
             ),
         )
-        if live is None:
-            return templated, self._debate_fallback_notice(round_number=2), None
-        return live.answer_text.strip(), None, live
+        # F-06: see ``_build_round_one_text`` — blank text means the dispatched
+        # call was unusable, not that no call was made.
+        text = "" if live is None else live.answer_text.strip()
+        if not text:
+            return templated, self._debate_fallback_notice(round_number=2), live
+        return text, None, live
 
     def _call_debate_model(
         self,
@@ -428,7 +436,26 @@ class DebateOrchestrationService:
             max_tokens=DEBATE_ROUND_MAX_TOKENS,
         )
         if result is None or not result.answer_text.strip():
-            return None
+            # F-06: past the two guards above the request WAS dispatched, so the
+            # provider may have billed it — an HTTP 200 whose completion is
+            # empty (``finish_reason="length"`` against the tight round cap is
+            # the likeliest trigger) still consumes tokens. Returning a bare
+            # ``None`` here made "no call was made" and "a call was made and its
+            # output was unusable" indistinguishable, and the collector drops
+            # ``None``, so the billed call left NO entry at all — not even a
+            # ``None`` one, which ``_actual_cost``'s gate would have caught.
+            # ``all([])`` is True, so the run was served as ``measured`` with
+            # those dollars missing.
+            #
+            # Surface an attempted-but-unusable marker instead: blank text (so
+            # the caller falls back to the templated critique) carrying whatever
+            # usage we captured. ``usage=None`` when the response never reached
+            # us, which correctly forces the run to ``estimated``.
+            return LiveProviderResult(
+                answer_text="",
+                sources=[],
+                usage=result.usage if result is not None else None,
+            )
         return result
 
     def _debate_user_prompt(

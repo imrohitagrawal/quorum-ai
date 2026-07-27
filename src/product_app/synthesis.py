@@ -575,10 +575,15 @@ class SynthesisOrchestrationService:
             system_prompt=_CONSENSUS_PROMPT,
             user_prompt=user_prompt,
         )
-        if live is None:
-            return truncate_section(templated, max_chars=DEFAULT_SECTION_MAX_CHARS), None, None
+        # F-06: ``live`` is non-None whenever a request was DISPATCHED, even if
+        # its output was unusable. Blank text therefore means "use the templated
+        # section" — but the result is still returned so its usage is recorded
+        # and a billed call cannot vanish from the receipt.
+        text = "" if live is None else live.answer_text.strip()
+        if not text:
+            return truncate_section(templated, max_chars=DEFAULT_SECTION_MAX_CHARS), None, live
         return (
-            truncate_section(live.answer_text.strip(), max_chars=DEFAULT_SECTION_MAX_CHARS),
+            truncate_section(text, max_chars=DEFAULT_SECTION_MAX_CHARS),
             None,
             live,
         )
@@ -614,10 +619,15 @@ class SynthesisOrchestrationService:
             system_prompt=_DISAGREEMENT_PROMPT,
             user_prompt=user_prompt,
         )
-        if live is None:
-            return truncate_section(templated, max_chars=DEFAULT_SECTION_MAX_CHARS), None, None
+        # F-06: ``live`` is non-None whenever a request was DISPATCHED, even if
+        # its output was unusable. Blank text therefore means "use the templated
+        # section" — but the result is still returned so its usage is recorded
+        # and a billed call cannot vanish from the receipt.
+        text = "" if live is None else live.answer_text.strip()
+        if not text:
+            return truncate_section(templated, max_chars=DEFAULT_SECTION_MAX_CHARS), None, live
         return (
-            truncate_section(live.answer_text.strip(), max_chars=DEFAULT_SECTION_MAX_CHARS),
+            truncate_section(text, max_chars=DEFAULT_SECTION_MAX_CHARS),
             None,
             live,
         )
@@ -648,10 +658,15 @@ class SynthesisOrchestrationService:
             system_prompt=_SOURCE_SUPPORT_PROMPT,
             user_prompt=user_prompt,
         )
-        if live is None:
-            return truncate_section(templated, max_chars=DEFAULT_SECTION_MAX_CHARS), None, None
+        # F-06: ``live`` is non-None whenever a request was DISPATCHED, even if
+        # its output was unusable. Blank text therefore means "use the templated
+        # section" — but the result is still returned so its usage is recorded
+        # and a billed call cannot vanish from the receipt.
+        text = "" if live is None else live.answer_text.strip()
+        if not text:
+            return truncate_section(templated, max_chars=DEFAULT_SECTION_MAX_CHARS), None, live
         return (
-            truncate_section(live.answer_text.strip(), max_chars=DEFAULT_SECTION_MAX_CHARS),
+            truncate_section(text, max_chars=DEFAULT_SECTION_MAX_CHARS),
             None,
             live,
         )
@@ -690,10 +705,15 @@ class SynthesisOrchestrationService:
             system_prompt=_UNCERTAINTY_PROMPT,
             user_prompt=user_prompt,
         )
-        if live is None:
-            return truncate_section(templated, max_chars=DEFAULT_SECTION_MAX_CHARS), None, None
+        # F-06: ``live`` is non-None whenever a request was DISPATCHED, even if
+        # its output was unusable. Blank text therefore means "use the templated
+        # section" — but the result is still returned so its usage is recorded
+        # and a billed call cannot vanish from the receipt.
+        text = "" if live is None else live.answer_text.strip()
+        if not text:
+            return truncate_section(templated, max_chars=DEFAULT_SECTION_MAX_CHARS), None, live
         return (
-            truncate_section(live.answer_text.strip(), max_chars=DEFAULT_SECTION_MAX_CHARS),
+            truncate_section(text, max_chars=DEFAULT_SECTION_MAX_CHARS),
             None,
             live,
         )
@@ -733,9 +753,12 @@ class SynthesisOrchestrationService:
             system_prompt=_RECOMMENDATION_PROMPT,
             user_prompt=user_prompt,
         )
-        if live is None:
-            return truncate_recommendation(templated), None, None
-        return truncate_recommendation(live.answer_text.strip()), None, live
+        # F-06: see the other section builders — blank text means the dispatched
+        # call was unusable, not that no call was made.
+        text = "" if live is None else live.answer_text.strip()
+        if not text:
+            return truncate_recommendation(templated), None, live
+        return truncate_recommendation(text), None, live
 
     def _call_synthesis_model(
         self,
@@ -761,7 +784,23 @@ class SynthesisOrchestrationService:
             max_tokens=SYNTHESIS_SECTION_MAX_TOKENS,
         )
         if result is None or not result.answer_text.strip():
-            return None
+            # F-06: past the two guards above the request WAS dispatched, so the
+            # provider may have billed it. Returning a bare ``None`` made "no
+            # call was made" indistinguishable from "a call was made and its
+            # output was unusable", and the collector below drops ``None``, so a
+            # billed section left NO entry — not even a ``None`` one, which
+            # ``_actual_cost``'s gate would have caught. ``all([])`` is True, so
+            # the run was served as ``measured`` with those dollars missing.
+            #
+            # Surface an attempted-but-unusable marker: blank text (so the
+            # caller falls back to the templated section) carrying whatever
+            # usage we captured. ``usage=None`` when the response never reached
+            # us, which correctly forces the run to ``estimated``.
+            return LiveProviderResult(
+                answer_text="",
+                sources=[],
+                usage=result.usage if result is not None else None,
+            )
         return result
 
     def _synthesis_fallback_notice(self, section_label: str) -> str:
