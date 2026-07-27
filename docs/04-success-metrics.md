@@ -8,7 +8,7 @@
 | 2 | Answer quality/confidence | The synthesized answer is complete, useful, and clear about confidence and uncertainty. | Rubric-based review of completeness, reasoning quality, uncertainty handling, and usefulness. |
 | 3 | Cost per query | The two-round debate workflow remains economically viable. | Track total model, search, debate, and synthesis cost per completed query. |
 | 4 | Time saved | The product reduces manual chatbot hopping and comparison work. | Compare elapsed product workflow time against a manual four-chatbot workflow. |
-| 5 | Citation coverage | Material claims include visible source links. | Measure percentage of material factual claims backed by source links. |
+| 5 | Source coverage | Answers that came back carry a visible primary source link. | Measure the percentage of the answers that came back carrying at least one primary source (`providers.calculate_citation_coverage`). Presence of a citation only — it does not verify the source supports the claim; that is `citation_marker_grounding`. Changed by WP-C on 2026-07-27: the old wording said "material factual claims", a denominator the code derived from answer LENGTH, which made the 80% target unreachable (see NFR-003 History in `docs/11-non-functional-requirements.md`). |
 
 ## MVP Targets
 

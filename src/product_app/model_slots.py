@@ -51,10 +51,13 @@ EXPECTED_SLOT_COUNT = 4
 #: |------|-----------------------------------|------------|
 #: | 1    | ``openai/gpt-4o-mini``            | 0.000150   |
 #: | 2    | ``anthropic/claude-haiku-4.5``    | 0.001000   |
-#: | 3    | ``google/gemini-2.5-flash``       | 0.000150   |
-#: | 4    | ``nvidia/nemotron-3-nano-30b-a3b``    | 0.000050   |
+#: | 3    | ``google/gemini-2.5-flash``       | 0.000300   |
+#: | 4    | ``nvidia/nemotron-3-nano-30b-a3b`` | 0.000050   |
 #:
-#: Combined input cost is **$0.00135 / 1K** tokens. The per-run hard
+#: Combined input cost is **$0.00150 / 1K** tokens (every row above read
+#: from the live public catalog on 2026-07-27; the slot-3 row previously
+#: said 0.000150, which was wrong before WP-G1 and which my recomputed
+#: total then inherited). The per-run hard
 #: cap at ``costs.py`` is unchanged; this list only lowers the average
 #: cost by choosing cheaper per-vendor options.
 DEFAULT_MODEL_IDS: tuple[str, ...] = (

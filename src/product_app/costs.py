@@ -357,7 +357,18 @@ class CostEstimationService:
         # calls.
         if account_id is not None and cost_event_recorder is not None:
             cumulative = self._cumulative_spend_for(account_id)
-            if cumulative > 0 and cumulative + bound > HARD_LIMIT_USD:
+            # UNITS: ``cumulative`` is a sum of RECORDED point estimates, so the
+            # term added to it must be the point estimate too. ``59a4a8f``
+            # switched this (and the daily cap below) to ``bound`` to "fail
+            # safe", which instead compared a worst case against a realistic
+            # meter — apples to oranges on a money rail, and the exact opposite
+            # of what the comment 20 lines above this mandates.
+            #
+            # The per-call rail above KEEPS the bound: that one fails safe on a
+            # single call, which is what issue #16 rec #2/#3 asked for. These
+            # accumulation rails are a different question and must match their
+            # meter. See tests/unit/test_cost_rail_units.py.
+            if cumulative > 0 and cumulative + estimated > HARD_LIMIT_USD:
                 return CostEstimate(
                     estimated_cost_usd=estimated,
                     max_cost_usd=bound,
@@ -389,7 +400,15 @@ class CostEstimationService:
             store = get_store()
             if store is not None:
                 already_spent = store.daily_spend_for(account_id)
-                if already_spent + bound > DAILY_CAP_USD:
+                # Same unit rule as the cumulative rail above: ``daily_spend_for``
+                # sums ``estimated_cost_usd``, so the addend is the point
+                # estimate. With ``bound`` here the cap admitted
+                # ``floor((CAP - bound) / unit) + 1`` runs instead of
+                # ``floor(CAP / unit)`` — one run of headroom permanently
+                # unusable — and any run whose BOUND alone exceeded the cap was
+                # BLOCKed with a null confirmation token even on an account that
+                # had spent nothing, which killed the confirmation band outright.
+                if already_spent + estimated > DAILY_CAP_USD:
                     return CostEstimate(
                         estimated_cost_usd=estimated,
                         max_cost_usd=bound,

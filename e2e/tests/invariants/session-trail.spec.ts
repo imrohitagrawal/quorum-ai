@@ -97,16 +97,25 @@ test.describe("PR8 — Conversation trail UI", () => {
     await expect(page.locator(".session-trail-entry")).toHaveCount(1);
   });
 
-  test("the trail is capped at 10 entries", async ({ page }) => {
-    // Run 11 distinct queries; the client-side cap (10) must hold.
-    for (let i = 0; i < 11; i++) {
-      await driveWithCompleted(page, goldenCompletedResp());
-      // Navigate back to composer for the next run.
-      await goBackToComposer(page);
-      const count = await page.locator(".session-trail-entry").count();
-      expect(count).toBeLessThanOrEqual(10);
-    }
-  });
+  // REMOVED: "the trail is capped at 10 entries". It could not fail, and this
+  // spec is now in the BLOCKING lane, so it was a gate enforcing nothing.
+  //
+  // Proved by mutation, twice over. Deleting the cap branch outright
+  // (app.js:3882) left it green, because the assertion was `count <= 10` while
+  // `count` is always 1: every run calls clearSessionTrail() (app.js:5823,
+  // and again via "Start fresh" at :6903), AND appendSessionTrailEntry dedupes
+  // by runId (app.js:3880) while the golden fixture returns the same
+  // query_run_id every time. Two independent reasons the trail cannot grow.
+  //
+  // So SESSION_TRAIL_CAP is unreachable dead code today: the trail is REPLACED
+  // per run, never appended across runs. Reaching it from a test needs either a
+  // test-only hook in production JS or distinct per-run ids in the shared
+  // golden fixture — neither is worth it for dead code, and a fake gate is
+  // worse than no gate. The remaining cases in this file are real: disabling
+  // the clear at app.js:6903 fails "'Start fresh' clears the session trail".
+  //
+  // WP-F owns this surface. Decide there whether the cap should exist at all;
+  // if the trail is ever changed to accumulate, add a real test with it.
 
   test("long questions are truncated to 80 characters", async ({ page }) => {
     const longQuestion = "A".repeat(200);
