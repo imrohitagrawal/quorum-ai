@@ -14,14 +14,16 @@ This file drives the REAL ``_execute_query_run_safely`` pipeline (no network:
 the initial-slot producer and the ``call_with_prompt`` seam are faked) and
 pins both directions:
 
-* the two latent skip paths (H1 synthesis-recorded-never, H2 a debate crash
-  after a billed call) must serve ``estimated``;
+* the skip paths (H1 synthesis-recorded-never — a surrogate for a branch that
+  is dead in production; H2 a debate crash after a billed call; and the
+  REACHABLE synthesis crash) must serve ``estimated``;
 * a CANCELLED or TIMED_OUT run that never entered a billable stage must STILL
   serve ``measured``, because that figure is exactly right.
 
-Every assertion is CARDINALITY — how many calls were dispatched versus how
-many usage entries the run actually recorded — because a clean-path outcome
-assertion is exactly what let the vacuous gate survive this long.
+The LOAD-BEARING assertion in each test is CARDINALITY — how many calls were
+dispatched versus how many usage entries the run actually recorded — with the
+served label and marker state alongside it, because a clean-path outcome
+assertion on its own is exactly what let the vacuous gate survive this long.
 """
 
 from __future__ import annotations
@@ -173,13 +175,21 @@ def test_billed_synthesis_that_is_never_recorded_is_not_measured(
 ) -> None:
     """``final_synthesis is None`` returns PARTIAL without recording usage.
 
-    ``_execute_query_run`` has ``if synthesis_result.final_synthesis is None:``
-    -> PARTIAL + return, which skips ``record_final_synthesis`` entirely. The
-    branch is dead today only because ``produce_final_synthesis`` always
-    returns a synthesis; a SURROGATE trigger (a stubbed producer that returns
-    ``final_synthesis=None`` while reporting five billed section calls) is used
-    here deliberately, because the point is the pipeline's response to that
-    return value, not how the value arises.
+    THE BRANCH THIS EXERCISES IS DEAD IN PRODUCTION TODAY. ``_execute_query_run``
+    has ``if synthesis_result.final_synthesis is None:`` -> PARTIAL + return,
+    which skips ``record_final_synthesis`` entirely — but no real caller can
+    reach it: ``src/product_app/synthesis.py`` contains exactly ONE ``return
+    SynthesisResult(`` and it always passes ``final_synthesis=synthesis``, a
+    ``FinalSynthesis`` built unconditionally a few lines above (verified by AST
+    walk over the module, 2026-07-28). So the stubbed producer here is a
+    SURROGATE for a branch nothing currently triggers. The test is still worth
+    keeping — ``SynthesisResult.final_synthesis`` is typed optional, the branch
+    exists, and its guard is the right one — but it must not be read as
+    evidence about a live path.
+
+    The REACHABLE synthesis analogue is a RAISE out of
+    ``produce_final_synthesis`` after a billed section call; that one is covered
+    by ``test_a_synthesis_crash_after_a_billed_call_is_not_measured`` below.
 
     Before the marker: five billed calls, ``synthesis_call_usages == []``,
     ``all([])`` True -> ``measured`` with those dollars missing.
@@ -187,15 +197,17 @@ def test_billed_synthesis_that_is_never_recorded_is_not_measured(
     _install_initial_slots(monkeypatch)
     _install_seam(monkeypatch, None)  # debate makes no billable call
 
-    billed = [_USAGE] * 5
+    produced: list[SynthesisResult] = []
 
     def _bills_then_yields_nothing(**_kwargs: Any) -> SynthesisResult:
-        return SynthesisResult(
+        result = SynthesisResult(
             final_synthesis=None,
             failed_steps=["synthesis"],
             missing_steps=["synthesis"],
-            live_call_usages=list(billed),
+            live_call_usages=[_USAGE] * 5,
         )
+        produced.append(result)
+        return result
 
     monkeypatch.setattr(
         synthesis_stub_service, "produce_final_synthesis", _bills_then_yields_nothing
@@ -205,8 +217,12 @@ def test_billed_synthesis_that_is_never_recorded_is_not_measured(
         run = _drive()
 
         assert run.status is QueryRunStatus.PARTIAL
-        # CARDINALITY: five calls billed, ZERO recorded on the run.
-        assert len(billed) == 5
+        # CARDINALITY: the pipeline CONSUMED one synthesis result reporting five
+        # billed section calls, and recorded ZERO of them on the run. Both
+        # halves bite: ``produced`` is empty if the pipeline never reaches the
+        # synthesis stage at all.
+        assert len(produced) == 1
+        assert len(produced[0].live_call_usages) == 5
         assert run.synthesis_call_usages == []
         # The marker is the fact that distinguishes this from an honest empty list.
         assert run.billing_stages[BillableStage.SYNTHESIS] is StageBillingState.ENTERED
@@ -264,6 +280,52 @@ def test_a_debate_crash_after_a_billed_call_is_not_measured(
 
     _actual, _breakdown, source = _actual_cost(run)
     assert source == "estimated", "a stage that was entered but never recorded cannot be measured"
+
+
+# --- H1-reachable: the SYNTHESIS analogue of H2, on a live path --------------
+
+
+def test_a_synthesis_crash_after_a_billed_call_is_not_measured(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A raise out of ``produce_final_synthesis`` skips ``record_final_synthesis``.
+
+    This is the REACHABLE synthesis hazard, and the one H1 above does NOT
+    cover: H1's ``final_synthesis is None`` return is dead in production, while
+    a transport/parse error escaping the synthesis orchestrator after a section
+    call has already been charged is an ordinary failure mode. The run falls to
+    ``_execute_query_run_safely``'s FAILED handler, so ``synthesis_call_usages``
+    stays ``[]`` — and before the marker ``all([])`` waved that through as
+    ``measured`` for a run that died mid-bill.
+
+    Shaped like H2 (the debate twin) on purpose: same surrogate, same
+    cardinality contract, the other stage.
+    """
+    _install_initial_slots(monkeypatch)
+    _install_seam(monkeypatch, None)  # debate makes no billable call
+
+    dispatched: list[str] = []
+
+    def _bills_then_raises(**_kwargs: Any) -> Any:
+        dispatched.append("consensus section call, billed")
+        raise RuntimeError("transport died after the section call was billed")
+
+    monkeypatch.setattr(synthesis_stub_service, "produce_final_synthesis", _bills_then_raises)
+
+    run = _drive()
+
+    assert run.status is QueryRunStatus.FAILED
+    # CARDINALITY: one call billed, ZERO recorded on the run.
+    assert len(dispatched) == 1
+    assert run.synthesis_call_usages == []
+    assert run.billing_stages[BillableStage.SYNTHESIS] is StageBillingState.ENTERED
+    # The debate stage completed its handshake and must not be blamed.
+    assert run.billing_stages[BillableStage.DEBATE] is StageBillingState.RECORDED
+    assert run.debate_call_usages == []
+
+    actual, _breakdown, source = _actual_cost(run)
+    assert source == "estimated", "a stage that was entered but never recorded cannot be measured"
+    assert actual == _ESTIMATE_USD, "the served figure is the pre-run estimate"
 
 
 # --- FINDING 1 pins: an honestly-empty list must STAY measured ---------------

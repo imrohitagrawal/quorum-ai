@@ -118,10 +118,12 @@ def _run(
     ``billing_stages`` defaults to ``RECORDED`` for both stages — the state in
     which the usage lists are authoritative and the ``all(usage is not None
     ...)`` check is the sole decider. That keeps every assertion below about
-    the usage lists, which is what these tests are for, while still exercising
-    the strictest of the three marker states (``NOT_ENTERED`` is the one that
-    waves an empty list through). The E2 marker itself is pinned in
-    ``tests/unit/test_stage_billing_gate.py``.
+    the usage lists, which is what these tests are for. ``RECORDED`` is the
+    IDENTITY state, not the strictest one: ``ENTERED`` is strictest (it refuses
+    ``measured`` whatever the list holds) and ``NOT_ENTERED`` is loosest (it
+    waves an empty list through). Under ``RECORDED`` the marker neither adds
+    nor removes anything, so these tests measure the usage-list check alone.
+    The E2 marker itself is pinned in ``tests/unit/test_stage_billing_gate.py``.
     """
     ids = model_ids if model_ids is not None else DEFAULT_MODEL_IDS
     slots = [ModelSlot(slot_number=i + 1, model_id=mid) for i, mid in enumerate(ids)]
