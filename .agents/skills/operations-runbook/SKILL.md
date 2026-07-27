@@ -128,4 +128,143 @@ the component is operable.
 
 ---
 
+# Factory skill contract
+
+> **Repo-added section.** Everything above is the upstream bundle. This block is the contract
+> `scripts/validate_quality_contracts.py` requires of every `.agents/skills/*/SKILL.md`, written
+> against what this skill actually does. Because an upstream refresh replaces this folder wholesale,
+> **re-apply this block after every update** — `make validate` goes red without it. Provenance is
+> recorded in `configs/external-skill-registry.json`.
+
+## When to use
+
+- A component is operable — it deploys, and it emits logs, metrics, or traces — and nobody has
+  written down how to run it, what to watch, or what to do at 3am when it breaks.
+- A component just reached its Definition of Done and needs its first runbook, or a milestone/incident
+  means an existing runbook must be refreshed and re-walked.
+- The request is any of: "runbook", "ops guide", "on-call doc", "troubleshooting guide", "incident
+  playbook", "SRE doc", "what do we do when X fails", "how do we recover".
+- An AI-bearing component needs its operational envelope documented — model cost, drift, guardrail
+  trips — alongside the ordinary service signals.
+
+## When not to use
+
+- **The component does not run yet.** A runbook describes observed behaviour. On a design-only
+  component you may draft a recovery procedure, but mark it `[designed, not yet built]` — do not
+  assert an unwalked recovery path works.
+- **Per commit.** This is a per-component, per-milestone deliverable, not a change gate.
+- **The reader is not an operator.** End-user how-to → `usage-guide`. Design rationale and *why* →
+  `architecture-and-decisions`. Look-up Q&A → `project-faq`. Ramping a new contributor →
+  `onboarding-companion`.
+- **The numbers live elsewhere.** SLO targets and the live error budget are linked, never restated;
+  if the ask is "define our SLOs", that is the SLO register's job, not this one.
+
+## Inputs
+
+- `assets/project-profile.md`, filled — in particular `grade_target_operations_runbook` and
+  `scope_operations_runbook` (default `internal`).
+- One or more operable components, with their deploy path and their dashboards/alerts.
+- The failure-mode analysis (FMEA) and dependency map the architecture work produced.
+- The service-level-objective register and error-budget tracker — to **link**.
+- `references/house-style.md` (read first), `references/runbook-method.md`,
+  `references/observability-and-slo.md`, `references/incident-response.md`.
+
+## Owned outputs
+
+- `docs/runbook.md` — one per separately-deployed component, in the seven-part structure above,
+  each carrying a literal `Last reviewed: YYYY-MM-DD` stamp (the date it was last *walked through*).
+- One failure-mode entry per failure mode, each produced from `assets/runbook-entry.template.md`
+  and classified **OPS** or **CORR**.
+- `docs/publish-targets.yaml` when the project first needs one (copied from `assets/`).
+
+This skill owns those files and nothing else. It does not own the SLO register, the ADRs, the
+architecture docs, or any source code.
+
+## Allowed tools
+
+- Read anywhere in the repository.
+- Write **only** to the owned outputs above.
+- Shell: `python3 scripts/verify.py …` (the skill's own verifier), and read-only inspection commands
+  needed to confirm a documented step is real.
+- Walking a recovery procedure in a **non-production** environment, to make the runbook truthful.
+
+## Forbidden actions
+
+- Writing a secret, token, key, or credential into any page. Runbooks instruct the operator to fetch
+  secrets the normal way; they never carry one.
+- Editing source code, ADRs, the SLO register, or another skill's outputs.
+- Restating a tunable value (threshold, timeout, budget) that another file owns — link the key.
+- Publishing. Rendering to a wiki/portal is `publish-mirror`'s job, per
+  `references/render-contract.md`.
+- Executing a destructive or irreversible recovery step against production to "test" it.
+- Marking a procedure verified when it was never walked through.
+
+## Procedure
+
+The numbered **Workflow** above is the procedure. In short: ground and configure → write one runbook
+per component to the seven-part structure → define monitoring → define incident response → stamp the
+last-reviewed date and run the verifier → hand off to `publish-mirror`.
+
+## Validation
+
+```bash
+python3 scripts/verify.py docs/runbook.md --format md --skill operations-runbook --profile docs/project-profile.md
+```
+
+Green means: reading grade within `grade_target_operations_runbook`, no banned words, no internal-name
+leak against `scope_operations_runbook`, the licence footer present, links resolve, and the
+`Last reviewed:` stamp parses and is not stale. The repo-level gate is `make validate`
+(`scripts/validate_quality_contracts.py`), which checks this contract's sections exist.
+
+## Handoff contract
+
+- **Consumes from** `architecture-and-decisions`: the failure modes, the dependency/blast-radius map,
+  and the resilience invariants. This skill turns those into operator procedure; it does not re-derive
+  them.
+- **Hands to** `doc-critic`: the produced runbooks, for the blind multi-axis critique. Unresolved
+  BLOCKERs stop the handoff.
+- **Then hands to** `publish-mirror`: the verified, reviewed Markdown, plus
+  `docs/publish-targets.yaml`.
+- **Links out to** `onboarding-companion` (a new contributor should be pointed here, not taught it)
+  and the SLO register.
+
+## Stop conditions
+
+Stop and ask a human rather than guessing when:
+
+- The component does not run, or you cannot observe it — there is nothing truthful to write.
+- A failure mode's recovery path cannot be walked through, so its safety is unproven.
+- You cannot tell whether a mode is **OPS** or **CORR**. Guessing wrong ships "just retry" onto a
+  correctness bug, which reproduces it.
+- A step would need a production credential, or would be irreversible.
+- The SLO register or error budget does not exist — link nothing rather than invent a number.
+- The project profile is missing or unfilled.
+
+## Examples
+
+- *"Write the runbook for the query-run pipeline."* → one `docs/runbook.md` for that component:
+  how to run it locally and deployed, its health signals and thresholds, a failure-mode entry per
+  mode (provider timeout = **OPS**, resumable with backoff because the step is idempotent; a
+  synthesis answer that violates the citation invariant = **CORR**, gate and regenerate, never
+  retry), routine operations, an SLO link, and the escalation path.
+- *"We had an incident where the daily cost cap locked an account out — fold the lesson in."* →
+  add/refresh the cost-cap failure-mode entry, add the signal and threshold that would have caught
+  it, re-walk the recovery, and bump `Last reviewed:`.
+- *"Document what to watch for the model layer."* → the AI signals in
+  `references/observability-and-slo.md`: cost per run, drift, guardrail trip rate, fallback rate.
+
+## Anti-examples
+
+- *"Write the runbook for the service we're about to build."* → premature; nothing runs. Draft at
+  most, marked `[designed, not yet built]`.
+- *"Explain why we chose this queue."* → `architecture-and-decisions`.
+- *"Write the getting-started guide for our users."* → `usage-guide`.
+- *"Put the production API key in the runbook so on-call can copy it."* → forbidden; document how to
+  retrieve it from the secret store instead.
+- *"Our p99 target is 800ms, write that in."* → link the SLO register; a pasted number drifts.
+- *"The retry loop fixes it, just add 'retry 3 times' to every entry."* → a CORR entry never says
+  retry; it reproduces the defect.
+
+---
+
 _Skill version: 1.1.0 — see `CHANGELOG.md`._

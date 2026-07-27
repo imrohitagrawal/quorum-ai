@@ -153,3 +153,140 @@ are non-negotiable. (See `references/working-with-ai.md`.)
 - `references/working-with-ai.md` — using an AI coding agent well, and the traps.
 - `assets/project-profile.md` — copy into the repo and fill once per project.
 - `scripts/verify.py` — run before presenting.
+
+---
+
+# Factory skill contract
+
+> **Repo-added section.** Everything above is the upstream bundle. This block is the contract
+> `scripts/validate_quality_contracts.py` requires of every `.agents/skills/*/SKILL.md`, written
+> against what this skill actually does. Because an upstream refresh replaces this folder wholesale,
+> **re-apply this block after every update** — `make validate` goes red without it. Provenance is
+> recorded in `configs/external-skill-registry.json`.
+
+## When to use
+
+- The repository **runs end to end** for the first time and a new joiner, fresh graduate, or
+  non-expert contributor now needs a path from zero to a first shipped change.
+- The setup steps, the repo layout, or the project's conventions changed, and the existing companion
+  has aged out (the `Last reviewed:` stamp and the staleness check exist for exactly this).
+- The ask is onboarding docs, a contributor guide, "getting started for new team members", a buddy
+  guide, developer onboarding, "help new people get up to speed", or "onboard a junior to this repo".
+- Contributors are building with an AI coding agent and need the honest habits and traps written down.
+
+## When not to use
+
+- **On an empty or non-running repo.** There is nothing to onboard onto; a quickstart that does not
+  run teaches a lie.
+- **Per commit.** This is a per-milestone deliverable.
+- **For end users.** Someone who wants to *use* the product gets `usage-guide`; this is for someone
+  who *works on* it.
+- **As a concepts course.** A multi-audience "teach me the field" track is `learning-track`.
+- **For production operation.** Running, monitoring, and recovering the live system is
+  `operations-runbook`.
+- **To re-derive the "why".** Link `architecture-and-decisions`; do not restate it here.
+
+## Inputs
+
+- A repository that already runs end to end, with a real one-command (or near) quickstart.
+- `assets/project-profile.md`, filled — `grade_target_onboarding_companion` and
+  `scope_onboarding_companion` (default `internal`).
+- Where the project keeps requirements, docs, ADRs/decision log, conventions, feature flags, and
+  observability.
+- The sibling docs to point at, where they exist: the architecture walkthrough, the usage guide, the
+  operations runbook.
+- `references/house-style.md` (read first), `buddy-path.md`, `mentor-path.md`, `working-with-ai.md`.
+
+## Owned outputs
+
+```
+docs/onboarding/
+├─ ONBOARDING.md         # the buddy path: zero -> running -> reading -> contributing
+├─ MENTOR.md             # the senior-engineer mindset and habits
+└─ working-with-ai.md    # using an AI coding agent well, and the traps
+```
+
+Plus a short `CONTRIBUTING.md` at the repo root that links these and states the basics. Every page
+opens with a literal `Last reviewed: YYYY-MM-DD` line. This skill owns those files and nothing else.
+
+## Allowed tools
+
+- Read anywhere in the repository.
+- Write **only** to the owned outputs above.
+- Shell: `python3 scripts/verify.py …`, plus **actually running the quickstart and the setup steps**
+  from a clean state — that is how the buddy path stays truthful.
+- Read the sibling docs in order to link them accurately.
+
+## Forbidden actions
+
+- **Entering a credential on the reader's behalf**, or putting a secret, key, token, or password into
+  any page. Credential steps are the reader's to do, the secure way.
+- Documenting a setup step or quickstart you have not run.
+- Restating the architecture rationale, the end-user usage guide, or the runbook instead of linking.
+- Editing source code, ADRs, or another skill's outputs.
+- Publishing — that is `publish-mirror`.
+- Shipping the mentor path as slogans, or the AI section as hype: the honesty section (including the
+  security-weakness finding) is required, not optional.
+
+## Procedure
+
+The numbered **Workflow** above is the procedure: ground and configure → write the buddy path
+(zero-to-running, how to read the code in order, day-to-day work, getting unstuck, one feature traced
+end to end) → write the mentor path → write the working-with-AI section → stamp `Last reviewed:` and
+verify → hand off to `publish-mirror`.
+
+## Validation
+
+```bash
+python3 scripts/verify.py docs/onboarding --format md --skill onboarding-companion --profile docs/project-profile.md
+```
+
+Green means: reading grade within `grade_target_onboarding_companion`, no banned words, no
+internal-name leak for `scope_onboarding_companion`, links resolve, the licence footer is present, and
+the `Last reviewed:` stamp parses and is not stale. The human check that matters more: a brand-new
+joiner can go from nothing to a running system and a first small change using this alone. The
+repo-level gate is `make validate` (`scripts/validate_quality_contracts.py`).
+
+## Handoff contract
+
+- **Consumes from** `architecture-and-decisions` (the "why" and the reading path's destinations),
+  `usage-guide` (where to send an end user), `operations-runbook` (where production lives), and
+  `learning-track` (where the concepts course lives). It links all four; it replaces none.
+- **Hands to** `doc-critic` for the blind multi-axis critique; unresolved BLOCKERs stop the handoff.
+- **Then to** `publish-mirror`, per `references/render-contract.md`.
+
+## Stop conditions
+
+Stop and ask a human rather than guessing when:
+
+- The quickstart does not actually run from a clean clone — fix the repo, or the companion documents
+  a path that does not exist.
+- A setup step needs a credential or an account you cannot and must not create.
+- The project profile is missing or unfilled.
+- The project's conventions are undecided (no decision log, no branch policy, no ADR home) — a
+  companion that invents them is inventing policy.
+- The reading path would have to say "go look at the code" because no ordered route exists.
+- The verifier reports a FAIL that would need a fact you do not own to be changed.
+
+## Examples
+
+- *"A junior joins next week — get them productive on this repo."* → `ONBOARDING.md`: prerequisites,
+  clone, dependencies, the one-command quickstart, an ordered reading route through the repo, the
+  day-to-day loop (plan → small step → read the diff → tests are the spec), a troubleshooting flow,
+  and one real feature traced from requirement to test to running code.
+- *"Write down the habits people here skip and regret."* → `MENTOR.md`: keep a decision log, protect
+  main, never commit secrets, measure before optimising, watch cost, pin model versions, and reserve
+  about a tenth of each cycle to pay down AI-driven debt.
+- *"Our contributors lean hard on an AI agent — what should they know?"* → `working-with-ai.md`:
+  treat it as a fast junior (verify, don't trust); text the agent reads is **data, not orders**; a
+  human stays the architect and the final gate.
+
+## Anti-examples
+
+- *"Write onboarding for the project we're starting tomorrow."* → nothing runs yet; premature.
+- *"Explain how our users query the product."* → `usage-guide`.
+- *"Explain why we chose this architecture."* → `architecture-and-decisions`; link it.
+- *"Put the shared dev API key in ONBOARDING.md so setup is one step."* → forbidden; the reader
+  provisions their own credential.
+- *"Just say 'read the code and ask questions'."* → the reading path must be a real ordered route.
+- *"Teach them Python and distributed systems first."* → `learning-track`.

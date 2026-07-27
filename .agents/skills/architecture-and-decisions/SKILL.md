@@ -209,3 +209,145 @@ This skill is versioned like code. Record every change in `CHANGELOG.md` (Keep a
 and bump the version in this file's header. An architecture walkthrough that drifts from the project
 is worse than none — the link-back rule (reference, do not copy) and a stamped, changelogged skill are
 how the two stay in step.
+
+---
+
+# Factory skill contract
+
+> **Repo-added section.** Everything above is the upstream bundle. This block is the contract
+> `scripts/validate_quality_contracts.py` requires of every `.agents/skills/*/SKILL.md`, written
+> against what this skill actually does. Because an upstream refresh replaces this folder wholesale,
+> **re-apply this block after every update** — `make validate` goes red without it. Provenance is
+> recorded in `configs/external-skill-registry.json`.
+
+## When to use
+
+- The ask is an architecture doc, design doc, technical deep-dive, decision-record narrative, "why is
+  it built this way", or "write the technical overview for a new engineer".
+- An ADR has just been **accepted** — that is the moment to write its decision treatment, while the
+  alternatives and the trade-off are still fresh.
+- The architecture has just been decided and the C4 Level 1–2 views do not exist yet.
+- A milestone closed and the failure-mode map or the non-functional posture needs revisiting.
+- The rest of the documentation suite is blocked: the learning track, FAQ, onboarding companion and
+  runbook all anchor to what this skill produces, so it runs first or in lockstep with design.
+
+## When not to use
+
+- **Per commit.** The per-change gate is a deterministic hook (banned words, link-check, lint,
+  secret-scan), not this authoring loop.
+- **As a single pass at the very end.** Written after the build, the treatments have already drifted.
+- **The decision is not made or not recorded.** If you cannot state the alternatives and the accepted
+  trade-off, you cannot write the treatment. Read the ADR and the code, or mark the section
+  `[designed, not yet built]` — never invent a rationale to fill the page.
+- **Wrong reader:** newcomer concepts course → `learning-track`; operator recovery steps →
+  `operations-runbook`; look-up facts → `project-faq`; task how-to → `usage-guide`; first-week
+  contributor ramp → `onboarding-companion`.
+
+## Inputs
+
+- `assets/project-profile.md`, filled — including `grade_target_architecture_and_decisions`,
+  `scope_architecture_and_decisions`, and the canonical worked example.
+- A designed architecture: at least C4 Levels 1–2, with the worked example traceable end to end.
+- The **accepted ADRs** (context, alternatives, trade-off, consequences) and the live ADR
+  registry/decision log to link by number.
+- The contracts/interfaces and their versioning rule; the technology stack *with the reason per
+  choice*; any failure-mode analysis; the live status source for built-vs-designed markers.
+- `references/house-style.md` (read first) plus `architecture-method.md`, `decision-treatment.md`,
+  `design-note-method.md`, `failure-mode-method.md`, `nfr-posture-method.md`.
+
+## Owned outputs
+
+`docs/architecture/` in the documented order:
+
+- `00-overview.md`, `10-containers.md`, `20-components.md`, `30-runtime.md`, `40-decisions.md`,
+  `50-failure-modes.md`, `60-nfr-posture.md`, `70-mental-model.md`
+- `design-notes/` — one deep design note per *significant* component only.
+
+This skill owns those files. It does **not** own the ADRs themselves, the ADR registry, the SLO
+register, or any source code.
+
+## Allowed tools
+
+- Read anywhere in the repository, including source, ADRs, contracts, and config.
+- Write **only** under `docs/architecture/`.
+- Shell: `python3 scripts/verify.py … --skill architecture-and-decisions --license LICENSE`, plus
+  read-only commands used to ground a claim in the code.
+- Diagram authoring in the C4 levels and the profile's palette, with alt text and a static fallback.
+
+## Forbidden actions
+
+- **Pasting a tunable value** — a threshold, an `N`, a ratio, a timeout — into the walkthrough. Name
+  the key and link the owning ADR or config file.
+- **Restating an ADR number or status.** Link the live registry.
+- Inventing a rationale, an alternative, or a trade-off that no ADR records.
+- Presenting `[designed, not yet built]` capability as live, or attaching a measurable SLO to a
+  component that does not exist.
+- Editing source code, ADRs, or another skill's outputs.
+- Publishing to a wiki or portal — that is `publish-mirror`.
+- Hand-drawing Levels 3–4 as if authoritative; those belong generated-from-code and kept in lockstep,
+  or marked a point-in-time snapshot.
+
+## Procedure
+
+The numbered **Workflow** above is the procedure: ground and configure → build the C4 views → write a
+five-line decision treatment per significant choice → write a deep design note per *significant*
+component → document failure modes and recovery → state the non-functional posture → close with the
+mental model → verify with `--license` → hand off to `publish-mirror`.
+
+## Validation
+
+```bash
+python3 scripts/verify.py docs/architecture --format md --skill architecture-and-decisions \
+  --profile docs/project-profile.md --license LICENSE
+```
+
+Green means: reading grade within target, no banned words, no internal-name leak for the configured
+scope, every link resolves, the licence footer is present, and `LICENSE` carries the warranty
+disclaimer and names the content licence. `ci/` ships the matching pre-commit hook and CI job. The
+repo-level gate is `make validate` (`scripts/validate_quality_contracts.py`).
+
+## Handoff contract
+
+- **Produces for the whole suite.** `learning-track`, `project-faq`, `onboarding-companion`,
+  `usage-guide` and `operations-runbook` all consume the architecture views, the decision treatments
+  and the failure-mode map produced here, and link to them rather than re-deriving.
+- **Specifically to `operations-runbook`:** the failure modes and the blast-radius/dependency map.
+  This skill teaches the design's resilience; the runbook owns the operator procedure.
+- **Hands to** `doc-critic` for the blind multi-axis critique; unresolved BLOCKERs stop the handoff.
+- **Then to** `publish-mirror` for rendering, per `references/render-contract.md`.
+
+## Stop conditions
+
+Stop and ask a human rather than guessing when:
+
+- A choice has no accepted ADR, or the ADR records no alternatives — there is no treatment to write.
+- You cannot tell whether something is built or only designed, and there is no live status source to
+  link.
+- The project profile is missing or unfilled (no grade target, no scope, no worked example).
+- A container view cannot be kept at or under eight nodes without hiding something that matters —
+  split the view with the architect, do not silently drop nodes.
+- A non-functional target would have to be invented to fill `60-nfr-posture.md`.
+- The verifier reports a FAIL you cannot resolve without changing a fact you do not own.
+
+## Examples
+
+- *"Explain why the app calls four models in parallel and then synthesises."* → a five-line treatment
+  in `40-decisions.md`: what it is, the alternatives (single model; sequential debate; majority vote),
+  why this one, when you would choose differently, how it serves the purpose — linked to its ADR.
+- *"A new senior engineer starts Monday and must be able to change the cost guardrail safely."* →
+  `10-containers.md` + `30-runtime.md` traced through the worked example, plus a design note for the
+  guardrail component leading with its threat model and naming the invariant a change must not break.
+- *"Document what happens when a provider times out mid-run."* → `50-failure-modes.md`: detection,
+  what stops vs degrades, the resume/idempotency guarantee, and the invariant — linking the runbook
+  for the operator steps.
+
+## Anti-examples
+
+- *"Write the architecture doc, we'll decide the queue later."* → no accepted decision, no treatment.
+- *"Copy the 80% coverage target and the $0.25 cap into the doc so it's all in one place."* → paste
+  forbidden; reference the keys and link the config that owns them.
+- *"Say the audit pipeline is live, it's basically done."* → built-vs-designed honesty; mark
+  `[designed, not yet built]` and link the live status.
+- *"Add a step-by-step recovery procedure here."* → that is `operations-runbook`.
+- *"Teach a fresh graduate distributed systems from scratch in this doc."* → `learning-track`.
+- *"Just list the tech stack."* → a stack list without the reason per choice is not this artifact.

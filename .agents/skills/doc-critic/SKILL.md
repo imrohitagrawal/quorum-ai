@@ -181,3 +181,141 @@ The method, the axis prompts, and the per-doc-type profiles ship as references (
 Versioned like code. Record every change in `CHANGELOG.md` (Keep a Changelog format) and bump the
 header version. The review method is itself reviewable — when the suite learns a new failure class,
 add it to the taxonomy and a profile, and changelog it.
+
+---
+
+# Factory skill contract
+
+> **Repo-added section.** Everything above is the upstream bundle. This block is the contract
+> `scripts/validate_quality_contracts.py` requires of every `.agents/skills/*/SKILL.md`, written
+> against what this skill actually does. Because an upstream refresh replaces this folder wholesale,
+> **re-apply this block after every update** — `make validate` goes red without it. Provenance is
+> recorded in `configs/external-skill-registry.json`.
+
+## When to use
+
+- A batch of documents has cleared its authoring loop **and** `scripts/verify.py`, and needs the
+  judgement layer before anyone reads it as truth.
+- Immediately before publishing a document set — this is the hard gate on that step.
+- The ask is to review, critique, QA, or harden docs; or to find contradictions, unsupported claims,
+  or honesty drift across a set.
+- After edits that span modules, where a wrong analogy or a reused term can propagate.
+
+## When not to use
+
+- **Per commit.** The per-change gate is `verify.py` in the CI hook.
+- **Before the verifier passes.** A document that leaks an internal name or fails the licence footer
+  is not ready for a critique; fix the FAILs first.
+- **To review the skills themselves** — that is `per-skill-review-prompt.md`. This reviews the
+  *documents skills produce*.
+- **To publish** — that is `publish-mirror`.
+- **As a substitute for the authoring skill's inline critic loop.** That loop *prevents* during
+  drafting; this gate *catches* afterwards. Both run.
+- **In a plain single chat when an independent gate is what is needed.** Without isolated subagents
+  the axes lose their independence — see *Honest limitations*.
+
+## Inputs
+
+- The produced document set to review (for example `docs/learning/` plus its `glossary.md`).
+- `docs/project-profile.md`, filled — scope, audience, and the `grade_target_*` / `scope_*` keys.
+- **The project source the docs teach from** — repository, ADRs, and the commands the docs claim.
+  The correctness axis reads and runs these; without access it can only mark claims unverified.
+- The locked analogy / term / honesty registers (`house-style.md` §5a). Their absence is itself the
+  first finding.
+- `references/review-playbook.md`, `reviewer-prompts.md`, `review-profiles.md`.
+
+## Owned outputs
+
+- `docs/<set>/REVIEW.md` — the severity-ranked review register, every finding carrying a **stable id**
+  (`B1`, `M1`, `N1`, …), a severity (BLOCKER / MAJOR / MINOR / NIT), an exact quote and location, the
+  axis that raised it, a doc-vs-code split, a status, and a concrete fix.
+- Appended entries in the suite's `CROSS-SKILL-FINDINGS.md` for findings that are a defect *class*
+  likely to recur in another doc type.
+- For a flagship/public gate: the emitted, ready-to-paste different-vendor prompt.
+
+## Allowed tools
+
+- Read the documents under review, the project profile, the repository source, and the ADRs.
+- Shell: `python3 scripts/verify.py …` (Step 2), and the commands the docs themselves claim — run
+  them to confirm the claim, in a non-destructive way.
+- Spawn isolated, **blind** subagents for the review axes, each in its own fresh context.
+- Write **only** to `docs/<set>/REVIEW.md` and `CROSS-SKILL-FINDINGS.md`.
+
+## Forbidden actions
+
+- **Silently editing the documents under review.** This skill produces a register a human approves;
+  it never auto-fixes.
+- Giving any axis your own conclusions, or another axis's findings, before the adjudicator runs —
+  anchoring destroys the independence the method depends on.
+- Handing an axis `references/house-style.md` itself instead of the neutralized writing contract.
+- Recalling a figure instead of recomputing it, or marking a claim VERIFIED without reading the
+  source or running the command.
+- Running the critique before `verify.py` is green.
+- Claiming an independent gate when the run was sequential in one context.
+- Publishing, or clearing a BLOCKER on the author's say-so without re-verifying.
+
+## Procedure
+
+The numbered **Workflow** above is the procedure: ground and load the review profile → run
+`verify.py` first → confirm the registers → run the blind multi-axis critique (whole-document
+consistency, code-grounded correctness, beginner floor, then the adversarial adjudicator) → emit the
+different-vendor pass for a flagship gate → write the severity-ranked register → gate on unresolved
+BLOCKERs and re-verify.
+
+## Validation
+
+```bash
+python3 scripts/verify.py docs/learning --format md --skill learning-track \
+  --profile docs/project-profile.md --license LICENSE
+```
+
+Run it in Step 2 (before the critique) and again in Step 7 (after fixes). The critique itself is
+validated structurally: every axis ran blind in its own context, the whole-document axis ran over the
+entire set at once, every finding has a severity + location + axis + fix, every code claim is tagged
+VERIFIED / ASSERTED / NEEDS-CODE-CHECK, and every BLOCKER id is marked resolved before handoff. The
+repo-level gate is `make validate` (`scripts/validate_quality_contracts.py`).
+
+## Handoff contract
+
+- **Consumes from** any authoring skill (`architecture-and-decisions`, `operations-runbook`,
+  `onboarding-companion`, `learning-track`, `usage-guide`, `project-faq`) — its produced pages, after
+  `verify.py` is green.
+- **Hands back to the author/owner**: `docs/<set>/REVIEW.md`. The owner applies fixes in one cycle.
+- **Hands to** `publish-mirror` — but **only** once every BLOCKER id is marked resolved and
+  `verify.py` is green again. Unresolved BLOCKERs block publishing.
+- **Hands outward** to `CROSS-SKILL-FINDINGS.md` so the next doc type inherits a systemic defect
+  class.
+
+## Stop conditions
+
+Stop and hand back to a human rather than proceeding when:
+
+- `verify.py` reports a FAIL — fix that first; the critique is wasted on it.
+- You cannot read the source or run the commands the docs claim — the correctness axis degrades to
+  "unverified" and the gate is not honest without saying so.
+- The harness cannot give each axis its own isolated context — declare the run a **structured
+  self-review, not an independent gate**.
+- A flagship/public gate needs the different-vendor pass — emit the prompt and **pause** until its
+  findings return.
+- A BLOCKER is disputed on judgement, not fact. The register is the artefact; the human decides.
+- No review profile exists for the doc type and the stakes are high — write the profile first.
+
+## Examples
+
+- *"Review the learning track before we publish it."* → verify → confirm registers → four blind axes
+  over `docs/learning/` → `docs/learning/REVIEW.md` with `B1: Module 3 says the cap is enforced
+  server-side, Module 6 says client-side — one of them leaves the reader believing something false.`
+- *"The runbook says 'measured $0.02 per run' — is that true?"* → correctness axis recomputes from
+  the source, tags the claim ASSERTED, and files it as a code-vs-doc mismatch with the exact quote.
+- *"We changed the architecture doc's analogy — check nothing else broke."* → whole-document axis over
+  the entire set at once, hunting analogy drift and term collisions across pages.
+
+## Anti-examples
+
+- *"Just fix the docs for me."* → out of scope; this produces a register, not edits.
+- *"Skip the verifier, go straight to the critique."* → forbidden; Step 2 is a precondition.
+- *"Run all four axes in this chat, one after another, and call it independent."* → that is a
+  structured self-review; say so.
+- *"Tell the reviewers what you think is wrong so they focus."* → anchoring; defeats the method.
+- *"Review the SKILL.md files."* → `per-skill-review-prompt.md`.
+- *"Publish it once the register is written."* → only after every BLOCKER is resolved and re-verified.
