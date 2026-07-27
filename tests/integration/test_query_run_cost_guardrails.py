@@ -8,6 +8,7 @@ from uuid import UUID, uuid4
 
 import pytest
 from fastapi.testclient import TestClient
+from tests.helpers import isolated_run_semaphore
 
 from product_app.auth import get_session_cookie_name, session_repository
 from product_app.catalog_fetcher import _FALLBACK_CATALOG, openrouter_catalog_fetcher
@@ -393,6 +394,27 @@ def _pinned_static_catalog() -> Iterator[None]:
         fetcher._cache_expires_at = previous_expiry  # noqa: SLF001
 
 
+@pytest.fixture(autouse=True)
+def _stable_catalog_price() -> Iterator[None]:
+    """Pin the catalog price for EVERY test in this module.
+
+    Every threshold assertion here is a statement about a price, and that
+    price comes from a PROCESS-GLOBAL catalog cache that other test modules
+    prime at import time. MEASURED on this tree: the same ``POST
+    /v1/query-runs/estimate`` for the default 4-slot mix returns 0.0261 with
+    the cache cold and 0.0244 once ``tests/contract/
+    test_api_contract_schemathesis.py`` has been imported — so the input to
+    this suite depends on which other modules pytest happened to collect. A
+    guardrail suite whose input price is decided by collection order is not
+    measuring the guardrail.
+
+    The pin is restored on exit, so it cannot change the price the rest of the
+    suite sees.
+    """
+    with _pinned_static_catalog():
+        yield
+
+
 def test_daily_cap_admits_the_number_of_runs_its_dollar_value_pays_for() -> None:
     """The real per-account money envelope, pinned so it cannot move silently.
 
@@ -434,8 +456,9 @@ def test_daily_cap_admits_the_number_of_runs_its_dollar_value_pays_for() -> None
     # test_api_contract_schemathesis.py::_pin_static_catalog``), so the
     # default-mix price is 0.0261 alone and 0.0244 after that module has been
     # imported. An envelope measured against a price that depends on
-    # collection order is not a measurement, so pin it here and restore it.
-    with _pinned_static_catalog(), configure_for_tests() as store:
+    # collection order is not a measurement — the module-wide
+    # ``_stable_catalog_price`` fixture pins it for every test here.
+    with configure_for_tests() as store:
         first = client.post(
             "/v1/query-runs/estimate",
             json={"query_text": "Compare these answers", "model_slots": DEFAULT_MODEL_IDS},
@@ -492,12 +515,23 @@ def test_capacity_rejection_neither_bills_nor_orphans_a_run() -> None:
     (nothing will ever terminate a run whose worker was never started).
 
     Uses the cookie session path: the semaphore is only acquired there.
-    """
-    from product_app.query_runs import _run_semaphore
 
-    while _run_semaphore.acquire(blocking=False):
-        pass
-    try:
+    Runs against a PRIVATE capacity semaphore. Draining the process-global one
+    and then releasing until ``ValueError`` (the shape this test used to have)
+    restores it to its BOUND rather than to the number of permits actually
+    drained: with one permit held by an in-flight worker from an earlier test
+    it mints a permit the process never had, and that worker's own release
+    then raises ``ValueError`` inside
+    ``_execute_query_run_with_semaphore_release``'s ``finally`` and kills the
+    thread. Measured, and the shape that made the F-01 permit specs
+    non-deterministic in a full-suite run — see
+    ``tests/helpers.isolated_run_semaphore``.
+    """
+    with isolated_run_semaphore(1) as semaphore:
+        # At capacity: the single permit is taken, so the request is refused
+        # before anything can charge the account or claim its run slot.
+        assert semaphore.acquire(blocking=False)
+
         client = TestClient(app)
         with configure_for_tests() as store:
             session = client.get("/v1/session")
@@ -521,10 +555,68 @@ def test_capacity_rejection_neither_bills_nor_orphans_a_run() -> None:
             assert store.daily_spend_for(account_id) == Decimal("0")
             # ...and no non-terminal run was left holding the account's slot.
             assert query_run_repository.get_active_for_account(account_id) is None
-    finally:
-        while True:
-            try:
-                _run_semaphore.release()
-            except ValueError:
-                break
-        query_run_repository.clear()
+
+
+def test_thread_start_failure_neither_bills_nor_orphans_a_run(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A run whose worker thread could not be STARTED is the same failure as
+    the 503 above, one statement later — and it used to be left open.
+
+    ``Thread.start()`` raises ``RuntimeError`` under thread exhaustion and
+    during interpreter shutdown. The billing event used to be written before
+    that call, so the caller was charged for a run that never executed AND was
+    left holding a non-terminal run: ``get_active_for_account`` treats it as
+    the account's one in-flight run, so every later ``POST /v1/query-runs``
+    is a 409 ``ACTIVE_QUERY_EXISTS`` until ``QUERY_RUN_ACTIVE_TTL`` (30
+    minutes) expires it. A phantom charge plus a half-hour lockout, from a
+    request that did nothing.
+
+    The three things that must hold, none of which held before:
+      * no spend-counted event (billing happens only after ``start()`` returns);
+      * no non-terminal run left behind (``_abandon_unstarted_run``);
+      * the capacity permit is returned (the ``except BaseException`` handler).
+    """
+    import product_app.query_runs as qr
+
+    class _RefusingThread:
+        """``Thread`` that cannot be started — the real ``RuntimeError``
+        CPython raises when the process is out of threads."""
+
+        def __init__(self, *args: object, **kwargs: object) -> None:
+            pass
+
+        def start(self) -> None:
+            raise RuntimeError("can't start new thread")
+
+    monkeypatch.setattr(qr, "Thread", _RefusingThread)
+
+    with isolated_run_semaphore(1) as semaphore:
+        # ``raise_server_exceptions=False`` so the 500 is rendered rather than
+        # re-raised into the test — we care about the state the server is left
+        # in, not about the traceback.
+        client = TestClient(app, raise_server_exceptions=False)
+        with configure_for_tests() as store:
+            session = client.get("/v1/session")
+            csrf = session.json()["csrf_token"]
+            response = client.post(
+                "/v1/query-runs",
+                json=acknowledged_request("Compare these answers"),
+                headers={"x-csrf-token": csrf},
+            )
+            assert response.status_code == 500
+
+            session_row = session_repository.get(client.cookies[get_session_cookie_name()])
+            assert session_row is not None
+            account_id = session_row.account_id
+
+            # Nothing was billed for a run that never ran.
+            assert _billing_events(account_id) == [], [
+                e.event_type for e in _events_for(account_id)
+            ]
+            assert store.daily_spend_for(account_id) == Decimal("0")
+            assert cost_estimation_service._cumulative_spend_for(account_id) == Decimal("0")
+            # ...the account is not locked out of the product for 30 minutes...
+            assert query_run_repository.get_active_for_account(account_id) is None
+            # ...and the capacity permit came back.
+            assert semaphore._value == 1  # noqa: SLF001

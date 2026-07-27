@@ -6,8 +6,13 @@ feedback-audit job needs to read *more* than the last N events — at minimum
 the last 24 hours of activity, regardless of how many runs that was — so the
 in-memory recorders are paired with this SQLite-backed sink.
 
-The sink is append-only. The audit job reads it; nothing ever writes back. A
-single ``events`` table stores one row per recorder call, identified by the
+The sink is append-only in normal operation: the audit job reads it and the
+recorders only ever ``INSERT``. The one exception is schema migration — a
+numbered, once-only repair recorded in the ``schema_migrations`` table and
+applied on the first open that finds it unapplied (today: the F-01 relabel,
+see ``_F01_PREVIEW_SELECT``). Every open, including the audit job's read-only
+one, checks that table; only the first one after a migration is added writes.
+A single ``events`` table stores one row per recorder call, identified by the
 recorder's event-type string and the account/run correlation ids.
 
 Anti-goals:
@@ -128,7 +133,24 @@ class FeedbackStore:
         ON events (recorder, event_type);
     """
 
-    #: F-01 backfill, run once per store open.
+    #: Deliberately NOT part of ``_SCHEMA``. ``_SCHEMA`` runs unguarded in
+    #: ``__init__``, and on an existing DB every statement in it is already a
+    #: no-op, so it needs no write. Adding a brand-new ``CREATE TABLE`` there
+    #: would make the FIRST open of an existing read-only database raise
+    #: ``attempt to write a readonly database`` — turning "the relabel could
+    #: not run" back into "Quorum does not start", the exact failure the
+    #: migration's best-effort ``except`` exists to prevent (measured: it did).
+    #: So it is created inside that guarded block instead.
+    _MIGRATIONS_DDL = (
+        "CREATE TABLE IF NOT EXISTS schema_migrations ("
+        "name TEXT PRIMARY KEY, applied_at TEXT NOT NULL)"
+    )
+
+    #: Name of the F-01 relabel in ``schema_migrations``. Its presence is what
+    #: makes the relabel a ONE-SHOT migration instead of a standing rule.
+    _F01_MIGRATION = "f01_preview_billing_relabel"
+
+    #: Rows the F-01 relabel applies to.
     #:
     #: Before the F-01 fix, ``POST /v1/query-runs/estimate`` — a pure preview —
     #: recorded ``cost_guardrail_accepted``, the one event type both spend
@@ -137,24 +159,25 @@ class FeedbackStore:
     #: production (``fly.toml`` pins ``FEEDBACK_DB_PATH`` to
     #: ``/data/feedback_events.sqlite3`` on the persistent volume precisely so
     #: it survives a deploy). ``daily_spend_for`` filters on ``event_type``
-    #: alone, so without this statement every preview written in the 24h before
+    #: alone, so without this migration every preview written in the 24h before
     #: the fix ships keeps double-metering its account for a full rolling day
     #: after it ships — real users stay wrongly over-capped by the very bug
     #: that was just fixed.
     #:
-    #: Safe by construction: a real charge ALWAYS carries a ``query_run_id``.
-    #: ``record_guardrail_event`` has exactly four call sites (all in
-    #: ``query_runs.py``); the only one that can produce
-    #: ``cost_guardrail_accepted`` is the successful ``POST /v1/query-runs``
-    #: path, which passes ``query_run.query_run_id``. The other three pass
-    #: ``None`` and produce ``cost_guardrail_blocked``,
-    #: ``cost_confirmation_required``, or (post-fix) ``cost_estimate_previewed``.
-    #: The rows are relabelled, never deleted, so the audit trail is intact.
-    #:
-    #: Self-limiting rather than a rewrite that runs every boot: on a DB
-    #: written by the fixed code this matches zero rows, forever.
-    _F01_PREVIEW_BACKFILL = (
-        "UPDATE events SET event_type = 'cost_estimate_previewed' "
+    #: WHY IT IS GUARDED BY A MARKER, not left to match zero rows on a fixed
+    #: DB: the WHERE clause below is a *policy* ("an accepted cost event with
+    #: no run id is not a charge"), and nothing enforces that policy on the
+    #: write side. Run on every open, it silently zeroes any future row of that
+    #: shape — MEASURED: write one ``cost_guardrail_accepted`` row with a NULL
+    #: ``query_run_id`` and ``daily_spend_for`` reports it, then reports 0.00
+    #: after a single restart. That is a fail-open spend guard: the direction
+    #: it fails in is "the account is under-metered", i.e. free money. Applying
+    #: it exactly once — over the rows that exist the first time the fixed code
+    #: opens the DB, which are pre-fix rows by construction — bounds the blast
+    #: radius to the migration it is, and needs no assumption about what any
+    #: later writer does.
+    _F01_PREVIEW_SELECT = (
+        "SELECT id, payload FROM events "
         "WHERE recorder = 'cost' "
         "AND event_type = 'cost_guardrail_accepted' "
         "AND query_run_id IS NULL"
@@ -179,26 +202,71 @@ class FeedbackStore:
         _open_stores.add(self)
 
     def _backfill_f01_preview_rows(self) -> None:
-        """Relabel pre-F-01 ``/estimate`` preview rows. See
-        ``_F01_PREVIEW_BACKFILL``.
+        """Apply the F-01 relabel ONCE. See :attr:`_F01_PREVIEW_SELECT`.
+
+        Both the column and the row's ``payload`` JSON are rewritten, so a
+        relabelled row cannot end up disagreeing with itself: the audit job
+        keys off ``payload`` field names, and a row whose column says
+        "previewed" while its payload still says "accepted" is not an audit
+        trail, it is two contradictory claims.
+
+        Atomic: the rewrite and the ``schema_migrations`` marker land in one
+        transaction, so a crash mid-way leaves the DB in the pre-migration
+        state and the next boot retries — never half-relabelled-and-marked.
 
         Best-effort, like :meth:`record`: opening the store must not fail
         because a one-shot repair could not run. A read-only or locked DB
         leaves the rows as they were — over-metering for at most the 24h
-        window, which is the behaviour without this method at all.
+        window, which is the behaviour without this method at all — and, since
+        the marker is written in the same transaction, the repair still lands
+        the moment the volume is writable again.
         """
+        relabelled = 0
         try:
             with self._lock:
-                cursor = self._conn.execute(self._F01_PREVIEW_BACKFILL)
+                self._conn.execute(self._MIGRATIONS_DDL)
+                if self._migration_applied(self._F01_MIGRATION):
+                    return
+                self._conn.execute("BEGIN IMMEDIATE")
+                try:
+                    rows = self._conn.execute(self._F01_PREVIEW_SELECT).fetchall()
+                    for row in rows:
+                        payload = json.loads(row["payload"])
+                        payload["event_type"] = "cost_estimate_previewed"
+                        self._conn.execute(
+                            "UPDATE events SET event_type = ?, payload = ? WHERE id = ?",
+                            (
+                                "cost_estimate_previewed",
+                                json.dumps(payload, default=_json_default),
+                                row["id"],
+                            ),
+                        )
+                    self._conn.execute(
+                        "INSERT INTO schema_migrations (name, applied_at) VALUES (?, ?)",
+                        (self._F01_MIGRATION, datetime.now(UTC).isoformat()),
+                    )
+                    self._conn.execute("COMMIT")
+                except BaseException:
+                    self._conn.execute("ROLLBACK")
+                    raise
+                relabelled = len(rows)
         except Exception as exc:  # noqa: BLE001 — repair is best-effort
             _log.warning("feedback_store: F-01 preview backfill did not run: %s", exc)
             return
-        if cursor.rowcount:
+        if relabelled:
             _log.info(
                 "feedback_store: relabelled %s pre-F-01 estimate-preview rows "
                 "from cost_guardrail_accepted to cost_estimate_previewed",
-                cursor.rowcount,
+                relabelled,
             )
+
+    def _migration_applied(self, name: str) -> bool:
+        """True if ``name`` is already recorded in ``schema_migrations``."""
+        cursor = self._conn.execute(
+            "SELECT 1 FROM schema_migrations WHERE name = ?",
+            (name,),
+        )
+        return cursor.fetchone() is not None
 
     @classmethod
     def from_env(cls) -> FeedbackStore:

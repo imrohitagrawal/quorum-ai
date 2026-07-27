@@ -977,9 +977,17 @@ def create_query_run(
     #
     # The legacy/test path is synchronous and deliberately bypasses the
     # semaphore to keep unit-test determinism, so it reserves nothing.
-    capacity_reserved = False
+    #
+    # The permit is taken from a captured REFERENCE to the semaphore, not by
+    # re-reading the module global at release time. A permit must always be
+    # returned to the object it was taken from: if the global is ever swapped
+    # (a test installing an isolated semaphore is the only real case), an
+    # in-flight worker that re-read the global would credit its permit to the
+    # wrong object — over-releasing one and permanently shrinking the other.
+    capacity_permit: BoundedSemaphore | None = None
     if not session.legacy:
-        if not _run_semaphore.acquire(blocking=False):
+        semaphore = _run_semaphore
+        if not semaphore.acquire(blocking=False):
             raise HTTPException(
                 status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
                 detail={
@@ -990,7 +998,7 @@ def create_query_run(
                     ),
                 },
             )
-        capacity_reserved = True
+        capacity_permit = semaphore
 
     try:
         return _start_reserved_query_run(
@@ -999,14 +1007,15 @@ def create_query_run(
             model_slots=model_slots,
             cost_estimate=cost_estimate,
             cost_decision=cost_decision,
+            capacity_permit=capacity_permit,
         )
     except BaseException:
         # Nothing below took ownership of the permit (the worker thread only
         # owns it once ``Thread.start()`` has returned, and that is the last
         # statement in the helper), so release it here. ``BoundedSemaphore``
         # raises on an over-release, so a double release cannot pass silently.
-        if capacity_reserved:
-            _run_semaphore.release()
+        if capacity_permit is not None:
+            capacity_permit.release()
         raise
 
 
@@ -1017,6 +1026,7 @@ def _start_reserved_query_run(
     model_slots: list[ModelSlot],
     cost_estimate: CostEstimate,
     cost_decision: CostGuardrailDecision,
+    capacity_permit: BoundedSemaphore | None,
 ) -> QueryRunCreateResponse:
     """Create, bill and launch a run whose capacity permit is already held.
 
@@ -1024,6 +1034,10 @@ def _start_reserved_query_run(
     there covers every step between reserving the permit and handing it to the
     worker thread — including the 409 and the audit/billing writes — instead of
     a per-step ``try/finally`` ladder that a later edit can fall out of.
+
+    ``capacity_permit`` is the semaphore the caller reserved from, or ``None``
+    on the legacy/test path which reserves nothing. It is handed to the worker
+    thread so the permit is returned to the object it came from.
     """
     try:
         query_run = query_run_repository.create(
@@ -1057,6 +1071,65 @@ def _start_reserved_query_run(
             (slot.slot_number, slot.model_id, slot.search) for slot in query_run.model_slots
         ),
     )
+    # Legacy/test path runs inline so the test suite can assert against
+    # the final state synchronously. Production / cookie path runs in a
+    # background thread that cannot block the request response.
+    if session.legacy:
+        _record_run_billing(session=session, query_run=query_run, cost_decision=cost_decision)
+        _execute_query_run(query_run.query_run_id, session.account_id)
+        query_run = query_run_repository.get(query_run.query_run_id)
+        # Legacy/test path runs inline (no safety wrapper), so persist the
+        # terminal run here. Idempotent with the production choke point.
+        _persist_terminal_run(query_run.query_run_id)
+        return _create_response_for(query_run)
+
+    # The capacity permit was reserved by the caller. ``Thread.start()`` is the
+    # ownership handover: until it returns nobody but this function can free
+    # the permit, and once it returns the worker owns it and releases it in its
+    # ``finally``. So everything that can fail is arranged around that one
+    # statement — the response is built before it (a failure there must not
+    # leave a running worker unaccounted for), the billing after it (a run that
+    # never started must not be charged). Anything raising before the handover
+    # propagates to the caller's handler, which returns the permit; nothing
+    # after it can leak or double-release.
+    response = _create_response_for(query_run)
+    try:
+        Thread(
+            target=_execute_query_run_with_semaphore_release,
+            args=(query_run.query_run_id, session.account_id, capacity_permit),
+            daemon=True,
+        ).start()
+    except BaseException:
+        # F-01: a run whose worker was never started must not be billed and
+        # must not keep the account's single active-run slot — the same
+        # failure class the 503 path above closes. ``Thread.start()`` raises
+        # ``RuntimeError`` under thread exhaustion and during interpreter
+        # shutdown. Billing is deliberately recorded only AFTER ``start()``
+        # returns, so there is nothing to un-bill here (the sink is
+        # append-only); all that is left is to free the account's slot. The
+        # caller's handler returns the capacity permit.
+        _abandon_unstarted_run(query_run.query_run_id)
+        raise
+    # The worker owns the run now. Bill it: this is the ONE spend-counted
+    # event for this logical run (F-01).
+    _record_run_billing(session=session, query_run=query_run, cost_decision=cost_decision)
+    return response
+
+
+def _record_run_billing(
+    *,
+    session: SessionContext,
+    query_run: QueryRun,
+    cost_decision: CostGuardrailDecision,
+) -> None:
+    """Record the one spend-counted cost event for a run that is executing.
+
+    ``cost_guardrail_accepted`` is the only event type the two spend guards
+    (``CostEstimationService._cumulative_spend_for`` and
+    ``FeedbackStore.daily_spend_for``) count, so this call is the account's
+    bill for this run. It must therefore happen once, and only for a run that
+    really runs — see F-01.
+    """
     cost_estimation_service.record_guardrail_event(
         account_id=session.account_id,
         query_run_id=query_run.query_run_id,
@@ -1072,30 +1145,18 @@ def _start_reserved_query_run(
         ),
     )
 
-    # Legacy/test path runs inline so the test suite can assert against
-    # the final state synchronously. Production / cookie path runs in a
-    # background thread that cannot block the request response.
-    if session.legacy:
-        _execute_query_run(query_run.query_run_id, session.account_id)
-        query_run = query_run_repository.get(query_run.query_run_id)
-        # Legacy/test path runs inline (no safety wrapper), so persist the
-        # terminal run here. Idempotent with the production choke point.
-        _persist_terminal_run(query_run.query_run_id)
-        return _create_response_for(query_run)
 
-    # The capacity permit was reserved by the caller. Build the response
-    # FIRST so that ``Thread.start()`` is genuinely the last statement that
-    # can fail: once it returns, the worker owns the permit and releases it in
-    # its ``finally``. Anything that raises before that propagates to the
-    # caller's handler, which releases it — so the permit can neither leak nor
-    # be double-released.
-    response = _create_response_for(query_run)
-    Thread(
-        target=_execute_query_run_with_semaphore_release,
-        args=(query_run.query_run_id, session.account_id),
-        daemon=True,
-    ).start()
-    return response
+def _abandon_unstarted_run(query_run_id: UUID) -> None:
+    """Terminate a run whose worker thread could not be started.
+
+    ``get_active_for_account`` treats every non-terminal run as the account's
+    one in-flight run, so an ACCEPTED run nothing will ever finish locks the
+    account out with 409 ``ACTIVE_QUERY_EXISTS`` until
+    ``QUERY_RUN_ACTIVE_TTL`` (30 minutes) expires it. Best-effort: the caller
+    is already raising, and failing to tidy up must not mask that error.
+    """
+    with contextlib.suppress(Exception):
+        query_run_repository.transition(query_run_id, QueryRunStatus.FAILED)
 
 
 def _create_response_for(query_run: QueryRun) -> QueryRunCreateResponse:
@@ -1262,19 +1323,29 @@ def _execute_query_run_safely(query_run_id: UUID, account_id: UUID) -> None:
         _persist_terminal_run(query_run_id)
 
 
-def _execute_query_run_with_semaphore_release(query_run_id: UUID, account_id: UUID) -> None:
+def _execute_query_run_with_semaphore_release(
+    query_run_id: UUID,
+    account_id: UUID,
+    capacity_permit: BoundedSemaphore | None,
+) -> None:
     """Thread entry point that also releases the run-cap semaphore.
 
-    The semaphore is acquired in the request handler (so the 503
-    response can be returned synchronously) and released here after
-    the run reaches a terminal state. Using a ``try/finally`` means
-    the semaphore is released even if the run raises an unhandled
-    exception, which prevents the cap from leaking on a crash.
+    The permit is acquired in the request handler (so the 503 response can be
+    returned synchronously) and released here after the run reaches a terminal
+    state. Using a ``try/finally`` means it is released even if the run raises
+    an unhandled exception, which prevents the cap from leaking on a crash.
+
+    ``capacity_permit`` is the semaphore OBJECT the handler reserved from,
+    passed in rather than re-read from the module global: a permit must be
+    returned to the object it was taken from. ``None`` means the caller
+    reserved nothing (the legacy/test path), and then there is nothing to
+    return — releasing the global here would mint a permit out of thin air.
     """
     try:
         _execute_query_run_safely(query_run_id=query_run_id, account_id=account_id)
     finally:
-        _run_semaphore.release()
+        if capacity_permit is not None:
+            capacity_permit.release()
 
 
 def _degrade_run_for_deadline(

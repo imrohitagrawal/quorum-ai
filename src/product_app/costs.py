@@ -71,6 +71,18 @@ HARD_LIMIT_USD = Decimal("0.25")
 #: therefore has to move the whole three-threshold ladder, not this constant
 #: alone.
 #:
+#: WHAT THIS IS NOT. The envelope above is PER ACCOUNT, and an account is a
+#: free, self-issued identity: ``GET /v1/session`` mints one on demand
+#: (``main.browser_session`` -> ``auth.issue_or_resume_session``), no payment
+#: instrument, no email, no proof of anything. So this constant is NOT a bound
+#: on what the deployment can be made to spend — the deployment-level bound is
+#: (accounts an attacker can mint) x this value, and the only thing limiting
+#: the first factor is the per-IP session bucket
+#: (``query_runs._InMemoryIpRateLimiter.CAPACITY`` = 30/min, per IP, in-process
+#: only). Read as an operator ratification, "$0.20" is the per-user blast
+#: radius of an honest mistake, not the day's worst case. A real spend ceiling
+#: for the deployment is a separate control and does not exist yet.
+#:
 #: The envelope is now asserted, not emergent:
 #: ``tests/integration/test_query_run_cost_guardrails.py::
 #: test_daily_cap_admits_the_number_of_runs_its_dollar_value_pays_for``
