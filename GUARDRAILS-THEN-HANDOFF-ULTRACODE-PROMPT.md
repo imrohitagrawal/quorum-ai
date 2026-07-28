@@ -80,6 +80,40 @@ same test — something proving the thing being counted exists at all.
 **Allow exceptions, but make them visible:** require a one-line reason beside
 each. A silent exception is the same failure in a new coat.
 
+### BEFORE WRITING ANY CODE FOR TASK B — bring the design to the operator
+
+This check can be too strict (blocking honest tests and becoming a tax people
+route around) or too loose (catching nothing and giving false confidence). That
+balance is the operator's call, not yours. Present all four of these and
+**wait for a decision**:
+
+**1. The rule**, in one sentence, in plain English.
+
+**2. The exception list** — every kind of test you propose to allow through,
+each with the reason. Expect at least these, and say whether you would allow
+them:
+   - a test whose *whole point* is that something is absent (no error toast
+     appeared, no console error, no forbidden colour on a surface);
+   - a security check asserting a hostile input produced nothing;
+   - a check inside a loop where the positive proof sits outside it.
+
+**3. A worked example** — one real assertion from this repo shown three ways:
+   as it is today, as it would fail the check, and as it would pass. Use a
+   genuine one, not an invented one.
+
+**4. Pros and cons, as bullets**, covering at least:
+   - what it catches that nothing else does today;
+   - what it will *not* catch (it is a shape check, not a proof — a test can
+     have a positive partner and still be weak);
+   - the false-alarm cost: how often you expect it to block an honest test;
+   - the maintenance cost: who updates the exception list, and how a reader
+     can tell a real exception from a lazy one;
+   - what happens the first time it blocks someone in a hurry — the honest
+     failure mode is that people write a throwaway positive assertion to get
+     past it, which is worse than no check.
+
+Then stop and wait. Do not build it before the operator answers.
+
 **Prove it works on real examples.** These three shipped green against the bug
 (all now fixed — reconstruct them to test your guard):
 1. a check asserting a list had 6 items, which the broken output also had;
@@ -233,6 +267,10 @@ THEN, in order, stopping between each:
      across 23 files, so scope it to changed files only. Copy the shape from
      tests/test_e2e_workflow_covers_all_invariant_specs.py. Prove it catches
      the three real examples in §2 Task B.
+     BEFORE WRITING ANY CODE for B: show me the rule, the exception list, a
+     worked example from this repo shown three ways, and the pros and cons as
+     bullets — then WAIT for my decision. Too strict blocks honest tests; too
+     loose catches nothing. That call is mine.
   C. Write WP-G2-TO-WP-H-ULTRACODE-PROMPT.md, with state you measured
      yourself and a hard stop after WP-G2.
 
