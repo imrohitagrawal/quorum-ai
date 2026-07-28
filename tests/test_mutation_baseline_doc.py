@@ -22,9 +22,9 @@ They come in two tiers, because the two kinds of claim do not travel equally:
   **skip** when it is absent. They cannot be blocking CI checks: the
   killed/timeout split is hardware- and load-dependent (mutation-baseline.md §5),
   so a Linux runner legitimately produces different counts for an unchanged
-  tree. Since #130 the `mutation-baseline` job BLOCKS, so "the job is advisory"
-  is no longer what keeps these two from failing a merge — they now skip unless
-  the run is on the machine profile the doc records (macOS, §2). On the Linux
+  tree. The `mutation-baseline` job is advisory, but these two no longer LEAN on
+  that: they skip unless the run is on the machine profile the doc records
+  (macOS, §2), so they would stay harmless even if the job were promoted. On the Linux
   CI runner they report SKIPPED, which is the honest outcome: comparing Linux
   counts against macOS-recorded ones was never a signal to begin with. The step
   deliberately carries no `continue-on-error`, because

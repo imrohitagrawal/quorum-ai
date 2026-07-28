@@ -271,24 +271,59 @@ def changed_lines():
     return ranges
 
 
+def unmutatable(node):
+    """True when mutmut will not generate mutants for this function.
+
+    Mirrors mutmut/mutation/file_mutation.py:230-235 - decorated functions are
+    skipped because the trampoline copy re-runs decorators, EXCEPT a lone bare
+    @staticmethod/@classmethod, which it handles. Measured on this tree: 34 of
+    the 40 decorated functions under src/product_app are unmutatable.
+    """
+    decorators = getattr(node, "decorator_list", [])
+    if not decorators:
+        return False
+    if len(decorators) == 1:
+        only = decorators[0]
+        if isinstance(only, ast.Name) and only.id in ("staticmethod", "classmethod"):
+            return False
+    return True
+
+
 def scope():
     """Changed functions -> mutmut mutant-name globs (xǁClassǁmethod / x_function)."""
     globs = []
+    skipped = []
     for path, lines in sorted(changed_lines().items()):
         module = path.removeprefix("src/").removesuffix(".py").replace("/", ".")
         with open(path) as handle:
             tree = ast.parse(handle.read())
 
-        def walk(node, cls=None):
+        def walk(node, cls=None, frozen=False):
             for child in ast.iter_child_nodes(node):
                 if isinstance(child, ast.ClassDef):
-                    walk(child, child.name)
+                    # A DECORATED class is skipped by mutmut together with its
+                    # WHOLE SUBTREE (file_mutation.py:236-237 returns True from
+                    # _skip_node_and_children, and on_visit stops descending).
+                    # So every method inside it is unmutatable, decorated or not
+                    # - e.g. every @dataclass. Missing this left #136 reachable
+                    # from _Session.is_expired and three others.
+                    walk(child, child.name, frozen or bool(child.decorator_list))
                 elif isinstance(child, (ast.FunctionDef, ast.AsyncFunctionDef)):
                     span = range(child.lineno, (child.end_lineno or child.lineno) + 1)
                     if lines & set(span):
-                        name = "xǁ%sǁ%s" % (cls, child.name) if cls else "x_%s" % child.name
-                        globs.append("%s.%s__mutmut_*" % (module, name))
-                    walk(child, cls)
+                        if frozen or unmutatable(child):
+                            # mutmut cannot build a trampoline for this function,
+                            # so naming it yields a glob that matches nothing. With
+                            # a scope made ONLY of these, `mutmut run` dies with
+                            # "Filtered for specific mutants, but nothing matches"
+                            # and the recipe blames also_copy - the wrong cause.
+                            # Measured over history: 7% of changes abort this way,
+                            # 38% carry one silently. Excluded and REPORTED (#136).
+                            skipped.append("%s.%s" % (module, child.name))
+                        else:
+                            name = "xǁ%sǁ%s" % (cls, child.name) if cls else "x_%s" % child.name
+                            globs.append("%s.%s__mutmut_*" % (module, name))
+                    walk(child, cls, frozen)
 
         walk(tree)
     # Only write anything when the scope is non-empty. `print("".join([]))`
@@ -298,6 +333,14 @@ def scope():
     # (i.e. mutate everything) on every change that touched no src/ Python.
     # The advisory `-` hid that for as long as it existed; the first blocking
     # run surfaced it immediately.
+    if skipped:
+        # stderr, never stdout: stdout is redirected into scope.txt and a note
+        # there would be read by `mutmut run` as a mutant name.
+        sys.stderr.write(
+            "mutation scope: %d changed function(s) cannot be mutated by mutmut "
+            "(decorated - see #136); excluded so the run does not abort:\n%s\n"
+            % (len(skipped), "\n".join("  " + n for n in sorted(set(skipped))))
+        )
     if globs:
         print("\n".join(sorted(set(globs))))
 
@@ -390,7 +433,7 @@ mutation-baseline:
 		printf '%s' "$$MUTMUT_SCOPE_PY" | $(PYTHON) - report $(DIFF_BASE) $(MUTATION_MIN_SCORE) > build/mutation/score.txt; \
 		status=$$?; cat build/mutation/score.txt; exit $$status; \
 	else \
-		echo "no changed Python functions under src/ vs $(DIFF_BASE) — nothing to mutate"; \
+		echo "no MUTATABLE changed functions under src/ vs $(DIFF_BASE) — nothing to mutate (any exclusions are named above)"; \
 	fi
 
 # R2 P0-G: changed-lines coverage vs $(DIFF_BASE) must be >= $(DIFF_COVER_MIN)%.

@@ -86,9 +86,11 @@ def test_an_all_timeout_scope_is_reported_as_unmeasured_not_as_a_crash(
     under mutmut's fork-based runner while the same tests pass in 1.34s
     standalone. Timeouts are excluded from the score by a recorded decision, so
     an all-timeout scope leaves `killed + survived == 0` and lands in the same
-    branch as an absent `mutants/` tree. Before #130 that branch was advisory
-    and its message never mattered; now the gate blocks, so an author would be
-    sent hunting for a crash that did not happen.
+    branch as an absent `mutants/` tree. While BOTH advisory switches were on,
+    that branch's message never mattered because the failure was swallowed
+    whole. `make` now exits honestly, so the message is read by whoever runs the
+    gate locally — and a wrong one sends them hunting a crash that never
+    happened.
 
     Turns red if: the `counts["timeout"]` branch is deleted from `report()` —
     the message reverts to "the run did not happen" and the exit becomes 1. Also
@@ -325,6 +327,256 @@ def test_an_empty_scope_writes_zero_bytes(scope_script: Path, tmp_path: Path) ->
     assert "pkg.thing.x_f__mutmut_*" in populated.stdout, (
         "a working-tree change inside a function produced no scope — "
         f"scope() is emitting nothing at all:\n{populated.stdout}{populated.stderr}"
+    )
+
+
+def _repo_with(tmp_path: Path, before: str, after: str) -> Path:
+    """A throwaway git repo whose worktree changes `before` -> `after`."""
+    repo = tmp_path / "repo"
+    (repo / "src" / "pkg").mkdir(parents=True)
+    env = {
+        **os.environ,
+        "GIT_AUTHOR_NAME": "t",
+        "GIT_AUTHOR_EMAIL": "t@t",
+        "GIT_COMMITTER_NAME": "t",
+        "GIT_COMMITTER_EMAIL": "t@t",
+    }
+
+    def git(*args: str) -> None:
+        subprocess.run(["git", *args], cwd=repo, check=True, capture_output=True, env=env)
+
+    module = repo / "src" / "pkg" / "thing.py"
+    module.write_text(before, encoding="utf-8")
+    git("init", "-q", "-b", "main")
+    git("add", "-A")
+    git("commit", "-qm", "base")
+    module.write_text(after, encoding="utf-8")
+    return repo
+
+
+DECORATED_BEFORE = """\
+class C:
+    @property
+    def value(self):
+        return 1
+"""
+DECORATED_AFTER = """\
+class C:
+    @property
+    def value(self):
+        return 2
+"""
+
+
+def test_a_decorated_only_change_is_excluded_and_reported(
+    scope_script: Path, tmp_path: Path
+) -> None:
+    """The #136 abort: mutmut builds no mutants for a decorated function.
+
+    Before this fix the scope named the glob, `mutmut run` matched nothing and
+    died with "Filtered for specific mutants, but nothing matches" — surfaced to
+    the author as the recipe's "missing from also_copy" message, which is the
+    wrong cause. Measured over history: 7% of changes with a non-empty scope
+    abort this way.
+
+    The function is now excluded (so the run does not abort) and REPORTED on
+    stderr (so the gap is visible rather than silent).
+
+    Turns red if: `unmutatable()` stops returning True for a decorated
+    function — the glob returns and the abort comes back.
+    """
+    repo = _repo_with(tmp_path, DECORATED_BEFORE, DECORATED_AFTER)
+    result = _run(scope_script, repo, "scope", "HEAD", "80")
+
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert result.stdout == "", (
+        f"a decorated function was scoped; mutmut will match nothing: {result.stdout!r}"
+    )
+    assert "cannot be mutated" in result.stderr, (
+        f"the exclusion was silent — the whole point is that it is visible:\n{result.stderr}"
+    )
+    assert "pkg.thing.value" in result.stderr, (
+        f"the report must name the function, or it is not actionable:\n{result.stderr}"
+    )
+
+
+def test_the_note_never_contaminates_the_scope_file(scope_script: Path, tmp_path: Path) -> None:
+    """The note goes to stderr. On stdout it would become a mutant name.
+
+    `scope` mode's stdout is redirected into build/mutation/scope.txt and passed
+    verbatim to `mutmut run`. A human-readable line there is read as a mutant
+    glob.
+
+    Turns red if: the note is written with print() instead of sys.stderr.
+    """
+    repo = _repo_with(tmp_path, DECORATED_BEFORE, DECORATED_AFTER)
+    result = _run(scope_script, repo, "scope", "HEAD", "80")
+    assert "cannot be mutated" not in result.stdout, (
+        f"the exclusion note leaked into scope.txt: {result.stdout!r}"
+    )
+
+
+PLAIN_BEFORE = """\
+class C:
+    @property
+    def value(self):
+        return 1
+
+    @staticmethod
+    def helper(x):
+        return x + 1
+
+
+def free(x):
+    return x + 1
+"""
+PLAIN_AFTER = PLAIN_BEFORE.replace("return x + 1", "return x + 2")
+
+
+def test_only_the_unmutatable_functions_are_dropped(scope_script: Path, tmp_path: Path) -> None:
+    """Positive partner: the exclusion must not swallow mutatable functions.
+
+    A bare @staticmethod IS mutated by mutmut
+    (mutmut/mutation/file_mutation.py:230-235), so it must stay in scope — and
+    an undecorated function obviously must. Without this, the two assertions
+    above are equally satisfied by a scope() that drops everything.
+
+    Turns red if: `unmutatable()` is widened to any decorated function, or to
+    all functions.
+    """
+    repo = _repo_with(tmp_path, PLAIN_BEFORE, PLAIN_AFTER)
+    result = _run(scope_script, repo, "scope", "HEAD", "80")
+
+    assert "xǁCǁhelper__mutmut_*" in result.stdout, (
+        f"a bare @staticmethod was dropped, but mutmut does mutate it:\n{result.stdout}"
+    )
+    assert "x_free__mutmut_*" in result.stdout, (
+        f"an undecorated function was dropped:\n{result.stdout}"
+    )
+
+
+DATACLASS_BEFORE = """\
+from dataclasses import dataclass
+
+
+@dataclass
+class Session:
+    token: str
+
+    def is_expired(self):
+        return 1
+"""
+DATACLASS_AFTER = DATACLASS_BEFORE.replace("return 1", "return 2")
+
+
+def test_a_decorated_class_hides_every_method_it_contains(
+    scope_script: Path, tmp_path: Path
+) -> None:
+    """A DECORATED CLASS is skipped by mutmut together with its whole subtree.
+
+    `file_mutation.py:236-237` returns True from `_skip_node_and_children` for a
+    decorated ClassDef, and `on_visit` then stops descending — so every method
+    inside is unmutatable, decorated or not. Every `@dataclass` is this shape.
+
+    Missing this left #136 reachable from four real functions on main
+    (`auth._Session.is_expired`, two `RunEvaluationResult` properties,
+    `feedback_audit.Finding.to_markdown`) — a PR touching only session expiry
+    would still have aborted with the misleading also_copy message. Found by
+    adversarial review; the first fix only handled decorated FUNCTIONS.
+
+    Turns red if: `walk()` stops propagating the enclosing class's decorators
+    to its methods.
+    """
+    repo = _repo_with(tmp_path, DATACLASS_BEFORE, DATACLASS_AFTER)
+    result = _run(scope_script, repo, "scope", "HEAD", "80")
+
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert result.stdout == "", (
+        "an undecorated method of a @dataclass was scoped; mutmut skips the "
+        f"whole class subtree, so the glob matches nothing: {result.stdout!r}"
+    )
+    assert "pkg.thing.is_expired" in result.stderr, (
+        f"the exclusion must name the method:\n{result.stderr}"
+    )
+
+
+UNDECORATED_CLASS_BEFORE = """\
+class Session:
+    def is_expired(self):
+        return 1
+"""
+UNDECORATED_CLASS_AFTER = UNDECORATED_CLASS_BEFORE.replace("return 1", "return 2")
+
+
+def test_an_undecorated_class_keeps_its_methods(scope_script: Path, tmp_path: Path) -> None:
+    """Positive partner: the class rule must key off the DECORATOR, not the class.
+
+    Without this, the assertion above is equally satisfied by a `walk()` that
+    drops every method of every class.
+
+    Turns red if: methods are dropped for any class rather than a decorated one.
+    """
+    repo = _repo_with(tmp_path, UNDECORATED_CLASS_BEFORE, UNDECORATED_CLASS_AFTER)
+    result = _run(scope_script, repo, "scope", "HEAD", "80")
+    assert "xǁSessionǁis_expired__mutmut_*" in result.stdout, (
+        f"a plain class method was dropped:\n{result.stdout}{result.stderr}"
+    )
+
+
+EDGE_BEFORE = """\
+import builtins
+
+
+class C:
+    @staticmethod()
+    def called_form(x):
+        return 1
+
+    @builtins.staticmethod
+    def attribute_form(x):
+        return 1
+
+    @property
+    @staticmethod
+    def two_decorators(self):
+        return 1
+
+    @staticmethod
+    async def async_static(x):
+        return 1
+"""
+EDGE_AFTER = EDGE_BEFORE.replace("return 1", "return 2")
+
+
+def test_the_decorator_edge_cases_match_mutmut(scope_script: Path, tmp_path: Path) -> None:
+    """Only a LONE, BARE `staticmethod`/`classmethod` Name is mutatable.
+
+    mutmut checks `isinstance(decorator, cst.Name)` on the single decorator, so
+    the call form `@staticmethod()` is an ast.Call, the dotted form
+    `@builtins.staticmethod` is an ast.Attribute, and two decorators fail the
+    `len == 1` test. All three are unmutatable.
+
+    This pins the cases the implementation gets RIGHT. Without it, "simplifying"
+    to `any(isinstance(d, ast.Name) and d.id in (...) for d in decorators)`
+    passes every other test in this module while re-opening the #136 abort for
+    the four `@field_validator(...) + @classmethod` pairs in config.py.
+
+    Turns red if: the check is loosened to `any(...)` over the decorator list,
+    or stops requiring a bare `ast.Name`.
+    """
+    repo = _repo_with(tmp_path, EDGE_BEFORE, EDGE_AFTER)
+    result = _run(scope_script, repo, "scope", "HEAD", "80")
+
+    for unmutatable_name in ("called_form", "attribute_form", "two_decorators"):
+        assert unmutatable_name in result.stderr, (
+            f"{unmutatable_name} should be excluded — mutmut will not mutate it:\n{result.stderr}"
+        )
+        assert unmutatable_name not in result.stdout, (
+            f"{unmutatable_name} was scoped but mutmut generates nothing for it"
+        )
+    # Positive partner: a lone bare @staticmethod IS mutated, even when async.
+    assert "async_static" in result.stdout, (
+        f"a lone bare @staticmethod was dropped, but mutmut mutates it:\n{result.stdout}"
     )
 
 
