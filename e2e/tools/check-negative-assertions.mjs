@@ -2,10 +2,11 @@
  * Fail a CHANGED spec file whose negative assertion has no positive partner.
  *
  * Issue #131. The mutation gate reads Python only, so nothing checks that the
- * browser tests can fail — and a defect census found "tests that cannot fail"
- * to be the second-largest category of escaped defects in this repo, ~28 of 32
- * of them in TypeScript. Three specs written in one session passed against the
- * exact bug they existed to catch.
+ * browser tests can fail. `docs/metrics/mutation-gate-study.md` §4 censused 158
+ * escaped defects and found 144 of them (91%) structurally invisible to that
+ * gate, with ~46% living in non-Python files — JavaScript, CSS and the
+ * Playwright specs this guard covers. Three specs written in one session passed
+ * against the exact bug they existed to catch.
  *
  * THE RULE
  *   A negative assertion needs a positive partner somewhere in the same
@@ -22,10 +23,10 @@
  * variable name. That is gameable — name your array `violations` and you are
  * exempt — and it is the "gate on a whole-line substring" antipattern AGENTS.md
  * warns about. Instead, nothing is exempt and the PARTNER definition is honest:
- * a liveness assertion (the surface rendered, the list is non-empty) counts.
- * Measured over the corpus: 70% of sites would need a reason comment under the
- * narrow definition, 26% under this one, and both known-vacuous tests are still
- * caught.
+ * a liveness assertion (the surface rendered, the list is non-empty) counts —
+ * but NOT one over a literal subject, which is a tautology and was a real hole.
+ * Measured with this tool over the whole corpus: 21 unpartnered sites across 7
+ * files, and both known-vacuous tests are caught.
  *
  * KNOWN LIMIT, stated rather than implied: element-presence is not
  * text-non-emptiness. `expect(surface).toBeVisible()` partnered with
@@ -54,10 +55,21 @@ const NEGATIVE_UNDER_NOT = new Set([
   "toBeChecked",
 ]);
 
-function run(cmd, args) {
+function run(cmd, args, { required = false } = {}) {
   try {
-    return execFileSync(cmd, args, { encoding: "utf8" });
-  } catch {
+    return execFileSync(cmd, args, { encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] });
+  } catch (error) {
+    if (required) {
+      // FAIL CLOSED. Swallowing this printed "nothing to check" and exited 0 —
+      // identical to a healthy PR that touched no specs, which is exactly the
+      // silent-no-op failure this guard exists to prevent elsewhere.
+      console.error(
+        `negative-assertion guard: git ${args.join(" ")} failed. The base ref is ` +
+          `unresolvable, so the changed-spec diff cannot be computed. Refusing to ` +
+          `report success over an unknown set of files.\n${error.stderr || error.message}`
+      );
+      process.exit(2);
+    }
     return "";
   }
 }
@@ -65,11 +77,11 @@ function run(cmd, args) {
 /** Spec files changed vs `base`, plus uncommitted ones. Mirrors the mutation gate's scoping. */
 function changedSpecs(base, repoRoot) {
   const seen = new Set();
-  for (const args of [
-    ["diff", "--name-only", `${base}...HEAD`, "--", "e2e"],
-    ["diff", "--name-only", "HEAD", "--", "e2e"],
+  for (const [args, required] of [
+    [["diff", "--name-only", `${base}...HEAD`, "--", "e2e"], true],
+    [["diff", "--name-only", "HEAD", "--", "e2e"], false],
   ]) {
-    for (const line of run("git", ["-C", repoRoot, ...args]).split("\n")) {
+    for (const line of run("git", ["-C", repoRoot, ...args], { required }).split("\n")) {
       if (line.endsWith(".spec.ts")) seen.add(line.trim());
     }
   }
@@ -112,6 +124,23 @@ const isNonEmptyLiteral = (arg) =>
     arg.type === "TemplateLiteral" ||
     (arg.type === "Literal" && arg.regex));
 
+/**
+ * `expect(true)`, `expect(1)`, `expect([1])` — a partner over a literal proves
+ * nothing about the code under test. Adversarial review confirmed this WAS the
+ * hole: `expect(true).toBeTruthy()` silenced a vacuous negative with no reason
+ * comment and no reviewer signal, making the rule strictly MORE gameable than
+ * the family allowlist it replaced.
+ */
+function isTautologicalSubject(subject) {
+  if (!subject) return false;
+  return (
+    subject.type === "Literal" ||
+    subject.type === "TemplateLiteral" ||
+    subject.type === "ArrayExpression" ||
+    subject.type === "ObjectExpression"
+  );
+}
+
 function classify(a) {
   const [first] = a.args;
   if (a.negated) {
@@ -127,6 +156,8 @@ function classify(a) {
   if ((a.matcher === "toHaveCount" || a.matcher === "toBe" || a.matcher === "toHaveLength") && isZero(first))
     return "negative";
   if (a.matcher === "toBeNull" || a.matcher === "toBeFalsy" || a.matcher === "toBeUndefined") return "negative";
+  // A positive over a literal subject is a tautology, not evidence.
+  if (isTautologicalSubject(a.subject)) return "other";
   if (a.matcher === "toBeGreaterThan" && isZero(first)) return "positive";
   if (a.matcher === "toBeGreaterThanOrEqual" && isPositiveNumber(first)) return "positive";
   if ((a.matcher === "toHaveCount" || a.matcher === "toBe" || a.matcher === "toHaveLength") && isPositiveNumber(first))
@@ -180,26 +211,34 @@ function collectAssertions(body) {
 
 export function checkSource(source, file) {
   const ast = parse(source, { loc: true, range: true, comment: true, ecmaVersion: "latest", sourceType: "module" });
-  const lines = source.split("\n");
+  // Exemptions are matched against real COMMENT TOKENS, never raw line text.
+  // Matching text let the marker be smuggled in a `test()` title or any string
+  // literal on a preceding line, and let one annotation cover a second
+  // assertion further down (both confirmed by adversarial review).
+  const exemptionLines = new Map();
+  for (const comment of ast.comments || []) {
+    const match = EXEMPTION.exec(`//${comment.value}`);
+    if (comment.type === "Line" && match) exemptionLines.set(comment.loc.start.line, false);
+  }
   const violations = [];
   for (const { title, body } of testsIn(ast)) {
     const assertions = collectAssertions(body);
     const hasPositive = assertions.some((a) => a.kind === "positive");
     for (const a of assertions) {
       if (a.kind !== "negative" || hasPositive) continue;
-      // The annotation may sit at the end of the assertion's own line, or on
-      // the line(s) immediately above it — a multi-line assertion is usual, and
-      // people naturally write the reason above the statement it explains.
+      // The annotation may end the assertion's own line, or sit in a contiguous
+      // comment block directly above it. Each annotation is CONSUMED once, so
+      // one reason cannot silently cover a second assertion below it.
       let exempt = false;
-      for (let probe = a.line - 1; probe >= 0 && probe >= a.line - 4; probe -= 1) {
-        const text = lines[probe] || "";
-        if (EXEMPTION.test(text)) {
-          exempt = true;
-          break;
+      for (let probe = a.line; probe >= a.line - 3 && probe > 0; probe -= 1) {
+        if (!exemptionLines.has(probe)) {
+          if (probe < a.line) break; // a gap: this block does not reach us
+          continue;
         }
-        // Stop at the previous statement, so an annotation cannot silently
-        // cover an assertion further down the test.
-        if (probe < a.line - 1 && text.trim() && !text.trim().startsWith("//")) break;
+        if (exemptionLines.get(probe)) break; // already spent on another assertion
+        exemptionLines.set(probe, true);
+        exempt = true;
+        break;
       }
       if (exempt) continue;
       violations.push({ file, line: a.line, test: title, matcher: `${a.negated ? "not." : ""}${a.matcher}` });

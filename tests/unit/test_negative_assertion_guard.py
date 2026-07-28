@@ -2,9 +2,10 @@
 
 `e2e/tools/check-negative-assertions.mjs` fails a CHANGED spec file whose
 negative assertion has no positive partner in the same `test()`. It is the
-TypeScript counterpart to the mutation gate, which reads Python only — and a
-census of 158 escaped defects found "tests that cannot fail" to be the
-second-largest category, with ~28 of 32 living in `e2e/tests/**/*.spec.ts`.
+TypeScript counterpart to the mutation gate, which reads Python only.
+`docs/metrics/mutation-gate-study.md` §4 censused 158 escaped defects and found
+144 (91%) structurally invisible to that gate, ~46% of them in non-Python files
+including the Playwright specs this guard covers.
 
 The checker is Node (it needs a real TypeScript parser). These tests drive it
 as a subprocess over fixture sources, so its behaviour is pinned by the same
@@ -91,8 +92,8 @@ def test_a_negative_with_a_liveness_partner_passes(tmp_path: Path) -> None:
     Without this, the assertion above is equally satisfied by a checker that
     rejects every negative assertion — which would be a tax, not a gate.
 
-    Turns red if: liveness assertions stop counting as partners (measured: that
-    takes the comment burden from 26% of sites to 70%).
+    Turns red if: liveness assertions stop counting as partners — the guard
+    then reports every absence-is-the-point test in the corpus.
     """
     result = _run(PARTNERED, tmp_path)
     assert result.returncode == 0, (
@@ -197,6 +198,107 @@ def test_a_partner_outside_the_loop_still_counts(tmp_path: Path) -> None:
     result = _run(LOOP_PARTNER, tmp_path)
     assert result.returncode == 0, (
         f"a partner outside the loop was not seen:\n{result.stdout}{result.stderr}"
+    )
+
+
+TAUTOLOGY = """\
+import { test, expect } from "@playwright/test";
+
+test("gamed with a tautology", async ({ page }) => {
+  expect(true).toBeTruthy();
+  await expect(page.locator(".badge-summary")).toHaveCount(0);
+});
+"""
+
+
+def test_a_tautological_partner_does_not_count(tmp_path: Path) -> None:
+    """`expect(true).toBeTruthy()` proves nothing about the code under test.
+
+    This was a real hole, found by adversarial review AFTER the PR body claimed
+    it was verified. The claim came from a Python prototype that excluded
+    literal subjects; the shipped Node checker classified by matcher name only
+    and never looked at the subject. One line silenced a vacuous negative with
+    no reason comment and no reviewer signal — strictly MORE gameable than the
+    family allowlist this design rejected.
+
+    Turns red if: `isTautologicalSubject` stops being consulted in `classify`.
+    """
+    result = _run(TAUTOLOGY, tmp_path)
+    assert result.returncode != 0, (
+        f"a literal-subject assertion served as a partner:\n{result.stdout}{result.stderr}"
+    )
+
+
+SMUGGLED = """\
+import { test, expect } from "@playwright/test";
+
+test("a title mentioning // no-positive-partner: smuggled", async ({ page }) => {
+  expect(pageErrors).toEqual([]);
+});
+"""
+
+
+def test_the_marker_cannot_be_smuggled_in_a_string(tmp_path: Path) -> None:
+    """Exemptions are matched against COMMENT TOKENS, not raw line text.
+
+    Matching text meant the marker could arrive inside a `test()` title or any
+    string literal on a preceding line.
+
+    Turns red if: the exemption is matched against source lines again.
+    """
+    result = _run(SMUGGLED, tmp_path)
+    assert result.returncode != 0, (
+        f"the marker inside a test title exempted an assertion:\n{result.stdout}{result.stderr}"
+    )
+
+
+REUSED = """\
+import { test, expect } from "@playwright/test";
+
+test("one reason must not cover two", async ({ page }) => {
+  expect(a).toEqual([]); // no-positive-partner: reason for A only
+  expect(b).toEqual([]);
+});
+"""
+
+
+def test_one_exemption_does_not_cover_a_second_assertion(tmp_path: Path) -> None:
+    """Each annotation is consumed once.
+
+    The lookback previously walked up several lines and could reach an
+    annotation that belonged to the assertion above.
+
+    Turns red if: the consumed-marker bookkeeping is removed.
+    """
+    result = _run(REUSED, tmp_path)
+    assert result.returncode != 0, (
+        f"one reason exempted two assertions:\n{result.stdout}{result.stderr}"
+    )
+    assert ":5" in result.stderr, (
+        f"the SECOND assertion (line 5) should be the one reported:\n{result.stderr}"
+    )
+
+
+def test_an_unresolvable_base_ref_fails_closed(tmp_path: Path) -> None:
+    """A git failure must not read as "no changed specs".
+
+    Swallowing it printed "nothing to check" and exited 0 — indistinguishable
+    from a healthy pull request that touched no specs. That is the silent-no-op
+    failure this guard exists to prevent elsewhere, in the guard itself.
+
+    Turns red if: the `required` flag is dropped from the base-diff call.
+    """
+    result = subprocess.run(
+        ["node", str(CHECKER), "--base", "origin/definitely-not-a-real-ref"],
+        cwd=E2E,
+        capture_output=True,
+        text=True,
+    )
+    assert result.returncode != 0, (
+        f"an unresolvable base ref reported success:\n{result.stdout}{result.stderr}"
+    )
+    assert "unresolvable" in result.stderr.lower() or "failed" in result.stderr.lower(), (
+        f"the failure must name its cause:\n{result.stderr}"
     )
 
 
