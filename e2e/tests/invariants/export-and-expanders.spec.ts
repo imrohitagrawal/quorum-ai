@@ -256,6 +256,49 @@ test.describe("F-12 — export completeness and section expanders", () => {
     expect(md).toMatch(/not a real source/);
   });
 
+  // Each of these is a MEASURED bypass of the first version of
+  // `mdUntrustedBlock`, found by review round 3. The first version tested
+  // /^\s*(```|~~~)/ for a fence (unlimited indent, any info string) and
+  // /^ {4,}\S/ for indented code (no blank-line requirement), and guarded
+  // setext underlines at `={2,}`. CommonMark says: an opener is indented at
+  // most 3 spaces, a backtick fence's info string may not contain a backtick,
+  // indented code cannot interrupt a paragraph, and a setext underline may be
+  // ONE character. Every one of those gaps shipped raw HTML or a forged
+  // heading into the export.
+  const BYPASSES: { name: string; section: string; expect: RegExp }[] = [
+    { name: "unclosed fence swallowing the document", section: "```\n<img src=x onerror=alert(1)>", expect: /SWALLOWED/ },
+    { name: "backtick in the info string", section: "```a`b\n<img src=x onerror=alert(1)>", expect: /<img/ },
+    { name: "indented lazy continuation", section: "Some prose here\n    <img src=x onerror=alert(1)>", expect: /<img/ },
+    { name: "single-character setext underline", section: "About this run\n=", expect: /^ {0,3}=+[ \t]*$/m },
+  ];
+
+  for (const b of BYPASSES) {
+    test(`untrusted model text cannot smuggle markup: ${b.name}`, async ({ page }) => {
+      const resp = goldenCompletedResp() as any;
+      resp.result.final_synthesis.consensus = b.section;
+      await driveToResult(page, resp);
+      const md = await exportedMarkdown(page);
+      expect(
+        md,
+        `provider text bypassed neutralisation via ${b.name} — raw markup or a ` +
+          `forged heading reached the exported decision record`
+      ).not.toMatch(b.expect);
+      // Every code fence the model opens must be closed. An unclosed fence
+      // does not delete the following sections — it makes a renderer show all
+      // of them as code, so the rest of the record silently disappears from
+      // view. `toContain` cannot see that (the text is still in the string);
+      // fence parity can.
+      const fences = (md.match(/^ {0,3}(`{3,}(?![^\n]*`)|~{3,})/gm) || []).length;
+      expect(
+        fences % 2,
+        `unbalanced code fences (${fences}) — an unclosed fence swallows every ` +
+          `section after it when the file is rendered (${b.name})`
+      ).toBe(0);
+      expect(md).toContain("### Disagreement");
+      expect(md).toContain("## Sources");
+    });
+  }
+
   test("a short section does not grow a pointless control", async ({ page }) => {
     await driveToResult(page);
     // Consensus is two sentences in the fixture — nothing to expand.

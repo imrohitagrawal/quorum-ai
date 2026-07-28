@@ -2356,35 +2356,74 @@
   function mdUntrustedBlock(text) {
     const lines = String(text == null ? "" : text).split("\n");
     let inFence = false;
-    return lines
+    let fenceChar = "";
+    let fenceLen = 0;
+    let prevBlank = true;
+    const out = lines
       .map((line) => {
-        // Code is left VERBATIM. A blanket `<` escape corrupted it: inside a
-        // fence a renderer does not decode entities, so `if (a < b)` reached
-        // the reader as `if (a &lt; b)`. Model answers here routinely contain
-        // code. Indented code blocks are treated the same way; the cost is
-        // that a deeply indented list item is also left alone.
-        if (/^\s*(```|~~~)/.test(line)) {
-          inFence = !inFence;
+        const blank = !line.trim();
+        // --- fenced code ------------------------------------------------
+        // CommonMark: an opener is indented AT MOST 3 spaces and is 3+ of the
+        // same char; a BACKTICK fence's info string may not contain a backtick.
+        // The first version tested /^\s*(```|~~~)/, which accepted unlimited
+        // indentation and any info string — so "    ```" or "```a`b" latched
+        // the fence flag and every following line shipped UNESCAPED.
+        const opener = line.match(/^ {0,3}(`{3,}|~{3,})(.*)$/);
+        if (!inFence && opener) {
+          const info = opener[2];
+          if (!(opener[1][0] === "`" && info.includes("`"))) {
+            inFence = true;
+            fenceChar = opener[1][0];
+            fenceLen = opener[1].length;
+            prevBlank = false;
+            return line;
+          }
+        } else if (inFence && opener) {
+          // A closer is the same char, at least as long, and carries no info.
+          if (opener[1][0] === fenceChar && opener[1].length >= fenceLen && !opener[2].trim()) {
+            inFence = false;
+            prevBlank = false;
+            return line;
+          }
+        }
+        if (inFence) {
+          prevBlank = blank;
           return line;
         }
-        if (inFence || /^ {4,}\S/.test(line)) return line;
+        // --- indented code ----------------------------------------------
+        // Only after a blank line. Indented code CANNOT interrupt a paragraph,
+        // so the previous version let a lazy continuation ("prose\n    <img>")
+        // pass through unescaped.
+        if (prevBlank && /^ {4,}\S/.test(line)) {
+          prevBlank = false;
+          return line;
+        }
+        prevBlank = blank;
         let out = line.replace(/</g, "&lt;");
         // Demote ATX headings below every structural heading this document
-        // emits. Never PROMOTE one: `######` must stay at 6, not become 5.
+        // emits; never PROMOTE one (###### stays at 6).
         out = out.replace(/^(#{1,6})(\s)/, (_m, hashes, sp) =>
           "#".repeat(Math.max(5, hashes.length)) + sp,
         );
-        // A SETEXT underline (`===` / `---` under a line of text) forges a
-        // heading at level 1 or 2 — outranking the demoted ATX form entirely,
-        // which is how the first version of this function was bypassed. The
-        // same shapes are also thematic breaks, which forge a section
-        // boundary. Escaping the first character renders them literally.
-        if (/^\s*(={2,}|-{3,}|\*{3,}|_{3,})\s*$/.test(out)) {
+        // A SETEXT underline forges a heading ABOVE the demoted ATX form, and
+        // the same shapes are thematic breaks that forge a section boundary.
+        // CommonMark allows a setext underline of ONE character — the previous
+        // `={2,}` guard missed "About this run\n=", which is the exact
+        // forgery this is here to stop.
+        if (/^ {0,3}(=+|-+|\*+|_+)[ \t]*$/.test(out)) {
           out = "\\" + out.trimStart();
         }
         return out;
-      })
-      .join("\n");
+      });
+    // A fence the model OPENED and never closed runs to the end of the
+    // document, swallowing every section after it — the provenance block is
+    // safe because it leads, but Sources and the model positions would vanish
+    // into a code block. Close it. (The content inside a fence is inert, so
+    // this is a readability/omission defect, not an injection one; MEASURED
+    // via the real export, where an unclosed fence ate everything from
+    // Disagreement onward.)
+    if (inFence) out.push(fenceChar.repeat(Math.max(3, fenceLen)));
+    return out.join("\n");
   }
 
   function buildResultMarkdown(result, res, fs, ctx) {
