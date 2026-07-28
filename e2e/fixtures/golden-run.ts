@@ -31,10 +31,8 @@ import { waitForComposerReady } from "./stabilize";
 // the formatter (bug #30).
 // Only the two markers that ANY correct #30 fix provably eliminates from text
 // nodes: inline bold (`**` → <strong>) and a line-START heading (`## ` → <h*>).
-// We deliberately do NOT flag ordered-list markers: a correctly rendered <ol>
-// exposes its numbers as CSS ::marker pseudo-elements, not text nodes, so a
-// text-node walker never sees them — flagging "1." would risk a non-greenable
-// gate. Mid-line `##` is likewise avoided in the fixture, because valid Markdown
+// Ordered-list markers ARE flagged as of WP-F/F-13 (see the entry below for the
+// measurement that changed this call). Mid-line `##` is avoided in the fixture, because valid Markdown
 // headings must start a line; a formatter legitimately leaves mid-sentence `##`
 // alone, so seeding it would make the gate impossible to turn green.
 export const RAW_MARKDOWN_PATTERNS: { name: string; re: RegExp }[] = [
@@ -56,11 +54,21 @@ export const RAW_MARKDOWN_PATTERNS: { name: string; re: RegExp }[] = [
   // Bullet markers: the block formatter converts lines starting with "- " or
   // "* " into <ul><li>, so a correct render leaves NO "- " / "* " marker in
   // any text node. Also covers optional indentation (tabs/spaces before the
-  // marker). We deliberately do NOT flag ordered-list markers ("1. "): a
-  // correctly rendered <ol> exposes its numbers as CSS ::marker pseudo-elements,
-  // not text nodes, so a text-node walker never sees them — flagging "1."
-  // would risk a non-greenable gate.
+  // marker).
   { name: "bullet marker (- / * )", re: /(?:^|\n)[ \t]*[-*][ \t]/ },
+  // WP-F/F-13: ordered-list markers ARE now flagged. The comment that used to
+  // sit here called this "non-greenable", on the reasoning that a correctly
+  // rendered <ol> exposes its numbers as ::marker pseudo-elements a text-node
+  // walker cannot see. That reasoning is exactly right — and it is the argument
+  // FOR the assertion, not against it. It was written while `formatAnswerText`
+  // could not emit an <ol> at all, so the marker survived as literal text and
+  // the gate would have been red with no fix available; the conclusion outlived
+  // that premise. MEASURED on this fixture before the F-13 fix: 47 text nodes
+  // under #main-content still carry a literal "1. "/"2. " marker, i.e. every
+  // ordered list in the golden run renders as plain paragraphs today. Once the
+  // formatter emits a real <ol>, the numbers move into ::marker and this goes
+  // green — greenable by construction, and only by the correct fix.
+  { name: "ordered-list marker (1. )", re: /(?:^|\n)[ \t]*\d+\.[ \t]/ },
 ];
 // STRUCTURAL limits of this gate (documented, not silently implied):
 //   (a) scope — it walks `#main-content` (where provider prose renders); app
@@ -102,13 +110,17 @@ const MESSY_UNCERTAINTY =
   "export gate remains **genuinely contested and unresolved between two of the " +
   "panels** even after both debate rounds concluded.";
 
-// Bullet-list surface (the mdInline bullet fix, PR5). A block formatter
-// (formatAnswerText) routes these through block-form paths (headings/ordered
-// lists), but inline surfaces (setInlineProse → mdInline) need their own
-// bullet regex. This string is consumed by inline/cell surfaces and exercises
-// `- ` / `* ` markers, optional indentation, and interaction with bold/italic
-// inside items. A correct mdInline produces <ul><li> (no "- " / "* " marker
-// in any text node).
+// Bullet-list surface. WIRED as of WP-F (it was dead for months — defined here,
+// referenced by nothing, so no gate ever rendered it; see §7.4 of the master
+// plan on fixtures gating coverage). It is seeded into the BLOCK surface
+// (`LONG_MESSY_ANSWER` → renderAnswerSection → formatAnswerText), not an inline
+// one: a <ul> inside a <span>/<p> cell is invalid markup, so "give mdInline its
+// own bullet regex for inline surfaces" was the wrong target. Exercises `- `
+// markers, indentation, and bold/italic/link/code inside items. A correct block
+// formatter produces ONE <ul> with one <li> per item and no marker in any text
+// node — measured before the F-13 fix, today's formatter instead emits a
+// SEPARATE single-item <ul> per line, each nested in a <p> the browser then
+// hoists it out of, leaving empty paragraphs behind.
 const MESSY_BULLET_LIST =
   "- **First point:** instrument retention events before export.\n" +
   "  - Nested indented bullet with a *nested italic* run.\n" +
@@ -138,6 +150,17 @@ const MESSY_SOURCE_TITLE_A =
   "Smith et al. (2024) — Retention benchmarks for SaaS (working paper, v2)";
 const MESSY_SOURCE_TITLE_B =
   "Jones & Lee — Cohort export patterns [preprint]";
+// WP-F/F-19: three MORE unique titles. The fixture previously carried the same
+// two source objects on every answering slot, so the run deduped to 2 unique
+// sources — below the `slice(0, 3)` cap in the chip row, which made the
+// "+N more" affordance unreachable by ANY test. It is not enough to fix the
+// affordance; the fixture has to be able to see it.
+const MESSY_SOURCE_TITLE_C =
+  "Okonkwo (2025) — Net revenue retention, measured honestly";
+const MESSY_SOURCE_TITLE_D =
+  "Garcia — Activation cohorts vs signup cohorts (conference talk)";
+const MESSY_SOURCE_TITLE_E =
+  "Retention instrumentation reference schema v4 (documentation)";
 
 // A genuinely long, multi-paragraph answer (~450 words) to stress the transcript
 // layout (#33) and the answer-section formatter. This surface IS formatted, so
@@ -164,6 +187,21 @@ const LONG_MESSY_ANSWER = (label: string) =>
   "Cohort by **signup month** for acquisition-quality questions, but cohort by **activation month** for product questions — mixing the two is the single most common source of misleading retention charts. Always state the cohort definition on the chart itself; a curve without a stated denominator is not interpretable.\n\n" +
   "### What good looks like\n\n" +
   "A mature setup reports monthly logo retention and NRR side by side, per activation cohort, with the raw event counts one click away so anyone can audit the number. The **worst** anti-pattern is a single blended percentage with no cohort, no denominator, and no link to the underlying events — it looks authoritative and means almost nothing.\n\n" +
+  // WP-F: a SOFT-WRAPPED paragraph — one paragraph the provider broke across
+  // several lines with SINGLE newlines, which is how most real model output
+  // arrives. Every other paragraph in this fixture is separated by a blank
+  // line, and that is precisely why the defect below stayed invisible: with
+  // `\n\n` everywhere, the formatter's list path is never reached from prose.
+  // MEASURED on today's code, "One.\nTwo.\nThree." renders as
+  // <ul><li>One.</li></ul><ul><li>Two.</li></ul><p>Three.</p> — ordinary prose
+  // silently becomes a run of one-item bullet lists.
+  "### A soft-wrapped paragraph\n\n" +
+  "Retention work fails for organisational reasons more often than technical ones.\n" +
+  "The instrumentation is rarely the hard part; agreeing on a single cohort definition is.\n" +
+  "Write the definition down before the first chart is built.\n\n" +
+  "### The panel's checklist\n\n" +
+  MESSY_BULLET_LIST +
+  "\n\n" +
   `Confidence for ${label}: moderate-to-high, contingent on the events above actually being instrumented.`;
 
 // ---- schema builders (mirror axe-all-views.spec.ts; messy content) ----------
@@ -214,10 +252,31 @@ const goldenAnswer = (i: number) => ({
   slot_number: i + 1, model_id: SLOTS[i].model_id,
   answer_text: LONG_MESSY_ANSWER(SLOTS[i].display_label),
   // Slot 3 is the empty-citation case (#31): answered, zero sources.
+  // WP-F/F-19: the answering slots no longer carry an IDENTICAL pair. Slots 1
+  // and 2 overlap on source "b" (real panels do cite the same paper twice, and
+  // the app's dedupe must still collapse it), while slot 4 cites two of its
+  // own — so the run holds 5 unique sources, above the 3-chip cap, and the
+  // "+N more" affordance is finally reachable by a test.
   sources: i === 2
     ? []
-    : [{ title: MESSY_SOURCE_TITLE_A, url: "https://example.com/a", provider: "openrouter_search" },
-       { title: MESSY_SOURCE_TITLE_B, url: "https://example.com/b", provider: "openrouter_search" }],
+    : i === 0
+      ? [{ title: MESSY_SOURCE_TITLE_A, url: "https://example.com/a", provider: "openrouter_search" },
+         { title: MESSY_SOURCE_TITLE_B, url: "https://example.com/b", provider: "openrouter_search" }]
+      : i === 1
+        ? [{ title: MESSY_SOURCE_TITLE_B, url: "https://example.com/b", provider: "openrouter_search" },
+           { title: MESSY_SOURCE_TITLE_C, url: "https://example.com/c", provider: "openrouter_search" }]
+        : [{ title: MESSY_SOURCE_TITLE_D, url: "https://example.com/d", provider: "openrouter_search" },
+           { title: MESSY_SOURCE_TITLE_E, url: "https://example.com/e", provider: "openrouter_search" }],
+  // WP-F/issue #114: the fixture carried NO provider_notice, so the blocking
+  // gate never rendered a single one of the nine user-facing notice strings
+  // rewritten in WP-E — they shipped with no browser-level coverage at all.
+  // Slot 3 is the zero-source slot, so NOTICE_NO_SOURCES_FOUND is the notice a
+  // real server emits for it. Quoted VERBATIM from the PROVIDER_NOTICES
+  // registry (`src/product_app/providers.py`); a drift guard pins the two
+  // copies together, so edit the registry, never this string.
+  provider_notice: i === 2
+    ? "This model's answer came back without any linked sources, so it does not count toward this run's source support."
+    : null,
   provider_attempt_order: ["openrouter_search"], provider_path: "openrouter_search",
   fallback_used: false, status: "completed", latency_ms: 2200 + i * 100,
   citation_coverage: i === 2 ? CC_EMPTY : CC,
