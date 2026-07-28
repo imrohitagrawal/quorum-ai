@@ -67,6 +67,7 @@ DESELECTED_FROM_THE_MUTANT_RUN = (
     "tests/unit/test_perf_gate_collection_floor.py",
     "tests/unit/test_perf_gate_required_specs.py",
     "tests/unit/test_perf_gate_runs_clean.py",
+    "tests/unit/test_negative_assertion_guard.py",
     "tests/unit/test_replay_mutation_scope.py",
 )
 
