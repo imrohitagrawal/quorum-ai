@@ -1,0 +1,1264 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Quorum AI — FAQ</title>
+<style>
+/* ── Reset ──────────────────────────────────────────── */
+*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+/* ── Design tokens ──────────────────────────────────── */
+:root {
+  --bg:           #fafaf8;
+  --bg-sidebar:   #1a1a2e;
+  --bg-sidebar-hover: #16213e;
+  --bg-card:      #ffffff;
+  --bg-code:      #f4f4f0;
+  --border:       #e2e0da;
+  --border-light: #ece9e3;
+  --text:         #1a1a1a;
+  --text-muted:   #6b6b6b;
+  --text-sidebar: #c8c8d0;
+  --text-sidebar-active: #ffffff;
+  --accent:       #4f6ef6;
+  --accent-soft:  #eef1ff;
+  --accent-warm:  #e07b39;
+  --accent-warm-soft: #fef4eb;
+  --green:        #1a7f4b;
+  --green-bg:     #eaf6f0;
+  --red:          #c0392b;
+  --red-bg:       #fdecea;
+  --amber:        #b45309;
+  --amber-bg:     #fffbeb;
+  --purple:       #7c3aed;
+  --purple-bg:    #f5f0ff;
+  --shadow-sm:    0 1px 3px rgba(0,0,0,.08);
+  --shadow-md:    0 4px 12px rgba(0,0,0,.10);
+  --radius:       8px;
+  --sidebar-w:    220px;
+  --font-display: "Georgia", "Times New Roman", serif;
+  --font-body:    -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+  --font-mono:    "SF Mono", "Fira Code", "Fira Mono", "Consolas", "Liberation Mono", monospace;
+}
+
+/* ── Layout ─────────────────────────────────────────── */
+html, body { height: 100%; }
+body {
+  font-family: var(--font-body);
+  font-size: 15px;
+  line-height: 1.7;
+  color: var(--text);
+  background: var(--bg);
+  display: flex;
+}
+
+/* ── Sidebar ────────────────────────────────────────── */
+#sidebar {
+  width: var(--sidebar-w);
+  min-width: var(--sidebar-w);
+  height: 100vh;
+  position: sticky;
+  top: 0;
+  background: var(--bg-sidebar);
+  color: var(--text-sidebar);
+  display: flex;
+  flex-direction: column;
+  overflow-y: auto;
+  z-index: 10;
+}
+.sidebar-header {
+  padding: 24px 20px 20px;
+  border-bottom: 1px solid rgba(255,255,255,.08);
+}
+.sidebar-header h1 {
+  font-family: var(--font-display);
+  font-size: 1.25rem;
+  color: #fff;
+  line-height: 1.3;
+}
+.sidebar-header .tagline {
+  font-size: 0.72rem;
+  margin-top: 6px;
+  opacity: 0.55;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.sidebar-tabs {
+  list-style: none;
+  padding: 8px 0;
+  flex: 1;
+}
+.sidebar-tabs li {
+  margin: 0;
+}
+.sidebar-tabs button {
+  width: 100%;
+  text-align: left;
+  padding: 10px 20px;
+  background: none;
+  border: none;
+  color: var(--text-sidebar);
+  font-family: var(--font-body);
+  font-size: 0.85rem;
+  cursor: pointer;
+  transition: background 0.15s, color 0.15s;
+  border-left: 3px solid transparent;
+  line-height: 1.4;
+}
+.sidebar-tabs button:hover {
+  background: var(--bg-sidebar-hover);
+  color: var(--text-sidebar-active);
+}
+.sidebar-tabs button.active {
+  background: var(--bg-sidebar-hover);
+  color: var(--text-sidebar-active);
+  border-left-color: var(--accent);
+  font-weight: 600;
+}
+.sidebar-tabs button .tab-num {
+  display: inline-block;
+  width: 22px;
+  height: 22px;
+  line-height: 22px;
+  text-align: center;
+  border-radius: 50%;
+  background: rgba(255,255,255,.1);
+  font-size: 0.7rem;
+  margin-right: 10px;
+  flex-shrink: 0;
+}
+.sidebar-tabs button.active .tab-num {
+  background: var(--accent);
+  color: #fff;
+}
+
+.sidebar-footer {
+  padding: 14px 20px;
+  border-top: 1px solid rgba(255,255,255,.08);
+  font-size: 0.7rem;
+  opacity: 0.4;
+}
+
+/* ── Main content ───────────────────────────────────── */
+#main {
+  flex: 1;
+  max-width: 860px;
+  padding: 40px 48px 80px;
+  overflow-y: auto;
+}
+
+/* ── Tab panels ─────────────────────────────────────── */
+.tab-panel {
+  display: none;
+  animation: fadeIn 0.2s ease;
+}
+.tab-panel.active { display: block; }
+@keyframes fadeIn { from { opacity: 0; transform: translateY(6px); } to { opacity: 1; transform: translateY(0); } }
+
+.tab-header {
+  margin-bottom: 32px;
+  padding-bottom: 16px;
+  border-bottom: 2px solid var(--border);
+}
+.tab-header h2 {
+  font-family: var(--font-display);
+  font-size: 1.8rem;
+  color: var(--text);
+  line-height: 1.2;
+}
+.tab-header .subtitle {
+  margin-top: 6px;
+  color: var(--text-muted);
+  font-size: 0.92rem;
+}
+
+/* ── Q&A blocks ─────────────────────────────────────── */
+.qa-block {
+  margin-bottom: 32px;
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow-sm);
+  overflow: hidden;
+}
+.qa-question {
+  padding: 18px 22px;
+  font-weight: 600;
+  font-size: 1rem;
+  cursor: pointer;
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  user-select: none;
+  background: var(--bg-card);
+  border-bottom: 1px solid var(--border-light);
+  transition: background 0.12s;
+}
+.qa-question:hover { background: var(--bg); }
+.qa-question .q-mark {
+  flex-shrink: 0;
+  width: 24px;
+  height: 24px;
+  background: var(--accent);
+  color: #fff;
+  border-radius: 50%;
+  text-align: center;
+  line-height: 24px;
+  font-size: 0.75rem;
+  font-weight: 700;
+  margin-top: 1px;
+}
+.qa-answer {
+  padding: 20px 22px 20px 56px;
+  display: none;
+  border-top: 1px solid var(--border-light);
+  background: #fdfdfc;
+}
+.qa-block.open .qa-answer { display: block; }
+
+.qa-answer p { margin-bottom: 12px; }
+.qa-answer p:last-child { margin-bottom: 0; }
+
+/* ── Honesty marker ─────────────────────────────────── */
+.honesty {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 2px 10px;
+  border-radius: 20px;
+  font-size: 0.78rem;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  white-space: nowrap;
+}
+.honesty.built     { background: var(--green-bg); color: var(--green); }
+.honesty.designed  { background: var(--amber-bg); color: var(--amber); }
+.honesty.missing   { background: var(--red-bg); color: var(--red); }
+
+/* ── Worked examples ────────────────────────────────── */
+.example {
+  margin-top: 14px;
+  padding: 14px 16px;
+  border-radius: 6px;
+  font-size: 0.9rem;
+  border-left: 4px solid;
+}
+.example.project {
+  background: var(--accent-soft);
+  border-color: var(--accent);
+}
+.example.real-life {
+  background: var(--accent-warm-soft);
+  border-color: var(--accent-warm);
+}
+.example-label {
+  font-size: 0.72rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  margin-bottom: 4px;
+  opacity: 0.7;
+}
+.example p { margin-bottom: 0; }
+.example p + p { margin-top: 6px; }
+
+/* ── Glossary callout ───────────────────────────────── */
+.glossary {
+  background: var(--purple-bg);
+  border: 1px solid #d4cff5;
+  border-radius: var(--radius);
+  padding: 18px 22px;
+  margin-bottom: 24px;
+}
+.glossary h3 {
+  font-family: var(--font-display);
+  font-size: 1.1rem;
+  margin-bottom: 12px;
+  color: var(--purple);
+}
+.glossary dl {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  gap: 6px 16px;
+}
+.glossary dt {
+  font-weight: 600;
+  font-size: 0.88rem;
+  color: var(--purple);
+  white-space: nowrap;
+  padding-top: 2px;
+}
+.glossary dt::after { content: ":"; }
+.glossary dd {
+  font-size: 0.88rem;
+  color: var(--text);
+}
+
+/* ── Code / inline ──────────────────────────────────── */
+code, .code-inline {
+  font-family: var(--font-mono);
+  font-size: 0.84em;
+  background: var(--bg-code);
+  padding: 2px 6px;
+  border-radius: 4px;
+  color: #2d2d2d;
+  word-break: break-word;
+}
+pre {
+  background: #1e1e2a;
+  color: #d4d4e0;
+  padding: 16px 20px;
+  border-radius: var(--radius);
+  overflow-x: auto;
+  font-family: var(--font-mono);
+  font-size: 0.83rem;
+  line-height: 1.6;
+  margin: 12px 0;
+}
+pre code {
+  background: none;
+  padding: 0;
+  color: inherit;
+}
+
+/* ── Onboarding checklist ───────────────────────────── */
+.checklist {
+  list-style: none;
+  counter-reset: step;
+}
+.checklist li {
+  counter-increment: step;
+  padding: 10px 0 10px 40px;
+  position: relative;
+  border-bottom: 1px solid var(--border-light);
+}
+.checklist li:last-child { border-bottom: none; }
+.checklist li::before {
+  content: counter(step);
+  position: absolute;
+  left: 0;
+  top: 10px;
+  width: 26px;
+  height: 26px;
+  border-radius: 50%;
+  background: var(--accent);
+  color: #fff;
+  font-size: 0.78rem;
+  font-weight: 700;
+  text-align: center;
+  line-height: 26px;
+}
+.checklist li .cmd {
+  font-family: var(--font-mono);
+  font-size: 0.85rem;
+  background: var(--bg-code);
+  padding: 2px 8px;
+  border-radius: 4px;
+  display: inline-block;
+  margin-top: 4px;
+}
+
+/* ── Mentor tip ─────────────────────────────────────── */
+.mentor-tip {
+  background: #fff9e6;
+  border: 1px solid #e8d98a;
+  border-radius: var(--radius);
+  padding: 16px 20px;
+  margin-top: 14px;
+  font-size: 0.92rem;
+}
+.mentor-tip .mentor-label {
+  font-weight: 700;
+  color: #8a6d00;
+  font-size: 0.78rem;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  margin-bottom: 4px;
+}
+
+/* ── Status badge ───────────────────────────────────── */
+.status-badge {
+  display: inline-block;
+  padding: 3px 10px;
+  border-radius: 20px;
+  font-size: 0.75rem;
+  font-weight: 600;
+}
+.status-badge.live    { background: #d1fae5; color: #065f46; }
+.status-badge.sim     { background: #fef3c7; color: #92400e; }
+.status-badge.gated   { background: #ede9fe; color: #5b21b6; }
+
+/* ── Freshness stamp ────────────────────────────────── */
+.freshness {
+  margin-top: 40px;
+  padding-top: 16px;
+  border-top: 1px solid var(--border);
+  font-size: 0.78rem;
+  color: var(--text-muted);
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.freshness::before {
+  content: "🕒";
+  font-size: 1rem;
+}
+
+/* ── Footer ─────────────────────────────────────────── */
+.page-footer {
+  margin-top: 48px;
+  padding-top: 20px;
+  border-top: 2px solid var(--border);
+  font-size: 0.82rem;
+  color: var(--text-muted);
+  text-align: center;
+}
+
+/* ── Keyboard hint ──────────────────────────────────── */
+.kbd-hint {
+  display: inline-block;
+  padding: 1px 7px;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  font-family: var(--font-mono);
+  font-size: 0.78rem;
+  background: var(--bg-code);
+  color: var(--text-muted);
+}
+
+/* ── Deep-link anchor ───────────────────────────────── */
+.anchor { scroll-margin-top: 24px; }
+
+/* ── Responsive ─────────────────────────────────────── */
+@media (max-width: 800px) {
+  body { flex-direction: column; }
+  #sidebar {
+    width: 100%;
+    min-width: unset;
+    height: auto;
+    position: relative;
+  }
+  .sidebar-tabs {
+    display: flex;
+    overflow-x: auto;
+    padding: 4px;
+  }
+  .sidebar-tabs button {
+    white-space: nowrap;
+    border-left: none;
+    border-bottom: 3px solid transparent;
+    padding: 8px 14px;
+  }
+  .sidebar-tabs button.active { border-bottom-color: var(--accent); border-left-color: transparent; }
+  .sidebar-header { padding: 16px; }
+  #main { padding: 24px 20px 60px; }
+  .qa-answer { padding-left: 22px; }
+}
+</style>
+</head>
+<body>
+
+<!-- ══════════════════════════════════════════════════════
+     SIDEBAR
+══════════════════════════════════════════════════════ -->
+<nav id="sidebar" aria-label="FAQ sections">
+  <div class="sidebar-header">
+    <h1>Quorum AI<br>FAQ</h1>
+    <div class="tagline">One question. Four models. One answer you can verify.</div>
+  </div>
+  <ul class="sidebar-tabs" role="tablist">
+    <li><button role="tab" aria-selected="true" data-tab="start" id="tab-start"><span class="tab-num">1</span>Start here</button></li>
+    <li><button role="tab" aria-selected="false" data-tab="tools" id="tab-tools"><span class="tab-num">2</span>Working with the tools</button></li>
+    <li><button role="tab" aria-selected="false" data-tab="architecture" id="tab-architecture"><span class="tab-num">3</span>Architecture and decisions</button></li>
+    <li><button role="tab" aria-selected="false" data-tab="quality" id="tab-quality"><span class="tab-num">4</span>Quality, security, operations</button></li>
+    <li><button role="tab" aria-selected="false" data-tab="onboarding" id="tab-onboarding"><span class="tab-num">5</span>Onboarding</button></li>
+    <li><button role="tab" aria-selected="false" data-tab="mentor" id="tab-mentor"><span class="tab-num">6</span>Mentor</button></li>
+  </ul>
+  <div class="sidebar-footer">← Use arrow keys to navigate &nbsp;|&nbsp; v0.2.0</div>
+</nav>
+
+<!-- ══════════════════════════════════════════════════════
+     MAIN
+══════════════════════════════════════════════════════ -->
+<main id="main">
+
+  <!-- ─── TAB 1: START HERE ─────────────────────────── -->
+  <section class="tab-panel active" id="panel-start" role="tabpanel" aria-labelledby="tab-start">
+
+    <div class="tab-header">
+      <h2>Start here</h2>
+      <p class="subtitle">What Quorum AI is, what problem it solves, how it works, and the words we use.</p>
+    </div>
+
+    <div class="qa-block">
+      <div class="qa-question" onclick="toggleQA(this)"><span class="q-mark">?</span> What is Quorum AI?</div>
+      <div class="qa-answer">
+        <p>Quorum AI is a research-synthesis tool. You type one question, it runs that question against four large language models (LLMs) in parallel, has the models critique each other across two debate rounds, and produces a single answer split into five sections: <strong>consensus</strong> (what all models agree on), <strong>disagreement</strong> (where they diverge), <strong>source support</strong> (what backs each claim), <strong>uncertainty</strong> (what is not settled), and <strong>recommendation</strong> (a practical takeaway).</p>
+        <p>A <strong>repo</strong> (short for <em>repository</em>) is a project's complete file history stored on GitHub — think of it as a version-controlled folder that every collaborator can read and contribute to. The Quorum AI repo is at <code>github.com/imrohitagrawal/quorum-ai</code>.</p>
+        <p>The product is designed for decision support, not for automated decisions. The output is meant to help you think more clearly, not to replace your judgment on high-stakes matters like medical, legal, or financial questions.</p>
+        <span class="honesty built">● Built</span>
+        <div class="example project">
+          <div class="example-label">In your project</div>
+          <p>Open <code>/ui</code> in your browser after starting the dev server. The workspace page shows four model panels, a debate rounds section, and the final synthesis — every section rendered live. The cost estimate appears before any provider is called, and nothing runs until you confirm.</p>
+        </div>
+        <div class="example real-life">
+          <div class="example-label">Picture it in real life</div>
+          <p>Imagine calling four independent research assistants, giving each the same brief, asking them to mark where they agree and disagree, and then having a senior editor write a one-page summary that surfaces the uncertainty. That is the workflow — except the assistants are LLMs and the editor is also an LLM.</p>
+        </div>
+      </div>
+    </div>
+
+    <div class="qa-block">
+      <div class="qa-question" onclick="toggleQA(this)"><span class="q-mark">?</span> What problem does it solve?</div>
+      <div class="qa-answer">
+        <p>If you want a well-rounded answer to a non-trivial question today, you typically open four different AI chatbots, type the same prompt into each, and manually compare the responses. That process is tedious, easy to skip (most people ask one model and stop), and offers no structured view of where the models agree, disagree, or hedge.</p>
+        <p>Quorum AI automates that process: the four calls happen in parallel, the cost is shown upfront, and the synthesis enforces that disagreement and uncertainty are preserved in the final output — not smoothed over.</p>
+        <span class="honesty built">● Built</span>
+        <div class="example project">
+          <div class="example-label">In your project</div>
+          <p>The four model slots (<code>model_slots.py</code>) are the constant source of truth. Each slot selects a different vendor — OpenAI, Anthropic, Google, or DeepSeek — so a single run covers four independent training runs and four independent safety fine-tuning passes. The debate module (<code>debate.py</code>) explicitly asks each model to critique the others, which catches the "all models confidently saying the same wrong thing" failure mode.</p>
+        </div>
+        <div class="example real-life">
+          <div class="example-label">Picture it in real life</div>
+          <p>Before making a hiring decision, a good manager does not rely on one interviewer's notes. They gather multiple perspectives, note where opinions converge, and flag the disagreements for further discussion. Quorum AI applies that instinct to AI-assisted research.</p>
+        </div>
+      </div>
+    </div>
+
+    <div class="qa-block">
+      <div class="qa-question" onclick="toggleQA(this)"><span class="q-mark">?</span> How does the AI design work? Why four models?</div>
+      <div class="qa-answer">
+        <p>The four models are selected from four different vendors by design. Different vendors train on different data, apply different safety fine-tuning, and have different failure modes. Running one model per vendor gives you four independent perspectives on the same question. Two debate rounds are then used to surface the disagreements — the first round asks each model to critique the others; the second round gives models a chance to revise their positions in light of the critiques.</p>
+        <p>A <strong>model</strong> is a specific AI system identified by a string like <code>openai/gpt-4o-mini</code>. The string has two parts: the <em>vendor</em> (who trained and hosts it) and the <em>version</em> (which training run). A <strong>token</strong> is the unit LLMs bill on — roughly ¾ of a word for English text. Providers charge per 1,000 tokens of input and output.</p>
+        <p>An <strong>API key</strong> is a secret string that authenticates your application to an external service (like ). In Quorum AI, the operator's API keys are stored server-side in Fly secrets — they never leave the server boundary and never appear in browser code, logs, or error responses.</p>
+        <span class="honesty built">● Built</span>
+        <div class="example project">
+          <div class="example-label">In your project</div>
+          <p>The default model IDs are defined in <code>model_slots.py</code> (lines 36–41) as the canonical source of truth. The live  catalog is consulted as a drift check, not as the source — if the catalog is unreachable, the static defaults are used. The debate model defaults to <code>anthropic/claude-haiku-4.5</code> (cheap, fast, good at critique) and the synthesis model to <code>openai/gpt-4o-mini</code> (cheap, reliable, structured-output friendly). Both are configurable via environment variables in <code>config.py</code>.</p>
+        </div>
+        <div class="example real-life">
+          <div class="example-label">Picture it in real life</div>
+          <p>Four independent weather stations each forecast tomorrow's temperature. You do not take one station's word — you compare all four, note where they converge (it will rain) and where they diverge (high of 18 vs 22 degrees), and then decide based on the spread. Four models are the minimum to get meaningful disagreement; fewer than four collapses to a single-opinion echo.</p>
+        </div>
+      </div>
+    </div>
+
+    <div class="qa-block">
+      <div class="qa-question" onclick="toggleQA(this)"><span class="q-mark">?</span> What do you mean by "ephemeral"?</div>
+      <div class="qa-answer">
+        <p>Quorum AI does not persist query results to a database by default in the current slice. When you refresh the page, the result is gone. This is a deliberate product posture: a research/synthesis tool is not a chat log. The architecture docs note that a durable run-history store (FR-014 / S1) was added for operator metrics — run metadata, cost, and evaluation scores are now written to <code>run_history_store.db</code> — but query text, model outputs, and synthesis prose remain session-scoped and are not part of the stored history.</p>
+        <p>A <strong>commit</strong> is a snapshot of the repository at a point in time. Each commit has a short SHA (like <code>9555701</code>) that uniquely identifies it. You can browse the commit history with <code>git log</code> on the command line, or on GitHub.</p>
+        <span class="honesty built">● Built</span>
+        <div class="example project">
+          <div class="example-label">In your project</div>
+          <p>The <code>query_runs</code> module holds runs in an in-memory session-scoped store. The <code>run_history_store.py</code> writes terminal metadata (not query text) to a SQLite file at <code>.data/run_history.sqlite3</code>. The <code>feedback_store.py</code> writes anonymised cost-guardrail events to a separate SQLite file. Neither stores the user's prompt or the model's response prose.</p>
+        </div>
+        <div class="example real-life">
+          <div class="example-label">Picture it in real life</div>
+          <p>A whiteboard in a meeting room: you write ideas, debate them, write the synthesis, and then wipe the board clean. The discussion informed the decision, but the board is blank for the next meeting. That is "ephemeral by design" — not a bug.</p>
+        </div>
+      </div>
+    </div>
+
+    <!-- Glossary -->
+    <div class="glossary" id="anchor-glossary" class="anchor">
+      <h3>Glossary — key terms defined</h3>
+      <dl>
+        <dt>API</dt><dd>Application Programming Interface — a structured way for one piece of software to call another. Quorum AI's API is a set of HTTP endpoints (like <code>POST /v1/query-runs</code>) that the browser calls to start a query run.</dd>
+        <dt>API key</dt><dd>A secret string that proves your application is authorised to use an external service. Kept server-side; never sent to the browser.</dd>
+        <dt>Commit</dt><dd>A snapshot of the repository's files at a point in time. Identified by a short SHA (e.g. <code>9555701</code>).</dd>
+        <dt>Model</dt><dd>A large language model identified by a vendor/version string, e.g. <code>openai/gpt-4o-mini</code>. Different vendors = different training data and safety fine-tuning.</dd>
+        <dt>Token</dt><dd>The unit LLMs bill on — roughly ¾ of an English word. Costs are quoted per 1,000 tokens.</dd>
+        <dt>Repo</dt><dd>Short for <em>repository</em> — the project's file history on GitHub. URL: <code>github.com/imrohitagrawal/quorum-ai</code>.</dd>
+        <dt>Synthesis</dt><dd>The final output section that combines all four model answers into consensus, disagreement, source support, uncertainty, and recommendation.</dd>
+        <dt>Debate round</dt><dd>One cycle where each model reads the others' answers and writes a critique. Two rounds are run per query.</dd>
+        <dt>Query run</dt><dd>A single execution of the full workflow: estimate → four initial answers → two debate rounds → synthesis. Identified by a <code>query_run_id</code>.</dd>
+        <dt>Source</dt><dd>A web page or document that a model cites to support a claim. Shown next to the model's answer.</dd>
+        <dt>FastAPI</dt><dd>A Python web framework used to build Quorum AI's backend. It generates API docs, validates input with Pydantic, and serves async endpoints.</dd>
+        <dt>SQLite</dt><dd>A file-based database. Quorum AI uses two SQLite files for durable storage: <code>feedback_store.db</code> (cost events) and <code>run_history_store.db</code> (terminal run metadata).</dd>
+        <dt>CSP</dt><dd>Content Security Policy — a browser security header that restricts which scripts, styles, and connections a page is allowed to load. Quorum AI uses a strict CSP to prevent injection attacks.</dd>
+        <dt>CSRF</dt><dd>Cross-Site Request Forgery — an attack where a malicious site tricks your browser into making a request you did not intend. Quorum AI defends against this with a per-session CSRF token bound to a signed cookie.</dd>
+        <dt>Fly.io</dt><dd>The cloud platform where Quorum AI is deployed. A containerised FastAPI service runs on Fly's edge network, fronted by Cloudflare DNS.</dd>
+        <dt>Cloudflare</dt><dd>The DNS and HTTPS provider for Quorum AI's custom domain (<code>quorum.stackclimb.com</code>). It terminates TLS and proxies requests to Fly.io.</dd>
+        <dt></dt><dd>A unified API gateway for multiple LLM vendors. Quorum AI calls , which routes to the selected model's actual vendor (OpenAI, Anthropic, Google, or DeepSeek).</dd>
+        <dt>Tavily</dt><dd>A web-search API used as a fallback when 's built-in search is unavailable. Gated on a <code>TAVILY_API_KEY</code> environment variable; absent by default.</dd>
+        <dt>Sentry</dt><dd>Error-tracking software. When configured (via <code>SENTRY_DSN</code>), unhandled exceptions and performance traces are reported — with all query text and LLM responses redacted first.</dd>
+        <dt>Prometheus</dt><dd>A monitoring system that scrapes metrics from Quorum AI's <code>/metrics</code> endpoint. Used by the ops dashboard at <code>/ui/ops</code>.</dd>
+        <dt>SLO</dt><dd>Service Level Objective — a target the product is held to. Quorum AI declares SLOs for availability (99%), 5xx rate (&lt;1%), and query latency (P50 ≤ 45s, P95 ≤ 120s, hard timeout 180s).</dd>
+        <dt>Trust score</dt><dd>A weighted composite of deterministic quality signals (citation coverage, agreement ratio, uncertainty surfaced, etc.) that measures how trustworthy a run's output is. Suppressed to "unverified" while citation support has not been verified.</dd>
+        <dt>BYO key</dt><dd>"Bring Your Own" key — a user-supplied  API key stored server-side for their session, allowing higher usage limits. Controlled by <code>OPENROUTER_LIVE_EXECUTION_ENABLED</code> and the operator's key.</dd>
+        <dt>Simulation mode</dt><dd>A fallback where the app produces templated, deterministic outputs instead of calling live LLMs. Active when no  key is configured or <code>OPENROUTER_LIVE_EXECUTION_ENABLED</code> is false. The <code>/ready</code> endpoint surfaces the state so the UI can show a banner.</dd>
+      </dl>
+    </div>
+
+    <div class="freshness">Last reviewed: 2026-07-23 · Auto-refreshed at each deploy</div>
+  </section>
+
+  <!-- ─── TAB 2: WORKING WITH THE TOOLS ──────────────── -->
+  <section class="tab-panel" id="panel-tools" role="tabpanel" aria-labelledby="tab-tools">
+    <div class="tab-header">
+      <h2>Working with the tools</h2>
+      <p class="subtitle">Which model to pick, what each cost tier means, how the skills and config system work, and where your keys live.</p>
+    </div>
+
+    <div class="qa-block">
+      <div class="qa-question" onclick="toggleQA(this)"><span class="q-mark">?</span> Which model should I pick for my query?</div>
+      <div class="qa-answer">
+        <p>You do not need to pick — the four default slots already cover four vendors and a wide price/quality range. The defaults are:</p>
+        <ul style="margin:8px 0 8px 20px;">
+          <li><code>openai/gpt-4o-mini</code> — fast, cheap, good general-purpose model</li>
+          <li><code>anthropic/claude-haiku-4.5</code> — fast, strong at analysis and critique (also the default debate writer)</li>
+          <li><code>google/gemini-2.5-flash</code> — fast, Google's lightweight frontier-class model</li>
+          <li><code>deepseek/deepseek-chat-v3.1</code> — open-weight, cost-efficient, strong reasoning</li>
+        </ul>
+        <p>If you want to customise, the model catalog endpoint <code>GET /v1/models/defaults</code> lists every available option with pricing. The <strong>cost estimate</strong> screen updates live as you change slots, so you can see the dollar impact before committing.</p>
+        <span class="honesty built">● Built</span>
+        <div class="example project">
+          <div class="example-label">In your project</div>
+          <p>The <code>catalog_fetcher.py</code> module fetches the live  catalog, caches it for six hours, and exposes it to both the server (for cost estimation) and the browser (for the model dropdown). The <code>cheapest_per_vendor</code> function filters out <code>:free</code> models to avoid a known Step-A bug where "free" models produced templated output. The server-side estimate in <code>costs.py</code> re-prices against the catalog on every call — the client mirrors the arithmetic client-side for responsiveness.</p>
+        </div>
+        <div class="example real-life">
+          <div class="example-label">Picture it in real life</div>
+          <p>Choosing a restaurant for a group dinner: one person likes Italian, another likes Japanese, another is vegetarian, another is on a budget. You send all four and let the group decide, rather than trusting one person's pick. The synthesis step is the host writing up "here is what we agreed on, here is the debate, and here is my recommendation."</p>
+        </div>
+      </div>
+    </div>
+
+    <div class="qa-block">
+      <div class="qa-question" onclick="toggleQA(this)"><span class="q-mark">?</span> What are the cost tiers?</div>
+      <div class="qa-answer">
+        <p>Quorum AI uses a three-band cost guardrail (implemented in <code>costs.py</code>):</p>
+        <ul style="margin:8px 0 8px 20px;">
+          <li><strong>ALLOW</strong> — estimated cost ≤ $0.15. Run proceeds with one click.</li>
+          <li><strong>REQUIRE CONFIRMATION</strong> — $0.15 &lt; estimated cost ≤ $0.25. You must click "Confirm" to proceed. A confirmation token (bound to your account, valid 5 minutes) is required.</li>
+          <li><strong>BLOCK</strong> — estimated cost &gt; $0.25. Cannot run, regardless of confirmation. There is also a per-account daily cap of $0.20 in any rolling 24-hour window.</li>
+        </ul>
+        <p>The estimate is a <em>realistic</em> point figure — it models each of the seven billed calls (4 initial answers + 2 debate rounds + 1 synthesis × 5 sections) using actual token counts and cached per-model prices. The guardrail keys off a <em>fail-safe upper bound</em> (pricing initial-answer output at the enforced 2000-token cap), so real cost can never exceed a limit the run was waved through under.</p>
+        <p>A <strong>token</strong> is the billing unit LLMs use. Roughly 4 characters of English text ≈ 1 token. A 500-word query is ~375 tokens; a 500-word model answer is ~375 tokens of output. Providers charge per 1,000 tokens (e.g. $0.0008 per 1K input tokens for gpt-4o-mini).</p>
+        <span class="honesty built">● Built</span>
+        <div class="example project">
+          <div class="example-label">In your project</div>
+          <p>The <code>costs.py</code> module exports <code>CostEstimationService</code> which computes <code>estimated_cost_usd</code>, <code>max_cost_usd</code> (the fail-safe bound), and a <code>CostBreakdown</code> partitioned both by model (four slot rows + one "Debate + synthesis" row) and by stage (initial answers, debate round 1, debate round 2, synthesis). The breakdown re-sums to the quantized total exactly (largest-remainder / Hamilton method). A daily cap of $0.20 is enforced against the durable SQLite feedback store, not the in-memory ring buffer, so trickle attacks over hours are also bounded.</p>
+        </div>
+        <div class="example real-life">
+          <div class="example-label">Picture it in real life</div>
+          <p>A hotel mini-bar with three pricing bands: snacks under $5 you grab freely, items $5–$10 you confirm at the front desk, and anything over $10 requires manager approval. The confirmation token is like a signed receipt — it expires in 5 minutes and is bound to your room number so you cannot replay someone else's receipt.</p>
+        </div>
+      </div>
+    </div>
+
+    <div class="qa-block">
+      <div class="qa-question" onclick="toggleQA(this)"><span class="q-mark">?</span> How do skills and config work?</div>
+      <div class="qa-answer">
+        <p><strong>Skills</strong> are bundled playbooks for specific tasks (TDD, e2e testing, architecture review, security review, etc.) that are loaded on demand. They are not code libraries — they are instruction sets that tell the agent how to approach a particular kind of work. The skill router (<code>make skill-route</code>) recommends which skill to use for the next missing artifact.</p>
+        <p><strong>Configuration</strong> lives in environment variables read at process start by <code>product_app.config.Settings</code> (a Pydantic <code>BaseSettings</code> class). The critical ones are:</p>
+        <ul style="margin:8px 0 8px 20px;">
+          <li><code>OPENROUTER_API_KEY</code> — the operator's LLM provider key. Server-side only.</li>
+          <li><code>OPENROUTER_LIVE_EXECUTION_ENABLED</code> — must be <code>true</code> for live LLM calls; otherwise the app runs in simulation mode.</li>
+          <li><code>TAVILY_API_KEY</code> — enables the real web-search fallback. Absent by default (CI stays hermetic and free).</li>
+          <li><code>QUORUM_EVAL_JUDGE_API_KEY</code> — enables the optional LLM-as-judge for evaluation. OFF by default.</li>
+          <li><code>RUNTIME_ENVIRONMENT</code> — one of <code>local</code>, <code>staging</code>, <code>production</code>. Production enforces stricter defaults.</li>
+          <li><code>QUORUM_TOKEN_SECRET</code> — a stable secret for signing confirmation tokens. Required in non-local environments.</li>
+          <li><code>SESSION_RATE_LIMIT_PER_MINUTE</code> — per-IP rate limit override for hermetic test lanes. Must be unset in production (the startup validator refuses to start otherwise).</li>
+        </ul>
+        <p>Configuration is loaded once at process start. There is no per-request config reload. The <code>.env</code> file is in <code>.gitignore</code> — never commit it.</p>
+        <span class="honesty built">● Built</span>
+        <div class="example project">
+          <div class="example-label">In your project</div>
+          <p>The <code>config.py</code> module defines <code>Settings</code> with Pydantic validators that catch misconfiguration at startup. For example: <code>SESSION_RATE_LIMIT_PER_MINUTE</code> set in production raises a <code>RuntimeError</code>; <code>QUORUM_TOKEN_SECRET</code> missing in production raises a <code>RuntimeError</code>; a blank string for optional fields is treated as unset (not a crash). The <code>validate_production_environment()</code> function runs at module import in <code>main.py</code> — a misconfigured deploy never starts serving traffic.</p>
+        </div>
+        <div class="example real-life">
+          <div class="example-label">Picture it in real life</div>
+          <p>A recipe card pinned to a kitchen wall: you read it once before you start cooking and follow it throughout. You do not re-read the recipe after every chop. That is process-start config — read once, shared everywhere. Skills are the different recipe cards for different dishes (testing, deploying, reviewing) — you pick the right one for what you are about to cook.</p>
+        </div>
+      </div>
+    </div>
+
+    <div class="qa-block">
+      <div class="qa-question" onclick="toggleQA(this)"><span class="q-mark">?</span> Where are my API keys? Are they safe?</div>
+      <div class="qa-answer">
+        <p>Operator-owned keys (, Tavily, the eval judge) are stored in <strong>Fly secrets</strong> — environment variables injected at container start by Fly.io's secrets manager. They never appear in source control, never appear in API responses, never appear in logs, and never reach the browser. The codebase has explicit redaction tests in <code>tests/security/test_release_security_redaction.py</code> that assert secret-shaped strings never appear in any error log.</p>
+        <p>The <code>Field(default="", repr=False)</code> annotation on key fields in <code>config.py</code> ensures that printing a <code>Settings</code> object never leaks the key value (the <code>repr=False</code> flag suppresses it from the Pydantic repr; the empty default means a missing key is an empty string, not <code>None</code>).</p>
+        <span class="honesty built">● Built</span>
+        <div class="example project">
+          <div class="example-label">In your project</div>
+          <p>Run <code>fly secrets list</code> on the deployed app to see the secret names (values are redacted in the CLI output). Locally, keys live in <code>.env</code> (gitignored). The Sentry integration in <code>main.py</code> includes a <code>_redact_sentry_event</code> hook that strips any field containing "query" or "prompt" from Sentry events before sending. The auth layer scopes BYO keys to the session that created them.</p>
+        </div>
+        <div class="example real-life">
+          <div class="example-label">Picture it in real life</div>
+          <p>A safe deposit box at a bank: you put the key inside, the bank locks the box, and the only person who can open it is the bank manager (the server process). You never carry the key with you, and the bank's logbook never records what was inside the box.</p>
+        </div>
+      </div>
+    </div>
+
+    <div class="freshness">Last reviewed: 2026-07-23</div>
+  </section>
+
+  <!-- ─── TAB 3: ARCHITECTURE AND DECISIONS ──────────── -->
+  <section class="tab-panel" id="panel-architecture" role="tabpanel" aria-labelledby="tab-architecture">
+    <div class="tab-header">
+      <h2>Architecture and decisions</h2>
+      <p class="subtitle">The stack, why it is this not something else, the components, the debate-synthesis design, and the architectural decision record trail.</p>
+    </div>
+
+    <div class="qa-block">
+      <div class="qa-question" onclick="toggleQA(this)"><span class="q-mark">?</span> What is the tech stack?</div>
+      <div class="qa-answer">
+        <p>Quorum AI is a <strong>modular monolith</strong> — a single deployable FastAPI service with explicit internal boundaries. The components are:</p>
+        <ul style="margin:8px 0 8px 20px;">
+          <li><strong>FastAPI</strong> (Python 3.13) — the web framework and API layer</li>
+          <li><strong>SQLite</strong> — file-based database for durable run metadata and cost events</li>
+          <li><strong></strong> — unified LLM API gateway (routes to OpenAI, Anthropic, Google, DeepSeek)</li>
+          <li><strong>Tavily</strong> — web-search fallback (gated on <code>TAVILY_API_KEY</code>)</li>
+          <li><strong>Fly.io</strong> — container hosting with one process, one worker</li>
+          <li><strong>Cloudflare</strong> — DNS + HTTPS termination + DDoS protection</li>
+          <li><strong>Prometheus</strong> — metrics exposition at <code>/metrics</code></li>
+          <li><strong>Sentry</strong> — error tracking (gated on <code>SENTRY_DSN</code>)</li>
+          <li><strong>uv</strong> — Python package manager and runner (replaces pip + venv)</li>
+        </ul>
+        <p>Frontend: vanilla HTML + JavaScript + CSS (no framework). The single page at <code>/ui</code> is rendered from <code>templates/workspace.html</code> with server-side data islands injected at render time.</p>
+        <span class="honesty built">● Built</span>
+        <div class="example project">
+          <div class="example-label">In your project</div>
+          <p>The project layout is documented in the README and the <code>src/product_app/</code> directory. The FastAPI app is constructed in <code>main.py:195-230</code>, routes are defined across modules (<code>query_runs.py</code>, <code>model_slots.py</code>, etc.), and the Prometheus instrumentator is wired at <code>main.py:242-244</code>. The SQLite stores are initialised from environment variables (<code>RUN_HISTORY_DB_PATH</code>, <code>FEEDBACK_DB_PATH</code>) with in-memory defaults for tests.</p>
+        </div>
+        <div class="example real-life">
+          <div class="example-label">Picture it in real life</div>
+          <p>A small restaurant kitchen: one chef (FastAPI), one prep table (SQLite), four ingredient suppliers ( vendors), one backup supplier (Tavily), and a front-of-house manager (Cloudflare). The chef does not outsource prep to a chain of specialised cooks — the kitchen is small enough that one person can do it all, but the stations are clearly marked so the workflow can be split later if the restaurant grows.</p>
+        </div>
+      </div>
+    </div>
+
+    <div class="qa-block">
+      <div class="qa-question" onclick="toggleQA(this)"><span class="q-mark">?</span> Why not a browser-only app? Why not microservices?</div>
+      <div class="qa-answer">
+        <p>Two alternatives were explicitly considered and rejected in the architecture docs:</p>
+        <p><strong>Browser-only (four independent chatbot integrations):</strong> This would require the browser to hold API keys for every vendor, making cost control weak (a malicious tab can rack up charges), observability impossible (no server-side telemetry), and secret rotation a user burden. The current design keeps all provider credentials server-side.</p>
+        <p><strong>Full microservices from day one:</strong> The first vertical slice needs correctness, safety, and cost discipline before distributed operational complexity. A modular monolith preserves internal seams (<code>auth</code>, <code>orchestration</code>, <code>providers</code>, <code>safety</code>, <code>persistence</code>, <code>observability</code>) so the orchestration worker can be extracted later if provider volume or latency requires it — without rewriting the whole system.</p>
+        <p><strong>Anonymous execution:</strong> Rejected by FR-001. Anonymous users cannot start provider-consuming work because it creates abuse and cost risk. Every execution endpoint requires a session cookie.</p>
+        <span class="honesty built">● Built</span>
+        <div class="example project">
+          <div class="example-label">In your project</div>
+          <p>The rejection rationale is recorded in the architecture doc under "Architecture Decisions" and the ADR-0001 draft at <code>docs/adr/0001-initial-architecture.md</code>. The session model uses an opaque browser cookie plus CSRF token (<code>auth.py</code>) — no password, no account creation, no email. The <code>/v1/session</code> endpoint issues or renews a session on demand.</p>
+        </div>
+        <div class="example real-life">
+          <div class="example-label">Picture it in real life</div>
+          <p>A restaurant that accepts walk-ins but requires a host to seat you (the session cookie). You cannot walk into the kitchen yourself, order from four different suppliers, and pay with cash — the kitchen needs a host to track who is seated, prevent the same table from ordering twice, and make sure the bill goes to the right account. The host is the auth layer.</p>
+        </div>
+      </div>
+    </div>
+
+    <div class="qa-block">
+      <div class="qa-question" onclick="toggleQA(this)"><span class="q-mark">?</span> How does the debate-synthesis design work?</div>
+      <div class="qa-answer">
+        <p>The query workflow has seven stages:</p>
+        <ol style="margin:8px 0 8px 20px;">
+          <li><strong>Initial answers</strong> — four models called in parallel, each with optional web search. Each call is bounded by a per-call timeout (default 8 seconds) and a hard 2000-token output cap.</li>
+          <li><strong>Debate round 1</strong> — each model reads the four initial answers and writes a critique focused on disagreement, weak support, and missing reasoning.</li>
+          <li><strong>Debate round 2</strong> — a second critique round, giving models a chance to revise their positions.</li>
+          <li><strong>Synthesis</strong> — five independent calls (one per section: consensus, disagreement, source support, uncertainty, recommendation), each re-sending the full context.</li>
+        </ol>
+        <p>The full pipeline has a 180-second hard wall-clock deadline. If it expires, the run terminal state is <code>timed_out</code> and every completed stage's output is returned with a visible missing-step explanation. A run that partially completed is never presented as fully successful.</p>
+        <p>The synthesis output is deliberately structured: <em>consensus</em> (aligned findings), <em>disagreement</em> (material divergences), <em>source support</em> (citations), <em>uncertainty</em> (what is not settled), and <em>recommendation</em> (a practical next step). High-stakes recommendations are framed as decision support only.</p>
+        <span class="honesty built">● Built</span>
+        <div class="example project">
+          <div class="example-label">In your project</div>
+          <p>The state machine in <code>query_runs.py</code> transitions runs through <code>draft → cost_review → accepted → initial_answers_running → debate_round_1_running → debate_round_2_running → synthesis_running → completed</code> (or <code>partial</code>/<code>failed</code>/<code>timed_out</code>). The <code>debate.py</code> module handles both rounds; <code>synthesis.py</code> fans out five section calls. The 180s deadline is enforced in <code>config.py</code> (<code>quorum_run_deadline_seconds</code>, default 180, validated to be &gt; 0 and ≤ 3600). A <code>asyncio.wait_for</code> wrapper enforces it at the orchestration level.</p>
+        </div>
+        <div class="example real-life">
+          <div class="example-label">Picture it in real life</div>
+          <p>A panel discussion at a conference: four experts give their takes (initial answers), then each responds to the others' points (debate round 1), then they refine their positions (debate round 2), and a moderator writes up "here is what the panel agreed on, here is where they clashed, here is the evidence, and here is what you should do next." The moderator is the synthesis step; the 180-second timer is the conference room booking.</p>
+        </div>
+      </div>
+    </div>
+
+    <div class="qa-block">
+      <div class="qa-question" onclick="toggleQA(this)"><span class="q-mark">?</span> Where can I read the architectural decisions?</div>
+      <div class="qa-answer">
+        <p>Architecture Decision Records (ADRs) live in <code>docs/adr/</code>. The current index is at <code>docs/24-adr-index.md</code>:</p>
+        <ul style="margin:8px 0 8px 20px;">
+          <li><strong>ADR-0001</strong> (Draft) — Initial architecture: modular FastAPI, session-gated, ephemeral.</li>
+          <li><strong>ADR-0002</strong> (Accepted, 2026-07-19) — SQLite stores stay single-writer (one connection, one lock, no WAL mode).</li>
+        </ul>
+        <p>New ADRs follow the standard format: context, decision, consequences, status. The ADR index is the single source of truth for what has been decided and what is still open.</p>
+        <span class="honesty built">● Built</span>
+      </div>
+    </div>
+
+    <div class="freshness">Last reviewed: 2026-07-23</div>
+  </section>
+
+  <!-- ─── TAB 4: QUALITY, SECURITY, OPERATIONS ──────── -->
+  <section class="tab-panel" id="panel-quality" role="tabpanel" aria-labelledby="tab-quality">
+    <div class="tab-header">
+      <h2>Quality, security, operations</h2>
+      <p class="subtitle">Testing approach, automated checks, security model, how to deploy and verify a release.</p>
+    </div>
+
+    <div class="qa-block">
+      <div class="qa-question" onclick="toggleQA(this)"><span class="q-mark">?</span> What is the testing approach?</div>
+      <div class="qa-answer">
+        <p>Quorum AI runs a full test pyramid. The <code>make test</code> target runs all suites:</p>
+        <ul style="margin:8px 0 8px 20px;">
+          <li><strong>Unit</strong> — module-level tests (<code>tests/unit/</code>) for providers, costs, debate, synthesis, evaluation, auth, config, model slots, redaction</li>
+          <li><strong>Integration</strong> — multi-module flows with a FastAPI test client (<code>tests/integration/</code>)</li>
+          <li><strong>Contract</strong> — <code>openapi.yaml</code> must match <code>app.openapi()</code> byte-for-byte (<code>tests/contract/test_openapi_contract.py</code>). Mutated schemas are detected.</li>
+          <li><strong>E2E</strong> — end-to-end workflows driven by Playwright (<code>tests/e2e/</code>) including rendering invariants (no raw Markdown in the DOM), visual snapshots, degraded-banner detection, and the trust-score surface</li>
+          <li><strong>Security</strong> — redaction contract tests (<code>tests/security/test_release_security_redaction.py</code>) that assert secret-shaped strings never appear in error logs</li>
+          <li><strong>Performance</strong> — hermetic latency samples in CI (<code>perf-sample.yml</code>) feeding an advisory perf gate</li>
+          <li><strong>Accessibility</strong> — axe-core checks in the e2e suite</li>
+        </ul>
+        <p>The e2e suite is timing-sensitive (the catalog API can return 403 mid-session), so it is designed to be re-run on single-test flakes. The flaky test register is at <code>docs/56-flaky-test-register.md</code>. A full flake scan (960 runs) measured 0 failures (run <code>29911231157</code>, 2026-07-22).</p>
+        <p>Evaluation testing (FR-015, NFR-011, NFR-012): Layer-A (deterministic signals) is tested as pure unit code; Layer B (LLM-as-judge) is never called for real in any test — <code>StubEvalJudge</code> is used, and the key gate, strict-JSON contract, and malformed-response-yields-no-verdict paths are exercised against the stub. Neutrality is proven with a seam spy: judge OFF makes zero <code>providers.call_with_prompt</code> invocations and yields a TrustScore identical to the stub-ON case.</p>
+        <span class="honesty built">● Built</span>
+        <div class="example project">
+          <div class="example-label">In your project</div>
+          <p>Run <code>make test</code> to execute all suites. The CI pipeline (GitHub Actions) runs unit, integration, contract, security, e2e, and performance tests on every push. The <code>make validate</code> and <code>make quality</code> targets run linting, type checking, and formatting checks. The <code>openapi.yaml</code> drift guard (<code>make openapi-check</code>) is a dedicated CI step that byte-compares the checked-in spec against a fresh <code>app.openapi()</code> render.</p>
+        </div>
+        <div class="example real-life">
+          <div class="example-label">Picture it in real life</div>
+          <p>A restaurant that inspects every delivery (unit tests: is this ingredient fresh?), checks that the kitchen workflow still produces the right dish when two stations run at once (integration tests), audits that the printed menu matches the kitchen's actual offerings (contract test: openapi.yaml == app.openapi()), watches a full dining room service end-to-end (e2e), and has a health inspector check the fridge temperature daily (security redaction). Every inspection must pass before the doors open for the day.</p>
+        </div>
+      </div>
+    </div>
+
+    <div class="qa-block">
+      <div class="qa-question" onclick="toggleQA(this)"><span class="q-mark">?</span> What is the security model?</div>
+      <div class="qa-answer">
+        <p>Quorum AI's security model is documented in <code>docs/40-threat-model.md</code> and <code>docs/41-security-controls.md</code>. The key controls:</p>
+        <ul style="margin:8px 0 8px 20px;">
+          <li><strong>Authentication:</strong> Opaque browser session cookie + CSRF token. No passwords, no email, no account creation. Sessions are issued by <code>GET /v1/session</code> and expire automatically.</li>
+          <li><strong>Authorization:</strong> Every execution and result endpoint requires a valid session. Results are scoped to the session's <code>account_id</code> — cross-account access returns 404.</li>
+          <li><strong>Secret isolation:</strong> App-owned provider keys (, Tavily, eval judge) are stored in Fly secrets, never in source control, never in API responses, never in logs. BYO keys are server-side only and session-scoped.</li>
+          <li><strong>Redaction:</strong> Every error log strips API keys, session tokens, and raw model output. The redaction contract is pinned by <code>tests/security/test_release_security_redaction.py</code>.</li>
+          <li><strong>Content Security Policy:</strong> Strict CSP with <code>script-src 'self' 'unsafe-inline'</code> (required for the inline CSRF token injection — a TODO is to migrate to a nonced approach). <code>base-uri 'none'</code> and <code>form-action 'none'</code> prevent injected base tags and form submissions. No CORS middleware — same-origin only.</li>
+          <li><strong>Cost guardrail:</strong> Three-band system (ALLOW / REQUIRE_CONFIRMATION / BLOCK) plus a per-account daily cap. Confirmation tokens are HMAC-signed, account-bound, and single-use with a 5-minute TTL.</li>
+          <li><strong>Privacy:</strong> Pre-submit warnings for sensitive/private data and high-stakes decision support. The MVP cannot claim sensitive-data safety until provider data-processing terms are finalised.</li>
+          <li><strong>Production validation:</strong> <code>validate_production_environment()</code> refuses to start if <code>SESSION_COOKIE_SECURE</code> is false, the legacy header is enabled, the rate-limit override is set, or <code>QUORUM_TOKEN_SECRET</code> is missing.</li>
+        </ul>
+        <span class="honesty built">● Built</span>
+        <div class="example project">
+          <div class="example-label">In your project</div>
+          <p>The security headers middleware in <code>main.py:391-402</code> sets <code>X-Content-Type-Options: nosniff</code>, <code>X-Frame-Options: DENY</code>, <code>Referrer-Policy: no-referrer</code>, the full CSP, and HSTS (production only). The CSRF token is bound to the session cookie via a signed HMAC. The <code>_NormalizeMethodLabelMiddleware</code> prevents cardinality attacks on the Prometheus metrics label space. The Sentry <code>before_send</code> hook redacts any field containing "query" or "prompt".</p>
+        </div>
+        <div class="example real-life">
+          <div class="example-label">Picture it in real life</div>
+          <p>A vault with three locks: the key is kept in a bank safe (Fly secrets), the combination is changed every time the vault is opened (per-session CSRF token), and a security camera records only that the door was opened — not what was inside (redacted logs). The vault only opens for people who have been signed in at the front desk (session cookie), and the front desk tracks who is inside so two people cannot use the same account simultaneously.</p>
+        </div>
+      </div>
+    </div>
+
+    <div class="qa-block">
+      <div class="qa-question" onclick="toggleQA(this)"><span class="q-mark">?</span> How do I deploy and verify a release?</div>
+      <div class="qa-answer">
+        <p>Deployment is via Fly.io. The standard flow:</p>
+        <ol style="margin:8px 0 8px 20px;">
+          <li>Push to <code>main</code> triggers the GitHub Actions CI pipeline.</li>
+          <li>All gates must pass: unit, integration, contract, security, e2e, performance.</li>
+          <li>On merge to main, the <code>deploy.yml</code> workflow builds and deploys the container to Fly.io.</li>
+          <li>The deploy job runs a smoke-probe (curl <code>/health</code> and <code>/ready</code>).</li>
+          <li>Verify the deployed SHA matches the merged commit: <code>curl -s https://quorum.stackclimb.com/status | jq -r .build_sha</code> and compare to the merged commit SHA.</li>
+        </ol>
+        <p><strong>Do not trust <code>/health</code> 200 alone.</strong> A green health check only confirms the process is running, not that the latest code is deployed. Use the <code>/status</code> endpoint's <code>build_sha</code> field to verify the deployed version matches the expected commit. The deploy-drift watchdog runs on a schedule and alerts if <code>main</code> HEAD does not have a successful Deploy job.</p>
+        <p>Rollback: <code>fly releases rollback</code>. The rollback procedure is in <code>DEPLOY.md</code>. There is no automatic rollback on a failed smoke test — deliberate.</p>
+        <span class="honesty built">● Built</span>
+        <div class="example project">
+          <div class="example-label">In your project</div>
+          <p>The <code>deploy-drift-watchdog.yml</code> workflow watches the pipeline signal ("does main HEAD have a successful Deploy job?"). The <code>availability-check.yml</code> watches the runtime liveness signal (is prod serving <code>live</code>?). The <code>error-rate-check.yml</code> watches the runtime quality signal (is prod erroring for users?). A deploy is verified by the deploy JOB actually running (not skipped/cancelled) and the running build's health, not by an unchanged <code>/health</code> 200. See <code>docs/95-demo-evidence.md</code> for the full deploy evidence trail.</p>
+        </div>
+        <div class="example real-life">
+          <div class="example-label">Picture it in real life</div>
+          <p>Shipping a new version of a mobile app: you check the App Store version number (not just "the app opens"), you read the release notes against the actual shipped build, and you have a one-click rollback if something breaks. The health check is "the app icon is on the home screen" — necessary but not sufficient. The build_sha is the version number.</p>
+        </div>
+      </div>
+    </div>
+
+    <div class="qa-block">
+      <div class="qa-question" onclick="toggleQA(this)"><span class="q-mark">?</span> What are the SLOs and how are they monitored?</div>
+      <div class="qa-answer">
+        <p>SLOs (Service Level Objectives) are declared targets the operator holds the product to. The current SLOs:</p>
+        <ul style="margin:8px 0 8px 20px;">
+          <li><strong>Availability:</strong> 99% of requests answered non-5xx. Read from <code>/metrics</code> request-count status labels.</li>
+          <li><strong>5xx error rate:</strong> &lt; 1% of requests. Same <code>/metrics</code> read.</li>
+          <li><strong>Query latency:</strong> P50 ≤ 45s, P95 ≤ 120s, hard timeout 180s. Enforced by wall-clock deadline in the orchestration layer.</li>
+          <li><strong>Non-run route latency:</strong> p95 &lt; 1s. From <code>/metrics</code> request-duration histograms.</li>
+          <li><strong>Readiness honesty:</strong> <code>/ready</code> reports <code>live</code> in production. Monitored by <code>availability-check.yml</code> (every 15 min).</li>
+          <li><strong>E2E flake rate:</strong> 0 observed failures per full scan. Measured baseline: 0/960 (run <code>29911231157</code>).</li>
+        </ul>
+        <p>The ops dashboard at <code>/ui/ops</code> renders all current SLO values live from <code>/metrics</code>, <code>/status</code>, and <code>/ready</code>. It auto-refreshes every 10 seconds. Two alerting rules are mechanised: readiness-not-live (<code>availability-check.yml</code>, every 15 min) and error rate over SLO (<code>error-rate-check.yml</code>, every 30 min). Both use GitHub's native workflow-failure email as the alert channel ($0, no new infra).</p>
+        <span class="honesty built">● Built</span>
+        <div class="example project">
+          <div class="example-label">In your project</div>
+          <p>The full SLO table with measurement sources is in <code>docs/80-observability.md</code>. The ops dashboard is built from <code>docs/85-dashboard-spec.md</code> and deployed as <code>templates/ops.html</code> (served at <code>/ui/ops</code>). The alert workflows are in <code>.github/workflows/availability-check.yml</code> and <code>.github/workflows/error-rate-check.yml</code>. The Prometheus instrumentator in <code>main.py:242-244</code> exposes metrics at <code>/metrics</code>, grouped by route template (not raw path/UUID), with <code>/metrics</code> itself excluded from its own scrape.</p>
+        </div>
+        <div class="example real-life">
+          <div class="example-label">Picture it in real life</div>
+          <p>A hospital monitors three vital signs: heart rate, blood pressure, and temperature. Each has a target range. A nurse checks them every shift (the scheduled workflows), and the monitor alarms if any reading goes out of range. The ops dashboard is the monitor display — every current value, every target, in one view. The alert channel is the nurse's pager.</p>
+        </div>
+      </div>
+    </div>
+
+    <div class="freshness">Last reviewed: 2026-07-23</div>
+  </section>
+
+  <!-- ─── TAB 5: ONBOARDING ──────────────────────────── -->
+  <section class="tab-panel" id="panel-onboarding" role="tabpanel" aria-labelledby="tab-onboarding">
+    <div class="tab-header">
+      <h2>Onboarding</h2>
+      <p class="subtitle">Your step-by-step buddy: from "what is this?" to "I just shipped a feature."</p>
+    </div>
+
+    <div class="qa-block">
+      <div class="qa-question" onclick="toggleQA(this)"><span class="q-mark">?</span> Step 0: What is the problem in plain words?</div>
+      <div class="qa-answer">
+        <p>Right now, if you want a well-researched answer to a complex question, you open one AI chatbot, get one perspective, and hope it is good enough. If you ask four different chatbots the same question, you get four different answers — and no easy way to see where they agree, where they disagree, and which claims are backed by sources.</p>
+        <p>Quorum AI fixes that: one question, four models, one answer with the disagreement preserved. Cost is shown before anything runs. Nothing executes without your confirmation. Results are ephemeral (they disappear when you close the tab) — because a research tool is not a chat log.</p>
+        <p><strong>The short version:</strong> "Ask four experts the same question, watch them debate, and get a synthesis that tells you what is settled, what is contested, and what you should do next."</p>
+        <span class="honesty built">● Built</span>
+      </div>
+    </div>
+
+    <div class="qa-block">
+      <div class="qa-question" onclick="toggleQA(this)"><span class="q-mark">?</span> Step 1: The words explained</div>
+      <div class="qa-answer">
+        <p>Before you touch the code, here are the words you will see everywhere, translated from jargon to plain English:</p>
+        <ul style="margin:8px 0 8px 20px;">
+          <li><strong>Repo</strong> = the project's file history on GitHub. URL: <code>github.com/imrohitagrawal/quorum-ai</code>.</li>
+          <li><strong>Commit</strong> = a saved snapshot of the repo. Each has a short ID like <code>9555701</code>.</li>
+          <li><strong>Branch</strong> = an independent line of development. <code>main</code> is the production branch. Feature branches are named like <code>feat/...</code>.</li>
+          <li><strong>Pull request (PR)</strong> = a proposal to merge a branch into <code>main</code>. CI runs automatically; human review is required.</li>
+          <li><strong>API</strong> = the set of URLs the app exposes for the browser to call. <code>POST /v1/query-runs</code> starts a run.</li>
+          <li><strong>API key</strong> = a secret string that authenticates the app to an external service (like ). Stored server-side.</li>
+          <li><strong>Model</strong> = a specific AI system, identified by <code>vendor/version</code> (e.g. <code>openai/gpt-4o-mini</code>).</li>
+          <li><strong>Token</strong> = the billing unit for LLMs. ~4 chars of English text ≈ 1 token. Priced per 1,000 tokens.</li>
+          <li><strong>FastAPI</strong> = the Python web framework. Like Flask, but with async support and automatic API docs.</li>
+          <li><strong>Pydantic</strong> = a Python library for data validation. Config values and API request/response shapes are Pydantic models.</li>
+          <li><strong>SQLite</strong> = a file-based database. No server process — just a file on disk. Quorum AI uses two: <code>feedback_store.db</code> and <code>run_history_store.db</code>.</li>
+          <li><strong>Dockerfile</strong> = a recipe for building the app's container image. Contains the Python version, dependencies, and the command to start the server.</li>
+          <li><strong>GitHub Actions</strong> = the CI/CD system. Every push runs tests automatically; merges to main trigger a deploy.</li>
+          <li><strong>SLO</strong> = Service Level Objective — a target the product is measured against (e.g. "P95 latency under 120 seconds").</li>
+          <li><strong>CSRF</strong> = Cross-Site Request Forgery. A token that proves the request came from the app's own page, not from a malicious site.</li>
+        </ul>
+        <span class="honesty built">● Built</span>
+      </div>
+    </div>
+
+    <div class="qa-block">
+      <div class="qa-question" onclick="toggleQA(this)"><span class="q-mark">?</span> Step 2: Set up tools from zero</div>
+      <div class="qa-answer">
+        <p>You need three tools: <strong>Python 3.13</strong>, <strong>uv</strong> (a fast Python package manager), and <strong>Git</strong>. On macOS:</p>
+        <ol style="margin:8px 0 8px 20px;">
+          <li>Install Python 3.13: <code>brew install python@3.13</code></li>
+          <li>Install uv: <code>curl -LsSf https://astral.sh/uv/install.sh | sh</code></li>
+          <li>Clone the repo: <code>git clone https://github.com/imrohitagrawal/quorum-ai.git</code></li>
+          <li>Enter the directory: <code>cd quorum-ai</code></li>
+          <li>Install dependencies: <code>uv sync</code></li>
+        </ol>
+        <p>That is it for local development. No database to install (SQLite is built into Python). No virtual environment to create (uv handles it).</p>
+        <span class="honesty built">● Built</span>
+      </div>
+    </div>
+
+    <div class="qa-block">
+      <div class="qa-question" onclick="toggleQA(this)"><span class="q-mark">?</span> Step 3: One-command quickstart</div>
+      <div class="qa-answer">
+        <p>After setup, one command starts the dev server:</p>
+        <pre><code>UV_CACHE_DIR=$PWD/.uv-cache PYTHONPATH=src \
+  uv run uvicorn product_app.main:app --host 127.0.0.1 --port 18084</code></pre>
+        <p>Then open <code>http://127.0.0.1:18084/ui</code> in your browser. Without an  key, the app runs in <strong>simulation mode</strong> (templated outputs). The workspace shows a banner indicating the degraded state.</p>
+        <p>To run tests:</p>
+        <pre><code>make test</code></pre>
+        <p>To run the full validation suite:</p>
+        <pre><code>make validate &amp;&amp; make quality</code></pre>
+        <span class="honesty built">● Built</span>
+        <div class="example project">
+          <div class="example-label">In your project</div>
+          <p>The <code>make test</code> target runs pytest with all test directories. The <code>make validate</code> target runs linting and type checking. The <code>make quality</code> target runs formatting checks. The <code>make skill-route</code> and <code>make next</code> targets help you choose which skill to use for the next artifact. All targets are defined in the project's <code>Makefile</code>.</p>
+        </div>
+      </div>
+    </div>
+
+    <div class="qa-block">
+      <div class="qa-question" onclick="toggleQA(this)"><span class="q-mark">?</span> Step 4: Read the repo in order</div>
+      <div class="qa-answer">
+        <p>Start here and work downward:</p>
+        <ol style="margin:8px 0 8px 20px; padding-left: 20px;">
+          <li><code>README.md</code> — what the product does, how to run it, the architecture diagram, the project layout.</li>
+          <li><code>docs/00-start-here.md</code> — the guided entry point for the full doc set.</li>
+          <li><code>docs/01-product-brief.md</code> — the product vision, audience, and brand.</li>
+          <li><code>docs/04-problem-statement.md</code> — the problem Quorum AI solves, in detail.</li>
+          <li><code>docs/20-architecture.md</code> — the C4 architecture, containers, components, query workflow, trust boundaries, failure modes.</li>
+          <li><code>docs/21-domain-model.md</code> — the entities, state machine, business invariants.</li>
+          <li><code>docs/22-api-contract.md</code> — every endpoint, schema, error code, and the OpenAPI drift guard.</li>
+          <li><code>src/product_app/main.py</code> — the app entry point: how FastAPI is built, routes wired, middleware stacked, secrets loaded.</li>
+          <li><code>src/product_app/config.py</code> — every environment variable, its default, its validator, and what it controls.</li>
+          <li><code>src/product_app/costs.py</code> — the cost estimation model, the three-band guardrail, confirmation tokens, the daily cap.</li>
+          <li><code>docs/40-threat-model.md</code> — the threat landscape and how each control maps to a risk.</li>
+          <li><code>docs/50-test-strategy.md</code> — the test pyramid, requirement mapping, evaluation testing.</li>
+          <li><code>docs/80-observability.md</code> — the signals inventory, SLOs, dashboards, alerting policy.</li>
+        </ol>
+        <p>After those, read the code you care about: <code>providers.py</code> for the LLM call cascade, <code>debate.py</code> for the critique logic, <code>synthesis.py</code> for the five-section output, <code>auth.py</code> for the session model.</p>
+        <span class="honesty built">● Built</span>
+      </div>
+    </div>
+
+    <div class="qa-block">
+      <div class="qa-question" onclick="toggleQA(this)"><span class="q-mark">?</span> Step 5: What to do when stuck</div>
+      <div class="qa-answer">
+        <p>A practical triage:</p>
+        <ul style="margin:8px 0 8px 20px;">
+          <li><strong>"The test is flaky"</strong> — check <code>docs/56-flaky-test-register.md</code>. E2E tests are timing-sensitive by design (the catalog API can 403 mid-session). Re-run the single test, not the whole suite.</li>
+          <li><strong>"I don't know which skill to use"</strong> — run <code>make skill-route</code> and <code>make next</code>. The router recommends the next missing artifact and which skill drives it.</li>
+          <li><strong>"I broke something and I don't know what"</strong> — run <code>git diff</code> to see what changed. Run <code>make test</code> to narrow it down. Use <code>git bisect</code> to find the commit that introduced the regression.</li>
+          <li><strong>"The deploy looks stuck"</strong> — check the GitHub Actions run page, not just the <code>/health</code> endpoint. A green <code>/health</code> only confirms the old deploy is still running. Check <code>/status</code> for the <code>build_sha</code> and compare it to the expected commit. The deploy-drift watchdog will alert if <code>main</code> HEAD has no successful Deploy job.</li>
+          <li><strong>"I need to understand a module"</strong> — start from the type annotations. Every public function has type hints. The Pydantic models at the top of a file tell you what data flows in and out. The docstrings tell you why.</li>
+          <li><strong>"I want to add a new feature"</strong> — read the ADR index first. If there is no ADR for the decision you are about to make, write one before coding. Then read <code>docs/60-implementation-plan.md</code> for the current plan, and <code>docs/54-ac-to-test-map.md</code> for the acceptance criteria that cover the area.</li>
+          <li><strong>"I need to talk to the human"</strong> — the project uses a session handoff protocol. Read <code>docs/session-handoff.md</code> and <code>docs/00-factory-console.md</code> to understand the current state and next actions before asking.</li>
+        </ul>
+        <span class="honesty built">● Built</span>
+      </div>
+    </div>
+
+    <div class="qa-block">
+      <div class="qa-question" onclick="toggleQA(this)"><span class="q-mark">?</span> Step 6: Follow one feature end to end</div>
+      <div class="qa-answer">
+        <p>The best way to understand the codebase is to follow a single query from submission to result. Here is the path:</p>
+        <ol style="margin:8px 0 8px 20px;">
+          <li><strong>Browser</strong> — user types a question in <code>templates/workspace.html</code>. JavaScript in <code>static/app.js</code> calls <code>POST /v1/query-runs/estimate</code>.</li>
+          <li><strong>Session</strong> — <code>GET /v1/session</code> issues a cookie + CSRF token. The CSRF token is sent as a header on every mutating request.</li>
+          <li><strong>Estimate</</strong> — <code>query_runs.py</code> calls <code>CostEstimationService.estimate()</code> (in <code>costs.py</code>), which computes a realistic token-based cost and returns the three-band threshold action.</li>
+          <li><strong>Submit</strong> — browser calls <code>POST /v1/query-runs</code> with the query, four model slots, safety acknowledgements, and (if needed) the confirmation token.</li>
+          <li><strong>Orchestration</strong> — <code>query_runs.py</code> creates a <code>QueryRun</code> in <code>accepted</code> state and fans out to four provider calls via <code>providers.py</code>.</li>
+          <li><strong>Providers</strong> — each call hits  with optional web search. Failures fall back to simulation. Results are stored as <code>ModelAnswer</code> objects.</li>
+          <li><strong>Debate</strong> — <code>debate.py</code> runs two critique rounds over the available answers.</li>
+          <li><strong>Synthesis</strong> — <code>synthesis.py</code> fans out five calls (one per section) and assembles the final output.</li>
+          <li><strong>Result</strong> — the browser polls <code>GET /v1/query-runs/{id}</code> for status updates, then renders the five synthesis sections plus the model answers, debate rounds, cost breakdown, and elapsed time.</li>
+          <li><strong>Evaluation</strong> — after the terminal transition, <code>evaluation.py</code> computes the deterministic <code>RunEvaluation</code> and <code>TrustScore</code> (Layer A). Optionally, the Layer B judge produces an advisory verdict.</li>
+        </ol>
+        <p>At each step, the state machine in <code>query_runs.py</code> advances the run through <code>draft → cost_review → accepted → initial_answers_running → debate_round_1_running → debate_round_2_running → synthesis_running → completed</code> (or a terminal failure state).</p>
+        <span class="honesty built">● Built</span>
+      </div>
+    </div>
+
+    <div class="freshness">Last reviewed: 2026-07-23</div>
+  </section>
+
+  <!-- ─── TAB 6: MENTOR ──────────────────────────────── -->
+  <section class="tab-panel" id="panel-mentor" role="tabpanel" aria-labelledby="tab-mentor">
+    <div class="tab-header">
+      <h2>Mentor</h2>
+      <p class="subtitle">Practical senior advice from the trenches: treat AI as a fast junior, verify don't trust, plan first, measure before optimizing, watch cost, pin model versions.</p>
+    </div>
+
+    <div class="qa-block">
+      <div class="qa-question" onclick="toggleQA(this)"><span class="q-mark">?</span> Treat AI as a fast junior, not an oracle</div>
+      <div class="qa-answer">
+        <p>An LLM is knowledgeable, fast, and tireless — but it is also confident-wrong, forgetful, and will happily invent a plausible-sounding answer when it does not know. Treat it like a bright new hire who has read everything but has not yet developed judgment.</p>
+        <p>That means: check its work, verify its citations, question its assumptions, and never let it make a decision you would not also explain to your manager. Quorum AI's design acknowledges this: the debate step exists because one model confidently hallucinating is a failure mode; four models plus two critique rounds surface the disagreement that a single model would smooth over.</p>
+        <div class="mentor-tip">
+          <div class="mentor-label">Mentor says</div>
+          <p>"The output of an LLM is a draft, not a fact. The synthesis step in Quorum AI is the first draft of your analysis — not the final answer. Read it critically, check the sources, and apply your own domain knowledge before acting on it."</p>
+        </div>
+        <div class="example project">
+          <div class="example-label">In your project</div>
+          <p>The <code>detect_refusal</code> and <code>citation_marker_grounding</code> signals in the Layer-A evaluation module are designed to catch exactly this: a model that refuses to answer (a safety signal worth surfacing) and a model that cites sources it did not actually retrieve (a grounding failure). The <code>TrustScore</code> suppresses its numeric value while <code>support_verified</code> is <code>False</code> — because citation count alone does not prove a citation supports its claim.</p>
+        </div>
+        <div class="example real-life">
+          <div class="example-label">Picture it in real life</div>
+          <p>A junior analyst writes a research memo. It is well-structured, confident, and thorough. But the manager does not publish it without checking the data sources, verifying the numbers, and asking "is this actually true?" The analyst is fast and knowledgeable, but the manager's judgment is the final gate. That is the right relationship with LLM output.</p>
+        </div>
+      </div>
+    </div>
+
+    <div class="qa-block">
+      <div class="qa-question" onclick="toggleQA(this)"><span class="q-mark">?</span> Verify, don't trust</div>
+      <div class="qa-answer">
+        <p>The single most important discipline in this codebase: if a number, status, or claim matters, measure it directly. Do not infer it from context, do not assume it from a previous state, do not accept it from a log line without checking the source.</p>
+        <p>Concrete applications:</p>
+        <ul style="margin:8px 0 8px 20px;">
+          <li><strong>Deploy verification:</strong> Do not trust <code>/health</code> 200. Check <code>/status</code> <code>build_sha</code> against the merged commit SHA. A green health check only confirms the old process is still running.</li>
+          <li><strong>Test results:</strong> A green test on clean sim data is not proof the feature works on real LLM output. Render against the golden messy fixture and look at it as a user would.</li>
+          <li><strong>Cost estimates:</strong> The guardrail keys off the fail-safe upper bound (<code>max_cost_usd</code>), not the point estimate. Real cost can never exceed a limit the run was waved through under.</li>
+          <li><strong>OpenAPI contract:</strong> Do not trust the hand-written spec. The drift guard byte-compares <code>app.openapi()</code> against the committed <code>openapi.yaml</code>. A mutated schema is caught.</li>
+          <li><strong>Redaction:</strong> Do not trust "we strip secrets." The redaction tests assert it with static-analysis-style checks against real secret-shaped patterns.</li>
+        </ul>
+        <div class="mentor-tip">
+          <div class="mentor-label">Mentor says</div>
+          <p>"The cheapest command you can run is the one that proves your hypothesis. Before you say 'it works,' run the check that would catch it if it didn't. Before you say 'it's deployed,' check the build_sha. Before you say 'the estimate is accurate,' compare it to a measured actual. One check prevents a confidently-wrong conclusion."</p>
+        </div>
+        <span class="honesty built">● Built</span>
+      </div>
+    </div>
+
+    <div class="qa-block">
+      <div class="qa-question" onclick="toggleQA(this)"><span class="q-mark">?</span> Plan first, code second</div>
+      <div class="qa-answer">
+        <p>Before writing implementation code, the factory requires that these documents exist and validate:</p>
+        <ul style="margin:8px 0 8px 20px;">
+          <li>Product brief, source of truth, functional requirements, non-functional requirements</li>
+          <li>Acceptance criteria, requirement registry, requirement traceability matrix</li>
+          <li>Architecture, domain model, threat model, AI safety grounding</li>
+          <li>Test strategy, implementation plan, CI/CD plan, observability</li>
+        </ul>
+        <p>This is not bureaucracy — it is the cheapest way to catch a wrong direction before it has been coded into ten files. A doc that takes 30 minutes to write can save a week of rework. The <code>make skill-route</code> command tells you which skill drives the next missing artifact.</p>
+        <p>For non-trivial changes, adversarially review the diff with independent subagents before calling it done. A correctness pass at minimum; for security/auth/validation code, a reviewer whose explicit job is to <em>break</em> the change and find an evasion.</p>
+        <div class="mentor-tip">
+          <div class="mentor-label">Mentor says</div>
+          <p>"Writing the doc before the code is not overhead — it is the design phase. The 30 minutes you spend writing the requirement is the 30 minutes you would otherwise spend rewriting the implementation because you built the wrong thing. The diff review is not distrust — it is the cheapest bug finder you have. A second pair of eyes catches what the first pair got used to."</p>
+        </div>
+        <span class="honesty built">● Built</span>
+      </div>
+    </div>
+
+    <div class="qa-block">
+      <div class="qa-question" onclick="toggleQA(this)"><span class="q-mark">?</span> Measure before optimizing</div>
+      <div class="qa-answer">
+        <p>Do not optimise a system you have not measured. The observability backbone (OD-1 through OD-7) exists so that every optimisation decision is grounded in data, not in a hunch.</p>
+        <p>The key metrics to watch:</p>
+        <ul style="margin:8px 0 8px 20px;">
+          <li><strong>P50 / P95 latency</strong> from <code>/metrics</code> request-duration histograms. Target: P50 ≤ 45s, P95 ≤ 120s.</li>
+          <li><strong>5xx rate</strong> from <code>/metrics</code> request-count status labels. Target: &lt; 1%.</li>
+          <li><strong>Provider call latency</strong> from per-request logs (each carries <code>request_id</code> and <code>query_run_id</code> for correlation).</li>
+          <li><strong>Cost per run</strong> from the feedback store's <code>cost_guardrail_accepted</code> events.</li>
+          <li><strong>Flake rate</strong> from the flake-scan workflow. Latest: 0/960.</li>
+        </ul>
+        <p>The perf-sample CI workflow produces hermetic latency samples on every run. The advisory perf gate compares them to the declared targets. The numbers are advisory because the test environment does not represent production latency (no real network, no real LLM calls) — but trends are meaningful.</p>
+        <div class="mentor-tip">
+          <div class="mentor-label">Mentor says</div>
+          <p>"If you cannot measure it, you cannot improve it. Before you spend a day refactoring for performance, check the current P95. If it is 80s and the target is 120s, your time is better spent on something else. If it is 110s, now you know what to optimise and you will know when you have succeeded."</p>
+        </div>
+        <span class="honesty built">● Built</span>
+      </div>
+    </div>
+
+    <div class="qa-block">
+      <div class="qa-question" onclick="toggleQA(this)"><span class="q-mark">?</span> Watch cost like a hawk</div>
+      <div class="qa-answer">
+        <p>Every LLM call costs money. The cost model in <code>costs.py</code> prices seven billed calls per query run (4 initial answers + 2 debate rounds + 5 synthesis sections). On the default model mix, a typical run costs between $0.01 and $0.03 — but a long query on expensive models can approach the $0.25 hard cap.</p>
+        <p>The guardrail is not optional. It is three-layered:</p>
+        <ol style="margin:8px 0 8px 20px;">
+          <li><strong>Per-call estimate</strong> — the pre-run estimate prices every call and checks the three-band threshold before any provider is called.</li>
+          <li><strong>Cumulative spend</strong> — an in-memory ring buffer tracks accepted spend per account and blocks rapid-fire exhaust-the-budget attacks.</li>
+          <li><strong>Daily cap</strong> — the durable SQLite feedback store enforces a $0.20 per-account-per-24h rolling window, catching trickle attacks that the in-memory buffer misses.</li>
+        </ol>
+        <p>The cost estimation is deliberately conservative: the point estimate models realistic token counts (grounded against a real live run that observed 2277–2560 prompt tokens and 465–1152 output tokens per model), and the guardrail keys off a fail-safe upper bound that prices initial-answer output at the enforced 2000-token cap. The estimate rarely falls below the measured actual.</p>
+        <div class="mentor-tip">
+          <div class="mentor-label">Mentor says</div>
+          <p>"Cost is the one metric that compounds silently. A $0.02 leak per run, 100 runs a day, is $730/month. The cost guardrail is not a suggestion — it is a circuit breaker. And the estimate is deliberately conservative: it is better to over-estimate and confirm than to under-estimate and surprise. The guardrail keys off the upper bound for exactly this reason."</p>
+        </div>
+        <span class="honesty built">● Built</span>
+        <div class="example project">
+          <div class="example-label">In your project</div>
+          <p>The <code>costs.py</code> module's <code>_estimate_breakdown</code> method prices each of the seven billed calls individually. The <code>by_model</code> partition shows four slot rows plus a "Debate + synthesis" row. The <code>by_stage</code> partition shows initial answers, debate round 1, debate round 2, and synthesis. Both re-sum to the quantized total exactly. The <code>max_cost_usd</code> field is always ≥ <code>estimated_cost_usd</code> and is what the guardrail checks — not the point estimate.</p>
+        </div>
+      </div>
+    </div>
+
+    <div class="qa-block">
+      <div class="qa-question" onclick="toggleQA(this)"><span class="q-mark">?</span> Pin model versions, don't float</div>
+      <div class="qa-answer">
+        <p>Model IDs in Quorum AI are pinned to specific versions: <code>openai/gpt-4o-mini</code>, not <code>openai/gpt-4o</code>. This matters because vendors silently update models, and an update can change the output quality, the token pricing, the safety behaviour, and the API contract — all without a deploy of your code.</p>
+        <p>The four default model IDs are the <strong>static source of truth</strong> in <code>model_slots.py</code>. The live  catalog is a <strong>drift check</strong>, not the source. If the catalog has dropped a default model ID, the workspace shows a banner and the <code>/v1/models/defaults</code> endpoint surfaces <code>stale_model_ids</code> so an operator can react — without silently swapping to a different model mid-run.</p>
+        <p>The debate and synthesis models (<code>DEBATE_MODEL_ID</code> and <code>SYNTHESIS_MODEL_ID</code> in <code>config.py</code>) are also pinned. Their defaults are <code>anthropic/claude-haiku-4.5</code> (debate) and <code>openai/gpt-4o-mini</code> (synthesis). The judge model (<code>QUORUM_EVAL_JUDGE_MODEL_ID</code>) is pinned because verdicts from different models are not comparable.</p>
+        <div class="mentor-tip">
+          <div class="mentor-label">Mentor says</div>
+          <p>"Floating model IDs are a silent deployment risk. If you depend on <code>gpt-4o</code> and OpenAI releases <code>gpt-4o-2025-06-13</code> with different behaviour, your tests still pass but your product changes. Pin the version. Monitor the drift. Decide when to upgrade deliberately."</p>
+        </div>
+        <span class="honesty built">● Built</span>
+        <div class="example project">
+          <div class="example-label">In your project</div>
+          <p>The <code>model_slots.py</code> module defines <code>DEFAULT_MODEL_IDS</code> as a hardcoded list of pinned model IDs. The <code>openrouter_model_catalog_service</code> fetches the live catalog as a <strong>drift check</strong> — if any default ID is missing from the catalog, it is surfaced as stale but never auto-corrected. The <code>catalog_fetcher.py</code> caches the catalog for 6 hours and falls back to the static defaults on failure. The <code>list_model_options</code> method filters <code>:free</code> models to avoid the Step-A bug.</p>
+        </div>
+      </div>
+    </div>
+
+    <div class="freshness">Last reviewed: 2026-07-23</div>
+  </section>
+
+  <!-- Footer -->
+  <footer class="page-footer">
+    <p>&copy; 2026 Rohit Agrawal &middot; Quorum AI &middot; All rights reserved</p>
+    <p style="margin-top:4px;">Last reviewed: 2026-07-23 &middot; v0.2.0 &middot; <a href="https://github.com/imrohitagrawal/quorum-ai" style="color:var(--accent);">github.com/imrohitagrawal/quorum-ai</a></p>
+  </footer>
+</main>
+
+<script>
+/* ── Tab switching ──────────────────────────────────── */
+const tabs = document.querySelectorAll('.sidebar-tabs button');
+const panels = document.querySelectorAll('.tab-panel');
+
+function switchTab(tabName) {
+  tabs.forEach(t => { t.classList.remove('active'); t.setAttribute('aria-selected', 'false'); });
+  panels.forEach(p => p.classList.remove('active'));
+  const target = document.querySelector(`[data-tab="${tabName}"]`);
+  const panel = document.getElementById('panel-' + tabName);
+  if (target) { target.classList.add('active'); target.setAttribute('aria-selected', 'true'); }
+  if (panel) { panel.classList.add('active'); }
+  // Deep link
+  if (history.replaceState) { history.replaceState(null, '', '#' + tabName); }
+  // Expand first QA in the panel
+  if (panel) { const first = panel.querySelector('.qa-block'); if (first) first.classList.add('open'); }
+}
+
+tabs.forEach(tab => {
+  tab.addEventListener('click', () => switchTab(tab.dataset.tab));
+});
+
+/* ── Keyboard navigation ────────────────────────────── */
+document.addEventListener('keydown', (e) => {
+  const current = document.querySelector('.sidebar-tabs button.active');
+  if (!current) return;
+  const idx = Array.from(tabs).indexOf(current);
+  if (e.key === 'ArrowDown' || e.key === 'ArrowRight') {
+    e.preventDefault();
+    const next = tabs[(idx + 1) % tabs.length];
+    next.click();
+    next.focus();
+  } else if (e.key === 'ArrowUp' || e.key === 'ArrowLeft') {
+    e.preventDefault();
+    const prev = tabs[(idx - 1 + tabs.length) % tabs.length];
+    prev.click();
+    prev.focus();
+  } else if (e.key === 'Home') {
+    e.preventDefault();
+    tabs[0].click();
+    tabs[0].focus();
+  } else if (e.key === 'End') {
+    e.preventDefault();
+    tabs[tabs.length - 1].click();
+    tabs[tabs.length - 1].focus();
+  }
+});
+
+/* ── Q&A toggles ────────────────────────────────────── */
+function toggleQA(el) {
+  const block = el.parentElement;
+  const wasOpen = block.classList.contains('open');
+  // Close all in this panel
+  block.parentElement.querySelectorAll('.qa-block').forEach(b => b.classList.remove('open'));
+  // Toggle clicked
+  if (!wasOpen) block.classList.add('open');
+}
+
+/* ── Deep link on load ──────────────────────────────── */
+(function initDeepLink() {
+  const hash = location.hash.replace('#', '');
+  if (hash && document.querySelector(`[data-tab="${hash}"]`)) {
+    switchTab(hash);
+  } else {
+    // Open first QA in the default tab
+    const firstPanel = document.querySelector('.tab-panel.active .qa-block');
+    if (firstPanel) firstPanel.classList.add('open');
+  }
+})();
+
+/* ── Open all QAs in "Mentor" tab by default ────────── */
+document.getElementById('panel-mentor').addEventListener('transitionend', function() {
+  // noop — kept for potential future animation hooks
+});
+</script>
+
+</body>
+</html>

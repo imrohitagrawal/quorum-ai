@@ -48,7 +48,7 @@ OPENROUTER_CATALOG_URL = "https://openrouter.ai/api/v1/models"
 
 #: Vendors the UI defaults to a slot from. The order is preserved in
 #: ``cheapest_per_vendor`` so slot 1/2/3/4 map to a stable family.
-DEFAULT_VENDORS: tuple[str, ...] = ("openai", "anthropic", "google", "deepseek")
+DEFAULT_VENDORS: tuple[str, ...] = ("openai", "anthropic", "google", "nvidia")
 
 
 @dataclass(frozen=True)
@@ -127,12 +127,34 @@ _FALLBACK_CATALOG: tuple[ModelCatalogEntry, ...] = (
         output_price_per_1k=Decimal("0.075"),
     ),
     ModelCatalogEntry(
+        # WP-D: output price corrected 0.0012 -> 0.0025. MEASURED against the
+        # live public catalog (https://openrouter.ai/api/v1/models,
+        # unauthenticated, $0) on 2026-07-27: completion 0.0000025/token ->
+        # 0.0025 per 1K. The stale row understated it by 52%.
+        #
+        # This row is corrected here, alone, because it is slot 3 of the
+        # SHIPPED default mix and therefore feeds
+        # ``PINNED_DEFAULT_MIX_UNIT_USD`` — ratifying a money envelope computed
+        # from a price known to be 52% wrong is not ratification. The input
+        # price (0.0003) was already exact and is unchanged.
+        #
+        # Five OTHER rows in this catalog are also stale (gemini-2.5-pro,
+        # gemini-2.5-flash-lite, deepseek-chat-v3.1, llama-3.1-8b-instruct,
+        # and openai/o3 which is 650% OVER and therefore over-blocks). They are
+        # deliberately NOT corrected here: they do not feed the shipped default
+        # mix, correcting prices upward makes estimates higher and pushes more
+        # runs into the cost rails, and that is a guardrail-input change that
+        # deserves its own diff and its own operator ratification. See the
+        # routing decision in WP-D-TO-CLOSEOUT-ULTRACODE-PROMPT.md §2.
+        #
+        # All of these apply ONLY in degraded mode (catalog fetch failed);
+        # normal operation prices from the live catalog.
         model_id="google/gemini-2.5-flash",
         name="Google: Gemini 2.5 Flash",
         vendor="google",
         short_name="Gemini 2.5 Flash",
         input_price_per_1k=Decimal("0.0003"),
-        output_price_per_1k=Decimal("0.0012"),
+        output_price_per_1k=Decimal("0.0025"),
     ),
     ModelCatalogEntry(
         model_id="google/gemini-2.5-flash-lite",
@@ -151,6 +173,27 @@ _FALLBACK_CATALOG: tuple[ModelCatalogEntry, ...] = (
         output_price_per_1k=Decimal("0.005"),
     ),
     ModelCatalogEntry(
+        # WP-G1: slot 4's vendor. Prices READ FROM the live public catalog
+        # (https://openrouter.ai/api/v1/models, unauthenticated, $0) on
+        # 2026-07-27: prompt 0.00000005/token, completion 0.0000002/token ->
+        # 0.00005 / 0.0002 per 1K. Not estimated, not carried over from the
+        # super variant.
+        #
+        # This entry must exist BEFORE nvidia enters DEFAULT_VENDORS: without a
+        # catalog row, slot 4 falls back to the 0.0008 default input price —
+        # 16x the real rate — and every cost estimate for the slot is wrong.
+        model_id="nvidia/nemotron-3-nano-30b-a3b",
+        name="NVIDIA: Nemotron 3 Nano 30B A3B",
+        vendor="nvidia",
+        short_name="Nemotron 3 Nano",
+        input_price_per_1k=Decimal("0.00005"),
+        output_price_per_1k=Decimal("0.0002"),
+    ),
+    ModelCatalogEntry(
+        # RETAINED, deliberately. deepseek is no longer a DEFAULT_VENDORS slot,
+        # but it is still a selectable catalog option and ~40 test files name
+        # it. Deleting the row and migrating the references are separate jobs;
+        # doing both at once is how a mechanical rename turns into a bad day.
         model_id="deepseek/deepseek-chat-v3.1",
         name="DeepSeek: DeepSeek Chat v3.1",
         vendor="deepseek",

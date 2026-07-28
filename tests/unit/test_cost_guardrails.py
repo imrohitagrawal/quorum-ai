@@ -1,8 +1,13 @@
+from collections.abc import Iterator
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
+from time import monotonic
 from unittest import mock
 from uuid import UUID
 
+import pytest
+
+from product_app.catalog_fetcher import _FALLBACK_CATALOG, openrouter_catalog_fetcher
 from product_app.costs import (
     CostConfirmation,
     CostEstimationService,
@@ -12,11 +17,48 @@ from product_app.costs import (
 from product_app.feedback_store import configure_for_tests
 from product_app.model_slots import validate_model_slots
 
+
+@pytest.fixture(autouse=True)
+def _stable_catalog_price() -> Iterator[None]:
+    """Pin the catalog price for EVERY test in this module.
+
+    Every threshold assertion here is a statement about a PRICE, and prices
+    come from a PROCESS-GLOBAL catalog cache that other modules prime at import
+    time — so without a pin the verdict can depend on which modules pytest
+    happened to collect first. MEASURED when that was live: an intermediate
+    ``openai/o3``-anchored fixture bounded at 0.2158 (require_confirmation)
+    running this file alone and 0.0815 (ALLOW) running all of ``tests/unit``.
+
+    HONEST STATUS: this pin is now DEFENCE IN DEPTH, not the thing holding the
+    module up. Order-independence currently comes from the FIXTURE, not from
+    here — every model in ``CONFIRM_MODEL_IDS`` is priced identically in the
+    offline catalog and the live one, so collection order cannot move the
+    verdict. VERIFIED: flipping this fixture to ``autouse=False`` leaves the
+    whole ``tests/unit`` suite green (885 passed).
+
+    It is kept because the property it guards is easy to lose: the next person
+    to adjust a band fixture should not have to rediscover that prices are
+    process-global. ``test_catalog_fetcher.py::
+    test_cost_band_fixtures_are_built_from_price_exact_models`` is the rail
+    that actually bites if that happens.
+    """
+    fetcher = openrouter_catalog_fetcher
+    previous_entries = fetcher._cache_entries  # noqa: SLF001
+    previous_expiry = fetcher._cache_expires_at  # noqa: SLF001
+    fetcher._cache_entries = list(_FALLBACK_CATALOG)  # noqa: SLF001
+    fetcher._cache_expires_at = monotonic() + 86_400.0  # noqa: SLF001
+    try:
+        yield
+    finally:
+        fetcher._cache_entries = previous_entries  # noqa: SLF001
+        fetcher._cache_expires_at = previous_expiry  # noqa: SLF001
+
+
 DEFAULT_MODEL_IDS = [
     "openai/gpt-4o-mini",
     "anthropic/claude-haiku-4.5",
     "google/gemini-2.5-flash",
-    "deepseek/deepseek-chat-v3.1",
+    "meta-llama/llama-3.1-8b-instruct",
 ]
 
 
@@ -37,16 +79,28 @@ def test_high_cost_query_requires_matching_confirmation() -> None:
     # issue #16: the guardrail keys off the fail-safe ``max_cost_usd`` bound
     # (worst-case, initial output priced at the enforced cap), not the point
     # estimate. The CONFIRM band (bound in (0.15, 0.25]) is a narrow window —
-    # cheap mixes bound well under $0.15, and any opus-tier model jumps the
-    # bound over $0.25. One opus slot + three cheap slots lands the bound at
-    # ~$0.21 (CONFIRM) while the point estimate is only ~$0.10 — so this also
-    # proves the rail evaluates the bound, not the (ALLOW-band) point estimate.
+    # cheap mixes bound well under $0.15, and an opus-tier slot now jumps the
+    # bound clear over $0.25. This test needs a genuinely CONFIRM estimate,
+    # because it round-trips the confirmation token and a BLOCK estimate
+    # carries ``confirmation_token=None``.
+    #
+    # WP-D re-fixtured this TWICE, and the second reason is the instructive one.
+    # An intermediate fixture anchored on ``openai/o3`` had a comfortable
+    # 0.034 margin but rested on a fallback price ~650% OVER live: MEASURED, it
+    # bounded at 0.2138 (require_confirmation) offline and 0.0795 (ALLOW) at
+    # real prices, i.e. it asserted a band production never sees.
+    #
+    # Every price in THIS mix is verified identical in the fallback catalog and
+    # the live one, so it bounds at 0.2474 either way. The 0.0026 margin to
+    # HARD_LIMIT_USD is thinner than the o3 mix's, and that trade is deliberate:
+    # a fixture that moves only when the COST MODEL changes is a real signal;
+    # one that moves when a stale price is corrected is noise.
     model_slots = validate_model_slots(
         [
-            "anthropic/claude-opus-4",
             "openai/gpt-4o-mini",
-            "deepseek/deepseek-chat-v3.1",
-            "google/gemini-2.5-flash",
+            "anthropic/claude-3-haiku",
+            "anthropic/claude-opus-4",
+            "nvidia/nemotron-3-nano-30b-a3b",
         ]
     )
     estimate = cost_estimation_service.estimate(
@@ -55,6 +109,7 @@ def test_high_cost_query_requires_matching_confirmation() -> None:
     )
     assert estimate.max_cost_usd is not None
     assert estimate.estimated_cost_usd < Decimal("0.15") < estimate.max_cost_usd
+    assert estimate.threshold_action == CostThresholdAction.REQUIRE_CONFIRMATION
 
     missing_decision = cost_estimation_service.evaluate_confirmation(
         estimate=estimate,
@@ -68,7 +123,6 @@ def test_high_cost_query_requires_matching_confirmation() -> None:
         ),
     )
 
-    assert estimate.threshold_action == CostThresholdAction.REQUIRE_CONFIRMATION
     assert not missing_decision.confirmed
     assert matching_decision.confirmed
 

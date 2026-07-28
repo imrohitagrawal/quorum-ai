@@ -53,17 +53,15 @@ def test_synthesis_eval_preserves_disagreement_and_meets_citation_target() -> No
     # mention "unsupported consensus" on the conservative path.
     assert "unsupported consensus" in synthesis.disagreement
     assert not synthesis.quality_checks.false_consensus_preserved
-    # L5d: with the honest heuristic the four ~218-char stub
-    # answers yield 2 material claims each → 8 total. With 4 cited
-    # that is 0.50 coverage, below the 0.80 target. The eval is
-    # updated to assert the *structure* of the heuristic is sound
-    # (non-zero claims, non-zero cited, ratio < target), not that
-    # a single citation alone meets the target — that would be the
-    # dishonest constant-1 denominator.
-    assert synthesis.citation_coverage.material_claim_count >= 4
-    assert synthesis.citation_coverage.cited_claim_count >= 1
-    assert synthesis.citation_coverage.coverage_ratio < synthesis.citation_coverage.target_ratio
-    assert not synthesis.quality_checks.citation_coverage_target_met
+    # WP-C / F-03: all four local-simulation answers carry a primary source,
+    # so coverage is 4/4 and the target IS met. That is the point of the
+    # redefinition — under the old chars-per-claim denominator this same
+    # fully-sourced run scored 0.50 and was reported as failing the target.
+    assert synthesis.citation_coverage.answer_count == 4
+    assert synthesis.citation_coverage.sourced_answer_count == 4
+    coverage = synthesis.citation_coverage
+    assert coverage.sourced_answer_ratio >= coverage.target_ratio
+    assert synthesis.quality_checks.citation_coverage_target_met
 
 
 def test_synthesis_eval_flags_high_stakes_examples_as_decision_support() -> None:

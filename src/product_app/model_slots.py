@@ -42,54 +42,29 @@ EXPECTED_SLOT_COUNT = 4
 
 #: Authoritative default model ids, in slot order (1, 2, 3, 4).
 #:
-#: Pre-launch cheap tier — the cheapest paid model in each of the
-#: four vendor families that the demo ``OPENROUTER_API_KEY`` is known
-#: to authenticate. The cheapest *paid* id per vendor is selected,
-#: not the absolute cheapest (which would be ``:free`` / ``:preview``
-#: variants that do not authenticate and collapse every slot into
-#: ``local_simulation``). Per-slot prices are intentionally not
-#: capped at any single threshold — the four-vendor minimum is
-#: bounded by whichever vendor's cheapest paid tier is most
-#: expensive. Current per-slot input rates (USD per 1K tokens):
+#: Pre-launch cheap tier — one model per vendor that authenticates
+#: with the demo ``OPENROUTER_API_KEY`` and supports the ``:online``
+#: web-search suffix. Curated explicitly so a catalog drift or outage
+#: cannot silently degrade the demo to ``local_simulation``.
 #:
 #: | Slot | Model id                          | Input $/1K |
 #: |------|-----------------------------------|------------|
 #: | 1    | ``openai/gpt-4o-mini``            | 0.000150   |
-#: | 2    | ``anthropic/claude-3-haiku``      | 0.000250   |
-#: | 3    | ``google/gemini-2.5-flash-lite``  | 0.000075   |
-#: | 4    | ``deepseek/deepseek-chat-v3.1``   | 0.000140   |
+#: | 2    | ``anthropic/claude-haiku-4.5``    | 0.001000   |
+#: | 3    | ``google/gemini-2.5-flash``       | 0.000300   |
+#: | 4    | ``nvidia/nemotron-3-nano-30b-a3b`` | 0.000050   |
 #:
-#: Combined input cost is **$0.000615 / 1K** tokens. The $0.25
-#: per-run hard cap at ``costs.py:35-36`` is unchanged; this list
-#: only lowers the *average* cost, not the spend ceiling.
-#:
-#: Why this list is the source of truth (not the live catalog):
-#:
-#: 1. The demo ``OPENROUTER_API_KEY`` authenticates a *fixed set* of
-#:    model ids. The catalog keeps growing; new models appear under
-#:    the same vendor prefix every quarter. Some authenticate, some
-#:    do not — and the catalog has no way to tell us which.
-#: 2. The catalog's cheapest-per-vendor logic returns whatever is
-#:    cheapest today, not what is known to work. The four ids here
-#:    have been observed to authenticate with the demo key and to
-#:    support the ``:online`` web-search suffix.
-#: 3. ``default_model_ids()`` is called on every page load and on
-#:    every ``/v1/query-runs`` POST that does not override the slot
-#:    list. A wrong default cascades: every slot returns
-#:    ``local_simulation`` and the demo is over before it starts.
-#:
-#: The live catalog is still consulted as a *drift* check — if a
-#: model in this tuple is no longer in the catalog, ``default_model_ids``
-#: surfaces the stale-id diagnostic without silently swapping in a
-#: different model. The drift diagnostic is informational: the
-#: curated default is still used by the validator and the demo,
-#: because the operator explicitly chose it. Operator action is
-#: only required if the id has actually been deprecated upstream.
+#: Combined input cost is **$0.00150 / 1K** tokens (every row above read
+#: from the live public catalog on 2026-07-27; the slot-3 row previously
+#: said 0.000150, which was wrong before WP-G1 and which my recomputed
+#: total then inherited). The per-run hard
+#: cap at ``costs.py`` is unchanged; this list only lowers the average
+#: cost by choosing cheaper per-vendor options.
 DEFAULT_MODEL_IDS: tuple[str, ...] = (
-    "openai/gpt-4o-mini",  # cheapest paid OpenAI
-    "anthropic/claude-3-haiku",  # cheapest paid Anthropic
-    "google/gemini-2.5-flash-lite",  # cheapest paid Google
-    "deepseek/deepseek-chat-v3.1",  # DeepSeek's paid tier
+    "openai/gpt-4o-mini",  # slot 1 — OpenAI
+    "anthropic/claude-haiku-4.5",  # slot 2 — Anthropic (debate)
+    "google/gemini-2.5-flash",  # slot 3 — Google
+    "nvidia/nemotron-3-nano-30b-a3b",  # slot 4 — NVIDIA (replaces deepseek)
 )
 
 #: Curated-default id set, computed once at module load. The validator
@@ -247,8 +222,11 @@ def _validate_model_id_list(model_ids: list[str]) -> None:
     # shape-check-only fallback but is correct given the whitelist
     # policy — the curated whitelist is the only signal available
     # when the live catalog is down.
-    known_ids: set[str] = set(_DEFAULT_MODEL_ID_SET)
-    # Catalog failures must not break validation.
+    known_ids: set[str] = set(_DEFAULT_MODEL_ID_SET) | {
+        entry.model_id for entry in _CATALOG_FALLBACK_ENTRIES
+    }
+    # Catalog failures must not break validation; successful fetches
+    # add their ids on top (the union is always larger, never smaller).
     with contextlib.suppress(Exception):  # noqa: BLE001
         known_ids |= {entry.model_id for entry in openrouter_catalog_fetcher.list_models()}
 

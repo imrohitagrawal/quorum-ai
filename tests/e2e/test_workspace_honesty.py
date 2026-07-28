@@ -165,7 +165,12 @@ def test_workspace_html_embeds_live_readiness_window_variable(
     assert "window.LIVE_READINESS" in html
     payload = _parse_window_literal(html, "window.LIVE_READINESS = ")
     assert isinstance(payload, dict)
-    assert payload["state"] in {"live", "offline_by_config", "offline_by_no_key"}
+    assert payload["state"] in {
+        "live",
+        "offline_by_config",
+        "offline_by_no_key",
+        "offline_by_bad_key",
+    }
     assert isinstance(payload["reasons"], list)
     assert isinstance(payload["catalog_drift_ids"], list)
 

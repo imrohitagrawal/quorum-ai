@@ -111,10 +111,8 @@ def test_count_only_citation_proxy_cannot_tell_faithful_from_unfaithful() -> Non
 
     def _aggregate(case: Any) -> Any:
         return calculate_citation_coverage(
-            material_claim_count=sum(
-                a.citation_coverage.material_claim_count for a in case.initial_answers
-            ),
-            cited_claim_count=sum(
+            answer_count=sum(a.citation_coverage.answer_count for a in case.initial_answers),
+            sourced_answer_count=sum(
                 1 for a in case.initial_answers if any(not s.is_fallback for s in a.sources)
             ),
         )

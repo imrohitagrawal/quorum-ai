@@ -1,10 +1,10 @@
 # Session Handoff
 
 ## Date/time
-2026-07-23T21:21:27+05:30
+2026-07-25T13:42:46+05:30
 
 ## Current branch/worktree
-docs/ops-hardening-closeout
+feat/ui-pr1-quickfixes
 
 ## Current phase
 Operate, learn, and improve
@@ -61,53 +61,139 @@ Operate, learn, and improve
 
 ## Git status
 ```text
-M docs/00-factory-console.md
-?? DEMO-READINESS-P1-P3-ULTRACODE-PROMPT.md
-?? OBSERVABILITY-DEMO-ULTRACODE-PROMPT.md
-?? OPS-HARDENING-CLOSEOUT-RESULT.md
-?? OPS-HARDENING-CLOSEOUT-ULTRACODE-PROMPT.md
-?? OPS-NAV-GLOSSARY-FAVICON-ULTRACODE-PROMPT.md
-?? OPS-TILE-RELEVANCE-ULTRACODE-PROMPT.md
-?? P2-CLOSEOUT-ULTRACODE-PROMPT.md
-?? R2-RB5-S4-RESULT.md
-?? R2-RB5-S4-ULTRACODE-PROMPT.md
-?? R2-S4-CLOSEOUT-ULTRACODE-PROMPT.md
-?? design_handoff_quorum_ui/
-?? e2e/tests/invariants/trust-score-visual.spec.ts-snapshots/trust-score-dark-1440-chromium-darwin.png
-?? e2e/tests/invariants/trust-score-visual.spec.ts-snapshots/trust-score-dark-375-chromium-darwin.png
-?? e2e/tests/invariants/trust-score-visual.spec.ts-snapshots/trust-score-dark-768-chromium-darwin.png
-?? e2e/tests/invariants/trust-score-visual.spec.ts-snapshots/trust-score-light-1440-chromium-darwin.png
-?? e2e/tests/invariants/trust-score-visual.spec.ts-snapshots/trust-score-light-375-chromium-darwin.png
-?? e2e/tests/invariants/trust-score-visual.spec.ts-snapshots/trust-score-light-768-chromium-darwin.png
-?? e2e/tests/invariants/visual-snapshots.spec.ts-snapshots/result-verdict-chromium-darwin.png
-?? e2e/tests/invariants/visual-snapshots.spec.ts-snapshots/transcript-full-chromium-darwin.png
-?? e2e/undefined/
+A  .agents/skills/architecture-and-decisions/CHANGELOG.md
+A  .agents/skills/architecture-and-decisions/SKILL.md
+A  .agents/skills/architecture-and-decisions/assets/project-profile.md
+A  .agents/skills/architecture-and-decisions/assets/publish-targets.yaml
+A  .agents/skills/architecture-and-decisions/ci/.pre-commit-config.yaml
+A  .agents/skills/architecture-and-decisions/ci/README.md
+A  .agents/skills/architecture-and-decisions/ci/verify-docs.yml
+A  .agents/skills/architecture-and-decisions/references/architecture-method.md
+A  .agents/skills/architecture-and-decisions/references/decision-treatment.md
+A  .agents/skills/architecture-and-decisions/references/design-note-method.md
+A  .agents/skills/architecture-and-decisions/references/failure-mode-method.md
+A  .agents/skills/architecture-and-decisions/references/house-style.md
+A  .agents/skills/architecture-and-decisions/references/licensing-and-credits.md
+A  .agents/skills/architecture-and-decisions/references/nfr-posture-method.md
+A  .agents/skills/architecture-and-decisions/references/render-contract.md
+A  .agents/skills/architecture-and-decisions/scripts/verify.py
+A  .agents/skills/doc-critic/CHANGELOG.md
+A  .agents/skills/doc-critic/SKILL.md
+A  .agents/skills/doc-critic/assets/project-profile.md
+A  .agents/skills/doc-critic/assets/publish-targets.yaml
+A  .agents/skills/doc-critic/ci/.pre-commit-config.yaml
+A  .agents/skills/doc-critic/ci/README.md
+A  .agents/skills/doc-critic/ci/verify-docs.yml
+A  .agents/skills/doc-critic/references/house-style.md
+A  .agents/skills/doc-critic/references/licensing-and-credits.md
+A  .agents/skills/doc-critic/references/render-contract.md
+A  .agents/skills/doc-critic/references/review-playbook.md
+A  .agents/skills/doc-critic/references/review-profiles.md
+A  .agents/skills/doc-critic/references/reviewer-prompts.md
+A  .agents/skills/doc-critic/scripts/verify.py
+A  .agents/skills/onboarding-companion/CHANGELOG.md
+A  .agents/skills/onboarding-companion/SKILL.md
+A  .agents/skills/onboarding-companion/assets/project-profile.md
+A  .agents/skills/onboarding-companion/assets/publish-targets.yaml
+A  .agents/skills/onboarding-companion/ci/.pre-commit-config.yaml
+A  .agents/skills/onboarding-companion/ci/README.md
+A  .agents/skills/onboarding-companion/ci/verify-docs.yml
+A  .agents/skills/onboarding-companion/references/buddy-path.md
+A  .agents/skills/onboarding-companion/references/house-style.md
+A  .agents/skills/onboarding-companion/references/licensing-and-credits.md
+A  .agents/skills/onboarding-companion/references/mentor-path.md
+A  .agents/skills/onboarding-companion/references/render-contract.md
+A  .agents/skills/onboarding-companion/references/working-with-ai.md
+A  .agents/skills/onboarding-companion/scripts/verify.py
+A  .agents/skills/operations-runbook/CHANGELOG.md
+A  .agents/skills/operations-runbook/SKILL.md
+A  .agents/skills/operations-runbook/assets/project-profile.md
+A  .agents/skills/operations-runbook/assets/publish-targets.yaml
+A  .agents/skills/operations-runbook/assets/runbook-entry.template.md
+A  .agents/skills/operations-runbook/ci/.pre-commit-config.yaml
+A  .agents/skills/operations-runbook/ci/README.md
+A  .agents/skills/operations-runbook/ci/verify-docs.yml
+A  .agents/skills/operations-runbook/references/house-style.md
+A  .agents/skills/operations-runbook/references/incident-response.md
+A  .agents/skills/operations-runbook/references/licensing-and-credits.md
+A  .agents/skills/operations-runbook/references/observability-and-slo.md
+A  .agents/skills/operations-runbook/references/render-contract.md
+A  .agents/skills/operations-runbook/references/runbook-method.md
+A  .agents/skills/operations-runbook/scripts/verify.py
+A  DEMO-READINESS-P1-P3-ULTRACODE-PROMPT.md
+M  Makefile
+A  OBSERVABILITY-DEMO-ULTRACODE-PROMPT.md
+A  OPS-HARDENING-CLOSEOUT-ULTRACODE-PROMPT.md
+A  OPS-NAV-GLOSSARY-FAVICON-ULTRACODE-PROMPT.md
+A  OPS-TILE-RELEVANCE-ULTRACODE-PROMPT.md
+A  P2-CLOSEOUT-ULTRACODE-PROMPT.md
+A  PR2-RED-GREEN-PROOF.md
+A  PR3-PR4-CLOSEOUT-ULTRACODE-PROMPT.md
+A  R2-RB5-S4-RESULT.md
+A  R2-RB5-S4-ULTRACODE-PROMPT.md
+A  R2-S4-CLOSEOUT-ULTRACODE-PROMPT.md
+A  UI-BUG-TRIAGE-2026-07-23-ANALYSIS.md
+A  UI-PR1-QUICKFIXES-ULTRACODE-PROMPT.md
+A  UI-PR2-DATA-COMPLETENESS-ULTRACODE-PROMPT.md
+A  UI-PR2-PR4-HANDOFF-ULTRACODE-PROMPT.md
+A  design_handoff_quorum_ui/CLAUDE-md-suggested.md
+A  design_handoff_quorum_ui/PROMPT-qa.md
+A  design_handoff_quorum_ui/PROMPT.md
+A  "design_handoff_quorum_ui/Quorum Final Review.dc.html"
+A  design_handoff_quorum_ui/README.md
+A  design_handoff_quorum_ui/support.js
+A  docs/REVIEW.md
+A  docs/architecture/40-decisions.md
+A  docs/architecture/50-failure-modes.md
+A  docs/faq/index.html
+A  docs/runbooks/provider-orchestrator.md
+M  e2e/fixtures/golden-run.ts
+M  e2e/tests/accessibility/axe-all-views.spec.ts
+M  e2e/tests/api-mocking/api-mocking.spec.ts
+A  e2e/tests/invariants/trust-score-visual.spec.ts-snapshots/trust-score-dark-1440-chromium-darwin.png
+A  e2e/tests/invariants/trust-score-visual.spec.ts-snapshots/trust-score-dark-375-chromium-darwin.png
+A  e2e/tests/invariants/trust-score-visual.spec.ts-snapshots/trust-score-dark-768-chromium-darwin.png
+A  e2e/tests/invariants/trust-score-visual.spec.ts-snapshots/trust-score-light-1440-chromium-darwin.png
+A  e2e/tests/invariants/trust-score-visual.spec.ts-snapshots/trust-score-light-375-chromium-darwin.png
+A  e2e/tests/invariants/trust-score-visual.spec.ts-snapshots/trust-score-light-768-chromium-darwin.png
+A  e2e/tests/invariants/visual-snapshots.spec.ts-snapshots/result-verdict-chromium-darwin.png
+A  e2e/tests/invariants/visual-snapshots.spec.ts-snapshots/transcript-full-chromium-darwin.png
+M  e2e/tests/ui-parity/parity-behavior.spec.ts
+A  e2e/undefined/ops-1440.png
+A  e2e/undefined/ops-375.png
+M  src/product_app/config.py
+M  src/product_app/debate.py
+M  src/product_app/model_slots.py
+M  src/product_app/providers.py
+M  src/product_app/static/app.css
+M  src/product_app/synthesis.py
+M  src/product_app/synthesis_length.py
+M  tests/unit/test_cost_breakdown.py
+M  tests/unit/test_cost_guardrails.py
+M  tests/unit/test_debate_orchestration.py
+M  tests/unit/test_estimate_token_model.py
+M  tests/unit/test_evaluation_auth_boundary.py
+M  tests/unit/test_model_slots.py
+M  tests/unit/test_provider_stubs.py
+A  tests/unit/test_providers.py
+M  tests/unit/test_query_run_auth_boundary.py
+M  tests/unit/test_query_run_result_projection.py
+M  tests/unit/test_query_run_state_machine.py
+M  tests/unit/test_readiness.py
+M  tests/unit/test_run_history_store.py
+M  tests/unit/test_synthesis.py
 ```
 
 ## Diff stat
 ```text
-docs/00-factory-console.md | 16 ++++++++++++++++
- 1 file changed, 16 insertions(+)
+no unstaged diff
 ```
 
 ## Completed in this session
-- Ops hardening + observability deferred-item closeout: PR #91 `9555701`
-  (closes #86) — CSP base-uri/form-action, /ready closed reason vocabulary,
-  /status sentry→error_tracking + build_sha, gate-min-executed false-green
-  fix, alert rule 2 mechanised ($0). Deploy JOB `30022024397` success; prod
-  content-verified; rule-2 proof dispatch `30022211861` green.
-- Full ledger: `OPS-HARDENING-CLOSEOUT-RESULT.md`.
+- Update manually before closing the session.
 
 ## Decisions made
-- `form-action 'none'` (not 'self'): the app has zero <form> elements, so any
-  form submission is an injection.
-- /status error-tracking key is vendor-neutral by design; value stays
-  active/inactive.
-- Probe alerts at >= the 1% threshold (the SLO is "< 1%", so exactly 1% is a
-  breach); min-delta floor 25 with rationale documented in the script.
-- **Deploy verification is now one line:**
-  `curl -s https://quorum.stackclimb.com/status | jq -r .build_sha` == merged
-  SHA. Use it in every future session instead of inferring from /health.
+- Update manually before closing the session.
 
 ## Assumptions recorded
 - Update `docs/ASSUMPTIONS.md` when needed.
@@ -136,10 +222,7 @@ make validate
 ```
 
 ## Validation result
-- make validate + make quality green (1403 passed, 10 skipped, cov 90%);
-  api-contract 43 executed (floor 22); openapi-check green; csp-smoke + ops
-  e2e green on chromium/firefox/webkit; changed-lines coverage gate green
-  after `4b3641f`.
+- Update after running checks.
 
 ## Next best action
 Review production signals, incidents, support feedback, and product metrics. Propose the next iteration with evidence.

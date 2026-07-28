@@ -33,7 +33,6 @@ from product_app.providers import (
     provider_execution_service,
 )
 from product_app.synthesis import (
-    TEMPLATED_FALLBACK_PREFIX,
     SynthesisResult,
     synthesis_stub_service,
 )
@@ -67,9 +66,9 @@ def _answers() -> list[InitialModelAnswer]:
             status=InitialAnswerStatus.COMPLETED,
             latency_ms=10,
             citation_coverage=CitationCoverage(
-                material_claim_count=1,
-                cited_claim_count=1,
-                coverage_ratio=Decimal("1"),
+                answer_count=1,
+                sourced_answer_count=1,
+                sourced_answer_ratio=Decimal("1"),
                 target_met=True,
             ),
             token_usage=_USAGE,
@@ -161,8 +160,9 @@ def test_all_five_synthesis_sections_serve_templated_text_on_blank_live_text(
     # Guards 3/7 .. 7/7, one assertion pair each.
     for label, section in sections:
         assert section.strip(), f"{label}: an EMPTY section was served to the user"
-        assert section.startswith(TEMPLATED_FALLBACK_PREFIX), (
-            f"{label}: served without the templated-fallback marker: {section!r}"
+        assert result.final_synthesis is not None
+        assert result.final_synthesis.synthesis_mode != "live", (
+            f"{label}: served as LIVE output when the live text was unusable"
         )
     # The recommendation's mandated framing must survive the fallback.
     assert "decision support only" in dict(sections)["recommendation"]
@@ -198,7 +198,9 @@ def test_synthesis_with_live_enabled_but_no_key_dispatches_nothing(
     )
     assert result.live_call_usages == []
     for label, section in _sections(result):
-        assert section.startswith(TEMPLATED_FALLBACK_PREFIX), f"{label} was not templated"
+        assert section.strip(), f"{label}: an EMPTY section was served to the user"
+    assert result.final_synthesis is not None
+    assert result.final_synthesis.synthesis_mode != "live", "templated run labelled live"
 
 
 # --- the honesty consequence of a LONGER usage list --------------------------
@@ -231,10 +233,9 @@ def test_a_fully_templated_run_is_never_presented_as_live(
     assert len(result.live_call_usages) == 5
     # ... over five sections that are ALL templated (content honesty).
     sections = [text for _label, text in _sections(result)]
-    assert all(section.startswith(TEMPLATED_FALLBACK_PREFIX) for section in sections)
-    assert len([s for s in sections if s.startswith(TEMPLATED_FALLBACK_PREFIX)]) == len(
-        result.live_call_usages
-    ), (
+    assert result.final_synthesis is not None
+    assert result.final_synthesis.synthesis_mode != "live"
+    assert len(sections) == len(result.live_call_usages), (
         "entry count and templated-section count coincide here, which is exactly "
         "why entry count must never be read as a liveness signal"
     )
@@ -274,4 +275,5 @@ def test_control_usable_live_text_is_served_over_the_template(
     )
     for label, section in _sections(synthesis):
         assert "A substantive live paragraph." in section, label
-        assert not section.startswith(TEMPLATED_FALLBACK_PREFIX), label
+    assert synthesis.final_synthesis is not None
+    assert synthesis.final_synthesis.synthesis_mode == "live"

@@ -85,7 +85,7 @@ curl -sf https://quorum-ai.fly.dev/ready | jq .
 curl -sf -o /dev/null -w "%{http_code}\n" https://quorum-ai.fly.dev/ui
 ```
 
-You should see HTTP 200 on all three. If `/ready` shows `offline_by_no_key`, you forgot to set `OPENROUTER_API_KEY` (or `OPENROUTER_LIVE_EXECUTION_ENABLED` is still `"false"`).
+You should see HTTP 200 on all three. If `/ready` shows `offline_by_no_key`, you forgot to set `OPENROUTER_API_KEY` (or `OPENROUTER_LIVE_EXECUTION_ENABLED` is still `"false"`). If it shows `offline_by_bad_key`, the key IS set but the provider rejected it (401/403) — see below.
 
 ---
 
@@ -223,6 +223,42 @@ fly secrets set OPENROUTER_LIVE_EXECUTION_ENABLED="true"
 # Option B: Accept offline mode (the app still works, using fallback responses)
 # No action needed - just acknowledge this is expected
 ```
+
+### /ready shows "offline_by_bad_key"
+
+`OPENROUTER_API_KEY` is set, but the startup credential check
+(`GET /api/v1/key`) came back 401/403 — the key is revoked, malformed, or
+belongs to a deleted account. Every run silently falls back to local
+simulation, which is exactly what this state exists to stop you from missing.
+
+Only an explicit 401/403 produces this state; a timeout, a 429, or a 5xx
+leaves the state alone, because a network fault is not evidence about a
+credential.
+
+**An unfunded key looks identical to an invalid one here.** Measured against
+the live provider on 2026-07-28: a funded valid key returns `200`, and a
+**valid but unfunded key returns `401`**. So this state means "invalid key
+**or** empty account" — check both. (It can also be a **network proxy**
+answering 403 on the app's behalf.)
+
+```bash
+# Confirm it yourself — this call costs zero tokens.
+# 200 = key valid AND funded. 401 = invalid OR out of credit.
+curl -sS -o /dev/null -w "%{http_code}\n" \
+  -H "Authorization: Bearer $OPENROUTER_API_KEY" \
+  https://openrouter.ai/api/v1/key
+
+fly secrets set OPENROUTER_API_KEY="sk-or-v1-..."   # then redeploy
+```
+
+The probe runs **once per process**, on a background thread, and only an
+explicit refusal is recorded — an inconclusive result never overwrites a
+verdict. Two consequences worth knowing:
+
+- the state clears on the next **restart**, not on the next `/ready` hit; and
+- a key that is revoked or defunded **mid-life** is not detected until the next
+  restart, so `/ready` keeps saying `live`. A periodic re-probe is the obvious
+  follow-up and is not implemented.
 
 ### Users get logged out every deploy
 

@@ -121,12 +121,33 @@ jobs:
         # the FR-016 trust-surface contract (trust-score-invariants). HARD gate:
         # continue-on-error was removed (the enforcement handoff); a red here is a
         # real regression and blocks the merge.
+        #
+        # WP-B/F-15: verdict-band + theme-toggle were written as blocking gates
+        # but never registered here — they were only swept by the visual-baseline
+        # SEEDING workflow, which does not gate a merge. An unregistered gate is
+        # not a gate. verdict-band pins the #8/#15 agreement-led band (incl. the
+        # AA contrast of every band surface on the green consensus state and the
+        # "never fabricate a coverage %" rule); theme-toggle pins #6 view by view.
+        #
+        # session-trail (PR8, issue #12) was the SAME omission one more time: the
+        # spec landed in tests/invariants/ and passes, but was never named here,
+        # so the conversation trail had no merge gate. The guard test
+        # tests/test_e2e_workflow_covers_all_invariant_specs.py has been red on
+        # exactly this since PR8 — that guard is doing its job, and this is the
+        # fix it was asking for.
         env:
           CI: "true"
         run: >-
           npx playwright test
           tests/invariants/rendering-invariants.spec.ts
           tests/invariants/trust-score-invariants.spec.ts
+          tests/invariants/verdict-band.spec.ts
+          tests/invariants/theme-toggle.spec.ts
+          tests/invariants/session-trail.spec.ts
+          tests/invariants/readiness-banner.spec.ts
+          tests/invariants/source-expander.spec.ts
+          tests/invariants/answer-completeness.spec.ts
+          tests/invariants/export-and-expanders.spec.ts
           --project=chromium
           --retries=0
 

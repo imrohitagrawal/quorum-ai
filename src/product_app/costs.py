@@ -29,6 +29,7 @@ from datetime import UTC, datetime, timedelta
 from decimal import ROUND_FLOOR, ROUND_HALF_UP, Decimal
 from enum import StrEnum
 from threading import RLock
+from typing import Any
 from uuid import UUID, uuid4
 
 from pydantic import BaseModel, Field
@@ -59,6 +60,21 @@ HARD_LIMIT_USD = Decimal("0.25")
 #: only ~$0.078 was real spend. Fixing the meter therefore MOVES the real
 #: per-account 24h envelope, ~$0.078 -> ~$0.183 (3 -> 7 runs), which is a
 #: money decision rather than a side effect of a bug fix.
+#:
+#: WP-D RE-MEASURED AND RATIFIED (operator-approved). The figures above are
+#: F-01's and are kept for the audit trail; they are NOT current. The default
+#: mix now prices at **$0.0317/run**, so this cap admits **6 runs**, not the
+#: 7 F-01 measured. Two honest corrections moved it: the
+#: ``google/gemini-2.5-flash`` fallback output price (0.0012 -> 0.0025,
+#: measured against the live public catalog) and pricing the round-2 debate
+#: prompt's prior-critique input, without which ``max_cost_usd`` was not a
+#: true ceiling. Note the 8 -> 6 drop predates WP-D: the branch's earlier
+#: ``config.py`` cap raise (700->2000, 800->3000) already put the real figure
+#: at 6, and a stale test pin had been hiding it. This cap STAYS at 0.20 —
+#: raising it to hold the run count constant would be counter-tuning a safety
+#: weight to preserve a metric. Pinned by
+#: ``tests/integration/test_query_run_cost_guardrails.py::
+#: test_daily_cap_admits_the_number_of_runs_its_dollar_value_pays_for``.
 #:
 #: The decision that ships with F-01 is to LEAVE this at 0.20, because 0.20 was
 #: never derived from watching production spend and so was never calibrated
@@ -364,8 +380,13 @@ class CostEstimationService:
         model_slots: list[ModelSlot],
         account_id: UUID | None = None,
         query_run_id: UUID | None = None,
+        context: dict[str, Any] | None = None,
     ) -> CostEstimate:
-        breakdown = self._estimate_breakdown(query_text=query_text, model_slots=model_slots)
+        breakdown = self._estimate_breakdown(
+            query_text=query_text,
+            model_slots=model_slots,
+            context=context,
+        )
         # ``breakdown.total`` is the quantized grand total (same value the
         # old ``_estimate_total(...).quantize(...)`` produced). Compute the
         # breakdown ONCE and attach it to every returned estimate — including
@@ -381,7 +402,9 @@ class CostEstimationService:
         # figure. The cumulative / daily-cap accounting below stays on the
         # realistic ``estimated`` — those track accumulated REAL spend, which
         # tracks the point estimate, not the worst case.
-        bound = self._estimate_bound_usd(query_text=query_text, model_slots=model_slots)
+        bound = self._estimate_bound_usd(
+            query_text=query_text, model_slots=model_slots, context=context
+        )
         threshold_action, reasons = self._threshold_for(bound)
         # C8: cumulative-spend guard. A user can issue many small
         # queries that each stay below ``HARD_LIMIT_USD`` but together
@@ -397,7 +420,18 @@ class CostEstimationService:
         # calls.
         if account_id is not None and cost_event_recorder is not None:
             cumulative = self._cumulative_spend_for(account_id)
-            if cumulative + estimated > HARD_LIMIT_USD:
+            # UNITS: ``cumulative`` is a sum of RECORDED point estimates, so the
+            # term added to it must be the point estimate too. ``59a4a8f``
+            # switched this (and the daily cap below) to ``bound`` to "fail
+            # safe", which instead compared a worst case against a realistic
+            # meter — apples to oranges on a money rail, and the exact opposite
+            # of what the comment 20 lines above this mandates.
+            #
+            # The per-call rail above KEEPS the bound: that one fails safe on a
+            # single call, which is what issue #16 rec #2/#3 asked for. These
+            # accumulation rails are a different question and must match their
+            # meter. See tests/unit/test_cost_rail_units.py.
+            if cumulative > 0 and cumulative + estimated > HARD_LIMIT_USD:
                 return CostEstimate(
                     estimated_cost_usd=estimated,
                     max_cost_usd=bound,
@@ -405,7 +439,7 @@ class CostEstimationService:
                     confirmation_token=None,
                     breakdown=breakdown,
                     reasons=[
-                        "Estimated cost is above the USD 0.25 hard limit for this account.",
+                        "Worst-case cost is above the USD 0.25 hard limit for this account.",
                         (
                             "Cumulative spend for this account is "
                             f"{cumulative.quantize(COST_DISPLAY_QUANTUM)} USD; "
@@ -449,6 +483,14 @@ class CostEstimationService:
                 self._log_daily_cap_bypassed()
             else:
                 already_spent = store.daily_spend_for(account_id)
+                # Same unit rule as the cumulative rail above: ``daily_spend_for``
+                # sums ``estimated_cost_usd``, so the addend is the point
+                # estimate. With ``bound`` here the cap admitted
+                # ``floor((CAP - bound) / unit) + 1`` runs instead of
+                # ``floor(CAP / unit)`` — one run of headroom permanently
+                # unusable — and any run whose BOUND alone exceeded the cap was
+                # BLOCKed with a null confirmation token even on an account that
+                # had spent nothing, which killed the confirmation band outright.
                 if already_spent + estimated > DAILY_CAP_USD:
                     return CostEstimate(
                         estimated_cost_usd=estimated,
@@ -458,7 +500,7 @@ class CostEstimationService:
                         breakdown=breakdown,
                         reasons=[
                             (
-                                f"Estimated cost would exceed the USD "
+                                f"Worst-case cost would exceed the USD "
                                 f"{DAILY_CAP_USD} daily cap for this account."
                             ),
                             (
@@ -632,7 +674,11 @@ class CostEstimationService:
     # -- internals --------------------------------------------------------
 
     def _estimate_breakdown(
-        self, *, query_text: str, model_slots: list[ModelSlot]
+        self,
+        *,
+        query_text: str,
+        model_slots: list[ModelSlot],
+        context: dict[str, Any] | None = None,
     ) -> CostBreakdown:
         """Compute the itemized cost partition (by model AND by stage).
 
@@ -666,6 +712,21 @@ class CostEstimationService:
             + (Decimal(str(settings.cost_output_tokens_per_query_token)) * query_tokens),
             Decimal(settings.initial_answer_max_tokens),
         )
+        # L4: compute extra context tokens from the optional follow-up context.
+        # The context dict carries { prior_question, prior_synthesis }; when
+        # present we price the prior_question as additional input tokens
+        # (it is injected into the system prompt of every debate/synthesis call).
+        # The prior_synthesis is re-sent as part of the user prompt and is
+        # priced in the upstream_answers_tokens term below; we add its length
+        # to the synthesis prompt token count explicitly.
+        context_tokens = Decimal(0)
+        if context:
+            prior_q = (context.get("prior_question") or "").strip()
+            prior_s = (context.get("prior_synthesis") or "").strip()
+            if prior_q:
+                context_tokens += Decimal(len(prior_q)) / CHARS_PER_TOKEN
+            if prior_s:
+                context_tokens += Decimal(len(prior_s)) / CHARS_PER_TOKEN
         (
             initial_per_model,
             initial_total,
@@ -687,6 +748,7 @@ class CostEstimationService:
             # per-section floor, not the enforced cap, so the point estimate
             # stays strictly <= the ``_estimate_bound_usd`` ceiling.
             synthesis_sections=Decimal(settings.cost_synthesis_sections),
+            context_tokens=context_tokens,
         )
         total = raw_total.quantize(COST_DISPLAY_QUANTUM, rounding=ROUND_HALF_UP)
 
@@ -750,6 +812,8 @@ class CostEstimationService:
         init_output_tokens: Decimal,
         synthesis_sections: Decimal = Decimal(1),
         debate_output_override: Decimal | None = None,
+        context_tokens: Decimal = Decimal(0),
+        price_round_two_prior_critique: bool = False,
     ) -> tuple[list[Decimal], Decimal, Decimal, Decimal, Decimal]:
         """The shared per-call token model, parameterised by the initial-answer
         output token count and the synthesis section count.
@@ -763,6 +827,11 @@ class CostEstimationService:
         differing only in the per-call output assumption (typical floor vs
         enforced cap), so the point estimate is always <= the bound and the two
         can never drift.
+
+        ``context_tokens`` is the extra input tokens from a follow-up context
+        (prior_question + prior_synthesis). It is priced into debate and synthesis
+        calls (those that receive context via the system prompt) but NOT into the
+        initial-answer calls.
         """
         if not model_slots:
             raise ValueError("model_slots must not be empty")
@@ -823,8 +892,36 @@ class CostEstimationService:
         # writers), not a rate borrowed from the four slot models. Their prompt
         # scales with the initial answers they consume (``init_output_tokens``),
         # so the guardrail bound's larger initial output flows through here too.
+        # L4: when a follow-up context is present, the prior_question is
+        # injected into the system prompt (same for every debate + synthesis
+        # call) and the prior_synthesis is re-sent in the user prompt (same
+        # for every synthesis section). Both are modelled as additional
+        # input tokens.
+        # Same prefix for debate (system) and synthesis (user).
+        context_input_tokens = context_tokens
         upstream_answers_tokens = Decimal(4) * init_output_tokens
-        debate_prompt_tokens = system_tokens + query_tokens + upstream_answers_tokens
+        debate_prompt_tokens = (
+            system_tokens + query_tokens + upstream_answers_tokens + context_input_tokens
+            # Round 2's prompt also carries round 1's critique in full
+            # (``debate._debate_user_prompt`` appends ``prior_round``, sliced
+            # nowhere), so debate input is NOT the same for both rounds. Without
+            # this term ``max_cost_usd`` was not a true ceiling: real debate
+            # input exceeded the priced figure by up to one full critique, and
+            # WP-D's 700 -> 2000 raise nearly tripled the gap. The synthesis
+            # term below has always added ``2 * debate_output_tokens`` for
+            # exactly this reason, which is what marks the omission an
+            # oversight rather than a modelling choice.
+            #
+            # Added ONCE to ``raw_total`` below, NOT to this per-round figure.
+            # An earlier revision charged it to both rounds "to be safe"; that
+            # over-priced every estimate by one critique's input and MEASURED
+            # 9 of the 495 four-slot mixes over the shipped catalog flipping
+            # CONFIRM -> BLOCK on the over-charge alone. BLOCK is a HARD refusal
+            # (``confirmation_token`` is ``None``), so the user cannot proceed
+            # at all — "over-protective" is the wrong word for denying a run the
+            # exact model says is affordable. A fail-safe bound must be a
+            # ceiling, not an inflation.
+        )
         # Both rounds share the same token model (the invariant the UI and the
         # breakdown tests rely on: ``by_stage`` round_1 == round_2).
         debate_round_cost = _cost(
@@ -834,6 +931,8 @@ class CostEstimationService:
             system_tokens
             + query_tokens
             + upstream_answers_tokens
+            + context_input_tokens  # prior_question in system prompt
+            + context_input_tokens  # prior_synthesis in user prompt (re-sent)
             + Decimal(2) * debate_output_tokens
         )
         # Synthesis fans out into ``synthesis_sections`` independent live calls,
@@ -843,10 +942,49 @@ class CostEstimationService:
         synthesis_cost = synthesis_sections * _cost(
             settings.synthesis_model_id, synthesis_prompt_tokens, synthesis_output_tokens
         )
-        raw_total = initial_total + Decimal(2) * debate_round_cost + synthesis_cost
+        # ROUND 2 ONLY: its prompt carries round 1's critique in full
+        # (``debate._debate_user_prompt`` appends ``prior_round``, sliced
+        # nowhere). Added here, once, rather than to ``debate_round_cost`` —
+        # that keeps the bound EXACT (no over-charge, so no affordable run is
+        # hard-refused) while leaving the displayed ``by_stage`` round_1 ==
+        # round_2 invariant intact. Without the term at all, ``max_cost_usd``
+        # was not a true ceiling, and WP-D's 700 -> 2000 raise nearly tripled
+        # the shortfall.
+        # Applied ONCE, and only for the BOUND
+        # (``price_round_two_prior_critique`` is set solely by
+        # :meth:`_estimate_bound_usd`, which returns a scalar and no
+        # breakdown). Two earlier shapes were both wrong:
+        #   * folding it into ``debate_prompt_tokens`` charged it to BOTH
+        #     rounds — MEASURED 9 of the 495 shipped-catalog mixes flipping
+        #     CONFIRM -> BLOCK on that over-charge alone, and BLOCK is a hard
+        #     refusal with no confirmation token, so a run the exact model
+        #     says is affordable became unrunnable;
+        #   * adding it to ``raw_total`` on the POINT path broke the
+        #     reconciliation invariant — ``by_stage`` stopped summing to
+        #     ``total``, because the term belongs to no single displayed stage.
+        # Bound-only keeps the ceiling EXACT and leaves both displayed
+        # contracts (round_1 == round_2, and both partitions reconciling)
+        # untouched.
+        prior_critique_input_cost = (
+            _cost(settings.debate_model_id, debate_output_tokens, Decimal(0))
+            if price_round_two_prior_critique
+            else Decimal(0)
+        )
+        raw_total = (
+            initial_total
+            + Decimal(2) * debate_round_cost
+            + prior_critique_input_cost
+            + synthesis_cost
+        )
         return initial_per_model, initial_total, debate_round_cost, synthesis_cost, raw_total
 
-    def _estimate_bound_usd(self, *, query_text: str, model_slots: list[ModelSlot]) -> Decimal:
+    def _estimate_bound_usd(
+        self,
+        *,
+        query_text: str,
+        model_slots: list[ModelSlot],
+        context: dict[str, Any] | None = None,
+    ) -> Decimal:
         """Fail-safe upper bound on real cost — the "up to $Y" figure the cost
         guardrail is evaluated against (issue #16 rec #2/#3).
 
@@ -864,6 +1002,16 @@ class CostEstimationService:
         total is a true ceiling on real cost: the guardrail keying off it can
         only ever over-protect, never wave through a run that then bills more.
         """
+        # Compute context tokens once; both the point estimate and the bound
+        # must model the same context so the point <= bound invariant holds.
+        context_tokens = Decimal(0)
+        if context:
+            prior_q = (context.get("prior_question") or "").strip()
+            prior_s = (context.get("prior_synthesis") or "").strip()
+            if prior_q:
+                context_tokens += Decimal(len(prior_q)) / CHARS_PER_TOKEN
+            if prior_s:
+                context_tokens += Decimal(len(prior_s)) / CHARS_PER_TOKEN
         init_output_tokens = Decimal(settings.initial_answer_max_tokens)
         *_, raw_total = self._cost_components(
             query_text=query_text,
@@ -871,6 +1019,10 @@ class CostEstimationService:
             init_output_tokens=init_output_tokens,
             synthesis_sections=Decimal(settings.cost_synthesis_sections),
             debate_output_override=Decimal(settings.cost_debate_output_tokens_cap),
+            context_tokens=context_tokens,
+            # The bound is the only caller that must be a true CEILING, and the
+            # only one with no breakdown to reconcile.
+            price_round_two_prior_critique=True,
         )
         return raw_total.quantize(COST_DISPLAY_QUANTUM, rounding=ROUND_HALF_UP)
 

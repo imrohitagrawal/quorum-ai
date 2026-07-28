@@ -18,6 +18,8 @@ import json
 import logging
 import os
 import time
+from collections.abc import AsyncIterator
+from contextlib import asynccontextmanager
 from html import escape
 from pathlib import Path
 from typing import Annotated, Any
@@ -62,6 +64,7 @@ from product_app.query_runs import _ip_rate_limiter
 from product_app.query_runs import router as query_runs_router
 from product_app.readiness import (
     run_startup_probe,
+    start_key_auth_probe,
 )
 from product_app.request_id import RequestIdMiddleware
 from product_app.run_history_store import RunHistoryStore
@@ -192,6 +195,25 @@ def _warn_if_docs_exposed_in_deployed_env(
         )
 
 
+@asynccontextmanager
+async def _lifespan(_app: FastAPI) -> AsyncIterator[None]:
+    """Work that must happen when the SERVER starts, not when the module
+    is imported.
+
+    F-14's credential probe lives here rather than at module scope for
+    one reason: it is an AUTHENTICATED request. ``scripts/export_openapi.py``
+    and ``make openapi-check`` import ``product_app.main``, and at module
+    scope that made a codegen step send the operator's live API key to
+    the provider. Importing the app must not be a network action; running
+    the server legitimately is.
+
+    ``run_startup_probe`` above stays at import: it only inspects settings
+    and the catalog cache, and the startup banner it logs is the point.
+    """
+    start_key_auth_probe()
+    yield
+
+
 def _build_fastapi(active_settings: Settings) -> FastAPI:
     """Construct the base FastAPI app with the docs routes gated per settings.
 
@@ -205,6 +227,7 @@ def _build_fastapi(active_settings: Settings) -> FastAPI:
     that FastAPI honours None.
     """
     return FastAPI(
+        lifespan=_lifespan,
         title=active_settings.app_name,
         version="0.2.0",
         description=(

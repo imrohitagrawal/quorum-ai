@@ -14,6 +14,10 @@ and ``providers.calculate_citation_coverage``, and the synthesis-level
 aggregation copied from ``synthesis.py``). Nothing about coverage is
 hand-written in the JSON, so a case cannot lie about its own metrics.
 
+WP-C / F-03: ``estimate_material_claim_count`` is still imported and used for
+the informational length figure, but it is NO LONGER part of the coverage
+arithmetic — coverage counts answers, not characters.
+
 Zero I/O beyond reading the JSON files that sit next to this module. No
 network, no clock, no randomness.
 """
@@ -33,7 +37,6 @@ from product_app.providers import (
     ProviderPath,
     SourceReference,
     calculate_citation_coverage,
-    estimate_material_claim_count,
 )
 from product_app.synthesis import (
     FinalSynthesis,
@@ -82,14 +85,19 @@ def _answer(raw: dict[str, Any]) -> InitialModelAnswer:
     answer_text = raw.get("answer_text", "")
     status = InitialAnswerStatus(raw.get("status", InitialAnswerStatus.COMPLETED))
     provider_path = ProviderPath(raw.get("provider_path", ProviderPath.OPENROUTER_SEARCH))
-    material = estimate_material_claim_count(answer_text) if answer_text.strip() else 0
-    cited = 1 if any(not source.is_fallback for source in sources) else 0
+    # WP-C / F-03: mirror ``providers._completed_answer`` exactly — one answer
+    # that produced text is ONE unit of coverage, and it either carries a
+    # primary source or it does not. (This block previously used
+    # ``estimate_material_claim_count`` as the denominator AND gave a sourced
+    # answer full per-answer coverage, so it never actually matched production
+    # despite the comment claiming it did.)
+    answer_count = 1 if answer_text.strip() else 0
+    sourced_answer_count = (
+        1 if answer_count and any(not source.is_fallback for source in sources) else 0
+    )
     coverage = calculate_citation_coverage(
-        material_claim_count=material,
-        # Production counts at most one cited claim per answer (see
-        # synthesis.py's aggregate) — mirror that rather than invent a
-        # per-answer number the pipeline never computes.
-        cited_claim_count=min(cited * material, material),
+        answer_count=answer_count,
+        sourced_answer_count=sourced_answer_count,
     )
     return InitialModelAnswer(
         slot_number=raw["slot_number"],
@@ -110,13 +118,15 @@ def _answer(raw: dict[str, Any]) -> InitialModelAnswer:
 
 def _aggregate_coverage(answers: list[InitialModelAnswer]) -> CitationCoverage:
     """Reproduce ``synthesis.py``'s aggregate coverage exactly."""
-    material_claim_count = sum(a.citation_coverage.material_claim_count for a in answers)
-    primary_cited_claim_count = sum(
-        1 for a in answers if any(not source.is_fallback for source in a.sources)
+    answer_count = sum(a.citation_coverage.answer_count for a in answers)
+    sourced_answer_count = sum(
+        1
+        for a in answers
+        if a.citation_coverage.answer_count and any(not source.is_fallback for source in a.sources)
     )
     return calculate_citation_coverage(
-        material_claim_count=material_claim_count,
-        cited_claim_count=primary_cited_claim_count,
+        answer_count=answer_count,
+        sourced_answer_count=sourced_answer_count,
     )
 
 

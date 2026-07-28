@@ -62,9 +62,9 @@ def _answer(
         status=status,
         latency_ms=1,
         citation_coverage=CitationCoverage(
-            material_claim_count=1,
-            cited_claim_count=0,
-            coverage_ratio=Decimal("0"),
+            answer_count=1,
+            sourced_answer_count=0,
+            sourced_answer_ratio=Decimal("0"),
             target_met=False,
         ),
     )
@@ -100,9 +100,9 @@ def _synthesis(
         recommendation=recommendation,
         high_stakes_notice=None,
         citation_coverage=CitationCoverage(
-            material_claim_count=0,
-            cited_claim_count=0,
-            coverage_ratio=Decimal("0"),
+            answer_count=0,
+            sourced_answer_count=0,
+            sourced_answer_ratio=Decimal("0"),
             target_met=False,
         ),
         quality_checks=SynthesisQualityChecks(

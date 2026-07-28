@@ -113,9 +113,9 @@ def _captured_answer(slot: ModelSlot) -> InitialModelAnswer:
         status=InitialAnswerStatus.COMPLETED,
         latency_ms=11,
         citation_coverage=CitationCoverage(
-            material_claim_count=2,
-            cited_claim_count=2,
-            coverage_ratio=Decimal("1"),
+            answer_count=2,
+            sourced_answer_count=2,
+            sourced_answer_ratio=Decimal("1"),
             target_met=True,
         ),
         token_usage=TokenUsage(prompt_tokens=1000, completion_tokens=500, total_tokens=1500),

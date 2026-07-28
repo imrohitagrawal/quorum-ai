@@ -31,10 +31,8 @@ import { waitForComposerReady } from "./stabilize";
 // the formatter (bug #30).
 // Only the two markers that ANY correct #30 fix provably eliminates from text
 // nodes: inline bold (`**` → <strong>) and a line-START heading (`## ` → <h*>).
-// We deliberately do NOT flag ordered-list markers: a correctly rendered <ol>
-// exposes its numbers as CSS ::marker pseudo-elements, not text nodes, so a
-// text-node walker never sees them — flagging "1." would risk a non-greenable
-// gate. Mid-line `##` is likewise avoided in the fixture, because valid Markdown
+// Ordered-list markers ARE flagged as of WP-F/F-13 (see the entry below for the
+// measurement that changed this call). Mid-line `##` is avoided in the fixture, because valid Markdown
 // headings must start a line; a formatter legitimately leaves mid-sentence `##`
 // alone, so seeding it would make the gate impossible to turn green.
 export const RAW_MARKDOWN_PATTERNS: { name: string; re: RegExp }[] = [
@@ -53,6 +51,46 @@ export const RAW_MARKDOWN_PATTERNS: { name: string; re: RegExp }[] = [
   //   not a blockquote and is intentionally not matched).
   { name: "underscore emphasis (_x_ / __x__)", re: /(^|\s)_{1,2}[^\s_][^_]*_{1,2}(?=[\s.,!?)]|$)/ },
   { name: "line-start blockquote (> )", re: /(^|\n)>\s/ },
+  // Bullet markers: the block formatter converts lines starting with "- " or
+  // "* " into <ul><li>, so a correct render leaves NO "- " / "* " marker in
+  // any text node. Also covers optional indentation (tabs/spaces before the
+  // marker).
+  { name: "bullet marker (- / * )", re: /(?:^|\n)[ \t]*[-*][ \t]/ },
+  // WP-F/F-13: ordered-list markers are flagged, but only for 1-2 DIGIT
+  // markers, and that limit is a measured necessity rather than tidiness.
+  //
+  // The comment that used to sit here called this pattern "non-greenable"
+  // because a correctly rendered <ol> hides its numbers in ::marker where a
+  // text-node walker cannot see them. That is the argument FOR asserting it,
+  // and MEASURED before the F-13 fix there were 47 text nodes under
+  // #main-content carrying a literal "1. "/"2. ": every ordered list in the
+  // golden run rendered as plain paragraphs.
+  //
+  // But the original caution was HALF RIGHT, and review proved it. An
+  // unrestricted `\d+\.` also matches correctly-rendered PROSE that happens to
+  // begin a line with a number — "…first proposed in\n2025. Nobody has
+  // revisited…" is one paragraph, rendered exactly right, and the gate flagged
+  // it. Restricting to 1-2 digits removes the year/identifier class, which is
+  // the one that actually occurs.
+  //
+  // It matches the LIST-OPENING marker "1." only, and that is a correctness
+  // requirement rather than caution. Round 2 of review found that any wider
+  // pattern contradicts the formatter: an ordered list may only interrupt a
+  // paragraph when it starts at 1 (CommonMark — without that rule a soft wrap
+  // onto "2025." was parsed as a list item and the year DELETED), so the
+  // formatter deliberately leaves "2. "/"3. " as literal text mid-paragraph.
+  // A gate flagging those would be red on output the formatter is correct to
+  // produce, with no fix available. "1." has no such conflict: a list that
+  // renders at all renders its numbers into ::marker, invisible to a text
+  // walker, so a literal "1. " means the whole list failed to render — which
+  // is exactly the defect this exists for (47 such nodes before F-13).
+  //
+  // Known limits, stated rather than implied: a list is only caught at its
+  // FIRST item, and the blockquote and inline-prose paths have no ordered-list
+  // handling at all (issue #120), so a numbered list in a blockquote would
+  // fire this with no fix available. The fixture seeds none — that, and not
+  // the pattern, is why this is green there.
+  { name: "ordered-list marker (1. )", re: /(?:^|\n)[ \t]*1\.[ \t]/ },
 ];
 // STRUCTURAL limits of this gate (documented, not silently implied):
 //   (a) scope — it walks `#main-content` (where provider prose renders); app
@@ -80,10 +118,61 @@ const MESSY_CAVEAT =
   "**High-stakes:** treat the cost figure as an estimate, not a bill — verify against a real run before relying on it.";
 const MESSY_CONSENSUS =
   "The models **agree** on the primary recommendation: instrument first, export second. This is the core finding and it is well supported.";
+// Bullet-list surface. WIRED as of WP-F (it was dead for months — defined here,
+// referenced by nothing, so no gate ever rendered it; see §7.4 of the master
+// plan on fixtures gating coverage). It is seeded into the BLOCK surface
+// (`MESSY_DISAGREEMENT` → setProse → formatAnswerText), not an inline
+// one: a <ul> inside a <span>/<p> cell is invalid markup, so "give mdInline its
+// own bullet regex for inline surfaces" was the wrong target. Exercises `- `
+// markers, indentation, and bold/italic/link/code inside items. A correct block
+// formatter produces ONE <ul> with one <li> per item and no marker in any text
+// node — measured before the F-13 fix, today's formatter instead emits a
+// SEPARATE single-item <ul> per line, each nested in a <p> the browser then
+// hoists it out of, leaving empty paragraphs behind.
+const MESSY_BULLET_LIST =
+  "- **First point:** instrument retention events before export.\n" +
+  "  - Nested indented bullet with a *nested italic* run.\n" +
+  "- **Second point:** verify the cost figure against a real run.\n" +
+  "- *Third point:* keep the $0.25 cap until measured.\n" +
+  "- Fourth bullet with a [link](https://example.com/bullets) inside it.\n" +
+  "- Fifth bullet with `inline_code` and __underscore__ emphasis.";
+
+// WP-F: this section is a BLOCK surface (setProse → formatAnswerText) and,
+// unlike the model cards, it is VISIBLE on the result view — the model-card
+// grid measures 0x0 there, so seeding list shapes into an answer body would
+// have gated markup no user ever sees. Three shapes ride along here:
+//
+//   (a) a SOFT-WRAPPED paragraph — one paragraph the provider broke with
+//       SINGLE newlines, which is how most real model output arrives. Every
+//       other paragraph in this fixture is blank-line separated, and that is
+//       exactly why the defect stayed invisible: MEASURED on today's code,
+//       "One.\nTwo.\nThree." renders as <ul><li>One.</li></ul><ul><li>Two.
+//       </li></ul><p>Three.</p> — ordinary prose becomes a run of bullets.
+//   (b) STRAY ASTERISKS in prose. Two unpaired `*` (a multiplication, a
+//       footnote mark) pair up ACROSS words into a bogus <em> whose text
+//       carries leading/trailing spaces — the signature no real italic has.
+//   (c) MESSY_BULLET_LIST, a genuine six-item list.
 const MESSY_DISAGREEMENT =
-  "Two models **dissent** on the secondary point (whether to gate the export behind a manual review). Preserved here rather than smoothed over.";
+  "Two models **dissent** on the secondary point (whether to gate the export behind a manual review). Preserved here rather than smoothed over.\n\n" +
+  "The dissent is narrow but real.\n" +
+  // A soft wrap landing on a YEAR. Any line starting `<digits>. ` used to be
+  // treated as an ordered-list item and the number STRIPPED, so "2025." was
+  // deleted outright — content destruction, invisible to the raw-marker gate
+  // because the marker is removed rather than left in a text node.
+  "The gate was first proposed in\n" +
+  "2025. Nobody has revisited the estimate since.\n" +
+  "The instrumentation is rarely the hard part; agreeing on a single cohort definition is.\n" +
+  "Write the definition down before the first chart is built.\n\n" +
+  "One panel priced the manual gate at roughly 3 * 40 reviewer-minutes per cohort * 12 cohorts, which it judged affordable.\n\n" +
+  // The UNSPACED form of the same arithmetic. Round 2 of review found the
+  // relaxed italic rule turned this into "3<em>40 per cohort and 2</em>12",
+  // and that the existing stray-asterisk gate could not catch it: that gate
+  // keys off emphasis whose TEXT carries bounding spaces, which the regex
+  // cannot produce. Seeded so the assertion has something real to fail on.
+  "Rerunning it costs 3*40 per cohort and 2*12 per quarter.\n\n" +
+  MESSY_BULLET_LIST;
 const MESSY_SOURCE_SUPPORT =
-  "Backed by **cited** sources across all responding models. Coverage ratio 0.85 against a 0.80 target.";
+  "Backed by **cited** sources on three of four responding models. Source coverage 0.75 against a 0.80 target.";
 // Deliberately > 180 chars with a `**bold**` run STRADDLING character 180
 // (opening `**` at index 167, closing at 229): the old
 // `truncateText(uncertaintyText, 180)` sliced here mid-run, leaving a dangling
@@ -115,6 +204,17 @@ const MESSY_SOURCE_TITLE_A =
   "Smith et al. (2024) — Retention benchmarks for SaaS (working paper, v2)";
 const MESSY_SOURCE_TITLE_B =
   "Jones & Lee — Cohort export patterns [preprint]";
+// WP-F/F-19: three MORE unique titles. The fixture previously carried the same
+// two source objects on every answering slot, so the run deduped to 2 unique
+// sources — below the `slice(0, 3)` cap in the chip row, which made the
+// "+N more" affordance unreachable by ANY test. It is not enough to fix the
+// affordance; the fixture has to be able to see it.
+const MESSY_SOURCE_TITLE_C =
+  "Okonkwo (2025) — Net revenue retention, measured honestly";
+const MESSY_SOURCE_TITLE_D =
+  "Garcia — Activation cohorts vs signup cohorts (conference talk)";
+const MESSY_SOURCE_TITLE_E =
+  "Retention instrumentation reference schema v4 (documentation)";
 
 // A genuinely long, multi-paragraph answer (~450 words) to stress the transcript
 // layout (#33) and the answer-section formatter. This surface IS formatted, so
@@ -130,6 +230,13 @@ const LONG_MESSY_ANSWER = (label: string) =>
   "3. **Expansion / contraction** — seat, usage, or tier changes, timestamped and attributable to a cohort.\n" +
   "4. **Churn signal** — the leading indicators (support escalations, usage decay) that precede a cancellation.\n\n" +
   "Without those events, every retention metric is a lagging autopsy. With them, you can build cohorted curves and, more importantly, intervene while a save is still possible. See https://example.com/retention/instrumentation for a reference event schema.\n\n" +
+  // A single UNBREAKABLE token far wider than a 375px column. Real provider
+  // output routinely contains one — a tracking URL, a content hash, a fully
+  // qualified identifier. Without it the golden fixture cannot exercise the
+  // `overflow-wrap` rule that stops such a token forcing horizontal page
+  // scroll, and that rule would ship untested (the same trap that let the
+  // `li::marker` override go unexercised).
+  "Reference build: `quorum_retention_instrumentation_reference_schema_v4_20260727_a1b2c3d4e5f6a7b8c9d0.json` — see https://example.com/retention/instrumentation/reference/schema/v4/quorum-retention-instrumentation-reference-schema-20260727.json for the canonical copy.\n\n" +
   "### Cohorting and the common trap\n\n" +
   "Cohort by **signup month** for acquisition-quality questions, but cohort by **activation month** for product questions — mixing the two is the single most common source of misleading retention charts. Always state the cohort definition on the chart itself; a curve without a stated denominator is not interpretable.\n\n" +
   "### What good looks like\n\n" +
@@ -141,16 +248,31 @@ export const SLOTS = [
   { slot_number: 1, model_id: "openai/gpt-4o-mini", display_label: "GPT-4o-mini" },
   { slot_number: 2, model_id: "anthropic/claude-haiku-4.5", display_label: "Claude Haiku 4.5" },
   { slot_number: 3, model_id: "google/gemini-2.5-flash", display_label: "Gemini 2.5 Flash" },
-  { slot_number: 4, model_id: "deepseek/deepseek-v3.1", display_label: "DeepSeek V3.1" },
+  // WP-G1: slot 4 is NVIDIA. The fixture hardcoding deepseek is the second,
+  // independent reason DeepSeek kept appearing after the model id was swapped
+  // — screenshots and e2e literally said so regardless of the server default.
+  { slot_number: 4, model_id: "nvidia/nemotron-3-nano-30b-a3b", display_label: "Nemotron 3 Nano" },
 ];
-const CC = { material_claim_count: 12, cited_claim_count: 10, coverage_ratio: "0.85", target_ratio: "0.80", target_met: true };
+// WP-C / F-03: coverage is the share of ANSWERS carrying a primary source, so
+// a PER-ANSWER shape is always out of 1. The old fixture used 12/10 = 0.85,
+// which is not a shape the server can emit for one answer at all.
+const CC = { answer_count: 1, sourced_answer_count: 1, sourced_answer_ratio: "1.00", target_ratio: "0.80", target_met: true };
 // The empty-citation case (#31 shape): a slot that answered but returned NO sources.
-const CC_EMPTY = { material_claim_count: 9, cited_claim_count: 0, coverage_ratio: "0.00", target_ratio: "0.80", target_met: false };
+const CC_EMPTY = { answer_count: 1, sourced_answer_count: 0, sourced_answer_ratio: "0.00", target_ratio: "0.80", target_met: false };
+// BELOW-TARGET coverage at RUN level, and now internally consistent with the
+// four per-answer shapes above: slot 3 is CC_EMPTY, so 3 of 4 answers carry a
+// primary source -> 0.75, just under the 0.80 target. Drives the verdict band's
+// caution line.
+//
+// This replaces a 4/32 = 0.13 shape that was the F-03 defect itself: a boolean
+// numerator over a chars-per-claim denominator. That number was UNREACHABLE by
+// any well-sourced run, so the caution line it drove fired on every run.
+const CC_BELOW = { answer_count: 4, sourced_answer_count: 3, sourced_answer_ratio: "0.75", target_ratio: "0.80", target_met: false };
 const BY_MODEL = [
   { model_id: "openai/gpt-4o-mini", display_name: "GPT-4o-mini", usd: "0.034", kind: "model" },
   { model_id: "anthropic/claude-haiku-4.5", display_name: "Claude Haiku 4.5", usd: "0.062", kind: "model" },
   { model_id: "google/gemini-2.5-flash", display_name: "Gemini 2.5 Flash", usd: "0.031", kind: "model" },
-  { model_id: "deepseek/deepseek-v3.1", display_name: "DeepSeek V3.1", usd: "0.039", kind: "model" },
+  { model_id: "nvidia/nemotron-3-nano-30b-a3b", display_name: "Nemotron 3 Nano", usd: "0.039", kind: "model" },
   { model_id: "synthesis", display_name: "Debate + synthesis", usd: "0.024", kind: "synthesis" },
 ];
 const BY_STAGE = [
@@ -169,10 +291,35 @@ const goldenAnswer = (i: number) => ({
   slot_number: i + 1, model_id: SLOTS[i].model_id,
   answer_text: LONG_MESSY_ANSWER(SLOTS[i].display_label),
   // Slot 3 is the empty-citation case (#31): answered, zero sources.
+  // WP-F/F-19: the answering slots no longer carry an IDENTICAL pair. Slots 1
+  // and 2 overlap on source "b" (real panels do cite the same paper twice, and
+  // the app's dedupe must still collapse it), while slot 4 cites two of its
+  // own — so the run holds 5 unique sources, above the 3-chip cap, and the
+  // "+N more" affordance is finally reachable by a test.
   sources: i === 2
     ? []
-    : [{ title: MESSY_SOURCE_TITLE_A, url: "https://example.com/a", provider: "openrouter_search" },
-       { title: MESSY_SOURCE_TITLE_B, url: "https://example.com/b", provider: "openrouter_search" }],
+    : i === 0
+      ? [{ title: MESSY_SOURCE_TITLE_A, url: "https://example.com/a", provider: "openrouter_search" },
+         { title: MESSY_SOURCE_TITLE_B, url: "https://example.com/b", provider: "openrouter_search" }]
+      : i === 1
+        ? [{ title: MESSY_SOURCE_TITLE_B, url: "https://example.com/b", provider: "openrouter_search" },
+           { title: MESSY_SOURCE_TITLE_C, url: "https://example.com/c", provider: "openrouter_search" }]
+        : [{ title: MESSY_SOURCE_TITLE_D, url: "https://example.com/d", provider: "openrouter_search" },
+           { title: MESSY_SOURCE_TITLE_E, url: "https://example.com/e", provider: "openrouter_search" }],
+  // WP-F/issue #114: the fixture carried NO provider_notice, so the blocking
+  // gate never rendered a single one of the nine user-facing notice strings
+  // rewritten in WP-E — they shipped with no browser-level coverage at all.
+  // Slot 3 is the zero-source slot, so NOTICE_NO_SOURCES_FOUND is the notice a
+  // real server emits for it. Quoted VERBATIM from the PROVIDER_NOTICES
+  // registry (`src/product_app/providers.py`); a drift guard pins the two
+  // copies together, so edit the registry, never this string.
+  provider_notice: i === 2
+    ? "This model's answer came back without any linked sources, so it does not count toward this run's source support."
+    : null,
+  // WP-D set `shortened` on the API and WP-F renders it. Slot 1 only: a flag
+  // on every answer would be as uninformative as a flag on none, and would
+  // let a gate pass that a blanket marker also passes.
+  shortened: i === 0,
   provider_attempt_order: ["openrouter_search"], provider_path: "openrouter_search",
   fallback_used: false, status: "completed", latency_ms: 2200 + i * 100,
   citation_coverage: i === 2 ? CC_EMPTY : CC,
@@ -191,8 +338,14 @@ const goldenMovements = (revised: number) => SLOTS.map((s, i) => ({
 const goldenSynthesis = () => ({
   status: "completed", consensus: MESSY_CONSENSUS, disagreement: MESSY_DISAGREEMENT,
   source_support: MESSY_SOURCE_SUPPORT, uncertainty: MESSY_UNCERTAINTY,
-  recommendation: MESSY_RECOMMENDATION, citation_coverage: CC,
-  quality_checks: { citation_coverage_target_met: true, false_consensus_preserved: false, decision_support_framing_present: true, high_stakes_warning_required: true },
+  // Review A6: this is the RUN-level shape, so it must be the run-level
+  // constant, not the per-answer CC. goldenAnswer(2) is the zero-source slot,
+  // so a real server on these four answers emits 3 of 4 = 0.75, below target.
+  // It previously carried CC (answer_count: 1), which no server can emit for a
+  // run — and goldenCompletedResp() is what the blocking invariant, visual,
+  // degraded and a11y lanes all consume.
+  recommendation: MESSY_RECOMMENDATION, citation_coverage: CC_BELOW,
+  quality_checks: { citation_coverage_target_met: false, false_consensus_preserved: false, decision_support_framing_present: true, high_stakes_warning_required: true },
   high_stakes_notice: MESSY_CAVEAT, latency_ms: 4200, summary: MESSY_SUMMARY,
 });
 const progress = (stage: string, states: string[]) => ({
@@ -213,7 +366,12 @@ export const goldenRunningResp = (elapsedMs: number) => ({
   query_run_id: "22222222-2222-4222-8222-222222222222", status: "initial_answers_running", correlation_id: "corr-golden-0001",
   model_slots: SLOTS, cost_estimate: costEstimate("0.100", "allow"), elapsed_time_ms: elapsedMs,
   failed_steps: [], missing_steps: [], progress: progress("initial_answers", ["running", "pending", "pending", "pending"]),
-  partial_failure_notice: null, provider_failure_notices: [],
+  partial_failure_notice: null,
+  // Mirrors what query_runs.py rolls up from the answers above — the
+  // run-level list is the notice path a user actually sees.
+  provider_failure_notices: [
+    "This model's answer came back without any linked sources, so it does not count toward this run's source support.",
+  ],
   result: { model_answers: [goldenAnswer(0), goldenAnswer(1)], debate_outputs: [], final_synthesis: null, agreement: { aligned: 0, total: 4 }, position_movements: [] },
   result_generated_at_utc: "2026-07-10T12:00:00Z", demo_mode: false, live_count: 2, local_count: 0, material_claim_count: 6,
   actual_cost_usd: "0.000", actual_breakdown: null,
@@ -231,6 +389,52 @@ export const goldenCompletedResp = () => ({
   result_generated_at_utc: "2026-07-10T12:00:00Z", demo_mode: false, live_count: 4, local_count: 0, material_claim_count: 12,
   actual_cost_usd: "0.188", actual_breakdown: breakdown("0.188"),
 });
+
+/**
+ * The CONSENSUS shape — 4 of 4 aligned, so `isConsensusResult()` is true and the
+ * band paints the one sanctioned large green surface.
+ *
+ * WHY this exists: `goldenCompletedResp()` is 3 of 4 — a DIVIDED panel — and
+ * carries `target_met: true` with no `synthesis_mode`. It therefore never
+ * renders the consensus band, the coverage caution line, or the provenance
+ * badge, so every `[data-consensus="true"]` rule was untested. That is exactly
+ * how F-04 shipped fully green with an amber caution and a blue badge rendering
+ * at ~1.15:1 on the dark-green band — invisible, on nearly every production run
+ * (the server defaults `synthesis_mode` to "simulated").
+ *
+ * It deliberately combines all three: green band + below-target coverage +
+ * non-live synthesis_mode. `revisedCount` stays 3 so the inferred-narration
+ * caption renders on the green surface too.
+ */
+export const goldenConsensusResp = () => {
+  const resp = goldenCompletedResp() as Record<string, any>;
+  resp.result.agreement = { aligned: 4, total: 4 };
+  resp.result.final_synthesis = {
+    ...resp.result.final_synthesis,
+    citation_coverage: CC_BELOW,
+    synthesis_mode: "simulated",
+    // Keep every field that RESTATES the numbers consistent with CC_BELOW and
+    // with 4-of-4. A fixture whose prose contradicts its own structured values
+    // is the dishonest shape these gates exist to catch, and it would quietly
+    // undermine any future assertion that reads that prose.
+    quality_checks: {
+      ...resp.result.final_synthesis.quality_checks,
+      citation_coverage_target_met: false,
+    },
+    source_support:
+      "Backed by **cited** sources on three of four responding models. Source coverage 0.75 against a 0.80 target.",
+    disagreement:
+      "No model **dissents**: all four converged on the same recommendation, including the secondary point about gating the export behind a manual review.",
+  };
+  // WP-C / F-03: ``material_claim_count`` is an INDEPENDENT length estimate now
+  // (chars/200 across the four answers), not the coverage denominator, so it is
+  // deliberately NOT derived from CC_BELOW any more. Nothing renders it — the
+  // "Claims inspected" card was removed with the redefinition — but the served
+  // field is still part of the pre-S2 contract, so the fixture carries a
+  // plausible value.
+  resp.material_claim_count = 32;
+  return resp;
+};
 
 const fulfil = (body: unknown, status = 200) => ({ status, contentType: "application/json", body: JSON.stringify(body) });
 
@@ -344,10 +548,12 @@ const costEstimateEnvelope = () => ({
 });
 
 /** Drive composer → run → completed RESULT view with the golden (messy) payload. */
-export async function driveToResult(page: Page) {
+export async function driveToResult(page: Page, resp: unknown = goldenCompletedResp()) {
   await boot(page);
   await baseRoutes(page);
-  await page.route(/\/v1\/query-runs\/[0-9a-f-]{36}$/, (r) => r.fulfill(fulfil(goldenCompletedResp())));
+  // `resp` lets a spec drive this same flow with a HOSTILE payload without
+  // polluting the golden fixture every other lane consumes.
+  await page.route(/\/v1\/query-runs\/[0-9a-f-]{36}$/, (r) => r.fulfill(fulfil(resp)));
   await page.route(/\/v1\/query-runs$/, (r) =>
     r.request().method() === "POST" ? r.fulfill(fulfil(goldenCreateResp())) : r.continue());
   await fill(page);
@@ -359,6 +565,39 @@ export async function driveToResult(page: Page) {
   // late-rendering surface cannot slip past as a spurious pass.
   await expect(page.locator("#result-verdict[data-consensus]")).toBeVisible({ timeout: 20000 });
   await expect(page.locator("#result-transcript-link")).toBeVisible({ timeout: 20000 });
+}
+
+/**
+ * Drive composer → run and STOP on the live-run view (the poll never
+ * completes). The live-run view hides the top bar and — unlike landing — does
+ * NOT get the floating control, so `#theme-toggle-live` is the only theme
+ * control a user has while a run is in flight.
+ */
+export async function driveToLiveRun(page: Page) {
+  await boot(page);
+  await baseRoutes(page);
+  let elapsed = 1000;
+  await page.route(/\/v1\/query-runs\/[0-9a-f-]{36}$/, (r) => {
+    elapsed += 1000;
+    r.fulfill(fulfil(goldenRunningResp(elapsed)));
+  });
+  await page.route(/\/v1\/query-runs$/, (r) =>
+    r.request().method() === "POST" ? r.fulfill(fulfil(goldenCreateResp())) : r.continue());
+  await fill(page);
+  await clickRunNow(page);
+  await expect(page.locator('[data-view="live-run"]')).toBeVisible({ timeout: 15000 });
+}
+
+/** Drive composer → "see the estimate" and stop on the cost-gate view. */
+export async function driveToCostGate(page: Page) {
+  await boot(page);
+  await page.route("**/v1/query-runs/estimate", (r) =>
+    r.fulfill(fulfil({ correlation_id: "corr-golden-est", cost_estimate: costEstimate("0.190", "require_confirmation"), model_slots: SLOTS, reasons: [] })));
+  await page.route("**/v1/query-runs/warnings", (r) => r.fulfill(fulfil({ warnings: [] })));
+  await page.route("**/v1/query-runs/active", (r) => r.fulfill(fulfil({ query_run_id: null })));
+  await fill(page);
+  await page.getByRole("button", { name: /see the estimate|estimate cost/i }).click();
+  await expect(page.locator("#gate-confirm")).toBeVisible({ timeout: 15000 });
 }
 
 /** From the result view, open the full debate transcript view. */

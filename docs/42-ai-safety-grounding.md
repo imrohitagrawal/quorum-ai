@@ -28,7 +28,7 @@ Quorum AI is an AI-assisted decision-support product. It compares four model out
 | Source-first factual claims | When source-backed search succeeds, material factual claims in model answers and synthesis must show visible source links. |
 | OpenRouter-first search | OpenRouter search-backed answering is attempted before fallback search. |
 | Fallback transparency | Fallback provider usage is recorded and visible as operational/result metadata. |
-| Citation coverage target | At least 80 percent of material factual claims in sampled final syntheses reference visible sources when source-backed search succeeds. |
+| Source coverage target | At least 80 percent of the model answers in a run carry at least one visible primary source when source-backed search succeeds. Presence of a citation only — see the honesty note below. |
 | No false consensus | Material disagreement must remain visible in the final synthesis. |
 | Partial honesty | Missing model/search/debate/synthesis steps must be named in partial results. |
 | Decision support only | Medical, legal, financial, safety, and regulated-topic outputs must be framed as decision support, not professional advice or automated decisions. |
@@ -66,7 +66,7 @@ The MVP warns; it does not yet block these topics unless future policy changes r
 
 | Eval | Purpose | Trace |
 |---|---|---|
-| Citation coverage sample | Verify 80 percent material-claim citation target when search succeeds. | NFR-003, AC-031 |
+| Source coverage sample | Verify the 80 percent sourced-answer target when search succeeds. | NFR-003, AC-031 |
 | False consensus cases | Ensure synthesis preserves material disagreement. | FR-009, AC-019 |
 | High-stakes warning set | Ensure warning coverage for medical, legal, financial, safety, and regulated examples. | NFR-008, AC-034 |
 | Prompt-injection set | Ensure retrieved content cannot override policies or reveal secrets. | T-007 |
@@ -92,7 +92,7 @@ golden-set harness can be wired to those libraries without renaming anything:
 | Faithfulness | Does the answer only assert what its cited evidence supports? | B (judge, 0-5) |
 | Answer relevancy | Does the answer address the question asked? | B (judge) |
 | Contextual/citation grounding | Do the answer's citation markers resolve to real retrieved sources? | A (`citation_marker_grounding`), corroborated by B (judge, 0-5) |
-| Citation coverage | What fraction of material claims carry a citation at all? | A |
+| Source coverage | What share of the answers carry a primary citation at all? | A |
 | Hallucination risk | Qualitative low/medium/high judgement of ungrounded assertion. | B (judge) |
 | Disagreement preservation | Is material model disagreement still visible in the synthesis? | A (false-consensus check), corroborated by B |
 

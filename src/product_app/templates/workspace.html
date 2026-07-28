@@ -57,6 +57,22 @@
       } catch (e) {
         /* storage disabled (private mode): fall through to workspace-first. */
       }
+      // PR1/#6 theme gate (pre-paint): resolve the theme HERE, before the body
+      // paints, so a user whose stored choice (or OS preference) is dark never
+      // sees a flash of the light theme while the deferred app.js loads. The
+      // <html> element ships with data-theme="light" as the no-JS fallback;
+      // this overwrites it. ``initThemeToggle`` in app.js re-runs the identical
+      // resolution — this snippet is the paint-timing half, not the authority.
+      try {
+        var stored = window.localStorage.getItem("quorum.theme");
+        if (stored === "dark" || stored === "light") {
+          document.documentElement.setAttribute("data-theme", stored);
+        } else if (window.matchMedia && window.matchMedia("(prefers-color-scheme: dark)").matches) {
+          document.documentElement.setAttribute("data-theme", "dark");
+        }
+      } catch (e) {
+        /* storage disabled: keep the light default from the markup. */
+      }
     </script>
   </head>
   <body>
@@ -84,9 +100,23 @@
             <span class="status-pill-dot" aria-hidden="true"></span>
             <span id="connection-pill-text">Connecting</span>
           </span>
-          <button id="theme-toggle" class="toggle" type="button" aria-label="Toggle dark mode">&#9680;</button>
+          <button id="theme-toggle" class="toggle" data-theme-toggle type="button" aria-label="Toggle dark mode">&#9680;</button>
         </div>
       </header>
+
+      <!-- PR1/#6: the top bar is hidden on landing / result / live-run /
+           transcript (see app.css), which left those views with NO way to
+           reach dark mode. This floating control is the toggle for exactly
+           those views — app.css shows it only where the top bar is hidden, so
+           the user never sees two toggles at once. Both carry
+           ``data-theme-toggle`` and are wired by the same handler. -->
+      <button
+        id="theme-toggle-float"
+        class="toggle theme-toggle-floating"
+        data-theme-toggle
+        type="button"
+        aria-label="Toggle dark mode"
+      >&#9680;</button>
 
       <section id="error-region" class="status-banner" data-severity="error" tabindex="-1" role="alert" hidden>
         <div class="status-banner-icon" id="error-region-icon" aria-hidden="true">!</div>
@@ -137,6 +167,31 @@
              containers so it is always in the accessibility tree and its
              mutations are reliably announced. -->
         <div id="cost-gate-live" class="sr-only" role="status" aria-live="polite"></div>
+
+        <!--
+          #111: the offline-mode disclosure. It sat inside the legacy
+          "Model outputs" panel-section, which app.css hides on EVERY view, so
+          it was computed, un-hidden, and never seen by anyone in ANY offline
+          state.
+
+          It lives OUTSIDE the swapped [data-view] containers for the same
+          reason #cost-gate-live above does: it is a property of the
+          DEPLOYMENT, not of one screen. Putting it inside a view made it
+          invisible on first visit, when the landing view is the one showing —
+          which is exactly the moment a user most needs to know their answers
+          will be simulated.
+
+          The result and transcript views own a run-specific #result-degraded
+          banner, so this one steps aside there (see app.css) rather than
+          saying a second, near-identical thing beside it.
+        -->
+        <div id="readiness-banner" class="callout callout-readiness" data-severity="warning" role="status" aria-live="polite" hidden>
+          <div class="callout-icon" aria-hidden="true">!</div>
+          <div class="callout-body">
+            <div class="callout-title" id="readiness-banner-title">Live execution is unavailable</div>
+            <div class="callout-message" id="readiness-banner-message"></div>
+          </div>
+        </div>
         <div data-view="composer">
         <section class="panel composer" aria-labelledby="composer-heading">
           <div class="composer-head">
@@ -399,6 +454,9 @@
               <div class="live-run-header-meta">
                 <span id="live-elapsed" class="live-elapsed mono" aria-hidden="true">0.0s elapsed</span>
                 <button id="live-stop" class="button live-stop" type="button">Stop run</button>
+                <!-- PR1/#6: see the result-header toggle for why this is
+                     in-header rather than a fixed floating control. -->
+                <button id="theme-toggle-live" class="toggle" data-theme-toggle type="button" aria-label="Toggle dark mode">&#9680;</button>
               </div>
             </div>
             <button
@@ -455,6 +513,11 @@
               <div class="result-header-actions">
                 <button id="result-copy" type="button" class="button result-action">Copy</button>
                 <button id="result-export" type="button" class="button result-action">Export</button>
+                <!-- PR1/#6: in-header toggle. A fixed floating control would
+                     overlay page content on narrow viewports (it visibly
+                     covered the trust-score card at 375/768). This view has a
+                     real header, so the control belongs in it. -->
+                <button id="theme-toggle-result" class="toggle" data-theme-toggle type="button" aria-label="Toggle dark mode">&#9680;</button>
               </div>
             </div>
 
@@ -595,6 +658,9 @@
                 <span id="transcript-meta" class="transcript-meta mono"></span>
               </div>
               <span id="transcript-status" class="transcript-status" data-consensus="false"></span>
+              <!-- PR1/#6: see the result-header toggle for why this is
+                   in-header rather than a fixed floating control. -->
+              <button id="theme-toggle-transcript" class="toggle" data-theme-toggle type="button" aria-label="Toggle dark mode">&#9680;</button>
             </div>
 
             <div class="transcript-body">
@@ -768,10 +834,6 @@
                 <span class="meta-label">Current time</span>
                 <div id="time-meta" class="meta-value">Not started</div>
               </div>
-              <div class="meta-card" aria-live="polite" aria-atomic="true">
-                <span class="meta-label">Claims inspected</span>
-                <div id="claim-meta" class="meta-value"></div>
-              </div>
               <div class="meta-card" data-status-card aria-live="polite" aria-atomic="true">
                 <span class="meta-label">Run status</span>
                 <div id="status-meta" class="meta-value">
@@ -800,6 +862,17 @@
             </div>
           </div>
         </aside>
+      </div>
+
+      <!-- PR8 — Conversation trail (ephemeral). Full-width panel below the
+           two-column layout so it is visible on every view (not hidden with
+           the aside). Rendered by app.js; cleared by "Start fresh". -->
+      <div class="session-trail-panel" role="region" aria-label="Conversation trail">
+        <div class="session-trail-head">
+          <span class="session-trail-title">This session</span>
+          <button id="session-trail-clear" type="button" class="session-trail-clear" hidden>Clear</button>
+        </div>
+        <div id="session-trail-list" class="session-trail-list" hidden></div>
       </div>
 
       <section class="panel panel-section">
@@ -836,13 +909,6 @@
             aria-label="What are the model outputs?"
           >&#9432;</button>
         </h2>
-        <div id="readiness-banner" class="callout callout-readiness" data-severity="warning" role="status" aria-live="polite" hidden>
-          <div class="callout-icon" aria-hidden="true">!</div>
-          <div class="callout-body">
-            <div class="callout-title" id="readiness-banner-title">Live execution is unavailable</div>
-            <div class="callout-message" id="readiness-banner-message"></div>
-          </div>
-        </div>
         <div id="demo-mode-banner" class="callout callout-demo-mode" role="alert" aria-live="assertive" hidden>
           <div class="callout-icon" aria-hidden="true">!</div>
           <div class="callout-body">

@@ -57,6 +57,11 @@ from product_app.providers import (
 )
 from product_app.synthesis import FinalSynthesis
 from product_app.synthesis_consensus import _has_polar_disagreement
+from product_app.untrusted_text import (
+    UNTRUSTED_BEGIN,
+    UNTRUSTED_END,
+    neutralize_delimiters,
+)
 
 #: Bumped whenever the persisted shape or the meaning of a signal changes.
 #: Stored payloads from different versions are not comparable.
@@ -713,6 +718,13 @@ class LayerASignals(BaseModel):
 
     model_config = ConfigDict(frozen=True)
 
+    #: WP-C / F-03: the share of ANSWERS carrying at least one primary
+    #: (non-fallback) source. Deliberately NOT renamed alongside
+    #: ``CitationCoverage``'s fields: this name is persisted verbatim inside
+    #: historical ``trust_json`` blobs and is the key of a served
+    #: ``TrustContribution``, so renaming it would make old and new records
+    #: disagree for no user-visible gain. Its MEANING changed at the WP-C
+    #: deploy; see docs/63-technical-debt-register.md.
     citation_coverage_ratio: float = Field(ge=0.0, le=1.0)
     citation_marker_grounding: float | None = Field(default=None, ge=0.0, le=1.0)
     #: Off-run URL markers on this run: cited documents the engine cannot
@@ -904,13 +916,15 @@ def evaluate_layer_a(
     completed = [a for a in initial_answers if _substantive(a)]
 
     if final_synthesis is not None:
-        coverage_ratio = float(final_synthesis.citation_coverage.coverage_ratio)
+        coverage_ratio = float(final_synthesis.citation_coverage.sourced_answer_ratio)
     else:
         aggregate = calculate_citation_coverage(
-            material_claim_count=sum(
-                a.citation_coverage.material_claim_count for a in initial_answers
-            ),
-            cited_claim_count=sum(
+            # WP-C / F-03: denominator is answers-that-produced-text, mirroring
+            # synthesis.py. Failed / cancelled slots carry ``answer_count = 0``.
+            answer_count=sum(a.citation_coverage.answer_count for a in initial_answers),
+            sourced_answer_count=sum(
+                # Gated on ``answer_count`` for the same reason as synthesis.py
+                # (review A4): the numerator must never outrun the denominator.
                 # COVERAGE is deliberately PRIMARY-ONLY and stays ``is_fallback``-
                 # keyed — the OPPOSITE of grounding / judge-evidence (host-keyed).
                 # The citation-coverage metric measures the MODEL's OWN ``:online``
@@ -920,10 +934,10 @@ def evaluate_layer_a(
                 # Do NOT switch this to _is_placeholder_source.
                 1
                 for a in initial_answers
-                if any(not s.is_fallback for s in a.sources)
+                if a.citation_coverage.answer_count and any(not s.is_fallback for s in a.sources)
             ),
         )
-        coverage_ratio = float(aggregate.coverage_ratio)
+        coverage_ratio = float(aggregate.sourced_answer_ratio)
 
     # Each ANSWER's ordinals index that answer's OWN bibliography. The
     # synthesis has NO bibliography — no numbered source list for it is ever
@@ -1172,8 +1186,14 @@ def parse_judge_verdict(raw: str | None) -> EvalJudgeVerdict | None:
         return None
 
 
-JUDGE_EVIDENCE_START = "<<<UNTRUSTED_EVIDENCE_BEGIN>>>"
-JUDGE_EVIDENCE_END = "<<<UNTRUSTED_EVIDENCE_END>>>"
+#: Aliases of the shared primitives in :mod:`product_app.untrusted_text`, which
+#: this module's fencing was extracted into when WP-D (F-08) needed the same
+#: protection for the debate and synthesis prompts. Kept under the original
+#: names so existing callers and tests read unchanged; the VALUES are shared,
+#: so the judge and the debate/synthesis stages can never drift onto different
+#: delimiters.
+JUDGE_EVIDENCE_START = UNTRUSTED_BEGIN
+JUDGE_EVIDENCE_END = UNTRUSTED_END
 
 
 @dataclass(frozen=True)
@@ -1229,11 +1249,9 @@ def build_judge_evidence(
     )
 
 
-def _neutralize_delimiters(text: str) -> str:
-    """Stop untrusted prose from forging an end-of-evidence delimiter."""
-    return text.replace(JUDGE_EVIDENCE_START, "[redacted-delimiter]").replace(
-        JUDGE_EVIDENCE_END, "[redacted-delimiter]"
-    )
+#: Shared with the debate/synthesis fencing — see
+#: :func:`product_app.untrusted_text.neutralize_delimiters`.
+_neutralize_delimiters = neutralize_delimiters
 
 
 _JUDGE_SYSTEM_PROMPT = f"""\

@@ -215,6 +215,10 @@ a { color: var(--accent); text-underline-offset: 2px; }
    ``position: fixed`` keeps it in the corner regardless of viewport scroll; the
    z-index sits above the toast region but below the error banner stack. */
 .theme-toggle-floating {
+  /* Hidden by default: on views that SHOW the top bar, the top bar's own
+     toggle is the control, and rendering both would put two theme toggles on
+     screen at once. Only the four topbar-hidden views opt in below. */
+  display: none;
   position: fixed;
   top: var(--space-4);
   right: var(--space-4);
@@ -229,13 +233,35 @@ a { color: var(--accent); text-underline-offset: 2px; }
      / synthesis content. */
 }
 
-/* On views that carry a full brand header (result / live-run / transcript)
-   the fixed position keeps the toggle from colliding with their own header bar. */
-[data-active-view="result"] .theme-toggle-floating,
-[data-active-view="live-run"] .theme-toggle-floating,
-[data-active-view="transcript"] .theme-toggle-floating {
+/* The float serves LANDING only. Landing is the one topbar-hidden view with no
+   header of its own, so a corner control is the only place to put it; the
+   result / live-run / transcript views each carry their own header and host an
+   in-header `[data-theme-toggle]` instead.
+   Why not float on all four: `position: fixed` overlays page content, and at
+   375/768 it visibly covered the trust-score card on the result view (caught by
+   trust-score-visual). A control that sits on top of the content it is meant to
+   restyle is the wrong affordance. */
+[data-active-view="landing"] .theme-toggle-floating {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
   top: var(--space-4);
 }
+
+/* WP-B: there is deliberately NO `html[data-first-visit="true"]` rule here.
+   One existed, on the premise that the first-visit gate paints the landing
+   before app.js sets ``data-active-view``, so "a first-time visitor briefly has
+   no toggle". That premise is false and the rule caused the very duplication
+   the float exists to avoid: the top bar is hidden ONLY by
+   `[data-active-view="landing"|"result"|"live-run"|"transcript"] .topbar`
+   (below), and in the pre-hydration window ``data-active-view`` is not set yet
+   — so the top bar and its ``#theme-toggle`` ARE on screen, and the float made
+   TWO visible toggles. The first-visit critical CSS in workspace.html hides
+   `[data-view="composer"]`, never the top bar.
+   Pinned by theme-toggle.spec.ts "a genuine FIRST visit shows exactly one
+   toggle before hydration" — the pre-existing "exactly one toggle" test goes
+   through boot(), which sets ``quorum.workspaceSeen`` and therefore can never
+   enter this window. */
 
 /* Mobile: nudge it slightly inward so it does not touch the screen edge. */
 @media (max-width: 600px) {
@@ -918,6 +944,26 @@ select {
    swapping the class. The base palette matches callout-warning so
    the default (warning) reads correctly before the renderer has
    run. */
+/* #111: the readiness banner now lives OUTSIDE the swapped [data-view]
+   containers, because it describes the DEPLOYMENT rather than one screen —
+   inside a view it was invisible on first visit, when landing is showing.
+
+   The RESULT view owns #result-degraded, which explains THIS RUN's
+   degradation, so the deployment-level banner steps aside there rather than
+   putting two near-identical warnings a few hundred pixels apart.
+
+   The TRANSCRIPT view is deliberately NOT in this list. An earlier version of
+   this rule included it, on the stated grounds that it "owns a run-specific
+   #result-degraded" — that was false: #result-degraded is declared inside
+   <div data-view="result"> and is display:none whenever the transcript shows.
+   Suppressing the banner there produced a view with NO disclosure of any kind
+   — on the one screen that renders the simulated model-vs-model debate in
+   full. Caught by review; do not re-add it without giving the transcript its
+   own run-level banner first. */
+#main-content[data-active-view="result"] #readiness-banner {
+  display: none;
+}
+
 .callout-readiness[data-severity="warning"] {
   background: var(--warning-soft);
   border-color: rgba(241, 179, 111, 0.40);
@@ -2492,25 +2538,65 @@ html[data-theme="dark"] .landing-preview-caption {
   color: var(--text-secondary);
 }
 
+/* WP-B/F-22: the recommendation is SUPPORTING DETAIL, so it reads at body
+   size in the UI face. It used to carry the 1.45rem serif display treatment,
+   which meant the band was agreement-led in DOM ORDER ONLY — the eye still
+   landed on the recommendation first and read it as the headline, which is the
+   #8/#15 contradiction the restructure was supposed to remove. The display
+   treatment moved up to .result-verdict-agreement below. */
 .result-verdict-text {
-  font-family: var(--font-serif);
-  font-size: 1.45rem;
-  line-height: 1.3;
-  font-weight: 500;
+  font-size: 1.05rem;
+  line-height: 1.5;
+  font-weight: 450;
   text-wrap: pretty;
 }
 
-.result-verdict-summary {
-  font-size: 0.9rem;
-  line-height: 1.55;
+/* PR6/#8/#15: the agreement tally LEADS the band (it is the deterministic
+   fact), so it carries headline weight; the recommendation prose below it is
+   supporting detail. Renamed from .result-verdict-summary — the old name
+   described a trailing summary line, which is no longer what this is.
+   WP-B/F-22: it now carries the display treatment (Newsreader, 1.45rem) that
+   the recommendation used to hold — "agreement-led" has to be true in type,
+   not just in source order. */
+.result-verdict-agreement {
+  font-family: var(--font-serif);
+  font-size: 1.45rem;
+  font-weight: 500;
+  line-height: 1.3;
+  text-wrap: pretty;
 }
 
-.result-verdict[data-consensus="true"] .result-verdict-summary {
+.result-verdict[data-consensus="true"] .result-verdict-agreement {
   color: color-mix(in srgb, var(--verdict-on) 90%, transparent);
 }
 
-.result-verdict[data-consensus="false"] .result-verdict-summary {
+.result-verdict[data-consensus="false"] .result-verdict-agreement {
   color: var(--body);
+}
+
+/* PR6/#8/#15: citation coverage is a SEPARATE authority from the agreement
+   tally. Folding it into the headline is what made the band read as
+   self-contradictory ("do not act" vs "4 of 4 aligned"). Its own line, its own
+   colour, visibly subordinate to the agreement line above it. */
+.result-verdict-coverage {
+  font-size: 0.8rem;
+  line-height: 1.5;
+  color: var(--warning);
+  display: block;
+  margin-top: 2px;
+}
+
+/* WP-B/F-04: --warning (#8A5F16 light) on the #0E6B50 consensus surface is
+   1.15:1 — invisible. Every sibling in the band already had a consensus
+   override; this one and .badge-summary did not, and `synthesis_mode` defaults
+   to "simulated" server-side, so the missing pair showed up on nearly every
+   production run. A warm-tinted white keeps the caution READING as caution
+   (it is not the same colour as the neutral copy around it) while clearing AA
+   at ~5:1. --warning flips to the lighter dark-mode amber, which only RAISES
+   the ratio on this theme-invariant green — verified in both themes by
+   verdict-band.spec.ts. */
+.result-verdict[data-consensus="true"] .result-verdict-coverage {
+  color: color-mix(in srgb, var(--verdict-on) 82%, var(--warning));
 }
 
 .result-verdict-caveat {
@@ -3248,9 +3334,18 @@ html[data-theme="dark"] .landing-preview-caption {
   display: grid;
   gap: 0;
 }
+/* `1fr` is shorthand for `minmax(auto, 1fr)`, and that `auto` MINIMUM is the
+   track's min-content — so a single unbreakable token in the synthesis body
+   (`retention_flag=true`, a bare URL) forces the whole row wider than its
+   container instead of wrapping. With the fixed 132px label column beside it
+   that pushed the result view 77px past a 375px viewport, which is what made
+   the session panel paint over the verdict band on mobile.
+   `minmax(0, 1fr)` is the canonical fix: the track may still GROW, but it is no
+   longer floored at min-content, so long tokens wrap instead of overflowing.
+   Applies at every width, not just mobile. */
 .result-synth-row {
   display: grid;
-  grid-template-columns: 132px 1fr;
+  grid-template-columns: 132px minmax(0, 1fr);
   gap: var(--space-4);
   padding: var(--space-4) 0;
   border-bottom: 1px solid var(--line);
@@ -3274,6 +3369,36 @@ html[data-theme="dark"] .landing-preview-caption {
   color: var(--body);
   text-wrap: pretty;
 }
+/* F-12: a long section collapses to a readable height. Only a body app.js has
+   MEASURED as overflowing carries `data-collapsible`, so a short section is
+   never clipped and never grows a control. `max-height` in `em` tracks the
+   font, and the fade makes the cut legible as a cut rather than as the end of
+   the text — a clipped section that looks finished is worse than a long one. */
+.result-synth-body[data-collapsible="true"] {
+  max-height: 18em;
+  overflow: hidden;
+  -webkit-mask-image: linear-gradient(to bottom, #000 82%, transparent 100%);
+  mask-image: linear-gradient(to bottom, #000 82%, transparent 100%);
+}
+.result-synth-expand {
+  /* The row is a two-column grid (label | body). Without this the control
+     lands in the LABEL column on a new row, floating beside the text it
+     belongs to instead of under it. */
+  grid-column: 2;
+  justify-self: start;
+  margin-top: var(--space-2);
+  padding: 4px var(--space-3);
+  border: 1px solid var(--line-strong-2);
+  border-radius: var(--radius-pill);
+  background: transparent;
+  color: var(--body);
+  font: inherit;
+  font-size: 0.8rem;
+  font-weight: 500;
+  cursor: pointer;
+}
+.result-synth-expand:hover { border-color: var(--info); color: var(--info); }
+.result-synth-expand:focus-visible { outline: 2px solid var(--info); outline-offset: 2px; }
 .result-synth-sources {
   display: flex;
   flex-direction: column;
@@ -3305,6 +3430,24 @@ html[data-theme="dark"] .landing-preview-caption {
   text-decoration: none;
   cursor: pointer;
 }
+/* `hidden` alone does not hide a chip: the rule above sets `display:inline-flex`,
+   which beats the user-agent `[hidden] { display: none }`. Without this the
+   collapsed chips stay on screen and the F-19 expander does nothing visible. */
+.result-source-chip[hidden] { display: none; }
+/* A simulated/fallback placeholder is not a citation. Marked, and never a link
+   (it points at the reserved example.test domain, which never resolves). */
+.result-source-chip[data-stub="true"] { border-style: dashed; cursor: default; }
+.result-source-stub-tag {
+  margin-left: var(--space-2);
+  padding: 0 6px;
+  border-radius: var(--radius-pill);
+  background: var(--warning-soft);
+  color: var(--warning);
+  font-size: 0.7rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
 a.result-source-chip:hover { border-color: var(--info); color: var(--info); }
 .result-source-num {
   display: inline-grid;
@@ -3317,7 +3460,29 @@ a.result-source-chip:hover { border-color: var(--info); color: var(--info); }
   font-size: 0.62rem;
   font-weight: 700;
 }
-.result-source-more { font-size: 0.8rem; color: var(--muted); }
+/* F-19: this is a real <button> now, not a muted label. It sits in the chip
+   row, so it is styled as a quiet sibling of the chips rather than as a form
+   control — but it keeps a real focus ring and a body-weight colour, because
+   it is the only route to the sources it counts. `--muted` was legible enough
+   for a note nobody could act on; an actionable control needs full contrast. */
+.result-source-more {
+  display: inline-flex;
+  align-items: center;
+  padding: 4px var(--space-3);
+  border: 1px dashed var(--line-strong-2);
+  border-radius: var(--radius-pill);
+  background: transparent;
+  color: var(--body);
+  font: inherit;
+  font-size: 0.8rem;
+  font-weight: 500;
+  cursor: pointer;
+}
+.result-source-more:hover { border-color: var(--info); color: var(--info); }
+.result-source-more:focus-visible {
+  outline: 2px solid var(--info);
+  outline-offset: 2px;
+}
 
 /* ----- Result: "Ask your next question" block (design comp screen 05) ------- */
 .result-next {
@@ -3567,6 +3732,17 @@ a.result-source-chip:hover { border-color: var(--info); color: var(--info); }
   gap: var(--space-4);
 }
 
+/* A grid item's `min-width` defaults to `auto` = its MIN-CONTENT, so an opening
+   card containing one long unbreakable token (a URL, `retention_flag=true`)
+   refuses to shrink and pushes the transcript past a 375px viewport — 43px of
+   horizontal page scroll. `min-width: 0` lets the card shrink to its track;
+   `.q-prose { overflow-wrap }` below then wraps the token inside it. Structural
+   fix, no typographic side effects. Pinned by the viewport-swept
+   no-horizontal-scroll invariant in rendering-invariants.spec.ts. */
+.transcript-openings > * {
+  min-width: 0;
+}
+
 .transcript-opening {
   display: flex;
   flex-direction: column;
@@ -3577,9 +3753,14 @@ a.result-source-chip:hover { border-color: var(--info); color: var(--info); }
   padding: var(--space-3) var(--space-4);
 }
 
+/* Wraps. The head carries a name, a provider tag and (WP-F) a "shortened"
+   badge, all `white-space: nowrap`; on a 375px column that row cannot fit on
+   one line, and without wrapping it silently clips its own content — caught by
+   the clipping invariant, which is what that gate is for. */
 .transcript-opening-head {
   display: flex;
   align-items: center;
+  flex-wrap: wrap;
   gap: var(--space-2);
 }
 
@@ -3611,6 +3792,38 @@ a.result-source-chip:hover { border-color: var(--info); color: var(--info); }
 
 .transcript-opening-tag[data-fallback="true"] {
   color: var(--warning);
+}
+
+/* WP-F: the provider cut this answer off at its token ceiling. A caution
+   treatment, not a muted one — it qualifies everything the reader is about to
+   read, and `margin-left: 0` keeps it beside the tag rather than fighting the
+   tag's `margin-left: auto` for the right edge. */
+.transcript-opening-shortened {
+  margin-left: var(--space-2);
+  padding: 1px var(--space-2);
+  border: 1px solid var(--warning);
+  border-radius: var(--radius-pill);
+  font-size: 0.68rem;
+  font-weight: 650;
+  color: var(--warning);
+  white-space: nowrap;
+}
+
+/* The per-model provider notice, shown with the answer it describes. At
+   `--body`, deliberately: this is an honesty disclosure about why an answer
+   looks the way it does, and muting it would repeat the mistake of rendering
+   it somewhere nobody looks. */
+/* Separated by a hairline: this is QUORUM speaking about the model, sitting
+   directly under prose the model wrote. Without the rule it reads as the
+   answer's closing sentence, which attributes the product's disclosure to the
+   model — the opposite of what a disclosure is for. */
+.transcript-opening-notice {
+  margin: var(--space-3) 0 0;
+  padding-top: var(--space-2);
+  border-top: 1px solid var(--line-2);
+  font-size: 0.78rem;
+  line-height: 1.5;
+  color: var(--body);
 }
 
 .transcript-opening-body {
@@ -3969,6 +4182,17 @@ html[data-theme="dark"] .workflow-step[data-state="completed"] .workflow-step-nu
 /* Markdown-flavored prose that LLM output produces. Only the bits the
    formatter actually emits are styled — if a future LLM output does
    not include a particular element, the relevant rule is a no-op. */
+
+/* Provider text is arbitrary: a bare URL, a code identifier, a long hash. Any
+   one of those is a single unbreakable "word" that overflows its column rather
+   than wrapping, which is how the transcript came to force horizontal page
+   scroll at 375px. `break-word` only breaks a word that would not fit on a line
+   of its own — it does NOT change intrinsic min-content sizing the way
+   `anywhere` does, so normal prose keeps its natural line breaks. */
+.q-prose {
+  overflow-wrap: break-word;
+}
+
 .q-prose p { margin: 0 0 var(--space-3); }
 .q-prose p:last-child { margin-bottom: 0; }
 .q-prose h4, .q-prose h5, .q-prose h6 {
@@ -4017,6 +4241,67 @@ html[data-theme="dark"] .workflow-step[data-state="completed"] .workflow-step-nu
   font-style: italic;
 }
 .q-prose blockquote:last-child { margin-bottom: 0; }
+
+/* WP-B/F-04 (second half): the recommendation renders through setProse, so the
+   words a user actually reads are `.q-prose` DESCENDANTS — and every rule above
+   that names a colour names an INK-family token (--ink, --muted,
+   --accent-strong, --accent-soft). Those are dark in the light theme, and the
+   consensus band is theme-invariant dark green, so the entire recommendation
+   painted at 1.1–2.8:1: bold text, links, inline code, blockquotes, headings.
+   Measured on the golden fixture before this block: STRONG 2.77, CODE 2.59,
+   BLOCKQUOTE/EM 1.11.
+   Adding a consensus override to the band's own children (as F-04 originally
+   did) does NOT reach these — they are painted by the prose stylesheet, which
+   knows nothing about the surface it lands on. Re-map the whole prose palette
+   onto the band's on-colour instead. --verdict-on is theme-invariant, so this
+   holds in light and dark; verdict-band.spec.ts walks EVERY text-bearing node
+   in the band in both themes. */
+.result-verdict[data-consensus="true"] .q-prose h4,
+.result-verdict[data-consensus="true"] .q-prose h5,
+.result-verdict[data-consensus="true"] .q-prose h6,
+.result-verdict[data-consensus="true"] .q-prose strong,
+.result-verdict[data-consensus="true"] .q-prose a,
+.result-verdict[data-consensus="true"] .q-prose a:hover {
+  color: var(--verdict-on);
+}
+
+.result-verdict[data-consensus="true"] .q-prose em,
+.result-verdict[data-consensus="true"] .q-prose blockquote {
+  color: color-mix(in srgb, var(--verdict-on) 88%, transparent);
+}
+
+.result-verdict[data-consensus="true"] .q-prose blockquote {
+  border-left-color: color-mix(in srgb, var(--verdict-on) 35%, transparent);
+}
+
+/* The placeholder branch of setProse REMOVES `q-prose` and ADDS `muted`
+   (app.js:4561-4563), so none of the overrides above reach it and the global
+   `.muted { color: var(--muted) }` wins — #5F6570 on #0E6B50 = 1.11:1, the
+   identical F-04 ratio. Reachable whenever the server sends an empty
+   `recommendation` (the field is a plain required `str`, so "" validates).
+   Found by adversarial review, not by a failing test — the fixtures all carry
+   a populated recommendation; verdict-band.spec.ts now covers the empty case. */
+.result-verdict[data-consensus="true"] .muted {
+  color: color-mix(in srgb, var(--verdict-on) 88%, transparent);
+}
+
+.result-verdict[data-consensus="true"] .q-prose code {
+  background: color-mix(in srgb, var(--verdict-on) 12%, transparent);
+  color: var(--verdict-on);
+}
+
+/* UNEXERCISED TODAY — kept deliberately, not dead by accident. `formatAnswerText`
+   cannot currently emit <ul>/<ol> at all: `flushParagraph()` and `flushList()`
+   share one `buffer`, and the blank-line branch (app.js:4513) plus the tail
+   (app.js:4541) both call flushParagraph FIRST, so a pending list is always
+   emitted as <p>. Verified live — the golden recommendation's "1./2./3." lines
+   render as three <p>, and `MESSY_BULLET_LIST` is dead for the same reason
+   (WP-F/F-13 owns that fix). The contrast walk in verdict-band.spec.ts DOES
+   measure ::marker, so the moment WP-F makes lists render, this rule is gated
+   automatically instead of shipping a 2.77:1 numeral on the green band. */
+.result-verdict[data-consensus="true"] .q-prose li::marker {
+  color: color-mix(in srgb, var(--verdict-on) 80%, transparent);
+}
 
 .round-card-body {
   display: flex;
@@ -4085,6 +4370,28 @@ html[data-theme="dark"] .workflow-step[data-state="completed"] .workflow-step-nu
 }
 
 .badge-fallback { background: var(--warning-soft); color: var(--warning); }
+/* PR6/#8/#15: replaces the leaked "Heuristic fallback: " / "[Template] " text
+   prefix. The provenance of the synthesis is UI chrome, not prose the user has
+   to read past. */
+.badge-summary { background: var(--info-soft); color: var(--info); }
+
+/* WP-B/F-21: .result-verdict-content is a flex COLUMN, whose default
+   align-items: stretch turned this pill into a full-width banner (measured 710
+   of 710px). A badge is a chip — it sizes to its label. Scoped to the band's
+   own children so no other badge context is affected. */
+.result-verdict-content > .badge {
+  align-self: flex-start;
+}
+
+/* WP-B/F-04: --info on --info-soft is a blue-on-blue-tint chip designed for
+   the paper surface; composited over the #0E6B50 consensus band it lands at
+   1.15:1. On the green surface the chip becomes a translucent-white pill with
+   the band's own text colour — the same treatment every sibling in the band
+   already had. ~5.3:1. */
+.result-verdict[data-consensus="true"] .badge-summary {
+  background: color-mix(in srgb, var(--verdict-on) 10%, transparent);
+  color: var(--verdict-on);
+}
 
 /* ----- Debate and synthesis ------------------------------------------- */
 
@@ -4661,6 +4968,9 @@ main:focus { outline: none; }
 .model-slot-avatar[data-vendor="deepseek"],
 .transcript-opening-avatar[data-vendor="deepseek"],
 .result-pos-avatar[data-vendor="deepseek"] { background: var(--vendor-deepseek-soft); color: var(--vendor-deepseek-ink); }
+.model-slot-avatar[data-vendor="nvidia"],
+.transcript-opening-avatar[data-vendor="nvidia"],
+.result-pos-avatar[data-vendor="nvidia"] { background: var(--vendor-nvidia-soft); color: var(--vendor-nvidia-ink); }
 .model-slot-info { flex: 1; min-width: 0; }
 .model-slot-name {
   display: flex;
@@ -5178,4 +5488,147 @@ html[data-theme="dark"] .landing-preview { background: var(--accent-soft); }
 @media (max-width: 600px) {
   .landing-runbar-foot { flex-direction: column; align-items: stretch; }
   .landing-runbar-actions { justify-content: space-between; }
+  /* PR8: the session trail collapses into a bottom bar on small screens. */
+  .session-trail-panel {
+    position: fixed;
+    bottom: 0;
+    left: 0;
+    right: 0;
+    top: auto;
+    border-radius: var(--radius-lg) var(--radius-lg) 0 0;
+    max-height: 40vh;
+    z-index: 100;
+    box-shadow: 0 -4px 24px rgba(0, 0, 0, 0.12);
+  }
+  .session-trail-panel[data-trail-collapsed="true"] {
+    max-height: none;
+  }
+}
+
+/* ----- PR8 — Conversation trail (ephemeral) --------------------------------- */
+
+.session-trail-panel {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+  padding: var(--space-4) var(--space-5);
+  border: 1px solid var(--line-2);
+  border-radius: var(--radius-md);
+  background: var(--surface);
+  margin-top: var(--space-4);
+}
+
+.session-trail-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-3);
+  flex-wrap: wrap;
+}
+
+.session-trail-title {
+  font-size: 0.82rem;
+  font-weight: 650;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--text-secondary);
+}
+
+.session-trail-clear {
+  font: inherit;
+  font-size: 0.78rem;
+  font-weight: 600;
+  color: var(--muted);
+  background: transparent;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+  padding: 3px 10px;
+  cursor: pointer;
+  transition: color var(--duration-fast) var(--bezier), border-color var(--duration-fast) var(--bezier);
+}
+.session-trail-clear:hover { color: var(--ink); border-color: var(--line-strong-2); }
+.session-trail-clear[hidden] { display: none; }
+
+.session-trail-list {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+}
+.session-trail-list[hidden] { display: none; }
+
+.session-trail-entry {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  padding: var(--space-2) var(--space-3);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+  background: var(--panel-strong);
+  cursor: pointer;
+  text-align: left;
+  width: 100%;
+  font: inherit;
+  color: inherit;
+  transition: background var(--duration-fast) var(--bezier), border-color var(--duration-fast) var(--bezier);
+  min-width: 0;
+}
+.session-trail-entry:hover { background: var(--overlay-inset); border-color: var(--line-strong-2); }
+.session-trail-entry:focus-visible { outline: 2px solid var(--focus-ring); outline-offset: 2px; }
+
+/* Muted treatment for degraded / simulated / failed / timed-out / cancelled / partial. */
+.session-trail-entry--muted {
+  opacity: 0.72;
+}
+.session-trail-entry--muted .session-trail-status {
+  color: var(--muted);
+  border-color: var(--line);
+}
+
+.session-trail-question {
+  flex: 1 1 auto;
+  min-width: 0;
+  font-size: 0.88rem;
+  color: var(--ink);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.session-trail-status {
+  flex-shrink: 0;
+  font-size: 0.68rem;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  padding: 2px 8px;
+  border-radius: 999px;
+  border: 1px solid var(--line);
+  color: var(--text-secondary);
+  white-space: nowrap;
+}
+
+.session-trail-time {
+  flex-shrink: 0;
+  font-size: 0.72rem;
+  color: var(--muted);
+}
+
+@media (max-width: 600px) {
+  .session-trail-panel {
+    position: fixed;
+    bottom: 0;
+    left: 0;
+    right: 0;
+    top: auto;
+    border-radius: var(--radius-lg) var(--radius-lg) 0 0;
+    max-height: 40vh;
+    z-index: 100;
+    box-shadow: 0 -4px 24px rgba(0, 0, 0, 0.12);
+    overflow-y: auto;
+  }
+  .session-trail-entry {
+    font-size: 0.84rem;
+    padding: var(--space-2) var(--space-2);
+    gap: var(--space-2);
+  }
 }

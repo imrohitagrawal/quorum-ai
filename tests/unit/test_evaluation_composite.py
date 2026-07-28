@@ -63,7 +63,14 @@ def test_a_known_grounding_is_never_dropped_from_the_composite() -> None:
     assert with_urls == pytest.approx(without_urls)
     # And grounding 1.0 genuinely contributes (this is the honest, if uncalibrated,
     # composite; the laundering run is defended by presentation_confidence, not here).
-    assert with_urls == pytest.approx(82.5)
+    #
+    # WP-C / F-03 moved this from 82.5 to 90.0, and the 7.5 is fully accounted
+    # for: all four answers of the laundering run carry a real source, so
+    # ``citation_coverage_ratio`` went 0.50 -> 1.00, and its weight is 0.15
+    # (LAYER_A_WEIGHTS) -> 0.15 * 0.50 * 100 = 7.5. Recorded, NOT counter-tuned:
+    # re-tuning a safety weight to hold a composite constant would be moving a
+    # guardrail off an unmeasured number.
+    assert with_urls == pytest.approx(90.0)
 
 
 def test_grounding_is_present_in_contributions_whenever_resolvable_markers_exist() -> None:

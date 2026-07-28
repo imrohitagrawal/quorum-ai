@@ -20,6 +20,7 @@ service so the assertions are independent of the real ``.env``.
 from __future__ import annotations
 
 import json
+from collections.abc import Iterator
 from decimal import Decimal
 
 import pytest
@@ -32,6 +33,7 @@ from product_app.model_slots import (
     DEFAULT_MODEL_IDS,
     openrouter_model_catalog_service,
 )
+from product_app.readiness import record_key_auth_state
 
 
 @pytest.fixture
@@ -63,6 +65,20 @@ def _set_catalog(monkeypatch: pytest.MonkeyPatch, model_ids: list[str]) -> None:
     monkeypatch.setattr(openrouter_model_catalog_service, "_entries", _fake)
 
 
+#: The drift tests below all share one shape: the live catalog has every static
+#: default EXCEPT one, so exactly that one must be reported stale. These used to
+#: hardcode `anthropic/claude-3-haiku` / `deepseek/deepseek-chat-v3.1` /
+#: `google/gemini-2.5-flash-lite` — a default set this repo stopped shipping
+#: several commits ago — so all four defaults read as stale and the assertions
+#: failed for a reason that had nothing to do with drift detection. Deriving the
+#: ids from DEFAULT_MODEL_IDS keeps the test about the BEHAVIOUR (one missing ->
+#: one stale) and makes it immune to the next slot change.
+_MISSING_DEFAULT: str = DEFAULT_MODEL_IDS[2]
+_DEFAULTS_EXCEPT_MISSING: list[str] = [
+    model_id for model_id in DEFAULT_MODEL_IDS if model_id != _MISSING_DEFAULT
+]
+
+
 def test_ready_endpoint_exposes_live_readiness_state(
     client: TestClient, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -77,7 +93,12 @@ def test_ready_endpoint_exposes_live_readiness_state(
     assert payload["environment"]
     # The probe ran at app start; this test sees the result.
     live = payload["live_readiness"]
-    assert live["state"] in {"live", "offline_by_config", "offline_by_no_key"}
+    assert live["state"] in {
+        "live",
+        "offline_by_config",
+        "offline_by_no_key",
+        "offline_by_bad_key",
+    }
     assert isinstance(live["reasons"], list)
     assert isinstance(live["catalog_drift_ids"], list)
 
@@ -89,18 +110,14 @@ def test_ready_endpoint_includes_drift_when_a_static_default_is_missing(
     # Catalog lists only three of the four static defaults.
     _set_catalog(
         monkeypatch,
-        [
-            "openai/gpt-4o-mini",
-            "anthropic/claude-3-haiku",
-            "deepseek/deepseek-chat-v3.1",
-        ],
+        _DEFAULTS_EXCEPT_MISSING,
     )
 
     response = client.get("/ready")
     payload = response.json()
 
     drift = payload["live_readiness"]["catalog_drift_ids"]
-    assert drift == ["google/gemini-2.5-flash-lite"]
+    assert drift == [_MISSING_DEFAULT]
 
 
 def test_ready_endpoint_reasons_never_leak_api_key(
@@ -131,12 +148,7 @@ def test_models_defaults_endpoint_returns_stale_model_ids(
     # AND checks drift on each call.
     _set_catalog(
         monkeypatch,
-        [
-            "openai/gpt-4o-mini",
-            "anthropic/claude-3-haiku",
-            # google/gemini-2.5-flash-lite missing
-            "deepseek/deepseek-chat-v3.1",
-        ],
+        _DEFAULTS_EXCEPT_MISSING,
     )
 
     # /v1/models/defaults requires a session cookie. /v1/session is a
@@ -153,7 +165,7 @@ def test_models_defaults_endpoint_returns_stale_model_ids(
     # The four returned slots are still the static defaults.
     assert [slot["model_id"] for slot in payload["model_slots"]] == list(DEFAULT_MODEL_IDS)
     # And drift is surfaced alongside.
-    assert payload["stale_model_ids"] == ["google/gemini-2.5-flash-lite"]
+    assert payload["stale_model_ids"] == [_MISSING_DEFAULT]
 
 
 def test_workspace_html_embeds_stale_model_ids_for_drift_banner(
@@ -164,12 +176,7 @@ def test_workspace_html_embeds_stale_model_ids_for_drift_banner(
     """
     _set_catalog(
         monkeypatch,
-        [
-            "openai/gpt-4o-mini",
-            "anthropic/claude-3-haiku",
-            # google/gemini-2.5-flash-lite missing
-            "deepseek/deepseek-chat-v3.1",
-        ],
+        _DEFAULTS_EXCEPT_MISSING,
     )
 
     response = client.get("/ui")
@@ -188,7 +195,7 @@ def test_workspace_html_embeds_stale_model_ids_for_drift_banner(
     end = html.index(";", start)
     literal = html[start:end].strip()
     stale = json.loads(literal)
-    assert stale == ["google/gemini-2.5-flash-lite"]
+    assert stale == [_MISSING_DEFAULT]
 
 
 def test_workspace_html_no_drift_when_catalog_matches_defaults(
@@ -257,3 +264,66 @@ def test_status_model_catalog_loaded_true_when_no_drift(
 
     body = response.json()
     assert body["model_catalog_loaded"] is True
+
+
+# ---------------------------------------------------------------------------
+# F-14 — a REJECTED key must be honest on every readiness surface at once.
+#
+# These three surfaces are read by three different audiences: an external
+# monitor polls ``/status.live_execution``, the ops dashboard renders
+# ``/ready.live_readiness.state``, and the workspace seeds its banner from
+# the ``window.LIVE_READINESS`` island on ``/ui``. Before F-14 all three
+# said the deployment was live while every run silently simulated, so the
+# fix is only real if all three move together.
+# ---------------------------------------------------------------------------
+
+
+@pytest.fixture
+def rejected_key(monkeypatch: pytest.MonkeyPatch) -> Iterator[None]:
+    """Live execution on, key present — and the provider refuses it."""
+    _set_live(enabled=True, key="sk-or-v1-fake-key-for-tests-only", monkeypatch=monkeypatch)
+    _set_catalog(monkeypatch, list(DEFAULT_MODEL_IDS))
+    record_key_auth_state("unauthorized")
+    yield
+    record_key_auth_state("unknown")
+
+
+def test_ready_reports_offline_by_bad_key_when_the_provider_refuses_the_key(
+    client: TestClient, rejected_key: None
+) -> None:
+    live = client.get("/ready").json()["live_readiness"]
+
+    assert live["state"] == "offline_by_bad_key"
+    assert any("credential check was refused" in reason for reason in live["reasons"]), live[
+        "reasons"
+    ]
+
+
+def test_status_live_execution_is_false_when_the_provider_refuses_the_key(
+    client: TestClient, rejected_key: None
+) -> None:
+    """The monitoring bool. A rejected key is not live execution."""
+    assert client.get("/status").json()["live_execution"] is False
+
+
+def test_workspace_island_carries_the_bad_key_state(client: TestClient, rejected_key: None) -> None:
+    html = client.get("/ui").text
+
+    assert "offline_by_bad_key" in html
+
+
+def test_ready_never_echoes_a_rejected_key_value(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The reason is served on the PUBLIC, unauthenticated /ready."""
+    secret = "sk-or-v1-DEADBEEF-super-secret"
+    _set_live(enabled=True, key=secret, monkeypatch=monkeypatch)
+    _set_catalog(monkeypatch, list(DEFAULT_MODEL_IDS))
+    record_key_auth_state("unauthorized")
+    try:
+        body = client.get("/ready").text
+    finally:
+        record_key_auth_state("unknown")
+
+    assert secret not in body
+    assert "DEADBEEF" not in body

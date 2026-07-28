@@ -302,11 +302,11 @@ class Settings(BaseSettings):
     #: (the point estimate keeps the lower typical floor above). MUST stay in
     #: sync with ``debate.DEBATE_ROUND_MAX_TOKENS`` — the value the live debate
     #: call actually enforces.
-    cost_debate_output_tokens_cap: int = 700
+    cost_debate_output_tokens_cap: int = 2000
     #: Output-token floor for one synthesis section call (the reconciled
     #: answer). Synthesis fans out into up to ``cost_synthesis_sections``
     #: independent live calls, each re-sending the full context.
-    cost_synthesis_output_tokens: int = 800
+    cost_synthesis_output_tokens: int = 3000
 
     #: Number of independent synthesis section calls the pipeline can make
     #: (``synthesis.SYNTHESIS_SECTION_MAX_TOKENS`` caps each). The live pipeline
@@ -322,7 +322,9 @@ class Settings(BaseSettings):
 
     #: Hard per-call output cap for the four initial answers, enforced as
     #: ``max_tokens`` on the live call (the debate and synthesis calls are
-    #: already capped at 700 / 800). Without it, initial-answer output is
+    #: already capped at ``debate.DEBATE_ROUND_MAX_TOKENS`` /
+    #: ``synthesis.SYNTHESIS_SECTION_MAX_TOKENS`` — 2000 / 3000 since WP-D
+    #: raised them from 700 / 800). Without it, initial-answer output is
     #: unbounded, so a verbose prompt on an expensive model mix can cost far
     #: more than any pre-run estimate — defeating the cost guardrail. 2000 is
     #: generous (~2× the largest answer observed in the live validation run,

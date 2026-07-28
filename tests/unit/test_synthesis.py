@@ -1,3 +1,4 @@
+from decimal import Decimal
 from typing import cast
 from uuid import uuid4
 
@@ -5,7 +6,11 @@ import pytest
 
 from product_app.debate import DebateOutput, debate_stub_service
 from product_app.model_slots import validate_model_slots
-from product_app.providers import provider_execution_service, provider_stub_service
+from product_app.providers import (
+    TokenUsage,
+    provider_execution_service,
+    provider_stub_service,
+)
 from product_app.synthesis import SynthesisStatus, synthesis_event_recorder, synthesis_stub_service
 
 DEFAULT_MODEL_IDS = [
@@ -52,14 +57,17 @@ def test_synthesis_stub_returns_required_sections_and_quality_checks() -> None:
     assert "visible source references" in synthesis.source_support
     assert synthesis.uncertainty
     assert "decision support only" in synthesis.recommendation
-    # L5d: with the honest heuristic the four ~218-char stub
-    # answers each yield 2 material claims → 8 total; 4 cited
-    # produces a 0.50 coverage ratio, which is below the 0.80
-    # target. Assert the honest ratio rather than the boolean.
-    assert synthesis.citation_coverage.material_claim_count >= 4
-    assert synthesis.citation_coverage.cited_claim_count == 4
-    assert not synthesis.citation_coverage.target_met
-    assert not synthesis.quality_checks.citation_coverage_target_met
+    assert synthesis.synthesis_mode == "simulated"
+    # WP-C / F-03: coverage is the share of ANSWERS carrying a primary source.
+    # Four stub answers, four primary sources -> 4/4, target met. The old math
+    # divided this same boolean numerator by a chars-per-claim denominator and
+    # reported 0.50, so every run was labelled provisional.
+    # Length invariance is pinned in tests/unit/test_citation_coverage_semantics.py.
+    assert synthesis.citation_coverage.answer_count == 4
+    assert synthesis.citation_coverage.sourced_answer_count == 4
+    assert synthesis.citation_coverage.sourced_answer_ratio == Decimal("1.00")
+    assert synthesis.citation_coverage.target_met
+    assert synthesis.quality_checks.citation_coverage_target_met
     # PR-2 Defect 3 fix: with all four stub answers being
     # identical, the consensus strength is "strong", so
     # ``false_consensus_preserved`` is now correctly False.
@@ -173,6 +181,7 @@ def test_synthesis_live_path_uses_llm_text_when_key_and_flag_set(
     assert result.final_synthesis.disagreement == "Live LLM section text."
     assert result.final_synthesis.source_support == "Live LLM section text."
     assert result.final_synthesis.uncertainty == "Live LLM section text."
+    assert result.final_synthesis.synthesis_mode == "live"
     # Recommendation gets the decision-support caveat appended
     # by ``truncate_recommendation`` because the LLM text does
     # not include the verbatim sentence. PR-2 Item 1 + Item 6:
@@ -242,8 +251,9 @@ def test_synthesis_falls_back_to_template_when_live_execution_disabled(
     # The "visible source references" phrase from the templated source_support
     # is what the existing integration test pins.
     assert "visible source references" in result.final_synthesis.source_support
-    # No LLM calls were made.
+    # No LLM calls were made; mode reflects the templated path.
     assert called["count"] == 0
+    assert result.final_synthesis.synthesis_mode == "simulated"
 
 
 # ---------------------------------------------------------------------------
@@ -451,27 +461,47 @@ def test_extract_citations_accepts_pre_extracted_content() -> None:
     assert [ref.url for ref in refs] == ["https://spec.example/page"]
 
 
-def test_synthesis_section_max_tokens_is_workstream_two_value() -> None:
-    """Workstream-2 bumped the per-section token cap from 500 to 800 so
-    the model can finish citation-coverage and failed-count sentences
-    without truncating mid-sentence. This test pins the new value so
-    an accidental revert is caught.
+def test_synthesis_section_max_tokens_matches_the_priced_cap() -> None:
+    """WP-D (F-07) raised the per-section token cap from 800 to 3000.
+
+    The value is pinned here so an accidental revert is caught, and it is
+    pinned *against ``settings.cost_synthesis_output_tokens``* rather than
+    against a bare literal alone: the enforced cap and the cap the cost
+    bound prices must move together, or ``max_cost_usd`` stops being a
+    true ceiling. Deriving the second assertion from config is what makes
+    this test catch the real failure mode (the two drifting apart) and not
+    merely a typo.
+
+    Bite proof: set either value to 800 and this reds.
     """
+    from product_app.config import settings
     from product_app.synthesis import SYNTHESIS_SECTION_MAX_TOKENS
 
-    assert SYNTHESIS_SECTION_MAX_TOKENS == 800
+    assert SYNTHESIS_SECTION_MAX_TOKENS == 3000
+    assert settings.cost_synthesis_output_tokens == SYNTHESIS_SECTION_MAX_TOKENS
 
 
-def test_user_prompt_includes_full_600_char_excerpt() -> None:
-    """Workstream-2 bumped the per-answer excerpt cap from 250 to 600
-    chars. The synthesis user_prompt must carry the longer excerpt
-    through so the LLM sees the model's actual stance (and any inline
-    citation links) instead of a truncated sliver.
+def test_user_prompt_carries_the_answer_up_to_the_derived_cap() -> None:
+    """WP-D (F-08) replaced the hardcoded 600-char per-answer excerpt with
+    ``SYNTHESIS_ANSWER_EXCERPT_MAX_CHARS``, derived from the token cap on the
+    call that produced the answer.
+
+    This asserts BOTH directions against the derived constant rather than a
+    literal, so it keeps biting when the cap moves:
+
+    * everything up to the cap survives — a regression back to 600 (or any
+      smaller slice) reds the first assertion;
+    * the cap is still enforced — deleting the slice entirely reds the second.
+
+    The old version of this test pinned 600 as a *feature* (``"x" * 601 not
+    in prompt``), which is exactly what F-08 set out to remove.
     """
     from product_app import synthesis as synth_mod
+    from product_app.config import settings
+    from product_app.synthesis import SYNTHESIS_ANSWER_EXCERPT_MAX_CHARS as CAP
 
-    # 800 chars of deterministic text so we can prove the slice point.
-    long_answer = "x" * 800
+    # Deliberately longer than the cap so the slice point is observable.
+    long_answer = "x" * (CAP + 200)
     answer = provider_stub_service.produce_initial_answers(
         account_id=uuid4(),
         query_run_id=uuid4(),
@@ -491,22 +521,47 @@ def test_user_prompt_includes_full_600_char_excerpt() -> None:
         failed_count=0,
         coverage_ratio=type("R", (), {"__str__": lambda self: "0.0"})(),
     )
-    # 800 chars in, sliced to 600; the prompt must carry the full 600.
-    assert ("x" * 600) in user_prompt
-    # And must NOT carry the trailing 200 that the old cap would have dropped.
-    assert ("x" * 601) not in user_prompt
+    # Everything up to the derived cap reaches the model...
+    assert ("x" * CAP) in user_prompt
+    # ...and the cap is still a cap.
+    assert ("x" * (CAP + 1)) not in user_prompt
+    # The behavioural invariant, not the tautology `CAP == max_tokens * 4`
+    # (which merely restates the definition and rescales with it): an answer of
+    # the longest length a slot is allowed to produce must reach synthesis
+    # whole. This reds if the excerpt is ever hardcoded below the answer cap.
+    longest_possible = "w" * (settings.initial_answer_max_tokens * 4)
+    answer.answer_text = longest_possible
+    prompt2 = synth_mod.synthesis_stub_service._user_prompt(
+        initial_answers=[answer],
+        debate_outputs=[],
+        failed_count=0,
+        coverage_ratio=type("R", (), {"__str__": lambda self: "0.0"})(),
+    )
+    assert longest_possible in prompt2, (
+        "a full-length initial answer is being truncated on its way into "
+        "synthesis — the excerpt cap is smaller than what a slot can emit"
+    )
 
 
-def test_user_prompt_includes_full_700_char_debate_excerpt() -> None:
-    """Workstream-2 bumped the per-round debate excerpt cap from 300 to
-    700 chars so the uncertainty section can see the actual claim in
-    the critique instead of a truncated prefix.
+def test_user_prompt_carries_the_critique_up_to_the_debate_derived_cap() -> None:
+    """WP-D (F-08): the per-round critique excerpt is now
+    ``SYNTHESIS_DEBATE_EXCERPT_MAX_CHARS``, derived from
+    ``DEBATE_ROUND_MAX_TOKENS`` — a critique cannot be longer than the debate
+    call that produced it was allowed to be.
+
+    The derivation is the contract, and the last assertion is what makes this
+    test worth having: pinning the literal 8000 would keep passing if someone
+    changed the debate cap without changing this excerpt, which is the exact
+    drift the derived form exists to prevent. (At the pre-F-07 cap of 700
+    tokens the correct value here was 2800, not 8000.)
     """
     from dataclasses import dataclass
 
     from product_app import synthesis as synth_mod
+    from product_app.debate import DEBATE_ROUND_MAX_TOKENS
+    from product_app.synthesis import SYNTHESIS_DEBATE_EXCERPT_MAX_CHARS as CAP
 
-    long_critique = "y" * 800
+    long_critique = "y" * (CAP + 200)
 
     @dataclass(frozen=True)
     class _FakeRound:
@@ -522,8 +577,31 @@ def test_user_prompt_includes_full_700_char_debate_excerpt() -> None:
         failed_count=0,
         coverage_ratio=type("R", (), {"__str__": lambda self: "0.0"})(),
     )
-    assert ("y" * 700) in user_prompt
-    assert ("y" * 701) not in user_prompt
+    assert ("y" * CAP) in user_prompt
+    assert ("y" * (CAP + 1)) not in user_prompt
+
+    # The assertion that actually bites. `CAP == DEBATE_ROUND_MAX_TOKENS * 4`
+    # would be a tautology — it restates the definition, so reverting F-07's
+    # cap to 700 rescales CAP, the fixture and both assertions above together
+    # and the test still passes. State the BEHAVIOURAL invariant instead: a
+    # critique of the longest length the debate is allowed to emit must reach
+    # the synthesis UNTRUNCATED. That reds if this excerpt is ever hardcoded
+    # (to 700, 2800 or 8000) while the debate cap says otherwise — which is
+    # the real defect, and the reason the plan ordered #3 before #4.
+    longest_possible = "z" * (DEBATE_ROUND_MAX_TOKENS * 4)
+    prompt2 = synth_mod.synthesis_stub_service._user_prompt(
+        initial_answers=[],
+        debate_outputs=cast(
+            "list[DebateOutput]",
+            [_FakeRound(round_number=1, critique_text=longest_possible)],
+        ),
+        failed_count=0,
+        coverage_ratio=type("R", (), {"__str__": lambda self: "0.0"})(),
+    )
+    assert longest_possible in prompt2, (
+        "a full-length debate critique is being truncated on its way into "
+        "synthesis — the excerpt cap is smaller than what the debate can emit"
+    )
 
 
 def test_recommendation_prompt_enforces_decision_support_caveat_and_gates() -> None:
@@ -546,3 +624,121 @@ def test_recommendation_prompt_enforces_decision_support_caveat_and_gates() -> N
     # the failure disclosure are non-negotiable.
     assert "verbatim" in _RECOMMENDATION_PROMPT
     assert "first sentence" in _RECOMMENDATION_PROMPT
+
+
+def test_no_templating_prefix_leaks_into_sections() -> None:
+    """PR6/#8/#15: templated provenance must NOT ride in the prose.
+
+    The old code prepended "Heuristic fallback: " (later "[Template] ") to
+    every templated section, so internal jargon surfaced verbatim in the
+    user-facing recommendation. Provenance now travels structurally as
+    ``FinalSynthesis.synthesis_mode`` and is rendered as a badge.
+
+    This pins the PRODUCER, not the renderer: a client-side scrub would also
+    mangle genuine provider prose that happens to contain these words.
+    """
+    account_id = uuid4()
+    query_run_id = uuid4()
+    query = "Compare source-backed options with material disagreement"
+    model_slots = validate_model_slots(DEFAULT_MODEL_IDS)
+    initial_answers = provider_stub_service.produce_initial_answers(
+        account_id=account_id,
+        query_run_id=query_run_id,
+        query_text=query,
+        model_slots=model_slots,
+    )
+    debate_result = debate_stub_service.run_debate_rounds(
+        account_id=account_id,
+        query_run_id=query_run_id,
+        query_text=query,
+        initial_answers=initial_answers,
+    )
+    # No openrouter_key => every section takes the TEMPLATED path, which is
+    # exactly the path that used to carry the prefix.
+    result = synthesis_stub_service.produce_final_synthesis(
+        account_id=account_id,
+        query_run_id=query_run_id,
+        query_text=query,
+        initial_answers=initial_answers,
+        debate_outputs=debate_result.debate_outputs,
+    )
+    synthesis = result.final_synthesis
+    assert synthesis is not None
+
+    banned = ("[Template]", "Heuristic fallback", "Template]")
+    sections = {
+        "consensus": synthesis.consensus,
+        "disagreement": synthesis.disagreement,
+        "source_support": synthesis.source_support,
+        "uncertainty": synthesis.uncertainty,
+        "recommendation": synthesis.recommendation,
+    }
+    for name, text in sections.items():
+        for token in banned:
+            assert token not in (text or ""), f"{name} leaked internal jargon {token!r}: {text!r}"
+
+    # ...and the provenance the prefix used to convey is still available,
+    # structurally. Without a key no live call happens, so this is templated.
+    assert synthesis.synthesis_mode == "simulated"
+
+
+def test_synthesis_mode_reports_usable_live_text_not_merely_a_billed_call() -> None:
+    """``synthesis_mode`` is the PROVENANCE channel. It must say "live" only
+    when the user is actually reading live model prose.
+
+    This is a defect the WP-D <- main merge created, present in neither side
+    alone. F-06 deliberately returns a non-``None`` live result even when the
+    completion is BLANK, so the billed usage is recorded and a charged call
+    cannot vanish from the receipt — correct, and it must stay. But
+    ``live_call_usages`` is built from those results, so ``live_count`` counts
+    calls that were DISPATCHED, not calls that produced text. Meanwhile WP-A
+    moved provenance out of the prose (``TEMPLATED_FALLBACK_PREFIX`` is now
+    "") and into ``synthesis_mode``.
+
+    Inputs -> wrong output: all five synthesis calls return HTTP 200 with an
+    empty completion. Every section falls back to templated text, yet
+    ``live_count == 5`` so the run is labelled ``synthesis_mode == "live"`` —
+    the product presents templated prose as live model output. That is the
+    exact failure the degraded-banner contract exists to prevent.
+
+    Bite proof: compute ``synthesis_mode`` from ``len(live_call_usages)`` and
+    this reds.
+    """
+    from product_app import config
+    from product_app.providers import LiveProviderResult
+
+    def blank_but_billed(**kwargs: object) -> LiveProviderResult:
+        # A billed call whose completion came back empty.
+        return LiveProviderResult(
+            answer_text="   ",
+            sources=[],
+            usage=TokenUsage(prompt_tokens=10, completion_tokens=0, total_tokens=10),
+        )
+
+    with pytest.MonkeyPatch.context() as mp:
+        mp.setattr(provider_execution_service, "call_with_prompt", blank_but_billed)
+        mp.setattr(config.settings, "openrouter_live_execution_enabled", True, raising=False)
+        account_id, query_run_id = uuid4(), uuid4()
+        slots = validate_model_slots(DEFAULT_MODEL_IDS)
+        answers = provider_stub_service.produce_initial_answers(
+            account_id=account_id,
+            query_run_id=query_run_id,
+            query_text="Compare source-backed options",
+            model_slots=slots,
+        )
+        result = synthesis_stub_service.produce_final_synthesis(
+            account_id=account_id,
+            query_run_id=query_run_id,
+            query_text="Compare source-backed options",
+            initial_answers=answers,
+            debate_outputs=[],
+            openrouter_key="sk-or-test-live",
+        )
+
+    assert result.final_synthesis is not None
+    # The billed usage is still recorded — F-06's contract is untouched.
+    assert len(result.live_call_usages) == 5
+    # ...but the user is reading TEMPLATED prose, so it is not a live run.
+    assert result.final_synthesis.synthesis_mode != "live", (
+        "templated sections were labelled as live model output"
+    )

@@ -38,11 +38,11 @@ from decimal import Decimal, InvalidOperation
 from enum import StrEnum
 from threading import BoundedSemaphore, RLock, Thread
 from time import sleep
-from typing import Annotated, Literal
+from typing import Annotated, Any, Literal
 from uuid import UUID, uuid4
 
 from fastapi import APIRouter, Depends, HTTPException, Request, status
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
 
 from product_app.auth import SessionContext, enforce_csrf, require_session
 from product_app.config import RuntimeEnvironment, settings
@@ -89,6 +89,7 @@ from product_app.providers import (
     InitialModelAnswer,
     ProviderPath,
     TokenUsage,
+    estimate_material_claim_count,
     provider_execution_service,
 )
 from product_app.run_history_store import RunHistoryRow
@@ -306,8 +307,24 @@ class QueryRunCreateRequest(BaseModel):
     # L2: optional per-slot web-search opt-in. See
     # ``QueryRunEstimateRequest.slot_search`` for the contract.
     slot_search: list[bool] | None = None
+    # L4: optional follow-up context from a previous query run. ``None``
+    # (default) means no prior context — a fresh query.
+    context: dict[str, Any] | None = Field(default=None)
     safety_acknowledgements: list[SafetyAcknowledgement] = Field(default_factory=list)
     cost_confirmation: CostConfirmation | None = None
+
+    @model_validator(mode="after")
+    def _validate_context_keys(self) -> QueryRunCreateRequest:
+        ctx = self.context
+        if ctx is None:
+            return self
+        allowed = {"prior_question", "prior_synthesis"}
+        extra = set(ctx.keys()) - allowed
+        if extra:
+            raise ValueError(
+                f"context may only contain {sorted(allowed)}; unexpected keys: {sorted(extra)}"
+            )
+        return self
 
 
 class QueryRunCreateResponse(BaseModel):
@@ -400,11 +417,18 @@ class QueryRunResultResponse(BaseModel):
     #: slot count. This is deliberate: a failed slot must not be laundered into
     #: either honest bucket.
     local_count: int = Field(ge=0, default=0)
-    #: Sum of the four models' ``material_claim_count`` values. The UI
-    #: surfaces this alongside the citation coverage so the user can
-    #: audit the denominator, not just the ratio. ``0`` for runs whose
-    #: initial-answers list is empty (e.g. cost-blocked before any model
-    #: was called).
+    #: Informational only: how many material claims the four answers were
+    #: LONG ENOUGH to hold, from ``providers.estimate_material_claim_count``
+    #: (a ~200-chars-per-claim heuristic).
+    #:
+    #: WP-C / F-03: this is NOT the citation-coverage denominator any more, and
+    #: it never should have been — dividing a per-answer boolean by it made the
+    #: 80% target unreachable at any realistic answer length. Coverage now
+    #: divides answers by answers (see ``CitationCoverage``). The field is kept
+    #: because it is part of the served pre-S2 contract
+    #: (tests/contract/test_query_run_evaluation_additive.py), not because
+    #: anything computes from it. ``0`` for runs whose initial-answers list is
+    #: empty (e.g. cost-blocked before any model was called).
     material_claim_count: int = Field(ge=0, default=0)
     #: Actual cost incurred by this run, for the receipt's est→actual
     #: reconciliation. Per-call provider-usage capture is NOT yet plumbed
@@ -480,10 +504,15 @@ class QueryRun:
     missing_steps: list[str] = field(default_factory=list)
     #: Real per-call token usage captured from the live debate/synthesis calls
     #: (P2). One entry per billed live call; ``None`` inside a list means the
-    #: call went live but the provider omitted its usage object. Read by
-    #: ``_actual_cost`` to decide whether the run's actual cost can be measured.
+    # call went live but the provider omitted its usage object. Read by
+    # ``_actual_cost`` to decide whether the run's actual cost can be measured.
     debate_call_usages: list[tuple[int, TokenUsage | None]] = field(default_factory=list)
     synthesis_call_usages: list[TokenUsage | None] = field(default_factory=list)
+    #: L4: optional follow-up context from a previous query run. ``None``
+    #: when this run was not triggered as a follow-up. Stored so the
+    #: pipeline can inject prior context into debate/synthesis prompts
+    #: and the cost estimator can account for the extra tokens.
+    context: dict[str, Any] | None = None
     #: E2: how far each billable stage got in the usage-recording handshake.
     #: Read by ``_actual_cost`` to tell an honestly-empty usage list (nothing
     #: was billable) from a silently-empty one (billed, never recorded). Both
@@ -563,6 +592,7 @@ class InMemoryQueryRunRepository:
         query_text: str,
         model_slots: list[ModelSlot],
         cost_estimate: CostEstimate,
+        context: dict[str, Any] | None = None,
     ) -> QueryRun:
         with self._lock:
             self._purge_expired_locked()
@@ -582,6 +612,7 @@ class InMemoryQueryRunRepository:
                 model_slots=model_slots,
                 cost_estimate=cost_estimate,
                 progress=_initial_progress(),
+                context=context,
             )
             self._query_runs[query_run_id] = query_run
             return query_run
@@ -1079,6 +1110,7 @@ def estimate_query_run(
         query_text=payload.query_text,
         model_slots=model_slots,
         account_id=session.account_id,
+        context=getattr(payload, "context", None),
     )
     cost_estimation_service.record_guardrail_event(
         account_id=session.account_id,
@@ -1139,6 +1171,7 @@ def create_query_run(
         query_text=payload.query_text,
         model_slots=model_slots,
         account_id=session.account_id,
+        context=payload.context,
     )
     cost_decision = cost_estimation_service.evaluate_confirmation(
         estimate=cost_estimate,
@@ -1264,6 +1297,7 @@ def _start_reserved_query_run(
             query_text=payload.query_text,
             model_slots=model_slots,
             cost_estimate=cost_estimate,
+            context=payload.context,
         )
     except ActiveQueryRunExistsError as exc:
         raise HTTPException(
@@ -1789,6 +1823,7 @@ def _execute_query_run(query_run_id: UUID, account_id: UUID) -> None:
         query_text=query_run.query_text,
         initial_answers=refreshed.initial_answers,
         openrouter_key=openrouter_key,
+        context=query_run.context,
     )
     query_run_repository.record_debate_outputs(
         query_run_id,
@@ -1975,7 +2010,7 @@ def _persist_terminal_run(query_run_id: UUID) -> None:
         citation_ratio = None
         final_synthesis = query_run.final_synthesis
         if final_synthesis is not None and final_synthesis.citation_coverage is not None:
-            citation_ratio = final_synthesis.citation_coverage.coverage_ratio
+            citation_ratio = final_synthesis.citation_coverage.sourced_answer_ratio
         row = RunHistoryRow(
             query_run_id=str(query_run.query_run_id),
             account_id=str(query_run.account_id),
@@ -2392,8 +2427,19 @@ def _result_response(query_run: QueryRun) -> QueryRunResultResponse:
         if answer.provider_path is ProviderPath.OPENROUTER_SEARCH
         and answer.status is InitialAnswerStatus.COMPLETED
     )
+    # WP-C / F-03: read straight from the length estimator. It used to be
+    # summed off ``citation_coverage``, back when coverage's denominator WAS
+    # this figure; coverage now counts answers, so the two are independent.
     material_claim_count = sum(
-        answer.citation_coverage.material_claim_count for answer in initial_answers
+        estimate_material_claim_count(answer.answer_text)
+        for answer in initial_answers
+        # Review A5: ``estimate_material_claim_count`` floors at 1 even for
+        # empty text, so summing over EVERY slot invents a claim for each
+        # failed / cancelled / deadline-exceeded answer — a run where all four
+        # slots timed out would report 4 material claims over zero characters
+        # of output, and that value is persisted to SQLite. Skip the slots that
+        # produced nothing. (Before WP-C these paths carried an explicit 0.)
+        if answer.answer_text.strip()
     )
     agreement, position_movements = build_agreement_and_positions(
         initial_answers=initial_answers,

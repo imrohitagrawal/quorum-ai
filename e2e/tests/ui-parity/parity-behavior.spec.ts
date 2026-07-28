@@ -18,14 +18,14 @@ const SLOTS = [
   { slot_number: 1, model_id: "openai/gpt-4o-mini", display_label: "GPT-4o-mini" },
   { slot_number: 2, model_id: "anthropic/claude-haiku-4.5", display_label: "Claude Haiku 4.5" },
   { slot_number: 3, model_id: "google/gemini-2.5-flash", display_label: "Gemini 2.5 Flash" },
-  { slot_number: 4, model_id: "deepseek/deepseek-v3.1", display_label: "DeepSeek V3.1" },
+  { slot_number: 4, model_id: "nvidia/nemotron-3-nano-30b-a3b", display_label: "Nemotron 3 Nano" },
 ];
-const CC = { material_claim_count: 12, cited_claim_count: 10, coverage_ratio: "0.85", target_ratio: "0.80", target_met: true };
+const CC = { answer_count: 1, sourced_answer_count: 1, sourced_answer_ratio: "1.00", target_ratio: "0.80", target_met: true };
 const BY_MODEL = [
   { model_id: "openai/gpt-4o-mini", display_name: "GPT-4o-mini", usd: "0.034", kind: "model" },
   { model_id: "anthropic/claude-haiku-4.5", display_name: "Claude Haiku 4.5", usd: "0.062", kind: "model" },
   { model_id: "google/gemini-2.5-flash", display_name: "Gemini 2.5 Flash", usd: "0.031", kind: "model" },
-  { model_id: "deepseek/deepseek-v3.1", display_name: "DeepSeek V3.1", usd: "0.039", kind: "model" },
+  { model_id: "nvidia/nemotron-3-nano-30b-a3b", display_name: "Nemotron 3 Nano", usd: "0.039", kind: "model" },
   { model_id: "synthesis", display_name: "Debate + synthesis", usd: "0.024", kind: "synthesis" },
 ];
 const BY_STAGE = [
@@ -165,7 +165,7 @@ test.describe("UI parity — behaviour", () => {
     await boot(page);
     const vendors = await page.locator("#model-inputs .model-slot-avatar").evaluateAll(
       (els) => els.map((e) => (e as HTMLElement).dataset.vendor));
-    expect(vendors).toEqual(["openai", "anthropic", "google", "deepseek"]);
+    expect(vendors).toEqual(["openai", "anthropic", "google", "nvidia"]);
   });
 
   test("cost-gate confirm band shows only Confirm/Back; block-band buttons hidden", async ({ page }) => {
@@ -1141,9 +1141,20 @@ test.describe("UI parity — behaviour", () => {
     await page.getByRole("textbox").first().fill(longQ);
     const cells = page.locator("#model-inputs .model-slot-estimate");
     await expect(cells).toHaveCount(4);
-    // Every slot shows a real ``~$0.NNN`` figure — not the "—" placeholder.
+    // Every slot shows a real figure — not the "—" placeholder.
+    //
+    // Two shapes are legitimate: `~$0.NNN`, and `<$0.001` for a model whose
+    // per-slot cost rounds below the display quantum. The second is deliberate
+    // honesty in the renderer (app.js:1199 — "$0.000" would claim the model is
+    // free), and slot 4 hits it now that WP-G1 moved it to nvidia nano at
+    // $0.00005/1K input. The regex previously accepted only the first shape,
+    // which is a hardcoded assumption that no slot is ever genuinely that
+    // cheap. The `MATCHES the server` half of this test is what pins the value
+    // itself; this loop only rejects a missing/placeholder figure.
     for (const text of await cells.allTextContents()) {
-      expect(text.trim(), `slot estimate was not a real figure: ${text}`).toMatch(/^~\$\d+\.\d{3}$/);
+      expect(text.trim(), `slot estimate was not a real figure: ${text}`).toMatch(
+        /^(~\$\d+\.\d{3}|<\$0\.001)$/,
+      );
     }
     // HONESTY GUARD: the client figures must equal what the REAL server
     // ``/v1/query-runs/estimate`` returns for the same query + models (the
@@ -1174,12 +1185,29 @@ test.describe("UI parity — behaviour", () => {
     // at most one display quantum ($0.0001). So the honest guard is agreement
     // within a cent-fraction, not byte-identical strings: each client figure
     // must be within $0.001 of the server's by_model row for the same slot.
-    const clientUsd = cross.client.map((t) => Number(t.replace(/[^0-9.]/g, "")));
-    expect(clientUsd).toHaveLength(cross.server.length);
-    clientUsd.forEach((c, i) => {
+    //
+    // The two rendered shapes need DIFFERENT comparisons. Stripping non-digits
+    // from "<$0.001" yields 0.001, and a +/-0.001 window around that admits a
+    // server value anywhere in [0, 0.002] — including exactly 0. That is a
+    // client saying "cheap but not free" while the server says free, which is
+    // precisely the divergence this cross-check exists to catch. So the
+    // sub-quantum shape asserts a BAND instead: strictly positive, and genuinely
+    // below the display quantum.
+    expect(cross.client).toHaveLength(cross.server.length);
+    cross.client.forEach((text, i) => {
+      const server = cross.server[i];
+      if (text.startsWith("<$")) {
+        expect(server, `slot ${i}: rendered "<$0.001" but the server says free`).toBeGreaterThan(0);
+        expect(
+          server,
+          `slot ${i}: rendered "<$0.001" but the server says ${server}, at or above the quantum`,
+        ).toBeLessThan(0.001);
+        return;
+      }
+      const client = Number(text.replace(/[^0-9.]/g, ""));
       expect(
-        Math.abs(c - cross.server[i]),
-        `slot ${i}: client ${c} vs server ${cross.server[i]} exceeds tolerance`,
+        Math.abs(client - server),
+        `slot ${i}: client ${client} vs server ${server} exceeds tolerance`,
       ).toBeLessThanOrEqual(0.001);
     });
     // Clearing the box drops the figures back to the neutral placeholder.
@@ -1259,7 +1287,7 @@ test.describe("UI parity — behaviour", () => {
 
   test("item 3.2 — 'How positions moved' avatars carry the SAME per-vendor tint as the composer slots, not a flat grey", async ({ page }) => {
     // The composer's four model slots each get a per-vendor tint (openai teal /
-    // anthropic amber / google blue / deepseek purple). The "How positions moved"
+    // anthropic amber / google blue / nvidia green). The "How positions moved"
     // avatars used to render a single flat grey (no data-vendor), losing that
     // colour identity — so a model that is teal in the composer went grey here.
     await driveToResult(page, completedResp());
@@ -1270,7 +1298,7 @@ test.describe("UI parity — behaviour", () => {
     // Each avatar is tagged with its model's vendor, matching the SLOTS order.
     const vendors = await avatars.evaluateAll((els) =>
       els.map((e) => (e as HTMLElement).dataset.vendor));
-    expect(vendors).toEqual(["openai", "anthropic", "google", "deepseek"]);
+    expect(vendors).toEqual(["openai", "anthropic", "google", "nvidia"]);
     // ...and they render four DISTINCT tints (the vendor colours), not one grey.
     const bgs = await avatars.evaluateAll((els) =>
       els.map((e) => getComputedStyle(e as HTMLElement).backgroundColor));

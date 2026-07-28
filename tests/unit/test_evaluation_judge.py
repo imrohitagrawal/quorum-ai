@@ -60,9 +60,9 @@ def _answer(*, text: str = "An answer with a claim [1].") -> InitialModelAnswer:
         status=InitialAnswerStatus.COMPLETED,
         latency_ms=100,
         citation_coverage=CitationCoverage(
-            material_claim_count=2,
-            cited_claim_count=2,
-            coverage_ratio=Decimal("1.00"),
+            answer_count=1,
+            sourced_answer_count=1,
+            sourced_answer_ratio=Decimal("1.00"),
             target_met=True,
         ),
     )
@@ -78,9 +78,9 @@ def _synthesis(*, consensus: str = "The panel agrees on the mechanism.") -> Fina
         recommendation="Treat this as decision support, not a decision.",
         high_stakes_notice=None,
         citation_coverage=CitationCoverage(
-            material_claim_count=8,
-            cited_claim_count=4,
-            coverage_ratio=Decimal("0.50"),
+            answer_count=4,
+            sourced_answer_count=2,
+            sourced_answer_ratio=Decimal("0.50"),
             target_met=False,
         ),
         quality_checks=SynthesisQualityChecks(

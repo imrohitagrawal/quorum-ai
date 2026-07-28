@@ -4,11 +4,17 @@ The synthesis was previously producing wall-of-caveats output on
 high-stakes queries (see Defect 4 in ``docs/SYNTHESIS_AUDIT.md``).
 PR-2 introduces a soft cap on each section's character count:
 
-* ``DEFAULT_SECTION_MAX_CHARS = 280`` for the four short sections
-  (Consensus, Disagreement, Source support, Uncertainty).
-* ``RECOMMENDATION_MAX_CHARS = 420`` for the Recommendation
+* The four short sections (Consensus, Disagreement, Source
+  support, Uncertainty) are capped by the caller. That cap is
+  ``synthesis.SYNTHESIS_SECTION_MAX_CHARS``, DERIVED from the
+  token ceiling those calls are billed at — this module used to
+  own an independent ``DEFAULT_SECTION_MAX_CHARS = 4000``, which
+  sat downstream of a 3000-token (~12_000 char) ceiling and threw
+  away most of what each run paid to generate.
+* ``RECOMMENDATION_MAX_CHARS = 2000`` for the Recommendation
   section, which must also carry the mandatory decision-support
-  caveat.
+  caveat. It stays here because it protects the caveat, which is
+  this module's job rather than the cost model's.
 
 The cap is a soft cap: the LLM prompt says "be concise" and the
 post-processing truncates with an ellipsis if it exceeds. The
@@ -26,12 +32,9 @@ from __future__ import annotations
 
 import re
 
-#: Soft cap for the four short sections.
-DEFAULT_SECTION_MAX_CHARS = 280
-
 #: Soft cap for the Recommendation section, which must also carry
 #: the mandatory decision-support caveat.
-RECOMMENDATION_MAX_CHARS = 420
+RECOMMENDATION_MAX_CHARS = 2000
 
 #: The mandatory decision-support caveat substring. The verbatim
 #: sentence in ``HIGH_STAKES_NOTICE_FRAGMENT`` is the long form;
@@ -108,8 +111,8 @@ def truncate_recommendation(text: str) -> str:
     The "truncate before the caveat" rule prevents a long LLM
     output from dropping the mandatory disclaimer. The audit
     flagged that the templated recommendation can run to 258+
-    characters on high-stakes queries; the 420-char cap is the
-    application-level guarantee.
+    characters on high-stakes queries; ``RECOMMENDATION_MAX_CHARS``
+    is the application-level guarantee.
     """
     if not text:
         # Nothing to do. The orchestrator's templated branch

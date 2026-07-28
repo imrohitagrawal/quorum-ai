@@ -349,18 +349,18 @@ components:
         consensus (a failed answer can never align).'
     CitationCoverage:
       properties:
-        material_claim_count:
+        answer_count:
           type: integer
           minimum: 0.0
-          title: Material Claim Count
-        cited_claim_count:
+          title: Answer Count
+        sourced_answer_count:
           type: integer
           minimum: 0.0
-          title: Cited Claim Count
-        coverage_ratio:
+          title: Sourced Answer Count
+        sourced_answer_ratio:
           type: string
           pattern: ^(?!^[-+.]*$)[+-]?0*\d*\.?\d*$
-          title: Coverage Ratio
+          title: Sourced Answer Ratio
         target_ratio:
           type: string
           pattern: ^(?!^[-+.]*$)[+-]?0*\d*\.?\d*$
@@ -371,11 +371,40 @@ components:
           title: Target Met
       type: object
       required:
-      - material_claim_count
-      - cited_claim_count
-      - coverage_ratio
+      - answer_count
+      - sourced_answer_count
+      - sourced_answer_ratio
       - target_met
       title: CitationCoverage
+      description: 'How much of the panel''s output carries a primary source.
+
+
+        WP-C / F-03. The metric is **the fraction of answers that carry at least
+
+        one primary (non-fallback) source** — nothing more, and the field names say
+
+        so. It used to divide a per-answer BOOLEAN by a characters-based estimate
+
+        of "material claims", so the numerator and denominator did not share units
+
+        and a run of four long, fully-sourced answers scored ~12% against an 80%
+
+        target. Every run was therefore labelled provisional and the recommendation
+
+        always said "pause for human review".
+
+
+        What this metric does NOT claim: that each individual assertion inside an
+
+        answer is supported. Counting sources says a citation is present; it says
+
+        nothing about whether the citation supports the claim. The signal that
+
+        checks whether a citation marker resolves to a real source is
+
+        ``citation_marker_grounding`` in :mod:`product_app.evaluation` — a
+
+        different, host-keyed authority. Do not conflate the two.'
     CostBreakdown:
       properties:
         by_model:
@@ -570,6 +599,10 @@ components:
           $ref: '#/components/schemas/CitationCoverage'
         quality_checks:
           $ref: '#/components/schemas/SynthesisQualityChecks'
+        synthesis_mode:
+          type: string
+          title: Synthesis Mode
+          default: simulated
       type: object
       required:
       - status
@@ -651,6 +684,10 @@ components:
           anyOf:
           - $ref: '#/components/schemas/TokenUsage'
           - type: 'null'
+        shortened:
+          type: boolean
+          title: Shortened
+          default: false
       type: object
       required:
       - slot_number
@@ -861,6 +898,12 @@ components:
             type: array
           - type: 'null'
           title: Slot Search
+        context:
+          anyOf:
+          - additionalProperties: true
+            type: object
+          - type: 'null'
+          title: Context
         safety_acknowledgements:
           items:
             $ref: '#/components/schemas/SafetyAcknowledgement'

@@ -221,7 +221,15 @@ def test_cheapest_per_vendor_picks_lowest_priced_entry() -> None:
                 _model(id="anthropic/claude-haiku-4.5", prompt="0.001", completion="0.005"),
                 _model(id="google/gemini-2.5-flash-lite", prompt="0.000075", completion="0.0003"),
                 _model(id="google/gemini-2.5-flash", prompt="0.0003", completion="0.0012"),
-                _model(id="deepseek/deepseek-chat-v3.1", prompt="0.00014", completion="0.00028"),
+                # WP-G1: nvidia replaced deepseek in DEFAULT_VENDORS, so the
+                # nvidia rows are what this exercises now. Two of them, so the
+                # "picks the LOWEST priced" claim in the test name is actually
+                # tested for this vendor rather than being a single-candidate
+                # pass-through.
+                _model(id="nvidia/nemotron-3-nano-30b-a3b", prompt="0.00005", completion="0.0002"),
+                _model(
+                    id="nvidia/nemotron-3-ultra-550b-a55b", prompt="0.0005", completion="0.0022"
+                ),
             )
         )
     )
@@ -230,7 +238,7 @@ def test_cheapest_per_vendor_picks_lowest_priced_entry() -> None:
         "openai": "openai/gpt-3.5-turbo",
         "anthropic": "anthropic/claude-3-haiku",
         "google": "google/gemini-2.5-flash-lite",
-        "deepseek": "deepseek/deepseek-chat-v3.1",
+        "nvidia": "nvidia/nemotron-3-nano-30b-a3b",
     }
 
 
@@ -285,3 +293,106 @@ def test_cheapest_per_vendor_breaks_ties_by_model_id_lexicographic() -> None:
 def test_cheapest_per_vendor_handles_empty_input() -> None:
     cheapest = OpenRouterCatalogFetcher.cheapest_per_vendor([], vendors=DEFAULT_VENDORS)
     assert cheapest == {}
+
+
+# ---------------------------------------------------------------------------
+# WP-D: the shipped default mix's fallback prices
+# ---------------------------------------------------------------------------
+
+
+def test_every_shipped_default_model_has_a_fallback_catalog_row() -> None:
+    """A default slot with no ``_FALLBACK_CATALOG`` row prices at the generic
+    default input price in degraded mode — 16x the real rate for a cheap model.
+
+    This is the one-line guard that would have caught WP-G1's half-done slot-4
+    swap on day one: the id moved into ``DEFAULT_MODEL_IDS`` before the catalog
+    row existed.
+    """
+    from product_app.catalog_fetcher import _FALLBACK_CATALOG
+    from product_app.model_slots import DEFAULT_MODEL_IDS
+
+    catalogued = {entry.model_id for entry in _FALLBACK_CATALOG}
+    missing = set(DEFAULT_MODEL_IDS) - catalogued
+    assert not missing, f"shipped default models with no fallback price row: {missing}"
+
+
+def test_gemini_flash_fallback_output_price_matches_the_measured_live_price() -> None:
+    """WP-D corrected this row from 0.0012 to 0.0025 per 1K output tokens.
+
+    MEASURED against the live public catalog (unauthenticated, $0) on
+    2026-07-27: completion 0.0000025/token. The stale value understated the
+    price of slot 3 of the SHIPPED default mix by 52%, and that row feeds
+    ``PINNED_DEFAULT_MIX_UNIT_USD`` — the constant the daily-spend envelope is
+    ratified against.
+
+    Nothing asserted this price before, which is exactly how it drifted 52%
+    unnoticed. Degraded mode only: normal operation prices from the live
+    catalog.
+
+    Bite proof: restore 0.0012 and this reds.
+    """
+    from product_app.catalog_fetcher import _FALLBACK_CATALOG
+
+    row = next(e for e in _FALLBACK_CATALOG if e.model_id == "google/gemini-2.5-flash")
+    assert row.output_price_per_1k == Decimal("0.0025")
+    # The input price was already correct; pinned so a future "fix" that moves
+    # both does not quietly change the half that was never wrong.
+    assert row.input_price_per_1k == Decimal("0.0003")
+
+
+def test_cost_band_fixtures_are_built_from_price_exact_models() -> None:
+    """A guardrail fixture must assert a band that exists in PRODUCTION.
+
+    Cost-band fixtures pick models to land the fail-safe bound in a specific
+    band. If a chosen model's ``_FALLBACK_CATALOG`` price differs from the live
+    one, the fixture asserts a band that only exists in degraded mode.
+
+    Inputs -> wrong output: WP-D briefly anchored both CONFIRM fixtures on
+    ``openai/o3``, whose fallback price is ~650% over live. MEASURED: bound
+    0.2138 (``require_confirmation``) under the offline catalog, 0.0795
+    (``ALLOW``) at real prices. Two tests then "passed" while asserting a
+    confirmation band production never reaches.
+
+    This pins the models those fixtures may draw from. It does NOT re-verify
+    prices against the network — the suite is hermetic. It pins the CONCLUSION
+    of a $0 measurement (2026-07-27, ``GET /api/v1/models``), so that adding a
+    known-drifting model to a band fixture fails here with the reason attached.
+
+    The drifting rows are deliberately still in the catalog and still usable by
+    tests that do not assert a BAND; correcting them is a separate PR.
+    """
+    from tests.integration.test_query_run_cost_guardrails import CONFIRM_MODEL_IDS
+
+    from product_app.catalog_fetcher import _FALLBACK_CATALOG
+
+    #: Verified identical in ``_FALLBACK_CATALOG`` and the live public catalog.
+    price_exact = {
+        "openai/gpt-4o-mini",
+        "openai/gpt-4.1",
+        "anthropic/claude-haiku-4.5",
+        "anthropic/claude-3-haiku",
+        "anthropic/claude-opus-4",
+        "google/gemini-2.5-flash",
+        "nvidia/nemotron-3-nano-30b-a3b",
+    }
+    #: Measured to DRIFT. A band fixture built on any of these is asserting a
+    #: degraded-mode-only verdict.
+    known_drifting = {
+        "openai/o3",
+        "google/gemini-2.5-flash-lite",
+        "google/gemini-2.5-pro",
+        "deepseek/deepseek-chat-v3.1",
+        "meta-llama/llama-3.1-8b-instruct",
+    }
+    catalogued = {entry.model_id for entry in _FALLBACK_CATALOG}
+    # The two sets together must still describe the catalog, so a NEW model
+    # cannot be added without someone classifying its price.
+    assert price_exact | known_drifting == catalogued, (
+        "a catalog model is classified neither price-exact nor drifting: "
+        f"{catalogued - (price_exact | known_drifting)}"
+    )
+    offenders = set(CONFIRM_MODEL_IDS) & known_drifting
+    assert not offenders, (
+        f"CONFIRM_MODEL_IDS draws on known price-drifting models {offenders}; "
+        "the band it asserts would not exist once those prices are corrected"
+    )

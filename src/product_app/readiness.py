@@ -3,9 +3,9 @@
 The application can run in two modes:
 
 * **Live mode** — ``OPENROUTER_LIVE_EXECUTION_ENABLED=true`` AND a
-  non-empty ``OPENROUTER_API_KEY`` are both set. Every query run
-  calls the real provider; the catalog, debate, and synthesis are
-  LLM-driven.
+  non-empty ``OPENROUTER_API_KEY`` are both set, AND the provider has
+  not rejected that key. Every query run calls the real provider; the
+  catalog, debate, and synthesis are LLM-driven.
 * **Offline / dev mode** — either flag is missing. Every query run
   falls back to ``local_simulation``; the debate and synthesis
   surfaces return templated text. The app still serves traffic.
@@ -25,8 +25,13 @@ dashboard) can surface the state without needing log access.
 from __future__ import annotations
 
 import logging
+import threading
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from typing import Literal
+from urllib.error import HTTPError
+from urllib.parse import urlsplit
+from urllib.request import HTTPRedirectHandler, Request, build_opener
 
 from product_app.config import settings
 from product_app.model_slots import (
@@ -37,7 +42,32 @@ from product_app.model_slots import (
 _log = logging.getLogger(__name__)
 
 
-ReadinessState = Literal["live", "offline_by_config", "offline_by_no_key"]
+ReadinessState = Literal[
+    "live",
+    "offline_by_config",
+    "offline_by_no_key",
+    "offline_by_bad_key",
+]
+
+#: The verdict of the credential probe.
+#:
+#: ``"unknown"`` is both the boot value and the answer to every
+#: ambiguous failure — a timeout, a 500, a DNS error. Only an explicit
+#: 401/403 (the provider stating it does not accept this credential)
+#: produces ``"unauthorized"``. Telling an operator their key is bad
+#: because the network hiccuped would be its own dishonesty.
+KeyAuthState = Literal["unknown", "ok", "unauthorized"]
+
+#: Statuses that mean "the provider refused this credential", as opposed
+#: to "the provider could not answer right now".
+_CREDENTIAL_REFUSED_STATUSES = frozenset({401, 403})
+
+_key_auth_lock = threading.RLock()
+_key_auth_state: KeyAuthState = "unknown"
+
+#: The probe transport: performs the request and returns the HTTP status.
+#: Injectable so the suite can classify every outcome without a socket.
+KeyAuthTransport = Callable[..., int]
 
 
 # ---------------------------------------------------------------------------
@@ -69,6 +99,28 @@ REASON_CATALOG_UNREACHABLE = (
     "default model list will still be served; live pricing is unavailable."
 )
 REASON_CATALOG_DRIFT_PREFIX = "Default model ids not in current catalog: "
+# MEASURED against the live provider, 2026-07-28, both directions:
+#   funded + valid key   -> 200
+#   UNFUNDED valid key   -> 401
+# So on this provider an empty balance is NOT a 402 on this endpoint — it
+# is indistinguishable from an invalid credential. An earlier draft of
+# this comment asserted the opposite from reasoning rather than
+# measurement, and dropped "funded" from the copy as a result. The reason
+# text must therefore name BOTH causes: telling an operator with a valid
+# but empty account to "check that the key is valid" sends them to
+# inspect the one thing that is fine.
+#
+# It can also be something between us and the provider (a proxy answering
+# 403 by policy), so the text names the check that failed rather than
+# declaring the key itself dead.
+REASON_BAD_KEY = (
+    "The OPENROUTER_API_KEY credential check was refused (HTTP 401/403). "
+    "Every query will fall back to local_simulation. The key is either "
+    "invalid or its account has no remaining credit — an unfunded key is "
+    "refused here exactly like an invalid one. Check both (and that any "
+    "network proxy allows the request), then restart to enable live "
+    "execution."
+)
 
 #: Every reason the probe may emit must start with one of these.
 APPROVED_REASON_PREFIXES = (
@@ -76,6 +128,7 @@ APPROVED_REASON_PREFIXES = (
     REASON_OFFLINE_BY_CONFIG,
     REASON_CATALOG_UNREACHABLE,
     REASON_CATALOG_DRIFT_PREFIX,
+    REASON_BAD_KEY,
 )
 
 
@@ -95,6 +148,11 @@ class ReadinessReport:
       but did not set the API key. Every query will fall back to
       local simulation silently. This is the failure mode the probe
       is most designed to catch.
+    * ``"offline_by_bad_key"`` — a key IS set and the provider
+      REFUSED it (401/403 from the zero-cost ``GET /key`` probe).
+      Configuration-only checks cannot see this, which makes it the
+      quieter sibling of ``offline_by_no_key``: everything reports
+      configured and every run simulates anyway.
 
     ``reasons`` carries human-readable detail for logs and the
     ``/ready`` endpoint payload. ``catalog_drift_ids`` is the list
@@ -139,6 +197,176 @@ def _has_api_key() -> bool:
     return bool(settings.openrouter_api_key)
 
 
+def key_auth_state() -> KeyAuthState:
+    """The credential probe's last verdict.
+
+    Read on every ``run_startup_probe`` call — which happens on four hot
+    paths (import, ``/ready``, ``/status``, ``/ui``) — so it must stay a
+    lock-guarded memory read and never a network call.
+    """
+    with _key_auth_lock:
+        return _key_auth_state
+
+
+def record_key_auth_state(state: KeyAuthState) -> None:
+    """Publish a probe verdict for every subsequent reader."""
+    global _key_auth_state
+    with _key_auth_lock:
+        _key_auth_state = state
+
+
+class _NoRedirect(HTTPRedirectHandler):
+    """Refuse every redirect on the credential probe.
+
+    urllib's default redirect handler copies ALL headers to the new
+    location with no same-origin check, and permits http as a redirect
+    target — so following one would hand ``Authorization: Bearer <key>``
+    to whatever host the redirect names, in cleartext if it names http.
+    A 302 from a captive portal or a typo'd base URL is enough.
+
+    Refusing also protects the VERDICT: a redirect target answering 200
+    would otherwise read as "the provider accepts this key", which is
+    the exact lie this probe exists to prevent. Returning ``None`` makes
+    urllib raise ``HTTPError`` for the 3xx, which the caller classifies
+    as ``"unknown"`` — never ``"ok"``.
+    """
+
+    def redirect_request(self, *args: object, **kwargs: object) -> None:
+        return None
+
+
+#: Built once; the probe is the only caller and always wants this policy.
+_KEY_PROBE_OPENER = build_opener(_NoRedirect)
+
+
+def _urlopen_key_probe(*, url: str, api_key: str, timeout: float) -> int:
+    """``GET {base}/key`` — auth-required, and it consumes ZERO tokens.
+
+    That is the whole reason this endpoint was chosen over a one-token
+    completion: an honesty check that bills the operator on every
+    process start would not survive contact with the cost rails.
+
+    The bearer token reaches exactly the configured origin and nowhere
+    else: redirects are refused and the caller has already required an
+    https URL.
+    """
+    request = Request(
+        url=url,
+        headers={
+            "Authorization": f"Bearer {api_key}",
+            "Accept": "application/json",
+            "HTTP-Referer": settings.openrouter_app_url,
+            "X-Title": settings.openrouter_app_title,
+        },
+        method="GET",
+    )
+    # S310: the caller enforces the https scheme and redirects are
+    # refused, so this cannot become a file:// or cleartext fetch.
+    with _KEY_PROBE_OPENER.open(request, timeout=timeout) as response:  # noqa: S310
+        return int(response.status)
+
+
+def probe_key_auth(*, transport: KeyAuthTransport | None = None) -> KeyAuthState:
+    """Ask the provider whether it accepts the configured credential.
+
+    Returns ``"unknown"`` without dialling when live execution could not
+    happen anyway (flag off, or no key). That gate is load-bearing: the
+    test suite forces the flag off and blocks outbound sockets, and the
+    contract gate proves that importing the app opens none.
+    """
+    api_key = settings.openrouter_api_key
+    if not (settings.openrouter_live_execution_enabled and api_key):
+        return "unknown"
+
+    url = f"{settings.openrouter_api_base_url}/key"
+    if transport is None and urlsplit(url).scheme != "https":
+        # OPENROUTER_API_BASE_URL is operator-settable. Sending a bearer
+        # token over cleartext is worse than not knowing whether the key
+        # works, so decline to find out.
+        _log.warning("live-execution probe: refusing to send the API key over a non-https base URL")
+        return "unknown"
+
+    send = transport if transport is not None else _urlopen_key_probe
+    try:
+        status = send(
+            url=url,
+            api_key=api_key,
+            timeout=settings.openrouter_timeout_seconds,
+        )
+    except HTTPError as exc:
+        if exc.code in _CREDENTIAL_REFUSED_STATUSES:
+            # The one unambiguous signal: the provider named the
+            # credential as the problem.
+            _log.warning(
+                "live-execution probe: provider rejected the API key (HTTP %s)",
+                exc.code,
+            )
+            return "unauthorized"
+        # 429/500/502/503 — the provider could not answer, which says
+        # nothing about the key.
+        _log.warning(
+            "live-execution probe: key check inconclusive (HTTP %s); leaving state unchanged",
+            exc.code,
+        )
+        return "unknown"
+    except Exception as exc:  # noqa: BLE001 — probe is best-effort
+        # The exception text stays in the process log ONLY: ``reasons``
+        # is served on the public /ready endpoint and a raw error string
+        # can carry hostnames, paths, or key material.
+        _log.warning(
+            "live-execution probe: key check failed (%s: %s); leaving state unchanged",
+            type(exc).__name__,
+            exc,
+        )
+        return "unknown"
+
+    if status in _CREDENTIAL_REFUSED_STATUSES:
+        return "unauthorized"
+    if 200 <= status < 300:
+        return "ok"
+    return "unknown"
+
+
+def start_key_auth_probe(*, transport: KeyAuthTransport | None = None) -> threading.Thread | None:
+    """Run the credential probe on a background daemon thread.
+
+    Returns ``None`` when there is nothing to prove (live execution off,
+    or no key) — so a gated-off deployment starts no thread and opens no
+    socket.
+
+    It must not be synchronous: ``main.py`` already blocks module import
+    on the catalog fetch, and this probe is a second network round-trip
+    against an endpoint that can be slow or unreachable. Startup latency
+    is not the price of honesty.
+    """
+    if not (settings.openrouter_live_execution_enabled and settings.openrouter_api_key):
+        return None
+
+    def _run() -> None:
+        verdict = probe_key_auth(transport=transport)
+        if verdict == "unknown":
+            # "Inconclusive" is not a verdict, it is the ABSENCE of one.
+            # Recording it would let a single timeout erase a proven
+            # rejection and re-advertise the deployment as live — which
+            # is exactly what every "leaving state unchanged" log line
+            # in ``probe_key_auth`` already promises does not happen.
+            return
+        record_key_auth_state(verdict)
+
+    thread = threading.Thread(target=_run, daemon=True, name="key-auth-probe")
+    try:
+        thread.start()
+    except BaseException:  # noqa: BLE001 — thread exhaustion / interpreter shutdown
+        # ``Thread.start`` raises RuntimeError when the process cannot
+        # create another thread or is already shutting down. The app must
+        # start even then: an unproven key verdict is a degraded
+        # diagnosis, a failed import is an outage. Same guard, and the
+        # same reasoning, as the dispatch in ``query_runs``.
+        _log.warning("live-execution probe: could not start the key probe thread")
+        return None
+    return thread
+
+
 def run_startup_probe() -> ReadinessReport:
     """Probe live-execution readiness and log a warning if degraded.
 
@@ -153,8 +381,18 @@ def run_startup_probe() -> ReadinessReport:
     has_key = _has_api_key()
 
     reasons: list[str] = []
-    if live_flag and has_key:
-        state: ReadinessState = "live"
+    if live_flag and has_key and key_auth_state() == "unauthorized":
+        # A key that is PRESENT is not a key that WORKS. Reading the
+        # cached probe verdict (never dialling here) is what lets this
+        # run on the four hot paths that call the probe per request.
+        # Ordered after neither of the two branches below by accident:
+        # "no key at all" and "live execution is off" are the more
+        # specific, more actionable diagnoses, so they keep priority —
+        # a stale rejection must not mask them.
+        state: ReadinessState = "offline_by_bad_key"
+        reasons.append(REASON_BAD_KEY)
+    elif live_flag and has_key:
+        state = "live"
     elif live_flag and not has_key:
         state = "offline_by_no_key"
         reasons.append(REASON_NO_KEY)

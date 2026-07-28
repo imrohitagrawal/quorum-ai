@@ -1,0 +1,1001 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+  <meta name="design_doc_mode" content="canvas">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Newsreader:ital,opsz,wght@0,6..72,400..700;1,6..72,400&family=Geist:wght@400;500;600;700&family=Geist+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+  <style>
+    html, body { margin: 0; padding: 0; background: #E9E7E2; }
+    a { color: #14171C; }
+    a:hover { color: #0E6B50; }
+    @keyframes qpulse { 0% { box-shadow: 0 0 0 0 rgba(71,104,158,0.45); } 70% { box-shadow: 0 0 0 7px rgba(71,104,158,0); } 100% { box-shadow: 0 0 0 0 rgba(71,104,158,0); } }
+    @keyframes qblink { 0%, 100% { opacity: 1; } 50% { opacity: 0; } }
+    @keyframes qdraw2 { from { stroke-dashoffset: 251; } to { stroke-dashoffset: 20; } }
+  </style>
+</helmet>
+
+<section style="padding: 48px 48px 8px; display: flex; flex-direction: column; gap: 20px; font-family: 'Geist', system-ui, sans-serif"><div style="display: flex; flex-direction: column; gap: 10px; max-width: 1180px"><div style="font-size: 13px; font-weight: 600; letter-spacing: 0.1em; text-transform: uppercase; color: #8a8578">Quorum · Final UI — review package · July 7, 2026</div><div style="display: flex; align-items: center; gap: 14px"><div style="display: flex; align-items: center; gap: 10px"><div style="width: 34px; height: 34px; border-radius: 9px; background: #0E6B50; color: #FFFFFF; display: grid; place-items: center; font-size: 17px; font-weight: 700; font-family: 'Newsreader', serif">Q</div><span style="font-family: 'Newsreader', Georgia, serif; font-size: 30px; font-weight: 500; letter-spacing: -0.01em; color: #14171C">Quorum — the approved system, end to end</span></div></div><div style="font-size: 14.5px; color: #55524a; line-height: 1.6; max-width: 96ch">The shipping default (Light · cool paper) as one flow — <a href="#01">01 Landing</a> → <a href="#02">02 Composer</a> → <a href="#03">03 Cost gate</a> → <a href="#04">04 Live run</a> → <a href="#05">05 Result</a> → <a href="#06">06 Transcript</a> → <a href="#07">07 Edge states</a> — plus the <a href="#08">08 Dark</a> mapping behind the ◐ toggle. Warm paper remains an appearance option (mirrored in the exploration file). Dashed tags on screens are spec notes for engineering, not UI. To review: pan/zoom freely and comment directly on any element. Cross-checked against the quorum-ai repo specs (FR-001–013 · AC-001–036 · COPY-001–006); this revision closes: current-time context, run + correlation IDs on receipt and errors, invalid-slot and cost-blocked states, secure-cookie session language.</div></div><div style="background: #FFFFFF; border: 1px solid rgba(20,23,28,0.10); border-radius: 14px; padding: 20px 24px; display: flex; flex-direction: column; gap: 12px; max-width: 1180px"><div style="font-size: 12px; font-weight: 700; letter-spacing: 0.06em; text-transform: uppercase; color: #14171C">The six rulings you are signing off</div><div style="display: grid; grid-template-columns: 1fr 1fr; gap: 12px 28px"><div style="display: flex; gap: 11px; align-items: flex-start"><span style="flex-shrink: 0; width: 20px; height: 20px; border-radius: 6px; background: rgba(14,107,80,0.09); border: 1.5px solid rgba(14,107,80,0.45); color: #0E6B50; display: grid; place-items: center; font-size: 11px; font-weight: 700; margin-top: 1px">✓</span><span style="font-size: 13.5px; line-height: 1.55; color: #3C4148"><strong>Name:</strong> "Quorum" — no "-AI" suffix; the tagline carries the mechanism: <em>Four AI models, one sourced answer.</em> <span style="font-family: monospace; font-size: 12px">quorum-ai</span> for domains/repos only.</span></div><div style="display: flex; gap: 11px; align-items: flex-start"><span style="flex-shrink: 0; width: 20px; height: 20px; border-radius: 6px; background: rgba(14,107,80,0.09); border: 1.5px solid rgba(14,107,80,0.45); color: #0E6B50; display: grid; place-items: center; font-size: 11px; font-weight: 700; margin-top: 1px">✓</span><span style="font-size: 13.5px; line-height: 1.55; color: #3C4148"><strong>Mark:</strong> green Q tile + ink wordmark, identical on all surfaces. No other logo colorways.</span></div><div style="display: flex; gap: 11px; align-items: flex-start"><span style="flex-shrink: 0; width: 20px; height: 20px; border-radius: 6px; background: rgba(14,107,80,0.09); border: 1.5px solid rgba(14,107,80,0.45); color: #0E6B50; display: grid; place-items: center; font-size: 11px; font-weight: 700; margin-top: 1px">✓</span><span style="font-size: 13.5px; line-height: 1.55; color: #3C4148"><strong>Palette:</strong> Light (cool paper #F6F5F2) is the default; warm paper #F2EEE7 is an appearance option; Dark ships behind the ◐ toggle. Ink #14171C · green #0E6B50 · blue #47689E · amber #8A5F16 · red #A83A2A.</span></div><div style="display: flex; gap: 11px; align-items: flex-start"><span style="flex-shrink: 0; width: 20px; height: 20px; border-radius: 6px; background: rgba(14,107,80,0.09); border: 1.5px solid rgba(14,107,80,0.45); color: #0E6B50; display: grid; place-items: center; font-size: 11px; font-weight: 700; margin-top: 1px">✓</span><span style="font-size: 13.5px; line-height: 1.55; color: #3C4148"><strong>Green rule:</strong> green only means <em>minds agree</em>. One large green surface per journey (the verdict band); small green for consensus/concession/completed; never on buttons, links, or decoration. Money always moves on ink.</span></div><div style="display: flex; gap: 11px; align-items: flex-start"><span style="flex-shrink: 0; width: 20px; height: 20px; border-radius: 6px; background: rgba(14,107,80,0.09); border: 1.5px solid rgba(14,107,80,0.45); color: #0E6B50; display: grid; place-items: center; font-size: 11px; font-weight: 700; margin-top: 1px">✓</span><span style="font-size: 13.5px; line-height: 1.55; color: #3C4148"><strong>Layout:</strong> one centered reading column everywhere except the live run’s two lanes. Flow is four moments — Ask → Approve the cost → Watch the debate → Verdict — transcript is the only drill-down.</span></div><div style="display: flex; gap: 11px; align-items: flex-start"><span style="flex-shrink: 0; width: 20px; height: 20px; border-radius: 6px; background: rgba(14,107,80,0.09); border: 1.5px solid rgba(14,107,80,0.45); color: #0E6B50; display: grid; place-items: center; font-size: 11px; font-weight: 700; margin-top: 1px">✓</span><span style="font-size: 13.5px; line-height: 1.55; color: #3C4148"><strong>Cost transparency:</strong> itemized estimate by model AND stage before anything runs; $0.15 confirm / $0.25 hard block; live spend vs approved cap; receipt reconciles est → actual with pipeline timings.</span></div></div></div></section>
+<section id="01" style="padding: 28px 48px; display: flex; flex-direction: column; gap: 16px; font-family: 'Geist', system-ui, sans-serif"><div style="display: flex; align-items: center; gap: 12px; max-width: 1180px"><span style="display: inline-grid; place-items: center; width: 40px; height: 34px; border-radius: 8px; background: #14171C; color: #FFFFFF; font-weight: 600; font-size: 13.5px; font-family: 'Geist Mono', monospace">01</span><div><div style="font-weight: 700; font-size: 16px; color: #1a1a18">Landing — the front door</div><div style="font-size: 13px; color: #6b675e; line-height: 1.5">First visit, nothing typed. Green signposts (eyebrow · Preview badge · active chip), one-line run bar, ink CTA. Collapses into the composer the moment you type. R1 scope note: per the UX correction the first screen is the workspace (02) — this landing is the anonymous/empty state, shippable later as the marketing front.</div></div></div><div data-screen-label="01 Landing" style="width: 1440px; background: #F6F5F2; border: 1px solid rgba(20,23,28,0.10); border-radius: 12px; overflow: hidden; box-shadow: 0 24px 60px rgba(20,23,28,0.12); font-family: 'Geist', system-ui, sans-serif; color: #14171C">
+      <div style="display: flex; align-items: center; justify-content: space-between; height: 64px; padding: 0 32px">
+        <div style="display: flex; align-items: center; gap: 10px">
+          <div style="width: 30px; height: 30px; border-radius: 8px; background: #0E6B50; color: #FFFFFF; display: grid; place-items: center; font-size: 15px; font-weight: 700; font-family: 'Newsreader', serif">Q</div>
+          <span style="font-weight: 650; font-size: 17px; letter-spacing: -0.01em">Quorum</span>
+        </div>
+        <div style="display: flex; align-items: center; gap: 16px">
+          <span style="font-size: 14px; color: #565C66; font-weight: 500">How it works</span>
+          <button style="height: 38px; padding: 0 18px; border-radius: 9px; border: 1px solid rgba(20,23,28,0.16); background: transparent; color: #14171C; font-size: 14px; font-weight: 600; cursor: pointer; font-family: inherit; transition: all .18s ease" style-hover="background: #14171C; color: #F6F5F2; border-color: #14171C">Open the workspace</button>
+        </div>
+      </div>
+
+      <div style="max-width: 800px; margin: 0 auto; padding: 44px 0 56px; display: flex; flex-direction: column; gap: 24px">
+        <div style="display: flex; flex-direction: column; gap: 16px; text-align: center; align-items: center">
+          <div style="font-size: 12.5px; font-weight: 600; letter-spacing: 0.14em; text-transform: uppercase; color: #0E6B50">Four AI models · two debate rounds · one sourced answer</div>
+          <h1 style="margin: 0; font-family: 'Newsreader', Georgia, serif; font-size: 52px; line-height: 1.06; font-weight: 500; letter-spacing: -0.02em; max-width: 15ch; text-wrap: balance">Ask once. Let four minds argue it out.</h1>
+          <p style="margin: 0; font-size: 17.5px; line-height: 1.6; color: #565C66; max-width: 56ch; text-wrap: pretty">Quorum sends your question to four frontier AI models, has them critique each other twice, then hands you one answer that shows where they agree, where they don't, and exactly what to trust.</p>
+        </div>
+
+        <div style="background: #FFFFFF; border: 1px solid rgba(20,23,28,0.12); border-radius: 18px; box-shadow: 0 12px 32px rgba(20,23,28,0.08); overflow: hidden">
+          <div style="padding: 22px 24px 4px; min-height: 84px">
+            <span style="font-size: 17px; line-height: 1.55; color: #7A8089">e.g. Should our company adopt passkeys and phase out passwords by 2027?</span>
+          </div>
+          <div style="display: flex; align-items: center; justify-content: space-between; gap: 16px; padding: 16px 20px 18px; border-top: 1px solid rgba(20,23,28,0.07); margin-top: 12px">
+            <div style="font-size: 13.5px; color: #565C66; display: flex; align-items: center; gap: 8px">
+              <span style="font-family: 'Geist Mono', monospace; color: #14171C; font-weight: 600; white-space: nowrap">≈ $0.05–0.20</span>
+              <span style="white-space: nowrap">· you approve the estimate first — hard cap $0.25/run</span>
+            </div>
+            <div style="display: flex; align-items: center; gap: 10px">
+              <button style="height: 44px; padding: 0 18px; border-radius: 11px; border: 1px solid rgba(20,23,28,0.16); background: #FFFFFF; color: #14171C; font-size: 14.5px; font-weight: 600; cursor: pointer; font-family: inherit; transition: all .18s ease" style-hover="background: #F6F5F2">Estimate</button>
+              <button style="height: 44px; padding: 0 24px; border-radius: 11px; border: none; background: #14171C; color: #FFFFFF; font-size: 14.5px; font-weight: 650; cursor: pointer; font-family: inherit; box-shadow: 0 6px 16px rgba(20,23,28,0.22); transition: all .18s ease" style-hover="transform: translateY(-1px); box-shadow: 0 10px 22px rgba(20,23,28,0.30)">Run the debate →</button>
+            </div>
+          </div>
+        </div>
+
+        <div style="display: flex; flex-direction: column; gap: 12px; align-items: center">
+          <span style="font-size: 13px; color: #7A8089; font-weight: 500">Not sure what to ask? Try one — it fills the box:</span>
+          <div style="display: flex; flex-wrap: wrap; gap: 10px; justify-content: center; max-width: 760px">
+            <button style="display: inline-flex; align-items: center; gap: 8px; height: 40px; padding: 0 16px; border-radius: 999px; border: 1.5px solid rgba(14,107,80,0.55); background: #FFFFFF; color: #14171C; font-size: 14px; font-weight: 550; cursor: pointer; font-family: inherit"><span style="width: 7px; height: 7px; border-radius: 999px; background: #0E6B50; flex-shrink: 0"></span>Should we adopt passkeys by 2027?</button>
+            <button style="display: inline-flex; align-items: center; height: 40px; padding: 0 16px; border-radius: 999px; border: 1px solid rgba(20,23,28,0.16); background: #FFFFFF; color: #3C4148; font-size: 14px; font-weight: 550; cursor: pointer; font-family: inherit; transition: all .16s ease" style-hover="border-color: #14171C; color: #14171C; transform: translateY(-1px)">Usage-based vs seat pricing?</button>
+            <button style="display: inline-flex; align-items: center; height: 40px; padding: 0 16px; border-radius: 999px; border: 1px solid rgba(20,23,28,0.16); background: #FFFFFF; color: #3C4148; font-size: 14px; font-weight: 550; cursor: pointer; font-family: inherit; transition: all .16s ease" style-hover="border-color: #14171C; color: #14171C; transform: translateY(-1px)">Is my startup thesis sound?</button>
+            <button style="display: inline-flex; align-items: center; height: 40px; padding: 0 16px; border-radius: 999px; border: 1px solid rgba(20,23,28,0.16); background: #FFFFFF; color: #3C4148; font-size: 14px; font-weight: 550; cursor: pointer; font-family: inherit; transition: all .16s ease" style-hover="border-color: #14171C; color: #14171C; transform: translateY(-1px)">How do I read this lab result?</button>
+          </div>
+        </div>
+
+        <div style="display: flex; gap: 14px; align-items: flex-start; padding: 18px 20px; border-radius: 14px; background: rgba(20,23,28,0.035); border: 1px solid rgba(20,23,28,0.10)">
+          <div style="flex-shrink: 0; display: inline-flex; align-items: center; height: 22px; padding: 0 9px; border-radius: 6px; background: #0E6B50; color: #FFFFFF; font-size: 10.5px; font-weight: 700; letter-spacing: 0.06em; text-transform: uppercase">Preview</div>
+          <p style="margin: 0; font-size: 15px; line-height: 1.6; color: #3C4148; text-wrap: pretty">4 of 4 models agree — with one real disagreement worth your attention: the safe overlap window (9 vs 18 months). You get a verdict, a phased plan, 12 sources, and the full debate on record.</p>
+        </div>
+
+        <div style="display: flex; gap: 12px; justify-content: center; flex-wrap: wrap; margin-top: 2px">
+          <span style="display: inline-flex; align-items: center; gap: 8px; padding: 8px 14px; border-radius: 999px; background: #FFFFFF; border: 1px solid rgba(20,23,28,0.10); font-size: 13px; color: #565C66"><span style="width: 8px; height: 8px; border-radius: 2px; background: #8A5F16"></span>Decision support, not professional advice</span>
+          <span style="display: inline-flex; align-items: center; gap: 8px; padding: 8px 14px; border-radius: 999px; background: #FFFFFF; border: 1px solid rgba(20,23,28,0.10); font-size: 13px; color: #565C66"><span style="width: 8px; height: 8px; border-radius: 2px; background: #8A5F16"></span>Don't paste sensitive or private data</span>
+          <span style="display: inline-flex; align-items: center; gap: 8px; padding: 8px 14px; border-radius: 999px; background: #FFFFFF; border: 1px solid rgba(20,23,28,0.10); font-size: 13px; color: #565C66"><span style="width: 8px; height: 8px; border-radius: 999px; background: #7A8089"></span>Results vanish when you leave</span>
+        </div>
+      </div>
+    </div></section><section id="02" style="padding: 28px 48px; display: flex; flex-direction: column; gap: 16px; font-family: 'Geist', system-ui, sans-serif"><div style="display: flex; align-items: center; gap: 12px; max-width: 1180px"><span style="display: inline-grid; place-items: center; width: 40px; height: 34px; border-radius: 8px; background: #14171C; color: #FFFFFF; font-weight: 600; font-size: 13.5px; font-family: 'Geist Mono', monospace">02</span><div><div style="font-weight: 700; font-size: 16px; color: #1a1a18">Composer — the workbench</div><div style="font-size: 13px; color: #6b675e; line-height: 1.5">Privacy warning, high-stakes gate (appears only on safety topics), four swappable model slots with per-model estimates, the one-run rule stated before money moves.</div></div></div><div data-screen-label="02 Composer" style="width: 1440px; background: #F6F5F2; border: 1px solid rgba(20,23,28,0.10); border-radius: 12px; overflow: hidden; box-shadow: 0 24px 60px rgba(20,23,28,0.12); font-family: 'Geist', system-ui, sans-serif; color: #14171C">
+      <div style="display: flex; align-items: center; justify-content: space-between; height: 60px; padding: 0 32px; background: #FFFFFF; border-bottom: 1px solid rgba(20,23,28,0.09)">
+        <div style="display: flex; align-items: center; gap: 12px">
+          <div style="display: flex; align-items: center; gap: 10px"><div style="width: 28px; height: 28px; border-radius: 8px; background: #0E6B50; color: #FFFFFF; display: grid; place-items: center; font-size: 14px; font-weight: 700; font-family: 'Newsreader', serif">Q</div><span style="font-weight: 650; font-size: 16px; letter-spacing: -0.01em">Quorum</span></div>
+          <span style="width: 1px; height: 18px; background: rgba(20,23,28,0.14)"></span>
+          <span style="font-size: 13.5px; color: #565C66">Four models, one sourced answer.</span>
+        </div>
+        <div style="display: flex; align-items: center; gap: 10px">
+          <span style="display: inline-flex; align-items: center; gap: 7px; padding: 5px 12px; border-radius: 999px; border: 1px solid rgba(20,23,28,0.12); color: #565C66; font-size: 12.5px; font-weight: 600"><span style="width: 6px; height: 6px; border-radius: 999px; background: #0E6B50"></span>Session active · provider configured</span>
+          <button style="width: 32px; height: 32px; border-radius: 999px; border: 1px solid rgba(20,23,28,0.12); background: transparent; color: #565C66; cursor: pointer; font-size: 13px">◐</button>
+        </div>
+      </div>
+
+      <div style="max-width: 800px; margin: 0 auto; padding: 40px 0 56px; display: flex; flex-direction: column; gap: 18px">
+        <div style="display: flex; flex-direction: column; gap: 6px">
+          <h1 style="margin: 0; font-family: 'Newsreader', Georgia, serif; font-size: 30px; font-weight: 500; letter-spacing: -0.01em; line-height: 1.2">Ask the panel</h1>
+          <div style="font-size: 14.5px; color: #565C66; line-height: 1.55">One question · four models · two debate rounds · one sourced answer. Results are ephemeral — they vanish when this session ends.</div>
+        </div>
+
+        <div style="display: flex; gap: 12px; padding: 13px 16px; border-radius: 10px; border: 1px solid rgba(138,95,22,0.30); background: rgba(138,95,22,0.06)">
+          <span style="flex-shrink: 0; width: 20px; height: 20px; border-radius: 999px; border: 1.5px solid #8A5F16; color: #8A5F16; display: grid; place-items: center; font-size: 12px; font-weight: 700; font-family: 'Geist Mono', monospace">!</span>
+          <div style="font-size: 13px; line-height: 1.55; color: #6B5320"><span style="font-weight: 650; color: #8A5F16">Don't include sensitive, private, or regulated information.</span> Your query is sent to external AI and search providers, and privacy controls are not finalized. Remove sensitive details before running.</div>
+        </div>
+
+        <div style="display: flex; flex-direction: column; gap: 8px">
+          <div style="display: flex; align-items: center; justify-content: space-between">
+            <span style="font-size: 11.5px; font-weight: 600; letter-spacing: 0.08em; text-transform: uppercase; color: #7A8089">Your question</span>
+            <span style="font-size: 11.5px; color: #7A8089; font-family: 'Geist Mono', monospace">163 / 20,000</span>
+          </div>
+          <div style="background: #FFFFFF; border: 1px solid rgba(20,23,28,0.14); border-radius: 12px; padding: 18px 20px; box-shadow: 0 1px 2px rgba(20,23,28,0.04)">
+            <p style="margin: 0; font-size: 16.5px; line-height: 1.55; color: #14171C">Should our 200-person company adopt passkeys and phase out passwords by the end of 2027? What's the safest migration sequence?</p>
+          </div>
+        </div>
+
+        <div style="position: relative; display: flex; flex-direction: column; gap: 11px; padding: 16px 18px; border-radius: 12px; border: 1px solid rgba(20,23,28,0.12); background: #FFFFFF">
+          <span style="position: absolute; top: -10px; right: 16px; font-size: 10.5px; font-weight: 600; letter-spacing: 0.05em; text-transform: uppercase; color: #7A8089; background: #F6F5F2; border: 1px dashed rgba(20,23,28,0.25); border-radius: 5px; padding: 2px 8px">appears only when a safety topic is detected — Run stays disabled until checked</span>
+          <div style="display: flex; align-items: center; gap: 8px">
+            <span style="width: 7px; height: 7px; border-radius: 2px; background: #A83A2A"></span>
+            <span style="font-size: 12.5px; font-weight: 650; letter-spacing: 0.02em; color: #A83A2A; text-transform: uppercase">Decision support only</span>
+          </div>
+          <div style="font-size: 13.5px; line-height: 1.6; color: #3C4148">This result is not medical, legal, financial, safety, or regulated professional advice. Review the sources, weigh the disagreement, and consult a qualified professional before acting.</div>
+          <label style="display: flex; align-items: center; gap: 10px; font-size: 13.5px; font-weight: 600; color: #14171C; cursor: pointer">
+            <span style="width: 20px; height: 20px; border-radius: 5px; background: #14171C; display: grid; place-items: center; color: #FFFFFF; font-size: 12px; flex-shrink: 0">✓</span>
+            I understand this is not professional advice.
+          </label>
+        </div>
+
+        <div style="display: flex; flex-direction: column; gap: 10px">
+          <div style="display: flex; align-items: center; justify-content: space-between">
+            <span style="font-size: 11.5px; font-weight: 600; letter-spacing: 0.08em; text-transform: uppercase; color: #7A8089">Four model slots</span>
+            <span style="font-size: 12px; color: #7A8089">Swap any slot from the live OpenRouter catalog · unknown IDs get a field-level fix · duplicates allowed but flagged</span>
+          </div>
+          <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 10px">
+            <div style="display: flex; align-items: center; gap: 12px; padding: 12px 14px; background: #FFFFFF; border: 1px solid rgba(20,23,28,0.10); border-radius: 11px">
+              <span style="width: 30px; height: 30px; border-radius: 999px; background: #DFEDE9; color: #2A7A68; display: grid; place-items: center; font-size: 12px; font-weight: 700; flex-shrink: 0">G</span>
+              <div style="flex: 1; min-width: 0"><div style="font-size: 13.5px; font-weight: 600">GPT-4o mini</div><div style="font-size: 11.5px; color: #7A8089; font-family: 'Geist Mono', monospace">openai/gpt-4o-mini</div></div>
+              <span style="font-size: 11px; color: #7A8089; font-family: 'Geist Mono', monospace; flex-shrink: 0">~$0.034</span>
+              <button style="width: 28px; height: 28px; border-radius: 7px; border: 1px solid rgba(20,23,28,0.12); background: #FFFFFF; color: #7A8089; cursor: pointer; font-size: 12px; flex-shrink: 0">▾</button>
+            </div>
+            <div style="display: flex; align-items: center; gap: 12px; padding: 12px 14px; background: #FFFFFF; border: 1px solid rgba(20,23,28,0.10); border-radius: 11px">
+              <span style="width: 30px; height: 30px; border-radius: 999px; background: #F2E8DA; color: #A26A2F; display: grid; place-items: center; font-size: 12px; font-weight: 700; flex-shrink: 0">C</span>
+              <div style="flex: 1; min-width: 0"><div style="font-size: 13.5px; font-weight: 600">Claude Haiku 4.5</div><div style="font-size: 11.5px; color: #7A8089; font-family: 'Geist Mono', monospace">anthropic/claude-haiku-4.5</div></div>
+              <span style="font-size: 11px; color: #7A8089; font-family: 'Geist Mono', monospace; flex-shrink: 0">~$0.062</span>
+              <button style="width: 28px; height: 28px; border-radius: 7px; border: 1px solid rgba(20,23,28,0.12); background: #FFFFFF; color: #7A8089; cursor: pointer; font-size: 12px; flex-shrink: 0">▾</button>
+            </div>
+            <div style="display: flex; align-items: center; gap: 12px; padding: 12px 14px; background: #FFFFFF; border: 1px solid rgba(20,23,28,0.10); border-radius: 11px">
+              <span style="width: 30px; height: 30px; border-radius: 999px; background: #E1E8F2; color: #47689E; display: grid; place-items: center; font-size: 12px; font-weight: 700; flex-shrink: 0">G</span>
+              <div style="flex: 1; min-width: 0"><div style="font-size: 13.5px; font-weight: 600">Gemini 2.5 Flash</div><div style="font-size: 11.5px; color: #7A8089; font-family: 'Geist Mono', monospace">google/gemini-2.5-flash</div></div>
+              <span style="font-size: 11px; color: #7A8089; font-family: 'Geist Mono', monospace; flex-shrink: 0">~$0.031</span>
+              <button style="width: 28px; height: 28px; border-radius: 7px; border: 1px solid rgba(20,23,28,0.12); background: #FFFFFF; color: #7A8089; cursor: pointer; font-size: 12px; flex-shrink: 0">▾</button>
+            </div>
+            <div style="display: flex; align-items: center; gap: 12px; padding: 12px 14px; background: #FFFFFF; border: 1px solid rgba(20,23,28,0.10); border-radius: 11px">
+              <span style="width: 30px; height: 30px; border-radius: 999px; background: #EAE3F2; color: #7A5C9E; display: grid; place-items: center; font-size: 12px; font-weight: 700; flex-shrink: 0">D</span>
+              <div style="flex: 1; min-width: 0"><div style="font-size: 13.5px; font-weight: 600">DeepSeek V3.1</div><div style="font-size: 11.5px; color: #7A8089; font-family: 'Geist Mono', monospace">deepseek/deepseek-chat-v3.1</div></div>
+              <span style="font-size: 11px; color: #7A8089; font-family: 'Geist Mono', monospace; flex-shrink: 0">~$0.039</span>
+              <button style="width: 28px; height: 28px; border-radius: 7px; border: 1px solid rgba(20,23,28,0.12); background: #FFFFFF; color: #7A8089; cursor: pointer; font-size: 12px; flex-shrink: 0">▾</button>
+            </div>
+          </div>
+        </div>
+
+        <div style="display: flex; align-items: center; justify-content: space-between; gap: 16px; padding: 4px 0 0">
+          <span style="font-size: 12.5px; color: #565C66; line-height: 1.5; max-width: 460px">You'll approve an itemized estimate before anything runs · hard cap <span style="font-family: 'Geist Mono', monospace; color: #14171C">$0.25</span>/run · one run at a time per session</span>
+          <button style="height: 46px; padding: 0 26px; border-radius: 11px; border: none; background: #14171C; color: #FFFFFF; font-size: 14.5px; font-weight: 650; cursor: pointer; font-family: inherit; box-shadow: 0 6px 16px rgba(20,23,28,0.22); transition: all .18s ease" style-hover="transform: translateY(-1px); box-shadow: 0 10px 22px rgba(20,23,28,0.30)">See the estimate →</button>
+        </div>
+
+        <div style="display: flex; flex-direction: column; gap: 10px; margin-top: 10px; border-top: 1px solid rgba(20,23,28,0.08); padding-top: 18px">
+          <span style="font-size: 12.5px; color: #7A8089; font-weight: 500">Not sure what to ask? These show Quorum at its best:</span>
+          <div style="display: flex; flex-wrap: wrap; gap: 10px">
+            <button style="height: 38px; padding: 0 16px; border-radius: 999px; border: 1px solid rgba(20,23,28,0.14); background: #FFFFFF; color: #3C4148; font-size: 13.5px; font-weight: 550; cursor: pointer; font-family: inherit; transition: all .16s ease" style-hover="border-color: #14171C; transform: translateY(-1px)">Usage-based vs seat pricing?</button>
+            <button style="height: 38px; padding: 0 16px; border-radius: 999px; border: 1px solid rgba(20,23,28,0.14); background: #FFFFFF; color: #3C4148; font-size: 13.5px; font-weight: 550; cursor: pointer; font-family: inherit; transition: all .16s ease" style-hover="border-color: #14171C; transform: translateY(-1px)">Aurora vs AlloyDB vs self-managed?</button>
+            <button style="height: 38px; padding: 0 16px; border-radius: 999px; border: 1px solid rgba(20,23,28,0.14); background: #FFFFFF; color: #3C4148; font-size: 13.5px; font-weight: 550; cursor: pointer; font-family: inherit; transition: all .16s ease" style-hover="border-color: #14171C; transform: translateY(-1px)">Is my startup thesis defensible?</button>
+            <button style="height: 38px; padding: 0 16px; border-radius: 999px; border: 1px solid rgba(20,23,28,0.14); background: #FFFFFF; color: #3C4148; font-size: 13.5px; font-weight: 550; cursor: pointer; font-family: inherit; transition: all .16s ease" style-hover="border-color: #14171C; transform: translateY(-1px)">Rewrite our retention policy?</button>
+          </div>
+        </div>
+
+        <div style="display: flex; gap: 10px; flex-wrap: wrap">
+          <span style="display: inline-flex; align-items: center; gap: 8px; padding: 7px 13px; border-radius: 999px; background: #FFFFFF; border: 1px solid rgba(20,23,28,0.10); font-size: 12.5px; color: #565C66"><span style="width: 8px; height: 8px; border-radius: 2px; background: #8A5F16"></span>Decision support, not professional advice</span>
+          <span style="display: inline-flex; align-items: center; gap: 8px; padding: 7px 13px; border-radius: 999px; background: #FFFFFF; border: 1px solid rgba(20,23,28,0.10); font-size: 12.5px; color: #565C66"><span style="width: 8px; height: 8px; border-radius: 2px; background: #8A5F16"></span>Don't paste sensitive or private data</span>
+          <span style="display: inline-flex; align-items: center; gap: 8px; padding: 7px 13px; border-radius: 999px; background: #FFFFFF; border: 1px solid rgba(20,23,28,0.10); font-size: 12.5px; color: #565C66"><span style="width: 8px; height: 8px; border-radius: 999px; background: #7A8089"></span>Results vanish when you leave</span>
+        </div>
+      </div>
+    </div></section><section id="03" style="padding: 28px 48px; display: flex; flex-direction: column; gap: 16px; font-family: 'Geist', system-ui, sans-serif"><div style="display: flex; align-items: center; gap: 12px; max-width: 1180px"><span style="display: inline-grid; place-items: center; width: 40px; height: 34px; border-radius: 8px; background: #14171C; color: #FFFFFF; font-weight: 600; font-size: 13.5px; font-family: 'Geist Mono', monospace">03</span><div><div style="font-weight: 700; font-size: 16px; color: #1a1a18">Cost gate — approve before anything runs</div><div style="font-size: 13px; color: #6b675e; line-height: 1.5">Itemized by model AND by stage — every round priced. ≤ $0.15 runs on a click; this confirm band up to $0.25; blocked above, no override. The approved figure becomes the run’s cap.</div></div></div><div data-screen-label="03 Cost gate" style="width: 1440px; background: #F6F5F2; border: 1px solid rgba(20,23,28,0.10); border-radius: 12px; overflow: hidden; box-shadow: 0 24px 60px rgba(20,23,28,0.12); font-family: 'Geist', system-ui, sans-serif; color: #14171C">
+      <div style="display: flex; align-items: center; justify-content: space-between; height: 60px; padding: 0 32px; background: #FFFFFF; border-bottom: 1px solid rgba(20,23,28,0.09)">
+        <div style="display: flex; align-items: center; gap: 12px">
+          <div style="display: flex; align-items: center; gap: 10px"><div style="width: 28px; height: 28px; border-radius: 8px; background: #0E6B50; color: #FFFFFF; display: grid; place-items: center; font-size: 14px; font-weight: 700; font-family: 'Newsreader', serif">Q</div><span style="font-weight: 650; font-size: 16px; letter-spacing: -0.01em">Quorum</span></div>
+          <span style="width: 1px; height: 18px; background: rgba(20,23,28,0.14)"></span>
+          <span style="font-size: 13.5px; color: #565C66">Cost review</span>
+        </div>
+        <span style="font-size: 12.5px; color: #7A8089">Nothing executes without this approval</span>
+      </div>
+
+      <div style="max-width: 880px; margin: 0 auto; padding: 40px 0 56px; display: flex; flex-direction: column; gap: 16px">
+        <div style="display: flex; flex-direction: column; gap: 4px">
+          <span style="font-size: 13px; color: #565C66">Your question</span>
+          <div style="font-family: 'Newsreader', Georgia, serif; font-size: 22px; line-height: 1.3; font-weight: 500; color: #14171C; text-wrap: balance">Should we adopt passkeys and phase out passwords by the end of 2027?</div>
+          <span style="font-size: 12.5px; color: #7A8089">4 models · 2 debate rounds · synthesis · sourced answers where search succeeds</span>
+        </div>
+
+        <div style="background: #FFFFFF; border: 1.5px solid rgba(138,95,22,0.40); border-radius: 16px; overflow: hidden; box-shadow: 0 12px 32px rgba(138,95,22,0.08)">
+          <div style="display: flex; align-items: center; justify-content: space-between; padding: 13px 24px; background: rgba(138,95,22,0.05); border-bottom: 1px solid rgba(138,95,22,0.15)">
+            <span style="font-size: 11.5px; font-weight: 700; letter-spacing: 0.08em; text-transform: uppercase; color: #8A5F16">Cost review — your confirmation required</span>
+            <span style="font-size: 12px; color: #8A5F16">Planning estimate · reconciled to actuals on the receipt</span>
+          </div>
+          <div style="padding: 22px 24px; display: flex; flex-direction: column; gap: 18px">
+            <div style="display: flex; align-items: baseline; gap: 12px">
+              <span style="font-family: 'Geist Mono', monospace; font-size: 42px; font-weight: 600; letter-spacing: -0.02em">$0.19</span>
+              <span style="font-size: 13.5px; color: #565C66">estimated range <span style="font-family: 'Geist Mono', monospace">$0.16–$0.22</span></span>
+            </div>
+            <div style="display: flex; flex-direction: column; gap: 6px">
+              <div style="position: relative; display: flex; height: 10px; border-radius: 999px; overflow: visible">
+                <span style="width: 60%; background: rgba(14,107,80,0.18); border-radius: 999px 0 0 999px"></span>
+                <span style="width: 40%; background: rgba(138,95,22,0.22); border-radius: 0 999px 999px 0"></span>
+                <span style="position: absolute; left: 60%; top: -3px; width: 2px; height: 16px; background: #14171C"></span>
+                <span style="position: absolute; left: 76%; top: -5px; width: 3px; height: 20px; background: #8A5F16; border-radius: 999px"></span>
+                <span style="position: absolute; right: 0; top: -3px; width: 2px; height: 16px; background: #A83A2A"></span>
+              </div>
+              <div style="display: flex; justify-content: space-between; font-family: 'Geist Mono', monospace; font-size: 10.5px; color: #7A8089">
+                <span>$0 — runs on approval</span><span style="color: #14171C">$0.15 — explicit confirmation</span><span style="color: #A83A2A">$0.25 — blocked, no override</span>
+              </div>
+            </div>
+            <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 24px">
+              <div style="display: flex; flex-direction: column; gap: 7px">
+                <span style="font-size: 11.5px; font-weight: 600; letter-spacing: 0.08em; text-transform: uppercase; color: #7A8089; padding-bottom: 2px">By model</span>
+                <div style="display: flex; justify-content: space-between; font-size: 12.5px"><span style="color: #565C66">GPT-4o mini</span><span style="font-family: 'Geist Mono', monospace">$0.034</span></div>
+                <div style="display: flex; justify-content: space-between; font-size: 12.5px"><span style="color: #565C66">Claude Haiku 4.5</span><span style="font-family: 'Geist Mono', monospace">$0.062</span></div>
+                <div style="display: flex; justify-content: space-between; font-size: 12.5px"><span style="color: #565C66">Gemini 2.5 Flash</span><span style="font-family: 'Geist Mono', monospace">$0.031</span></div>
+                <div style="display: flex; justify-content: space-between; font-size: 12.5px"><span style="color: #565C66">DeepSeek V3.1</span><span style="font-family: 'Geist Mono', monospace">$0.039</span></div>
+                <div style="display: flex; justify-content: space-between; font-size: 12.5px"><span style="color: #565C66">Synthesis writer</span><span style="font-family: 'Geist Mono', monospace">$0.024</span></div>
+                <div style="display: flex; justify-content: space-between; font-size: 12.5px; font-weight: 600; border-top: 1px solid rgba(20,23,28,0.08); padding-top: 7px"><span>Total</span><span style="font-family: 'Geist Mono', monospace">$0.190</span></div>
+              </div>
+              <div style="display: flex; flex-direction: column; gap: 7px; border-left: 1px solid rgba(20,23,28,0.08); padding-left: 24px">
+                <span style="font-size: 11.5px; font-weight: 600; letter-spacing: 0.08em; text-transform: uppercase; color: #7A8089; padding-bottom: 2px">By stage — every round priced</span>
+                <div style="display: flex; justify-content: space-between; font-size: 12.5px"><span style="color: #565C66">Initial answers × 4</span><span style="font-family: 'Geist Mono', monospace">$0.078</span></div>
+                <div style="display: flex; justify-content: space-between; font-size: 12.5px"><span style="color: #565C66">Debate round 1</span><span style="font-family: 'Geist Mono', monospace">$0.044</span></div>
+                <div style="display: flex; justify-content: space-between; font-size: 12.5px"><span style="color: #565C66">Debate round 2</span><span style="font-family: 'Geist Mono', monospace">$0.044</span></div>
+                <div style="display: flex; justify-content: space-between; font-size: 12.5px"><span style="color: #565C66">Synthesis</span><span style="font-family: 'Geist Mono', monospace">$0.024</span></div>
+                <div style="display: flex; justify-content: space-between; font-size: 12.5px; font-weight: 600; border-top: 1px solid rgba(20,23,28,0.08); padding-top: 7px"><span>Total</span><span style="font-family: 'Geist Mono', monospace">$0.190</span></div>
+              </div>
+            </div>
+            <p style="margin: 0; font-size: 13.5px; line-height: 1.6; color: #3C4148">This estimate is above <span style="font-family: 'Geist Mono', monospace">$0.15</span>, so Quorum won't run it without your explicit confirmation. Above <span style="font-family: 'Geist Mono', monospace">$0.25</span> execution is blocked entirely — no override.</p>
+            <div style="display: flex; gap: 10px; align-items: center">
+              <button style="height: 46px; padding: 0 24px; border-radius: 11px; border: none; background: #14171C; color: #FFFFFF; font-size: 14.5px; font-weight: 650; cursor: pointer; font-family: inherit; box-shadow: 0 6px 16px rgba(20,23,28,0.22); transition: all .18s ease" style-hover="transform: translateY(-1px); box-shadow: 0 10px 22px rgba(20,23,28,0.30)">Confirm &amp; run · $0.19</button>
+              <button style="height: 46px; padding: 0 20px; border-radius: 11px; border: 1px solid rgba(20,23,28,0.14); background: #FFFFFF; color: #14171C; font-size: 14.5px; font-weight: 600; cursor: pointer; font-family: inherit; transition: all .16s ease" style-hover="background: #F6F5F2">Back to edit</button>
+              <span style="font-size: 12px; color: #7A8089; margin-left: 4px">The approved figure becomes this run's spend cap.</span>
+            </div>
+          </div>
+        </div>
+
+        <div style="display: flex; align-items: center; gap: 8px; font-size: 12px; color: #7A8089">
+          <span style="font-family: 'Geist Mono', monospace; border: 1px solid rgba(20,23,28,0.12); border-radius: 4px; padding: 1px 6px; font-size: 10.5px">Ctrl</span>+<span style="font-family: 'Geist Mono', monospace; border: 1px solid rgba(20,23,28,0.12); border-radius: 4px; padding: 1px 6px; font-size: 10.5px">Enter</span> confirm · <span style="font-family: 'Geist Mono', monospace; border: 1px solid rgba(20,23,28,0.12); border-radius: 4px; padding: 1px 6px; font-size: 10.5px">Esc</span> back — estimates at or below $0.15 skip this screen and run on approval.
+        </div>
+      </div>
+    </div></section><section id="04" style="padding: 28px 48px; display: flex; flex-direction: column; gap: 16px; font-family: 'Geist', system-ui, sans-serif"><div style="display: flex; align-items: center; gap: 12px; max-width: 1180px"><span style="display: inline-grid; place-items: center; width: 40px; height: 34px; border-radius: 8px; background: #14171C; color: #FFFFFF; font-weight: 600; font-size: 13.5px; font-family: 'Geist Mono', monospace">04</span><div><div style="font-weight: 700; font-size: 16px; color: #1a1a18">Live run — watch the debate</div><div style="font-size: 13px; color: #6b675e; line-height: 1.5">Per-stage timing and cost accruing live, both debate rounds on screen, search-fallback disclosed, stop always available, spend tracked against your approved figure. Running is blue — green stays out until minds agree.</div></div></div><div data-screen-label="04 Live run" style="width: 1440px; background: #F6F5F2; border: 1px solid rgba(20,23,28,0.10); border-radius: 12px; overflow: hidden; box-shadow: 0 24px 60px rgba(20,23,28,0.12); font-family: 'Geist', system-ui, sans-serif; color: #14171C">
+      <div style="display: flex; align-items: center; justify-content: space-between; height: 60px; padding: 0 32px; background: #FFFFFF; border-bottom: 1px solid rgba(20,23,28,0.09)">
+        <div style="display: flex; align-items: center; gap: 12px">
+          <div style="display: flex; align-items: center; gap: 10px"><div style="width: 28px; height: 28px; border-radius: 8px; background: #0E6B50; color: #FFFFFF; display: grid; place-items: center; font-size: 14px; font-weight: 700; font-family: 'Newsreader', serif">Q</div><span style="font-weight: 650; font-size: 16px; letter-spacing: -0.01em">Quorum</span></div>
+          <span style="width: 1px; height: 18px; background: rgba(20,23,28,0.14)"></span>
+          <span style="display: inline-flex; align-items: center; gap: 7px; font-size: 13.5px; color: #47689E; font-weight: 600"><span style="width: 7px; height: 7px; border-radius: 999px; background: #47689E; animation: qpulse 1.6s ease-out infinite"></span>Running · debate round 2 of 2</span>
+        </div>
+        <div style="display: flex; align-items: center; gap: 12px">
+          <span style="font-size: 13px; color: #565C66; font-family: 'Geist Mono', monospace">28.7s elapsed</span>
+          <button style="height: 34px; padding: 0 15px; border-radius: 9px; border: 1px solid rgba(168,58,42,0.35); background: #FFFFFF; color: #A83A2A; cursor: pointer; font-size: 12.5px; font-weight: 600; font-family: inherit; transition: all .16s ease" style-hover="background: rgba(168,58,42,0.06)">Stop run</button>
+        </div>
+      </div>
+
+      <div style="padding: 16px 32px; border-bottom: 1px solid rgba(20,23,28,0.07); background: rgba(20,23,28,0.015)">
+        <div style="font-size: 11px; font-weight: 600; letter-spacing: 0.08em; text-transform: uppercase; color: #7A8089; margin-bottom: 4px">Running query</div>
+        <div style="font-family: 'Newsreader', Georgia, serif; font-size: 19px; font-weight: 500; line-height: 1.35; max-width: 900px">Should our 200-person company adopt passkeys and phase out passwords by the end of 2027? What's the safest migration sequence?</div>
+      </div>
+
+      <div style="display: flex; align-items: stretch; padding: 16px 32px; border-bottom: 1px solid rgba(20,23,28,0.07); background: #FFFFFF">
+        <div style="flex: 1; display: flex; flex-direction: column; gap: 6px; padding-right: 20px">
+          <div style="display: flex; align-items: center; gap: 8px"><span style="width: 18px; height: 18px; border-radius: 999px; background: #14171C; color: #FFFFFF; display: grid; place-items: center; font-size: 10px; font-weight: 700">✓</span><span style="font-size: 13px; font-weight: 600">Initial answers</span></div>
+          <div style="height: 3px; border-radius: 999px; background: #14171C"></div>
+          <div style="font-size: 11px; color: #7A8089; font-family: 'Geist Mono', monospace">4/4 · 8.2s · $0.070</div>
+        </div>
+        <div style="flex: 1; display: flex; flex-direction: column; gap: 6px; padding: 0 20px">
+          <div style="display: flex; align-items: center; gap: 8px"><span style="width: 18px; height: 18px; border-radius: 999px; background: #14171C; color: #FFFFFF; display: grid; place-items: center; font-size: 10px; font-weight: 700">✓</span><span style="font-size: 13px; font-weight: 600">Debate round 1</span></div>
+          <div style="height: 3px; border-radius: 999px; background: #14171C"></div>
+          <div style="font-size: 11px; color: #7A8089; font-family: 'Geist Mono', monospace">4/4 · 11.4s · $0.039</div>
+        </div>
+        <div style="flex: 1; display: flex; flex-direction: column; gap: 6px; padding: 0 20px">
+          <div style="display: flex; align-items: center; gap: 8px"><span style="width: 18px; height: 18px; border-radius: 999px; background: #47689E; color: #FFFFFF; display: grid; place-items: center; font-size: 10px; font-weight: 700; box-shadow: 0 0 0 3px rgba(71,104,158,0.15)">●</span><span style="font-size: 13px; font-weight: 600; color: #47689E">Debate round 2</span></div>
+          <div style="height: 3px; border-radius: 999px; background: linear-gradient(to right, #47689E 55%, rgba(71,104,158,0.15) 55%)"></div>
+          <div style="font-size: 11px; color: #47689E; font-family: 'Geist Mono', monospace">3/4 responding…</div>
+        </div>
+        <div style="flex: 1; display: flex; flex-direction: column; gap: 6px; padding-left: 20px">
+          <div style="display: flex; align-items: center; gap: 8px"><span style="width: 18px; height: 18px; border-radius: 999px; background: rgba(20,23,28,0.07); color: #7A8089; display: grid; place-items: center; font-size: 10px; font-weight: 700">4</span><span style="font-size: 13px; font-weight: 600; color: #7A8089">Synthesis</span></div>
+          <div style="height: 3px; border-radius: 999px; background: rgba(20,23,28,0.07)"></div>
+          <div style="font-size: 11px; color: #7A8089; font-family: 'Geist Mono', monospace">pending</div>
+        </div>
+      </div>
+
+      <div style="display: grid; grid-template-columns: 1fr 340px">
+        <div style="padding: 24px 32px 32px; display: flex; flex-direction: column; gap: 22px; border-right: 1px solid rgba(20,23,28,0.07)">
+          <div style="display: flex; flex-direction: column; gap: 12px">
+            <div style="display: flex; align-items: center; gap: 10px">
+              <span style="font-size: 11.5px; font-weight: 700; letter-spacing: 0.08em; text-transform: uppercase; color: #7A8089">Round 1 · they challenge each other</span>
+              <span style="flex: 1; height: 1px; background: rgba(20,23,28,0.08)"></span>
+              <span style="font-size: 11px; color: #565C66; font-weight: 600">complete</span>
+            </div>
+            <div style="background: #FFFFFF; border: 1px solid rgba(20,23,28,0.09); border-radius: 12px; padding: 14px 16px; display: flex; flex-direction: column; gap: 8px">
+              <div style="display: flex; align-items: center; gap: 8px; font-size: 12.5px">
+                <span style="width: 22px; height: 22px; border-radius: 999px; background: #F2E8DA; color: #A26A2F; display: grid; place-items: center; font-size: 10px; font-weight: 700">C</span>
+                <span style="font-weight: 600">Claude Haiku</span>
+                <span style="color: #7A8089">→</span>
+                <span style="width: 22px; height: 22px; border-radius: 999px; background: #E1E8F2; color: #47689E; display: grid; place-items: center; font-size: 10px; font-weight: 700">G</span>
+                <span style="font-weight: 600">Gemini</span>
+                <span style="margin-left: auto; padding: 2px 8px; border-radius: 999px; background: rgba(138,95,22,0.10); color: #8A5F16; font-size: 10.5px; font-weight: 600">challenges</span>
+              </div>
+              <p style="margin: 0; font-size: 13.5px; line-height: 1.6; color: #3C4148">Your 9-month dual-credential window rests on a single vendor blog. NIST SP 800-63B ties the overlap to <em>tested recovery flows</em>, not a calendar. For 200 people without proven recovery, 9 months risks locking users out.</p>
+            </div>
+            <div style="background: #FFFFFF; border: 1px solid rgba(20,23,28,0.09); border-radius: 12px; padding: 14px 16px; display: flex; flex-direction: column; gap: 8px">
+              <div style="display: flex; align-items: center; gap: 8px; font-size: 12.5px">
+                <span style="width: 22px; height: 22px; border-radius: 999px; background: #EAE3F2; color: #7A5C9E; display: grid; place-items: center; font-size: 10px; font-weight: 700">D</span>
+                <span style="font-weight: 600">DeepSeek</span>
+                <span style="color: #7A8089">→</span>
+                <span style="width: 22px; height: 22px; border-radius: 999px; background: #DFEDE9; color: #2A7A68; display: grid; place-items: center; font-size: 10px; font-weight: 700">G</span>
+                <span style="font-weight: 600">GPT-4o mini</span>
+                <span style="margin-left: auto; padding: 2px 8px; border-radius: 999px; background: rgba(20,23,28,0.05); color: #565C66; font-size: 10.5px; font-weight: 600">builds on</span>
+              </div>
+              <p style="margin: 0; font-size: 13.5px; line-height: 1.6; color: #3C4148">Agree on phasing, but your cost estimate omits help-desk load during migration. Passwordless cuts reset tickets long-term, yet the first quarter spikes. I'd budget an 18-month overlap to absorb it.</p>
+            </div>
+          </div>
+
+          <div style="display: flex; flex-direction: column; gap: 12px">
+            <div style="display: flex; align-items: center; gap: 10px">
+              <span style="font-size: 11.5px; font-weight: 700; letter-spacing: 0.08em; text-transform: uppercase; color: #47689E">Round 2 · respond &amp; refine</span>
+              <span style="flex: 1; height: 1px; background: rgba(20,23,28,0.08)"></span>
+              <span style="font-size: 11px; color: #47689E; font-weight: 600">in progress</span>
+            </div>
+            <div style="background: #FFFFFF; border: 1px solid rgba(20,23,28,0.09); border-radius: 12px; padding: 14px 16px; display: flex; flex-direction: column; gap: 8px">
+              <div style="display: flex; align-items: center; gap: 8px; font-size: 12.5px">
+                <span style="width: 22px; height: 22px; border-radius: 999px; background: #E1E8F2; color: #47689E; display: grid; place-items: center; font-size: 10px; font-weight: 700">G</span>
+                <span style="font-weight: 600">Gemini</span>
+                <span style="margin-left: auto; padding: 2px 8px; border-radius: 999px; background: rgba(14,107,80,0.08); color: #0E6B50; font-size: 10.5px; font-weight: 600">conceded</span>
+              </div>
+              <p style="margin: 0; font-size: 13.5px; line-height: 1.6; color: #3C4148">Fair — revising the window from a fixed 9 months to "until recovery flows pass a documented test," likely 9–14 months. Sourcing updated to NIST SP 800-63B.</p>
+            </div>
+            <div style="position: relative; background: #FFFFFF; border: 1.5px solid rgba(71,104,158,0.40); border-radius: 12px; padding: 14px 16px; display: flex; flex-direction: column; gap: 8px; box-shadow: 0 0 0 3px rgba(71,104,158,0.07)">
+              <span style="position: absolute; top: -10px; right: 16px; font-size: 10.5px; font-weight: 600; letter-spacing: 0.05em; text-transform: uppercase; color: #47689E; background: #F6F5F2; border: 1px dashed rgba(71,104,158,0.45); border-radius: 5px; padding: 2px 8px">streaming now</span>
+              <div style="display: flex; align-items: center; gap: 8px; font-size: 12.5px">
+                <span style="width: 22px; height: 22px; border-radius: 999px; background: #EAE3F2; color: #7A5C9E; display: grid; place-items: center; font-size: 10px; font-weight: 700">D</span>
+                <span style="font-weight: 600">DeepSeek</span>
+                <span style="margin-left: auto; display: inline-flex; align-items: center; gap: 6px; font-size: 11px; color: #47689E; font-weight: 600"><span style="width: 6px; height: 6px; border-radius: 999px; background: #47689E; animation: qpulse 1.6s ease-out infinite"></span>responding</span>
+              </div>
+              <p style="margin: 0; font-size: 13.5px; line-height: 1.6; color: #3C4148">Accepting the recovery-gated window resolves my cost concern too — a documented test is the trigger I wanted. Holding my help-desk staffing note as a<span style="display: inline-block; width: 8px; height: 15px; background: #47689E; vertical-align: text-bottom; margin-left: 2px; animation: qblink 1s step-end infinite"></span></p>
+            </div>
+            <div style="border: 1px dashed rgba(20,23,28,0.18); border-radius: 12px; padding: 12px 16px; display: flex; align-items: center; gap: 8px; font-size: 12.5px; color: #7A8089">
+              <span style="width: 22px; height: 22px; border-radius: 999px; background: #F2E8DA; color: #A26A2F; display: grid; place-items: center; font-size: 10px; font-weight: 700; opacity: 0.6">C</span>
+              <span style="font-weight: 600; color: #7A8089">Claude Haiku</span>
+              <span style="margin-left: auto; font-family: 'Geist Mono', monospace; font-size: 11px">queued</span>
+            </div>
+          </div>
+        </div>
+
+        <div style="padding: 24px 24px 32px; display: flex; flex-direction: column; gap: 18px; background: rgba(20,23,28,0.015)">
+          <div style="display: flex; flex-direction: column; gap: 10px">
+            <span style="font-size: 11px; font-weight: 600; letter-spacing: 0.08em; text-transform: uppercase; color: #7A8089">Model status</span>
+            <div style="display: flex; align-items: center; gap: 10px"><span style="width: 24px; height: 24px; border-radius: 999px; background: #DFEDE9; color: #2A7A68; display: grid; place-items: center; font-size: 10px; font-weight: 700; flex-shrink: 0">G</span><span style="flex: 1; font-size: 12.5px; font-weight: 600">GPT-4o mini</span><span style="font-size: 10.5px; color: #565C66; font-weight: 600; font-family: 'Geist Mono', monospace">live · done</span></div>
+            <div style="display: flex; align-items: center; gap: 10px"><span style="width: 24px; height: 24px; border-radius: 999px; background: #F2E8DA; color: #A26A2F; display: grid; place-items: center; font-size: 10px; font-weight: 700; flex-shrink: 0">C</span><span style="flex: 1; font-size: 12.5px; font-weight: 600">Claude Haiku 4.5</span><span style="font-size: 10.5px; color: #7A8089; font-weight: 600; font-family: 'Geist Mono', monospace">queued</span></div>
+            <div style="display: flex; align-items: center; gap: 10px"><span style="width: 24px; height: 24px; border-radius: 999px; background: #E1E8F2; color: #47689E; display: grid; place-items: center; font-size: 10px; font-weight: 700; flex-shrink: 0">G</span><span style="flex: 1; font-size: 12.5px; font-weight: 600">Gemini 2.5 Flash</span><span style="font-size: 10.5px; color: #8A5F16; font-weight: 600; font-family: 'Geist Mono', monospace">fallback</span></div>
+            <div style="display: flex; align-items: center; gap: 10px"><span style="width: 24px; height: 24px; border-radius: 999px; background: #EAE3F2; color: #7A5C9E; display: grid; place-items: center; font-size: 10px; font-weight: 700; flex-shrink: 0">D</span><span style="flex: 1; font-size: 12.5px; font-weight: 600">DeepSeek V3.1</span><span style="font-size: 10.5px; color: #47689E; font-weight: 600; font-family: 'Geist Mono', monospace">responding</span></div>
+          </div>
+
+          <div style="display: flex; flex-direction: column; gap: 6px; padding: 12px 14px; border-radius: 10px; border: 1px solid rgba(138,95,22,0.28); background: rgba(138,95,22,0.06)">
+            <div style="display: flex; align-items: center; gap: 7px; font-size: 12px; font-weight: 650; color: #8A5F16"><span style="width: 6px; height: 6px; border-radius: 999px; background: #8A5F16"></span>Search fallback in use</div>
+            <div style="font-size: 12px; line-height: 1.5; color: #6B5320">OpenRouter search didn't return enough source support for Gemini, so Tavily is providing citations. Informational — the run continues, and it's disclosed on the receipt.</div>
+          </div>
+
+          <div style="display: flex; flex-direction: column; gap: 8px; padding: 14px; border-radius: 10px; border: 1px solid rgba(20,23,28,0.10); background: #FFFFFF">
+            <div style="font-size: 12px; font-weight: 650; color: #14171C">Don't want to wait?</div>
+            <div style="font-size: 12px; line-height: 1.5; color: #565C66">Initial answers and round 1 are final. Review them now while round 2 and synthesis finish.</div>
+            <button style="height: 34px; border-radius: 8px; border: 1px solid rgba(20,23,28,0.14); background: #FFFFFF; color: #14171C; font-size: 12.5px; font-weight: 600; cursor: pointer; font-family: inherit; transition: all .16s ease" style-hover="background: #F6F5F2">Review completed steps</button>
+          </div>
+
+          <div style="display: flex; flex-direction: column; gap: 8px; margin-top: auto; padding: 14px; border-radius: 10px; border: 1px solid rgba(20,23,28,0.10); background: #FFFFFF">
+            <div style="display: flex; justify-content: space-between; font-size: 12px; color: #565C66"><span>Spend so far</span><span style="font-family: 'Geist Mono', monospace; color: #14171C; font-weight: 600">$0.149</span></div>
+            <div style="height: 5px; border-radius: 999px; background: rgba(20,23,28,0.08); overflow: hidden"><div style="width: 78%; height: 100%; border-radius: 999px; background: #47689E"></div></div>
+            <div style="display: flex; justify-content: space-between; font-size: 11px; color: #7A8089; font-family: 'Geist Mono', monospace"><span>$0</span><span>approved $0.19</span></div>
+            <div style="font-size: 11.5px; line-height: 1.5; color: #7A8089">The run stops itself if spend would pass the approved figure.</div>
+          </div>
+        </div>
+      </div>
+    </div></section><section id="05" style="padding: 28px 48px; display: flex; flex-direction: column; gap: 16px; font-family: 'Geist', system-ui, sans-serif"><div style="display: flex; align-items: center; gap: 12px; max-width: 1180px"><span style="display: inline-grid; place-items: center; width: 40px; height: 34px; border-radius: 8px; background: #14171C; color: #FFFFFF; font-weight: 600; font-size: 13.5px; font-family: 'Geist Mono', monospace">05</span><div><div style="font-weight: 700; font-size: 16px; color: #1a1a18">Result — the verdict</div><div style="font-size: 13px; color: #6b675e; line-height: 1.5">The product’s only large green surface. Verdict → trust triangle → how positions moved → synthesis → next question. Run details (receipt · cost est→actual by model &amp; stage · pipeline) one click away, collapsed by default.</div></div></div><div data-screen-label="05 Result" style="width: 1440px; background: #F6F5F2; border: 1px solid rgba(20,23,28,0.10); border-radius: 12px; overflow: hidden; box-shadow: 0 24px 60px rgba(20,23,28,0.12); font-family: 'Geist', system-ui, sans-serif; color: #14171C">
+      <div style="display: flex; align-items: center; justify-content: space-between; height: 60px; padding: 0 32px; background: #FFFFFF; border-bottom: 1px solid rgba(20,23,28,0.09)">
+        <div style="display: flex; align-items: center; gap: 12px">
+          <div style="display: flex; align-items: center; gap: 10px"><div style="width: 28px; height: 28px; border-radius: 8px; background: #0E6B50; color: #FFFFFF; display: grid; place-items: center; font-size: 14px; font-weight: 700; font-family: 'Newsreader', serif">Q</div><span style="font-weight: 650; font-size: 16px; letter-spacing: -0.01em">Quorum</span></div>
+          <span style="width: 1px; height: 18px; background: rgba(20,23,28,0.14)"></span>
+          <span style="display: inline-flex; align-items: center; gap: 7px; font-size: 13.5px; color: #0E6B50; font-weight: 600"><span style="width: 7px; height: 7px; border-radius: 999px; background: #0E6B50"></span>Completed in 41.2s</span>
+        </div>
+        <div style="display: flex; gap: 8px">
+          <button style="height: 36px; padding: 0 16px; border-radius: 9px; border: 1px solid rgba(20,23,28,0.14); background: #FFFFFF; color: #14171C; font-size: 13.5px; font-weight: 600; cursor: pointer; font-family: inherit; transition: all .16s ease" style-hover="background: #F6F5F2">Copy</button>
+          <button style="height: 36px; padding: 0 16px; border-radius: 9px; border: 1px solid rgba(20,23,28,0.14); background: #FFFFFF; color: #14171C; font-size: 13.5px; font-weight: 600; cursor: pointer; font-family: inherit; transition: all .16s ease" style-hover="background: #F6F5F2">Export</button>
+        </div>
+      </div>
+
+      <div style="max-width: 960px; margin: 0 auto; padding: 36px 0 52px; display: flex; flex-direction: column; gap: 18px">
+        <div style="display: flex; flex-direction: column; gap: 8px; padding: 0 4px">
+          <span style="font-size: 13px; color: #565C66; font-weight: 500">You asked</span>
+          <h1 style="margin: 0; font-family: 'Newsreader', Georgia, serif; font-size: 29px; line-height: 1.28; font-weight: 500; letter-spacing: -0.01em; text-wrap: balance">Should we adopt passkeys and phase out passwords by the end of 2027?</h1>
+          <div style="display: flex; align-items: center; gap: 8px; font-size: 13px; color: #7A8089; flex-wrap: wrap">
+            <span style="display: inline-flex; align-items: center; gap: 6px; color: #0E6B50; font-weight: 600"><span style="width: 6px; height: 6px; border-radius: 999px; background: currentColor"></span>Completed</span>
+            <span>·</span><span>41.2s</span>
+            <span>·</span><span style="white-space: nowrap">Jul 7, 2026 · finished 09:41:44 UTC</span>
+            <span>·</span><span>actual <span style="font-family: 'Geist Mono', monospace; color: #3C4148; font-weight: 600">$0.171</span> <span style="color: #7A8089">(approved $0.19)</span></span>
+            <span>·</span><span style="font-family: 'Geist Mono', monospace">qr_7f3a2c91</span>
+            <span style="display: inline-flex; align-items: center; gap: 5px; margin-left: 4px; padding: 3px 10px; border-radius: 999px; border: 1px solid rgba(20,23,28,0.14); color: #565C66; font-weight: 600; cursor: pointer">Run details ▴</span>
+          </div>
+        </div>
+
+        <div style="position: relative; border: 1px solid rgba(20,23,28,0.10); border-radius: 14px; background: #FFFFFF; padding: 18px 22px 20px">
+          <span style="position: absolute; top: -10px; right: 16px; font-size: 10.5px; font-weight: 600; letter-spacing: 0.05em; text-transform: uppercase; color: #7A8089; background: #F6F5F2; border: 1px dashed rgba(20,23,28,0.25); border-radius: 5px; padding: 2px 8px">shown expanded — collapsed by default</span>
+          <div style="display: grid; grid-template-columns: 1.05fr 1fr 1fr 0.9fr; gap: 22px">
+            <div style="display: flex; flex-direction: column; gap: 7px">
+              <span style="font-size: 11px; font-weight: 600; letter-spacing: 0.08em; text-transform: uppercase; color: #7A8089">Run receipt</span>
+              <div style="display: flex; justify-content: space-between; gap: 8px; font-size: 12.5px"><span style="color: #565C66">Run ID</span><span style="display: inline-flex; gap: 6px; font-family: 'Geist Mono', monospace">qr_7f3a2c91 <span style="color: #7A8089; cursor: pointer">⧉</span></span></div>
+              <div style="display: flex; justify-content: space-between; gap: 8px; font-size: 12.5px"><span style="color: #565C66">Correlation</span><span style="display: inline-flex; gap: 6px; font-family: 'Geist Mono', monospace">req_9d21b7c4 <span style="color: #7A8089; cursor: pointer">⧉</span></span></div>
+              <div style="display: flex; justify-content: space-between; gap: 8px; font-size: 12.5px"><span style="color: #565C66">Session</span><span>Secure cookie</span></div>
+              <div style="display: flex; justify-content: space-between; gap: 8px; font-size: 12.5px"><span style="color: #565C66">Started</span><span style="font-family: 'Geist Mono', monospace">09:41:03 UTC</span></div>
+              <div style="display: flex; justify-content: space-between; gap: 8px; font-size: 12.5px"><span style="color: #565C66">Finished</span><span style="font-family: 'Geist Mono', monospace">09:41:44 UTC</span></div>
+              <div style="display: flex; justify-content: space-between; gap: 8px; font-size: 12.5px"><span style="color: #565C66">Search</span><span style="text-align: right">OpenRouter · Tavily ×1</span></div>
+              <div style="font-size: 11.5px; line-height: 1.5; color: #7A8089; padding-top: 4px">Quote the run ID + correlation ID when reporting an issue — support can pull every log line. Ephemeral: gone when this session ends.</div>
+            </div>
+            <div style="display: flex; flex-direction: column; gap: 7px; border-left: 1px solid rgba(20,23,28,0.08); padding-left: 22px">
+              <span style="font-size: 11px; font-weight: 600; letter-spacing: 0.08em; text-transform: uppercase; color: #7A8089">Cost by model · est → actual</span>
+              <div style="display: flex; justify-content: space-between; font-size: 12.5px"><span style="color: #565C66">GPT-4o mini</span><span style="font-family: 'Geist Mono', monospace; white-space: nowrap">$0.034 → $0.031</span></div>
+              <div style="display: flex; justify-content: space-between; font-size: 12.5px"><span style="color: #565C66">Claude</span><span style="font-family: 'Geist Mono', monospace; white-space: nowrap">$0.062 → $0.058</span></div>
+              <div style="display: flex; justify-content: space-between; font-size: 12.5px"><span style="color: #565C66">Gemini</span><span style="font-family: 'Geist Mono', monospace; white-space: nowrap">$0.031 → $0.027</span></div>
+              <div style="display: flex; justify-content: space-between; font-size: 12.5px"><span style="color: #565C66">DeepSeek</span><span style="font-family: 'Geist Mono', monospace; white-space: nowrap">$0.039 → $0.035</span></div>
+              <div style="display: flex; justify-content: space-between; font-size: 12.5px"><span style="color: #565C66">Synthesis</span><span style="font-family: 'Geist Mono', monospace; white-space: nowrap">$0.024 → $0.020</span></div>
+              <div style="display: flex; justify-content: space-between; font-size: 12.5px; font-weight: 600; border-top: 1px solid rgba(20,23,28,0.08); padding-top: 6px"><span>Total</span><span style="font-family: 'Geist Mono', monospace; white-space: nowrap">$0.190 → $0.171</span></div>
+            </div>
+            <div style="display: flex; flex-direction: column; gap: 7px; border-left: 1px solid rgba(20,23,28,0.08); padding-left: 22px">
+              <span style="font-size: 11px; font-weight: 600; letter-spacing: 0.08em; text-transform: uppercase; color: #7A8089">Cost by stage · est → actual</span>
+              <div style="display: flex; justify-content: space-between; font-size: 12.5px"><span style="color: #565C66">Initial</span><span style="font-family: 'Geist Mono', monospace; white-space: nowrap">$0.078 → $0.070</span></div>
+              <div style="display: flex; justify-content: space-between; font-size: 12.5px"><span style="color: #565C66">Round 1</span><span style="font-family: 'Geist Mono', monospace; white-space: nowrap">$0.044 → $0.039</span></div>
+              <div style="display: flex; justify-content: space-between; font-size: 12.5px"><span style="color: #565C66">Round 2</span><span style="font-family: 'Geist Mono', monospace; white-space: nowrap">$0.044 → $0.040</span></div>
+              <div style="display: flex; justify-content: space-between; font-size: 12.5px"><span style="color: #565C66">Synthesis</span><span style="font-family: 'Geist Mono', monospace; white-space: nowrap">$0.024 → $0.022</span></div>
+              <div style="display: flex; justify-content: space-between; font-size: 12.5px; font-weight: 600; border-top: 1px solid rgba(20,23,28,0.08); padding-top: 6px"><span>Under approval</span><span style="font-family: 'Geist Mono', monospace; color: #0E6B50">−$0.019</span></div>
+            </div>
+            <div style="display: flex; flex-direction: column; gap: 7px; border-left: 1px solid rgba(20,23,28,0.08); padding-left: 22px">
+              <span style="font-size: 11px; font-weight: 600; letter-spacing: 0.08em; text-transform: uppercase; color: #7A8089">Pipeline</span>
+              <div style="display: flex; justify-content: space-between; font-size: 12.5px"><span style="color: #565C66">✓ Initial answers</span><span style="font-family: 'Geist Mono', monospace; color: #7A8089">8.2s</span></div>
+              <div style="display: flex; justify-content: space-between; font-size: 12.5px"><span style="color: #565C66">✓ Debate round 1</span><span style="font-family: 'Geist Mono', monospace; color: #7A8089">11.4s</span></div>
+              <div style="display: flex; justify-content: space-between; font-size: 12.5px"><span style="color: #565C66">✓ Debate round 2</span><span style="font-family: 'Geist Mono', monospace; color: #7A8089">12.9s</span></div>
+              <div style="display: flex; justify-content: space-between; font-size: 12.5px"><span style="color: #565C66">✓ Synthesis</span><span style="font-family: 'Geist Mono', monospace; color: #7A8089">8.5s</span></div>
+              <div style="font-size: 11.5px; line-height: 1.5; color: #7A8089; padding-top: 4px">All four stages completed within the 180s hard timeout.</div>
+            </div>
+          </div>
+        </div>
+
+        <div style="display: flex; align-items: center; gap: 30px; background: #0E6B50; border-radius: 18px; padding: 26px 32px; box-shadow: 0 16px 40px rgba(14,107,80,0.25)">
+          <div style="position: relative; width: 104px; height: 104px; flex-shrink: 0">
+            <svg width="104" height="104" viewBox="0 0 104 104" style="transform: rotate(-90deg)">
+              <circle cx="52" cy="52" r="40" fill="none" stroke="rgba(255,255,255,0.22)" stroke-width="9"></circle>
+              <circle cx="52" cy="52" r="40" fill="none" stroke="#FFFFFF" stroke-width="9" stroke-linecap="round" stroke-dasharray="251" stroke-dashoffset="20" style="animation: qdraw2 1.4s cubic-bezier(0.22,1,0.36,1) both"></circle>
+            </svg>
+            <div style="position: absolute; inset: 0; display: flex; flex-direction: column; align-items: center; justify-content: center">
+              <span style="font-family: 'Newsreader', serif; font-size: 26px; font-weight: 600; color: #FFFFFF; line-height: 1">4/4</span>
+              <span style="font-size: 10.5px; font-weight: 650; color: rgba(255,255,255,0.85); letter-spacing: 0.06em; text-transform: uppercase">agree</span>
+            </div>
+          </div>
+          <div style="flex: 1; display: flex; flex-direction: column; gap: 8px">
+            <span style="font-size: 12px; font-weight: 650; letter-spacing: 0.1em; text-transform: uppercase; color: rgba(255,255,255,0.75)">The panel's verdict</span>
+            <div style="font-family: 'Newsreader', Georgia, serif; font-size: 25px; line-height: 1.3; font-weight: 500; color: #FFFFFF; text-wrap: pretty">Yes — adopt passkeys with a phased rollout, and keep a password fallback until account-recovery flows are proven.</div>
+            <span style="font-size: 14px; line-height: 1.55; color: rgba(255,255,255,0.82)">Unanimous after two debate rounds — one position revised, one refined, zero disagreements hidden.</span>
+          </div>
+        </div>
+
+        <div style="display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 12px">
+          <div style="background: #FFFFFF; border: 1px solid rgba(20,23,28,0.09); border-radius: 14px; padding: 16px 18px; display: flex; flex-direction: column; gap: 6px">
+            <div style="display: flex; align-items: center; justify-content: space-between"><span style="font-size: 12.5px; font-weight: 700; letter-spacing: 0.05em; text-transform: uppercase; color: #0E6B50">Agreement</span><span style="width: 9px; height: 9px; border-radius: 3px; background: #0E6B50"></span></div>
+            <span style="font-size: 24px; font-weight: 700; letter-spacing: -0.01em">4 of 4 <span style="font-size: 14px; font-weight: 600; color: #565C66">aligned</span></span>
+            <span style="font-size: 13px; line-height: 1.5; color: #565C66">Convergence earned through critique, not sampling luck.</span>
+          </div>
+          <div style="background: #FFFFFF; border: 1px solid rgba(20,23,28,0.09); border-radius: 14px; padding: 16px 18px; display: flex; flex-direction: column; gap: 6px">
+            <div style="display: flex; align-items: center; justify-content: space-between"><span style="font-size: 12.5px; font-weight: 700; letter-spacing: 0.05em; text-transform: uppercase; color: #47689E">Source support</span><span style="width: 9px; height: 9px; border-radius: 3px; background: #47689E"></span></div>
+            <span style="font-size: 24px; font-weight: 700; letter-spacing: -0.01em">83% <span style="font-size: 14px; font-weight: 600; color: #565C66">· 12 sources</span></span>
+            <span style="font-size: 13px; line-height: 1.5; color: #565C66">Material claims scored against citations. nist.gov, fidoalliance.org…</span>
+          </div>
+          <div style="background: #FFFFFF; border: 1px solid rgba(20,23,28,0.09); border-radius: 14px; padding: 16px 18px; display: flex; flex-direction: column; gap: 6px">
+            <div style="display: flex; align-items: center; justify-content: space-between"><span style="font-size: 12.5px; font-weight: 700; letter-spacing: 0.05em; text-transform: uppercase; color: #8A5F16">Open uncertainty</span><span style="width: 9px; height: 9px; border-radius: 3px; background: #8A5F16"></span></div>
+            <span style="font-size: 24px; font-weight: 700; letter-spacing: -0.01em">1 flag</span>
+            <span style="font-size: 13px; line-height: 1.5; color: #565C66">Vendor cost projections are single-source. Treat as directional.</span>
+          </div>
+        </div>
+
+        <div style="background: #FFFFFF; border: 1px solid rgba(20,23,28,0.09); border-radius: 16px; overflow: hidden">
+          <div style="padding: 18px 24px 4px; display: flex; flex-direction: column; gap: 2px">
+            <span style="font-size: 16px; font-weight: 700; letter-spacing: -0.01em">How positions moved</span>
+            <span style="font-size: 13px; color: #565C66">Two rounds of structured critique — who held, who conceded, and why the final answer deserves the word "consensus".</span>
+          </div>
+          <div style="display: grid; grid-template-columns: 170px 1fr 1fr 1fr; padding: 14px 24px 20px">
+            <span style="padding: 8px 0"></span>
+            <span style="font-size: 11.5px; font-weight: 700; letter-spacing: 0.06em; text-transform: uppercase; color: #7A8089; padding: 8px 10px">Opening</span>
+            <span style="font-size: 11.5px; font-weight: 700; letter-spacing: 0.06em; text-transform: uppercase; color: #7A8089; padding: 8px 10px">After round 1</span>
+            <span style="font-size: 11.5px; font-weight: 700; letter-spacing: 0.06em; text-transform: uppercase; color: #7A8089; padding: 8px 10px">Final</span>
+            <div style="display: flex; align-items: center; gap: 9px; padding: 10px 0; border-top: 1px solid rgba(20,23,28,0.06)"><span style="width: 26px; height: 26px; border-radius: 999px; background: #DFEDE9; color: #2A7A68; display: grid; place-items: center; font-size: 11px; font-weight: 700">G</span><span style="font-size: 13.5px; font-weight: 650">GPT-4o mini</span></div>
+            <div style="padding: 10px; border-top: 1px solid rgba(20,23,28,0.06); display: flex; align-items: center"><span style="padding: 5px 11px; border-radius: 999px; background: #F6F5F2; font-size: 12.5px; font-weight: 550; color: #3C4148">Adopt, phased</span></div>
+            <div style="padding: 10px; border-top: 1px solid rgba(20,23,28,0.06); display: flex; align-items: center"><span style="font-size: 12.5px; color: #565C66">Pushed back on 18-month overlap</span></div>
+            <div style="padding: 10px; border-top: 1px solid rgba(20,23,28,0.06); display: flex; align-items: center"><span style="padding: 5px 11px; border-radius: 999px; background: #F6F5F2; font-size: 12.5px; font-weight: 600; color: #3C4148">Held · 88%</span></div>
+            <div style="display: flex; align-items: center; gap: 9px; padding: 10px 0; border-top: 1px solid rgba(20,23,28,0.06)"><span style="width: 26px; height: 26px; border-radius: 999px; background: #F2E8DA; color: #A26A2F; display: grid; place-items: center; font-size: 11px; font-weight: 700">C</span><span style="font-size: 13.5px; font-weight: 650">Claude Haiku</span></div>
+            <div style="padding: 10px; border-top: 1px solid rgba(20,23,28,0.06); display: flex; align-items: center"><span style="padding: 5px 11px; border-radius: 999px; background: #F6F5F2; font-size: 12.5px; font-weight: 550; color: #3C4148">Adopt, gate on recovery</span></div>
+            <div style="padding: 10px; border-top: 1px solid rgba(20,23,28,0.06); display: flex; align-items: center"><span style="font-size: 12.5px; color: #565C66">Challenged Gemini's sourcing</span></div>
+            <div style="padding: 10px; border-top: 1px solid rgba(20,23,28,0.06); display: flex; align-items: center"><span style="padding: 5px 11px; border-radius: 999px; background: #F6F5F2; font-size: 12.5px; font-weight: 600; color: #3C4148">Held · 91%</span></div>
+            <div style="display: flex; align-items: center; gap: 9px; padding: 10px 0; border-top: 1px solid rgba(20,23,28,0.06)"><span style="width: 26px; height: 26px; border-radius: 999px; background: #E1E8F2; color: #47689E; display: grid; place-items: center; font-size: 11px; font-weight: 700">G</span><span style="font-size: 13.5px; font-weight: 650">Gemini 2.5</span></div>
+            <div style="padding: 10px; border-top: 1px solid rgba(20,23,28,0.06); display: flex; align-items: center"><span style="padding: 5px 11px; border-radius: 999px; background: #F6F5F2; font-size: 12.5px; font-weight: 550; color: #3C4148">Adopt in 9 months</span></div>
+            <div style="padding: 10px; border-top: 1px solid rgba(20,23,28,0.06); display: flex; align-items: center"><span style="font-size: 12.5px; color: #8A5F16; font-weight: 550">Sourcing challenged — 1 vendor blog</span></div>
+            <div style="padding: 10px; border-top: 1px solid rgba(20,23,28,0.06); display: flex; align-items: center"><span style="display: inline-flex; align-items: center; gap: 6px; padding: 5px 11px; border-radius: 999px; background: rgba(14,107,80,0.07); border: 1.5px solid rgba(14,107,80,0.45); font-size: 12.5px; font-weight: 650; color: #0E6B50">✓ Revised → recovery-gated</span></div>
+            <div style="display: flex; align-items: center; gap: 9px; padding: 10px 0; border-top: 1px solid rgba(20,23,28,0.06)"><span style="width: 26px; height: 26px; border-radius: 999px; background: #EAE3F2; color: #7A5C9E; display: grid; place-items: center; font-size: 11px; font-weight: 700">D</span><span style="font-size: 13.5px; font-weight: 650">DeepSeek V3.1</span></div>
+            <div style="padding: 10px; border-top: 1px solid rgba(20,23,28,0.06); display: flex; align-items: center"><span style="padding: 5px 11px; border-radius: 999px; background: #F6F5F2; font-size: 12.5px; font-weight: 550; color: #3C4148">Adopt over 18 months</span></div>
+            <div style="padding: 10px; border-top: 1px solid rgba(20,23,28,0.06); display: flex; align-items: center"><span style="font-size: 12.5px; color: #565C66">Cost pushback from GPT-4o mini</span></div>
+            <div style="padding: 10px; border-top: 1px solid rgba(20,23,28,0.06); display: flex; align-items: center"><span style="display: inline-flex; align-items: center; gap: 6px; padding: 5px 11px; border-radius: 999px; background: rgba(14,107,80,0.07); border: 1.5px solid rgba(14,107,80,0.45); font-size: 12.5px; font-weight: 650; color: #0E6B50">✓ Revised → recovery-gated</span></div>
+          </div>
+          <a href="#06" style="display: flex; align-items: center; justify-content: center; gap: 8px; padding: 13px; border-top: 1px solid rgba(20,23,28,0.07); background: rgba(20,23,28,0.015); font-size: 13.5px; font-weight: 600; color: #14171C; text-decoration: none; transition: background .16s ease" style-hover="background: rgba(20,23,28,0.04)">Read the full debate transcript →</a>
+        </div>
+
+        <div style="background: #FFFFFF; border: 1px solid rgba(20,23,28,0.09); border-radius: 16px; overflow: hidden">
+          <div style="padding: 18px 24px 14px; display: flex; align-items: baseline; justify-content: space-between">
+            <span style="font-size: 16px; font-weight: 700; letter-spacing: -0.01em">The synthesis</span>
+            <span style="font-size: 12.5px; color: #7A8089">by <span style="font-family: 'Geist Mono', monospace">openai/gpt-4o-mini</span> from the four refined answers</span>
+          </div>
+          <div style="display: flex; gap: 14px; padding: 14px 24px; border-top: 1px solid rgba(20,23,28,0.06)">
+            <span style="flex-shrink: 0; width: 118px; font-size: 12px; font-weight: 700; letter-spacing: 0.05em; text-transform: uppercase; color: #0E6B50; padding-top: 2px">Consensus</span>
+            <p style="margin: 0; flex: 1; font-size: 14.5px; line-height: 1.65; color: #3C4148">Passkeys are the right direction and 2027 is achievable: pilot with engineering, expand company-wide after ~90 days, never remove password recovery before it's tested.</p>
+          </div>
+          <div style="display: flex; gap: 14px; padding: 14px 24px; border-top: 1px solid rgba(20,23,28,0.06)">
+            <span style="flex-shrink: 0; width: 118px; font-size: 12px; font-weight: 700; letter-spacing: 0.05em; text-transform: uppercase; color: #8A5F16; padding-top: 2px">Disagreement</span>
+            <p style="margin: 0; flex: 1; font-size: 14.5px; line-height: 1.65; color: #3C4148">The dual-credential window — 9 vs 18 months — resolved in round 2 to a <em>recovery-gated</em> trigger, not a date. Preserved here, not averaged away.</p>
+          </div>
+          <div style="display: flex; gap: 14px; padding: 14px 24px; border-top: 1px solid rgba(20,23,28,0.06)">
+            <span style="flex-shrink: 0; width: 118px; font-size: 12px; font-weight: 700; letter-spacing: 0.05em; text-transform: uppercase; color: #A83A2A; padding-top: 2px">Uncertainty</span>
+            <p style="margin: 0; flex: 1; font-size: 14.5px; line-height: 1.65; color: #3C4148">Migration cost projections trace to one vendor source. Directional only — budget with a range, not a number.</p>
+          </div>
+          <div style="display: flex; gap: 14px; padding: 14px 24px; border-top: 1px solid rgba(20,23,28,0.06)">
+            <span style="flex-shrink: 0; width: 118px; font-size: 12px; font-weight: 700; letter-spacing: 0.05em; text-transform: uppercase; color: #47689E; padding-top: 2px">Sources</span>
+            <div style="flex: 1; display: flex; flex-wrap: wrap; gap: 6px; align-items: center">
+              <a href="#05" style="display: inline-flex; align-items: center; gap: 6px; padding: 5px 11px; border-radius: 999px; border: 1px solid rgba(71,104,158,0.25); background: rgba(71,104,158,0.05); font-size: 12.5px; font-weight: 550; color: #3A5680; text-decoration: none; transition: all .16s ease" style-hover="border-color: #47689E; background: rgba(71,104,158,0.10)"><span style="font-family: 'Geist Mono', monospace; font-size: 11px; color: #7A8089">1</span>nist.gov · SP 800-63B</a>
+              <a href="#05" style="display: inline-flex; align-items: center; gap: 6px; padding: 5px 11px; border-radius: 999px; border: 1px solid rgba(71,104,158,0.25); background: rgba(71,104,158,0.05); font-size: 12.5px; font-weight: 550; color: #3A5680; text-decoration: none; transition: all .16s ease" style-hover="border-color: #47689E; background: rgba(71,104,158,0.10)"><span style="font-family: 'Geist Mono', monospace; font-size: 11px; color: #7A8089">2</span>fidoalliance.org · workforce passkeys</a>
+              <a href="#05" style="display: inline-flex; align-items: center; gap: 6px; padding: 5px 11px; border-radius: 999px; border: 1px solid rgba(71,104,158,0.25); background: rgba(71,104,158,0.05); font-size: 12.5px; font-weight: 550; color: #3A5680; text-decoration: none; transition: all .16s ease" style-hover="border-color: #47689E; background: rgba(71,104,158,0.10)"><span style="font-family: 'Geist Mono', monospace; font-size: 11px; color: #7A8089">3</span>microsoft.com · Entra deployment data</a>
+              <span style="font-size: 12.5px; color: #7A8089; font-weight: 550">+ 9 more</span>
+            </div>
+          </div>
+          <div style="display: flex; gap: 14px; padding: 16px 24px; border-top: 1px solid rgba(20,23,28,0.06); background: rgba(14,107,80,0.045)">
+            <span style="flex-shrink: 0; width: 118px; font-size: 12px; font-weight: 700; letter-spacing: 0.05em; text-transform: uppercase; color: #0E6B50; padding-top: 2px">Recommendation</span>
+            <p style="margin: 0; flex: 1; font-size: 15px; line-height: 1.65; color: #14171C; font-weight: 500">Pilot in Q1 with engineering. Expand after 90 days of clean recovery testing. Keep password fallback until recovery passes a documented test — then set the cutover date. <span style="color: #565C66; font-weight: 400">Decision support, not professional advice.</span></p>
+          </div>
+        </div>
+
+        <div style="position: relative; background: #FFFFFF; border: 1px solid rgba(20,23,28,0.12); border-radius: 16px; box-shadow: 0 12px 32px rgba(20,23,28,0.07)">
+          <div style="padding: 18px 24px 0; display: flex; flex-direction: column; gap: 12px">
+            <div style="display: flex; align-items: center; justify-content: space-between; gap: 16px; flex-wrap: wrap">
+              <span style="font-size: 16px; font-weight: 700; letter-spacing: -0.01em">Ask your next question</span>
+              <div style="display: flex; gap: 4px; padding: 4px; border-radius: 11px; background: #F6F5F2; border: 1px solid rgba(20,23,28,0.08)">
+                <button style="height: 34px; padding: 0 16px; border-radius: 8px; border: none; background: #14171C; color: #FFFFFF; font-size: 13px; font-weight: 650; cursor: pointer; font-family: inherit">Follow up on this</button>
+                <button style="height: 34px; padding: 0 16px; border-radius: 8px; border: none; background: transparent; color: #565C66; font-size: 13px; font-weight: 600; cursor: pointer; font-family: inherit; transition: color .16s ease" style-hover="color: #14171C">Start fresh</button>
+              </div>
+            </div>
+            <div style="display: flex; gap: 10px; padding: 12px 14px; border-radius: 10px; background: rgba(20,23,28,0.03); border: 1px solid rgba(20,23,28,0.08)">
+              <span style="flex-shrink: 0; width: 8px; height: 8px; border-radius: 999px; background: #14171C; margin-top: 5px"></span>
+              <p style="margin: 0; font-size: 13.5px; line-height: 1.6; color: #3C4148"><strong style="color: #14171C">Follow up carries this verdict + debate as context</strong> (≈ +$0.03 on the estimate) and keeps this result on screen until the new one completes. <strong style="color: #14171C">Start fresh</strong> is a clean slate — results are ephemeral, so export this one first if you need it.</p>
+            </div>
+            <div style="padding: 4px 2px 2px; min-height: 42px; font-size: 15.5px; line-height: 1.55; color: #7A8089">e.g. What about hardware security keys instead of platform passkeys?</div>
+          </div>
+          <div style="display: flex; align-items: center; justify-content: space-between; gap: 16px; padding: 14px 24px 18px; border-top: 1px solid rgba(20,23,28,0.06); margin-top: 12px">
+            <span style="font-size: 13px; color: #565C66"><span style="font-family: 'Geist Mono', monospace; color: #14171C; font-weight: 600">≈ $0.13–0.16</span> · you approve the estimate first · hard cap $0.25 · one run at a time</span>
+            <button style="height: 44px; padding: 0 24px; border-radius: 11px; border: none; background: #14171C; color: #FFFFFF; font-size: 14.5px; font-weight: 650; cursor: pointer; font-family: inherit; box-shadow: 0 6px 16px rgba(20,23,28,0.22); transition: all .18s ease" style-hover="transform: translateY(-1px); box-shadow: 0 10px 22px rgba(20,23,28,0.30)">Estimate &amp; run →</button>
+          </div>
+        </div>
+
+        <div style="display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 0 6px; font-size: 12.5px; color: #7A8089; flex-wrap: wrap">
+          <span>Ephemeral — this result vanishes when the session ends. Export it to keep it.</span>
+          <span>Decision support, not professional advice.</span>
+        </div>
+      </div>
+    </div></section><section id="06" style="padding: 28px 48px; display: flex; flex-direction: column; gap: 16px; font-family: 'Geist', system-ui, sans-serif"><div style="display: flex; align-items: center; gap: 12px; max-width: 1180px"><span style="display: inline-grid; place-items: center; width: 40px; height: 34px; border-radius: 8px; background: #14171C; color: #FFFFFF; font-weight: 600; font-size: 13.5px; font-family: 'Geist Mono', monospace">06</span><div><div style="font-weight: 700; font-size: 16px; color: #1a1a18">Transcript — the audit trail</div><div style="font-size: 13px; color: #6b675e; line-height: 1.5">The only drill-down: opening positions, round-1 challenges, round-2 concessions, hand-off to synthesis. Green chips mark concessions — minds moving toward agreement.</div></div></div><div data-screen-label="06 Debate transcript" style="width: 1440px; background: #F6F5F2; border: 1px solid rgba(20,23,28,0.10); border-radius: 12px; overflow: hidden; box-shadow: 0 24px 60px rgba(20,23,28,0.12); font-family: 'Geist', system-ui, sans-serif; color: #14171C">
+      <div style="display: flex; align-items: center; justify-content: space-between; height: 60px; padding: 0 32px; background: #FFFFFF; border-bottom: 1px solid rgba(20,23,28,0.09)">
+        <div style="display: flex; align-items: center; gap: 12px">
+          <a href="#05" style="display: inline-flex; align-items: center; gap: 7px; font-size: 13.5px; color: #565C66; text-decoration: none; font-weight: 600; transition: color .16s ease" style-hover="color: #14171C">← Back to verdict</a>
+          <span style="width: 1px; height: 18px; background: rgba(20,23,28,0.14)"></span>
+          <span style="font-size: 15px; font-weight: 650">The debate</span>
+          <span style="font-size: 13px; color: #7A8089">2 rounds · 4 models · 24.3s · $0.079</span>
+        </div>
+        <span style="display: inline-flex; align-items: center; gap: 7px; font-size: 13px; color: #0E6B50; font-weight: 600"><span style="width: 7px; height: 7px; border-radius: 999px; background: #0E6B50"></span>Converged</span>
+      </div>
+
+      <div style="max-width: 840px; margin: 0 auto; padding: 36px 0 52px; display: flex; flex-direction: column; gap: 30px">
+        <div style="font-family: 'Newsreader', Georgia, serif; font-size: 22px; line-height: 1.35; font-weight: 500; color: #3C4148; text-align: center; max-width: 26ch; margin: 0 auto; text-wrap: balance">Should we adopt passkeys and phase out passwords by the end of 2027?</div>
+
+        <div style="display: flex; flex-direction: column; gap: 14px">
+          <div style="display: flex; align-items: center; gap: 10px"><span style="font-size: 12.5px; font-weight: 700; letter-spacing: 0.08em; text-transform: uppercase; color: #7A8089">Opening positions</span><span style="flex: 1; height: 1px; background: rgba(20,23,28,0.10)"></span><span style="font-size: 12px; color: #7A8089; font-family: 'Geist Mono', monospace">source-backed · 8.2s</span></div>
+          <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 12px">
+            <div style="background: #FFFFFF; border: 1px solid rgba(20,23,28,0.09); border-radius: 12px; padding: 14px 16px; display: flex; flex-direction: column; gap: 8px">
+              <div style="display: flex; align-items: center; gap: 9px"><span style="width: 26px; height: 26px; border-radius: 999px; background: #DFEDE9; color: #2A7A68; display: grid; place-items: center; font-size: 11px; font-weight: 700">G</span><span style="font-size: 13.5px; font-weight: 650">GPT-4o mini</span><span style="margin-left: auto; font-size: 11px; color: #7A8089; font-family: 'Geist Mono', monospace">live · 6 src</span></div>
+              <p style="margin: 0; font-size: 13.5px; line-height: 1.6; color: #3C4148">Adopt. Phishing-resistance evidence is strong and a phased rollout keeps risk low.</p>
+            </div>
+            <div style="background: #FFFFFF; border: 1px solid rgba(20,23,28,0.09); border-radius: 12px; padding: 14px 16px; display: flex; flex-direction: column; gap: 8px">
+              <div style="display: flex; align-items: center; gap: 9px"><span style="width: 26px; height: 26px; border-radius: 999px; background: #F2E8DA; color: #A26A2F; display: grid; place-items: center; font-size: 11px; font-weight: 700">C</span><span style="font-size: 13.5px; font-weight: 650">Claude Haiku 4.5</span><span style="margin-left: auto; font-size: 11px; color: #7A8089; font-family: 'Geist Mono', monospace">live · 5 src</span></div>
+              <p style="margin: 0; font-size: 13.5px; line-height: 1.6; color: #3C4148">Adopt — but the migration risk that matters is account recovery, not adoption itself.</p>
+            </div>
+            <div style="background: #FFFFFF; border: 1px solid rgba(20,23,28,0.09); border-radius: 12px; padding: 14px 16px; display: flex; flex-direction: column; gap: 8px">
+              <div style="display: flex; align-items: center; gap: 9px"><span style="width: 26px; height: 26px; border-radius: 999px; background: #E1E8F2; color: #47689E; display: grid; place-items: center; font-size: 11px; font-weight: 700">G</span><span style="font-size: 13.5px; font-weight: 650">Gemini 2.5 Flash</span><span style="margin-left: auto; font-size: 11px; color: #8A5F16; font-family: 'Geist Mono', monospace">fallback · 1 src</span></div>
+              <p style="margin: 0; font-size: 13.5px; line-height: 1.6; color: #3C4148">Adopt and move fast — a 9-month dual-credential window is enough for a company this size.</p>
+            </div>
+            <div style="background: #FFFFFF; border: 1px solid rgba(20,23,28,0.09); border-radius: 12px; padding: 14px 16px; display: flex; flex-direction: column; gap: 8px">
+              <div style="display: flex; align-items: center; gap: 9px"><span style="width: 26px; height: 26px; border-radius: 999px; background: #EAE3F2; color: #7A5C9E; display: grid; place-items: center; font-size: 11px; font-weight: 700">D</span><span style="font-size: 13.5px; font-weight: 650">DeepSeek V3.1</span><span style="margin-left: auto; font-size: 11px; color: #7A8089; font-family: 'Geist Mono', monospace">live · 4 src</span></div>
+              <p style="margin: 0; font-size: 13.5px; line-height: 1.6; color: #3C4148">Adopt, but budget an 18-month overlap to absorb the help-desk load during migration.</p>
+            </div>
+          </div>
+        </div>
+
+        <div style="display: flex; flex-direction: column; gap: 16px">
+          <div style="display: flex; align-items: center; gap: 10px"><span style="font-size: 12.5px; font-weight: 700; letter-spacing: 0.08em; text-transform: uppercase; color: #14171C">Round 1 · they challenge each other</span><span style="flex: 1; height: 1px; background: rgba(20,23,28,0.10)"></span><span style="font-size: 12px; color: #7A8089; font-family: 'Geist Mono', monospace">11.4s · $0.039</span></div>
+          <div style="position: relative; display: flex; flex-direction: column; gap: 14px; padding-left: 34px">
+            <div style="position: absolute; left: 12px; top: 12px; bottom: 12px; width: 2px; background: rgba(20,23,28,0.10)"></div>
+            <div style="position: relative">
+              <span style="position: absolute; left: -34px; top: 2px; width: 26px; height: 26px; border-radius: 999px; background: #F2E8DA; color: #A26A2F; display: grid; place-items: center; font-size: 11px; font-weight: 700; box-shadow: 0 0 0 4px #F6F5F2">C</span>
+              <div style="background: #FFFFFF; border: 1px solid rgba(20,23,28,0.09); border-radius: 12px; padding: 14px 16px; display: flex; flex-direction: column; gap: 7px">
+                <div style="font-size: 12.5px; color: #565C66"><strong style="color: #14171C">Claude</strong> challenges <strong style="color: #14171C">Gemini</strong></div>
+                <p style="margin: 0; font-size: 14px; line-height: 1.6; color: #3C4148">Your 9-month window rests on a single vendor blog. NIST SP 800-63B ties the overlap to <em>tested recovery flows</em>, not a calendar. For 200 people without proven recovery, 9 months risks locking users out.</p>
+              </div>
+            </div>
+            <div style="position: relative">
+              <span style="position: absolute; left: -34px; top: 2px; width: 26px; height: 26px; border-radius: 999px; background: #EAE3F2; color: #7A5C9E; display: grid; place-items: center; font-size: 11px; font-weight: 700; box-shadow: 0 0 0 4px #F6F5F2">D</span>
+              <div style="background: #FFFFFF; border: 1px solid rgba(20,23,28,0.09); border-radius: 12px; padding: 14px 16px; display: flex; flex-direction: column; gap: 7px">
+                <div style="font-size: 12.5px; color: #565C66"><strong style="color: #14171C">DeepSeek</strong> builds on <strong style="color: #14171C">GPT-4o mini</strong></div>
+                <p style="margin: 0; font-size: 14px; line-height: 1.6; color: #3C4148">Agree on phasing, but your cost estimate omits help-desk load during migration. Passwordless cuts reset tickets long-term, yet the first quarter spikes. Budget an 18-month overlap to absorb it.</p>
+              </div>
+            </div>
+            <div style="position: relative">
+              <span style="position: absolute; left: -34px; top: 2px; width: 26px; height: 26px; border-radius: 999px; background: #DFEDE9; color: #2A7A68; display: grid; place-items: center; font-size: 11px; font-weight: 700; box-shadow: 0 0 0 4px #F6F5F2">G</span>
+              <div style="background: #FFFFFF; border: 1px solid rgba(20,23,28,0.09); border-radius: 12px; padding: 14px 16px; display: flex; flex-direction: column; gap: 7px">
+                <div style="font-size: 12.5px; color: #565C66"><strong style="color: #14171C">GPT-4o mini</strong> pushes back on <strong style="color: #14171C">DeepSeek</strong></div>
+                <p style="margin: 0; font-size: 14px; line-height: 1.6; color: #3C4148">18 months prolongs the weakest surface — while both credentials are live, there are two ways in. The overlap should be as short as recovery testing allows, not a fixed year and a half.</p>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <div style="display: flex; flex-direction: column; gap: 16px">
+          <div style="display: flex; align-items: center; gap: 10px"><span style="font-size: 12.5px; font-weight: 700; letter-spacing: 0.08em; text-transform: uppercase; color: #14171C">Round 2 · respond &amp; refine</span><span style="flex: 1; height: 1px; background: rgba(20,23,28,0.10)"></span><span style="font-size: 12px; color: #7A8089; font-family: 'Geist Mono', monospace">12.9s · $0.040</span></div>
+          <div style="position: relative; display: flex; flex-direction: column; gap: 14px; padding-left: 34px">
+            <div style="position: absolute; left: 12px; top: 12px; bottom: 12px; width: 2px; background: rgba(20,23,28,0.10)"></div>
+            <div style="position: relative">
+              <span style="position: absolute; left: -34px; top: 2px; width: 26px; height: 26px; border-radius: 999px; background: #E1E8F2; color: #47689E; display: grid; place-items: center; font-size: 11px; font-weight: 700; box-shadow: 0 0 0 4px #F6F5F2">G</span>
+              <div style="background: #FFFFFF; border: 1px solid rgba(20,23,28,0.09); border-radius: 12px; padding: 14px 16px; display: flex; flex-direction: column; gap: 7px">
+                <div style="display: flex; align-items: center; gap: 8px; font-size: 12.5px; color: #565C66"><strong style="color: #14171C">Gemini</strong><span style="padding: 2px 8px; border-radius: 999px; background: rgba(14,107,80,0.08); color: #0E6B50; font-size: 10.5px; font-weight: 600">conceded</span></div>
+                <p style="margin: 0; font-size: 14px; line-height: 1.6; color: #3C4148">Fair. Revising from a fixed 9 months to "until recovery flows pass a documented test" — likely 9–14 months. Sourcing updated to NIST SP 800-63B.</p>
+              </div>
+            </div>
+            <div style="position: relative">
+              <span style="position: absolute; left: -34px; top: 2px; width: 26px; height: 26px; border-radius: 999px; background: #EAE3F2; color: #7A5C9E; display: grid; place-items: center; font-size: 11px; font-weight: 700; box-shadow: 0 0 0 4px #F6F5F2">D</span>
+              <div style="background: #FFFFFF; border: 1px solid rgba(20,23,28,0.09); border-radius: 12px; padding: 14px 16px; display: flex; flex-direction: column; gap: 7px">
+                <div style="display: flex; align-items: center; gap: 8px; font-size: 12.5px; color: #565C66"><strong style="color: #14171C">DeepSeek</strong><span style="padding: 2px 8px; border-radius: 999px; background: rgba(14,107,80,0.08); color: #0E6B50; font-size: 10.5px; font-weight: 600">refined</span></div>
+                <p style="margin: 0; font-size: 14px; line-height: 1.6; color: #3C4148">A documented test is exactly the trigger I wanted — that resolves my cost concern too. Dropping the fixed 18 months; keeping the note to staff the help-desk for the overlap.</p>
+              </div>
+            </div>
+            <div style="position: relative">
+              <span style="position: absolute; left: -34px; top: 2px; width: 26px; height: 26px; border-radius: 999px; background: #F2E8DA; color: #A26A2F; display: grid; place-items: center; font-size: 11px; font-weight: 700; box-shadow: 0 0 0 4px #F6F5F2">C</span>
+              <div style="background: #FFFFFF; border: 1px solid rgba(20,23,28,0.09); border-radius: 12px; padding: 14px 16px; display: flex; flex-direction: column; gap: 7px">
+                <div style="display: flex; align-items: center; gap: 8px; font-size: 12.5px; color: #565C66"><strong style="color: #14171C">Claude</strong><span style="padding: 2px 8px; border-radius: 999px; background: rgba(14,107,80,0.08); color: #0E6B50; font-size: 10.5px; font-weight: 600">closes</span></div>
+                <p style="margin: 0; font-size: 14px; line-height: 1.6; color: #3C4148">Then we converge: adopt, phased, with the cutover gated on a documented recovery test rather than a date. That's the safe sequence.</p>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <a href="#05" style="display: flex; align-items: center; justify-content: center; gap: 10px; padding: 16px; border-radius: 12px; background: rgba(14,107,80,0.07); border: 1px solid rgba(14,107,80,0.25); color: #0E6B50; font-size: 14px; font-weight: 600; text-decoration: none; transition: all .16s ease" style-hover="background: rgba(14,107,80,0.12)">✓ The synthesizer folded these refinements into the verdict — back to the result →</a>
+      </div>
+    </div></section><section id="07" style="padding: 28px 48px; display: flex; flex-direction: column; gap: 16px; font-family: 'Geist', system-ui, sans-serif"><div style="display: flex; align-items: center; gap: 12px; max-width: 1180px"><span style="display: inline-grid; place-items: center; width: 40px; height: 34px; border-radius: 8px; background: #14171C; color: #FFFFFF; font-weight: 600; font-size: 13.5px; font-family: 'Geist Mono', monospace">07</span><div><div style="font-weight: 700; font-size: 16px; color: #1a1a18">Edge states — the seven everyone eventually hits</div><div style="font-size: 13px; color: #6b675e; line-height: 1.5">Anonymous · active-run block · invalid slot · cost blocked · provider failure · partial result · wrong session. No secrets leaked, no run existence disclosed, always a next action.</div></div></div><div style="display: flex; gap: 20px; flex-wrap: wrap"><div data-screen-label="07 Anonymous" style="width: 690px; background: #FFFFFF; border: 1px solid rgba(20,23,28,0.10); border-radius: 12px; overflow: hidden; box-shadow: 0 16px 40px rgba(20,23,28,0.08); font-family: 'Geist', system-ui, sans-serif; color: #14171C">
+        <div style="display: flex; align-items: center; justify-content: space-between; height: 52px; padding: 0 20px; border-bottom: 1px solid rgba(20,23,28,0.07)">
+          <div style="display: flex; align-items: center; gap: 9px"><div style="width: 22px; height: 22px; border-radius: 6px; background: #0E6B50; color: #FFFFFF; display: grid; place-items: center; font-size: 12px; font-weight: 700; font-family: 'Newsreader', serif">Q</div><span style="font-weight: 650; font-size: 14px">Quorum</span></div>
+          <button style="height: 30px; padding: 0 16px; border-radius: 8px; border: none; background: #14171C; color: #FFFFFF; font-size: 12.5px; font-weight: 600; cursor: pointer; font-family: inherit">Start a session</button>
+        </div>
+        <div style="padding: 22px 22px 24px; display: flex; flex-direction: column; gap: 13px">
+          <div style="display: inline-flex; align-items: center; gap: 6px; align-self: flex-start; padding: 4px 10px; border-radius: 999px; background: rgba(20,23,28,0.05); color: #565C66; font-size: 11px; font-weight: 600; letter-spacing: 0.04em; text-transform: uppercase">Anonymous · AC-001</div>
+          <h3 style="margin: 0; font-size: 18px; font-weight: 650; letter-spacing: -0.01em">Start a session to run a query</h3>
+          <p style="margin: 0; font-size: 13.5px; line-height: 1.6; color: #565C66">You can see how Quorum works, but running a query spends provider budget, so it needs a browser session first — one click, a secure cookie, no signup or password. Provider access is configured on the server; you'll never enter an API key.</p>
+          <div style="opacity: 0.55; display: flex; flex-direction: column; gap: 10px">
+            <div style="background: #F6F5F2; border: 1px solid rgba(20,23,28,0.10); border-radius: 10px; padding: 14px 16px; font-size: 14px; color: #7A8089">Ask a question…</div>
+            <div style="display: flex; justify-content: flex-end"><button style="height: 38px; padding: 0 18px; border-radius: 9px; border: none; background: rgba(20,23,28,0.25); color: #FFFFFF; font-size: 13px; font-weight: 600; cursor: not-allowed; font-family: inherit" disabled>See the estimate →</button></div>
+          </div>
+        </div>
+      </div><div data-screen-label="07 Active run exists" style="width: 690px; background: #FFFFFF; border: 1px solid rgba(20,23,28,0.10); border-radius: 12px; overflow: hidden; box-shadow: 0 16px 40px rgba(20,23,28,0.08); font-family: 'Geist', system-ui, sans-serif; color: #14171C">
+        <div style="display: flex; align-items: center; justify-content: space-between; height: 52px; padding: 0 20px; border-bottom: 1px solid rgba(20,23,28,0.07)">
+          <div style="display: flex; align-items: center; gap: 9px"><div style="width: 22px; height: 22px; border-radius: 6px; background: #0E6B50; color: #FFFFFF; display: grid; place-items: center; font-size: 12px; font-weight: 700; font-family: 'Newsreader', serif">Q</div><span style="font-weight: 650; font-size: 14px">Quorum</span></div>
+          <span style="display: inline-flex; align-items: center; gap: 7px; font-size: 12.5px; color: #47689E; font-weight: 600"><span style="width: 7px; height: 7px; border-radius: 999px; background: #47689E; animation: qpulse 1.6s ease-out infinite"></span>1 run active</span>
+        </div>
+        <div style="padding: 22px 22px 24px; display: flex; flex-direction: column; gap: 13px">
+          <div style="display: inline-flex; align-items: center; gap: 6px; align-self: flex-start; padding: 4px 10px; border-radius: 999px; background: rgba(71,104,158,0.08); color: #47689E; font-size: 11px; font-weight: 600; letter-spacing: 0.04em; text-transform: uppercase">Active query exists · AC-003</div>
+          <h3 style="margin: 0; font-size: 18px; font-weight: 650; letter-spacing: -0.01em">You already have a run in progress</h3>
+          <p style="margin: 0; font-size: 13.5px; line-height: 1.6; color: #565C66">One active query per session keeps costs predictable. Jump back to your running query, or stop it before starting a new one.</p>
+          <div style="display: flex; align-items: center; gap: 12px; padding: 14px 16px; border-radius: 10px; border: 1px solid rgba(71,104,158,0.25); background: rgba(71,104,158,0.04)">
+            <span style="width: 8px; height: 8px; border-radius: 999px; background: #47689E; flex-shrink: 0; animation: qpulse 1.6s ease-out infinite"></span>
+            <div style="flex: 1; min-width: 0">
+              <div style="font-size: 13px; font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis">Should our 200-person company adopt passkeys…</div>
+              <div style="font-size: 11.5px; color: #7A8089; font-family: 'Geist Mono', monospace">debate round 2 · 28.7s · qr_7f3a2c91</div>
+            </div>
+            <button style="height: 34px; padding: 0 14px; border-radius: 8px; border: none; background: #14171C; color: #FFFFFF; font-size: 12.5px; font-weight: 600; cursor: pointer; font-family: inherit; flex-shrink: 0">Go to run →</button>
+          </div>
+          <div style="display: flex; justify-content: flex-end"><button style="height: 34px; padding: 0 14px; border-radius: 8px; border: 1px solid rgba(168,58,42,0.35); background: #FFFFFF; color: #A83A2A; font-size: 12.5px; font-weight: 600; cursor: pointer; font-family: inherit">Stop it &amp; start new</button></div>
+        </div>
+      </div><div data-screen-label="07 Provider failure" style="width: 690px; background: #FFFFFF; border: 1px solid rgba(20,23,28,0.10); border-radius: 12px; overflow: hidden; box-shadow: 0 16px 40px rgba(20,23,28,0.08); font-family: 'Geist', system-ui, sans-serif; color: #14171C">
+        <div style="display: flex; align-items: center; justify-content: space-between; height: 52px; padding: 0 20px; border-bottom: 1px solid rgba(20,23,28,0.07)">
+          <div style="display: flex; align-items: center; gap: 9px"><div style="width: 22px; height: 22px; border-radius: 6px; background: #0E6B50; color: #FFFFFF; display: grid; place-items: center; font-size: 12px; font-weight: 700; font-family: 'Newsreader', serif">Q</div><span style="font-weight: 650; font-size: 14px">Quorum</span></div>
+          <span style="display: inline-flex; align-items: center; gap: 7px; font-size: 12.5px; color: #A83A2A; font-weight: 600"><span style="width: 7px; height: 7px; border-radius: 999px; background: #A83A2A"></span>Step failed</span>
+        </div>
+        <div style="padding: 22px 22px 24px; display: flex; flex-direction: column; gap: 13px">
+          <div style="display: inline-flex; align-items: center; gap: 6px; align-self: flex-start; padding: 4px 10px; border-radius: 999px; background: rgba(168,58,42,0.08); color: #A83A2A; font-size: 11px; font-weight: 600; letter-spacing: 0.04em; text-transform: uppercase">Provider failure · AC-015</div>
+          <h3 style="margin: 0; font-size: 18px; font-weight: 650; letter-spacing: -0.01em">One model didn't finish</h3>
+          <p style="margin: 0; font-size: 13.5px; line-height: 1.6; color: #565C66">The <strong>debate round 1</strong> call to <span style="font-family: 'Geist Mono', monospace; color: #14171C">google/gemini-2.5-flash</span> returned a provider error. We retried once. No secrets or keys are exposed — this is a provider-side issue, not your query.</p>
+          <div style="display: flex; flex-direction: column; gap: 8px; padding: 14px 16px; border-radius: 10px; border: 1px solid rgba(168,58,42,0.22); background: rgba(168,58,42,0.035)">
+            <div style="display: flex; justify-content: space-between; font-size: 12.5px"><span style="color: #565C66">Failed step</span><span style="font-weight: 600">Debate round 1 · slot 3</span></div>
+            <div style="display: flex; justify-content: space-between; font-size: 12.5px"><span style="color: #565C66">Provider response</span><span style="font-family: 'Geist Mono', monospace; color: #A83A2A">503 · upstream timeout</span></div>
+            <div style="display: flex; justify-content: space-between; font-size: 12.5px"><span style="color: #565C66">Other three models</span><span style="font-weight: 600">completed</span></div>
+            <div style="display: flex; justify-content: space-between; font-size: 12.5px"><span style="color: #565C66">Correlation ID</span><span style="font-family: 'Geist Mono', monospace">req_4b8e19aa</span></div>
+          </div>
+          <div style="display: flex; gap: 8px">
+            <button style="flex: 1; height: 38px; border-radius: 9px; border: none; background: #14171C; color: #FFFFFF; font-size: 13px; font-weight: 600; cursor: pointer; font-family: inherit">Retry this step</button>
+            <button style="flex: 1; height: 38px; border-radius: 9px; border: 1px solid rgba(20,23,28,0.14); background: #FFFFFF; color: #14171C; font-size: 13px; font-weight: 600; cursor: pointer; font-family: inherit">Continue with 3 models</button>
+          </div>
+        </div>
+      </div><div data-screen-label="07 Partial result" style="width: 690px; background: #FFFFFF; border: 1px solid rgba(20,23,28,0.10); border-radius: 12px; overflow: hidden; box-shadow: 0 16px 40px rgba(20,23,28,0.08); font-family: 'Geist', system-ui, sans-serif; color: #14171C">
+        <div style="display: flex; align-items: center; justify-content: space-between; height: 52px; padding: 0 20px; border-bottom: 1px solid rgba(20,23,28,0.07)">
+          <div style="display: flex; align-items: center; gap: 9px"><div style="width: 22px; height: 22px; border-radius: 6px; background: #0E6B50; color: #FFFFFF; display: grid; place-items: center; font-size: 12px; font-weight: 700; font-family: 'Newsreader', serif">Q</div><span style="font-weight: 650; font-size: 14px">Quorum</span></div>
+          <span style="display: inline-flex; align-items: center; gap: 7px; font-size: 12.5px; color: #8A5F16; font-weight: 600"><span style="width: 7px; height: 7px; border-radius: 999px; background: #8A5F16"></span>Partial result</span>
+        </div>
+        <div style="padding: 22px 22px 24px; display: flex; flex-direction: column; gap: 13px">
+          <div style="display: inline-flex; align-items: center; gap: 6px; align-self: flex-start; padding: 4px 10px; border-radius: 999px; background: rgba(138,95,22,0.10); color: #8A5F16; font-size: 11px; font-weight: 600; letter-spacing: 0.04em; text-transform: uppercase">Partial result · AC-022</div>
+          <h3 style="margin: 0; font-size: 18px; font-weight: 650; letter-spacing: -0.01em">Synthesis used what finished in time</h3>
+          <p style="margin: 0; font-size: 13.5px; line-height: 1.6; color: #565C66">The run hit the 180s timeout before every step completed. The synthesis is built from available results and marks where evidence is missing — read it with that gap in mind.</p>
+          <div style="display: flex; flex-direction: column; border: 1px solid rgba(20,23,28,0.10); border-radius: 10px; overflow: hidden">
+            <div style="display: flex; align-items: center; gap: 10px; padding: 10px 14px; border-bottom: 1px solid rgba(20,23,28,0.06)"><span style="width: 16px; height: 16px; border-radius: 999px; background: #14171C; color: #FFFFFF; display: grid; place-items: center; font-size: 9px">✓</span><span style="flex: 1; font-size: 12.5px">Initial answers</span><span style="font-size: 11px; color: #565C66; font-weight: 600">4/4 available</span></div>
+            <div style="display: flex; align-items: center; gap: 10px; padding: 10px 14px; border-bottom: 1px solid rgba(20,23,28,0.06)"><span style="width: 16px; height: 16px; border-radius: 999px; background: #14171C; color: #FFFFFF; display: grid; place-items: center; font-size: 9px">✓</span><span style="flex: 1; font-size: 12.5px">Debate round 1</span><span style="font-size: 11px; color: #565C66; font-weight: 600">4/4 available</span></div>
+            <div style="display: flex; align-items: center; gap: 10px; padding: 10px 14px; border-bottom: 1px solid rgba(20,23,28,0.06)"><span style="width: 16px; height: 16px; border-radius: 999px; background: rgba(138,95,22,0.15); color: #8A5F16; display: grid; place-items: center; font-size: 10px; font-weight: 700">!</span><span style="flex: 1; font-size: 12.5px">Debate round 2</span><span style="font-size: 11px; color: #8A5F16; font-weight: 600">2/4 — timed out</span></div>
+            <div style="display: flex; align-items: center; gap: 10px; padding: 10px 14px"><span style="width: 16px; height: 16px; border-radius: 999px; background: #14171C; color: #FFFFFF; display: grid; place-items: center; font-size: 9px">✓</span><span style="flex: 1; font-size: 12.5px">Synthesis</span><span style="font-size: 11px; color: #7A8089">from available evidence</span></div>
+          </div>
+          <div style="display: flex; gap: 8px">
+            <button style="flex: 1; height: 38px; border-radius: 9px; border: none; background: #14171C; color: #FFFFFF; font-size: 13px; font-weight: 600; cursor: pointer; font-family: inherit">Review available results</button>
+            <button style="flex: 1; height: 38px; border-radius: 9px; border: 1px solid rgba(20,23,28,0.14); background: #FFFFFF; color: #14171C; font-size: 13px; font-weight: 600; cursor: pointer; font-family: inherit">Retry missing steps</button>
+          </div>
+          <span style="font-size: 12px; color: #7A8089; font-family: 'Geist Mono', monospace">qr_7f3a2c91 · req_9d21b7c4 — quote both when reporting</span>
+        </div>
+      </div><div data-screen-label="07 Invalid model slot" style="width: 690px; background: #FFFFFF; border: 1px solid rgba(20,23,28,0.10); border-radius: 12px; overflow: hidden; box-shadow: 0 16px 40px rgba(20,23,28,0.08); font-family: 'Geist', system-ui, sans-serif; color: #14171C">
+        <div style="display: flex; align-items: center; justify-content: space-between; height: 52px; padding: 0 20px; border-bottom: 1px solid rgba(20,23,28,0.07)">
+          <div style="display: flex; align-items: center; gap: 9px"><div style="width: 22px; height: 22px; border-radius: 6px; background: #0E6B50; color: #FFFFFF; display: grid; place-items: center; font-size: 12px; font-weight: 700; font-family: 'Newsreader', serif">Q</div><span style="font-weight: 650; font-size: 14px">Quorum</span></div>
+          <span style="display: inline-flex; align-items: center; gap: 7px; font-size: 12.5px; color: #A83A2A; font-weight: 600"><span style="width: 7px; height: 7px; border-radius: 999px; background: #A83A2A"></span>1 slot needs a fix</span>
+        </div>
+        <div style="padding: 22px 22px 24px; display: flex; flex-direction: column; gap: 13px">
+          <div style="display: inline-flex; align-items: center; gap: 6px; align-self: flex-start; padding: 4px 10px; border-radius: 999px; background: rgba(168,58,42,0.08); color: #A83A2A; font-size: 11px; font-weight: 600; letter-spacing: 0.04em; text-transform: uppercase">Invalid model slot · AC-008</div>
+          <h3 style="margin: 0; font-size: 18px; font-weight: 650; letter-spacing: -0.01em">Slot 3 isn't a model we can call</h3>
+          <p style="margin: 0; font-size: 13.5px; line-height: 1.6; color: #565C66">The ID isn't in the OpenRouter catalog, so nothing was sent and nothing was charged. The error names the exact slot — never a generic "invalid input".</p>
+          <div style="display: flex; flex-direction: column; gap: 8px">
+            <div style="display: flex; align-items: center; gap: 12px; padding: 11px 14px; background: #FFFFFF; border: 1px solid rgba(20,23,28,0.10); border-radius: 10px; opacity: 0.6">
+              <span style="width: 26px; height: 26px; border-radius: 999px; background: #F2E8DA; color: #A26A2F; display: grid; place-items: center; font-size: 11px; font-weight: 700; flex-shrink: 0">C</span>
+              <div style="flex: 1; min-width: 0"><div style="font-size: 12.5px; font-weight: 600">Slot 2 · Claude Haiku 4.5</div><div style="font-size: 11px; color: #7A8089; font-family: 'Geist Mono', monospace">anthropic/claude-haiku-4.5</div></div>
+              <span style="font-size: 12px; color: #0E6B50; font-weight: 700">✓</span>
+            </div>
+            <div style="display: flex; flex-direction: column; gap: 7px; padding: 11px 14px; background: rgba(168,58,42,0.03); border: 1.5px solid rgba(168,58,42,0.45); border-radius: 10px">
+              <div style="display: flex; align-items: center; gap: 12px">
+                <span style="width: 26px; height: 26px; border-radius: 999px; background: rgba(168,58,42,0.10); color: #A83A2A; display: grid; place-items: center; font-size: 12px; font-weight: 700; flex-shrink: 0">?</span>
+                <div style="flex: 1; min-width: 0"><div style="font-size: 12.5px; font-weight: 600">Slot 3 · unknown model</div><div style="font-size: 11px; color: #A83A2A; font-family: 'Geist Mono', monospace">google/gemini-2.5flash</div></div>
+                <button style="height: 30px; padding: 0 12px; border-radius: 8px; border: none; background: #14171C; color: #FFFFFF; font-size: 12px; font-weight: 600; cursor: pointer; font-family: inherit; flex-shrink: 0">Browse catalog</button>
+              </div>
+              <div style="font-size: 12px; line-height: 1.5; color: #A83A2A; font-weight: 550">Not in the OpenRouter catalog — did you mean <span style="font-family: 'Geist Mono', monospace">google/gemini-2.5-flash</span>?</div>
+            </div>
+          </div>
+          <div style="display: flex; justify-content: flex-end"><button style="height: 38px; padding: 0 18px; border-radius: 9px; border: none; background: rgba(20,23,28,0.25); color: #FFFFFF; font-size: 13px; font-weight: 600; cursor: not-allowed; font-family: inherit" disabled>See the estimate →</button></div>
+        </div>
+      </div><div data-screen-label="07 Cost blocked" style="width: 690px; background: #FFFFFF; border: 1px solid rgba(20,23,28,0.10); border-radius: 12px; overflow: hidden; box-shadow: 0 16px 40px rgba(20,23,28,0.08); font-family: 'Geist', system-ui, sans-serif; color: #14171C">
+        <div style="display: flex; align-items: center; justify-content: space-between; height: 52px; padding: 0 20px; border-bottom: 1px solid rgba(20,23,28,0.07)">
+          <div style="display: flex; align-items: center; gap: 9px"><div style="width: 22px; height: 22px; border-radius: 6px; background: #0E6B50; color: #FFFFFF; display: grid; place-items: center; font-size: 12px; font-weight: 700; font-family: 'Newsreader', serif">Q</div><span style="font-weight: 650; font-size: 14px">Quorum</span></div>
+          <span style="display: inline-flex; align-items: center; gap: 7px; font-size: 12.5px; color: #A83A2A; font-weight: 600"><span style="width: 7px; height: 7px; border-radius: 999px; background: #A83A2A"></span>Estimate blocked</span>
+        </div>
+        <div style="padding: 22px 22px 24px; display: flex; flex-direction: column; gap: 13px">
+          <div style="display: inline-flex; align-items: center; gap: 6px; align-self: flex-start; padding: 4px 10px; border-radius: 999px; background: rgba(168,58,42,0.08); color: #A83A2A; font-size: 11px; font-weight: 600; letter-spacing: 0.04em; text-transform: uppercase">Cost blocked · AC-010 · COPY-004</div>
+          <h3 style="margin: 0; font-size: 18px; font-weight: 650; letter-spacing: -0.01em">Over the hard cap — this run won't start</h3>
+          <p style="margin: 0; font-size: 13.5px; line-height: 1.6; color: #565C66">The itemized estimate is above the $0.25 limit and no override exists in this release. Nothing ran and nothing was charged — trim the run, then estimate again.</p>
+          <div style="display: flex; flex-direction: column; gap: 8px; padding: 14px 16px; border-radius: 10px; border: 1px solid rgba(168,58,42,0.22); background: rgba(168,58,42,0.035)">
+            <div style="display: flex; justify-content: space-between; font-size: 12.5px"><span style="color: #565C66">Estimated total</span><span style="font-family: 'Geist Mono', monospace; color: #A83A2A; font-weight: 700">$0.31</span></div>
+            <div style="display: flex; justify-content: space-between; font-size: 12.5px"><span style="color: #565C66">Hard cap</span><span style="font-family: 'Geist Mono', monospace">$0.25 · no override</span></div>
+            <div style="display: flex; justify-content: space-between; gap: 12px; font-size: 12.5px"><span style="color: #565C66; flex-shrink: 0">Why</span><span style="text-align: right">4 premium slots · 14,600-char question · search on all four</span></div>
+          </div>
+          <div style="display: flex; gap: 8px">
+            <button style="flex: 1; height: 38px; border-radius: 9px; border: none; background: #14171C; color: #FFFFFF; font-size: 13px; font-weight: 600; cursor: pointer; font-family: inherit">Choose cheaper models</button>
+            <button style="flex: 1; height: 38px; border-radius: 9px; border: 1px solid rgba(20,23,28,0.14); background: #FFFFFF; color: #14171C; font-size: 13px; font-weight: 600; cursor: pointer; font-family: inherit">Shorten the question</button>
+          </div>
+          <span style="font-size: 12px; color: #7A8089; font-family: 'Geist Mono', monospace">threshold_action: blocked · req_2f61aa90</span>
+        </div>
+      </div><div data-screen-label="07 Wrong session" style="width: 690px; background: #FFFFFF; border: 1px solid rgba(20,23,28,0.10); border-radius: 12px; overflow: hidden; box-shadow: 0 16px 40px rgba(20,23,28,0.08); font-family: 'Geist', system-ui, sans-serif; color: #14171C">
+        <div style="display: flex; align-items: center; gap: 9px; height: 52px; padding: 0 20px; border-bottom: 1px solid rgba(20,23,28,0.07)">
+          <div style="width: 22px; height: 22px; border-radius: 6px; background: #0E6B50; color: #FFFFFF; display: grid; place-items: center; font-size: 12px; font-weight: 700; font-family: 'Newsreader', serif">Q</div><span style="font-weight: 650; font-size: 14px">Quorum</span>
+        </div>
+        <div style="padding: 34px 40px 32px; display: flex; flex-direction: column; align-items: center; text-align: center; gap: 13px">
+          <div style="display: inline-flex; align-items: center; gap: 6px; padding: 4px 10px; border-radius: 999px; background: rgba(20,23,28,0.05); color: #565C66; font-size: 11px; font-weight: 600; letter-spacing: 0.04em; text-transform: uppercase">Wrong session · AC-032</div>
+          <h3 style="margin: 0; font-family: 'Newsreader', Georgia, serif; font-size: 24px; font-weight: 500; letter-spacing: -0.01em">You don't have access to this</h3>
+          <p style="margin: 0; font-size: 14px; line-height: 1.65; color: #565C66; max-width: 46ch; text-wrap: pretty">This link belongs to a different browser session. Runs are private to the session that started them and disappear when it ends — so we can't open it for you. That's the extent of what we can say about it.</p>
+          <div style="display: flex; gap: 10px; margin-top: 4px">
+            <button style="height: 40px; padding: 0 20px; border-radius: 10px; border: none; background: #14171C; color: #FFFFFF; font-size: 13.5px; font-weight: 650; cursor: pointer; font-family: inherit">Start your own query</button>
+            <button style="height: 40px; padding: 0 18px; border-radius: 10px; border: 1px solid rgba(20,23,28,0.14); background: #FFFFFF; color: #14171C; font-size: 13.5px; font-weight: 600; cursor: pointer; font-family: inherit">Start a session</button>
+          </div>
+          <span style="font-size: 12px; color: #7A8089; font-family: 'Geist Mono', monospace; margin-top: 2px">error 403 · req_77aa02c4 · no run details disclosed</span>
+        </div>
+      </div></div></section><section id="08" style="padding: 28px 48px; display: flex; flex-direction: column; gap: 16px; font-family: 'Geist', system-ui, sans-serif"><div style="display: flex; align-items: center; gap: 12px; max-width: 1180px"><span style="display: inline-grid; place-items: center; width: 40px; height: 34px; border-radius: 8px; background: #14171C; color: #FFFFFF; font-weight: 600; font-size: 13.5px; font-family: 'Geist Mono', monospace">08</span><div><div style="font-weight: 700; font-size: 16px; color: #1a1a18">Dark — behind the ◐ toggle</div><div style="font-size: 13px; color: #6b675e; line-height: 1.5">Every token from 05 mapped to dark; the verdict band is untouched — it works on both. Primary buttons invert to paper-on-ink.</div></div></div><div data-screen-label="08 Dark result" style="width: 1440px; background: #101215; border-radius: 12px; overflow: hidden; box-shadow: 0 24px 60px rgba(0,0,0,0.45); font-family: 'Geist', system-ui, sans-serif; color: #E8EAEE">
+      <div style="display: flex; align-items: center; justify-content: space-between; height: 60px; padding: 0 32px; background: #15181D; border-bottom: 1px solid rgba(232,234,238,0.09)">
+        <div style="display: flex; align-items: center; gap: 12px">
+          <div style="display: flex; align-items: center; gap: 10px"><div style="width: 28px; height: 28px; border-radius: 8px; background: #0E6B50; color: #FFFFFF; display: grid; place-items: center; font-size: 14px; font-weight: 700; font-family: 'Newsreader', serif">Q</div><span style="font-weight: 650; font-size: 16px; letter-spacing: -0.01em">Quorum</span></div>
+          <span style="width: 1px; height: 18px; background: rgba(232,234,238,0.14)"></span>
+          <span style="display: inline-flex; align-items: center; gap: 7px; font-size: 13.5px; color: #4EC28C; font-weight: 600"><span style="width: 7px; height: 7px; border-radius: 999px; background: #4EC28C"></span>Completed in 41.2s</span>
+        </div>
+        <div style="display: flex; gap: 8px">
+          <button style="height: 36px; padding: 0 16px; border-radius: 9px; border: 1px solid rgba(232,234,238,0.14); background: transparent; color: #E8EAEE; font-size: 13.5px; font-weight: 600; cursor: pointer; font-family: inherit; transition: all .16s ease" style-hover="background: rgba(232,234,238,0.06)">Copy</button>
+          <button style="height: 36px; padding: 0 16px; border-radius: 9px; border: 1px solid rgba(232,234,238,0.14); background: transparent; color: #E8EAEE; font-size: 13.5px; font-weight: 600; cursor: pointer; font-family: inherit; transition: all .16s ease" style-hover="background: rgba(232,234,238,0.06)">Export</button>
+        </div>
+      </div>
+
+      <div style="max-width: 960px; margin: 0 auto; padding: 36px 0 52px; display: flex; flex-direction: column; gap: 18px">
+        <div style="display: flex; flex-direction: column; gap: 8px; padding: 0 4px">
+          <span style="font-size: 13px; color: #9AA0AA; font-weight: 500">You asked</span>
+          <h1 style="margin: 0; font-family: 'Newsreader', Georgia, serif; font-size: 29px; line-height: 1.28; font-weight: 500; letter-spacing: -0.01em; text-wrap: balance">Should we adopt passkeys and phase out passwords by the end of 2027?</h1>
+          <div style="display: flex; align-items: center; gap: 8px; font-size: 13px; color: #737A85; flex-wrap: wrap">
+            <span style="display: inline-flex; align-items: center; gap: 6px; color: #4EC28C; font-weight: 600"><span style="width: 6px; height: 6px; border-radius: 999px; background: currentColor"></span>Completed</span>
+            <span>·</span><span>41.2s</span>
+            <span>·</span><span style="white-space: nowrap">Jul 7, 2026 · finished 09:41:44 UTC</span>
+            <span>·</span><span>actual <span style="font-family: 'Geist Mono', monospace; color: #C3C7CE; font-weight: 600">$0.171</span> <span style="color: #737A85">(approved $0.19)</span></span>
+            <span>·</span><span style="font-family: 'Geist Mono', monospace">qr_7f3a2c91</span>
+            <span style="display: inline-flex; align-items: center; gap: 5px; margin-left: 4px; padding: 3px 10px; border-radius: 999px; border: 1px solid rgba(232,234,238,0.14); color: #C3C7CE; font-weight: 600; cursor: pointer">Run details ▴</span>
+          </div>
+        </div>
+
+        <div style="position: relative; border: 1px solid rgba(232,234,238,0.10); border-radius: 14px; background: #191C22; padding: 18px 22px 20px">
+          <span style="position: absolute; top: -10px; right: 16px; font-size: 10.5px; font-weight: 600; letter-spacing: 0.05em; text-transform: uppercase; color: #9AA0AA; background: #101215; border: 1px dashed rgba(232,234,238,0.25); border-radius: 5px; padding: 2px 8px">shown expanded — collapsed by default</span>
+          <div style="display: grid; grid-template-columns: 1.05fr 1fr 1fr 0.9fr; gap: 22px">
+            <div style="display: flex; flex-direction: column; gap: 7px">
+              <span style="font-size: 11px; font-weight: 600; letter-spacing: 0.08em; text-transform: uppercase; color: #737A85">Run receipt</span>
+              <div style="display: flex; justify-content: space-between; gap: 8px; font-size: 12.5px"><span style="color: #9AA0AA">Run ID</span><span style="display: inline-flex; gap: 6px; font-family: 'Geist Mono', monospace">qr_7f3a2c91 <span style="color: #737A85; cursor: pointer">⧉</span></span></div>
+              <div style="display: flex; justify-content: space-between; gap: 8px; font-size: 12.5px"><span style="color: #9AA0AA">Correlation</span><span style="display: inline-flex; gap: 6px; font-family: 'Geist Mono', monospace">req_9d21b7c4 <span style="color: #737A85; cursor: pointer">⧉</span></span></div>
+              <div style="display: flex; justify-content: space-between; gap: 8px; font-size: 12.5px"><span style="color: #9AA0AA">Session</span><span>Secure cookie</span></div>
+              <div style="display: flex; justify-content: space-between; gap: 8px; font-size: 12.5px"><span style="color: #9AA0AA">Started</span><span style="font-family: 'Geist Mono', monospace">09:41:03 UTC</span></div>
+              <div style="display: flex; justify-content: space-between; gap: 8px; font-size: 12.5px"><span style="color: #9AA0AA">Finished</span><span style="font-family: 'Geist Mono', monospace">09:41:44 UTC</span></div>
+              <div style="display: flex; justify-content: space-between; gap: 8px; font-size: 12.5px"><span style="color: #9AA0AA">Search</span><span style="text-align: right">OpenRouter · Tavily ×1</span></div>
+              <div style="font-size: 11.5px; line-height: 1.5; color: #737A85; padding-top: 4px">Quote the run ID + correlation ID when reporting an issue — support can pull every log line. Ephemeral: gone when this session ends.</div>
+            </div>
+            <div style="display: flex; flex-direction: column; gap: 7px; border-left: 1px solid rgba(232,234,238,0.09); padding-left: 22px">
+              <span style="font-size: 11px; font-weight: 600; letter-spacing: 0.08em; text-transform: uppercase; color: #737A85">Cost by model · est → actual</span>
+              <div style="display: flex; justify-content: space-between; font-size: 12.5px"><span style="color: #9AA0AA">GPT-4o mini</span><span style="font-family: 'Geist Mono', monospace; white-space: nowrap">$0.034 → $0.031</span></div>
+              <div style="display: flex; justify-content: space-between; font-size: 12.5px"><span style="color: #9AA0AA">Claude</span><span style="font-family: 'Geist Mono', monospace; white-space: nowrap">$0.062 → $0.058</span></div>
+              <div style="display: flex; justify-content: space-between; font-size: 12.5px"><span style="color: #9AA0AA">Gemini</span><span style="font-family: 'Geist Mono', monospace; white-space: nowrap">$0.031 → $0.027</span></div>
+              <div style="display: flex; justify-content: space-between; font-size: 12.5px"><span style="color: #9AA0AA">DeepSeek</span><span style="font-family: 'Geist Mono', monospace; white-space: nowrap">$0.039 → $0.035</span></div>
+              <div style="display: flex; justify-content: space-between; font-size: 12.5px"><span style="color: #9AA0AA">Synthesis</span><span style="font-family: 'Geist Mono', monospace; white-space: nowrap">$0.024 → $0.020</span></div>
+              <div style="display: flex; justify-content: space-between; font-size: 12.5px; font-weight: 600; border-top: 1px solid rgba(232,234,238,0.09); padding-top: 6px"><span>Total</span><span style="font-family: 'Geist Mono', monospace; white-space: nowrap">$0.190 → $0.171</span></div>
+            </div>
+            <div style="display: flex; flex-direction: column; gap: 7px; border-left: 1px solid rgba(232,234,238,0.09); padding-left: 22px">
+              <span style="font-size: 11px; font-weight: 600; letter-spacing: 0.08em; text-transform: uppercase; color: #737A85">Cost by stage · est → actual</span>
+              <div style="display: flex; justify-content: space-between; font-size: 12.5px"><span style="color: #9AA0AA">Initial</span><span style="font-family: 'Geist Mono', monospace; white-space: nowrap">$0.078 → $0.070</span></div>
+              <div style="display: flex; justify-content: space-between; font-size: 12.5px"><span style="color: #9AA0AA">Round 1</span><span style="font-family: 'Geist Mono', monospace; white-space: nowrap">$0.044 → $0.039</span></div>
+              <div style="display: flex; justify-content: space-between; font-size: 12.5px"><span style="color: #9AA0AA">Round 2</span><span style="font-family: 'Geist Mono', monospace; white-space: nowrap">$0.044 → $0.040</span></div>
+              <div style="display: flex; justify-content: space-between; font-size: 12.5px"><span style="color: #9AA0AA">Synthesis</span><span style="font-family: 'Geist Mono', monospace; white-space: nowrap">$0.024 → $0.022</span></div>
+              <div style="display: flex; justify-content: space-between; font-size: 12.5px; font-weight: 600; border-top: 1px solid rgba(232,234,238,0.09); padding-top: 6px"><span>Under approval</span><span style="font-family: 'Geist Mono', monospace; color: #4EC28C">−$0.019</span></div>
+            </div>
+            <div style="display: flex; flex-direction: column; gap: 7px; border-left: 1px solid rgba(232,234,238,0.09); padding-left: 22px">
+              <span style="font-size: 11px; font-weight: 600; letter-spacing: 0.08em; text-transform: uppercase; color: #737A85">Pipeline</span>
+              <div style="display: flex; justify-content: space-between; font-size: 12.5px"><span style="color: #9AA0AA">✓ Initial answers</span><span style="font-family: 'Geist Mono', monospace; color: #737A85">8.2s</span></div>
+              <div style="display: flex; justify-content: space-between; font-size: 12.5px"><span style="color: #9AA0AA">✓ Debate round 1</span><span style="font-family: 'Geist Mono', monospace; color: #737A85">11.4s</span></div>
+              <div style="display: flex; justify-content: space-between; font-size: 12.5px"><span style="color: #9AA0AA">✓ Debate round 2</span><span style="font-family: 'Geist Mono', monospace; color: #737A85">12.9s</span></div>
+              <div style="display: flex; justify-content: space-between; font-size: 12.5px"><span style="color: #9AA0AA">✓ Synthesis</span><span style="font-family: 'Geist Mono', monospace; color: #737A85">8.5s</span></div>
+              <div style="font-size: 11.5px; line-height: 1.5; color: #737A85; padding-top: 4px">All four stages completed within the 180s hard timeout.</div>
+            </div>
+          </div>
+        </div>
+
+        <div style="display: flex; align-items: center; gap: 30px; background: #0E6B50; border-radius: 18px; padding: 26px 32px; box-shadow: 0 16px 40px rgba(14,107,80,0.30)">
+          <div style="position: relative; width: 104px; height: 104px; flex-shrink: 0">
+            <svg width="104" height="104" viewBox="0 0 104 104" style="transform: rotate(-90deg)">
+              <circle cx="52" cy="52" r="40" fill="none" stroke="rgba(255,255,255,0.22)" stroke-width="9"></circle>
+              <circle cx="52" cy="52" r="40" fill="none" stroke="#FFFFFF" stroke-width="9" stroke-linecap="round" stroke-dasharray="251" stroke-dashoffset="20" style="animation: qdraw2 1.4s cubic-bezier(0.22,1,0.36,1) both"></circle>
+            </svg>
+            <div style="position: absolute; inset: 0; display: flex; flex-direction: column; align-items: center; justify-content: center">
+              <span style="font-family: 'Newsreader', serif; font-size: 26px; font-weight: 600; color: #FFFFFF; line-height: 1">4/4</span>
+              <span style="font-size: 10.5px; font-weight: 650; color: rgba(255,255,255,0.85); letter-spacing: 0.06em; text-transform: uppercase">agree</span>
+            </div>
+          </div>
+          <div style="flex: 1; display: flex; flex-direction: column; gap: 8px">
+            <span style="font-size: 12px; font-weight: 650; letter-spacing: 0.1em; text-transform: uppercase; color: rgba(255,255,255,0.75)">The panel's verdict</span>
+            <div style="font-family: 'Newsreader', Georgia, serif; font-size: 25px; line-height: 1.3; font-weight: 500; color: #FFFFFF; text-wrap: pretty">Yes — adopt passkeys with a phased rollout, and keep a password fallback until account-recovery flows are proven.</div>
+            <span style="font-size: 14px; line-height: 1.55; color: rgba(255,255,255,0.82)">Unanimous after two debate rounds — one position revised, one refined, zero disagreements hidden.</span>
+          </div>
+        </div>
+
+        <div style="display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 12px">
+          <div style="background: #191C22; border: 1px solid rgba(232,234,238,0.10); border-radius: 14px; padding: 16px 18px; display: flex; flex-direction: column; gap: 6px">
+            <div style="display: flex; align-items: center; justify-content: space-between"><span style="font-size: 12.5px; font-weight: 700; letter-spacing: 0.05em; text-transform: uppercase; color: #4EC28C">Agreement</span><span style="width: 9px; height: 9px; border-radius: 3px; background: #4EC28C"></span></div>
+            <span style="font-size: 24px; font-weight: 700; letter-spacing: -0.01em">4 of 4 <span style="font-size: 14px; font-weight: 600; color: #9AA0AA">aligned</span></span>
+            <span style="font-size: 13px; line-height: 1.5; color: #9AA0AA">Convergence earned through critique, not sampling luck.</span>
+          </div>
+          <div style="background: #191C22; border: 1px solid rgba(232,234,238,0.10); border-radius: 14px; padding: 16px 18px; display: flex; flex-direction: column; gap: 6px">
+            <div style="display: flex; align-items: center; justify-content: space-between"><span style="font-size: 12.5px; font-weight: 700; letter-spacing: 0.05em; text-transform: uppercase; color: #9FB6DF">Source support</span><span style="width: 9px; height: 9px; border-radius: 3px; background: #9FB6DF"></span></div>
+            <span style="font-size: 24px; font-weight: 700; letter-spacing: -0.01em">83% <span style="font-size: 14px; font-weight: 600; color: #9AA0AA">· 12 sources</span></span>
+            <span style="font-size: 13px; line-height: 1.5; color: #9AA0AA">Material claims scored against citations. nist.gov, fidoalliance.org…</span>
+          </div>
+          <div style="background: #191C22; border: 1px solid rgba(232,234,238,0.10); border-radius: 14px; padding: 16px 18px; display: flex; flex-direction: column; gap: 6px">
+            <div style="display: flex; align-items: center; justify-content: space-between"><span style="font-size: 12.5px; font-weight: 700; letter-spacing: 0.05em; text-transform: uppercase; color: #D9A954">Open uncertainty</span><span style="width: 9px; height: 9px; border-radius: 3px; background: #D9A954"></span></div>
+            <span style="font-size: 24px; font-weight: 700; letter-spacing: -0.01em">1 flag</span>
+            <span style="font-size: 13px; line-height: 1.5; color: #9AA0AA">Vendor cost projections are single-source. Treat as directional.</span>
+          </div>
+        </div>
+
+        <div style="background: #191C22; border: 1px solid rgba(232,234,238,0.10); border-radius: 16px; overflow: hidden">
+          <div style="padding: 18px 24px 4px; display: flex; flex-direction: column; gap: 2px">
+            <span style="font-size: 16px; font-weight: 700; letter-spacing: -0.01em">How positions moved</span>
+            <span style="font-size: 13px; color: #9AA0AA">Two rounds of structured critique — who held, who conceded, and why the final answer deserves the word "consensus".</span>
+          </div>
+          <div style="display: grid; grid-template-columns: 170px 1fr 1fr 1fr; padding: 14px 24px 20px">
+            <span style="padding: 8px 0"></span>
+            <span style="font-size: 11.5px; font-weight: 700; letter-spacing: 0.06em; text-transform: uppercase; color: #737A85; padding: 8px 10px">Opening</span>
+            <span style="font-size: 11.5px; font-weight: 700; letter-spacing: 0.06em; text-transform: uppercase; color: #737A85; padding: 8px 10px">After round 1</span>
+            <span style="font-size: 11.5px; font-weight: 700; letter-spacing: 0.06em; text-transform: uppercase; color: #737A85; padding: 8px 10px">Final</span>
+            <div style="display: flex; align-items: center; gap: 9px; padding: 10px 0; border-top: 1px solid rgba(232,234,238,0.07)"><span style="width: 26px; height: 26px; border-radius: 999px; background: rgba(59,138,118,0.22); color: #74C9B4; display: grid; place-items: center; font-size: 11px; font-weight: 700">G</span><span style="font-size: 13.5px; font-weight: 650">GPT-4o mini</span></div>
+            <div style="padding: 10px; border-top: 1px solid rgba(232,234,238,0.07); display: flex; align-items: center"><span style="padding: 5px 11px; border-radius: 999px; background: #22262D; font-size: 12.5px; font-weight: 550; color: #C3C7CE">Adopt, phased</span></div>
+            <div style="padding: 10px; border-top: 1px solid rgba(232,234,238,0.07); display: flex; align-items: center"><span style="font-size: 12.5px; color: #9AA0AA">Pushed back on 18-month overlap</span></div>
+            <div style="padding: 10px; border-top: 1px solid rgba(232,234,238,0.07); display: flex; align-items: center"><span style="padding: 5px 11px; border-radius: 999px; background: #22262D; font-size: 12.5px; font-weight: 600; color: #C3C7CE">Held · 88%</span></div>
+            <div style="display: flex; align-items: center; gap: 9px; padding: 10px 0; border-top: 1px solid rgba(232,234,238,0.07)"><span style="width: 26px; height: 26px; border-radius: 999px; background: rgba(190,130,62,0.20); color: #DCA870; display: grid; place-items: center; font-size: 11px; font-weight: 700">C</span><span style="font-size: 13.5px; font-weight: 650">Claude Haiku</span></div>
+            <div style="padding: 10px; border-top: 1px solid rgba(232,234,238,0.07); display: flex; align-items: center"><span style="padding: 5px 11px; border-radius: 999px; background: #22262D; font-size: 12.5px; font-weight: 550; color: #C3C7CE">Adopt, gate on recovery</span></div>
+            <div style="padding: 10px; border-top: 1px solid rgba(232,234,238,0.07); display: flex; align-items: center"><span style="font-size: 12.5px; color: #9AA0AA">Challenged Gemini's sourcing</span></div>
+            <div style="padding: 10px; border-top: 1px solid rgba(232,234,238,0.07); display: flex; align-items: center"><span style="padding: 5px 11px; border-radius: 999px; background: #22262D; font-size: 12.5px; font-weight: 600; color: #C3C7CE">Held · 91%</span></div>
+            <div style="display: flex; align-items: center; gap: 9px; padding: 10px 0; border-top: 1px solid rgba(232,234,238,0.07)"><span style="width: 26px; height: 26px; border-radius: 999px; background: rgba(100,133,186,0.22); color: #A5BCE3; display: grid; place-items: center; font-size: 11px; font-weight: 700">G</span><span style="font-size: 13.5px; font-weight: 650">Gemini 2.5</span></div>
+            <div style="padding: 10px; border-top: 1px solid rgba(232,234,238,0.07); display: flex; align-items: center"><span style="padding: 5px 11px; border-radius: 999px; background: #22262D; font-size: 12.5px; font-weight: 550; color: #C3C7CE">Adopt in 9 months</span></div>
+            <div style="padding: 10px; border-top: 1px solid rgba(232,234,238,0.07); display: flex; align-items: center"><span style="font-size: 12.5px; color: #D9A954; font-weight: 550">Sourcing challenged — 1 vendor blog</span></div>
+            <div style="padding: 10px; border-top: 1px solid rgba(232,234,238,0.07); display: flex; align-items: center"><span style="display: inline-flex; align-items: center; gap: 6px; padding: 5px 11px; border-radius: 999px; background: rgba(78,194,140,0.10); border: 1.5px solid rgba(78,194,140,0.45); font-size: 12.5px; font-weight: 650; color: #4EC28C">✓ Revised → recovery-gated</span></div>
+            <div style="display: flex; align-items: center; gap: 9px; padding: 10px 0; border-top: 1px solid rgba(232,234,238,0.07)"><span style="width: 26px; height: 26px; border-radius: 999px; background: rgba(146,113,186,0.22); color: #BFA6E0; display: grid; place-items: center; font-size: 11px; font-weight: 700">D</span><span style="font-size: 13.5px; font-weight: 650">DeepSeek V3.1</span></div>
+            <div style="padding: 10px; border-top: 1px solid rgba(232,234,238,0.07); display: flex; align-items: center"><span style="padding: 5px 11px; border-radius: 999px; background: #22262D; font-size: 12.5px; font-weight: 550; color: #C3C7CE">Adopt over 18 months</span></div>
+            <div style="padding: 10px; border-top: 1px solid rgba(232,234,238,0.07); display: flex; align-items: center"><span style="font-size: 12.5px; color: #9AA0AA">Cost pushback from GPT-4o mini</span></div>
+            <div style="padding: 10px; border-top: 1px solid rgba(232,234,238,0.07); display: flex; align-items: center"><span style="display: inline-flex; align-items: center; gap: 6px; padding: 5px 11px; border-radius: 999px; background: rgba(78,194,140,0.10); border: 1.5px solid rgba(78,194,140,0.45); font-size: 12.5px; font-weight: 650; color: #4EC28C">✓ Revised → recovery-gated</span></div>
+          </div>
+          <a href="#06" style="display: flex; align-items: center; justify-content: center; gap: 8px; padding: 13px; border-top: 1px solid rgba(232,234,238,0.08); background: rgba(232,234,238,0.02); font-size: 13.5px; font-weight: 600; color: #E8EAEE; text-decoration: none; transition: background .16s ease" style-hover="background: rgba(232,234,238,0.05)">Read the full debate transcript →</a>
+        </div>
+
+        <div style="background: #191C22; border: 1px solid rgba(232,234,238,0.10); border-radius: 16px; overflow: hidden">
+          <div style="padding: 18px 24px 14px; display: flex; align-items: baseline; justify-content: space-between">
+            <span style="font-size: 16px; font-weight: 700; letter-spacing: -0.01em">The synthesis</span>
+            <span style="font-size: 12.5px; color: #737A85">by <span style="font-family: 'Geist Mono', monospace">openai/gpt-4o-mini</span> from the four refined answers</span>
+          </div>
+          <div style="display: flex; gap: 14px; padding: 14px 24px; border-top: 1px solid rgba(232,234,238,0.07)">
+            <span style="flex-shrink: 0; width: 118px; font-size: 12px; font-weight: 700; letter-spacing: 0.05em; text-transform: uppercase; color: #4EC28C; padding-top: 2px">Consensus</span>
+            <p style="margin: 0; flex: 1; font-size: 14.5px; line-height: 1.65; color: #C3C7CE">Passkeys are the right direction and 2027 is achievable: pilot with engineering, expand company-wide after ~90 days, never remove password recovery before it's tested.</p>
+          </div>
+          <div style="display: flex; gap: 14px; padding: 14px 24px; border-top: 1px solid rgba(232,234,238,0.07)">
+            <span style="flex-shrink: 0; width: 118px; font-size: 12px; font-weight: 700; letter-spacing: 0.05em; text-transform: uppercase; color: #D9A954; padding-top: 2px">Disagreement</span>
+            <p style="margin: 0; flex: 1; font-size: 14.5px; line-height: 1.65; color: #C3C7CE">The dual-credential window — 9 vs 18 months — resolved in round 2 to a <em>recovery-gated</em> trigger, not a date. Preserved here, not averaged away.</p>
+          </div>
+          <div style="display: flex; gap: 14px; padding: 14px 24px; border-top: 1px solid rgba(232,234,238,0.07)">
+            <span style="flex-shrink: 0; width: 118px; font-size: 12px; font-weight: 700; letter-spacing: 0.05em; text-transform: uppercase; color: #DB8070; padding-top: 2px">Uncertainty</span>
+            <p style="margin: 0; flex: 1; font-size: 14.5px; line-height: 1.65; color: #C3C7CE">Migration cost projections trace to one vendor source. Directional only — budget with a range, not a number.</p>
+          </div>
+          <div style="display: flex; gap: 14px; padding: 14px 24px; border-top: 1px solid rgba(232,234,238,0.07)">
+            <span style="flex-shrink: 0; width: 118px; font-size: 12px; font-weight: 700; letter-spacing: 0.05em; text-transform: uppercase; color: #9FB6DF; padding-top: 2px">Sources</span>
+            <div style="flex: 1; display: flex; flex-wrap: wrap; gap: 6px; align-items: center">
+              <a href="#08" style="display: inline-flex; align-items: center; gap: 6px; padding: 5px 11px; border-radius: 999px; border: 1px solid rgba(159,182,223,0.28); background: rgba(159,182,223,0.07); font-size: 12.5px; font-weight: 550; color: #B7C6E6; text-decoration: none; transition: all .16s ease" style-hover="border-color: #9FB6DF; background: rgba(159,182,223,0.14)"><span style="font-family: 'Geist Mono', monospace; font-size: 11px; color: #737A85">1</span>nist.gov · SP 800-63B</a>
+              <a href="#08" style="display: inline-flex; align-items: center; gap: 6px; padding: 5px 11px; border-radius: 999px; border: 1px solid rgba(159,182,223,0.28); background: rgba(159,182,223,0.07); font-size: 12.5px; font-weight: 550; color: #B7C6E6; text-decoration: none; transition: all .16s ease" style-hover="border-color: #9FB6DF; background: rgba(159,182,223,0.14)"><span style="font-family: 'Geist Mono', monospace; font-size: 11px; color: #737A85">2</span>fidoalliance.org · workforce passkeys</a>
+              <a href="#08" style="display: inline-flex; align-items: center; gap: 6px; padding: 5px 11px; border-radius: 999px; border: 1px solid rgba(159,182,223,0.28); background: rgba(159,182,223,0.07); font-size: 12.5px; font-weight: 550; color: #B7C6E6; text-decoration: none; transition: all .16s ease" style-hover="border-color: #9FB6DF; background: rgba(159,182,223,0.14)"><span style="font-family: 'Geist Mono', monospace; font-size: 11px; color: #737A85">3</span>microsoft.com · Entra deployment data</a>
+              <span style="font-size: 12.5px; color: #737A85; font-weight: 550">+ 9 more</span>
+            </div>
+          </div>
+          <div style="display: flex; gap: 14px; padding: 16px 24px; border-top: 1px solid rgba(232,234,238,0.07); background: rgba(78,194,140,0.06)">
+            <span style="flex-shrink: 0; width: 118px; font-size: 12px; font-weight: 700; letter-spacing: 0.05em; text-transform: uppercase; color: #4EC28C; padding-top: 2px">Recommendation</span>
+            <p style="margin: 0; flex: 1; font-size: 15px; line-height: 1.65; color: #E8EAEE; font-weight: 500">Pilot in Q1 with engineering. Expand after 90 days of clean recovery testing. Keep password fallback until recovery passes a documented test — then set the cutover date. <span style="color: #9AA0AA; font-weight: 400">Decision support, not professional advice.</span></p>
+          </div>
+        </div>
+
+        <div style="position: relative; background: #191C22; border: 1px solid rgba(232,234,238,0.12); border-radius: 16px">
+          <div style="padding: 18px 24px 0; display: flex; flex-direction: column; gap: 12px">
+            <div style="display: flex; align-items: center; justify-content: space-between; gap: 16px; flex-wrap: wrap">
+              <span style="font-size: 16px; font-weight: 700; letter-spacing: -0.01em">Ask your next question</span>
+              <div style="display: flex; gap: 4px; padding: 4px; border-radius: 11px; background: #101215; border: 1px solid rgba(232,234,238,0.09)">
+                <button style="height: 34px; padding: 0 16px; border-radius: 8px; border: none; background: #E8EAEE; color: #101215; font-size: 13px; font-weight: 650; cursor: pointer; font-family: inherit">Follow up on this</button>
+                <button style="height: 34px; padding: 0 16px; border-radius: 8px; border: none; background: transparent; color: #9AA0AA; font-size: 13px; font-weight: 600; cursor: pointer; font-family: inherit; transition: color .16s ease" style-hover="color: #E8EAEE">Start fresh</button>
+              </div>
+            </div>
+            <div style="display: flex; gap: 10px; padding: 12px 14px; border-radius: 10px; background: rgba(232,234,238,0.04); border: 1px solid rgba(232,234,238,0.08)">
+              <span style="flex-shrink: 0; width: 8px; height: 8px; border-radius: 999px; background: #E8EAEE; margin-top: 5px"></span>
+              <p style="margin: 0; font-size: 13.5px; line-height: 1.6; color: #C3C7CE"><strong style="color: #E8EAEE">Follow up carries this verdict + debate as context</strong> (≈ +$0.03 on the estimate) and keeps this result on screen until the new one completes. <strong style="color: #E8EAEE">Start fresh</strong> is a clean slate — results are ephemeral, so export this one first if you need it.</p>
+            </div>
+            <div style="padding: 4px 2px 2px; min-height: 42px; font-size: 15.5px; line-height: 1.55; color: #737A85">e.g. What about hardware security keys instead of platform passkeys?</div>
+          </div>
+          <div style="display: flex; align-items: center; justify-content: space-between; gap: 16px; padding: 14px 24px 18px; border-top: 1px solid rgba(232,234,238,0.07); margin-top: 12px">
+            <span style="font-size: 13px; color: #9AA0AA"><span style="font-family: 'Geist Mono', monospace; color: #E8EAEE; font-weight: 600">≈ $0.13–0.16</span> · you approve the estimate first · hard cap $0.25 · one run at a time</span>
+            <button style="height: 44px; padding: 0 24px; border-radius: 11px; border: none; background: #E8EAEE; color: #101215; font-size: 14.5px; font-weight: 650; cursor: pointer; font-family: inherit; box-shadow: 0 6px 16px rgba(0,0,0,0.35); transition: all .18s ease" style-hover="transform: translateY(-1px)">Estimate &amp; run →</button>
+          </div>
+        </div>
+
+        <div style="display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 0 6px; font-size: 12.5px; color: #737A85; flex-wrap: wrap">
+          <span>Ephemeral — this result vanishes when the session ends. Export it to keep it.</span>
+          <span>Decision support, not professional advice.</span>
+        </div>
+      </div>
+    </div></section>
+</x-dc>
+</body>
+</html>

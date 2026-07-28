@@ -1,6 +1,6 @@
 {
   "version": "5.2-final",
-  "note": "Registry of approved external skills. Empty by default; add entries through the onboarding process, not by popularity alone.",
+  "note": "Registry of skill-bundle provenance. Primarily external skills, added through the onboarding process and not by popularity alone. It ALSO records first-party bundles that live in .agents/skills/ but are authored and maintained outside this repo (trust_tier `first-party-operator-authored`), so that a stale copy is detectable; those are operator-owned and are not subject to the reviewer-only default below.",
   "last_audit": {
     "date": "2026-07-19",
     "owner": "R2 Phase-0 agent P0-I",
@@ -409,6 +409,166 @@
       ],
       "reason": "Registering an already-vendored skill whose tooling is absent, so the gap is visible rather than silently failing at use time.",
       "status": "proposed-blocked-missing-tooling"
+    },
+    {
+      "name": "architecture-and-decisions",
+      "description": "Authors the depth artifact: how the system fits together plus a decision treatment (alternatives, trade-off accepted, failure modes guarded) for every choice that matters. C4-style diagrams, Diataxis 'explanation' mode.",
+      "source_url": "FIRST-PARTY - authored by the repository owner via Codex; maintained in a separate skills repository and copied into .agents/skills/ wholesale. No upstream public URL.",
+      "owner": "Rohit Agrawal",
+      "repo": "imrohitagrawal (private skills repo; see assets/project-profile.md)",
+      "path": ".agents/skills/architecture-and-decisions",
+      "version_or_commit": "1.3.0 (2026-06-20, from .agents/skills/architecture-and-decisions/CHANGELOG.md)",
+      "license": "First-party - owned by the repository owner; no third-party licence obligations. No vendored/fetched marker and no upstream licence file anywhere in the bundle.",
+      "install_method": "copied in from the owner's skills repo; a new upstream version REPLACES the folder wholesale",
+      "supported_agents": [
+        "claude-code",
+        "codex"
+      ],
+      "activation_mode": "workspace-approved",
+      "trust_tier": "first-party-operator-authored",
+      "risk_rating": "low",
+      "kind": "documentation-authoring skill",
+      "allowed_operations": [
+        "read_repo",
+        "write_repo (docs only)",
+        "shell (scripts/verify.py)"
+      ],
+      "forbidden_operations": [
+        "external_write",
+        "secrets",
+        "deployment",
+        "destructive_git",
+        "source-code edits"
+      ],
+      "review_owner": "Task 0b (WP-C session)",
+      "review_date": "2026-07-27",
+      "validation_command": "make validate  (scripts/validate_quality_contracts.py enforces the 13 required contract sections)",
+      "verdict": "ADOPT. First-party, operator-authored, docs-only side effects.",
+      "blocking_conditions": [
+        "Bundle scripts are excluded from ruff (pyproject.toml extend-exclude) because upstream replaces the folder wholesale - do NOT reformat them in place."
+      ],
+      "reason": "AGENTS.md V5.2 requires provenance for every skill bundle in the tree. These four were untracked in the registry, so a stale copy was undetectable.",
+      "status": "registered"
+    },
+    {
+      "name": "doc-critic",
+      "description": "The independent critic gate for the documentation suite: runs scripts/verify.py, then a blind multi-axis agent critique (whole-document consistency, code-grounded correctness, beginner floor, adversarial adjudicator), writes a severity-ranked review register, and gates publishing on unresolved blockers.",
+      "source_url": "FIRST-PARTY - authored by the repository owner via Codex; maintained in a separate skills repository and copied into .agents/skills/ wholesale. No upstream public URL.",
+      "owner": "Rohit Agrawal",
+      "repo": "imrohitagrawal (private skills repo; see assets/project-profile.md)",
+      "path": ".agents/skills/doc-critic",
+      "version_or_commit": "0.1.0 (2026-06-26, from .agents/skills/doc-critic/CHANGELOG.md)",
+      "license": "First-party - owned by the repository owner; no third-party licence obligations.",
+      "install_method": "copied in from the owner's skills repo; a new upstream version REPLACES the folder wholesale",
+      "supported_agents": [
+        "claude-code",
+        "codex"
+      ],
+      "activation_mode": "workspace-approved",
+      "trust_tier": "first-party-operator-authored",
+      "risk_rating": "low",
+      "kind": "documentation-review skill",
+      "allowed_operations": [
+        "read_repo",
+        "write_repo (review register only)",
+        "shell (scripts/verify.py)"
+      ],
+      "forbidden_operations": [
+        "external_write",
+        "secrets",
+        "deployment",
+        "destructive_git",
+        "publishing (delegates to publish-mirror)"
+      ],
+      "review_owner": "Task 0b (WP-C session)",
+      "review_date": "2026-07-27",
+      "validation_command": "make validate",
+      "verdict": "ADOPT. First-party; reviews docs, never publishes them.",
+      "blocking_conditions": [
+        "Bundle scripts are excluded from ruff (pyproject.toml extend-exclude) - do NOT reformat them in place."
+      ],
+      "reason": "AGENTS.md V5.2 provenance requirement; see the architecture-and-decisions entry.",
+      "status": "registered"
+    },
+    {
+      "name": "onboarding-companion",
+      "description": "Authors the newcomer companion (ONBOARDING.md plus a CONTRIBUTING section): setup, first end-to-end run, the order to read the codebase in, day-to-day work, getting unstuck, and the senior-engineer habits that matter when building with an AI coding agent.",
+      "source_url": "FIRST-PARTY - authored by the repository owner via Codex; maintained in a separate skills repository and copied into .agents/skills/ wholesale. No upstream public URL.",
+      "owner": "Rohit Agrawal",
+      "repo": "imrohitagrawal (private skills repo; see assets/project-profile.md)",
+      "path": ".agents/skills/onboarding-companion",
+      "version_or_commit": "1.1.0 (2026-06-21, from .agents/skills/onboarding-companion/CHANGELOG.md)",
+      "license": "First-party - owned by the repository owner; no third-party licence obligations.",
+      "install_method": "copied in from the owner's skills repo; a new upstream version REPLACES the folder wholesale",
+      "supported_agents": [
+        "claude-code",
+        "codex"
+      ],
+      "activation_mode": "workspace-approved",
+      "trust_tier": "first-party-operator-authored",
+      "risk_rating": "low",
+      "kind": "documentation-authoring skill",
+      "allowed_operations": [
+        "read_repo",
+        "write_repo (docs only)",
+        "shell (scripts/verify.py)"
+      ],
+      "forbidden_operations": [
+        "external_write",
+        "secrets",
+        "deployment",
+        "destructive_git",
+        "source-code edits"
+      ],
+      "review_owner": "Task 0b (WP-C session)",
+      "review_date": "2026-07-27",
+      "validation_command": "make validate",
+      "verdict": "ADOPT. First-party, docs-only side effects.",
+      "blocking_conditions": [
+        "Bundle scripts are excluded from ruff (pyproject.toml extend-exclude) - do NOT reformat them in place."
+      ],
+      "reason": "AGENTS.md V5.2 provenance requirement; see the architecture-and-decisions entry.",
+      "status": "registered"
+    },
+    {
+      "name": "operations-runbook",
+      "description": "Authors the operator-facing documentation: one action-first runbook per component with a failure-mode entry per thing that can go wrong, plus monitoring signals, routine operations, and escalation. Covers AI-specific concerns (model cost, drift, guardrails).",
+      "source_url": "FIRST-PARTY - authored by the repository owner via Codex; maintained in a separate skills repository and copied into .agents/skills/ wholesale. No upstream public URL.",
+      "owner": "Rohit Agrawal",
+      "repo": "imrohitagrawal (private skills repo; see assets/project-profile.md)",
+      "path": ".agents/skills/operations-runbook",
+      "version_or_commit": "1.1.1 (2026-06-22, from .agents/skills/operations-runbook/CHANGELOG.md)",
+      "license": "First-party - owned by the repository owner; no third-party licence obligations.",
+      "install_method": "copied in from the owner's skills repo; a new upstream version REPLACES the folder wholesale",
+      "supported_agents": [
+        "claude-code",
+        "codex"
+      ],
+      "activation_mode": "workspace-approved",
+      "trust_tier": "first-party-operator-authored",
+      "risk_rating": "low",
+      "kind": "documentation-authoring skill",
+      "allowed_operations": [
+        "read_repo",
+        "write_repo (docs only)",
+        "shell (scripts/verify.py)"
+      ],
+      "forbidden_operations": [
+        "external_write",
+        "secrets",
+        "deployment",
+        "destructive_git",
+        "source-code edits"
+      ],
+      "review_owner": "Task 0b (WP-C session)",
+      "review_date": "2026-07-27",
+      "validation_command": "make validate",
+      "verdict": "ADOPT. First-party, docs-only side effects.",
+      "blocking_conditions": [
+        "Bundle scripts are excluded from ruff (pyproject.toml extend-exclude) - do NOT reformat them in place."
+      ],
+      "reason": "AGENTS.md V5.2 provenance requirement; see the architecture-and-decisions entry.",
+      "status": "registered"
     }
   ]
 }

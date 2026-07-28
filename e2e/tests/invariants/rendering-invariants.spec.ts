@@ -99,6 +99,174 @@ test.describe("rendering invariants (golden fixture)", () => {
     ).toEqual([]);
   });
 
+  // ---- WP-F / F-13: list STRUCTURE, not just the absence of markers -------
+  //
+  // The no-raw-markdown walk above is a text-node check, so it is blind to
+  // markup that is structurally wrong but leaks no marker: a list split into
+  // one single-item list per line leaves no "- " behind, and neither does a
+  // paragraph silently turned into a bullet. Both were live in the shipped UI
+  // and both passed that gate. These assert the structure itself.
+
+  test("an ordered list renders as a real <ol> (F-13)", async ({ page }) => {
+    await driveToResult(page);
+    // Seeded verbatim in MESSY_RECOMMENDATION as "1. Ship the retention-…".
+    const item = page
+      .locator("#main-content ol li")
+      .filter({ hasText: "Ship the retention-instrumentation slice first" });
+    // The recommendation is rendered on more than one surface of this view, so
+    // this pins "at least one, and the user can see it" rather than an exact
+    // count that would break the next time a surface is added.
+    await expect(
+      item.first(),
+      "the recommendation's numbered steps must be <li> inside an <ol>. " +
+        "Rendered as paragraphs, the literal '1. ' survives as text — which " +
+        "is what the ordered-list marker pattern catches."
+    ).toBeVisible();
+  });
+
+  test("a bullet list renders as ONE list, not one list per item (F-13)", async ({ page }) => {
+    await driveToResult(page);
+    // MESSY_BULLET_LIST: 6 items, seeded into the disagreement section — a
+    // block surface that is genuinely VISIBLE here. (The model-card grid
+    // measures 0x0 on this view, so an answer body would have gated markup no
+    // user ever sees.)
+    const body = page
+      .locator("#main-content .result-synth-body")
+      .filter({ hasText: "instrument retention events before export" })
+      .first();
+    await expect(body).toBeVisible();
+    const shape = await body.evaluate((el) => ({
+      lists: el.querySelectorAll("ul").length,
+      items: el.querySelectorAll("ul li").length,
+      emptyParagraphs: [...el.querySelectorAll("p")].filter(
+        (p) => !(p.textContent || "").trim()
+      ).length,
+    }));
+    expect(
+      shape.lists,
+      `expected exactly ONE <ul> for the six-item list; saw ${shape.lists}. ` +
+        "More than one means each line became its own single-item list."
+    ).toBe(1);
+    // At LEAST six: the fixture seeds an indented sub-bullet, and this
+    // formatter flattens it to a sibling item. Pinning exactly 6 would make a
+    // future correct nested-<ul> implementation RED — a gate that blocks the
+    // fix for the defect it half-describes.
+    expect(
+      shape.items,
+      "the six seeded bullets must all be <li> of that list"
+    ).toBeGreaterThanOrEqual(6);
+    // No item may carry the stripped indent as literal text.
+    const untrimmed = await body.evaluate(() =>
+      [...document.querySelectorAll(".result-synth-body li")]
+        .map((li) => li.textContent || "")
+        .filter((t) => t !== t.trimStart())
+    );
+    expect(untrimmed, "a list item kept its marker indentation as text").toEqual([]);
+    expect(
+      shape.emptyParagraphs,
+      "empty <p> residue means a <ul> was emitted INSIDE a <p> and the browser " +
+        "hoisted it out, splitting the paragraph around it"
+    ).toBe(0);
+  });
+
+  test("soft-wrapped prose never becomes a bullet (F-13)", async ({ page }) => {
+    await driveToResult(page);
+    // A single paragraph the provider broke with SINGLE newlines — the shape
+    // most real model output arrives in. Its lines are prose, not list items.
+    // Positive control FIRST: without it, a fixture reword makes the negative
+    // below silently vacuous — it would pass because the text is absent, not
+    // because it is correctly rendered.
+    await expect(
+      page.getByText("The instrumentation is rarely the hard part", { exact: false }).first()
+    ).toBeVisible();
+    const stray = page
+      .locator("#main-content li")
+      .filter({ hasText: "The instrumentation is rarely the hard part" });
+    await expect(
+      stray,
+      "a soft-wrapped prose line was rendered as a list item. Ordinary prose " +
+        "must never become a bullet — the reader cannot tell the model did not " +
+        "write a list."
+    ).toHaveCount(0);
+  });
+
+  test("a soft wrap onto a number never deletes the number (F-13)", async ({ page }) => {
+    // "…first proposed in\n2025. Nobody has revisited…" is ONE paragraph the
+    // provider wrapped. Treating "2025. " as an ordered-list marker strips it,
+    // so the year vanishes from the answer entirely. CommonMark only lets an
+    // ordered list interrupt a paragraph when it starts at 1, precisely to stop
+    // this.
+    await driveToResult(page);
+    const body = page
+      .locator("#main-content .result-synth-body")
+      .filter({ hasText: "The gate was first proposed in" })
+      .first();
+    await expect(body).toBeVisible();
+    await expect(
+      body,
+      "the year was deleted from the rendered answer — the marker is stripped, " +
+        "so no raw-marker gate can see this happen"
+    ).toContainText("2025");
+  });
+
+  test("stray asterisks in prose never fabricate emphasis (F-13)", async ({ page }) => {
+    // Two unpaired asterisks in ordinary prose (a multiplication, a footnote
+    // mark) must not pair up ACROSS words into a bogus <em>. Rendered via the
+    // real formatter, not a unit stub.
+    await driveToResult(page);
+    // Scoped to `.q-prose` — the class setProse puts on rendered PROVIDER
+    // prose. App chrome legitimately writes <strong>Provider path: </strong>
+    // with a trailing space inside the tag; that is app-authored markup, not
+    // something the formatter derived from model text, and it is not what this
+    // invariant is about.
+    const emphasised = await page.evaluate(() => {
+      const scope = document.querySelector("#main-content") || document.body;
+      return [...scope.querySelectorAll(".q-prose em, .q-prose strong")].map(
+        (e) => e.textContent || ""
+      );
+    });
+    // The signature of a FALSE pair is precise: `a * b and c * d` emphasises
+    // " b and c ", so the emphasised run carries leading/trailing whitespace.
+    // Real emphasis never does — `*bold*` cannot capture its own bounding
+    // spaces. Keying off the signature, not a word-count heuristic, is what
+    // makes this assertion able to fail.
+    // Without this the filter below is over a possibly-empty set: setProse
+    // REMOVES `q-prose` on its placeholder branch, so "the formatter fell back
+    // everywhere" would pass as cleanly as a correct render.
+    expect(
+      emphasised.length,
+      "no emphasis found in provider prose at all — the filter below would be " +
+        "green over an empty set"
+    ).toBeGreaterThan(0);
+    // The whitespace-bounded signature below catches the SPACED form. It
+    // cannot catch the unspaced one — the regex captures `[^\s*]…[^\s*]`, so
+    // emphasis text can never carry bounding spaces, making that predicate
+    // unreachable for any variant of the current rule. So assert the unspaced
+    // arithmetic directly, against text the fixture seeds for it.
+    const arithmetic = page
+      .locator("#main-content .q-prose p")
+      .filter({ hasText: "Rerunning it costs" })
+      .first();
+    await expect(arithmetic).toBeVisible();
+    await expect(
+      arithmetic,
+      "unspaced arithmetic must survive literally — emphasis here is invented"
+    ).toContainText("3*40");
+    expect(
+      await arithmetic.locator("em").count(),
+      "an <em> in a paragraph whose only asterisks are multiplication signs " +
+        "is emphasis the model never wrote"
+    ).toBe(0);
+
+    const fabricated = emphasised.filter((t) => t !== t.trim());
+    expect(
+      fabricated,
+      `emphasis whose text is surrounded by whitespace is two stray asterisks ` +
+        `paired ACROSS words, not something the model wrote:\n` +
+        JSON.stringify(fabricated, null, 2)
+    ).toEqual([]);
+  });
+
   test("inline code renders verbatim — no emphasis fires inside a <code> span (#30)", async ({ page }) => {
     // Inline code is verbatim by contract. The underscore/asterisk emphasis
     // rules must NOT fire inside a code span: `__init__` must stay literal, not
@@ -173,6 +341,85 @@ test.describe("rendering invariants (golden fixture)", () => {
     await driveToTranscript(page);
     expect(await pageScrollsHorizontally(page), "transcript view forces horizontal page scroll").toBe(false);
   });
+
+  // The test above NEVER calls setViewportSize, so for its whole life it has
+  // only ever asserted this at Playwright's 1280px default — where the layout is
+  // comfortable and nothing overflows. A 77px blowout at 375px sat behind that
+  // blind spot: `.result-synth-row` is `grid-template-columns: 132px 1fr` with no
+  // mobile breakpoint, and `1fr` resolves to `minmax(auto, 1fr)` whose auto
+  // minimum is the content's MIN-CONTENT — so a long unbreakable token in the
+  // synthesis body (`retention_flag=true`) pushed the row past the viewport and
+  // the session panel painted over the verdict band.
+  //
+  // Mobile is where a horizontal-scroll bug actually bites, so sweep the real
+  // breakpoints. 375 = iPhone SE/mini, 768 = tablet, 1440 = the design comp.
+  // Page-level scroll is NOT the whole story. A card that clips its own
+  // overflow hides the damage from the document: the transcript's opening cards
+  // measured clientWidth 271 with scrollWidth 624 — 353px of provider text
+  // silently cut off — while `document.scrollWidth` stayed clean. Content the
+  // user cannot read is a defect whether or not the page scrolls.
+  //
+  // Intentional scroll containers (overflow-x: auto/scroll, e.g. the wide
+  // positions table) are exempt: scrolling INSIDE a container that advertises
+  // itself as scrollable is the designed behaviour.
+  for (const width of [375, 768] as const) {
+    test(`no element silently clips its own content @ ${width}px`, async ({ page }) => {
+      await page.setViewportSize({ width, height: 900 });
+      await driveToResult(page);
+      await driveToTranscript(page);
+      await page.evaluate(() => (document as unknown as { fonts?: { ready: Promise<unknown> } }).fonts?.ready);
+
+      const clipped = await page.evaluate(() => {
+        const bad: { tag: string; cls: string; client: number; scroll: number; text: string }[] = [];
+        const root = document.getElementById("main-content");
+        if (!root) return bad;
+        for (const el of Array.from(root.querySelectorAll<HTMLElement>("*"))) {
+          if (el.scrollWidth <= el.clientWidth + 1) continue;
+          // Exempt this element or any ancestor that opts into scrolling.
+          let scrollable = false;
+          for (let n: HTMLElement | null = el; n && n !== root.parentElement; n = n.parentElement) {
+            const ox = getComputedStyle(n).overflowX;
+            if (ox === "auto" || ox === "scroll") { scrollable = true; break; }
+          }
+          if (scrollable) continue;
+          const cs = getComputedStyle(el);
+          if (cs.display === "none" || cs.visibility === "hidden") continue;
+          bad.push({
+            tag: el.tagName,
+            cls: (el.className || "").toString().slice(0, 45),
+            client: el.clientWidth,
+            scroll: el.scrollWidth,
+            text: (el.textContent || "").trim().slice(0, 45),
+          });
+        }
+        return bad;
+      });
+
+      expect(
+        clipped,
+        `elements clipping their own content at ${width}px:\n${clipped
+          .map((c) => `  ${c.tag}.${c.cls} client=${c.client} scroll=${c.scroll} — "${c.text}"`)
+          .join("\n")}`,
+      ).toEqual([]);
+    });
+  }
+
+  for (const width of [375, 768, 1440] as const) {
+    test(`the page never scrolls horizontally @ ${width}px (result + transcript)`, async ({ page }) => {
+      await page.setViewportSize({ width, height: 900 });
+      await driveToResult(page);
+      expect(
+        await pageScrollsHorizontally(page),
+        `result view forces horizontal page scroll at ${width}px`,
+      ).toBe(false);
+
+      await driveToTranscript(page);
+      expect(
+        await pageScrollsHorizontally(page),
+        `transcript view forces horizontal page scroll at ${width}px`,
+      ).toBe(false);
+    });
+  }
 });
 
 // The universally-valid layout invariant: the PAGE (document) must not scroll

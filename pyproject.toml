@@ -62,7 +62,14 @@ src = ["src", "tests"]
 # ./mutants/ and rewrites every function into a mutant dispatcher. Linting or
 # formatting that generated tree is meaningless and turns `make lint` /
 # `make format-check` red for anyone who has run the mutation gate locally.
-extend-exclude = ["mutants"]
+#
+# ``.agents/skills/*/scripts/`` holds the helper scripts shipped inside skill
+# bundles. Those bundles are authored and maintained outside this repo and
+# copied in wholesale — a new upstream version REPLACES the folder — so any
+# reformatting we apply here is undone on the next update. Exclude them rather
+# than conform them; their provenance is tracked in
+# ``configs/external-skill-registry.json`` instead.
+extend-exclude = ["mutants", ".agents/skills/*/scripts"]
 
 [tool.ruff.lint]
 select = ["E", "F", "I", "B", "UP", "SIM"]

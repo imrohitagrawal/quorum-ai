@@ -41,7 +41,6 @@ from product_app.providers import (
 )
 from product_app.query_runs import query_run_repository
 from product_app.safety import WARNING_VERSION, WarningType
-from product_app.synthesis import TEMPLATED_FALLBACK_PREFIX
 
 MODEL_IDS = [
     "openai/gpt-4o-mini",
@@ -80,9 +79,9 @@ def _captured_answer(slot: Any) -> InitialModelAnswer:
         status=InitialAnswerStatus.COMPLETED,
         latency_ms=11,
         citation_coverage=CitationCoverage(
-            material_claim_count=2,
-            cited_claim_count=2,
-            coverage_ratio=Decimal("1"),
+            answer_count=2,
+            sourced_answer_count=2,
+            sourced_answer_ratio=Decimal("1"),
             target_met=True,
         ),
         token_usage=TokenUsage(prompt_tokens=1000, completion_tokens=500, total_tokens=1500),
@@ -180,8 +179,11 @@ def test_all_seven_calls_blank_but_billed_is_priced_yet_never_labelled_live(
         assert [r["round_number"] for r in rounds] == [1, 2]
         assert rounds[0]["critique_text"].startswith("Round 1 critique.")
         assert rounds[1]["critique_text"].startswith("Round 2 critique, refining round 1.")
-        for label, text in _synthesis_sections(body):
-            assert text.startswith(TEMPLATED_FALLBACK_PREFIX), f"{label}: {text!r}"
+        # WP-A moved templated-vs-live provenance out of the prose and into
+        # ``FinalSynthesis.synthesis_mode``; ``TEMPLATED_FALLBACK_PREFIX`` is now
+        # "" so a startswith() check on it is vacuous in the positive form and
+        # unsatisfiable in the negative. Assert the structural signal instead.
+        assert body["result"]["final_synthesis"]["synthesis_mode"] != "live"
 
         # The durable row matches what the user was served.
         row = store.get(body["_run_id"])
@@ -209,8 +211,11 @@ def test_all_seven_calls_unmeasurable_downgrades_cost_and_nothing_else(
         assert body["local_count"] == 0
         assert body["demo_mode"] is False
         assert body["failed_steps"] == []
-        for label, text in _synthesis_sections(body):
-            assert text.startswith(TEMPLATED_FALLBACK_PREFIX), f"{label}: {text!r}"
+        # WP-A moved templated-vs-live provenance out of the prose and into
+        # ``FinalSynthesis.synthesis_mode``; ``TEMPLATED_FALLBACK_PREFIX`` is now
+        # "" so a startswith() check on it is vacuous in the positive form and
+        # unsatisfiable in the negative. Assert the structural signal instead.
+        assert body["result"]["final_synthesis"]["synthesis_mode"] != "live"
 
         row = store.get(body["_run_id"])
         assert row is not None
@@ -240,8 +245,7 @@ def test_unbilled_failure_keeps_the_receipt_measured(
     assert Decimal(str(body["actual_cost_usd"])) != run.cost_estimate.estimated_cost_usd
     assert Decimal(str(body["actual_cost_usd"])) > Decimal("0")
     assert body["live_count"] == 4
-    for label, text in _synthesis_sections(body):
-        assert text.startswith(TEMPLATED_FALLBACK_PREFIX), f"{label}: {text!r}"
+    assert body["result"]["final_synthesis"]["synthesis_mode"] != "live"
 
 
 def test_control_all_seven_calls_usable_is_live_prose_and_measured(
@@ -263,4 +267,6 @@ def test_control_all_seven_calls_usable_is_live_prose_and_measured(
     assert rounds[1]["critique_text"] == live_text
     for label, text in _synthesis_sections(body):
         assert live_text in text, label
-        assert not text.startswith(TEMPLATED_FALLBACK_PREFIX), label
+    # ...and it is LABELLED live. WP-A carries that structurally in
+    # ``synthesis_mode`` rather than as a text prefix on the prose.
+    assert body["result"]["final_synthesis"]["synthesis_mode"] == "live"

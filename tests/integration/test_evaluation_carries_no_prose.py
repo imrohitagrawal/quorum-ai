@@ -72,9 +72,9 @@ def _sentinel_synthesis() -> FinalSynthesis:
         recommendation=f"Recommendation mentioning {SENTINEL}.",
         high_stakes_notice=None,
         citation_coverage=CitationCoverage(
-            material_claim_count=8,
-            cited_claim_count=4,
-            coverage_ratio=Decimal("0.50"),
+            answer_count=4,
+            sourced_answer_count=2,
+            sourced_answer_ratio=Decimal("0.50"),
             target_met=False,
         ),
         quality_checks=SynthesisQualityChecks(

@@ -6,7 +6,13 @@ __pycache__/
 .ruff_cache/
 .uv-cache/
 .coverage
+# Two DIFFERENT artifacts, both needed:
+#   `.coverage 2`, `.coverage 3`, ... — macOS duplicate-name copies.
+#   `.coverage.<host>.<pid>.<rand>`   — one per worker from pytest-cov's
+#     parallel mode. Only `.coverage *` was listed, and it does NOT match
+#     these (no space), so every run left dozens of untracked files behind.
 .coverage *
+.coverage.*
 htmlcov/
 .env
 .env.*
@@ -45,3 +51,9 @@ temp-artifacts/
 # mutmut copies the whole project into ./mutants/ for `make mutation-baseline`.
 # It is a build artifact: never committed, never linted, never type-checked.
 mutants/
+
+# Throwaway human-review captures (master plan §11 "Cleanup owed"):
+# review specs assert little and only exist to produce PNGs for a human to
+# look at. They are NOT registered in any CI lane and must never gate.
+e2e/review-screenshots/
+e2e/tests/review/

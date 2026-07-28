@@ -9,6 +9,9 @@ import pytest
 from product_app.model_slots import ModelSlot, validate_model_slots
 from product_app.providers import (
     _SEARCH_REJECTED,
+    NOTICE_DEMO_MODE,
+    NOTICE_LIVE_RETURNED_NOTHING,
+    NOTICE_SEARCH_DISABLED,
     LiveProviderResult,
     ProviderPath,
     SourceReference,
@@ -24,7 +27,7 @@ DEFAULT_MODEL_IDS = [
     "openai/gpt-4o-mini",
     "anthropic/claude-haiku-4.5",
     "google/gemini-2.5-flash",
-    "deepseek/deepseek-chat-v3.1",
+    "nvidia/nemotron-3-nano-30b-a3b",
 ]
 
 
@@ -48,7 +51,13 @@ def test_provider_stub_marks_local_simulation_when_live_execution_is_disabled() 
     assert all(not answer.fallback_used for answer in answers)
     assert all(answer.sources for answer in answers)
     assert all(answer.sources[0].provider == ProviderPath.LOCAL_SIMULATION for answer in answers)
-    assert all("simulated" in (answer.provider_notice or "") for answer in answers)
+    # By IDENTITY, not substring: NOTICE_DEMO_MODE and
+    # NOTICE_LIVE_RETURNED_NOTHING share the phrase "not a real model
+    # answer", so a substring check passes even when the branch picks the
+    # wrong one — and picking the wrong one tells the user a model was
+    # called when none was.
+    assert all(answer.provider_notice == NOTICE_DEMO_MODE for answer in answers)
+    assert all(answer.provider_notice != NOTICE_LIVE_RETURNED_NOTHING for answer in answers)
 
 
 def test_provider_stub_uses_fallback_when_openrouter_sources_are_unusable() -> None:
@@ -91,20 +100,24 @@ def test_provider_events_are_non_secret_and_record_source_count() -> None:
 
 
 def test_citation_coverage_scores_against_target() -> None:
-    passing = calculate_citation_coverage(material_claim_count=5, cited_claim_count=4)
-    failing = calculate_citation_coverage(material_claim_count=5, cited_claim_count=3)
+    # WP-C / F-03: both arguments are counted in ANSWERS. 4 of 5 answers
+    # sourced clears the 0.80 bar; 3 of 5 does not.
+    passing = calculate_citation_coverage(answer_count=5, sourced_answer_count=4)
+    failing = calculate_citation_coverage(answer_count=5, sourced_answer_count=3)
 
-    assert passing.coverage_ratio == Decimal("0.8")
+    assert passing.sourced_answer_ratio == Decimal("0.8")
     assert passing.target_met
-    assert failing.coverage_ratio == Decimal("0.6")
+    assert failing.sourced_answer_ratio == Decimal("0.6")
     assert not failing.target_met
 
 
 def test_estimate_material_claim_count_uses_200_char_heuristic() -> None:
-    # L5d: the estimator must (a) floor at 1, (b) cap to one
-    # claim per 200 chars, and (c) never return 0 even for
-    # empty / placeholder input. These cases are the contract
-    # that the rest of the citation-coverage math depends on.
+    # The estimator must (a) floor at 1, (b) cap to one claim per 200 chars,
+    # and (c) never return 0 even for empty / placeholder input.
+    #
+    # WP-C / F-03: this is now a LENGTH estimate reported for information only.
+    # Nothing in the citation-coverage math depends on it any more — that
+    # dependency was the defect. See tests/unit/test_citation_coverage_semantics.py.
     empty = estimate_material_claim_count("")
     short = estimate_material_claim_count("x" * 100)
     medium = estimate_material_claim_count("x" * 200)
@@ -121,17 +134,20 @@ def test_estimate_material_claim_count_uses_200_char_heuristic() -> None:
 
 
 def test_estimate_material_claim_count_with_real_stub_text_returns_2() -> None:
-    # L5d: the local-simulation stub answer is exactly 218 chars
-    # long, which yields 2 material claims. This locks in the
-    # integration-test expectation that the stub text produces
-    # coverage_ratio = 0.50 (2 claims, 1 citation), not the
-    # dishonest 1.0 (1 claim, 1 citation).
+    # The local-simulation stub answer is exactly 218 chars long, which yields
+    # 2 material claims. Pinned because the served, informational
+    # ``QueryRunResultResponse.material_claim_count`` is summed from it.
+    #
+    # WP-C / F-03: this figure NO LONGER feeds the coverage ratio. It used to,
+    # and that made a fully-sourced 218-char answer score 0.50 while the same
+    # answer at 1500 chars scored 0.13 — the same evidence, a different number,
+    # purely because of length.
     slot = validate_model_slots(
         [
             "openai/gpt-4o-mini",
             "anthropic/claude-haiku-4.5",
             "google/gemini-2.5-flash",
-            "deepseek/deepseek-chat-v3.1",
+            "nvidia/nemotron-3-nano-30b-a3b",
         ]
     )[0]
     stub = provider_stub_service._local_simulation_text(model_slot=slot)
@@ -238,14 +254,17 @@ def test_provider_stub_relaxes_sources_gate_when_live_text_present_without_citat
 
     assert all(answer.provider_path == ProviderPath.OPENROUTER_SEARCH for answer in answers)
     assert all(answer.sources == [] for answer in answers)
-    assert all("citation" in (answer.provider_notice or "").lower() for answer in answers)
+    assert all(
+        "without any linked sources" in (answer.provider_notice or "").lower() for answer in answers
+    )
 
 
 class _FakeLiveResult:
     """Minimal stand-in for ``LiveProviderResult`` that doesn't require
     pulling the dataclass into the test module. Mirrors the real fields,
     including the ``usage`` record added for measured-cost capture (defaults
-    to ``None`` — these tests do not exercise the usage path)."""
+    to ``None`` — these tests do not exercise the usage path) and
+    ``is_truncated`` added for the (shortened) surface."""
 
     def __init__(
         self,
@@ -253,10 +272,12 @@ class _FakeLiveResult:
         answer_text: str,
         sources: list[SourceReference],
         usage: TokenUsage | None = None,
+        is_truncated: bool = False,
     ) -> None:
         self.answer_text = answer_text
         self.sources = sources
         self.usage = usage
+        self.is_truncated = is_truncated
 
 
 def test_live_response_uses_online_suffix_for_search(
@@ -605,20 +626,21 @@ def test_per_slot_search_off_response_records_search_disabled_notice(
     )
 
     # Slot 1 (search=False): still records as OPENROUTER_SEARCH, with
-    # the "Web search was disabled" notice.
+    # the "Web search was turned off" notice.
     assert answers[0].provider_path == ProviderPath.OPENROUTER_SEARCH
     assert answers[0].provider_notice is not None
-    assert "Web search was disabled" in answers[0].provider_notice
+    assert "Web search was turned off" in answers[0].provider_notice
 
     # Slot 2 (search=True): no search-disabled notice (the existing
     # "missing citations" notice may or may not fire depending on
     # whether :online succeeded; we just confirm the search-disabled
     # notice is NOT present).
     assert answers[1].provider_path == ProviderPath.OPENROUTER_SEARCH
-    assert not (
-        answers[1].provider_notice is not None
-        and "Web search was disabled" in answers[1].provider_notice
-    )
+    # Assert against the CONSTANT, not a substring of the old copy. The
+    # previous form checked for "Web search was disabled", which no notice
+    # can contain any more, so it had become unconditionally true — a
+    # negative assertion that could not fail is not a guard.
+    assert answers[1].provider_notice != NOTICE_SEARCH_DISABLED
 
 
 def test_cancelled_answer_has_expected_shape() -> None:
@@ -654,10 +676,11 @@ def test_cancelled_answer_has_expected_shape() -> None:
     assert answer.error_code == "CANCELLED"
     assert answer.provider_notice is not None
     assert "Cancelled" in answer.provider_notice
-    # Empty answer produces zero-claim coverage.
-    assert answer.citation_coverage.material_claim_count == 0
-    assert answer.citation_coverage.cited_claim_count == 0
-    assert answer.citation_coverage.coverage_ratio == Decimal("0")
+    # A cancelled answer produced no text, so it is out of the coverage
+    # denominator entirely (WP-C / F-03).
+    assert answer.citation_coverage.answer_count == 0
+    assert answer.citation_coverage.sourced_answer_count == 0
+    assert answer.citation_coverage.sourced_answer_ratio == Decimal("0")
 
 
 class _FakeResponse:

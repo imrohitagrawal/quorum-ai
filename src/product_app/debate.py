@@ -25,11 +25,13 @@ from dataclasses import asdict, dataclass, field
 from enum import StrEnum
 from threading import RLock
 from time import perf_counter
+from typing import Any
 from uuid import UUID
 
 from pydantic import BaseModel, Field
 
 from product_app.config import RuntimeEnvironment, settings
+from product_app.costs import CHARS_PER_TOKEN
 from product_app.feedback_store import record_event as _record_feedback_event
 from product_app.model_slots import ModelSlot
 from product_app.providers import (
@@ -43,13 +45,37 @@ from product_app.providers import (
 from product_app.safety import (
     SafetyAcknowledgement,
 )
+from product_app.untrusted_text import UNTRUSTED_DATA_SYSTEM_RULE, fence
 
 DEBATE_HARD_TIMEOUT_MS = 180_000
 
-#: Token cap per debate round. The plan calls for ~600 tokens of
-#: output per round; we round to a hard cap of 700 to leave a small
-#: safety margin for the model's tendency to emit a leading phrase.
-DEBATE_ROUND_MAX_TOKENS = 700
+#: Token cap per debate round. WP-D (F-07) raised this from 700 to
+#: 2000: at 700 the moderator was clipping substantive critiques
+#: mid-sentence, and the critique text is what the synthesis
+#: uncertainty section leans on, so the truncation propagated.
+#:
+#: This MUST stay in sync with ``settings.cost_debate_output_tokens_cap``
+#: (``config.py``), which is what the fail-safe ``max_cost_usd`` bound
+#: prices the debate stage at. If the enforced cap here exceeds the
+#: priced cap there, the "bound" stops being a true ceiling and the
+#: cost rails silently under-protect. ``tests/unit/
+#: test_estimate_token_model.py::test_bound_cap_assumptions_match_the_
+#: enforced_caps`` pins the two together.
+DEBATE_ROUND_MAX_TOKENS = 2000
+
+#: How much of each initial answer the debate moderator gets to see.
+#:
+#: WP-D (F-08) replaced a hardcoded ``[:200]`` here. 200 chars is roughly one
+#: sentence: the moderator was being asked to find "specific points of
+#: disagreement" while seeing only each model's opening clause, so it could
+#: only ever critique the framing, never the substance.
+#:
+#: DERIVED, not a literal. An initial answer's length is bounded by the token
+#: cap on the call that produced it (``settings.initial_answer_max_tokens``,
+#: enforced in ``providers.py``), so this is exactly "as much as can exist"
+#: and it tracks that cap automatically. Hardcoding 8000 would silently
+#: decouple the next time the answer cap moves.
+DEBATE_ANSWER_EXCERPT_MAX_CHARS = int(settings.initial_answer_max_tokens * CHARS_PER_TOKEN)
 
 FOCUS_AREAS: tuple[str, ...] = ("disagreement", "weak_support", "missing_reasoning")
 HIGH_STAKES_NOTICE_FRAGMENT = (
@@ -69,7 +95,7 @@ ROUND_ONE_SYSTEM_PROMPT = (
     "weak or missing source support. Cite the model names and quote "
     "the specific passage. Be concrete; do not write generic 'they "
     "differ on X' phrasing. The output is for a human reviewer, not "
-    "the user."
+    "the user.\n\n" + UNTRUSTED_DATA_SYSTEM_RULE
 )
 
 ROUND_TWO_SYSTEM_PROMPT = (
@@ -77,7 +103,8 @@ ROUND_TWO_SYSTEM_PROMPT = (
     "specifically on (a) the strongest residual disagreements after "
     "round 1, and (b) reasoning the round 1 critique flagged as "
     "missing. Cite the model names and quote the specific passage. "
-    "Be concrete. The output is for a human reviewer, not the user."
+    "Be concrete. The output is for a human reviewer, not the user.\n\n"
+    + UNTRUSTED_DATA_SYSTEM_RULE
 )
 
 
@@ -204,6 +231,7 @@ class DebateOrchestrationService:
         model_slots: list[ModelSlot] | None = None,
         safety_acknowledgements: list[SafetyAcknowledgement] | None = None,
         openrouter_key: str = "",
+        context: dict[str, Any] | None = None,
     ) -> DebateResult:
         if model_slots is None:
             model_slots = []
@@ -225,6 +253,7 @@ class DebateOrchestrationService:
             initial_answers=initial_answers,
             query_text=query_text,
             openrouter_key=openrouter_key,
+            context=context,
         )
         round_one_ms = max(1, round((perf_counter() - round_one_started) * 1000))
         round_timings_ms[1] = round_one_ms
@@ -290,6 +319,7 @@ class DebateOrchestrationService:
             query_text=query_text,
             round_one_text=round_one_text,
             openrouter_key=openrouter_key,
+            context=context,
         )
         round_two_ms = max(1, round((perf_counter() - round_two_started) * 1000))
         round_timings_ms[2] = round_two_ms
@@ -343,6 +373,7 @@ class DebateOrchestrationService:
         initial_answers: list[InitialModelAnswer],
         query_text: str,
         openrouter_key: str,
+        context: dict[str, Any] | None = None,
     ) -> tuple[str, str | None, LiveProviderResult | None]:
         disagreement = self._extract_disagreement(initial_answers=initial_answers)
         weak_support = self._extract_weak_support(initial_answers=initial_answers)
@@ -362,6 +393,7 @@ class DebateOrchestrationService:
                 initial_answers=initial_answers,
                 prior_round=None,
             ),
+            context=context,
         )
         # F-06: ``live`` is non-None whenever the call MAY HAVE BEEN BILLED,
         # even if its output was unusable — a request the provider refused
@@ -381,6 +413,7 @@ class DebateOrchestrationService:
         query_text: str,
         round_one_text: str,
         openrouter_key: str,
+        context: dict[str, Any] | None = None,
     ) -> tuple[str, str | None, LiveProviderResult | None]:
         disagreement = self._extract_disagreement(initial_answers=initial_answers)
         weak_support = self._extract_weak_support(initial_answers=initial_answers)
@@ -400,6 +433,7 @@ class DebateOrchestrationService:
                 initial_answers=initial_answers,
                 prior_round=round_one_text,
             ),
+            context=context,
         )
         # F-06: see ``_build_round_one_text`` — blank text means a call that may
         # have been billed came back unusable, not that no call was made.
@@ -414,6 +448,7 @@ class DebateOrchestrationService:
         openrouter_key: str,
         system_prompt: str,
         user_prompt: str,
+        context: dict[str, Any] | None = None,
     ) -> LiveProviderResult | None:
         """Call the configured debate model.
 
@@ -452,6 +487,7 @@ class DebateOrchestrationService:
             system_prompt=system_prompt,
             user_prompt=user_prompt,
             max_tokens=DEBATE_ROUND_MAX_TOKENS,
+            context=context,
         )
 
     def _debate_user_prompt(
@@ -461,16 +497,42 @@ class DebateOrchestrationService:
         initial_answers: list[InitialModelAnswer],
         prior_round: str | None,
     ) -> str:
-        # We summarise each model answer rather than re-quoting it in
-        # full. The intent of the debate is to surface disagreement,
-        # not to dump the original answers back into the LLM.
+        # WP-D (F-08): the moderator now sees each answer in full rather than
+        # its first 200 chars. The old comment here ("we summarise each model
+        # answer rather than re-quoting it in full") described a deliberate
+        # design that turned out to defeat the stage's purpose — a moderator
+        # asked to quote "the specific passage" that disagrees cannot do so
+        # from an opening clause.
+        #
+        # The prompt has TWO parts, and the split is the point. Our own
+        # directives stay OUTSIDE the fence; only provider- and user-originated
+        # text goes inside it. Fencing the whole message would put our own
+        # instructions ("do NOT repeat the query") inside a block whose system
+        # rule tells the model to ignore instructions — self-defeating.
+        directives: list[str] = [
+            "The user's question and the four model answers are in the evidence "
+            "block below. Do NOT repeat the question verbatim in your response.",
+        ]
+        if prior_round is not None:
+            directives.append(
+                "The block also carries the round 1 critique, for context. Do NOT repeat it."
+            )
+
+        # Untrusted from here down.
         lines: list[str] = []
-        lines.append("User query (do NOT repeat in your response):")
+        lines.append("User query:")
         lines.append(query_text)
         lines.append("")
-        lines.append("Four model answers (model name, status, first 200 chars):")
+        lines.append(
+            "Four model answers (model name, status, first "
+            f"{DEBATE_ANSWER_EXCERPT_MAX_CHARS} chars):"
+        )
         for answer in initial_answers:
-            excerpt = (answer.answer_text or "").strip().replace("\n", " ")[:200]
+            excerpt = (
+                (answer.answer_text or "")
+                .strip()
+                .replace("\n", " ")[:DEBATE_ANSWER_EXCERPT_MAX_CHARS]
+            )
             # ``display_name`` is the catalog's short label
             # ("Claude Haiku 4.5"). Falling back to ``model_id`` keeps
             # the prompt well-formed even if the catalog is unaware
@@ -479,9 +541,9 @@ class DebateOrchestrationService:
             lines.append(f"- {label} ({answer.status.value}): {excerpt}")
         if prior_round is not None:
             lines.append("")
-            lines.append("Round 1 critique (for context; do NOT repeat):")
+            lines.append("Round 1 critique:")
             lines.append(prior_round)
-        return "\n".join(lines)
+        return "\n".join(directives) + "\n\n" + fence("\n".join(lines))
 
     def _debate_fallback_notice(self, *, round_number: int) -> str:
         return (

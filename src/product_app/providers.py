@@ -38,17 +38,19 @@ from http.client import HTTPException
 from math import ceil
 from threading import RLock
 from time import perf_counter
+from typing import Any
 from urllib.error import HTTPError, URLError
 from urllib.parse import urlparse
 from urllib.request import Request, urlopen
 from uuid import UUID
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
 
 from product_app.config import RuntimeEnvironment, settings
 from product_app.feedback_store import record_event as _record_feedback_event
 from product_app.model_slots import ModelSlot, openrouter_model_catalog_service
 from product_app.provider_keys import ProviderCredentialSource
+from product_app.untrusted_text import fence
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -93,11 +95,54 @@ class SourceReference(BaseModel):
 
 
 class CitationCoverage(BaseModel):
-    material_claim_count: int = Field(ge=0)
-    cited_claim_count: int = Field(ge=0)
-    coverage_ratio: Decimal = Field(ge=Decimal("0"), le=Decimal("1"))
+    """How much of the panel's output carries a primary source.
+
+    WP-C / F-03. The metric is **the fraction of answers that carry at least
+    one primary (non-fallback) source** — nothing more, and the field names say
+    so. It used to divide a per-answer BOOLEAN by a characters-based estimate
+    of "material claims", so the numerator and denominator did not share units
+    and a run of four long, fully-sourced answers scored ~12% against an 80%
+    target. Every run was therefore labelled provisional and the recommendation
+    always said "pause for human review".
+
+    What this metric does NOT claim: that each individual assertion inside an
+    answer is supported. Counting sources says a citation is present; it says
+    nothing about whether the citation supports the claim. The signal that
+    checks whether a citation marker resolves to a real source is
+    ``citation_marker_grounding`` in :mod:`product_app.evaluation` — a
+    different, host-keyed authority. Do not conflate the two.
+    """
+
+    #: Answers in scope. ``1`` for a completed answer; ``0`` for a failed,
+    #: cancelled or deadline-exceeded answer, which produced no text to source.
+    #: At run level this is the number of answers that produced text.
+    answer_count: int = Field(ge=0)
+    #: Of those, how many carried at least one ``is_fallback=False`` source.
+    #: Fallback sources are real pages, but they are not the model's own
+    #: research, so they deliberately do not count toward the target.
+    sourced_answer_count: int = Field(ge=0)
+    #: ``sourced_answer_count / answer_count``, quantized to 2dp.
+    sourced_answer_ratio: Decimal = Field(ge=Decimal("0"), le=Decimal("1"))
     target_ratio: Decimal = CITATION_COVERAGE_TARGET
     target_met: bool
+
+    @model_validator(mode="after")
+    def _numerator_cannot_outrun_denominator(self) -> CitationCoverage:
+        """More sourced answers than answers is not a number, it is a bug.
+
+        Reachable only by a caller that gates the numerator on a different
+        predicate than the denominator — which is exactly the class of defect
+        WP-C removed. Without this the failure surfaces as ``sourced_answer_ratio
+        Input should be <= 1``, an opaque Decimal-range error that names neither
+        field. Say what actually went wrong instead.
+        """
+        if self.sourced_answer_count > self.answer_count:
+            raise ValueError(
+                f"sourced_answer_count ({self.sourced_answer_count}) exceeds "
+                f"answer_count ({self.answer_count}): the numerator and the "
+                "denominator must be gated on the same predicate"
+            )
+        return self
 
 
 #: Upper bound on a plausible per-call token count. Real completions are far
@@ -108,6 +153,82 @@ class CitationCoverage(BaseModel):
 #: crafted huge count cannot raise ``decimal.InvalidOperation`` on the result
 #: endpoint.
 _MAX_PLAUSIBLE_TOKENS = 100_000_000
+
+
+# ---------------------------------------------------------------------------
+# F-09 — the closed set of user-facing provider notices.
+#
+# These render on the model cards, the run-notices list, and the provider-
+# failure detail row (``app.js`` ``renderLiveNotices`` / ``showProviderFailure``
+# / the per-card notice), through ``textContent`` — so they are plain prose
+# read by a user, not a log line read by us.
+#
+# They live here, together and named, for the reason ``readiness`` keeps its
+# reason vocabulary together: copy that is scattered across branch arms drifts
+# into developer shorthand one branch at a time. That is exactly how ":online"
+# and "citation annotations" reached the screen (triage issue #2).
+# ``tests/unit/test_provider_notice_copy.py`` walks this registry.
+# ---------------------------------------------------------------------------
+
+# Each notice states what was OBSERVED, never an unobserved cause, and
+# never a direction ("below") that depends on where it happens to be
+# rendered — these strings appear on the model card (BELOW the answer
+# text), in the run-notices list, and in the live-run fallback panel,
+# which has no source list in it at all.
+NOTICE_SEARCH_DISABLED = (
+    "Web search was turned off for this model, so its answer comes "
+    "from what it learned during training."
+)
+NOTICE_SOURCES_FROM_BACKUP_SEARCH = (
+    "This model did not return any sources of its own. The sources "
+    "shown here came from a separate web search, so they do not count "
+    "toward this run's source support."
+)
+NOTICE_NO_SOURCES_FOUND = (
+    "This model's answer came back without any linked sources, so it "
+    "does not count toward this run's source support."
+)
+NOTICE_FALLBACK_SOURCE_SUPPORT = (
+    "The sources shown here did not come from this model, so they do "
+    "not count toward this run's source support."
+)
+# Deliberately says only what is known. This fires both when a model
+# answered with nothing usable AND when the request never reached a
+# model at all (a refused key, an exhausted balance, a rate limit, a
+# DNS failure all return no response), so it must not claim the model
+# was asked.
+NOTICE_LIVE_RETURNED_NOTHING = (
+    "No usable answer came back for this model, so the text shown here "
+    "was produced by Quorum's local simulation. It is not a real model "
+    "answer."
+)
+# "not active" rather than "turned off": this also fires when live
+# execution IS enabled but no key is set, where "turned off" would send
+# the operator to the wrong switch.
+NOTICE_DEMO_MODE = (
+    "Live model calls are not active for this deployment, so the text "
+    "shown here was produced by Quorum's local simulation. It is not a "
+    "real model answer."
+)
+NOTICE_PROVIDER_UNAVAILABLE = (
+    "This model's answer is unavailable because the provider did not return a usable response."
+)
+NOTICE_CANCELLED = "Cancelled before this model was asked for an answer."
+NOTICE_RUN_DEADLINE = "The run reached its time limit before this model answered."
+
+#: Every notice the provider layer may show a user. Adding a branch that
+#: invents its own string bypasses the copy guard, so add it HERE.
+PROVIDER_NOTICES: tuple[str, ...] = (
+    NOTICE_SEARCH_DISABLED,
+    NOTICE_SOURCES_FROM_BACKUP_SEARCH,
+    NOTICE_NO_SOURCES_FOUND,
+    NOTICE_FALLBACK_SOURCE_SUPPORT,
+    NOTICE_LIVE_RETURNED_NOTHING,
+    NOTICE_DEMO_MODE,
+    NOTICE_PROVIDER_UNAVAILABLE,
+    NOTICE_CANCELLED,
+    NOTICE_RUN_DEADLINE,
+)
 
 
 class TokenUsage(BaseModel):
@@ -145,6 +266,16 @@ class InitialModelAnswer(BaseModel):
     #: (no real billing) or when the provider omitted the usage object. Read
     #: by the cost layer to compute a measured actual cost.
     token_usage: TokenUsage | None = None
+    #: WP-D (F-07): this answer was cut short by the provider's token ceiling
+    #: (``finish_reason == "length"``), so the text below is incomplete. Only
+    #: a live provider call can set this — simulated, fallback, failed,
+    #: cancelled and deadline-exceeded answers all keep the ``False`` default,
+    #: because none of them was truncated BY A MODEL.
+    #:
+    #: This crosses the API boundary so the UI can mark the answer
+    #: "(shortened)" instead of presenting a mid-sentence stop as the model's
+    #: complete view. It is INERT until that surface exists (WP-F).
+    shortened: bool = False
 
 
 @dataclass(frozen=True)
@@ -327,22 +458,11 @@ class ProviderExecutionService:
             #    unavailable" notice fires when sources are still empty.
             # 4) Otherwise, no notice (clean search hit with sources).
             if not model_slot.search:
-                search_disabled_notice = (
-                    "Web search was disabled for this slot; the answer "
-                    "reflects the model's training-data response, not a "
-                    "live web search."
-                )
+                search_disabled_notice = NOTICE_SEARCH_DISABLED
             elif supplemented_sources:
-                search_disabled_notice = (
-                    "The model returned no citation annotations, so the sources "
-                    "below come from a fallback web search rather than the "
-                    "model's own :online results."
-                )
+                search_disabled_notice = NOTICE_SOURCES_FROM_BACKUP_SEARCH
             elif not sources:
-                search_disabled_notice = (
-                    "Live answer returned without citation annotations; coverage may "
-                    "be below the 80% target because :online web search was unavailable."
-                )
+                search_disabled_notice = NOTICE_NO_SOURCES_FOUND
             else:
                 search_disabled_notice = None
             return self._completed_answer(
@@ -358,6 +478,7 @@ class ProviderExecutionService:
                 fallback_used=False,
                 provider_notice=search_disabled_notice,
                 token_usage=live_response.usage,
+                shortened=live_response.is_truncated,
             )
 
         # No live response, or live response returned no usable text.
@@ -370,6 +491,14 @@ class ProviderExecutionService:
         use_fallback = self._should_force_fallback(query_text=query_text, model_slot=model_slot)
         if use_fallback:
             provider_attempt_order = [ProviderPath.LOCAL_SIMULATION, ProviderPath.FALLBACK_SEARCH]
+            # NOTE: the ``live_response.answer_text`` arm here is unreachable —
+            # the ``openrouter_search`` branch above returns whenever there IS
+            # usable live text, so control only arrives here when there is
+            # none. Kept as-is (pre-existing) rather than "simplified" inside
+            # WP-D, but it is why this branch needs no ``shortened=``: the text
+            # it emits is always locally simulated, and simulated text was
+            # never truncated by a model. Pinned by
+            # ``test_simulated_text_on_the_fallback_branch_is_never_shortened``.
             answer_text = (
                 live_response.answer_text
                 if live_response is not None and live_response.answer_text
@@ -386,10 +515,7 @@ class ProviderExecutionService:
                 provider_path=ProviderPath.FALLBACK_SEARCH,
                 provider_attempt_order=provider_attempt_order,
                 fallback_used=True,
-                provider_notice=(
-                    "Fallback source support was used because  search "
-                    "results were unavailable or did not include usable citations."
-                ),
+                provider_notice=NOTICE_FALLBACK_SOURCE_SUPPORT,
             )
 
         return self._completed_answer(
@@ -411,14 +537,10 @@ class ProviderExecutionService:
                 # both into a single "live execution is disabled"
                 # message, which blamed the operator when the actual
                 # cause was the model returning no text. Be honest.
-                "Live execution returned no usable answer for this slot, so "
-                "the response below was produced by Quorum's local simulation "
-                "helpers. It is not a real-model answer."
+                NOTICE_LIVE_RETURNED_NOTHING
                 if (live_response is None or not (live_response.answer_text or "").strip())
                 and self._live_execution_enabled(openrouter_key=openrouter_key)
-                else "Local demo mode is active because live execution is "
-                "disabled. These results are simulated — produced by Quorum's "
-                "local simulation helpers — and do not come from a live provider."
+                else NOTICE_DEMO_MODE
             ),
         )
 
@@ -442,6 +564,7 @@ class ProviderExecutionService:
         fallback_used: bool,
         provider_notice: str | None = None,
         token_usage: TokenUsage | None = None,
+        shortened: bool = False,
     ) -> InitialModelAnswer:
         duration_ms = max(1, round((perf_counter() - started_at) * 1000))
         provider_event_recorder.record(
@@ -460,17 +583,14 @@ class ProviderExecutionService:
         # the model's own research, so we exclude them from the coverage
         # metric to avoid inflating the score.
         #
-        # L5d: ``material_claim_count`` is now an honest heuristic
-        # rather than a constant 1. We estimate one material claim per
-        # ~200 characters of answer text (industry rule-of-thumb:
-        # roughly one factual assertion per paragraph). For a 500-char
-        # answer this gives 2-3 claims; with a single citation the
-        # coverage ratio is 33-50%, which surfaces as ``target_met =
-        # false`` — the honest number. The ``max(1, …)`` floor keeps
-        # zero-length / placeholder answers valid for the calculator.
-        material_claim_count = estimate_material_claim_count(answer_text)
+        # WP-C / F-03: one completed answer is exactly ONE unit of coverage,
+        # and it either carries a primary source or it does not. The previous
+        # denominator was ``estimate_material_claim_count(answer_text)`` — a
+        # characters-based figure — against this same boolean numerator, so a
+        # long, fully-sourced answer scored a low ratio purely for being long.
         primary_source_count = sum(1 for source in sources if not source.is_fallback)
-        cited_claim_count = 1 if primary_source_count > 0 else 0
+        answer_count = 1
+        sourced_answer_count = 1 if primary_source_count > 0 else 0
         return InitialModelAnswer(
             slot_number=model_slot.slot_number,
             model_id=model_slot.model_id,
@@ -483,11 +603,12 @@ class ProviderExecutionService:
             status=InitialAnswerStatus.COMPLETED,
             latency_ms=duration_ms,
             citation_coverage=calculate_citation_coverage(
-                material_claim_count=material_claim_count,
-                cited_claim_count=cited_claim_count,
+                answer_count=answer_count,
+                sourced_answer_count=sourced_answer_count,
             ),
             provider_notice=provider_notice,
             token_usage=token_usage,
+            shortened=shortened,
         )
 
     def _failed_answer(
@@ -522,16 +643,19 @@ class ProviderExecutionService:
             fallback_used=False,
             status=InitialAnswerStatus.FAILED,
             latency_ms=duration_ms,
+            # WP-C / F-03: a FAILED answer produced no text to source, so it
+            # is out of the coverage denominator entirely — the same treatment
+            # the cancelled and deadline-exceeded paths below already had. A
+            # missing slot is penalised by the ``completeness`` signal; charging
+            # it against coverage too would re-create a floor the metric cannot
+            # reach. (It previously passed ``estimate_material_claim_count("")``
+            # == 1, so a failed answer silently diluted the run's ratio.)
             citation_coverage=calculate_citation_coverage(
-                material_claim_count=estimate_material_claim_count(""),
-                cited_claim_count=0,
+                answer_count=0,
+                sourced_answer_count=0,
             ),
             error_code="PROVIDER_UNAVAILABLE",
-            provider_notice=(
-                "This model answer is unavailable because the provider did not "
-                "return a usable response. Raw key material and upstream secrets "
-                "remain redacted."
-            ),
+            provider_notice=NOTICE_PROVIDER_UNAVAILABLE,
         )
 
     def cancelled_answer(self, model_slot: ModelSlot) -> InitialModelAnswer:
@@ -567,11 +691,11 @@ class ProviderExecutionService:
             status=InitialAnswerStatus.FAILED,
             latency_ms=0,
             citation_coverage=calculate_citation_coverage(
-                material_claim_count=0,
-                cited_claim_count=0,
+                answer_count=0,
+                sourced_answer_count=0,
             ),
             error_code="CANCELLED",
-            provider_notice="Cancelled before model call started.",
+            provider_notice=NOTICE_CANCELLED,
         )
 
     def deadline_exceeded_answer(self, model_slot: ModelSlot) -> InitialModelAnswer:
@@ -603,11 +727,11 @@ class ProviderExecutionService:
             status=InitialAnswerStatus.FAILED,
             latency_ms=0,
             citation_coverage=calculate_citation_coverage(
-                material_claim_count=0,
-                cited_claim_count=0,
+                answer_count=0,
+                sourced_answer_count=0,
             ),
             error_code="RUN_DEADLINE_EXCEEDED",
-            provider_notice="Run deadline reached before this model answered.",
+            provider_notice=NOTICE_RUN_DEADLINE,
         )
 
     def _live_openrouter_response(
@@ -724,17 +848,48 @@ class ProviderExecutionService:
         model_id: str,
         system_prompt: str | None = None,
         max_tokens: int | None = None,
+        context: dict[str, Any] | None = None,
     ) -> LiveProviderResult | _SearchRejected | _DispatchedUnmeasured | None:
         # ``_post_openrouter`` accepts a custom system prompt and
         # ``max_tokens`` cap. The debate and synthesis services pass their
         # own caps; the initial-answer search path now passes
         # ``settings.initial_answer_max_tokens`` too (previously uncapped).
         # The default here stays ``None`` for any other caller.
-        system_message = system_prompt or (
+        # L4: when context is provided (a follow-up query), inject the
+        # prior question into the system prompt so the model is aware
+        # of the conversation history without re-quoting the user query.
+        # WP-D (F-08): ``prior_question`` is CLIENT-SUPPLIED and lands in the
+        # SYSTEM message, so it is the one untrusted channel the user-message
+        # fence cannot cover. Two rules therefore apply to it:
+        #
+        #   1. It goes AFTER the caller's system prompt, never before. Prepended,
+        #      an attacker-authored follow-up was literally the first instruction
+        #      the model read — above the untrusted-data rule — and could
+        #      countermand the entire fencing scheme.
+        #   2. Its delimiters are neutralized, so it cannot forge a decoy
+        #      evidence block inside the trusted half of the prompt.
+        #
+        # It is still labelled so the model knows it is quoted user input rather
+        # than an instruction from us.
+        base_system_prompt = system_prompt or (
             "Answer the user query with explicit source-backed reasoning. "
             "Include citations or source URLs where possible, and explain "
             "uncertainty instead of fabricating support."
         )
+        context_suffix = ""
+        if context and context.get("prior_question"):
+            # FENCED, not merely neutralized and repositioned. Position alone
+            # cannot solve this: before the untrusted-data rule the client text
+            # reads as a governing instruction, and after it, it is the last
+            # thing the model sees and can pose as an amendment to the rule
+            # ("the paragraph above no longer applies"). Wrapping it in the
+            # same delimiters the rule already governs makes it unambiguously
+            # DATA wherever it sits — the same treatment the answers get in the
+            # user message.
+            context_suffix = "\n\nThe user's previous question, as data:\n" + fence(
+                str(context["prior_question"])
+            )
+        system_message = base_system_prompt + context_suffix
         messages: list[dict[str, str]] = [
             {"role": "system", "content": system_message},
             {"role": "user", "content": query_text},
@@ -868,6 +1023,18 @@ class ProviderExecutionService:
             # as a real result carrying it; deciding what an empty answer MEANS
             # belongs to the caller, not here.
             usage = _extract_usage(parsed)
+            # WP-D (F-07): did the provider stop because it hit the token
+            # ceiling? Extracted INSIDE this try alongside ``usage``, not after
+            # it — the two are read from the same payload, and if reading this
+            # one somehow raises, the call still billed and must be classified
+            # ``_DISPATCH_UNMEASURED`` like any other post-dispatch failure.
+            #
+            # It pairs especially closely with F-06's finding C above: an HTTP
+            # 200 whose completion is EMPTY because ``finish_reason="length"``
+            # hit a tight cap is exactly the case that used to be thrown away.
+            # It now returns as a real result carrying both the usage that was
+            # billed and the reason the text is missing.
+            is_truncated = _finish_reason_indicates_truncation(parsed)
         except Exception as exc:
             # A body arrived, so the call billed. This clause spans json.loads
             # AND the three extractors, so it covers two different situations:
@@ -887,7 +1054,12 @@ class ProviderExecutionService:
                 expected=_EXPECTED_BODY_ERRORS,
             )
             return _DISPATCH_UNMEASURED
-        return LiveProviderResult(answer_text=content, sources=citations, usage=usage)
+        return LiveProviderResult(
+            answer_text=content,
+            sources=citations,
+            usage=usage,
+            is_truncated=is_truncated,
+        )
 
     def call_with_prompt(
         self,
@@ -897,6 +1069,7 @@ class ProviderExecutionService:
         system_prompt: str,
         user_prompt: str,
         max_tokens: int | None = None,
+        context: dict[str, Any] | None = None,
     ) -> LiveProviderResult | None:
         """Public entry point for internal callers (debate, synthesis)
         that need to call a specific model with a custom system prompt
@@ -932,6 +1105,7 @@ class ProviderExecutionService:
             model_id=model_id,
             system_prompt=system_prompt,
             max_tokens=max_tokens,
+            context=context,
         )
         if isinstance(result, _DispatchedUnmeasured):
             return LiveProviderResult(answer_text="", sources=[], usage=None)
@@ -1086,6 +1260,12 @@ class LiveProviderResult:
     #: when the response omitted the ``usage`` object. Threaded up to the
     #: cost layer so a fully-captured run can report a measured actual cost.
     usage: TokenUsage | None = None
+    #: WP-D (F-07): the provider told us it stopped because it hit the
+    #: ``max_tokens`` ceiling (``finish_reason == "length"``), so this answer
+    #: is the model's output CUT SHORT, not its complete one. Defaults to
+    #: ``False`` — the honest reading of a response that carried no signal is
+    #: "no evidence of truncation", never "definitely truncated".
+    is_truncated: bool = False
 
 
 #: Internal sentinel returned by ``_post_openrouter`` when ````
@@ -1165,6 +1345,31 @@ def _log_post_dispatch_failure(
         event,
         extra={"error_type": type(exc).__name__, "model_id": model_id},
     )
+
+
+def _finish_reason_indicates_truncation(payload: object) -> bool:
+    """Did the provider stop because it hit the token ceiling?
+
+    Reads ``choices[0].finish_reason`` and reports ``True`` only for the
+    documented ``"length"`` value. Every other shape — a payload that is not
+    a mapping, a missing/empty/non-list ``choices``, a non-mapping element,
+    an absent ``finish_reason``, or any other reason (``"stop"``,
+    ``"content_filter"``, a provider-specific string) — reports ``False``.
+
+    The asymmetry is deliberate and is the whole point: ``shortened`` becomes
+    a "(shortened)" marker on a user-visible answer, so a malformed or
+    unfamiliar response must never be able to *assert* truncation. Absence of
+    evidence is reported as absence, not as a defect we invented.
+    """
+    if not isinstance(payload, dict):
+        return False
+    choices = payload.get("choices")
+    if not isinstance(choices, list) or not choices:
+        return False
+    first = choices[0]
+    if not isinstance(first, dict):
+        return False
+    return first.get("finish_reason") == "length"
 
 
 def _extract_usage(payload: object) -> TokenUsage | None:
@@ -1332,6 +1537,26 @@ def _sanitize_source_url(url: str) -> str | None:
     """
     if not isinstance(url, str) or not url:
         return None
+    # Strip the ends FIRST, then judge what remains. Providers routinely emit a
+    # trailing newline or surrounding spaces on an otherwise perfectly good
+    # citation, and the inline-markdown path already strips before validating —
+    # rejecting those outright would silently DROP real sources and depress
+    # citation coverage, which is a product defect in a tool whose claim is
+    # source-backed answers. Reject injection, not sloppiness.
+    url = url.strip()
+    if not url:
+        return None
+    # A URL is a single token. One carrying a line break — or any other
+    # whitespace/control character — is not a URL, it is a payload: inlined
+    # into a prompt it forges its own line, and every downstream consumer
+    # (debate, synthesis, the evaluation judge) inlines sources this way.
+    # ``urlparse`` strips these for its own host check and then hands the
+    # ORIGINAL string back, so the host check passing says nothing about what
+    # the rest of the string will do. Reject here, at the producer, rather
+    # than flattening at each consumer — three consumers means the next one
+    # forgets. Unicode line separators (U+2028/U+2029/U+0085) count too.
+    if any(ch.isspace() or ord(ch) < 0x20 or ch in "  " for ch in url):
+        return None
     if not url.startswith(("http://", "https://")):
         return None
     # Strip fragment — everything after the first '#'.
@@ -1441,23 +1666,26 @@ def _extract_citations(
 _INLINE_MARKDOWN_LINK_RE = re.compile(r"\[([^\]]+)\]\((https?://[^\s)]+)\)")
 
 
-#: L5d: characters-per-material-claim heuristic. Industry rule of
-#: thumb is one factual assertion per ~150-250 characters of
-#: generated text (i.e. one per short paragraph). 200 is a
-#: defensible mid-point: short enough to make coverage honest
-#: (a 600-char answer gets 3 claims; a single citation is 33%),
-#: long enough that a 200-char answer still gets 1 claim.
+#: Characters-per-material-claim heuristic. Industry rule of thumb is one
+#: factual assertion per ~150-250 characters of generated text (i.e. one per
+#: short paragraph); 200 is a defensible mid-point.
+#:
+#: WP-C / F-03: this is a LENGTH ESTIMATE, not the citation-coverage
+#: denominator. It used to be, and that was the defect — dividing a per-answer
+#: boolean by it made the 80% target unreachable at any realistic answer
+#: length. Its only remaining job is the informational
+#: ``QueryRunResultResponse.material_claim_count`` figure. Do not reintroduce
+#: it into :func:`calculate_citation_coverage`.
 MATERIAL_CLAIM_CHAR_DENOMINATOR = 200
 
 
 def estimate_material_claim_count(answer_text: str) -> int:
-    """Estimate the number of material claims in ``answer_text``.
+    """Roughly how many material claims ``answer_text`` is long enough to hold.
 
-    The estimate is a heuristic — true claim extraction would need
-    an LLM call. ``max(1, ceil(len / 200))`` gives a defensible
-    number that matches the plan's "500-token answer → 2-3 material
-    claims" target. The floor of 1 keeps the citation-coverage
-    calculator valid for empty / placeholder answers.
+    A length heuristic, not claim extraction — true extraction would need its
+    own LLM call. Reported for information only; see
+    :data:`MATERIAL_CLAIM_CHAR_DENOMINATOR` for why it is NOT the coverage
+    denominator.
     """
     text = (answer_text or "").strip()
     if not text:
@@ -1467,24 +1695,31 @@ def estimate_material_claim_count(answer_text: str) -> int:
 
 def calculate_citation_coverage(
     *,
-    material_claim_count: int,
-    cited_claim_count: int,
+    answer_count: int,
+    sourced_answer_count: int,
 ) -> CitationCoverage:
-    if material_claim_count <= 0:
+    """Coverage = the share of answers carrying at least one primary source.
+
+    Both arguments are counted in the SAME unit — answers. That is the whole
+    point of WP-C / F-03: the previous signature took a boolean numerator and a
+    characters-derived denominator, so the ratio fell as answers got longer
+    even when every one of them was sourced.
+    """
+    if answer_count <= 0:
         return CitationCoverage(
-            material_claim_count=0,
-            cited_claim_count=0,
-            coverage_ratio=Decimal("0"),
+            answer_count=0,
+            sourced_answer_count=0,
+            sourced_answer_ratio=Decimal("0"),
             target_met=False,
         )
-    coverage_ratio = (Decimal(cited_claim_count) / Decimal(material_claim_count)).quantize(
+    sourced_answer_ratio = (Decimal(sourced_answer_count) / Decimal(answer_count)).quantize(
         Decimal("0.01")
     )
     return CitationCoverage(
-        material_claim_count=material_claim_count,
-        cited_claim_count=cited_claim_count,
-        coverage_ratio=coverage_ratio,
-        target_met=coverage_ratio >= CITATION_COVERAGE_TARGET,
+        answer_count=answer_count,
+        sourced_answer_count=sourced_answer_count,
+        sourced_answer_ratio=sourced_answer_ratio,
+        target_met=sourced_answer_ratio >= CITATION_COVERAGE_TARGET,
     )
 
 

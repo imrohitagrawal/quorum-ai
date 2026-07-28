@@ -128,9 +128,9 @@ def _install_raising_provider(
 
 def _coverage() -> CitationCoverage:
     return CitationCoverage(
-        material_claim_count=1,
-        cited_claim_count=1,
-        coverage_ratio=Decimal("1"),
+        answer_count=1,
+        sourced_answer_count=1,
+        sourced_answer_ratio=Decimal("1"),
         target_met=True,
     )
 

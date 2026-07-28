@@ -25,27 +25,50 @@ from product_app.main import app
 from product_app.query_runs import query_run_repository
 from product_app.safety import WARNING_VERSION, WarningType
 
+#: The mix the product actually ships (``model_slots.DEFAULT_MODEL_IDS``).
+#: WP-G1 migrated slot 4 deepseek -> nvidia; this module was missed, so the
+#: money envelope below was being measured against a mix that no longer ships.
 DEFAULT_MODEL_IDS = [
     "openai/gpt-4o-mini",
     "anthropic/claude-haiku-4.5",
     "google/gemini-2.5-flash",
-    "deepseek/deepseek-chat-v3.1",
+    "nvidia/nemotron-3-nano-30b-a3b",
 ]
 
 #: issue #16: the guardrail keys off the fail-safe ``max_cost_usd`` bound
-#: (worst-case, initial output priced at the enforced cap). One opus slot +
-#: three cheap slots lands the BOUND at ~$0.21 (in the (0.15, 0.25] CONFIRM
-#: band) while the realistic point estimate is only ~$0.10 — under the $0.20
-#: daily cap (which tracks the point estimate), so the per-call confirmation is
-#: the binding constraint, not the daily cap. A full opus-tier mix would push
-#: the bound over $0.25 into BLOCK.
+#: (worst-case, initial output priced at the enforced cap), while the daily cap
+#: tracks the point estimate — so for this mix the per-call confirmation is the
+#: binding constraint, not the daily cap.
+#:
+#: A mix whose POINT estimate sits in ALLOW but whose fail-safe BOUND lands in
+#: the (0.15, 0.25] confirmation band — MEASURED point 0.1127, bound 0.2474.
+#:
+#: EVERY PRICE HERE IS VERIFIED EXACT against the live public catalog
+#: (unauthenticated, $0, 2026-07-27): gpt-4o-mini 0.00015/0.0006,
+#: claude-3-haiku 0.00025/0.00125, claude-opus-4 0.015/0.075, nemotron
+#: 0.00005/0.0002 — each identical to its ``_FALLBACK_CATALOG`` row. That is
+#: the property this fixture is chosen for, and it is not cosmetic:
+#:
+#:   * the previous fixture was anchored on ``openai/o3``, whose fallback price
+#:     is ~650% OVER live. MEASURED: it bounds at 0.2138 (require_confirmation)
+#:     under the offline catalog and 0.0795 (ALLOW) at real prices — so it
+#:     asserted a band that does not exist in production, and the queued
+#:     price-drift PR would have flipped it;
+#:   * this mix bounds at 0.2474 under BOTH catalogs, so the verdict cannot
+#:     depend on whether the catalog fetch succeeded.
+#:
+#: The margin to ``HARD_LIMIT_USD`` is thin (0.0026) and that is accepted
+#: deliberately: reaching the confirmation band REQUIRES an expensive slot, and
+#: ``claude-opus-4`` is the only expensive model in the catalog whose price is
+#: verified. A fixture that moves only when the COST MODEL changes is a real
+#: signal; one that moves when a stale price is corrected is noise.
 CONFIRM_MODEL_IDS = [
-    "anthropic/claude-opus-4",
     "openai/gpt-4o-mini",
-    "deepseek/deepseek-chat-v3.1",
-    "google/gemini-2.5-flash",
+    "anthropic/claude-3-haiku",
+    "anthropic/claude-opus-4",
+    "nvidia/nemotron-3-nano-30b-a3b",
 ]
-CONFIRM_QUERY = "x" * 2_500
+CONFIRM_QUERY = "Compare vendors"
 
 #: A full opus-tier mix — its bound exceeds the $0.25 hard limit → BLOCK.
 BLOCKED_MODEL_IDS = [
@@ -369,7 +392,12 @@ def test_estimate_time_block_still_records_blocked_and_pages_sentry() -> None:
 #: (``catalog_fetcher._FALLBACK_CATALOG``). MEASURED, and re-asserted by the
 #: envelope test so a catalog price change surfaces as "re-measure the
 #: envelope", never as a silently different envelope.
-PINNED_DEFAULT_MIX_UNIT_USD = Decimal("0.0244")
+#:
+#: WP-D re-measured and ratified this: 0.0244 -> 0.0317 against the SHIPPED
+#: mix (slot 4 is nvidia, not the deepseek this module used to name). See the
+#: envelope test's docstring for the attribution — the admitted run count fell
+#: 8 -> 6 BEFORE WP-D, and this constant had been hiding it.
+PINNED_DEFAULT_MIX_UNIT_USD = Decimal("0.0317")
 
 
 @contextmanager
@@ -439,6 +467,31 @@ def test_daily_cap_admits_the_number_of_runs_its_dollar_value_pays_for() -> None
     and ``test_high_cost_query_accepts_matching_confirmation_token`` — the
     exact regression 9c50239 fixed.)
 
+    WP-D re-measurement and ratification (operator-approved).
+    ``PINNED_DEFAULT_MIX_UNIT_USD`` moved 0.0244 -> 0.0317 and the admitted
+    run count 8 -> 6. Attribution, measured rather than assumed:
+
+    * The 8 -> 6 drop is **pre-existing** and was NOT caused by WP-D. At this
+      branch's parent the unit was already 0.0310, and ``floor(0.20/0.0310)``
+      is 6. The stale 0.0244 pin had been *hiding* a cut that the earlier
+      ``config.py`` cap raise (700->2000, 800->3000) already made.
+    * WP-D moves the unit 0.0310 -> 0.0317 through ONE correction to this
+      figure: the ``google/gemini-2.5-flash`` fallback output price
+      (0.0012 -> 0.0025, measured against the live public catalog). It does
+      not change the run count; it makes the number truer.
+    * WP-D's other money fix — pricing round 2's prior-critique input, without
+      which ``max_cost_usd`` was not a true ceiling — deliberately does NOT
+      appear here. It applies to the BOUND only
+      (``_cost_components(price_round_two_prior_critique=True)``), because
+      charging it on the point path either hard-refused affordable runs or
+      broke the breakdown's reconciliation invariant. The daily meter tracks
+      the point estimate, so this constant is unaffected by it.
+
+    The decision stands: ``DAILY_CAP_USD`` stays at 0.20. Raising it to
+    preserve 8 runs would be counter-tuning a safety weight to hold a metric
+    constant — the envelope shrank because the pricing got more honest, not
+    because the policy changed.
+
     This test states the envelope out loud. Change the meter, or change the
     cap, and it fails — so the next move is a reviewed decision, not a
     side effect.
@@ -472,7 +525,7 @@ def test_daily_cap_admits_the_number_of_runs_its_dollar_value_pays_for() -> None
         )
         # The cap admits every run its dollar value pays for, and not one more.
         expected_runs = int((DAILY_CAP_USD / unit).to_integral_value(rounding=ROUND_FLOOR))
-        assert expected_runs == 8, f"default-mix unit price moved: {unit}"
+        assert expected_runs == 6, f"default-mix unit price moved: {unit}"
 
         completed = 0
         rejection = None

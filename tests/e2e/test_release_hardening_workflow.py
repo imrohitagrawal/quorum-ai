@@ -93,7 +93,10 @@ def test_core_query_workflow_with_env_configured_access(
         # L5d: with the honest heuristic the four ~218-char stub
         # answers yield 2 material claims each → 8 total. With 4
         # cited that is 0.50 coverage, below the 0.80 target.
-        "citation_coverage_target_met": False,
+        # WP-C / F-03: all four local-simulation answers carry a primary source,
+        # so coverage is 4/4 and the target is met. This was False only because
+        # the old ratio divided a per-answer boolean by a chars-per-claim count.
+        "citation_coverage_target_met": True,
         # PR-2 Defect 3 fix: stub answers are identical, so
         # ``consensus_strength`` is "strong" and
         # ``false_consensus_preserved`` is correctly False.

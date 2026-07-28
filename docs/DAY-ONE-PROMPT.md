@@ -176,6 +176,31 @@ it gates on the *artifacts the workflow must produce*.
 > after which unresolved ≥MED findings go to the human with an explicit override
 > decision (§1b). Do not call it clean after one pass.
 >
+> **5a-i. Each round's fixes introduce the next round's defects — plan for it,
+> and cap it.** Measured over one function in one session: round 1's advice, taken
+> on trust, broke arithmetic rendering (`3*40` rendered as `340`); round 2's fix
+> opened four ways to smuggle markup past it; round 3 closed those and left the
+> original hole open. Every round was competent. So: **re-review every fix diff**,
+> and agree the cap up front (this operator's is **2 rounds**, §1b allows 3) —
+> then ship with the residual list written down, because more rounds is not
+> convergence.
+>
+> **5a-ii. When patching keeps producing defects, the approach is wrong — change
+> it, do not patch again.** Three failed rounds on one unit is the signal, not bad
+> luck. What finally worked was removing the unit's hardest job (a block-level
+> sanitiser was being reused for single-line values; those values got a simple
+> escape instead) and rewriting its check to assert the **outcome** — "no heading
+> the document did not write" — rather than the mechanism the last fix happened to
+> use. A check on the mechanism only ever catches the bypass you already thought of.
+>
+> **5a-iii. Before a release, verify against the CODE — the tracker, the plan and
+> your own summaries are all claims.** This is a separate step from reviewing a
+> diff: read the shipped code fresh and ask what is actually true. Measured: four
+> read-only agents doing this found more than two full review rounds had, including
+> a class review cannot see — **work marked done that was not in production**. Two
+> issues had been closed against fixes sitting on an unmerged branch. Run it as a
+> standing pre-release step, not a one-off.
+>
 > **5b. Commit hygiene: branch first, always.** Never commit to the default
 > branch. Open the slice's branch before the first edit, keep one branch per
 > slice, and commit per slice with the evidence (RED output, gate run) referenced
@@ -279,6 +304,29 @@ So the UI gate needs things a normal functional test lacks:
    (e.g. 375 / 768 / 1440px) in the pinned CI environment (baselines are
    platform/browser-specific — a macOS baseline never matches on Linux).
 
+7. **Every negative check needs a positive partner — no mutation tool covers the
+   UI.** Mutation testing reads Python; it never touches `app.js` or the browser
+   specs, so the one mechanism that proves a test can fail is absent exactly
+   where UI tests live. Fill it by hand: any assertion of the form *"count is
+   0"*, *"list is empty"* or *"does not match"* must sit beside one proving the
+   thing being counted exists at all. `expect(x).toHaveCount(0)` proves nothing
+   if `x` never matches anything.
+   **Measured, one project, one session — three tests passed against the exact
+   bug they existed to catch:** one asserted a list had 6 items, which the broken
+   output also had (and which would have gone red if someone *fixed* it
+   properly); one asserted no emphasis carried surrounding spaces, a shape the
+   code could never produce, so it was always true; one asserted a history panel
+   held exactly one entry — which *is* the defect, so building the real feature
+   turns it red. All three read as reasonable. None could fail.
+   Enforce it the way this repo already enforces two similar rules — a test that
+   reads the spec files and fails on an unpaired negative check. Allow
+   exceptions, but require a one-line reason beside each so the exception is
+   visible rather than silent.
+8. **A gate that would fail when the bug is fixed is worse than no gate.** Three
+   of the above have this property: they lock in the broken behaviour. When you
+   write a check, ask which change makes it red, and confirm that change is the
+   *regression* and not the *fix*.
+
 **Definition of done for any UI change:** its affected views have visual snapshot
 tests against the fixture; you have captured and **visually reviewed** a screenshot
 of each with real-shaped data; the invariants (incl. computed-style, overlap,
@@ -306,7 +354,17 @@ threshold from that data. An unmeasured guardrail number is a fabricated one.
 | **Computed-style baseline source** | the single source the expected values are read from | **Policy.** One machine-readable token source (the CSS custom-property block / design-token file) is authoritative; the spec reads the token and asserts the element's computed value equals it. A literal hex/px retyped into a spec is a second source of truth and will drift — the only literals allowed are **negative** constraints (a token that must NOT appear on a surface). |
 | **Eval-regression delta** | the per-metric drop that fails a PR | **Baseline-then-set, and ship ADVISORY first.** You cannot know the tolerable delta before you know the metric's run-to-run variance. Run the frozen golden set **N times unchanged**, record each metric's mean and spread, and set the failing delta above that noise band. Until that measurement exists the gate reports but does not block. |
 | **Coverage floor / changed-lines coverage** | `--cov-fail-under=N`; `diff-cover --fail-under=M` | **Measure `N` from today's actual total** and never set it below (a lower floor ratchets quality down); `M` is a policy choice for *new* lines and can be strict from day one. |
-| **Mutation score** | threshold + scope + window | **Baseline-then-set.** Measure a real score per core module first; set the threshold from that data, scope it to changed code, and run **advisory (non-blocking)** until the baseline exists and the CI runtime is known. |
+| **Mutation score** | threshold + scope + window | **Baseline-then-set.** Measure a real score per core module first; set the threshold from that data, scope it to changed code, and run **advisory (non-blocking)** until the baseline exists and the CI runtime is known. **Write the exit condition down when you make it advisory, and put a date or a
+condition on it.** Advisory with no stated end never ends: measured on this
+project, the check sat non-blocking long after both of its conditions were met —
+it was scoped to changed functions, ran in 1m09s, and passed — because nobody
+had written down what would make it block. Name the trigger ("blocks once it has
+passed on N consecutive PRs") in the same commit that adds the check. This
+applies to every gate shipped advisory, not just this one. |
+
+**Rule:** every gate shipped **advisory** carries, in the same commit, the
+condition that makes it blocking. A gate with no stated exit stays advisory
+forever and quietly becomes decoration.
 
 **Rule:** any threshold in this table that has not yet been measured is written in
 the repo as `baseline-then-set` with its measurement step spelled out — never as a
