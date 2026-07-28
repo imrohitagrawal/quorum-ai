@@ -3441,10 +3441,12 @@ html[data-theme="dark"] .landing-preview-caption {
   margin-left: var(--space-2);
   padding: 0 6px;
   border-radius: var(--radius-pill);
-  background: var(--warning);
-  color: var(--on-tonal);
-  font-size: 0.62rem;
+  background: var(--warning-soft);
+  color: var(--warning);
+  font-size: 0.7rem;
   font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
 }
 a.result-source-chip:hover { border-color: var(--info); color: var(--info); }
 .result-source-num {

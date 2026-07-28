@@ -38,10 +38,19 @@ _NOTICE_KEY = re.compile(r"provider_notice:|provider_failure_notices:")
 #: so they stay inside the window.
 _NEXT_KEY = re.compile(r"\n {0,4}[A-Za-z_][A-Za-z0-9_]*:")
 
-#: Every quoted string literal inside the captured window, single or double
-#: quoted. ``null`` (the no-notice branch) carries no quotes and is ignored by
-#: construction.
-_QUOTED = re.compile(r'"([^"\n]+)"' + r"|'([^'\n]+)'")
+#: Line comments are stripped from a window before scanning. Without this an
+#: apostrophe in a trailing comment ("the model's answer") was captured as a
+#: notice and compared against the registry, reddening the guard over prose.
+_LINE_COMMENT = re.compile(r"//[^\n]*")
+
+#: Every string literal inside the captured window: double-quoted, or a
+#: backtick template. Single quotes are deliberately NOT matched — this fixture
+#: is prettier-formatted with double quotes, and allowing them only reintroduced
+#: the apostrophe false positive. A template literal IS matched, because it is
+#: the natural JS form for a long notice and was the one shape that captured
+#: nothing at all, i.e. passed silently. ``null`` carries no quotes and is
+#: ignored by construction.
+_QUOTED = re.compile(r'"([^"\n]+)"' + r"|`([^`]+)`")
 
 #: A value that is neither a quoted literal nor ``null`` — e.g. a bare constant
 #: reference. The guard cannot resolve those, and silently capturing nothing
@@ -65,7 +74,7 @@ def _quoted_notices() -> list[str]:
     for key in _NOTICE_KEY.finditer(text):
         rest = text[key.end() :]
         end = _NEXT_KEY.search(rest)
-        window = rest[: end.start()] if end else rest
+        window = _LINE_COMMENT.sub("", rest[: end.start()] if end else rest)
         unresolvable = _UNRESOLVABLE.match(window)
         if unresolvable and unresolvable.group(1) not in ("null", "undefined"):
             raise AssertionError(
@@ -75,8 +84,8 @@ def _quoted_notices() -> list[str]:
                 "and cannot resolve identifiers, so it would silently pass. "
                 "Inline the string, or teach this guard to resolve it."
             )
-        for double, single in _QUOTED.findall(window):
-            found.append(double or single)
+        for double, backtick in _QUOTED.findall(window):
+            found.append(double or backtick)
     return found
 
 

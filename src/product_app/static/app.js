@@ -2354,9 +2354,37 @@
   //   * raw HTML is escaped. Markdown permits it, and any viewer that renders
   //     it would execute a <script> the provider wrote.
   function mdUntrustedBlock(text) {
-    return String(text == null ? "" : text)
-      .replace(/</g, "&lt;")
-      .replace(/^(#{1,6})(\s)/gm, "#####$2");
+    const lines = String(text == null ? "" : text).split("\n");
+    let inFence = false;
+    return lines
+      .map((line) => {
+        // Code is left VERBATIM. A blanket `<` escape corrupted it: inside a
+        // fence a renderer does not decode entities, so `if (a < b)` reached
+        // the reader as `if (a &lt; b)`. Model answers here routinely contain
+        // code. Indented code blocks are treated the same way; the cost is
+        // that a deeply indented list item is also left alone.
+        if (/^\s*(```|~~~)/.test(line)) {
+          inFence = !inFence;
+          return line;
+        }
+        if (inFence || /^ {4,}\S/.test(line)) return line;
+        let out = line.replace(/</g, "&lt;");
+        // Demote ATX headings below every structural heading this document
+        // emits. Never PROMOTE one: `######` must stay at 6, not become 5.
+        out = out.replace(/^(#{1,6})(\s)/, (_m, hashes, sp) =>
+          "#".repeat(Math.max(5, hashes.length)) + sp,
+        );
+        // A SETEXT underline (`===` / `---` under a line of text) forges a
+        // heading at level 1 or 2 — outranking the demoted ATX form entirely,
+        // which is how the first version of this function was bypassed. The
+        // same shapes are also thematic breaks, which forge a section
+        // boundary. Escaping the first character renders them literally.
+        if (/^\s*(={2,}|-{3,}|\*{3,}|_{3,})\s*$/.test(out)) {
+          out = "\\" + out.trimStart();
+        }
+        return out;
+      })
+      .join("\n");
   }
 
   function buildResultMarkdown(result, res, fs, ctx) {
@@ -2386,7 +2414,15 @@
     // The TRUE denominator is the slot count, not the agreement total: an
     // answer that timed out is never recorded, so agreement.total can be 3 on a
     // 4-slot run and "3 of 3" would read as fully live.
-    const denominator = slotCount || ctx.total || 0;
+    // Same fallback chain the on-screen banner uses. Falling back only to the
+    // agreement total left `denominator === 0` when both were absent, and the
+    // guard below then suppressed the degraded warning entirely — silence on a
+    // degraded run is the dangerous direction.
+    const localCount = Number(result.local_count);
+    const counted =
+      (Number.isFinite(liveCount) ? liveCount : 0) +
+      (Number.isFinite(localCount) ? localCount : 0);
+    const denominator = slotCount || ctx.total || counted || 0;
     if (Number.isFinite(liveCount) && denominator && liveCount < denominator) {
       push(
         liveCount === 0
@@ -2429,7 +2465,10 @@
     }
     push("");
 
-    if (ctx.question) push(`**Question:** ${mdUntrustedBlock(ctx.question)}`, "");
+    // The question is the USER's own words. Only raw HTML is neutralised —
+    // heading demotion is for MODEL text, and applying it here would alter a
+    // faithful record of what was asked.
+    if (ctx.question) push(`**Question:** ${String(ctx.question).replace(/</g, "&lt;")}`, "");
 
     const recommendation = fs && fs.recommendation ? String(fs.recommendation).trim() : "";
     push("## Verdict", "");
@@ -2472,17 +2511,20 @@
         // anchors and badges them (`renderStubSource`); an export that turned
         // them into numbered citations would launder simulated placeholders
         // into a decision record.
-        if (s && STUB_SOURCE_PROVIDERS.has(s.provider)) {
-          const tag = STUB_SOURCE_TAG_TEXT[s.provider] || "simulated";
+        if (s && (STUB_SOURCE_PROVIDERS.has(s.provider) || s.isFallback === true)) {
+          const tag = STUB_SOURCE_TAG_TEXT[s.provider] || (s.isFallback ? "fallback stub" : "simulated");
           push(`${i + 1}. ${title} — **${tag}, not a real source**`);
           return;
         }
-        // Untrusted URL: the same allow-list the chips use. A `javascript:` or
-        // `data:` URL must never become a link a viewer will happily open.
-        const href = safeMarkdownHref(url);
+        // Untrusted URL: the same allow-list the chips use, and ABSOLUTE
+        // http(s) only. `safeMarkdownHref` also permits relative URLs, which
+        // are meaningful in a page and meaningless in a downloaded file — a
+        // bare "example.com/article" would export as a dead relative link that
+        // still reads as a citation.
+        const href = safeHttpUrl(url);
         push(
           href
-            ? `${i + 1}. [${title}](${href})`
+            ? `${i + 1}. [${title}](<${href}>)`
             : `${i + 1}. ${title} (link withheld — unsupported URL scheme)`,
         );
       });
@@ -2566,6 +2608,11 @@
           title: s && s.title ? String(s.title) : sourceHost(url),
           url,
           provider: s && s.provider ? String(s.provider) : "",
+          // `is_fallback` too: the trust card EXCLUDES these from "N sources
+          // cited" and citation coverage counts only primary sources, so a
+          // chip row or export presenting them as ordinary citations shows a
+          // source count the trust card contradicts.
+          isFallback: Boolean(s && s.is_fallback),
         });
       }
     }
@@ -2682,7 +2729,7 @@
           // those anchors elsewhere for exactly that reason. F-19 made every
           // source reachable, so without this the expander hands the user a
           // row of dead links dressed as citations.
-          const isStub = STUB_SOURCE_PROVIDERS.has(s.provider);
+          const isStub = STUB_SOURCE_PROVIDERS.has(s.provider) || s.isFallback === true;
           const safe = isStub ? null : safeHttpUrl(s.url);
           const chip = safe ? mkEl("a", "result-source-chip") : mkEl("span", "result-source-chip");
           if (isStub) chip.dataset.stub = "true";
@@ -2701,7 +2748,11 @@
           chip.appendChild(mkEl("span", "result-source-label", label));
           if (isStub) {
             chip.appendChild(
-              mkEl("span", "result-source-stub-tag", STUB_SOURCE_TAG_TEXT[s.provider] || "simulated"),
+              mkEl(
+                "span",
+                "result-source-stub-tag",
+                STUB_SOURCE_TAG_TEXT[s.provider] || (s.isFallback ? "fallback stub" : "simulated"),
+              ),
             );
           }
           if (i >= COLLAPSED_SOURCE_COUNT) chip.hidden = true;
@@ -5045,15 +5096,26 @@
     // the ** would each be consumed as empty italics.
     s = s.replace(/\*\*([^*]+)\*\*/g, (_m, t) => `<strong>${t}</strong>`);
     // Italic uses the SAME word-boundary discipline as the underscore rule
-    // below: the run may not begin or end with whitespace. Without that, two
-    // UNRELATED stray asterisks pair up across words — MEASURED: "cost * qty
-    // and rate * hours" rendered as "cost <em> qty and rate </em> hours",
-    // inventing emphasis the model never wrote. A lone `*` (a multiplication,
-    // a footnote mark) is common in real answers and must survive literally.
-    // The giveaway is that the captured run carried its own bounding spaces,
-    // which real emphasis can never do.
+    // below, on BOTH counts: the run may not begin or end with whitespace, AND
+    // the delimiters may not sit against a word character.
+    //
+    // This is a DELIBERATE deviation from CommonMark, which allows intra-word
+    // `*` emphasis (it forbids it only for `_`). The cost of the deviation is
+    // that `see *note*s here` renders literally instead of emphasising "note".
+    // The cost of NOT deviating is that this product invents emphasis in the
+    // one shape its own domain is full of — MEASURED, both halves:
+    //
+    //   "cost * qty and rate * hours" -> cost <em> qty and rate </em> hours
+    //   "total 3*40 and 2*12 per year" -> total 3<em>40 and 2</em>12 per year
+    //
+    // Review round 1 argued the `\w` guards contributed nothing and had them
+    // relaxed; round 2 measured the unspaced case and showed they carry the
+    // whole second half. Fabricating emphasis is a lie about what the model
+    // wrote; failing to render a rare intra-word italic is a fidelity loss.
+    // For a product whose claim is that nothing on screen is unsupported by
+    // the data, that trade is not close.
     s = s.replace(
-      /(^|[^*])\*([^\s*](?:[^*]*[^\s*])?)\*/g,
+      /(^|[^\w*])\*([^\s*](?:[^*]*[^\s*])?)\*(?!\w)/g,
       (_m, lead, t) => `${lead}<em>${t}</em>`,
     );
     // [text](url). The captured ``url`` reaches us HTML-escaped (every

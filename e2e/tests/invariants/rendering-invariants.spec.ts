@@ -238,6 +238,26 @@ test.describe("rendering invariants (golden fixture)", () => {
       "no emphasis found in provider prose at all — the filter below would be " +
         "green over an empty set"
     ).toBeGreaterThan(0);
+    // The whitespace-bounded signature below catches the SPACED form. It
+    // cannot catch the unspaced one — the regex captures `[^\s*]…[^\s*]`, so
+    // emphasis text can never carry bounding spaces, making that predicate
+    // unreachable for any variant of the current rule. So assert the unspaced
+    // arithmetic directly, against text the fixture seeds for it.
+    const arithmetic = page
+      .locator("#main-content .q-prose p")
+      .filter({ hasText: "Rerunning it costs" })
+      .first();
+    await expect(arithmetic).toBeVisible();
+    await expect(
+      arithmetic,
+      "unspaced arithmetic must survive literally — emphasis here is invented"
+    ).toContainText("3*40");
+    expect(
+      await arithmetic.locator("em").count(),
+      "an <em> in a paragraph whose only asterisks are multiplication signs " +
+        "is emphasis the model never wrote"
+    ).toBe(0);
+
     const fabricated = emphasised.filter((t) => t !== t.trim());
     expect(
       fabricated,

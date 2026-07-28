@@ -73,13 +73,24 @@ export const RAW_MARKDOWN_PATTERNS: { name: string; re: RegExp }[] = [
   // it. Restricting to 1-2 digits removes the year/identifier class, which is
   // the one that actually occurs.
   //
-  // Known limits, stated rather than implied: a genuine list numbered past 99
-  // is not flagged, prose legitimately opening with "7. " would be, and the
-  // blockquote and inline-prose paths still have no ordered-list handling at
-  // all — so a numbered list inside a blockquote WOULD fire this with no fix
-  // available. The fixture seeds none, and that is the only reason this is
-  // green. Widening the fixture there needs the formatter fixed first.
-  { name: "ordered-list marker (1. )", re: /(?:^|\n)[ \t]*\d{1,2}\.[ \t]/ },
+  // It matches the LIST-OPENING marker "1." only, and that is a correctness
+  // requirement rather than caution. Round 2 of review found that any wider
+  // pattern contradicts the formatter: an ordered list may only interrupt a
+  // paragraph when it starts at 1 (CommonMark — without that rule a soft wrap
+  // onto "2025." was parsed as a list item and the year DELETED), so the
+  // formatter deliberately leaves "2. "/"3. " as literal text mid-paragraph.
+  // A gate flagging those would be red on output the formatter is correct to
+  // produce, with no fix available. "1." has no such conflict: a list that
+  // renders at all renders its numbers into ::marker, invisible to a text
+  // walker, so a literal "1. " means the whole list failed to render — which
+  // is exactly the defect this exists for (47 such nodes before F-13).
+  //
+  // Known limits, stated rather than implied: a list is only caught at its
+  // FIRST item, and the blockquote and inline-prose paths have no ordered-list
+  // handling at all (issue #120), so a numbered list in a blockquote would
+  // fire this with no fix available. The fixture seeds none — that, and not
+  // the pattern, is why this is green there.
+  { name: "ordered-list marker (1. )", re: /(?:^|\n)[ \t]*1\.[ \t]/ },
 ];
 // STRUCTURAL limits of this gate (documented, not silently implied):
 //   (a) scope — it walks `#main-content` (where provider prose renders); app
@@ -153,6 +164,12 @@ const MESSY_DISAGREEMENT =
   "The instrumentation is rarely the hard part; agreeing on a single cohort definition is.\n" +
   "Write the definition down before the first chart is built.\n\n" +
   "One panel priced the manual gate at roughly 3 * 40 reviewer-minutes per cohort * 12 cohorts, which it judged affordable.\n\n" +
+  // The UNSPACED form of the same arithmetic. Round 2 of review found the
+  // relaxed italic rule turned this into "3<em>40 per cohort and 2</em>12",
+  // and that the existing stray-asterisk gate could not catch it: that gate
+  // keys off emphasis whose TEXT carries bounding spaces, which the regex
+  // cannot produce. Seeded so the assertion has something real to fail on.
+  "Rerunning it costs 3*40 per cohort and 2*12 per quarter.\n\n" +
   MESSY_BULLET_LIST;
 const MESSY_SOURCE_SUPPORT =
   "Backed by **cited** sources on three of four responding models. Source coverage 0.75 against a 0.80 target.";
