@@ -944,6 +944,26 @@ select {
    swapping the class. The base palette matches callout-warning so
    the default (warning) reads correctly before the renderer has
    run. */
+/* #111: the readiness banner now lives OUTSIDE the swapped [data-view]
+   containers, because it describes the DEPLOYMENT rather than one screen —
+   inside a view it was invisible on first visit, when landing is showing.
+
+   The RESULT view owns #result-degraded, which explains THIS RUN's
+   degradation, so the deployment-level banner steps aside there rather than
+   putting two near-identical warnings a few hundred pixels apart.
+
+   The TRANSCRIPT view is deliberately NOT in this list. An earlier version of
+   this rule included it, on the stated grounds that it "owns a run-specific
+   #result-degraded" — that was false: #result-degraded is declared inside
+   <div data-view="result"> and is display:none whenever the transcript shows.
+   Suppressing the banner there produced a view with NO disclosure of any kind
+   — on the one screen that renders the simulated model-vs-model debate in
+   full. Caught by review; do not re-add it without giving the transcript its
+   own run-level banner first. */
+#main-content[data-active-view="result"] #readiness-banner {
+  display: none;
+}
+
 .callout-readiness[data-severity="warning"] {
   background: var(--warning-soft);
   border-color: rgba(241, 179, 111, 0.40);

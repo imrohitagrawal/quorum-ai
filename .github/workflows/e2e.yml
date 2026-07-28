@@ -144,6 +144,7 @@ jobs:
           tests/invariants/verdict-band.spec.ts
           tests/invariants/theme-toggle.spec.ts
           tests/invariants/session-trail.spec.ts
+          tests/invariants/readiness-banner.spec.ts
           --project=chromium
           --retries=0
 

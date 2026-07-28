@@ -167,6 +167,31 @@
              containers so it is always in the accessibility tree and its
              mutations are reliably announced. -->
         <div id="cost-gate-live" class="sr-only" role="status" aria-live="polite"></div>
+
+        <!--
+          #111: the offline-mode disclosure. It sat inside the legacy
+          "Model outputs" panel-section, which app.css hides on EVERY view, so
+          it was computed, un-hidden, and never seen by anyone in ANY offline
+          state.
+
+          It lives OUTSIDE the swapped [data-view] containers for the same
+          reason #cost-gate-live above does: it is a property of the
+          DEPLOYMENT, not of one screen. Putting it inside a view made it
+          invisible on first visit, when the landing view is the one showing —
+          which is exactly the moment a user most needs to know their answers
+          will be simulated.
+
+          The result and transcript views own a run-specific #result-degraded
+          banner, so this one steps aside there (see app.css) rather than
+          saying a second, near-identical thing beside it.
+        -->
+        <div id="readiness-banner" class="callout callout-readiness" data-severity="warning" role="status" aria-live="polite" hidden>
+          <div class="callout-icon" aria-hidden="true">!</div>
+          <div class="callout-body">
+            <div class="callout-title" id="readiness-banner-title">Live execution is unavailable</div>
+            <div class="callout-message" id="readiness-banner-message"></div>
+          </div>
+        </div>
         <div data-view="composer">
         <section class="panel composer" aria-labelledby="composer-heading">
           <div class="composer-head">
@@ -884,13 +909,6 @@
             aria-label="What are the model outputs?"
           >&#9432;</button>
         </h2>
-        <div id="readiness-banner" class="callout callout-readiness" data-severity="warning" role="status" aria-live="polite" hidden>
-          <div class="callout-icon" aria-hidden="true">!</div>
-          <div class="callout-body">
-            <div class="callout-title" id="readiness-banner-title">Live execution is unavailable</div>
-            <div class="callout-message" id="readiness-banner-message"></div>
-          </div>
-        </div>
         <div id="demo-mode-banner" class="callout callout-demo-mode" role="alert" aria-live="assertive" hidden>
           <div class="callout-icon" aria-hidden="true">!</div>
           <div class="callout-body">
