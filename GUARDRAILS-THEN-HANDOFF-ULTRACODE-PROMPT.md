@@ -11,8 +11,9 @@
 
 | Thing | Value |
 |---|---|
-| `main` | `2bba0d1` |
-| Production `/status.build_sha` | `2bba0d13b994ebecea042ef076a47935f183fb6d` — **exact match** |
+| Last PRODUCT change on `main` | `2bba0d1` (PR #96) |
+| Production `/status.build_sha` | `2bba0d1…` — **matches the last product change** |
+| `main` tip | moves with docs-only commits (e.g. `c1d20f8` added this file). Do NOT expect `main` to equal prod: a docs merge changes `main` and redeploys the same app. Compare prod against the last commit that touched `src/`. |
 | Deploy | job **actually ran** (not `skipped`); `/health` + `/ready` smoke tests passed, run `30377661288` |
 | pytest | 1776 passed, 10 skipped |
 | e2e blocking invariants lane (9 specs) | 138 passed |
@@ -253,8 +254,10 @@ before editing anything.
 
 FIRST: re-measure the state in §1 yourself — make validate lint format-check
 type-check openapi-check, then pytest, then BOTH e2e lanes, then
-make diff-cover DIFF_BASE=origin/main. Expect main 2bba0d1, prod build_sha
-2bba0d1, 1776 pytest, 138 and 94 e2e, 98% diff-cover. Run pytest and
+make diff-cover DIFF_BASE=origin/main. Expect 1776 pytest, 138 and 94 e2e,
+98% diff-cover, and prod build_sha == the last commit that touched src/
+(2bba0d1 at time of writing; main's tip will be AHEAD of that because of
+docs-only commits — that is normal, not a failed deploy). Run pytest and
 diff-cover SERIALLY (#113). If any number differs, find out why before
 writing code.
 
