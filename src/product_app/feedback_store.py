@@ -53,10 +53,32 @@ from uuid import UUID
 _log = logging.getLogger(__name__)
 
 #: Default on-disk location. Operators can override via the
-#: ``FEEDBACK_DB_PATH`` env var (set in ``fly.toml`` or by the audit
-#: cron job). A Fly volume is the production home; ``:memory:`` is
-#: the test home; a local file under ``.data/`` is the dev default
-#: so dev runs do not pollute the repo.
+#: ``FEEDBACK_DB_PATH`` env var, which ``fly.toml``'s ``[env]`` block sets for
+#: production. The load-bearing claim is the narrow negative one: no workflow
+#: sets it — VERIFIED 2026-07-28, zero occurrences of ``FEEDBACK_DB_PATH``
+#: across all 15 files under ``.github/``. (Test code does set it, via
+#: ``monkeypatch.setenv`` in
+#: ``tests/integration/test_feedback_store_locked_database.py``; that is
+#: process-local and never reaches a runner's audit job.)
+#: ``feedback_audit.py`` does READ it, indirectly, at both its entry points —
+#: each behind a guard that the nightly workflow always falls through:
+#: ``_load_events_by_recorder`` calls :meth:`FeedbackStore.from_env` only when
+#: ``get_store()`` is ``None``, and it is — the audit runs as its own CLI
+#: process that never configures a store (VERIFIED by import); and
+#: ``generate_status_md`` calls it only when its ``status`` argument is
+#: ``None``, and it is — ``feedback-audit.yml`` passes ``--status-only`` and no
+#: ``--status-json``, which is the only thing that populates ``status``.
+#: ``from_env`` is ``os.environ.get("FEEDBACK_DB_PATH", DEFAULT_DB_PATH)``, so
+#: the consequence follows from the workflow half alone — with nothing setting
+#: the var on the runner, that ``get`` falls back to this default and the
+#: nightly audit opens its own empty, checkout-local database rather than the
+#: production volume (issue #103). An operator who exports
+#: ``FEEDBACK_DB_PATH=/data/...`` by hand (e.g. running the audit under
+#: ``fly ssh console``, as ``docs/23-data-model.md`` and the locked-database
+#: runbook describe) DOES redirect it at the real volume.
+#: A Fly volume is the production home; ``:memory:`` is the test home; a
+#: local file under ``.data/`` is the dev default so dev runs do not pollute
+#: the repo.
 DEFAULT_DB_PATH = ".data/feedback_events.sqlite3"
 
 #: How long :meth:`FeedbackStore.close` waits for the store lock before closing
@@ -215,11 +237,56 @@ class FeedbackStore:
         state and the next boot retries — never half-relabelled-and-marked.
 
         Best-effort, like :meth:`record`: opening the store must not fail
-        because a one-shot repair could not run. A read-only or locked DB
-        leaves the rows as they were — over-metering for at most the 24h
-        window, which is the behaviour without this method at all — and, since
-        the marker is written in the same transaction, the repair still lands
-        the moment the volume is writable again.
+        because a one-shot repair could not run. What that degradation costs
+        depends on the fault, and only ONE of the faults is this method's to
+        degrade (measured in
+        ``tests/integration/test_feedback_store_locked_database.py`` and
+        ``tests/integration/test_f01_preview_billing_backfill.py``):
+
+        * **Read-only DB** — an unwritable volume. ``_SCHEMA`` one line
+          earlier is a no-op against an existing schema and needs no write, so
+          the store opens and the ``except`` below catches. The rows stay as
+          they were, so the spend already on disk is over-counted for at most
+          the 24h window ``daily_spend_for`` reads — the behaviour without this
+          method at all. Nothing is marked applied, so the repair lands on the
+          next store OPEN once the volume is writable — which means a process
+          restart, not "the moment the volume recovers". The store is a
+          process-wide singleton and nothing re-attempts the migration inside
+          a running process.
+
+          That over-count is NOT the whole cost, and it is not even the
+          dominant one: on the same unwritable volume :meth:`record` swallows
+          every write (``WARNING ... failed to persist event``), so the
+          ``cost_guardrail_accepted`` rows that ARE the meter never land and
+          ``daily_spend_for`` returns a FROZEN total for as long as the fault
+          lasts. Net direction is UNDER-metering, not over-metering. MEASURED:
+          four charges each worth ``DAILY_CAP_USD / 4`` → ``daily_spend_for``
+          still ``0`` and ``threshold_action`` ``allow`` with a token minted,
+          where the same four without the fault reach ``BLOCK``. ``store is
+          not None``, so ``costs.py`` takes the metered branch and the P1
+          bypass ERROR never fires: zero ERROR records anywhere and ``/status``
+          still reads ``connected``. Nothing retries or queues a swallowed
+          event, so those charges are lost permanently — and SQLite opened the
+          file ``O_RDONLY``, so even ``chmod``-ing the volume writable does not
+          revive THIS handle; only a restart does.
+        * **Locked DB** — this method is often not reached at all, so the
+          degradation is NOT the one above. An EXCLUSIVE hold blocks readers
+          too, and a RESERVED hold blocks writers, so
+          ``self._conn.executescript(self._SCHEMA)`` ONE LINE EARLIER raises
+          ``database is locked``: always under EXCLUSIVE, and under RESERVED
+          whenever the schema is not yet present (a fresh volume — RESERVED is
+          only benign once it is). That raise propagates out of ``__init__``;
+          ``main`` catches it and the process runs with NO store. The account
+          is then UNDER-metered, not over-metered — with no store ``costs.py``
+          skips the 24h spend cap entirely, which is the fail-open direction
+          (P1 / issue #101; both the boot and the per-estimate bypass now log
+          at ERROR). Only a RESERVED hold on an already-schema'd DB reaches
+          the ``except`` below, and that case behaves like read-only —
+          including the frozen ledger and the silently-unenforced cap, which is
+          the SAME under-metering as the no-store case but with none of its
+          loudness. It differs from read-only in one way only: writes resume by
+          themselves the moment the other connection commits or rolls back (no
+          restart), while the events lost during the hold stay lost. MEASURED.
         """
         relabelled = 0
         try:
