@@ -27,7 +27,7 @@ curl -s https://quorum.stackclimb.com/status \
 | --- | --- | --- | --- |
 | `connected` | `0` | Healthy. This is the only green combination. | — |
 | `degraded` | **`> 0`** | **Money.** That many billed cost events are permanently missing from the ledger the 24 h cap reads; that much spend went unmetered. | [read-only](#failure-mode-read-only-volume), [locked (b)](#b-reserved-lock-on-an-already-schemad-database--the-store-opens-but-its-writes-are-swallowed-while-the-lock-is-held), [full volume](#failure-mode-full-or-nearly-full-volume) |
-| `degraded` | `0` | **Telemetry only.** Writes are failing (or one failed) but no charge has been lost: the ledger is correct and the cap is still firing. The audit trail is gaining gaps. | [full volume](#failure-mode-full-or-nearly-full-volume), [boot migration](#failure-mode-read-only-volume) |
+| `degraded` | `0` | **No charge lost *yet* — read the linked sections before deprioritising.** Writes are failing (or one failed) and the ledger is still correct, but the counter only counts charges this process has actually attempted. Two very different faults land here: a nearly-full volume dropping the big telemetry rows while every charge lands (genuinely telemetry-only), **and** a read-only volume whose first priced run has not happened yet — MEASURED, a boot onto a read-only volume with the F-01 marker unapplied reports exactly `degraded` / `failing` / `0`, and it is a money fault whose next priced run loses the charge, on the one ordering that does *not* recover on the live handle (so plan for a restart). A third, benign one is a boot-time migration that raised on a *read* (see below). | [read-only / boot migration](#failure-mode-read-only-volume), [full volume](#failure-mode-full-or-nearly-full-volume) |
 | `disconnected` | `0` | No store at all — the boot-time open failed. The cap is skipped entirely. | [locked (a)](#a-no-store-at-all--exclusive-or-reserved-before-the-schema-exists) |
 | `error` | (either) | The store is present but its health query raised — a live handle that went bad. | — |
 
@@ -86,6 +86,19 @@ Two log lines, quoted verbatim from `src/product_app/feedback_store.py`:
 > `schema_migrations` is the only reliable evidence. Do not infer status from
 > the log.
 
+> ⚠ **`F-01 preview backfill did not run` can be a read-side fault, and then
+> `degraded` is a false alarm.** The migration's `try` covers the `SELECT` and
+> the `json.loads` of every candidate row as well as the writes, and any raise in
+> it stamps a write failure. MEASURED on a fully **writable** volume with one
+> corrupt-JSON `events` row: `/status` reports `feedback_db: "degraded"`,
+> `feedback_writes: "failing"`, `feedback_lost_billed_writes: 0` — and the next
+> real `record()` clears both back to `connected`/`ok`. Read the WARNING's
+> trailing message: `attempt to write a readonly database` (or `database is
+> locked`, or `disk is full`) is the real fault; a `json`/`ValueError` text such
+> as `Expecting value: line 1 column 1 (char 0)` is this false alarm. Either way
+> the money counter is untouched, and it is `feedback_lost_billed_writes` that
+> decides whether you have an incident.
+
 Two more come from `record()`, one per swallowed write, and are the signals for
 every "the store opened but nothing is landing" fault below:
 
@@ -109,11 +122,12 @@ every "the store opened but nothing is landing" fault below:
 
 The ERROR names the remedy **per shape**, keyed on the SQLite error text it
 carries, because the three shapes do not recover the same way. Do not
-generalise one to another — MEASURED, all three on the same handle:
+generalise one to another — MEASURED on the same handle, the read-only shape
+four separate times (once per ordering, see the recovery table at the end):
 
 | SQLite error in the record | Recovers on the SAME handle? | Remedy |
 | --- | --- | --- |
-| `attempt to write a readonly database` | **No, never.** SQLite opened the file `O_RDONLY`; `chmod +w` does not revive it, and `os.access` starts returning `True` while the handle is still dead. | Restore write access, then **restart the process**. |
+| `attempt to write a readonly database` | **Depends on the ordering** — see [the recovery table](#recovery-at-a-glance-which-shapes-need-a-restart) before assuming either way. A handle that *predates* the fault (the volume went read-only under an already-open handle) resumes on the `chmod`; a handle opened onto an *already*-read-only database file does not. `os.access` returns `True` in both, so it cannot tell you which you have. | Restore write access, then re-read `/status`. If `feedback_writes` has not returned to `ok`, **restart the process** — a restart works in every ordering. |
 | `database is locked` | **Yes**, the instant the RESERVED holder commits or rolls back. | `COMMIT`/`ROLLBACK`/kill the holder. No restart needed for writes. |
 | `database or disk is full` / `unable to open database file` | **Yes**, as soon as space is freed. | Free space on the volume. No restart needed for writes. |
 
@@ -293,19 +307,25 @@ database — so:
   byte-indistinguishable from the healthy control, with `feedback_events_total`
   *climbing*. `feedback_lost_billed_writes` is the field that was added for
   exactly this, and `feedback_db` now degrades on it too.
-- Recovery is *not* automatic even after `chmod`. MEASURED: SQLite opened the
-  file `O_RDONLY`, so the existing handle keeps failing every write once the
-  volume is writable again; a **fresh** open (i.e. a process restart) writes
-  normally. The charges swallowed during the fault are still absent afterwards.
+- Recovery after `chmod` is *not guaranteed*, and which way it goes depends on
+  when the handle was opened. MEASURED, four orderings on the same handle:
+  a handle opened **before** the fault (the volume went read-only under an
+  already-open handle)
+  resumes writing on the `chmod` alone; a handle opened **after**, onto an
+  already-read-only database *file*, keeps failing every write and needs a fresh
+  open (a process restart); a handle opened after with only the *directory*
+  read-only also resumes on the `chmod`. `os.access` returns `True` in every one
+  of them, so it cannot tell you which you have — `/status`'s `feedback_writes`
+  can, because it reports what the handle itself last did. The charges swallowed
+  during the fault are absent afterwards in all four.
 
-**Action.** Restore write access to the volume, then **restart the machine** —
-this is the one shape in this runbook where the restart is mandatory for writes
-at all, not just for the migration, because SQLite is holding the file
-`O_RDONLY` (contrast the locked and full-volume shapes below, which both resume
-on the live handle). The migration is likewise retried on the next store *open*,
-not continuously — nothing re-attempts it inside a running process. Re-run the
-read-only checks above and confirm the marker now exists and that new `events`
-rows appear.
+**Action.** Restore write access to the volume, then re-read `/status`. If
+`feedback_writes` is back to `ok`, writes have resumed on the live handle and no
+restart is needed for them. If it still reads `failing`, **restart the machine**
+— a restart resumes writes in every ordering. Restart regardless if you need the
+F-01 migration to run: it is retried on the next store *open*, not continuously,
+and nothing re-attempts it inside a running process. Re-run the read-only checks
+above and confirm the marker now exists and that new `events` rows appear.
 
 **Alerting.** Page on `feedback_lost_billed_writes > 0` (or on its delta over
 the evaluation window, which is the loss rate) — that is the money condition and
@@ -328,10 +348,13 @@ and does not repeat for as long as the fault lasts.
 
 `/status`'s `degraded` value advertises "a full disk" as one of its causes, so
 it needs an entry here. The `events` table is append-only and has **no pruning,
-retention policy or `VACUUM` anywhere in `src/`** (VERIFIED by grep: zero
-matches for `VACUUM`, `retention` or `DELETE FROM events`), so it grows without
-bound for the life of the volume. A volume that fills is a scheduled future
-state of this deployment, not a hypothetical.
+retention policy or `VACUUM` anywhere in `src/`** (VERIFIED by grep 2026-07-28:
+`grep -rn 'VACUUM' src/` and `grep -rn 'DELETE FROM events' src/` are both empty;
+`grep -rni 'retention' src/` is **not** — it returns two hits, a landing-page
+suggestion chip in `templates/workspace.html` and a comment in `static/app.js`
+about intra-word underscores, neither of which is a retention policy or touches
+this table), so it grows without bound for the life of the volume. A volume
+that fills is a scheduled future state of this deployment, not a hypothetical.
 
 **Symptom.** `/status` reports `feedback_db: "degraded"` and
 `feedback_writes: "failing"`, with `WARNING feedback_store: failed to persist
@@ -589,8 +612,9 @@ holding a real `BEGIN EXCLUSIVE` / `BEGIN IMMEDIATE`, in
   is the self-clearing shape, `feedback_writes` returns to `ok` on its own after
   the first write that lands once the lock is released — the events lost in
   between are still gone, and `feedback_lost_billed_writes` still shows how many
-  they were. Contrast the read-only volume, which needs a process restart because
-  SQLite holds the file `O_RDONLY` (MEASURED, both directions).
+  they were. Contrast the read-only volume, which recovers on the live handle
+  only when that handle predates the fault and otherwise needs a process restart
+  (MEASURED, four orderings — see the recovery table at the end of this runbook).
 - **`feedback_writes` can read `ok` right through this fault** whenever the lock
   is intermittent rather than continuous — a backup, a checkpoint, another
   machine, a maintenance script that takes RESERVED for a few milliseconds per
@@ -619,14 +643,33 @@ holding a real `BEGIN EXCLUSIVE` / `BEGIN IMMEDIATE`, in
 ## Recovery at a glance: which shapes need a restart
 
 The three "the store opened but writes are failing" shapes recover differently,
-and the ERROR record names the remedy for the one you have. MEASURED on the same
-handle, in all three directions:
+and the ERROR record names the remedy for the one you have. MEASURED on the
+same handle — the read-only row four times, once per ordering:
 
 | Shape | SQLite error | Same handle recovers? | What "fixed" looks like |
 | --- | --- | --- | --- |
-| Read-only volume | `attempt to write a readonly database` | **No.** `chmod +w` does nothing for this handle; `os.access` starts saying `True` while it is still dead. | Restore write access **and restart the process**. A fresh handle writes normally. |
+| Read-only volume | `attempt to write a readonly database` | **It depends on the ordering** (measured below). `os.access` says `True` either way, so it cannot tell you which you have. | Restore write access, re-read `/status`, and **restart if `feedback_writes` is still `failing`**. A restart works in every ordering. |
 | RESERVED lock | `database is locked` | **Yes**, the moment the holder commits or rolls back. | `COMMIT`/`ROLLBACK`/kill the holder. Writes resume with no restart. |
 | Full / nearly-full volume | `database or disk is full`, or `unable to open database file` at zero bytes free | **Yes**, as soon as space is freed. | Free or extend the volume. Writes resume with no restart. |
+
+The read-only row's "it depends", MEASURED — four orderings, `chmod` back to
+writable in each, then one more write on the SAME handle:
+
+| Ordering | Same handle writes again after the `chmod`? |
+| --- | --- |
+| Handle opened **before** the fault, file + directory read-only (the volume goes read-only under an already-open handle) | **Yes** |
+| Handle opened **after** the fault, file + directory read-only (a boot onto a read-only volume — the ordering the tests pin) | **No** |
+| Handle opened after, **file** read-only, directory writable | **No** |
+| Handle opened after, **directory** read-only, file writable | **Yes** |
+
+The last row is also why "SQLite opened the file `O_RDONLY`" is not the general
+explanation. MEASURED in that ordering: the database file stays mode `0644` and
+a raw `O_RDWR` write to it succeeds, `PRAGMA journal_mode` reads `delete` (so a
+commit needs a `-journal` sibling *in the directory*, which is the part that is
+unwritable), no `-journal` file appears, and the same handle commits the moment
+the directory is writable again — none of which a genuinely read-only file
+handle would do. The `O_RDONLY` explanation fits the rows where the *file* is
+`0444`, not the shape as a whole.
 
 In every row the charges lost during the fault stay lost, and
 `feedback_lost_billed_writes` keeps counting them for the life of the process.

@@ -352,9 +352,12 @@ class FeedbackStore:
           write fails; it is the counter, not that field, that survives a fault
           which only intermittently loses charges. Nothing
           retries or queues a swallowed event, so those charges are lost
-          permanently — and SQLite opened the file ``O_RDONLY``, so even
-          ``chmod``-ing the volume writable does not revive THIS handle; only a
-          restart does.
+          permanently. Whether the LIVE handle writes again once the volume is
+          made writable depends on the ordering (MEASURED — see
+          :meth:`write_health`): a handle opened onto the already-read-only
+          database file, which is this method's own shape whenever the store
+          opened during the fault, does not, and needs a restart; a handle that
+          predates the fault resumes on the ``chmod`` alone.
         * **Locked DB** — this method is often not reached at all, so the
           degradation is NOT the one above. An EXCLUSIVE hold blocks readers
           too, and a RESERVED hold blocks writers, so
@@ -373,9 +376,10 @@ class FeedbackStore:
           no-store case's loudness; since issue #109 :meth:`record` announces the
           lost billed events itself. It differs from read-only in one way only:
           writes resume by themselves the moment the other connection commits or
-          rolls back (no restart), so :meth:`write_health` clears itself here and
-          stays sticky there, while the events lost during the hold stay lost
-          either way. MEASURED.
+          rolls back (no restart), so :meth:`write_health` clears itself here
+          unconditionally — where on the read-only shape that depends on whether
+          the handle predates the fault. The events lost during the hold stay
+          lost either way. MEASURED.
         """
         relabelled = 0
         try:
@@ -417,6 +421,21 @@ class FeedbackStore:
             # while the process had just watched a write fail. MEASURED on a
             # read-only volume with the marker not yet applied (the first boot
             # after F-01 ships onto an unwritable volume).
+            #
+            # SCOPE, and the false alarm it buys (issue #109, third review). This
+            # ``except`` is wider than the write it is stamping for: the guarded
+            # block also SELECTs and ``json.loads`` every candidate row, so a
+            # read-side raise stamps a write failure too. MEASURED on a fully
+            # WRITABLE volume with one corrupt-JSON ``events`` row: ``json.loads``
+            # raises, ``/status`` reports ``feedback_db: "degraded"`` and
+            # ``feedback_writes: "failing"`` with ``feedback_lost_billed_writes:
+            # 0``, and the very next real ``record()`` clears both. It is
+            # transient, self-clearing and never touches the money counter — which
+            # is exactly why the stamp is left wide rather than narrowed here:
+            # narrowing it risks dropping the genuine boot-time write failure this
+            # branch exists to report, and that one is a money fault. The runbook's
+            # triage table names this shape so an operator does not read it as the
+            # read-only fault.
             with self._lock:
                 self._last_write_failure_at = self._monotonic()
             _log.warning("feedback_store: F-01 preview backfill did not run: %s", exc)
@@ -530,11 +549,18 @@ class FeedbackStore:
             # so it is still there when the operator arrives.
             #
             # The remedy is per-shape, and the SQLite error text already in this
-            # record is the discriminator. All three MEASURED on the same handle:
-            # read-only never recovers (SQLite holds the file ``O_RDONLY``), a
-            # RESERVED lock recovers when the holder releases, and ``SQLITE_FULL``
-            # recovers when space is freed. Clauses are separated by ``;`` so the
-            # pairing is checkable by a test rather than by reading.
+            # record is the discriminator. A RESERVED lock recovers on this same
+            # handle once the holder releases, and ``SQLITE_FULL`` once space is
+            # freed — both MEASURED. Read-only is the one whose recovery depends
+            # on ORDERING, so its clause hedges instead of promising: MEASURED on
+            # the same handle, restoring write access DOES resume writes when the
+            # handle predates the fault (the volume goes read-only under an
+            # already-open handle), and does NOT when the handle was opened onto
+            # an already-read-only database FILE (a boot onto a read-only
+            # volume). A restart works in every shape, so the clause still names
+            # it — as the fallback, not as the only move. Clauses are separated
+            # by ``;`` so the pairing is checkable by a test rather than by
+            # reading.
             _log.error(
                 "feedback_store: a BILLED cost event (recorder=%s type=%s) was NOT "
                 "persisted: %s. The per-account 24h daily spend cap is metered from "
@@ -543,8 +569,11 @@ class FeedbackStore:
                 "/status now reports feedback_lost_billed_writes=%s and "
                 "feedback_db=degraded, and that count never goes back down. "
                 "REMEDY, keyed on the SQLite error above: "
-                "'attempt to write a readonly database' — this handle is dead, "
-                "chmod does not revive it, restart the process; "
+                "'attempt to write a readonly database' — restore write access, "
+                "then re-check /status. MEASURED, this same handle resumes "
+                "writing if it predates the fault, but not if it was opened onto "
+                "an already-read-only database file, so restart the process if "
+                "feedback_writes has not gone back to ok; "
                 "'database is locked' — a RESERVED holder, writes resume on this "
                 "same handle once it commits or rolls back; "
                 "'database or disk is full' (or 'unable to open database file' on a "
@@ -605,7 +634,12 @@ class FeedbackStore:
         Scope, stated narrowly: this is a count of losses inside THIS process. It
         says nothing about losses in an earlier process, and a restart starts it
         at zero — the durable evidence of a gap is the absence of the rows
-        themselves, which the runbook's read-only query counts.
+        themselves, which the runbook's read-only query counts. It also assumes a
+        SINGLE application process: ``/status`` reads the counter out of the
+        memory of whichever worker served the request, so with more than one
+        worker a loss on a sibling worker is invisible and the masking this
+        counter exists to defeat comes back. The ``Dockerfile`` runs uvicorn with
+        ``--workers 1``, which is what makes the assumption hold today.
         """
         with self._lock:
             return self._lost_billed_writes
@@ -618,13 +652,24 @@ class FeedbackStore:
         directions asserted in
         ``tests/integration/test_feedback_store_write_failures.py``):
 
-        * **Read-only volume** — SQLite opened the file ``O_RDONLY``. The SAME
-          handle NEVER recovers; ``chmod +w`` does nothing for it and only a
-          fresh handle (in production: a restart) writes again. The signal must
-          stay ``failing``. This is also why ``os.access()`` is not the signal:
-          MEASURED, it returns ``True`` right after the ``chmod`` while the live
-          handle is still permanently broken — a false negative in the worst
-          state there is.
+        * **Read-only volume, handle opened onto the already-read-only database
+          FILE** — the boot-onto-a-read-only-volume shape, and the ordering the
+          tests above pin. That handle does not recover: ``chmod +w`` does
+          nothing for it and only a fresh handle (in production: a restart)
+          writes again, so the signal must stay ``failing``. This is also why
+          ``os.access()`` is not the signal: MEASURED, it returns ``True`` right
+          after the ``chmod`` while that handle is still broken.
+
+          SCOPED deliberately (issue #109, third review). The unqualified "a
+          read-only volume NEVER recovers on the same handle" that stood here is
+          FALSE in two of the four measured orderings: a handle that predates the
+          fault (the volume goes read-only under an already-open handle) resumes
+          writing on the ``chmod`` alone, and so does a handle opened when only
+          the DIRECTORY is unwritable — where the file was never opened
+          ``O_RDONLY`` at all, so that mechanism does not explain the general
+          case either. ``failing`` is still the correct signal in all four: it
+          clears itself on the next landed write wherever recovery is possible,
+          and stays put where it is not.
         * **RESERVED lock** — the SAME handle recovers the instant the holder
           commits or rolls back. The signal must clear itself, with no restart.
 

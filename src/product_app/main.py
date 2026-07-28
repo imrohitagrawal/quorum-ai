@@ -756,13 +756,21 @@ def status_snapshot() -> dict[str, object]:
         # (``query_only`` reads back ``0``; ``BEGIN IMMEDIATE`` returns OK — it is
         # the INSERT *inside* that transaction which raises ``attempt to write a
         # readonly database``). ``os.access`` is
-        # excluded for a DIFFERENT and stronger reason, which an earlier revision
-        # of this comment got wrong by lumping all three together: on that shape
+        # excluded for a DIFFERENT reason, which an earlier revision of this
+        # comment got wrong by lumping all three together: on that shape
         # ``os.access`` correctly returns False, but it is measuring the FILE,
-        # not the HANDLE. After a ``chmod +w`` it returns True while the live
-        # ``O_RDONLY`` handle is permanently dead — a false all-clear in the
-        # worst state there is. See ``FeedbackStore.write_health``'s docstring,
-        # which has always had this right.
+        # not the HANDLE. After a ``chmod +w`` it returns True — and whether the
+        # live handle is then healthy depends on an ordering ``os.access``
+        # cannot see. MEASURED (issue #109, third review): a handle opened onto
+        # the already-read-only file is still dead, so ``True`` is a false
+        # all-clear; a handle that predates the fault has genuinely recovered,
+        # so ``True`` is correct. A file-level probe cannot separate those two,
+        # which is the argument against it — not that it is always wrong. It can
+        # also be a false all-clear DURING a fault, not only after one: MEASURED,
+        # with only the DIRECTORY unwritable the file stays mode ``0644`` and
+        # ``os.access`` returns ``True`` while every write raises ``attempt to
+        # write a readonly database``. ``write_health`` reports what the handle
+        # itself last did; see its docstring.
         feedback_writes = store.write_health()
         feedback_lost_billed_writes = store.lost_billed_writes()
         try:

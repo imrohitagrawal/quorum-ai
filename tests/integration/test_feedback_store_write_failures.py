@@ -13,11 +13,23 @@ with real SQLite (no mocks of the failure itself):
 * **A — a RESERVED lock taken AFTER boot.** A second real connection holds
   ``BEGIN IMMEDIATE``. Writes raise ``database is locked`` and **recover by
   themselves** the moment the holder rolls back — the same handle keeps working.
-* **B — a read-only volume with the database file already present.** The
-  production shape (``fly.toml`` pins ``FEEDBACK_DB_PATH`` to a file on the
-  mounted volume). Writes raise ``attempt to write a readonly database`` and the
-  same handle **never** recovers: SQLite opened the file ``O_RDONLY``, so
-  ``chmod +w`` does nothing for it; only a fresh handle writes again.
+* **B — a read-only volume with the database file already present, opened
+  AFTER it went read-only.** The production boot shape (``fly.toml`` pins
+  ``FEEDBACK_DB_PATH`` to a file on the mounted volume). Writes raise ``attempt
+  to write a readonly database`` and this handle does not recover: the file is
+  mode ``0444``, so SQLite could only have opened it read-only, ``chmod +w``
+  does nothing for it, and only a fresh handle writes again.
+
+  SCOPE, MEASURED (issue #109, third review) — that is a property of the
+  ORDERING pinned here, not of read-only volumes in general. Swept over four
+  orderings on the same handle, ``chmod``-ing back to writable in each: opened
+  after the fault with file+directory read-only (this one) does NOT resume, nor
+  does file-only read-only; but a handle opened BEFORE the fault (the volume
+  goes read-only under an already-open handle — the ext4 remount-ro shape) DOES
+  resume on the ``chmod`` alone, and so does a handle opened when only the
+  DIRECTORY is unwritable — where the file was never opened read-only at all.
+  The tests below pin this ordering deliberately; the runbook carries the full
+  matrix and the operator advice that covers all four.
 * **C — a full disk.** Reproduced hermetically with ``PRAGMA max_page_count``
   pinned to the database's current size, which makes real SQLite raise
   ``database or disk is full`` (``SQLITE_FULL``, code 13) with no mock in the
@@ -546,13 +558,19 @@ def test_a_read_only_volume_marks_writes_failing_and_stays_failing_after_chmod(
     tmp_path: Path,
     caplog: pytest.LogCaptureFixture,
 ) -> None:
-    """Shape B — the production shape — and the reason the signal is sticky.
+    """Shape B — the production boot shape — and the reason the signal is sticky.
 
-    SQLite opened the file ``O_RDONLY``, so making the volume writable again does
-    NOT revive this handle: every later write on it still fails. A signal that
+    The store opens onto a file that is ALREADY mode ``0444``, so SQLite can only
+    have opened it read-only, and making the volume writable again does NOT
+    revive this handle: every later write on it still fails. A signal that
     cleared on ``chmod`` (or that trusted ``os.access``, which returns ``True``
     here — MEASURED) would report healthy in the worst state there is. Only a
     FRESH handle recovers, which in production means a process restart.
+
+    Scoped to THIS ordering on purpose — see the module docstring's shape B: a
+    handle that predates the fault resumes on the ``chmod`` alone (MEASURED), so
+    "a read-only volume never recovers on the same handle" is not a claim this
+    test makes or supports.
     """
     _skip_if_root()
     db = tmp_path / "feedback_events.sqlite3"
@@ -1188,8 +1206,12 @@ def test_a_fault_that_loses_only_telemetry_leaves_the_ledger_and_the_counter_int
     """A nearly-full volume rejects BIG rows while SMALL billed rows still land.
 
     ``events`` has no pruning, retention or ``VACUUM`` anywhere in ``src/``
-    (VERIFIED by grep on this tree: zero matches for ``VACUUM``, ``retention``
-    or ``DELETE FROM events``), so the table grows unbounded and a volume that
+    (VERIFIED by grep on this tree, 2026-07-28: ``VACUUM`` and
+    ``DELETE FROM events`` both return zero matches; ``retention`` returns TWO —
+    a landing-page chip in ``templates/workspace.html`` and a comment in
+    ``static/app.js`` — neither a retention policy nor anything touching this
+    table, so the conclusion holds but the earlier "zero matches for ...
+    retention" did not), so the table grows unbounded and a volume that
     fills is a scheduled future state, not a hypothesis. A billed row is ~230 B;
     a provider row carrying answer text is kilobytes. So ``write_health()`` says
     ``failing`` and ``/status`` says ``degraded`` while every charge landed and
@@ -1278,17 +1300,20 @@ def test_the_lost_billed_write_error_only_names_fields_status_agrees_with(
 def test_the_lost_billed_write_error_scopes_restart_to_the_shape_that_needs_it(
     tmp_path: Path, caplog: pytest.LogCaptureFixture
 ) -> None:
-    """Only the read-only volume needs a restart. MEASURED, all three shapes.
+    """Only the read-only volume can need a restart. MEASURED, all three shapes.
 
     The shipped text ended with an unconditional "restart the process", which is
     right for one shape in three: a RESERVED lock and a ``SQLITE_FULL`` both
     recover on the SAME handle (pinned by
     ``test_a_lock_taken_after_boot_marks_writes_failing_and_self_clears`` and
     ``test_a_full_disk_recovers_on_the_same_handle_once_space_is_freed``), while
-    the read-only handle never does (pinned by
-    ``test_a_read_only_volume_marks_writes_failing_and_stays_failing_after_chmod``).
-    The message must therefore name the discriminator — the SQLite error text it
-    already carries — and attach the restart only to that clause.
+    the read-only handle opened onto an already-read-only FILE does not (pinned
+    by
+    ``test_a_read_only_volume_marks_writes_failing_and_stays_failing_after_chmod``;
+    other orderings of the same fault do recover — see the module docstring's
+    shape B). The message must therefore name the discriminator — the SQLite
+    error text it already carries — and attach the restart only to that clause,
+    while telling the operator what to check before reaching for it.
     """
     _skip_if_root()
     db = tmp_path / "feedback_events.sqlite3"
@@ -1311,6 +1336,16 @@ def test_the_lost_billed_write_error_scopes_restart_to_the_shape_that_needs_it(
         assert "restart" in by_shape["readonly database"]
         assert "restart" not in by_shape["database is locked"]
         assert "restart" not in by_shape["disk is full"]
+
+        # The self-heal half, asserted rather than assumed (issue #109, third
+        # review). Without these two lines the clauses could be reduced to bare
+        # labels — "'database is locked' — a RESERVED holder;" — and this test
+        # still passed: MEASURED, that exact mutation left 31/31 green. "No
+        # restart" is only half the remedy; an operator also has to be told the
+        # writes come back by themselves, or the absence of "restart" reads as
+        # "nothing to do here".
+        assert "resume" in by_shape["database is locked"], by_shape
+        assert "resume" in by_shape["disk is full"], by_shape
     finally:
         _restore_writable(db)
         if store is not None:
