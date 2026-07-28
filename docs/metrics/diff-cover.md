@@ -190,7 +190,6 @@ only the 88% global floor applies there. Hermetic: `OPENROUTER_LIVE_EXECUTION_EN
   macOS against the real branch and a synthetic scratch repo.
 - diff-cover measures *line* coverage of changed lines. A changed line executed
   by an assertion-free test still counts as covered — the mutation baseline
-  (`make mutation-baseline`, blocking on pull requests) is what probes test
-  strength.
+  (`make mutation-baseline`, advisory in CI) is what probes test strength.
 - Changes to non-`src/` code (e.g. `scripts/`) have no coverage data in
   `coverage.xml` (`--cov=src`) and are simply absent from the diff report.

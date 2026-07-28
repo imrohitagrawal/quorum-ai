@@ -35,7 +35,7 @@ These are measurable **today** from git history and tool output.
   blocking. Should trend **down** as planning improves.
 - **Mutation score** — `mutmut` score on the slice's changed **functions** —
   every function whose body overlaps a changed line, not the whole module
-  (`make mutation-baseline`, blocking on pull requests). Should trend **up**.
+  (`make mutation-baseline`, advisory in CI). Should trend **up**.
 - **Escaped defects** — findings a *later* phase raises about an *already
   merged* commit of that slice. Target → **0**. Counted against the commit they
   escaped, so a defect introduced by a fix commit is tracked separately from one

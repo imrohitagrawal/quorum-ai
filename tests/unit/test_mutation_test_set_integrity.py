@@ -149,7 +149,7 @@ def test_every_pinned_module_actually_exists() -> None:
 
 
 def test_the_decorated_function_blind_spot_is_recorded() -> None:
-    """mutmut 3.6.0 generates NO mutants for a decorated function.
+    """mutmut 3.6.0 cannot mutate most decorated functions.
 
     Measured live against `@property api_docs_enabled`: the scope names the
     glob, mutmut matches nothing, and the run dies with
@@ -157,10 +157,13 @@ def test_the_decorated_function_blind_spot_is_recorded() -> None:
         AssertionError: Filtered for specific mutants, but nothing matches
 
     surfaced to the author as the recipe's "missing from also_copy" message,
-    which is the wrong cause. Replayed over history: **7%** of pull requests
-    with a non-empty scope would abort this way, and **41%** have decorated
-    functions silently unmeasured. There are 40 such functions under
-    src/product_app — every FastAPI route, every Pydantic validator.
+    which is the wrong cause. mutmut skips a decorated function unless its ONLY
+    decorator is a bare @staticmethod/@classmethod
+    (mutmut/mutation/file_mutation.py:230-235). Of the 40 decorated functions
+    under src/product_app, 34 are unmutatable — every FastAPI route, every
+    Pydantic validator. Replayed over history: **7%** of pull requests with a
+    non-empty scope would abort this way, and **38%** have unmutatable
+    functions silently unmeasured.
 
     This is the single biggest reason the gate is advisory rather than
     blocking, so the count is pinned. If it moves, the study's §3.2 numbers are

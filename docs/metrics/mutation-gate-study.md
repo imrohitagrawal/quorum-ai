@@ -59,20 +59,20 @@ mutate" branch was **unreachable**, and every docs-only pull request invoked
 
 ## 2. The gate, repaired
 
-Before any decision could be measured, the gate had to actually run. Fixed on
-`feat/mutation-gate-blocking`, each with a test proven to bite by mutation:
+Before any decision could be measured, the gate had to actually run. Each fix
+ships with a test proven to bite by mutation:
 
 | Defect | Fix |
 |---|---|
 | Empty scope wrote 1 byte → branch unreachable → unscoped mutmut run | `if globs:` guard; empty scope now writes **0 bytes** |
 | `e2e/fixtures` missing from `[tool.mutmut].also_copy` | added (removed 13 of 41 copy failures) |
-| Suite could not run inside mutmut's `./mutants/` copy | `repo_introspection` marker on 8 repo-driving modules, deselected under mutmut only |
+| Suite could not run inside mutmut's `./mutants/` copy | `repo_introspection` marker on 9 repo-driving modules, deselected under mutmut only |
 | `killed+survived == 0` reported "the run did not happen" even when everything **timed out** | separate `UNMEASURED` branch, exits 0, prints no score |
 | `no_tests` mutants silently left the denominator — a perfect score over nothing | now fails the run and names the cause |
 | A decorative `MUTMUT_PATHS` variable disagreed with the real pathspec | deleted |
 
 **Measured result of the repair:** the suite inside the mutant copy went from
-**41 failed + 6 errors** (on `origin/main`) to **0 failed, 1667 passed**, and
+**41 failed + 6 errors** (on `origin/main`) to **0 failed**, and
 `make mutation-baseline` completed a real run for the first time.
 
 Verified end to end by execution, not by reading:
@@ -107,8 +107,10 @@ e0ac7b52  fix(copy): PR-1 brand lede, workspace lede
 50c64eae  C16: cleanup — drop dead logger   (pure deletion)
 ```
 
-**Four of five are money or model configuration.** The blind spot is not
-trivia; it is the spend caps and the pricing table.
+**Three of the five are money or model configuration** (the daily cap, the
+web-search fee, the model id); the other two are UI copy and a pure deletion.
+The blind spot is not only trivia — it includes the spend caps and the pricing
+table.
 
 The cause is structural. The scope matches only functions whose *body* overlaps
 a changed line. **5,829 lines of `src/product_app` — about 35% — sit outside
@@ -117,8 +119,11 @@ every `def`**: `config.py` is 75% module-level, `catalog_fetcher.py` 52%
 
 ### 3.2 False blocks — 7%
 
-mutmut 3.6.0 generates **no mutants for a decorated function**. Probed live on
-`@property api_docs_enabled`:
+mutmut 3.6.0 skips decorated functions — **except** a single bare
+`@staticmethod` or `@classmethod`, which it does handle
+(`mutmut/mutation/file_mutation.py:230-235`, read). Of the **40** decorated
+functions under `src/product_app`, **34 are unmutatable** and 6 are fine.
+Probed live on `@property api_docs_enabled`:
 
 ```
 AssertionError: Filtered for specific mutants, but nothing matches
@@ -128,19 +133,20 @@ The scope names the glob, mutmut matches nothing, and the run **aborts** — and
 the author sees the recipe's "usually a repo-root file missing from
 `[tool.mutmut].also_copy`" message, which is the wrong cause entirely.
 
-There are **40 decorated functions** under `src/product_app` — every FastAPI
-route in `main.py`, every Pydantic validator in `config.py`.
+The 34 unmutatable ones include every FastAPI route in `main.py` and every
+Pydantic validator in `config.py`.
 
 | | of 61 commits with a non-empty scope |
 |---|---|
-| Scope **entirely** decorated → hard abort | **4 (7%)** |
-| Scope **partly** decorated → those functions silently unmeasured | **25 (41%)** |
+| Scope **entirely** unmutatable → hard abort | **4 (7%)** |
+| Scope **partly** unmutatable → those functions silently unmeasured | **23 (38%)** |
 
 This is a live bug and is tracked separately from the blocking decision.
 
 ### 3.3 Cost
 
-Scope size: **median 4 functions, p90 24, max 56.**
+Scope size, over the 61 commits with a non-empty scope: **median 5 functions,
+p90 24, max 56.**
 
 Measured mutant counts: `fence` → 2 mutants; `evaluate_layer_a` → 127 mutants in
 3m32s on 10 cores; the recorded baseline → 504 mutants for 21 functions in ~9
@@ -346,7 +352,7 @@ decorated-function abort, then re-measure yield against a fresh defect census.
    *cannot see JavaScript, module-level constants, decorated functions, or
    deletions.* #130 would never have been written.
 3. **Measure a gate against your own defect history before trusting it.**
-   "What would this have done to our last 300 commits?" is answerable in minutes
+   "What would this have done to our last N commits?" is answerable in minutes
    (`scripts/replay_mutation_scope.py`) and it is the question that decided this.
 4. **Match the tool to the defect's shape, not just its location.** Constants
    need pinned literal assertions. Browser behaviour needs a rendered fixture and
@@ -384,6 +390,23 @@ influence, not enforcement.
 
 ## 9. Open, and named as open
 
+- **The REPAIRED gate has still never scored a mutant in CI.** Every run so far,
+  including this pull request's, took the "nothing to mutate" branch because no
+  `src/` Python changed. That branch working is itself the repair — but §7.1
+  says a green advisory job is not evidence it ran, and that applies to this
+  work too. The first PR touching `src/` Python is the real proof.
+- **The new `no_tests` hard-fail conflicts with the recorded baseline.** §3 of
+  `mutation-baseline.md` records `no-tests = 2` on all five baseline runs, and
+  §3.2 deliberately deferred fixing them. The gate would now fail that state.
+  It is defused only by `continue-on-error`, so promoting the gate without
+  first clearing those two would break immediately.
+- **`report()` misclassifies several mutmut exit codes.** The
+  `killed if code > 0 else "timeout"` fallback treats pytest's
+  NO_TESTS_COLLECTED (5) and USAGE_ERROR (4) as *killed*, and mutmut's own
+  timeout codes as killed too. The `no_tests` guard only knows 33, so the
+  "silence a function's tests" evasion stays open via exit 5. Pre-existing and
+  untouched by this work — but the recorded 87.2–88.7% baseline was produced by
+  it, so the derived threshold of 80 inherits any inflation.
 - **p90 CI runtime unmeasured.** The 30-minute-timeout risk in §3.3 is an
   extrapolation from two local data points.
 - **The decorated-function abort is unfixed.** 7% false-block rate; related to

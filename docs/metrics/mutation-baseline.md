@@ -346,7 +346,7 @@ scope is below it.
   `--max-children 8`. This branch is a worst case — it adds a whole module, so
   21 functions are in scope; a typical change touching 2–3 functions is a small
   fraction of that.
-- CI job timeout is **30 minutes**, and the job is **blocking** (there is no
+- CI job timeout is **30 minutes**, and the job is **advisory** (it carries
   `continue-on-error`). At ~9 min locally the headroom is ~3.3×, not 4×.
 
 Two known harness problems, both measured, were the reason for the advisory
@@ -373,11 +373,13 @@ window rather than immediate blocking:
    `SENTRY_DSN=`, `OPENROUTER_LIVE_EXECUTION_ENABLED=false` and a dummy
    `QUORUM_TOKEN_SECRET`, and `.env` is not in `also_copy`.
 
-**Advisory window: closed 2026-07-28** (opened 2026-07-19, was to run to
-2026-08-02). Converted to blocking under issue #130: the leading `-` is gone
-from the `mutation-baseline` recipe **and** `continue-on-error` is gone from the
-CI job. Both were required — the `-` swallowed every failure inside the run, so
-removing the workflow flag alone would have shipped a gate that still could not
+**Advisory window: superseded 2026-07-29.** Issue #130 asked to convert the
+gate to blocking. The conversion was built, measured, and REVERSED — see
+`docs/metrics/mutation-gate-study.md`. What survived is the repair: the leading
+`-` is gone from the `mutation-baseline` recipe, so `make` now exits non-zero
+honestly, while `continue-on-error` REMAINS on the CI job so a red gate reports
+without blocking a merge. Both switches mattered — the `-` swallowed every
+failure inside the run, so removing the workflow flag alone would have left a gate that still could not
 fail.
 
 The recorded precondition was that problem (1) be **fixed or ring-fenced**. It
@@ -459,9 +461,9 @@ because the two kinds of claim have different portability:
   counts for an unchanged tree. The CI `mutation-baseline` job runs this guard
   immediately after producing its own artifact, so drift is *visible* in the job
   log — but on that Linux runner this tier now reports **SKIPPED**. It used to
-  be kept harmless by the job's `continue-on-error`. Since #130 the job blocks,
-  so the tier instead skips unless it is running on the hardware profile §2
-  records (macOS). That is the honest form: comparing Linux counts against
+  be kept harmless ONLY by the job's `continue-on-error`. The tier now also
+  skips unless it is running on the hardware profile §2 records (macOS), so it
+  no longer depends on that flag alone. That is the honest form: comparing Linux counts against
   macOS-recorded ones was never a signal, and a `continue-on-error` on the step
   would have made the whole job read as advisory to
   `tests/test_doc_gate_consistency.py`. **This is a real, accepted limitation:

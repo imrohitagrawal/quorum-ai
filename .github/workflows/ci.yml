@@ -215,9 +215,10 @@ jobs:
     #
     #   * real yield: 6 of 158 enumerated escaped defects (~4%), and 5 of the 6
     #     are uncovered branches the blocking diff-cover gate already catches;
-    #   * 7% of pull requests would HARD ABORT — mutmut 3.6.0 generates no
-    #     mutants for a decorated function, and 40 exist under src/product_app;
-    #   * 41% have decorated functions silently unmeasured;
+    #   * 7% of pull requests would HARD ABORT — mutmut 3.6.0 skips decorated
+    #     functions (except a bare @staticmethod/@classmethod); 34 of the 40
+    #     under src/product_app are unmutatable;
+    #   * 38% have unmutatable functions silently unmeasured;
     #   * 8% produce an empty scope (module-level constants, pure deletions)
     #     and pass having measured nothing.
     #
@@ -278,8 +279,8 @@ jobs:
       # legitimately differs from the recorded macOS numbers.
       #
       # It used to get that leniency for free from the job's
-      # `continue-on-error: true`. The job blocks now (#130), and the leniency
-      # is NOT restated as a step-level `continue-on-error` — that would make
+      # `continue-on-error: true`. That flag is still on the JOB, but the
+      # leniency is NOT restated as a step-level `continue-on-error` — that would make
       # this job read as advisory to tests/test_doc_gate_consistency.py, which
       # deliberately treats any downgraded `run:` step as a downgraded gate.
       # Loosening that detector to "all run steps" would let a genuinely
