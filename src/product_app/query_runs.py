@@ -800,14 +800,34 @@ class InMemoryQueryRunRepository:
         round-trip would stall every pipeline write in the process, trading a
         money bug for an availability bug.
 
-        ``self._lock`` is an ``RLock``, so a caller that already holds it
-        (``_actual_cost`` is reachable from inside repository-driven code
-        paths) re-enters instead of deadlocking. Nothing is called while the
-        lock is held, so this cannot introduce a lock-ordering cycle.
+        ``self._lock`` is an ``RLock``. That is DEFENSIVE, not required by any
+        caller today: no method of this class calls ``_actual_cost`` or
+        ``_result_response`` (AST-checked over this module), and the callers
+        that do — the ``/v1/query-runs/{id}`` route handlers,
+        ``_persist_terminal_run`` and ``_log_estimate_accuracy`` — are
+        module-level functions that do not hold this lock. The ``RLock`` costs
+        nothing and means a future repository-side caller re-enters instead of
+        hanging. Nothing is called while the lock is held, so this cannot
+        introduce a lock-ordering cycle.
+
+        The copy is SHALLOW, which is sufficient only because every recorded
+        object it captures is treated as immutable: the repository's writers
+        REBIND ``initial_answers`` / ``debate_call_usages`` /
+        ``synthesis_call_usages`` rather than mutate a recorded
+        ``InitialModelAnswer`` or ``TokenUsage`` in place. Those models are not
+        ``frozen``, so that invariant is a convention — pinned by
+        ``tests/integration/test_recorded_billing_objects_are_never_mutated.py``.
+        A writer that mutated a recorded answer in place would re-open the
+        TOCTOU straight through this snapshot.
 
         ``query_run`` is passed in rather than looked up by id: ``_actual_cost``
         is handed a run object by its callers, and the copy only needs mutual
         exclusion with the mutators — all of which take THIS lock.
+
+        Pinned by
+        ``tests/integration/test_billing_snapshot_copy_is_mutually_exclusive.py``,
+        which parks a reader in the MIDDLE of the copy: with the lock the
+        writer blocks, without it the receipt changes.
         """
         with self._lock:
             return BillingSnapshot(
@@ -2292,17 +2312,58 @@ def _evaluation_projection(
 
 
 def _result_response(query_run: QueryRun) -> QueryRunResultResponse:
+    """Project a live ``QueryRun`` into the response the ``GET /{id}`` route serves.
+
+    ORDERING IS LOAD-BEARING. Every field of the served BODY is read into a
+    local BEFORE ``_actual_cost`` is called, and the response is built from
+    those locals — so the cost figure is the NEWEST read in this response,
+    never the oldest. This function is called for a RUNNING run (there is no
+    terminal guard), so the pipeline thread mutates ``query_run`` underneath
+    it.
+
+    The body used to be read in the ``return`` expression, i.e. AFTER
+    ``_actual_cost`` returned, which put the whole pricing computation — the
+    cold-cache ``catalog_fetcher.list_models()`` round-trip included — between
+    the cost's view of the run and the body's. MEASURED on the PRE-FIX tree,
+    free-running with no parking (3 fresh processes x 3000 trials): 2, 2, 2
+    responses carrying a full two-round debate transcript, a final synthesis
+    and a TERMINAL status over ``cost_source="measured"`` with every
+    debate/synthesis line at $0. For that run shape the served figure is
+    $0.0062 against a true measured $0.0137 — a 2.2x UNDER-statement, on a
+    receipt the UI never refreshes (``static/app.js`` handles the first
+    terminal payload exactly once: ``terminalHandled`` -> ``stopPolling()`` ->
+    render, with no re-fetch). Same probe on this ordering: 0, 0, 0.
+
+    Reading the body first cannot produce that: the cost can only be NEWER than
+    the body it is served with, which over-states rather than hides a billed
+    call. Pinned by
+    ``tests/integration/test_result_response_body_and_cost_agree.py``.
+    """
+    # --- the BODY, read first (see the docstring: this order is the fix) -----
+    query_run_id = query_run.query_run_id
+    status = query_run.status
+    correlation_id = query_run.correlation_id
+    model_slots = list(query_run.model_slots)
+    cost_estimate = query_run.cost_estimate
+    elapsed_time_ms = _elapsed_time_ms(query_run)
+    failed_steps = list(query_run.failed_steps)
+    missing_steps = list(query_run.missing_steps)
+    progress = _progress_model(query_run)
+    initial_answers = list(query_run.initial_answers)
+    debate_outputs = list(query_run.debate_outputs)
+    final_synthesis = query_run.final_synthesis
+
     provider_failure_notices = list(
         dict.fromkeys(
             [
                 answer.provider_notice
-                for answer in query_run.initial_answers
+                for answer in initial_answers
                 if answer.provider_notice is not None
             ]
         )
     )
     partial_failure_notice = None
-    if query_run.status in {
+    if status in {
         QueryRunStatus.PARTIAL,
         QueryRunStatus.FAILED,
         QueryRunStatus.TIMED_OUT,
@@ -2313,11 +2374,11 @@ def _result_response(query_run: QueryRun) -> QueryRunResultResponse:
         )
     demo_mode = any(
         answer.provider_path in {ProviderPath.LOCAL_SIMULATION, ProviderPath.FALLBACK_SEARCH}
-        for answer in query_run.initial_answers
+        for answer in initial_answers
     )
     local_count = sum(
         1
-        for answer in query_run.initial_answers
+        for answer in initial_answers
         if answer.provider_path in {ProviderPath.LOCAL_SIMULATION, ProviderPath.FALLBACK_SEARCH}
     )
     # RB-5 / D3 honesty fix: a slot that FAILED on the OpenRouter path is NOT a
@@ -2327,35 +2388,38 @@ def _result_response(query_run: QueryRun) -> QueryRunResultResponse:
     # Require COMPLETED, mirroring the STRICT gate in ``_actual_cost`` below.
     live_count = sum(
         1
-        for answer in query_run.initial_answers
+        for answer in initial_answers
         if answer.provider_path is ProviderPath.OPENROUTER_SEARCH
         and answer.status is InitialAnswerStatus.COMPLETED
     )
     material_claim_count = sum(
-        answer.citation_coverage.material_claim_count for answer in query_run.initial_answers
+        answer.citation_coverage.material_claim_count for answer in initial_answers
     )
     agreement, position_movements = build_agreement_and_positions(
-        initial_answers=query_run.initial_answers,
-        debate_outputs=query_run.debate_outputs,
-        final_synthesis=query_run.final_synthesis,
+        initial_answers=initial_answers,
+        debate_outputs=debate_outputs,
+        final_synthesis=final_synthesis,
     )
+    evaluation = _evaluation_projection(query_run, agreement=agreement)
+
+    # --- the COST, read LAST, from its own atomic snapshot -------------------
     actual_cost_usd, actual_breakdown, cost_source = _actual_cost(query_run)
     return QueryRunResultResponse(
-        query_run_id=query_run.query_run_id,
-        status=query_run.status,
-        correlation_id=query_run.correlation_id,
-        model_slots=query_run.model_slots,
-        cost_estimate=query_run.cost_estimate,
-        elapsed_time_ms=_elapsed_time_ms(query_run),
-        failed_steps=query_run.failed_steps,
-        missing_steps=query_run.missing_steps,
-        progress=_progress_model(query_run),
+        query_run_id=query_run_id,
+        status=status,
+        correlation_id=correlation_id,
+        model_slots=model_slots,
+        cost_estimate=cost_estimate,
+        elapsed_time_ms=elapsed_time_ms,
+        failed_steps=failed_steps,
+        missing_steps=missing_steps,
+        progress=progress,
         partial_failure_notice=partial_failure_notice,
         provider_failure_notices=provider_failure_notices,
         result=ResultProjection(
-            model_answers=query_run.initial_answers,
-            debate_outputs=query_run.debate_outputs,
-            final_synthesis=query_run.final_synthesis,
+            model_answers=initial_answers,
+            debate_outputs=debate_outputs,
+            final_synthesis=final_synthesis,
             agreement=agreement,
             position_movements=position_movements,
         ),
@@ -2367,7 +2431,7 @@ def _result_response(query_run: QueryRun) -> QueryRunResultResponse:
         actual_cost_usd=actual_cost_usd,
         actual_breakdown=actual_breakdown,
         cost_source=cost_source,
-        evaluation=_evaluation_projection(query_run, agreement=agreement),
+        evaluation=evaluation,
     )
 
 
