@@ -373,6 +373,9 @@ test.describe("PR6 — verdict band is agreement-led (#8/#15)", () => {
         },
       }),
     );
+    // Positive partner FIRST (#131): the absence of a caution line only means
+    // something once the verdict itself is proven to have rendered.
+    await expect(page.locator("#result-verdict")).toBeVisible();
     await expect(page.locator(".result-verdict-coverage")).toHaveCount(0);
   });
 
@@ -390,6 +393,11 @@ test.describe("PR6 — verdict band is agreement-led (#8/#15)", () => {
 
   test("a fully live synthesis carries NO badge", async ({ page }) => {
     await driveWith(page, withSynthesis({ synthesis_mode: "live" }));
+    // Positive partner FIRST (#131): without it the assertion below holds just
+    // as well over a blank page, so it would pass whether or not the badge
+    // logic works at all. Proving the verdict rendered is what gives the
+    // absence of a badge any meaning.
+    await expect(page.locator("#result-verdict")).toBeVisible();
     await expect(page.locator(".badge-summary")).toHaveCount(0);
   });
 
@@ -642,12 +650,17 @@ test.describe("WP-B — verdict band regressions (F-04, F-18, F-21, F-22)", () =
           },
         }),
       );
+      // Positive partner FIRST (#131): both assertions below are about what the
+      // verdict must NOT say, and neither means anything until the verdict is
+      // proven to have rendered at all.
+      const verdict = page.locator("#result-verdict");
+      await expect(verdict).toBeVisible();
       const caution = page.locator(".result-verdict-coverage");
       await expect(
         caution,
         `a ${label} ratio must not be coerced to 0 and presented as a measured coverage figure`,
       ).toHaveCount(0);
-      await expect(page.locator("#result-verdict")).not.toContainText("Only 0%");
+      await expect(verdict).not.toContainText("Only 0%");
     });
   }
 
