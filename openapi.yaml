@@ -215,35 +215,78 @@ paths:
 
         session tokens, or internal filesystem paths. ``feedback_db`` is
 
-        reported as ``connected``/``disconnected``/``error`` health only; the
+        reported as ``connected``/``degraded``/``disconnected``/``error`` health
 
-        on-disk database path is deliberately not exposed in this public
+        only; the on-disk database path is deliberately not exposed in this public
 
-        response. The two unhealthy values are different faults with different
+        response, and neither field below may smuggle it back in. The three
 
-        fixes: ``disconnected`` means no store was ever opened, so persistence AND
+        unhealthy values are different faults with different fixes.
 
-        the 24h per-account spend cap are off until the process is restarted. It is
 
-        a NARROWER fault than "the volume is unhappy". MEASURED causes of a failed
+        ``disconnected`` means no store was ever opened, so persistence AND the 24h
+
+        per-account spend cap are off until the process is restarted. It is a
+
+        NARROWER fault than "the volume is unhappy". MEASURED causes of a failed
 
         boot-time open: an EXCLUSIVE lock, a RESERVED lock on a database with no
 
-        schema yet, and an unwritable volume with no database FILE yet. MEASURED
+        schema yet, and an unwritable volume with no database FILE yet.
 
-        NOT to cause it: an unwritable volume whose database file already exists —
 
-        the production shape, since ``fly.toml`` pins ``FEEDBACK_DB_PATH`` to a file
+        ``degraded`` means a store IS open and its reads work, but its last write
 
-        on the mounted volume — and a RESERVED lock on an already-schema''d database.
+        attempt failed (issue #109). MEASURED causes: an unwritable volume whose
 
-        Both of those open fine and report ``connected`` while every write is
+        database file already exists (the production shape, since ``fly.toml`` pins
 
-        swallowed, so ``connected`` is NOT by itself evidence that writes are
+        ``FEEDBACK_DB_PATH`` to a file on the mounted volume), a RESERVED lock on an
 
-        landing or that the spend cap is being fed. ``error`` means a store is
+        already-schema''d database, and a full disk. All three open fine and used to
 
-        present but its health query raised.
+        report ``connected`` while every write was swallowed, which made
+
+        ``connected`` no evidence at all that the spend cap was being fed: the
+
+        ``cost_guardrail_accepted`` rows that ARE the meter never landed,
+
+        ``daily_spend_for`` read a frozen ledger, and the cap stopped firing.
+
+        MEASURED with charges worth ``DAILY_CAP_USD / 4``: the fault admits them all
+
+        where a healthy store BLOCKs the FIFTH — the guard is a strict
+
+        ``already_spent + estimated > DAILY_CAP_USD``, so four of them land the
+
+        ledger exactly ON the cap without exceeding it.
+
+
+        ``error`` means a store is present but its health query raised. It outranks
+
+        ``degraded``: a broken handle is a different diagnosis from a broken volume.
+
+
+        ``feedback_writes`` is the write-health signal on its own key, so an alert
+
+        can watch it without parsing ``feedback_db``: ``ok`` (a write landed and
+
+        none has failed since), ``failing`` (the last attempt failed, or there is no
+
+        store at all — either way events are not landing), ``unverified`` (no write
+
+        has been ATTEMPTED yet in this process). ``unverified`` is a real state, not
+
+        a hedge: MEASURED, opening a store on a steady-state database writes
+
+        nothing, every read-only surface here writes nothing, and ``fly.toml`` sets
+
+        ``min_machines_running = 0``, so a cold machine serving only reads is
+
+        ordinary. Nothing can have been lost in that window — the first event that
+
+        could be lost is the same one that ends it.
+
 
         ``error_tracking`` is likewise a generic ``active``/``inactive``
 

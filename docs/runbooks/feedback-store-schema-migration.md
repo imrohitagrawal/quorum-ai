@@ -162,10 +162,15 @@ run: attempt to write a readonly database`. No marker row appears.
 The store still opens — `_SCHEMA`'s statements are no-ops on an existing
 database — so:
 
-- Reads keep working. The daily spend cap still queries `daily_spend_for`, and
-  `/status` still reports `feedback_db: "connected"` — the store object is real
-  and its health query succeeds. MEASURED 2026-07-28 with the DB file *and* its
-  directory `chmod`-ed unwritable.
+- Reads keep working — the store object is real and its health query succeeds.
+  MEASURED 2026-07-28 with the DB file *and* its directory `chmod`-ed
+  unwritable. Before issue #109 `/status` therefore reported the fully green
+  `feedback_db: "connected"` throughout the fault; it now reports
+  `feedback_db: "degraded"` with `feedback_writes: "failing"` from the first
+  swallowed write onward. Between boot and that first write attempt the honest
+  answer is `feedback_db: "connected"`, `feedback_writes: "unverified"` —
+  nothing has been lost yet, because the first event that *could* be lost is
+  the one that flips the signal.
 - Writes fail per event and are swallowed with
   `WARNING feedback_store: failed to persist event recorder=%s type=%s:
   attempt to write a readonly database`. The audit trail gains no new rows, and
@@ -175,12 +180,21 @@ database — so:
 - **But the larger effect runs the other way: the ledger freezes and the daily
   spend cap silently stops firing.** `cost_guardrail_accepted` rows are among
   the swallowed writes, so `daily_spend_for` keeps returning the total from
-  before the fault no matter how much is spent during it. MEASURED: four charges
-  each worth a quarter of `DAILY_CAP_USD` → `daily_spend_for` still `0`,
-  `threshold_action` `allow` with a confirmation token minted, **zero**
-  `product_app.costs` ERROR records (case (a)'s loud bypass ERROR does not fire
-  here — `store is not None`), `/status` `connected`. Net direction is
-  **under**-metering: free spend, permanently lost from the audit trail.
+  before the fault no matter how much is spent during it. MEASURED (re-measured
+  2026-07-28): charges each worth a quarter of `DAILY_CAP_USD` → `daily_spend_for`
+  still `0` and `threshold_action` `allow` with a confirmation token minted,
+  where without the fault the **fifth** such charge is the one that `BLOCK`s.
+  (Not the fourth — the guard is a strict `already_spent + estimated >
+  DAILY_CAP_USD`, so four quarter-cap charges land the ledger exactly *on* the
+  cap without exceeding it. An earlier revision of this runbook said "four";
+  the boundary is now pinned by
+  `tests/integration/test_feedback_store_write_failures.py::test_block_lands_on_the_fifth_quarter_cap_charge_not_the_fourth`.)
+  Case (a)'s loud bypass ERROR still does not fire here — `store is not None` —
+  but since issue #109 `record` raises its own rate-limited ERROR naming the
+  disarmed cap, and `/status` reports `feedback_db: "degraded"` with
+  `feedback_writes: "failing"` instead of the old bare `connected`. Net
+  direction is **under**-metering: free spend, permanently lost from the audit
+  trail.
 - Recovery is *not* automatic even after `chmod`. MEASURED: SQLite opened the
   file `O_RDONLY`, so the existing handle keeps failing every write once the
   volume is writable again; a **fresh** open (i.e. a process restart) writes
@@ -191,13 +205,17 @@ the restart is required for writes at all, not just for the migration. The
 migration is likewise retried on the next store *open*, not continuously —
 nothing re-attempts it inside a running process. Re-run the read-only checks
 above and confirm the marker now exists and that new `events` rows appear.
-Treat a sustained run of the `failed to persist event` WARNING as a spend-guard
-outage. Once the F-01 marker is applied — the production steady state — it is
-the only signal this fault produces: MEASURED 2026-07-28, a read-only open
-against an already-marked database emits no record at all. Before the marker is
-applied you also get the boot `F-01 preview backfill did not run` WARNING in
-the Symptom above, but that one fires once, at the open, and does not repeat
-for as long as the fault lasts.
+Alert on `/status` `feedback_writes == "failing"` and on the `feedback_store:
+a BILLED cost event ... was NOT persisted` ERROR (issue #109, rate-limited to
+one per 60 s so it keeps re-firing for the length of the outage rather than
+decaying to a single line). Treat either, or a sustained run of the
+`failed to persist event` WARNING, as a spend-guard outage. Before issue #109
+that WARNING was the ONLY signal this fault produced once the F-01 marker was
+applied — the production steady state: MEASURED 2026-07-28, a read-only open
+against an already-marked database emitted no record at all at open time, and
+still does not. Before the marker is applied you also get the boot `F-01
+preview backfill did not run` WARNING in the Symptom above, but that one fires
+once, at the open, and does not repeat for as long as the fault lasts.
 
 ## Failure mode: locked database
 
@@ -269,7 +287,9 @@ all**:
   that decision.
 - `/status` reports `feedback_db: "disconnected"` — reserved for exactly this
   fault. A store that is present but whose health query raises reports
-  `"error"` instead; do not confuse the two.
+  `"error"` instead, and one that is present and readable but cannot write
+  reports `"degraded"` (issue #109); do not confuse the three. `feedback_writes`
+  is `"failing"` here too: with no store, events are definitively not landing.
 - Anything else that calls `FeedbackStore.from_env()` — the
   `feedback_audit` entry points `_load_events_by_recorder` and
   `generate_status_md` — does so **unguarded** and would raise outright. On the
@@ -357,25 +377,33 @@ holding a real `BEGIN EXCLUSIVE` / `BEGIN IMMEDIATE`, in
   and resume succeeding the moment the other connection commits or rolls back —
   no restart needed for that half, unlike case (a). Nothing replays the events
   lost in between; `record` has no retry and no queue.
-- **The daily spend cap therefore stops firing, silently.** `store is not None`,
-  so `costs.py` takes the metered branch and `_log_daily_cap_bypassed` never
+- **The daily spend cap therefore stops firing.** `store is not None`, so
+  `costs.py` takes the metered branch and `_log_daily_cap_bypassed` never
   runs — but the `cost_guardrail_accepted` rows that *are* the meter are among
   the swallowed writes, so `daily_spend_for` keeps reading a **frozen ledger**:
   the total stays at whatever was on disk when the lock was taken, and every
   charge made during the hold is lost for good. This is **under**-metering (free
   spend), not the over-metering of a skipped migration. MEASURED (reviewer probe
-  reproduced 2026-07-28): four charges each worth a quarter of `DAILY_CAP_USD`
-  recorded under a `BEGIN IMMEDIATE` hold → `daily_spend_for` still `0`,
-  `threshold_action` `allow` with a confirmation token minted, where the same
-  four charges without the lock reach `BLOCK`.
-- **There is no ERROR anywhere and `/status` still reads `connected`.** Same
-  measurement: zero `product_app.costs` ERROR records, zero `product_app.main`
-  ERROR records, `feedback_db: "connected"` — only the per-event `WARNING`
-  above, repeated once per swallowed write. Case (a)'s loud `costs:` ERROR does
-  **not** cover this case, so do not treat "no cap-bypass ERROR" as "the cap is
-  enforced". Alert on the `failed to persist event` WARNING as well, and treat a
-  sustained run of it as a spend-guard outage. (Tracked as a separate defect —
-  the guard is bypassed here without the loudness P1 / issue #101 added.)
+  reproduced 2026-07-28): charges each worth a quarter of `DAILY_CAP_USD`
+  recorded under a `BEGIN IMMEDIATE` hold → `daily_spend_for` still `0` and
+  `threshold_action` `allow` with a confirmation token minted, where without the
+  lock the **fifth** such charge is the one that `BLOCK`s. (Not the fourth —
+  see the read-only section above for the strict-`>` arithmetic; an earlier
+  revision of this runbook said "four".)
+- **Since issue #109 this is no longer silent.** `record` now keeps two
+  monotonic write-health stamps and emits a rate-limited (one per 60 s) ERROR —
+  `feedback_store: a BILLED cost event ... was NOT persisted` — whenever a
+  `cost`/`cost_guardrail_accepted` write is lost, and `/status` reports
+  `feedback_db: "degraded"` with `feedback_writes: "failing"`. It is still true
+  that case (a)'s `costs:` bypass ERROR does **not** cover this case (`store is
+  not None`), and that `product_app.main` logs nothing, so do not treat "no
+  cap-bypass ERROR" as "the cap is enforced" — watch `feedback_writes` and the
+  `feedback_store:` ERROR instead. The per-event `failed to persist event`
+  WARNING is still emitted once per swallowed write, unrated, for the other
+  (telemetry) event types. Because the RESERVED hold is the self-clearing
+  shape, `feedback_writes` returns to `ok` on its own after the first write
+  that lands once the lock is released — the events lost in between are still
+  gone.
 
 **Action.**
 

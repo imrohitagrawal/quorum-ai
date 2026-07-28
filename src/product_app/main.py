@@ -646,21 +646,45 @@ def status_snapshot() -> dict[str, object]:
     health, error-tracking state, and process uptime. No authentication
     is required — the endpoint never surfaces query text, account ids,
     session tokens, or internal filesystem paths. ``feedback_db`` is
-    reported as ``connected``/``disconnected``/``error`` health only; the
-    on-disk database path is deliberately not exposed in this public
-    response. The two unhealthy values are different faults with different
-    fixes: ``disconnected`` means no store was ever opened, so persistence AND
-    the 24h per-account spend cap are off until the process is restarted. It is
-    a NARROWER fault than "the volume is unhappy". MEASURED causes of a failed
+    reported as ``connected``/``degraded``/``disconnected``/``error`` health
+    only; the on-disk database path is deliberately not exposed in this public
+    response, and neither field below may smuggle it back in. The three
+    unhealthy values are different faults with different fixes.
+
+    ``disconnected`` means no store was ever opened, so persistence AND the 24h
+    per-account spend cap are off until the process is restarted. It is a
+    NARROWER fault than "the volume is unhappy". MEASURED causes of a failed
     boot-time open: an EXCLUSIVE lock, a RESERVED lock on a database with no
-    schema yet, and an unwritable volume with no database FILE yet. MEASURED
-    NOT to cause it: an unwritable volume whose database file already exists —
-    the production shape, since ``fly.toml`` pins ``FEEDBACK_DB_PATH`` to a file
-    on the mounted volume — and a RESERVED lock on an already-schema'd database.
-    Both of those open fine and report ``connected`` while every write is
-    swallowed, so ``connected`` is NOT by itself evidence that writes are
-    landing or that the spend cap is being fed. ``error`` means a store is
-    present but its health query raised.
+    schema yet, and an unwritable volume with no database FILE yet.
+
+    ``degraded`` means a store IS open and its reads work, but its last write
+    attempt failed (issue #109). MEASURED causes: an unwritable volume whose
+    database file already exists (the production shape, since ``fly.toml`` pins
+    ``FEEDBACK_DB_PATH`` to a file on the mounted volume), a RESERVED lock on an
+    already-schema'd database, and a full disk. All three open fine and used to
+    report ``connected`` while every write was swallowed, which made
+    ``connected`` no evidence at all that the spend cap was being fed: the
+    ``cost_guardrail_accepted`` rows that ARE the meter never landed,
+    ``daily_spend_for`` read a frozen ledger, and the cap stopped firing.
+    MEASURED with charges worth ``DAILY_CAP_USD / 4``: the fault admits them all
+    where a healthy store BLOCKs the FIFTH — the guard is a strict
+    ``already_spent + estimated > DAILY_CAP_USD``, so four of them land the
+    ledger exactly ON the cap without exceeding it.
+
+    ``error`` means a store is present but its health query raised. It outranks
+    ``degraded``: a broken handle is a different diagnosis from a broken volume.
+
+    ``feedback_writes`` is the write-health signal on its own key, so an alert
+    can watch it without parsing ``feedback_db``: ``ok`` (a write landed and
+    none has failed since), ``failing`` (the last attempt failed, or there is no
+    store at all — either way events are not landing), ``unverified`` (no write
+    has been ATTEMPTED yet in this process). ``unverified`` is a real state, not
+    a hedge: MEASURED, opening a store on a steady-state database writes
+    nothing, every read-only surface here writes nothing, and ``fly.toml`` sets
+    ``min_machines_running = 0``, so a cold machine serving only reads is
+    ordinary. Nothing can have been lost in that window — the first event that
+    could be lost is the same one that ends it.
+
     ``error_tracking`` is likewise a generic ``active``/``inactive``
     health value: the concrete vendor (and anything else useful for
     targeting it) is deliberately not named on this public surface.
@@ -671,24 +695,50 @@ def status_snapshot() -> dict[str, object]:
     # Feedback DB state
     store = get_store()
     feedback_db: str
+    feedback_writes: str
     feedback_events_total: int
     if store is None:
         feedback_db = "disconnected"
+        # Not "unverified": with no store, events are definitively not landing.
+        # That is measured, not unknown. ``feedback_db`` keeps its own narrower
+        # meaning, so the pair still separates "no store at all" from "a store
+        # that cannot write".
+        feedback_writes = "failing"
         feedback_events_total = 0
     else:
+        # Two floats read under the store's own RLock. It cannot raise, and it
+        # adds no new blocking exposure: the ``event_count()`` call below already
+        # takes that same lock, so /status could already wait behind an in-flight
+        # ``record()`` before this line existed.
+        #
+        # Deliberately NOT an active probe write — MEASURED, ``BEGIN IMMEDIATE``
+        # blocks 5197 ms under a held RESERVED lock, and /status is
+        # unauthenticated, unthrottled and a sync def running in anyio's
+        # 40-token threadpool, so a probe here would turn the very fault it is
+        # observing into a DoS lever on every endpoint. Also deliberately not
+        # ``PRAGMA query_only`` / a ``BEGIN IMMEDIATE`` probe / ``os.access``:
+        # MEASURED, all three report HEALTHY on the read-only production shape.
+        feedback_writes = store.write_health()
         try:
             feedback_events_total = store.event_count()
             # Report health only. The on-disk database path is an
             # internal detail and must never be leaked through this
             # unauthenticated operator snapshot.
-            feedback_db = "connected"
+            #
+            # A bare token, never a parenthetical suffix: the redaction
+            # regression test asserts ``"(" not in body["feedback_db"]``, so
+            # "connected (writes failing)" would both fail that gate and invite
+            # a future path back into the string.
+            feedback_db = "degraded" if feedback_writes == "failing" else "connected"
         except Exception:  # noqa: BLE001 - status must not 500
             # Distinct from the ``store is None`` branch above on purpose (P1 /
             # issue #101). Both used to report "disconnected", which collapsed
             # two faults an operator has to act on differently: no store at all
             # (boot-time open failed; nothing is persisted and the daily spend
             # cap is skipped; needs a restart) versus a live handle whose query
-            # raised. One string could not tell them apart.
+            # raised. One string could not tell them apart. ``error`` outranks
+            # ``degraded``: a handle whose reads raise is a worse and different
+            # diagnosis than a volume that will not take writes.
             feedback_db = "error"
             feedback_events_total = 0
     # Latest audit date
@@ -712,6 +762,12 @@ def status_snapshot() -> dict[str, object]:
         "environment": settings.runtime_environment.value,
         "live_execution": report.state in ("live",),
         "feedback_db": feedback_db,
+        # Issue #109. A separate key as well as the degraded ``feedback_db``
+        # token: an alert rule should be able to watch write health directly
+        # instead of string-matching a field that also encodes three other
+        # faults, and adding a key is safe (the public-contract test uses a
+        # superset check).
+        "feedback_writes": feedback_writes,
         "feedback_events_total": feedback_events_total,
         "latest_audit": latest_audit,
         "model_catalog_loaded": report.catalog_loaded,
