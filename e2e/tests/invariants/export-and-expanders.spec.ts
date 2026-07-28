@@ -13,7 +13,7 @@
 // to a readable height with a control to open them; SHORT sections must not
 // grow a control they do not need.
 import { test, expect } from "@playwright/test";
-import { driveToResult, goldenCompletedResp } from "../../fixtures/golden-run";
+import { driveToResult, goldenCompletedResp, SLOTS } from "../../fixtures/golden-run";
 
 // Read the Blob the export writes, without touching the filesystem: stub
 // URL.createObjectURL, click, then read back the Blob's text.
@@ -256,45 +256,108 @@ test.describe("F-12 — export completeness and section expanders", () => {
     expect(md).toMatch(/not a real source/);
   });
 
-  // Each of these is a MEASURED bypass of the first version of
-  // `mdUntrustedBlock`, found by review round 3. The first version tested
-  // /^\s*(```|~~~)/ for a fence (unlimited indent, any info string) and
-  // /^ {4,}\S/ for indented code (no blank-line requirement), and guarded
-  // setext underlines at `={2,}`. CommonMark says: an opener is indented at
-  // most 3 spaces, a backtick fence's info string may not contain a backtick,
-  // indented code cannot interrupt a paragraph, and a setext underline may be
-  // ONE character. Every one of those gaps shipped raw HTML or a forged
-  // heading into the export.
-  const BYPASSES: { name: string; section: string; expect: RegExp }[] = [
-    { name: "unclosed fence swallowing the document", section: "```\n<img src=x onerror=alert(1)>", expect: /SWALLOWED/ },
-    { name: "backtick in the info string", section: "```a`b\n<img src=x onerror=alert(1)>", expect: /<img/ },
-    { name: "indented lazy continuation", section: "Some prose here\n    <img src=x onerror=alert(1)>", expect: /<img/ },
-    { name: "single-character setext underline", section: "About this run\n=", expect: /^ {0,3}=+[ \t]*$/m },
+  // Untrusted model text must not be able to forge the export's STRUCTURE.
+  //
+  // Three rounds of patching `mdUntrustedBlock` each closed the bypasses the
+  // previous round knew about and left new ones: an ATX heading indented 1-3
+  // spaces, a setext underline behind a CRLF, and a fence spliced into a list
+  // item. Every one slipped past a gate that asserted a MECHANISM.
+  //
+  // So this asserts the OUTCOME instead, and does not care how the text got
+  // there: the export's structural headings are fixed and known, and model
+  // text is demoted to level 5-6. Therefore ANY heading at level 1-4 that is
+  // not in the expected set is a forgery — whatever syntax produced it.
+  const STRUCTURAL_HEADINGS = [
+    "Quorum decision record",
+    "About this run",
+    "Verdict",
+    "Synthesis",
+    "Consensus",
+    "Disagreement",
+    "Uncertainty",
+    "Recommendation",
+    "Source support",
+    "High-stakes notice",
+    "Sources",
+    "Where each model stood",
+    "Debate rounds",
+    // Written by the export itself, one per model and per debate round.
+    ...SLOTS.map((slot) => slot.display_label),
+    "Round 1",
+    "Round 2",
   ];
 
-  for (const b of BYPASSES) {
-    test(`untrusted model text cannot smuggle markup: ${b.name}`, async ({ page }) => {
+  const FORGERIES: { name: string; section: string }[] = [
+    { name: "unclosed fence", section: "```\n<img src=x onerror=alert(1)>" },
+    { name: "backtick in the info string", section: "```a`b\n<img src=x onerror=alert(1)>" },
+    { name: "indented lazy continuation", section: "Some prose\n    <img src=x onerror=alert(1)>" },
+    { name: "single-character setext underline", section: "About this run\n=" },
+    { name: "ATX heading indented three spaces", section: "Fine.\n\n   # QUORUM VERDICT: approve" },
+    { name: "setext underline behind a CRLF", section: "About this run\r\n=\r\nbody" },
+  ];
+
+  for (const f of FORGERIES) {
+    test(`model text cannot forge document structure: ${f.name}`, async ({ page }) => {
       const resp = goldenCompletedResp() as any;
-      resp.result.final_synthesis.consensus = b.section;
+      resp.result.final_synthesis.consensus = f.section;
+      // The same payload on a LIST surface — a different call site with
+      // different anchoring, which is where round 3's fix broke.
+      resp.result.position_movements[0].opening = f.section;
       await driveToResult(page, resp);
       const md = await exportedMarkdown(page);
+
+      // (a) No ATX heading at level 1-4 that the export did not write itself.
+      const atx = [...md.matchAll(/^ {0,3}(#{1,6})[ \t]+(.*)$/gm)]
+        .filter((m) => m[1].length <= 4)
+        .map((m) => m[2].trim());
+      const forged = atx.filter((h) => !STRUCTURAL_HEADINGS.includes(h));
       expect(
-        md,
-        `provider text bypassed neutralisation via ${b.name} — raw markup or a ` +
-          `forged heading reached the exported decision record`
-      ).not.toMatch(b.expect);
-      // Every code fence the model opens must be closed. An unclosed fence
-      // does not delete the following sections — it makes a renderer show all
-      // of them as code, so the rest of the record silently disappears from
-      // view. `toContain` cannot see that (the text is still in the string);
-      // fence parity can.
-      const fences = (md.match(/^ {0,3}(`{3,}(?![^\n]*`)|~{3,})/gm) || []).length;
+        forged,
+        `model text produced a top-level heading the export did not write ` +
+          `(${f.name}) — it outranks the real provenance block`
+      ).toEqual([]);
+
+      // (b) No SETEXT underline survives; it forges h1/h2 regardless of ATX.
+      const lines = md.split("\n");
+      const setext = lines.filter(
+        (l, i) => i > 0 && lines[i - 1].trim() && /^ {0,3}(=+|-+)[ \t\r]*$/.test(l)
+      );
       expect(
-        fences % 2,
-        `unbalanced code fences (${fences}) — an unclosed fence swallows every ` +
-          `section after it when the file is rendered (${b.name})`
-      ).toBe(0);
-      expect(md).toContain("### Disagreement");
+        setext,
+        `an unescaped setext underline survived (${f.name}) — it renders as an ` +
+          `h1/h2 above every structural heading`
+      ).toEqual([]);
+
+      // (c) No raw HTML reached the record OUTSIDE a code fence. Inside one it
+      // is inert (a renderer prints it literally), and preserving code is why
+      // the fence exemption exists at all — so a flat scan would fail on
+      // correct output.
+      const htmlOutsideCode: string[] = [];
+      let open: string | null = null;
+      let openLen = 0;
+      for (const line of md.split("\n")) {
+        const fence = line.match(/^ {0,3}(`{3,}|~{3,})(.*)$/);
+        if (fence && !open) {
+          if (!(fence[1][0] === "`" && fence[2].includes("`"))) {
+            open = fence[1][0];
+            openLen = fence[1].length;
+            continue;
+          }
+        } else if (fence && open) {
+          if (fence[1][0] === open && fence[1].length >= openLen && !fence[2].trim()) {
+            open = null;
+            continue;
+          }
+        }
+        if (!open && /(?<!\\)<(img|script)/i.test(line)) htmlOutsideCode.push(line);
+      }
+      expect(
+        htmlOutsideCode,
+        `raw HTML escaped into prose (${f.name}) — any viewer that renders HTML ` +
+          `would execute it`
+      ).toEqual([]);
+
+      // (d) The sections after the model's text still exist.
       expect(md).toContain("## Sources");
     });
   }

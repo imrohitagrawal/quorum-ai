@@ -2353,8 +2353,17 @@
   //     rewrite is not evidence of anything.
   //   * raw HTML is escaped. Markdown permits it, and any viewer that renders
   //     it would execute a <script> the provider wrote.
+  // Untrusted text destined for an INLINE position (inside a list item, after
+  // a label). Block sanitisation cannot be used here: its output is multi-line
+  // and assumes column-0 anchoring, which a list item does not provide. These
+  // values are single-line statements, so escaping every Markdown control and
+  // flattening newlines is both safe and lossless enough.
+  function mdUntrustedInline(text) {
+    return mdEscapeInline(String(text == null ? "" : text).replace(/\s+/g, " ").trim());
+  }
+
   function mdUntrustedBlock(text) {
-    const lines = String(text == null ? "" : text).split("\n");
+    const lines = String(text == null ? "" : text).replace(/\r\n?/g, "\n").split("\n");
     let inFence = false;
     let fenceChar = "";
     let fenceLen = 0;
@@ -2395,22 +2404,21 @@
         // so the previous version let a lazy continuation ("prose\n    <img>")
         // pass through unescaped.
         if (prevBlank && /^ {4,}\S/.test(line)) {
-          prevBlank = false;
           return line;
         }
         prevBlank = blank;
         let out = line.replace(/</g, "&lt;");
         // Demote ATX headings below every structural heading this document
         // emits; never PROMOTE one (###### stays at 6).
-        out = out.replace(/^(#{1,6})(\s)/, (_m, hashes, sp) =>
-          "#".repeat(Math.max(5, hashes.length)) + sp,
+        out = out.replace(/^ {0,3}(#{1,6})(\s|$)/, (_m, hashes, sp) =>
+          "#".repeat(Math.max(5, hashes.length)) + (sp || ""),
         );
         // A SETEXT underline forges a heading ABOVE the demoted ATX form, and
         // the same shapes are thematic breaks that forge a section boundary.
         // CommonMark allows a setext underline of ONE character — the previous
         // `={2,}` guard missed "About this run\n=", which is the exact
         // forgery this is here to stop.
-        if (/^ {0,3}(=+|-+|\*+|_+)[ \t]*$/.test(out)) {
+        if (/^ {0,3}(=+|-+|\*+|_+)[ \t\r]*$/.test(out)) {
           out = "\\" + out.trimStart();
         }
         return out;
@@ -2577,10 +2585,10 @@
         if (!m) continue;
         const name = mdEscapeInline(String(m.display_name || m.model_id || "Model"));
         push(`### ${name}`, "");
-        if (m.opening) push(`- **Opening:** ${mdUntrustedBlock(String(m.opening).trim())}`);
-        if (m.after_round_1) push(`- **After round 1:** ${mdUntrustedBlock(String(m.after_round_1).trim())}`);
-        if (m.final) push(`- **Final:** ${mdUntrustedBlock(String(m.final).trim())}`);
-        if (m.revision_note) push(`- **Revision note:** ${mdUntrustedBlock(String(m.revision_note).trim())}`);
+        if (m.opening) push(`- **Opening:** ${mdUntrustedInline(m.opening)}`);
+        if (m.after_round_1) push(`- **After round 1:** ${mdUntrustedInline(m.after_round_1)}`);
+        if (m.final) push(`- **Final:** ${mdUntrustedInline(m.final)}`);
+        if (m.revision_note) push(`- **Revision note:** ${mdUntrustedInline(m.revision_note)}`);
         push("");
       }
     }
