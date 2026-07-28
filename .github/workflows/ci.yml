@@ -192,7 +192,7 @@ jobs:
           if-no-files-found: ignore
 
   mutation-baseline:
-    name: Mutation score (ADVISORY - non-blocking)
+    name: Mutation score on changed functions (advisory — measured, see study)
     # PULL-REQUEST ONLY — must NOT run on a push to main. The score is a per-PR,
     # CHANGED-FUNCTIONS-vs-base concept; on a push to main there is no meaningful
     # base and the scope explodes to the whole merged slice, running the full
@@ -204,11 +204,44 @@ jobs:
     # already does) keeps "CI" fast on push so the gate can pass. The invariant is
     # pinned by tests/unit/test_deploy_gate_no_slow_push_jobs.py.
     if: github.event_name == 'pull_request'
-    # LOCKED decision: advisory until 2026-08-02, then re-evaluate (RB-7).
+    # ADVISORY — and this is now a MEASURED decision, not an unexamined default.
+    # Full evidence: docs/metrics/mutation-gate-study.md.
+    #
+    # Issue #130 asked to make this blocking, arguing the job "finished in
+    # 1m 9s on PR #96 and passed". The log shows it ABORTED at "failed to
+    # collect stats" and was green only because a second advisory switch (a
+    # leading `-` on the Makefile recipe) ignored the error. It had never
+    # scored a single mutant in CI. The gate was then repaired and measured:
+    #
+    #   * real yield: 6 of 158 enumerated escaped defects (~4%), and 5 of the 6
+    #     are uncovered branches the blocking diff-cover gate already catches;
+    #   * 7% of pull requests would HARD ABORT — mutmut 3.6.0 skips decorated
+    #     functions (except a bare @staticmethod/@classmethod); 34 of the 40
+    #     under src/product_app are unmutatable;
+    #   * 38% have unmutatable functions silently unmeasured;
+    #   * 8% produce an empty scope (module-level constants, pure deletions)
+    #     and pass having measured nothing.
+    #
+    # So roughly 15% of pull requests would get a wrong answer for 4% yield.
+    # Independently, no published industrial practice blocks a merge on a
+    # mutation score: Google surfaces mutants as review findings and states the
+    # score "is neither concrete nor actionable"; StrykerJS defaults
+    # `break: null`; PIT ships its threshold unset; mutmut has no score gate.
+    # The 80% threshold here is ours, not the tool's.
+    #
+    # `continue-on-error` is therefore DELIBERATE. What is NOT restored is the
+    # Makefile's leading `-`: the recipe still exits non-zero honestly, so a
+    # local run and this job's own status tell the truth. Advisory here means
+    # "reported, does not block a merge" — it does NOT mean "failures are
+    # invisible". Pinned by tests/unit/test_mutation_gate_blocking.py.
+    #
+    # To revisit: fix the decorated-function abort, then re-measure yield
+    # against a fresh defect census. Do not promote on runtime alone again.
+    continue-on-error: true
+    #
     # Scope is CHANGED FUNCTIONS vs the base branch, not whole modules — see
     # docs/metrics/mutation-baseline.md for the measured baseline, the derived
     # threshold, and the measured runtime that justifies the timeout below.
-    continue-on-error: true
     runs-on: ubuntu-latest
     # Measured locally: ~7-8m for the 21 changed functions (504 mutants, after
     # the RB-3 leak fix widened the scope from 425) on this branch with
@@ -235,18 +268,37 @@ jobs:
         run: uv sync --all-extras
       - name: Mutation score on changed functions
         run: make mutation-baseline DIFF_BASE=origin/${{ github.base_ref || 'main' }}
+      # HONEST STATUS: this step reports SKIPPED on this runner, always.
+      #
       # The doc-honesty guard SKIPS without build/mutation/score.txt, which is
-      # the normal state in the `quality` job and in a fresh clone — so as
-      # shipped its artifact-comparison tier never ran anywhere in CI and a
-      # stale docs/metrics/mutation-baseline.md passed silently. This step is
-      # the only place in CI where the artifact exists, so it is the only place
-      # that tier can run. It stays inside this `continue-on-error: true` job:
-      # the killed/timeout split is hardware- and load-dependent (baseline §5),
-      # so a Linux runner legitimately differs from the recorded macOS numbers
-      # and this must inform, not block. The machine-independent tier of the
-      # same file (threshold vs Makefile, per-run arithmetic) already runs
-      # blocking in the `quality` job's full pytest run.
-      - name: Mutation doc honesty (artifact tier — advisory)
+      # the normal state in the `quality` job and in a fresh clone. This job is
+      # the only place in CI where the artifact exists, so it used to be the
+      # only place the artifact tier could run. It must INFORM, not block: the
+      # killed/timeout split
+      # is hardware- and load-dependent (baseline §5), so a Linux runner
+      # legitimately differs from the recorded macOS numbers.
+      #
+      # It used to get that leniency for free from the job's
+      # `continue-on-error: true`. That flag is still on the JOB, but the
+      # leniency is NOT restated as a step-level `continue-on-error` — that would make
+      # this job read as advisory to tests/test_doc_gate_consistency.py, which
+      # deliberately treats any downgraded `run:` step as a downgraded gate.
+      # Loosening that detector to "all run steps" would let a genuinely
+      # downgraded gate step hide behind one blocking step, so the detector
+      # stays as it is.
+      #
+      # Instead the artifact tier skips itself off the machine profile the doc
+      # actually records (macOS, §2). So on this Linux runner it reports
+      # SKIPPED — the artifact comparison is a LOCAL, macOS-only check and is
+      # deliberately not enforced anywhere in CI. Say it plainly rather than
+      # leave a step that reads as coverage it does not provide.
+      #
+      # The step is kept because the SKIP line is the visible evidence of that
+      # decision in the job log, and because the machine-INdependent tier of
+      # the same file (threshold vs Makefile, per-run arithmetic) does run here
+      # and does block — as it also does in the `quality` job's full pytest
+      # run. Nothing enforceable is lost; nothing unenforceable is claimed.
+      - name: Mutation doc honesty (artifact tier)
         if: always()
         run: uv run pytest tests/test_mutation_baseline_doc.py -v --no-cov -p no:randomly
       - name: Upload mutation report

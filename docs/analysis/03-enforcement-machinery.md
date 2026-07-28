@@ -28,7 +28,7 @@ fails the build if any doc's blocking/advisory wording contradicts reality
 | `api-contract` — *Schemathesis API contract (blocking)* | blocking | — |
 | `diff-cover` — *Changed-lines coverage >= 95% (blocking)* | blocking-on-pull-requests-only | `if: github.event_name == 'pull_request'`, so a direct push to `main` has no changed-lines gate (`docs/analysis/09-enforcement-hooks.md` records the same PARTIAL) |
 | `perf-gate` | advisory | `continue-on-error: true` — macOS-derived budgets would false-fail a slower runner; DEBT-009 |
-| `mutation-baseline` | advisory | `continue-on-error: true` until 2026-08-02 (RB-7) |
+| `mutation-baseline` | advisory | `continue-on-error: true` — a MEASURED decision, not a default: yield 6/158 escaped defects, 7% false-abort, 8% silent pass (docs/metrics/mutation-gate-study.md). Also pull-request-only |
 | `codex-review` | vacuous (no executable step) | the `openai/codex-action` step is commented out pending an `OPENAI_API_KEY` secret, so the job only checks out and always passes |
 | `e2e` (`e2e.yml`) | blocking | — |
 

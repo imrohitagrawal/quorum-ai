@@ -73,6 +73,39 @@ headroom); invariant pinned by `tests/unit/test_deploy_gate_no_slow_push_jobs.py
 Confirm a deploy by the deploy **job** running and prod serving the new build
 (grep a served asset / `/ready` build stamp), not by `/health`.
 
+## 2026-07-29 — A CI gate reported green for months without ever measuring anything
+
+**What happened.** The `mutation-baseline` job aborted at
+`failed to collect stats` in ~1m07s on **every** pull-request run, and reported
+success because a `-` on the Makefile recipe swallowed the error and
+`continue-on-error` swallowed the job. It had **never scored a single mutant in
+CI**. Issue #130 then asked to make the gate blocking, citing that abort as
+*"finished in 1m 9s on PR #96 and passed"*, and was closed COMPLETED with **no
+commit** — the change was never made.
+
+**Root cause of the silence.** `scope()` printed `"\n".join([])`, a bare
+newline. The recipe guards its work branch with `[ -s scope.txt ]`, a **size**
+test, so one byte made the "nothing to mutate" branch unreachable and every
+docs-only PR invoked `mutmut` unscoped, which aborts.
+
+**Durable fix.** Gate repaired (empty scope writes 0 bytes; `e2e/fixtures` added
+to `also_copy`; repo-driving modules deselected under mutmut via a pinned
+`repo_introspection` marker; all-timeout and `no_tests` states reported
+distinctly instead of as "the run did not happen"). The suite inside mutmut's
+copy went from **41 failed to 0**, and the gate completed a real run for the
+first time.
+
+**Decision.** The promotion was then measured and **reversed** — yield ~4% of
+158 enumerated escaped defects, ~15% of PRs would get a wrong answer, and no
+published industrial practice blocks a merge on a mutation score. Evidence:
+`docs/metrics/mutation-gate-study.md`. Carry-forward rules:
+`docs/DAY-ONE-PROMPT.md` §4a-bis.
+
+**Rules earned.** A green advisory job is not evidence it ran — open the log.
+Every gate ships a charter naming what it cannot see. Replay a gate over real
+history (`scripts/replay_mutation_scope.py`) before trusting it. Never close an
+issue whose fix has no commit.
+
 ## Cross-cutting rule
 
 **"Green" is a claim, not a proof.** A green local test run can pass on stale

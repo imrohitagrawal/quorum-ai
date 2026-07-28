@@ -29,6 +29,11 @@ from pathlib import Path
 
 import pytest
 
+# Deselected under mutmut: this module drives git/make/pytest against the real
+# REPO_ROOT, which does not exist inside mutmut's ./mutants/ copy. It still runs
+# blocking in the ordinary suite.
+pytestmark = pytest.mark.repo_introspection
+
 REPO_ROOT = Path(__file__).resolve().parents[2]
 PW_CONFIG = REPO_ROOT / "e2e" / "playwright.config.ts"
 WORKFLOW_DIR = REPO_ROOT / ".github" / "workflows"

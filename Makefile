@@ -49,7 +49,11 @@ PERF_REQUIRED_SPECS ?= tests/perf/test_perf_gate_hermeticity.py:6 tests/perf/tes
 # Mutation scope: changed lines vs the merge-base with origin/main, per the
 # R2 decision to mutate changed code only (not whole modules).
 DIFF_BASE ?= origin/main
-MUTMUT_PATHS ?= src/product_app
+# NOTE: there is deliberately no MUTMUT_PATHS variable. One existed, said
+# `src/product_app`, and was read by nothing but a banner — while the scope
+# code diffs `-- src` (which also holds src/httpx2). A decorative variable that
+# disagrees with the real pathspec is a lie waiting to be believed; the banner
+# now states the pathspec the code actually uses.
 
 .PHONY: check-python publishing-check skill-onboarding-check skill-discover handoff check-breaking apply-orbi-profile skill-route start next capture-idea validate validate-strict fr-completeness openapi-export openapi-check quality format format-check lint type-check test evals test-report gate-min-collected gate-min-executed perf-gate api-contract mutation-baseline diff-cover security-scan ci-evidence run docker-build feedback-audit
 
@@ -205,24 +209,36 @@ api-contract:
 # function under src/ whose body overlaps a line changed vs $(DIFF_BASE) (plus
 # uncommitted working-tree changes) is turned into a mutmut mutant-name glob.
 #
-# ADVISORY (non-blocking) until $(MUTATION_ADVISORY_UNTIL) per the locked
-# 2-week decision — the leading `-` is what makes it advisory. Delete the `-`
-# to make it blocking. The recipe below FAILS CLOSED so that promotion is safe:
-# an unresolvable $(DIFF_BASE) is a hard error rather than silently an empty
-# scope, `mutmut run` is not piped so its exit status survives,
-# stale `mutants/` metadata is removed first, and `report` exits non-zero both
-# below threshold AND when zero mutants were scored, and its status reaches
-# make because it is redirected, not piped into `tee` (tee's 0 would win). Every
-# one of those is covered by tests/unit/test_mutation_gate_integrity.py, and the
-# promotion itself — `-` deleted, below-threshold report, make exits non-zero —
-# is executed in tests/unit/test_mutation_gate_blocking.py.
+# ADVISORY IN CI, HONEST LOCALLY. There is no leading `-` on the recipe, so a
+# below-threshold score really does fail `make` — the exit status tells the
+# truth here and in the job's own status. What makes it advisory is
+# `continue-on-error` on the CI job alone, so it reports without blocking a
+# merge. That split is deliberate: the old arrangement had BOTH switches on,
+# which meant a crashed run looked identical to a clean one. Measured evidence
+# for the advisory decision: docs/metrics/mutation-gate-study.md. The recipe
+# FAILS CLOSED throughout: an unresolvable $(DIFF_BASE) is a hard error rather
+# than silently an empty scope, `mutmut run` is not piped so its exit status
+# survives, stale `mutants/` metadata is removed first, and `report` exits
+# non-zero both below threshold AND when zero mutants were scored, and its
+# status reaches make because it is redirected, not piped into `tee` (tee's 0
+# would win). Every one of those is covered by
+# tests/unit/test_mutation_gate_integrity.py, and the blocking behaviour itself
+# — the shipped recipe, a below-threshold report, make exits non-zero — is
+# executed in tests/unit/test_mutation_gate_blocking.py.
+#
+# The promotion condition recorded in docs/metrics/mutation-baseline.md §5 was
+# "not until the timeout storm is fixed or RING-FENCED". It is ring-fenced two
+# ways, both measured: timeouts are excluded from the score's denominator, and
+# a scope in which EVERYTHING timed out is no longer conflated with a run that
+# never happened (see `report`). Measured worst case that made the second
+# ring-fence necessary: 66/66 mutants of `_persist_terminal_run` timed out
+# under mutmut while the same tests pass in 1.34s standalone.
 # Threshold derivation and the raw baseline: docs/metrics/mutation-baseline.md.
 # Re-measured 2026-07-19: the RB-3 leak fix widened the changed-function scope
 # from 425 to 504 mutants and the score fell to a measured 87.2-88.7% across
 # five runs, so the old 90 floor is retired. 80 = lowest observed (87.2) minus
 # the same 6.4-point harness-noise headroom the previous derivation used.
 MUTATION_MIN_SCORE ?= 80
-MUTATION_ADVISORY_UNTIL ?= 2026-08-02
 MUTMUT_MAX_CHILDREN ?= 8
 
 define MUTMUT_SCOPE_PY
@@ -275,7 +291,15 @@ def scope():
                     walk(child, cls)
 
         walk(tree)
-    print("\n".join(sorted(set(globs))))
+    # Only write anything when the scope is non-empty. `print("".join([]))`
+    # emits a bare newline, which is 1 byte, which makes the recipe's
+    # `[ -s build/mutation/scope.txt ]` TRUE — so the "nothing to mutate"
+    # branch was unreachable and `mutmut run` was invoked with ZERO globs
+    # (i.e. mutate everything) on every change that touched no src/ Python.
+    # The advisory `-` hid that for as long as it existed; the first blocking
+    # run surfaced it immediately.
+    if globs:
+        print("\n".join(sorted(set(globs))))
 
 
 def report():
@@ -297,7 +321,45 @@ def report():
     checked = counts["killed"] + counts["survived"]
     print("mutants scored: %d killed, %d survived, %d timeout (excluded), %d no-tests" % (
         counts["killed"], counts["survived"], counts["timeout"], counts["no_tests"]))
+    if counts["no_tests"]:
+        # Checked BEFORE the `not checked` branch below, because a scope where
+        # EVERY mutant is no_tests also has `killed + survived == 0` and would
+        # otherwise be reported as "the run did not happen" — false, and the
+        # same wrong-diagnosis bug this recipe already fixed for timeouts.
+        # Measured: adding one untested function produced 6 no-tests, 0 killed,
+        # 0 survived, and the old ordering blamed an absent mutants/ tree.
+        #
+        # exit 33 = mutmut found NO test covering this mutant. Those mutants are
+        # not in `checked`, so they do not lower the score — they leave it. That
+        # is the quietest way to fake a pass: silence a function's tests and its
+        # mutants stop being counted rather than start failing. Measured on a
+        # scratch tree, identical source, one added deselection marker: 63.6%
+        # BELOW THRESHOLD became 100.0% pass, with 9 mutants moved to no_tests.
+        # Changed code with no covering test is precisely what this gate exists
+        # to catch, so it fails here instead of scoring around it.
+        print("%d mutant(s) had NO covering test (no-tests). A changed function "
+              "with no test cannot be measured, and these are excluded from the "
+              "score — so this is a gap, not a pass. Add a test, or if the tests "
+              "exist but are deselected under [tool.mutmut], that deselection is "
+              "hiding this function." % counts["no_tests"])
+        raise SystemExit(1)
     if not checked:
+        # Two very different states used to share one message, and the message
+        # was only true of the first. Now the gate blocks, telling an author to
+        # go hunting for a crashed run that did not crash costs real time.
+        if counts["timeout"]:
+            # Every mutant timed out. Measured (baseline §5): 66/66 mutants of
+            # _persist_terminal_run time out under mutmut's fork-based runner
+            # while the same tests pass in 1.34s standalone. Timeouts are
+            # already excluded from the score by a recorded decision — counting
+            # them as survivors would fail the gate for a tooling defect — and
+            # an all-timeout scope is the limit case of that same decision, so
+            # it is NOT failed here. It is also NOT a pass: nothing was
+            # measured, and this line says so in the log and in score.txt so it
+            # can never be read as a clean score.
+            print("UNMEASURED: every mutant timed out (%d) — mutmut's fork runner, "
+                  "not a test failure. No mutation evidence for this change." % counts["timeout"])
+            return
         # Fail closed: absent/crashed run == no measurement, not a perfect score.
         print("no mutants were scored — the run did not happen (empty or absent mutants/)")
         raise SystemExit(1)
@@ -315,11 +377,11 @@ endef
 export MUTMUT_SCOPE_PY
 
 mutation-baseline:
-	@echo "mutation-baseline: ADVISORY until $(MUTATION_ADVISORY_UNTIL) — changed functions in $(MUTMUT_PATHS) vs $(DIFF_BASE), threshold $(MUTATION_MIN_SCORE)%"
+	@echo "mutation-baseline: ADVISORY in CI (reported, does not block a merge) — changed functions under src/ vs $(DIFF_BASE), threshold $(MUTATION_MIN_SCORE)%"
 	@mkdir -p build/mutation
 	@printf '%s' "$$MUTMUT_SCOPE_PY" | $(PYTHON) - scope $(DIFF_BASE) $(MUTATION_MIN_SCORE) > build/mutation/scope.txt
 	@echo "changed functions in scope:"; sed 's/^/  /' build/mutation/scope.txt
-	-@if [ -s build/mutation/scope.txt ]; then \
+	@if [ -s build/mutation/scope.txt ]; then \
 		rm -rf mutants; \
 		SENTRY_DSN= OPENROUTER_LIVE_EXECUTION_ENABLED=false QUORUM_RUNTIME_ENVIRONMENT=ci QUORUM_TOKEN_SECRET=mutation-baseline UV_CACHE_DIR=$(UV_CACHE_DIR) \
 			uv run mutmut run --max-children $(MUTMUT_MAX_CHILDREN) $$(tr '\n' ' ' < build/mutation/scope.txt) > build/mutation/run.log 2>&1 \

@@ -73,6 +73,23 @@ new bugs a change introduces. Before declaring any non-trivial change complete:
   positive is gone AND every genuine case the check must still catch is still
   caught. Never gate a secret/threat check on whole-line substrings; key off
   the matched token or value.
+- **Verify by executing, never by reading.** A statement about what a tool,
+  gate, or test does is UNVERIFIED until you have run it and read its output.
+  This is not a style preference — it is the failure mode that has cost this
+  project the most, and it applies to human and AI contributors equally.
+  Measured examples, all from one work package
+  (`docs/metrics/mutation-gate-study.md` §8): a CI gate reported green for
+  months while aborting before it measured anything, and the issue to promote it
+  cited that abort as a passing run; two freshly-written tests asserted only on
+  printed text and stayed green under the mutation they existed to catch; a
+  guard asserting `"sys.platform" in source` survived the constant being flipped
+  to the wrong value. In each case the reading was confident and the run
+  disagreed.
+  - Before promoting an advisory gate, **open its job log** and confirm it
+    produced its number.
+  - Before excluding tests from a gate, **measure** what that removes.
+  - Before claiming a check bites, **mutate the code and watch it go red** —
+    `cp` the file aside and restore from the copy, never `git checkout`.
 
 
 ## UI verification (the built workspace)

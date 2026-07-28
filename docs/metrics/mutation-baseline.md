@@ -23,8 +23,11 @@ threshold below is derived from the measurement, not the other way round.
   the runtime image or the Docker build).
 - Config: `[tool.mutmut]` in `pyproject.toml` (every option there has a
   measured reason attached).
-- Runner: `make mutation-baseline` — **ADVISORY (non-blocking) until
-  2026-08-02**, CI job `mutation-baseline` in `.github/workflows/ci.yml`.
+- Runner: `make mutation-baseline` — **ADVISORY in CI** (reports, does not
+  block a merge), CI job `mutation-baseline` in `.github/workflows/ci.yml`.
+  `make` itself exits non-zero honestly; only the CI job carries
+  `continue-on-error`. Issue #130 asked to promote it; the promotion was built,
+  measured, and reversed — the evidence is in `docs/metrics/mutation-gate-study.md`.
 - Hardware for every number below: Apple M-series, 10 cores, macOS 25.5,
   `--max-children 8`, hermetic (`OPENROUTER_LIVE_EXECUTION_ENABLED=false`,
   `SENTRY_DSN=`, no network, **$0**).
@@ -89,8 +92,9 @@ it at `d7469ce` too; it is killed at HEAD as well
 
 So the mutant that actually escaped the old suite is one mutmut would never have
 produced. **The gate is a floor, not a proof of test strength** — that is
-recorded here rather than glossed over, and it is one of the reasons the gate
-ships advisory.
+recorded here rather than glossed over. It is why the gate is a floor under
+changed code and nothing more — passing it is not evidence that a change is
+well tested.
 
 ---
 
@@ -288,8 +292,33 @@ Notes, so the number is falsifiable rather than plausible:
 - **Unmeasured, stated plainly:** every number here is from one macOS M-series
   machine. CI is a 2-core ubuntu runner, where the timeout column — the only one
   that moves — will be *worse*. The score there could fall below 80 without any
-  test regressing. That is a further reason the gate stays **advisory**, and it is
-  why the CI job's own artifact should be read before anyone proposes promoting it.
+  test regressing. **This is the one live risk carried by making the gate
+  blocking (#130), and it is named here rather than discovered later.**
+
+  **The CI number is not merely unmeasured — it has never existed.** Issue #130
+  argued the gate was ready because it "finished in 1m 9s on PR #96 and
+  passed". Both halves are false, and the job's own log says so (run
+  `30376617533`, job `90333801913`, 16:06:01Z → 16:07:12Z):
+
+  ```
+  FAILED tests/contract/test_golden_fixture_matches_served_schema.py::test_the_shared_fixture_exists
+  failed to collect stats. runner returned 1
+  mutation-baseline: mutmut run failed — see build/mutation/run.log
+  make: [Makefile:322: mutation-baseline] Error 1 (ignored)
+  ```
+
+  It finished in ~1m07s because it **aborted before scoring a single mutant**,
+  and it was green only because the advisory `-` ignored the error. Four
+  sampled pull-request runs all show the same 1m04–1m11s abort. So there is no
+  measured CI runtime, no measured CI score, and `timeout-minutes: 30` has
+  never been exercised by a real run. `MUTMUT_MAX_CHILDREN ?= 8` is tuned for a
+  10-core M-series machine; eight forks on a 2-core runner multiplies exactly
+  the `RLIMIT_CPU` timeouts described above.
+
+  If the gate does fire on an honest change, read the job's own uploaded
+  artifact first — the fix is to record the measured CI number and derive a
+  threshold from it, never to re-add `continue-on-error` and never to raise the
+  floor above what the evidence supports.
 
 The threshold was proven to bite, on the real R3 report (`mutants/**/*.py.meta`
 from the run in §3, re-scored at two thresholds):
@@ -307,7 +336,7 @@ The obsolete **70%** figure stays retired, and **90% is retired with it**: 90 wa
 derived from a scope that no longer exists (§3.1), and every run of the current
 scope is below it.
 
-## 5. Runtime, and why the advisory window is 2 weeks
+## 5. Runtime, and what the advisory window was for (now closed)
 
 - Whole-module `query_runs.py`: **1009 mutants**. Extrapolated from the measured
   rate this is roughly an hour of CI per run — which is exactly why the ledger
@@ -317,10 +346,10 @@ scope is below it.
   `--max-children 8`. This branch is a worst case — it adds a whole module, so
   21 functions are in scope; a typical change touching 2–3 functions is a small
   fraction of that.
-- CI job timeout is **30 minutes** with `continue-on-error: true`. At ~9 min
-  locally the headroom is now ~3.3×, not 4×.
+- CI job timeout is **30 minutes**, and the job is **advisory** (it carries
+  `continue-on-error`). At ~9 min locally the headroom is ~3.3×, not 4×.
 
-Two known harness problems, both measured, are the reason for the advisory
+Two known harness problems, both measured, were the reason for the advisory
 window rather than immediate blocking:
 
 1. **Timeouts are a fork artifact, not a signal.** mutmut re-runs the suite by
@@ -344,11 +373,40 @@ window rather than immediate blocking:
    `SENTRY_DSN=`, `OPENROUTER_LIVE_EXECUTION_ENABLED=false` and a dummy
    `QUORUM_TOKEN_SECRET`, and `.env` is not in `also_copy`.
 
-**Advisory window: until 2026-08-02** (2 weeks from 2026-07-19). To convert to
-blocking, drop the leading `-` from the `mutation-baseline` recipe and remove
-`continue-on-error` from the CI job — the report step already exits non-zero
-below `MUTATION_MIN_SCORE`. The conversion should not happen until problem (1)
-above is either fixed or ring-fenced, otherwise a timeout storm blocks merges.
+**Advisory window: superseded 2026-07-29.** Issue #130 asked to convert the
+gate to blocking. The conversion was built, measured, and REVERSED — see
+`docs/metrics/mutation-gate-study.md`. What survived is the repair: the leading
+`-` is gone from the `mutation-baseline` recipe, so `make` now exits non-zero
+honestly, while `continue-on-error` REMAINS on the CI job so a red gate reports
+without blocking a merge. Both switches mattered — the `-` swallowed every
+failure inside the run, so removing the workflow flag alone would have left a gate that still could not
+fail.
+
+The recorded precondition was that problem (1) be **fixed or ring-fenced**. It
+is ring-fenced, two ways, and the second one was missing until the promotion:
+
+1. Timeouts are excluded from the score's denominator (`killed + survived`), so
+   a timeout storm cannot drag the percentage down. This was already true.
+2. A scope in which *everything* timed out no longer collapses into the
+   "the run did not happen" failure. `killed + survived == 0` was a hard exit 1
+   whose message named an absent or crashed `mutants/` tree — false, and while
+   the gate was advisory nobody paid for it. Measured worst case: **66/66
+   mutants of `_persist_terminal_run` timed out** while the same tests pass in
+   1.34s standalone, so a change touching only that function would have been
+   blocked by a tooling artifact, with a message sending its author after a
+   crash that never happened. That case now reports `UNMEASURED` with the
+   timeout count, exits 0, and prints **no score** — it is neither a pass that
+   looks measured nor a failure for something the author did not do.
+
+A run that produced no metadata at all still fails closed, unchanged. The three
+states are distinguishable in the log and in `build/mutation/score.txt`, and
+each is pinned by a test in `tests/unit/test_mutation_gate_integrity.py`.
+
+**The residual gap, stated plainly:** an all-timeout scope means that change
+carries no mutation evidence, and the gate says so rather than pretending
+otherwise. It does not block. If timeout storms become common rather than
+confined to thread-spawning code in `query_runs.py`, the answer is to fix the
+fork-runner interaction, not to widen this exception.
 
 ## 6. Scoping method (changed functions, not changed modules)
 
@@ -402,10 +460,15 @@ because the two kinds of claim have different portability:
   and load-dependent (§5), so a Linux runner legitimately produces different
   counts for an unchanged tree. The CI `mutation-baseline` job runs this guard
   immediately after producing its own artifact, so drift is *visible* in the job
-  log, but the job is `continue-on-error: true` and therefore advisory — the same
-  status as the mutation gate itself. **This is a real, accepted limitation: a
-  stale count in this file is caught locally and reported in CI, not blocked by
-  CI.**
+  log — but on that Linux runner this tier now reports **SKIPPED**. It used to
+  be kept harmless ONLY by the job's `continue-on-error`. The tier now also
+  skips unless it is running on the hardware profile §2 records (macOS), so it
+  no longer depends on that flag alone. That is the honest form: comparing Linux counts against
+  macOS-recorded ones was never a signal, and a `continue-on-error` on the step
+  would have made the whole job read as advisory to
+  `tests/test_doc_gate_consistency.py`. **This is a real, accepted limitation:
+  a stale count in this file is caught locally, on the machine that can produce
+  a comparable number, and never by CI.**
 
 `./mutants/` and `mutmut-stats.json` are created in the repo root by mutmut and
 are build artifacts — they must not be committed and belong in `.gitignore`

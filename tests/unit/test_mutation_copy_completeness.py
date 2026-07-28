@@ -36,6 +36,13 @@ import warnings
 from pathlib import Path
 from typing import Any
 
+import pytest
+
+# Deselected under mutmut: this module drives git/make/pytest against the real
+# REPO_ROOT, which does not exist inside mutmut's ./mutants/ copy. It still runs
+# blocking in the ordinary suite.
+pytestmark = pytest.mark.repo_introspection
+
 REPO_ROOT = Path(__file__).resolve().parents[2]
 PYPROJECT = REPO_ROOT / "pyproject.toml"
 
@@ -60,6 +67,7 @@ ROOT_READING_MODULES = (
     "tests/unit/test_makefile_gate_integrity.py",
     "tests/unit/test_skill_router_placeholder.py",
     "tests/test_doc_gate_consistency.py",
+    "tests/contract/test_golden_fixture_matches_served_schema.py",
 )
 
 _ROOT_PATH_LITERAL = re.compile(r"^[A-Za-z0-9_.][A-Za-z0-9_.-]*(/[^\s]+)+$")
