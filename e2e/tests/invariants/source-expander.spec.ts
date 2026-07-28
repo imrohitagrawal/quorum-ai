@@ -12,7 +12,7 @@
 // five unique sources across the slots (two of them shared, so dedupe is still
 // exercised).
 import { test, expect } from "@playwright/test";
-import { driveToResult } from "../../fixtures/golden-run";
+import { driveToResult, goldenCompletedResp } from "../../fixtures/golden-run";
 
 test.describe("F-19 — the rest of the cited sources are reachable", () => {
   test.skip(({ browserName }) => browserName !== "chromium", "chromium-only gate");
@@ -62,6 +62,45 @@ test.describe("F-19 — the rest of the cited sources are reachable", () => {
     ).toEqual(["1", "2", "3", "4", "5"]);
     // Every fixture source is a real https URL, so every chip is a safe link.
     await expect(row.locator("a.result-source-chip:visible")).toHaveCount(5);
+  });
+
+  test("a Quorum stub source is never a clickable citation", async ({ page }) => {
+    // A stub source is Quorum's own placeholder, not evidence: it points at the
+    // IANA-reserved example.test domain, which never resolves. `renderStubSource`
+    // has refused to make those anchors elsewhere for exactly that reason, but
+    // `collectResultSources` used to DROP the `provider` field, so the synthesis
+    // chip row could not tell a stub from a real citation and linked it anyway.
+    // F-19 made every source reachable, which turned that into a row of dead
+    // links dressed as provenance.
+    const resp = goldenCompletedResp() as any;
+    resp.result.model_answers[0].sources = [
+      {
+        title: "Local demo evidence for slot 1",
+        url: "https://example.test/local-demo/1",
+        provider: "local_simulation",
+      },
+    ];
+    await driveToResult(page, resp);
+    const row = page.locator(".result-synth-source-chips");
+    await expect(row).toBeVisible();
+
+    const stub = row.locator(".result-source-chip", { hasText: "Local demo evidence" });
+    await expect(stub).toHaveCount(1);
+    expect(
+      await stub.first().evaluate((el) => el.tagName),
+      "a stub source was rendered as an anchor — clicking it opens a dead tab, " +
+        "and it reads as a real citation"
+    ).toBe("SPAN");
+    expect(await stub.first().evaluate((el) => el.hasAttribute("href"))).toBe(false);
+    // And it is LABELLED, not merely un-linked: an unmarked stub still reads as
+    // evidence to someone judging the answer by its sources.
+    await expect(stub.first().locator(".result-source-stub-tag")).toHaveText(/simulated/i);
+
+    // Positive control, same run: a genuine https source is still a real link.
+    // Without this the assertions above would also pass if NOTHING linked.
+    const real = row.locator("a.result-source-chip", { hasText: "Jones & Lee" });
+    await expect(real).toHaveCount(1);
+    await expect(real).toHaveAttribute("href", "https://example.com/b");
   });
 
   test("the expander is operable from the keyboard", async ({ page }) => {
