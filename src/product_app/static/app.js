@@ -3609,12 +3609,34 @@
     );
     if (tagInfo.fallback) tag.dataset.fallback = "true";
     head.appendChild(tag);
+    // WP-F: ``shortened`` means the provider stopped at its token ceiling, so
+    // the text below ends mid-thought. It crossed the API boundary in WP-D and
+    // nothing rendered it, which left the product presenting an interrupted
+    // answer as the model's complete view. Marked in the head, beside the
+    // provider tag, because it qualifies the whole answer rather than any one
+    // paragraph of it.
+    if (answer && answer.shortened === true) {
+      const short = mkEl("span", "transcript-opening-shortened", "shortened");
+      short.title =
+        "The provider stopped this answer at its length limit, so it ends " +
+        "mid-thought. It is not the model's complete view.";
+      head.appendChild(short);
+    }
     card.appendChild(head);
 
     const body = mkEl("div", "transcript-opening-body");
     const text = String((answer && answer.answer_text) || "").trim();
     setProse(body, text, "This model did not return an opening answer.");
     card.appendChild(body);
+    // The per-model notice is shown HERE, with the answer it describes. Its
+    // only previous render target was the model card, and
+    // ``.panel.panel-section { display: none }`` hides that section on every
+    // view — so the notices rewritten in WP-E reached the DOM and never
+    // reached a reader. Plain textContent: provider metadata, not prose.
+    const noticeText = String((answer && answer.provider_notice) || "").trim();
+    if (noticeText) {
+      card.appendChild(mkEl("p", "transcript-opening-notice", noticeText));
+    }
     return card;
   }
 

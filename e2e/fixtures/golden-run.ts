@@ -282,6 +282,10 @@ const goldenAnswer = (i: number) => ({
   provider_notice: i === 2
     ? "This model's answer came back without any linked sources, so it does not count toward this run's source support."
     : null,
+  // WP-D set `shortened` on the API and WP-F renders it. Slot 1 only: a flag
+  // on every answer would be as uninformative as a flag on none, and would
+  // let a gate pass that a blanket marker also passes.
+  shortened: i === 0,
   provider_attempt_order: ["openrouter_search"], provider_path: "openrouter_search",
   fallback_used: false, status: "completed", latency_ms: 2200 + i * 100,
   citation_coverage: i === 2 ? CC_EMPTY : CC,
@@ -328,7 +332,12 @@ export const goldenRunningResp = (elapsedMs: number) => ({
   query_run_id: "22222222-2222-4222-8222-222222222222", status: "initial_answers_running", correlation_id: "corr-golden-0001",
   model_slots: SLOTS, cost_estimate: costEstimate("0.100", "allow"), elapsed_time_ms: elapsedMs,
   failed_steps: [], missing_steps: [], progress: progress("initial_answers", ["running", "pending", "pending", "pending"]),
-  partial_failure_notice: null, provider_failure_notices: [],
+  partial_failure_notice: null,
+  // Mirrors what query_runs.py rolls up from the answers above — the
+  // run-level list is the notice path a user actually sees.
+  provider_failure_notices: [
+    "This model's answer came back without any linked sources, so it does not count toward this run's source support.",
+  ],
   result: { model_answers: [goldenAnswer(0), goldenAnswer(1)], debate_outputs: [], final_synthesis: null, agreement: { aligned: 0, total: 4 }, position_movements: [] },
   result_generated_at_utc: "2026-07-10T12:00:00Z", demo_mode: false, live_count: 2, local_count: 0, material_claim_count: 6,
   actual_cost_usd: "0.000", actual_breakdown: null,

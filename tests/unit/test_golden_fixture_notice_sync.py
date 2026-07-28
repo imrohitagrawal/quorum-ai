@@ -25,12 +25,7 @@ import re
 
 from product_app.providers import PROVIDER_NOTICES
 
-_FIXTURE = (
-    pathlib.Path(__file__).resolve().parents[2]
-    / "e2e"
-    / "fixtures"
-    / "golden-run.ts"
-)
+_FIXTURE = pathlib.Path(__file__).resolve().parents[2] / "e2e" / "fixtures" / "golden-run.ts"
 
 #: Locates each ``provider_notice:`` key in the fixture.
 _NOTICE_KEY = re.compile(r"provider_notice:")

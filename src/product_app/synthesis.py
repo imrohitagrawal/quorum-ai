@@ -65,7 +65,6 @@ from product_app.synthesis_consensus import (
     compute_consensus_strength,
 )
 from product_app.synthesis_length import (
-    DEFAULT_SECTION_MAX_CHARS,
     truncate_recommendation,
     truncate_section,
 )
@@ -99,13 +98,22 @@ HIGH_STAKES_NOTICE_FRAGMENT = (
 #: ``tests/unit/test_estimate_token_model.py::
 #: test_bound_cap_assumptions_match_the_enforced_caps``.
 #:
-#: NOTE the downstream storage cap: a 3000-token section is ~12_000
-#: chars, but ``truncate_section`` still hard-cuts stored section text
-#: at ``synthesis_length.DEFAULT_SECTION_MAX_CHARS`` (4000), and the
-#: Recommendation at ``RECOMMENDATION_MAX_CHARS`` (2000). So the raise
-#: buys headroom for the model to *finish a thought*, not 12_000 chars
-#: of visible output.
 SYNTHESIS_SECTION_MAX_TOKENS = 3000
+
+#: How much of a generated section actually survives to the user.
+#:
+#: DERIVED, never hardcoded — the same discipline the excerpt sizes below
+#: follow. It was previously an unrelated literal
+#: (``synthesis_length.DEFAULT_SECTION_MAX_CHARS = 4000``) sitting downstream
+#: of a 3000-token ceiling worth ~12_000 chars, so roughly two thirds of the
+#: output this run is BILLED for was generated, charged, and then thrown away
+#: before anyone could read it, leaving a "…" as the only trace. Two constants
+#: describing one quantity drift; one derived constant cannot.
+#:
+#: The Recommendation keeps its own, tighter ``RECOMMENDATION_MAX_CHARS`` —
+#: that cap exists to protect the mandatory decision-support caveat from being
+#: truncated away, which is a different job from this one.
+SYNTHESIS_SECTION_MAX_CHARS = int(SYNTHESIS_SECTION_MAX_TOKENS * CHARS_PER_TOKEN)
 
 #: How much of each initial answer the synthesis sections get to see.
 #: WP-D (F-08) replaced a hardcoded ``[:600]``. Bounded by the token cap on
@@ -749,9 +757,9 @@ class SynthesisOrchestrationService:
         # recorded and a billed call cannot vanish from the receipt.
         text = "" if live is None else live.answer_text.strip()
         if not text:
-            return truncate_section(templated, max_chars=DEFAULT_SECTION_MAX_CHARS), None, live
+            return truncate_section(templated, max_chars=SYNTHESIS_SECTION_MAX_CHARS), None, live
         return (
-            truncate_section(text, max_chars=DEFAULT_SECTION_MAX_CHARS),
+            truncate_section(text, max_chars=SYNTHESIS_SECTION_MAX_CHARS),
             None,
             live,
         )
@@ -797,9 +805,9 @@ class SynthesisOrchestrationService:
         # recorded and a billed call cannot vanish from the receipt.
         text = "" if live is None else live.answer_text.strip()
         if not text:
-            return truncate_section(templated, max_chars=DEFAULT_SECTION_MAX_CHARS), None, live
+            return truncate_section(templated, max_chars=SYNTHESIS_SECTION_MAX_CHARS), None, live
         return (
-            truncate_section(text, max_chars=DEFAULT_SECTION_MAX_CHARS),
+            truncate_section(text, max_chars=SYNTHESIS_SECTION_MAX_CHARS),
             None,
             live,
         )
@@ -849,9 +857,9 @@ class SynthesisOrchestrationService:
         # recorded and a billed call cannot vanish from the receipt.
         text = "" if live is None else live.answer_text.strip()
         if not text:
-            return truncate_section(templated, max_chars=DEFAULT_SECTION_MAX_CHARS), None, live
+            return truncate_section(templated, max_chars=SYNTHESIS_SECTION_MAX_CHARS), None, live
         return (
-            truncate_section(text, max_chars=DEFAULT_SECTION_MAX_CHARS),
+            truncate_section(text, max_chars=SYNTHESIS_SECTION_MAX_CHARS),
             None,
             live,
         )
@@ -900,9 +908,9 @@ class SynthesisOrchestrationService:
         # recorded and a billed call cannot vanish from the receipt.
         text = "" if live is None else live.answer_text.strip()
         if not text:
-            return truncate_section(templated, max_chars=DEFAULT_SECTION_MAX_CHARS), None, live
+            return truncate_section(templated, max_chars=SYNTHESIS_SECTION_MAX_CHARS), None, live
         return (
-            truncate_section(text, max_chars=DEFAULT_SECTION_MAX_CHARS),
+            truncate_section(text, max_chars=SYNTHESIS_SECTION_MAX_CHARS),
             None,
             live,
         )

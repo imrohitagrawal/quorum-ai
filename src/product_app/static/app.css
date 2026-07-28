@@ -3709,9 +3709,14 @@ a.result-source-chip:hover { border-color: var(--info); color: var(--info); }
   padding: var(--space-3) var(--space-4);
 }
 
+/* Wraps. The head carries a name, a provider tag and (WP-F) a "shortened"
+   badge, all `white-space: nowrap`; on a 375px column that row cannot fit on
+   one line, and without wrapping it silently clips its own content — caught by
+   the clipping invariant, which is what that gate is for. */
 .transcript-opening-head {
   display: flex;
   align-items: center;
+  flex-wrap: wrap;
   gap: var(--space-2);
 }
 
@@ -3743,6 +3748,38 @@ a.result-source-chip:hover { border-color: var(--info); color: var(--info); }
 
 .transcript-opening-tag[data-fallback="true"] {
   color: var(--warning);
+}
+
+/* WP-F: the provider cut this answer off at its token ceiling. A caution
+   treatment, not a muted one — it qualifies everything the reader is about to
+   read, and `margin-left: 0` keeps it beside the tag rather than fighting the
+   tag's `margin-left: auto` for the right edge. */
+.transcript-opening-shortened {
+  margin-left: var(--space-2);
+  padding: 1px var(--space-2);
+  border: 1px solid var(--warning);
+  border-radius: var(--radius-pill);
+  font-size: 0.68rem;
+  font-weight: 650;
+  color: var(--warning);
+  white-space: nowrap;
+}
+
+/* The per-model provider notice, shown with the answer it describes. At
+   `--body`, deliberately: this is an honesty disclosure about why an answer
+   looks the way it does, and muting it would repeat the mistake of rendering
+   it somewhere nobody looks. */
+/* Separated by a hairline: this is QUORUM speaking about the model, sitting
+   directly under prose the model wrote. Without the rule it reads as the
+   answer's closing sentence, which attributes the product's disclosure to the
+   model — the opposite of what a disclosure is for. */
+.transcript-opening-notice {
+  margin: var(--space-3) 0 0;
+  padding-top: var(--space-2);
+  border-top: 1px solid var(--line-2);
+  font-size: 0.78rem;
+  line-height: 1.5;
+  color: var(--body);
 }
 
 .transcript-opening-body {
