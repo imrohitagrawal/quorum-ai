@@ -86,9 +86,11 @@ def test_an_all_timeout_scope_is_reported_as_unmeasured_not_as_a_crash(
     under mutmut's fork-based runner while the same tests pass in 1.34s
     standalone. Timeouts are excluded from the score by a recorded decision, so
     an all-timeout scope leaves `killed + survived == 0` and lands in the same
-    branch as an absent `mutants/` tree. Before #130 that branch was advisory
-    and its message never mattered; now the gate blocks, so an author would be
-    sent hunting for a crash that did not happen.
+    branch as an absent `mutants/` tree. While BOTH advisory switches were on,
+    that branch's message never mattered because the failure was swallowed
+    whole. `make` now exits honestly, so the message is read by whoever runs the
+    gate locally — and a wrong one sends them hunting a crash that never
+    happened.
 
     Turns red if: the `counts["timeout"]` branch is deleted from `report()` —
     the message reverts to "the run did not happen" and the exit becomes 1. Also
@@ -325,6 +327,131 @@ def test_an_empty_scope_writes_zero_bytes(scope_script: Path, tmp_path: Path) ->
     assert "pkg.thing.x_f__mutmut_*" in populated.stdout, (
         "a working-tree change inside a function produced no scope — "
         f"scope() is emitting nothing at all:\n{populated.stdout}{populated.stderr}"
+    )
+
+
+def _repo_with(tmp_path: Path, before: str, after: str) -> Path:
+    """A throwaway git repo whose worktree changes `before` -> `after`."""
+    repo = tmp_path / "repo"
+    (repo / "src" / "pkg").mkdir(parents=True)
+    env = {
+        **os.environ,
+        "GIT_AUTHOR_NAME": "t",
+        "GIT_AUTHOR_EMAIL": "t@t",
+        "GIT_COMMITTER_NAME": "t",
+        "GIT_COMMITTER_EMAIL": "t@t",
+    }
+
+    def git(*args: str) -> None:
+        subprocess.run(["git", *args], cwd=repo, check=True, capture_output=True, env=env)
+
+    module = repo / "src" / "pkg" / "thing.py"
+    module.write_text(before, encoding="utf-8")
+    git("init", "-q", "-b", "main")
+    git("add", "-A")
+    git("commit", "-qm", "base")
+    module.write_text(after, encoding="utf-8")
+    return repo
+
+
+DECORATED_BEFORE = """\
+class C:
+    @property
+    def value(self):
+        return 1
+"""
+DECORATED_AFTER = """\
+class C:
+    @property
+    def value(self):
+        return 2
+"""
+
+
+def test_a_decorated_only_change_is_excluded_and_reported(
+    scope_script: Path, tmp_path: Path
+) -> None:
+    """The #136 abort: mutmut builds no mutants for a decorated function.
+
+    Before this fix the scope named the glob, `mutmut run` matched nothing and
+    died with "Filtered for specific mutants, but nothing matches" — surfaced to
+    the author as the recipe's "missing from also_copy" message, which is the
+    wrong cause. Measured over history: 7% of changes with a non-empty scope
+    abort this way.
+
+    The function is now excluded (so the run does not abort) and REPORTED on
+    stderr (so the gap is visible rather than silent).
+
+    Turns red if: `unmutatable()` stops returning True for a decorated
+    function — the glob returns and the abort comes back.
+    """
+    repo = _repo_with(tmp_path, DECORATED_BEFORE, DECORATED_AFTER)
+    result = _run(scope_script, repo, "scope", "HEAD", "80")
+
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert result.stdout == "", (
+        f"a decorated function was scoped; mutmut will match nothing: {result.stdout!r}"
+    )
+    assert "cannot be mutated" in result.stderr, (
+        f"the exclusion was silent — the whole point is that it is visible:\n{result.stderr}"
+    )
+    assert "pkg.thing.value" in result.stderr, (
+        f"the report must name the function, or it is not actionable:\n{result.stderr}"
+    )
+
+
+def test_the_note_never_contaminates_the_scope_file(scope_script: Path, tmp_path: Path) -> None:
+    """The note goes to stderr. On stdout it would become a mutant name.
+
+    `scope` mode's stdout is redirected into build/mutation/scope.txt and passed
+    verbatim to `mutmut run`. A human-readable line there is read as a mutant
+    glob.
+
+    Turns red if: the note is written with print() instead of sys.stderr.
+    """
+    repo = _repo_with(tmp_path, DECORATED_BEFORE, DECORATED_AFTER)
+    result = _run(scope_script, repo, "scope", "HEAD", "80")
+    assert "cannot be mutated" not in result.stdout, (
+        f"the exclusion note leaked into scope.txt: {result.stdout!r}"
+    )
+
+
+PLAIN_BEFORE = """\
+class C:
+    @property
+    def value(self):
+        return 1
+
+    @staticmethod
+    def helper(x):
+        return x + 1
+
+
+def free(x):
+    return x + 1
+"""
+PLAIN_AFTER = PLAIN_BEFORE.replace("return x + 1", "return x + 2")
+
+
+def test_only_the_unmutatable_functions_are_dropped(scope_script: Path, tmp_path: Path) -> None:
+    """Positive partner: the exclusion must not swallow mutatable functions.
+
+    A bare @staticmethod IS mutated by mutmut
+    (mutmut/mutation/file_mutation.py:230-235), so it must stay in scope — and
+    an undecorated function obviously must. Without this, the two assertions
+    above are equally satisfied by a scope() that drops everything.
+
+    Turns red if: `unmutatable()` is widened to any decorated function, or to
+    all functions.
+    """
+    repo = _repo_with(tmp_path, PLAIN_BEFORE, PLAIN_AFTER)
+    result = _run(scope_script, repo, "scope", "HEAD", "80")
+
+    assert "xǁCǁhelper__mutmut_*" in result.stdout, (
+        f"a bare @staticmethod was dropped, but mutmut does mutate it:\n{result.stdout}"
+    )
+    assert "x_free__mutmut_*" in result.stdout, (
+        f"an undecorated function was dropped:\n{result.stdout}"
     )
 
 
