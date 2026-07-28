@@ -9,6 +9,20 @@
 
 ## 1. State, measured
 
+> **Anchor — this document was written at `2bba0d1`.**
+> That commit is in the past and cannot change, so this line is never wrong.
+> To see everything that has happened since, run:
+> ```bash
+> git log --oneline 2bba0d1..origin/main
+> ```
+> Do NOT expect any commit identifier below to still be the tip of `main`.
+> Merging this file moved the tip, and every merge after it moves the tip
+> again — three merges happened within an hour of writing. A handoff cannot
+> contain the identifier that recording it creates. Anchor backward to a commit
+> that already exists; never point forward to one that does not.
+> Tracked as #134: teach `make handoff` to print this state so no document has
+> to carry it.
+
 | Thing | Value |
 |---|---|
 | Last PRODUCT change on `main` | `2bba0d1` (PR #96) |
