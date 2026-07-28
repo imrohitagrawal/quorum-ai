@@ -3369,6 +3369,36 @@ html[data-theme="dark"] .landing-preview-caption {
   color: var(--body);
   text-wrap: pretty;
 }
+/* F-12: a long section collapses to a readable height. Only a body app.js has
+   MEASURED as overflowing carries `data-collapsible`, so a short section is
+   never clipped and never grows a control. `max-height` in `em` tracks the
+   font, and the fade makes the cut legible as a cut rather than as the end of
+   the text — a clipped section that looks finished is worse than a long one. */
+.result-synth-body[data-collapsible="true"] {
+  max-height: 18em;
+  overflow: hidden;
+  -webkit-mask-image: linear-gradient(to bottom, #000 82%, transparent 100%);
+  mask-image: linear-gradient(to bottom, #000 82%, transparent 100%);
+}
+.result-synth-expand {
+  /* The row is a two-column grid (label | body). Without this the control
+     lands in the LABEL column on a new row, floating beside the text it
+     belongs to instead of under it. */
+  grid-column: 2;
+  justify-self: start;
+  margin-top: var(--space-2);
+  padding: 4px var(--space-3);
+  border: 1px solid var(--line-strong-2);
+  border-radius: var(--radius-pill);
+  background: transparent;
+  color: var(--body);
+  font: inherit;
+  font-size: 0.8rem;
+  font-weight: 500;
+  cursor: pointer;
+}
+.result-synth-expand:hover { border-color: var(--info); color: var(--info); }
+.result-synth-expand:focus-visible { outline: 2px solid var(--info); outline-offset: 2px; }
 .result-synth-sources {
   display: flex;
   flex-direction: column;

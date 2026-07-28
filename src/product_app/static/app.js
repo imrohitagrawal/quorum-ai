@@ -195,6 +195,7 @@
     // transition; the Copy/Export buttons read it. ``lastResultRunId`` names
     // the exported file. Kept as textContent-safe strings (no HTML).
     lastResultSummary: null,
+    lastResultMarkdown: null,
     lastResultRunId: null,
     // Slice 5 (06 Transcript): the last terminal poll result, captured in the
     // pollRun terminal branch alongside ``renderResult``. The transcript view
@@ -2303,6 +2304,125 @@
     if (result.correlation_id) summaryLines.push(`Run: ${result.correlation_id}`);
     state.lastResultSummary = summaryLines.join("\n");
     state.lastResultRunId = result.query_run_id || result.correlation_id || "run";
+    // F-12: Copy stays a short summary — that is what a summary is for — but
+    // EXPORT now writes the whole run. The file is named `quorum-<run>.md`, and
+    // it used to contain four lines: question, verdict, agreement, run id.
+    // Everything the run actually produced was dropped, so a user exporting a
+    // decision record got a receipt.
+    state.lastResultMarkdown = buildResultMarkdown(result, res, fs, {
+      question,
+      isConsensus,
+      aligned,
+      total,
+      movements,
+    });
+  }
+
+  // Build the full Markdown export for a completed run.
+  //
+  // Source data is the API projection, never the DOM: the rendered view has
+  // already turned the provider's Markdown into HTML, and a `.md` file wants
+  // the Markdown back. Taking it from the payload means `**bold**` stays
+  // `**bold**` and no tag can leak into the file.
+  function buildResultMarkdown(result, res, fs, ctx) {
+    const out = [];
+    // Variadic on purpose: every call site below passes a line plus its
+    // trailing blank. A single-parameter version silently dropped every
+    // section BODY and left a document of bare headings.
+    const push = (...lines) => out.push(...lines);
+    const section = (heading, body) => {
+      const text = body == null ? "" : String(body).trim();
+      if (!text) return;
+      push(`### ${heading}`, "", text, "");
+    };
+
+    push("# Quorum decision record", "");
+    if (ctx.question) push(`**Question:** ${ctx.question}`, "");
+
+    const recommendation = fs && fs.recommendation ? String(fs.recommendation).trim() : "";
+    push("## Verdict", "");
+    // Mirrors the on-screen eyebrow: a divided panel has no unified "verdict".
+    push(
+      recommendation
+        ? `**${ctx.isConsensus ? "Verdict" : "Leaning"}:** see the Recommendation section below.`
+        : "**Verdict:** No synthesis was produced for this run.",
+    );
+    push(
+      ctx.isConsensus
+        ? `**Agreement:** ${ctx.aligned} of ${ctx.total} models aligned.`
+        : `**Agreement:** ${ctx.aligned} of ${ctx.total} models aligned; the rest are preserved as disagreement.`,
+      "",
+    );
+
+    if (fs) {
+      push("## Synthesis", "");
+      section("Consensus", fs.consensus);
+      section("Disagreement", fs.disagreement);
+      section("Uncertainty", fs.uncertainty);
+      section("Recommendation", fs.recommendation);
+      section("Source support", fs.source_support);
+    }
+
+    const sources = collectResultSources(res || {});
+    if (sources.length) {
+      push("## Sources", "");
+      sources.forEach((s, i) => {
+        const url = s && s.url ? String(s.url) : "";
+        const title = s && s.title ? String(s.title) : sourceHost(url) || "source";
+        // Every cited source, including the ones the view keeps behind
+        // "+N more" — an export that reproduced the collapsed view would drop
+        // provenance the run actually has.
+        push(url ? `${i + 1}. [${title}](${url})` : `${i + 1}. ${title}`);
+      });
+      push("");
+    }
+
+    const movements = Array.isArray(ctx.movements) ? ctx.movements : [];
+    if (movements.length) {
+      push("## Where each model stood", "");
+      for (const m of movements) {
+        if (!m) continue;
+        const name = String(m.display_name || m.model_id || "Model");
+        push(`### ${name}`, "");
+        if (m.opening) push(`- **Opening:** ${String(m.opening).trim()}`);
+        if (m.after_round_1) push(`- **After round 1:** ${String(m.after_round_1).trim()}`);
+        if (m.final) push(`- **Final:** ${String(m.final).trim()}`);
+        if (m.revision_note) push(`- **Revision note:** ${String(m.revision_note).trim()}`);
+        push("");
+      }
+    }
+
+    const rounds = Array.isArray(res && res.debate_outputs) ? res.debate_outputs : [];
+    if (rounds.length) {
+      push("## Debate rounds", "");
+      for (const r of rounds) {
+        if (!r) continue;
+        push(`### Round ${r.round_number}`, "");
+        const focus = Array.isArray(r.focus_areas) ? r.focus_areas.filter(Boolean) : [];
+        if (focus.length) push(`*Focus: ${focus.join(", ")}*`, "");
+        if (r.critique_text) push(String(r.critique_text).trim(), "");
+      }
+    }
+
+    // Provenance for the record itself. An exported decision record that
+    // cannot be traced back to its run is not evidence of anything.
+    push("## About this run", "");
+    if (result.correlation_id) push(`- Run: ${result.correlation_id}`);
+    if (result.query_run_id) push(`- Run id: ${result.query_run_id}`);
+    if (result.result_generated_at_utc) push(`- Generated: ${result.result_generated_at_utc}`);
+    if (Number.isFinite(Number(result.elapsed_time_ms))) {
+      push(`- Elapsed: ${formatDuration(result.elapsed_time_ms)}`);
+    }
+    const liveCount = Number(result.live_count);
+    if (Number.isFinite(liveCount)) {
+      // Honesty travels with the file: a simulated run must not be exported as
+      // though four live models produced it.
+      push(`- Live model answers: ${liveCount} of ${ctx.total || 4}`);
+    }
+    if (fs && fs.synthesis_mode) push(`- Synthesis: ${fs.synthesis_mode}`);
+    push("");
+
+    return out.join("\n");
   }
 
   // Return the normalised URL string only when it is a real http(s) URL;
@@ -2398,6 +2518,38 @@
       }
       row.appendChild(body);
       grid.appendChild(row);
+      // F-12: sections can now be ~12_000 characters (WP-F stopped discarding
+      // the output the run is billed for), so a long one is a wall of text to
+      // scroll past. Collapse it to a readable height with a control to open
+      // it — and give a SHORT section no control at all, because an affordance
+      // that reveals nothing is noise.
+      //
+      // The decision is made from measured layout, not from a character count:
+      // whether the rendered body actually overflows its collapsed height is
+      // the only thing that matters, and it depends on viewport and font as
+      // much as on length. Deferred to the next frame because a body that has
+      // not been laid out yet reports a scrollHeight of 0 and would look like
+      // it fits.
+      if (typeof bodyContent === "string") {
+        requestAnimationFrame(() => {
+          if (!body.isConnected) return;
+          body.dataset.collapsible = "true";
+          if (body.scrollHeight <= body.clientHeight + 1) {
+            delete body.dataset.collapsible;
+            return;
+          }
+          const toggle = mkEl("button", "result-synth-expand", "Show full section");
+          toggle.type = "button";
+          toggle.setAttribute("aria-expanded", "false");
+          toggle.addEventListener("click", () => {
+            const expanding = toggle.getAttribute("aria-expanded") !== "true";
+            toggle.setAttribute("aria-expanded", expanding ? "true" : "false");
+            body.dataset.collapsible = expanding ? "false" : "true";
+            toggle.textContent = expanding ? "Show less" : "Show full section";
+          });
+          row.appendChild(toggle);
+        });
+      }
     };
     for (const [label, value, key] of rows) {
       addRow(label, key, String(value).trim());
@@ -5943,6 +6095,7 @@
       // Slice 4a (05 Result): a new run must never serve the previous run's
       // Copy/Export text, and the terminal-branch guard must start fresh (C-C).
       state.lastResultSummary = null;
+      state.lastResultMarkdown = null;
       state.lastResultRunId = null;
       // Slice 5 (06 Transcript): drop the previous run's transcript snapshot so
       // the drill-down can never render stale openings/critiques for a new run.
@@ -7376,10 +7529,13 @@
     const resultExportButton = el("result-export");
     if (resultExportButton) {
       resultExportButton.addEventListener("click", () => {
-        const summary = state.lastResultSummary;
-        if (!summary) return;
+        // F-12: the FULL run, not the copy summary. Falls back to the summary
+        // only if the document was never built, so the button never silently
+        // does nothing.
+        const document_ = state.lastResultMarkdown || state.lastResultSummary;
+        if (!document_) return;
         try {
-          const blob = new Blob([summary], { type: "text/markdown;charset=utf-8" });
+          const blob = new Blob([document_], { type: "text/markdown;charset=utf-8" });
           const url = URL.createObjectURL(blob);
           const anchor = document.createElement("a");
           anchor.href = url;

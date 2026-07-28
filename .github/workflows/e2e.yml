@@ -147,6 +147,7 @@ jobs:
           tests/invariants/readiness-banner.spec.ts
           tests/invariants/source-expander.spec.ts
           tests/invariants/answer-completeness.spec.ts
+          tests/invariants/export-and-expanders.spec.ts
           --project=chromium
           --retries=0
 
