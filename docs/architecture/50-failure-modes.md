@@ -112,6 +112,14 @@ The source of truth for failure-mode behaviour is `docs/20-architecture.md` Fail
 - Recovery mechanism. Operator must set the key and restart. The readiness probe is the detection surface for this condition at startup; in production the `/ready` endpoint reports `state: offline_by_no_key`.
 - What you must not break. The key must never appear in error messages, log lines, or response bodies. The `_redact_sentry_event` hook strips `query` and `prompt` keys from Sentry events as defense-in-depth; the key itself is never passed to Sentry because `send_default_pii=False`.
 
+### Secret/key present but REJECTED by the provider
+
+- What STOPS. Nothing stops. This is the dangerous one: the key is a non-empty string, so every "is it configured?" check passes, and each provider call fails individually and falls back. Runs complete and look normal.
+- What DEGRADES. Every model answer, the debate, and the synthesis come from local simulation while the deployment reports itself configured.
+- Detection mechanism. A startup credential probe (`readiness.start_key_auth_probe`) issues `GET {openrouter_api_base_url}/key` — auth-required and zero token cost — on a background daemon thread, and publishes a verdict that `run_startup_probe` reads from cache. A 401/403 sets `state: offline_by_bad_key` on `/ready`, flips `/status.live_execution` to `false`, and raises the workspace banner. Only an explicit 401/403 does this: a timeout, a 429, or a 5xx leaves the state unchanged, because a network fault is not evidence about a credential — and an inconclusive probe never overwrites a recorded verdict, so one blip cannot re-advertise a refused key as live. Measured 2026-07-28: a funded valid key returns 200 and a valid but UNFUNDED key returns 401, so this state legitimately covers "empty account" as well as "bad credential" — the two are not separable at this endpoint. Known gaps: a proxy answering 403 is indistinguishable from the provider doing so, and the probe runs once per process, so a key revoked or drained mid-life is not detected until restart.
+- Recovery mechanism. Operator replaces the key and restarts. The probe runs once per process, so the state clears on restart, not on the next `/ready` hit.
+- What you must not break. The probe must stay on a background thread (module import already blocks on the catalog fetch) and must stay gated on live-flag AND key-present, which is what keeps the test suite socket-free and the contract gate's no-outbound-socket guard green. The reason string is served on the public `/ready`, so it must come from `APPROVED_REASON_PREFIXES` and never interpolate the key or a raw provider error.
+
 ### Browser disconnection mid-query
 
 - What STOPS. Nothing stops on the server side. The browser disconnecting drops the HTTP response stream; the background thread continues executing the pipeline to a terminal state.

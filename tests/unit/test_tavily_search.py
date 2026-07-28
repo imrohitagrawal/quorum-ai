@@ -352,7 +352,7 @@ def test_online_answer_without_citations_is_supplemented_by_tavily(
         # ...but it now carries REAL fallback sources instead of nothing.
         assert [s.url for s in answer.sources] == ["https://supp.example/a"]
         assert all(s.is_fallback for s in answer.sources)
-        assert "fallback web search" in (answer.provider_notice or "")
+        assert "came from a separate web search" in (answer.provider_notice or "")
         # Fallback sources do not count toward the model's citation coverage.
         assert answer.citation_coverage.sourced_answer_count == 0
 
@@ -372,7 +372,7 @@ def test_online_answer_without_citations_stays_empty_without_key(
 
     for answer in answers:
         assert answer.sources == []
-        assert "citation" in (answer.provider_notice or "").lower()
+        assert "without any linked sources" in (answer.provider_notice or "").lower()
 
 
 def test_online_answer_with_citations_is_not_supplemented(

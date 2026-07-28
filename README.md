@@ -121,7 +121,7 @@ The full architecture document is at [docs/20-architecture.md](docs/20-architect
 Key design points, with file:line citations:
 
 - **Cost guardrail**: hard $0.25 cap at [costs.py:35-36](src/product_app/costs.py#L35). The estimate must succeed before a run; the run is blocked if the estimate exceeds the cap.
-- **Live-readiness probe**: [readiness.py:46](src/product_app/readiness.py#L46) — runs at app start, re-runs on every `/ready` hit, distinguishes `live`, `live` (with drift), `offline_by_config`, `offline_by_no_key`.
+- **Live-readiness probe**: [readiness.py:46](src/product_app/readiness.py#L46) — runs at app start, re-runs on every `/ready` hit, distinguishes `live`, `live` (with drift), `offline_by_config`, `offline_by_no_key`, and `offline_by_bad_key` (the key is set but the provider refused it — checked with a zero-token `GET /key` on a background thread, so a revoked key can no longer be served as "live").
 - **Static defaults are the source of truth** for the four model slots. The  catalog is consulted as a **drift check**, not the source — see [model_slots.py:36-41](src/product_app/model_slots.py#L36) and the 4 selection tests in `tests/unit/test_model_slots.py`.
 - **Redaction**: every error log strips API keys, session tokens, and raw model output before it hits the logger. The redaction tests in `tests/security/test_release_security_redaction.py` are the contract.
 - **CSRF + cookie session** instead of bearer tokens. The CSRF token is bound to the session via a signed cookie; cross-site requests can't read it. See [auth.py](src/product_app/auth.py).

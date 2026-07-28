@@ -211,7 +211,7 @@ A typical live query run emits four `provider_initial_answer_completed` events (
 
 ### 9. Run wall-clock deadline exceeded — class: OPS
 
-- **Symptom.** One or more slots are cut before producing an answer. The slot shows `status=FAILED`, `error_code="RUN_DEADLINE_EXCEEDED"`, `latency_ms=0`, and a `provider_notice`: "Run deadline reached before this model answered."
+- **Symptom.** One or more slots are cut before producing an answer. The slot shows `status=FAILED`, `error_code="RUN_DEADLINE_EXCEEDED"`, `latency_ms=0`, and a `provider_notice`: "The run reached its time limit before this model answered."
 - **Signal / alert.** `provider_initial_answer_failed` events with `error_code=RUN_DEADLINE_EXCEEDED`. The run-level deadline (180 s hard, from NFR-001 / PR #73) fires. `/metrics` request-duration histogram shows runs near the ceiling.
 - **Blast radius.** Cut slots show FAILED. Remaining slots (that answered before the deadline) are unaffected. The synthesis/debate stages consume whatever answers completed. The user sees the deadline-exceeded notice on cut slots.
 - **First response.**
@@ -227,7 +227,7 @@ A typical live query run emits four `provider_initial_answer_completed` events (
 
 ### 10. Forced provider failure (test hook) — class: CORR (test-only)
 
-- **Symptom.** A slot returns `status=FAILED`, `error_code="PROVIDER_UNAVAILABLE"` with the notice "This model answer is unavailable because the provider did not return a usable response."
+- **Symptom.** A slot returns `status=FAILED`, `error_code="PROVIDER_UNAVAILABLE"` with the notice "This model's answer is unavailable because the provider did not return a usable response."
 - **Signal / alert.** This is triggered only by the magic phrase "force provider failure" in the query text (LOCAL environment only) or the `provider-failure` marker in `model_id`. It is a test hook, not a real failure.
 - **Blast radius.** Only the test run is affected. Production cannot trigger this path — the phrase is gated on `runtime_environment == LOCAL`, and `model_id` is operator-curated.
 - **Resume / recovery.** N/A — this is a deliberate test path. Remove the trigger phrase or model marker.

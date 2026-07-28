@@ -155,6 +155,82 @@ class CitationCoverage(BaseModel):
 _MAX_PLAUSIBLE_TOKENS = 100_000_000
 
 
+# ---------------------------------------------------------------------------
+# F-09 — the closed set of user-facing provider notices.
+#
+# These render on the model cards, the run-notices list, and the provider-
+# failure detail row (``app.js`` ``renderLiveNotices`` / ``showProviderFailure``
+# / the per-card notice), through ``textContent`` — so they are plain prose
+# read by a user, not a log line read by us.
+#
+# They live here, together and named, for the reason ``readiness`` keeps its
+# reason vocabulary together: copy that is scattered across branch arms drifts
+# into developer shorthand one branch at a time. That is exactly how ":online"
+# and "citation annotations" reached the screen (triage issue #2).
+# ``tests/unit/test_provider_notice_copy.py`` walks this registry.
+# ---------------------------------------------------------------------------
+
+# Each notice states what was OBSERVED, never an unobserved cause, and
+# never a direction ("below") that depends on where it happens to be
+# rendered — these strings appear on the model card (BELOW the answer
+# text), in the run-notices list, and in the live-run fallback panel,
+# which has no source list in it at all.
+NOTICE_SEARCH_DISABLED = (
+    "Web search was turned off for this model, so its answer comes "
+    "from what it learned during training."
+)
+NOTICE_SOURCES_FROM_BACKUP_SEARCH = (
+    "This model did not return any sources of its own. The sources "
+    "shown here came from a separate web search, so they do not count "
+    "toward this run's source support."
+)
+NOTICE_NO_SOURCES_FOUND = (
+    "This model's answer came back without any linked sources, so it "
+    "does not count toward this run's source support."
+)
+NOTICE_FALLBACK_SOURCE_SUPPORT = (
+    "The sources shown here did not come from this model, so they do "
+    "not count toward this run's source support."
+)
+# Deliberately says only what is known. This fires both when a model
+# answered with nothing usable AND when the request never reached a
+# model at all (a refused key, an exhausted balance, a rate limit, a
+# DNS failure all return no response), so it must not claim the model
+# was asked.
+NOTICE_LIVE_RETURNED_NOTHING = (
+    "No usable answer came back for this model, so the text shown here "
+    "was produced by Quorum's local simulation. It is not a real model "
+    "answer."
+)
+# "not active" rather than "turned off": this also fires when live
+# execution IS enabled but no key is set, where "turned off" would send
+# the operator to the wrong switch.
+NOTICE_DEMO_MODE = (
+    "Live model calls are not active for this deployment, so the text "
+    "shown here was produced by Quorum's local simulation. It is not a "
+    "real model answer."
+)
+NOTICE_PROVIDER_UNAVAILABLE = (
+    "This model's answer is unavailable because the provider did not return a usable response."
+)
+NOTICE_CANCELLED = "Cancelled before this model was asked for an answer."
+NOTICE_RUN_DEADLINE = "The run reached its time limit before this model answered."
+
+#: Every notice the provider layer may show a user. Adding a branch that
+#: invents its own string bypasses the copy guard, so add it HERE.
+PROVIDER_NOTICES: tuple[str, ...] = (
+    NOTICE_SEARCH_DISABLED,
+    NOTICE_SOURCES_FROM_BACKUP_SEARCH,
+    NOTICE_NO_SOURCES_FOUND,
+    NOTICE_FALLBACK_SOURCE_SUPPORT,
+    NOTICE_LIVE_RETURNED_NOTHING,
+    NOTICE_DEMO_MODE,
+    NOTICE_PROVIDER_UNAVAILABLE,
+    NOTICE_CANCELLED,
+    NOTICE_RUN_DEADLINE,
+)
+
+
 class TokenUsage(BaseModel):
     """Real per-call token usage as reported by the provider.
 
@@ -382,22 +458,11 @@ class ProviderExecutionService:
             #    unavailable" notice fires when sources are still empty.
             # 4) Otherwise, no notice (clean search hit with sources).
             if not model_slot.search:
-                search_disabled_notice = (
-                    "Web search was disabled for this slot; the answer "
-                    "reflects the model's training-data response, not a "
-                    "live web search."
-                )
+                search_disabled_notice = NOTICE_SEARCH_DISABLED
             elif supplemented_sources:
-                search_disabled_notice = (
-                    "The model returned no citation annotations, so the sources "
-                    "below come from a fallback web search rather than the "
-                    "model's own :online results."
-                )
+                search_disabled_notice = NOTICE_SOURCES_FROM_BACKUP_SEARCH
             elif not sources:
-                search_disabled_notice = (
-                    "Live answer returned without citation annotations; coverage may "
-                    "be below the 80% target because :online web search was unavailable."
-                )
+                search_disabled_notice = NOTICE_NO_SOURCES_FOUND
             else:
                 search_disabled_notice = None
             return self._completed_answer(
@@ -450,10 +515,7 @@ class ProviderExecutionService:
                 provider_path=ProviderPath.FALLBACK_SEARCH,
                 provider_attempt_order=provider_attempt_order,
                 fallback_used=True,
-                provider_notice=(
-                    "Fallback source support was used because  search "
-                    "results were unavailable or did not include usable citations."
-                ),
+                provider_notice=NOTICE_FALLBACK_SOURCE_SUPPORT,
             )
 
         return self._completed_answer(
@@ -475,14 +537,10 @@ class ProviderExecutionService:
                 # both into a single "live execution is disabled"
                 # message, which blamed the operator when the actual
                 # cause was the model returning no text. Be honest.
-                "Live execution returned no usable answer for this slot, so "
-                "the response below was produced by Quorum's local simulation "
-                "helpers. It is not a real-model answer."
+                NOTICE_LIVE_RETURNED_NOTHING
                 if (live_response is None or not (live_response.answer_text or "").strip())
                 and self._live_execution_enabled(openrouter_key=openrouter_key)
-                else "Local demo mode is active because live execution is "
-                "disabled. These results are simulated — produced by Quorum's "
-                "local simulation helpers — and do not come from a live provider."
+                else NOTICE_DEMO_MODE
             ),
         )
 
@@ -597,11 +655,7 @@ class ProviderExecutionService:
                 sourced_answer_count=0,
             ),
             error_code="PROVIDER_UNAVAILABLE",
-            provider_notice=(
-                "This model answer is unavailable because the provider did not "
-                "return a usable response. Raw key material and upstream secrets "
-                "remain redacted."
-            ),
+            provider_notice=NOTICE_PROVIDER_UNAVAILABLE,
         )
 
     def cancelled_answer(self, model_slot: ModelSlot) -> InitialModelAnswer:
@@ -641,7 +695,7 @@ class ProviderExecutionService:
                 sourced_answer_count=0,
             ),
             error_code="CANCELLED",
-            provider_notice="Cancelled before model call started.",
+            provider_notice=NOTICE_CANCELLED,
         )
 
     def deadline_exceeded_answer(self, model_slot: ModelSlot) -> InitialModelAnswer:
@@ -677,7 +731,7 @@ class ProviderExecutionService:
                 sourced_answer_count=0,
             ),
             error_code="RUN_DEADLINE_EXCEEDED",
-            provider_notice="Run deadline reached before this model answered.",
+            provider_notice=NOTICE_RUN_DEADLINE,
         )
 
     def _live_openrouter_response(

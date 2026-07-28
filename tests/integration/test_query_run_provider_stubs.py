@@ -5,6 +5,7 @@ from fastapi.testclient import TestClient
 
 from product_app.main import app
 from product_app.providers import (
+    NOTICE_DEMO_MODE,
     LiveProviderResult,
     ProviderPath,
     SourceReference,
@@ -67,9 +68,10 @@ def test_query_run_response_marks_local_simulation_when_live_execution_is_disabl
         and answer["citation_coverage"]["target_met"]
         for answer in body["initial_answers"]
     )
-    assert all(
-        "local simulation" in answer["provider_notice"] for answer in body["initial_answers"]
-    )
+    # Identity, not substring: the two simulation notices share their
+    # honesty phrase, so a substring check cannot tell "live is off" from
+    # "the model answered with nothing".
+    assert all(answer["provider_notice"] == NOTICE_DEMO_MODE for answer in body["initial_answers"])
     event = provider_event_recorder.list_events()[0]
     assert event.account_id == account_id
     assert event.source_count == 1

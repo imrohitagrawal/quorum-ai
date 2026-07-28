@@ -20,6 +20,7 @@ service so the assertions are independent of the real ``.env``.
 from __future__ import annotations
 
 import json
+from collections.abc import Iterator
 from decimal import Decimal
 
 import pytest
@@ -32,6 +33,7 @@ from product_app.model_slots import (
     DEFAULT_MODEL_IDS,
     openrouter_model_catalog_service,
 )
+from product_app.readiness import record_key_auth_state
 
 
 @pytest.fixture
@@ -91,7 +93,12 @@ def test_ready_endpoint_exposes_live_readiness_state(
     assert payload["environment"]
     # The probe ran at app start; this test sees the result.
     live = payload["live_readiness"]
-    assert live["state"] in {"live", "offline_by_config", "offline_by_no_key"}
+    assert live["state"] in {
+        "live",
+        "offline_by_config",
+        "offline_by_no_key",
+        "offline_by_bad_key",
+    }
     assert isinstance(live["reasons"], list)
     assert isinstance(live["catalog_drift_ids"], list)
 
@@ -257,3 +264,66 @@ def test_status_model_catalog_loaded_true_when_no_drift(
 
     body = response.json()
     assert body["model_catalog_loaded"] is True
+
+
+# ---------------------------------------------------------------------------
+# F-14 — a REJECTED key must be honest on every readiness surface at once.
+#
+# These three surfaces are read by three different audiences: an external
+# monitor polls ``/status.live_execution``, the ops dashboard renders
+# ``/ready.live_readiness.state``, and the workspace seeds its banner from
+# the ``window.LIVE_READINESS`` island on ``/ui``. Before F-14 all three
+# said the deployment was live while every run silently simulated, so the
+# fix is only real if all three move together.
+# ---------------------------------------------------------------------------
+
+
+@pytest.fixture
+def rejected_key(monkeypatch: pytest.MonkeyPatch) -> Iterator[None]:
+    """Live execution on, key present — and the provider refuses it."""
+    _set_live(enabled=True, key="sk-or-v1-fake-key-for-tests-only", monkeypatch=monkeypatch)
+    _set_catalog(monkeypatch, list(DEFAULT_MODEL_IDS))
+    record_key_auth_state("unauthorized")
+    yield
+    record_key_auth_state("unknown")
+
+
+def test_ready_reports_offline_by_bad_key_when_the_provider_refuses_the_key(
+    client: TestClient, rejected_key: None
+) -> None:
+    live = client.get("/ready").json()["live_readiness"]
+
+    assert live["state"] == "offline_by_bad_key"
+    assert any("credential check was refused" in reason for reason in live["reasons"]), live[
+        "reasons"
+    ]
+
+
+def test_status_live_execution_is_false_when_the_provider_refuses_the_key(
+    client: TestClient, rejected_key: None
+) -> None:
+    """The monitoring bool. A rejected key is not live execution."""
+    assert client.get("/status").json()["live_execution"] is False
+
+
+def test_workspace_island_carries_the_bad_key_state(client: TestClient, rejected_key: None) -> None:
+    html = client.get("/ui").text
+
+    assert "offline_by_bad_key" in html
+
+
+def test_ready_never_echoes_a_rejected_key_value(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The reason is served on the PUBLIC, unauthenticated /ready."""
+    secret = "sk-or-v1-DEADBEEF-super-secret"
+    _set_live(enabled=True, key=secret, monkeypatch=monkeypatch)
+    _set_catalog(monkeypatch, list(DEFAULT_MODEL_IDS))
+    record_key_auth_state("unauthorized")
+    try:
+        body = client.get("/ready").text
+    finally:
+        record_key_auth_state("unknown")
+
+    assert secret not in body
+    assert "DEADBEEF" not in body

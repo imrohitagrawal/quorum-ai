@@ -484,9 +484,9 @@ def test_normal_completion_is_unchanged(monkeypatch: pytest.MonkeyPatch) -> None
 
 _SLOT = ModelSlot(slot_number=1, model_id=_MODEL_ID)
 _UNUSABLE_NOTICE = (
-    "Live execution returned no usable answer for this slot, so "
-    "the response below was produced by Quorum's local simulation "
-    "helpers. It is not a real-model answer."
+    "No usable answer came back for this model, so the text shown here "
+    "was produced by Quorum's local simulation. It is not a real model "
+    "answer."
 )
 
 

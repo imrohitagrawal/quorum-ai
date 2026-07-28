@@ -185,7 +185,7 @@ def test_upstream_fault_degrades_slot_honestly(
     assert answer.status is InitialAnswerStatus.COMPLETED
     assert answer.provider_path is ProviderPath.LOCAL_SIMULATION
     assert answer.answer_text.strip()
-    assert "not a real-model answer" in (answer.provider_notice or "").lower()
+    assert "not a real model answer" in (answer.provider_notice or "").lower()
     # (The LOCAL_SIMULATION assertion above IS the paired negative: a fault must
     # never masquerade as a live OPENROUTER_SEARCH answer, and that path is
     # mutually exclusive with LOCAL_SIMULATION.)

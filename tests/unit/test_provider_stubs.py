@@ -9,6 +9,9 @@ import pytest
 from product_app.model_slots import ModelSlot, validate_model_slots
 from product_app.providers import (
     _SEARCH_REJECTED,
+    NOTICE_DEMO_MODE,
+    NOTICE_LIVE_RETURNED_NOTHING,
+    NOTICE_SEARCH_DISABLED,
     LiveProviderResult,
     ProviderPath,
     SourceReference,
@@ -48,7 +51,13 @@ def test_provider_stub_marks_local_simulation_when_live_execution_is_disabled() 
     assert all(not answer.fallback_used for answer in answers)
     assert all(answer.sources for answer in answers)
     assert all(answer.sources[0].provider == ProviderPath.LOCAL_SIMULATION for answer in answers)
-    assert all("simulated" in (answer.provider_notice or "") for answer in answers)
+    # By IDENTITY, not substring: NOTICE_DEMO_MODE and
+    # NOTICE_LIVE_RETURNED_NOTHING share the phrase "not a real model
+    # answer", so a substring check passes even when the branch picks the
+    # wrong one — and picking the wrong one tells the user a model was
+    # called when none was.
+    assert all(answer.provider_notice == NOTICE_DEMO_MODE for answer in answers)
+    assert all(answer.provider_notice != NOTICE_LIVE_RETURNED_NOTHING for answer in answers)
 
 
 def test_provider_stub_uses_fallback_when_openrouter_sources_are_unusable() -> None:
@@ -245,7 +254,9 @@ def test_provider_stub_relaxes_sources_gate_when_live_text_present_without_citat
 
     assert all(answer.provider_path == ProviderPath.OPENROUTER_SEARCH for answer in answers)
     assert all(answer.sources == [] for answer in answers)
-    assert all("citation" in (answer.provider_notice or "").lower() for answer in answers)
+    assert all(
+        "without any linked sources" in (answer.provider_notice or "").lower() for answer in answers
+    )
 
 
 class _FakeLiveResult:
@@ -615,20 +626,21 @@ def test_per_slot_search_off_response_records_search_disabled_notice(
     )
 
     # Slot 1 (search=False): still records as OPENROUTER_SEARCH, with
-    # the "Web search was disabled" notice.
+    # the "Web search was turned off" notice.
     assert answers[0].provider_path == ProviderPath.OPENROUTER_SEARCH
     assert answers[0].provider_notice is not None
-    assert "Web search was disabled" in answers[0].provider_notice
+    assert "Web search was turned off" in answers[0].provider_notice
 
     # Slot 2 (search=True): no search-disabled notice (the existing
     # "missing citations" notice may or may not fire depending on
     # whether :online succeeded; we just confirm the search-disabled
     # notice is NOT present).
     assert answers[1].provider_path == ProviderPath.OPENROUTER_SEARCH
-    assert not (
-        answers[1].provider_notice is not None
-        and "Web search was disabled" in answers[1].provider_notice
-    )
+    # Assert against the CONSTANT, not a substring of the old copy. The
+    # previous form checked for "Web search was disabled", which no notice
+    # can contain any more, so it had become unconditionally true — a
+    # negative assertion that could not fail is not a guard.
+    assert answers[1].provider_notice != NOTICE_SEARCH_DISABLED
 
 
 def test_cancelled_answer_has_expected_shape() -> None:

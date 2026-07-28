@@ -95,8 +95,8 @@ def test_result_endpoint_projects_model_answers_debate_cost_elapsed_and_synthesi
     # OPENROUTER_LIVE_EXECUTION_ENABLED=true but the live call
     # failing in CI, each per-slot notice names the live failure
     # instead of the older "live is disabled" copy. Both branches
-    # share the "local simulation" wording, so pin that to
-    # decouple the test from the exact failure-mode phrasing.
+    # share the "local simulation" wording, so pin that to decouple the
+    # test from the exact failure-mode phrasing.
     assert len(body["provider_failure_notices"]) == 1
     assert "local simulation" in body["provider_failure_notices"][0]
     # The demo_mode flag is True for local-simulation runs so the UI can
@@ -146,8 +146,8 @@ def test_result_endpoint_projects_provider_failure_notice_without_secrets() -> N
     body = response.json()
     assert body["provider_failure_notices"] == [
         (
-            "This model answer is unavailable because the provider did not return a usable "
-            "response. Raw key material and upstream secrets remain redacted."
+            "This model's answer is unavailable because the provider did not "
+            "return a usable response."
         )
     ]
     assert body["status"] == "partial"
