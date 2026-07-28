@@ -84,6 +84,12 @@ jobs:
     steps:
       - name: Check out repository
         uses: actions/checkout@v4
+        with:
+          # Full history: the negative-assertion guard (#131) diffs the changed
+          # spec files against the PR base, exactly as diff-cover and the
+          # mutation gate do. On a shallow clone the base ref is absent, the
+          # diff is empty, and the guard would silently check NOTHING.
+          fetch-depth: 0
 
       - name: Install uv
         uses: astral-sh/setup-uv@v5
@@ -107,6 +113,25 @@ jobs:
       - name: Install e2e dependencies
         working-directory: e2e
         run: npm ci
+
+      # #131 — the mutation gate reads Python only, so nothing checked that the
+      # BROWSER tests can fail. A defect census found "tests that cannot fail"
+      # to be the second-largest category of escaped defects here, ~28 of 32 in
+      # TypeScript. This runs before Playwright: it is fast, and a spec that
+      # cannot fail should be reported before spending 8 minutes running it.
+      #
+      # Scoped to CHANGED spec files, like diff-cover and the mutation gate.
+      # 21 pre-existing violations across 7 files are NOT fixed here; they
+      # surface when someone next touches those files. Registered (and this
+      # step pinned) by tests/unit/test_negative_assertion_guard.py.
+      - name: Fetch base branch for the changed-spec diff
+        if: github.event_name == 'pull_request'
+        run: git fetch --no-tags origin "${{ github.base_ref }}"
+
+      - name: Negative assertions have a positive partner (#131)
+        if: github.event_name == 'pull_request'
+        working-directory: e2e
+        run: node tools/check-negative-assertions.mjs --base "origin/${{ github.base_ref }}"
 
       - name: Install Playwright Chromium (+ system deps)
         working-directory: e2e
