@@ -45,7 +45,12 @@ USER quorum
 EXPOSE 8000
 
 # Production uvicorn settings:
-# - 4 workers (single instance, but each handles requests in parallel)
+# - 1 worker. The CMD below says "--workers", "1"; this line used to read
+#   "4 workers", which was stale. It matters beyond tidiness: /status's
+#   feedback_writes and feedback_lost_billed_writes are PER-PROCESS, so with more
+#   than one worker a /status request samples whichever worker answered it and a
+#   lost-charge signal on another worker is invisible. Raising the count means
+#   moving those signals out of process memory first.
 # - bind to 0.0.0.0 so Fly's proxy can reach it
 # - proxy headers enabled so we get the real client IP from Fly's edge, but
 #   TRUSTED ONLY from Fly's private proxy networks. This was "*", which believed

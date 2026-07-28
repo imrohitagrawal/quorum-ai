@@ -329,6 +329,7 @@ current_readiness = run_startup_probe()
 # are swallowed; the next call to ``list_models`` will retry.
 openrouter_catalog_fetcher.prewarm()
 
+
 # Feedback audit storage. The store is append-only and powers the
 # nightly feedback_audit job. The on-disk path defaults to
 # ``.data/feedback_events.sqlite3``; the audit job reads the same
@@ -336,13 +337,36 @@ openrouter_catalog_fetcher.prewarm()
 # store is optional — the in-memory recorders continue to work
 # without it. A failed open is logged and the app continues
 # without persistence (the audit job will simply see no data).
-try:
-    configure_feedback_store(FeedbackStore.from_env())
-except Exception as exc:  # noqa: BLE001 - persistence is optional
-    logging.getLogger(__name__).warning(
-        "feedback_store: could not open SQLite sink, persistence disabled: %s",
-        exc,
-    )
+def _configure_feedback_store() -> None:
+    """Open the feedback sink at boot; on failure log LOUDLY and continue.
+
+    A module-level function rather than bare module code so the degraded
+    branch is reachable from a test — before P1 / issue #101 it was not, and
+    the branch shipped for months with the wrong severity and an incomplete
+    message.
+
+    Still catching, deliberately: a storage fault must not stop the app from
+    serving. But ERROR, not WARNING, and the message names the consequence
+    that actually costs money. Losing the store does not only disable
+    persistence — ``costs.CostEstimationService.estimate`` guards the 24h
+    ``DAILY_CAP_USD`` spend cap behind ``store is not None``, so this boot also
+    turns that cap off for the life of the process (there is no reconnect
+    path). ``costs`` re-states it per estimate window; this is the first and
+    earliest place an operator can see it.
+    """
+    try:
+        configure_feedback_store(FeedbackStore.from_env())
+    except Exception as exc:  # noqa: BLE001 - persistence is optional
+        logging.getLogger(__name__).error(
+            "feedback_store: could not open SQLite sink — persistence is "
+            "disabled AND the per-account 24h daily spend cap will not be "
+            "enforced for the life of this process (no reconnect path; "
+            "restart once the database is reachable): %s",
+            exc,
+        )
+
+
+_configure_feedback_store()
 
 # Durable terminal run-history sink (S1 / FR-014). Sibling of the feedback
 # store on the same Fly volume, path from ``RUN_HISTORY_DB_PATH``. As with the
@@ -645,8 +669,73 @@ def status_snapshot() -> dict[str, object]:
     health, error-tracking state, and process uptime. No authentication
     is required — the endpoint never surfaces query text, account ids,
     session tokens, or internal filesystem paths. ``feedback_db`` is
-    reported as ``connected``/``disconnected`` health only; the on-disk
-    database path is deliberately not exposed in this public response.
+    reported as ``connected``/``degraded``/``disconnected``/``error`` health
+    only; the on-disk database path is deliberately not exposed in this public
+    response, and neither field below may smuggle it back in. The three
+    unhealthy values are different faults with different fixes.
+
+    ``disconnected`` means no store was ever opened, so persistence AND the 24h
+    per-account spend cap are off until the process is restarted. It is a
+    NARROWER fault than "the volume is unhappy". MEASURED causes of a failed
+    boot-time open: an EXCLUSIVE lock, a RESERVED lock on a database with no
+    schema yet, and an unwritable volume with no database FILE yet.
+
+    ``degraded`` means a store IS open and its reads work, but EITHER its last
+    write attempt failed OR at least one billed cost event has been lost since
+    this process started (issue #109). It is deliberately the union of the two:
+    it is the at-a-glance token, and both conditions are things an operator has
+    to look at. It does NOT by itself say the spend cap stopped firing — read
+    ``feedback_lost_billed_writes`` to find out which of the two you have.
+    MEASURED causes: an unwritable volume whose database file already exists (the
+    production shape, since ``fly.toml`` pins ``FEEDBACK_DB_PATH`` to a file on
+    the mounted volume), a RESERVED lock on an already-schema'd database, a full
+    or nearly-full volume, and a boot whose F-01 migration write failed. All of
+    them open fine and used to report ``connected``.
+
+    ``error`` means a store is present but its health query raised. It outranks
+    ``degraded``: a broken handle is a different diagnosis from a broken volume.
+
+    ``feedback_lost_billed_writes`` is the MONEY signal, and the only one of
+    these fields that cannot be masked. It counts, for this process only, the
+    ``cost``/``cost_guardrail_accepted`` writes that were attempted and lost —
+    exactly the rows ``daily_spend_for`` sums. It only ever increases; no later
+    success clears it and nothing resets it short of a restart.
+
+    * ``> 0`` — the ledger the 24 h ``DAILY_CAP_USD`` cap reads is missing at
+      least that many charges, so that much spend went unmetered and the cap was
+      under-enforced. Those events are gone for good: ``record()`` has no retry
+      and no queue. MEASURED end to end through ``POST /v1/query-runs`` with a
+      transient lock across only the billed write: 8 runs accepted and $0.2088
+      billed against a $0.20 cap, zero ``cost_guardrail_accepted`` rows on disk.
+    * ``0`` with ``feedback_writes: "failing"`` — writes are failing, but no
+      charge has been lost yet, so the ledger is still correct and the cap is
+      still firing. This is a real and expected shape, not a technicality: a
+      nearly-full volume rejects the kilobyte-sized provider/synthesis rows while
+      the ~230-byte billed rows still land (MEASURED: 4/4 charges landed, ledger
+      exact, ``write_health`` ``failing``). Treat it as telemetry loss, which the
+      audit job tolerates — not as a money incident.
+    * ``0`` on a store with no store configured at all — nothing was attempted,
+      so nothing was counted. ``disconnected`` is the signal there, and P1 /
+      issue #101's two ERRORs cover the skipped cap.
+
+    ``feedback_writes`` is the store's write-health on its own key, so an alert
+    can watch it without parsing ``feedback_db``: ``ok`` (a write landed and none
+    has failed since), ``failing`` (the last attempt failed, or there is no store
+    at all — either way events are not landing), ``unverified`` (nothing has been
+    written or failed yet). It reports the LAST write of ANY recorder, so it is
+    not a money signal: a landed telemetry write re-stamps ``ok`` over a charge
+    lost microseconds earlier, which is the ordinary production interleaving
+    (the run worker thread starts before the billed write is recorded).
+    MEASURED: under that interleaving ``feedback_writes`` read ``ok`` for the
+    whole outage described above. ``unverified`` is a real state, not a hedge:
+    MEASURED, opening a store on a steady-state database — an existing file whose
+    F-01 marker is already applied, i.e. the production shape — writes nothing,
+    every read-only surface here writes nothing, and ``fly.toml`` sets
+    ``min_machines_running = 0``, so a cold machine serving only reads is
+    ordinary. An open that DOES attempt a write (a fresh database, or an
+    unapplied migration) stamps its outcome, so ``unverified`` does not cover for
+    a failed boot-time write.
+
     ``error_tracking`` is likewise a generic ``active``/``inactive``
     health value: the concrete vendor (and anything else useful for
     targeting it) is deliberately not named on this public surface.
@@ -657,19 +746,88 @@ def status_snapshot() -> dict[str, object]:
     # Feedback DB state
     store = get_store()
     feedback_db: str
+    feedback_writes: str
     feedback_events_total: int
+    feedback_lost_billed_writes: int
     if store is None:
         feedback_db = "disconnected"
+        # Not "unverified": with no store, events are definitively not landing.
+        # That is measured, not unknown. ``feedback_db`` keeps its own narrower
+        # meaning, so the pair still separates "no store at all" from "a store
+        # that cannot write".
+        feedback_writes = "failing"
         feedback_events_total = 0
+        # Zero because nothing was ever attempted, not because nothing was lost:
+        # ``record_event`` returns early with no store, so there is no write to
+        # count. The signal for this fault is ``disconnected`` plus P1 / issue
+        # #101's two ERRORs.
+        feedback_lost_billed_writes = 0
     else:
+        # Two floats read under the store's own RLock. It cannot raise, and it
+        # adds no new blocking exposure: the ``event_count()`` call below already
+        # takes that same lock, so /status could already wait behind an in-flight
+        # ``record()`` before this line existed.
+        #
+        # Deliberately NOT an active probe write — MEASURED, ``BEGIN IMMEDIATE``
+        # blocks 5197 ms under a held RESERVED lock, and /status is
+        # unauthenticated, unthrottled and a sync def running in anyio's
+        # 40-token threadpool, so a probe here would turn the very fault it is
+        # observing into a DoS lever on every endpoint.
+        #
+        # Also deliberately not ``PRAGMA query_only`` or a ``BEGIN IMMEDIATE``
+        # probe: MEASURED on the read-only production shape, both report HEALTHY
+        # (``query_only`` reads back ``0``; ``BEGIN IMMEDIATE`` returns OK — it is
+        # the INSERT *inside* that transaction which raises ``attempt to write a
+        # readonly database``). ``os.access`` is
+        # excluded for a DIFFERENT reason, which an earlier revision of this
+        # comment got wrong by lumping all three together: on that shape
+        # ``os.access`` correctly returns False, but it is measuring the FILE,
+        # not the HANDLE. After a ``chmod +w`` it returns True — and whether the
+        # live handle is then healthy depends on an ordering ``os.access``
+        # cannot see. MEASURED (issue #109, third review): a handle opened onto
+        # the already-read-only file is still dead, so ``True`` is a false
+        # all-clear; a handle that predates the fault has genuinely recovered,
+        # so ``True`` is correct. A file-level probe cannot separate those two,
+        # which is the argument against it — not that it is always wrong. It can
+        # also be a false all-clear DURING a fault, not only after one: MEASURED,
+        # with only the DIRECTORY unwritable the file stays mode ``0644`` and
+        # ``os.access`` returns ``True`` while every write raises ``attempt to
+        # write a readonly database``. ``write_health`` reports what the handle
+        # itself last did; see its docstring.
+        feedback_writes = store.write_health()
+        feedback_lost_billed_writes = store.lost_billed_writes()
         try:
             feedback_events_total = store.event_count()
             # Report health only. The on-disk database path is an
             # internal detail and must never be leaked through this
             # unauthenticated operator snapshot.
-            feedback_db = "connected"
+            #
+            # A bare token, never a parenthetical suffix: the redaction
+            # regression test asserts ``"(" not in body["feedback_db"]``, so
+            # "connected (writes failing)" would both fail that gate and invite
+            # a future path back into the string.
+            #
+            # The counter is part of the condition because the stamp alone is
+            # maskable: MEASURED through the real route, a landed telemetry write
+            # kept ``feedback_writes`` at ``ok`` for a whole outage in which 8
+            # runs blew a $0.20 cap and not one billed row landed. ``connected``
+            # therefore now means "writes are landing AND no charge has been lost
+            # in this process" — nothing weaker.
+            feedback_db = (
+                "connected"
+                if feedback_writes != "failing" and feedback_lost_billed_writes == 0
+                else "degraded"
+            )
         except Exception:  # noqa: BLE001 - status must not 500
-            feedback_db = "disconnected"
+            # Distinct from the ``store is None`` branch above on purpose (P1 /
+            # issue #101). Both used to report "disconnected", which collapsed
+            # two faults an operator has to act on differently: no store at all
+            # (boot-time open failed; nothing is persisted and the daily spend
+            # cap is skipped; needs a restart) versus a live handle whose query
+            # raised. One string could not tell them apart. ``error`` outranks
+            # ``degraded``: a handle whose reads raise is a worse and different
+            # diagnosis than a volume that will not take writes.
+            feedback_db = "error"
             feedback_events_total = 0
     # Latest audit date
     latest_report = _latest_feedback_report()
@@ -692,6 +850,17 @@ def status_snapshot() -> dict[str, object]:
         "environment": settings.runtime_environment.value,
         "live_execution": report.state in ("live",),
         "feedback_db": feedback_db,
+        # Issue #109. A separate key as well as the degraded ``feedback_db``
+        # token: an alert rule should be able to watch write health directly
+        # instead of string-matching a field that also encodes three other
+        # faults, and adding a key is safe (the public-contract test uses a
+        # superset check).
+        "feedback_writes": feedback_writes,
+        # Issue #109 review, B1. The one field here that a concurrent successful
+        # write cannot mask, and the discriminator between "telemetry is being
+        # lost" and "the spend meter is being lost". A plain integer, so an alert
+        # rule can threshold it and a delta over a window is a loss RATE.
+        "feedback_lost_billed_writes": feedback_lost_billed_writes,
         "feedback_events_total": feedback_events_total,
         "latest_audit": latest_audit,
         "model_catalog_loaded": report.catalog_loaded,

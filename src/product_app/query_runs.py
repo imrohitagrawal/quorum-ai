@@ -143,6 +143,47 @@ class StageState(StrEnum):
     SKIPPED = "skipped"
 
 
+class BillableStage(StrEnum):
+    """The pipeline stages that can dispatch a BILLED provider call.
+
+    The initial-answer stage is absent on purpose: it is gated separately by
+    ``initial_fully_captured``, which already requires one recorded answer per
+    slot and so cannot be fooled by an empty list.
+    """
+
+    DEBATE = "debate"
+    SYNTHESIS = "synthesis"
+
+
+class StageBillingState(StrEnum):
+    """Where a billable stage got to in the usage-recording handshake (E2).
+
+    ``_actual_cost``'s honesty gate is ``all(usage is not None for ... in
+    <list>)``, and ``all([])`` is True — so an EMPTY usage list means two
+    opposite things and the gate could not tell them apart:
+
+    * the stage RAN and dispatched nothing billable (an HTTP 403/404 refusal,
+      no configured model id, live execution off) — the empty list is exact;
+    * the stage was ENTERED, calls were BILLED, and the code that records them
+      never ran — the empty list hides real dollars.
+
+    This marker supplies the missing fact. It keys off whether the RECORDING
+    code path itself ran, never off a downstream artifact: ``debate_outputs``
+    is appended on every run that reaches the debate stage whether or not
+    anything was billed, so gating on it would force ``estimated`` for honest
+    unbilled runs and re-open the ~4.8x overstatement PR #99 measured.
+    """
+
+    #: Never reached. Nothing could have been billed.
+    NOT_ENTERED = "not_entered"
+    #: Started — calls may have been dispatched and BILLED — and recording
+    #: never completed. Blocks ``measured``.
+    ENTERED = "entered"
+    #: The recording handshake completed. The usage list is authoritative, so
+    #: the ``all(usage is not None ...)`` check decides.
+    RECORDED = "recorded"
+
+
 TERMINAL_STATUSES = frozenset(
     {
         QueryRunStatus.COMPLETED,
@@ -472,10 +513,61 @@ class QueryRun:
     #: pipeline can inject prior context into debate/synthesis prompts
     #: and the cost estimator can account for the extra tokens.
     context: dict[str, Any] | None = None
+    #: E2: how far each billable stage got in the usage-recording handshake.
+    #: Read by ``_actual_cost`` to tell an honestly-empty usage list (nothing
+    #: was billable) from a silently-empty one (billed, never recorded). Both
+    #: stages start ``NOT_ENTERED``; see :class:`StageBillingState`.
+    billing_stages: dict[BillableStage, StageBillingState] = field(
+        default_factory=lambda: dict.fromkeys(BillableStage, StageBillingState.NOT_ENTERED)
+    )
 
     @property
     def is_terminal(self) -> bool:
         return self.status in TERMINAL_STATUSES
+
+
+@dataclass(frozen=True)
+class BillingSnapshot:
+    """One ATOMIC read of every ``QueryRun`` field ``_actual_cost`` decides from.
+
+    ``_actual_cost`` used to read the live run TWICE — once in the honesty
+    gate, once in the measured computation below it — with no lock and no copy
+    in between. That window is not microseconds wide: the computation's first
+    :func:`~product_app.costs.measured_call_cost_usd` goes ``_price_per_1k ->
+    price_index() -> _entries() -> catalog_fetcher.list_models()``, which on a
+    cold or expired cache is a real network round-trip. And ``GET
+    /v1/query-runs/{id}`` serves ``_result_response`` for a RUNNING run, so a
+    polling UI reads a run the pipeline thread is concurrently mutating. The
+    repository's mutators take ``_lock``; ``_actual_cost`` took nothing.
+
+    MEASURED consequence of the double read (deterministic repro: park the
+    reader inside the catalog fetch, run the real ``mark_billable_stage_entered
+    + record_debate_outputs`` in the window): the gate saw ``DEBATE
+    NOT_ENTERED`` over an empty usage list and passed it as "nothing was
+    billable"; the pipeline then recorded ``[(1, usage), (2, None)]``; the
+    computation RE-read that list and its ``if usage is None: continue``
+    silently DROPPED round 2. Served: ``cost_source="measured"``,
+    ``debate_round_1=$0.0035``, ``debate_round_2=$0`` — round 1's dollars in a
+    figure the UI calls measured, with a BILLED round-2 call missing from it.
+    A free-running two-thread probe hit the same signature with no parking at
+    all (~1 dishonest read per 3000 trials).
+
+    Copying every field the gate and the computation share — under the
+    repository lock, so no mutator can interleave — makes both halves decide
+    and price from the SAME facts. Copying one field at a time WITHOUT the lock
+    would not be enough: the marker and its usage list would still be read at
+    different instants, and either read order still yields a dishonest
+    ``measured`` (a stale ``NOT_ENTERED`` over a fresh list drops the billed
+    call; a stale empty list under a fresh ``RECORDED`` drops the whole stage).
+    """
+
+    cost_estimate: CostEstimate
+    model_slots: tuple[ModelSlot, ...]
+    initial_answers: tuple[InitialModelAnswer, ...]
+    debate_call_usages: tuple[tuple[int, TokenUsage | None], ...]
+    synthesis_call_usages: tuple[TokenUsage | None, ...]
+    debate_stage: StageBillingState
+    synthesis_stage: StageBillingState
 
 
 class InMemoryQueryRunRepository:
@@ -682,6 +774,20 @@ class InMemoryQueryRunRepository:
             return self._query_runs[query_run_id]
         return last
 
+    def mark_billable_stage_entered(self, query_run_id: UUID, stage: BillableStage) -> QueryRun:
+        """Record that ``stage`` is about to run and may bill (E2).
+
+        Called immediately BEFORE the stage's orchestrator, so any path that
+        leaves without reaching the matching ``record_*`` — a raise, or an
+        early return that skips the recording call — leaves the marker on
+        ``ENTERED`` and blocks ``measured``.
+        """
+        with self._lock:
+            query_run = self._query_runs[query_run_id]
+            query_run.billing_stages[stage] = StageBillingState.ENTERED
+            query_run.updated_at = datetime.now(UTC)
+            return query_run
+
     def record_debate_outputs(
         self,
         query_run_id: UUID,
@@ -693,6 +799,10 @@ class InMemoryQueryRunRepository:
             query_run.debate_outputs = debate_outputs
             if live_call_usages is not None:
                 query_run.debate_call_usages = live_call_usages
+            # E2: reaching here IS the recording handshake, so the usage list
+            # from this point on is authoritative — empty means "nothing was
+            # billable", not "we never looked".
+            query_run.billing_stages[BillableStage.DEBATE] = StageBillingState.RECORDED
             query_run.updated_at = datetime.now(UTC)
             return query_run
 
@@ -707,8 +817,59 @@ class InMemoryQueryRunRepository:
             query_run.final_synthesis = final_synthesis
             if live_call_usages is not None:
                 query_run.synthesis_call_usages = live_call_usages
+            # E2: see ``record_debate_outputs``.
+            query_run.billing_stages[BillableStage.SYNTHESIS] = StageBillingState.RECORDED
             query_run.updated_at = datetime.now(UTC)
             return query_run
+
+    def billing_snapshot(self, query_run: QueryRun) -> BillingSnapshot:
+        """Copy every billing-relevant field of ``query_run`` in ONE atomic read.
+
+        The lock is held for the COPY ONLY. Pricing
+        (``measured_call_cost_usd`` -> the model-catalog fetch) happens after
+        it is released: holding the repository lock across a network
+        round-trip would stall every pipeline write in the process, trading a
+        money bug for an availability bug.
+
+        ``self._lock`` is an ``RLock``. That is DEFENSIVE, not required by any
+        caller today: no method of this class calls ``_actual_cost`` or
+        ``_result_response`` (AST-checked over this module), and the callers
+        that do — the ``/v1/query-runs/{id}`` route handlers,
+        ``_persist_terminal_run`` and ``_log_estimate_accuracy`` — are
+        module-level functions that do not hold this lock. The ``RLock`` costs
+        nothing and means a future repository-side caller re-enters instead of
+        hanging. Nothing is called while the lock is held, so this cannot
+        introduce a lock-ordering cycle.
+
+        The copy is SHALLOW, which is sufficient only because every recorded
+        object it captures is treated as immutable: the repository's writers
+        REBIND ``initial_answers`` / ``debate_call_usages`` /
+        ``synthesis_call_usages`` rather than mutate a recorded
+        ``InitialModelAnswer`` or ``TokenUsage`` in place. Those models are not
+        ``frozen``, so that invariant is a convention — pinned by
+        ``tests/integration/test_recorded_billing_objects_are_never_mutated.py``.
+        A writer that mutated a recorded answer in place would re-open the
+        TOCTOU straight through this snapshot.
+
+        ``query_run`` is passed in rather than looked up by id: ``_actual_cost``
+        is handed a run object by its callers, and the copy only needs mutual
+        exclusion with the mutators — all of which take THIS lock.
+
+        Pinned by
+        ``tests/integration/test_billing_snapshot_copy_is_mutually_exclusive.py``,
+        which parks a reader in the MIDDLE of the copy: with the lock the
+        writer blocks, without it the receipt changes.
+        """
+        with self._lock:
+            return BillingSnapshot(
+                cost_estimate=query_run.cost_estimate,
+                model_slots=tuple(query_run.model_slots),
+                initial_answers=tuple(query_run.initial_answers),
+                debate_call_usages=tuple(query_run.debate_call_usages),
+                synthesis_call_usages=tuple(query_run.synthesis_call_usages),
+                debate_stage=query_run.billing_stages[BillableStage.DEBATE],
+                synthesis_stage=query_run.billing_stages[BillableStage.SYNTHESIS],
+            )
 
     def clear(self) -> None:
         with self._lock:
@@ -1651,6 +1812,11 @@ def _execute_query_run(query_run_id: UUID, account_id: UUID) -> None:
         ):
             _mark_remaining_stages(query_run_id, ["debate_round_2", "synthesis"])
         return
+    # E2: from here the debate stage may dispatch BILLED calls. Marked before
+    # the call, so a raise inside the orchestrator — or any path that returns
+    # without reaching ``record_debate_outputs`` — leaves ``ENTERED`` behind
+    # and the receipt cannot claim ``measured``.
+    query_run_repository.mark_billable_stage_entered(query_run_id, BillableStage.DEBATE)
     debate_result = debate_stub_service.run_debate_rounds(
         account_id=account_id,
         query_run_id=query_run_id,
@@ -1734,6 +1900,17 @@ def _execute_query_run(query_run_id: UUID, account_id: UUID) -> None:
         )
         return
     latest = query_run_repository.get(query_run_id)
+    # E2: same contract as the debate stage above. Two ways out of here skip
+    # ``record_final_synthesis`` and would otherwise leave billed section calls
+    # behind an empty list that ``all([])`` waves through as ``measured``:
+    #   * a RAISE out of ``produce_final_synthesis`` — reachable, and the case
+    #     this mark actually earns its keep on;
+    #   * the ``final_synthesis is None`` branch below, which returns PARTIAL
+    #     without recording. That one is DEAD today — ``synthesis.py`` has
+    #     exactly one ``return SynthesisResult(`` and it always passes a
+    #     ``FinalSynthesis`` — and is guarded only because the return type
+    #     permits ``None``, so a future producer could start emitting it.
+    query_run_repository.mark_billable_stage_entered(query_run_id, BillableStage.SYNTHESIS)
     synthesis_result = synthesis_stub_service.produce_final_synthesis(
         account_id=account_id,
         query_run_id=query_run_id,
@@ -2170,17 +2347,58 @@ def _evaluation_projection(
 
 
 def _result_response(query_run: QueryRun) -> QueryRunResultResponse:
+    """Project a live ``QueryRun`` into the response the ``GET /{id}`` route serves.
+
+    ORDERING IS LOAD-BEARING. Every field of the served BODY is read into a
+    local BEFORE ``_actual_cost`` is called, and the response is built from
+    those locals — so the cost figure is the NEWEST read in this response,
+    never the oldest. This function is called for a RUNNING run (there is no
+    terminal guard), so the pipeline thread mutates ``query_run`` underneath
+    it.
+
+    The body used to be read in the ``return`` expression, i.e. AFTER
+    ``_actual_cost`` returned, which put the whole pricing computation — the
+    cold-cache ``catalog_fetcher.list_models()`` round-trip included — between
+    the cost's view of the run and the body's. MEASURED on the PRE-FIX tree,
+    free-running with no parking (3 fresh processes x 3000 trials): 2, 2, 2
+    responses carrying a full two-round debate transcript, a final synthesis
+    and a TERMINAL status over ``cost_source="measured"`` with every
+    debate/synthesis line at $0. For that run shape the served figure is
+    $0.0062 against a true measured $0.0137 — a 2.2x UNDER-statement, on a
+    receipt the UI never refreshes (``static/app.js`` handles the first
+    terminal payload exactly once: ``terminalHandled`` -> ``stopPolling()`` ->
+    render, with no re-fetch). Same probe on this ordering: 0, 0, 0.
+
+    Reading the body first cannot produce that: the cost can only be NEWER than
+    the body it is served with, which over-states rather than hides a billed
+    call. Pinned by
+    ``tests/integration/test_result_response_body_and_cost_agree.py``.
+    """
+    # --- the BODY, read first (see the docstring: this order is the fix) -----
+    query_run_id = query_run.query_run_id
+    status = query_run.status
+    correlation_id = query_run.correlation_id
+    model_slots = list(query_run.model_slots)
+    cost_estimate = query_run.cost_estimate
+    elapsed_time_ms = _elapsed_time_ms(query_run)
+    failed_steps = list(query_run.failed_steps)
+    missing_steps = list(query_run.missing_steps)
+    progress = _progress_model(query_run)
+    initial_answers = list(query_run.initial_answers)
+    debate_outputs = list(query_run.debate_outputs)
+    final_synthesis = query_run.final_synthesis
+
     provider_failure_notices = list(
         dict.fromkeys(
             [
                 answer.provider_notice
-                for answer in query_run.initial_answers
+                for answer in initial_answers
                 if answer.provider_notice is not None
             ]
         )
     )
     partial_failure_notice = None
-    if query_run.status in {
+    if status in {
         QueryRunStatus.PARTIAL,
         QueryRunStatus.FAILED,
         QueryRunStatus.TIMED_OUT,
@@ -2191,11 +2409,11 @@ def _result_response(query_run: QueryRun) -> QueryRunResultResponse:
         )
     demo_mode = any(
         answer.provider_path in {ProviderPath.LOCAL_SIMULATION, ProviderPath.FALLBACK_SEARCH}
-        for answer in query_run.initial_answers
+        for answer in initial_answers
     )
     local_count = sum(
         1
-        for answer in query_run.initial_answers
+        for answer in initial_answers
         if answer.provider_path in {ProviderPath.LOCAL_SIMULATION, ProviderPath.FALLBACK_SEARCH}
     )
     # RB-5 / D3 honesty fix: a slot that FAILED on the OpenRouter path is NOT a
@@ -2205,7 +2423,7 @@ def _result_response(query_run: QueryRun) -> QueryRunResultResponse:
     # Require COMPLETED, mirroring the STRICT gate in ``_actual_cost`` below.
     live_count = sum(
         1
-        for answer in query_run.initial_answers
+        for answer in initial_answers
         if answer.provider_path is ProviderPath.OPENROUTER_SEARCH
         and answer.status is InitialAnswerStatus.COMPLETED
     )
@@ -2214,7 +2432,7 @@ def _result_response(query_run: QueryRun) -> QueryRunResultResponse:
     # this figure; coverage now counts answers, so the two are independent.
     material_claim_count = sum(
         estimate_material_claim_count(answer.answer_text)
-        for answer in query_run.initial_answers
+        for answer in initial_answers
         # Review A5: ``estimate_material_claim_count`` floors at 1 even for
         # empty text, so summing over EVERY slot invents a claim for each
         # failed / cancelled / deadline-exceeded answer — a run where all four
@@ -2224,27 +2442,30 @@ def _result_response(query_run: QueryRun) -> QueryRunResultResponse:
         if answer.answer_text.strip()
     )
     agreement, position_movements = build_agreement_and_positions(
-        initial_answers=query_run.initial_answers,
-        debate_outputs=query_run.debate_outputs,
-        final_synthesis=query_run.final_synthesis,
+        initial_answers=initial_answers,
+        debate_outputs=debate_outputs,
+        final_synthesis=final_synthesis,
     )
+    evaluation = _evaluation_projection(query_run, agreement=agreement)
+
+    # --- the COST, read LAST, from its own atomic snapshot -------------------
     actual_cost_usd, actual_breakdown, cost_source = _actual_cost(query_run)
     return QueryRunResultResponse(
-        query_run_id=query_run.query_run_id,
-        status=query_run.status,
-        correlation_id=query_run.correlation_id,
-        model_slots=query_run.model_slots,
-        cost_estimate=query_run.cost_estimate,
-        elapsed_time_ms=_elapsed_time_ms(query_run),
-        failed_steps=query_run.failed_steps,
-        missing_steps=query_run.missing_steps,
-        progress=_progress_model(query_run),
+        query_run_id=query_run_id,
+        status=status,
+        correlation_id=correlation_id,
+        model_slots=model_slots,
+        cost_estimate=cost_estimate,
+        elapsed_time_ms=elapsed_time_ms,
+        failed_steps=failed_steps,
+        missing_steps=missing_steps,
+        progress=progress,
         partial_failure_notice=partial_failure_notice,
         provider_failure_notices=provider_failure_notices,
         result=ResultProjection(
-            model_answers=query_run.initial_answers,
-            debate_outputs=query_run.debate_outputs,
-            final_synthesis=query_run.final_synthesis,
+            model_answers=initial_answers,
+            debate_outputs=debate_outputs,
+            final_synthesis=final_synthesis,
             agreement=agreement,
             position_movements=position_movements,
         ),
@@ -2256,8 +2477,28 @@ def _result_response(query_run: QueryRun) -> QueryRunResultResponse:
         actual_cost_usd=actual_cost_usd,
         actual_breakdown=actual_breakdown,
         cost_source=cost_source,
-        evaluation=_evaluation_projection(query_run, agreement=agreement),
+        evaluation=evaluation,
     )
+
+
+def _stage_captured(stage: StageBillingState, usages_captured: bool) -> bool:
+    """Whether a billable stage's contribution to the bill is fully known (E2).
+
+    ``usages_captured`` is the pre-existing ``all(usage is not None ...)``
+    check over the stage's usage list. On its own it is vacuously True for an
+    EMPTY list, which is why the marker decides first:
+
+    * ``NOT_ENTERED`` — the stage never ran, so there is nothing to know.
+    * ``ENTERED``     — it ran and never finished recording; whatever the list
+      holds, it is not the whole story.
+    * ``RECORDED``    — the handshake completed, so the list is authoritative
+      and the usual check applies.
+    """
+    if stage is StageBillingState.NOT_ENTERED:
+        return True
+    if stage is StageBillingState.ENTERED:
+        return False
+    return usages_captured
 
 
 def _actual_cost(
@@ -2281,12 +2522,42 @@ def _actual_cost(
       billed-but-uncaptured call), or any live call omitted its usage, the run
       stays ``estimated``. It is the only way to guarantee that no billed call
       is silently omitted from a figure the UI presents as measured billing.
+    * E2: a debate/synthesis stage that was ENTERED but never completed its
+      usage recording also stays ``estimated``. An empty usage list is only
+      trustworthy once the stage's marker says the recording ran — see
+      :class:`StageBillingState` and :func:`_stage_captured`.
+
+    Deliberately NOT consulted: the run's STATUS. A cancelled/partial/timed-out
+    run whose captured calls are all present is still ``measured``, because its
+    figure is exact; swapping it for a pre-run estimate would overstate the
+    bill. Pinned by ``test_actual_cost_ignores_run_status_today``.
+
+    DELIBERATE, BOUNDED OVER-STATEMENT (E2 tradeoff, currently latent): a stage
+    that raises BEFORE dispatching any provider call is provably $0 billed, yet
+    its marker is ``ENTERED``, so this returns the pre-run ESTIMATE instead of
+    the exact measured initial-answer figure. MEASURED on a raise out of
+    ``run_debate_rounds`` with zero dispatched calls: $0.0200 served where
+    origin/main served $0.0062 — a 3.2x over-statement on a FAILED run. It is
+    accepted on purpose: a stage that crashed mid-flight cannot certify how far
+    it got, and over-stating a crashed run is the safe direction, whereas the
+    cancel/deadline paths (which never enter a billable stage at all) keep
+    their exact figure. Latent rather than live today — the statements before
+    the first provider dispatch in ``run_debate_rounds`` /
+    ``produce_final_synthesis`` are local assignments and string building with
+    no reachable raise — so this is a bound on a future regression, not a
+    figure any current run serves. The mark deliberately stays OUTSIDE the
+    provider seam: moving it inside would re-open the window it exists to close.
+
+    CONCURRENCY: the whole decision is made from ONE ``BillingSnapshot`` taken
+    under the repository lock. The live run is never re-read below the gate —
+    see :class:`BillingSnapshot` for the measured defect that caused.
     """
-    estimate = query_run.cost_estimate
+    snapshot = query_run_repository.billing_snapshot(query_run)
+    estimate = snapshot.cost_estimate
 
     # --- STRICT honesty gate -------------------------------------------------
-    model_slots = query_run.model_slots
-    initial_answers = query_run.initial_answers
+    model_slots = snapshot.model_slots
+    initial_answers = snapshot.initial_answers
     initial_fully_captured = (
         bool(model_slots)
         and len(initial_answers) == len(model_slots)
@@ -2297,8 +2568,14 @@ def _actual_cost(
             for answer in initial_answers
         )
     )
-    debate_captured = all(usage is not None for _, usage in query_run.debate_call_usages)
-    synthesis_captured = all(usage is not None for usage in query_run.synthesis_call_usages)
+    debate_captured = _stage_captured(
+        snapshot.debate_stage,
+        all(usage is not None for _, usage in snapshot.debate_call_usages),
+    )
+    synthesis_captured = _stage_captured(
+        snapshot.synthesis_stage,
+        all(usage is not None for usage in snapshot.synthesis_call_usages),
+    )
     if not (initial_fully_captured and debate_captured and synthesis_captured):
         return estimate.estimated_cost_usd, estimate.breakdown, "estimated"
 
@@ -2307,6 +2584,10 @@ def _actual_cost(
     # unreachable but keep the types narrow. The whole computation is wrapped so
     # a cost-arithmetic error (e.g. a Decimal overflow from a value that somehow
     # slipped the capture-time bound) can never crash the result endpoint.
+    # Everything below reads ``snapshot`` — the SAME facts the gate decided on.
+    # Re-reading ``query_run`` here is the TOCTOU that let a serving read claim
+    # "measured" while its ``is None`` skip dropped a BILLED call the pipeline
+    # had recorded in between; see :class:`BillingSnapshot`.
     try:
         per_model_initial_named: list[tuple[str, str, Decimal]] = []
         for answer in sorted(initial_answers, key=lambda a: a.slot_number):
@@ -2326,7 +2607,7 @@ def _actual_cost(
             )
 
         debate_by_round: dict[int, Decimal] = {}
-        for round_number, debate_usage in query_run.debate_call_usages:
+        for round_number, debate_usage in snapshot.debate_call_usages:
             if debate_usage is None:
                 continue
             debate_by_round[round_number] = debate_by_round.get(
@@ -2344,7 +2625,7 @@ def _actual_cost(
                     prompt_tokens=synth_usage.prompt_tokens,
                     completion_tokens=synth_usage.completion_tokens,
                 )
-                for synth_usage in query_run.synthesis_call_usages
+                for synth_usage in snapshot.synthesis_call_usages
                 if synth_usage is not None
             ),
             Decimal("0"),

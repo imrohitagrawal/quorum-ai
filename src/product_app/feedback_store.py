@@ -39,24 +39,47 @@ import logging
 import os
 import sqlite3
 import threading
+import time
 import weakref
-from collections.abc import Iterable, Iterator
+from collections.abc import Callable, Iterable, Iterator
 from contextlib import contextmanager, suppress
 from dataclasses import asdict, dataclass
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 from enum import Enum
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
 from uuid import UUID
 
 _log = logging.getLogger(__name__)
 
 #: Default on-disk location. Operators can override via the
-#: ``FEEDBACK_DB_PATH`` env var (set in ``fly.toml`` or by the audit
-#: cron job). A Fly volume is the production home; ``:memory:`` is
-#: the test home; a local file under ``.data/`` is the dev default
-#: so dev runs do not pollute the repo.
+#: ``FEEDBACK_DB_PATH`` env var, which ``fly.toml``'s ``[env]`` block sets for
+#: production. The load-bearing claim is the narrow negative one: no workflow
+#: sets it — VERIFIED 2026-07-28, zero occurrences of ``FEEDBACK_DB_PATH``
+#: across all 15 files under ``.github/``. (Test code does set it, via
+#: ``monkeypatch.setenv`` in
+#: ``tests/integration/test_feedback_store_locked_database.py``; that is
+#: process-local and never reaches a runner's audit job.)
+#: ``feedback_audit.py`` does READ it, indirectly, at both its entry points —
+#: each behind a guard that the nightly workflow always falls through:
+#: ``_load_events_by_recorder`` calls :meth:`FeedbackStore.from_env` only when
+#: ``get_store()`` is ``None``, and it is — the audit runs as its own CLI
+#: process that never configures a store (VERIFIED by import); and
+#: ``generate_status_md`` calls it only when its ``status`` argument is
+#: ``None``, and it is — ``feedback-audit.yml`` passes ``--status-only`` and no
+#: ``--status-json``, which is the only thing that populates ``status``.
+#: ``from_env`` is ``os.environ.get("FEEDBACK_DB_PATH", DEFAULT_DB_PATH)``, so
+#: the consequence follows from the workflow half alone — with nothing setting
+#: the var on the runner, that ``get`` falls back to this default and the
+#: nightly audit opens its own empty, checkout-local database rather than the
+#: production volume (issue #103). An operator who exports
+#: ``FEEDBACK_DB_PATH=/data/...`` by hand (e.g. running the audit under
+#: ``fly ssh console``, as ``docs/23-data-model.md`` and the locked-database
+#: runbook describe) DOES redirect it at the real volume.
+#: A Fly volume is the production home; ``:memory:`` is the test home; a
+#: local file under ``.data/`` is the dev default so dev runs do not pollute
+#: the repo.
 DEFAULT_DB_PATH = ".data/feedback_events.sqlite3"
 
 #: How long :meth:`FeedbackStore.close` waits for the store lock before closing
@@ -66,6 +89,43 @@ DEFAULT_DB_PATH = ".data/feedback_events.sqlite3"
 #: >10x headroom for a disk-backed volume. Anything past that is not contention,
 #: it is a lock that will never be released.
 _CLOSE_LOCK_TIMEOUT_S = 5.0
+
+#: The (recorder, event_type) pair that IS the daily spend meter.
+#: :meth:`FeedbackStore.daily_spend_for` sums ``estimated_cost_usd`` over exactly
+#: ``recorder = 'cost' AND event_type = 'cost_guardrail_accepted'`` — verified
+#: against that method's SQL, not inferred from its name. Every other event type
+#: this store holds is telemetry the audit job already tolerates gaps in; losing
+#: one of THESE is what freezes the ledger and disarms the cap, so it is the only
+#: loss that earns an ERROR and the only one :meth:`FeedbackStore.lost_billed_writes`
+#: counts.
+_METERED_WRITE = ("cost", "cost_guardrail_accepted")
+
+#: Minimum gap between two "a billed cost event was lost" ERROR records
+#: (issue #109).
+#:
+#: Sized and shaped exactly like ``costs.DAILY_CAP_BYPASS_LOG_INTERVAL_S``, for
+#: the same measured reasons and against the same failure. A read-only volume
+#: fails EVERY priced write, so an unconditional ERROR would emit one record per
+#: priced request and bury the signal it exists to raise; a once-per-process
+#: record fails the other way, landing at the first charge after boot and then
+#: going silent while the cap is still disarmed. One per minute is bounded
+#: (<=1440/day) and keeps re-firing for as long as the fault lasts, so an alert
+#: rule on a multi-minute evaluation window stays lit.
+#:
+#: The window is measured against ``time.monotonic()``, NOT the wall clock, for
+#: the reason P1 / issue #101 measured on its own window: one backward step (NTP
+#: correction, VM clock resync, snapshot restore) makes ``now - last`` negative
+#: and keeps it under the interval until real time catches up — 1 record emitted
+#: where 61 were due, i.e. a money guard's only signal silenced by a clock event
+#: unrelated to the fault. The constant is duplicated here rather than imported
+#: from ``costs`` on purpose: ``costs`` imports this module (lazily, "to avoid
+#: cycles"), so a module-level import back the other way would re-create exactly
+#: the cycle that comment is guarding against.
+LOST_COST_EVENT_LOG_INTERVAL_S = 60.0
+
+#: Tri-state answer to "are writes landing?". See
+#: :meth:`FeedbackStore.write_health`.
+WriteHealth = Literal["ok", "failing", "unverified"]
 
 
 def _json_default(value: Any) -> Any:
@@ -158,8 +218,14 @@ class FeedbackStore:
     #: of that shape, but it is not retroactive, and this table is durable in
     #: production (``fly.toml`` pins ``FEEDBACK_DB_PATH`` to
     #: ``/data/feedback_events.sqlite3`` on the persistent volume precisely so
-    #: it survives a deploy). ``daily_spend_for`` filters on ``event_type``
-    #: alone, so without this migration every preview written in the 24h before
+    #: it survives a deploy). ``daily_spend_for`` does not look at
+    #: ``query_run_id`` at all — it filters on ``recorder = 'cost' AND
+    #: event_type = 'cost_guardrail_accepted'`` plus the account and the 24 h
+    #: window (read its SQL; an earlier revision of this comment said
+    #: "``event_type`` alone", which contradicted ``_METERED_WRITE`` above, and
+    #: the recorder half is exactly what stops a cost-shaped event written by
+    #: another recorder from counting as a charge).
+    #: So without this migration every preview written in the 24h before
     #: the fix ships keeps double-metering its account for a full rolling day
     #: after it ships — real users stay wrongly over-capped by the very bug
     #: that was just fixed.
@@ -183,10 +249,36 @@ class FeedbackStore:
         "AND query_run_id IS NULL"
     )
 
-    def __init__(self, db_path: str) -> None:
+    def __init__(
+        self,
+        db_path: str,
+        *,
+        monotonic_provider: Callable[[], float] | None = None,
+    ) -> None:
         self._db_path = db_path
         self._lock = threading.RLock()
         self._closed = False
+        #: Elapsed-time source for the two write-health stamps and the
+        #: lost-cost-event log window. MONOTONIC, never a wall clock — see
+        #: ``LOST_COST_EVENT_LOG_INTERVAL_S``. Injectable so the cardinality
+        #: tests can drive the window without sleeping.
+        self._monotonic: Callable[[], float] = (
+            time.monotonic if monotonic_provider is None else monotonic_provider
+        )
+        #: Monotonic readings at the last landed / last failed :meth:`record`.
+        #: Two stamps rather than one boolean because the faults recover
+        #: differently — see :meth:`write_health`. Both start ``None``: a store
+        #: that has not attempted a write yet has measured nothing.
+        self._last_write_success_at: float | None = None
+        self._last_write_failure_at: float | None = None
+        #: Monotonic reading at the last lost-billed-cost-event ERROR, for the
+        #: rate limit described on ``LOST_COST_EVENT_LOG_INTERVAL_S``.
+        self._lost_cost_event_logged_at: float | None = None
+        #: How many BILLED cost events this process has failed to persist.
+        #: See :meth:`lost_billed_writes` for why this exists alongside the two
+        #: stamps. Monotonically increasing; never reset, and no later success
+        #: clears it.
+        self._lost_billed_writes = 0
         # ``check_same_thread=False`` lets the audit job read from a
         # different thread than the writer. The lock above serialises
         # access either way.
@@ -215,11 +307,79 @@ class FeedbackStore:
         state and the next boot retries — never half-relabelled-and-marked.
 
         Best-effort, like :meth:`record`: opening the store must not fail
-        because a one-shot repair could not run. A read-only or locked DB
-        leaves the rows as they were — over-metering for at most the 24h
-        window, which is the behaviour without this method at all — and, since
-        the marker is written in the same transaction, the repair still lands
-        the moment the volume is writable again.
+        because a one-shot repair could not run. What that degradation costs
+        depends on the fault, and only ONE of the faults is this method's to
+        degrade (measured in
+        ``tests/integration/test_feedback_store_locked_database.py`` and
+        ``tests/integration/test_f01_preview_billing_backfill.py``):
+
+        * **Read-only DB** — an unwritable volume. ``_SCHEMA`` one line
+          earlier is a no-op against an existing schema and needs no write, so
+          the store opens and the ``except`` below catches. The rows stay as
+          they were, so the spend already on disk is over-counted for at most
+          the 24h window ``daily_spend_for`` reads — the behaviour without this
+          method at all. Nothing is marked applied, so the repair lands on the
+          next store OPEN once the volume is writable — which means a process
+          restart, not "the moment the volume recovers". The store is a
+          process-wide singleton and nothing re-attempts the migration inside
+          a running process.
+
+          That over-count is NOT the whole cost, and it is not even the
+          dominant one: on the same unwritable volume :meth:`record` swallows
+          every write (``WARNING ... failed to persist event``), so the
+          ``cost_guardrail_accepted`` rows that ARE the meter never land and
+          ``daily_spend_for`` returns a FROZEN total for as long as the fault
+          lasts. Net direction is UNDER-metering, not over-metering. MEASURED:
+          charges each worth ``DAILY_CAP_USD / 4`` → ``daily_spend_for`` still
+          ``0`` and ``threshold_action`` ``allow`` with a token minted, where
+          the same charges without the fault reach ``BLOCK`` on the FIFTH one.
+          (Not the fourth: the guard is ``already_spent + estimated >
+          DAILY_CAP_USD``, a strict ``>``, so after four quarter-cap charges the
+          ledger reads exactly the cap and it is the fifth estimate that first
+          exceeds it. An earlier revision of this docstring, of
+          ``docs/runbooks/feedback-store-schema-migration.md`` and of the
+          ``/status`` docstring in ``main.py`` all said "four"; re-measured
+          2026-07-28 and pinned by
+          ``tests/integration/test_feedback_store_write_failures.py::
+          test_block_lands_on_the_fifth_quarter_cap_charge_not_the_fourth``.)
+          ``store is not None``, so ``costs.py`` takes the metered branch and
+          the P1 bypass ERROR never fires. What DOES fire, since issue #109, is
+          ``record``'s own rate-limited ERROR naming the disarmed cap, and
+          ``/status`` degrades ``feedback_db`` to ``degraded`` while
+          ``feedback_lost_billed_writes`` counts up — before that there were zero
+          ERROR records anywhere and ``/status`` still read ``connected``. On
+          THIS shape ``feedback_writes`` also reads ``failing``, because every
+          write fails; it is the counter, not that field, that survives a fault
+          which only intermittently loses charges. Nothing
+          retries or queues a swallowed event, so those charges are lost
+          permanently. Whether the LIVE handle writes again once the volume is
+          made writable depends on the ordering (MEASURED — see
+          :meth:`write_health`): a handle opened onto the already-read-only
+          database file, which is this method's own shape whenever the store
+          opened during the fault, does not, and needs a restart; a handle that
+          predates the fault resumes on the ``chmod`` alone.
+        * **Locked DB** — this method is often not reached at all, so the
+          degradation is NOT the one above. An EXCLUSIVE hold blocks readers
+          too, and a RESERVED hold blocks writers, so
+          ``self._conn.executescript(self._SCHEMA)`` ONE LINE EARLIER raises
+          ``database is locked``: always under EXCLUSIVE, and under RESERVED
+          whenever the schema is not yet present (a fresh volume — RESERVED is
+          only benign once it is). That raise propagates out of ``__init__``;
+          ``main`` catches it and the process runs with NO store. The account
+          is then UNDER-metered, not over-metered — with no store ``costs.py``
+          skips the 24h spend cap entirely, which is the fail-open direction
+          (P1 / issue #101; both the boot and the per-estimate bypass now log
+          at ERROR). Only a RESERVED hold on an already-schema'd DB reaches
+          the ``except`` below, and that case behaves like read-only —
+          including the frozen ledger and the unenforced cap, which is the SAME
+          under-metering as the no-store case. It used to come with none of the
+          no-store case's loudness; since issue #109 :meth:`record` announces the
+          lost billed events itself. It differs from read-only in one way only:
+          writes resume by themselves the moment the other connection commits or
+          rolls back (no restart), so :meth:`write_health` clears itself here
+          unconditionally — where on the read-only shape that depends on whether
+          the handle predates the fault. The events lost during the hold stay
+          lost either way. MEASURED.
         """
         relabelled = 0
         try:
@@ -250,7 +410,34 @@ class FeedbackStore:
                     self._conn.execute("ROLLBACK")
                     raise
                 relabelled = len(rows)
+                # A landed write is a landed write, whoever made it. Reaching
+                # here means the marker INSERT committed.
+                self._last_write_success_at = self._monotonic()
         except Exception as exc:  # noqa: BLE001 — repair is best-effort
+            # Issue #109 review, C1. This branch is a FAILED WRITE ATTEMPT and
+            # used to leave both stamps untouched, so a boot whose migration
+            # could not run reported ``feedback_writes: "unverified"`` and
+            # ``feedback_db: "connected"`` — i.e. "no evidence either way" —
+            # while the process had just watched a write fail. MEASURED on a
+            # read-only volume with the marker not yet applied (the first boot
+            # after F-01 ships onto an unwritable volume).
+            #
+            # SCOPE, and the false alarm it buys (issue #109, third review). This
+            # ``except`` is wider than the write it is stamping for: the guarded
+            # block also SELECTs and ``json.loads`` every candidate row, so a
+            # read-side raise stamps a write failure too. MEASURED on a fully
+            # WRITABLE volume with one corrupt-JSON ``events`` row: ``json.loads``
+            # raises, ``/status`` reports ``feedback_db: "degraded"`` and
+            # ``feedback_writes: "failing"`` with ``feedback_lost_billed_writes:
+            # 0``, and the very next real ``record()`` clears both. It is
+            # transient, self-clearing and never touches the money counter — which
+            # is exactly why the stamp is left wide rather than narrowed here:
+            # narrowing it risks dropping the genuine boot-time write failure this
+            # branch exists to report, and that one is a money fault. The runbook's
+            # triage table names this shape so an operator does not read it as the
+            # read-only fault.
+            with self._lock:
+                self._last_write_failure_at = self._monotonic()
             _log.warning("feedback_store: F-01 preview backfill did not run: %s", exc)
             return
         if relabelled:
@@ -294,6 +481,21 @@ class FeedbackStore:
         The hot path is the in-memory recorder; this sink is a write-through
         cache. A failure here must not crash the request handler. The
         audit job tolerates gaps, so swallowing is the right policy.
+
+        Swallowing is *not* the same as forgetting (issue #109). Each attempt
+        stamps :attr:`_last_write_success_at` or :attr:`_last_write_failure_at`,
+        which is what :meth:`write_health` and ``/status`` read; a lost *billed
+        cost* event additionally increments :meth:`lost_billed_writes` and raises
+        a rate-limited ERROR. Before this, a database that was present but
+        unwritable produced a per-event WARNING and no state at all: the store
+        reported ``connected``, ``daily_spend_for`` read a frozen ledger, and the
+        24 h cap stopped firing with nothing anywhere saying so.
+
+        The counter is not a duplicate of the stamps. The stamps describe THIS
+        STORE's last write, and this store carries every recorder's events, so a
+        landed provider/synthesis/debate write overwrites the failure stamp of a
+        charge lost microseconds earlier — which is the ordinary production
+        interleaving, not a corner case (see :meth:`lost_billed_writes`).
         """
         row = (
             recorder,
@@ -303,21 +505,212 @@ class FeedbackStore:
             recorded_at.isoformat(),
             json.dumps(payload, default=_json_default),
         )
-        try:
-            with self._lock:
+        # The stamps are set under the SAME ``RLock`` that serialises the
+        # connection — the module has one lock discipline and adding a second
+        # lock would create an ordering to get wrong. Both log calls happen
+        # AFTER the lock is released: logging can block on a handler, and
+        # nothing about the record needs the connection.
+        failure: Exception | None = None
+        announce = False
+        lost_total = 0
+        with self._lock:
+            try:
                 self._conn.execute(
                     "INSERT INTO events "
                     "(recorder, event_type, account_id, query_run_id, recorded_at, payload) "
                     "VALUES (?, ?, ?, ?, ?, ?)",
                     row,
                 )
-        except Exception as exc:  # noqa: BLE001 — feedback store is best-effort
-            _log.warning(
-                "feedback_store: failed to persist event recorder=%s type=%s: %s",
+            except Exception as exc:  # noqa: BLE001 — feedback store is best-effort
+                failure = exc
+                self._last_write_failure_at = self._monotonic()
+                if (recorder, event_type) == _METERED_WRITE:
+                    self._lost_billed_writes += 1
+                    lost_total = self._lost_billed_writes
+                    announce = self._claim_lost_cost_event_log_slot()
+            else:
+                self._last_write_success_at = self._monotonic()
+        if failure is None:
+            return
+        _log.warning(
+            "feedback_store: failed to persist event recorder=%s type=%s: %s",
+            recorder,
+            event_type,
+            failure,
+        )
+        if announce:
+            # Everything this record asserts about ``/status`` has to be true at
+            # the moment it is emitted, and stay true afterwards. That rules out
+            # naming ``feedback_writes``: the counter is bumped above, under the
+            # lock, but the very next telemetry write can flip ``feedback_writes``
+            # back to ``ok`` — MEASURED through the real route, where the shipped
+            # text told an operator to check a field that read ``ok`` for the
+            # whole outage. ``feedback_lost_billed_writes`` only ever increases,
+            # so it is still there when the operator arrives.
+            #
+            # The remedy is per-shape, and the SQLite error text already in this
+            # record is the discriminator. A RESERVED lock recovers on this same
+            # handle once the holder releases, and ``SQLITE_FULL`` once space is
+            # freed — both MEASURED. Read-only is the one whose recovery depends
+            # on ORDERING, so its clause hedges instead of promising: MEASURED on
+            # the same handle, restoring write access DOES resume writes when the
+            # handle predates the fault (the volume goes read-only under an
+            # already-open handle), and does NOT when the handle was opened onto
+            # an already-read-only database FILE (a boot onto a read-only
+            # volume). A restart works in every shape, so the clause still names
+            # it — as the fallback, not as the only move. Clauses are separated
+            # by ``;`` so the pairing is checkable by a test rather than by
+            # reading.
+            _log.error(
+                "feedback_store: a BILLED cost event (recorder=%s type=%s) was NOT "
+                "persisted: %s. The per-account 24h daily spend cap is metered from "
+                "these rows, so every charge lost here is spend the cap never sees. "
+                "The event is lost for good — record() has no retry and no queue. "
+                "/status now reports feedback_lost_billed_writes=%s and "
+                "feedback_db=degraded, and that count never goes back down. "
+                "REMEDY, keyed on the SQLite error above: "
+                "'attempt to write a readonly database' — restore write access, "
+                "then re-check /status. MEASURED, this same handle resumes "
+                "writing if it predates the fault, but not if it was opened onto "
+                "an already-read-only database file, so restart the process if "
+                "feedback_writes has not gone back to ok; "
+                "'database is locked' — a RESERVED holder, writes resume on this "
+                "same handle once it commits or rolls back; "
+                "'database or disk is full' (or 'unable to open database file' on a "
+                "volume with no room for the journal) — writes resume on this same "
+                "handle once space is freed. Charges already lost stay lost in every "
+                "case. Repeats suppressed for %ss.",
                 recorder,
                 event_type,
-                exc,
+                failure,
+                lost_total,
+                LOST_COST_EVENT_LOG_INTERVAL_S,
             )
+
+    def _claim_lost_cost_event_log_slot(self) -> bool:
+        """Check-then-set the ERROR suppression window. Call with the lock HELD.
+
+        Returns ``True`` at most once per ``LOST_COST_EVENT_LOG_INTERVAL_S``. The
+        check and the set are one critical section on purpose: the point of a
+        rate limit is a bounded record count, and a racing check-then-set would
+        emit one record per concurrent request thread instead of one per window.
+        """
+        now = self._monotonic()
+        last = self._lost_cost_event_logged_at
+        if last is not None and (now - last) < LOST_COST_EVENT_LOG_INTERVAL_S:
+            return False
+        self._lost_cost_event_logged_at = now
+        return True
+
+    def lost_billed_writes(self) -> int:
+        """How many BILLED cost events this process failed to persist.
+
+        Counts exactly the ``(recorder, event_type)`` pair
+        :attr:`~product_app.feedback_store._METERED_WRITE` — the pair
+        :meth:`daily_spend_for` sums — and nothing else. Monotonically
+        increasing: never reset, and a later successful write does not clear it.
+
+        WHY A COUNTER AND NOT ANOTHER STAMP (issue #109 review, B1). This store
+        is shared by every recorder, and :meth:`write_health` reports the store's
+        LAST write, not the cost stream's. In production
+        ``query_runs._start_reserved_query_run`` calls ``Thread.start()`` before
+        ``_record_run_billing``, so provider/debate/synthesis/evaluation/
+        model_slot/safety events are landing in this same store while the billed
+        write is attempted; any one of them re-stamps success over the failure.
+        MEASURED through the real route with a transient RESERVED hold across only
+        the billed write: 8 runs accepted, $0.2088 actually billed against a $0.20
+        cap, ZERO ``cost_guardrail_accepted`` rows on disk — and ``/status``
+        reading ``feedback_db='connected' feedback_writes='ok'`` throughout,
+        byte-indistinguishable from the healthy control (which BLOCKs on run 8 at
+        $0.1827). ``feedback_events_total`` even CLIMBED, reinforcing the wrong
+        conclusion. A stamp can be masked by any other writer; a count that only
+        goes up cannot.
+
+        It is also the only field that separates "one charge was lost" from "a
+        hundred were": the ERROR is rate-limited to one record per
+        ``LOST_COST_EVENT_LOG_INTERVAL_S``, so the log alone cannot tell them
+        apart.
+
+        Scope, stated narrowly: this is a count of losses inside THIS process. It
+        says nothing about losses in an earlier process, and a restart starts it
+        at zero — the durable evidence of a gap is the absence of the rows
+        themselves, which the runbook's read-only query counts. It also assumes a
+        SINGLE application process: ``/status`` reads the counter out of the
+        memory of whichever worker served the request, so with more than one
+        worker a loss on a sibling worker is invisible and the masking this
+        counter exists to defeat comes back. The ``Dockerfile`` runs uvicorn with
+        ``--workers 1``, which is what makes the assumption hold today.
+        """
+        with self._lock:
+            return self._lost_billed_writes
+
+    def write_health(self) -> WriteHealth:
+        """Are writes landing? ``"ok"`` / ``"failing"`` / ``"unverified"``.
+
+        A COMPARATOR between two monotonic stamps, not an "ever failed" boolean,
+        because the two production faults recover differently (MEASURED, and both
+        directions asserted in
+        ``tests/integration/test_feedback_store_write_failures.py``):
+
+        * **Read-only volume, handle opened onto the already-read-only database
+          FILE** — the boot-onto-a-read-only-volume shape, and the ordering the
+          tests above pin. That handle does not recover: ``chmod +w`` does
+          nothing for it and only a fresh handle (in production: a restart)
+          writes again, so the signal must stay ``failing``. This is also why
+          ``os.access()`` is not the signal: MEASURED, it returns ``True`` right
+          after the ``chmod`` while that handle is still broken.
+
+          SCOPED deliberately (issue #109, third review). The unqualified "a
+          read-only volume NEVER recovers on the same handle" that stood here is
+          FALSE in two of the four measured orderings: a handle that predates the
+          fault (the volume goes read-only under an already-open handle) resumes
+          writing on the ``chmod`` alone, and so does a handle opened when only
+          the DIRECTORY is unwritable — where the file was never opened
+          ``O_RDONLY`` at all, so that mechanism does not explain the general
+          case either. ``failing`` is still the correct signal in all four: it
+          clears itself on the next landed write wherever recovery is possible,
+          and stays put where it is not.
+        * **RESERVED lock** — the SAME handle recovers the instant the holder
+          commits or rolls back. The signal must clear itself, with no restart.
+
+        ``"unverified"`` is a third state and not a rounding error. MEASURED:
+        opening a store on a steady-state database — the production shape, where
+        ``fly.toml`` pins ``FEEDBACK_DB_PATH`` to an existing file on the volume
+        whose F-01 marker is already applied — attempts ZERO writes (the
+        ``IF NOT EXISTS`` schema is a no-op and the migration returns at its
+        marker check), and every read-only surface — ``/health``, ``/ready``,
+        ``/status``, ``/metrics``, ``/v1/session``, ``/v1/models/defaults``,
+        ``/ui``, ``/ui/ops`` — writes nothing. With ``min_machines_running = 0``
+        in ``fly.toml`` a cold machine that has served only reads is ordinary, so
+        reporting ``"ok"`` there would be a claim nothing has measured. Nothing
+        is lost inside that window by construction: the first event that COULD be
+        lost is the same event that ends it. An open that DOES write — a fresh
+        database, or an unapplied migration — stamps its outcome either way, so
+        ``"unverified"`` never covers for a write the process watched fail
+        (issue #109 review, C1).
+
+        THIS IS NOT THE MONEY SIGNAL. It reports the store's last write, whoever
+        made it, so a landed telemetry write masks a lost charge — see
+        :meth:`lost_billed_writes`, which is the field to read for that.
+
+        A tie (both stamps equal, i.e. a success and a failure inside one clock
+        tick) resolves to ``"failing"``. Under-reporting a broken money meter is
+        the expensive direction; a spurious ``"failing"`` costs an operator one
+        look at ``/status``. That decision is pinned by
+        ``tests/integration/test_feedback_store_write_failures.py::
+        test_a_success_and_a_failure_inside_one_clock_tick_report_failing``, with
+        an injected frozen clock — MEASURED, ``time.monotonic`` resolves finely
+        enough (~4.17e-08 s) that a real clock never ties across a SQLite INSERT,
+        so before that test flipping the ``>=`` to ``>`` left every test green.
+        """
+        with self._lock:
+            failed_at = self._last_write_failure_at
+            succeeded_at = self._last_write_success_at
+        if failed_at is None:
+            return "unverified" if succeeded_at is None else "ok"
+        if succeeded_at is None or failed_at >= succeeded_at:
+            return "failing"
+        return "ok"
 
     def iter_events(
         self,
@@ -545,8 +938,10 @@ def configure_for_tests() -> Iterator[FeedbackStore]:
 # keeps the call-site a one-liner.
 __all__ = [
     "DEFAULT_DB_PATH",
+    "LOST_COST_EVENT_LOG_INTERVAL_S",
     "FeedbackEventRow",
     "FeedbackStore",
+    "WriteHealth",
     "asdict",
     "configure",
     "configure_for_tests",
