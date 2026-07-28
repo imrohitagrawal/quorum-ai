@@ -43,7 +43,7 @@ from product_app.providers import (
     SourceReference,
     TokenUsage,
 )
-from product_app.query_runs import _actual_cost
+from product_app.query_runs import BillableStage, StageBillingState, _actual_cost
 from product_app.synthesis import synthesis_stub_service
 
 _MODEL_IDS = [
@@ -182,7 +182,18 @@ def _run(
     *,
     debate_call_usages: list[tuple[int, TokenUsage | None]],
     synthesis_call_usages: list[TokenUsage | None],
+    debate_stage: StageBillingState = StageBillingState.RECORDED,
+    synthesis_stage: StageBillingState = StageBillingState.RECORDED,
 ) -> SimpleNamespace:
+    """A run shaped exactly as ``_actual_cost`` reads it.
+
+    Both E2 ``billing_stages`` markers default to ``RECORDED``: every driver
+    above runs its stage to completion and hands back the list the pipeline
+    would record, so the handshake genuinely closed. ``RECORDED`` is also the
+    only one of the three states under which the usage-list assertions below
+    are load-bearing — ``NOT_ENTERED`` would wave an empty list through and
+    ``ENTERED`` would block regardless of the list.
+    """
     return SimpleNamespace(
         cost_estimate=CostEstimate(
             estimated_cost_usd=Decimal("0.0200"),
@@ -194,6 +205,10 @@ def _run(
         initial_answers=_captured_initial_answers(),
         debate_call_usages=debate_call_usages,
         synthesis_call_usages=synthesis_call_usages,
+        billing_stages={
+            BillableStage.DEBATE: debate_stage,
+            BillableStage.SYNTHESIS: synthesis_stage,
+        },
     )
 
 

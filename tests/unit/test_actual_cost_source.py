@@ -27,7 +27,13 @@ from product_app.providers import (
     SourceReference,
     TokenUsage,
 )
-from product_app.query_runs import QueryRunResultResponse, _actual_cost, query_run_repository
+from product_app.query_runs import (
+    BillableStage,
+    QueryRunResultResponse,
+    StageBillingState,
+    _actual_cost,
+    query_run_repository,
+)
 from product_app.synthesis import (
     FinalSynthesis,
     SynthesisQualityChecks,
@@ -104,7 +110,21 @@ def _run(
     synthesis_call_usages: list[TokenUsage | None],
     estimate: CostEstimate,
     model_ids: list[str] | None = None,
+    debate_stage: StageBillingState = StageBillingState.RECORDED,
+    synthesis_stage: StageBillingState = StageBillingState.RECORDED,
 ) -> SimpleNamespace:
+    """A run shaped exactly as ``_actual_cost`` reads it.
+
+    ``billing_stages`` defaults to ``RECORDED`` for both stages — the state in
+    which the usage lists are authoritative and the ``all(usage is not None
+    ...)`` check is the sole decider. That keeps every assertion below about
+    the usage lists, which is what these tests are for. ``RECORDED`` is the
+    IDENTITY state, not the strictest one: ``ENTERED`` is strictest (it refuses
+    ``measured`` whatever the list holds) and ``NOT_ENTERED`` is loosest (it
+    waves an empty list through). Under ``RECORDED`` the marker neither adds
+    nor removes anything, so these tests measure the usage-list check alone.
+    The E2 marker itself is pinned in ``tests/unit/test_stage_billing_gate.py``.
+    """
     ids = model_ids if model_ids is not None else DEFAULT_MODEL_IDS
     slots = [ModelSlot(slot_number=i + 1, model_id=mid) for i, mid in enumerate(ids)]
     return SimpleNamespace(
@@ -113,6 +133,10 @@ def _run(
         initial_answers=initial_answers,
         debate_call_usages=debate_call_usages,
         synthesis_call_usages=synthesis_call_usages,
+        billing_stages={
+            BillableStage.DEBATE: debate_stage,
+            BillableStage.SYNTHESIS: synthesis_stage,
+        },
     )
 
 
@@ -398,6 +422,11 @@ def test_end_to_end_repository_wiring_populates_usages_and_measures() -> None:
     # The record methods actually stored the usages on the QueryRun.
     assert refreshed.debate_call_usages == debate_usages
     assert refreshed.synthesis_call_usages == synth_usages
+    # ...and closed the E2 recording handshake for both billable stages.
+    assert refreshed.billing_stages == {
+        BillableStage.DEBATE: StageBillingState.RECORDED,
+        BillableStage.SYNTHESIS: StageBillingState.RECORDED,
+    }
 
     actual, breakdown, source = _actual_cost(refreshed)
     assert source == "measured"
