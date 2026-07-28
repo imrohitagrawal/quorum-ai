@@ -9,9 +9,19 @@ the model id. `docs/metrics/mutation-gate-study.md` §3.1.
 
 Measured before this file existed, with a detector that requires the other side
 of the comparison to be a LITERAL: of the 38 module-level constants in risk-tier
-modules, **not one carried a literal `== VALUE` assertion**. Every reference was
-symbolic (`assert x < DAILY_CAP_USD`, `assert rendered == CONSTANT`), which moves
-with the code — change the constant and the test still passes.
+modules, **3 carried a literal `== VALUE` assertion** — `costs.DAILY_CAP_USD`
+(`tests/integration/test_query_run_cost_guardrails.py:501`),
+`costs.HARD_LIMIT_USD` (`tests/integration/test_cumulative_cost_guard.py:154`)
+and `main.SENTRY_DSN` (`tests/unit/test_sentry_init.py:33`). The other 35 were
+referenced only symbolically (`assert x < DAILY_CAP_USD`,
+`assert rendered == CONSTANT`), which moves with the code — change the constant
+and the test still passes.
+
+(A previous revision of this docstring said "not one". False — and it was a
+*correction* of an earlier true statement, introduced while fixing a different
+false claim, in the file whose whole purpose is preventing exactly this.
+Round-2 adversarial review caught it by running the new detector against
+`origin/main`. Left on the record rather than quietly amended.)
 
 The starkest case, and the reason this file is not academic:
 `costs._DEFAULT_PRICE_PER_1K_INPUT = 0.0008` — the default behind the recorded
@@ -28,7 +38,19 @@ detector that counted `== CONSTANT` as a pin regardless of what the other side
 was — the very flaw `test_every_bucket_a_constant_really_has_a_literal_pin` now
 exists to prevent. Recorded rather than quietly corrected.)
 
-**Why not pin all 30.** A literal pin on a regex, a filesystem path or a CSP
+**Known limitations, stated rather than implied** (round-2 review, all measured):
+
+* The pin detector does **not** check reachability. An assertion inside
+  `if False:`, a `@pytest.mark.skip`ped test, or an uncalled nested function
+  still counts as a pin. Tracked as #145.
+* It rejects `pytest.approx(...)` and container literals, so a float or a
+  collection constant cannot currently be promoted to bucket A. Tracked as #145.
+* Discovery covers module-level names only. Sixteen ALL-CAPS **class**
+  attributes in the risk modules are invisible, including
+  `config.Settings.RUN_DEADLINE_MAX_SECONDS` and
+  `config.Settings.SESSION_RATE_LIMIT_MAX`. Tracked as #145.
+
+**Why not pin all 38.** A literal pin on a regex, a filesystem path or a CSP
 policy is churn: the value legitimately changes, so the reflex becomes "edit the
 test alongside the code", which is the habit this whole exercise exists to
 break. Constants are therefore TRIAGED into three buckets below, and
@@ -183,6 +205,22 @@ def _module_constants() -> dict[str, int]:
     return found
 
 
+def _qualify(node: ast.expr, origins: dict[str, str]) -> str | None:
+    """`module.NAME` for a reference that really is OUR constant, else None.
+
+    Keying on the bare attribute name was a hole: `fake._HSTS_HEADER == "wrong"`
+    pinned `main._HSTS_HEADER`, and so did any same-named local, mock attribute
+    or loop variable. 122 distinct bare names in tests/ satisfied the old
+    predicate — a namespace ~9x the set being guarded.
+    """
+    if isinstance(node, ast.Attribute) and isinstance(node.value, ast.Name):
+        return f"{node.value.id}.{node.attr}"
+    if isinstance(node, ast.Name):
+        module = origins.get(node.id)
+        return f"{module}.{node.id}" if module else None
+    return None
+
+
 def _is_literal(node: ast.expr) -> bool:
     """A literal value, or `Decimal("…")`/`timedelta(…)` over literals."""
     if isinstance(node, ast.Constant):
@@ -193,10 +231,27 @@ def _is_literal(node: ast.expr) -> bool:
         func = node.func
         name = func.attr if isinstance(func, ast.Attribute) else getattr(func, "id", "")
         if name in ("Decimal", "timedelta", "frozenset", "Path"):
+            # `all([])` is True, so a ZERO-ARG call would qualify:
+            # `assert EXPECTED_SLOT_COUNT == frozenset()` would read as a pin.
+            if not (node.args or node.keywords):
+                return False
             return all(_is_literal(a) for a in node.args) and all(
                 _is_literal(k.value) for k in node.keywords
             )
     return False
+
+
+def _imported_from(tree: ast.Module) -> dict[str, str]:
+    """Bare name -> product_app module it was imported from, for this test file."""
+    origins: dict[str, str] = {}
+    for node in ast.walk(tree):
+        if isinstance(node, ast.ImportFrom) and node.module:
+            if not node.module.startswith("product_app"):
+                continue
+            tail = node.module.split(".")[-1]
+            for alias in node.names:
+                origins[alias.asname or alias.name] = tail
+    return origins
 
 
 def _literally_pinned_constants() -> set[str]:
@@ -215,6 +270,7 @@ def _literally_pinned_constants() -> set[str]:
             tree = ast.parse(path.read_text(encoding="utf-8"))
         except SyntaxError:  # pragma: no cover - a broken test file fails elsewhere
             continue
+        origins = _imported_from(tree)
         for node in ast.walk(tree):
             if not isinstance(node, ast.Assert):
                 continue
@@ -225,18 +281,12 @@ def _literally_pinned_constants() -> set[str]:
                     continue
                 sides = [cmp_node.left, *cmp_node.comparators]
                 for index, side in enumerate(sides):
-                    name: str | None
-                    if isinstance(side, ast.Attribute):
-                        name = side.attr
-                    elif isinstance(side, ast.Name):
-                        name = side.id
-                    else:
-                        name = None
-                    if not name:
+                    qualified = _qualify(side, origins)
+                    if not qualified:
                         continue
                     others = [s for j, s in enumerate(sides) if j != index]
                     if any(_is_literal(other) for other in others):
-                        pinned.add(name)
+                        pinned.add(qualified)
     return pinned
 
 
@@ -297,39 +347,25 @@ def test_the_slot_count_is_pinned() -> None:
     assert model_slots.EXPECTED_SLOT_COUNT == 4
 
 
-def test_every_default_model_id_has_a_catalog_row() -> None:
-    """The bucket-B pin for the model/pricing surface — and the 16x guard.
+def test_every_default_slot_vendor_is_listed_in_default_vendors() -> None:
+    """The half of the WP-G1 swap that `test_catalog_fetcher.py:303` does NOT cover.
 
-    `WP-D-TO-CLOSEOUT` calls this "the one-line guard that would have caught
-    WP-G1's half-done swap on day one": the slot-4 model id was changed while
-    its `_FALLBACK_CATALOG` row was not, so that model priced at the 0.0008
-    default — a 16x mispricing. Nothing asserted it until now.
+    That test checks the model id has a catalog ROW. This checks its VENDOR is
+    listed — the other thing the half-done slot-4 swap left stale.
 
-    A literal pin is wrong here (ids are swapped deliberately); the INVARIANT
-    is what must hold.
+    Deliberately a SUBSET check, not equality: an extra entry in
+    `DEFAULT_VENDORS` is not a defect (it is the default argument of
+    `cheapest_per_vendor`, and `ONLINE_CAPABLE_VENDORS` is documented as living
+    *within* it), whereas a slot whose vendor is missing is.
 
-    Turns red if: a model id is added to DEFAULT_MODEL_IDS with no catalog row.
-    """
-    catalog_ids = {entry.model_id for entry in catalog_fetcher._FALLBACK_CATALOG}
-    assert catalog_ids, "the fallback catalog is empty — this guard would be vacuous"
-    missing = sorted(set(model_slots.DEFAULT_MODEL_IDS) - catalog_ids)
-    assert not missing, (
-        f"default model ids with no _FALLBACK_CATALOG row: {missing}. They price "
-        "at the default rate — this is the 16x mispricing shape."
-    )
-
-
-def test_the_default_vendor_set_matches_the_default_model_ids() -> None:
-    """The other half of the same swap: the vendor list must follow the ids.
-
-    Turns red if: a slot moves to a new vendor and DEFAULT_VENDORS is not
-    updated, or vice versa.
+    Turns red if: a slot moves to a vendor absent from DEFAULT_VENDORS.
     """
     from_ids = {model_id.split("/")[0] for model_id in model_slots.DEFAULT_MODEL_IDS}
     assert from_ids, "no default model ids — the comparison below would be vacuous"
-    assert set(catalog_fetcher.DEFAULT_VENDORS) == from_ids, (
-        f"DEFAULT_VENDORS={sorted(catalog_fetcher.DEFAULT_VENDORS)} but the "
-        f"default ids use {sorted(from_ids)}"
+    unlisted = sorted(from_ids - set(catalog_fetcher.DEFAULT_VENDORS))
+    assert not unlisted, (
+        f"default slots use vendors missing from DEFAULT_VENDORS: {unlisted} "
+        f"(listed: {sorted(catalog_fetcher.DEFAULT_VENDORS)})"
     )
 
 
@@ -401,7 +437,7 @@ def test_every_bucket_a_constant_really_has_a_literal_pin() -> None:
     its pin (verified by adding a name with no assertion).
     """
     pinned = _literally_pinned_constants()
-    missing = sorted(q for q in BUCKET_A_LITERAL_PIN if q.split(".", 1)[1] not in pinned)
+    missing = sorted(q for q in BUCKET_A_LITERAL_PIN if q not in pinned)
     assert not missing, (
         f"bucket A names these but no test compares them to a LITERAL: {missing}. "
         "A symbolic assertion (`assert rendered == CONSTANT`) is not a pin — it "
