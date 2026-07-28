@@ -99,6 +99,107 @@ test.describe("rendering invariants (golden fixture)", () => {
     ).toEqual([]);
   });
 
+  // ---- WP-F / F-13: list STRUCTURE, not just the absence of markers -------
+  //
+  // The no-raw-markdown walk above is a text-node check, so it is blind to
+  // markup that is structurally wrong but leaks no marker: a list split into
+  // one single-item list per line leaves no "- " behind, and neither does a
+  // paragraph silently turned into a bullet. Both were live in the shipped UI
+  // and both passed that gate. These assert the structure itself.
+
+  test("an ordered list renders as a real <ol> (F-13)", async ({ page }) => {
+    await driveToResult(page);
+    // Seeded verbatim in MESSY_RECOMMENDATION as "1. Ship the retention-…".
+    const item = page
+      .locator("#main-content ol li")
+      .filter({ hasText: "Ship the retention-instrumentation slice first" });
+    // The recommendation is rendered on more than one surface of this view, so
+    // this pins "at least one, and the user can see it" rather than an exact
+    // count that would break the next time a surface is added.
+    await expect(
+      item.first(),
+      "the recommendation's numbered steps must be <li> inside an <ol>. " +
+        "Rendered as paragraphs, the literal '1. ' survives as text — which " +
+        "is what the ordered-list marker pattern catches."
+    ).toBeVisible();
+  });
+
+  test("a bullet list renders as ONE list, not one list per item (F-13)", async ({ page }) => {
+    await driveToResult(page);
+    // MESSY_BULLET_LIST: 6 items, seeded into the disagreement section — a
+    // block surface that is genuinely VISIBLE here. (The model-card grid
+    // measures 0x0 on this view, so an answer body would have gated markup no
+    // user ever sees.)
+    const body = page
+      .locator("#main-content .result-synth-body")
+      .filter({ hasText: "instrument retention events before export" })
+      .first();
+    await expect(body).toBeVisible();
+    const shape = await body.evaluate((el) => ({
+      lists: el.querySelectorAll("ul").length,
+      items: el.querySelectorAll("ul li").length,
+      emptyParagraphs: [...el.querySelectorAll("p")].filter(
+        (p) => !(p.textContent || "").trim()
+      ).length,
+    }));
+    expect(
+      shape.lists,
+      `expected exactly ONE <ul> for the six-item list; saw ${shape.lists}. ` +
+        "More than one means each line became its own single-item list."
+    ).toBe(1);
+    expect(shape.items, "the six seeded bullets must all be <li> of that list").toBe(6);
+    expect(
+      shape.emptyParagraphs,
+      "empty <p> residue means a <ul> was emitted INSIDE a <p> and the browser " +
+        "hoisted it out, splitting the paragraph around it"
+    ).toBe(0);
+  });
+
+  test("soft-wrapped prose never becomes a bullet (F-13)", async ({ page }) => {
+    await driveToResult(page);
+    // A single paragraph the provider broke with SINGLE newlines — the shape
+    // most real model output arrives in. Its lines are prose, not list items.
+    const stray = page
+      .locator("#main-content li")
+      .filter({ hasText: "The instrumentation is rarely the hard part" });
+    await expect(
+      stray,
+      "a soft-wrapped prose line was rendered as a list item. Ordinary prose " +
+        "must never become a bullet — the reader cannot tell the model did not " +
+        "write a list."
+    ).toHaveCount(0);
+  });
+
+  test("stray asterisks in prose never fabricate emphasis (F-13)", async ({ page }) => {
+    // Two unpaired asterisks in ordinary prose (a multiplication, a footnote
+    // mark) must not pair up ACROSS words into a bogus <em>. Rendered via the
+    // real formatter, not a unit stub.
+    await driveToResult(page);
+    // Scoped to `.q-prose` — the class setProse puts on rendered PROVIDER
+    // prose. App chrome legitimately writes <strong>Provider path: </strong>
+    // with a trailing space inside the tag; that is app-authored markup, not
+    // something the formatter derived from model text, and it is not what this
+    // invariant is about.
+    const emphasised = await page.evaluate(() => {
+      const scope = document.querySelector("#main-content") || document.body;
+      return [...scope.querySelectorAll(".q-prose em, .q-prose strong")].map(
+        (e) => e.textContent || ""
+      );
+    });
+    // The signature of a FALSE pair is precise: `a * b and c * d` emphasises
+    // " b and c ", so the emphasised run carries leading/trailing whitespace.
+    // Real emphasis never does — `*bold*` cannot capture its own bounding
+    // spaces. Keying off the signature, not a word-count heuristic, is what
+    // makes this assertion able to fail.
+    const fabricated = emphasised.filter((t) => t !== t.trim());
+    expect(
+      fabricated,
+      `emphasis whose text is surrounded by whitespace is two stray asterisks ` +
+        `paired ACROSS words, not something the model wrote:\n` +
+        JSON.stringify(fabricated, null, 2)
+    ).toEqual([]);
+  });
+
   test("inline code renders verbatim — no emphasis fires inside a <code> span (#30)", async ({ page }) => {
     // Inline code is verbatim by contract. The underscore/asterisk emphasis
     // rules must NOT fire inside a code span: `__init__` must stay literal, not

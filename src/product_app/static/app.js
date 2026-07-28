@@ -4547,17 +4547,39 @@
       out.push(`<p>${inner}</p>`);
       buffer = [];
     };
+    // List lines get their OWN buffer, exactly as blockquotes do. They used to
+    // share ``buffer`` with flushParagraph, and that single fact produced every
+    // list defect this formatter had — all of them MEASURED, none theorised:
+    //
+    //   * A list never survived as a list. Every path that reached flushList()
+    //     ran flushParagraph() first, draining the shared buffer, so each item
+    //     was emitted as its own <p>. What looked like a list on screen came
+    //     from mdInline's separate per-line bullet rule, which wrapped each
+    //     item in its OWN <ul> nested inside that <p> — invalid markup the
+    //     browser then hoisted out, leaving empty paragraphs behind. Six
+    //     bullets rendered as eight lists.
+    //   * Ordered lists did not render at all. mdInline's rule matches only
+    //     "-"/"*", so "1. " reached the DOM as literal text — 76 such text
+    //     nodes in the golden run.
+    //   * Ordinary prose became bullets. The one path that did NOT call
+    //     flushParagraph first (the plain-line branch below) called flushList()
+    //     on a buffer full of PROSE, so a paragraph the provider soft-wrapped
+    //     with single newlines rendered as a run of one-item lists.
+    //
+    // With a dedicated buffer each flush owns one block type and none of the
+    // above is expressible.
+    let listBuffer = [];
+    const orderedMarker = (line) => /^\s*\d+\.\s+/.test(line);
     const flushList = () => {
-      if (!buffer.length) return;
-      const items = buffer.map((line) => {
+      if (!listBuffer.length) return;
+      const items = listBuffer.map((line) => {
         // Strip leading bullet marker ( "- ", "* ", or "1. " ).
         const stripped = line.replace(/^(\s*)([-*]|\d+\.)\s+/, "$1");
         return `<li>${mdInline(escapeHtml(stripped))}</li>`;
       });
-      const ordered = buffer[0].match(/^\s*\d+\.\s+/) != null;
-      const tag = ordered ? "ol" : "ul";
+      const tag = orderedMarker(listBuffer[0]) ? "ol" : "ul";
       out.push(`<${tag}>${items.join("")}</${tag}>`);
-      buffer = [];
+      listBuffer = [];
     };
     // Blockquote: consecutive lines starting with ">" collapse into one
     // <blockquote> (the marker + one optional space is stripped per line).
@@ -4588,7 +4610,13 @@
       if (listMarker(line)) {
         flushParagraph();
         flushQuote();
-        buffer.push(line);
+        // A change of marker type ends the current list and starts a new one,
+        // so "- a" followed by "1. b" is two lists rather than one list whose
+        // tag is decided by whichever item happened to come first.
+        if (listBuffer.length && orderedMarker(listBuffer[0]) !== orderedMarker(line)) {
+          flushList();
+        }
+        listBuffer.push(line);
         continue;
       }
       flushList();
@@ -4683,7 +4711,18 @@
     // Bold then italic. Order matters: ** must be tried before *, or
     // the ** would each be consumed as empty italics.
     s = s.replace(/\*\*([^*]+)\*\*/g, (_m, t) => `<strong>${t}</strong>`);
-    s = s.replace(/(^|[^*])\*([^*]+)\*/g, (_m, lead, t) => `${lead}<em>${t}</em>`);
+    // Italic uses the SAME word-boundary discipline as the underscore rule
+    // below: the run may not begin or end with whitespace. Without that, two
+    // UNRELATED stray asterisks pair up across words — MEASURED: "cost * qty
+    // and rate * hours" rendered as "cost <em> qty and rate </em> hours",
+    // inventing emphasis the model never wrote. A lone `*` (a multiplication,
+    // a footnote mark) is common in real answers and must survive literally.
+    // The giveaway is that the captured run carried its own bounding spaces,
+    // which real emphasis can never do.
+    s = s.replace(
+      /(^|[^\w*])\*([^\s*](?:[^*]*[^\s*])?)\*(?!\w)/g,
+      (_m, lead, t) => `${lead}<em>${t}</em>`,
+    );
     // [text](url). The captured ``url`` reaches us HTML-escaped (every
     // caller runs its input through ``escapeHtml`` before mdInline), but we
     // deliberately do NOT rely on that: this replace decodes the URL back,

@@ -96,24 +96,10 @@ const MESSY_CAVEAT =
   "**High-stakes:** treat the cost figure as an estimate, not a bill — verify against a real run before relying on it.";
 const MESSY_CONSENSUS =
   "The models **agree** on the primary recommendation: instrument first, export second. This is the core finding and it is well supported.";
-const MESSY_DISAGREEMENT =
-  "Two models **dissent** on the secondary point (whether to gate the export behind a manual review). Preserved here rather than smoothed over.";
-const MESSY_SOURCE_SUPPORT =
-  "Backed by **cited** sources on three of four responding models. Source coverage 0.75 against a 0.80 target.";
-// Deliberately > 180 chars with a `**bold**` run STRADDLING character 180
-// (opening `**` at index 167, closing at 229): the old
-// `truncateText(uncertaintyText, 180)` sliced here mid-run, leaving a dangling
-// `**` in a text node that the no-raw-markdown invariant catches. See D-16.
-const MESSY_UNCERTAINTY =
-  "Confidence is moderate-to-high given corroborating citations across every " +
-  "responding model, though the secondary sequencing point about the cohort " +
-  "export gate remains **genuinely contested and unresolved between two of the " +
-  "panels** even after both debate rounds concluded.";
-
 // Bullet-list surface. WIRED as of WP-F (it was dead for months — defined here,
 // referenced by nothing, so no gate ever rendered it; see §7.4 of the master
 // plan on fixtures gating coverage). It is seeded into the BLOCK surface
-// (`LONG_MESSY_ANSWER` → renderAnswerSection → formatAnswerText), not an inline
+// (`MESSY_DISAGREEMENT` → setProse → formatAnswerText), not an inline
 // one: a <ul> inside a <span>/<p> cell is invalid markup, so "give mdInline its
 // own bullet regex for inline surfaces" was the wrong target. Exercises `- `
 // markers, indentation, and bold/italic/link/code inside items. A correct block
@@ -128,6 +114,40 @@ const MESSY_BULLET_LIST =
   "- *Third point:* keep the $0.25 cap until measured.\n" +
   "- Fourth bullet with a [link](https://example.com/bullets) inside it.\n" +
   "- Fifth bullet with `inline_code` and __underscore__ emphasis.";
+
+// WP-F: this section is a BLOCK surface (setProse → formatAnswerText) and,
+// unlike the model cards, it is VISIBLE on the result view — the model-card
+// grid measures 0x0 there, so seeding list shapes into an answer body would
+// have gated markup no user ever sees. Three shapes ride along here:
+//
+//   (a) a SOFT-WRAPPED paragraph — one paragraph the provider broke with
+//       SINGLE newlines, which is how most real model output arrives. Every
+//       other paragraph in this fixture is blank-line separated, and that is
+//       exactly why the defect stayed invisible: MEASURED on today's code,
+//       "One.\nTwo.\nThree." renders as <ul><li>One.</li></ul><ul><li>Two.
+//       </li></ul><p>Three.</p> — ordinary prose becomes a run of bullets.
+//   (b) STRAY ASTERISKS in prose. Two unpaired `*` (a multiplication, a
+//       footnote mark) pair up ACROSS words into a bogus <em> whose text
+//       carries leading/trailing spaces — the signature no real italic has.
+//   (c) MESSY_BULLET_LIST, a genuine six-item list.
+const MESSY_DISAGREEMENT =
+  "Two models **dissent** on the secondary point (whether to gate the export behind a manual review). Preserved here rather than smoothed over.\n\n" +
+  "The dissent is narrow but real.\n" +
+  "The instrumentation is rarely the hard part; agreeing on a single cohort definition is.\n" +
+  "Write the definition down before the first chart is built.\n\n" +
+  "One panel priced the manual gate at roughly 3 * 40 reviewer-minutes per cohort * 12 cohorts, which it judged affordable.\n\n" +
+  MESSY_BULLET_LIST;
+const MESSY_SOURCE_SUPPORT =
+  "Backed by **cited** sources on three of four responding models. Source coverage 0.75 against a 0.80 target.";
+// Deliberately > 180 chars with a `**bold**` run STRADDLING character 180
+// (opening `**` at index 167, closing at 229): the old
+// `truncateText(uncertaintyText, 180)` sliced here mid-run, leaving a dangling
+// `**` in a text node that the no-raw-markdown invariant catches. See D-16.
+const MESSY_UNCERTAINTY =
+  "Confidence is moderate-to-high given corroborating citations across every " +
+  "responding model, though the secondary sequencing point about the cohort " +
+  "export gate remains **genuinely contested and unresolved between two of the " +
+  "panels** even after both debate rounds concluded.";
 
 // Block surfaces: a line-START heading + inline bold + an ordered list. A correct
 // fix routes these through the block formatter (heading→<h*>, **→<strong>,
@@ -187,21 +207,6 @@ const LONG_MESSY_ANSWER = (label: string) =>
   "Cohort by **signup month** for acquisition-quality questions, but cohort by **activation month** for product questions — mixing the two is the single most common source of misleading retention charts. Always state the cohort definition on the chart itself; a curve without a stated denominator is not interpretable.\n\n" +
   "### What good looks like\n\n" +
   "A mature setup reports monthly logo retention and NRR side by side, per activation cohort, with the raw event counts one click away so anyone can audit the number. The **worst** anti-pattern is a single blended percentage with no cohort, no denominator, and no link to the underlying events — it looks authoritative and means almost nothing.\n\n" +
-  // WP-F: a SOFT-WRAPPED paragraph — one paragraph the provider broke across
-  // several lines with SINGLE newlines, which is how most real model output
-  // arrives. Every other paragraph in this fixture is separated by a blank
-  // line, and that is precisely why the defect below stayed invisible: with
-  // `\n\n` everywhere, the formatter's list path is never reached from prose.
-  // MEASURED on today's code, "One.\nTwo.\nThree." renders as
-  // <ul><li>One.</li></ul><ul><li>Two.</li></ul><p>Three.</p> — ordinary prose
-  // silently becomes a run of one-item bullet lists.
-  "### A soft-wrapped paragraph\n\n" +
-  "Retention work fails for organisational reasons more often than technical ones.\n" +
-  "The instrumentation is rarely the hard part; agreeing on a single cohort definition is.\n" +
-  "Write the definition down before the first chart is built.\n\n" +
-  "### The panel's checklist\n\n" +
-  MESSY_BULLET_LIST +
-  "\n\n" +
   `Confidence for ${label}: moderate-to-high, contingent on the events above actually being instrumented.`;
 
 // ---- schema builders (mirror axe-all-views.spec.ts; messy content) ----------
