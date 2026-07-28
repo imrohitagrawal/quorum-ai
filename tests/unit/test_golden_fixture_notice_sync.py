@@ -27,17 +27,26 @@ from product_app.providers import PROVIDER_NOTICES
 
 _FIXTURE = pathlib.Path(__file__).resolve().parents[2] / "e2e" / "fixtures" / "golden-run.ts"
 
-#: Locates each ``provider_notice:`` key in the fixture.
-_NOTICE_KEY = re.compile(r"provider_notice:")
+#: Locates each notice-carrying key in the fixture. BOTH the per-answer
+#: ``provider_notice`` and the run-level ``provider_failure_notices`` roll-up —
+#: the first version of this guard matched only the former, so the run-level
+#: copy added in the SAME commit was invisible to it and could drift freely.
+_NOTICE_KEY = re.compile(r"provider_notice:|provider_failure_notices:")
 
 #: The end of that key's value: the next line opening a sibling object key at
 #: the same or shallower indentation. A ternary's branches are indented deeper,
 #: so they stay inside the window.
 _NEXT_KEY = re.compile(r"\n {0,4}[A-Za-z_][A-Za-z0-9_]*:")
 
-#: Every double-quoted string literal inside the captured window. ``null`` (the
-#: no-notice branch) carries no quotes and is therefore ignored by construction.
-_QUOTED = re.compile(r'"([^"\n]+)"')
+#: Every quoted string literal inside the captured window, single or double
+#: quoted. ``null`` (the no-notice branch) carries no quotes and is ignored by
+#: construction.
+_QUOTED = re.compile(r'"([^"\n]+)"' + r"|'([^'\n]+)'")
+
+#: A value that is neither a quoted literal nor ``null`` — e.g. a bare constant
+#: reference. The guard cannot resolve those, and silently capturing nothing
+#: would be a false green, so it FAILS and says why.
+_UNRESOLVABLE = re.compile(r"^[\s?:]*([A-Za-z_$][\w$.]*)\s*[,\n]")
 
 
 def _fixture_text() -> str:
@@ -57,7 +66,17 @@ def _quoted_notices() -> list[str]:
         rest = text[key.end() :]
         end = _NEXT_KEY.search(rest)
         window = rest[: end.start()] if end else rest
-        found.extend(_QUOTED.findall(window))
+        unresolvable = _UNRESOLVABLE.match(window)
+        if unresolvable and unresolvable.group(1) not in ("null", "undefined"):
+            raise AssertionError(
+                "golden-run.ts assigns a provider notice from the identifier "
+                f"{unresolvable.group(1)!r} rather than a literal. This guard "
+                "compares literal text against the PROVIDER_NOTICES registry "
+                "and cannot resolve identifiers, so it would silently pass. "
+                "Inline the string, or teach this guard to resolve it."
+            )
+        for double, single in _QUOTED.findall(window):
+            found.append(double or single)
     return found
 
 

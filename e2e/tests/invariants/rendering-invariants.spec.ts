@@ -147,7 +147,21 @@ test.describe("rendering invariants (golden fixture)", () => {
       `expected exactly ONE <ul> for the six-item list; saw ${shape.lists}. ` +
         "More than one means each line became its own single-item list."
     ).toBe(1);
-    expect(shape.items, "the six seeded bullets must all be <li> of that list").toBe(6);
+    // At LEAST six: the fixture seeds an indented sub-bullet, and this
+    // formatter flattens it to a sibling item. Pinning exactly 6 would make a
+    // future correct nested-<ul> implementation RED — a gate that blocks the
+    // fix for the defect it half-describes.
+    expect(
+      shape.items,
+      "the six seeded bullets must all be <li> of that list"
+    ).toBeGreaterThanOrEqual(6);
+    // No item may carry the stripped indent as literal text.
+    const untrimmed = await body.evaluate(() =>
+      [...document.querySelectorAll(".result-synth-body li")]
+        .map((li) => li.textContent || "")
+        .filter((t) => t !== t.trimStart())
+    );
+    expect(untrimmed, "a list item kept its marker indentation as text").toEqual([]);
     expect(
       shape.emptyParagraphs,
       "empty <p> residue means a <ul> was emitted INSIDE a <p> and the browser " +
@@ -159,6 +173,12 @@ test.describe("rendering invariants (golden fixture)", () => {
     await driveToResult(page);
     // A single paragraph the provider broke with SINGLE newlines — the shape
     // most real model output arrives in. Its lines are prose, not list items.
+    // Positive control FIRST: without it, a fixture reword makes the negative
+    // below silently vacuous — it would pass because the text is absent, not
+    // because it is correctly rendered.
+    await expect(
+      page.getByText("The instrumentation is rarely the hard part", { exact: false }).first()
+    ).toBeVisible();
     const stray = page
       .locator("#main-content li")
       .filter({ hasText: "The instrumentation is rarely the hard part" });
@@ -168,6 +188,25 @@ test.describe("rendering invariants (golden fixture)", () => {
         "must never become a bullet — the reader cannot tell the model did not " +
         "write a list."
     ).toHaveCount(0);
+  });
+
+  test("a soft wrap onto a number never deletes the number (F-13)", async ({ page }) => {
+    // "…first proposed in\n2025. Nobody has revisited…" is ONE paragraph the
+    // provider wrapped. Treating "2025. " as an ordered-list marker strips it,
+    // so the year vanishes from the answer entirely. CommonMark only lets an
+    // ordered list interrupt a paragraph when it starts at 1, precisely to stop
+    // this.
+    await driveToResult(page);
+    const body = page
+      .locator("#main-content .result-synth-body")
+      .filter({ hasText: "The gate was first proposed in" })
+      .first();
+    await expect(body).toBeVisible();
+    await expect(
+      body,
+      "the year was deleted from the rendered answer — the marker is stripped, " +
+        "so no raw-marker gate can see this happen"
+    ).toContainText("2025");
   });
 
   test("stray asterisks in prose never fabricate emphasis (F-13)", async ({ page }) => {
@@ -191,6 +230,14 @@ test.describe("rendering invariants (golden fixture)", () => {
     // Real emphasis never does — `*bold*` cannot capture its own bounding
     // spaces. Keying off the signature, not a word-count heuristic, is what
     // makes this assertion able to fail.
+    // Without this the filter below is over a possibly-empty set: setProse
+    // REMOVES `q-prose` on its placeholder branch, so "the formatter fell back
+    // everywhere" would pass as cleanly as a correct render.
+    expect(
+      emphasised.length,
+      "no emphasis found in provider prose at all — the filter below would be " +
+        "green over an empty set"
+    ).toBeGreaterThan(0);
     const fabricated = emphasised.filter((t) => t !== t.trim());
     expect(
       fabricated,

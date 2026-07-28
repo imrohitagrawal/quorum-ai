@@ -12,8 +12,22 @@ or they drift apart exactly like this again. The cap is now computed from the
 generation ceiling and ``CHARS_PER_TOKEN``, the way the excerpt sizes already
 are; nothing hardcodes 4000 or 12_000.
 
-This is deliberately NOT a test that pins a number. It pins the property: what
-the model was paid to produce survives to the user.
+This pins a property rather than a number: what the model was paid to produce
+survives to the user.
+
+Two limits stated rather than implied:
+
+* ``CHARS_PER_TOKEN`` is the industry ~4-chars/token RULE OF THUMB (see
+  ``costs.py``), not a bound. Prose denser than that — long words, heavy
+  Markdown — can still exceed 12_000 characters at 3000 tokens and still be
+  cut, with the ``…`` as the only trace. The derivation removes drift between
+  two literals; it does not make tokens and characters the same quantity.
+* The Recommendation section is NOT covered here. It keeps the tighter
+  ``RECOMMENDATION_MAX_CHARS`` (2000) that protects the mandatory
+  decision-support caveat, while being billed at the same 3000-token ceiling —
+  so the "billed then discarded" leak is still live for that one section.
+  Filed rather than fixed: raising it means reworking the caveat-protection
+  arithmetic, which is a separate change.
 """
 
 from __future__ import annotations
@@ -41,7 +55,16 @@ def test_the_storage_cap_matches_what_the_run_is_billed_to_generate() -> None:
     """
     from product_app.costs import CHARS_PER_TOKEN
 
-    assert int(SYNTHESIS_SECTION_MAX_TOKENS * CHARS_PER_TOKEN) == SYNTHESIS_SECTION_MAX_CHARS
+    # Restating the definition (`== int(TOKENS * CHARS_PER_TOKEN)`) would be a
+    # tautology — it re-evaluates the right-hand side of the assignment and
+    # cannot fail. Assert the PROPERTY instead: the cap must be at least the
+    # output the run is billed for, at the documented ratio. That fails if the
+    # cap is lowered, hardcoded back to 4000, or decoupled from the ceiling.
+    billed_chars = SYNTHESIS_SECTION_MAX_TOKENS * int(CHARS_PER_TOKEN)
+    assert billed_chars <= SYNTHESIS_SECTION_MAX_CHARS, (
+        f"the storage cap ({SYNTHESIS_SECTION_MAX_CHARS}) is below the output "
+        f"each section call is billed for (~{billed_chars} chars)."
+    )
     assert config.settings.cost_synthesis_output_tokens == SYNTHESIS_SECTION_MAX_TOKENS
 
 

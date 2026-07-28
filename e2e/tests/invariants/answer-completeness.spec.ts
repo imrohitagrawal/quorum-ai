@@ -27,13 +27,21 @@ test.describe("per-answer honesty surfaces", () => {
   test("an answer the provider cut short is marked as shortened", async ({ page }) => {
     await driveToResult(page);
     await driveToTranscript(page);
-    const marked = page.locator(".transcript-opening").filter({ hasText: /shortened/i });
+    const marked = page.locator(".transcript-opening").filter({
+      has: page.locator(".transcript-opening-shortened"),
+    });
     await expect(
       marked,
       "the fixture's slot-1 answer carries shortened: true. Without a marker " +
         "the reader takes a mid-sentence stop for the model's complete view."
     ).toHaveCount(1);
     await expect(marked.first()).toBeVisible();
+    // The visible words must say the answer is incomplete. A bare "shortened"
+    // reads as a length descriptor, and everything explanatory sitting in a
+    // `title` tooltip is unreachable by keyboard and invisible on touch.
+    await expect(
+      marked.first().locator(".transcript-opening-shortened")
+    ).toHaveText(/incomplete|cut off/i);
   });
 
   test("only the shortened answer is marked", async ({ page }) => {
@@ -42,7 +50,9 @@ test.describe("per-answer honesty surfaces", () => {
     // Three of the four fixture answers are complete. A marker on all of them
     // would be as useless as a marker on none, and would pass the test above.
     await expect(
-      page.locator(".transcript-opening").filter({ hasText: /shortened/i })
+      page.locator(".transcript-opening").filter({
+        has: page.locator(".transcript-opening-shortened"),
+      })
     ).toHaveCount(1);
     await expect(page.locator(".transcript-opening")).toHaveCount(4);
   });
@@ -52,10 +62,13 @@ test.describe("per-answer honesty surfaces", () => {
     await driveToTranscript(page);
     // Slot 3 is the zero-source slot; the fixture carries the registry's
     // NOTICE_NO_SOURCES_FOUND for it, verbatim.
-    const notice = page.getByText(
-      "This model's answer came back without any linked sources",
-      { exact: false }
-    );
+    // Scoped to the transcript surface. An unscoped getByText also matches the
+    // `.model-card-notice` copy inside the permanently display:none panel
+    // (issue #118), and `.first()` would then be load-bearing on template
+    // ordering rather than on the fix.
+    const notice = page.locator(".transcript-opening-notice").filter({
+      hasText: "This model's answer came back without any linked sources",
+    });
     await expect(
       notice.first(),
       "a provider notice must be VISIBLE to the reader of that answer. It " +

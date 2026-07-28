@@ -3434,6 +3434,18 @@ html[data-theme="dark"] .landing-preview-caption {
    which beats the user-agent `[hidden] { display: none }`. Without this the
    collapsed chips stay on screen and the F-19 expander does nothing visible. */
 .result-source-chip[hidden] { display: none; }
+/* A simulated/fallback placeholder is not a citation. Marked, and never a link
+   (it points at the reserved example.test domain, which never resolves). */
+.result-source-chip[data-stub="true"] { border-style: dashed; cursor: default; }
+.result-source-stub-tag {
+  margin-left: var(--space-2);
+  padding: 0 6px;
+  border-radius: var(--radius-pill);
+  background: var(--warning);
+  color: var(--on-tonal);
+  font-size: 0.62rem;
+  font-weight: 700;
+}
 a.result-source-chip:hover { border-color: var(--info); color: var(--info); }
 .result-source-num {
   display: inline-grid;

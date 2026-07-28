@@ -56,19 +56,30 @@ export const RAW_MARKDOWN_PATTERNS: { name: string; re: RegExp }[] = [
   // any text node. Also covers optional indentation (tabs/spaces before the
   // marker).
   { name: "bullet marker (- / * )", re: /(?:^|\n)[ \t]*[-*][ \t]/ },
-  // WP-F/F-13: ordered-list markers ARE now flagged. The comment that used to
-  // sit here called this "non-greenable", on the reasoning that a correctly
-  // rendered <ol> exposes its numbers as ::marker pseudo-elements a text-node
-  // walker cannot see. That reasoning is exactly right — and it is the argument
-  // FOR the assertion, not against it. It was written while `formatAnswerText`
-  // could not emit an <ol> at all, so the marker survived as literal text and
-  // the gate would have been red with no fix available; the conclusion outlived
-  // that premise. MEASURED on this fixture before the F-13 fix: 47 text nodes
-  // under #main-content still carry a literal "1. "/"2. " marker, i.e. every
-  // ordered list in the golden run renders as plain paragraphs today. Once the
-  // formatter emits a real <ol>, the numbers move into ::marker and this goes
-  // green — greenable by construction, and only by the correct fix.
-  { name: "ordered-list marker (1. )", re: /(?:^|\n)[ \t]*\d+\.[ \t]/ },
+  // WP-F/F-13: ordered-list markers are flagged, but only for 1-2 DIGIT
+  // markers, and that limit is a measured necessity rather than tidiness.
+  //
+  // The comment that used to sit here called this pattern "non-greenable"
+  // because a correctly rendered <ol> hides its numbers in ::marker where a
+  // text-node walker cannot see them. That is the argument FOR asserting it,
+  // and MEASURED before the F-13 fix there were 47 text nodes under
+  // #main-content carrying a literal "1. "/"2. ": every ordered list in the
+  // golden run rendered as plain paragraphs.
+  //
+  // But the original caution was HALF RIGHT, and review proved it. An
+  // unrestricted `\d+\.` also matches correctly-rendered PROSE that happens to
+  // begin a line with a number — "…first proposed in\n2025. Nobody has
+  // revisited…" is one paragraph, rendered exactly right, and the gate flagged
+  // it. Restricting to 1-2 digits removes the year/identifier class, which is
+  // the one that actually occurs.
+  //
+  // Known limits, stated rather than implied: a genuine list numbered past 99
+  // is not flagged, prose legitimately opening with "7. " would be, and the
+  // blockquote and inline-prose paths still have no ordered-list handling at
+  // all — so a numbered list inside a blockquote WOULD fire this with no fix
+  // available. The fixture seeds none, and that is the only reason this is
+  // green. Widening the fixture there needs the formatter fixed first.
+  { name: "ordered-list marker (1. )", re: /(?:^|\n)[ \t]*\d{1,2}\.[ \t]/ },
 ];
 // STRUCTURAL limits of this gate (documented, not silently implied):
 //   (a) scope — it walks `#main-content` (where provider prose renders); app
@@ -133,6 +144,12 @@ const MESSY_BULLET_LIST =
 const MESSY_DISAGREEMENT =
   "Two models **dissent** on the secondary point (whether to gate the export behind a manual review). Preserved here rather than smoothed over.\n\n" +
   "The dissent is narrow but real.\n" +
+  // A soft wrap landing on a YEAR. Any line starting `<digits>. ` used to be
+  // treated as an ordered-list item and the number STRIPPED, so "2025." was
+  // deleted outright — content destruction, invisible to the raw-marker gate
+  // because the marker is removed rather than left in a text node.
+  "The gate was first proposed in\n" +
+  "2025. Nobody has revisited the estimate since.\n" +
   "The instrumentation is rarely the hard part; agreeing on a single cohort definition is.\n" +
   "Write the definition down before the first chart is built.\n\n" +
   "One panel priced the manual gate at roughly 3 * 40 reviewer-minutes per cohort * 12 cohorts, which it judged affordable.\n\n" +
@@ -514,10 +531,12 @@ const costEstimateEnvelope = () => ({
 });
 
 /** Drive composer → run → completed RESULT view with the golden (messy) payload. */
-export async function driveToResult(page: Page) {
+export async function driveToResult(page: Page, resp: unknown = goldenCompletedResp()) {
   await boot(page);
   await baseRoutes(page);
-  await page.route(/\/v1\/query-runs\/[0-9a-f-]{36}$/, (r) => r.fulfill(fulfil(goldenCompletedResp())));
+  // `resp` lets a spec drive this same flow with a HOSTILE payload without
+  // polluting the golden fixture every other lane consumes.
+  await page.route(/\/v1\/query-runs\/[0-9a-f-]{36}$/, (r) => r.fulfill(fulfil(resp)));
   await page.route(/\/v1\/query-runs$/, (r) =>
     r.request().method() === "POST" ? r.fulfill(fulfil(goldenCreateResp())) : r.continue());
   await fill(page);

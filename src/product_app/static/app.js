@@ -2324,6 +2324,41 @@
   // already turned the provider's Markdown into HTML, and a `.md` file wants
   // the Markdown back. Taking it from the payload means `**bold**` stays
   // `**bold**` and no tag can leak into the file.
+  //: Mirrors the on-screen provenance badge. The raw enum means nothing to a
+  //: reader of the exported file.
+  const SYNTHESIS_MODE_EXPORT_LABEL = {
+    live: "written by a model",
+    fallback: "partially automated (Quorum templates)",
+    template: "automated summary (Quorum templates, not a model)",
+    simulated: "local simulation (not a model)",
+  };
+
+  // Neutralise Markdown link syntax in an untrusted INLINE value (a source
+  // title). Without this a title containing `](javascript:…)[` closes the link
+  // early and opens a hostile one whose visible label looks benign, under a URL
+  // column that still shows the harmless address.
+  function mdEscapeInline(text) {
+    return String(text == null ? "" : text).replace(/([\\`*_[\]()<>])/g, "\\$1");
+  }
+
+  // Make an untrusted BLOCK of provider prose safe to embed in the export while
+  // keeping it readable as Markdown — this is the model's own text, so its
+  // `**bold**` and lists must survive verbatim. Two things are neutralised:
+  //
+  //   * line-start headings are demoted below every structural heading this
+  //     document emits. Otherwise model output containing "## About this run"
+  //     forges the provenance block — MEASURED: a fully simulated run whose
+  //     synthesis text claimed "Live model answers: 4 of 4" produced exactly
+  //     that, above the genuine block. A decision record that a model can
+  //     rewrite is not evidence of anything.
+  //   * raw HTML is escaped. Markdown permits it, and any viewer that renders
+  //     it would execute a <script> the provider wrote.
+  function mdUntrustedBlock(text) {
+    return String(text == null ? "" : text)
+      .replace(/</g, "&lt;")
+      .replace(/^(#{1,6})(\s)/gm, "#####$2");
+  }
+
   function buildResultMarkdown(result, res, fs, ctx) {
     const out = [];
     // Variadic on purpose: every call site below passes a line plus its
@@ -2333,11 +2368,68 @@
     const section = (heading, body) => {
       const text = body == null ? "" : String(body).trim();
       if (!text) return;
-      push(`### ${heading}`, "", text, "");
+      push(`### ${heading}`, "", mdUntrustedBlock(text), "");
     };
 
     push("# Quorum decision record", "");
-    if (ctx.question) push(`**Question:** ${ctx.question}`, "");
+
+    // Provenance LEADS. Two reasons, both learned the hard way:
+    //   * it must appear before any provider text, so model output that forges
+    //     an "About this run" block cannot be the first one a reader meets;
+    //   * the degraded disclosure has to be impossible to miss. The result view
+    //     shows a banner whenever this run was not fully live, and the repo
+    //     gates on that (degraded-banner.spec.ts) precisely because a count in
+    //     a footer is not a disclosure. An exported file outlives the session
+    //     that would have shown the banner, so the file has to carry it.
+    const slotCount = Array.isArray(result.model_slots) ? result.model_slots.length : 0;
+    const liveCount = Number(result.live_count);
+    // The TRUE denominator is the slot count, not the agreement total: an
+    // answer that timed out is never recorded, so agreement.total can be 3 on a
+    // 4-slot run and "3 of 3" would read as fully live.
+    const denominator = slotCount || ctx.total || 0;
+    if (Number.isFinite(liveCount) && denominator && liveCount < denominator) {
+      push(
+        liveCount === 0
+          ? "> **Simulated result — not from real models.** Every answer, the debate and the synthesis below were produced by Quorum's local simulation. Treat this as a demo, not a model panel."
+          : `> **Partly simulated result.** Only ${liveCount} of ${denominator} answers came from a live provider; the rest are simulated or could not be retrieved. Do not rely on this as a fully live result.`,
+        "",
+      );
+    }
+
+    push("## About this run", "");
+    if (result.correlation_id) push(`- Run: ${result.correlation_id}`);
+    if (result.query_run_id) push(`- Run id: ${result.query_run_id}`);
+    if (result.result_generated_at_utc) push(`- Generated: ${result.result_generated_at_utc}`);
+    if (Number.isFinite(Number(result.elapsed_time_ms))) {
+      push(`- Elapsed: ${formatDuration(result.elapsed_time_ms)}`);
+    }
+    if (Number.isFinite(liveCount) && denominator) {
+      push(`- Live model answers: ${liveCount} of ${denominator}`);
+    }
+    if (fs && fs.synthesis_mode) {
+      // The screen renders this enum as a badge a reader understands; a raw
+      // "fallback" in a footer tells them nothing about whether a model wrote
+      // the verdict above.
+      push(`- Synthesis: ${SYNTHESIS_MODE_EXPORT_LABEL[fs.synthesis_mode] || fs.synthesis_mode}`);
+    }
+    // An answer the provider cut short is marked on screen; an exported record
+    // that drops the mark presents an interrupted answer as complete.
+    const shortenedAnswers = (Array.isArray(res && res.model_answers) ? res.model_answers : [])
+      .filter((a) => a && a.shortened === true);
+    if (shortenedAnswers.length) {
+      push(
+        `- Incomplete answers: ${shortenedAnswers.length} model answer(s) hit the ` +
+          "length limit Quorum sets on each call and end mid-thought.",
+      );
+    }
+    if (fs && fs.citation_coverage && fs.citation_coverage.target_met === false) {
+      push(
+        "- Source support is BELOW target for this run — the verdict below is provisional.",
+      );
+    }
+    push("");
+
+    if (ctx.question) push(`**Question:** ${mdUntrustedBlock(ctx.question)}`, "");
 
     const recommendation = fs && fs.recommendation ? String(fs.recommendation).trim() : "";
     push("## Verdict", "");
@@ -2361,6 +2453,7 @@
       section("Uncertainty", fs.uncertainty);
       section("Recommendation", fs.recommendation);
       section("Source support", fs.source_support);
+      section("High-stakes notice", fs.high_stakes_notice);
     }
 
     const sources = collectResultSources(res || {});
@@ -2368,11 +2461,30 @@
       push("## Sources", "");
       sources.forEach((s, i) => {
         const url = s && s.url ? String(s.url) : "";
-        const title = s && s.title ? String(s.title) : sourceHost(url) || "source";
+        const rawTitle = s && s.title ? String(s.title) : sourceHost(url) || "source";
+        const title = mdEscapeInline(rawTitle);
         // Every cited source, including the ones the view keeps behind
         // "+N more" — an export that reproduced the collapsed view would drop
         // provenance the run actually has.
-        push(url ? `${i + 1}. [${title}](${url})` : `${i + 1}. ${title}`);
+        //
+        // A Quorum-side stub source points at the IANA-reserved example.test
+        // domain and is NOT evidence. The view already refuses to make those
+        // anchors and badges them (`renderStubSource`); an export that turned
+        // them into numbered citations would launder simulated placeholders
+        // into a decision record.
+        if (s && STUB_SOURCE_PROVIDERS.has(s.provider)) {
+          const tag = STUB_SOURCE_TAG_TEXT[s.provider] || "simulated";
+          push(`${i + 1}. ${title} — **${tag}, not a real source**`);
+          return;
+        }
+        // Untrusted URL: the same allow-list the chips use. A `javascript:` or
+        // `data:` URL must never become a link a viewer will happily open.
+        const href = safeMarkdownHref(url);
+        push(
+          href
+            ? `${i + 1}. [${title}](${href})`
+            : `${i + 1}. ${title} (link withheld — unsupported URL scheme)`,
+        );
       });
       push("");
     }
@@ -2382,12 +2494,12 @@
       push("## Where each model stood", "");
       for (const m of movements) {
         if (!m) continue;
-        const name = String(m.display_name || m.model_id || "Model");
+        const name = mdEscapeInline(String(m.display_name || m.model_id || "Model"));
         push(`### ${name}`, "");
-        if (m.opening) push(`- **Opening:** ${String(m.opening).trim()}`);
-        if (m.after_round_1) push(`- **After round 1:** ${String(m.after_round_1).trim()}`);
-        if (m.final) push(`- **Final:** ${String(m.final).trim()}`);
-        if (m.revision_note) push(`- **Revision note:** ${String(m.revision_note).trim()}`);
+        if (m.opening) push(`- **Opening:** ${mdUntrustedBlock(String(m.opening).trim())}`);
+        if (m.after_round_1) push(`- **After round 1:** ${mdUntrustedBlock(String(m.after_round_1).trim())}`);
+        if (m.final) push(`- **Final:** ${mdUntrustedBlock(String(m.final).trim())}`);
+        if (m.revision_note) push(`- **Revision note:** ${mdUntrustedBlock(String(m.revision_note).trim())}`);
         push("");
       }
     }
@@ -2400,27 +2512,9 @@
         push(`### Round ${r.round_number}`, "");
         const focus = Array.isArray(r.focus_areas) ? r.focus_areas.filter(Boolean) : [];
         if (focus.length) push(`*Focus: ${focus.join(", ")}*`, "");
-        if (r.critique_text) push(String(r.critique_text).trim(), "");
+        if (r.critique_text) push(mdUntrustedBlock(String(r.critique_text).trim()), "");
       }
     }
-
-    // Provenance for the record itself. An exported decision record that
-    // cannot be traced back to its run is not evidence of anything.
-    push("## About this run", "");
-    if (result.correlation_id) push(`- Run: ${result.correlation_id}`);
-    if (result.query_run_id) push(`- Run id: ${result.query_run_id}`);
-    if (result.result_generated_at_utc) push(`- Generated: ${result.result_generated_at_utc}`);
-    if (Number.isFinite(Number(result.elapsed_time_ms))) {
-      push(`- Elapsed: ${formatDuration(result.elapsed_time_ms)}`);
-    }
-    const liveCount = Number(result.live_count);
-    if (Number.isFinite(liveCount)) {
-      // Honesty travels with the file: a simulated run must not be exported as
-      // though four live models produced it.
-      push(`- Live model answers: ${liveCount} of ${ctx.total || 4}`);
-    }
-    if (fs && fs.synthesis_mode) push(`- Synthesis: ${fs.synthesis_mode}`);
-    push("");
 
     return out.join("\n");
   }
@@ -2464,7 +2558,15 @@
         const key = url || (s && s.title) || "";
         if (!key || seen.has(key)) continue;
         seen.add(key);
-        out.push({ title: s && s.title ? String(s.title) : sourceHost(url), url });
+        // `provider` is carried through so consumers can tell a real citation
+        // from a Quorum-side STUB (local_simulation / fallback_search), which
+        // points at the reserved example.test domain and is not evidence.
+        // Dropping it here is why the chip row rendered those as live links.
+        out.push({
+          title: s && s.title ? String(s.title) : sourceHost(url),
+          url,
+          provider: s && s.provider ? String(s.provider) : "",
+        });
       }
     }
     return out;
@@ -2575,8 +2677,15 @@
           // Only make the chip a link when the URL is http(s) — mirrors the
           // ``createSafeLink`` scheme allow-list so a ``javascript:`` URL can never
           // become a clickable anchor. Otherwise render a plain, non-link chip.
-          const safe = safeHttpUrl(s.url);
+          // A Quorum-side stub points at the IANA-reserved example.test domain,
+          // which never resolves — `renderStubSource` already refuses to make
+          // those anchors elsewhere for exactly that reason. F-19 made every
+          // source reachable, so without this the expander hands the user a
+          // row of dead links dressed as citations.
+          const isStub = STUB_SOURCE_PROVIDERS.has(s.provider);
+          const safe = isStub ? null : safeHttpUrl(s.url);
           const chip = safe ? mkEl("a", "result-source-chip") : mkEl("span", "result-source-chip");
+          if (isStub) chip.dataset.stub = "true";
           if (safe) {
             chip.href = safe;
             chip.target = "_blank";
@@ -2590,6 +2699,11 @@
           // non-http URL yields an empty host).
           const label = host && title ? `${host} · ${title}` : host || title || "source";
           chip.appendChild(mkEl("span", "result-source-label", label));
+          if (isStub) {
+            chip.appendChild(
+              mkEl("span", "result-source-stub-tag", STUB_SOURCE_TAG_TEXT[s.provider] || "simulated"),
+            );
+          }
           if (i >= COLLAPSED_SOURCE_COUNT) chip.hidden = true;
           chipRow.appendChild(chip);
         });
@@ -3768,10 +3882,10 @@
     // provider tag, because it qualifies the whole answer rather than any one
     // paragraph of it.
     if (answer && answer.shortened === true) {
-      const short = mkEl("span", "transcript-opening-shortened", "shortened");
+      const short = mkEl("span", "transcript-opening-shortened", "cut off — incomplete");
       short.title =
-        "The provider stopped this answer at its length limit, so it ends " +
-        "mid-thought. It is not the model's complete view.";
+        "This answer hit the length limit Quorum sets on each model call, so " +
+        "it ends mid-thought. It is not the model's complete view.";
       head.appendChild(short);
     }
     card.appendChild(head);
@@ -4732,7 +4846,8 @@
     while (collapsed.length && collapsed[collapsed.length - 1].trim() === "") collapsed.pop();
     if (!collapsed.length) return "";
     // Group consecutive non-blank lines into blocks; classify each
-    // block as a list, heading, fenced code block, or paragraph. The
+    // block as a list, heading, blockquote, or paragraph (there is NO
+    // fenced-code-block branch — a ``` fence renders as literal text). The
     // inline renderer (mdInline) handles bold, italic, inline code,
     // and links within those block contents.
     const out = [];
@@ -4764,15 +4879,24 @@
     //     on a buffer full of PROSE, so a paragraph the provider soft-wrapped
     //     with single newlines rendered as a run of one-item lists.
     //
-    // With a dedicated buffer each flush owns one block type and none of the
-    // above is expressible.
+    // With a dedicated buffer each flush owns one block type, so none of the
+    // above is expressible ON THE PARAGRAPH/LIST PATH. It is NOT a whole-file
+    // guarantee: the blockquote and heading branches still hand raw lines to
+    // mdInline, whose per-line bullet rule is deliberately retained for the
+    // inline surfaces, so a bullet inside a blockquote still becomes one
+    // single-item <ul> per line. Ungated and out of scope here; noted so the
+    // next reader does not trust a stronger claim than the code makes.
     let listBuffer = [];
     const orderedMarker = (line) => /^\s*\d+\.\s+/.test(line);
     const flushList = () => {
       if (!listBuffer.length) return;
       const items = listBuffer.map((line) => {
         // Strip leading bullet marker ( "- ", "* ", or "1. " ).
-        const stripped = line.replace(/^(\s*)([-*]|\d+\.)\s+/, "$1");
+        // Drop the indent with the marker. Keeping it only pushed literal
+        // spaces into the <li>'s textContent — HTML collapses them, so the
+        // nesting was never visible anyway. Real nested lists are not built
+        // here; a sub-bullet renders as a flat item.
+        const stripped = line.replace(/^(\s*)([-*]|\d+\.)\s+/, "");
         return `<li>${mdInline(escapeHtml(stripped))}</li>`;
       });
       const tag = orderedMarker(listBuffer[0]) ? "ol" : "ul";
@@ -4806,6 +4930,17 @@
         continue;
       }
       if (listMarker(line)) {
+        // An ordered marker may only INTERRUPT a paragraph when it starts at 1
+        // — CommonMark's rule, and it exists for exactly this case: a provider
+        // soft-wraps a sentence and the wrap lands on a year or a version, so
+        // "…first proposed in\n2025. Nobody has revisited…" would otherwise
+        // become a list item AND have "2025." stripped as its marker. That
+        // deletes content, and no raw-marker gate can see it happen, because
+        // the marker is removed rather than left behind.
+        if (buffer.length && orderedMarker(line) && !/^\s*1\.\s/.test(line)) {
+          buffer.push(line);
+          continue;
+        }
         flushParagraph();
         flushQuote();
         // A change of marker type ends the current list and starts a new one,
@@ -4918,7 +5053,7 @@
     // The giveaway is that the captured run carried its own bounding spaces,
     // which real emphasis can never do.
     s = s.replace(
-      /(^|[^\w*])\*([^\s*](?:[^*]*[^\s*])?)\*(?!\w)/g,
+      /(^|[^*])\*([^\s*](?:[^*]*[^\s*])?)\*/g,
       (_m, lead, t) => `${lead}<em>${t}</em>`,
     );
     // [text](url). The captured ``url`` reaches us HTML-escaped (every
