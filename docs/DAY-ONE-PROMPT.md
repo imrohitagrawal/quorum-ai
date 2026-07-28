@@ -176,6 +176,31 @@ it gates on the *artifacts the workflow must produce*.
 > after which unresolved ≥MED findings go to the human with an explicit override
 > decision (§1b). Do not call it clean after one pass.
 >
+> **5a-i. Each round's fixes introduce the next round's defects — plan for it,
+> and cap it.** Measured over one function in one session: round 1's advice, taken
+> on trust, broke arithmetic rendering (`3*40` rendered as `340`); round 2's fix
+> opened four ways to smuggle markup past it; round 3 closed those and left the
+> original hole open. Every round was competent. So: **re-review every fix diff**,
+> and agree the cap up front (this operator's is **2 rounds**, §1b allows 3) —
+> then ship with the residual list written down, because more rounds is not
+> convergence.
+>
+> **5a-ii. When patching keeps producing defects, the approach is wrong — change
+> it, do not patch again.** Three failed rounds on one unit is the signal, not bad
+> luck. What finally worked was removing the unit's hardest job (a block-level
+> sanitiser was being reused for single-line values; those values got a simple
+> escape instead) and rewriting its check to assert the **outcome** — "no heading
+> the document did not write" — rather than the mechanism the last fix happened to
+> use. A check on the mechanism only ever catches the bypass you already thought of.
+>
+> **5a-iii. Before a release, verify against the CODE — the tracker, the plan and
+> your own summaries are all claims.** This is a separate step from reviewing a
+> diff: read the shipped code fresh and ask what is actually true. Measured: four
+> read-only agents doing this found more than two full review rounds had, including
+> a class review cannot see — **work marked done that was not in production**. Two
+> issues had been closed against fixes sitting on an unmerged branch. Run it as a
+> standing pre-release step, not a one-off.
+>
 > **5b. Commit hygiene: branch first, always.** Never commit to the default
 > branch. Open the slice's branch before the first edit, keep one branch per
 > slice, and commit per slice with the evidence (RED output, gate run) referenced
