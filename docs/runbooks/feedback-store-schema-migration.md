@@ -13,6 +13,35 @@ writable.
 
 ---
 
+## Start here: the 30-second triage
+
+Every fault in this runbook ends in one of two places, and `/status` tells you
+which without an SSH session:
+
+```bash
+curl -s https://quorum.stackclimb.com/status \
+  | jq '{feedback_db, feedback_writes, feedback_lost_billed_writes, feedback_events_total}'
+```
+
+| `feedback_db` | `feedback_lost_billed_writes` | What you have | Section |
+| --- | --- | --- | --- |
+| `connected` | `0` | Healthy. This is the only green combination. | — |
+| `degraded` | **`> 0`** | **Money.** That many billed cost events are permanently missing from the ledger the 24 h cap reads; that much spend went unmetered. | [read-only](#failure-mode-read-only-volume), [locked (b)](#b-reserved-lock-on-an-already-schemad-database--the-store-opens-but-its-writes-are-swallowed-while-the-lock-is-held), [full volume](#failure-mode-full-or-nearly-full-volume) |
+| `degraded` | `0` | **No charge lost *yet* — read the linked sections before deprioritising.** Writes are failing (or one failed) and the ledger is still correct, but the counter only counts charges this process has actually attempted. Two very different faults land here: a nearly-full volume dropping the big telemetry rows while every charge lands (genuinely telemetry-only), **and** a read-only volume whose first priced run has not happened yet — MEASURED, a boot onto a read-only volume with the F-01 marker unapplied reports exactly `degraded` / `failing` / `0`, and it is a money fault whose next priced run loses the charge, on the one ordering that does *not* recover on the live handle (so plan for a restart). A third, benign one is a boot-time migration that raised on a *read* (see below). | [read-only / boot migration](#failure-mode-read-only-volume), [full volume](#failure-mode-full-or-nearly-full-volume) |
+| `disconnected` | `0` | No store at all — the boot-time open failed. The cap is skipped entirely. | [locked (a)](#a-no-store-at-all--exclusive-or-reserved-before-the-schema-exists) |
+| `error` | (either) | The store is present but its health query raised — a live handle that went bad. | — |
+
+`feedback_lost_billed_writes` is a **per-process** counter that only ever
+increases. It is the one field a concurrent successful write cannot mask, and
+the reason it exists is measured in the next section. A restart resets it to
+zero; the durable evidence of a gap is the absence of the rows themselves, which
+the read-only query further down counts.
+
+**`feedback_writes` is not the money field.** It reports the store's last write
+by *any* recorder, and one process writes six event streams into this database.
+
+---
+
 ## What happens on boot
 
 The migration runner is invoked from `FeedbackStore.__init__`, so it runs on
@@ -57,6 +86,54 @@ Two log lines, quoted verbatim from `src/product_app/feedback_store.py`:
 > `schema_migrations` is the only reliable evidence. Do not infer status from
 > the log.
 
+> ⚠ **`F-01 preview backfill did not run` can be a read-side fault, and then
+> `degraded` is a false alarm.** The migration's `try` covers the `SELECT` and
+> the `json.loads` of every candidate row as well as the writes, and any raise in
+> it stamps a write failure. MEASURED on a fully **writable** volume with one
+> corrupt-JSON `events` row: `/status` reports `feedback_db: "degraded"`,
+> `feedback_writes: "failing"`, `feedback_lost_billed_writes: 0` — and the next
+> real `record()` clears both back to `connected`/`ok`. Read the WARNING's
+> trailing message: `attempt to write a readonly database` (or `database is
+> locked`, or `disk is full`) is the real fault; a `json`/`ValueError` text such
+> as `Expecting value: line 1 column 1 (char 0)` is this false alarm. Either way
+> the money counter is untouched, and it is `feedback_lost_billed_writes` that
+> decides whether you have an incident.
+
+Two more come from `record()`, one per swallowed write, and are the signals for
+every "the store opened but nothing is landing" fault below:
+
+| Level | Message | Emitted when |
+| --- | --- | --- |
+| `WARNING` | `feedback_store: failed to persist event recorder=%s type=%s: %s` | **Every** swallowed write, of **every** event type. Unrated — one record per lost event. |
+| `ERROR` | `feedback_store: a BILLED cost event (recorder=... type=cost_guardrail_accepted) was NOT persisted: ...` | Only when a `cost`/`cost_guardrail_accepted` write is lost. Rate-limited to one per 60 s. |
+
+> ⚠ **The `WARNING` is not scoped to telemetry.** An earlier revision of this
+> runbook said it was "emitted … for the other (telemetry) event types" — that
+> is wrong, and it matters, because it invites an operator to read a `cost`
+> WARNING as harmless. A lost billed charge produces **both** records: the
+> WARNING first, then the ERROR (if the 60 s window is open). VERIFIED against
+> `record()`, where the WARNING is unconditional and the ERROR is the extra one.
+
+> ⚠ **The `ERROR` is rate-limited, so its COUNT means nothing.** One lost charge
+> and a thousand produce the same single record inside a 60 s window (MEASURED:
+> 32 threads × 25 lost charges in one window → exactly 1 record, 800 counted).
+> Read `/status`'s `feedback_lost_billed_writes` for the magnitude; read the log
+> for the fact and the SQLite error string.
+
+The ERROR names the remedy **per shape**, keyed on the SQLite error text it
+carries, because the three shapes do not recover the same way. Do not
+generalise one to another — MEASURED on the same handle, the read-only shape
+four separate times (once per ordering, see the recovery table at the end):
+
+| SQLite error in the record | Recovers on the SAME handle? | Remedy |
+| --- | --- | --- |
+| `attempt to write a readonly database` | **Depends on the ordering** — see [the recovery table](#recovery-at-a-glance-which-shapes-need-a-restart) before assuming either way. A handle that *predates* the fault (the volume went read-only under an already-open handle) resumes on the `chmod`; a handle opened onto an *already*-read-only database file does not. `os.access` returns `True` in both, so it cannot tell you which you have. | Restore write access, then re-read `/status`. If `feedback_writes` has not returned to `ok`, **restart the process** — a restart works in every ordering. |
+| `database is locked` | **Yes**, the instant the RESERVED holder commits or rolls back. | `COMMIT`/`ROLLBACK`/kill the holder. No restart needed for writes. |
+| `database or disk is full` / `unable to open database file` | **Yes**, as soon as space is freed. | Free space on the volume. No restart needed for writes. |
+
+In all three, the charges lost during the fault stay lost: `record()` has no
+retry and no queue, and nothing replays them.
+
 Two more lines come from the *call sites*, not the store, and mean something
 much bigger — see "Locked database" below. Both are `ERROR`:
 
@@ -82,8 +159,11 @@ Use the `mode=ro` URI. A plain read-write `sqlite3.connect` against the live
 production database takes locks and can create a `-journal` sidecar on the
 volume the app is actively writing — and, per "Locked database" below, holding
 a lock against this file yourself risks becoming case (a) or (b) for the *next*
-process that opens it, up to and including silently disabling the daily spend
-guard (case (a)). (A raw `sqlite3.connect` does *not* apply the migration —
+process that opens it, up to and including disabling the daily spend
+guard (case (a)). That is no longer *silent* — P1 / issue #101 gave case (a)
+two ERRORs, and issue #109 gave case (b) an ERROR plus a `/status` counter —
+but a signal someone still has to notice is not the same thing as a guard that
+is working. (A raw `sqlite3.connect` does *not* apply the migration —
 only `FeedbackStore.__init__`/`FeedbackStore.from_env()` do that, since only
 they run the migration check — but there is no reason to take the write path
 to read a handful of counts.)
@@ -154,18 +234,40 @@ counts above it.
 
 ## Failure mode: read-only volume
 
-**Symptom.** On boot, `WARNING feedback_store: F-01 preview backfill did not
-run: attempt to write a readonly database`. No marker row appears.
+**Symptom.** `/status` reports `feedback_db: "degraded"` with
+`feedback_lost_billed_writes` climbing above `0`, and the logs carry
+`ERROR feedback_store: a BILLED cost event … was NOT persisted: attempt to
+write a readonly database` (once a minute, for as long as the fault lasts)
+alongside a `WARNING feedback_store: failed to persist event …` per lost event.
+On the *first* boot after F-01 ships onto an unwritable volume you also get
+`WARNING feedback_store: F-01 preview backfill did not run: attempt to write a
+readonly database` and no marker row — but that one fires once, at the open, so
+do not wait for it: on an already-marked database (the production steady state)
+the boot log says **nothing at all**, and the `/status` fields plus the two
+`record()` records are the whole signal.
+
+> Since issue #109 the failed boot migration also stamps write health, so a boot
+> whose migration write failed reports `feedback_writes: "failing"` and
+> `feedback_db: "degraded"` immediately — it used to report `"unverified"` /
+> `"connected"`, i.e. "no evidence either way", while the process had just
+> watched a write fail. MEASURED.
 
 **What it means.** This is the *documented, tested* degradation
 (`tests/integration/test_f01_preview_billing_backfill.py::test_read_only_database_degrades_to_pre_backfill_behaviour_instead_of_failing_to_boot`).
 The store still opens — `_SCHEMA`'s statements are no-ops on an existing
 database — so:
 
-- Reads keep working. The daily spend cap still queries `daily_spend_for`, and
-  `/status` still reports `feedback_db: "connected"` — the store object is real
-  and its health query succeeds. MEASURED 2026-07-28 with the DB file *and* its
-  directory `chmod`-ed unwritable.
+- Reads keep working — the store object is real and its health query succeeds.
+  MEASURED 2026-07-28 with the DB file *and* its directory `chmod`-ed
+  unwritable. Before issue #109 `/status` therefore reported the fully green
+  `feedback_db: "connected"` throughout the fault; it now reports
+  `feedback_db: "degraded"` with `feedback_writes: "failing"` from the first
+  swallowed write onward, and `feedback_lost_billed_writes` counting each lost
+  charge. Between boot and that first write attempt — on a database whose F-01
+  marker is already applied, so the open attempts nothing — the honest answer is
+  `feedback_db: "connected"`, `feedback_writes: "unverified"`, counter `0`:
+  nothing has been lost yet, because the first event that *could* be lost is
+  the one that flips the signal.
 - Writes fail per event and are swallowed with
   `WARNING feedback_store: failed to persist event recorder=%s type=%s:
   attempt to write a readonly database`. The audit trail gains no new rows, and
@@ -173,51 +275,154 @@ database — so:
 - The pre-F-01 rows stay as they were, so the spend already on disk is
   over-counted — bounded to the 24 h rolling window `daily_spend_for` reads.
 - **But the larger effect runs the other way: the ledger freezes and the daily
-  spend cap silently stops firing.** `cost_guardrail_accepted` rows are among
+  spend cap stops firing.** `cost_guardrail_accepted` rows are among
   the swallowed writes, so `daily_spend_for` keeps returning the total from
-  before the fault no matter how much is spent during it. MEASURED: four charges
-  each worth a quarter of `DAILY_CAP_USD` → `daily_spend_for` still `0`,
-  `threshold_action` `allow` with a confirmation token minted, **zero**
-  `product_app.costs` ERROR records (case (a)'s loud bypass ERROR does not fire
-  here — `store is not None`), `/status` `connected`. Net direction is
-  **under**-metering: free spend, permanently lost from the audit trail.
-- Recovery is *not* automatic even after `chmod`. MEASURED: SQLite opened the
-  file `O_RDONLY`, so the existing handle keeps failing every write once the
-  volume is writable again; a **fresh** open (i.e. a process restart) writes
-  normally. The charges swallowed during the fault are still absent afterwards.
+  before the fault no matter how much is spent during it. MEASURED (re-measured
+  2026-07-28): charges each worth a quarter of `DAILY_CAP_USD` → `daily_spend_for`
+  still `0` and `threshold_action` `allow` with a confirmation token minted,
+  where without the fault the **fifth** such charge is the one that `BLOCK`s.
+  (Not the fourth — the guard is a strict `already_spent + estimated >
+  DAILY_CAP_USD`, so four quarter-cap charges land the ledger exactly *on* the
+  cap without exceeding it. An earlier revision of this runbook said "four";
+  the boundary is now pinned by
+  `tests/integration/test_feedback_store_write_failures.py::test_block_lands_on_the_fifth_quarter_cap_charge_not_the_fourth`.)
+  Case (a)'s loud bypass ERROR still does not fire here — `store is not None` —
+  but since issue #109 `record` raises its own rate-limited ERROR naming the
+  disarmed cap, and `/status` reports `feedback_db: "degraded"` with
+  `feedback_lost_billed_writes` counting the charges that never landed. **That
+  counter, not `feedback_writes`, is how you tell this fault from a telemetry
+  gap** — and it is the only field that survives the masking case below. Net
+  direction is **under**-metering: free spend, permanently lost from the audit
+  trail.
+- **`feedback_writes` alone can read `ok` throughout a fault of this kind,** on
+  the partial shapes where some writes still land. The store carries six event
+  streams and reports the last write of any of them; a run's worker thread is
+  started *before* the billed write is recorded
+  (`query_runs._start_reserved_query_run`), so a landed provider or synthesis
+  event re-stamps success over a charge lost microseconds earlier. MEASURED
+  through `POST /v1/query-runs` with a transient lock held across only the
+  billed write: **8 runs accepted, $0.2088 actually billed against the $0.20
+  cap, zero `cost_guardrail_accepted` rows on disk — and `/status` reading
+  `feedback_db: "connected"`, `feedback_writes: "ok"` the entire time**,
+  byte-indistinguishable from the healthy control, with `feedback_events_total`
+  *climbing*. `feedback_lost_billed_writes` is the field that was added for
+  exactly this, and `feedback_db` now degrades on it too.
+- Recovery after `chmod` is *not guaranteed*, and which way it goes depends on
+  when the handle was opened. MEASURED, four orderings on the same handle:
+  a handle opened **before** the fault (the volume went read-only under an
+  already-open handle)
+  resumes writing on the `chmod` alone; a handle opened **after**, onto an
+  already-read-only database *file*, keeps failing every write and needs a fresh
+  open (a process restart); a handle opened after with only the *directory*
+  read-only also resumes on the `chmod`. `os.access` returns `True` in every one
+  of them, so it cannot tell you which you have — `/status`'s `feedback_writes`
+  can, because it reports what the handle itself last did. The charges swallowed
+  during the fault are absent afterwards in all four.
 
-**Action.** Restore write access to the volume, then **restart the machine** —
-the restart is required for writes at all, not just for the migration. The
-migration is likewise retried on the next store *open*, not continuously —
-nothing re-attempts it inside a running process. Re-run the read-only checks
+**Action.** Restore write access to the volume, then re-read `/status`. If
+`feedback_writes` is back to `ok`, writes have resumed on the live handle and no
+restart is needed for them. If it still reads `failing`, **restart the machine**
+— a restart resumes writes in every ordering. Restart regardless if you need the
+F-01 migration to run: it is retried on the next store *open*, not continuously,
+and nothing re-attempts it inside a running process. Re-run the read-only checks
 above and confirm the marker now exists and that new `events` rows appear.
-Treat a sustained run of the `failed to persist event` WARNING as a spend-guard
-outage. Once the F-01 marker is applied — the production steady state — it is
-the only signal this fault produces: MEASURED 2026-07-28, a read-only open
-against an already-marked database emits no record at all. Before the marker is
-applied you also get the boot `F-01 preview backfill did not run` WARNING in
-the Symptom above, but that one fires once, at the open, and does not repeat
-for as long as the fault lasts.
+
+**Alerting.** Page on `feedback_lost_billed_writes > 0` (or on its delta over
+the evaluation window, which is the loss rate) — that is the money condition and
+the one field nothing can mask. Alert at a lower severity on `feedback_db !=
+"connected"` and on the `feedback_store: a BILLED cost event ... was NOT
+persisted` ERROR (rate-limited to one per 60 s, so it keeps re-firing for the
+length of the outage rather than decaying to a single line). Do **not** page on
+`feedback_writes == "failing"` alone in either direction: it misses this fault
+whenever some other recorder's write lands in between (MEASURED above), and it
+fires on a nearly-full volume where every charge is landing correctly (see the
+next section). Before issue #109 the per-event `failed to persist event` WARNING
+was the ONLY signal this fault produced once the F-01 marker was applied — the
+production steady state: MEASURED 2026-07-28, a read-only open against an
+already-marked database emitted no record at all at open time, and still does
+not. Before the marker is applied you also get the boot `F-01 preview backfill
+did not run` WARNING in the Symptom above, but that one fires once, at the open,
+and does not repeat for as long as the fault lasts.
+
+## Failure mode: full or nearly-full volume
+
+`/status`'s `degraded` value advertises "a full disk" as one of its causes, so
+it needs an entry here. The `events` table is append-only and has **no pruning,
+retention policy or `VACUUM` anywhere in `src/`** (VERIFIED by grep 2026-07-28:
+`grep -rn 'VACUUM' src/` and `grep -rn 'DELETE FROM events' src/` are both empty;
+`grep -rni 'retention' src/` is **not** — it returns two hits, a landing-page
+suggestion chip in `templates/workspace.html` and a comment in `static/app.js`
+about intra-word underscores, neither of which is a retention policy or touches
+this table), so it grows without bound for the life of the volume. A volume
+that fills is a scheduled future state of this deployment, not a hypothetical.
+
+**Symptom.** `/status` reports `feedback_db: "degraded"` and
+`feedback_writes: "failing"`, with `WARNING feedback_store: failed to persist
+event …: database or disk is full` in the logs. Whether it is a money incident
+depends entirely on `feedback_lost_billed_writes`:
+
+| `feedback_lost_billed_writes` | Diagnosis |
+| --- | --- |
+| `0` | **Telemetry loss only.** Every charge is still landing and the ledger is exact — the cap is firing normally. The audit trail is gaining gaps the audit job tolerates. Not a money incident. |
+| `> 0` | **Money.** Charges are being dropped; treat exactly like the read-only case above. |
+
+That split is not a technicality, it is the *usual* shape at the boundary. A
+billed `cost_guardrail_accepted` row is ~230 B of JSON; a provider or synthesis
+row carries the model's answer text and is kilobytes. So a volume with a little
+room left rejects the big rows and accepts the small ones. MEASURED with one
+page of headroom: **4/4 billed rows landed, `daily_spend_for` exact, 1/4
+telemetry rows landed, `write_health` `failing`.** Reading `degraded` as "the
+cap stopped firing" here would be wrong in the expensive direction — it would
+send an operator hunting a money bug that does not exist while the real problem
+is disk.
+
+**Error text at the extremes.** MEASURED against a real 2 MB volume filled to a
+chosen number of free bytes: with 4 KiB or more free, SQLite raises
+`SQLITE_FULL (13): database or disk is full`; with **zero** bytes free it raises
+`SQLITE_CANTOPEN (14): unable to open database file` instead, because it cannot
+create the rollback journal. Both are swallowed by the same `record()` branch
+and produce the same `/status` fields, so triage on the fields, and expect
+either string in the log.
+
+**Recovery.** Writes resume on the **same handle** as soon as space is freed —
+no restart (MEASURED). The events lost while the volume was full are still gone.
+
+**Action.**
+
+1. Free space on the Fly volume, or grow it. The volume is `quorum_data`,
+   mounted at `/data` (`fly.toml` `[[mounts]]`); check `fly volumes --help` for
+   the extend/grow subcommand your flyctl version ships.
+2. Check `feedback_lost_billed_writes` — if it is above zero, the ledger the cap
+   reads is short by that many charges for the rest of the 24 h window; treat it
+   as a spend-guard incident.
+3. Confirm recovery by new `events` rows appearing, and by `feedback_writes`
+   returning to `ok`. The counter will **not** return to zero; that is the
+   point. It resets only on a process restart.
 
 ## Failure mode: locked database
 
 "Locked" is not one case. SQLite has more than one lock level, and which one
 the *other* connection holds decides whether the app gets no store at all, or
 a store that *opens* but whose writes are swallowed for as long as the lock is
-held — the ledger freezes and the daily spend cap silently stops firing.
+held — the ledger freezes and the daily spend cap stops firing.
 **Neither case is benign: MEASURED 2026-07-28, the per-account 24 h daily spend
 cap stops being enforced in both.** They differ in blast radius and in
-recovery, not in whether money leaks. **Tell the two apart by which boot record
-appears — and note the two sit at different log levels: case (a) is an `ERROR`,
-case (b) a `WARNING`.** Grep for the message text across both levels, never for
-one level alone: filtering on `WARNING` matches only case (b) and hides case
-(a) entirely — and do not read case (b)'s lower log level as a lower severity.
-Do not triage on the word "locked" in isolation either — it appears in both.
+recovery, not in whether money leaks.
 
-| Appears | Does *not* appear | Case |
-| --- | --- | --- |
-| `ERROR feedback_store: could not open SQLite sink — persistence is disabled AND the per-account 24h daily spend cap will not be enforced … database is locked` | `F-01 preview backfill did not run` | (a) no store at all — EXCLUSIVE, **or** RESERVED on a database with no schema yet |
-| `F-01 preview backfill did not run: … database is locked` | `could not open SQLite sink` | (b) RESERVED on an already-schema'd database — the store *opens*, but every write made while the lock is held is swallowed: the ledger freezes and the spend cap silently stops firing. Writes resume by themselves once the holder releases (no restart needed, unlike (a)); the events lost in between never come back |
+**Tell them apart on `/status` first — it works whatever the log has rotated
+away.** Case (a) is `feedback_db: "disconnected"`; case (b) is
+`feedback_db: "degraded"` with `feedback_lost_billed_writes` climbing. Only if
+you need the boot record as well: the two sit at different log levels — case (a)
+is an `ERROR`, case (b) a `WARNING`. Grep for the message text across both
+levels, never for one level alone: filtering on `WARNING` matches only case (b)
+and hides case (a) entirely — and do not read case (b)'s lower log level as a
+lower severity. Do not triage on the word "locked" in isolation either — it
+appears in both.
+
+| `/status` | Boot record that appears | Does *not* appear | Case |
+| --- | --- | --- | --- |
+| `feedback_db: "disconnected"` | `ERROR feedback_store: could not open SQLite sink — persistence is disabled AND the per-account 24h daily spend cap will not be enforced … database is locked` | `F-01 preview backfill did not run` | (a) no store at all — EXCLUSIVE, **or** RESERVED on a database with no schema yet |
+| `feedback_db: "degraded"`, `feedback_lost_billed_writes > 0` | `F-01 preview backfill did not run: … database is locked` (only on a database whose marker is not yet applied) | `could not open SQLite sink` | (b) RESERVED on an already-schema'd database — the store *opens*, but every write made while the lock is held is swallowed: the ledger freezes and the spend cap stops firing, announced by the rate-limited `a BILLED cost event … was NOT persisted` ERROR. Writes resume by themselves once the holder releases (no restart needed, unlike (a)); the events lost in between never come back |
 
 Case (a) also produces, at most once a minute for as long as the process
 lives, `ERROR costs: feedback store unavailable, so the USD 0.20 per-account
@@ -227,12 +432,20 @@ has already rotated away.
 
 ### (a) No store at all — EXCLUSIVE, or RESERVED before the schema exists
 
-**Symptom.** On boot, `ERROR feedback_store: could not open SQLite sink —
-persistence is disabled AND the per-account 24h daily spend cap will not be
-enforced …: database is locked`, roughly 5 s after the store open is attempted
-(MEASURED 5.37 s — Python's `sqlite3.connect` default `timeout` of 5.0 s, which
-`FeedbackStore` does not override). **No** `F-01 preview backfill did not run`
-warning — the migration runner is never reached.
+**Symptom.** `/status` reports `feedback_db: "disconnected"` (with
+`feedback_writes: "failing"` and `feedback_lost_billed_writes: 0` — there is no
+store to attempt a write, let alone lose one). On boot, `ERROR feedback_store:
+could not open SQLite sink — persistence is disabled AND the per-account 24h
+daily spend cap will not be enforced …: database is locked`, roughly 5 s after
+the store open is attempted (MEASURED 5.37 s — Python's `sqlite3.connect`
+default `timeout` of 5.0 s, which `FeedbackStore` does not override). **No**
+`F-01 preview backfill did not run` warning — the migration runner is never
+reached.
+
+> ⚠ A `feedback_lost_billed_writes` of `0` here does **not** mean no spend went
+> unmetered. It means nothing was counted, because with no store `record_event`
+> returns before touching SQLite. The cap is skipped *entirely* in this case —
+> `disconnected` and the two ERRORs below are its signal.
 
 **Which lock levels land here.** EXCLUSIVE always. RESERVED **also** lands here
 when the database has no schema yet — see case (b) for why that is not the
@@ -269,7 +482,10 @@ all**:
   that decision.
 - `/status` reports `feedback_db: "disconnected"` — reserved for exactly this
   fault. A store that is present but whose health query raises reports
-  `"error"` instead; do not confuse the two.
+  `"error"` instead, and one that is present and readable but is either failing
+  writes or has already lost a charge reports `"degraded"` (issue #109); do not
+  confuse the three. `feedback_writes` is `"failing"` here too: with no store,
+  events are definitively not landing.
 - Anything else that calls `FeedbackStore.from_env()` — the
   `feedback_audit` entry points `_load_events_by_recorder` and
   `generate_status_md` — does so **unguarded** and would raise outright. On the
@@ -317,9 +533,17 @@ The read-only path is covered separately by
 
 ### (b) RESERVED lock on an already-schema'd database — the store opens, but its writes are swallowed while the lock is held
 
-**Symptom.** On boot, `WARNING feedback_store: F-01 preview backfill did not
-run: database is locked`. **No** `could not open SQLite sink` ERROR, and **no**
-`costs: … daily spend cap is NOT being enforced` ERROR.
+**Symptom.** `/status` reports `feedback_db: "degraded"` with
+`feedback_lost_billed_writes` climbing, and the logs carry `ERROR
+feedback_store: a BILLED cost event … was NOT persisted: database is locked`
+once a minute for as long as the holder keeps the lock. **No** `could not open
+SQLite sink` ERROR, and **no** `costs: … daily spend cap is NOT being enforced`
+ERROR — those are case (a)'s, and their absence is precisely what makes this
+case look fine if you only grep for them. On a database whose F-01 marker is not
+yet applied you also get a one-shot boot `WARNING feedback_store: F-01 preview
+backfill did not run: database is locked`; on the production steady state
+(marker applied) the boot log says nothing, so **do not use it as the
+discriminator** — use `/status`.
 
 **What it means — this is the case the "Find the lock holder" step above is
 actually describing when the holder is a `sqlite3` shell.** A RESERVED lock
@@ -357,25 +581,49 @@ holding a real `BEGIN EXCLUSIVE` / `BEGIN IMMEDIATE`, in
   and resume succeeding the moment the other connection commits or rolls back —
   no restart needed for that half, unlike case (a). Nothing replays the events
   lost in between; `record` has no retry and no queue.
-- **The daily spend cap therefore stops firing, silently.** `store is not None`,
-  so `costs.py` takes the metered branch and `_log_daily_cap_bypassed` never
+- **The daily spend cap therefore stops firing.** `store is not None`, so
+  `costs.py` takes the metered branch and `_log_daily_cap_bypassed` never
   runs — but the `cost_guardrail_accepted` rows that *are* the meter are among
   the swallowed writes, so `daily_spend_for` keeps reading a **frozen ledger**:
   the total stays at whatever was on disk when the lock was taken, and every
   charge made during the hold is lost for good. This is **under**-metering (free
   spend), not the over-metering of a skipped migration. MEASURED (reviewer probe
-  reproduced 2026-07-28): four charges each worth a quarter of `DAILY_CAP_USD`
-  recorded under a `BEGIN IMMEDIATE` hold → `daily_spend_for` still `0`,
-  `threshold_action` `allow` with a confirmation token minted, where the same
-  four charges without the lock reach `BLOCK`.
-- **There is no ERROR anywhere and `/status` still reads `connected`.** Same
-  measurement: zero `product_app.costs` ERROR records, zero `product_app.main`
-  ERROR records, `feedback_db: "connected"` — only the per-event `WARNING`
-  above, repeated once per swallowed write. Case (a)'s loud `costs:` ERROR does
-  **not** cover this case, so do not treat "no cap-bypass ERROR" as "the cap is
-  enforced". Alert on the `failed to persist event` WARNING as well, and treat a
-  sustained run of it as a spend-guard outage. (Tracked as a separate defect —
-  the guard is bypassed here without the loudness P1 / issue #101 added.)
+  reproduced 2026-07-28): charges each worth a quarter of `DAILY_CAP_USD`
+  recorded under a `BEGIN IMMEDIATE` hold → `daily_spend_for` still `0` and
+  `threshold_action` `allow` with a confirmation token minted, where without the
+  lock the **fifth** such charge is the one that `BLOCK`s. (Not the fourth —
+  see the read-only section above for the strict-`>` arithmetic; an earlier
+  revision of this runbook said "four".)
+- **Since issue #109 this is no longer silent.** `record` keeps two monotonic
+  write-health stamps, counts every lost billed charge, and emits a rate-limited
+  (one per 60 s) ERROR — `feedback_store: a BILLED cost event ... was NOT
+  persisted` — whenever a `cost`/`cost_guardrail_accepted` write is lost.
+  `/status` reports `feedback_db: "degraded"` and
+  `feedback_lost_billed_writes: N`. It is still true that case (a)'s `costs:`
+  bypass ERROR does **not** cover this case (`store is not None`), and that
+  `product_app.main` logs nothing, so do not treat "no cap-bypass ERROR" as "the
+  cap is enforced" — watch the counter and the `feedback_store:` ERROR instead.
+  The per-event `failed to persist event` WARNING is emitted once per swallowed
+  write, unrated, for **every** event type including the billed cost events (an
+  earlier revision of this runbook said it was scoped to "the other (telemetry)
+  event types" — it is not, and a lost charge produces both that WARNING and the
+  ERROR).
+- **Recovery is on the live handle, not a restart.** Because the RESERVED hold
+  is the self-clearing shape, `feedback_writes` returns to `ok` on its own after
+  the first write that lands once the lock is released — the events lost in
+  between are still gone, and `feedback_lost_billed_writes` still shows how many
+  they were. Contrast the read-only volume, which recovers on the live handle
+  only when that handle predates the fault and otherwise needs a process restart
+  (MEASURED, four orderings — see the recovery table at the end of this runbook).
+- **`feedback_writes` can read `ok` right through this fault** whenever the lock
+  is intermittent rather than continuous — a backup, a checkpoint, another
+  machine, a maintenance script that takes RESERVED for a few milliseconds per
+  pass. Any recorder's write landing in between re-stamps success. MEASURED
+  through `POST /v1/query-runs` with the hold spanning only `_record_run_billing`:
+  8 runs accepted, $0.2088 billed against the $0.20 cap, zero
+  `cost_guardrail_accepted` rows — `/status` `connected`/`ok` throughout, and one
+  single ERROR record for the whole run. `feedback_lost_billed_writes` was added
+  for this shape.
 
 **Action.**
 
@@ -389,6 +637,44 @@ holding a real `BEGIN EXCLUSIVE` / `BEGIN IMMEDIATE`, in
    `__init__` gets a clear lock.
 3. Confirm recovery: new `events` rows appear right away once the lock is
    released; the marker row only appears after the restart in step 2.
+   `feedback_lost_billed_writes` stays where it is — it is a record of what was
+   lost, not a live health flag, and only a process restart zeroes it.
+
+## Recovery at a glance: which shapes need a restart
+
+The three "the store opened but writes are failing" shapes recover differently,
+and the ERROR record names the remedy for the one you have. MEASURED on the
+same handle — the read-only row four times, once per ordering:
+
+| Shape | SQLite error | Same handle recovers? | What "fixed" looks like |
+| --- | --- | --- | --- |
+| Read-only volume | `attempt to write a readonly database` | **It depends on the ordering** (measured below). `os.access` says `True` either way, so it cannot tell you which you have. | Restore write access, re-read `/status`, and **restart if `feedback_writes` is still `failing`**. A restart works in every ordering. |
+| RESERVED lock | `database is locked` | **Yes**, the moment the holder commits or rolls back. | `COMMIT`/`ROLLBACK`/kill the holder. Writes resume with no restart. |
+| Full / nearly-full volume | `database or disk is full`, or `unable to open database file` at zero bytes free | **Yes**, as soon as space is freed. | Free or extend the volume. Writes resume with no restart. |
+
+The read-only row's "it depends", MEASURED — four orderings, `chmod` back to
+writable in each, then one more write on the SAME handle:
+
+| Ordering | Same handle writes again after the `chmod`? |
+| --- | --- |
+| Handle opened **before** the fault, file + directory read-only (the volume goes read-only under an already-open handle) | **Yes** |
+| Handle opened **after** the fault, file + directory read-only (a boot onto a read-only volume — the ordering the tests pin) | **No** |
+| Handle opened after, **file** read-only, directory writable | **No** |
+| Handle opened after, **directory** read-only, file writable | **Yes** |
+
+The last row is also why "SQLite opened the file `O_RDONLY`" is not the general
+explanation. MEASURED in that ordering: the database file stays mode `0644` and
+a raw `O_RDWR` write to it succeeds, `PRAGMA journal_mode` reads `delete` (so a
+commit needs a `-journal` sibling *in the directory*, which is the part that is
+unwritable), no `-journal` file appears, and the same handle commits the moment
+the directory is writable again — none of which a genuinely read-only file
+handle would do. The `O_RDONLY` explanation fits the rows where the *file* is
+`0444`, not the shape as a whole.
+
+In every row the charges lost during the fault stay lost, and
+`feedback_lost_billed_writes` keeps counting them for the life of the process.
+A restart is what clears the counter — which is why "the counter went to zero"
+is evidence of a restart, never of a repair.
 
 ## Adding the next migration
 
