@@ -2410,8 +2410,15 @@
       const wrap = mkEl("div", "result-synth-sources");
       if (sources.length) {
         const chipRow = mkEl("div", "result-synth-source-chips");
-        const shown = sources.slice(0, 3);
-        shown.forEach((s, i) => {
+        // F-19: EVERY cited source is built, not just the first three. The row
+        // stays capped at three by default so it does not dominate the
+        // synthesis, but the rest are real chips carrying their real citation
+        // numbers, revealed by the expander below. Previously they were never
+        // constructed at all: the "+N more" text announced provenance the user
+        // had no way to reach, on a product that asks people to judge answers
+        // by their sources.
+        const COLLAPSED_SOURCE_COUNT = 3;
+        sources.forEach((s, i) => {
           // SECURITY: source URLs come from external search providers (untrusted).
           // Only make the chip a link when the URL is http(s) — mirrors the
           // ``createSafeLink`` scheme allow-list so a ``javascript:`` URL can never
@@ -2431,10 +2438,27 @@
           // non-http URL yields an empty host).
           const label = host && title ? `${host} · ${title}` : host || title || "source";
           chip.appendChild(mkEl("span", "result-source-label", label));
+          if (i >= COLLAPSED_SOURCE_COUNT) chip.hidden = true;
           chipRow.appendChild(chip);
         });
-        if (sources.length > shown.length) {
-          chipRow.appendChild(mkEl("span", "result-source-more", `+ ${sources.length - shown.length} more`));
+        const overflow = sources.length - COLLAPSED_SOURCE_COUNT;
+        if (overflow > 0) {
+          // A native <button>, so it is focusable and Enter/Space work without
+          // any key handling of our own. The label states the direction of the
+          // action in both states rather than only the count.
+          const more = mkEl("button", "result-source-more", `+ ${overflow} more`);
+          more.type = "button";
+          more.setAttribute("aria-expanded", "false");
+          more.addEventListener("click", () => {
+            const expanding = more.getAttribute("aria-expanded") !== "true";
+            more.setAttribute("aria-expanded", expanding ? "true" : "false");
+            const chips = chipRow.querySelectorAll(".result-source-chip");
+            chips.forEach((chip, i) => {
+              if (i >= COLLAPSED_SOURCE_COUNT) chip.hidden = !expanding;
+            });
+            more.textContent = expanding ? "Show fewer" : `+ ${overflow} more`;
+          });
+          chipRow.appendChild(more);
         }
         wrap.appendChild(chipRow);
       }

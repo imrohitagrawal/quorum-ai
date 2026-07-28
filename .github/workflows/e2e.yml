@@ -145,6 +145,7 @@ jobs:
           tests/invariants/theme-toggle.spec.ts
           tests/invariants/session-trail.spec.ts
           tests/invariants/readiness-banner.spec.ts
+          tests/invariants/source-expander.spec.ts
           --project=chromium
           --retries=0
 

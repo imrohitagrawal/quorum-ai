@@ -3400,6 +3400,10 @@ html[data-theme="dark"] .landing-preview-caption {
   text-decoration: none;
   cursor: pointer;
 }
+/* `hidden` alone does not hide a chip: the rule above sets `display:inline-flex`,
+   which beats the user-agent `[hidden] { display: none }`. Without this the
+   collapsed chips stay on screen and the F-19 expander does nothing visible. */
+.result-source-chip[hidden] { display: none; }
 a.result-source-chip:hover { border-color: var(--info); color: var(--info); }
 .result-source-num {
   display: inline-grid;
@@ -3412,7 +3416,29 @@ a.result-source-chip:hover { border-color: var(--info); color: var(--info); }
   font-size: 0.62rem;
   font-weight: 700;
 }
-.result-source-more { font-size: 0.8rem; color: var(--muted); }
+/* F-19: this is a real <button> now, not a muted label. It sits in the chip
+   row, so it is styled as a quiet sibling of the chips rather than as a form
+   control — but it keeps a real focus ring and a body-weight colour, because
+   it is the only route to the sources it counts. `--muted` was legible enough
+   for a note nobody could act on; an actionable control needs full contrast. */
+.result-source-more {
+  display: inline-flex;
+  align-items: center;
+  padding: 4px var(--space-3);
+  border: 1px dashed var(--line-strong-2);
+  border-radius: var(--radius-pill);
+  background: transparent;
+  color: var(--body);
+  font: inherit;
+  font-size: 0.8rem;
+  font-weight: 500;
+  cursor: pointer;
+}
+.result-source-more:hover { border-color: var(--info); color: var(--info); }
+.result-source-more:focus-visible {
+  outline: 2px solid var(--info);
+  outline-offset: 2px;
+}
 
 /* ----- Result: "Ask your next question" block (design comp screen 05) ------- */
 .result-next {
