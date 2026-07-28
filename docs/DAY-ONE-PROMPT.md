@@ -370,6 +370,44 @@ forever and quietly becomes decoration.
 the repo as `baseline-then-set` with its measurement step spelled out — never as a
 placeholder number. A number in a config is read as evidence by everyone after you.
 
+### 4a-bis. The three rules above were not enough — learned the hard way
+
+The rules above produced issue #130, which followed them faithfully and was
+still wrong. The mutation gate had a measured baseline and a stated exit
+condition, so #130 promoted it. It should not have. Full evidence:
+`docs/metrics/mutation-gate-study.md`. Three additions, each earned:
+
+**Rule: a green advisory job is not evidence that it ran. Open the log.**
+The gate had **never scored a single mutant in CI** — it aborted at
+`failed to collect stats` in ~1m07s on every run, and was green only because the
+advisory switch ignored the error. #130 cited that abort as "finished in 1m 9s
+and passed". Before promoting any advisory gate, open its job log and confirm it
+produced *its number*, not merely a green tick. Cheapest possible check;
+prevented a wrong decision that was already implemented.
+
+**Rule: every gate ships with a CHARTER saying what it cannot see.**
+One paragraph, next to the gate. Ours would have read: *cannot see JavaScript,
+CSS, or browser tests; cannot see module-level constants or config tables;
+cannot see decorated functions; cannot see pure deletions.* Measured, those
+blind spots were **8% of pull requests passing having measured nothing** (mostly
+money configuration) and **7% aborting on a tooling artefact**. With the charter
+written, #130 would never have been filed.
+
+**Rule: replay the gate over real history before trusting it.**
+"What would this have done to our last N commits?" is answerable in minutes and
+is the question that reversed this decision. Keep the instrument in the repo —
+`scripts/replay_mutation_scope.py` is the worked example. A gate whose
+historical behaviour is unknown is a gate whose cost is unknown.
+
+**And the sharpest lesson, which is about tools rather than gates:** the gate's
+own founding document already recorded that the tool would have scored the
+flagship defect **green**, and that measured yield across 158 real escaped
+defects was **~4%** — five-sixths of which a faster existing gate already caught.
+*Match the instrument to the defect's shape, not merely to its location.*
+Constants need pinned literal assertions; browser behaviour needs a rendered
+fixture and a screenshot; billing needs an independent oracle at the seam. Ask
+what the last twenty real defects were before choosing what to enforce.
+
 ---
 
 ## 5. Enforcement & accountability

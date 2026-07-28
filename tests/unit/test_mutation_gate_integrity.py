@@ -20,6 +20,7 @@ so a regression in the real recipe fails here rather than in a prose assertion.
 from __future__ import annotations
 
 import json
+import os
 import re
 import subprocess
 import sys
@@ -76,6 +77,182 @@ def test_report_fails_when_every_mutant_is_unrun(scope_script: Path, tmp_path: P
     assert "no mutants were scored" in result.stdout + result.stderr
 
 
+def test_an_all_timeout_scope_is_reported_as_unmeasured_not_as_a_crash(
+    scope_script: Path, tmp_path: Path
+) -> None:
+    """Every mutant timed out: real, measured, and NOT "the run did not happen".
+
+    Baseline §5 measured 66/66 mutants of `_persist_terminal_run` timing out
+    under mutmut's fork-based runner while the same tests pass in 1.34s
+    standalone. Timeouts are excluded from the score by a recorded decision, so
+    an all-timeout scope leaves `killed + survived == 0` and lands in the same
+    branch as an absent `mutants/` tree. Before #130 that branch was advisory
+    and its message never mattered; now the gate blocks, so an author would be
+    sent hunting for a crash that did not happen.
+
+    Turns red if: the `counts["timeout"]` branch is deleted from `report()` —
+    the message reverts to "the run did not happen" and the exit becomes 1. Also
+    red if the branch keeps its message but re-raises `SystemExit(1)`, which the
+    exit-status assertion below is here to catch: asserting only on printed text
+    left that mutation green (adversarial review finding).
+    """
+    _write_meta(tmp_path, "query_runs", {f"x_persist__mutmut_{i}": -24 for i in range(1, 67)})
+    result = _run(scope_script, tmp_path, "report", "origin/main", "90")
+    output = result.stdout + result.stderr
+
+    assert result.returncode == 0, (
+        "an all-timeout scope exited non-zero, so a change to thread-spawning "
+        "code is blocked by a tooling artifact rather than by its own tests:\n"
+        f"{output}"
+    )
+    assert "UNMEASURED" in output, (
+        "an all-timeout scope must say so in words; it is neither a clean "
+        f"score nor a crashed run:\n{output}"
+    )
+    assert "66" in output, f"the timeout count must be reported, not hidden:\n{output}"
+    assert "no mutants were scored" not in output, (
+        "an all-timeout run reported itself as a run that never happened — "
+        f"that message is false and sends the author after a phantom crash:\n{output}"
+    )
+    # Positive partner for the two negatives above: prove the crash branch this
+    # one is being distinguished FROM still fires, so the assertions are not
+    # passing over a report() that prints nothing at all.
+    empty = tmp_path / "no-mutants-here"
+    empty.mkdir()
+    crashed = _run(scope_script, empty, "report", "origin/main", "90")
+    assert "no mutants were scored" in crashed.stdout + crashed.stderr
+
+
+def test_an_all_timeout_scope_never_reports_a_score(scope_script: Path, tmp_path: Path) -> None:
+    """The loosening must not become a silent pass that looks measured.
+
+    Turns red if: the bucket map stops excluding timeouts — changing the
+    `else "timeout"` fallback to `else "survived"` makes this scope score 0.0%
+    and print BELOW THRESHOLD (verified). Zero evidence must never render as a
+    number a reader can mistake for a result, in either direction.
+    """
+    _write_meta(tmp_path, "query_runs", {"a__mutmut_1": -24, "b__mutmut_2": -9})
+    result = _run(scope_script, tmp_path, "report", "origin/main", "90")
+    output = result.stdout + result.stderr
+
+    assert result.returncode == 0, f"the all-timeout path must not block:\n{output}"
+    assert "mutation score" not in output, f"an unmeasured run printed a mutation score:\n{output}"
+    assert "BELOW THRESHOLD" not in output, (
+        f"an unmeasured run was scored against the threshold:\n{output}"
+    )
+    # ...and the partner proving the score line exists at all when there IS
+    # evidence, so the two negatives above cannot pass over a broken report().
+    _write_meta(tmp_path, "other", {"c__mutmut_1": 1, "d__mutmut_2": 0})
+    measured = _run(scope_script, tmp_path, "report", "origin/main", "40")
+    assert "mutation score" in measured.stdout, measured.stdout + measured.stderr
+
+
+def test_a_partly_timed_out_scope_is_still_scored_on_what_ran(
+    scope_script: Path, tmp_path: Path
+) -> None:
+    """The timeout branch must trigger ONLY when nothing at all was measured.
+
+    Turns red if: the branch is widened from `killed + survived == 0` to any
+    run containing a timeout — which would let one timing-out mutant suppress
+    the gate for the whole change.
+    """
+    _write_meta(
+        tmp_path,
+        "query_runs",
+        {"a__mutmut_1": -24, "b__mutmut_2": 1, "c__mutmut_3": 0},
+    )
+    result = _run(scope_script, tmp_path, "report", "origin/main", "90")
+    output = result.stdout + result.stderr
+
+    assert "UNMEASURED" not in output, (
+        f"a scope with real kills and survivors was written off as unmeasured:\n{output}"
+    )
+    assert "50.0%" in output, f"expected 1 killed / 1 survived = 50%:\n{output}"
+    assert result.returncode != 0, f"50% is below the 90 threshold and must still block:\n{output}"
+
+
+def test_a_function_with_no_covering_test_fails_the_run(scope_script: Path, tmp_path: Path) -> None:
+    """`no_tests` must be loud. It is the quietest way to fake a perfect score.
+
+    mutmut records exit code 33 when a mutant has NO covering test, and the
+    score's denominator is `killed + survived` — so an uncovered function does
+    not score 0%, it scores nothing at all and vanishes. Confirmed on a scratch
+    tree, identical source, one added deselection marker:
+
+        before:  7 killed, 4 survived, 0 no-tests →  63.6%  BELOW THRESHOLD
+        after:   2 killed, 0 survived, 9 no-tests → 100.0%  pass
+
+    That is the whole evasion: silence a function's tests and its mutants leave
+    the measurement rather than failing it. Changed code with no test is
+    exactly what this gate exists to catch, so it fails here.
+
+    Turns red if: the `no_tests` check is removed from `report()` — the run
+    then exits 0 at a flattering 100%.
+    """
+    _write_meta(
+        tmp_path,
+        "evaluation",
+        {"a__mutmut_1": 1, "b__mutmut_2": 33, "c__mutmut_3": 33},
+    )
+    result = _run(scope_script, tmp_path, "report", "origin/main", "80")
+    output = result.stdout + result.stderr
+
+    assert result.returncode != 0, (
+        "a changed function with no covering test scored 100% and passed — "
+        f"the gate measured one mutant and ignored two:\n{output}"
+    )
+    assert "no-tests" in output.lower() or "no covering test" in output.lower(), (
+        f"the failure must name the cause, or nobody can act on it:\n{output}"
+    )
+
+
+def test_an_entirely_untested_function_names_the_real_cause(
+    scope_script: Path, tmp_path: Path
+) -> None:
+    """The shape a REAL run produced, which the mixed case above did not cover.
+
+    Adding one untested function to `src/` gave `0 killed, 0 survived, 0
+    timeout, 6 no-tests`. Because `checked == killed + survived`, that is also
+    `checked == 0`, so ordering decides the message: the `not checked` branch
+    blamed an absent or crashed `mutants/` tree — the same false diagnosis this
+    recipe already fixed for timeouts. The author would go hunting a phantom
+    crash instead of writing the missing test.
+
+    Found by RUNNING the gate, not by reading it: the mixed case above passes
+    under either ordering.
+
+    Turns red if: the `no_tests` check is moved back below `if not checked`.
+    """
+    _write_meta(tmp_path, "untrusted_text", {f"x_w__mutmut_{i}": 33 for i in range(1, 7)})
+    result = _run(scope_script, tmp_path, "report", "origin/main", "80")
+    output = result.stdout + result.stderr
+
+    assert result.returncode != 0, f"an entirely untested function passed:\n{output}"
+    assert "no covering test" in output.lower(), (
+        f"the message must name the missing tests, not a crash:\n{output}"
+    )
+    assert "the run did not happen" not in output, (
+        "an untested function was reported as a crashed run — false, and it "
+        f"sends the author after a mutants/ tree that is fine:\n{output}"
+    )
+
+
+def test_a_clean_run_with_zero_no_tests_still_passes(scope_script: Path, tmp_path: Path) -> None:
+    """Positive partner: the new check must not fail an honest run.
+
+    Without this, `test_a_function_with_no_covering_test_fails_the_run` is
+    equally satisfied by a report() that fails unconditionally.
+
+    Turns red if: the `no_tests` check is widened to fail runs that have none.
+    """
+    _write_meta(tmp_path, "evaluation", {"a__mutmut_1": 1, "b__mutmut_2": 1, "c__mutmut_3": 0})
+    result = _run(scope_script, tmp_path, "report", "origin/main", "60")
+    output = result.stdout + result.stderr
+
+    assert result.returncode == 0, f"an honest 66.7% run was failed:\n{output}"
+    assert "0 no-tests" in output, f"expected the no-tests count to be reported:\n{output}"
+
+
 def test_report_still_scores_a_real_run(scope_script: Path, tmp_path: Path) -> None:
     """The fail-closed guard must not swallow a genuine measurement."""
     _write_meta(
@@ -91,6 +268,64 @@ def test_report_still_scores_a_real_run(scope_script: Path, tmp_path: Path) -> N
     below = _run(scope_script, tmp_path, "report", "origin/main", "90")
     assert below.returncode != 0
     assert "BELOW THRESHOLD" in below.stdout
+
+
+def test_an_empty_scope_writes_zero_bytes(scope_script: Path, tmp_path: Path) -> None:
+    """`[ -s scope.txt ]` is a SIZE test, so a bare newline defeats it.
+
+    Found by the first blocking run (#130). `print("\\n".join([]))` emits one
+    newline; `-s` is true for any non-zero size; so the recipe's "no changed
+    Python functions — nothing to mutate" branch was unreachable and
+    `mutmut run` was invoked with ZERO globs — mutate everything — on every
+    change that touched no Python under src/. The advisory `-` swallowed the
+    resulting failure, so it went unseen for as long as the gate was advisory.
+
+    Turns red if: the `if globs:` guard is removed from `scope()`.
+    """
+    # Driven against a throwaway repo, NEVER against REPO_ROOT: `changed_lines()`
+    # unions the merge-base diff with `git diff -U0 HEAD -- src`, i.e. the
+    # WORKING TREE. Pointed at the real repo this test would go red for any
+    # developer with an uncommitted edit under src/ — a false failure caused by
+    # unrelated work in progress. It would also fail inside mutmut's ./mutants/
+    # copy, which has no `.git` at all. A purpose-built repo has neither problem.
+    repo = tmp_path / "repo"
+    (repo / "src" / "pkg").mkdir(parents=True)
+    env = {
+        **os.environ,
+        "GIT_AUTHOR_NAME": "t",
+        "GIT_AUTHOR_EMAIL": "t@t",
+        "GIT_COMMITTER_NAME": "t",
+        "GIT_COMMITTER_EMAIL": "t@t",
+    }
+
+    def git(*args: str) -> None:
+        subprocess.run(["git", *args], cwd=repo, check=True, capture_output=True, env=env)
+
+    git("init", "-q", "-b", "main")
+    module = repo / "src" / "pkg" / "thing.py"
+    module.write_text("def f(x):\n    return x + 1\n", encoding="utf-8")
+    git("add", "-A")
+    git("commit", "-qm", "base")
+
+    # NEGATIVE: nothing changed at all -> the scope must be zero BYTES, not a
+    # bare newline, or `[ -s scope.txt ]` sends the recipe down its work branch.
+    empty = _run(scope_script, repo, "scope", "HEAD", "80")
+    assert empty.returncode == 0, empty.stdout + empty.stderr
+    assert empty.stdout == "", (
+        "an empty scope wrote bytes, so the recipe will take its work branch "
+        f"and run mutmut unscoped: {empty.stdout!r}"
+    )
+
+    # POSITIVE partner: change a line INSIDE the function and the same script
+    # must emit a glob. Without this, the assertion above is equally satisfied
+    # by a scope() that has stopped producing output at all.
+    module.write_text("def f(x):\n    return x + 2\n", encoding="utf-8")
+    populated = _run(scope_script, repo, "scope", "HEAD", "80")
+    assert populated.returncode == 0, populated.stdout + populated.stderr
+    assert "pkg.thing.x_f__mutmut_*" in populated.stdout, (
+        "a working-tree change inside a function produced no scope — "
+        f"scope() is emitting nothing at all:\n{populated.stdout}{populated.stderr}"
+    )
 
 
 def test_scope_fails_loudly_on_a_bad_base_ref(scope_script: Path) -> None:

@@ -217,7 +217,7 @@ by reading `.github/workflows/ci.yml`, `Makefile`, and `pyproject.toml`.
 | P0-E hermetic perf p50/p95 + concurrency | `perf-gate` | yes | **YES** |
 | P0-F Schemathesis API contract | `api-contract` | yes | **YES** |
 | P0-G changed-lines coverage ≥95% | `diff-cover` | yes, **PR events only** | **PARTIAL** — no changed-lines gate on a direct push to `main` |
-| P0-D mutation score | `mutation-baseline` | **no** (`continue-on-error: true`) | **ADVISORY ONLY** — reports, never fails |
+| P0-D mutation score | `mutation-baseline` | **no** (advisory) | Reports, never fails. Advisory is measured, not assumed — see docs/metrics/mutation-gate-study.md. Also PR-only |
 | Global coverage floor 88% | inside `validate-and-test` (`--cov-fail-under=88`) | yes | **YES** |
 | UI rendering invariants / visual / degraded banner | `.github/workflows/e2e.yml` | yes (per AGENTS.md) | **YES** |
 | **P0-H pre-commit gate (H2)** | *none* — but `validate-and-test` runs the same `make validate` + pytest | yes | **YES via CI**; the hook only makes it faster |

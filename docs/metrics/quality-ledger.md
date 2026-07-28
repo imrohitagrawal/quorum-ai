@@ -35,7 +35,7 @@ These are measurable **today** from git history and tool output.
   blocking. Should trend **down** as planning improves.
 - **Mutation score** — `mutmut` score on the slice's changed **functions** —
   every function whose body overlaps a changed line, not the whole module
-  (`make mutation-baseline`, advisory in CI). Should trend **up**.
+  (`make mutation-baseline`, blocking on pull requests). Should trend **up**.
 - **Escaped defects** — findings a *later* phase raises about an *already
   merged* commit of that slice. Target → **0**. Counted against the commit they
   escaped, so a defect introduced by a fix commit is tracked separately from one
@@ -81,7 +81,7 @@ trade-off, not a defect), enumerated from the actual diffs:
 excluded from the score as a measured `fork()`/`RLIMIT_CPU` harness artifact
 (§5 of that file), not as kills. Re-derive with
 `make mutation-baseline DIFF_BASE=origin/main`; scope in
-`build/mutation/scope.txt`, score in `build/mutation/score.txt`. Advisory floor
+`build/mutation/scope.txt`, score in `build/mutation/score.txt`. Floor
 `MUTATION_MIN_SCORE = 80`, so this row **passes**.
 
 **This supersedes the 96.5% first recorded here.** That figure was measured on a
@@ -209,9 +209,10 @@ a slice is not done until its row is filled.
 4. **Unmeasured ⇒ `—`.** If a metric is pending on another workstream, write
    `— (pending <what>)` so the blocker is visible. Do not leave a cell blank and
    do not substitute the target value.
-5. **Mutation score:** run `make mutation-baseline` (advisory, non-blocking) and
-   record the score for the slice's changed **functions** (the scope the gate
-   actually mutates), with the mutmut version and the functions mutated.
+5. **Mutation score:** run `make mutation-baseline` (advisory in CI; see
+   `docs/metrics/mutation-gate-study.md` for why) and record the score for the slice's changed
+   **functions** (the scope the gate actually mutates), with the mutmut version
+   and the functions mutated.
 6. **Escaped defects:** count against the commit they escaped, and enumerate them
    — a bare count with no enumeration is not auditable.
 7. **Read the trend, and say what it means.** After S2, state explicitly whether

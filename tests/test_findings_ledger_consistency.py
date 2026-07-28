@@ -45,6 +45,11 @@ from pathlib import Path
 
 import pytest
 
+# Deselected under mutmut: this module drives git/make/pytest against the real
+# REPO_ROOT, which does not exist inside mutmut's ./mutants/ copy. It still runs
+# blocking in the ordinary suite.
+pytestmark = pytest.mark.repo_introspection
+
 REPO_ROOT = Path(__file__).resolve().parents[1]
 LEDGER_PATH = REPO_ROOT / "docs" / "analysis" / "R2-plan-review-findings.md"
 

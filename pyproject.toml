@@ -112,6 +112,7 @@ pythonpath = ["src"]
 # tests/test_store_lifecycle_behaviour.py.
 markers = [
   "env_oracle: asserts on interpreter/OS behaviour (GC, wall clock, subprocess); deselected under mutmut",
+  "repo_introspection: reads the repo itself (git/make/pytest against REPO_ROOT); cannot run inside mutmut's ./mutants/ copy",
 ]
 
 # R2 P0-D (ledger RB-7): mutation testing. Every value below was set from a
@@ -154,6 +155,14 @@ also_copy = [
   # tests/unit/test_session_rate_lane_posture.py reads it from ``REPO_ROOT``;
   # absent inside ./mutants/ it aborts stats collection.
   "fly.toml",
+  # ``e2e/fixtures`` holds the golden run fixture that
+  # tests/contract/test_golden_fixture_matches_served_schema.py reads from
+  # ``REPO_ROOT`` to prove the browser fixture still matches the served schema.
+  # Only ``e2e/tests`` was copied, so that spec failed inside ./mutants/ and
+  # mutmut aborted with "failed to collect stats" before scoring a mutant.
+  # Found by the first BLOCKING run of the gate (#130): while it was advisory
+  # the abort was a green job, so nothing surfaced it.
+  "e2e/fixtures",
 ]
 # -m "not env_oracle": environmental oracles — GC/ResourceWarning finalisation,
 #   wall-clock thread timing, a child interpreter's exit status — do not survive
@@ -176,7 +185,7 @@ pytest_add_cli_args = [
   "-p", "no:randomly",
   "--no-cov",
   "-q",
-  "-m", "not env_oracle",
+  "-m", "not env_oracle and not repo_introspection",
   "--ignore", "tests/perf",
   "--ignore", "tests/performance",
 ]
