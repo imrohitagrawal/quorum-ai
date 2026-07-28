@@ -455,6 +455,131 @@ def test_only_the_unmutatable_functions_are_dropped(scope_script: Path, tmp_path
     )
 
 
+DATACLASS_BEFORE = """\
+from dataclasses import dataclass
+
+
+@dataclass
+class Session:
+    token: str
+
+    def is_expired(self):
+        return 1
+"""
+DATACLASS_AFTER = DATACLASS_BEFORE.replace("return 1", "return 2")
+
+
+def test_a_decorated_class_hides_every_method_it_contains(
+    scope_script: Path, tmp_path: Path
+) -> None:
+    """A DECORATED CLASS is skipped by mutmut together with its whole subtree.
+
+    `file_mutation.py:236-237` returns True from `_skip_node_and_children` for a
+    decorated ClassDef, and `on_visit` then stops descending — so every method
+    inside is unmutatable, decorated or not. Every `@dataclass` is this shape.
+
+    Missing this left #136 reachable from four real functions on main
+    (`auth._Session.is_expired`, two `RunEvaluationResult` properties,
+    `feedback_audit.Finding.to_markdown`) — a PR touching only session expiry
+    would still have aborted with the misleading also_copy message. Found by
+    adversarial review; the first fix only handled decorated FUNCTIONS.
+
+    Turns red if: `walk()` stops propagating the enclosing class's decorators
+    to its methods.
+    """
+    repo = _repo_with(tmp_path, DATACLASS_BEFORE, DATACLASS_AFTER)
+    result = _run(scope_script, repo, "scope", "HEAD", "80")
+
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert result.stdout == "", (
+        "an undecorated method of a @dataclass was scoped; mutmut skips the "
+        f"whole class subtree, so the glob matches nothing: {result.stdout!r}"
+    )
+    assert "pkg.thing.is_expired" in result.stderr, (
+        f"the exclusion must name the method:\n{result.stderr}"
+    )
+
+
+UNDECORATED_CLASS_BEFORE = """\
+class Session:
+    def is_expired(self):
+        return 1
+"""
+UNDECORATED_CLASS_AFTER = UNDECORATED_CLASS_BEFORE.replace("return 1", "return 2")
+
+
+def test_an_undecorated_class_keeps_its_methods(scope_script: Path, tmp_path: Path) -> None:
+    """Positive partner: the class rule must key off the DECORATOR, not the class.
+
+    Without this, the assertion above is equally satisfied by a `walk()` that
+    drops every method of every class.
+
+    Turns red if: methods are dropped for any class rather than a decorated one.
+    """
+    repo = _repo_with(tmp_path, UNDECORATED_CLASS_BEFORE, UNDECORATED_CLASS_AFTER)
+    result = _run(scope_script, repo, "scope", "HEAD", "80")
+    assert "xǁSessionǁis_expired__mutmut_*" in result.stdout, (
+        f"a plain class method was dropped:\n{result.stdout}{result.stderr}"
+    )
+
+
+EDGE_BEFORE = """\
+import builtins
+
+
+class C:
+    @staticmethod()
+    def called_form(x):
+        return 1
+
+    @builtins.staticmethod
+    def attribute_form(x):
+        return 1
+
+    @property
+    @staticmethod
+    def two_decorators(self):
+        return 1
+
+    @staticmethod
+    async def async_static(x):
+        return 1
+"""
+EDGE_AFTER = EDGE_BEFORE.replace("return 1", "return 2")
+
+
+def test_the_decorator_edge_cases_match_mutmut(scope_script: Path, tmp_path: Path) -> None:
+    """Only a LONE, BARE `staticmethod`/`classmethod` Name is mutatable.
+
+    mutmut checks `isinstance(decorator, cst.Name)` on the single decorator, so
+    the call form `@staticmethod()` is an ast.Call, the dotted form
+    `@builtins.staticmethod` is an ast.Attribute, and two decorators fail the
+    `len == 1` test. All three are unmutatable.
+
+    This pins the cases the implementation gets RIGHT. Without it, "simplifying"
+    to `any(isinstance(d, ast.Name) and d.id in (...) for d in decorators)`
+    passes every other test in this module while re-opening the #136 abort for
+    the four `@field_validator(...) + @classmethod` pairs in config.py.
+
+    Turns red if: the check is loosened to `any(...)` over the decorator list,
+    or stops requiring a bare `ast.Name`.
+    """
+    repo = _repo_with(tmp_path, EDGE_BEFORE, EDGE_AFTER)
+    result = _run(scope_script, repo, "scope", "HEAD", "80")
+
+    for unmutatable_name in ("called_form", "attribute_form", "two_decorators"):
+        assert unmutatable_name in result.stderr, (
+            f"{unmutatable_name} should be excluded — mutmut will not mutate it:\n{result.stderr}"
+        )
+        assert unmutatable_name not in result.stdout, (
+            f"{unmutatable_name} was scoped but mutmut generates nothing for it"
+        )
+    # Positive partner: a lone bare @staticmethod IS mutated, even when async.
+    assert "async_static" in result.stdout, (
+        f"a lone bare @staticmethod was dropped, but mutmut mutates it:\n{result.stdout}"
+    )
+
+
 def test_scope_fails_loudly_on_a_bad_base_ref(scope_script: Path) -> None:
     """A base ref git cannot resolve must be a hard error, not an empty scope."""
     result = _run(scope_script, REPO_ROOT, "scope", "origin/does-not-exist-xyz", "90")

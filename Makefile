@@ -298,14 +298,20 @@ def scope():
         with open(path) as handle:
             tree = ast.parse(handle.read())
 
-        def walk(node, cls=None):
+        def walk(node, cls=None, frozen=False):
             for child in ast.iter_child_nodes(node):
                 if isinstance(child, ast.ClassDef):
-                    walk(child, child.name)
+                    # A DECORATED class is skipped by mutmut together with its
+                    # WHOLE SUBTREE (file_mutation.py:236-237 returns True from
+                    # _skip_node_and_children, and on_visit stops descending).
+                    # So every method inside it is unmutatable, decorated or not
+                    # - e.g. every @dataclass. Missing this left #136 reachable
+                    # from _Session.is_expired and three others.
+                    walk(child, child.name, frozen or bool(child.decorator_list))
                 elif isinstance(child, (ast.FunctionDef, ast.AsyncFunctionDef)):
                     span = range(child.lineno, (child.end_lineno or child.lineno) + 1)
                     if lines & set(span):
-                        if unmutatable(child):
+                        if frozen or unmutatable(child):
                             # mutmut cannot build a trampoline for this function,
                             # so naming it yields a glob that matches nothing. With
                             # a scope made ONLY of these, `mutmut run` dies with
@@ -317,7 +323,7 @@ def scope():
                         else:
                             name = "xǁ%sǁ%s" % (cls, child.name) if cls else "x_%s" % child.name
                             globs.append("%s.%s__mutmut_*" % (module, name))
-                    walk(child, cls)
+                    walk(child, cls, frozen)
 
         walk(tree)
     # Only write anything when the scope is non-empty. `print("".join([]))`
@@ -427,7 +433,7 @@ mutation-baseline:
 		printf '%s' "$$MUTMUT_SCOPE_PY" | $(PYTHON) - report $(DIFF_BASE) $(MUTATION_MIN_SCORE) > build/mutation/score.txt; \
 		status=$$?; cat build/mutation/score.txt; exit $$status; \
 	else \
-		echo "no changed Python functions under src/ vs $(DIFF_BASE) — nothing to mutate"; \
+		echo "no MUTATABLE changed functions under src/ vs $(DIFF_BASE) — nothing to mutate (any exclusions are named above)"; \
 	fi
 
 # R2 P0-G: changed-lines coverage vs $(DIFF_BASE) must be >= $(DIFF_COVER_MIN)%.

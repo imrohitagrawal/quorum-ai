@@ -7,15 +7,26 @@ changed `src/` Python produced an EMPTY mutation scope** — and three of the fi
 real cases were money or model configuration: the daily cap, the web-search fee,
 the model id. `docs/metrics/mutation-gate-study.md` §3.1.
 
-Measured before this file existed: of 30 module-level constants in risk-tier
-modules, **only 3 carried a literal `== VALUE` assertion**. The rest were
-referenced only symbolically (`assert x < DAILY_CAP_USD`), which moves with the
-code — change the constant and the test still passes.
+Measured before this file existed, with a detector that requires the other side
+of the comparison to be a LITERAL: of the 38 module-level constants in risk-tier
+modules, **not one carried a literal `== VALUE` assertion**. Every reference was
+symbolic (`assert x < DAILY_CAP_USD`, `assert rendered == CONSTANT`), which moves
+with the code — change the constant and the test still passes.
 
 The starkest case, and the reason this file is not academic:
-`costs._DEFAULT_PRICE_PER_1K_INPUT = 0.0008` had **zero** test references, while
-its `_OUTPUT` twin was pinned. That exact default is the one behind the recorded
-16x mispricing.
+`costs._DEFAULT_PRICE_PER_1K_INPUT = 0.0008` — the default behind the recorded
+16x mispricing — was referenced only SYMBOLICALLY
+(`assert Decimal(cm["default_input_price_per_1k"]) == _DEFAULT_PRICE_PER_1K_INPUT`,
+`tests/integration/test_template_data_island_escape.py:89`). That assertion
+compares the rendered template against the constant, so it holds no matter what
+the constant says. Change 0.0008 to 0.0128 and it stays green.
+
+(An earlier draft of this file claimed the constant had *zero* references and
+that its `_OUTPUT` twin was pinned. Adversarial review showed both halves false:
+the twin carries the identical symbolic assertion. The error came from a pin
+detector that counted `== CONSTANT` as a pin regardless of what the other side
+was — the very flaw `test_every_bucket_a_constant_really_has_a_literal_pin` now
+exists to prevent. Recorded rather than quietly corrected.)
 
 **Why not pin all 30.** A literal pin on a regex, a filesystem path or a CSP
 policy is churn: the value legitimately changes, so the reflex becomes "edit the
@@ -33,13 +44,22 @@ import re
 from datetime import timedelta
 from decimal import Decimal
 
-from product_app import auth, costs, main, model_slots
+from product_app import auth, catalog_fetcher, costs, main, model_slots
 
 REPO_ROOT = pathlib.Path(__file__).resolve().parents[2]
 SRC = REPO_ROOT / "src" / "product_app"
 TESTS = REPO_ROOT / "tests"
 
 #: The modules whose module-level constants are risk-bearing.
+#:
+#: KNOWN GAP, stated rather than implied: `config.py` is listed but contributes
+#: ZERO constants, because all 41 of its settings are `Settings` class
+#: attributes with defaults, not module-level names. So the largest
+#: configuration surface in the repo — including
+#: `cost_web_search_request_fee_usd`, one of the money changes that produced an
+#: empty mutation scope — is NOT covered by this file. Extending the registry to
+#: Pydantic field defaults is tracked separately; listing `config.py` here keeps
+#: the module in view rather than letting it read as covered by omission.
 RISK_TIER_MODULES = (
     "costs.py",
     "config.py",
@@ -87,6 +107,30 @@ BUCKET_B_PIN_BEHAVIOUR = {
         "assert where the unprefixed fallback is accepted (F-02)"
     ),
     "auth.LEGACY_CSRF_PLACEHOLDER": "assert the legacy path it marks, not the string",
+    "catalog_fetcher.DEFAULT_VENDORS": (
+        "assert it equals the vendor set of DEFAULT_MODEL_IDS; it changes on a slot swap"
+    ),
+    "catalog_fetcher._FALLBACK_CATALOG": (
+        "assert every DEFAULT_MODEL_ID has a row; prices change upstream"
+    ),
+    "model_slots.DEFAULT_MODEL_IDS": (
+        "assert the count and that each id resolves in the catalog; ids are swapped"
+    ),
+    "model_slots.FALLBACK_CATALOG_OPTIONS": (
+        "assert the shape the slot picker relies on, not the members"
+    ),
+    "model_slots.ONLINE_CAPABLE_VENDORS": (
+        "assert it stays within DEFAULT_VENDORS; :online support is unverified (study §7)"
+    ),
+    "model_slots._DEFAULT_MODEL_ID_SET": (
+        "derived from DEFAULT_MODEL_IDS; assert they stay consistent"
+    ),
+    "model_slots._UNAUTHENTICATED_VARIANT_SUFFIXES": (
+        "assert the suffixes are stripped, not the literal tuple"
+    ),
+    "safety.WARNING_COPY": (
+        "assert the mandatory caveat is present; the wording is edited deliberately"
+    ),
 }
 
 #: No pin. A literal here restates the implementation and catches nothing.
@@ -103,8 +147,20 @@ BUCKET_C_NO_PIN = {
 }
 
 
+#: Constant-looking names. The floor is 2 trailing chars, not 3: a future
+#: `URL`, `TTL`, `CAP` or `FEE` would otherwise be invisible to the whole guard.
+_CONST_NAME = re.compile(r"_?[A-Z][A-Z0-9_]{2,}")
+
+
 def _module_constants() -> dict[str, int]:
-    """`module.NAME` -> line, for every module-level constant in a risk module."""
+    """`module.NAME` -> line, for every module-level constant in a risk module.
+
+    Covers `ast.AnnAssign` as well as `ast.Assign`, and tuple targets. An
+    earlier version matched only bare `Assign`, which hid EIGHT constants —
+    including `catalog_fetcher.DEFAULT_VENDORS`, `catalog_fetcher._FALLBACK_CATALOG`
+    and `model_slots.DEFAULT_MODEL_IDS`, i.e. precisely the surface behind the
+    recorded 16x mispricing. Found by adversarial review.
+    """
     found: dict[str, int] = {}
     for name in RISK_TIER_MODULES:
         path = SRC / name
@@ -112,18 +168,76 @@ def _module_constants() -> dict[str, int]:
             continue
         module = path.stem
         for node in ast.parse(path.read_text(encoding="utf-8")).body:
-            if not isinstance(node, ast.Assign):
+            if isinstance(node, ast.Assign):
+                targets: list[ast.expr] = list(node.targets)
+            elif isinstance(node, ast.AnnAssign):
+                targets = [node.target]
+            else:
                 continue
-            for target in node.targets:
-                if isinstance(target, ast.Name) and re.fullmatch(
-                    r"_?[A-Z][A-Z0-9_]{3,}", target.id
-                ):
-                    found[f"{module}.{target.id}"] = node.lineno
+            flat: list[ast.expr] = []
+            for target in targets:
+                flat.extend(target.elts if isinstance(target, ast.Tuple) else [target])
+            for element in flat:
+                if isinstance(element, ast.Name) and _CONST_NAME.fullmatch(element.id):
+                    found[f"{module}.{element.id}"] = node.lineno
     return found
 
 
-def _test_sources() -> str:
-    return "\n".join(p.read_text(encoding="utf-8") for p in TESTS.rglob("test_*.py") if p.is_file())
+def _is_literal(node: ast.expr) -> bool:
+    """A literal value, or `Decimal("…")`/`timedelta(…)` over literals."""
+    if isinstance(node, ast.Constant):
+        return True
+    if isinstance(node, ast.UnaryOp) and isinstance(node.op, ast.USub):
+        return _is_literal(node.operand)
+    if isinstance(node, ast.Call):
+        func = node.func
+        name = func.attr if isinstance(func, ast.Attribute) else getattr(func, "id", "")
+        if name in ("Decimal", "timedelta", "frozenset", "Path"):
+            return all(_is_literal(a) for a in node.args) and all(
+                _is_literal(k.value) for k in node.keywords
+            )
+    return False
+
+
+def _literally_pinned_constants() -> set[str]:
+    """Constants compared with `==` to a LITERAL inside a real `assert`.
+
+    Parsed with `ast`, per file — NOT a grep over concatenated sources. A grep
+    was the first implementation and it accepted, all measured:
+      * `assert costs.DAILY_CAP_USD == costs.HARD_LIMIT_USD` (purely symbolic),
+      * a commented-out assertion,
+      * an assertion inside a string literal in an unrelated file.
+    Each satisfied "bucket A is pinned" while pinning nothing.
+    """
+    pinned: set[str] = set()
+    for path in TESTS.rglob("test_*.py"):
+        try:
+            tree = ast.parse(path.read_text(encoding="utf-8"))
+        except SyntaxError:  # pragma: no cover - a broken test file fails elsewhere
+            continue
+        for node in ast.walk(tree):
+            if not isinstance(node, ast.Assert):
+                continue
+            for cmp_node in ast.walk(node.test):
+                if not isinstance(cmp_node, ast.Compare):
+                    continue
+                if not all(isinstance(op, ast.Eq) for op in cmp_node.ops):
+                    continue
+                sides = [cmp_node.left, *cmp_node.comparators]
+                for index, side in enumerate(sides):
+                    name: str | None
+                    if isinstance(side, ast.Attribute):
+                        name = side.attr
+                    elif isinstance(side, ast.Name):
+                        name = side.id
+                    else:
+                        name = None
+                    if not name:
+                        continue
+                    others = [s for j, s in enumerate(sides) if j != index]
+                    if any(_is_literal(other) for other in others):
+                        pinned.add(name)
+    return pinned
 
 
 # ---------------------------------------------------------------------------
@@ -181,6 +295,51 @@ def test_the_slot_count_is_pinned() -> None:
     many models actually answered.
     """
     assert model_slots.EXPECTED_SLOT_COUNT == 4
+
+
+def test_every_default_model_id_has_a_catalog_row() -> None:
+    """The bucket-B pin for the model/pricing surface — and the 16x guard.
+
+    `WP-D-TO-CLOSEOUT` calls this "the one-line guard that would have caught
+    WP-G1's half-done swap on day one": the slot-4 model id was changed while
+    its `_FALLBACK_CATALOG` row was not, so that model priced at the 0.0008
+    default — a 16x mispricing. Nothing asserted it until now.
+
+    A literal pin is wrong here (ids are swapped deliberately); the INVARIANT
+    is what must hold.
+
+    Turns red if: a model id is added to DEFAULT_MODEL_IDS with no catalog row.
+    """
+    catalog_ids = {entry.model_id for entry in catalog_fetcher._FALLBACK_CATALOG}
+    assert catalog_ids, "the fallback catalog is empty — this guard would be vacuous"
+    missing = sorted(set(model_slots.DEFAULT_MODEL_IDS) - catalog_ids)
+    assert not missing, (
+        f"default model ids with no _FALLBACK_CATALOG row: {missing}. They price "
+        "at the default rate — this is the 16x mispricing shape."
+    )
+
+
+def test_the_default_vendor_set_matches_the_default_model_ids() -> None:
+    """The other half of the same swap: the vendor list must follow the ids.
+
+    Turns red if: a slot moves to a new vendor and DEFAULT_VENDORS is not
+    updated, or vice versa.
+    """
+    from_ids = {model_id.split("/")[0] for model_id in model_slots.DEFAULT_MODEL_IDS}
+    assert from_ids, "no default model ids — the comparison below would be vacuous"
+    assert set(catalog_fetcher.DEFAULT_VENDORS) == from_ids, (
+        f"DEFAULT_VENDORS={sorted(catalog_fetcher.DEFAULT_VENDORS)} but the "
+        f"default ids use {sorted(from_ids)}"
+    )
+
+
+def test_there_are_exactly_as_many_default_ids_as_slots() -> None:
+    """Turns red if: DEFAULT_MODEL_IDS and EXPECTED_SLOT_COUNT drift apart.
+
+    EXPECTED_SLOT_COUNT drives the "N of 4" honesty banner; a mismatch makes
+    that banner lie about how many models were asked.
+    """
+    assert len(model_slots.DEFAULT_MODEL_IDS) == model_slots.EXPECTED_SLOT_COUNT
 
 
 # ---------------------------------------------------------------------------
@@ -241,18 +400,13 @@ def test_every_bucket_a_constant_really_has_a_literal_pin() -> None:
     Turns red if: a constant is added to BUCKET_A_LITERAL_PIN without writing
     its pin (verified by adding a name with no assertion).
     """
-    sources = _test_sources()
-    missing = []
-    for qualified in BUCKET_A_LITERAL_PIN:
-        const = qualified.split(".", 1)[1]
-        pinned = re.search(
-            rf"assert\s+[\w.]*\b{re.escape(const)}\b\s*==\s*\S|"
-            rf"assert\s+\S[^\n]*==\s*[\w.]*\b{re.escape(const)}\b",
-            sources,
-        )
-        if not pinned:
-            missing.append(qualified)
-    assert not missing, f"bucket A names these but no test pins them to a literal: {missing}"
+    pinned = _literally_pinned_constants()
+    missing = sorted(q for q in BUCKET_A_LITERAL_PIN if q.split(".", 1)[1] not in pinned)
+    assert not missing, (
+        f"bucket A names these but no test compares them to a LITERAL: {missing}. "
+        "A symbolic assertion (`assert rendered == CONSTANT`) is not a pin — it "
+        "moves with the code."
+    )
 
 
 def test_bucket_c_entries_each_carry_a_reason() -> None:
