@@ -48,6 +48,23 @@ EVIDENCE_DOCS = (
     "18-requirement-traceability-matrix.md",
 )
 
+#: Floor on the number of requirements this gate must actually parse, for THIS
+#: repository's own documents.
+#:
+#: Set from the measured count on 2026-07-29 (**29**), minus headroom for a
+#: deliberate deletion or two. It is NOT derived from the same expression it
+#: guards: the check is "did we parse a plausible number of requirements at
+#: all", and a literal is the only honest way to state that. Raise it when the
+#: requirement set grows; lower it only with a recorded reason.
+#:
+#: Applied only when `--min-requirements` asks for it, which the Makefile does.
+#: The default is 0 because this script is also run against small synthetic
+#: document trees by its own tests — measured: a floor applied unconditionally
+#: failed `test_complete_tree_passes`, which builds a valid 2-requirement tree.
+#: A floor that fires on legitimate input gets switched off, so it is opt-in at
+#: the call site that knows the real corpus.
+MINIMUM_REQUIREMENTS = 25
+
 REQ_HEADING = re.compile(r"^##\s+(N?FR-\d{3})\b", flags=re.MULTILINE)
 REQ_ID = re.compile(r"^N?FR-\d{3}$")
 FENCE = re.compile(r"^(?:```|~~~)")
@@ -325,6 +342,18 @@ def main(argv: list[str] | None = None) -> int:
         default=ROOT / "docs",
         help="Directory holding the requirement docs (default: repo docs/).",
     )
+    parser.add_argument(
+        "--min-requirements",
+        type=int,
+        default=0,
+        help=(
+            "Refuse to pass unless at least N requirements were actually parsed. "
+            "Every check here is 'no requirement lacks a row', which is trivially "
+            f"true over zero requirements. The Makefile passes {MINIMUM_REQUIREMENTS} "
+            "for this repository's own corpus; the default of 0 keeps the gate "
+            "usable against a small document tree."
+        ),
+    )
     args = parser.parse_args(argv)
 
     problems = check(args.docs_root)
@@ -348,6 +377,22 @@ def main(argv: list[str] | None = None) -> int:
     count = sum(
         len(declared_requirements(read_doc(args.docs_root, doc))) for doc in REQUIREMENTS_DOCS
     )
+    # FAIL-CLOSED FLOOR. Every check above is of the form "no requirement is
+    # missing a row", and each is vacuously satisfied when zero requirements are
+    # declared — a renamed heading, a changed table format or an empty docs_root
+    # would make this BLOCKING gate print "OK" having verified nothing. A
+    # negative check needs a positive partner: the thing counted must exist.
+    if count < args.min_requirements:
+        print(
+            f"ERROR: only {count} requirements were parsed from {REQUIREMENTS_DOCS} "
+            f"(floor {args.min_requirements}). Every completeness check here is "
+            '"no requirement lacks a row", which passes trivially over an empty '
+            "set — so this gate would report OK having checked nothing. Either the "
+            "requirement documents stopped parsing, or requirements were deleted "
+            "and the floor must be lowered deliberately with a recorded reason.",
+            file=sys.stderr,
+        )
+        return 1
     print(
         f"OK: requirement traceability completeness — {count} requirements "
         "(FR + NFR) present in docs/17 and docs/18."

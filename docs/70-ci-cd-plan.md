@@ -22,6 +22,65 @@ The VS-013 local and CI evidence path is:
 
 Remote CI evidence is not claimed until GitHub Actions runs and the uploaded artifact is retained.
 
+## Pull request template — what it is, and what it is not
+
+`.github/pull_request_template.md` prefills every new pull request's body.
+
+**It is not enforcement.** GitHub has no required-field mechanism for pull
+requests — issue templates support forms, pull request templates do not
+([GitHub docs on templates](https://docs.github.com/en/communities/using-templates-to-encourage-useful-issues-and-pull-requests/about-issue-and-pull-request-templates);
+confirmed in [community discussion #84771](https://github.com/orgs/community/discussions/84771),
+where the stated workaround is a workflow that reads the body and fails a
+check). Nothing today parses pull request bodies in this repo, so the template
+sits **above the line** in `docs/DAY-ONE-PROMPT.md` §1: influence, not a gate.
+It is recorded here so nobody later reads it as one.
+
+**Why it asks for pasted evidence instead of checkboxes.** The template is
+designed against this repository's own measured failure history
+(`docs/metrics/mutation-gate-study.md` §8, `docs/103-incident-learnings.md`),
+not against a generic checklist. The four recurring failures — claims from
+reading rather than running, tests that pass whether or not the feature works,
+advisory gates believed without opening the log, numbers written into prose
+unmeasured — share one property: **a checkbox cannot detect any of them.** Each
+would have been ticked honestly by someone who believed the claim. So every
+field asks for a command, a number, or a line that was broken.
+
+Design taken from reading eight real templates in full:
+
+| Read | Taken |
+|---|---|
+| [kubernetes/kubernetes](https://raw.githubusercontent.com/kubernetes/kubernetes/master/.github/PULL_REQUEST_TEMPLATE.md) | Prose headings and fenced blocks, **zero checkboxes**; every field has a defined "nothing" value (`NONE`, `N/A`) so blank is distinguishable from skipped. This is the structural model. |
+| [pandas-dev/pandas](https://raw.githubusercontent.com/pandas-dev/pandas/main/.github/PULL_REQUEST_TEMPLATE.md) | Link each requirement to the doc that defines it, so the ask is an instruction rather than a claim. |
+| [angular/angular](https://raw.githubusercontent.com/angular/angular/main/.github/PULL_REQUEST_TEMPLATE.md) | The before/after pair ("current behavior" / "new behavior") yields a claim a reviewer can test. |
+| [Microsoft Engineering Playbook](https://microsoft.github.io/code-with-engineering-playbook/code-reviews/pull-request-template/) | The only one asking for artefacts — logs, outputs — rather than assent. Directly targets our failure mode (d). |
+
+Read and **rejected**, with the reason:
+
+| Read | Rejected |
+|---|---|
+| [home-assistant/core](https://raw.githubusercontent.com/home-assistant/core/dev/.github/PULL_REQUEST_TEMPLATE.md) (~13 boxes) | "Tests added and passed" as one box is precisely the claim our history says is unreliable — it is satisfied by a test that passes with the feature deleted. Split into test identity, bite proof, and run output. Its `DO NOT DELETE ANY TEXT` header is evidence the template is too long to survive contact. |
+| [electron/electron](https://raw.githubusercontent.com/electron/electron/main/.github/PULL_REQUEST_TEMPLATE.md), [symfony/symfony](https://raw.githubusercontent.com/symfony/symfony/7.4/.github/PULL_REQUEST_TEMPLATE.md) | "All checks passed" as a checkbox encodes the exact #158 defect — a gate believed without opening its log. Replaced with the job log link and the number the job printed. |
+| [rust-lang/rust](https://raw.githubusercontent.com/rust-lang/rust/master/.github/pull_request_template.md), [apache/airflow](https://raw.githubusercontent.com/apache/airflow/main/.github/PULL_REQUEST_TEMPLATE.md) | Near-empty templates work because the rigour lives in bots. That is the right destination, not the right starting point for a repo whose problem is unverified claims. |
+| Angular's 9-way and Home Assistant's 7-way type taxonomies | Those serve triage at high pull request volume. A single-maintainer repo pays the attention cost for no signal. |
+
+**Length.** Five sections, all prose or fenced blocks, no checkboxes. Measured
+across the eight templates read, the median is ~7 interactive items and the two
+highest-traffic projects (kubernetes, rust) have the fewest. Zhang et al.,
+*"Consistent or not? An investigation of using Pull Request Template in
+GitHub"*, Information and Software Technology, 2021
+([abstract](https://www.sciencedirect.com/science/article/abs/pii/S0950584921002354))
+reports that only 1.2% of ~538k sampled projects use a template at all, and
+that surveyed contributors accept templates asking for *pivotal* information —
+description, test, checklist. **Caveat, stated because it is the rule here:
+that paper is behind a paywall and was read as a search-result abstract, not in
+full. Treat its numbers as second-hand.**
+
+**Promotion condition.** This template becomes enforcement only if a workflow
+parses the body and fails a check on an empty evidence section. That is not
+built, and should not be built until someone measures how many recent pull
+requests it would have failed — the same replay rule every other gate here is
+held to (`docs/DAY-ONE-PROMPT.md` §4a-bis).
+
 ## Branch protection on `main` (#61)
 
 `main` is a protected branch. Changes land only through a pull request; direct

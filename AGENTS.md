@@ -87,9 +87,28 @@ new bugs a change introduces. Before declaring any non-trivial change complete:
   disagreed.
   - Before promoting an advisory gate, **open its job log** and confirm it
     produced its number.
+  - **A RED gate is not evidence it measured either.** A non-zero exit can mean
+    the gate fell over before measuring anything — which is what #158 was, and
+    the failure message named the wrong cause. Read the log and find the number
+    before attributing a red gate to the diff in front of you.
   - Before excluding tests from a gate, **measure** what that removes.
   - Before claiming a check bites, **mutate the code and watch it go red** —
     `cp` the file aside and restore from the copy, never `git checkout`.
+- **Every gate must report what it counted, and refuse to pass on an empty
+  input.** Nearly every gate here is a negative check ("no line uncovered", "no
+  secret matched", "no requirement lacks a row"), and all of those are trivially
+  true over nothing. Measured 2026-07-29: **13 of 22 CI jobs could reach a
+  terminal status having measured nothing, four of them blocking** — including
+  `diff-cover`, reproduced exiting **0** on a diff with genuinely uncovered new
+  lines because its coverage report mapped none of them. Floors now exist
+  (`docs/analysis/03-enforcement-machinery.md`); when you add a gate, add its
+  floor in the same commit and prove it red against an empty input.
+- **Do not add a new gate before checking how the last N real defects were
+  found.** Measured over every fix commit touching `src/`: **0 of 16 were caught
+  by an automated check**; 10 of 16 came from adversarial review. Gates here
+  prevent regressions; they do not detect new defects. The multi-lens review fan
+  is what does, and the slice built without one leaked 10 escaped defects against
+  0 for the two built with one.
 
 
 ## UI verification (the built workspace)

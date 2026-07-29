@@ -32,6 +32,66 @@ fails the build if any doc's blocking/advisory wording contradicts reality
 | `codex-review` | vacuous (no executable step) | the `openai/codex-action` step is commented out pending an `OPENAI_API_KEY` secret, so the job only checks out and always passes |
 | `e2e` (`e2e.yml`) | blocking | — |
 
+## Can a gate here finish having measured nothing? (2026-07-29)
+
+The table above records whether a gate *blocks*. It never recorded whether a
+gate **measured**, and those are different questions — which is the whole content
+of #130 and #158. Audited by execution and by reading real CI job logs:
+
+- **`mutation-baseline`: 11 of the last 11 pull-request runs scored zero mutants.**
+  Ten reported `success` (`no MUTATABLE changed functions ... nothing to mutate`),
+  one reported `failure` (`failed to collect stats`, run `30436468037`). Green and
+  red were equally uninformative.
+- **`diff-cover` — a BLOCKING gate — exits 0 on an empty denominator.** Reproduced
+  locally: two genuinely uncovered new lines in `fence()` plus a coverage report
+  containing no packages gave `No lines with coverage information in this diff.`
+  and `rc=0`. `--fail-under=95` does not fire when it maps nothing.
+- **13 of 22 jobs could reach a terminal status having measured nothing**, four of
+  them blocking (`diff-cover`, `fr-completeness`, the security scan inside
+  `validate-and-test`, `e2e`).
+- The repair pattern already existed — `Makefile:126` `gate-min-collected` and
+  `Makefile:150` `gate-min-executed` — and was wired to exactly two gates
+  (`perf-gate`, `api-contract`), whose logs do show their numbers.
+
+### Floors added, and what each is proven to catch
+
+| Gate | Floor | Proven RED by |
+|---|---|---|
+| `diff-cover` (blocking) | every changed `src/**.py` file must be present in the coverage report (`scripts/check_diff_cover_measured.py`) | a real `src/` edit plus a report with no packages → rc=1; the same edit with the real report → rc=0; a comment-only edit → rc=0 (no false fire) |
+| `validate-and-test` security scan (blocking) | ≥50 files actually read | a 1-file tree → `FAILED TO MEASURE`, rc=1; the real tree → `1367 files scanned`, rc=0 |
+| `fr-completeness` (blocking) | ≥25 requirements actually parsed | doc 10 truncated to 2 sections → 14 parsed → rc=1; **without** the floor the same truncation printed `OK` and rc=0 |
+| `e2e` both lanes (blocking) | executed-count floors 130 / 88, zero skips (`scripts/check_e2e_executed.py`) | missing report, all-skipped, and zero-matched all → rc=1; the real 94-test lane → rc=0 |
+| `mutation-baseline` (advisory) | a non-empty scope must leave a score or an explicit `UNMEASURED` in `score.txt`; the empty-scope branch now says in words that no score was produced | the recipe's own failure branch |
+
+**Still unfloored, named rather than hidden:** the `visual-snapshots` step (its
+executed count was not measured on this machine — the baselines are Linux-only),
+`csp-smoke`, `flake-scan`, `perf-sample`, `check-error-rate` and the
+`perf-gate` missing-JSON branch. The last four *detect* the unmeasured state and
+print `UNMEASURED`, then still `exit 0` — so the status remains a lie even though
+the log is honest.
+
+**What none of these floors can see:** whether the tests that ran assert anything
+worth asserting. A lane of 138 vacuous specs satisfies its floor completely. These
+close "the gate stopped running", not "the gate never bit".
+
+## An evidence-artifact gate was built, measured, and NOT shipped
+
+`docs/DAY-ONE-PROMPT.md` §1 specifies one ("changed `src/` module with no
+mutation report → fail"). The structurally checkable version — a `src/` change
+with no added-or-modified test file — was built and replayed before shipping, as
+§4a-bis requires.
+
+Replay over the last 200 first-parent commits: 67 changed `src/` Python, **5 (7%)**
+touched no test file, and four of those five look like genuine gaps. But over the
+last **60** commits — current practice rather than June's — 17 changed `src/`
+Python and exactly **one** would have fired: `c88715ae`, which changed a single
+attribution header string and needed no test. **A false block.**
+
+A gate whose only firing in current practice would have been wrong is not worth
+its noise, so it was **deleted rather than shipped advisory-and-ignored**. Recorded
+here because "measured and declined" is a result, and the next person should not
+have to re-derive it. Re-measure with a fresh window before proposing it again.
+
 ## Prove-red evidence (recorded this session, against current `app.js`/`app.css`)
 
 Running `rendering-invariants.spec.ts` on chromium: **3 failed, 1 passed.**

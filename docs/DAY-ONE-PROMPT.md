@@ -405,6 +405,37 @@ that resolves paths from `__file__`, `cwd`, or `parents[n]` will silently point 
 the copy. Resolve from an explicit root (e.g. `git rev-parse --show-toplevel`), or
 skip the check when it detects it is running inside the copy.
 
+**Rule: every gate must be able to state its DENOMINATOR, and fail when it is
+empty.** This is the general form of the two rules above, and it is the one to
+carry if you carry only one. Nearly every gate is a *negative* check —
+"no line is uncovered", "no secret matches", "no requirement lacks a row", "no
+mutant survived". Every one of those is **trivially true over an empty input**.
+So a gate whose input silently becomes empty reports success having verified
+nothing, and looks exactly like a gate that verified everything.
+
+Do not reason about whether that can happen. Measure it: feed each gate an empty
+input and see what it does. On this project that audit found **13 of 22 CI jobs
+could reach a terminal status having measured nothing, four of them blocking** —
+including the flagship changed-lines coverage gate, which was reproduced exiting
+**0** on a diff containing genuinely uncovered new lines, because its coverage
+report mapped none of them and `--fail-under` does not fire on an empty
+denominator. Separately, a mutation gate produced **no score on 11 of its last 11
+runs** — ten green, one red, all uninformative.
+
+The fix is small and mechanical: every gate reports **what it counted**, and
+refuses to pass below a floor. `47 files scanned, 0 findings` is a result;
+`passed` is not. Set the floor from a measured value, as an independent literal —
+never derived from the same expression it guards, or it can never detect that
+expression collapsing. Give each floor a positive partner test proving the
+counted thing exists, and a no-false-fire test for the case where empty is
+honest (a docs-only change genuinely has no lines to cover).
+
+Two specific traps, both paid for:
+- **Piping a check into `tee` discards its exit status** — the pipeline reports
+  `tee`'s 0. `set -o pipefail`, or the job can never fail.
+- **A "detects and reports UNMEASURED, then exits 0" gate is still lying.** The
+  log is honest and the status is not, and the status is what people read.
+
 **Rule: every gate ships with a CHARTER saying what it cannot see.**
 One paragraph, next to the gate. Ours would have read: *cannot see JavaScript,
 CSS, or browser tests; cannot see module-level constants or config tables;
@@ -431,6 +462,49 @@ outranks tuning it, and both outrank writing the rule down again.
 is the question that reversed this decision. Keep the instrument in the repo —
 `scripts/replay_mutation_scope.py` is the worked example. A gate whose
 historical behaviour is unknown is a gate whose cost is unknown.
+
+**Rule: before investing in more gates, count how your last N real defects were
+actually found.** This is the cheapest study in this document and it reorders
+every other priority. Take every fix commit, trace each back through `git blame`
+to the commit that introduced it, and read the issue or commit body for how it
+was discovered. Measured on this project, over every fix touching application
+code:
+
+| How it was found | Share |
+|---|---|
+| A human or agent deliberately hunting for bugs (adversarial review) | **10 of 16** |
+| Manual testing, a driven audit, a product walkthrough | 3 of 16 |
+| Observing production output | 1 of 16 |
+| **An automated check that existed to catch it** | **0 of 16** |
+
+Zero. The one CI-gate row in the ledger caught test-vs-code drift, and its own
+commit says so. The corroborating number is starker: the slice built without a
+multi-lens review fan leaked **10** escaped defects; the two slices built with
+one leaked **0** each.
+
+Three consequences, and they are uncomfortable:
+
+1. **Gates mostly prevent regressions of defects you already found.** That is
+   worth having — it is why the UI invariant suite exists — but it is not how new
+   defects surface. Budget accordingly: a gate is insurance, not detection.
+2. **The detection method with the measured track record is adversarial review,
+   and it sits above the enforcement line.** It depends on someone choosing to
+   run it. If you take the durability hierarchy seriously, the highest-value
+   below-the-line work is making that review *happen* and *leave evidence* — not
+   adding a tenth code-level gate.
+3. **Verify the reviewers.** In the best-measured round here, a five-lens fan
+   raised 32 findings and independent verifiers refuted **23** of them. Review
+   without a verification step is a defect generator of its own.
+
+And the shape that DOES generalise into a gate: when a defect turns out to be
+"we added a member to a set and forgot to handle it somewhere", pin the whole set
+with an exhaustive equality assertion, so the next member turns it red and forces
+a decision. Audited here, only 3 of 14 enumerated production sets had such a pin;
+adding a synthetic member to a pinned one turned six tests red immediately, and
+to an unpinned one turned nothing red at all. Worse, the test written to prevent
+one such defect hardcoded five of the six members it was guarding — so one member
+was never exercised by the very test that existed for it. **If a test enumerates
+a production set, derive the enumeration from the set, never retype it.**
 
 **And the sharpest lesson, which is about tools rather than gates:** the gate's
 own founding document already recorded that the tool would have scored the

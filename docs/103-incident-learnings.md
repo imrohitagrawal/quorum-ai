@@ -4,6 +4,61 @@ Concrete, dated incidents and the durable fix each one earned. Each entry is a
 real event with evidence (run ids, commits), not a hypothetical. New entries go
 at the top.
 
+## 2026-07-29 — A RED gate that measured nothing, and twelve more that could
+
+**What happened.** The repaired mutation gate met the case it existed for — the
+first pull request touching `src/` Python (#157) — and **scored nothing**. It
+exited non-zero during test collection, so the tick was red and read as a verdict
+on the diff. It was not.
+
+**Root cause, reproduced exactly.** `tests/unit/test_mutation_test_set_integrity.py`
+computed `REPO_ROOT = Path(__file__).resolve().parents[2]`. mutmut runs the suite
+from inside `./mutants/`, so the root resolved to the copy, and the guard counted
+the mutation runner's own generated `x_<name>__mutmut_N` variants:
+
+```
+AssertionError: 514 decorated functions under src/product_app; the study measured 40
+assert 514 <= 55
+!!!! stopping after 1 failures !!!!
+failed to collect stats. runner returned 1
+```
+
+Real source has 40. Reproduced on 2026-07-29 by re-introducing the `parents[2]`
+resolution and re-running `make mutation-baseline`: identical `514` abort. With
+the fix (`tests/repo_root.py`, resolving to the nearest `.git` ancestor) the same
+command on the same tree printed `2 killed, 0 survived, 0 no-tests → 100.0%`. One
+line, and the difference between a number and no number.
+
+**The printed diagnosis was wrong.** It said "usually a repo-root file missing
+from `[tool.mutmut].also_copy`". Nothing was missing. The message now names the
+copied-tree cause first and states that the exit code is about the gate, not the
+diff.
+
+**The wider finding, which is the real content of this entry.** Auditing every
+gate for the same question — *can it finish having measured nothing?* — found:
+
+- `mutation-baseline`: **11 of the last 11 pull-request runs produced no score.**
+  Ten green, one red.
+- **`diff-cover`, a BLOCKING gate, exits 0 on an empty denominator.** Reproduced:
+  two genuinely uncovered new lines plus a coverage report with no packages gave
+  `No lines with coverage information in this diff.` and `rc=0`.
+- **13 of 22 jobs could reach a terminal status having measured nothing; four of
+  them blocking.**
+- The fix pattern already existed in the repo (`gate-min-collected` /
+  `gate-min-executed`, `Makefile:126`/`:150`) and was wired to two gates.
+
+**Durable fix.** Fail-closed floors on the four blocking gates plus the mutation
+gate, each proven RED against an empty input and GREEN against a real one — see
+`docs/analysis/03-enforcement-machinery.md` for the table and the evidence. Also
+`set -o pipefail` in the two workflows that piped a check into `tee` and thereby
+discarded its exit status.
+
+**Rules earned.** A RED advisory job is not evidence it measured — open the log,
+same as for a green one. Any check that resolves paths from `__file__` will point
+at the copy when a tool re-runs your suite from a generated tree. And the one that
+generalises furthest: **a gate that cannot state what it measured has not been
+verified, only observed** — ask every gate for its denominator.
+
 ## 2026-07-22 — A green Deploy run can mean nothing was deployed
 
 **What happened.** After PR #60 merged, the Deploy workflow produced three runs

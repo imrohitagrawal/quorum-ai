@@ -40,7 +40,18 @@ import ast
 import tomllib
 from pathlib import Path
 
-REPO_ROOT = Path(__file__).resolve().parents[2]
+from tests.repo_root import find_repo_root
+
+#: The REAL repository root, not ``parents[2]``.
+#:
+#: mutmut runs this suite from inside ``./mutants/``, where ``parents[2]`` is
+#: the copy. ``test_the_decorated_function_blind_spot_is_recorded`` then walked
+#: ``mutants/src/product_app`` — which carries one generated ``x_<name>__mutmut_N``
+#: variant per mutant — and counted **514** decorated functions against a
+#: threshold of 55. With ``-x`` in force that killed collection, so the gate
+#: exited non-zero having scored no mutant at all, on every pull request that
+#: touched ``src/`` Python (#158). See ``tests/repo_root.py``.
+REPO_ROOT = find_repo_root(Path(__file__))
 TESTS_DIR = REPO_ROOT / "tests"
 PYPROJECT = REPO_ROOT / "pyproject.toml"
 

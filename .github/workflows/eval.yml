@@ -77,4 +77,10 @@ jobs:
         # advisory job is one of the two lanes meant to execute it.
         env:
           QUORUM_RUN_PERF_BUDGET: "1"
-        run: uv run pytest tests/perf/test_eval_batch_baseline.py -q --no-cov -s | tee "$GITHUB_STEP_SUMMARY"
+        # `set -o pipefail`: without it the pipeline reports tee's exit status,
+        # which is always 0, so a failed or ABORTED pytest run reads as a clean
+        # pass. Advisory means "reported, does not block" — it must not mean
+        # "cannot fail", which is how a job ends up green having measured nothing.
+        run: |
+          set -o pipefail
+          uv run pytest tests/perf/test_eval_batch_baseline.py -q --no-cov -s | tee "$GITHUB_STEP_SUMMARY"

@@ -49,4 +49,9 @@ jobs:
       - name: Report issues closed COMPLETED with no commit
         env:
           GH_TOKEN: ${{ github.token }}
-        run: python3 scripts/check_issue_closure.py | tee -a "$GITHUB_STEP_SUMMARY"
+        # `set -o pipefail` — see eval.yml: a bare pipe into tee discards the
+        # script's exit status, so a crashed check is indistinguishable from a
+        # clean one.
+        run: |
+          set -o pipefail
+          python3 scripts/check_issue_closure.py | tee -a "$GITHUB_STEP_SUMMARY"
