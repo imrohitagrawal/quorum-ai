@@ -7,7 +7,7 @@ WHY
     stopped running is a merge gate that stopped gating.
 
     This is the same guard the Makefile already applies to the perf and contract
-    gates (`gate-min-executed`, Makefile:150) — a gate measures or it fails —
+    gates (`gate-min-executed` in the Makefile) — a gate measures or it fails —
     applied to the lane that actually carries this project's UI invariants.
 
 WHAT IT CHECKS

@@ -16,6 +16,7 @@ are meant to detect.
 
 from __future__ import annotations
 
+import ast
 from pathlib import Path
 
 import pytest
@@ -103,22 +104,52 @@ def test_it_fails_loudly_when_there_is_no_repository(tmp_path: Path) -> None:
         find_repo_root(module)
 
 
-def test_the_real_module_root_is_this_repository() -> None:
-    """The shipped call site resolves to a tree that has the real source in it.
+def test_the_guard_module_resolves_its_root_through_the_helper() -> None:
+    """The shipped call site must not go back to a parent count.
 
-    Deliberately NOT asserted against ``Path(__file__).parents[2]`` — that is
-    the expression under repair, and comparing the fix to the bug would pass in
-    both worlds. Asserted instead against properties only the real repository
-    has, plus the negative that named the defect.
+    **This is a SOURCE pin, and it is one deliberately.** An earlier version of
+    this test asserted only that ``REPO_ROOT`` had a ``pyproject.toml`` and a
+    ``src/product_app`` under it and was not named ``mutants``. In an ordinary
+    checkout ``Path(__file__).resolve().parents[2]`` satisfies all three — so
+    the test was GREEN with the #158 defect fully present, and would only ever
+    have gone red under the mutation runner, which is not the runner CI gates
+    on. It was a test that passed when the feature was absent: the exact defect
+    class this module's own docstring is about. Caught by adversarial review,
+    then reproduced.
 
-    Turns red if: REPO_ROOT in the mutation-test-set guard is pointed back at a
-    copy, or at the tests directory.
+    A behavioural assertion cannot distinguish the two here, because outside a
+    copied tree the correct answer and the buggy answer are the same path. So
+    the property that actually differs — which expression computes the root — is
+    asserted directly, against the source.
+
+    Turns red if: the guard module computes its root from ``parents[...]`` again,
+    or stops importing the resolver.
     """
-    from tests.unit.test_mutation_test_set_integrity import REPO_ROOT
+    from tests.unit import test_mutation_test_set_integrity as guard
 
-    assert (REPO_ROOT / "pyproject.toml").is_file()
-    assert (REPO_ROOT / "src" / "product_app" / "__init__.py").is_file()
-    assert REPO_ROOT.name != "mutants", (
-        f"REPO_ROOT resolved to {REPO_ROOT} — a generated copy, not the repository. "
-        "Any census of src/ taken here counts the mutation runner's own variants."
+    source = Path(guard.__file__).read_text(encoding="utf-8")
+    tree = ast.parse(source)
+
+    assert "find_repo_root" in source, (
+        "the mutation-test-set guard no longer resolves its root through "
+        "tests/repo_root.py; inside the mutation runner's copy it will count the "
+        "runner's own generated variants again (#158)"
     )
+    # Parsed, not grepped. The module's own docstring quotes ``parents[2]`` while
+    # explaining the defect, so a substring search reports the explanation as the
+    # bug — measured: it did exactly that on the first attempt at this test.
+    parent_indexing = [
+        node
+        for node in ast.walk(tree)
+        if isinstance(node, ast.Attribute) and node.attr == "parents"
+    ]
+    assert not parent_indexing, (
+        "the guard computes a path from a fixed parent count again (line(s) "
+        f"{sorted({n.lineno for n in parent_indexing})}). Inside ./mutants/ that "
+        "lands on the copy. Use find_repo_root()."
+    )
+    # Positive partner: the pin above is about HOW the root is computed; this is
+    # that the answer is still usable. Without it, deleting REPO_ROOT entirely
+    # would satisfy both assertions above.
+    assert (guard.REPO_ROOT / "pyproject.toml").is_file()
+    assert (guard.REPO_ROOT / "src" / "product_app" / "__init__.py").is_file()

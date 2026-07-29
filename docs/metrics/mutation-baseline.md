@@ -160,7 +160,13 @@ restored, the same command aborted at `assert 514 <= 55` /
 `failed to collect stats` and scored nothing. That pair is the causal evidence
 that the root-resolution repair is what produced the number.
 
-**First real runtime data point for #137** (p90 CI runtime was previously an
+**Runtime, and its evidential status.** These came from the probe run's console
+output and `build/mutation/` is a gitignored build directory that has since been
+cleared, so **the log is gone and these three numbers are NOT independently
+reproducible**. Recorded as a first indication, not as the measurement #137 asks
+for; anyone promoting the gate on runtime must re-measure and keep the log.
+
+**First indication for #137** (p90 CI runtime was previously an
 extrapolation from two local points): mutant *generation* took **23.4s** for the
 whole tree (23 files mutated, 9,370 mutants generated) before scoping filtered
 execution to 2, which then ran at **7.32 mutations/second**. Generation cost is

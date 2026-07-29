@@ -234,3 +234,161 @@ def test_the_worktree_is_included_in_the_changed_set(
     assert any(cmd[-1] == "HEAD" for cmd in calls), (
         f"the working tree is never diffed; only these ran: {calls}"
     )
+
+
+# --------------------------------------------------------------------------
+# The two script-internal floors
+#
+# These shipped without tests in the first cut of this change, which AGENTS.md —
+# edited by the same commit — forbids, naming `scripts/security_scan.py`
+# explicitly. Caught by adversarial review. CI runs `--cov=src`, so nothing here
+# is measured by the coverage gate; without these the floors guarding two
+# BLOCKING gates would themselves be unguarded.
+# --------------------------------------------------------------------------
+
+
+def _security_scan(tmp_root: Path) -> ModuleType:
+    """Load security_scan with its ROOT pointed at a synthetic tree.
+
+    `setattr` rather than direct assignment because the module is loaded
+    dynamically, so mypy cannot see the attributes it is being given.
+    """
+    module = _load("security_scan")
+    setattr(module, "ROOT", tmp_root)  # noqa: B010
+    setattr(module, "REPORT_PATH", tmp_root / "build" / "security" / "security-scan.json")  # noqa: B010
+    return module
+
+
+def test_a_security_scan_that_read_almost_nothing_fails(tmp_path: Path) -> None:
+    """Zero findings over zero files is not a clean scan, it is no scan.
+
+    Every check in that script is "no line matches a secret pattern", which is
+    trivially true over an empty file list — so a moved root or a broadened
+    ignore rule would print "Security scan passed" and exit 0 on a BLOCKING gate.
+
+    Turns red if: the MINIMUM_FILES_SCANNED comparison is removed, or
+    `_run_checks` stops returning the count alongside the findings.
+    """
+    (tmp_path / "only.md").write_text("nothing here", encoding="utf-8")
+
+    assert _security_scan(tmp_path).main() == 1
+
+
+def test_a_real_security_scan_passes_and_reports_its_count(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """Positive partner: a tree above the floor must pass, and say how many.
+
+    Without this, a floor that always returned 1 would satisfy the test above.
+    The printed count is the denominator — a pass with no number is the thing
+    this whole family of floors exists to abolish.
+
+    Turns red if: the floor rejects a legitimately-sized tree, or the pass
+    message stops naming the file count.
+    """
+    for index in range(60):
+        (tmp_path / f"file{index}.md").write_text("clean", encoding="utf-8")
+
+    assert _security_scan(tmp_path).main() == 0
+    assert "60 files scanned" in capsys.readouterr().out
+
+
+def test_the_security_scan_still_catches_a_real_secret(tmp_path: Path) -> None:
+    """Loosening a check must be proven in BOTH directions.
+
+    `mutants` was added to EXCLUDED_DIRS in the same change. This is the partner
+    that proves the scan still finds what it must — otherwise "0 findings" above
+    could mean the detector was broken rather than the tree clean.
+
+    Turns red if: the env_secret_assignment check stops firing, or the exclusion
+    list swallows ordinary source directories.
+    """
+    for index in range(60):
+        (tmp_path / f"file{index}.md").write_text("clean", encoding="utf-8")
+    # NB: the literal must not contain the word "placeholder" in any case — the
+    # scanner correctly ignores those, and an earlier version of this fixture
+    # used "NOTAPLACEHOLDERvalue123", which the check skipped. The test failed
+    # for the right reason and the fixture was wrong.
+    (tmp_path / "leak.py").write_text('api_key = "hunter2seCretV4lue"\n', encoding="utf-8")
+
+    assert _security_scan(tmp_path).main() == 1
+
+
+def test_the_generated_mutant_copy_is_excluded_but_real_source_is_not(
+    tmp_path: Path,
+) -> None:
+    """The exclusion must remove the generated copy and nothing else.
+
+    Turns red if: `mutants` is dropped from EXCLUDED_DIRS (the copy's duplicates
+    of exempt test files reappear as findings), or if the exclusion is widened
+    so that ordinary files stop being read.
+    """
+    module = _security_scan(tmp_path)
+    (tmp_path / "mutants").mkdir()
+    (tmp_path / "mutants" / "copy.md").write_text("x", encoding="utf-8")
+    (tmp_path / "real.md").write_text("x", encoding="utf-8")
+
+    found = {path.name for path in module._iter_text_files()}
+
+    assert "real.md" in found, "the scan stopped reading ordinary files"
+    assert "copy.md" not in found, "the generated mutant copy is being scanned again"
+
+
+def test_the_requirement_gate_refuses_a_suspiciously_small_corpus(tmp_path: Path) -> None:
+    """Parsing 2 requirements where there are 29 must not print OK.
+
+    Every check in that gate is "no requirement lacks a row", vacuously true over
+    a corpus that stopped parsing. Measured: truncating the requirements document
+    to 2 sections dropped the count from 29 to 14 and the gate still exited 0.
+
+    Turns red if: the --min-requirements comparison is dropped.
+    """
+    fr = _load("validate_fr_completeness")
+
+    for name in ("10-functional-requirements.md", "11-non-functional-requirements.md"):
+        (tmp_path / name).write_text("# empty\n", encoding="utf-8")
+    for name in ("17-requirement-registry.md", "18-requirement-traceability-matrix.md"):
+        (tmp_path / name).write_text("# empty\n", encoding="utf-8")
+
+    assert fr.main(["--docs-root", str(tmp_path), "--min-requirements", "25"]) == 1
+
+
+def test_the_requirement_gate_floor_is_wired_into_the_makefile() -> None:
+    """An unregistered floor is not a floor.
+
+    The floor defaults to 0 so the script stays usable against a small synthetic
+    document tree; that makes the Makefile the only place it is switched on. This
+    repository has already shipped three "blocking gates" that were never named
+    in a workflow — the same failure, one layer up.
+
+    Turns red if: `make fr-completeness` stops passing --min-requirements.
+    """
+    recipe = (REPO_ROOT / "Makefile").read_text(encoding="utf-8")
+
+    assert "--min-requirements" in recipe, (
+        "make fr-completeness no longer switches the floor on, so the blocking "
+        "gate is back to passing over a corpus that stopped parsing"
+    )
+
+
+def test_the_e2e_floors_are_wired_into_the_workflow() -> None:
+    """Same rule for the Playwright lanes: deleting the step must be visible.
+
+    Turns red if: either floor step is removed from e2e.yml, or the script is
+    renamed without updating the workflow.
+    """
+    workflow = (REPO_ROOT / ".github" / "workflows" / "e2e.yml").read_text(encoding="utf-8")
+
+    assert workflow.count("scripts/check_e2e_executed.py") == 2, (
+        "e2e.yml must invoke the executed-count floor once per blocking lane; "
+        f"found {workflow.count('scripts/check_e2e_executed.py')}"
+    )
+
+
+def test_the_diff_cover_floor_is_wired_into_the_makefile() -> None:
+    """Turns red if: the diff-cover recipe stops invoking its floor."""
+    recipe = (REPO_ROOT / "Makefile").read_text(encoding="utf-8")
+
+    assert "scripts/check_diff_cover_measured.py" in recipe, (
+        "the diff-cover recipe no longer runs its empty-denominator floor"
+    )

@@ -46,11 +46,10 @@ of #130 and #158. Audited by execution and by reading real CI job logs:
   locally: two genuinely uncovered new lines in `fence()` plus a coverage report
   containing no packages gave `No lines with coverage information in this diff.`
   and `rc=0`. `--fail-under=95` does not fire when it maps nothing.
-- **13 of 22 jobs could reach a terminal status having measured nothing**, four of
+- **13 of 21 jobs could reach a terminal status having measured nothing**, four of
   them blocking (`diff-cover`, `fr-completeness`, the security scan inside
   `validate-and-test`, `e2e`).
-- The repair pattern already existed — `Makefile:126` `gate-min-collected` and
-  `Makefile:150` `gate-min-executed` — and was wired to exactly two gates
+- The repair pattern already existed — `gate-min-collected` and `gate-min-executed` in the `Makefile` — and was wired to exactly two gates
   (`perf-gate`, `api-contract`), whose logs do show their numbers.
 
 ### Floors added, and what each is proven to catch
@@ -58,7 +57,8 @@ of #130 and #158. Audited by execution and by reading real CI job logs:
 | Gate | Floor | Proven RED by |
 |---|---|---|
 | `diff-cover` (blocking) | every changed `src/**.py` file must be present in the coverage report (`scripts/check_diff_cover_measured.py`) | a real `src/` edit plus a report with no packages → rc=1; the same edit with the real report → rc=0; a comment-only edit → rc=0 (no false fire) |
-| `validate-and-test` security scan (blocking) | ≥50 files actually read | a 1-file tree → `FAILED TO MEASURE`, rc=1; the real tree → `1367 files scanned`, rc=0 |
+| `validate-and-test` security scan (blocking) | ≥50 files actually read | a 1-file tree → `FAILED TO MEASURE`, rc=1; the real tree → `1369 files scanned`, rc=0 (the exact count moves with untracked
+files — it is the ORDER OF MAGNITUDE that matters against a floor of 50) |
 | `fr-completeness` (blocking) | ≥25 requirements actually parsed | doc 10 truncated to 2 sections → 14 parsed → rc=1; **without** the floor the same truncation printed `OK` and rc=0 |
 | `e2e` both lanes (blocking) | executed-count floors 130 / 88, zero skips (`scripts/check_e2e_executed.py`) | missing report, all-skipped, and zero-matched all → rc=1; the real 94-test lane → rc=0 |
 | `mutation-baseline` (advisory) | a non-empty scope must leave a score or an explicit `UNMEASURED` in `score.txt`; the empty-scope branch now says in words that no score was produced | the recipe's own failure branch |

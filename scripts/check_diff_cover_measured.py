@@ -19,17 +19,36 @@ WHY THIS EXISTS — measured, not hypothetical
     two incidents this repository has already paid for: #130 (a green advisory
     job that had never scored a mutant) and #158 (a red one that had not either).
 
-WHAT THIS CHECKS
+WHAT THIS CHECKS — and it is narrower than it sounds
     Every changed Python file under `src/` must be PRESENT in the coverage
-    report. If a changed file is absent, the report cannot have measured it and
-    the percentage is over the wrong denominator.
+    report. That catches the report COLLAPSING — a broken `<source>` mapping, a
+    coverage run that imported nothing, an excluded path — which is the case
+    where the percentage is computed over the wrong denominator entirely.
 
-WHAT THIS DELIBERATELY DOES NOT CHECK
-    It does not require `total_num_lines > 0`. A comment-only or blank-line
-    change to a `src/` module legitimately contributes no executable lines, and
-    failing that would be a false alarm that gets the floor switched off. The
-    signal used instead — a changed file the report has never heard of — cannot
-    be produced by a comment-only edit.
+WHAT IT DOES **NOT** CLOSE — read this before citing it
+    It does not make diff-cover see a change that has no executable lines. A
+    module-level constant or config table is exactly that shape, and it is this
+    repository's most expensive defect class.
+
+    Reproduced 2026-07-29 against real coverage.py and real diff-cover: adding
+    two rows to a module-level `PRICES` dict produced
+
+        No lines with coverage information in this diff.   diff-cover rc=0
+        {"total_num_lines": 0, "num_changed_lines": 2}
+
+    and this floor **passed**, because the file was present in the report. The
+    changed lines are not statements, so there is nothing for line coverage to
+    measure. That is arithmetically correct and completely blind.
+
+    So: the mutation gate cannot see module-level constants (its charter says
+    so), and neither can this one. Two gates, one shared blind spot, and it is
+    where the money configuration lives. Tracked as an open issue with the
+    measurement that would decide a stricter rule.
+
+    A zero-measured-line file is therefore REPORTED LOUDLY here rather than
+    failed. Failing it would also fire on a comment-only or import-only edit,
+    which is legitimate and frequent — and a floor that fires on legitimate work
+    is a floor somebody switches off.
 
     It also cannot see whether the coverage numbers are CORRECT, only that the
     report covers the files the diff touched.
@@ -141,6 +160,24 @@ def main(argv: list[str] | None = None) -> int:
     report = Path(args.json_report)
     if report.is_file():
         total = json.loads(report.read_text()).get("total_num_lines")
+
+    if total == 0:
+        # Not a failure — see the module docstring. But it must not hide inside a
+        # success message, which is how "0 changed lines measured" read before.
+        listed = "\n".join(f"    {path}" for path in changed)
+        print(
+            "diff-cover floor: NOTICE — the changed src/ file(s) are in the coverage "
+            "report, but NONE of their changed lines are executable statements, so "
+            "diff-cover measured ZERO of them:\n"
+            f"{listed}\n"
+            "  The 95% you are about to see is over an empty denominator. This is the "
+            "module-level-constant blind spot: a pricing table, a spend cap or a model "
+            "id changes here and NO coverage gate can see it — the mutation gate cannot "
+            "either. If this change touches money or configuration, it needs a pinned "
+            "literal assertion, and a reviewer should read it rather than trust a tick."
+        )
+        return 0
+
     print(
         f"diff-cover floor: all {len(changed)} changed src/ file(s) are present in the "
         f"coverage report ({len(reported)} files reported"

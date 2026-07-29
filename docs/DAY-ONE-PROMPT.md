@@ -414,7 +414,7 @@ So a gate whose input silently becomes empty reports success having verified
 nothing, and looks exactly like a gate that verified everything.
 
 Do not reason about whether that can happen. Measure it: feed each gate an empty
-input and see what it does. On this project that audit found **13 of 22 CI jobs
+input and see what it does. On this project that audit found **13 of 21 CI jobs
 could reach a terminal status having measured nothing, four of them blocking** —
 including the flagship changed-lines coverage gate, which was reproduced exiting
 **0** on a diff containing genuinely uncovered new lines, because its coverage
@@ -475,7 +475,8 @@ code:
 | A human or agent deliberately hunting for bugs (adversarial review) | **10 of 16** |
 | Manual testing, a driven audit, a product walkthrough | 3 of 16 |
 | Observing production output | 1 of 16 |
-| **An automated check that existed to catch it** | **0 of 16** |
+| **An automated check that existed to catch it** | **0 of 16** | The
+  per-commit table, the method and its limits: `docs/metrics/defect-discovery-audit.md`.
 
 Zero. The one CI-gate row in the ledger caught test-vs-code drift, and its own
 commit says so. The corroborating number is starker: the slice built without a
@@ -499,9 +500,13 @@ Three consequences, and they are uncomfortable:
 And the shape that DOES generalise into a gate: when a defect turns out to be
 "we added a member to a set and forgot to handle it somewhere", pin the whole set
 with an exhaustive equality assertion, so the next member turns it red and forces
-a decision. Audited here, only 3 of 14 enumerated production sets had such a pin;
-adding a synthetic member to a pinned one turned six tests red immediately, and
-to an unpinned one turned nothing red at all. Worse, the test written to prevent
+a decision. Audited here, only **2 of 14** enumerated production sets had such a pin —
+and both of those were found by *executing* the experiment, not by pattern
+matching: adding a synthetic member to a pinned set turned six tests red
+immediately, and adding one to an unpinned set turned nothing red at all. (A
+first pass counted three, because a regex mistook a single-member assertion
+inside a dict literal for a whole-set pin. Adversarial review caught it. The
+lesson repeats itself: the grep said three, the run said two.) Worse, the test written to prevent
 one such defect hardcoded five of the six members it was guarding — so one member
 was never exercised by the very test that existed for it. **If a test enumerates
 a production set, derive the enumeration from the set, never retype it.**

@@ -42,10 +42,9 @@ gate for the same question — *can it finish having measured nothing?* — foun
 - **`diff-cover`, a BLOCKING gate, exits 0 on an empty denominator.** Reproduced:
   two genuinely uncovered new lines plus a coverage report with no packages gave
   `No lines with coverage information in this diff.` and `rc=0`.
-- **13 of 22 jobs could reach a terminal status having measured nothing; four of
+- **13 of 21 jobs could reach a terminal status having measured nothing; four of
   them blocking.**
-- The fix pattern already existed in the repo (`gate-min-collected` /
-  `gate-min-executed`, `Makefile:126`/`:150`) and was wired to two gates.
+- The fix pattern already existed in the repo (`gate-min-collected` / `gate-min-executed` in the `Makefile`) and was wired to two gates.
 
 **Durable fix.** Fail-closed floors on the four blocking gates plus the mutation
 gate, each proven RED against an empty input and GREEN against a real one — see
