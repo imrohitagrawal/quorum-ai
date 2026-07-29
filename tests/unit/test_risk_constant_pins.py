@@ -298,6 +298,16 @@ def _literally_pinned_constants() -> set[str]:
 def test_money_constants_are_pinned_to_their_literal_values() -> None:
     """Turns red if: any spend rail moves. That is the point — it must be reviewed.
 
+    A PIN IS NOT A VALIDATION. This makes a change visible; it does not say the
+    value is right. Measured 2026-07-29, `_DEFAULT_PRICE_PER_1K_INPUT = 0.0008`
+    is the fallback used when the catalog is unreachable, and against the four
+    shipped default models it OVER-charges three (5.3x, 2.7x, and 16.0x for
+    nvidia — that is the recorded "16x mispricing", derived here from first
+    principles) while UNDER-charging anthropic/claude-haiku-4.5, whose real
+    input price is 0.001. Under-charging is the unsafe direction for a spend
+    cap. No document derives 0.0008. Tracked as an issue; pinned here so it
+    cannot drift further while that is decided.
+
     These are statements about real money. `costs._DEFAULT_PRICE_PER_1K_INPUT`
     is the standout: 0.0008 is the default behind the recorded 16x mispricing,
     and it had no test reference at all before this line.
