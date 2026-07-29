@@ -115,6 +115,29 @@ SYNTHESIS_SECTION_MAX_TOKENS = 3000
 #: truncated away, which is a different job from this one.
 SYNTHESIS_SECTION_MAX_CHARS = int(SYNTHESIS_SECTION_MAX_TOKENS * CHARS_PER_TOKEN)
 
+#: The largest final synthesis this application can emit, in characters.
+#:
+#: WP-G2 (F-10) needs this to bound ``context["prior_synthesis"]`` — a value a
+#: client re-sends from a PREVIOUS run, so "as large as we can produce" is the
+#: only honest ceiling. It is summed from the caps that actually bound the
+#: five ``FinalSynthesis`` prose fields plus the notice, NOT from
+#: ``settings.cost_synthesis_sections``: that one is a PRICING knob, is
+#: env-overridable, and retuning it would silently narrow a public request
+#: field below what this file can still emit (adversarial review, WP-G2).
+#:
+#: All FIVE sections are counted at ``SYNTHESIS_SECTION_MAX_CHARS``, including
+#: Recommendation. Its tighter ``RECOMMENDATION_MAX_CHARS`` reads like the real
+#: bound and is NOT one: when the caveat already appears early in the text,
+#: ``truncate_recommendation`` returns everything from the caveat onward
+#: untruncated (``synthesis_length.py``, the ``body_budget <= 0`` path).
+#: Measured: a 27_732-char recommendation came back at 27_701 against a 2_000
+#: "cap". The only thing that really bounds that section is the token cap on
+#: the call that produced it — which is ``SYNTHESIS_SECTION_MAX_CHARS``.
+#: Using 2_000 here made this constant 50_117 while the stage could emit
+#: 59_924, so a legitimate follow-up on this app's own output was rejected
+#: with a 422 (demonstrated in adversarial review).
+FINAL_SYNTHESIS_MAX_CHARS = 5 * SYNTHESIS_SECTION_MAX_CHARS + len(HIGH_STAKES_NOTICE_FRAGMENT)
+
 #: How much of each initial answer the synthesis sections get to see.
 #: WP-D (F-08) replaced a hardcoded ``[:600]``. Bounded by the token cap on
 #: the call that produced the answer, so it is "as much as can exist".
@@ -392,6 +415,7 @@ class SynthesisOrchestrationService:
             debate_outputs=debate_outputs,
             failed_count=failed_count,
             coverage_ratio=coverage.sourced_answer_ratio,
+            context=context,
         )
 
         # PERF-P0: parallelize the 5 synthesis section calls. The
@@ -606,6 +630,7 @@ class SynthesisOrchestrationService:
         debate_outputs: list[DebateOutput],
         failed_count: int,
         coverage_ratio: Decimal,
+        context: dict[str, Any] | None = None,
     ) -> str:
         """Build a compact, deterministic prompt that fits within the
         per-section token budget. We summarise each model answer and
@@ -633,6 +658,34 @@ class SynthesisOrchestrationService:
 
         # Untrusted from here down.
         lines: list[str] = []
+        # WP-G2 (F-10): the follow-up context. ``prior_question`` already
+        # reaches every synthesis call through the SYSTEM prompt
+        # (``providers._post_openrouter``); ``prior_synthesis`` belongs in the
+        # USER prompt, which is what ``costs.py`` has always priced it as and
+        # what nothing sent. It is client-supplied text from a previous run, so
+        # it goes INSIDE the fence with everything else provider-originated —
+        # never into the directives above it.
+        #
+        # FLATTENED, like every other untrusted value in this prompt. The fence
+        # stops it forging the evidence BOUNDARY, but not the prompt's internal
+        # structure: with its newlines intact it can open its own
+        # "Four model answers…" or "- round 1:" line and manufacture a
+        # consensus no model produced (demonstrated in adversarial review).
+        # It also carries a consumer-side cap, so the prompt stays sized even
+        # if the request-level bound is ever loosened.
+        prior_synthesis = _flatten_for_prompt(
+            (context or {}).get("prior_synthesis") or "",
+            max_chars=FINAL_SYNTHESIS_MAX_CHARS,
+        ).strip()
+        if prior_synthesis:
+            directives.append(
+                "The evidence block opens with the synthesis from the user's previous "
+                "question. Treat it as prior context for this follow-up, not as an "
+                "answer to restate."
+            )
+            lines.append("Synthesis of the user's previous question:")
+            lines.append(prior_synthesis)
+            lines.append("")
         lines.append(
             "Four model answers (model name, status, first "
             f"{SYNTHESIS_ANSWER_EXCERPT_MAX_CHARS} chars):"
@@ -848,6 +901,10 @@ class SynthesisOrchestrationService:
             openrouter_key=openrouter_key,
             system_prompt=_SOURCE_SUPPORT_PROMPT,
             user_prompt=user_prompt,
+            # WP-G2 (F-10): this was the one section of five that accepted
+            # ``context`` and then dropped it, so ``prior_question`` never
+            # reached its system prompt while every run paid for it.
+            context=context,
         )
         # F-06: ``live`` is non-None whenever the call MAY HAVE BEEN BILLED,
         # even if its output was unusable — a request the provider refused
