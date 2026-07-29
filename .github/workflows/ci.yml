@@ -237,6 +237,37 @@ jobs:
     #
     # To revisit: fix the decorated-function abort, then re-measure yield
     # against a fresh defect census. Do not promote on runtime alone again.
+    #
+    # ----------------------------------------------------------------------
+    # CHARTER — what this gate cannot see, and how it fails.
+    # Required by docs/DAY-ONE-PROMPT.md 4a-bis, written next to the job because
+    # that is where someone reading a tick will look.
+    #
+    # CANNOT SEE:
+    #   * JavaScript, CSS, HTML templates or any browser behaviour. Measured:
+    #     ~46% of this project's defects live outside src/ Python entirely.
+    #   * module-level constants and config tables - about 35% of
+    #     src/product_app sits outside every `def`, including the pricing table
+    #     and the spend caps. Three of the five measured silent passes were
+    #     money configuration.
+    #   * decorated functions - 34 of 40 under src/product_app are unmutatable
+    #     by mutmut 3.6.0; 7% of pull requests abort on this.
+    #   * pure deletions - there is no surviving line to mutate.
+    #   * a defect of OMISSION. Mutation testing perturbs code that EXISTS; it
+    #     can say nothing about the case nobody handled, which is the shape of
+    #     most of this repo's escaped defects.
+    #
+    # ITS OWN FAILURE MODES - the line #158 earned:
+    #   * It can exit NON-ZERO without having measured anything. In the log that
+    #     looks like `failed to collect stats. runner returned 1`, and it means
+    #     the suite could not run inside ./mutants/ - a statement about the gate,
+    #     not about the diff.
+    #   * It can exit ZERO without having measured anything, when the changed
+    #     functions produce an empty scope. The recipe now says so in words.
+    #   * So NEITHER tick is evidence. Open the log and find the score. Measured
+    #     2026-07-29: 11 of the last 11 pull-request runs produced no score at
+    #     all - ten green, one red.
+    # ----------------------------------------------------------------------
     continue-on-error: true
     #
     # Scope is CHANGED FUNCTIONS vs the base branch, not whole modules — see
@@ -322,3 +353,4 @@ jobs:
       #   with:
       #     openai-api-key: ${{ secrets.OPENAI_API_KEY }}
       #     prompt-file: .github/codex/pr-review.md
+

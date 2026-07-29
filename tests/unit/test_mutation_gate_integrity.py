@@ -622,3 +622,36 @@ def test_recipe_clears_stale_mutant_metadata(mutation_recipe: str) -> None:
         "the recipe does not clear mutants/; a crashed run would be scored "
         f"against a previous run's metadata:\n{mutation_recipe}"
     )
+
+
+def test_the_abort_message_names_the_copied_tree_cause(mutation_recipe: str) -> None:
+    """The failure text sent the last reader to the wrong file (#158).
+
+    When `mutmut run` dies at `failed to collect stats` the recipe prints the
+    diagnosis. It used to assert one cause — "usually a repo-root file missing
+    from `[tool.mutmut].also_copy`" — and on #158 that was simply wrong: nothing
+    was missing. The real cause was a guard resolving the repository root from
+    `__file__`, which inside `./mutants/` reads the copy and counts the mutation
+    runner's own generated variants. The message cost real diagnosis time by
+    being confidently specific about the wrong thing.
+
+    Both causes must be named, and the message must say plainly that the job
+    measured nothing — otherwise a red gate reads as a verdict on the diff.
+
+    Turns red if: the copied-tree cause or the "no score was produced" warning
+    is dropped from the recipe's failure branch.
+    """
+    assert "also_copy" in mutation_recipe, (
+        "the also_copy cause was dropped; it is still the second-most-likely "
+        "reason the suite cannot run inside ./mutants/"
+    )
+    assert "__file__" in mutation_recipe, (
+        "the failure message does not name the copied-tree cause. #158 aborted "
+        "on a guard resolving the repo root from __file__ while the message "
+        "pointed at also_copy, where nothing was wrong."
+    )
+    assert "NOT ABOUT YOUR DIFF" in mutation_recipe, (
+        "the failure message no longer says the exit code is about the gate "
+        "rather than the change — which is what made a red gate read as a "
+        "verdict on the diff in #158"
+    )

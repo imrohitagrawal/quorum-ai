@@ -138,6 +138,42 @@ command, run under heavier machine load):
 | R2 | 2026-07-19 | 504 | 333 | 43 | 126 | 2 | 88.6% |
 | R3 | 2026-07-19 | 504 | 336 | 43 | 123 | 2 | 88.7% |
 
+### The 2026-07-29 repair probe — deliberately NOT a row in the table above
+
+**This is a PROBE, not a baseline.** It is kept out of the per-run table on
+purpose: the guard in `tests/test_mutation_baseline_doc.py` cross-checks any
+recorded run against the `**total**` survivor row, and a 2-mutant probe cannot
+satisfy that. Widening the guard to admit it was tried and reverted — bending a
+check to fit a throwaway artifact is the failure this document is about. It
+exists to answer the question `docs/metrics/mutation-gate-study.md` §9 left open:
+*does the repaired gate produce a score at all?* It scoped one function
+(`untrusted_text.fence`, engaged by a deliberate temporary edit that was reverted)
+and printed:
+
+```
+mutants scored: 2 killed, 0 survived, 0 timeout (excluded), 0 no-tests
+mutation score (killed / (killed+survived)) = 100.0% (threshold 80%)
+```
+
+Run immediately before it on the **same tree** with the pre-#158 root resolution
+restored, the same command aborted at `assert 514 <= 55` /
+`failed to collect stats` and scored nothing. That pair is the causal evidence
+that the root-resolution repair is what produced the number.
+
+**Runtime, and its evidential status.** These came from the probe run's console
+output and `build/mutation/` is a gitignored build directory that has since been
+cleared, so **the log is gone and these three numbers are NOT independently
+reproducible**. Recorded as a first indication, not as the measurement #137 asks
+for; anyone promoting the gate on runtime must re-measure and keep the log.
+
+**First indication for #137** (p90 CI runtime was previously an
+extrapolation from two local points): mutant *generation* took **23.4s** for the
+whole tree (23 files mutated, 9,370 mutants generated) before scoping filtered
+execution to 2, which then ran at **7.32 mutations/second**. Generation cost is
+therefore close to fixed per run regardless of scope size — the part that scales
+with scope is execution. This is a 10-core laptop; a 2-core CI runner will be
+slower. Still not a p90 measurement.
+
 Per-module, captured from `mutants/**/*.py.meta` for R1/R2/R3:
 
 | Module (changed functions only) | mutants | killed | survived | timeout | no-tests |

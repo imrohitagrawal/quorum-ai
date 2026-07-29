@@ -405,6 +405,23 @@ influence, not enforcement.
   `src/` Python changed. That branch working is itself the repair — but §7.1
   says a green advisory job is not evidence it ran, and that applies to this
   work too. The first PR touching `src/` Python is the real proof.
+
+  > **Updated 2026-07-29.** That first PR arrived (#157) and the gate **aborted
+  > without scoring** — #158. Cause: a guard resolving the repository root from
+  > `__file__`, which inside `./mutants/` counts the mutation runner's own
+  > generated variants (514 against a bound of 55). Repaired; the same command on
+  > the same tree now prints `2 killed, 0 survived, 0 no-tests → 100.0%`, and
+  > re-introducing the old resolution reproduces the abort exactly. That pair is
+  > recorded as run **P1** in `mutation-baseline.md` §3.
+  >
+  > **Still open, and it is the same open question one level up:** the repair is
+  > proven LOCALLY. It has not yet been proven in CI, because scoring requires a
+  > pull request that changes `src/` Python and the repair itself does not.
+  > Measured while auditing this: **11 of the last 11 pull-request runs of this
+  > job produced no score** — ten reported `success`, one reported `failure`.
+  > Neither tick carried information. The job now says so in words on the
+  > empty-scope branch, and its charter in `ci.yml` states that it can exit
+  > non-zero having measured nothing.
 - **The new `no_tests` hard-fail conflicts with the recorded baseline.** §3 of
   `mutation-baseline.md` records `no-tests = 2` on all five baseline runs, and
   §3.2 deliberately deferred fixing them. The gate would now fail that state.

@@ -79,7 +79,11 @@ validate-strict: check-python fr-completeness
 # docs/18. Stdlib-only, like the other factory validators, so it runs without
 # a uv environment. Part of the `validate` chain and build-failing in CI.
 fr-completeness: check-python
-	$(PYTHON) scripts/validate_fr_completeness.py
+	@# --min-requirements: every check in this gate is "no requirement lacks a
+	@# row", which passes trivially over zero requirements. Measured: truncating
+	@# the requirements doc to 2 sections dropped the parsed count from 29 to 14
+	@# and the gate still printed OK. The floor is the positive partner.
+	$(PYTHON) scripts/validate_fr_completeness.py --min-requirements 25
 
 # Regenerate openapi.yaml from app.openapi() (a fresh FastAPI app instance).
 openapi-export:
@@ -428,12 +432,35 @@ mutation-baseline:
 		rm -rf mutants; \
 		SENTRY_DSN= OPENROUTER_LIVE_EXECUTION_ENABLED=false QUORUM_RUNTIME_ENVIRONMENT=ci QUORUM_TOKEN_SECRET=mutation-baseline UV_CACHE_DIR=$(UV_CACHE_DIR) \
 			uv run mutmut run --max-children $(MUTMUT_MAX_CHILDREN) $$(tr '\n' ' ' < build/mutation/scope.txt) > build/mutation/run.log 2>&1 \
-			|| { tail -40 build/mutation/run.log; echo "mutation-baseline: mutmut run failed — see build/mutation/run.log"; echo "  'failed to collect stats' == the suite cannot run inside ./mutants/, usually a repo-root file missing from [tool.mutmut].also_copy (guarded by tests/unit/test_mutation_copy_completeness.py)"; exit 1; }; \
+			|| { tail -40 build/mutation/run.log; \
+			echo "mutation-baseline: mutmut run failed — see build/mutation/run.log"; \
+			echo "  THIS EXIT CODE IS ABOUT THE GATE, NOT ABOUT YOUR DIFF. No mutation"; \
+			echo "  score was produced. A red job here is not evidence that anything"; \
+			echo "  was measured — read the log and find the number before blaming the change."; \
+			echo "  'failed to collect stats' == the suite could not run inside ./mutants/."; \
+			echo "  Two causes, in the order they actually occur:"; \
+			echo "    1. a check that resolves the repo root from __file__/parents[n]. Inside"; \
+			echo "       ./mutants/ that points at the COPY, whose src/ carries one generated"; \
+			echo "       x_<name>__mutmut_N variant per mutant — so any census of the source"; \
+			echo "       counts mutmut's own output and blows its bound (#158). Resolve with"; \
+			echo "       tests/repo_root.find_repo_root, or mark the module repo_introspection."; \
+			echo "    2. a repo-root file missing from [tool.mutmut].also_copy"; \
+			echo "       (guarded by tests/unit/test_mutation_copy_completeness.py)."; \
+			exit 1; }; \
 		tail -40 build/mutation/run.log; \
 		printf '%s' "$$MUTMUT_SCOPE_PY" | $(PYTHON) - report $(DIFF_BASE) $(MUTATION_MIN_SCORE) > build/mutation/score.txt; \
-		status=$$?; cat build/mutation/score.txt; exit $$status; \
+		status=$$?; cat build/mutation/score.txt; \
+		if [ $$status -eq 0 ] && ! grep -qE 'mutation score .* = [0-9.]+%|UNMEASURED' build/mutation/score.txt; then \
+			echo "mutation-baseline: the scope was NON-EMPTY and the run exited 0, but"; \
+			echo "  build/mutation/score.txt contains no score and no UNMEASURED verdict."; \
+			echo "  A gate measures or it fails — refusing to pass having produced no number."; \
+			exit 1; fi; \
+		exit $$status; \
 	else \
 		echo "no MUTATABLE changed functions under src/ vs $(DIFF_BASE) — nothing to mutate (any exclusions are named above)"; \
+		echo "mutation-baseline: NO SCORE WAS PRODUCED. This job is green because there"; \
+		echo "  was nothing in scope, not because anything was measured. Do not cite this"; \
+		echo "  run as evidence the gate works — that was #130's exact mistake."; \
 	fi
 
 # R2 P0-G: changed-lines coverage vs $(DIFF_BASE) must be >= $(DIFF_COVER_MIN)%.
@@ -456,7 +483,15 @@ diff-cover:
 	UV_CACHE_DIR=$(UV_CACHE_DIR) uv run diff-cover build/coverage/coverage.xml \
 		--compare-branch=$(DIFF_BASE) \
 		--fail-under=$(DIFF_COVER_MIN) \
-		--markdown-report build/coverage/diff-cover.md
+		--markdown-report build/coverage/diff-cover.md \
+		--format json:build/coverage/diff-cover.json
+	@# FAIL-CLOSED FLOOR. `--fail-under` computes its percentage over the lines
+	@# diff-cover could map to the report; when it maps NONE the denominator is
+	@# empty, the percentage reads 100, and this BLOCKING gate exits 0. Measured
+	@# 2026-07-29: two uncovered new lines in fence() plus a report with no
+	@# packages gave "No lines with coverage information in this diff" and rc=0.
+	@# Same shape as #130 and #158 — a status with no measurement behind it.
+	@$(PYTHON) scripts/check_diff_cover_measured.py --base $(DIFF_BASE)
 
 security-scan: check-python
 	$(PYTHON) scripts/security_scan.py

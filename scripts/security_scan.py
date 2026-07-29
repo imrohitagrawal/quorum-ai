@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import re
+import sys
 from dataclasses import asdict, dataclass
 from datetime import UTC, datetime
 from pathlib import Path
@@ -19,6 +20,15 @@ EXCLUDED_DIRS = {
     "build",
     "dist",
     "htmlcov",
+    # The mutation runner's generated copy of the project. Every file in it is a
+    # duplicate of one already scanned in its real location, and the directory is
+    # gitignored so nothing here can ever be committed. Excluding it LOSES NO
+    # COVERAGE and removes a false positive: the `tests/` exemptions below are
+    # keyed on a path starting with "tests/", which `mutants/tests/...` does not,
+    # so after any local `make mutation-baseline` the copies of exempt test files
+    # were reported as secret assignments. Measured 2026-07-29: 35 such findings,
+    # every one a copy of an already-exempt file.
+    "mutants",
 }
 
 # A bare Python identifier or attribute access on the right-hand side of an
@@ -42,6 +52,14 @@ TEXT_SUFFIXES = {
 }
 
 
+#: Floor on the number of files the scan must actually read.
+#:
+#: Measured 2026-07-29: the scan reads well over 400 files. The floor is set
+#: far below that so ordinary churn never trips it, while zero — or a handful,
+#: which is what a broken root or ignore rule produces — still fails.
+MINIMUM_FILES_SCANNED = 50
+
+
 @dataclass(frozen=True)
 class SecurityFinding:
     check_id: str
@@ -51,7 +69,7 @@ class SecurityFinding:
 
 
 def main() -> int:
-    findings = _run_checks()
+    findings, scanned = _run_checks()
     REPORT_PATH.parent.mkdir(parents=True, exist_ok=True)
     report = {
         "generated_at": datetime.now(UTC).isoformat(),
@@ -64,6 +82,7 @@ def main() -> int:
             "browser_secret_terms",
         ],
         "finding_count": len(findings),
+        "files_scanned": scanned,
         "findings": [asdict(finding) for finding in findings],
     }
     REPORT_PATH.write_text(json.dumps(report, indent=2) + "\n", encoding="utf-8")
@@ -71,13 +90,37 @@ def main() -> int:
         for finding in findings:
             print(f"{finding.path}:{finding.line}: {finding.check_id}: {finding.message}")
         return 1
-    print(f"Security scan passed. Report: {REPORT_PATH.relative_to(ROOT)}")
+    # FAIL-CLOSED FLOOR. Every check here is "no line matches a secret pattern",
+    # which is trivially true over zero lines. If `_iter_text_files()` ever
+    # returns nothing — a moved root, a changed ignore rule, a bad cwd — this
+    # BLOCKING gate prints "Security scan passed" and exits 0 having read no
+    # files at all. The count is the positive partner the finding count needs.
+    if scanned < MINIMUM_FILES_SCANNED:
+        print(
+            f"Security scan FAILED TO MEASURE: only {scanned} file(s) were read "
+            f"(floor {MINIMUM_FILES_SCANNED}). Zero findings over zero files is not "
+            "a clean scan, it is no scan. Check that the scan root still resolves "
+            "and that the ignore rules did not swallow the tree.",
+            file=sys.stderr,
+        )
+        return 1
+    print(
+        f"Security scan passed ({scanned} files scanned, 0 findings). "
+        f"Report: {REPORT_PATH.relative_to(ROOT)}"
+    )
     return 0
 
 
-def _run_checks() -> list[SecurityFinding]:
+def _run_checks() -> tuple[list[SecurityFinding], int]:
+    """Return the findings AND how many files were actually read.
+
+    The count is not decoration: zero findings is only meaningful alongside
+    a non-zero number of files scanned.
+    """
     findings: list[SecurityFinding] = []
+    scanned = 0
     for path in _iter_text_files():
+        scanned += 1
         relative = path.relative_to(ROOT).as_posix()
         text = path.read_text(encoding="utf-8", errors="replace")
         for line_number, line in enumerate(text.splitlines(), start=1):
@@ -123,7 +166,7 @@ def _run_checks() -> list[SecurityFinding]:
                     message="Browser UI route must not render provider key material.",
                 )
             )
-    return findings
+    return findings, scanned
 
 
 def _iter_text_files() -> list[Path]:
