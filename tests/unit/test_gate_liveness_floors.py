@@ -29,6 +29,7 @@ from pathlib import Path
 from types import ModuleType
 
 import pytest
+from tests.code_text import code_without_comments
 from tests.repo_root import find_repo_root
 
 REPO_ROOT = find_repo_root(Path(__file__))
@@ -397,14 +398,13 @@ def test_the_requirement_gate_floor_is_wired_into_the_makefile() -> None:
 
     Turns red if: `make fr-completeness` stops passing --min-requirements.
     """
-    recipe = (REPO_ROOT / "Makefile").read_text(encoding="utf-8")
+    # Comments stripped BEFORE searching. The first version of this test asserted
+    # `"--min-requirements" in recipe` and the same commit had added a comment
+    # above the recipe explaining the flag — so deleting the real flag left the
+    # test GREEN. Anchoring to the invocation fixed that instance; reading only
+    # the code fixes the whole class, and is what a future guard should copy.
+    recipe = code_without_comments(REPO_ROOT / "Makefile")
 
-    # Anchored to the INVOCATION, not the bare flag name. Measured: the first
-    # version of this test asserted `"--min-requirements" in recipe`, and the
-    # same commit had added a comment above the recipe explaining the flag — so
-    # deleting the real flag left the test GREEN. A substring pin matched the
-    # explanation of the thing instead of the thing. That is the defect class
-    # this whole change is about, reintroduced two tests after fixing it.
     assert "validate_fr_completeness.py --min-requirements" in recipe, (
         "make fr-completeness no longer switches the floor on, so the blocking "
         "gate is back to passing over a corpus that stopped parsing"

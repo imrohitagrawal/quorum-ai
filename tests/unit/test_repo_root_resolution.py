@@ -16,7 +16,10 @@ are meant to detect.
 
 from __future__ import annotations
 
-import ast
+import os
+import shutil
+import subprocess
+import sys
 from pathlib import Path
 
 import pytest
@@ -104,70 +107,70 @@ def test_it_fails_loudly_when_there_is_no_repository(tmp_path: Path) -> None:
         find_repo_root(module)
 
 
-def test_the_guard_module_resolves_its_root_through_the_helper() -> None:
-    """The shipped call site must not go back to a parent count.
+def test_the_guard_module_resolves_out_of_a_copied_tree_FOR_REAL(tmp_path: Path) -> None:
+    """Run the guard inside a copied tree and see where its root actually lands.
 
-    **This is a SOURCE pin, and it is one deliberately.** An earlier version of
-    this test asserted only that ``REPO_ROOT`` had a ``pyproject.toml`` and a
-    ``src/product_app`` under it and was not named ``mutants``. In an ordinary
-    checkout ``Path(__file__).resolve().parents[2]`` satisfies all three — so
-    the test was GREEN with the #158 defect fully present, and would only ever
-    have gone red under the mutation runner, which is not the runner CI gates
-    on. It was a test that passed when the feature was absent: the exact defect
-    class this module's own docstring is about. Caught by adversarial review,
-    then reproduced.
+    **This replaces four failed attempts to pin the source, and the reason it is
+    different in kind is the point.** Each earlier version asserted a *description*
+    of the fix and was defeated by a different spelling of the defect:
 
-    A behavioural assertion cannot distinguish the two here, because outside a
-    copied tree the correct answer and the buggy answer are the same path. So
-    the property that actually differs — which expression computes the root — is
-    asserted directly, against the source.
+    1. asserted properties ``parents[2]`` also satisfies — green with the bug present;
+    2. searched for ``parents[`` — matched the module's own docstring explaining it;
+    3. banned any ``.parents`` attribute — evadable by ``.parent.parent.parent``,
+       and it false-fired on legitimate use;
+    4. pinned ``REPO_ROOT`` to an ``ast.Call`` — evadable two ways, both measured:
+       a LATER reassignment (``next()`` takes the first ``Assign``, Python runs the
+       last) and a module-local function shadowing the import.
 
-    Turns red if: the guard module computes its root from ``parents[...]`` again,
-    or stops importing the resolver.
+    A description of a defect has unbounded spellings. The defect itself has one
+    observable consequence: **inside the mutation runner's copy, the root lands on
+    the copy.** So build that copy and look. No spelling can fake this, because it
+    is not read from the source at all.
+
+    Turns red if: the guard computes its root from a parent count in ANY spelling,
+    reassigns it afterwards, or shadows ``find_repo_root`` with a local definition.
     """
-    from tests.unit import test_mutation_test_set_integrity as guard
+    # A repository with a generated copy inside it, exactly as the runner leaves it:
+    # the copy carries pyproject.toml and src/product_app so that a buggy root
+    # STILL satisfies every existence check — that is what made attempt 1 vacuous.
+    (tmp_path / ".git").mkdir()
+    copy = tmp_path / "mutants"
+    (copy / "tests" / "unit").mkdir(parents=True)
+    (copy / "src" / "product_app").mkdir(parents=True)
+    (copy / "src" / "product_app" / "__init__.py").write_text("", encoding="utf-8")
+    (copy / "pyproject.toml").write_text("[tool.x]\n", encoding="utf-8")
+    (copy / "tests" / "__init__.py").write_text("", encoding="utf-8")
+    (copy / "tests" / "unit" / "__init__.py").write_text("", encoding="utf-8")
 
-    source = Path(guard.__file__).read_text(encoding="utf-8")
-    tree = ast.parse(source)
+    real = find_repo_root(Path(__file__))
+    shutil.copy2(real / "tests" / "repo_root.py", copy / "tests" / "repo_root.py")
+    guard_name = "test_mutation_test_set_integrity"
+    shutil.copy2(
+        real / "tests" / "unit" / f"{guard_name}.py",
+        copy / "tests" / "unit" / f"{guard_name}.py",
+    )
 
-    assert "find_repo_root" in source, (
-        "the mutation-test-set guard no longer resolves its root through "
-        "tests/repo_root.py; inside the mutation runner's copy it will count the "
-        "runner's own generated variants again (#158)"
+    # Import the guard FROM INSIDE THE COPY and ask it where its root is.
+    probe = subprocess.run(
+        [
+            sys.executable,
+            "-c",
+            f"from tests.unit.{guard_name} import REPO_ROOT; print(REPO_ROOT)",
+        ],
+        cwd=copy,
+        env={**os.environ, "PYTHONPATH": str(copy)},
+        capture_output=True,
+        text=True,
     )
-    # Pinned at the ASSIGNMENT, not by scanning the file for a forbidden token.
-    #
-    # Two earlier attempts were both wrong, and both in ways this repository has
-    # paid for before. A substring search for ``parents[`` matched the module's
-    # own docstring EXPLAINING the defect. Widening to "no ast.Attribute named
-    # parents anywhere" then (a) false-fired on any legitimate ``path.parents``
-    # use elsewhere in the module and (b) was still evadable by spelling the same
-    # bug ``.parent.parent.parent`` — measured: that spelling plus a comment
-    # mentioning find_repo_root passed both ruff and the test.
-    #
-    # Asserting what REPO_ROOT must BE closes all three: it is a call to
-    # find_repo_root, or it is not this module's contract.
-    assignment = next(
-        (
-            node
-            for node in tree.body
-            if isinstance(node, ast.Assign)
-            and any(isinstance(t, ast.Name) and t.id == "REPO_ROOT" for t in node.targets)
-        ),
-        None,
+    assert probe.returncode == 0, f"the guard did not import inside the copy:\n{probe.stderr}"
+    resolved = Path(probe.stdout.strip())
+
+    assert resolved == tmp_path.resolve(), (
+        f"the guard resolved its root to {resolved} from inside the copy at {copy}. "
+        "It must resolve to the REAL repository root. Landing on the copy is #158: "
+        "every census it takes then counts the mutation runner's own generated "
+        "variants instead of the real source."
     )
-    assert assignment is not None, "the guard no longer defines REPO_ROOT at module level"
-    assert (
-        isinstance(assignment.value, ast.Call)
-        and isinstance(assignment.value.func, ast.Name)
-        and assignment.value.func.id == "find_repo_root"
-    ), (
-        f"REPO_ROOT (line {assignment.lineno}) is not a call to find_repo_root. Any "
-        "parent-count spelling — parents[2], .parent.parent.parent — lands on the "
-        "mutation runner's copy and counts its generated variants (#158)."
+    assert resolved != copy.resolve(), (
+        "the guard resolved to the generated copy — this is #158 exactly."
     )
-    # Positive partner: the pin above is about HOW the root is computed; this is
-    # that the answer is still usable. Without it, deleting REPO_ROOT entirely
-    # would satisfy both assertions above.
-    assert (guard.REPO_ROOT / "pyproject.toml").is_file()
-    assert (guard.REPO_ROOT / "src" / "product_app" / "__init__.py").is_file()

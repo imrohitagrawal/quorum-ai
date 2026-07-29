@@ -436,6 +436,38 @@ Two specific traps, both paid for:
 - **A "detects and reports UNMEASURED, then exits 0" gate is still lying.** The
   log is honest and the status is not, and the status is what people read.
 
+**Rule: a guard test must assert against STRUCTURE, never against a substring of
+a file — and when you must read a file, strip the prose first.**
+Measured the hard way: four consecutive attempts to pin one property, each
+defeated by a different spelling.
+
+| Attempt | How it failed |
+|---|---|
+| assert properties the correct answer also has | green with the defect present |
+| `assert "parents[" not in source` | matched the docstring EXPLAINING the defect |
+| ban the AST attribute `.parents` | evadable by `.parent.parent.parent`; false-fired on legitimate use |
+| pin the assignment to a named call | evadable by a LATER reassignment, and by a local function shadowing the import |
+
+The pattern: **a description of a defect has unbounded spellings; the defect
+itself has one observable consequence.** Assert the consequence. The version that
+finally held does not read the source at all — it builds the copied tree the bug
+occurs in, runs the module inside it, and checks where the answer lands. It
+catches all four attacks because none of them can change what the code *does*.
+
+Two corollaries worth carrying:
+
+- **A substring search over a file matches the prose that explains the thing, not
+  the thing.** Comments and docstrings live in the same file as the code and are
+  written by the same person in the same commit — twice here, the explanation
+  added alongside a change was what kept its own guard green. If you must search
+  text, strip comments and docstrings first (`tests/code_text.py` is the worked
+  example).
+- **Do not answer this with a lint banning substring assertions.** Measured
+  before proposing it: **62 of 63** such assertions in this suite would be
+  flagged, nearly all against JavaScript and CSS where there is no parse to fall
+  back on. A rule that flags almost everything is switched off within a week.
+  Ship the positive tool and let guards opt in.
+
 **Rule: every gate ships with a CHARTER saying what it cannot see.**
 One paragraph, next to the gate. Ours would have read: *cannot see JavaScript,
 CSS, or browser tests; cannot see module-level constants or config tables;
