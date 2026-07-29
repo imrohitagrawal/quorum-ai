@@ -381,6 +381,16 @@ contributors alike, and every item below is from this one work package.
 | Two new tests asserting only on printed text | a mutation restoring `SystemExit(1)` left both green |
 | A unit test for the `no_tests` path using a mixed case | the real run hit a different branch and printed a false message |
 | A guard asserting `"sys.platform" in source` | flipping the constant to `"linux"` kept it green |
+| "the gate stayed broken for **months**" — shipped into 4 files | **~7 days**, and measured only after the operator challenged it. The abort is confirmed by log on 22 July and 28 July |
+| "#130 sat unfixed a long time" | it lived **71 minutes** and was caught the same evening — a sub-hour detection gap |
+| "`_DEFAULT_PRICE_PER_1K_INPUT` is pinned, therefore sound" | pinning makes drift visible; it does not derive the value. Measured later: it under-charges one shipped model by 25% (#151) |
+
+**The sharpest pattern, and it took the operator to name it:** every number
+produced by running a command was correct; every number written straight into
+prose was wrong. Narrative text was treated as a lower evidence bar than code,
+which is backwards — prose is what people read and act on. None of the prose
+errors were caught by self-review; all were caught by an adversarial reviewer
+or by the operator.
 
 The countermeasure is mechanical, not exhortative: CI, hooks, and tests proven
 to bite by mutation. Prose in a rulebook — including this document — is
