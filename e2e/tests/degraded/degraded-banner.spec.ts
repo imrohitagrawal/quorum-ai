@@ -123,30 +123,35 @@ test.describe("degraded-mode result banner (#26)", () => {
     // Honest denominator: 2 of 4 (four slots), not the dishonest 2 of 3.
     await expect(banner).toContainText(/2 of 4/i);
     await expect(banner).not.toContainText(/2 of 3/i);
-    // Honest narrative: the 1 failed slot must be named as a failure, NOT
-    // folded into "the rest are from local simulation" (which would be false).
-    await expect(banner).toContainText(/could not be retrieved because the provider failed/i);
+    // Honest narrative: the 1 missing slot must be named separately, NOT folded
+    // into "the rest are from local simulation" (which would be false).
+    //
+    // The copy is deliberately NEUTRAL about why the slot is empty. It used to
+    // say "could not be retrieved because the provider failed" — a cause the
+    // browser cannot know, and usually the wrong one: a live provider error
+    // becomes a SIMULATED answer in production, so an empty slot came from a
+    // cancel or the run deadline. Asserting an unverified cause is the defect
+    // this work package exists to remove, so the test must not demand it back.
+    await expect(banner).toContainText(/1 returned nothing/i);
+    await expect(banner).not.toContainText(/the provider failed/i);
     await expect(banner).not.toContainText(/the rest are from Quorum's local simulation/i);
   });
-});
 
-/**
- * RB-5 / D3 — the TRANSCRIPT-view demo-mode banner (#demo-mode-banner, rendered
- * by renderModelPanels) also derives its "N of M" from the served counts. Before
- * the fix it keyed the denominator and the all-live check on live_count +
- * local_count, so a provider-failure run (a FAILED OpenRouter slot is in neither
- * bucket) rendered the self-contradictory "3 of 3 model answers came from a live
- * provider; the remaining 0 are from ... simulation" and silently dropped the
- * failed slot. This gate pins the honest copy: "3 of 4 ... 1 could not be
- * retrieved", never "3 of 3".
- */
-test.describe("transcript demo-mode banner — failed-slot honesty (RB-5/D3)", () => {
-  test.skip(({ browserName }) => browserName !== "chromium", "reference run is chromium-only");
-
-  test("a provider-failure run shows 'N of slotCount' and names the failed slot", async ({
-    page,
-  }) => {
-    // 3 live + 0 local across 4 slots ⇒ 1 slot FAILED (neither live nor local).
+  test("a short panel is disclosed even when NOTHING was simulated", async ({ page }) => {
+    // The gap this test exists for. There are two ways a panel comes up short:
+    //
+    //   * an answer was SIMULATED        -> local_count goes up
+    //   * a slot produced NO answer      -> counted in NEITHER count
+    //
+    // A slot produces no answer when the user cancels it or the run deadline
+    // expires. Then local_count is 0, and a banner keyed on "were any answers
+    // simulated?" stays hidden — so the reader was shown a verdict and a
+    // synthesis built from three of four answers with no disclosure anywhere,
+    // while the headline still read "3 of 4 models aligned", which describes a
+    // disagreement rather than a missing answer.
+    //
+    // TURNS RED IF: renderResultDegraded goes back to keying `degraded` on
+    // `localCount > 0` alone — the banner is hidden here and toBeVisible fails.
     const completed = {
       ...goldenCompletedResp(),
       demo_mode: false,
@@ -155,17 +160,113 @@ test.describe("transcript demo-mode banner — failed-slot honesty (RB-5/D3)", (
     };
     await driveWithCompleted(page, completed);
 
-    // Assert on the message target directly — the banner container can flicker
-    // hidden→visible as the result settles, but toContainText auto-retries until
-    // the honest copy lands.
-    const message = page.locator("#demo-mode-banner [data-demo-mode-target]");
-    // Honest denominator + the failed slot surfaced.
-    await expect(message).toContainText(/3 of 4 model answers came from a live provider/i);
-    await expect(message).toContainText(/could not be retrieved because the provider failed/i);
-    // The regression this fixes: never the contradictory "3 of 3".
-    await expect(message).not.toContainText(/3 of 3/i);
+    const banner = page.locator("#result-degraded");
+    await expect(
+      banner,
+      "a panel missing an answer must be disclosed even though nothing was simulated",
+    ).toBeVisible();
+    await expect(banner).toContainText(/3 of 4/i);
+    await expect(banner).toContainText(/did not respond/i);
+    // Nothing was simulated on this run, so NEITHER the message NOR THE TITLE may
+    // say otherwise. The title is asserted separately and on purpose: an earlier
+    // version of this test used /simulation/i over the whole banner, which does
+    // NOT match the word "simulated" — so deleting the title branch left the
+    // title reading "Partly simulated result" on a run with nothing simulated,
+    // and this test still passed. /simulat/ catches both spellings.
+    await expect(banner).not.toContainText(/simulat/i);
+    await expect(page.locator("#result-degraded-title")).toHaveText(
+      /Incomplete result — not every model answered/,
+    );
+  });
+
+  test("a run that is PART simulated and PART missing names both, not just the simulation", async ({
+    page,
+  }) => {
+    // 0 live + 2 simulated across 4 slots ⇒ 2 slots returned nothing. The
+    // all-simulated copy claims "this WHOLE result ... comes from Quorum's local
+    // simulation", which is false here: half the panel came from nothing at all,
+    // and the clause that names missing slots was unreachable whenever
+    // live_count was 0.
+    //
+    // TURNS RED IF: describePanelShortfall loses its `noLive && missing > 0`
+    // branch and falls through to the fully-simulated sentence — that sentence
+    // says "this WHOLE result comes from Quorum's local simulation" and contains
+    // no number, so both assertions below fail.
+    const completed = {
+      ...goldenCompletedResp(),
+      demo_mode: true,
+      live_count: 0,
+      local_count: 2,
+    };
+    await driveWithCompleted(page, completed);
+
+    const banner = page.locator("#result-degraded");
+    await expect(banner).toBeVisible();
+    // BOTH shortfalls named, with their own counts: 2 simulated, 2 missing.
+    await expect(banner).toContainText(/2 came from Quorum's local simulation/i);
+    await expect(banner).toContainText(/2 returned nothing/i);
+    // And it must not claim the WHOLE result was simulated, which is the false
+    // sentence this case used to fall through to.
+    await expect(banner).not.toContainText(/whole result/i);
+  });
+
+  test("a run where NO model answered says so, instead of blaming simulation", async ({ page }) => {
+    // 0 live + 0 simulated across 4 slots ⇒ every slot returned nothing. Nothing
+    // was simulated, so "Simulated result — not from real models" would be false;
+    // and "based only on the answers that arrived" would be absurd, because none
+    // arrived.
+    //
+    // TURNS RED IF: describePanelShortfall loses its `allMissing` branch.
+    const completed = {
+      ...goldenCompletedResp(),
+      demo_mode: false,
+      live_count: 0,
+      local_count: 0,
+    };
+    await driveWithCompleted(page, completed);
+
+    const banner = page.locator("#result-degraded");
+    await expect(banner).toBeVisible();
+    await expect(page.locator("#result-degraded-title")).toHaveText(
+      /No result — no model answered/,
+    );
+    await expect(banner).toContainText(/None of the 4 models returned an answer/i);
+    await expect(banner).not.toContainText(/simulat/i);
   });
 });
+
+/*
+ * RB-5 / D3 lived here as a gate over `#demo-mode-banner [data-demo-mode-target]`,
+ * asserting the honest "3 of 4 ... 1 could not be retrieved" copy with
+ * `toContainText`. REMOVED (#115): `toContainText` does not require visibility,
+ * and that element measures 0x0 in every view — it sits inside the
+ * `section.panel.panel-section` that app.css hides by design. So a BLOCKING merge
+ * gate was certifying the honesty of markup no user can read, which reads as
+ * covered and is worse than no gate at all.
+ *
+ * The PROPERTY it pinned — a slot counted in NEITHER bucket must keep the true
+ * slot count as the denominator, and must be named as a failure rather than
+ * folded into "the rest are from local simulation" — is now pinned on a surface a
+ * user can actually see, by two tests above, both asserting toBeVisible() on
+ * `#result-degraded`.
+ *
+ * BE PRECISE ABOUT WHAT THAT DOES AND DOES NOT COVER. Those tests drive
+ * `renderResultDegraded`, a DIFFERENT function. `renderModelPanels` still
+ * contains its own copy of the same arithmetic for `#demo-mode-banner`, and after
+ * this removal NOTHING asserts on it: reverting its denominator to `live + local`
+ * leaves every e2e lane green. That code is invisible to users, so this is a
+ * coverage gap over dead output rather than an unguarded user-facing behaviour —
+ * but it is a gap, it is recorded on #115, and moving the banner out of the
+ * hidden section (#115) must bring a gate with it. The two tests are:
+ *   * "a run with a FAILED provider slot keeps the honest 'of 4' denominator"
+ *     (2 live + 1 simulated + 1 failed) covers the mixed case and the copy.
+ *   * "a short panel is disclosed even when NOTHING was simulated"
+ *     (3 live + 0 simulated + 1 missing) covers the case that had no banner.
+ *
+ * When `#demo-mode-banner` is moved OUT of the hidden section so the transcript
+ * view regains a run-level disclosure (#115), a gate for it belongs here again —
+ * asserting toBeVisible(), never toContainText alone.
+ */
 
 /**
  * OC-5 — the misleading-output gate (S3, FR-016). The DEBT-012 laundering shape

@@ -4327,17 +4327,6 @@ html[data-theme="dark"] .workflow-step[data-state="completed"] .workflow-step-nu
 
 .model-card-meta strong { color: var(--ink); }
 
-.model-card-notice {
-  margin: 0;
-  padding: var(--space-3) var(--space-4);
-  background: var(--warning-soft);
-  color: var(--warning);
-  border-radius: var(--radius-sm);
-  font-size: 0.85rem;
-  line-height: 1.5;
-  border-left: 3px solid var(--warning);
-}
-
 .source-list {
   margin: 0;
   padding: 0;

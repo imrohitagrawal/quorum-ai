@@ -226,6 +226,40 @@ test.describe("F-12 — export completeness and section expanders", () => {
     ).toBeLessThan(verdict);
   });
 
+  test("the export tells the same story as the screen when nothing was simulated", async ({
+    page,
+  }) => {
+    // The export and the banner each carried their OWN copy of this logic, with
+    // different words. For 3 live + 0 simulated + 1 missing, the file said
+    // "Partly simulated result." while the screen said "Incomplete result — not
+    // every model answered" — and nothing was simulated on that run, so the file
+    // was the dishonest one. A kept file is the copy most likely to be read
+    // without the screen beside it. Both now share describePanelShortfall.
+    //
+    // TURNS RED IF: buildResultMarkdown goes back to its own two-variant copy.
+    const resp = goldenCompletedResp() as any;
+    resp.demo_mode = false;
+    resp.live_count = 3;
+    resp.local_count = 0;
+    await driveToResult(page, resp);
+
+    const onScreen = await page
+      .locator("#result-degraded-title")
+      .textContent();
+    expect(onScreen).toMatch(/Incomplete result — not every model answered/);
+
+    const md = await exportedMarkdown(page);
+    expect(
+      md,
+      "the exported file must carry the same disclosure the screen showed"
+    ).toMatch(/Incomplete result — not every model answered/);
+    expect(md).toMatch(/3 of 4 models answered/);
+    expect(
+      md,
+      "nothing was simulated on this run, so the file must not say it was"
+    ).not.toMatch(/simulat/i);
+  });
+
   test("the export marks answers the length limit cut short", async ({ page }) => {
     await driveToResult(page);
     const md = await exportedMarkdown(page);

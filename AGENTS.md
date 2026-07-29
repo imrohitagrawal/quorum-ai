@@ -134,8 +134,18 @@ this file. But when you touch the workspace UI (`src/product_app/static/app.js`,
   - `visual-snapshots.spec.ts` — human-reviewed `toHaveScreenshot` baselines for
     the result + transcript views (Linux baselines seeded in CI; see
     `.github/workflows/seed-visual-baselines.yml`).
-  - `degraded-banner.spec.ts` — the result view must surface a simulated/degraded
-    banner whenever `live_count < 4`, so simulated output is never shown as real.
+  - `degraded-banner.spec.ts` — the result view must surface a degraded banner
+    whenever the panel came up SHORT, so an incomplete run is never shown as a
+    complete one. Note this line **described a contract the code did not have**
+    until WP-H: the banner was keyed on `local_count > 0` — "were any answers
+    simulated?" — which is blind to a slot that produced *no* answer (cancelled,
+    or the run deadline expired). Such a slot is counted in neither `live_count`
+    nor `local_count`, so a run with three live answers and one missing showed no
+    banner at all while the headline read "3 of 4 models aligned". The condition
+    is now `local_count > 0 || missing > 0` — equivalent to
+    `live_count < slot_count` **whenever `live + local <= slot_count`**, which is
+    all the server can emit. So the sentence above is true as written *now*, and
+    was not before. A doc asserting a contract is not the contract.
 - **A new provider-text surface must route through the markdown renderer**
   (`setProse` for block prose, `setInlineProse` for inline/cell surfaces) — never
   raw `textContent`/`mkEl`. Source titles are the one exception (provider

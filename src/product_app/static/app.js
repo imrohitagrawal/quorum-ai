@@ -2173,11 +2173,87 @@
   // the verdict/synthesis as if real. This makes the fallback visible so
   // simulated output can never be mistaken for a real model panel. Shown
   // whenever fewer than all answers were live (any local/fallback answer).
+  // A panel can come up short in TWO independent ways, and any combination of
+  // the two is reachable: answers that were SIMULATED, and slots that returned
+  // NOTHING (cancelled, or the run deadline expired — counted in neither
+  // live_count nor local_count). Four combinations therefore need four different
+  // sentences, and getting any of them wrong is its own dishonesty: saying
+  // "simulated" about a run where nothing was simulated is as wrong as saying
+  // nothing at all.
+  //
+  // This is a SINGLE function on purpose. The banner and the exported Markdown
+  // both describe the same shortfall, and they previously each carried their own
+  // copy of the logic with different words — so the file a user kept disagreed
+  // with the screen they read it from (the same class of defect as #128). Two
+  // callers, one description: they cannot drift.
+  function describePanelShortfall({ live, simulated, missing, total }) {
+    const t = total ?? 4;
+    const allMissing = live === 0 && simulated === 0;
+    const noLive = live === 0;
+    const title = allMissing
+      ? "No result — no model answered"
+      : noLive
+        ? "Simulated result — not from real models"
+        : simulated === 0
+          ? "Incomplete result — not every model answered"
+          : "Partly simulated result";
+    let message;
+    if (allMissing) {
+      message =
+        `None of the ${t} models returned an answer, so there is nothing below to rely on. ` +
+        "Anything shown as a verdict or synthesis was not produced from model output.";
+    } else if (noLive && missing > 0) {
+      // Its own sentence. Appending "and N returned nothing" to the sentence
+      // below produced "this WHOLE result comes from local simulation … a further
+      // 3 of 4 returned nothing at all", which contradicts itself.
+      message =
+        `None of the ${t} answers came from a live provider: ${simulated} came from ` +
+        `Quorum's local simulation and ${missing} returned nothing. ` +
+        "Treat this as a demo, not a real model panel.";
+    } else if (noLive) {
+      // The fully-simulated case, and the only one this sentence is true for.
+      // Pinned by the export gate, so keep the wording.
+      message =
+        "Live execution was unavailable, so this whole result — the answers, the debate, and the synthesis — comes from Quorum's local simulation, not from a real provider. Treat it as a demo, not a real model panel.";
+    } else if (simulated === 0) {
+      message =
+        `Only ${live} of ${t} models answered; ${missing} did not respond. ` +
+        "The verdict and synthesis below are built only from the answers that arrived — read them as a partial panel, not the full one.";
+    } else {
+      // Name the missing slots explicitly rather than folding them into "the
+      // rest are from local simulation", which would be false for a slot that
+      // produced nothing.
+      //
+      // The wording is deliberately NEUTRAL about the cause. It read "could not
+      // be retrieved because the provider failed", which asserts a cause the
+      // browser cannot know — and which is usually wrong: in production a live
+      // provider error is turned into a SIMULATED answer, so a slot in neither
+      // bucket got there by a user cancel or the run deadline expiring, not by a
+      // provider failing. Stating an unverified cause confidently is the same
+      // defect this work package exists to remove.
+      const remainder =
+        missing > 0
+          ? `${simulated} ${simulated === 1 ? "is" : "are"} from Quorum's local simulation and ` +
+            `${missing} returned nothing`
+          : "the rest are from Quorum's local simulation";
+      message =
+        `Only ${live} of ${t} answers came from a live provider; ${remainder}. ` +
+        "The verdict and synthesis below mix real and simulated output — do not rely on them as a fully live result.";
+    }
+    return { title, message };
+  }
+
+  // A count is only usable if it is a non-negative WHOLE number. A float or a
+  // negative (a buggy or hostile payload) otherwise flows straight into the
+  // arithmetic and produces "-1 are from Quorum's local simulation", or a
+  // degraded warning on a run that was entirely live.
+  const isUsableCount = (n) => Number.isInteger(n) && n >= 0;
+
   function renderResultDegraded(result) {
     const banner = el("result-degraded");
     if (!banner) return;
-    const liveCount = Number.isFinite(result.live_count) ? result.live_count : null;
-    const localCount = Number.isFinite(result.local_count) ? result.local_count : null;
+    const liveCount = isUsableCount(result.live_count) ? result.live_count : null;
+    const localCount = isUsableCount(result.local_count) ? result.local_count : null;
     // RB-5/D3: the denominator is the TRUE slot count, not ``live + local``.
     // A slot that FAILED on the OpenRouter path is counted in NEITHER live_count
     // nor local_count (it is neither a live answer nor a simulation), so
@@ -2199,34 +2275,49 @@
       slotCount != null && liveCount != null && localCount != null
         ? Math.max(0, slotCount - liveCount - localCount)
         : 0;
-    // Degraded when any answer was NOT live. Prefer the explicit counts; fall
-    // back to the ``demo_mode`` boolean when counts are absent (older payload).
-    const degraded =
-      localCount != null ? localCount > 0 : result.demo_mode === true;
+    // Degraded when the panel came up SHORT — in EITHER of the two ways it can.
+    // Keying this on ``localCount > 0`` alone saw only the first of them:
+    //
+    //   * an answer was SIMULATED          -> counted in localCount
+    //   * a slot produced NO answer at all -> counted in NEITHER count
+    //
+    // A slot produces no answer when the user cancels it or the run deadline
+    // expires. That run has localCount 0, so the old condition hid the banner
+    // entirely: the reader was shown a verdict and a synthesis built from three
+    // quarters of the panel with no disclosure anywhere, while the headline read
+    // "3 of 4 models aligned" — which describes a disagreement, not a missing
+    // answer. Fall back to ``demo_mode`` only when the counts are absent (older
+    // payload), where a missing slot cannot be detected at all.
+    // Gate on ``localCount`` alone, exactly as the pre-fix code did, so an older
+    // payload carrying only ``local_count`` still warns. Requiring BOTH counts
+    // would silently stop warning on that payload — a narrowing in the dangerous
+    // direction. ``failedCount`` is already 0 whenever either count is absent.
+    const countsPresent = localCount != null;
+    const degraded = countsPresent
+      ? localCount > 0 || failedCount > 0
+      : result.demo_mode === true;
     if (!degraded) {
       banner.hidden = true;
       return;
     }
     const titleEl = el("result-degraded-title");
     const msgEl = el("result-degraded-message");
-    const allLocal = liveCount === 0 || liveCount == null;
-    if (titleEl) {
-      titleEl.textContent = allLocal
-        ? "Simulated result — not from real models"
-        : "Partly simulated result";
-    }
-    if (msgEl) {
-      // Name the failed slots explicitly rather than folding them into "the
-      // rest are from local simulation" (which would be false for a failed slot).
-      const remainderClause =
-        failedCount > 0
-          ? `${localCount} ${localCount === 1 ? "is" : "are"} from Quorum's local simulation and ` +
-            `${failedCount} could not be retrieved because the provider failed`
-          : "the rest are from Quorum's local simulation";
-      msgEl.textContent = allLocal
-        ? "Live execution was unavailable, so this whole result — the answers, the debate, and the synthesis — comes from Quorum's local simulation, not from GPT, Claude, Gemini, or Deepseek. Treat it as a demo, not a real model panel."
-        : `Only ${liveCount} of ${total ?? 4} answers came from a live provider; ${remainderClause}. The verdict and synthesis below mix real and simulated output — do not rely on them as a fully live result.`;
-    }
+    // An older payload with no counts tells us only ``demo_mode``: something was
+    // simulated, and nothing about how much or what is missing. Passing zeros
+    // into the describer would make it read "No model answered", which is a
+    // stronger claim than the payload supports — and that branch exists ONLY for
+    // this payload, so being wrong here defeats its whole purpose. Describe the
+    // fully-simulated case, which is what ``demo_mode`` alone means.
+    const { title, message } = countsPresent
+      ? describePanelShortfall({
+          live: liveCount ?? 0,
+          simulated: localCount ?? 0,
+          missing: failedCount,
+          total,
+        })
+      : describePanelShortfall({ live: 0, simulated: total ?? 4, missing: 0, total });
+    if (titleEl) titleEl.textContent = title;
+    if (msgEl) msgEl.textContent = message;
     banner.hidden = false;
   }
 
@@ -2471,12 +2562,22 @@
       (Number.isFinite(localCount) ? localCount : 0);
     const denominator = slotCount || ctx.total || counted || 0;
     if (Number.isFinite(liveCount) && denominator && liveCount < denominator) {
-      push(
-        liveCount === 0
-          ? "> **Simulated result — not from real models.** Every answer, the debate and the synthesis below were produced by Quorum's local simulation. Treat this as a demo, not a model panel."
-          : `> **Partly simulated result.** Only ${liveCount} of ${denominator} answers came from a live provider; the rest are simulated or could not be retrieved. Do not rely on this as a fully live result.`,
-        "",
-      );
+      // Shares ``describePanelShortfall`` with the on-screen banner. These were
+      // two independent copies of the same logic with different words, so the
+      // SAME payload produced "Partly simulated result." in the exported file and
+      // "Incomplete result — not every model answered" on screen, and the
+      // liveCount===0 arm claimed "Every answer ... produced by local simulation"
+      // on a run where some slots produced nothing at all. An exported file
+      // outlives the session, so it is the copy most likely to be read without
+      // the screen next to it — it must not be the less honest of the two.
+      const simulated = Number.isFinite(localCount) && localCount >= 0 ? localCount : 0;
+      const { title, message } = describePanelShortfall({
+        live: liveCount,
+        simulated,
+        missing: Math.max(0, denominator - liveCount - simulated),
+        total: denominator,
+      });
+      push(`> **${title}.** ${message}`, "");
     }
 
     push("## About this run", "");
@@ -4479,10 +4580,13 @@
             actionClause;
         } else {
           bannerState = "mixed";
-          const failedClause =
-            failedCount > 0
-              ? `${failedCount} could not be retrieved because the provider failed. `
-              : "";
+          // Neutral about the cause, matching renderResultDegraded: the browser
+          // cannot know WHY a slot is empty, and "the provider failed" is usually
+          // wrong (a live provider error becomes a simulated answer; an empty slot
+          // means a cancel or the run deadline). This output is currently
+          // invisible — see #115 — so fixing the wording now means it is not false
+          // on the day that banner is made visible.
+          const failedClause = failedCount > 0 ? `${failedCount} returned nothing. ` : "";
           bannerCopy =
             `${liveCount} of ${total ?? 4} model answers came from a live provider; ` +
             `${localCount ?? 0} are from Quorum's local simulation helpers. ` +
@@ -4585,19 +4689,24 @@
         }
       }
       article.appendChild(body);
-      // When the model is complete but carried a ``provider_notice`` —
-      // e.g. it was a local-simulation answer with an honest disclosure,
-      // or a fallback-search answer — surface the notice on the card so
-      // the user can tell at a glance why the path is what it is.
-      // We do NOT render this for pending slots (notice would just be
-      // stale copy) or for slots whose ``answer_text`` is itself a
-      // placeholder string.
-      if (slot && slot.provider_notice && runStatusValue !== "pending") {
-        const notice = document.createElement("p");
-        notice.className = "model-card-notice";
-        notice.textContent = slot.provider_notice;
-        article.appendChild(notice);
-      }
+      // #118: the per-model ``provider_notice`` used to be rendered here, onto
+      // the model card. That card lives inside the "Model outputs"
+      // ``section.panel.panel-section``, which ``app.css`` hides on EVERY view
+      // by design — so measured in a browser, this notice was 0x0 in all three
+      // views and no user ever read it. WP-F already renders the same notice
+      // where the answer is actually read, on the transcript opening card
+      // (``.transcript-opening-notice``), under a BLOCKING gate that asserts
+      // toBeVisible() — e2e/tests/invariants/answer-completeness.spec.ts. This
+      // render was therefore a duplicate of a working surface, not the only one,
+      // and is removed rather than kept as decoration.
+      //
+      // NOTE, precisely: ``runStatusValue`` is still read by the no-slot error
+      // placeholder above, but that branch only runs when a slot is ABSENT. The
+      // parity test supplies all four slots, so after this removal that test no
+      // longer reaches any reader of ``runStatusValue`` — it still guards against
+      // uncaught page errors during the card render, which is what it asserts,
+      // but it is no longer a guard on this particular variable. Recorded rather
+      // than papered over.
       const meta = document.createElement("div");
       meta.className = "model-card-meta";
       const path = document.createElement("div");
