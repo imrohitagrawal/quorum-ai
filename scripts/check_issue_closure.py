@@ -2,7 +2,7 @@
 
 Issue #139. Issue #130 was closed **COMPLETED** on 2026-07-28 and the change it
 asked for was never made — no commit, no branch, nothing. The gate it was about
-stayed broken for about 8 days, silently green, and the next session had to
+stayed broken for about a week, silently green, and the next session had to
 rediscover it from CI logs (`docs/103-incident-learnings.md`).
 
 `AGENTS.md` already says *"never close an issue whose fix sits on an unmerged

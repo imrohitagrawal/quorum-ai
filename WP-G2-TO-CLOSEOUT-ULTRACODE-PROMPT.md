@@ -1,5 +1,10 @@
 # WP-G2, then the guard backlog — handoff for a fresh chat
 
+> **HOW TO USE THIS FILE.** You do not paste this whole document into a chat.
+> You paste the short block in **§6**, which tells the new chat to come and read
+> this file. Everything else here is the detail that chat will read for itself.
+> One short message from you; one long document for it.
+
 > **Written:** 2026-07-29, immediately after PRs #140/#144/#147/#149 merged and
 > deploy-verified. Every number below was **measured at that moment** by running
 > the command shown, not carried from an older document.
@@ -25,7 +30,7 @@
 | e2e blocking invariants lane | 138 passed | see §4 rule 16 for the exact flags |
 | e2e axe + parity lane | 94 passed | same |
 | Changed-lines coverage | n/a on a clean tree | `make diff-cover DIFF_BASE=origin/main` |
-| Open issues | 8, all from this session | `gh issue list` |
+| Open issues | 9, all from this session | `gh issue list` |
 
 **Run `pytest` and `make diff-cover` SERIALLY** — they race on a shared path (#113).
 
@@ -63,7 +68,7 @@ permanent payment-confirmation loop. **Both edits go in ONE commit.**
 
 ### Task B — the guard backlog (only if the operator asks for it)
 
-Eight issues, all filed this session, none started. Two are **trigger-gated:
+Nine issues, all filed this session, none started. Two are **trigger-gated:
 do not schedule them.**
 
 | # | What | Size |
@@ -74,6 +79,7 @@ do not schedule them.**
 | **#148** | The #131 guard is blind to `expect.soft`, `toBeHidden`/`toBeEmpty`, and partners asserted in `beforeEach` or via a page object. | M |
 | **#145** | The constant-pin detector ignores reachability (a pin inside `if False:` counts), rejects `pytest.approx`, and misses 16 class-level constants incl. `Settings.RUN_DEADLINE_MAX_SECONDS`. | M |
 | **#143** | Nothing pins `replay_mutation_scope.py` ≡ the Makefile's `MUTMUT_SCOPE_PY`, though review measured them equivalent today (66 commits, 0 mismatches). | S |
+| **#151** | The `0.0008` fallback input price is **underived**. Measured against the four shipped models it over-charges three (5.3x, 2.7x, **16.0x** for nvidia — that is the recorded "16x mispricing") and **UNDER-charges `anthropic/claude-haiku-4.5` by 25%**, which is the unsafe direction because the daily cap is enforced against the estimate. The user-facing FAQ also states 0.0008 as gpt-4o-mini's price; the real figure is 0.00015. **Cost layer — file findings, coordinate before fixing (rule 19).** | M |
 | **#137** | TRIGGER-GATED: measure p90 mutation runtime on CI. **Only when someone proposes making the gate blocking.** | — |
 | **#138** | TRIGGER-GATED: survey the risk-based-testing literature. **Only when someone proposes criticality-tiered gates.** | — |
 

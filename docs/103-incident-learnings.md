@@ -73,7 +73,7 @@ headroom); invariant pinned by `tests/unit/test_deploy_gate_no_slow_push_jobs.py
 Confirm a deploy by the deploy **job** running and prod serving the new build
 (grep a served asset / `/ready` build stamp), not by `/health`.
 
-## 2026-07-29 — A CI gate reported green for 8 days without ever measuring anything
+## 2026-07-29 — A CI gate reported green for a week without ever measuring anything
 
 **What happened.** The `mutation-baseline` job aborted at
 `failed to collect stats` in ~1m07s on **every** pull-request run, and reported
@@ -81,11 +81,16 @@ success because a `-` on the Makefile recipe swallowed the error and
 `continue-on-error` swallowed the job. It had **never scored a single mutant in
 CI**.
 
-**Duration, measured — not "months".** The abort's cause is
+**Duration, measured from job logs — not "months", and not inferred.** The
+abort is confirmed by log on a 2026-07-22 pull-request run (`29967598312`,
+conclusion **success**, body `failed to collect stats`) and on four runs on
+2026-07-28. Its cause is
 `tests/contract/test_golden_fixture_matches_served_schema.py`, which reads
-`e2e/fixtures/` and landed 2026-07-21; `e2e/fixtures` was not in
-`[tool.mutmut].also_copy`. So the gate had been aborting for about **8 days**
-when it was found. Issue #130 itself lived **71 minutes** (created 15:39,
+`e2e/fixtures/` and landed 2026-07-21 with `e2e/fixtures` absent from
+`[tool.mutmut].also_copy`. So the gate was reporting green while measuring
+nothing for about **a week**. A first correction said "8 days" from the file
+date alone; that was still reasoning, not measurement, and is recorded here
+because the distinction is the whole lesson. Issue #130 itself lived **71 minutes** (created 15:39,
 closed 16:50 on 2026-07-28). It asked to make the gate blocking, citing the
 abort as *"finished in 1m 9s on PR #96 and passed"*, and was closed COMPLETED
 with **no commit** — the change was never made.
