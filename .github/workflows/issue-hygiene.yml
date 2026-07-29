@@ -1,0 +1,52 @@
+name: Issue closure hygiene (advisory)
+
+# Issue #139. #130 was closed COMPLETED on 2026-07-28 and the change it asked
+# for was never made — no commit, no branch. The gate it was about stayed
+# broken for months, silently green, and the next session had to rediscover it
+# from CI logs (docs/103-incident-learnings.md).
+#
+# AGENTS.md already said "never close an issue whose fix sits on an unmerged
+# branch". Prose did not bind; by the durability ladder in
+# docs/DAY-ONE-PROMPT.md §1 only mechanism does.
+#
+# ADVISORY ON PURPOSE, and that is a decision with evidence behind it rather
+# than a default: docs/metrics/mutation-gate-study.md measured what happens when
+# a noisy check is made blocking, and Google's published practice is to surface
+# findings at review time rather than gate on them. Some issues legitimately
+# close with no commit; those should close as NOT_PLANNED. The value here is
+# visibility.
+#
+# The classification logic is a pure function tested hermetically in
+# tests/unit/test_issue_closure_guard.py — this workflow only supplies real data.
+
+on:
+  schedule:
+    # Weekly, Monday 06:00 UTC. Issue hygiene drifts over weeks, not minutes;
+    # a per-PR run would be noise on a signal that changes this slowly.
+    - cron: "0 6 * * 1"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  issues: read
+
+jobs:
+  issue-closure-hygiene:
+    name: Closed COMPLETED with no commit
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # The check greps the whole commit log for issue references; a shallow
+          # clone would report every issue as unbacked.
+          fetch-depth: 0
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Report issues closed COMPLETED with no commit
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: python3 scripts/check_issue_closure.py | tee -a "$GITHUB_STEP_SUMMARY"
