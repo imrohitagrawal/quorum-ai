@@ -62,10 +62,11 @@ test.describe("per-answer honesty surfaces", () => {
     await driveToTranscript(page);
     // Slot 3 is the zero-source slot; the fixture carries the registry's
     // NOTICE_NO_SOURCES_FOUND for it, verbatim.
-    // Scoped to the transcript surface. An unscoped getByText also matches the
-    // `.model-card-notice` copy inside the permanently display:none panel
-    // (issue #118), and `.first()` would then be load-bearing on template
-    // ordering rather than on the fix.
+    // Scoped to the transcript surface deliberately. This used to also avoid a
+    // duplicate `.model-card-notice` copy inside the permanently display:none
+    // panel; that render was removed (#118), so the transcript is now the only
+    // producer — but the scoping stays, so this stops asserting on the transcript
+    // surface only if someone deliberately edits it.
     const notice = page.locator(".transcript-opening-notice").filter({
       hasText: "This model's answer came back without any linked sources",
     });

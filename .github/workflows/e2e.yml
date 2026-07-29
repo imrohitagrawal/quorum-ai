@@ -182,7 +182,8 @@ jobs:
       # EXECUTED-COUNT FLOOR. Playwright exits 0 when a spec path matches nothing
       # and when every test it found was skipped, so a lane that quietly stopped
       # running is indistinguishable from a clean pass — on a BLOCKING gate.
-      # Floor is the EXACT count measured on 2026-07-29 (138), not a rounded-down
+      # Floor is the EXACT count measured on 2026-07-30 (139 — WP-H added an export
+      # honesty test), not a rounded-down
       # one. Headroom hides a deleted spec: at a floor of 130, dropping
       # session-trail.spec.ts (7 tests) from the list above left this green — and
       # session-trail is the spec this workflow already records as having shipped
@@ -190,7 +191,7 @@ jobs:
       # edit to this number: they are not derived from
       # the spec list above, or they could never detect that list shrinking.
       - name: "invariants lane: floor on tests actually executed"
-        run: python3 scripts/check_e2e_executed.py --report e2e/results.xml --min 138 --lane "invariants lane"
+        run: python3 scripts/check_e2e_executed.py --report e2e/results.xml --min 139 --lane "invariants lane"
 
       - name: Clear the previous lane's JUnit report
         run: rm -f e2e/results.xml
@@ -218,11 +219,13 @@ jobs:
       # EXECUTED-COUNT FLOOR. Playwright exits 0 when a spec path matches nothing
       # and when every test it found was skipped, so a lane that quietly stopped
       # running is indistinguishable from a clean pass — on a BLOCKING gate.
-      # Floor is the EXACT count measured on 2026-07-29 (94), for the reason given
+      # Floor is the EXACT count measured on 2026-07-30 (96 — WP-H added two
+      # degraded-banner honesty tests and removed one over invisible markup), for
+      # the reason given
       # on the invariants lane above: they are not derived from
       # the spec list above, or they could never detect that list shrinking.
       - name: "axe + parity lane: floor on tests actually executed"
-        run: python3 scripts/check_e2e_executed.py --report e2e/results.xml --min 94 --lane "axe + parity lane"
+        run: python3 scripts/check_e2e_executed.py --report e2e/results.xml --min 96 --lane "axe + parity lane"
 
       - name: Run visual snapshots (BLOCKING)
         working-directory: e2e

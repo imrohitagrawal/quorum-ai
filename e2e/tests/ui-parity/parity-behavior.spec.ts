@@ -289,8 +289,21 @@ test.describe("UI parity — behaviour", () => {
 
     await driveToResult(page, withNotice);
 
-    // The provider notice renders on the cards — proving the guarded branch ran.
-    await expect(page.locator(".model-card-notice").first()).toContainText("local simulation");
+    // POSITIVE PARTNER for the two negative assertions below: prove the card
+    // render actually CONSUMED the per-slot data, so "no page errors" cannot be
+    // vacuously true over a render that never touched a slot.
+    //
+    // This asserted on `.model-card-notice` until #118 removed that render (the
+    // element sat inside the permanently `display:none` "Model outputs" section,
+    // measured 0x0; the provider notice is now shown on the transcript opening
+    // card, gated by answer-completeness.spec.ts). A plain `.model-card` count
+    // would NOT do as its replacement: the cards are built from the default model
+    // ids and appear whatever the slot data says, so the count passes over a
+    // render that read nothing. Assert a value that can only come from the
+    // payload instead.
+    await expect(page.locator(".model-card-meta").first()).toContainText(
+      "Provider path: openrouter_search",
+    );
     // No "... is not defined" surfaced as a toast (the pre-fix storm) ...
     await expect(page.locator(".toast", { hasText: /is not defined/i })).toHaveCount(0);
     // ... and no uncaught page error slipped through either.

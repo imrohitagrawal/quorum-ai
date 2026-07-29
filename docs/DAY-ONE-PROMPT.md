@@ -565,6 +565,77 @@ Constants need pinned literal assertions; browser behaviour needs a rendered
 fixture and a screenshot; billing needs an independent oracle at the seam. Ask
 what the last twenty real defects were before choosing what to enforce.
 
+### 4a-ter. Degrade by admitting the gap, never by inventing plausible filler
+
+The rule, and it is a *product* rule with a *mechanical* enforcement (both halves
+are required — see the ladder below):
+
+> **When a dependency fails, report the gap. Never substitute invented content
+> that is shaped like the real thing.** And: **no fabricated value may reach a
+> number the user is asked to trust.**
+
+Why this earned its own section: on one product, four separate defects turned out
+to be a single habit expressed four times. A failed model call was replaced with a
+locally generated answer marked *completed*. A missing citation was replaced with
+a fabricated URL flagged as a *primary* source — so it counted toward the
+source-coverage figure the product leads with. A failed reasoning stage was
+replaced with templated prose whose provenance marker had been set to an empty
+string. And a warning that *was* honest had been rendered into a container the
+layout hid, so the one truthful surface was the invisible one. Measured
+consequence: a run with one real answer and three invented ones reports **100%
+source coverage** and "3 of 4 models aligned", where three of the four are
+templates that cannot align with anything. **Mark this claim honestly: the
+substitution itself was reproduced by executing the pipeline with a fault
+injected; the coverage figure was traced through the source** (the fabricated
+source is flagged as a primary one, and primary sources are what the coverage
+numerator counts) **and not observed on a run.** State which of the two you have
+whenever you carry a number like this forward.
+
+Two things make this shape hard to see. First, **each substitution is locally
+reasonable** — "return something well-formed rather than crash" is defensible in
+isolation, and each was written by someone being careful. Second, **the disclosure
+usually exists**: there was a banner, a provenance field, and self-describing
+text in the fabricated answer itself. None of it helped, because *a correct label
+on a wrong number is still a wrong number*. The count and the percentage carried
+no label at all, and those are what a reader acts on.
+
+**A rule alone will not hold this.** Writing it in a doc puts it at the top of the
+durability hierarchy in §1 — influence, not enforcement. Implement it at the
+lowest rung you can afford, in this order:
+
+| Rung | Mechanism | What it costs / what it still misses |
+|---|---|---|
+| Weakest — **prose** | the rule above, in the repo's agent instructions | depends on whoever is at the keyboard remembering; zero enforcement |
+| Better — **fault-injected behavioural test** | inject a dependency failure into one unit of a real pipeline run, then assert *the trust numbers*, not just the status: the denominator equals units that actually succeeded, no fabricated source is counted, each stage reports its own provenance | cheap if a fault-injection lane already exists; catches regressions, not new shapes; must assert the number, because asserting "it didn't crash" is what let this ship |
+| Strongest — **make the bad state unrepresentable** | the function that computes a trust number does not accept "a list of results" — it accepts only results carrying real provenance, so fabricated data cannot be passed in. In a typed language this is a signature, checked by the type checker; "remember to filter the fakes out" stops being something anyone can forget | needs a type/API change and touches every consumer; the only rung that survives a new author who never read the rule |
+
+Three implementation details that are easy to get wrong:
+
+- **Pin the provenance set exhaustively**, deriving the enumeration from the set
+  rather than retyping it, so adding a new kind of result forces a decision at
+  every consumer instead of silently defaulting to "treat as real". §4a-bis
+  records this as the shape that *does* generalise into a gate — note it is a
+  different thing from the pin that finally held there, which asserts an
+  observable consequence rather than a set membership. Both beat a text search.
+- **Every user-facing trust number states its denominator and what it excluded** —
+  "coverage 100% (4 of 4 answers, 0 excluded)", never a bare "100%". This is
+  exactly the denominator rule already required of *gates* in §4a-bis, applied to
+  the numbers shown to a user. A number that cannot say what it counted cannot be
+  trusted, whoever is reading it.
+- **Do not enforce this by searching source text for the fabrication.** §4a-bis
+  records four consecutive failed attempts to pin one property — two of them text
+  searches, defeated by the prose that explained the very thing they searched
+  for. Assert the observable consequence instead: run the pipeline with a fault
+  injected and check what the numbers say.
+
+And the corollary that ties this to the UI section (§4): **a disclosure you have
+not seen rendered is not a disclosure.** The invisible-banner half of this was
+covered by a *blocking* test that used a "contains text" assertion — which does
+not require visibility — so a hard merge gate certified the honesty of a
+zero-by-zero element for months, and read as covered. Any test whose subject is
+"the user is told X" must assert **visibility**, never mere presence in the
+document.
+
 ---
 
 ## 5. Enforcement & accountability
