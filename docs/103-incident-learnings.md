@@ -73,15 +73,22 @@ headroom); invariant pinned by `tests/unit/test_deploy_gate_no_slow_push_jobs.py
 Confirm a deploy by the deploy **job** running and prod serving the new build
 (grep a served asset / `/ready` build stamp), not by `/health`.
 
-## 2026-07-29 — A CI gate reported green for months without ever measuring anything
+## 2026-07-29 — A CI gate reported green for 8 days without ever measuring anything
 
 **What happened.** The `mutation-baseline` job aborted at
 `failed to collect stats` in ~1m07s on **every** pull-request run, and reported
 success because a `-` on the Makefile recipe swallowed the error and
 `continue-on-error` swallowed the job. It had **never scored a single mutant in
-CI**. Issue #130 then asked to make the gate blocking, citing that abort as
-*"finished in 1m 9s on PR #96 and passed"*, and was closed COMPLETED with **no
-commit** — the change was never made.
+CI**.
+
+**Duration, measured — not "months".** The abort's cause is
+`tests/contract/test_golden_fixture_matches_served_schema.py`, which reads
+`e2e/fixtures/` and landed 2026-07-21; `e2e/fixtures` was not in
+`[tool.mutmut].also_copy`. So the gate had been aborting for about **8 days**
+when it was found. Issue #130 itself lived **71 minutes** (created 15:39,
+closed 16:50 on 2026-07-28). It asked to make the gate blocking, citing the
+abort as *"finished in 1m 9s on PR #96 and passed"*, and was closed COMPLETED
+with **no commit** — the change was never made.
 
 **Root cause of the silence.** `scope()` printed `"\n".join([])`, a bare
 newline. The recipe guards its work branch with `[ -s scope.txt ]`, a **size**

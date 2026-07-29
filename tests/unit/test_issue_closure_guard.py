@@ -1,8 +1,8 @@
 """The issue-closure guard must detect a real unbacked closure.
 
 Issue #139. #130 was closed COMPLETED with no commit, no branch, nothing — and
-the gate it was about stayed broken for months. `AGENTS.md` already forbade it
-in prose; prose did not bind.
+the gate it was about had been aborting for about 8 days. `AGENTS.md` already
+forbade closing like that in prose; prose did not bind.
 
 These tests drive the PURE classification functions over fixture data. No
 network, no `gh`, no repository state — so the logic is pinned hermetically and

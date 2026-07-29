@@ -2,8 +2,8 @@ name: Issue closure hygiene (advisory)
 
 # Issue #139. #130 was closed COMPLETED on 2026-07-28 and the change it asked
 # for was never made — no commit, no branch. The gate it was about stayed
-# broken for months, silently green, and the next session had to rediscover it
-# from CI logs (docs/103-incident-learnings.md).
+# broken for about 8 days, silently green, and the next session had to
+# rediscover it from CI logs (docs/103-incident-learnings.md).
 #
 # AGENTS.md already said "never close an issue whose fix sits on an unmerged
 # branch". Prose did not bind; by the durability ladder in
