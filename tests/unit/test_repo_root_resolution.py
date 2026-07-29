@@ -135,18 +135,36 @@ def test_the_guard_module_resolves_its_root_through_the_helper() -> None:
         "tests/repo_root.py; inside the mutation runner's copy it will count the "
         "runner's own generated variants again (#158)"
     )
-    # Parsed, not grepped. The module's own docstring quotes ``parents[2]`` while
-    # explaining the defect, so a substring search reports the explanation as the
-    # bug — measured: it did exactly that on the first attempt at this test.
-    parent_indexing = [
-        node
-        for node in ast.walk(tree)
-        if isinstance(node, ast.Attribute) and node.attr == "parents"
-    ]
-    assert not parent_indexing, (
-        "the guard computes a path from a fixed parent count again (line(s) "
-        f"{sorted({n.lineno for n in parent_indexing})}). Inside ./mutants/ that "
-        "lands on the copy. Use find_repo_root()."
+    # Pinned at the ASSIGNMENT, not by scanning the file for a forbidden token.
+    #
+    # Two earlier attempts were both wrong, and both in ways this repository has
+    # paid for before. A substring search for ``parents[`` matched the module's
+    # own docstring EXPLAINING the defect. Widening to "no ast.Attribute named
+    # parents anywhere" then (a) false-fired on any legitimate ``path.parents``
+    # use elsewhere in the module and (b) was still evadable by spelling the same
+    # bug ``.parent.parent.parent`` — measured: that spelling plus a comment
+    # mentioning find_repo_root passed both ruff and the test.
+    #
+    # Asserting what REPO_ROOT must BE closes all three: it is a call to
+    # find_repo_root, or it is not this module's contract.
+    assignment = next(
+        (
+            node
+            for node in tree.body
+            if isinstance(node, ast.Assign)
+            and any(isinstance(t, ast.Name) and t.id == "REPO_ROOT" for t in node.targets)
+        ),
+        None,
+    )
+    assert assignment is not None, "the guard no longer defines REPO_ROOT at module level"
+    assert (
+        isinstance(assignment.value, ast.Call)
+        and isinstance(assignment.value.func, ast.Name)
+        and assignment.value.func.id == "find_repo_root"
+    ), (
+        f"REPO_ROOT (line {assignment.lineno}) is not a call to find_repo_root. Any "
+        "parent-count spelling — parents[2], .parent.parent.parent — lands on the "
+        "mutation runner's copy and counts its generated variants (#158)."
     )
     # Positive partner: the pin above is about HOW the root is computed; this is
     # that the answer is still usable. Without it, deleting REPO_ROOT entirely

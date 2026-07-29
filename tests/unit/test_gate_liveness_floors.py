@@ -334,6 +334,38 @@ def test_the_generated_mutant_copy_is_excluded_but_real_source_is_not(
     assert "copy.md" not in found, "the generated mutant copy is being scanned again"
 
 
+def _valid_requirement_tree(root: Path) -> None:
+    """A COMPLETE two-requirement corpus: every check but the floor passes.
+
+    Deliberately valid. The point of the floor is that a *well-formed* corpus
+    which has silently shrunk still fails, and only a tree that passes every
+    other check can demonstrate that.
+    """
+    (root / "10-functional-requirements.md").write_text(
+        "# Functional Requirements\n\n## FR-001\nThe system shall do one thing.\n"
+        "\n## FR-002\nThe system shall do another.\n",
+        encoding="utf-8",
+    )
+    # An NFR section is required too: the gate fails a requirements document
+    # that parses to zero sections, independently of the floor.
+    (root / "11-non-functional-requirements.md").write_text(
+        "# Non-Functional Requirements\n\n## NFR-001\nThe system shall be quick.\n",
+        encoding="utf-8",
+    )
+    header = "| Req ID | Type | Title | Tests | Status |\n|---|---|---|---|---|\n"
+    rows = (
+        "| FR-001 | Functional | One | TEST-FR-001 | Draft |\n"
+        "| FR-002 | Functional | Two | TEST-FR-002 | Draft |\n"
+        "| NFR-001 | Non-functional | Quick | TEST-NFR-001 | Draft |\n"
+    )
+    (root / "17-requirement-registry.md").write_text(
+        "# Requirement Registry\n\n" + header + rows, encoding="utf-8"
+    )
+    (root / "18-requirement-traceability-matrix.md").write_text(
+        "# Requirement Traceability Matrix\n\n" + header + rows, encoding="utf-8"
+    )
+
+
 def test_the_requirement_gate_refuses_a_suspiciously_small_corpus(tmp_path: Path) -> None:
     """Parsing 2 requirements where there are 29 must not print OK.
 
@@ -344,13 +376,15 @@ def test_the_requirement_gate_refuses_a_suspiciously_small_corpus(tmp_path: Path
     Turns red if: the --min-requirements comparison is dropped.
     """
     fr = _load("validate_fr_completeness")
+    _valid_requirement_tree(tmp_path)
 
-    for name in ("10-functional-requirements.md", "11-non-functional-requirements.md"):
-        (tmp_path / name).write_text("# empty\n", encoding="utf-8")
-    for name in ("17-requirement-registry.md", "18-requirement-traceability-matrix.md"):
-        (tmp_path / name).write_text("# empty\n", encoding="utf-8")
-
+    # The floor must be the ONLY reason this fails. Proven by the partner below:
+    # with the floor at 0 the very same tree passes. Measured: the first version
+    # of this test used an empty tree, which fails an earlier "no FR sections
+    # found" check — so it was green with the floor comparison deleted. A test
+    # that fails for the wrong reason is not a test of the thing it names.
     assert fr.main(["--docs-root", str(tmp_path), "--min-requirements", "25"]) == 1
+    assert fr.main(["--docs-root", str(tmp_path), "--min-requirements", "0"]) == 0
 
 
 def test_the_requirement_gate_floor_is_wired_into_the_makefile() -> None:
@@ -365,7 +399,13 @@ def test_the_requirement_gate_floor_is_wired_into_the_makefile() -> None:
     """
     recipe = (REPO_ROOT / "Makefile").read_text(encoding="utf-8")
 
-    assert "--min-requirements" in recipe, (
+    # Anchored to the INVOCATION, not the bare flag name. Measured: the first
+    # version of this test asserted `"--min-requirements" in recipe`, and the
+    # same commit had added a comment above the recipe explaining the flag — so
+    # deleting the real flag left the test GREEN. A substring pin matched the
+    # explanation of the thing instead of the thing. That is the defect class
+    # this whole change is about, reintroduced two tests after fixing it.
+    assert "validate_fr_completeness.py --min-requirements" in recipe, (
         "make fr-completeness no longer switches the floor on, so the blocking "
         "gate is back to passing over a corpus that stopped parsing"
     )

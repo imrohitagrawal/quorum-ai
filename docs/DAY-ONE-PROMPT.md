@@ -475,11 +475,14 @@ code:
 | A human or agent deliberately hunting for bugs (adversarial review) | **10 of 16** |
 | Manual testing, a driven audit, a product walkthrough | 3 of 16 |
 | Observing production output | 1 of 16 |
-| **An automated check that existed to catch it** | **0 of 16** | The
-  per-commit table, the method and its limits: `docs/metrics/defect-discovery-audit.md`.
+| **An automated check that existed to catch it** | **0 of 16** |
 
-Zero. The one CI-gate row in the ledger caught test-vs-code drift, and its own
-commit says so. The corroborating number is starker: the slice built without a
+Zero. The one CI-gate row caught test-vs-code drift, and its own commit says so.
+The table above is the four largest routes; two more rows (the CI-gate row and one
+unknown) make the total 16. The per-commit table, the exact command, and the
+limits of the method are recorded in `docs/metrics/defect-discovery-audit.md` —
+an audit whose population lives nowhere cannot be checked, which is the same
+defect as a gate that cannot state its denominator. The corroborating number is starker: the slice built without a
 multi-lens review fan leaked **10** escaped defects; the two slices built with
 one leaked **0** each.
 
@@ -503,10 +506,20 @@ with an exhaustive equality assertion, so the next member turns it red and force
 a decision. Audited here, only **2 of 14** enumerated production sets had such a pin —
 and both of those were found by *executing* the experiment, not by pattern
 matching: adding a synthetic member to a pinned set turned six tests red
-immediately, and adding one to an unpinned set turned nothing red at all. (A
+immediately, with a message naming the new member and forcing a decision about
+it. (A
 first pass counted three, because a regex mistook a single-member assertion
 inside a dict literal for a whole-set pin. Adversarial review caught it. The
-lesson repeats itself: the grep said three, the run said two.) Worse, the test written to prevent
+lesson repeats itself: the grep said three, the run said two.)
+
+**And a correction worth carrying, because it is the same discipline applied to
+this very claim:** an earlier draft said adding a member to an *unpinned* set
+"turned nothing red at all". Reviewed by execution, that is false — a member
+added to any enum exposed in the API schema reds the schema-drift contract. But
+that contract only says *the shape changed*; it does not say *you forgot to
+handle the new state*. The distinction is the whole point. A schema pin tells
+you a set grew; a behavioural pin tells you what you failed to do about it. Do
+not let the first be mistaken for the second. Worse, the test written to prevent
 one such defect hardcoded five of the six members it was guarding — so one member
 was never exercised by the very test that existed for it. **If a test enumerates
 a production set, derive the enumeration from the set, never retype it.**
