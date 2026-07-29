@@ -385,6 +385,26 @@ and passed". Before promoting any advisory gate, open its job log and confirm it
 produced *its number*, not merely a green tick. Cheapest possible check;
 prevented a wrong decision that was already implemented.
 
+**Rule: a RED advisory job is not evidence that it MEASURED. Open the log too.**
+The mirror image of the rule above, and it cost a second incident to learn
+(quorum-ai #158, 2026-07-29). The repaired gate finally met the case it existed
+for — the first pull request touching `src/` Python — and **still scored nothing**.
+It died during test collection because one of its own guard tests computed the
+repository root from `__file__`; the mutation tool runs the suite from inside a
+generated scratch copy, so the guard counted the tool's own generated variants
+(514 against a threshold of 55) and aborted. Real source had 40, well under, and
+the pull request had added none. The failure message named the wrong cause
+entirely ("usually a repo-root file missing from `also_copy`").
+So: **a red tick tells you the job exited non-zero, nothing more.** It may have
+measured and found a real problem, or it may have fallen over before measuring
+anything. Read the log and find the number before you attribute a red gate to the
+diff in front of you — and never let a red-for-tooling-reasons gate be waved
+through as "known flaky", which is how it stays broken.
+**Corollary for any tool that runs your suite inside a copied tree:** every check
+that resolves paths from `__file__`, `cwd`, or `parents[n]` will silently point at
+the copy. Resolve from an explicit root (e.g. `git rev-parse --show-toplevel`), or
+skip the check when it detects it is running inside the copy.
+
 **Rule: every gate ships with a CHARTER saying what it cannot see.**
 One paragraph, next to the gate. Ours would have read: *cannot see JavaScript,
 CSS, or browser tests; cannot see module-level constants or config tables;
@@ -392,6 +412,19 @@ cannot see decorated functions; cannot see pure deletions.* Measured, those
 blind spots were **8% of pull requests passing having measured nothing** (mostly
 money configuration) and **7% aborting on a tooling artefact**. With the charter
 written, #130 would never have been filed.
+
+A charter must also state **the gate's own failure modes**, not only its blind
+spots in the code — "this job can exit non-zero without having measured anything,
+and here is what that looks like in the log." Ours did not, which is why #158's
+abort read as a verdict on the diff rather than on the gate.
+
+**And the rule this whole section is really about: the strongest way to enforce
+"tests must bite" is not a sentence telling authors to prove it — it is a tool
+that breaks the code itself and checks whether the tests notice.** That is what a
+mutation runner *is*. So a broken mutation gate is not a missing metric; it is the
+enforcement of your most important testing rule silently switched off, leaving the
+rule resting entirely on whoever happens to be at the keyboard. Repairing it
+outranks tuning it, and both outrank writing the rule down again.
 
 **Rule: replay the gate over real history before trusting it.**
 "What would this have done to our last N commits?" is answerable in minutes and
