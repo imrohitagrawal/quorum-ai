@@ -38,7 +38,7 @@ from decimal import Decimal, InvalidOperation
 from enum import StrEnum
 from threading import BoundedSemaphore, RLock, Thread
 from time import sleep
-from typing import Annotated, Any, Literal
+from typing import Annotated, Any, Literal, Self
 from uuid import UUID, uuid4
 
 from fastapi import APIRouter, Depends, HTTPException, Request, status
@@ -101,6 +101,7 @@ from product_app.safety import (
     safety_warning_policy,
 )
 from product_app.synthesis import (
+    FINAL_SYNTHESIS_MAX_CHARS,
     FinalSynthesis,
     build_agreement_and_positions,
     synthesis_stub_service,
@@ -284,7 +285,41 @@ class ResultProjection(BaseModel):
 _QUERY_TEXT_MAX_LENGTH = 20_000
 
 
-class QueryRunEstimateRequest(BaseModel):
+#: WP-G2 (F-10): how long each ``context`` value may be. Both are DERIVED from
+#: what this application itself can have produced, not picked:
+#:
+#:  * ``prior_question`` IS a previous ``query_text``, so nothing longer than
+#:    the query-text cap could ever have been accepted in the first place;
+#:  * ``prior_synthesis`` IS a previous final synthesis, so its ceiling is
+#:    ``FINAL_SYNTHESIS_MAX_CHARS`` — owned by ``synthesis.py``, which is where
+#:    the caps that bound it live. It is deliberately NOT derived from
+#:    ``settings.cost_synthesis_sections``: that is an env-overridable PRICING
+#:    knob, and retuning it would silently narrow this public field below what
+#:    the synthesis stage can still emit.
+#:
+#: Before this, both were ``Any`` and unbounded (#125): a non-string raised
+#: ``AttributeError`` inside ``costs.py`` — an unhandled 500 on the public API —
+#: and an arbitrarily long string was concatenated into the system prompt and
+#: priced into the guardrail bound.
+_CONTEXT_PRIOR_QUESTION_MAX_LENGTH = _QUERY_TEXT_MAX_LENGTH
+_CONTEXT_PRIOR_SYNTHESIS_MAX_LENGTH = FINAL_SYNTHESIS_MAX_CHARS
+_CONTEXT_MAX_LENGTHS = {
+    "prior_question": _CONTEXT_PRIOR_QUESTION_MAX_LENGTH,
+    "prior_synthesis": _CONTEXT_PRIOR_SYNTHESIS_MAX_LENGTH,
+}
+
+
+class _QueryRunRequestBase(BaseModel):
+    """The fields that decide what a run COSTS.
+
+    WP-G2 (F-10): the estimate body and the create body must carry every one of
+    these, or ``/estimate`` quotes a price that ``POST /v1/query-runs`` does not
+    charge. The user then confirms a number that never matches what the run
+    reserves, and the confirmation loop cannot be escaped. They drifted exactly
+    that way — ``context`` was on create only — so they now share one base and
+    a drift test pins it (``tests/unit/test_context_carry.py``).
+    """
+
     query_text: str = Field(min_length=1, max_length=_QUERY_TEXT_MAX_LENGTH)
     model_slots: list[str] = Field(min_length=1)
     # L2: optional per-slot web-search opt-in. Same length as
@@ -292,6 +327,41 @@ class QueryRunEstimateRequest(BaseModel):
     # "use the per-slot default" — which is search-enabled for the
     # default four-slot demo run.
     slot_search: list[bool] | None = None
+    # L4: optional follow-up context from a previous query run. ``None``
+    # (default) means no prior context — a fresh query. Values are ``str``,
+    # not ``Any``: a wrong type is a 422 from the edge, never a 500 from
+    # deep inside the cost model (#125).
+    #
+    # A per-key ``None`` stays accepted. It parsed before this change and every
+    # consumer is already None-safe (``costs.py`` does ``or ""``,
+    # ``providers.py`` guards on truthiness), so rejecting it would break a
+    # working client to fix a different bug (adversarial review, WP-G2).
+    context: dict[str, str | None] | None = Field(default=None)
+
+    @model_validator(mode="after")
+    def _validate_context(self) -> Self:
+        ctx = self.context
+        if ctx is None:
+            return self
+        allowed = set(_CONTEXT_MAX_LENGTHS)
+        extra = set(ctx.keys()) - allowed
+        if extra:
+            raise ValueError(
+                f"context may only contain {sorted(allowed)}; unexpected keys: {sorted(extra)}"
+            )
+        for key, value in ctx.items():
+            if value is None:
+                continue
+            limit = _CONTEXT_MAX_LENGTHS[key]
+            if len(value) > limit:
+                raise ValueError(
+                    f"context.{key} may be at most {limit} characters; got {len(value)}"
+                )
+        return self
+
+
+class QueryRunEstimateRequest(_QueryRunRequestBase):
+    pass
 
 
 class QueryRunEstimateResponse(BaseModel):
@@ -301,30 +371,9 @@ class QueryRunEstimateResponse(BaseModel):
     reasons: list[str]
 
 
-class QueryRunCreateRequest(BaseModel):
-    query_text: str = Field(min_length=1, max_length=_QUERY_TEXT_MAX_LENGTH)
-    model_slots: list[str] = Field(min_length=1)
-    # L2: optional per-slot web-search opt-in. See
-    # ``QueryRunEstimateRequest.slot_search`` for the contract.
-    slot_search: list[bool] | None = None
-    # L4: optional follow-up context from a previous query run. ``None``
-    # (default) means no prior context — a fresh query.
-    context: dict[str, Any] | None = Field(default=None)
+class QueryRunCreateRequest(_QueryRunRequestBase):
     safety_acknowledgements: list[SafetyAcknowledgement] = Field(default_factory=list)
     cost_confirmation: CostConfirmation | None = None
-
-    @model_validator(mode="after")
-    def _validate_context_keys(self) -> QueryRunCreateRequest:
-        ctx = self.context
-        if ctx is None:
-            return self
-        allowed = {"prior_question", "prior_synthesis"}
-        extra = set(ctx.keys()) - allowed
-        if extra:
-            raise ValueError(
-                f"context may only contain {sorted(allowed)}; unexpected keys: {sorted(extra)}"
-            )
-        return self
 
 
 class QueryRunCreateResponse(BaseModel):
@@ -1110,7 +1159,14 @@ def estimate_query_run(
         query_text=payload.query_text,
         model_slots=model_slots,
         account_id=session.account_id,
-        context=getattr(payload, "context", None),
+        # WP-G2 (F-10): the fix here is the ``context`` field on the shared
+        # request base, NOT this line — with the field present, the old
+        # ``getattr(payload, "context", None)`` would read the same value. It
+        # is spelled as a plain attribute so the next reader cannot mistake a
+        # defaulted lookup for a deliberate opt-out: that defaulted lookup is
+        # what silently returned ``None`` for as long as the estimate body had
+        # no such field, quoting a follow-up at the price of a fresh query.
+        context=payload.context,
     )
     cost_estimation_service.record_guardrail_event(
         account_id=session.account_id,
@@ -1918,6 +1974,10 @@ def _execute_query_run(query_run_id: UUID, account_id: UUID) -> None:
         initial_answers=latest.initial_answers,
         debate_outputs=latest.debate_outputs,
         openrouter_key=openrouter_key,
+        # WP-G2 (F-10): the debate stage has always been handed the context;
+        # this call was not, so ``prior_synthesis`` was priced into every one
+        # of the five synthesis calls and sent to none of them.
+        context=query_run.context,
     )
     if synthesis_result.final_synthesis is None:
         query_run_repository.update_status(
