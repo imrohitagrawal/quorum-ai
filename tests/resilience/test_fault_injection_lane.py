@@ -347,8 +347,22 @@ _MIXED_MODEL_IDS = [
     "google/gemini-2.5-flash",
     "deepseek/deepseek-chat-v3.1",
 ]
-#: Slot 2. Chosen mid-list so an off-by-one in slot handling cannot pass.
-_FAULTED_MODEL_ID = _MIXED_MODEL_IDS[1]
+#: Slot 3. Mid-list, so an off-by-one in slot handling cannot pass — and it must
+#: be a model the MODERATOR does not also use. Slot 2 is
+#: ``anthropic/claude-haiku-4.5``, which IS ``settings.debate_model_id``, and
+#: slot 1 is ``openai/gpt-4o-mini``, which IS ``settings.synthesis_model_id``.
+#: Faulting either one takes a moderator stage down with the participant, so the
+#: run under test would no longer be "one participant missing" — it would be
+#: "one participant missing AND that stage templated", and the numbers below
+#: would be measuring two changes at once.
+#:
+#: This test faulted slot 2 when it was written, on the stated but unchecked
+#: belief that the moderator "uses a different model id". It does not. The
+#: assertion in ``_faulted_model_collides_with_no_moderator`` is what makes the
+#: belief checkable, so a change to either setting reds this test instead of
+#: silently changing what it measures.
+_FAULTED_MODEL_ID = _MIXED_MODEL_IDS[2]
+_FAULTED_SLOT_NUMBER = 3
 
 _LIVE_BODY = json.dumps(
     {
@@ -367,18 +381,40 @@ _LIVE_BODY = json.dumps(
 ).encode()
 
 
-def _urlopen_faulting_only_slot_two(request: Any, timeout: float = 0) -> _FakeResponse:
-    """Time out for slot 2's model and answer normally for everything else.
+def _urlopen_faulting_only_the_participant(request: Any, timeout: float = 0) -> _FakeResponse:
+    """Time out for the faulted slot's model; answer normally for everything else.
 
-    Keyed on the model id in the POST body, so the two debate rounds and the
-    five synthesis sections (which use a different model id) are unaffected —
-    only ONE participant is missing, which is the case #171 is about. The
-    ``split(":")`` strips the ``:online`` search suffix.
+    Keyed on the model id in the POST body. Because ``_FAULTED_MODEL_ID`` is
+    neither moderator model (asserted, not assumed — see
+    ``_faulted_model_collides_with_no_moderator``), the two debate rounds and
+    the five synthesis sections still run live, so exactly ONE participant is
+    missing. That is the case #171 is about. The ``split(":")`` strips the
+    ``:online`` search suffix.
     """
     payload = json.loads(request.data.decode())
     if str(payload.get("model", "")).split(":")[0] == _FAULTED_MODEL_ID:
         raise TimeoutError("upstream timed out")
     return _FakeResponse(_LIVE_BODY)
+
+
+def _faulted_model_collides_with_no_moderator() -> None:
+    """Fail loudly if the faulted participant is also a moderator model.
+
+    The collision this guards against was real and silent: the test faulted
+    ``anthropic/claude-haiku-4.5``, which is ``settings.debate_model_id``, so
+    both debate rounds fell back to their local template while the docstring
+    said they were 'unaffected'. Derived from ``settings`` rather than retyped,
+    so changing either setting reds this instead of quietly changing the
+    scenario under test.
+    """
+    assert config.settings.debate_model_id != _FAULTED_MODEL_ID, (
+        "the faulted participant is also the debate moderator — the debate would "
+        "template and the run would no longer be 'one participant missing'"
+    )
+    assert config.settings.synthesis_model_id != _FAULTED_MODEL_ID, (
+        "the faulted participant is also the synthesis model — the synthesis "
+        "would template and the run would no longer be 'one participant missing'"
+    )
 
 
 def _drive_full_run(client: TestClient) -> dict[str, Any]:
@@ -409,7 +445,7 @@ def test_mixed_live_and_faulted_run_counts_only_the_answers_that_arrived(
 
     This is the run the issue measured. Before #171 it served, verbatim::
 
-        2 completed local_simulation  primary=1  'Cross-check summary for ...'
+        <faulted slot> completed local_simulation primary=1 'Cross-check summary ...'
         live_count 3 local_count 1 demo_mode True
         answer_count 4 sourced_answer_count 4 ratio 1.00
 
@@ -426,8 +462,8 @@ def test_mixed_live_and_faulted_run_counts_only_the_answers_that_arrived(
       fabricated ``example.test/local-demo`` prefix;
     * exactly 1 slot is FAILED and exactly 0 are on a simulated path;
     * the fabrication's own sentence appears 0 times in the ENTIRE served
-      payload — debate critiques and synthesis sections included, which is
-      where the invented answer used to be quoted back as a model position;
+      payload, model answers included — that is where the invented answer used
+      to sit, and where the paired positive finds it;
     * the missing slot's row in the position-movement table opens with the
       no-answer stand-in, not a synopsis of an invented answer.
 
@@ -439,11 +475,12 @@ def test_mixed_live_and_faulted_run_counts_only_the_answers_that_arrived(
     answer matches neither either. The load-bearing assertions here are the
     counts above.
 
-    One assertion here is deliberately NOT a defect detector, and is marked as
-    such at its site rather than left looking like evidence it is not:
-    ``agreement["aligned"] == 3`` read 3 before the fix too, because the
-    fabricated slot happened to cluster as the minority. Measured under
-    mutation, not assumed.
+    Four assertions here are NOT defect detectors. They are pins, and they are
+    named so no reader mistakes them for evidence: ``agreement["aligned"] == 3``
+    (read 3 before the fix too — the fabricated slot clustered as the minority),
+    ``sourced_answer_ratio == 1`` and ``live_count == 3`` (both read the same
+    before the fix; the DENOMINATOR is what moved, not the ratio), and
+    ``cost_source``. Each was measured under mutation, not assumed.
 
     ``cost_source == "estimated"`` is a no-change pin on the money contract: a
     run with a missing slot must not yield a measured receipt. Its positive
@@ -453,11 +490,15 @@ def test_mixed_live_and_faulted_run_counts_only_the_answers_that_arrived(
     ever produce one answer.
 
     What turns it red: delete the ``_live_execution_enabled`` guard from
-    ``produce_initial_answer``. Eleven of the counts above move. Verified by
-    mutation.
+    ``produce_initial_answer``. Most of the counts above move; the four pins
+    named above do not. No total is quoted here on purpose — how many
+    "assertions" a block contains is a matter of how you count them, and an
+    earlier draft of this docstring carried a figure nobody else could
+    reproduce.
     """
     query_run_repository.clear()
-    _enable_live(monkeypatch, _urlopen_faulting_only_slot_two)
+    _faulted_model_collides_with_no_moderator()
+    _enable_live(monkeypatch, _urlopen_faulting_only_the_participant)
     monkeypatch.setattr(config.settings, "openrouter_api_key", _FAKE_KEY, raising=False)
     monkeypatch.setattr(config.settings, "stage_delay_ms", 0, raising=False)
 
@@ -470,7 +511,9 @@ def test_mixed_live_and_faulted_run_counts_only_the_answers_that_arrived(
     failed = [a for a in answers if a["status"] == InitialAnswerStatus.FAILED]
     assert len(completed) == 3
     assert len(failed) == 1
-    assert failed[0]["slot_number"] == 2, "the faulted slot is the one reported missing"
+    assert failed[0]["slot_number"] == _FAULTED_SLOT_NUMBER, (
+        "the faulted slot is the one reported missing"
+    )
     simulated = [
         a
         for a in answers
@@ -508,7 +551,9 @@ def test_mixed_live_and_faulted_run_counts_only_the_answers_that_arrived(
     # stand-in — compared against ``_opening_synopsis("")`` rather than a
     # retyped copy of that sentence, so rewording the copy cannot silently
     # decouple the two.
-    missing_movement = [m for m in body["result"]["position_movements"] if m["slot_number"] == 2]
+    missing_movement = [
+        m for m in body["result"]["position_movements"] if m["slot_number"] == _FAULTED_SLOT_NUMBER
+    ]
     assert len(missing_movement) == 1
     assert missing_movement[0]["opening"] == _opening_synopsis("")
     assert missing_movement[0]["revised"] is False, "a slot with no answer revised nothing"

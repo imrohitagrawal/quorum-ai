@@ -71,18 +71,26 @@ def test_the_registry_lists_every_notice_the_module_declares() -> None:
     can emit any more, which would have made a retyped floor red for the wrong
     reason — and the only honest repair to a retyped floor is to retype it,
     which is how a floor stops measuring anything. Derived from the AST, it
-    tracks additions and deletions on its own and is strictly stronger: it
-    also catches a notice declared but never registered, which a count cannot
-    see.
+    tracks additions and deletions on its own, and because it compares CONTENTS
+    rather than counts it catches a notice declared but never registered — which
+    neither the old floor nor a length comparison can see.
 
     What turns it red: add ``NOTICE_ANYTHING = "..."`` to ``providers.py`` and
-    leave it out of ``PROVIDER_NOTICES``.
+    leave it out of ``PROVIDER_NOTICES`` — even if you also register some other
+    literal to keep the two counts equal.
     """
-    declared = _declared_notice_names()
-    assert declared, "no NOTICE_* constants found — the walk is looking in the wrong place"
-    assert len(set(PROVIDER_NOTICES)) == len(declared), (
-        f"{len(declared)} NOTICE_* constants declared, "
-        f"{len(set(PROVIDER_NOTICES))} distinct strings registered: {sorted(declared)}"
+    names = _declared_notice_names()
+    assert names, "no NOTICE_* constants found — the walk is looking in the wrong place"
+    declared = {getattr(providers, name) for name in names}
+    # MEMBERSHIP, not a count. An earlier draft compared lengths, and review
+    # broke it in one move: declare a jargon-carrying notice, reference it twice
+    # so the reachability guard is satisfied, register some unrelated literal,
+    # and the two counts stay equal while the new notice is unguarded. Equal
+    # cardinality is not the property; equal contents is.
+    assert set(PROVIDER_NOTICES) == declared, (
+        "PROVIDER_NOTICES and the module's NOTICE_* constants disagree.\n"
+        f"declared but not registered: {sorted(declared - set(PROVIDER_NOTICES))}\n"
+        f"registered but not declared: {sorted(set(PROVIDER_NOTICES) - declared)}"
     )
 
 
