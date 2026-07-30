@@ -639,9 +639,21 @@ class FinalAnswerProvenance(StrEnum):
     """Did a model-written final answer go into placing this row?
 
     The stance copy may only say what "the final synthesis" did with a model's
-    position when a model wrote that synthesis AND the classification actually
-    compared the opening against it. This enum is the second key of
+    position when a model wrote that synthesis. This enum is the second key of
     :data:`_STANCE_COPY`, alongside :class:`AlignmentState`.
+
+    That condition is NECESSARY, NOT SUFFICIENT, and this docstring claimed
+    otherwise for one review round. ``MODEL_AUTHORED`` does not mean every
+    opening was compared against the final answer:
+    :func:`~product_app.synthesis_consensus.classify_model_alignment`
+    short-circuits ``final_aligned = True`` for a MAJORITY opener before the
+    containment test runs. Measured 2026-07-30 — four agreeing openers about a
+    bridge, against a model-written synthesis about sourdough, invoked
+    ``_opening_reflected_in_final`` **zero** times and served "the final
+    synthesis keeps it in" four times. That door is pre-existing and byte-for-
+    byte what ``main`` serves; its number side is filed as #180 and its
+    narration side is recorded there too. Nothing here closes it — this enum
+    only stops the narration on runs where no model wrote the text at all.
 
     It is NOT a new source of truth. It restates the branch
     :func:`product_app.synthesis_consensus.classify_model_alignment` already
@@ -652,9 +664,9 @@ class FinalAnswerProvenance(StrEnum):
     number are read off one value rather than two.
     """
 
-    #: A model wrote the final answer AND each opening was compared against it,
-    #: so the narration may describe what that final answer did with this
-    #: model's position.
+    #: A model wrote the final answer, so the narration may name it. See the
+    #: class docstring for why this does NOT mean the opening was compared
+    #: against it.
     MODEL_AUTHORED = "model_authored"
     #: No model-written final answer went into the placement. FOUR shapes land
     #: here, not the three an earlier draft of this docstring listed:
