@@ -431,6 +431,14 @@ def test_mixed_live_and_faulted_run_counts_only_the_answers_that_arrived(
     * the missing slot's row in the position-movement table opens with the
       no-answer stand-in, not a synopsis of an invented answer.
 
+    SCOPE of those two string searches, stated so a later reader does not
+    over-trust them: they detect ONE generator, ``_local_simulation_text``,
+    which is the one #171 is about. They are NOT a general "nothing fabricated
+    reached the user" check — a templated debate round and a templated
+    synthesis section match neither string, and an empty-but-not-blank live
+    answer matches neither either. The load-bearing assertions here are the
+    counts above.
+
     One assertion here is deliberately NOT a defect detector, and is marked as
     such at its site rather than left looking like evidence it is not:
     ``agreement["aligned"] == 3`` read 3 before the fix too, because the
@@ -466,8 +474,7 @@ def test_mixed_live_and_faulted_run_counts_only_the_answers_that_arrived(
     simulated = [
         a
         for a in answers
-        if a["provider_path"]
-        in {ProviderPath.LOCAL_SIMULATION, ProviderPath.FALLBACK_SEARCH}
+        if a["provider_path"] in {ProviderPath.LOCAL_SIMULATION, ProviderPath.FALLBACK_SEARCH}
     ]
     assert len(simulated) == 0, "a live run may not contain a simulated answer"
 
@@ -570,9 +577,7 @@ def test_a_demo_run_still_simulates_every_slot(monkeypatch: pytest.MonkeyPatch) 
     missing slots and every count here drops to zero.
     """
     query_run_repository.clear()
-    monkeypatch.setattr(
-        config.settings, "openrouter_live_execution_enabled", False, raising=False
-    )
+    monkeypatch.setattr(config.settings, "openrouter_live_execution_enabled", False, raising=False)
     monkeypatch.setattr(config.settings, "stage_delay_ms", 0, raising=False)
 
     body = _drive_full_run(TestClient(app))
