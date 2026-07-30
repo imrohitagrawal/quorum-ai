@@ -56,6 +56,20 @@ is the rule only.
     (#113).
 16. **`make format` reformats test assertions** and breaks `sed`-style anchors.
     Grep for the real text before any programmatic edit.
+16a. **Process-global test state.** The cost event ring, the run-capacity
+    semaphore and the model catalog are process globals — a test that mutates one
+    changes the cap for everything after it. Use
+    `tests/helpers.isolated_run_semaphore` (`tests/helpers.py:19`).
+16b. **A probe script that does `sys.path.insert(0, ROOT/"src")` can silently
+    measure a STALE copy of the tree** sitting next to it, making a working fix
+    look broken. Repoint `ROOT` and sanity-check that the file you think you are
+    importing is the one on disk.
+16c. **`rm` on an UNTRACKED file is permanent** — there is no git history to
+    recover it from. Run `git ls-files <path>` before deleting anything you did
+    not just create. Recorded 2026-07-30, after three untracked handoff documents
+    were deleted alongside 29 tracked ones and two traps in them were lost; 16a
+    and 16b above are reconstructed from a partial grep captured earlier in the
+    same session, so their wording is approximate.
 
 **Shipping**
 17. **One work package, one pull request**, merged before the next starts. Merge
