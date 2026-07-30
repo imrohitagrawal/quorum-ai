@@ -851,11 +851,19 @@ class ProviderExecutionService:
         # This inverted NOTHING about F-06 and invented no threshold. Emptiness
         # after ``.strip()`` is the predicate the rest of the product already
         # uses on model-produced text — ``evaluation._substantive``,
-        # ``synthesis_consensus``, the material-claim count reached from
-        # ``query_runs``, and every debate and synthesis site that tests a live
-        # provider response. The initial-answer path was the only dissenter,
-        # which is why the SAME payload could serve ``agreement 3 of 4`` next
-        # to ``live_count 4``.
+        # ``synthesis_consensus``, ``query_runs`` (twice: directly, when
+        # choosing which answers count toward the material-claim total, and
+        # again inside ``estimate_material_claim_count``), and every debate and
+        # synthesis site that tests a live provider response. The initial-answer
+        # path was the only dissenter, which is why the SAME payload could serve
+        # ``agreement 3 of 4`` next to ``live_count 4``.
+        #
+        # That parenthesis is deliberate. Review reported this attribution as
+        # "true but indirect — the strip is not in ``query_runs``". REFUTED on
+        # inspection: there are two, and one is a direct ``.strip()`` filter in
+        # ``_result_response``. A reviewer claim gets checked before it is acted
+        # on; this one did not survive the check, and the wording it would have
+        # produced was vaguer than the truth.
         #
         # No count is quoted above, on purpose. An earlier draft of this comment
         # said "all ten ... sites"; review could not re-derive ten under any
