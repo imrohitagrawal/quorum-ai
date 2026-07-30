@@ -17,7 +17,11 @@ is the rule only.
    measured.** Open the log and find the number.
 3. **If a premise you were handed turns out to be false, STOP and say so.** Never
    repair it silently and carry on.
-4. **Plain English. No jargon, no invented shorthand.**
+4. **When you CORRECT a false claim, verify the REPLACEMENT before writing it.**
+   Three review rounds here caught rewrites that were themselves false — one told
+   an operator a money-losing fault was benign. Prefer narrow hedged wording
+   ("no workflow sets it") over absolutes ("set nowhere else").
+5. **Plain English. No jargon, no invented shorthand.**
 
 **Tests**
 5. **Every test ships with one line saying what turns it red.** Prove it by
@@ -25,7 +29,13 @@ is the rule only.
    `diff -q`. **Never `git checkout <file>`** — it discards uncommitted work.
    Confirm the run actually executed; a mutation that breaks collection proves
    nothing.
-6. **A negative check needs a positive partner.** "No X found" is trivially true
+6a. **Capture the verbatim failure output** when the test first fails. "It failed"
+   is not evidence; the message is.
+6b. **Accounting code (cost, quota, rate limits, usage) asserts CARDINALITY** — how
+   many records, rows, or calls — never just a clean-path outcome. F-01 survived
+   every existing test because they asserted *that* a run was billed, never *how
+   many times*. Ask of every assertion: could this fail for ANY implementation?
+7. **A negative check needs a positive partner.** "No X found" is trivially true
    over nothing.
 7. **Never parametrize a test over the constant it tests**; never assert a bound
    against the constant that defines it.
@@ -40,8 +50,16 @@ is the rule only.
     *IEEE TSE* 1997). Spend the difference on verification, not more finders.
 11. **Verify every reviewer claim before acting** — roughly a fifth do not
     survive. **Check the fix, not just the finding.**
-12. **Cap review at TWO rounds**, then ship with leftovers filed. If two fixes in
-    a row add defects, change the approach.
+12. **Cap review at TWO rounds**, then STOP and escalate with open findings
+    listed. If two fixes in a row add defects, change the approach.
+    **Expect your own fix to introduce a defect — budget a round for it.**
+12a. **Reviewers refute by default** and report only findings backed by a
+    demonstrated failure. Reviews are **read-only**; a separate single writer
+    applies fixes.
+12b. **A reviewer that must mutate source gets its OWN copy**
+    (`git archive HEAD | tar -x -C <dir>`). A shared-worktree mutation once gave
+    another reviewer 4 phantom failures, and once left uncommitted edits a later
+    agent inherited.
 
 **Commands that bite if you get them wrong**
 13. **Run e2e exactly as CI does**, or ~95 phantom failures appear:
@@ -50,8 +68,18 @@ is the rule only.
     cd e2e && SESSION_RATE_LIMIT_PER_MINUTE=600 npx playwright test <spec> \
       --project=chromium --workers=1 --retries=0
     ```
-14. **`make quality` / `make validate` do NOT include the blocking changed-lines
-    coverage gate.** Run `make diff-cover DIFF_BASE=origin/main` before pushing.
+14. **Three blocking CI gates are in NEITHER `make quality` nor `make validate`.**
+    Run all of these before pushing:
+    ```bash
+    uv sync --all-extras   # NOT --extra dev: schemathesis lives in `quality`, and
+                           # without it mypy reports 6 phantom import errors
+    make quality && make validate
+    make diff-cover DIFF_BASE=origin/main   # blocking, >=95% changed-line coverage
+    make openapi-check                      # blocking
+    make security-scan                      # blocking
+    ```
+    **Never lower a threshold, add `# pragma: no cover`, or delete a test to go
+    green.** If a line is genuinely untestable, say so with evidence.
 15. **Run `pytest` and `make diff-cover` serially** — they race on a shared path
     (#113).
 16. **`make format` reformats test assertions** and breaks `sed`-style anchors.
@@ -64,17 +92,34 @@ is the rule only.
     measure a STALE copy of the tree** sitting next to it, making a working fix
     look broken. Repoint `ROOT` and sanity-check that the file you think you are
     importing is the one on disk.
-16c. **`rm` on an UNTRACKED file is permanent** — there is no git history to
-    recover it from. Run `git ls-files <path>` before deleting anything you did
-    not just create. Recorded 2026-07-30, after three untracked handoff documents
-    were deleted alongside 29 tracked ones and two traps in them were lost; 16a
-    and 16b above are reconstructed from a partial grep captured earlier in the
-    same session, so their wording is approximate.
+16c. **Before deleting a file, run `git ls-files <path>`.** Tracked files are
+    recoverable with `git show <sha>:<path>`. An untracked file has no history —
+    but if it was ever `git add`ed it survives as a **dangling blob**, and
+    `git fsck --lost-found` plus `git cat-file -p <blob>` recovers it byte-exact.
+    Recorded 2026-07-30: three untracked handoff documents were deleted, declared
+    unrecoverable on the strength of `git log --all` alone, and then recovered in
+    full from dangling blobs. **Check the object store before declaring loss.**
 
 **Shipping**
-17. **One work package, one pull request**, merged before the next starts. Merge
+17. **One CONCERN per pull request**, merged before the next starts — a reviewer
+    cannot audit a billing fix and a docs restructure in the same diff. Merge
     `main` into your branch **before** starting. Check you are on your branch
     before committing.
+17a. **Branch in a dedicated `git worktree`**, never the main checkout, so other
+    uncommitted work is never at risk.
+17b. **Push, open a pull request, merge and deploy only with explicit human
+    approval.** Commit locally freely.
+17c. **Squash-merge with an explicit message**
+    (`gh pr merge --squash --subject --body`). A bare `--squash` concatenates
+    EVERY commit body onto `main`, so superseded figures from intermediate
+    commits land there. (Violated on PR #172, 2026-07-30 — both bodies landed.)
+17d. **The head branch must be up to date with base.** A second stacked pull
+    request merges `main` in first, then **re-gates the merged tree locally**
+    (diff-cover included). A clean auto-merge is not a correct merge.
+17e. **After merging, `git branch -f main origin/main`** — the merge lands on the
+    remote and the local ref does not follow.
+17f. **Hermetic / $0.** No paid API calls for routine checks. Never fabricate a
+    number — flag the gap instead.
 18. **Done means merged AND running in production.** Verify three ways: the
     deploy **job** ran (not `skipped`/`cancelled` — check the job, not the run's
     rollup), `/status.build_sha` equals the merged SHA, and the thing you built
