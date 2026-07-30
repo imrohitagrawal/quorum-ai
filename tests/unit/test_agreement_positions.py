@@ -193,10 +193,24 @@ def test_minority_that_aligns_is_marked_revised_with_an_inference_note() -> None
     assert len(revised) == 1
     assert revised[0].slot_number == 4
     # Observable-inference wording — opening-vs-final, no mid-debate action.
+    #
+    # These two strings USED to name "the final synthesis" as the thing that
+    # reflected the consensus, on this very run — which supplies no final
+    # synthesis at all. #176 replaced them; the note still describes the same
+    # observable inference, it just no longer names an object that does not
+    # exist. ``test_no_stance_row_names_a_final_synthesis_no_model_wrote`` is
+    # the assertion that keeps them honest; these two pin the exact wording so
+    # a copy edit is a deliberate act.
     assert revised[0].revision_note == (
-        "Opened as a minority view; the final synthesis reflects the group consensus."
+        "Opened as a minority view and is counted inside the group consensus. That "
+        "placement reads the panel's own answers; no model-written final answer is "
+        "available to compare it against."
     )
-    assert revised[0].final == "Aligns with the group consensus in the final synthesis."
+    assert revised[0].final == (
+        "Opened in the minority, and is counted inside the group consensus. No "
+        "model-written final answer is available to compare it against, so this "
+        "reads the panel's own answers."
+    )
     # A revised model still lands aligned, so aligned counts it.
     assert agreement.aligned == 4
     assert agreement.total == 4
@@ -432,6 +446,123 @@ def test_minority_whose_opening_lands_in_final_is_marked_revised() -> None:
     assert revised[0].slot_number == 4
     assert agreement.total == 4
     assert agreement.aligned == 4
+
+
+def test_no_stance_row_names_a_final_synthesis_no_model_wrote() -> None:
+    """#176 surface 4. The per-model narration may say what "the final
+    synthesis" did with a model's position ONLY when a model wrote that
+    synthesis.
+
+    Measured at ``12cf402`` on the ordinary three-of-four-agree panel: on a run
+    whose synthesis this product TEMPLATED, three rows read "the final synthesis
+    keeps it in the group consensus" and one read "the final synthesis leaves it
+    outside" — 4 of 4 rows narrating a synthesis no model wrote. On a run with
+    NO synthesis at all it was worse: the minority row read "Aligns with the
+    group consensus in the final synthesis", naming an object that does not
+    exist.
+
+    This asserts CARDINALITY on the served rows, in both directions on the SAME
+    panel, so it cannot pass over an empty set or over a run shape that happens
+    not to produce the sentence:
+
+    * live synthesis   -> 4 of 4 rows name the final synthesis (the positive
+      partner; without it "0 rows name it" is trivially true over nothing);
+    * templated        -> 0 of 4;
+    * no synthesis     -> 0 of 4.
+
+    It counts rows rather than comparing against the copy table, so it could
+    fail for any implementation — comparing to ``_STANCE_COPY`` would compare
+    the code against itself.
+
+    What turns it red: in ``product_app.synthesis.build_agreement_and_positions``
+    replace the derived ``final_answer_provenance`` with the constant
+    ``FinalAnswerProvenance.MODEL_AUTHORED``. The templated and no-synthesis
+    runs then serve the model-authored copy again and both counts read 4.
+    """
+    answers = [
+        _answer(1, _AGREE_TEXT),
+        _answer(2, _AGREE_TEXT),
+        _answer(3, _AGREE_TEXT),
+        _answer(4, "An unrelated claim about zebra migration patterns in autumn."),
+    ]
+    debate = _debate("After round 2 the models converged on the load-limit reading.")
+
+    def rows_naming_a_final_synthesis(final_synthesis: FinalSynthesis | None) -> int:
+        _, positions = build_agreement_and_positions(
+            initial_answers=answers,
+            debate_outputs=debate,
+            final_synthesis=final_synthesis,
+        )
+        assert len(positions) == 4, "a row per model, or the counts below mean nothing"
+        return sum(
+            1
+            for p in positions
+            if "final synthesis" in " ".join(filter(None, (p.final, p.revision_note))).lower()
+        )
+
+    live = _synthesis(_AGREE_TEXT, synthesis_mode=SYNTHESIS_MODE_LIVE)
+    templated = _synthesis(_AGREE_TEXT, synthesis_mode=SYNTHESIS_MODE_SIMULATED)
+
+    assert rows_naming_a_final_synthesis(live) == 4, (
+        "positive partner: a model wrote it, so every row may name it"
+    )
+    assert rows_naming_a_final_synthesis(templated) == 0, (
+        "this product wrote the final answer; no row may say what it did"
+    )
+    assert rows_naming_a_final_synthesis(None) == 0, (
+        "there is no final synthesis on this run; no row may name one"
+    )
+
+
+def test_stance_copy_covers_every_provenance_and_alignment_state() -> None:
+    """The copy table is TOTAL over its key, so a served lookup cannot raise.
+
+    ``(NOT_MODEL_AUTHORED, MOVED_TO_CONSENSUS)`` is the one combination
+    measured unreachable today, and it is still present: reachability is a
+    measurement about today's classifier, and a ``KeyError`` inside a served
+    response is a worse failure than a redundant row.
+
+    What turns it red: delete any entry from ``_STANCE_COPY`` — the count drops
+    below 8 and the missing-key list names it.
+    """
+    from product_app.debate import _STANCE_COPY, AlignmentState, FinalAnswerProvenance
+
+    expected = {
+        (provenance, state) for provenance in FinalAnswerProvenance for state in AlignmentState
+    }
+    assert len(expected) == 8, "2 provenances x 4 alignment states"
+    assert set(_STANCE_COPY) == expected, sorted(str(k) for k in expected - set(_STANCE_COPY))
+    assert len(_STANCE_COPY) == 8
+
+
+def test_a_revised_row_still_carries_a_note_when_no_model_wrote_the_final_answer() -> None:
+    """The honest rewording must not empty the chip's tooltip.
+
+    ``PositionMovement.revised`` drives a "✓ Revised" chip in the result view
+    whose title and caption are ``revision_note``; a rewrite that dropped the
+    note would silently ship a chip with no explanation. Positive partner to
+    the count assertion above: the row must still SAY something, it just may
+    not say it about a synthesis that does not exist.
+
+    What turns it red: set ``revision_note=None`` on the
+    ``(NOT_MODEL_AUTHORED, MOVED_TO_CONSENSUS)`` row of ``_STANCE_COPY``.
+    """
+    answers = [
+        _answer(1, _AGREE_TEXT),
+        _answer(2, _AGREE_TEXT),
+        _answer(3, _AGREE_TEXT),
+        _answer(4, "An unrelated claim about zebra migration patterns in autumn."),
+    ]
+    debate = _debate("After round 2 the models converged on the load-limit reading.")
+
+    _, positions = build_agreement_and_positions(
+        initial_answers=answers, debate_outputs=debate, final_synthesis=None
+    )
+
+    revised = [p for p in positions if p.revised]
+    assert len(revised) == 1, "the no-synthesis strong-panel run flags exactly one row"
+    assert revised[0].revision_note, "the chip's tooltip may not be emptied by the rewording"
+    assert revised[0].final, "the Final cell may not be emptied by the rewording"
 
 
 def test_no_stance_copy_claims_an_unobservable_mid_debate_action() -> None:

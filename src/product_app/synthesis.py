@@ -37,6 +37,7 @@ from product_app.debate import (
     DEBATE_ROUND_MAX_TOKENS,
     AgreementSummary,
     DebateOutput,
+    FinalAnswerProvenance,
     PositionMovement,
     build_position_movements,
     summarize_agreement,
@@ -1225,10 +1226,23 @@ def build_agreement_and_positions(
     live or simulated is already surfaced by
     ``QueryRunResultResponse.demo_mode``.
     """
+    model_authored_final_text = _final_synthesis_alignment_text(final_synthesis)
+    # ONE expression decides both the number and the sentence (#176). The
+    # classifier compares an opening against final-answer CONTENT only when this
+    # text is non-empty, and the stance narration may name "the final synthesis"
+    # only in exactly that case. Deriving the provenance from the same value —
+    # rather than re-deriving it from ``final_synthesis`` — is what stops the
+    # verdict ring and the "how positions moved" table telling different
+    # stories about the same run.
+    final_answer_provenance = (
+        FinalAnswerProvenance.MODEL_AUTHORED
+        if (model_authored_final_text or "").strip()
+        else FinalAnswerProvenance.NOT_MODEL_AUTHORED
+    )
     alignments = classify_model_alignment(
         initial_answers,
         debate_outputs,
-        model_authored_final_text=_final_synthesis_alignment_text(final_synthesis),
+        model_authored_final_text=model_authored_final_text,
         final_answer_was_templated=_final_synthesis_was_templated(final_synthesis),
     )
     agreement = summarize_agreement(initial_answers=initial_answers, alignments=alignments)
@@ -1236,6 +1250,7 @@ def build_agreement_and_positions(
         initial_answers=initial_answers,
         debate_outputs=debate_outputs,
         alignments=alignments,
+        final_answer_provenance=final_answer_provenance,
     )
     return agreement, positions
 
