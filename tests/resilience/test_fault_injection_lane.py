@@ -655,7 +655,8 @@ def test_a_run_in_which_every_slot_returned_whitespace_is_not_a_completed_run(
         status completed  cost_source measured
         failed_steps []  missing_steps []
         coverage {'answer_count': 4, 'sourced_answer_count': 0,
-                  'sourced_answer_ratio': '0.00', 'target_met': False}
+                  'sourced_answer_ratio': '0.00', 'target_ratio': '0.80',
+                  'target_met': False}
 
     Four models produced nothing and the product reported "4 of 4 answered
     live", status ``completed``, no failed steps, and a ``measured`` (billed)
@@ -742,19 +743,25 @@ def test_a_whitespace_slot_carrying_a_citation_leaves_the_coverage_denominator(
         slot 3 completed primary=1 text='   \\n\\t  '
         live_count 4 demo_mode False status completed cost_source measured
         coverage {'answer_count': 4, 'sourced_answer_count': 4,
-                  'sourced_answer_ratio': '1.00', 'target_met': True}
+                  'sourced_answer_ratio': '1.00', 'target_ratio': '0.80',
+                  'target_met': True}
         agreement {'aligned': 3, 'total': 4}
 
     ``coverage 4 of 4 = 100%`` on a run where one slot produced no text — the
     same wrong figure #171 was filed about, reached through a different door.
 
-    THE PAYLOAD CONTRADICTED ITSELF, and that is this test's sharpest assertion.
-    ``synthesis_consensus`` applies ``.strip()`` when deciding alignment, so
-    ``agreement`` read 3 while ``live_count`` and the coverage denominator read
-    4. The product knew the slot was empty in one place and not in the other.
-    The pair ``live_count == 3`` and ``aligned == 3`` is what pins that
-    disagreement closed: before the fix those two numbers differed, and NO
-    assertion on either one alone would have caught it.
+    THE PAYLOAD CONTRADICTED ITSELF. ``synthesis_consensus`` applies
+    ``.strip()`` when deciding alignment, so ``agreement`` read 3 while
+    ``live_count`` and the coverage denominator read 4. The product knew the
+    slot was empty in one place and not in the other. ``live_count == 3`` is the
+    assertion that catches it — on its own, since it read 4 before the fix — and
+    ``aligned == 3`` is the PIN beside it that shows WHAT it disagreed with.
+
+    An earlier draft of this paragraph claimed "NO assertion on either one alone
+    would have caught it". That is false, and it was refuted by the very
+    measurement that produced the block above: ``live_count`` moves 4 -> 3, so
+    asserting it alone is sufficient. Corrected rather than deleted, because the
+    pairing is still what makes the failure legible.
 
     ``sourced_answer_ratio == 1`` reads the same before and after — it is a
     PIN, not a defect detector. It is the DENOMINATOR that moved (4 -> 3), which
@@ -806,8 +813,6 @@ def test_a_whitespace_slot_carrying_a_citation_leaves_the_coverage_denominator(
     assert Decimal(str(coverage["sourced_answer_ratio"])) == Decimal("1")  # PIN
 
     # --- the disagreement, pinned closed ------------------------------------
-    # These two numbers came from code that disagreed about whether the slot was
-    # empty: ``live_count`` did not strip, ``classify_model_alignment`` did.
     # These two numbers came from code that disagreed about whether slot 3 was
     # empty: ``live_count`` did not strip, ``classify_model_alignment`` did. So
     # the run served ``live_count 4`` beside ``aligned 3``. ``live_count`` is

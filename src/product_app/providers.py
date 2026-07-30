@@ -865,13 +865,15 @@ class ProviderExecutionService:
         # on; this one did not survive the check, and the wording it would have
         # produced was vaguer than the truth.
         #
-        # No count is quoted above, on purpose. An earlier draft of this comment
-        # said "all ten ... sites"; review could not re-derive ten under any
-        # reading — eight ``live.answer_text.strip()`` calls, eleven counting
-        # the excerpt and synopsis helpers, thirteen counting every ``.strip()``
-        # in the two files. A count in prose is a claim, it goes stale silently,
-        # and that one was simply wrong. The sentence names the SET so a reader
-        # greps for it instead of trusting a number.
+        # No count is quoted above, on purpose. An earlier draft said "all ten
+        # ... sites" and review could not re-derive ten under any reading. Two
+        # figures ARE re-derivable in ``debate.py`` + ``synthesis.py``: EIGHT
+        # ``live.answer_text.strip()`` call sites, and THIRTEEN occurrences of
+        # ``.strip()`` in total. Anything between them depends on which helpers
+        # you elect to count, so no such number appears here — a first repair of
+        # this comment quoted "eleven" for that middle reading and review could
+        # not reproduce that either. A count in prose is a claim; this sentence
+        # names the SET so a reader greps it instead of trusting a figure.
         #
         # KNOWN RESIDUAL (#178): ``str.strip()`` removes only characters where
         # ``str.isspace()`` is true. A completion of zero-width or invisible

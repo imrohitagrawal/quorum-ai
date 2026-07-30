@@ -705,16 +705,28 @@ def test_initial_answer_path_counts_an_answer_with_surrounding_whitespace(
     prompts print it verbatim.
 
     What turns it red: make the guard RETURN A REBUILT RESULT carrying the
-    stripped text (``return dataclasses.replace(result,
-    answer_text=result.answer_text.strip())``) — the leading and trailing
-    newlines disappear from the served answer and this assertion fires.
+    stripped text. Add ``from dataclasses import replace`` to ``providers.py``,
+    then swap the guard's ``return result`` for::
 
-    Do NOT try the obvious ``result.answer_text = result.answer_text.strip()``:
-    ``LiveProviderResult`` is a frozen dataclass, so that raises
-    ``FrozenInstanceError`` and reds this test for the wrong reason. A mutation
-    that raises instead of running proves nothing about the assertion — the
-    exact trap AGENTS.md rule 6 exists to catch, and it was in this docstring
-    until review performed it and got the exception rather than the failure.
+        return replace(result, answer_text=result.answer_text.strip())
+
+    The leading and trailing newlines then disappear from the served answer and
+    this assertion fires with ``AssertionError: served text is not rewritten``.
+
+    TWO WRONG WAYS TO PERFORM IT, both of which raise instead of asserting, and
+    both of which were written in this docstring before review performed them:
+
+    * ``result.answer_text = result.answer_text.strip()`` — ``LiveProviderResult``
+      is a frozen dataclass, so this raises ``FrozenInstanceError``.
+    * ``dataclasses.replace(...)`` without adding an import — ``providers.py``
+      binds only ``asdict`` and ``dataclass`` from that module, never the module
+      name, so this raises ``NameError``.
+
+    A mutation that raises instead of running proves nothing about the
+    assertion. That is the trap AGENTS.md rule 6 exists to catch, and this
+    docstring fell into it twice: once in the original, and once in the repair
+    of the original. Both were found only by someone PERFORMING the instruction
+    rather than reading it.
     """
     _install(monkeypatch, _Body(_completion("\n  A real answer.  \n")))
     answer = _produce_initial()
