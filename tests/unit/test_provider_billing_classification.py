@@ -604,23 +604,135 @@ def test_initial_answer_path_torn_body_now_degrades_instead_of_raising(
     assert answer.citation_coverage.answer_count == 0
 
 
-def test_initial_answer_path_still_serves_a_whitespace_only_completion(
+def test_initial_answer_path_reports_a_whitespace_only_completion_missing(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """PIN: whitespace-only content was a live COMPLETED answer before F-06.
+    """#175: a whitespace-only completion is NOT an answer. INVERTED, not deleted.
 
-    ``_post_openrouter`` returned the RAW content, so ``"   "`` passed its
-    ``if not content`` guard. The replacement guard in
-    ``_live_openrouter_response`` is deliberately ``not result.answer_text`` and
-    NOT ``.strip()`` so this stays true; tightening it would be a silent
-    behaviour change smuggled in under a billing fix.
+    This test used to be
+    ``test_initial_answer_path_still_serves_a_whitespace_only_completion`` and
+    asserted the opposite: ``answer_text == "   \\n  "`` and
+    ``token_usage == _BILLED_USAGE`` on a COMPLETED slot. Its docstring said
+    tightening the guard "would be a silent behaviour change smuggled in under a
+    billing fix."
+
+    **That was right about the risk and wrong about the conclusion.** The risk
+    is real — which is why the change is happening HERE, in its own pull
+    request, with the behaviour change as the headline rather than a side
+    effect. But pinning the behaviour did not make it correct. What it pinned
+    was a run in which no model produced a single character reporting "4 of 4
+    answered live", status ``completed``, no failed steps and a ``measured``
+    (billed) receipt — and, with a citation annotation on the empty slot, 100%
+    source coverage over an answer with no text. A test that goes green because
+    the defect is present is not protecting a contract; it is locking one in.
+
+    Nothing is invented here. ``.strip()`` is the predicate the rest of the
+    product already applies to model-produced text (``evaluation._substantive``,
+    ``synthesis_consensus``, and every debate/synthesis provider-response site);
+    the initial-answer path was the sole dissenter. There is NO minimum length
+    and no quality heuristic — see
+    ``test_initial_answer_path_counts_a_one_character_answer``, the positive
+    partner that proves a legitimate ``"7"`` still counts.
+
+    Every assertion below is a CARDINALITY on what the slot contributes
+    downstream, not a status check. ``posts[0] == 1`` is the billing contract:
+    the call still went out and was still billed exactly once — this fix changes
+    what the slot MEANS, never how many requests it provokes.
+
+    ``token_usage is None`` is the money decision (#175), not an accident: see
+    ``providers._failed_answer``'s docstring for why a missing slot records no
+    usage and the receipt drops to ``estimated`` instead.
+
+    What turns it red: revert ``.strip()`` in ``_live_openrouter_response`` to
+    ``if not result.answer_text:`` — the slot comes back COMPLETED carrying
+    ``"   \\n  "`` and ``_BILLED_USAGE``, and ``answer_count`` returns to 1.
+    Verified by mutation (copy aside, mutate, restore from copy, ``diff -q``).
     """
-    _install(monkeypatch, _Body(_completion("   \n  ")))
+    posts = _install(monkeypatch, _Body(_completion("   \n  ")))
     answer = _produce_initial()
+    assert posts[0] == 1, "the whitespace completion was still billed exactly once"
+
+    assert answer.status is InitialAnswerStatus.FAILED
+    assert answer.error_code == "PROVIDER_UNAVAILABLE"
+    # Honest about what was attempted: the OpenRouter call really was made.
     assert answer.provider_path is ProviderPath.OPENROUTER_SEARCH
     assert answer.provider_attempt_order == [ProviderPath.OPENROUTER_SEARCH]
-    assert answer.answer_text == "   \n  "
-    assert answer.token_usage == _BILLED_USAGE
+    assert answer.token_usage is None, "a missing slot must never carry live usage"
+
+    # The cardinalities, which are the point.
+    assert answer.answer_text == ""
+    assert len(answer.sources) == 0
+    assert answer.citation_coverage.answer_count == 0, "out of the coverage DENOMINATOR"
+    assert answer.citation_coverage.sourced_answer_count == 0
+
+
+def test_initial_answer_path_counts_a_one_character_answer(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """POSITIVE PARTNER: the over-correction detector for #175.
+
+    ``.strip()`` must remove exactly one thing — text that is nothing but
+    whitespace. A model that legitimately answers ``"7"`` has answered. If this
+    ever fails, the guard has grown a minimum length, which is a product
+    decision nobody took.
+
+    This is the assertion that makes the inverted test above safe to trust: a
+    guard that returned "missing" for EVERYTHING would satisfy every zero over
+    there.
+
+    What turns it red: change the guard to require more than one character
+    (e.g. ``len(result.answer_text.strip()) < 2``) — the slot flips to FAILED
+    with ``answer_count == 0``.
+    """
+    posts = _install(monkeypatch, _Body(_completion("7")))
+    answer = _produce_initial()
+    assert posts[0] == 1
+
+    assert answer.status is InitialAnswerStatus.COMPLETED
+    assert answer.answer_text == "7"
+    assert answer.token_usage == _BILLED_USAGE, "a real answer keeps its measured tokens"
+    assert answer.citation_coverage.answer_count == 1, "a real answer is IN the denominator"
+
+
+def test_initial_answer_path_counts_an_answer_with_surrounding_whitespace(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """POSITIVE PARTNER: ``.strip()`` decides, it does not MUTATE.
+
+    A normal completion often arrives wrapped in a leading newline. The guard
+    strips only to make the emptiness DECISION; the served text must stay
+    byte-for-byte what the model returned, because the debate and synthesis
+    prompts print it verbatim.
+
+    What turns it red: make the guard RETURN A REBUILT RESULT carrying the
+    stripped text. Add ``from dataclasses import replace`` to ``providers.py``,
+    then swap the guard's ``return result`` for::
+
+        return replace(result, answer_text=result.answer_text.strip())
+
+    The leading and trailing newlines then disappear from the served answer and
+    this assertion fires with ``AssertionError: served text is not rewritten``.
+
+    TWO WRONG WAYS TO PERFORM IT, both of which raise instead of asserting, and
+    both of which were written in this docstring before review performed them:
+
+    * ``result.answer_text = result.answer_text.strip()`` — ``LiveProviderResult``
+      is a frozen dataclass, so this raises ``FrozenInstanceError``.
+    * ``dataclasses.replace(...)`` without adding an import — ``providers.py``
+      binds only ``asdict`` and ``dataclass`` from that module, never the module
+      name, so this raises ``NameError``.
+
+    A mutation that raises instead of running proves nothing about the
+    assertion. That is the trap AGENTS.md rule 6 exists to catch, and this
+    docstring fell into it twice: once in the original, and once in the repair
+    of the original. Both were found only by someone PERFORMING the instruction
+    rather than reading it.
+    """
+    _install(monkeypatch, _Body(_completion("\n  A real answer.  \n")))
+    answer = _produce_initial()
+    assert answer.status is InitialAnswerStatus.COMPLETED
+    assert answer.answer_text == "\n  A real answer.  \n", "served text is not rewritten"
+    assert answer.citation_coverage.answer_count == 1
 
 
 def test_initial_answer_path_control_live_answer_is_unchanged(
