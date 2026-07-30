@@ -10,7 +10,7 @@ from product_app.model_slots import ModelSlot, validate_model_slots
 from product_app.providers import (
     _SEARCH_REJECTED,
     NOTICE_DEMO_MODE,
-    NOTICE_LIVE_RETURNED_NOTHING,
+    NOTICE_PROVIDER_UNAVAILABLE,
     NOTICE_SEARCH_DISABLED,
     LiveProviderResult,
     ProviderPath,
@@ -51,13 +51,17 @@ def test_provider_stub_marks_local_simulation_when_live_execution_is_disabled() 
     assert all(not answer.fallback_used for answer in answers)
     assert all(answer.sources for answer in answers)
     assert all(answer.sources[0].provider == ProviderPath.LOCAL_SIMULATION for answer in answers)
-    # By IDENTITY, not substring: NOTICE_DEMO_MODE and
-    # NOTICE_LIVE_RETURNED_NOTHING share the phrase "not a real model
-    # answer", so a substring check passes even when the branch picks the
-    # wrong one — and picking the wrong one tells the user a model was
-    # called when none was.
+    # By IDENTITY, not substring: several notices share the phrase "not a real
+    # model answer", so a substring check passes even when the branch picks
+    # the wrong one.
     assert all(answer.provider_notice == NOTICE_DEMO_MODE for answer in answers)
-    assert all(answer.provider_notice != NOTICE_LIVE_RETURNED_NOTHING for answer in answers)
+    # #171 paired negative: a DEMO run is the one place simulated answers are
+    # legitimate, so no slot here may be reported missing. This is the exact
+    # assertion that distinguishes "live execution is off, everything is
+    # simulated and labelled" from "live execution is on and a slot failed" —
+    # the second is now the ONLY producer of NOTICE_PROVIDER_UNAVAILABLE on
+    # this path, and mixing the two is what #171 was.
+    assert all(answer.provider_notice != NOTICE_PROVIDER_UNAVAILABLE for answer in answers)
 
 
 def test_provider_stub_uses_fallback_when_openrouter_sources_are_unusable() -> None:

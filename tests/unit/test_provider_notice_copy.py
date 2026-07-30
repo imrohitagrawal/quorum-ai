@@ -44,13 +44,46 @@ _DEVELOPER_SPEAK = (
 )
 
 
-def test_the_registry_is_not_empty() -> None:
+def _declared_notice_names() -> set[str]:
+    """Every ``NOTICE_*`` constant ``providers.py`` declares, read from its AST.
+
+    Derived from the module, never retyped here — a hand-copied count goes
+    stale silently the moment a notice is added or removed.
+    """
+    tree = ast.parse(pathlib.Path(providers.__file__).read_text(encoding="utf-8"))
+    return {
+        node.targets[0].id
+        for node in tree.body
+        if isinstance(node, ast.Assign)
+        and isinstance(node.targets[0], ast.Name)
+        and node.targets[0].id.startswith("NOTICE_")
+    }
+
+
+def test_the_registry_lists_every_notice_the_module_declares() -> None:
     """A guard over an empty collection proves nothing.
 
     ``all([])`` being True is precisely how F-06's cost gate went
-    vacuous; this suite refuses to repeat it.
+    vacuous; this suite refuses to repeat it. So the registry must be
+    non-empty AND complete.
+
+    This replaced a hand-typed ``>= 9``. #171 deleted a notice that no branch
+    can emit any more, which would have made a retyped floor red for the wrong
+    reason — and the only honest repair to a retyped floor is to retype it,
+    which is how a floor stops measuring anything. Derived from the AST, it
+    tracks additions and deletions on its own and is strictly stronger: it
+    also catches a notice declared but never registered, which a count cannot
+    see.
+
+    What turns it red: add ``NOTICE_ANYTHING = "..."`` to ``providers.py`` and
+    leave it out of ``PROVIDER_NOTICES``.
     """
-    assert len(PROVIDER_NOTICES) >= 9
+    declared = _declared_notice_names()
+    assert declared, "no NOTICE_* constants found — the walk is looking in the wrong place"
+    assert len(set(PROVIDER_NOTICES)) == len(declared), (
+        f"{len(declared)} NOTICE_* constants declared, "
+        f"{len(set(PROVIDER_NOTICES))} distinct strings registered: {sorted(declared)}"
+    )
 
 
 @pytest.mark.parametrize("notice", PROVIDER_NOTICES)

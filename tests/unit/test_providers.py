@@ -201,11 +201,24 @@ class TestTruncationPropagation:
 
         assert answer.shortened is False
 
-    def test_simulated_text_on_the_fallback_branch_is_never_shortened(self) -> None:
-        """The other half of the same branch: when there is NO usable live text
-        the answer is locally simulated, and simulated text was never truncated
-        by a model. Proves the fix keys off which text was actually used, not
-        merely off the presence of a truncated live response.
+    def test_a_truncated_but_empty_live_result_reports_the_slot_missing(self) -> None:
+        """The other half of the same branch, rewritten by #171.
+
+        Note the query text: ``force fallback search`` steers this into the
+        FALLBACK branch, and that branch also emitted ``_local_simulation_text``
+        when there was no live text. Live execution is ON here (the class
+        fixture), so before #171 this was a SECOND route to a fabricated
+        COMPLETED answer during a live run — which is why the guard is placed
+        above the fallback branch rather than only on the tail. Its
+        predecessor asserted ``answer_text != ""``: it pinned the fabrication.
+
+        The original contract is unchanged and still asserted: ``shortened``
+        reflects the text actually used, so a slot carrying no model text is
+        never marked shortened whatever the discarded live result claimed.
+
+        What turns it red: move the ``_live_execution_enabled`` guard in
+        ``produce_initial_answer`` below the ``use_fallback`` branch — the slot
+        comes back COMPLETED with invented text. Verified by mutation.
         """
         slots = validate_model_slots(
             [
@@ -230,7 +243,47 @@ class TestTruncationPropagation:
                 openrouter_key="sk-test",
             )
 
-        assert answer.answer_text != ""
+        assert answer.status is InitialAnswerStatus.FAILED
+        assert answer.answer_text == ""
+        assert len(answer.sources) == 0
+        assert answer.citation_coverage.answer_count == 0
+        assert answer.shortened is False
+
+    def test_demo_mode_still_simulates_the_slot_and_never_marks_it_shortened(self) -> None:
+        """Positive partner to the test above: the simulated answer still EXISTS.
+
+        The assertions above are all "nothing was produced", and a guard that
+        returned a missing slot unconditionally would satisfy every one of
+        them. This drives the identical call with live execution OFF — the one
+        mode where simulation is legitimate — and asserts the simulated answer
+        is produced in full, so the emptiness above is caused by live mode and
+        not by the fabrication path having been deleted outright.
+
+        What turns it red: make the ``_live_execution_enabled`` guard
+        unconditional and this slot comes back FAILED and empty.
+        """
+        slots = validate_model_slots(
+            [
+                "openai/gpt-4o-mini",
+                "anthropic/claude-haiku-4.5",
+                "google/gemini-2.5-flash",
+                "nvidia/nemotron-3-nano-30b-a3b",
+            ]
+        )
+        with patch.object(settings, "openrouter_live_execution_enabled", False):
+            answer = provider_execution_service.produce_initial_answer(
+                account_id=uuid4(),
+                query_run_id=uuid4(),
+                query_text="please force fallback search for this one",
+                model_slot=slots[0],
+                credential_source=ProviderCredentialSource.APP_OWNED,
+                openrouter_key="sk-test",
+            )
+
+        assert answer.status is InitialAnswerStatus.COMPLETED
+        assert "simulated in local demo mode" in answer.answer_text
+        assert len(answer.sources) == 1
+        assert answer.citation_coverage.answer_count == 1
         assert answer.shortened is False
 
 
