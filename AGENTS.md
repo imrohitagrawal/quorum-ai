@@ -50,11 +50,13 @@ is the rule only.
     *IEEE TSE* 1997). Spend the difference on verification, not more finders.
 11. **Verify every reviewer claim before acting.** **Check the fix, not just the
     finding.** The often-quoted "roughly a fifth do not survive" has **no source
-    document in this repo** — treat it as assumed, not measured. What *is*
-    measured, 2026-07-30: of 22 claims carried forward from handoff documents and
-    checked against the tree, **12 were wrong or already resolved**
-    (`docs/analysis/2026-07-30-extraction-ledger.md` §4). Inherited claims decay
-    faster than review findings do.
+    document in this repo** — treat it as assumed, not measured.
+    What *is* measured, on 2026-07-30, is the decay rate of claims **inherited
+    from handoff documents**, which is a different and worse population:
+    4 headline findings checked, 4 refuted (extraction ledger §2, §4.1, §4.2);
+    18 "would be lost outright" candidates checked, 6 already done, 1 already
+    filed, 1 largely wrong (§4). **22 checked, 12 did not survive.** Add the
+    tally yourself from those sections rather than trusting this sentence.
 12. **Cap review at TWO rounds**, then STOP and escalate with open findings
     listed. If two fixes in a row add defects, change the approach.
     **Expect your own fix to introduce a defect — budget a round for it.**
@@ -73,25 +75,40 @@ is the rule only.
     cd e2e && SESSION_RATE_LIMIT_PER_MINUTE=600 npx playwright test <spec> \
       --project=chromium --workers=1 --retries=0
     ```
-14. **FOUR blocking gates are in NEITHER `make quality` nor `make validate`.**
-    Verified 2026-07-30: `make quality` is `format-check lint type-check test`;
-    `make validate` is `check-python fr-completeness` plus `validate_all.py`.
-    Neither reaches the four below, and all four are required by branch
-    protection — so passing both targets locally does **not** mean the pull
-    request can merge. Run all of these before pushing:
+14. **`make quality` and `make validate` do NOT cover the merge gates.** Six
+    contexts are required by branch protection. Passing both targets locally
+    proves almost nothing about whether the pull request can merge. Each
+    required context, and the local command that produces it (verified
+    2026-07-30):
+
+    | Required status check | Produced locally by |
+    |---|---|
+    | `validate-and-test` | `make validate` (+ `openapi-check`, `security-scan` as steps) |
+    | `pytest (Python 3.12)` | `make quality` |
+    | `Changed-lines coverage >= 95% (blocking)` | `make diff-cover DIFF_BASE=origin/main` |
+    | `Schemathesis API contract (blocking)` | `make api-contract` |
+    | `FR traceability completeness (blocking)` | `make fr-completeness` (inside `make validate`) |
+    | `e2e axe + parity (chromium)` | **the e2e suite — see rule 13** |
+
     ```bash
     uv sync --all-extras   # NOT --extra dev: schemathesis lives in `quality`
     make quality && make validate
-    make diff-cover DIFF_BASE=origin/main   # blocking, >=95% changed-line coverage
-    make api-contract                       # blocking — "Schemathesis API contract"
-    make openapi-check                      # blocking
-    make security-scan                      # blocking
+    make diff-cover DIFF_BASE=origin/main
+    make api-contract
+    make openapi-check
+    make security-scan
+    # and e2e per rule 13 if you touched UI, specs or fixtures
     ```
-    `make api-contract` was missing from this list until 2026-07-30, so an agent
-    following the rule exactly could still be blocked at merge. **The list is
-    only correct while branch protection is unchanged — re-derive it with
-    `gh api repos/:owner/:repo/branches/main/protection` rather than trusting
-    this paragraph.**
+
+    **This list has been wrong twice.** Until 2026-07-30 it omitted
+    `make api-contract`; the fix that added it still missed
+    `e2e axe + parity (chromium)`, which is a required check whose words appear
+    nowhere else in this file. **A count goes stale silently, so do not trust
+    the table — re-derive it:**
+    ```bash
+    gh api repos/:owner/:repo/branches/main/protection \
+      --jq '.required_status_checks.contexts[]'
+    ```
     **Never lower a threshold, add `# pragma: no cover`, or delete a test to go
     green.** If a line is genuinely untestable, say so with evidence.
 15. **Run `pytest` and `make diff-cover` serially** — they race on
@@ -301,12 +318,22 @@ this file. But when you touch the workspace UI (`src/product_app/static/app.js`,
   three described below: `answer-completeness`, `export-and-expanders`,
   `readiness-banner`, `real-integration-smoke`, `rendering-invariants`,
   `session-trail`, `source-expander`, `theme-toggle`, `trust-score-invariants`,
-  `trust-score-visual`, `verdict-band`, `visual-snapshots`. **Anything placed in
-  that directory is forced into the blocking lane** by
-  `tests/test_e2e_workflow_covers_all_invariant_specs.py`, so a spec dropped
-  there becomes a merge gate whether or not you intended it. Three are detailed
-  here because they have contracts worth stating; the other nine bind just as
-  hard. Enumerate the directory rather than trusting this list:
+  `trust-score-visual`, `verdict-band`, `visual-snapshots`. All twelve are
+  currently wired into blocking lanes. Three are detailed below because they
+  have contracts worth stating; the other nine bind just as hard. Enumerate the
+  directory rather than trusting this list.
+  **Two holes in the guard that is supposed to keep that true**
+  (`tests/test_e2e_workflow_covers_all_invariant_specs.py`) — both pre-existing,
+  neither fixed here:
+  - It asserts `spec in workflow` against the **raw text** of `e2e.yml`, so a
+    spec named only in that file's header comment block passes while running in
+    no step. It forces the *name* to appear, not the spec to *execute* — an
+    instance of the substring-vs-structure trap in rule 8, inside a gate.
+  - Its `GATED_SPEC_DIRS` covers only `e2e/tests/invariants/` and
+    `e2e/tests/ops/`. `e2e/tests/degraded/` is **not** swept, though
+    `e2e.yml:213` runs a blocking spec from it.
+
+  The specs are:
   - `rendering-invariants.spec.ts` — walks `#main-content` and asserts NO raw
     Markdown survives in any text node (`**`, `##`, `` `code` ``, `](url)`,
     `_ _`/`__ __`, line-start `>`), a **monotonic** elapsed timer, no horizontal

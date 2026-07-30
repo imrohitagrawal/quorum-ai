@@ -86,7 +86,7 @@ measured to be worse than the bug.
 
 ## The uncomfortable note on Tier 2
 
-**Seventeen of forty-three open issues are gate machinery.** Measured on this
+**Thirteen of forty-two open issues are gate machinery.** Measured on this
 repository, **0 of 16** `src/` defects were ever caught by an automated check
 (`docs/metrics/defect-discovery-audit.md`). The external evidence points the same
 way: Google enforces no codebase-wide coverage threshold and does not gate on a

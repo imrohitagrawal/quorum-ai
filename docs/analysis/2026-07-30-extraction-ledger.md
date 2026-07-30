@@ -13,7 +13,7 @@ evidence.** Kept because the content survey is useful on its own.
 > | Document | Referenced by |
 > |---|---|
 > | `R2-S2-S4-ULTRACODE-PROMPT.md` | `pyproject.toml`, `tests/test_ultracode_prompt_enforcement_contract.py`, `tests/test_findings_ledger_consistency.py`, `tests/test_findings_ledger_fs5_status.py`, and two docs |
-> | `WP-D-TO-CLOSEOUT-ULTRACODE-PROMPT.md` | **`src/product_app/catalog_fetcher.py`** — production source |
+> | `WP-D-TO-CLOSEOUT-ULTRACODE-PROMPT.md` | `src/product_app/catalog_fetcher.py:148` — a **code comment**, not a functional dependency. Deleting the doc would not have broken it; this row said "production source" when first written, which overstated it. The 18 broken tests came from the three test files, not this one |
 > | 16 others | `docs/session-handoff.md`, `docs/00-factory-console.md`, `docs/95-demo-evidence.md`, `UI-BUG-TRIAGE-2026-07-23-ANALYSIS.md`, `WP-B-RESULT-AND-WP-C-HANDOFF.md` |
 >
 > **How this was found, which is the point.** Moving them into a staging directory
@@ -38,9 +38,15 @@ evidence.** Kept because the content survey is useful on its own.
 
 ## 1. Coverage — the mechanical check
 
-```
-$ for f in *.md; do [ "$f" = README.md ] && continue; grep -cE '^#+( |$)' "$f"; done | paste -sd+ | bc
-465
+```bash
+# Run from the repo root. The original transcript ran inside the since-deleted
+# staging directory, so it is NOT reproducible as first written -- bare *.md at
+# the root today matches far more files.
+git show 27227d5 --stat >/dev/null   # the commit that held all 32
+for f in $(git ls-tree --name-only 27227d5 docs/_pending-deletion/ | grep -v README); do
+  git show "27227d5:$f" | grep -cE '^#+( |$)'
+done | awk '{n+=$1} END{print n}'
+# 465   <- verified 2026-07-30. (`paste -sd+ | bc` is GNU-only; BSD paste rejects it.)
 ```
 
 | | |
@@ -217,7 +223,7 @@ load-bearing, not incidental.
 - `/status` is unauthenticated, unthrottled and a sync `def` in a 40-token threadpool; a blocking probe there stalls every endpoint.
 - `/status.live_execution` is a monitoring contract consumed by `ops.js:308`.
 - `main.py:302` already blocks on the catalog fetch at import; a new startup probe goes on a background daemon thread.
-- `AGENTS.md` rule 14 names five gates; the staged files also require `make fr-completeness`, `make api-contract`, `make perf-gate`, `make mutation-baseline` — and the last must *score* mutants, not abort.
+- The handoff documents also require `make fr-completeness`, `make api-contract`, `make perf-gate` and `make mutation-baseline` — and the last must *score* mutants, not abort. **Acted on:** `AGENTS.md` rule 14 was rewritten on 2026-07-30 into a table mapping each of the six required status checks to the command that produces it, after two successive versions of it undercounted (three, then four, against an actual six).
 
 ---
 
@@ -240,7 +246,7 @@ deferral list is a claim, and it decays.*
 | **`max_cost_usd` omits source-line tokens.** `synthesis.py:710-722` inlines up to 3 sources per answer into the prompt; `costs.py:933-940` has no source-lines term. *The ~2,400-token / 2.4% figure is **UNVERIFIED** — settle it by instrumenting `_build_synthesis_prompt` against the golden fixture.* | code |
 | **The judge path drifts from the shared untrusted-data constant.** `evaluation.py:60-64` imports `UNTRUSTED_BEGIN/END` and `neutralize_delimiters` but **not** `UNTRUSTED_DATA_SYSTEM_RULE`; it re-states the rule in prose at `:1257-1269`. `debate.py` and `synthesis.py` import the constant. Improve the constant and the judge will not follow. | code |
 | **No length bound on judge source lines.** `build_judge_evidence` (`:1228-1243`) emits `[{i}] {title} :: {url}` untruncated, where synthesis caps at `synthesis.py:176-193`. | code |
-| **Deploy-verify never checks the release or the build stamp.** `grep -rn "fly releases"` → zero hits; `deploy.yml:150-183` curls `/health` and `/ready` only and **does not assert `/status.build_sha`** — the very check `AGENTS.md` rule 18 requires. | code |
+| **Deploy-verify never checks the release or the build stamp.** `grep -rn "fly releases" .github/` → zero hits (repo-wide it appears in 13 files, all prose — the check must be scoped to the workflows or it reports the wrong thing); `deploy.yml:150-183` curls `/health` and `/ready` only and **does not assert `/status.build_sha`** — the very check `AGENTS.md` rule 18 requires. | code |
 | **No `pre-push` target.** Zero hits in `Makefile`, `.pre-commit-config.yaml`, `.git/hooks/pre-push`. Local gates can still drift from CI. | code |
 | **Feedback events are never pruned.** No `retention`/`prune`/`DELETE`/`vacuum` in `feedback_store.py`. Tracked as DEBT-003 in `docs/63`, never as an issue. | code |
 
@@ -274,8 +280,11 @@ no "swap slot 3 and you are under $0.25". File that, not the original claim.
 | The seven operator-authored correctness labels | **Safe** — present in `docs/metrics/accuracy-pilot.md` |
 | `evaluation.py:1229` as an unfenced sink | **Refuted** — §4.1 |
 
-Of the 25 issues the staged files reference, **23 are still open**; only #118 and #125
-have closed.
+Of the 25 issues the staged files reference, **20 are still open**. Five have closed:
+#86, #101, #109, #118 and #125. *An earlier version of this line said "only #118 and
+#125". It checked the 25 issues in the STEP 3 list and missed #86, #101 and #109 —
+referenced by the three files recovered from dangling blobs, and #86 is called closed
+nine lines earlier in this same section. A sub-list is not the population.*
 
 ### 4.1 A refuted finding, recorded because the refutation is the result
 
@@ -304,8 +313,15 @@ Both halves of the rule are therefore satisfied. **Two smaller residues are real
    risk worth closing, and it is why the original claim looked true to a reader
    grepping for `fence(`.
 
-*This is rule 11 doing its job — roughly a fifth of findings do not survive
-inspection — and rule 57: a refutation is a successful outcome, not a wasted pass.*
+*This is `AGENTS.md` rule 11 doing its job. Note the rate: **of 22 inherited
+claims checked on 2026-07-30, 12 did not survive** — 4 headline findings, all
+refuted (§2, §4.1, §4.2), plus 8 of the 18 candidates in §4. That is far worse
+than the "roughly a fifth" often quoted for live review findings, which has no
+source in this repo and should be treated as assumed. Inherited claims decay;
+review findings are at least about code someone just looked at.*
+
+*(Rule numbering: "§3 item NN" below refers to this ledger's own table, not to
+`AGENTS.md`. The two namespaces are unrelated — always say which.)*
 
 ### 4.2 A second refutation — and the one that nearly changed a correct rule
 
@@ -356,7 +372,7 @@ recorded so nobody re-derives the superseded version from an old document.
 | Ship with leftovers filed as issues after the cap | **STOP and escalate with open findings listed** — a different terminal action |
 | Best-effort swallowed writes are the store pattern | Later measured as a **money fail-open** (the cost stream must be loud) |
 | "78 golden cases, 18 needing human labels" | **Refuted** — only 5 existed; the 78 was a planning artifact never committed |
-| Banner condition `live_count < 4` | `local_count > 0 \|\| missing > 0` |
+| Banner condition `live_count < 4` | `localCount > 0 \|\| failedCount > 0` (`app.js:2297`) |
 
 ---
 

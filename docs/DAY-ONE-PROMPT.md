@@ -650,7 +650,7 @@ triggers: `docs/evidence/`.
 
 | About to adopt | Why it failed the check | Replaced with |
 |---|---|---|
-| "Fan out 3–5 review lenses" | The only randomized experiment in the field found **two reviewers ≈ four, one is worse** (Porter, Siy, Mockus & Votta, *IEEE TSE* 1997, 88 inspections) | **Two lenses**, plus a verification stage |
+| "Fan out 3–5 review lenses" | The only randomized experiment in the field found **two reviewers ≈ four, one is worse** (Porter, Siy, Toman & Votta, *IEEE TSE* 23(6), 1997, 88 inspections — secondary reporting, see the correction in `docs/evidence/2026-07-30-engineering-practice.md` §1) | **Two lenses**, plus a verification stage |
 | "Review 200–400 lines at a time" | **Vendor-published** by the company selling the review tool; **61% of those reviews found zero defects**; "defect" meant a comment logged in their tool | Dropped. Use the field observation instead: effective teams' median change is 24–78 lines |
 | "Review is how you find defects" | **14%** of review comments were defect-related, fourth of nine categories (Bacchelli & Bird, ICSE 2013). Effect on post-release defects is weak and partly fails to replicate | Keep the local claim only, with its `n` |
 | "Derived facts decay faster than rationale" (this author's own) | **Untested.** Derived facts are the only staleness class with detectors, so the only class counted — a tooling artifact, not a measurement | "Derived facts are mechanically checkable; rationale is not" |
@@ -725,11 +725,26 @@ shift-handover guidance derived from Piper Alpha and Sellafield.
    it. Anything worth keeping longer is not a handoff: it is an issue (state), a
    decision record (rationale), or a gate (enforcement).
 
-**Two of those three are mechanically enforceable, and that is where they belong:**
-a check that scans tracked prose for commit-SHA-shaped strings, `file:line`
-references and hard-coded counts; and an assertion that no handoff document is ever
-tracked. Rule 2 is a human act and will never be enforceable — **record it in the
-ledger as `prose only` rather than pretending otherwise.**
+**One of those three is mechanically enforceable here:** a check that scans tracked
+prose for commit-SHA-shaped strings, `file:line` references and hard-coded counts.
+Rule 2 is a human act and will never be enforceable — **record it in the ledger as
+`prose only` rather than pretending otherwise.**
+
+**Rule 3 is enforceable only in a NEW project, and this paragraph originally said
+otherwise.** An earlier draft proposed "an assertion that no handoff document is
+ever tracked". That gate would go **red against the very tree proposing it**: this
+repository tracks 32 handoff documents at its root, and it cannot stop. Three of
+them are load-bearing — `R2-S2-S4-ULTRACODE-PROMPT.md` is named in
+`pyproject.toml`'s `[tool.mutmut].also_copy` and read from `REPO_ROOT` by
+`tests/test_ultracode_prompt_enforcement_contract.py`, and
+`WP-D-TO-CLOSEOUT-ULTRACODE-PROMPT.md` is referenced from
+`src/product_app/catalog_fetcher.py`. Moving them into a staging directory on
+2026-07-30 raised `FileNotFoundError` in 18 tests and had to be reverted.
+
+So the honest statement is: **start a new project with handoffs untracked and
+ephemeral; do not retrofit that rule onto a repository whose code already reads
+them.** A gate proposed in prose is a claim like any other — run it against the
+current tree before writing that it is enforceable.
 
 > **Trap, paid for on 2026-07-30:** the ignore rule that keeps ephemeral handoffs
 > out of the repository (`HANDOFF-*.md`) also silently swallowed the **template**.

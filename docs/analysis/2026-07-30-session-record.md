@@ -124,10 +124,10 @@ handoff is complete — **has no equivalent in any software handoff practice fou
 | One review lens on a real diff here | **96k–122k tokens** | measured this session (two reviewers) |
 | Pricing | $5/M input, $25/M output | verified table |
 | Per lens | **≈ $0.90** | ~85/15 read/write split — **inferred, not measured** |
-| Two lenses + verification | **≈ $3 per pull request** | ~$90 across 30 PRs |
+| Two lenses + verification | **≈ $2.75 per pull request** | ~$83 across 30 PRs. *Corrected 2026-07-30: this read ≈$3 / ~$90; the arithmetic did not follow from the inputs. See ADR-0003.* |
 
 Revised down from $5 by Porter's two-reviewer finding. Settle the split with one
-`count_tokens` run before treating $3 as measured rather than estimated.
+`count_tokens` run before treating ~$2.75 as measured rather than estimated.
 
 ---
 
@@ -135,11 +135,22 @@ Revised down from $5 by Porter's two-reviewer finding. Settle the split with one
 
 Claimed the four documentation homes did not overlap. Checked. They do:
 
-| Number | Its one computed source | Files restating it |
+| Number | Its one computed source | Files containing it, at HEAD |
 |---|---|---|
-| "0 of 16 caught by a gate" | `docs/metrics/defect-discovery-audit.md` | **5** |
-| "13 of 21 could measure nothing" | `docs/analysis/03-enforcement-machinery.md` | **5** |
-| "10 of 16 found by review" | same audit | 3 |
+| "0 of 16 caught by a gate" | `docs/metrics/defect-discovery-audit.md` | **8** |
+| "13 of 21 could measure nothing" | `docs/analysis/03-enforcement-machinery.md` | **6** |
+| "10 of 16 found by review" | same audit | **6** |
+
+```bash
+for p in "0 of 16" "13 of 21" "10 of 16"; do git grep -l "$p" -- . | wc -l; done
+```
+
+**These figures were 5 / 5 / 3 until 2026-07-30 and reproduced at no tree state** —
+a section headed *"measured, not asserted"* carried three numbers nobody could
+re-derive. The counts above are from the command shown, at HEAD, and include the
+source file itself. They will drift as documents are added, which is the finding:
+**this is a count of a growing problem, not a fixed fact.** Re-run it rather than
+quoting it.
 
 **The redundancy is not between the four homes — their roles are distinct. It is
 that `DAY-ONE-PROMPT.md` has absorbed content from all of them.** At **54,891
@@ -204,7 +215,8 @@ over guidance.
 
 **7.3 Answered a prose problem with more prose.** Argued DAY-ONE is too long
 because it is append-only, proposed replacing a section with a ledger — then added
-**two new prose sections (~150 lines)** in the pull request making that argument.
+**two new prose sections (101 lines)** in the pull request making that argument.
+*(This said ~150 until 2026-07-30; `git diff --numstat` says 101.)*
 Third instance of the same pattern in one day.
 
 **7.4 Improvised a check that a repo command should own.** The deploy-verification
@@ -231,8 +243,11 @@ session.
 
 **Awaiting the operator:**
 
-1. **$3/PR review budget** — derived in §5, revised down from $5.
-2. **Permission to delete** — the 30 root handoff documents, and the Tier 2 gate
+1. **~$2.75/PR review budget** — derived in §5, revised down from $5, arithmetic corrected 2026-07-30.
+2. ~~**Permission to delete** — the 30 root handoff documents~~ **WITHDRAWN
+   2026-07-30.** There are 32, not 30, and the deletion project is closed on
+   evidence: 18 of them are referenced by tracked files and moving them broke 18
+   tests. See the extraction ledger. Still open from this item: the Tier 2 gate
    issues that fail *"does this prevent a regression we actually had?"*
 3. **Whether the legacy "Model outputs" section returns** — decides whether #115 is
    a move or a deletion.
@@ -242,6 +257,6 @@ it absorbs #128, unblocks #115, should swallow #112, and #100 must be built on i
 two-mode split because *degrade to simulation* at the spend ceiling is only honest
 if it degrades the **whole run**.
 
-**Not built, designed only:** the enforcement ledger (§6), the review job at diff
-time, method ADRs for this session's decisions (`docs/adr/` has 2 records, both
-architectural, none on method).
+**Not built, designed only:** the enforcement ledger (§6) and the review job at diff
+time. *(This also said `docs/adr/` had 2 records and none on method — stale within
+this same pull request, which adds ADR-0003, the first method ADR.)*

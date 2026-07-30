@@ -20,7 +20,7 @@ plausible-sounding figure. Local numbers measured on this repository the same da
 
 | # | Claim | Grade | Source |
 |---|---|---|---|
-| 1.1 | **Two reviewers ≈ four reviewers. One is worse.** *"We found no difference in the interval or effectiveness of inspections of two- or four-person teams. The effectiveness of one-reviewer teams was poorer than both of the others."* | `WELL-EVIDENCED` | Porter, Siy, Mockus & Votta, *IEEE TSE* 23(6), 1997. **Randomized controlled experiment**, 88 inspections over 18 months, >55K new lines of C++ |
+| 1.1 | **Two reviewers ≈ four reviewers. One is worse.** *"We found no difference in the interval or effectiveness of inspections of two- or four-person teams. The effectiveness of one-reviewer teams was poorer than both of the others."* | `INDUSTRY-PUBLISHED` — **downgraded from `WELL-EVIDENCED` on 2026-07-30, see note below** | Porter, Siy, **Toman** & Votta, "An Experiment to Assess the Cost-Benefits of Code Inspections in Large Scale Software Development", *IEEE TSE* 23(6):329–346, 1997, DOI 10.1109/32.601071. **Randomized controlled experiment**, 88 inspections over 18 months, >55K new lines of C++ |
 | 1.2 | **Defect-related comments are 14% of review comments** — fourth of nine categories. Code improvement is the largest at 29%. Defect-finding is practitioners' stated top motivation and is not what they mostly write | `WELL-EVIDENCED` | Bacchelli & Bird, ICSE 2013. 570 comments classified from 200 Microsoft review threads |
 | 1.3 | **One reviewer is the norm in practice.** <25% of changes have more than one reviewer; median reviewer count 1; median change 24 lines | `WELL-EVIDENCED` | Sadowski et al., ICSE-SEIP 2018. ~9M changes, >25,000 authors/reviewers at Google |
 | 1.4 | **Review's measured effect on post-release defects is weak and partly fails to replicate.** Coverage negatively associated with defects in 3 of 4 releases, significant in 2 — then a replication found review measures *"contributed little… R² remaining almost unchanged"* | `WELL-EVIDENCED` (both) | McIntosh et al., *EMSE* 2016 (Qt/VTK/ITK); Krutauz, Dey, Rigby & Mockus, arXiv:2005.09217, 2020 (Qt, Chrome) — **preprint; peer-reviewed version not confirmed** |
@@ -30,8 +30,30 @@ plausible-sounding figure. Local numbers measured on this repository the same da
 | 1.8 | Capers Jones defect-removal-efficiency table (formal code inspection 85% average) | `ASSERTION` | Consultancy-published; no sampling frame, no DRE denominator definition, proprietary database. Ranges so wide (unit testing 15–50%) they carry little decision value. **Conflicts with 1.1/1.4** — do not blend |
 | 1.9 | McConnell's *Code Complete* defect-detection table | `ASSERTION` | Table values not obtained from primary source. It is a **synthesis largely of Capers Jones** — citing both double-counts one dataset. His actual point, usually dropped: no technique exceeds ~75%, average ~40%, **use a combination** |
 
-**What would change 1.1:** a second randomized experiment on modern pull-request
-review with different team sizes. None exists as of this date.
+**Correction, 2026-07-30 — row 1.1 was misattributed, and the grade was wrong.**
+This record originally credited the 1997 paper to "Porter, Siy, **Mockus** &
+Votta". The correct author list is **Porter, Siy, Toman & Votta**. Mockus is an
+author of a *different* Porter/Siy study — "Understanding the Sources of Variation
+in Software Inspections", *TOSEM* 1998. The wrong list was also copied into
+`docs/DAY-ONE-PROMPT.md`.
+
+This matters more than a typo. Row 1.1 is the single citation that changed
+`AGENTS.md` rule 10 from "fan out 3–5 review lenses" to "two lenses, not five",
+and `WELL-EVIDENCED` is defined in this directory's README as *peer-reviewed,
+primary source read*. **An author list that wrong is proof the primary source was
+not read** — the paper is paywalled, and neither the verbatim quote nor the
+"88 inspections / 18 months / >55K lines of C++" figures were confirmed against
+it. By this record's own grading rules that is `INDUSTRY-PUBLISHED` at best, so
+the grade is corrected.
+
+**The conclusion still stands** — the finding is widely reported and no source
+contradicts it — but it now rests on secondary reporting, not on a source anyone
+here has read.
+
+**What would change 1.1:** obtain the paper and confirm the quote and figures
+directly, which would restore `WELL-EVIDENCED`; or a second randomized experiment
+on modern pull-request review with different team sizes, of which none exists as
+of this date.
 
 ---
 

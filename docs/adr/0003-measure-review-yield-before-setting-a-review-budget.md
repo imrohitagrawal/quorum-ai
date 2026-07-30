@@ -20,12 +20,20 @@ A budget figure was derived on 2026-07-30 (`docs/evidence/2026-07-30-engineering
 | One review lens on a real diff here | 96k–122k tokens | **measured** — two reviewers on the WP-H diff |
 | Shape: 2 finders + 1 verifier | ~342k tokens | 2 lenses (Porter: two ≈ four, one is worse) |
 | Pricing | $5/M input, $25/M output | verified |
-| **Derived** | **≈ $3 per pull request** | 291k in + 51k out at an **inferred** 85/15 split |
+| **Derived** | **≈ $2.75 per pull request** | 291k in + 51k out at an **inferred** 85/15 split |
+
+**Arithmetic corrected 2026-07-30.** This table originally derived "≈ $3". Recomputed
+from its own inputs (342k tokens, $5/M in, $25/M out): 85/15 gives **$2.74**, not $3.
+The sensitivity figures below were wrong the same way. An ADR arguing that a budget
+must not be set from an unreproducible number had three unreproducible numbers in it.
 
 Two things make that figure unsafe to adopt:
 
 1. **The read/write split is inferred, not measured.** The agent framework reports
-   one total. At 70/30 the figure is $3.90; at 95/5 it is $1.85.
+   one total. Recomputed 2026-07-30 from the same 342k tokens: at 70/30 the figure
+   is **$3.76**; at 95/5 it is **$2.05**. (This read $3.90 and $1.85 until then —
+   neither followed from the inputs above.) The split moves the answer by ~1.8×,
+   which is the point: settle it with one `count_tokens` run.
 2. **Yield is entirely unknown.** Review has never run here as a routine job, only
    ad hoc on work packages already suspected of being defective. The external
    evidence is unflattering — best measured LLM-review precision is **16.65%** with
@@ -33,10 +41,10 @@ Two things make that figure unsafe to adopt:
    scored **28%** (32 findings, 23 refuted by independent verifiers). A later round
    hit 7 of 10, but n=1.
 
-Adopting $3/PR would set a guardrail number from an unmeasured baseline. This
+Adopting ~$2.75/PR would set a guardrail number from an unmeasured baseline. This
 repository's own rule, stated in `docs/DAY-ONE-PROMPT.md` §4a, is that **an
 unmeasured guardrail number is a fabricated one** — and the session that derived
-$3 spent its day enforcing that rule on other people's numbers before nearly
+that figure spent its day enforcing that rule on other people's numbers before nearly
 breaking it on its own.
 
 ## Decision
@@ -64,7 +72,7 @@ high, the correct rule is "review `src/` diffs that touch money or auth", not
 ### Controls that apply from the first shadow run
 
 - **Prompt caching on the shared context.** Both finders read the same diff; cache
-  reads are ~0.1× of input. Largest single lever — may take $3 to ~$2 on its own.
+  reads are ~0.1× of input. Largest single lever — may take ~$2.75 to ~$2 on its own.
 - **Hard token budget per job**, enforcing the $10 ceiling mechanically.
 - **Diff-size cap.** p50 here is 419 changed lines, p90 is 2,111, and the maximum
   observed was **29,996** (PR #96). Above the cap, review the `src/` subset and
