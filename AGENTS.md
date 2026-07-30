@@ -2,6 +2,88 @@
 
 This repository was generated from Codex Product Factory Enterprise Edition.
 
+## Operating rules — read these first
+
+Placed first deliberately: instruction-following degrades as instruction count
+rises, and earlier instructions are measurably better followed than later ones
+(IFScale, arXiv:2507.11538). These are the non-negotiables. The reasoning behind
+each one lives in `docs/evidence/` and `docs/103-incident-learnings.md`; this list
+is the rule only.
+
+**Truth**
+1. **Verify by executing, never by reading.** State the command and what it
+   printed, or say UNVERIFIED out loud.
+2. **A green advisory job is not evidence it ran; a RED one is not evidence it
+   measured.** Open the log and find the number.
+3. **If a premise you were handed turns out to be false, STOP and say so.** Never
+   repair it silently and carry on.
+4. **Plain English. No jargon, no invented shorthand.**
+
+**Tests**
+5. **Every test ships with one line saying what turns it red.** Prove it by
+   mutation: `cp` the file aside, mutate, restore from the copy, verify with
+   `diff -q`. **Never `git checkout <file>`** — it discards uncommitted work.
+   Confirm the run actually executed; a mutation that breaks collection proves
+   nothing.
+6. **A negative check needs a positive partner.** "No X found" is trivially true
+   over nothing.
+7. **Never parametrize a test over the constant it tests**; never assert a bound
+   against the constant that defines it.
+8. **Assert structure, not substrings** — a substring matches the prose that
+   explains the thing. Use `tests/code_text.py` when you must read a file.
+
+**Review**
+9. **Fan out for review, never for building.** Subagents share one working tree.
+   Tell every reviewer **IN CAPITALS** not to write, edit, `git checkout`,
+   `git stash` or `sed -i` anything.
+10. **Two lenses, not five.** Two reviewers ≈ four; one is worse (Porter et al.,
+    *IEEE TSE* 1997). Spend the difference on verification, not more finders.
+11. **Verify every reviewer claim before acting** — roughly a fifth do not
+    survive. **Check the fix, not just the finding.**
+12. **Cap review at TWO rounds**, then ship with leftovers filed. If two fixes in
+    a row add defects, change the approach.
+
+**Commands that bite if you get them wrong**
+13. **Run e2e exactly as CI does**, or ~95 phantom failures appear:
+    ```bash
+    lsof -ti tcp:18085 | xargs -r kill -9
+    cd e2e && SESSION_RATE_LIMIT_PER_MINUTE=600 npx playwright test <spec> \
+      --project=chromium --workers=1 --retries=0
+    ```
+14. **`make quality` / `make validate` do NOT include the blocking changed-lines
+    coverage gate.** Run `make diff-cover DIFF_BASE=origin/main` before pushing.
+15. **Run `pytest` and `make diff-cover` serially** — they race on a shared path
+    (#113).
+16. **`make format` reformats test assertions** and breaks `sed`-style anchors.
+    Grep for the real text before any programmatic edit.
+
+**Shipping**
+17. **One work package, one pull request**, merged before the next starts. Merge
+    `main` into your branch **before** starting. Check you are on your branch
+    before committing.
+18. **Done means merged AND running in production.** Verify three ways: the
+    deploy **job** ran (not `skipped`/`cancelled` — check the job, not the run's
+    rollup), `/status.build_sha` equals the merged SHA, and the thing you built
+    actually fires. Probe production only where it costs nothing.
+    Two traps, both paid for:
+    - **`gh run list --commit <SHA>` silently returns `[]` in this repo.** Use
+      `--branch main` and match on the SHA prefix.
+    - **A merge produces two runs; one is `cancelled` by concurrency dedupe.** A
+      wait-loop keyed on "any completed run for this SHA" fires on the cancelled
+      one and reports done while production is still on the old build. Resolve
+      the **newest run by `createdAt`**, then read its Deploy **job**.
+19. **Close more than you open.** If an item is bigger than it looked, say so and
+    stop — do not file and continue.
+20. **A pull request opens with one line saying why this item outranks the top of
+    the backlog.** If that line cannot be written honestly, the ranking is wrong.
+    Discovering a higher-ranked item mid-work is a **mandatory stop**: park the
+    branch, re-run selection, record it.
+
+**Before adding a gate**, measure its yield against real defect history and state
+what it cannot see. Measured here: **0 of 16** `src/` defects were caught by an
+automated check; **10 of 16** by adversarial review
+(`docs/metrics/defect-discovery-audit.md`).
+
 
 ## Simplified start
 
