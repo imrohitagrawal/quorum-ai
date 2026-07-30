@@ -1,11 +1,38 @@
-# 2026-07-30 — extraction ledger for `docs/_pending-deletion/`
+# 2026-07-30 — extraction ledger for the 32 root handoff documents
 
-The record of what 32 staged handoff documents contain, where each part goes, and
-what would be lost if they were deleted today. This is the artifact the staging
-README's deletion condition 1 requires.
+The record of what 32 handoff documents contain and which of their rules are worth
+keeping. Written for a deletion project that **was cancelled the same day, on
+evidence.** Kept because the content survey is useful on its own.
 
-**Nothing in `docs/_pending-deletion/` may be deleted on the strength of this file
-alone.** It satisfies condition 1 of four. Conditions 2, 3 and 4 are open — see §7.
+> ## The deletion project is closed. Do not restart it.
+>
+> The premise was that 32 root handoff documents were inert clutter. **They are
+> not.** Measured 2026-07-30: **18 of the 32 are referenced by tracked files
+> outside themselves.**
+>
+> | Document | Referenced by |
+> |---|---|
+> | `R2-S2-S4-ULTRACODE-PROMPT.md` | `pyproject.toml`, `tests/test_ultracode_prompt_enforcement_contract.py`, `tests/test_findings_ledger_consistency.py`, `tests/test_findings_ledger_fs5_status.py`, and two docs |
+> | `WP-D-TO-CLOSEOUT-ULTRACODE-PROMPT.md` | **`src/product_app/catalog_fetcher.py`** — production source |
+> | 16 others | `docs/session-handoff.md`, `docs/00-factory-console.md`, `docs/95-demo-evidence.md`, `UI-BUG-TRIAGE-2026-07-23-ANALYSIS.md`, `WP-B-RESULT-AND-WP-C-HANDOFF.md` |
+>
+> **How this was found, which is the point.** Moving them into a staging directory
+> broke **18 tests** — `FileNotFoundError` on a path the test suite expects at the
+> repo root. Not deleting them. *Moving* them. Measured against `origin/main`,
+> where the file exists at root, so this was a regression introduced that day, not
+> a pre-existing failure.
+>
+> Six read-only agents had already classified all 465 sections of these files, and
+> not one noticed, because every one of them was asked *what do these documents
+> say* and none was asked *what points at them*. **A content audit cannot see an
+> inbound reference.** The four-condition deletion gate built around this ledger
+> asked for coverage, independent extraction, destinations and a case study — and
+> would have passed all four while still breaking the build.
+>
+> The missing condition was one line: `git grep -l "$(basename $f)"`.
+>
+> The files are back at the repo root. The staging directory is gone. Nothing here
+> needs deleting; the documents cost 500KB and harm nobody.
 
 ---
 
@@ -345,17 +372,30 @@ recorded so nobody re-derives the superseded version from an old document.
 
 ---
 
-## 7. What is still required before deletion
+## 7. How to use this file
 
-| Condition | State |
+**Not as a to-do list.** It is a reference. Of the 70 rules in §3, only the four
+spot-checked ones have been verified, and all four were wrong — so treat every
+unverified row as a lead, never as a fact. Promote a rule into `AGENTS.md` when it
+actually bites you, and verify it with a command in the same change.
+
+The rules stated by **three or more independent sessions** are the best available
+signal of what is load-bearing; there are 25 of them. That is the tranche worth
+verifying if anyone ever wants to spend the time. Nobody has to.
+
+### What this exercise cost, and what it was worth
+
+| | |
 |---|---|
-| 1. Every section accounted for, denominator printed | **MET** — §1 |
-| 2. Independent extraction agrees — reviewers who have **not** seen this ledger | **OPEN** |
-| 3. Destinations hold the content, verified by grep against the destination | **OPEN** |
-| 4. The case study exists | **OPEN** |
+| Produced | a 465-section content survey, 70 candidate rules, 4 refutations, 9 rulebook repairs |
+| Cost | a full working day, six extraction agents, two audit agents |
+| Shipped to a user | **nothing** |
+| Regressions introduced | 2 — 18 broken tests from the staging move, and the root `README.md` briefly deleted by a careless `git rm` |
 
-Condition 2 exists because the first attempt at this verification grepped
-`AGENTS.md` for the rules already extracted, reported success, and was structurally
-incapable of finding a rule never seen — it missed 17, including three blocking CI
-gates and the human-approval requirement. **Reviewers must extract independently
-and then diff, never review this ledger.**
+Both regressions were caught by running things, neither by review. The day's real
+output is not the 70 rules; it is the four refutations, the nine rulebook repairs,
+and the discovery that a content audit is blind to inbound references.
+
+**The rule that would have prevented the whole detour is already in `AGENTS.md`:
+close more than you open.** A cleanup that opens two regressions and files zero
+fixes is not cleanup.
