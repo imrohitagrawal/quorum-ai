@@ -704,9 +704,17 @@ def test_initial_answer_path_counts_an_answer_with_surrounding_whitespace(
     byte-for-byte what the model returned, because the debate and synthesis
     prompts print it verbatim.
 
-    What turns it red: make the guard rewrite the value
-    (``result.answer_text = result.answer_text.strip()``, or return a rebuilt
-    result) — the trailing newline disappears from the served answer.
+    What turns it red: make the guard RETURN A REBUILT RESULT carrying the
+    stripped text (``return dataclasses.replace(result,
+    answer_text=result.answer_text.strip())``) — the leading and trailing
+    newlines disappear from the served answer and this assertion fires.
+
+    Do NOT try the obvious ``result.answer_text = result.answer_text.strip()``:
+    ``LiveProviderResult`` is a frozen dataclass, so that raises
+    ``FrozenInstanceError`` and reds this test for the wrong reason. A mutation
+    that raises instead of running proves nothing about the assertion — the
+    exact trap AGENTS.md rule 6 exists to catch, and it was in this docstring
+    until review performed it and got the exception rather than the failure.
     """
     _install(monkeypatch, _Body(_completion("\n  A real answer.  \n")))
     answer = _produce_initial()

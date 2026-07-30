@@ -851,11 +851,27 @@ class ProviderExecutionService:
         # This inverted NOTHING about F-06 and invented no threshold. Emptiness
         # after ``.strip()`` is the predicate the rest of the product already
         # uses on model-produced text — ``evaluation._substantive``,
-        # ``synthesis_consensus.classify_model_alignment``,
-        # ``query_runs`` (material claims) and all ten debate/synthesis
-        # provider-response sites. The initial-answer path was the only
-        # dissenter, which is why the SAME payload could serve
-        # ``agreement 3 of 4`` next to ``live_count 4``.
+        # ``synthesis_consensus``, the material-claim count reached from
+        # ``query_runs``, and every debate and synthesis site that tests a live
+        # provider response. The initial-answer path was the only dissenter,
+        # which is why the SAME payload could serve ``agreement 3 of 4`` next
+        # to ``live_count 4``.
+        #
+        # No count is quoted above, on purpose. An earlier draft of this comment
+        # said "all ten ... sites"; review could not re-derive ten under any
+        # reading — eight ``live.answer_text.strip()`` calls, eleven counting
+        # the excerpt and synopsis helpers, thirteen counting every ``.strip()``
+        # in the two files. A count in prose is a claim, it goes stale silently,
+        # and that one was simply wrong. The sentence names the SET so a reader
+        # greps for it instead of trusting a number.
+        #
+        # KNOWN RESIDUAL (#178): ``str.strip()`` removes only characters where
+        # ``str.isspace()`` is true. A completion of zero-width or invisible
+        # characters (U+200B, U+FEFF, U+00AD, U+2800 ...) is still served as an
+        # answer, with the same wrong numbers described above. Filed rather than
+        # fixed here: closing it means deciding which Unicode categories count
+        # as invisible, and applying that one predicate at every site named
+        # above so they do not start disagreeing again.
         #
         # The correction to the note this replaced, which is the reason the
         # defect looked safe: it quoted ``initial_fully_captured`` as requiring

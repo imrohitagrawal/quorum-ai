@@ -647,13 +647,15 @@ def test_a_run_in_which_every_slot_returned_whitespace_is_not_a_completed_run(
 ) -> None:
     """#175, variant A: four billed calls, zero characters, and the run says so.
 
-    Measured on origin/main (e6c84ea) before the fix, verbatim::
+    Measured on origin/main (e6c84ea) before the fix, driving THIS fixture's
+    exact body, verbatim::
 
-        slot 1..4 completed openrouter_search  text='   \\n  '
+        slot 1..4 completed openrouter_search  text='   \\n\\t  '
         live_count 4 local_count 0 demo_mode False
         status completed  cost_source measured
         failed_steps []  missing_steps []
-        coverage {'answer_count': 4, 'sourced_answer_count': 0, ...}
+        coverage {'answer_count': 4, 'sourced_answer_count': 0,
+                  'sourced_answer_ratio': '0.00', 'target_met': False}
 
     Four models produced nothing and the product reported "4 of 4 answered
     live", status ``completed``, no failed steps, and a ``measured`` (billed)
@@ -806,11 +808,18 @@ def test_a_whitespace_slot_carrying_a_citation_leaves_the_coverage_denominator(
     # --- the disagreement, pinned closed ------------------------------------
     # These two numbers came from code that disagreed about whether the slot was
     # empty: ``live_count`` did not strip, ``classify_model_alignment`` did.
+    # These two numbers came from code that disagreed about whether slot 3 was
+    # empty: ``live_count`` did not strip, ``classify_model_alignment`` did. So
+    # the run served ``live_count 4`` beside ``aligned 3``. ``live_count`` is
+    # the assertion that MOVES (4 -> 3); ``aligned`` is a PIN, unchanged at 3.
+    #
+    # An earlier draft added a third line asserting the two are EQUAL. Review
+    # showed it could not fail: both are asserted ``== 3`` immediately above, so
+    # the equality is entailed and pins nothing. Equality is also not a property
+    # of the product — the two legitimately part company whenever a model
+    # answers and DISAGREES. The pair below is what carries the meaning.
     assert served["live_count"] == 3
-    assert served["result"]["agreement"]["aligned"] == 3
-    assert served["live_count"] == served["result"]["agreement"]["aligned"], (
-        "the two emptiness tests that used to disagree now agree"
-    )
+    assert served["result"]["agreement"]["aligned"] == 3  # PIN
 
     # --- the money, as a COUNT ----------------------------------------------
     carrying_usage = [a for a in answers if a["token_usage"] is not None]
