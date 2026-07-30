@@ -521,7 +521,14 @@ class ProviderExecutionService:
             # WP-D, but it is why this branch needs no ``shortened=``: the text
             # it emits is always locally simulated, and simulated text was
             # never truncated by a model. Pinned by
-            # ``test_simulated_text_on_the_fallback_branch_is_never_shortened``.
+            # ``TestTruncationPropagation::test_demo_mode_still_simulates_the_
+            # slot_and_never_marks_it_shortened`` (renamed in #171; this comment
+            # cited the old name, which no longer exists).
+            #
+            # #171: with live execution ON this whole branch is unreachable —
+            # the guard above returns a missing slot first. It is now the DEMO
+            # path only, which is why the pin above drives it with live
+            # execution off.
             answer_text = (
                 live_response.answer_text
                 if live_response is not None and live_response.answer_text

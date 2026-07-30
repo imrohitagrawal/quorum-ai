@@ -236,11 +236,16 @@ def test_one_provider_failure_slot_is_excluded_from_served_live_count(
 
     A hard provider failure produces a slot with ``status=FAILED`` **and**
     ``provider_path=OPENROUTER_SEARCH`` (``providers._failed_answer``) — the exact
-    shape D3 fixes. (A *transient* urlopen fault degrades to a COMPLETED
-    LOCAL_SIMULATION slot instead — covered by
-    ``test_upstream_fault_degrades_slot_honestly`` above — so it is the hard
-    failure, reached here via the LOCAL-independent ``provider-failure`` model
-    marker, that actually exercises the ``live_count`` filter.)
+    shape D3 fixes. (Since #171 a *transient* urlopen fault produces that same
+    shape — see
+    ``test_upstream_fault_reports_the_slot_missing_and_fabricates_nothing``
+    above. This paragraph read "a transient urlopen fault degrades to a
+    COMPLETED LOCAL_SIMULATION slot instead" and cited a test name the #171
+    rename removed: a dangling citation attached to the behaviour #171 deleted.
+    What still makes THIS test distinct is its ROUTE — the LOCAL-independent
+    ``provider-failure`` model marker short-circuits to ``_failed_answer``
+    before live execution is attempted at all, so it exercises the
+    ``live_count`` filter without depending on the #171 guard.)
 
     This is the served-number contract RB-5 protects: a provider failure must not
     inflate the "N of 4" banner.
@@ -475,12 +480,15 @@ def test_mixed_live_and_faulted_run_counts_only_the_answers_that_arrived(
     answer matches neither either. The load-bearing assertions here are the
     counts above.
 
-    Four assertions here are NOT defect detectors. They are pins, and they are
-    named so no reader mistakes them for evidence: ``agreement["aligned"] == 3``
-    (read 3 before the fix too — the fabricated slot clustered as the minority),
-    ``sourced_answer_ratio == 1`` and ``live_count == 3`` (both read the same
-    before the fix; the DENOMINATOR is what moved, not the ratio), and
-    ``cost_source``. Each was measured under mutation, not assumed.
+    SEVEN of the assertions below are NOT defect detectors. They are pins, and
+    each is marked ``PIN`` at its own line so no reader has to trust a count in
+    a docstring to know which is which. They are: ``len(answers) == 4``,
+    ``sourced_answer_ratio == 1``, ``live_count == 3``, ``agreement["aligned"]
+    == 3``, ``len(missing_movement) == 1``, ``revised is False``, and
+    ``cost_source``. Every one was measured under the mutation named below, not
+    assumed — the ratio and ``live_count`` read the same before the fix because
+    it is the DENOMINATOR that moved, and the fabricated slot happened to
+    cluster as the minority so ``aligned`` read 3 either way.
 
     ``cost_source == "estimated"`` is a no-change pin on the money contract: a
     run with a missing slot must not yield a measured receipt. Its positive
@@ -490,11 +498,11 @@ def test_mixed_live_and_faulted_run_counts_only_the_answers_that_arrived(
     ever produce one answer.
 
     What turns it red: delete the ``_live_execution_enabled`` guard from
-    ``produce_initial_answer``. Most of the counts above move; the four pins
-    named above do not. No total is quoted here on purpose — how many
-    "assertions" a block contains is a matter of how you count them, and an
-    earlier draft of this docstring carried a figure nobody else could
-    reproduce.
+    ``produce_initial_answer``. 13 of the 20 assertions below move; the seven
+    marked ``PIN`` do not. Two earlier drafts of this docstring got that
+    enumeration wrong — one said "eleven" and one said "four pins" — which is
+    why every pin is now marked at its own line rather than listed only here.
+    A count in prose is a claim, and this one has been re-measured twice.
     """
     query_run_repository.clear()
     _faulted_model_collides_with_no_moderator()
@@ -506,7 +514,7 @@ def test_mixed_live_and_faulted_run_counts_only_the_answers_that_arrived(
     answers = body["result"]["model_answers"]
 
     # --- what arrived -------------------------------------------------------
-    assert len(answers) == 4, "all four slots are still reported"
+    assert len(answers) == 4, "all four slots are still reported"  # PIN
     completed = [a for a in answers if a["status"] == InitialAnswerStatus.COMPLETED]
     failed = [a for a in answers if a["status"] == InitialAnswerStatus.FAILED]
     assert len(completed) == 3
@@ -525,7 +533,7 @@ def test_mixed_live_and_faulted_run_counts_only_the_answers_that_arrived(
     coverage = body["result"]["final_synthesis"]["citation_coverage"]
     assert coverage["answer_count"] == 3, "the denominator is answers RECEIVED"
     assert coverage["sourced_answer_count"] == 3
-    assert Decimal(str(coverage["sourced_answer_ratio"])) == Decimal("1")
+    assert Decimal(str(coverage["sourced_answer_ratio"])) == Decimal("1")  # PIN
 
     primary_sources = [
         source for answer in answers for source in answer["sources"] if not source["is_fallback"]
@@ -534,7 +542,7 @@ def test_mixed_live_and_faulted_run_counts_only_the_answers_that_arrived(
     assert not [s for s in primary_sources if s["url"].startswith(LOCAL_SIMULATION_URL_PREFIX)]
 
     # --- the served labels --------------------------------------------------
-    assert body["live_count"] == 3
+    assert body["live_count"] == 3  # PIN
     assert body["local_count"] == 0
     assert body["demo_mode"] is False, "one provider failing does not make a run a demo"
 
@@ -544,8 +552,9 @@ def test_mixed_live_and_faulted_run_counts_only_the_answers_that_arrived(
     # because the fabricated slot happened to cluster as the minority. Measured
     # under mutation rather than assumed — so it is labelled, not dressed up.
     agreement = body["result"]["agreement"]
-    assert agreement["aligned"] == 3, "only answers that arrived can align"
-    # This one DOES move. The missing slot's row in the "how positions moved"
+    assert agreement["aligned"] == 3, "only answers that arrived can align"  # PIN
+    # The ``opening`` assertion below — and only it — moves. The two around it
+    # are pins. The missing slot's row in the "how positions moved"
     # table used to open with a synopsis of the INVENTED answer, narrating a
     # fabrication as a model's stance. It must now be the fixed no-answer
     # stand-in — compared against ``_opening_synopsis("")`` rather than a
@@ -554,8 +563,10 @@ def test_mixed_live_and_faulted_run_counts_only_the_answers_that_arrived(
     missing_movement = [
         m for m in body["result"]["position_movements"] if m["slot_number"] == _FAULTED_SLOT_NUMBER
     ]
-    assert len(missing_movement) == 1
+    assert len(missing_movement) == 1  # PIN
     assert missing_movement[0]["opening"] == _opening_synopsis("")
+    # PIN — read False before the fix too. It sits here for topical grouping,
+    # NOT because it moves; only the ``opening`` assertion above does.
     assert missing_movement[0]["revised"] is False, "a slot with no answer revised nothing"
 
     # --- nothing fabricated reached ANY served surface ----------------------
@@ -564,7 +575,7 @@ def test_mixed_live_and_faulted_run_counts_only_the_answers_that_arrived(
     assert served.count(LOCAL_SIMULATION_URL_PREFIX) == 0
 
     # --- the money contract did not move ------------------------------------
-    assert body["cost_source"] == "estimated", (
+    assert body["cost_source"] == "estimated", (  # PIN
         "a slot that produced no usage cannot yield a measured receipt"
     )
 

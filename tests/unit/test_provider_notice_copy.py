@@ -75,6 +75,21 @@ def test_the_registry_lists_every_notice_the_module_declares() -> None:
     rather than counts it catches a notice declared but never registered — which
     neither the old floor nor a length comparison can see.
 
+    KNOWN BLIND SPOT, stated rather than left to be discovered: the walk matches
+    module-level ``ast.Assign`` only, so an ANNOTATED declaration
+    (``NOTICE_X: str = "..."``), a tuple unpacking, or a function-local
+    ``NOTICE_*`` is invisible to it — and to
+    ``test_every_registered_notice_is_reachable_from_the_provider_layer``, which
+    shares the predicate. Review demonstrated a jargon-carrying annotated notice
+    reaching a user with this whole file green. Pre-existing, not introduced
+    here, and tracked separately; it is recorded now so nobody reads this guard
+    as covering more than it does.
+
+    Narrowing this check knowingly accepts: a second constant carrying a value
+    already in the registry, or a plain alias, no longer reds where the length
+    comparison did. Both carry a value that is already guarded, so no unguarded
+    copy reaches a user — measured, not assumed.
+
     What turns it red: add ``NOTICE_ANYTHING = "..."`` to ``providers.py`` and
     leave it out of ``PROVIDER_NOTICES`` — even if you also register some other
     literal to keep the two counts equal.
