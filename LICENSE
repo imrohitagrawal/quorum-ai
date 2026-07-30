@@ -4,8 +4,11 @@ Copyright (c) 2026 Rohit Agrawal
 SPDX-License-Identifier: LicenseRef-quorum-ai-source-v1
 
 This license governs the **source code** of the Quorum-AI project. Content under
-`docs/learning/` is licensed separately under CC BY-NC-ND 4.0 — see
-`docs/learning/LICENSE` for the terms that apply to that content.
+`docs/learning/` — the Quorum-AI Learning Companion — is licensed separately under
+CC BY-NC-ND 4.0; see `docs/learning/LICENSE` for the terms that apply to it.
+**As of 2026-07-30 that content has not been written**, so the separate licence is
+reserved rather than in force. This carve-out is stated up front so nobody has to
+infer the split, and dated so it is visible when it stops being true.
 
 ------------------------------------------------------------------------
 

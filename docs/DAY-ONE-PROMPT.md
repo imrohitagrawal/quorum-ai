@@ -636,6 +636,125 @@ zero-by-zero element for months, and read as covered. Any test whose subject is
 "the user is told X" must assert **visibility**, never mere presence in the
 document.
 
+### 4a-quater. Check the practice before you adopt it — and grade the evidence
+
+**Rule: before encoding an industry practice as a rule or a gate, find its primary
+source and grade it. Record the grade, not just the citation.**
+
+This section exists because a research sweep run on 2026-07-30 killed three
+practices this document was about to adopt, and refuted a hypothesis its own author
+had written down an hour earlier. Full record, with primary sources and re-check
+triggers: `docs/evidence/`.
+
+**What died, and what it was replaced with:**
+
+| About to adopt | Why it failed the check | Replaced with |
+|---|---|---|
+| "Fan out 3–5 review lenses" | The only randomized experiment in the field found **two reviewers ≈ four, one is worse** (Porter, Siy, Toman & Votta, *IEEE TSE* 23(6), 1997, 88 inspections — secondary reporting, see the correction in `docs/evidence/2026-07-30-engineering-practice.md` §1) | **Two lenses**, plus a verification stage |
+| "Review 200–400 lines at a time" | **Vendor-published** by the company selling the review tool; **61% of those reviews found zero defects**; "defect" meant a comment logged in their tool | Dropped. Use the field observation instead: effective teams' median change is 24–78 lines |
+| "Review is how you find defects" | **14%** of review comments were defect-related, fourth of nine categories (Bacchelli & Bird, ICSE 2013). Effect on post-release defects is weak and partly fails to replicate | Keep the local claim only, with its `n` |
+| "Derived facts decay faster than rationale" (this author's own) | **Untested.** Derived facts are the only staleness class with detectors, so the only class counted — a tooling artifact, not a measurement | "Derived facts are mechanically checkable; rationale is not" |
+
+**The grades to use** — a citation alone is not enough, because the weight a claim
+will bear differs enormously by how it was produced:
+
+`WELL-EVIDENCED` (peer-reviewed, primary source read) · `INDUSTRY-PUBLISHED` (an
+organisation reporting its own practice) · `VENDOR` (published by a party selling
+the thing measured) · `ASSERTION` (credible source, no published methodology) ·
+`LOCAL` (measured here; small n; does not generalise) · `NOT-FOUND` (searched, does
+not exist — **this is a finding**) · `REFUTED` (**keep these; the same wrong belief
+comes back**).
+
+**Three findings from that sweep worth carrying into any project:**
+
+- **Placement beats precision.** *"the fix rate… was near zero. Next, we switched
+  Infer on at diff time… the fix rate rocketed to over 70%. The same program
+  analysis, with same false positive rate"* (Distefano et al., *CACM* 62(8), 2019).
+  Before tuning a check nobody acts on, check **where its findings appear**.
+- **Tier the false-positive bar by enforcement strength.** Blocking checks need
+  *"essentially zero"* false positives; advisory-at-review tolerates **<10%**, with
+  a written trigger: ≥10% not-useful → probation, >25% → disable (Sadowski et al.,
+  *Tricorder*, ICSE 2015). This project has been promoting gates to blocking
+  without measuring their not-useful rate at all.
+- **Do not gate on a mutation score.** Google does not, and not for cost reasons:
+  *"we were also unable to find a good way to surface it to the engineers in an
+  actionable way."* They surface mutants **on changed lines, at review, one per
+  line, with low-value nodes suppressed** — which took their productive-mutant
+  ratio from **15% to 89%**. Coverage likewise: *"should not be used as a quality
+  target"* (Inozemtseva & Holmes, ICSE 2014); a floor is a ratchet, not evidence.
+
+**And one honest note on citing your own coinages.** Where no literature exists,
+say so and cite yourself. "A gate that passed because it measured nothing" has no
+established name or prior art — the formal-verification *vacuity detection* work is
+a real, mature field and a **different one**. Borrowing it as precedent would be
+the exact dishonesty the rule is trying to prevent.
+
+---
+
+## 4b. Session handoff — carry state without carrying rot
+
+**Ship a session-handoff template in the first commit, and use it from session
+one.** Template and full rationale: `docs/91-session-handoff-template.md`.
+
+Handoff is close to a solved problem outside software, and the evidence is far
+better than anything in our field. **I-PASS** (Starmer et al., *NEJM*
+2014;371(19):1803–12) — 9 sites, **10,740 admissions** — cut medical errors **23%**
+and preventable adverse events **30%**, at **no time cost** (2.4 → 2.5 min). Its
+negative control held: non-preventable adverse events did not move (p=0.79), which
+is why the result is credible rather than an artefact of raised attention. Two
+caveats: it was a **bundle** (mnemonic + training), not a template alone, and it is
+medicine. What transfers is the shape — independently corroborated by UK HSE
+shift-handover guidance derived from Piper Alpha and Sellafield.
+
+**Three rules keep a handoff from rotting:**
+
+1. **Never write a derived fact into prose — write the command that produces it.**
+   A derived fact is anything a machine can compute: a commit hash, a test count, a
+   line number, what is deployed. **More than 25% of the top 1,000 GitHub projects
+   contain at least one outdated code-element reference** (Tan, Wagner & Treude,
+   *EMSE* 28, 2023). On this project, three line references in one handoff were
+   stale within a single session, and one premise it stated as fact was false in a
+   way that would have deleted a needed user warning.
+2. **The receiver confirms before editing.** I-PASS's *Synthesis by receiver*, and
+   HSE's *cross-checking by incoming personnel* — the one element both fields
+   arrived at independently, and the one with **no equivalent in any software
+   handoff practice found**. Every software handoff is write-only. A handoff is not
+   complete when the sender finishes writing; it is complete when the receiver
+   re-measures and reports what differed.
+3. **It is ephemeral by construction** — deleted in the pull request that consumes
+   it. Anything worth keeping longer is not a handoff: it is an issue (state), a
+   decision record (rationale), or a gate (enforcement).
+
+**One of those three is mechanically enforceable here:** a check that scans tracked
+prose for commit-SHA-shaped strings, `file:line` references and hard-coded counts.
+Rule 2 is a human act and will never be enforceable — **record it in the ledger as
+`prose only` rather than pretending otherwise.**
+
+**Rule 3 is enforceable only in a NEW project, and this paragraph originally said
+otherwise.** An earlier draft proposed "an assertion that no handoff document is
+ever tracked". That gate would go **red against the very tree proposing it**: this
+repository tracks 32 handoff documents at its root, and it cannot stop.
+**Exactly one is load-bearing in the sense that removing it breaks the build:**
+`R2-S2-S4-ULTRACODE-PROMPT.md`, named in `pyproject.toml`'s
+`[tool.mutmut].also_copy` and read from `REPO_ROOT` by three test files. Moving it
+into a staging directory on 2026-07-30 raised `FileNotFoundError` in 18 tests and
+had to be reverted. A further 17 are merely *referenced* — including
+`WP-D-TO-CLOSEOUT-ULTRACODE-PROMPT.md`, which appears only in a code comment at
+`src/product_app/catalog_fetcher.py:148` and would break nothing.
+*(This paragraph said "three are load-bearing" and then listed two, one of them
+that harmless comment. One breaks the build. Count what you enumerate.)*
+
+So the honest statement is: **start a new project with handoffs untracked and
+ephemeral; do not retrofit that rule onto a repository whose code already reads
+them.** A gate proposed in prose is a claim like any other — run it against the
+current tree before writing that it is enforceable.
+
+> **Trap, paid for on 2026-07-30:** the ignore rule that keeps ephemeral handoffs
+> out of the repository (`HANDOFF-*.md`) also silently swallowed the **template**.
+> An ignore pattern is a gate with no output; it never tells you what it hid.
+> Name shared artifacts so they cannot match it, and check with
+> `git check-ignore -v <path>` after adding any file you expect to be tracked.
+
 ---
 
 ## 5. Enforcement & accountability

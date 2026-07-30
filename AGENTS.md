@@ -2,6 +2,191 @@
 
 This repository was generated from Codex Product Factory Enterprise Edition.
 
+## Operating rules — read these first
+
+Placed first deliberately: instruction-following degrades as instruction count
+rises, and earlier instructions are measurably better followed than later ones
+(IFScale, arXiv:2507.11538). These are the non-negotiables. The reasoning behind
+each one lives in `docs/evidence/` and `docs/103-incident-learnings.md`; this list
+is the rule only.
+
+**Truth**
+1. **Verify by executing, never by reading.** State the command and what it
+   printed, or say UNVERIFIED out loud.
+2. **A green advisory job is not evidence it ran; a RED one is not evidence it
+   measured.** Open the log and find the number.
+3. **If a premise you were handed turns out to be false, STOP and say so.** Never
+   repair it silently and carry on.
+4. **When you CORRECT a false claim, verify the REPLACEMENT before writing it.**
+   Three review rounds here caught rewrites that were themselves false — one told
+   an operator a money-losing fault was benign. Prefer narrow hedged wording
+   ("no workflow sets it") over absolutes ("set nowhere else").
+5. **Plain English. No jargon, no invented shorthand.**
+
+**Tests**
+6. **Every test ships with one line saying what turns it red.** Prove it by
+   mutation: `cp` the file aside, mutate, restore from the copy, verify with
+   `diff -q`. **Never `git checkout <file>`** — it discards uncommitted work.
+   Confirm the run actually executed; a mutation that breaks collection proves
+   nothing.
+6a. **Capture the verbatim failure output** when the test first fails. "It failed"
+   is not evidence; the message is.
+6b. **Accounting code (cost, quota, rate limits, usage) asserts CARDINALITY** — how
+   many records, rows, or calls — never just a clean-path outcome. F-01 survived
+   every existing test because they asserted *that* a run was billed, never *how
+   many times*. Ask of every assertion: could this fail for ANY implementation?
+7. **A negative check needs a positive partner.** "No X found" is trivially true
+   over nothing.
+7a. **Never parametrize a test over the constant it tests**; never assert a bound
+   against the constant that defines it.
+8. **Assert structure, not substrings** — a substring matches the prose that
+   explains the thing. Use `tests/code_text.py` when you must read a file.
+
+**Review**
+9. **Fan out for review, never for building.** Subagents share one working tree.
+   Tell every reviewer **IN CAPITALS** not to write, edit, `git checkout`,
+   `git stash` or `sed -i` anything.
+10. **Two lenses, not five.** Two reviewers ≈ four; one is worse (Porter et al.,
+    *IEEE TSE* 1997). Spend the difference on verification, not more finders.
+11. **Verify every reviewer claim before acting.** **Check the fix, not just the
+    finding.** The often-quoted "roughly a fifth do not survive" has **no source
+    document in this repo** — treat it as assumed, not measured.
+    What *is* measured, on 2026-07-30, is the decay rate of claims **inherited
+    from handoff documents** — a different and worse population. Two components,
+    each checkable on its own; deliberately NOT summed into one headline figure,
+    because the first attempt at that produced an aggregate nobody could re-derive:
+    - **2 of 3** headline findings refuted outright (extraction ledger §4.1, §4.2);
+      a third (§2) was narrowed rather than refuted.
+    - **8 of 18** "would be lost outright" candidates already done, already filed,
+      or largely wrong (§4).
+    Roughly half of what a handoff asserts does not survive contact with the tree.
+12. **Cap review at TWO rounds**, then STOP and escalate with open findings
+    listed. If two fixes in a row add defects, change the approach.
+    **Expect your own fix to introduce a defect — budget a round for it.**
+12a. **Reviewers refute by default** and report only findings backed by a
+    demonstrated failure. Reviews are **read-only**; a separate single writer
+    applies fixes.
+12b. **A reviewer that must mutate source gets its OWN copy**
+    (`git archive HEAD | tar -x -C <dir>`). A shared-worktree mutation once gave
+    another reviewer 4 phantom failures, and once left uncommitted edits a later
+    agent inherited.
+
+**Commands that bite if you get them wrong**
+13. **Run e2e exactly as CI does**, or ~95 phantom failures appear:
+    ```bash
+    lsof -ti tcp:18085 | xargs -r kill -9
+    cd e2e && SESSION_RATE_LIMIT_PER_MINUTE=600 npx playwright test <spec> \
+      --project=chromium --workers=1 --retries=0
+    ```
+14. **`make quality` and `make validate` do NOT cover the merge gates.** Six
+    contexts are required by branch protection. Passing both targets locally
+    proves almost nothing about whether the pull request can merge. Each
+    required context, and the local command that produces it (verified
+    2026-07-30):
+
+    | Required status check | Produced locally by |
+    |---|---|
+    | `validate-and-test` | one CI job running **eight** targets: `make validate`, `openapi-check`, `format-check`, `lint`, `type-check`, `test-report`, `security-scan`, `docker-build`. The first six are covered by `make quality && make validate` below; **`docker-build` is covered by nothing local** |
+    | `pytest (Python 3.12)` | `make quality` |
+    | `Changed-lines coverage >= 95% (blocking)` | `make diff-cover DIFF_BASE=origin/main` |
+    | `Schemathesis API contract (blocking)` | `make api-contract` |
+    | `FR traceability completeness (blocking)` | `make fr-completeness` (inside `make validate`) |
+    | `e2e axe + parity (chromium)` | **the e2e suite — see rule 13** |
+
+    ```bash
+    uv sync --all-extras   # NOT --extra dev: schemathesis lives in `quality`
+    make quality && make validate
+    make diff-cover DIFF_BASE=origin/main
+    make api-contract
+    make openapi-check
+    make security-scan
+    # and e2e per rule 13 if you touched UI, specs or fixtures
+    ```
+
+    **This list has been wrong twice.** Until 2026-07-30 it omitted
+    `make api-contract`; the fix that added it still missed
+    `e2e axe + parity (chromium)`, which is a required check whose words appear
+    nowhere else in this file. **A count goes stale silently, so do not trust
+    the table — re-derive it:**
+    ```bash
+    gh api repos/:owner/:repo/branches/main/protection \
+      --jq '.required_status_checks.contexts[]'
+    ```
+    **Never lower a threshold, add `# pragma: no cover`, or delete a test to go
+    green.** If a line is genuinely untestable, say so with evidence.
+15. **Run `pytest` and `make diff-cover` serially** — they race on
+    `build/gates/guard-good-xml.xml`, written by
+    `tests/unit/test_makefile_gate_integrity.py` (#113, still open).
+16. **`make format` reformats test assertions** and breaks `sed`-style anchors.
+    Grep for the real text before any programmatic edit.
+16a. **Process-global test state.** The cost event ring, the run-capacity
+    semaphore and the model catalog are process globals — a test that mutates one
+    changes the cap for everything after it. Use
+    `tests/helpers.isolated_run_semaphore` (`tests/helpers.py:19`).
+16b. **A probe script that does `sys.path.insert(0, ROOT/"src")` can silently
+    measure a STALE copy of the tree** sitting next to it, making a working fix
+    look broken. Repoint `ROOT` and sanity-check that the file you think you are
+    importing is the one on disk.
+16c. **Before deleting a file, run `git ls-files <path>`.** Tracked files are
+    recoverable with `git show <sha>:<path>`. An untracked file has no history —
+    but if it was ever `git add`ed it survives as a **dangling blob**, and
+    `git fsck --lost-found` plus `git cat-file -p <blob>` recovers it byte-exact.
+    Recorded 2026-07-30: three untracked handoff documents were deleted, declared
+    unrecoverable on the strength of `git log --all` alone, and then recovered in
+    full from dangling blobs. **Check the object store before declaring loss.**
+
+**Shipping**
+17. **One CONCERN per pull request**, merged before the next starts — a reviewer
+    cannot audit a billing fix and a docs restructure in the same diff. Merge
+    `main` into your branch **before** starting. Check you are on your branch
+    before committing.
+17a. **Branch in a dedicated `git worktree`**, never the main checkout, so other
+    uncommitted work is never at risk.
+17b. **Push, open a pull request, merge and deploy only with explicit human
+    approval.** Commit locally freely.
+17c. **Squash-merge with an explicit message**
+    (`gh pr merge --squash --subject --body`). A bare `--squash` concatenates
+    EVERY commit body onto `main`, so superseded figures from intermediate
+    commits land there. (Violated on PR #172, merged 2026-07-29 — both bodies
+    landed.)
+17d. **The head branch must be up to date with base.** A second stacked pull
+    request merges `main` in first, then **re-gates the merged tree locally**
+    (diff-cover included). A clean auto-merge is not a correct merge.
+17e. **After merging, `git branch -f main origin/main`** — the merge lands on the
+    remote and the local ref does not follow.
+17f. **Hermetic / $0.** No paid API calls for routine checks. Never fabricate a
+    number — flag the gap instead.
+18. **Done means merged AND running in production.** Verify three ways: the
+    deploy **job** ran (not `skipped`/`cancelled` — check the job, not the run's
+    rollup), `/status.build_sha` equals the merged SHA, and the thing you built
+    actually fires. Probe production only where it costs nothing — `/ready`,
+    `/status`, `/metrics`, `/ui/ops` and `/estimate` are all free; a full run
+    is not.
+    A docs-only merge still redeploys (no workflow has a paths filter), so
+    `build_sha` tracks `main`'s tip after **every** merge, not only code ones.
+    Traps:
+    - **`gh run list --commit <SHA>` returned `[]` on 2026-07-22** and the
+      workaround was `--branch main` plus a SHA-prefix match. **Re-measured
+      2026-07-30 on `gh 2.96.0`: it returns runs normally** (10, and 5/10/8/10
+      across four `main` SHAs). The workaround is still safe but no longer
+      required. Recorded with its date and tool version because the original
+      was written as a timeless absolute, so nobody re-checked it for a week.
+    - **A merge produces two runs; one is `cancelled` by concurrency dedupe.** A
+      wait-loop keyed on "any completed run for this SHA" fires on the cancelled
+      one and reports done while production is still on the old build. Resolve
+      the **newest run by `createdAt`**, then read its Deploy **job**.
+19. **Close more than you open.** If an item is bigger than it looked, say so and
+    stop — do not file and continue.
+20. **A pull request opens with one line saying why this item outranks the top of
+    the backlog.** If that line cannot be written honestly, the ranking is wrong.
+    Discovering a higher-ranked item mid-work is a **mandatory stop**: park the
+    branch, re-run selection, record it.
+
+**Before adding a gate**, measure its yield against real defect history and state
+what it cannot see. Measured here: **0 of 16** `src/` defects were caught by an
+automated check; **10 of 16** by adversarial review
+(`docs/metrics/defect-discovery-audit.md`).
+
 
 ## Simplified start
 
@@ -79,12 +264,18 @@ new bugs a change introduces. Before declaring any non-trivial change complete:
   project the most, and it applies to human and AI contributors equally.
   Measured examples, all from one work package
   (`docs/metrics/mutation-gate-study.md` §8): a CI gate reported green for
-  months while aborting before it measured anything, and the issue to promote it
-  cited that abort as a passing run; two freshly-written tests asserted only on
-  printed text and stayed green under the mutation they existed to catch; a
-  guard asserting `"sys.platform" in source` survived the constant being flipped
-  to the wrong value. In each case the reading was confident and the run
-  disagreed.
+  **~7 days** while aborting before it measured anything (abort confirmed by log
+  on 22 and 28 July), and the issue to promote it cited that abort as a passing
+  run; two freshly-written tests asserted only on printed text and stayed green
+  under the mutation they existed to catch; a guard asserting
+  `"sys.platform" in source` survived the constant being flipped to the wrong
+  value. In each case the reading was confident and the run disagreed.
+  **This paragraph said "months" until 2026-07-30.** §8 of the very study it
+  cites lists that word in its own table of refuted claims, corrected to ~7 days
+  — so the rulebook's flagship example of verifying by execution was itself an
+  unverified number, carried for a week inside the section warning against
+  exactly that. The lesson is not that the gate was broken; it is that a
+  citation is not a check.
   - Before promoting an advisory gate, **open its job log** and confirm it
     produced its number.
   - **A RED gate is not evidence it measured either.** A non-zero exit can mean
@@ -126,7 +317,26 @@ this file. But when you touch the workspace UI (`src/product_app/static/app.js`,
   ordered lists, blockquotes, long multi-paragraph answers, an empty-citation
   slot — and look at it as a user would (screenshot at 1440px).
 - **The below-the-line gate is `e2e/tests/invariants/`** — driven in CI by
-  `.github/workflows/e2e.yml`:
+  `.github/workflows/e2e.yml`. That directory holds **twelve** specs, not the
+  three described below: `answer-completeness`, `export-and-expanders`,
+  `readiness-banner`, `real-integration-smoke`, `rendering-invariants`,
+  `session-trail`, `source-expander`, `theme-toggle`, `trust-score-invariants`,
+  `trust-score-visual`, `verdict-band`, `visual-snapshots`. All twelve are
+  currently wired into blocking lanes. Three are detailed below because they
+  have contracts worth stating; the other nine bind just as hard. Enumerate the
+  directory rather than trusting this list.
+  **Two holes in the guard that is supposed to keep that true**
+  (`tests/test_e2e_workflow_covers_all_invariant_specs.py`) — both pre-existing,
+  neither fixed here:
+  - It asserts `spec in workflow` against the **raw text** of `e2e.yml`, so a
+    spec named only in that file's header comment block passes while running in
+    no step. It forces the *name* to appear, not the spec to *execute* — an
+    instance of the substring-vs-structure trap in rule 8, inside a gate.
+  - Its `GATED_SPEC_DIRS` covers only `e2e/tests/invariants/` and
+    `e2e/tests/ops/`. `e2e/tests/degraded/` is **not** swept, though
+    `e2e.yml:213` runs a blocking spec from it.
+
+  The specs are:
   - `rendering-invariants.spec.ts` — walks `#main-content` and asserts NO raw
     Markdown survives in any text node (`**`, `##`, `` `code` ``, `](url)`,
     `_ _`/`__ __`, line-start `>`), a **monotonic** elapsed timer, no horizontal
@@ -134,7 +344,11 @@ this file. But when you touch the workspace UI (`src/product_app/static/app.js`,
   - `visual-snapshots.spec.ts` — human-reviewed `toHaveScreenshot` baselines for
     the result + transcript views (Linux baselines seeded in CI; see
     `.github/workflows/seed-visual-baselines.yml`).
-  - `degraded-banner.spec.ts` — the result view must surface a degraded banner
+  - `e2e/tests/degraded/degraded-banner.spec.ts` — **note the path: it is in
+    `tests/degraded/`, not `tests/invariants/`**, though `e2e.yml` runs it in the
+    same blocking lane. This file said `invariants/` until 2026-07-30, so a
+    reader looking for it there found nothing. The result view must surface a
+    degraded banner
     whenever the panel came up SHORT, so an incomplete run is never shown as a
     complete one. Note this line **described a contract the code did not have**
     until WP-H: the banner was keyed on `local_count > 0` — "were any answers
@@ -142,10 +356,15 @@ this file. But when you touch the workspace UI (`src/product_app/static/app.js`,
     or the run deadline expired). Such a slot is counted in neither `live_count`
     nor `local_count`, so a run with three live answers and one missing showed no
     banner at all while the headline read "3 of 4 models aligned". The condition
-    is now `local_count > 0 || missing > 0` — equivalent to
+    is now `localCount > 0 || failedCount > 0` (`app.js:2297`, where
+    `failedCount` is the slots that produced nothing) — equivalent to
     `live_count < slot_count` **whenever `live + local <= slot_count`**, which is
     all the server can emit. So the sentence above is true as written *now*, and
     was not before. A doc asserting a contract is not the contract.
+    Until 2026-07-30 this quoted the condition as `local_count > 0 || missing > 0`
+    — the server-side field names, which appear nowhere in `app.js`. **Quote
+    identifiers that exist in the file you name**, or a reader who greps for them
+    concludes the contract is absent.
 - **A new provider-text surface must route through the markdown renderer**
   (`setProse` for block prose, `setInlineProse` for inline/cell surfaces) — never
   raw `textContent`/`mkEl`. Source titles are the one exception (provider

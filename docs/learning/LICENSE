@@ -3,8 +3,8 @@ Licence
 
 © 2026 Rohit Agrawal. All rights reserved except as granted below.
 
-The **content of the Aegis Learning Companion** (the Markdown pages, diagrams, and
-images under `docs/learning/`) is licensed under the
+The **content of the Quorum-AI Learning Companion** (the Markdown pages, diagrams,
+and images under `docs/learning/`) is licensed under the
 **Creative Commons Attribution–NonCommercial–NoDerivatives 4.0 International
 Licence (CC BY-NC-ND 4.0)**.
 
@@ -41,7 +41,7 @@ Commons CC BY-NC-ND 4.0 legal code:
 How to attribute
 ----------------
 
-> "Aegis Learning Companion" by Rohit Agrawal, licensed under CC BY-NC-ND 4.0.
+> "Quorum-AI Learning Companion" by Rohit Agrawal, licensed under CC BY-NC-ND 4.0.
 > Source: the canonical published URL.
 
 For commercial use, translations, or derivative works, please ask first —
@@ -51,5 +51,22 @@ Scope
 -----
 
 This licence covers the **learning-companion content** under `docs/learning/`.
-Any source code in this project is, or will be, licensed separately under its
-own licence file (see the repository root `LICENSE`).
+Source code in this project is licensed separately — see the repository root
+`LICENSE` (Quorum-AI Source Code License, MIT + Attribution).
+
+Status — no content published yet
+---------------------------------
+
+**As of 2026-07-30 the Quorum-AI Learning Companion has not been written.** This
+directory contains this licence and nothing else. These terms are **reserved for
+content that does not yet exist**, and nothing here should be read as a claim that
+a learning companion is available.
+
+This note exists because the opposite was true for the whole life of the project
+until today: a licence naming another project ("Aegis Learning Companion",
+inherited un-customised from a skill-pack template) sat here governing an empty
+directory, while the root `LICENSE` directed readers to it as though a separately
+licensed body of work existed. A licence for unwritten content is an aspiration
+marked as a deliverable — the exact failure `docs/DAY-ONE-PROMPT.md` warns against.
+
+**Delete this section in the pull request that publishes the first page.**
