@@ -29,7 +29,6 @@ from typing import Literal
 
 from product_app.debate import DebateOutput, ModelAlignment
 from product_app.providers import InitialAnswerStatus, InitialModelAnswer
-from product_app.synthesis_length import DICTATED_CAVEAT_SENTENCE
 
 ConsensusStrength = Literal["strong", "weak", "divided"]
 
@@ -209,33 +208,6 @@ def _four_grams(text: str) -> frozenset[str]:
     return frozenset(" ".join(words[i : i + 4]) for i in range(len(words) - 3))
 
 
-#: The 4-grams of the sentence this product dictates, subtracted from BOTH
-#: sides of every alignment comparison (:func:`_opening_reflected_in_final`).
-#:
-#: #171 finding 5 is "a trust number decided by content no model authored", and
-#: this sentence qualifies twice over: ``synthesis._RECOMMENDATION_PROMPT``
-#: rule 1 orders the model to emit it verbatim, and ``_CaveatEnforcer`` appends
-#: it when the model does not. It is 17 words — 14 4-grams — far more
-#: than the 10% containment threshold needs, so an answer that merely carries
-#: the ordinary regulated-domain disclaimer was counted as having landed in the
-#: final answer. Measured before this subtraction: 14 of 22 opening 4-grams,
-#: 64%, on the disclaimer alone.
-#:
-#: Subtracted from the N-GRAM SETS rather than stripped from the prose, and
-#: that choice is the fix. Three earlier attempts cut the sentence out of the
-#: recommendation text with string surgery, and each left a way in: the caveat
-#: also reaches the comparison through the CONSENSUS (``_CONSENSUS_PROMPT``
-#: tells the model to quote phrases from the answers), a model writing
-#: "decision-support only" defeats a substring match and makes
-#: ``_CaveatEnforcer`` append a SECOND copy, and a model whose text lacks a
-#: trailing full stop left no sentence boundary to cut at, deleting its whole
-#: recommendation. Subtracting here removes all three at once: it applies to
-#: the entire comparison text whatever section it came from, it uses the SAME
-#: ``[a-z0-9]+`` tokenisation as the comparison (so "decision-support" and
-#: "decision support" are already the same tokens), and it deletes no prose.
-_DICTATED_CAVEAT_NGRAMS: frozenset[str] = _four_grams(DICTATED_CAVEAT_SENTENCE)
-
-
 def _excerpt(text: str) -> str:
     """Return the first ``_OVERLAP_EXCERPT_CHARS`` characters of
     ``text`` with newlines collapsed to spaces. Empty if ``text``
@@ -371,10 +343,10 @@ def _opening_reflected_in_final(opening_text: str, final_text: str) -> bool:
     excerpted for the same reason — a phrase from the opening may appear
     anywhere in the synthesis.
     """
-    opening_ngrams = _four_grams(_excerpt(opening_text)) - _DICTATED_CAVEAT_NGRAMS
+    opening_ngrams = _four_grams(_excerpt(opening_text))
     if not opening_ngrams:
         return False
-    final_ngrams = _four_grams(final_text) - _DICTATED_CAVEAT_NGRAMS
+    final_ngrams = _four_grams(final_text)
     if not final_ngrams:
         return False
     shared = len(opening_ngrams & final_ngrams)

@@ -40,10 +40,6 @@ from product_app.synthesis import (
     build_agreement_and_positions,
 )
 from product_app.synthesis_consensus import compute_consensus_strength
-from product_app.synthesis_length import (
-    _CaveatEnforcer,
-    truncate_recommendation,
-)
 
 FOCUS = ["disagreement", "weak_support", "missing_reasoning"]
 
@@ -408,110 +404,6 @@ def test_a_templated_synthesis_does_not_align_a_minority_on_a_strong_panel() -> 
     assert [p.slot_number for p in positions if p.revised] == [], (
         "no model may be reported as having moved to a consensus this product wrote"
     )
-
-
-def test_the_caveat_this_product_dictates_cannot_align_a_minority() -> None:
-    """A ``"live"`` synthesis is still not wholly the model's words, and the
-    part that is not must not decide alignment.
-
-    ``_RECOMMENDATION_PROMPT`` rule 1 orders the model to end with the
-    decision-support caveat verbatim, and ``truncate_recommendation`` appends
-    it when the model omits it — so that sentence is in EVERY recommendation
-    regardless of what the model wrote. It is 17 words, worth 14 4-grams — 14 of
-    slot 4's 22 opening 4-grams below, 64%, against a 10% threshold.
-
-    The consequence is #171 finding 5's exact shape surviving inside the mode
-    the fix declares safe: a minority answer that carries the ordinary
-    regulated-domain disclaimer — which the product's own high-stakes handling
-    encourages — gets counted aligned on a sentence this product dictated,
-    having shared no substance with the panel at all.
-
-    The sentence is excluded by subtracting its 4-grams from BOTH sides of the
-    comparison (``synthesis_consensus._DICTATED_CAVEAT_NGRAMS``) rather than by
-    cutting it out of the recommendation text. Three string-surgery drafts each
-    left a way in, and this test drives all three of the channels they missed:
-
-    * the caveat reaching the comparison through the CONSENSUS, which no
-      recommendation-only strip can see (``_CONSENSUS_PROMPT`` tells the model
-      to quote phrases from the answers, and in a regulated domain the answers
-      carry the disclaimer);
-    * a model writing "decision-support only" with a hyphen, which defeats a
-      substring match — and makes ``_CaveatEnforcer`` append a SECOND copy —
-      but is the same ``[a-z0-9]+`` tokens to the comparison;
-    * the ordinary compliant shape, the caveat appended at the end.
-
-    The paired positives are the two runs whose final answer genuinely carries
-    slot 4's own point. The caveat is excluded; the model's own words are not,
-    and no prose is deleted to achieve it.
-
-    What turns it red: delete the ``- _DICTATED_CAVEAT_NGRAMS`` subtractions
-    from ``_opening_reflected_in_final``; every boilerplate-only case then
-    aligns slot 4, so those runs read 3 instead of 2.
-    """
-    majority = "The tunnel option is best because it avoids the flood plain entirely."
-    unrelated = "Seasonal bird counts in the estuary have risen for six years running."
-    # A minority whose ONLY overlap with the final answer is the dictated caveat.
-    minority = (
-        "Consult a qualified professional about the culvert easement. "
-        f"{_CaveatEnforcer.FULL_CAVEAT}"
-    )
-    answers = [
-        _answer(1, majority),
-        _answer(2, majority),
-        _answer(3, unrelated),
-        _answer(4, minority),
-    ]
-    debate = _debate("The panel weighed both options.")
-    assert compute_consensus_strength(answers, debate) != "strong"
-
-    def _aligned(consensus: str, recommendation: str) -> tuple[int, list[int]]:
-        agreement, positions = build_agreement_and_positions(
-            initial_answers=answers,
-            debate_outputs=debate,
-            final_synthesis=_synthesis(
-                consensus, recommendation=recommendation, synthesis_mode=SYNTHESIS_MODE_LIVE
-            ),
-        )
-        return agreement.aligned, [p.slot_number for p in positions if p.revised]
-
-    # ``truncate_recommendation`` is the real production path that guarantees
-    # the caveat is present, so the compliant fixture is built through it.
-    compliant = truncate_recommendation("Act on the tunnel consensus after a human audit.")
-    assert _CaveatEnforcer.FULL_CAVEAT in compliant, "the premise: the caveat is always appended"
-    # The hyphen variant the substring matcher cannot see. Passed through the
-    # same production path, which fails to recognise it and appends a SECOND
-    # copy — so the served recommendation carries the dictated sentence twice.
-    hyphenated = truncate_recommendation(
-        "Act on the tunnel consensus. This summary is decision-support only and "
-        "is not medical, legal, financial, safety, or regulated professional advice."
-    )
-    assert hyphenated.lower().count("decision") == 2, (
-        "the premise: a hyphen defeats the substring check and the caveat is appended twice"
-    )
-
-    boilerplate_only = {
-        "caveat in the recommendation": (majority, compliant),
-        "caveat in the CONSENSUS": (f"{majority} {_CaveatEnforcer.FULL_CAVEAT}", ""),
-        "caveat hyphenated, and served twice": (majority, hyphenated),
-    }
-    for label, (consensus, recommendation) in boilerplate_only.items():
-        aligned, revised = _aligned(consensus, recommendation)
-        assert aligned == 2, f"{label}: slot 4 shares only the dictated sentence"
-        assert revised == [], f"{label}: and nothing may be reported as moved"
-
-    # Paired positives: a final answer whose own words carry slot 4's point,
-    # once through each of the two sections that feed the comparison.
-    substance = "consult a qualified professional about the culvert easement before signing"
-    for label, (consensus, recommendation) in {
-        "substance in the recommendation": (
-            majority,
-            truncate_recommendation(f"Act on the tunnel consensus, and {substance}."),
-        ),
-        "substance in the consensus": (f"{majority} We {substance}.", compliant),
-    }.items():
-        aligned, revised = _aligned(consensus, recommendation)
-        assert aligned == 3, f"{label}: the model's own words still align slot 4"
-        assert revised == [4], label
 
 
 def test_minority_whose_opening_lands_in_final_is_marked_revised() -> None:

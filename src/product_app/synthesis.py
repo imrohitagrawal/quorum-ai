@@ -1157,18 +1157,35 @@ def _final_synthesis_alignment_text(final_synthesis: FinalSynthesis | None) -> s
         return None
     if final_synthesis.synthesis_mode != SYNTHESIS_MODE_LIVE:
         return None
-    # NOTE — "live" does NOT mean every word here is the model's. Rule 1 of
-    # ``_RECOMMENDATION_PROMPT`` dictates the decision-support caveat verbatim,
-    # ``_CaveatEnforcer`` appends it when the model omits it, and
-    # ``_CONSENSUS_PROMPT`` invites the model to quote phrases from answers that
-    # may themselves carry it. That dictated sentence alone clears the
-    # containment threshold, so it is removed from the COMPARISON rather than
-    # from this text: ``synthesis_consensus`` subtracts its 4-grams from both
-    # sides (see ``_DICTATED_CAVEAT_NGRAMS``). Doing it there and not here is
-    # deliberate — it covers the consensus as well as the recommendation, it
-    # uses the same tokenisation as the comparison so punctuation variants
-    # cannot slip past, and it deletes none of the model's prose. Three
-    # string-surgery drafts of a strip-it-here version each left a way in.
+    # KNOWN LIMIT, deliberately not fixed here — filed as #180.
+    #
+    # "live" means a model wrote all five sections. It does NOT mean every word
+    # is the model's own choice: ``_RECOMMENDATION_PROMPT`` rule 1 dictates the
+    # decision-support caveat verbatim, ``_CaveatEnforcer`` appends it when the
+    # model omits it, and ``_CONSENSUS_PROMPT`` invites the model to quote
+    # phrases from answers that may carry it. That sentence is long enough to
+    # clear the containment threshold on its own, so an answer sharing nothing
+    # with the panel but the ordinary disclaimer can still be counted aligned.
+    #
+    # This is PRE-EXISTING — reachable on ``main`` today for ANY completed
+    # synthesis — and the guard above strictly NARROWS it, to live syntheses
+    # only. It is not made worse here.
+    #
+    # Three attempts to close it in this pull request were each broken by
+    # adversarial review, which is why it is filed rather than patched again:
+    # stripping at the caveat marker deleted the model's own prose; stripping by
+    # sentence missed the consensus section and every punctuation variant; and
+    # subtracting the caveat's 4-grams from the comparison was incomplete
+    # against paraphrases, was half a provable no-op, and was pinned only by a
+    # test built from the same constant it subtracted.
+    #
+    # #180 also records the WIDER door none of those touched, which is the one
+    # worth closing: ``opening_majority`` short-circuits ``final_aligned = True``
+    # without ever running the containment test, and the clustering primitive
+    # behind it excludes no boilerplate either — so four unrelated answers that
+    # merely open with the disclaimer are served as "strong consensus, 4 of 4".
+    # Closing that means deciding what counts as boilerplate in general, which
+    # needs a measurement rather than a judgement.
     text = " ".join(p for p in (final_synthesis.consensus, final_synthesis.recommendation) if p)
     return text or None
 

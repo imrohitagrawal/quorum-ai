@@ -42,17 +42,6 @@ RECOMMENDATION_MAX_CHARS = 2000
 #: minor rephrasings.
 _CAVEAT_MARKER = "decision support only"
 
-#: The caveat in full. Public because it is not only appended here: since #171
-#: finding 5 ``synthesis_consensus`` subtracts its word 4-grams from the
-#: per-model alignment comparison, because a sentence this product DICTATES
-#: (``synthesis._RECOMMENDATION_PROMPT`` rule 1) and APPENDS when the model
-#: omits it (:class:`_CaveatEnforcer`) must not be able to decide a trust
-#: number. One definition, read by both, so the two can never drift.
-DICTATED_CAVEAT_SENTENCE = (
-    "This summary is decision support only and is not medical, "
-    "legal, financial, safety, or regulated professional advice."
-)
-
 #: Sentence-boundary pattern used by ``truncate_section`` to find
 #: the last "natural" stop. We treat ".", "!", "?" followed by a
 #: space as a sentence end.
@@ -195,7 +184,10 @@ class _CaveatEnforcer:
     #: The full caveat sentence. The orchestrator's templated
     #: branch emits this verbatim, and the LLM prompt's rule 1
     #: mandates it.
-    FULL_CAVEAT = DICTATED_CAVEAT_SENTENCE
+    FULL_CAVEAT = (
+        "This summary is decision support only and is not medical, "
+        "legal, financial, safety, or regulated professional advice."
+    )
 
     @classmethod
     def append_if_missing(cls, text: str) -> str:
