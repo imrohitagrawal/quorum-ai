@@ -644,6 +644,40 @@ class ProviderExecutionService:
         credential_source: ProviderCredentialSource,
         started_at: float,
     ) -> InitialModelAnswer:
+        """Report the slot MISSING. It carries no ``token_usage`` — deliberately.
+
+        #175, the money decision, stated where the code makes it. A slot can
+        reach here after a call that really was billed: a whitespace-only (or
+        empty) completion arrives with the provider's own ``usage`` object, and
+        dropping it means those dollars stop being itemised.
+
+        The alternative — a missing slot that still carries its usage — was
+        measured and rejected, for four reasons:
+
+        * It would change no receipt. ``initial_fully_captured``
+          (``query_runs.py``) requires ``status is COMPLETED``, so the summing
+          loop behind that gate is unreachable while any slot is FAILED.
+          Measured: a FAILED slot carrying usage still yields ``estimated``.
+          The value would be recorded, serialised into the API response, and
+          read by nothing.
+        * The spend is not silently lost. It is loudly marked UNMEASURABLE —
+          the receipt drops to ``estimated``, which is exactly the F-06
+          contract (see ``_DISPATCH_UNMEASURED``): a billed call must never
+          VANISH, but it does not have to be SUMMED. The run stops claiming a
+          measured figure it cannot support.
+        * It is what this path already does for the identical class of call.
+          An empty completion has arrived here carrying usage since F-06 and
+          has always been reported with none.
+        * On the debate/synthesis path usage lives in a SEPARATE list from the
+          output, so recording it cannot imply the output was good. Here it
+          lives ON the answer, so carrying it would make one field's honesty
+          depend on another's.
+
+        What would change this decision: a consumer that reads per-answer
+        ``token_usage`` independently of ``initial_fully_captured`` — a
+        per-slot spend breakdown, or a counter of billed-but-unusable calls.
+        There is none today (#177 would add the nearest thing).
+        """
         duration_ms = max(1, round((perf_counter() - started_at) * 1000))
         provider_event_recorder.record(
             event_type="provider_initial_answer_failed",
@@ -794,23 +828,44 @@ class ProviderExecutionService:
         )
         if result is None or isinstance(result, _SearchRejected | _DispatchedUnmeasured):
             return None
-        # F-06: ``_post_openrouter`` now returns a real result for an EMPTY
+        # F-06: ``_post_openrouter`` returns a real result for an EMPTY
         # completion so the debate/synthesis path can record the usage the
-        # provider charged for. The initial-answer path must NOT see that
-        # change: before F-06 an empty completion arrived here as ``None``, and
-        # a non-``None`` result flips ``provider_attempt_order`` to
+        # provider charged for. The initial-answer path must NOT treat that as
+        # an answer: a non-``None`` result flips ``provider_attempt_order`` to
         # OPENROUTER_SEARCH in ``produce_initial_answer``, so an empty slot
         # would report a live attempt it never usefully made.
         # ``provider_attempt_order`` is a user-visible response field
-        # (openapi.yaml), which is the actual casualty — MEASURED: dropping this
-        # guard does NOT corrupt ``initial_fully_captured``, because that gate
-        # also requires ``provider_path is OPENROUTER_SEARCH`` and
-        # ``token_usage is not None``, and both stay wrong either way. The
-        # guard is deliberately ``not
-        # result.answer_text`` and NOT ``.strip()`` — a whitespace-only
-        # completion was served as a COMPLETED live answer before F-06 and
-        # still is.
-        if not result.answer_text:
+        # (openapi.yaml).
+        #
+        # #175: this guard is ``.strip()``. It did NOT used to be, and the
+        # difference was a defect, not a decision. A completion of ``"   \n\t "``
+        # is truthy, so a whitespace-only answer was served as a COMPLETED live
+        # slot: it counted toward ``live_count``, sat in the citation-coverage
+        # DENOMINATOR, and — carrying its own ``token_usage`` — satisfied
+        # ``initial_fully_captured``, so a run in which no model produced a
+        # single character reported "4 of 4 answered live", status
+        # ``completed``, no failed steps and a ``measured`` (billed) receipt.
+        # With one slot returning a citation annotation and no prose it
+        # reported 100% source coverage over an answer with no text.
+        #
+        # This inverted NOTHING about F-06 and invented no threshold. Emptiness
+        # after ``.strip()`` is the predicate the rest of the product already
+        # uses on model-produced text — ``evaluation._substantive``,
+        # ``synthesis_consensus.classify_model_alignment``,
+        # ``query_runs`` (material claims) and all ten debate/synthesis
+        # provider-response sites. The initial-answer path was the only
+        # dissenter, which is why the SAME payload could serve
+        # ``agreement 3 of 4`` next to ``live_count 4``.
+        #
+        # The correction to the note this replaced, which is the reason the
+        # defect looked safe: it quoted ``initial_fully_captured`` as requiring
+        # ``provider_path is OPENROUTER_SEARCH`` and ``token_usage is not
+        # None``. The gate (``query_runs.py``) has a THIRD conjunct — ``status
+        # is COMPLETED`` — and that omission is load-bearing. It is what makes
+        # a whitespace slot's usage reach a measured receipt while a failed
+        # slot's cannot, and it is why the fix costs the run its ``measured``
+        # label: see ``_failed_answer`` for the money decision (#175).
+        if not result.answer_text.strip():
             return None
         return result
 

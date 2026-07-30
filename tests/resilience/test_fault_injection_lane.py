@@ -615,6 +615,213 @@ def test_an_unfaulted_run_of_the_same_harness_is_measured(
     assert body["cost_source"] == "measured"
 
 
+# ---------------------------------------------------------------------------
+# #175 — the WHITESPACE run: every slot answered 200 OK, and said nothing.
+#
+# Not a fault at all at the transport level: HTTP 200, well-formed JSON, a real
+# ``usage`` object, and a completion consisting only of whitespace. That is a
+# real provider behaviour (an image-only model, a refusal that emits only
+# whitespace, a ``max_tokens`` cut landing on a space), and before #175 it was
+# the ONE run shape that reached a ``measured`` receipt with no text anywhere.
+# ---------------------------------------------------------------------------
+
+
+def _whitespace_body(annotations: list[dict[str, str]]) -> bytes:
+    """200 OK, whitespace-only completion, WITH the usage the provider charged.
+
+    The ``usage`` object is the point: this call was BILLED. It is what made the
+    old behaviour reach ``initial_fully_captured`` and serve a ``measured``
+    receipt, and it is what the money decision in ``providers._failed_answer``
+    is about.
+    """
+    return json.dumps(
+        {
+            "choices": [{"message": {"content": "   \n\t  ", "annotations": annotations}}],
+            "usage": {"prompt_tokens": 1000, "completion_tokens": 300, "total_tokens": 1300},
+        }
+    ).encode()
+
+
+def test_a_run_in_which_every_slot_returned_whitespace_is_not_a_completed_run(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """#175, variant A: four billed calls, zero characters, and the run says so.
+
+    Measured on origin/main (e6c84ea) before the fix, verbatim::
+
+        slot 1..4 completed openrouter_search  text='   \\n  '
+        live_count 4 local_count 0 demo_mode False
+        status completed  cost_source measured
+        failed_steps []  missing_steps []
+        coverage {'answer_count': 4, 'sourced_answer_count': 0, ...}
+
+    Four models produced nothing and the product reported "4 of 4 answered
+    live", status ``completed``, no failed steps, and a ``measured`` (billed)
+    receipt. No degraded banner fired, because ``app.js`` derives
+    ``failedCount`` by subtracting ``live_count`` from the slot count — and
+    ``live_count`` was the very number the whitespace slots inflated.
+
+    Every assertion is a CARDINALITY, and each is satisfiable by a different
+    wrong implementation:
+
+    * ``posts[0] >= 4`` — the POSITIVE PARTNER for every zero below. Without
+      it, a harness that never dialled out at all would satisfy "no live
+      answers" trivially. It also states the money fact plainly: these calls
+      really were made, and really were billed.
+    * ``live_count == 0`` with ``local_count == 0`` — nothing was laundered
+      into the live count, and nothing was fabricated to replace it either.
+    * ``0`` answers carry ``token_usage`` — the money decision (#175 option b),
+      asserted as a COUNT rather than a label. The provider stated a charge on
+      all four calls; none of it is itemised, and the receipt says
+      ``estimated`` rather than claiming a measured figure it cannot support.
+    * ``final_synthesis is None`` — no synthesis was built over nothing.
+
+    What turns it red: revert ``.strip()`` in
+    ``providers._live_openrouter_response``. Then ``live_count`` reads 4,
+    ``status`` reads ``completed``, ``cost_source`` reads ``measured``, four
+    answers carry usage and a synthesis exists. Verified by mutation.
+    """
+    query_run_repository.clear()
+    posts = [0]
+    body = _whitespace_body([])
+
+    def _urlopen_all_whitespace(request: Any, timeout: float = 0) -> _FakeResponse:
+        posts[0] += 1
+        return _FakeResponse(body)
+
+    _enable_live(monkeypatch, _urlopen_all_whitespace)
+    monkeypatch.setattr(config.settings, "openrouter_api_key", _FAKE_KEY, raising=False)
+    monkeypatch.setattr(config.settings, "stage_delay_ms", 0, raising=False)
+
+    served = _drive_full_run(TestClient(app))
+    answers = served["result"]["model_answers"]
+
+    # --- the calls really went out, and really were billed ------------------
+    assert posts[0] >= 4, "positive partner: at least one POST per slot was dispatched"
+
+    # --- what arrived -------------------------------------------------------
+    assert len(answers) == 4, "all four slots are still reported"
+    assert len([a for a in answers if a["status"] == InitialAnswerStatus.COMPLETED]) == 0
+    assert len([a for a in answers if a["status"] == InitialAnswerStatus.FAILED]) == 4
+    assert {a["answer_text"] for a in answers} == {""}, "no whitespace text is served"
+
+    # --- the served labels --------------------------------------------------
+    assert served["live_count"] == 0, "whitespace never counts as a live answer"
+    assert served["local_count"] == 0, "and nothing was fabricated to replace it"
+    assert served["demo_mode"] is False
+    assert served["status"] == "partial", "a run that produced nothing is not completed"
+    assert "initial_answers" in served["failed_steps"]
+
+    # --- nothing was built on top of nothing --------------------------------
+    assert served["result"]["final_synthesis"] is None
+
+    # --- the money, as a COUNT ----------------------------------------------
+    billed_but_unitemised = [a for a in answers if a["token_usage"] is None]
+    assert len(billed_but_unitemised) == 4, (
+        "every slot was billed and none of it is itemised — the #175 money decision"
+    )
+    assert served["cost_source"] == "estimated", (
+        "a run with no usable answer must never serve a measured receipt"
+    )
+
+    # --- and nothing fabricated reached any surface -------------------------
+    assert json.dumps(served).count(_FABRICATION_SENTENCE) == 0
+
+
+def test_a_whitespace_slot_carrying_a_citation_leaves_the_coverage_denominator(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """#175, variant B: 100% source coverage over an answer with no text.
+
+    The sharper shape. Three slots answer normally; the fourth returns a
+    citation annotation and no prose — a model that emits a citation block and
+    nothing else. Measured on origin/main (e6c84ea) before the fix, verbatim::
+
+        slot 3 completed primary=1 text='   \\n\\t  '
+        live_count 4 demo_mode False status completed cost_source measured
+        coverage {'answer_count': 4, 'sourced_answer_count': 4,
+                  'sourced_answer_ratio': '1.00', 'target_met': True}
+        agreement {'aligned': 3, 'total': 4}
+
+    ``coverage 4 of 4 = 100%`` on a run where one slot produced no text — the
+    same wrong figure #171 was filed about, reached through a different door.
+
+    THE PAYLOAD CONTRADICTED ITSELF, and that is this test's sharpest assertion.
+    ``synthesis_consensus`` applies ``.strip()`` when deciding alignment, so
+    ``agreement`` read 3 while ``live_count`` and the coverage denominator read
+    4. The product knew the slot was empty in one place and not in the other.
+    The pair ``live_count == 3`` and ``aligned == 3`` is what pins that
+    disagreement closed: before the fix those two numbers differed, and NO
+    assertion on either one alone would have caught it.
+
+    ``sourced_answer_ratio == 1`` reads the same before and after — it is a
+    PIN, not a defect detector. It is the DENOMINATOR that moved (4 -> 3), which
+    is exactly why asserting the ratio alone is worthless here and the counts
+    are load-bearing.
+
+    What turns it red: revert ``.strip()`` in
+    ``providers._live_openrouter_response``. ``live_count`` returns to 4 while
+    ``aligned`` stays 3, the coverage denominator returns to 4, and a fourth
+    answer carries usage. Verified by mutation.
+    """
+    query_run_repository.clear()
+    _faulted_model_collides_with_no_moderator()
+    whitespace_body = _whitespace_body(
+        [{"title": "Live evidence", "url": "https://live.example/evidence"}]
+    )
+
+    def _urlopen_whitespace_only_for_the_participant(
+        request: Any, timeout: float = 0
+    ) -> _FakeResponse:
+        payload = json.loads(request.data.decode())
+        if str(payload.get("model", "")).split(":")[0] == _FAULTED_MODEL_ID:
+            return _FakeResponse(whitespace_body)
+        return _FakeResponse(_LIVE_BODY)
+
+    _enable_live(monkeypatch, _urlopen_whitespace_only_for_the_participant)
+    monkeypatch.setattr(config.settings, "openrouter_api_key", _FAKE_KEY, raising=False)
+    monkeypatch.setattr(config.settings, "stage_delay_ms", 0, raising=False)
+
+    served = _drive_full_run(TestClient(app))
+    answers = served["result"]["model_answers"]
+
+    # --- what arrived -------------------------------------------------------
+    assert len(answers) == 4
+    failed = [a for a in answers if a["status"] == InitialAnswerStatus.FAILED]
+    assert len(failed) == 1
+    assert failed[0]["slot_number"] == _FAULTED_SLOT_NUMBER, (
+        "the whitespace slot is the one reported missing"
+    )
+    assert failed[0]["answer_text"] == ""
+    assert len(failed[0]["sources"]) == 0, (
+        "a citation annotation cannot survive an answer that has no text"
+    )
+
+    # --- the trust numbers --------------------------------------------------
+    coverage = served["result"]["final_synthesis"]["citation_coverage"]
+    assert coverage["answer_count"] == 3, "the denominator is answers RECEIVED, not slots"
+    assert coverage["sourced_answer_count"] == 3
+    assert Decimal(str(coverage["sourced_answer_ratio"])) == Decimal("1")  # PIN
+
+    # --- the disagreement, pinned closed ------------------------------------
+    # These two numbers came from code that disagreed about whether the slot was
+    # empty: ``live_count`` did not strip, ``classify_model_alignment`` did.
+    assert served["live_count"] == 3
+    assert served["result"]["agreement"]["aligned"] == 3
+    assert served["live_count"] == served["result"]["agreement"]["aligned"], (
+        "the two emptiness tests that used to disagree now agree"
+    )
+
+    # --- the money, as a COUNT ----------------------------------------------
+    carrying_usage = [a for a in answers if a["token_usage"] is not None]
+    assert len(carrying_usage) == 3, "exactly the three answers that arrived are itemised"
+    assert {a["slot_number"] for a in carrying_usage} == {1, 2, 4}
+    assert served["cost_source"] == "estimated", (
+        "the whitespace call was billed and cannot be itemised, so the receipt "
+        "falls back to the estimate rather than claiming a measured figure"
+    )
+
+
 def test_a_demo_run_still_simulates_every_slot(monkeypatch: pytest.MonkeyPatch) -> None:
     """Positive partner: the probe above can actually see a fabricated answer.
 
