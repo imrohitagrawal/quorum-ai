@@ -192,16 +192,16 @@ NOTICE_FALLBACK_SOURCE_SUPPORT = (
     "The sources shown here did not come from this model, so they do "
     "not count toward this run's source support."
 )
-# Deliberately says only what is known. This fires both when a model
-# answered with nothing usable AND when the request never reached a
-# model at all (a refused key, an exhausted balance, a rate limit, a
-# DNS failure all return no response), so it must not claim the model
-# was asked.
-NOTICE_LIVE_RETURNED_NOTHING = (
-    "No usable answer came back for this model, so the text shown here "
-    "was produced by Quorum's local simulation. It is not a real model "
-    "answer."
-)
+# #171 deleted ``NOTICE_LIVE_RETURNED_NOTHING`` — "No usable answer came back
+# for this model, so the text shown here was produced by Quorum's local
+# simulation." Nothing can emit it any more: when live execution is on and a
+# model returns nothing usable, the slot is now REPORTED MISSING rather than
+# filled with simulated text, so it carries ``NOTICE_PROVIDER_UNAVAILABLE``
+# instead. The copy guard
+# (``test_every_registered_notice_is_reachable_from_the_provider_layer``)
+# reds on a registered-but-unemitted notice, which is how this deletion was
+# forced rather than remembered.
+#
 # "not active" rather than "turned off": this also fires when live
 # execution IS enabled but no key is set, where "turned off" would send
 # the operator to the wrong switch.
@@ -223,7 +223,6 @@ PROVIDER_NOTICES: tuple[str, ...] = (
     NOTICE_SOURCES_FROM_BACKUP_SEARCH,
     NOTICE_NO_SOURCES_FOUND,
     NOTICE_FALLBACK_SOURCE_SUPPORT,
-    NOTICE_LIVE_RETURNED_NOTHING,
     NOTICE_DEMO_MODE,
     NOTICE_PROVIDER_UNAVAILABLE,
     NOTICE_CANCELLED,
@@ -481,6 +480,30 @@ class ProviderExecutionService:
                 shortened=live_response.is_truncated,
             )
 
+        # #171: live execution is ON and this slot produced no usable live
+        # text. REPORT THE SLOT MISSING; never substitute locally simulated
+        # text for it. A fabricated answer stamped ``completed`` is handed to
+        # the debate, the synthesis, the agreement count and the
+        # source-coverage figure as though a model had produced it — and its
+        # ``is_fallback=False`` demo source is what makes it count as PRIMARY,
+        # so a run with one real answer and three simulated ones reported 100%
+        # source coverage, three quarters of it invented. Simulation is a
+        # WHOLE-RUN mode (live execution off, or no key), never a per-model
+        # substitute; this is the branch that made it per-model.
+        #
+        # Placed above the ``use_fallback`` branch on purpose: that branch also
+        # emits ``_local_simulation_text`` when there is no live text, so
+        # guarding only the tail would leave the same fabrication reachable
+        # through it.
+        if self._live_execution_enabled(openrouter_key=openrouter_key):
+            return self._failed_answer(
+                account_id=account_id,
+                query_run_id=query_run_id,
+                model_slot=model_slot,
+                credential_source=credential_source,
+                started_at=started_at,
+            )
+
         # No live response, or live response returned no usable text.
         # Decide between a clean local-simulation answer and a
         # fallback_search answer. The trigger phrases let the test suite
@@ -498,7 +521,14 @@ class ProviderExecutionService:
             # WP-D, but it is why this branch needs no ``shortened=``: the text
             # it emits is always locally simulated, and simulated text was
             # never truncated by a model. Pinned by
-            # ``test_simulated_text_on_the_fallback_branch_is_never_shortened``.
+            # ``TestTruncationPropagation::test_demo_mode_still_simulates_the_
+            # slot_and_never_marks_it_shortened`` (renamed in #171; this comment
+            # cited the old name, which no longer exists).
+            #
+            # #171: with live execution ON this whole branch is unreachable —
+            # the guard above returns a missing slot first. It is now the DEMO
+            # path only, which is why the pin above drives it with live
+            # execution off.
             answer_text = (
                 live_response.answer_text
                 if live_response is not None and live_response.answer_text
@@ -529,19 +559,13 @@ class ProviderExecutionService:
             provider_path=ProviderPath.LOCAL_SIMULATION,
             provider_attempt_order=provider_attempt_order,
             fallback_used=False,
-            provider_notice=(
-                # Distinguish "live mode is off" (operator choice) from
-                # "live was attempted but returned no usable answer"
-                # (e.g. an image-only model like
-                # google/gemini-3.1-flash-image). The prior copy collapsed
-                # both into a single "live execution is disabled"
-                # message, which blamed the operator when the actual
-                # cause was the model returning no text. Be honest.
-                NOTICE_LIVE_RETURNED_NOTHING
-                if (live_response is None or not (live_response.answer_text or "").strip())
-                and self._live_execution_enabled(openrouter_key=openrouter_key)
-                else NOTICE_DEMO_MODE
-            ),
+            # #171: this branch is now reached ONLY with live execution off or
+            # no key — the guard above returns a missing slot in every live
+            # case — so there is exactly one honest thing left to say, and the
+            # old "live was attempted but returned nothing" arm is dead. The
+            # situation it described is now a FAILED slot carrying
+            # ``NOTICE_PROVIDER_UNAVAILABLE``.
+            provider_notice=NOTICE_DEMO_MODE,
         )
 
     # -- internal helpers -------------------------------------------------

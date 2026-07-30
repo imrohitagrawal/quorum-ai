@@ -40,6 +40,7 @@ from product_app import config
 from product_app.model_slots import ModelSlot
 from product_app.provider_keys import ProviderCredentialSource
 from product_app.providers import (
+    NOTICE_PROVIDER_UNAVAILABLE,
     InitialAnswerStatus,
     LiveProviderResult,
     ProviderPath,
@@ -472,22 +473,25 @@ def test_normal_completion_is_unchanged(monkeypatch: pytest.MonkeyPatch) -> None
     assert result.usage == _BILLED_USAGE
 
 
-# --- the initial-answer path must be BYTE-FOR-BYTE unchanged -----------------
+# --- the initial-answer path: the LIVE-CALL CARDINALITY must not move --------
 #
 # ``_live_openrouter_response`` shares ``_post_openrouter`` with the
-# debate/synthesis path, and ``_post_openrouter`` now returns a RESULT where it
-# used to return ``None`` (empty completion) plus a new sentinel. If any of that
-# reached ``produce_initial_answer``, a slot with no text would flip
-# ``provider_attempt_order`` to OPENROUTER_SEARCH and present as a live attempt
-# — corrupting ``initial_fully_captured`` and the degraded banner. Every
-# assertion below holds identically on origin/main.
+# debate/synthesis path, and ``_post_openrouter`` returns a RESULT where it used
+# to return ``None`` (empty completion) plus a new sentinel. The number of POSTs
+# each upstream outcome provokes is the billing contract these tests exist for,
+# and #171 does not touch it — the guard it adds runs AFTER every live attempt
+# has been made and decided.
+#
+# What #171 DID change is what the slot then looks like. These tests used to be
+# named ``..._still_falls_back_to_local_simulation`` and asserted a COMPLETED
+# LOCAL_SIMULATION answer carrying invented text. That was the defect, pinned:
+# the invented answer went on to the debate, the synthesis, the agreement count
+# and the source-coverage figure as though a model had written it. The slot is
+# now reported MISSING instead, so the assertions below assert exactly that —
+# with the POST counts untouched, which is what proves the billing contract
+# survived the change.
 
 _SLOT = ModelSlot(slot_number=1, model_id=_MODEL_ID)
-_UNUSABLE_NOTICE = (
-    "No usable answer came back for this model, so the text shown here "
-    "was produced by Quorum's local simulation. It is not a real model "
-    "answer."
-)
 
 
 def _produce_initial() -> Any:
@@ -515,25 +519,47 @@ def _produce_initial() -> Any:
         ("read-timeout", _RaisingBody(TimeoutError("read timed out")), 1),
     ],
 )
-def test_initial_answer_path_still_falls_back_to_local_simulation(
+def test_initial_answer_path_reports_the_slot_missing_and_invents_nothing(
     monkeypatch: pytest.MonkeyPatch, label: str, outcome: Any, expected_posts: int
 ) -> None:
-    """No live text -> a clearly-labelled simulated slot, exactly as before.
+    """#171: live execution on, no usable live text -> the slot is MISSING.
 
-    In particular ``provider_attempt_order`` must stay ``[LOCAL_SIMULATION]``:
-    the branch's new blank-text result would otherwise mark the slot as having
-    attempted OPENROUTER_SEARCH.
+    The billing half is unchanged and is asserted first: each upstream outcome
+    provokes exactly the same number of POSTs it always did.
+
+    The honesty half is the change. Every assertion is a CARDINALITY on what
+    the slot contributes downstream, not a status check:
+
+    * ``citation_coverage.answer_count == 0`` — the slot is out of the
+      source-coverage DENOMINATOR. Before #171 it carried 1, and a fabricated
+      ``is_fallback=False`` demo source put it in the NUMERATOR too, so a run
+      with one real answer and three of these reported 100% coverage.
+    * ``len(answer.sources) == 0`` — nothing fabricated can be cited.
+    * ``answer_text == ""`` — no invented text reaches the debate or the
+      synthesis prompt, both of which print every COMPLETED answer verbatim.
+
+    What turns it red: restore the old tail of ``produce_initial_answer`` (drop
+    the ``_live_execution_enabled`` guard) and the slot comes back COMPLETED
+    with one source and ``answer_count == 1``. Verified by mutation.
     """
     posts = _install(monkeypatch, outcome)
     answer = _produce_initial()
     assert posts[0] == expected_posts, f"{label}: live-attempt cardinality changed"
-    assert answer.status is InitialAnswerStatus.COMPLETED
-    assert answer.provider_path is ProviderPath.LOCAL_SIMULATION
-    assert answer.provider_attempt_order == [ProviderPath.LOCAL_SIMULATION]
+
+    assert answer.status is InitialAnswerStatus.FAILED
+    assert answer.error_code == "PROVIDER_UNAVAILABLE"
+    # Honest about what was attempted: the OpenRouter call really was made.
+    assert answer.provider_path is ProviderPath.OPENROUTER_SEARCH
+    assert answer.provider_attempt_order == [ProviderPath.OPENROUTER_SEARCH]
     assert answer.fallback_used is False
-    assert answer.token_usage is None, "a simulated slot must never carry live usage"
-    assert "simulated in local demo mode" in answer.answer_text
-    assert answer.provider_notice == _UNUSABLE_NOTICE
+    assert answer.token_usage is None, "a missing slot must never carry live usage"
+    assert answer.provider_notice == NOTICE_PROVIDER_UNAVAILABLE
+
+    # The cardinalities, which are the point.
+    assert answer.answer_text == ""
+    assert len(answer.sources) == 0
+    assert answer.citation_coverage.answer_count == 0
+    assert answer.citation_coverage.sourced_answer_count == 0
 
 
 def test_initial_answer_path_torn_body_now_degrades_instead_of_raising(
@@ -549,10 +575,17 @@ def test_initial_answer_path_torn_body_now_degrades_instead_of_raising(
     was silently DROPPED — no answer, no failure notice, just a missing model.
 
     The catch-all in ``_post_messages`` converts that into an honest degraded
-    slot instead. The cost label does not move: a LOCAL_SIMULATION slot fails
-    ``initial_fully_captured``'s OPENROUTER_SEARCH requirement either way (a
-    dropped slot failed it via the length check), so a torn body that may have
-    been billed still forces ``estimated``.
+    slot instead. Since #171 that degraded slot is a MISSING one rather than a
+    simulated one, and the cost label still does not move: a FAILED slot fails
+    ``initial_fully_captured``'s ``status is COMPLETED`` requirement just as a
+    LOCAL_SIMULATION slot failed its ``provider_path`` requirement, so a torn
+    body that may have been billed still forces ``estimated``. That equivalence
+    is asserted end-to-end in ``tests/resilience/test_fault_injection_lane.py``
+    (``test_mixed_live_and_faulted_run_counts_only_the_answers_that_arrived``).
+
+    What turns it red: drop the ``except Exception`` catch-all in
+    ``_post_messages`` and ``IncompleteRead`` propagates out of
+    ``produce_initial_answer`` — the call itself raises.
     """
     posts = _install(
         monkeypatch,
@@ -560,12 +593,15 @@ def test_initial_answer_path_torn_body_now_degrades_instead_of_raising(
     )
     answer = _produce_initial()  # must not raise
     assert posts[0] == 1
-    assert answer.status is InitialAnswerStatus.COMPLETED
-    assert answer.provider_path is ProviderPath.LOCAL_SIMULATION
-    assert answer.provider_attempt_order == [ProviderPath.LOCAL_SIMULATION]
+    assert answer.status is InitialAnswerStatus.FAILED
+    assert answer.provider_path is ProviderPath.OPENROUTER_SEARCH
+    assert answer.provider_attempt_order == [ProviderPath.OPENROUTER_SEARCH]
     assert answer.token_usage is None
-    assert answer.provider_notice == _UNUSABLE_NOTICE
-    assert "simulated in local demo mode" in answer.answer_text
+    assert answer.provider_notice == NOTICE_PROVIDER_UNAVAILABLE
+    # A torn body is exactly the shape most likely to smuggle a partial,
+    # plausible-looking answer through: assert there is no text at all.
+    assert answer.answer_text == ""
+    assert answer.citation_coverage.answer_count == 0
 
 
 def test_initial_answer_path_still_serves_a_whitespace_only_completion(

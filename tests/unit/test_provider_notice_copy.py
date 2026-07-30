@@ -44,13 +44,69 @@ _DEVELOPER_SPEAK = (
 )
 
 
-def test_the_registry_is_not_empty() -> None:
+def _declared_notice_names() -> set[str]:
+    """Every ``NOTICE_*`` constant ``providers.py`` declares, read from its AST.
+
+    Derived from the module, never retyped here — a hand-copied count goes
+    stale silently the moment a notice is added or removed.
+    """
+    tree = ast.parse(pathlib.Path(providers.__file__).read_text(encoding="utf-8"))
+    return {
+        node.targets[0].id
+        for node in tree.body
+        if isinstance(node, ast.Assign)
+        and isinstance(node.targets[0], ast.Name)
+        and node.targets[0].id.startswith("NOTICE_")
+    }
+
+
+def test_the_registry_lists_every_notice_the_module_declares() -> None:
     """A guard over an empty collection proves nothing.
 
     ``all([])`` being True is precisely how F-06's cost gate went
-    vacuous; this suite refuses to repeat it.
+    vacuous; this suite refuses to repeat it. So the registry must be
+    non-empty AND complete.
+
+    This replaced a hand-typed ``>= 9``. #171 deleted a notice that no branch
+    can emit any more, which would have made a retyped floor red for the wrong
+    reason — and the only honest repair to a retyped floor is to retype it,
+    which is how a floor stops measuring anything. Derived from the AST, it
+    tracks additions and deletions on its own, and because it compares CONTENTS
+    rather than counts it catches a notice declared but never registered — which
+    neither the old floor nor a length comparison can see.
+
+    KNOWN BLIND SPOT, stated rather than left to be discovered: the walk matches
+    module-level ``ast.Assign`` only, so an ANNOTATED declaration
+    (``NOTICE_X: str = "..."``), a tuple unpacking, or a function-local
+    ``NOTICE_*`` is invisible to it — and to
+    ``test_every_registered_notice_is_reachable_from_the_provider_layer``, which
+    shares the predicate. Review demonstrated a jargon-carrying annotated notice
+    reaching a user with this whole file green. Pre-existing, not introduced
+    here, and tracked separately; it is recorded now so nobody reads this guard
+    as covering more than it does.
+
+    Narrowing this check knowingly accepts: a second constant carrying a value
+    already in the registry, or a plain alias, no longer reds where the length
+    comparison did. Both carry a value that is already guarded, so no unguarded
+    copy reaches a user — measured, not assumed.
+
+    What turns it red: add ``NOTICE_ANYTHING = "..."`` to ``providers.py`` and
+    leave it out of ``PROVIDER_NOTICES`` — even if you also register some other
+    literal to keep the two counts equal.
     """
-    assert len(PROVIDER_NOTICES) >= 9
+    names = _declared_notice_names()
+    assert names, "no NOTICE_* constants found — the walk is looking in the wrong place"
+    declared = {getattr(providers, name) for name in names}
+    # MEMBERSHIP, not a count. An earlier draft compared lengths, and review
+    # broke it in one move: declare a jargon-carrying notice, reference it twice
+    # so the reachability guard is satisfied, register some unrelated literal,
+    # and the two counts stay equal while the new notice is unguarded. Equal
+    # cardinality is not the property; equal contents is.
+    assert set(PROVIDER_NOTICES) == declared, (
+        "PROVIDER_NOTICES and the module's NOTICE_* constants disagree.\n"
+        f"declared but not registered: {sorted(declared - set(PROVIDER_NOTICES))}\n"
+        f"registered but not declared: {sorted(set(PROVIDER_NOTICES) - declared)}"
+    )
 
 
 @pytest.mark.parametrize("notice", PROVIDER_NOTICES)
