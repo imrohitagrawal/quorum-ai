@@ -7,14 +7,17 @@ evidence.** Kept because the content survey is useful on its own.
 > ## The deletion project is closed. Do not restart it.
 >
 > The premise was that 32 root handoff documents were inert clutter. **They are
-> not.** Measured 2026-07-30: **18 of the 32 are referenced by tracked files
-> outside themselves.**
+> not.** Measured 2026-07-30: **19 of the 32 are referenced by tracked files
+> outside the set** (22 if references between the 32 themselves are counted).
+> *An earlier version said 18; it missed `UI-REMEDIATION-MASTER-PLAN-ULTRACODE-PROMPT.md`,
+> referenced from `WP-B-RESULT-AND-WP-C-HANDOFF.md` — a file listed as a referrer
+> two rows below.*
 >
 > | Document | Referenced by |
 > |---|---|
 > | `R2-S2-S4-ULTRACODE-PROMPT.md` | `pyproject.toml`, `tests/test_ultracode_prompt_enforcement_contract.py`, `tests/test_findings_ledger_consistency.py`, `tests/test_findings_ledger_fs5_status.py`, and two docs |
 > | `WP-D-TO-CLOSEOUT-ULTRACODE-PROMPT.md` | `src/product_app/catalog_fetcher.py:148` — a **code comment**, not a functional dependency. Deleting the doc would not have broken it; this row said "production source" when first written, which overstated it. The 18 broken tests came from the three test files, not this one |
-> | 16 others | `docs/session-handoff.md`, `docs/00-factory-console.md`, `docs/95-demo-evidence.md`, `UI-BUG-TRIAGE-2026-07-23-ANALYSIS.md`, `WP-B-RESULT-AND-WP-C-HANDOFF.md` |
+> | 17 others | `docs/session-handoff.md`, `docs/00-factory-console.md`, `docs/95-demo-evidence.md`, `UI-BUG-TRIAGE-2026-07-23-ANALYSIS.md`, `WP-B-RESULT-AND-WP-C-HANDOFF.md` |
 >
 > **How this was found, which is the point.** Moving them into a staging directory
 > broke **18 tests** — `FileNotFoundError` on a path the test suite expects at the
@@ -223,7 +226,7 @@ load-bearing, not incidental.
 - `/status` is unauthenticated, unthrottled and a sync `def` in a 40-token threadpool; a blocking probe there stalls every endpoint.
 - `/status.live_execution` is a monitoring contract consumed by `ops.js:308`.
 - `main.py:302` already blocks on the catalog fetch at import; a new startup probe goes on a background daemon thread.
-- The handoff documents also require `make fr-completeness`, `make api-contract`, `make perf-gate` and `make mutation-baseline` — and the last must *score* mutants, not abort. **Acted on:** `AGENTS.md` rule 14 was rewritten on 2026-07-30 into a table mapping each of the six required status checks to the command that produces it, after two successive versions of it undercounted (three, then four, against an actual six).
+- The handoff documents also require `make fr-completeness`, `make api-contract`, `make perf-gate` and `make mutation-baseline` — and the last must *score* mutants, not abort. **Acted on:** `AGENTS.md` rule 14 was rewritten on 2026-07-30 into a table mapping each of the six required status checks to the command that produces it, after two successive versions of it undercounted the gates lying outside those two targets (three, then four). Note the six is a different population — all required contexts, two of which those targets do produce.
 
 ---
 
@@ -275,7 +278,7 @@ no "swap slot 3 and you are under $0.25". File that, not the original claim.
 | Item | Status |
 |---|---|
 | **"#137 and #138 are TRIGGER-GATED. Leave them. #155: do not attempt — the obvious fix is measured to be worse than the bug."** All three issues confirmed **OPEN**; the prohibitions exist nowhere but the staged files. An issue title will not say "do not attempt". | **Must be rehomed** |
-| Four stashes | **Archived 2026-07-30** — `refs/archive/stash-0..3` created and verified readable |
+| Four stashes | **Partly safe.** `refs/archive/stash-0..3` created and verified readable 2026-07-30, so `git gc` will not collect them. **But `git ls-remote origin 'refs/archive/*'` is empty** — the default push refspec is `refs/heads/*`, so they exist on one disk only. Durable preservation still needs an explicit push. |
 | Two untriaged local branches: `feat/ui-pr5b-cost-guard-diff`, `worktree-wf_8fbedc6c-041-3` | Present, untriaged |
 | The seven operator-authored correctness labels | **Safe** — present in `docs/metrics/accuracy-pilot.md` |
 | `evaluation.py:1229` as an unfenced sink | **Refuted** — §4.1 |
@@ -284,7 +287,7 @@ Of the 25 issues the staged files reference, **20 are still open**. Five have cl
 #86, #101, #109, #118 and #125. *An earlier version of this line said "only #118 and
 #125". It checked the 25 issues in the STEP 3 list and missed #86, #101 and #109 —
 referenced by the three files recovered from dangling blobs, and #86 is called closed
-nine lines earlier in this same section. A sub-list is not the population.*
+earlier in this same section. A sub-list is not the population.*
 
 ### 4.1 A refuted finding, recorded because the refutation is the result
 

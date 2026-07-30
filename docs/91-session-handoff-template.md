@@ -8,8 +8,8 @@ Copy `## THE TEMPLATE` below into a new file for each handoff. Delete it on merg
 
 Handoff between work sessions was, until now, a long prose document written at the
 end of a session and read at the start of the next. **Thirty-two** of them
-accumulated in this repository's root, and they stay there — 18 are referenced by
-tracked files, and moving them out broke 18 tests on 2026-07-30. Every one carried
+accumulated in this repository's root, and they stay there — 19 are referenced by
+tracked files outside the set, and moving them out broke 18 tests on 2026-07-30. Every one carried
 facts that expired — commit hashes, test counts, line numbers — and a later session
 that trusted them was wrong. Measured
 on 2026-07-30: three line-number references in the previous handoff were stale, and

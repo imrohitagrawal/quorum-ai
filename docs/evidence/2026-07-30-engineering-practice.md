@@ -20,7 +20,7 @@ plausible-sounding figure. Local numbers measured on this repository the same da
 
 | # | Claim | Grade | Source |
 |---|---|---|---|
-| 1.1 | **Two reviewers ≈ four reviewers. One is worse.** *"We found no difference in the interval or effectiveness of inspections of two- or four-person teams. The effectiveness of one-reviewer teams was poorer than both of the others."* | `INDUSTRY-PUBLISHED` — **downgraded from `WELL-EVIDENCED` on 2026-07-30, see note below** | Porter, Siy, **Toman** & Votta, "An Experiment to Assess the Cost-Benefits of Code Inspections in Large Scale Software Development", *IEEE TSE* 23(6):329–346, 1997, DOI 10.1109/32.601071. **Randomized controlled experiment**, 88 inspections over 18 months, >55K new lines of C++ |
+| 1.1 | **Two reviewers ≈ four reviewers. One is worse.** *"We found no difference in the interval or effectiveness of inspections of two- or four-person teams. The effectiveness of one-reviewer teams was poorer than both of the others."* | `ASSERTION` — **downgraded from `WELL-EVIDENCED` on 2026-07-30, see note below** | Porter, Siy, **Toman** & Votta, "An Experiment to Assess the Cost-Benefits of Code Inspections in Large Scale Software Development", *IEEE TSE* 23(6):329–346, 1997, DOI 10.1109/32.601071. **Randomized controlled experiment**, 88 inspections over 18 months, >55K new lines of C++ |
 | 1.2 | **Defect-related comments are 14% of review comments** — fourth of nine categories. Code improvement is the largest at 29%. Defect-finding is practitioners' stated top motivation and is not what they mostly write | `WELL-EVIDENCED` | Bacchelli & Bird, ICSE 2013. 570 comments classified from 200 Microsoft review threads |
 | 1.3 | **One reviewer is the norm in practice.** <25% of changes have more than one reviewer; median reviewer count 1; median change 24 lines | `WELL-EVIDENCED` | Sadowski et al., ICSE-SEIP 2018. ~9M changes, >25,000 authors/reviewers at Google |
 | 1.4 | **Review's measured effect on post-release defects is weak and partly fails to replicate.** Coverage negatively associated with defects in 3 of 4 releases, significant in 2 — then a replication found review measures *"contributed little… R² remaining almost unchanged"* | `WELL-EVIDENCED` (both) | McIntosh et al., *EMSE* 2016 (Qt/VTK/ITK); Krutauz, Dey, Rigby & Mockus, arXiv:2005.09217, 2020 (Qt, Chrome) — **preprint; peer-reviewed version not confirmed** |
@@ -43,8 +43,14 @@ and `WELL-EVIDENCED` is defined in this directory's README as *peer-reviewed,
 primary source read*. **An author list that wrong is proof the primary source was
 not read** — the paper is paywalled, and neither the verbatim quote nor the
 "88 inspections / 18 months / >55K lines of C++" figures were confirmed against
-it. By this record's own grading rules that is `INDUSTRY-PUBLISHED` at best, so
-the grade is corrected.
+it. This directory's README says it plainly: *"A citation you have not read is
+`ASSERTION`, not `WELL-EVIDENCED`, however respectable the name."* So the grade is
+`ASSERTION`.
+
+*(This note first downgraded the row to `INDUSTRY-PUBLISHED`. That was a second
+error: the README defines that grade as "a named organisation reporting its own
+practice", which a randomized academic experiment is not. Corrected the same day —
+a wrong correction is still wrong.)*
 
 **The conclusion still stands** — the finding is widely reported and no source
 contradicts it — but it now rests on secondary reporting, not on a source anyone
@@ -153,7 +159,7 @@ before anyone proposes promoting ours to blocking.
 | 8.2 | Merged pull-request size: **p50 419 changed lines**, p90 2,111, max 29,996 (PR #96). **5–17× the field medians in 1.5** | `gh pr list --state merged --limit 30` |
 | 8.3 | **One thorough review lens costs 96k–122k tokens** on a real diff here (round-1 reviewer 95,986; round-2 121,908) | Measured, this session |
 | 8.4 | Verified pricing: Claude Opus 5 **$5/M input, $25/M output**; cache reads ~0.1×, writes 1.25× | Anthropic pricing table, cached 2026-06-24 |
-| 8.5 | **Derived review cost ≈ $0.90 per lens**; two lenses + verification ≈ **$3 per pull request**; ~$90 across 30 PRs. **Input/output split is inferred, not measured** — settle with one `count_tokens` run | 8.3 × 8.4 |
+| 8.5 | **Derived review cost ≈ $0.90 per lens**; two lenses + verification ≈ **$2.75 per pull request**; ~$83 across 30 PRs *(corrected 2026-07-30 — the arithmetic did not follow from the inputs; see ADR-0003)*. **Input/output split is inferred, not measured** — settle with one `count_tokens` run | 8.3 × 8.4 |
 | 8.6 | Review precision here: **28%** unverified (32 findings, 23 refuted, earlier session); 70% on one later round (n=1) | Session records |
 
 **What would change 8.5:** a `count_tokens` run against a representative diff.
@@ -168,7 +174,7 @@ Decisions revised the same day it was compiled:
 | Was going to | Now | Because |
 |---|---|---|
 | Fan out 3–5 review lenses | **Two** | 1.1 |
-| Budget $5/PR for review | **$3/PR** | 1.1 → fewer lenses |
+| Budget $5/PR for review | **~$2.75/PR** | 1.1 → fewer lenses |
 | Cite review as "the method with the track record" | Keep the claim, **shrink it to local n=16** | 1.2, 1.4 |
 | Encode "review 200–400 lines" | **Dropped**; use the field-median observation instead | 1.6 |
 | Tune gate precision | **Check gate placement first** | 3.3 |

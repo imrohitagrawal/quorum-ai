@@ -145,17 +145,25 @@ Claimed the four documentation homes did not overlap. Checked. They do:
 for p in "0 of 16" "13 of 21" "10 of 16"; do git grep -l "$p" -- . | wc -l; done
 ```
 
-**These figures were 5 / 5 / 3 until 2026-07-30 and reproduced at no tree state** —
-a section headed *"measured, not asserted"* carried three numbers nobody could
-re-derive. The counts above are from the command shown, at HEAD, and include the
+**These figures were 5 / 5 / 3 until 2026-07-30, and the triple reproduced at no
+tree state** — a section headed *"measured, not asserted"* carried numbers nobody
+could re-derive. (Strictly: the third element alone does reproduce — the merge base
+gives 4 / 4 / 3. The set never did.) The counts above are from the command shown, at HEAD, and include the
 source file itself. They will drift as documents are added, which is the finding:
 **this is a count of a growing problem, not a fixed fact.** Re-run it rather than
 quoting it.
 
 **The redundancy is not between the four homes — their roles are distinct. It is
-that `DAY-ONE-PROMPT.md` has absorbed content from all of them.** At **54,891
-characters** it is larger than `quality-ledger.md`, `adr/`, `study/` and
-`evidence/` combined, and it restates their numbers instead of citing them.
+that `DAY-ONE-PROMPT.md` has absorbed content from all of them** — it restates
+their numbers instead of citing them.
+
+*Corrected 2026-07-30: this said DAY-ONE was "at 54,891 characters … larger than
+`quality-ledger.md`, `adr/`, `study/` and `evidence/` combined". **That was false
+when written and is more false now** — measured at HEAD, DAY-ONE is 56,200 bytes
+against 64,910 for the four combined. It is comparable in size to all four homes
+put together, which is the real point and did not need the exaggeration. The
+size also moves every time anyone edits the file, so quoting it is a trap:
+`wc -c docs/DAY-ONE-PROMPT.md` and the four paths is the honest form.*
 
 One distinction worth keeping: `AGENTS.md` restating a number inline is
 **legitimate** — it is always loaded into context, so a link would never be
@@ -215,8 +223,11 @@ over guidance.
 
 **7.3 Answered a prose problem with more prose.** Argued DAY-ONE is too long
 because it is append-only, proposed replacing a section with a ledger — then added
-**two new prose sections (101 lines)** in the pull request making that argument.
-*(This said ~150 until 2026-07-30; `git diff --numstat` says 101.)*
+**two new prose sections** in the pull request making that argument.
+*(This said "~150 lines", then "101 lines". Both were wrong by the time they were
+read: a count of the PR's own diff keeps moving as the PR grows — it reached 116.
+A self-referential number cannot be stated correctly in the thing it counts, so
+it is stated as a shape instead: two sections.)*
 Third instance of the same pattern in one day.
 
 **7.4 Improvised a check that a repo command should own.** The deploy-verification

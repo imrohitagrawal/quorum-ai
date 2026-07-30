@@ -20,7 +20,7 @@ A budget figure was derived on 2026-07-30 (`docs/evidence/2026-07-30-engineering
 | One review lens on a real diff here | 96k–122k tokens | **measured** — two reviewers on the WP-H diff |
 | Shape: 2 finders + 1 verifier | ~342k tokens | 2 lenses (Porter: two ≈ four, one is worse) |
 | Pricing | $5/M input, $25/M output | verified |
-| **Derived** | **≈ $2.75 per pull request** | 291k in + 51k out at an **inferred** 85/15 split |
+| **Derived** | **$2.74 per pull request** | 291k in + 51k out at an **inferred** 85/15 split |
 
 **Arithmetic corrected 2026-07-30.** This table originally derived "≈ $3". Recomputed
 from its own inputs (342k tokens, $5/M in, $25/M out): 85/15 gives **$2.74**, not $3.
@@ -41,7 +41,7 @@ Two things make that figure unsafe to adopt:
    scored **28%** (32 findings, 23 refuted by independent verifiers). A later round
    hit 7 of 10, but n=1.
 
-Adopting ~$2.75/PR would set a guardrail number from an unmeasured baseline. This
+Adopting $2.74/PR would set a guardrail number from an unmeasured baseline. This
 repository's own rule, stated in `docs/DAY-ONE-PROMPT.md` §4a, is that **an
 unmeasured guardrail number is a fabricated one** — and the session that derived
 that figure spent its day enforcing that rule on other people's numbers before nearly
@@ -72,7 +72,7 @@ high, the correct rule is "review `src/` diffs that touch money or auth", not
 ### Controls that apply from the first shadow run
 
 - **Prompt caching on the shared context.** Both finders read the same diff; cache
-  reads are ~0.1× of input. Largest single lever — may take ~$2.75 to ~$2 on its own.
+  reads are ~0.1× of input. Largest single lever — may take it to about $1.43 on its own (input share $1.45 × 0.1, output unchanged).
 - **Hard token budget per job**, enforcing the $10 ceiling mechanically.
 - **Diff-size cap.** p50 here is 419 changed lines, p90 is 2,111, and the maximum
   observed was **29,996** (PR #96). Above the cap, review the `src/` subset and

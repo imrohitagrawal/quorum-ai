@@ -733,13 +733,16 @@ Rule 2 is a human act and will never be enforceable — **record it in the ledge
 **Rule 3 is enforceable only in a NEW project, and this paragraph originally said
 otherwise.** An earlier draft proposed "an assertion that no handoff document is
 ever tracked". That gate would go **red against the very tree proposing it**: this
-repository tracks 32 handoff documents at its root, and it cannot stop. Three of
-them are load-bearing — `R2-S2-S4-ULTRACODE-PROMPT.md` is named in
-`pyproject.toml`'s `[tool.mutmut].also_copy` and read from `REPO_ROOT` by
-`tests/test_ultracode_prompt_enforcement_contract.py`, and
-`WP-D-TO-CLOSEOUT-ULTRACODE-PROMPT.md` is referenced from
-`src/product_app/catalog_fetcher.py`. Moving them into a staging directory on
-2026-07-30 raised `FileNotFoundError` in 18 tests and had to be reverted.
+repository tracks 32 handoff documents at its root, and it cannot stop.
+**Exactly one is load-bearing in the sense that removing it breaks the build:**
+`R2-S2-S4-ULTRACODE-PROMPT.md`, named in `pyproject.toml`'s
+`[tool.mutmut].also_copy` and read from `REPO_ROOT` by three test files. Moving it
+into a staging directory on 2026-07-30 raised `FileNotFoundError` in 18 tests and
+had to be reverted. A further 17 are merely *referenced* — including
+`WP-D-TO-CLOSEOUT-ULTRACODE-PROMPT.md`, which appears only in a code comment at
+`src/product_app/catalog_fetcher.py:148` and would break nothing.
+*(This paragraph said "three are load-bearing" and then listed two, one of them
+that harmless comment. One breaks the build. Count what you enumerate.)*
 
 So the honest statement is: **start a new project with handoffs untracked and
 ephemeral; do not retrofit that rule onto a repository whose code already reads

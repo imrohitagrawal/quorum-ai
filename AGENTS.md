@@ -52,11 +52,14 @@ is the rule only.
     finding.** The often-quoted "roughly a fifth do not survive" has **no source
     document in this repo** — treat it as assumed, not measured.
     What *is* measured, on 2026-07-30, is the decay rate of claims **inherited
-    from handoff documents**, which is a different and worse population:
-    4 headline findings checked, 4 refuted (extraction ledger §2, §4.1, §4.2);
-    18 "would be lost outright" candidates checked, 6 already done, 1 already
-    filed, 1 largely wrong (§4). **22 checked, 12 did not survive.** Add the
-    tally yourself from those sections rather than trusting this sentence.
+    from handoff documents** — a different and worse population. Two components,
+    each checkable on its own; deliberately NOT summed into one headline figure,
+    because the first attempt at that produced an aggregate nobody could re-derive:
+    - **2 of 3** headline findings refuted outright (extraction ledger §4.1, §4.2);
+      a third (§2) was narrowed rather than refuted.
+    - **8 of 18** "would be lost outright" candidates already done, already filed,
+      or largely wrong (§4).
+    Roughly half of what a handoff asserts does not survive contact with the tree.
 12. **Cap review at TWO rounds**, then STOP and escalate with open findings
     listed. If two fixes in a row add defects, change the approach.
     **Expect your own fix to introduce a defect — budget a round for it.**
@@ -83,7 +86,7 @@ is the rule only.
 
     | Required status check | Produced locally by |
     |---|---|
-    | `validate-and-test` | `make validate` (+ `openapi-check`, `security-scan` as steps) |
+    | `validate-and-test` | one CI job running **eight** targets: `make validate`, `openapi-check`, `format-check`, `lint`, `type-check`, `test-report`, `security-scan`, `docker-build`. The first six are covered by `make quality && make validate` below; **`docker-build` is covered by nothing local** |
     | `pytest (Python 3.12)` | `make quality` |
     | `Changed-lines coverage >= 95% (blocking)` | `make diff-cover DIFF_BASE=origin/main` |
     | `Schemathesis API contract (blocking)` | `make api-contract` |
