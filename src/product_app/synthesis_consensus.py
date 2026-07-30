@@ -358,6 +358,7 @@ def classify_model_alignment(
     debate_outputs: list[DebateOutput],
     *,
     model_authored_final_text: str | None = None,
+    final_answer_was_templated: bool = False,
 ) -> list[ModelAlignment]:
     """Deterministic per-model alignment, one :class:`ModelAlignment` per
     initial answer in the given order.
@@ -386,10 +387,24 @@ def classify_model_alignment(
         keyword alone no longer blanket-aligns every model: an unrelated
         minority whose opening is absent from the final synthesis is NOT
         counted aligned.
-      - When there is no model-authored final answer to compare against,
-        falls back to the panel-strength inference — a ``"strong"`` panel
-        aligns the minority too. This makes that path identical to the
-        pre-fix behaviour.
+      - When the final answer is TEMPLATED — a completed synthesis exists and
+        this product wrote it (``final_answer_was_templated``) — the minority
+        is NOT aligned. Whether its position landed in that text is
+        unobservable, and the panel-strength fallback below would align it on
+        any ``"strong"`` panel, inventing both the alignment and a "revised its
+        position" claim about a synthesis no model wrote.
+      - When there is no final answer at ALL (missing, or the synthesis
+        failed), falls back to the panel-strength inference — a ``"strong"``
+        panel aligns the minority too. Unchanged, pre-existing behaviour.
+
+    The last two are deliberately NOT the same branch, and the difference is
+    not cosmetic. Both mean "no model-authored text to check against", but a
+    failed synthesis puts no final answer on the screen, while a templated one
+    puts a confident-looking final answer there that this product wrote — the
+    case where an unearned alignment does the most damage. Collapsing the
+    templated case into the panel-strength inference was measured, on the
+    ordinary three-of-four-agree panel, to take the served ring from 3 of 4 to
+    4 of 4 and to mark the outlier "revised".
 
     The argument is named ``model_authored_final_text``, not
     ``final_synthesis_text``, and the name is the contract: it must carry text
@@ -438,10 +453,20 @@ def classify_model_alignment(
             # if its OWN opening survives into the final synthesis. A panel-level
             # convergence keyword no longer aligns an unrelated minority.
             final_aligned = _opening_reflected_in_final(text_by_index[index], final_text)
+        elif final_answer_was_templated:
+            # Minority opener, and the final answer on the screen is one THIS
+            # PRODUCT wrote. We cannot observe whether this model's position
+            # landed in it, so we do not claim that it did. Falling through to
+            # the panel-strength branch below would align every minority on a
+            # "strong" panel — the ordinary three-of-four-agree shape — and
+            # ``revised`` would then flip to True, reporting that a model moved
+            # to a consensus no model authored.
+            final_aligned = False
         else:
-            # Minority opener, no final synthesis to compare against — fall back
-            # to the panel-strength inference (a "strong" panel aligns it too).
-            # This makes the no-synthesis path identical to the pre-fix behaviour.
+            # Minority opener, no final synthesis to compare against at all —
+            # fall back to the panel-strength inference (a "strong" panel aligns
+            # it too). This makes the no-synthesis path identical to the pre-fix
+            # behaviour, and is deliberately NOT the templated case above.
             final_aligned = strength == "strong"
         revised = completed and opening_majority != final_aligned
         alignments.append(

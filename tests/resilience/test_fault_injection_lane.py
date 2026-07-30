@@ -1139,3 +1139,66 @@ def test_a_live_synthesis_still_carries_a_minority_into_the_verdict_ring(
     assert body["result"]["agreement"] == {"aligned": 3, "total": 4}  # PIN
     revised = [m["slot_number"] for m in body["result"]["position_movements"] if m["revised"]]
     assert revised == [4], "the model whose position the synthesis actually carried"
+
+
+#: A panel where THREE participants cluster — the product's ordinary shape, and
+#: the one that classifies ``"strong"``. Slot 4 is the outlier.
+_STRONG_OPENING_BY_PARTICIPANT = {
+    _MODERATOR_FREE_PARTICIPANTS[0]: _PANEL_MAJORITY_TEXT,
+    _MODERATOR_FREE_PARTICIPANTS[1]: _PANEL_MAJORITY_TEXT,
+    _MODERATOR_FREE_PARTICIPANTS[2]: _PANEL_MAJORITY_TEXT,
+    _MODERATOR_FREE_PARTICIPANTS[3]: _PANEL_UNRELATED_TEXT,
+}
+
+
+def test_a_templated_synthesis_on_a_strong_panel_invents_no_alignment(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The regression the FIRST version of this fix introduced, pinned at the
+    served-API level. Found by adversarial review, not by me.
+
+    Refusing the templated text is only half the job: it left the minority
+    falling through to the panel-strength inference, which aligns EVERY
+    minority once the panel is ``"strong"`` — three of four models agreeing,
+    the ordinary case. Measured on this exact scenario: 3 of 4 before the
+    original #171 fix, **4 of 4 after it**, with slot 4 additionally flipped to
+    ``revised``. The browser renders that as "4 of 4 models aligned · 1 revised
+    their position" (``app.js``), a manufactured claim that a model changed its
+    mind, on a synthesis no model wrote. The fix made its own target worse.
+
+    Slot 4 answers about single-VM block devices while the other three answer
+    about provider-operated object storage; its position is in neither the
+    panel nor the templated synthesis.
+
+    Asserted as cardinalities:
+
+    * ``aligned`` is 3 — the three clustered openers, and not the outlier;
+    * exactly 0 slots are ``revised``;
+    * the panel really IS ``"strong"``, so the run exercises the branch that
+      was wrong rather than passing for an unrelated reason;
+    * ``_panel_preconditions`` still holds — four live answers, nothing
+      simulated, no failed step — so the number was not bought by degrading
+      the run.
+
+    What turns it red: delete the ``elif final_answer_was_templated`` branch
+    from ``classify_model_alignment``; the minority falls through to
+    ``strength == "strong"``, ``aligned`` reads 4 and one slot reads
+    ``revised``.
+    """
+    monkeypatch.setitem(
+        _OPENING_BY_PARTICIPANT, _MODERATOR_FREE_PARTICIPANTS[2], _PANEL_MAJORITY_TEXT
+    )
+    body = _drive_moderator_fault_run(monkeypatch, synthesis_content=None)
+
+    _panel_preconditions(body)
+    assert body["result"]["final_synthesis"]["synthesis_mode"] == "simulated"
+
+    run = query_run_repository.get(UUID(body["query_run_id"]))
+    assert compute_consensus_strength(run.initial_answers, run.debate_outputs) == "strong", (
+        "this test exists for the strong panel; on any other the panel-strength "
+        "fallback and the templated refusal already agree"
+    )
+
+    assert body["result"]["agreement"] == {"aligned": 3, "total": 4}
+    revised = [m["slot_number"] for m in body["result"]["position_movements"] if m["revised"]]
+    assert revised == [], f"no model moved to a consensus this product wrote: {revised}"

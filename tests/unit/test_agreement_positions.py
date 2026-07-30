@@ -30,14 +30,17 @@ from product_app.query_runs import (
 )
 from product_app.synthesis import (
     SYNTHESIS_MODE_LIVE,
+    SYNTHESIS_MODE_SIMULATED,
     SYNTHESIS_MODES,
     FinalSynthesis,
     SynthesisQualityChecks,
     SynthesisStatus,
     _final_synthesis_alignment_text,
+    _final_synthesis_was_templated,
     build_agreement_and_positions,
 )
 from product_app.synthesis_consensus import compute_consensus_strength
+from product_app.synthesis_length import _CaveatEnforcer, truncate_recommendation
 
 FOCUS = ["disagreement", "weak_support", "missing_reasoning"]
 
@@ -264,7 +267,25 @@ def test_only_a_live_synthesis_supplies_the_text_alignment_is_measured_against()
     # Positive partner for the Nones: the one mode that DOES yield text yields
     # the real thing, both sections, not an empty string.
     assert yields_text[SYNTHESIS_MODE_LIVE] == f"{consensus} {recommendation}"
-    assert len(by_mode) - len(yields_text) == len(SYNTHESIS_MODES) - 1
+
+    # A value outside SYNTHESIS_MODES fails CLOSED. ``synthesis_mode`` is a bare
+    # ``str`` on the model with no validator, so an unknown value is
+    # constructible, and the check must be exact equality rather than anything
+    # looser. Adversarial review landed a mutant here: rewriting the guard as
+    # ``SYNTHESIS_MODE_LIVE not in final_synthesis.synthesis_mode`` — a
+    # SUBSTRING test — passed all seven new tests and 150 others, because every
+    # canonical value either is "live" or does not contain it. "not-live" does
+    # contain it, and is the value that tells the two apart.
+    assert "not-live" not in SYNTHESIS_MODES
+    assert (
+        _final_synthesis_alignment_text(
+            _synthesis(consensus, recommendation=recommendation, synthesis_mode="not-live")
+        )
+        is None
+    ), "an unrecognised mode is not a model-authored synthesis"
+    assert _final_synthesis_was_templated(_synthesis(consensus, synthesis_mode="not-live")), (
+        "and it must be treated as templated, not as an absent synthesis"
+    )
 
 
 def test_a_templated_synthesis_does_not_decide_which_models_aligned() -> None:
@@ -319,16 +340,145 @@ def test_a_templated_synthesis_does_not_decide_which_models_aligned() -> None:
     templated, templated_positions = build_agreement_and_positions(
         initial_answers=answers,
         debate_outputs=debate,
-        final_synthesis=_synthesis(final_text, synthesis_mode="simulated"),
+        final_synthesis=_synthesis(final_text, synthesis_mode=SYNTHESIS_MODE_SIMULATED),
     )
 
     assert live.total == templated.total == 4
     assert live.aligned == 3, "a model wrote the final answer and it quotes the minority"
     assert templated.aligned == 2, "this product wrote it, so it cannot vouch for the minority"
-    assert live.aligned - templated.aligned == 1
     # WHICH slot moved, not just how many: slot 4, and only slot 4.
     assert [p.slot_number for p in live_positions if p.revised] == [4]
     assert [p.slot_number for p in templated_positions if p.revised] == []
+
+
+def test_a_templated_synthesis_does_not_align_a_minority_on_a_strong_panel() -> None:
+    """Refusing the templated text must not hand the decision to a branch that
+    says yes to everybody.
+
+    Found by adversarial review of the first fix, and it was a REGRESSION that
+    fix introduced. Returning ``None`` for a templated synthesis routed the
+    minority to the panel-strength fallback, which aligns EVERY minority when
+    the panel is ``"strong"`` — no content check at all. On the product's most
+    ordinary panel shape (three of four models saying the same thing) that is
+    the INFLATING direction: measured 3 of 4 before the fix, 4 of 4 after it,
+    with slot 4 additionally flipped to ``revised`` — a manufactured claim that
+    a model changed its mind, on a synthesis no model wrote.
+
+    So "no model-authored final answer" now has two distinct meanings and they
+    are not interchangeable:
+
+    * the synthesis is ABSENT or failed — there is no final answer on screen at
+      all, and the panel-strength inference stands (pre-existing, unchanged,
+      pinned by ``test_minority_that_aligns_is_marked_revised_with_an_inference_note``);
+    * the synthesis is TEMPLATED — a confident-looking final answer IS on
+      screen and this product wrote it. Whether the model's position landed in
+      it is unobservable, so it is not counted.
+
+    The strength assertion is the precondition that makes this test mean
+    something: on a NON-strong panel both branches already agree, so the test
+    would pass without measuring anything.
+
+    What turns it red: delete the ``elif final_answer_was_templated`` branch
+    from ``classify_model_alignment`` and the templated run falls through to
+    ``strength == "strong"``, so ``aligned`` reads 4 and ``revised`` reads [4].
+    """
+    answers = [
+        _answer(1, _AGREE_TEXT),
+        _answer(2, _AGREE_TEXT),
+        _answer(3, _AGREE_TEXT),
+        _answer(4, "An unrelated claim about zebra migration patterns in autumn."),
+    ]
+    debate = _debate("After round 2 the models converged on the load-limit reading.")
+    assert compute_consensus_strength(answers, debate) == "strong", (
+        "this test exists for the strong panel; on any other the fallback and "
+        "the refusal already agree and nothing is being measured"
+    )
+    # A final answer that is the majority reading — the zebra opening is not in it.
+    templated, positions = build_agreement_and_positions(
+        initial_answers=answers,
+        debate_outputs=debate,
+        final_synthesis=_synthesis(_AGREE_TEXT, synthesis_mode=SYNTHESIS_MODE_SIMULATED),
+    )
+
+    assert templated.total == 4
+    assert templated.aligned == 3, "the three clustered openers, and not the outlier"
+    assert [p.slot_number for p in positions if p.revised] == [], (
+        "no model may be reported as having moved to a consensus this product wrote"
+    )
+
+
+def test_the_caveat_this_product_dictates_cannot_align_a_minority() -> None:
+    """A ``"live"`` synthesis is still not wholly the model's words, and the
+    part that is not must not decide alignment.
+
+    ``_RECOMMENDATION_PROMPT`` rule 1 orders the model to end with the
+    decision-support caveat verbatim, and ``truncate_recommendation`` appends
+    it when the model omits it — so that sentence is in EVERY recommendation
+    regardless of what the model wrote. It is 18 words long, which is more than
+    enough 4-grams to clear the 10% containment threshold on its own.
+
+    The consequence is #171 finding 5's exact shape surviving inside the mode
+    the fix declares safe: a minority answer that carries the ordinary
+    regulated-domain disclaimer — which the product's own high-stakes handling
+    encourages — gets counted aligned on a sentence this product dictated,
+    having shared no substance with the panel at all.
+
+    The paired positive is the second half: the same run with a recommendation
+    whose BODY genuinely reflects the minority still aligns it. The caveat is
+    excluded; the model's own words are not.
+
+    What turns it red: drop the ``strip_mandated_caveat`` call from
+    ``_final_synthesis_alignment_text`` and the first case aligns slot 4 on the
+    disclaimer alone, so ``aligned`` reads 3 instead of 2.
+    """
+    majority = "The tunnel option is best because it avoids the flood plain entirely."
+    unrelated = "Seasonal bird counts in the estuary have risen for six years running."
+    # A minority whose ONLY overlap with the final answer is the dictated caveat.
+    minority = (
+        "Consult a qualified professional about the culvert easement. "
+        f"{_CaveatEnforcer.FULL_CAVEAT}"
+    )
+    answers = [
+        _answer(1, majority),
+        _answer(2, majority),
+        _answer(3, unrelated),
+        _answer(4, minority),
+    ]
+    debate = _debate("The panel weighed both options.")
+    assert compute_consensus_strength(answers, debate) != "strong"
+
+    # The recommendation body says nothing about slot 4; only the mandated
+    # caveat is shared. ``truncate_recommendation`` is the real production path
+    # that guarantees the caveat is there, so the fixture is built through it.
+    body_only = truncate_recommendation("Act on the tunnel consensus after a human audit.")
+    assert _CaveatEnforcer.FULL_CAVEAT in body_only, "the premise: the caveat is always appended"
+
+    boilerplate_only, boilerplate_positions = build_agreement_and_positions(
+        initial_answers=answers,
+        debate_outputs=debate,
+        final_synthesis=_synthesis(
+            majority, recommendation=body_only, synthesis_mode=SYNTHESIS_MODE_LIVE
+        ),
+    )
+    assert boilerplate_only.aligned == 2, (
+        "slot 4 shares only the sentence this product dictated, so it is not aligned"
+    )
+    assert [p.slot_number for p in boilerplate_positions if p.revised] == []
+
+    # Paired positive: a recommendation whose BODY carries slot 4's own point.
+    with_substance = truncate_recommendation(
+        "Act on the tunnel consensus, and consult a qualified professional "
+        "about the culvert easement before signing."
+    )
+    substantive, substantive_positions = build_agreement_and_positions(
+        initial_answers=answers,
+        debate_outputs=debate,
+        final_synthesis=_synthesis(
+            majority, recommendation=with_substance, synthesis_mode=SYNTHESIS_MODE_LIVE
+        ),
+    )
+    assert substantive.aligned == 3, "the model's own words still align it"
+    assert [p.slot_number for p in substantive_positions if p.revised] == [4]
 
 
 def test_minority_whose_opening_lands_in_final_is_marked_revised() -> None:

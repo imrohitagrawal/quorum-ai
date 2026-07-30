@@ -133,15 +133,23 @@ def test_every_case_declares_a_valid_synthesis_mode() -> None:
     alignment may compare an opening against it, so this key feeds the
     ``agreement`` figure every case in this gate is evaluated with.
 
-    Membership is checked against ``product_app.synthesis.SYNTHESIS_MODES``, not
-    a list retyped here (``AGENTS.md`` rule 7a), so a new mode cannot be
-    accepted by this test without the product actually having it.
+    The value of this test is the CARDINALITY below, not membership. Membership
+    is already enforced by ``corpus/loader.py`` at import time — ``CASES =
+    corpus.load_cases()`` runs at module scope — so an invalid mode never
+    reaches this function, and an ``in SYNTHESIS_MODES`` assertion here could
+    not fail. Adversarial review demonstrated exactly that, and it has been
+    removed rather than left as decoration. What this test adds is that the
+    corpus exercises BOTH sides of the line the #171 fix draws.
 
-    What turns it red: delete the ``"synthesis_mode"`` line from any case file
-    and the ``KeyError`` from ``raw["final_synthesis"]["synthesis_mode"]``
-    names that case.
+    What turns it red — and this mutation RUNS, it does not break collection:
+    change case 05's declared mode from ``simulated`` to ``live``; the corpus
+    then has no templated case, and
+    ``sum(... if m != SYNTHESIS_MODE_LIVE) >= 1`` fails with ``assert 0 >= 1``.
+    The first draft's stated mutation (delete the key from a case file) raised
+    ``KeyError`` inside ``load_cases()`` during collection, so the test never
+    executed — proving nothing, which is ``AGENTS.md`` rule 6's trap.
     """
-    from product_app.synthesis import SYNTHESIS_MODES
+    from product_app.synthesis import SYNTHESIS_MODE_LIVE
 
     declared = {}
     for case_id in CASE_IDS:
@@ -149,14 +157,11 @@ def test_every_case_declares_a_valid_synthesis_mode() -> None:
         synthesis = raw["run"]["final_synthesis"]
         assert synthesis is not None, f"{case_id}: this test presumes a synthesis"
         declared[case_id] = synthesis["synthesis_mode"]
-        assert declared[case_id] in SYNTHESIS_MODES, f"{case_id}: {declared[case_id]!r}"
 
-    # Cardinality, not just membership: the corpus covers BOTH sides of the
-    # line the fix draws — at least one case whose synthesis a model wrote and
-    # at least one it did not — so the gate exercises both alignment paths.
-    assert len(declared) == len(CASE_IDS)
-    assert sum(1 for m in declared.values() if m == "live") >= 1
-    assert sum(1 for m in declared.values() if m != "live") >= 1
+    # The corpus must cover both alignment paths: at least one case whose
+    # synthesis a model wrote, and at least one it did not.
+    assert sum(1 for m in declared.values() if m == SYNTHESIS_MODE_LIVE) >= 1
+    assert sum(1 for m in declared.values() if m != SYNTHESIS_MODE_LIVE) >= 1
 
 
 def test_a_case_that_omits_synthesis_mode_is_refused() -> None:
@@ -169,7 +174,9 @@ def test_a_case_that_omits_synthesis_mode_is_refused() -> None:
 
     What turns it red: change ``raw["synthesis_mode"]`` to
     ``raw.get("synthesis_mode", "live")`` in ``corpus/loader.py`` — no
-    exception is raised and ``pytest.raises`` fails.
+    exception is raised and ``pytest.raises`` fails. (That mutation RUNS: the
+    loader still imports, so this test executes and fails on its own
+    assertion.)
     """
     raw = _raw_case("faithful-consensus")
     without_mode = dict(raw["run"]["final_synthesis"])

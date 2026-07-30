@@ -65,6 +65,7 @@ from product_app.synthesis_consensus import (
     compute_consensus_strength,
 )
 from product_app.synthesis_length import (
+    strip_mandated_caveat,
     truncate_recommendation,
     truncate_section,
 )
@@ -1157,8 +1158,31 @@ def _final_synthesis_alignment_text(final_synthesis: FinalSynthesis | None) -> s
         return None
     if final_synthesis.synthesis_mode != SYNTHESIS_MODE_LIVE:
         return None
-    text = " ".join(p for p in (final_synthesis.consensus, final_synthesis.recommendation) if p)
+    # Even under "live" the recommendation is not wholly the model's: rule 1 of
+    # ``_RECOMMENDATION_PROMPT`` dictates the decision-support caveat verbatim,
+    # and ``truncate_recommendation`` appends it when the model omits it. That
+    # dictated sentence is long enough to clear the containment threshold by
+    # itself, so an answer carrying the ordinary regulated-domain disclaimer
+    # was counted aligned on this product's own words — finding 5's shape,
+    # inside the mode this function declares safe. Strip it; keep the body.
+    recommendation = strip_mandated_caveat(final_synthesis.recommendation)
+    text = " ".join(p for p in (final_synthesis.consensus, recommendation) if p)
     return text or None
+
+
+def _final_synthesis_was_templated(final_synthesis: FinalSynthesis | None) -> bool:
+    """Is there a COMPLETED final answer on the screen that a model did NOT write?
+
+    Distinct from ``_final_synthesis_alignment_text(...) is None``, which is
+    also true when there is no final answer at all. ``classify_model_alignment``
+    needs the two apart: a failed synthesis keeps the pre-existing
+    panel-strength inference, while a templated one must not align a minority,
+    because the inference says yes to every minority on a ``"strong"`` panel and
+    would report a model as having moved to a consensus no model authored.
+    """
+    if final_synthesis is None or final_synthesis.status is not SynthesisStatus.COMPLETED:
+        return False
+    return final_synthesis.synthesis_mode != SYNTHESIS_MODE_LIVE
 
 
 def build_agreement_and_positions(
@@ -1185,6 +1209,7 @@ def build_agreement_and_positions(
         initial_answers,
         debate_outputs,
         model_authored_final_text=_final_synthesis_alignment_text(final_synthesis),
+        final_answer_was_templated=_final_synthesis_was_templated(final_synthesis),
     )
     agreement = summarize_agreement(initial_answers=initial_answers, alignments=alignments)
     positions = build_position_movements(
