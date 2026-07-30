@@ -65,7 +65,6 @@ from product_app.synthesis_consensus import (
     compute_consensus_strength,
 )
 from product_app.synthesis_length import (
-    strip_mandated_caveat,
     truncate_recommendation,
     truncate_section,
 )
@@ -1158,15 +1157,19 @@ def _final_synthesis_alignment_text(final_synthesis: FinalSynthesis | None) -> s
         return None
     if final_synthesis.synthesis_mode != SYNTHESIS_MODE_LIVE:
         return None
-    # Even under "live" the recommendation is not wholly the model's: rule 1 of
+    # NOTE — "live" does NOT mean every word here is the model's. Rule 1 of
     # ``_RECOMMENDATION_PROMPT`` dictates the decision-support caveat verbatim,
-    # and ``truncate_recommendation`` appends it when the model omits it. That
-    # dictated sentence is long enough to clear the containment threshold by
-    # itself, so an answer carrying the ordinary regulated-domain disclaimer
-    # was counted aligned on this product's own words — finding 5's shape,
-    # inside the mode this function declares safe. Strip it; keep the body.
-    recommendation = strip_mandated_caveat(final_synthesis.recommendation)
-    text = " ".join(p for p in (final_synthesis.consensus, recommendation) if p)
+    # ``_CaveatEnforcer`` appends it when the model omits it, and
+    # ``_CONSENSUS_PROMPT`` invites the model to quote phrases from answers that
+    # may themselves carry it. That dictated sentence alone clears the
+    # containment threshold, so it is removed from the COMPARISON rather than
+    # from this text: ``synthesis_consensus`` subtracts its 4-grams from both
+    # sides (see ``_DICTATED_CAVEAT_NGRAMS``). Doing it there and not here is
+    # deliberate — it covers the consensus as well as the recommendation, it
+    # uses the same tokenisation as the comparison so punctuation variants
+    # cannot slip past, and it deletes none of the model's prose. Three
+    # string-surgery drafts of a strip-it-here version each left a way in.
+    text = " ".join(p for p in (final_synthesis.consensus, final_synthesis.recommendation) if p)
     return text or None
 
 

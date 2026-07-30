@@ -42,6 +42,17 @@ RECOMMENDATION_MAX_CHARS = 2000
 #: minor rephrasings.
 _CAVEAT_MARKER = "decision support only"
 
+#: The caveat in full. Public because it is not only appended here: since #171
+#: finding 5 ``synthesis_consensus`` subtracts its word 4-grams from the
+#: per-model alignment comparison, because a sentence this product DICTATES
+#: (``synthesis._RECOMMENDATION_PROMPT`` rule 1) and APPENDS when the model
+#: omits it (:class:`_CaveatEnforcer`) must not be able to decide a trust
+#: number. One definition, read by both, so the two can never drift.
+DICTATED_CAVEAT_SENTENCE = (
+    "This summary is decision support only and is not medical, "
+    "legal, financial, safety, or regulated professional advice."
+)
+
 #: Sentence-boundary pattern used by ``truncate_section`` to find
 #: the last "natural" stop. We treat ".", "!", "?" followed by a
 #: space as a sentence end.
@@ -172,38 +183,6 @@ def _truncate_with_caveat_present(text: str) -> str:
     return body_truncated + " " + _ELLIPSIS + "  " + caveat_onward.lstrip()
 
 
-def strip_mandated_caveat(text: str) -> str:
-    """Return ``text`` with the mandatory decision-support caveat removed.
-
-    The caveat is not the model's writing even when the model typed it:
-    ``synthesis._RECOMMENDATION_PROMPT`` rule 1 orders it verbatim, and
-    :class:`_CaveatEnforcer` appends it when the model omits it. It is
-    therefore in EVERY recommendation, and it is 18 words long — more than
-    enough 4-grams to carry an answer over the containment threshold that
-    decides per-model alignment.
-
-    #171 finding 5 is "a trust number decided by this product's own words", and
-    a sentence this product dictates is exactly that. Measured: a minority
-    answer sharing nothing with the panel but the ordinary regulated-domain
-    disclaimer matched 12 of its 22 opening 4-grams — 55% against a 10%
-    threshold — and was counted as having landed in the final answer.
-
-    Keys on :data:`_CAVEAT_MARKER` rather than the full sentence for the same
-    reason :func:`truncate_recommendation` does — it survives comma insertions
-    and minor rephrasings — so the function that strips and the function that
-    appends can never disagree about where the caveat starts. The marker sits
-    mid-sentence ("This summary **is decision support only**…"), so the cut is
-    at the start of the sentence containing it, not at the marker. Text with no
-    caveat is returned unchanged.
-    """
-    marker_idx = text.lower().find(_CAVEAT_MARKER)
-    if marker_idx == -1:
-        return text
-    sentence_start = max(text.rfind(stop, 0, marker_idx) for stop in (". ", "! ", "? ", "\n"))
-    cut = 0 if sentence_start == -1 else sentence_start + 1
-    return text[:cut].strip()
-
-
 class _CaveatEnforcer:
     """Internal helper: ensure the decision-support caveat is
     present at the end of a recommendation string.
@@ -216,10 +195,7 @@ class _CaveatEnforcer:
     #: The full caveat sentence. The orchestrator's templated
     #: branch emits this verbatim, and the LLM prompt's rule 1
     #: mandates it.
-    FULL_CAVEAT = (
-        "This summary is decision support only and is not medical, "
-        "legal, financial, safety, or regulated professional advice."
-    )
+    FULL_CAVEAT = DICTATED_CAVEAT_SENTENCE
 
     @classmethod
     def append_if_missing(cls, text: str) -> str:
