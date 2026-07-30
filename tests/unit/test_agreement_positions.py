@@ -13,7 +13,7 @@ from decimal import Decimal
 from uuid import UUID, uuid4
 
 from product_app.costs import cost_estimation_service
-from product_app.debate import DebateOutput, DebateRoundStatus
+from product_app.debate import DebateOutput, DebateRoundStatus, PositionMovement
 from product_app.model_slots import ModelSlot
 from product_app.providers import (
     CitationCoverage,
@@ -29,6 +29,7 @@ from product_app.query_runs import (
     _result_response,
 )
 from product_app.synthesis import (
+    SYNTHESIS_MODE_FALLBACK,
     SYNTHESIS_MODE_LIVE,
     SYNTHESIS_MODE_SIMULATED,
     SYNTHESIS_MODES,
@@ -203,13 +204,13 @@ def test_minority_that_aligns_is_marked_revised_with_an_inference_note() -> None
     # a copy edit is a deliberate act.
     assert revised[0].revision_note == (
         "Opened as a minority view and is counted inside the group consensus. That "
-        "placement reads the panel's own answers; no model-written final answer is "
-        "available to compare it against."
+        "placement reads the panel's own answers; no model-written final answer was "
+        "used to make it."
     )
     assert revised[0].final == (
-        "Opened in the minority, and is counted inside the group consensus. No "
-        "model-written final answer is available to compare it against, so this "
-        "reads the panel's own answers."
+        "Opened in the minority, and is counted inside the group consensus. That "
+        "placement reads the panel's own answers; no model-written final answer was "
+        "used to make it."
     )
     # A revised model still lands aligned, so aligned counts it.
     assert agreement.aligned == 4
@@ -470,14 +471,25 @@ def test_no_stance_row_names_a_final_synthesis_no_model_wrote() -> None:
     * templated        -> 0 of 4;
     * no synthesis     -> 0 of 4.
 
-    It counts rows rather than comparing against the copy table, so it could
-    fail for any implementation — comparing to ``_STANCE_COPY`` would compare
-    the code against itself.
+    * MIXED (``"fallback"``)  -> 0 of 4. Added after adversarial review: this
+      is the one mode the first version of the fix mislabelled, and the only
+      non-``"live"`` mode whose consensus can be entirely the model's words.
 
-    What turns it red: in ``product_app.synthesis.build_agreement_and_positions``
-    replace the derived ``final_answer_provenance`` with the constant
-    ``FinalAnswerProvenance.MODEL_AUTHORED``. The templated and no-synthesis
-    runs then serve the model-authored copy again and both counts read 4.
+    The count alone is NOT sufficient, and review demonstrated it: copy reading
+    "the final **answer** keeps it in the group consensus" makes the identical
+    claim, is the #176 defect verbatim, and slips past a search for the two
+    words "final synthesis". So the exact served sentence of every row is
+    pinned below as well. The literals are written out here rather than read
+    from ``_STANCE_COPY`` — importing the table would compare the code against
+    itself and pass for any copy at all.
+
+    What turns it red, two ways:
+
+    1. in ``product_app.synthesis.build_agreement_and_positions`` replace the
+       derived ``final_answer_provenance`` with the constant
+       ``FinalAnswerProvenance.MODEL_AUTHORED`` — every count reads 4;
+    2. reword any ``NOT_MODEL_AUTHORED`` row of ``_STANCE_COPY`` — the exact
+       assertions below name the row that changed.
     """
     answers = [
         _answer(1, _AGREE_TEXT),
@@ -487,21 +499,25 @@ def test_no_stance_row_names_a_final_synthesis_no_model_wrote() -> None:
     ]
     debate = _debate("After round 2 the models converged on the load-limit reading.")
 
-    def rows_naming_a_final_synthesis(final_synthesis: FinalSynthesis | None) -> int:
+    def rows(final_synthesis: FinalSynthesis | None) -> list[PositionMovement]:
         _, positions = build_agreement_and_positions(
             initial_answers=answers,
             debate_outputs=debate,
             final_synthesis=final_synthesis,
         )
         assert len(positions) == 4, "a row per model, or the counts below mean nothing"
+        return positions
+
+    def rows_naming_a_final_synthesis(final_synthesis: FinalSynthesis | None) -> int:
         return sum(
             1
-            for p in positions
+            for p in rows(final_synthesis)
             if "final synthesis" in " ".join(filter(None, (p.final, p.revision_note))).lower()
         )
 
     live = _synthesis(_AGREE_TEXT, synthesis_mode=SYNTHESIS_MODE_LIVE)
     templated = _synthesis(_AGREE_TEXT, synthesis_mode=SYNTHESIS_MODE_SIMULATED)
+    mixed = _synthesis(_AGREE_TEXT, synthesis_mode=SYNTHESIS_MODE_FALLBACK)
 
     assert rows_naming_a_final_synthesis(live) == 4, (
         "positive partner: a model wrote it, so every row may name it"
@@ -512,15 +528,41 @@ def test_no_stance_row_names_a_final_synthesis_no_model_wrote() -> None:
     assert rows_naming_a_final_synthesis(None) == 0, (
         "there is no final synthesis on this run; no row may name one"
     )
+    assert rows_naming_a_final_synthesis(mixed) == 0, (
+        "a mixed synthesis is refused whole, so no row may say what it did"
+    )
+
+    # The exact sentence, per row, on the templated run. This is what stops the
+    # defect coming back under different words.
+    held_with = (
+        "Opened with, and is counted inside, the group consensus. That placement reads "
+        "the panel's own answers; no model-written final answer was used to make it."
+    )
+    held_minority = (
+        "Opened in the minority, and is counted outside the group consensus. No "
+        "model-written final answer was used to make that placement."
+    )
+    assert [p.final for p in rows(templated)] == [
+        held_with,
+        held_with,
+        held_with,
+        held_minority,
+    ]
+    # ...and it must not become a claim about the SYNTHESIS either, which would
+    # be false on the mixed run whose consensus the model wrote in full.
+    assert [p.final for p in rows(mixed)] == [held_with, held_with, held_with, held_minority]
 
 
 def test_stance_copy_covers_every_provenance_and_alignment_state() -> None:
     """The copy table is TOTAL over its key, so a served lookup cannot raise.
 
-    ``(NOT_MODEL_AUTHORED, MOVED_TO_CONSENSUS)`` is the one combination
-    measured unreachable today, and it is still present: reachability is a
-    measurement about today's classifier, and a ``KeyError`` inside a served
-    response is a worse failure than a redundant row.
+    All eight rows are reachable, including
+    ``(NOT_MODEL_AUTHORED, MOVED_TO_CONSENSUS)`` — the no-synthesis strong panel
+    reaches it, and the test below exercises it. What is unreachable is that row
+    via a TEMPLATED or MIXED synthesis specifically. Totality is asserted anyway
+    rather than pruned to the reachable set: reachability is a measurement about
+    today's classifier, and a ``KeyError`` inside a served response is a worse
+    failure than a redundant row.
 
     What turns it red: delete any entry from ``_STANCE_COPY`` — the count drops
     below 8 and the missing-key list names it.

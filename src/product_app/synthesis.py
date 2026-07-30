@@ -1227,13 +1227,18 @@ def build_agreement_and_positions(
     ``QueryRunResultResponse.demo_mode``.
     """
     model_authored_final_text = _final_synthesis_alignment_text(final_synthesis)
-    # ONE expression decides both the number and the sentence (#176). The
-    # classifier compares an opening against final-answer CONTENT only when this
-    # text is non-empty, and the stance narration may name "the final synthesis"
-    # only in exactly that case. Deriving the provenance from the same value —
-    # rather than re-deriving it from ``final_synthesis`` — is what stops the
-    # verdict ring and the "how positions moved" table telling different
-    # stories about the same run.
+    # The number and the sentence are read off ONE value (#176). The classifier
+    # compares an opening against final-answer CONTENT only when this text is
+    # non-empty, and the stance narration may name "the final synthesis" only in
+    # exactly that case, so the provenance is derived from the same value here
+    # rather than re-derived from ``final_synthesis``.
+    #
+    # That makes drift unlikely, NOT impossible, and this comment claimed
+    # "cannot" until adversarial review measured otherwise: the emptiness test
+    # is spelled out twice, here and inside ``classify_model_alignment``.
+    # Mutating the classifier's branch alone was demonstrated to move the number
+    # while the sentence stayed put — caught by the two number-side tests, not by
+    # the narration test. Nothing asserts the two expressions agree.
     final_answer_provenance = (
         FinalAnswerProvenance.MODEL_AUTHORED
         if (model_authored_final_text or "").strip()

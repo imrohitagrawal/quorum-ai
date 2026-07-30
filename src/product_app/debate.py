@@ -636,11 +636,12 @@ class AlignmentState(StrEnum):
 
 
 class FinalAnswerProvenance(StrEnum):
-    """Is there a final answer a MODEL wrote for the narration to talk about?
+    """Did a model-written final answer go into placing this row?
 
     The stance copy may only say what "the final synthesis" did with a model's
-    position when a model actually wrote that synthesis. This enum is the
-    second key of :data:`_STANCE_COPY`, alongside :class:`AlignmentState`.
+    position when a model wrote that synthesis AND the classification actually
+    compared the opening against it. This enum is the second key of
+    :data:`_STANCE_COPY`, alongside :class:`AlignmentState`.
 
     It is NOT a new source of truth. It restates the branch
     :func:`product_app.synthesis_consensus.classify_model_alignment` already
@@ -648,15 +649,32 @@ class FinalAnswerProvenance(StrEnum):
     when ``model_authored_final_text`` is non-empty, and otherwise infers from
     the panel. :func:`product_app.synthesis.build_agreement_and_positions`
     derives this value from that same expression, so the sentence and the
-    number can never disagree.
+    number are read off one value rather than two.
     """
 
-    #: A model wrote the final answer, so the narration may describe what that
-    #: final answer did with this model's position.
+    #: A model wrote the final answer AND each opening was compared against it,
+    #: so the narration may describe what that final answer did with this
+    #: model's position.
     MODEL_AUTHORED = "model_authored"
-    #: There is no model-written final answer to compare an opening against —
-    #: the synthesis is missing, failed, or is one this product templated. The
-    #: narration must not claim what a final synthesis did.
+    #: No model-written final answer went into the placement. FOUR shapes land
+    #: here, not the three an earlier draft of this docstring listed:
+    #:
+    #: * missing — no synthesis on the run at all;
+    #: * failed — a synthesis exists but its status is not COMPLETED;
+    #: * ``"simulated"`` — this product templated all five sections;
+    #: * ``"fallback"`` — a MIXED run, 1 to 4 of 5 sections live. It does not
+    #:   record WHICH, so ``_final_synthesis_alignment_text`` refuses it whole.
+    #:
+    #: The fourth is why the copy below describes the PLACEMENT and not the
+    #: synthesis. A mixed run's consensus and recommendation can be entirely the
+    #: model's words: a fully-live run in which no answer carried a primary
+    #: source is one, because ``_build_source_support`` returns early WITHOUT
+    #: dispatching its call, capping the live-section count at four. Measured
+    #: 2026-07-30 through the real orchestrator — four calls dispatched,
+    #: ``synthesis_mode`` ``"fallback"``, consensus and recommendation both the
+    #: model's. A sentence claiming no model-written final answer EXISTS would
+    #: be false on that run. What is true on all four shapes is that no
+    #: model-written final answer was used to place the row.
     NOT_MODEL_AUTHORED = "not_model_authored"
 
 
@@ -885,16 +903,23 @@ _NO_ANSWER_COPY = _StanceCopy(
 #:   the final synthesis", naming a final synthesis that does not exist.
 #:
 #: The replacement narrates only what IS observed — how the opening clustered,
-#: and whether the row is counted inside the consensus — and says plainly that
-#: there is no model-written final answer behind that placement. That sentence
-#: restates the branch condition itself, so it cannot become false.
+#: whether the row is counted inside the consensus, and that the final answer
+#: was not what placed it. It describes the PLACEMENT, not the synthesis: see
+#: :class:`FinalAnswerProvenance` for the mixed (``"fallback"``) run on which a
+#: sentence about the synthesis's authorship would itself be false.
 #:
-#: All eight rows exist even though ``(NOT_MODEL_AUTHORED, MOVED_TO_CONSENSUS)``
-#: was measured unreachable (a minority is never aligned against a templated
-#: final answer, and the panel-strength fallback that CAN reach it is the
-#: no-synthesis case). A total table cannot raise ``KeyError`` in a served path
-#: if that measurement is ever wrong;
-#: ``test_every_provenance_and_alignment_state_has_stance_copy`` pins the count.
+#: All eight rows exist. ``(NOT_MODEL_AUTHORED, MOVED_TO_CONSENSUS)`` is
+#: reachable — the no-synthesis strong panel reaches it, and
+#: ``test_a_revised_row_still_carries_a_note_when_no_model_wrote_the_final_answer``
+#: exercises it. What is unreachable, measured 2026-07-30 by enumerating the
+#: provenance x alignment grid, is that row via a TEMPLATED or MIXED synthesis
+#: specifically: refusing the final text sends a minority to
+#: ``final_aligned = False``, so it can never be ``revised``. An earlier draft
+#: of this comment called the row itself "measured unreachable", which its own
+#: parenthesis contradicted — a reachability claim is a measurement and this
+#: one was written from memory.
+#: ``test_stance_copy_covers_every_provenance_and_alignment_state`` pins the
+#: count, so the lookup cannot raise ``KeyError`` in a served path.
 _STANCE_COPY: dict[tuple[FinalAnswerProvenance, AlignmentState], _StanceCopy] = {
     (FinalAnswerProvenance.MODEL_AUTHORED, AlignmentState.NO_ANSWER): _NO_ANSWER_COPY,
     (FinalAnswerProvenance.NOT_MODEL_AUTHORED, AlignmentState.NO_ANSWER): _NO_ANSWER_COPY,
@@ -925,9 +950,9 @@ _STANCE_COPY: dict[tuple[FinalAnswerProvenance, AlignmentState], _StanceCopy] = 
     (FinalAnswerProvenance.NOT_MODEL_AUTHORED, AlignmentState.HELD_WITH_CONSENSUS): _StanceCopy(
         after_round_1=_OPENING_COPY[AlignmentState.HELD_WITH_CONSENSUS],
         final=(
-            "Opened with, and is counted inside, the group consensus. No model-written "
-            "final answer is available to compare it against, so this reads the panel's "
-            "own answers."
+            "Opened with, and is counted inside, the group consensus. That placement "
+            "reads the panel's own answers; no model-written final answer was used to "
+            "make it."
         ),
         revised=False,
         revision_note=None,
@@ -935,22 +960,22 @@ _STANCE_COPY: dict[tuple[FinalAnswerProvenance, AlignmentState], _StanceCopy] = 
     (FinalAnswerProvenance.NOT_MODEL_AUTHORED, AlignmentState.MOVED_TO_CONSENSUS): _StanceCopy(
         after_round_1=_OPENING_COPY[AlignmentState.MOVED_TO_CONSENSUS],
         final=(
-            "Opened in the minority, and is counted inside the group consensus. No "
-            "model-written final answer is available to compare it against, so this "
-            "reads the panel's own answers."
+            "Opened in the minority, and is counted inside the group consensus. That "
+            "placement reads the panel's own answers; no model-written final answer was "
+            "used to make it."
         ),
         revised=True,
         revision_note=(
             "Opened as a minority view and is counted inside the group consensus. That "
-            "placement reads the panel's own answers; no model-written final answer is "
-            "available to compare it against."
+            "placement reads the panel's own answers; no model-written final answer was "
+            "used to make it."
         ),
     ),
     (FinalAnswerProvenance.NOT_MODEL_AUTHORED, AlignmentState.HELD_MINORITY): _StanceCopy(
         after_round_1=_OPENING_COPY[AlignmentState.HELD_MINORITY],
         final=(
             "Opened in the minority, and is counted outside the group consensus. No "
-            "model-written final answer is available to compare it against."
+            "model-written final answer was used to make that placement."
         ),
         revised=False,
         revision_note=None,
