@@ -625,12 +625,69 @@ class AlignmentState(StrEnum):
 
     #: Model returned no usable answer; there is no stance to place.
     NO_ANSWER = "no_answer"
-    #: Opening clustered with the majority; final synthesis keeps it aligned.
+    #: Opening clustered with the majority, and it is counted inside the
+    #: consensus.
     HELD_WITH_CONSENSUS = "held_with_consensus"
-    #: Opening clustered as a minority; final synthesis aligns (``revised``).
+    #: Opening clustered as a minority, and it is counted inside the consensus
+    #: anyway (``revised``).
     MOVED_TO_CONSENSUS = "moved_to_consensus"
-    #: Opening clustered as a minority; final synthesis leaves it dissenting.
+    #: Opening clustered as a minority, and it stays outside the consensus.
     HELD_MINORITY = "held_minority"
+
+
+class FinalAnswerProvenance(StrEnum):
+    """Did a model-written final answer go into placing this row?
+
+    The stance copy may only say what "the final synthesis" did with a model's
+    position when a model wrote that synthesis. This enum is the second key of
+    :data:`_STANCE_COPY`, alongside :class:`AlignmentState`.
+
+    That condition is NECESSARY, NOT SUFFICIENT, and this docstring claimed
+    otherwise for one review round. ``MODEL_AUTHORED`` does not mean every
+    opening was compared against the final answer:
+    :func:`~product_app.synthesis_consensus.classify_model_alignment`
+    short-circuits ``final_aligned = True`` for a MAJORITY opener before the
+    containment test runs. Measured 2026-07-30 — four agreeing openers about a
+    bridge, against a model-written synthesis about sourdough, invoked
+    ``_opening_reflected_in_final`` **zero** times and served "the final
+    synthesis keeps it in" four times. That door is pre-existing and byte-for-
+    byte what ``main`` serves; its number side is filed as #180 and its
+    narration side is recorded there too. Nothing here closes it — this enum
+    only stops the narration on runs where no model wrote the text at all.
+
+    It is NOT a new source of truth. It restates the branch
+    :func:`product_app.synthesis_consensus.classify_model_alignment` already
+    takes for a minority opener: it aligns against final-answer CONTENT only
+    when ``model_authored_final_text`` is non-empty, and otherwise infers from
+    the panel. :func:`product_app.synthesis.build_agreement_and_positions`
+    derives this value from that same expression, so the sentence and the
+    number are read off one value rather than two.
+    """
+
+    #: A model wrote the final answer, so the narration may name it. See the
+    #: class docstring for why this does NOT mean the opening was compared
+    #: against it.
+    MODEL_AUTHORED = "model_authored"
+    #: No model-written final answer went into the placement. FOUR shapes land
+    #: here, not the three an earlier draft of this docstring listed:
+    #:
+    #: * missing — no synthesis on the run at all;
+    #: * failed — a synthesis exists but its status is not COMPLETED;
+    #: * ``"simulated"`` — this product templated all five sections;
+    #: * ``"fallback"`` — a MIXED run, 1 to 4 of 5 sections live. It does not
+    #:   record WHICH, so ``_final_synthesis_alignment_text`` refuses it whole.
+    #:
+    #: The fourth is why the copy below describes the PLACEMENT and not the
+    #: synthesis. A mixed run's consensus and recommendation can be entirely the
+    #: model's words: a fully-live run in which no answer carried a primary
+    #: source is one, because ``_build_source_support`` returns early WITHOUT
+    #: dispatching its call, capping the live-section count at four. Measured
+    #: 2026-07-30 through the real orchestrator — four calls dispatched,
+    #: ``synthesis_mode`` ``"fallback"``, consensus and recommendation both the
+    #: model's. A sentence claiming no model-written final answer EXISTS would
+    #: be false on that run. What is true on all four shapes is that no
+    #: model-written final answer was used to place the row.
+    NOT_MODEL_AUTHORED = "not_model_authored"
 
 
 @dataclass(frozen=True)
@@ -757,6 +814,7 @@ def build_position_movements(
     initial_answers: list[InitialModelAnswer],
     debate_outputs: list[DebateOutput],
     alignments: list[ModelAlignment],
+    final_answer_provenance: FinalAnswerProvenance,
 ) -> list[PositionMovement]:
     """One :class:`PositionMovement` per model, in slot order.
 
@@ -764,6 +822,13 @@ def build_position_movements(
     answer (observed); the round-1 and final stances are INFERRED from the
     model's alignment (opening majority/minority vs final consensus) and the
     debate focus lens — never from an observed per-model transcript.
+
+    ``final_answer_provenance`` is REQUIRED, with no default, because the
+    narration is false when it is guessed: a caller that let it default to
+    ``MODEL_AUTHORED`` would go back to telling users what "the final synthesis"
+    did on runs where no model wrote one (#176). The caller is the layer that
+    knows — see
+    :func:`product_app.synthesis.build_agreement_and_positions`.
     """
     focus = _focus_phrase(debate_outputs)
     by_slot = {alignment.slot_number: alignment for alignment in alignments}
@@ -772,7 +837,9 @@ def build_position_movements(
         alignment = by_slot.get(answer.slot_number)
         opening = _opening_synopsis(answer.answer_text)
         after_round_1, final, revised, revision_note = _stance_texts(
-            alignment=alignment, focus=focus
+            alignment=alignment,
+            focus=focus,
+            final_answer_provenance=final_answer_provenance,
         )
         movements.append(
             PositionMovement(
@@ -805,36 +872,122 @@ class _StanceCopy:
     revision_note: str | None
 
 
-#: One row of honest copy per alignment state — the single source of truth for
-#: the stance narration. The classifier's booleans collapse to an
-#: :class:`AlignmentState` (via :attr:`ModelAlignment.state`), which indexes
-#: here, so the copy and the honesty of the note can never drift from the
-#: classification.
-_STANCE_COPY: dict[AlignmentState, _StanceCopy] = {
-    AlignmentState.NO_ANSWER: _StanceCopy(
-        after_round_1="No usable answer was returned, so there is no round-1 stance to place.",
-        final="No final stance; this model's answer was unavailable.",
-        revised=False,
-        revision_note=None,
+#: The opening-side narration. It describes how the model's OWN answer
+#: clustered against the other openings, which is observed the same way however
+#: the final answer was produced — so it is keyed by state alone and shared by
+#: both provenances rather than written out twice.
+_OPENING_COPY: dict[AlignmentState, str] = {
+    AlignmentState.NO_ANSWER: (
+        "No usable answer was returned, so there is no round-1 stance to place."
     ),
-    AlignmentState.HELD_WITH_CONSENSUS: _StanceCopy(
-        after_round_1="Opening clustered with the majority reading on {focus}.",
+    AlignmentState.HELD_WITH_CONSENSUS: "Opening clustered with the majority reading on {focus}.",
+    AlignmentState.MOVED_TO_CONSENSUS: "Opening clustered as a minority reading on {focus}.",
+    AlignmentState.HELD_MINORITY: "Opening clustered as a minority reading on {focus}.",
+}
+
+#: A model that returned nothing has no stance to place, and this copy asserts
+#: nothing about a final answer — so it is the same row under both
+#: provenances rather than two identical literals that could drift apart.
+_NO_ANSWER_COPY = _StanceCopy(
+    after_round_1=_OPENING_COPY[AlignmentState.NO_ANSWER],
+    final="No final stance; this model's answer was unavailable.",
+    revised=False,
+    revision_note=None,
+)
+
+#: One row of honest copy per (provenance, alignment state) — the single source
+#: of truth for the stance narration. The classifier's booleans collapse to an
+#: :class:`AlignmentState` (via :attr:`ModelAlignment.state`), and the caller
+#: supplies the :class:`FinalAnswerProvenance` from the same expression the
+#: classifier branches on, so the copy can never drift from the classification.
+#:
+#: WHY the second key exists (#176, measured 2026-07-30 at ``12cf402``). Every
+#: string below used to name "the final synthesis" as the thing that kept a
+#: model in the consensus or left it out. On a run where NO model wrote a final
+#: answer, that sentence is false, and it was served on two shapes reachable in
+#: production:
+#:
+#: * a TEMPLATED synthesis — this product wrote all five sections after the
+#:   synthesis model failed. Since #171 finding 5 alignment is explicitly NOT
+#:   derived from that text; the narration claimed it anyway, once per model.
+#: * NO synthesis at all — missing or failed. Here the old copy was worse: with
+#:   a "strong" panel the minority row read "Aligns with the group consensus in
+#:   the final synthesis", naming a final synthesis that does not exist.
+#:
+#: The replacement narrates only what IS observed — how the opening clustered,
+#: whether the row is counted inside the consensus, and that the final answer
+#: was not what placed it. It describes the PLACEMENT, not the synthesis: see
+#: :class:`FinalAnswerProvenance` for the mixed (``"fallback"``) run on which a
+#: sentence about the synthesis's authorship would itself be false.
+#:
+#: All eight rows exist. ``(NOT_MODEL_AUTHORED, MOVED_TO_CONSENSUS)`` is
+#: reachable — the no-synthesis strong panel reaches it, and
+#: ``test_a_revised_row_still_carries_a_note_when_no_model_wrote_the_final_answer``
+#: exercises it. What is unreachable, measured 2026-07-30 by enumerating the
+#: provenance x alignment grid, is that row via a TEMPLATED or MIXED synthesis
+#: specifically: refusing the final text sends a minority to
+#: ``final_aligned = False``, so it can never be ``revised``. An earlier draft
+#: of this comment called the row itself "measured unreachable", which its own
+#: parenthesis contradicted — a reachability claim is a measurement and this
+#: one was written from memory.
+#: ``test_stance_copy_covers_every_provenance_and_alignment_state`` pins the
+#: count, so the lookup cannot raise ``KeyError`` in a served path.
+_STANCE_COPY: dict[tuple[FinalAnswerProvenance, AlignmentState], _StanceCopy] = {
+    (FinalAnswerProvenance.MODEL_AUTHORED, AlignmentState.NO_ANSWER): _NO_ANSWER_COPY,
+    (FinalAnswerProvenance.NOT_MODEL_AUTHORED, AlignmentState.NO_ANSWER): _NO_ANSWER_COPY,
+    # --- a model wrote the final answer: the narration may describe it -------
+    (FinalAnswerProvenance.MODEL_AUTHORED, AlignmentState.HELD_WITH_CONSENSUS): _StanceCopy(
+        after_round_1=_OPENING_COPY[AlignmentState.HELD_WITH_CONSENSUS],
         final="Opened with, and the final synthesis keeps it in, the group consensus.",
         revised=False,
         revision_note=None,
     ),
-    AlignmentState.MOVED_TO_CONSENSUS: _StanceCopy(
-        after_round_1="Opening clustered as a minority reading on {focus}.",
+    (FinalAnswerProvenance.MODEL_AUTHORED, AlignmentState.MOVED_TO_CONSENSUS): _StanceCopy(
+        after_round_1=_OPENING_COPY[AlignmentState.MOVED_TO_CONSENSUS],
         final="Aligns with the group consensus in the final synthesis.",
         revised=True,
         revision_note=(
             "Opened as a minority view; the final synthesis reflects the group consensus."
         ),
     ),
-    AlignmentState.HELD_MINORITY: _StanceCopy(
-        after_round_1="Opening clustered as a minority reading on {focus}.",
+    (FinalAnswerProvenance.MODEL_AUTHORED, AlignmentState.HELD_MINORITY): _StanceCopy(
+        after_round_1=_OPENING_COPY[AlignmentState.HELD_MINORITY],
         final=(
             "Opened in the minority; the final synthesis leaves it outside the group consensus."
+        ),
+        revised=False,
+        revision_note=None,
+    ),
+    # --- no model-written final answer: narrate the opening and the count ----
+    (FinalAnswerProvenance.NOT_MODEL_AUTHORED, AlignmentState.HELD_WITH_CONSENSUS): _StanceCopy(
+        after_round_1=_OPENING_COPY[AlignmentState.HELD_WITH_CONSENSUS],
+        final=(
+            "Opened with, and is counted inside, the group consensus. That placement "
+            "reads the panel's own answers; no model-written final answer was used to "
+            "make it."
+        ),
+        revised=False,
+        revision_note=None,
+    ),
+    (FinalAnswerProvenance.NOT_MODEL_AUTHORED, AlignmentState.MOVED_TO_CONSENSUS): _StanceCopy(
+        after_round_1=_OPENING_COPY[AlignmentState.MOVED_TO_CONSENSUS],
+        final=(
+            "Opened in the minority, and is counted inside the group consensus. That "
+            "placement reads the panel's own answers; no model-written final answer was "
+            "used to make it."
+        ),
+        revised=True,
+        revision_note=(
+            "Opened as a minority view and is counted inside the group consensus. That "
+            "placement reads the panel's own answers; no model-written final answer was "
+            "used to make it."
+        ),
+    ),
+    (FinalAnswerProvenance.NOT_MODEL_AUTHORED, AlignmentState.HELD_MINORITY): _StanceCopy(
+        after_round_1=_OPENING_COPY[AlignmentState.HELD_MINORITY],
+        final=(
+            "Opened in the minority, and is counted outside the group consensus. No "
+            "model-written final answer was used to make that placement."
         ),
         revised=False,
         revision_note=None,
@@ -846,16 +999,18 @@ def _stance_texts(
     *,
     alignment: ModelAlignment | None,
     focus: str,
+    final_answer_provenance: FinalAnswerProvenance,
 ) -> tuple[str, str, bool, str | None]:
     """Return ``(after_round_1, final, revised, revision_note)`` for one model.
 
-    Pure lookup on the model's :class:`AlignmentState` — no branching logic
-    lives here, so the copy stays in lockstep with the classification. Every
-    string is an inference from opening-vs-final alignment; none claims a
-    mid-debate action.
+    Pure lookup on the model's :class:`AlignmentState` and the run's
+    :class:`FinalAnswerProvenance` — no branching logic lives here, so the copy
+    stays in lockstep with the classification. Every string is an inference
+    from opening-vs-final alignment; none claims a mid-debate action, and none
+    claims what a final synthesis did unless a model wrote one.
     """
     state = alignment.state if alignment is not None else AlignmentState.NO_ANSWER
-    copy = _STANCE_COPY[state]
+    copy = _STANCE_COPY[(final_answer_provenance, state)]
     return (
         copy.after_round_1.format(focus=focus),
         copy.final,
@@ -880,6 +1035,7 @@ __all__ = [
     "DebateRoundEvent",
     "DebateRoundStatus",
     "FOCUS_AREAS",
+    "FinalAnswerProvenance",
     "InMemoryDebateEventRecorder",
     "ModelAlignment",
     "PositionMovement",

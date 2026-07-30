@@ -37,6 +37,7 @@ from product_app.debate import (
     DEBATE_ROUND_MAX_TOKENS,
     AgreementSummary,
     DebateOutput,
+    FinalAnswerProvenance,
     PositionMovement,
     build_position_movements,
     summarize_agreement,
@@ -1225,10 +1226,28 @@ def build_agreement_and_positions(
     live or simulated is already surfaced by
     ``QueryRunResultResponse.demo_mode``.
     """
+    model_authored_final_text = _final_synthesis_alignment_text(final_synthesis)
+    # The number and the sentence are read off ONE value (#176). The classifier
+    # compares an opening against final-answer CONTENT only when this text is
+    # non-empty, and the stance narration may name "the final synthesis" only in
+    # exactly that case, so the provenance is derived from the same value here
+    # rather than re-derived from ``final_synthesis``.
+    #
+    # That makes drift unlikely, NOT impossible, and this comment claimed
+    # "cannot" until adversarial review measured otherwise: the emptiness test
+    # is spelled out twice, here and inside ``classify_model_alignment``.
+    # Mutating the classifier's branch alone was demonstrated to move the number
+    # while the sentence stayed put — caught by the two number-side tests, not by
+    # the narration test. Nothing asserts the two expressions agree.
+    final_answer_provenance = (
+        FinalAnswerProvenance.MODEL_AUTHORED
+        if (model_authored_final_text or "").strip()
+        else FinalAnswerProvenance.NOT_MODEL_AUTHORED
+    )
     alignments = classify_model_alignment(
         initial_answers,
         debate_outputs,
-        model_authored_final_text=_final_synthesis_alignment_text(final_synthesis),
+        model_authored_final_text=model_authored_final_text,
         final_answer_was_templated=_final_synthesis_was_templated(final_synthesis),
     )
     agreement = summarize_agreement(initial_answers=initial_answers, alignments=alignments)
@@ -1236,6 +1255,7 @@ def build_agreement_and_positions(
         initial_answers=initial_answers,
         debate_outputs=debate_outputs,
         alignments=alignments,
+        final_answer_provenance=final_answer_provenance,
     )
     return agreement, positions
 
