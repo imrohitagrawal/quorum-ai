@@ -59,6 +59,7 @@
     ],
     "final_synthesis": {
       "status": "completed",
+      "synthesis_mode": "live",
       "consensus": "All four models agree: store session tokens in an httpOnly, Secure, SameSite cookie rather than localStorage. A token in web storage is readable by page script, so one XSS bug becomes session theft; the httpOnly flag removes that read entirely, as the session-management cheat sheet and the web-storage reference both state.",
       "disagreement": "No material disagreement. The models differ only in how much they foreground CSRF, which every answer addresses by adding SameSite.",
       "source_support": "Two sources carried the answer across all four slots: the session-management cheat sheet and the web-storage API reference. Every claim traces to one of them.",

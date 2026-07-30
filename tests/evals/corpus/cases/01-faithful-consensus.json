@@ -57,6 +57,7 @@
     ],
     "final_synthesis": {
       "status": "completed",
+      "synthesis_mode": "live",
       "consensus": "All four models land in the same place. Modern identity guidance has moved away from calendar-based password expiry; scheduled expiry for human passwords is now treated as an anti-pattern by the two bodies most organisations cite; dropping the fixed rotation interval is the mainstream position; and the interval-based reset requirement has been withdrawn from the guidance most teams follow. The published guidance replaces it with an evidence-of-compromise trigger plus breach-corpus screening at the moment a secret is set [1] [2].",
       "disagreement": "There is no material disagreement on the substance. The models differ only in emphasis: two foreground the second-factor control set, two foreground the help-desk and behavioural cost of forced rotation.",
       "source_support": "Three sources carried the load across all four answers: the digital identity guidelines, the application-security cheat sheet, and the one-time-password specification at [RFC 6238](https://www.rfc-editor.org/rfc/rfc6238). Every claim above traces to one of them.",

@@ -12,8 +12,10 @@ Zero I/O, zero paid calls, no judge.
 from __future__ import annotations
 
 import importlib.util
+import json
 import sys
 from pathlib import Path
+from typing import Any
 
 import pytest
 
@@ -107,3 +109,97 @@ def test_evaluation_is_deterministic_and_carries_no_prose(case: object) -> None:
         )
     if case.final_synthesis is not None:  # type: ignore[attr-defined]
         assert case.final_synthesis.consensus[:40] not in serialized  # type: ignore[attr-defined]
+
+
+# --- #171 finding 5: the corpus must DECLARE who wrote each synthesis -------
+
+
+def _raw_case(case_id: str) -> dict[str, Any]:
+    """The on-disk JSON for one case, so these tests operate on the real
+    fixture rather than a hand-built stand-in that could drift from it."""
+    for path in sorted((Path(__file__).resolve().parent / "corpus" / "cases").glob("*.json")):
+        raw: dict[str, Any] = json.loads(path.read_text())
+        if raw["case_id"] == case_id:
+            return raw
+    raise AssertionError(f"no corpus case {case_id!r}")
+
+
+def test_every_case_declares_a_valid_synthesis_mode() -> None:
+    """The positive partner for the two rejection tests below: every case on
+    disk really does carry a ``synthesis_mode``, and it is one of the modes the
+    product can emit.
+
+    Since #171 finding 5, WHO WROTE the synthesis decides whether per-model
+    alignment may compare an opening against it, so this key feeds the
+    ``agreement`` figure every case in this gate is evaluated with.
+
+    The value of this test is the CARDINALITY below, not membership. Membership
+    is already enforced by ``corpus/loader.py`` at import time — ``CASES =
+    corpus.load_cases()`` runs at module scope — so an invalid mode never
+    reaches this function, and an ``in SYNTHESIS_MODES`` assertion here could
+    not fail. Adversarial review demonstrated exactly that, and it has been
+    removed rather than left as decoration. What this test adds is that the
+    corpus exercises BOTH sides of the line the #171 fix draws.
+
+    What turns it red — and this mutation RUNS, it does not break collection:
+    change case 05's declared mode from ``simulated`` to ``live``; the corpus
+    then has no templated case, and
+    ``sum(... if m != SYNTHESIS_MODE_LIVE) >= 1`` fails with ``assert 0 >= 1``.
+    The first draft's stated mutation (delete the key from a case file) raised
+    ``KeyError`` inside ``load_cases()`` during collection, so the test never
+    executed — proving nothing, which is ``AGENTS.md`` rule 6's trap.
+    """
+    from product_app.synthesis import SYNTHESIS_MODE_LIVE
+
+    declared = {}
+    for case_id in CASE_IDS:
+        raw = _raw_case(case_id)
+        synthesis = raw["run"]["final_synthesis"]
+        assert synthesis is not None, f"{case_id}: this test presumes a synthesis"
+        declared[case_id] = synthesis["synthesis_mode"]
+
+    # The corpus must cover both alignment paths: at least one case whose
+    # synthesis a model wrote, and at least one it did not.
+    assert sum(1 for m in declared.values() if m == SYNTHESIS_MODE_LIVE) >= 1
+    assert sum(1 for m in declared.values() if m != SYNTHESIS_MODE_LIVE) >= 1
+
+
+def test_a_case_that_omits_synthesis_mode_is_refused() -> None:
+    """A missing ``synthesis_mode`` must RAISE, not default.
+
+    ``FinalSynthesis.synthesis_mode`` defaults to ``"simulated"``, so a silent
+    default here would quietly drop a case's synthesis-aware alignment and
+    change the ``agreement`` number this gate evaluates — with every assertion
+    still green. Loud is the requirement.
+
+    What turns it red: change ``raw["synthesis_mode"]`` to
+    ``raw.get("synthesis_mode", "live")`` in ``corpus/loader.py`` — no
+    exception is raised and ``pytest.raises`` fails. (That mutation RUNS: the
+    loader still imports, so this test executes and fails on its own
+    assertion.)
+    """
+    raw = _raw_case("faithful-consensus")
+    without_mode = dict(raw["run"]["final_synthesis"])
+    del without_mode["synthesis_mode"]
+    answers = [corpus._answer(item) for item in raw["run"]["initial_answers"]]
+
+    with pytest.raises(KeyError, match="synthesis_mode"):
+        corpus._synthesis(without_mode, answers)
+
+
+def test_a_case_declaring_an_unknown_synthesis_mode_is_refused() -> None:
+    """A value the product cannot emit must RAISE too — otherwise a typo like
+    ``"Live"`` would sail through and be treated as "not live", silently taking
+    the fallback path.
+
+    What turns it red: delete the ``if synthesis_mode not in SYNTHESIS_MODES``
+    check from ``corpus/loader.py``; the bogus value is accepted and
+    ``pytest.raises`` fails.
+    """
+    raw = _raw_case("faithful-consensus")
+    bogus = dict(raw["run"]["final_synthesis"])
+    bogus["synthesis_mode"] = "Live"
+    answers = [corpus._answer(item) for item in raw["run"]["initial_answers"]]
+
+    with pytest.raises(ValueError, match="synthesis_mode"):
+        corpus._synthesis(bogus, answers)

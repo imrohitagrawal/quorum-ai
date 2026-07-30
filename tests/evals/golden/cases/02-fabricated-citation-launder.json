@@ -59,6 +59,7 @@
     ],
     "final_synthesis": {
       "status": "completed",
+      "synthesis_mode": "live",
       "consensus": "The four answers agree that enforced 90-day rotation produces a large, measured reduction in account takeover, roughly 40 to 66 percent depending on the companion control.",
       "disagreement": "The point estimates differ but the direction and magnitude are treated as settled across all four.",
       "source_support": "The answers cite numbered references and external study URLs throughout.",

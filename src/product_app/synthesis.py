@@ -82,6 +82,30 @@ from product_app.untrusted_text import UNTRUSTED_DATA_SYSTEM_RULE, fence
 #: badge it instead — prose is not a metadata channel.
 TEMPLATED_FALLBACK_PREFIX = ""
 
+#: The three values ``FinalSynthesis.synthesis_mode`` can take. Named constants
+#: rather than bare literals because since #171 finding 5 the value is READ as
+#: well as written — ``_final_synthesis_alignment_text`` refuses a synthesis
+#: this product wrote — and a producer/consumer drift on a spelling would
+#: silently restore the defect rather than fail. Both sites now spell it once,
+#: here. The strings themselves are part of the served API
+#: (``openapi.yaml``) and the browser reads them (``app.js`` compares against
+#: ``"live"`` and ``"fallback"``), so their VALUES are fixed even though the
+#: names are new.
+#:
+#: ``"live"`` = all five sections came back from the model with usable text.
+#: ``"fallback"`` = 1 to 4 did (a MIXED run; it does not record which).
+#: ``"simulated"`` = none did, so every section is this product's template.
+SYNTHESIS_MODE_LIVE = "live"
+SYNTHESIS_MODE_FALLBACK = "fallback"
+SYNTHESIS_MODE_SIMULATED = "simulated"
+
+#: Every value :data:`FinalSynthesis.synthesis_mode` can hold, as a set, so a
+#: test can cover all of them without retyping the members (``AGENTS.md`` rule
+#: 7a). Derived from the three constants above, never listed independently.
+SYNTHESIS_MODES: frozenset[str] = frozenset(
+    {SYNTHESIS_MODE_LIVE, SYNTHESIS_MODE_FALLBACK, SYNTHESIS_MODE_SIMULATED}
+)
+
 HIGH_STAKES_NOTICE_FRAGMENT = (
     "This summary is decision support only and is not medical, legal, "
     "financial, safety, or regulated professional advice."
@@ -263,7 +287,7 @@ class FinalSynthesis(BaseModel):
     high_stakes_notice: str | None
     citation_coverage: CitationCoverage
     quality_checks: SynthesisQualityChecks
-    synthesis_mode: str = "simulated"
+    synthesis_mode: str = SYNTHESIS_MODE_SIMULATED
 
 
 @dataclass(frozen=True)
@@ -577,11 +601,11 @@ class SynthesisOrchestrationService:
             if live is not None and live.answer_text.strip()
         )
         synthesis_mode = (
-            "live"
+            SYNTHESIS_MODE_LIVE
             if live_text_sections == 5
-            else "fallback"
+            else SYNTHESIS_MODE_FALLBACK
             if live_text_sections > 0
-            else "simulated"
+            else SYNTHESIS_MODE_SIMULATED
         )
 
         synthesis = FinalSynthesis(
@@ -1099,17 +1123,86 @@ class SynthesisOrchestrationService:
 
 def _final_synthesis_alignment_text(final_synthesis: FinalSynthesis | None) -> str | None:
     """The substantive final-answer text used to test per-model alignment: the
-    consensus plus the recommendation of a COMPLETED synthesis.
+    consensus plus the recommendation of a COMPLETED synthesis, **and only when
+    a model wrote them.**
 
-    Returns ``None`` when there is no completed synthesis to compare against
-    (missing, or ``status != COMPLETED``), in which case alignment falls back
-    to the panel-strength inference rather than comparing openings to a failure
-    placeholder.
+    Returns ``None`` when there is nothing model-authored to compare against, in
+    which case alignment falls back to the panel-strength inference (derived
+    from the models' own openings and the debate critiques) rather than
+    comparing openings to text this product wrote. Three cases return ``None``:
+    a missing synthesis, one whose ``status != COMPLETED``, and — since #171
+    finding 5 — one whose sections are Quorum's own template.
+
+    ``synthesis_mode`` is the orchestrator's own account of who wrote the five
+    sections (``synthesis.py`` computes it from which sections came back with
+    usable live text). Only ``"live"`` means every section is the model's, so
+    only ``"live"`` yields a text a model authored. ``"fallback"`` is a MIXED
+    run — 1 to 4 sections live — and it does not say WHICH, so it cannot
+    establish that the consensus and the recommendation specifically are the
+    model's; a mixed text is contaminated evidence, not partial evidence, so it
+    is refused whole.
+
+    Why this is not cosmetic (#171 finding 5, reproduced at ``9c60bc3``): with
+    a templated synthesis this function handed ``classify_model_alignment``
+    Quorum's own weak-consensus boilerplate, which ends "Some models disagreed
+    on points; treat the consensus as a working hypothesis, not a verdict." A
+    minority answer whose own prose echoed that generic advisory language
+    matched 12 of its 25 opening 4-grams against it — 48%, against a 10%
+    containment threshold — and was counted as landing in the final answer. The
+    served run read ``live_count`` 4, ``failed_steps`` empty, ``demo_mode``
+    false and ``agreement`` 3 of 4, and the third of those three was granted by
+    this product's own words about an outlier it had never read.
     """
     if final_synthesis is None or final_synthesis.status is not SynthesisStatus.COMPLETED:
         return None
+    if final_synthesis.synthesis_mode != SYNTHESIS_MODE_LIVE:
+        return None
+    # KNOWN LIMIT, deliberately not fixed here — filed as #180.
+    #
+    # "live" means a model wrote all five sections. It does NOT mean every word
+    # is the model's own choice: ``_RECOMMENDATION_PROMPT`` rule 1 dictates the
+    # decision-support caveat verbatim, ``_CaveatEnforcer`` appends it when the
+    # model omits it, and ``_CONSENSUS_PROMPT`` invites the model to quote
+    # phrases from answers that may carry it. That sentence is long enough to
+    # clear the containment threshold on its own, so an answer sharing nothing
+    # with the panel but the ordinary disclaimer can still be counted aligned.
+    #
+    # This is PRE-EXISTING — reachable on ``main`` today for ANY completed
+    # synthesis — and the guard above strictly NARROWS it, to live syntheses
+    # only. It is not made worse here.
+    #
+    # Three attempts to close it in this pull request were each broken by
+    # adversarial review, which is why it is filed rather than patched again:
+    # stripping at the caveat marker deleted the model's own prose; stripping by
+    # sentence missed the consensus section and every punctuation variant; and
+    # subtracting the caveat's 4-grams from the comparison was incomplete
+    # against paraphrases, was half a provable no-op, and was pinned only by a
+    # test built from the same constant it subtracted.
+    #
+    # #180 also records the WIDER door none of those touched, which is the one
+    # worth closing: ``opening_majority`` short-circuits ``final_aligned = True``
+    # without ever running the containment test, and the clustering primitive
+    # behind it excludes no boilerplate either — so four unrelated answers that
+    # merely open with the disclaimer are served as "strong consensus, 4 of 4".
+    # Closing that means deciding what counts as boilerplate in general, which
+    # needs a measurement rather than a judgement.
     text = " ".join(p for p in (final_synthesis.consensus, final_synthesis.recommendation) if p)
     return text or None
+
+
+def _final_synthesis_was_templated(final_synthesis: FinalSynthesis | None) -> bool:
+    """Is there a COMPLETED final answer on the screen that a model did NOT write?
+
+    Distinct from ``_final_synthesis_alignment_text(...) is None``, which is
+    also true when there is no final answer at all. ``classify_model_alignment``
+    needs the two apart: a failed synthesis keeps the pre-existing
+    panel-strength inference, while a templated one must not align a minority,
+    because the inference says yes to every minority on a ``"strong"`` panel and
+    would report a model as having moved to a consensus no model authored.
+    """
+    if final_synthesis is None or final_synthesis.status is not SynthesisStatus.COMPLETED:
+        return False
+    return final_synthesis.synthesis_mode != SYNTHESIS_MODE_LIVE
 
 
 def build_agreement_and_positions(
@@ -1135,7 +1228,8 @@ def build_agreement_and_positions(
     alignments = classify_model_alignment(
         initial_answers,
         debate_outputs,
-        final_synthesis_text=_final_synthesis_alignment_text(final_synthesis),
+        model_authored_final_text=_final_synthesis_alignment_text(final_synthesis),
+        final_answer_was_templated=_final_synthesis_was_templated(final_synthesis),
     )
     agreement = summarize_agreement(initial_answers=initial_answers, alignments=alignments)
     positions = build_position_movements(

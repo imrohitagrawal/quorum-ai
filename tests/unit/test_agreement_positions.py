@@ -29,11 +29,17 @@ from product_app.query_runs import (
     _result_response,
 )
 from product_app.synthesis import (
+    SYNTHESIS_MODE_LIVE,
+    SYNTHESIS_MODE_SIMULATED,
+    SYNTHESIS_MODES,
     FinalSynthesis,
     SynthesisQualityChecks,
     SynthesisStatus,
+    _final_synthesis_alignment_text,
+    _final_synthesis_was_templated,
     build_agreement_and_positions,
 )
+from product_app.synthesis_consensus import compute_consensus_strength
 
 FOCUS = ["disagreement", "weak_support", "missing_reasoning"]
 
@@ -87,11 +93,21 @@ def _synthesis(
     *,
     recommendation: str = "",
     status: SynthesisStatus = SynthesisStatus.COMPLETED,
+    synthesis_mode: str = SYNTHESIS_MODE_LIVE,
 ) -> FinalSynthesis:
     """Minimal COMPLETED FinalSynthesis whose consensus/recommendation carry the
     final-answer content that per-model alignment is compared against.
+
+    ``synthesis_mode`` defaults to ``"live"`` — a MODEL wrote these sections —
+    because that is what every caller here means by "the final answer". It is
+    spelled out rather than left to ``FinalSynthesis``'s own ``"simulated"``
+    default because since #171 finding 5 the two are no longer interchangeable:
+    alignment refuses to compare an opening against a synthesis this product
+    templated, so a helper that silently produced a templated one would make
+    every synthesis-aware test below measure the fallback path instead.
     """
     return FinalSynthesis(
+        synthesis_mode=synthesis_mode,
         status=status,
         consensus=consensus,
         disagreement="",
@@ -211,6 +227,183 @@ def test_unrelated_minority_absent_from_final_is_not_counted_aligned() -> None:
     slot4 = next(p for p in positions if p.slot_number == 4)
     assert slot4.revised is False
     assert slot4.revision_note is None
+
+
+def test_only_a_live_synthesis_supplies_the_text_alignment_is_measured_against() -> None:
+    """#171 finding 5, at the seam: ``_final_synthesis_alignment_text`` hands over
+    the consensus + recommendation for a ``"live"`` synthesis and ``None`` for
+    every other mode, because only ``"live"`` means a model wrote all five
+    sections. ``"fallback"`` is a MIXED run that does not record WHICH sections
+    were live, so it cannot establish that these two specifically are the
+    model's.
+
+    Covers EVERY mode by iterating :data:`SYNTHESIS_MODES` rather than listing
+    the members (``AGENTS.md`` rule 7a), so adding a fourth mode fails here
+    until someone decides which side of the line it falls on. The count
+    assertions below are the cardinality that makes that real: exactly one mode
+    yields the text and exactly ``len(SYNTHESIS_MODES) - 1`` yield ``None``, so
+    a guard that returned ``None`` for everything — which would satisfy every
+    individual ``is None`` — fails.
+
+    What turns it red: drop the ``synthesis_mode != SYNTHESIS_MODE_LIVE`` guard
+    from ``_final_synthesis_alignment_text`` and all three modes return the
+    text, so ``len(yields_text)`` reads 3, not 1.
+    """
+    assert len(SYNTHESIS_MODES) >= 2, "a one-value set could not distinguish anything"
+
+    consensus = "The posted load limit is the operative constraint."
+    recommendation = "Verify the posting before crossing."
+    by_mode = {
+        mode: _final_synthesis_alignment_text(
+            _synthesis(consensus, recommendation=recommendation, synthesis_mode=mode)
+        )
+        for mode in sorted(SYNTHESIS_MODES)
+    }
+
+    yields_text = {mode: text for mode, text in by_mode.items() if text is not None}
+    assert len(yields_text) == 1, f"exactly one mode may supply the text, got {yields_text}"
+    assert set(yields_text) == {SYNTHESIS_MODE_LIVE}
+    # Positive partner for the Nones: the one mode that DOES yield text yields
+    # the real thing, both sections, not an empty string.
+    assert yields_text[SYNTHESIS_MODE_LIVE] == f"{consensus} {recommendation}"
+
+    # A value outside SYNTHESIS_MODES fails CLOSED. ``synthesis_mode`` is a bare
+    # ``str`` on the model with no validator, so an unknown value is
+    # constructible, and the check must be exact equality rather than anything
+    # looser. Adversarial review landed a mutant here: rewriting the guard as
+    # ``SYNTHESIS_MODE_LIVE not in final_synthesis.synthesis_mode`` — a
+    # SUBSTRING test — passed all seven new tests and 150 others, because every
+    # canonical value either is "live" or does not contain it. "not-live" does
+    # contain it, and is the value that tells the two apart.
+    assert "not-live" not in SYNTHESIS_MODES
+    assert (
+        _final_synthesis_alignment_text(
+            _synthesis(consensus, recommendation=recommendation, synthesis_mode="not-live")
+        )
+        is None
+    ), "an unrecognised mode is not a model-authored synthesis"
+    assert _final_synthesis_was_templated(_synthesis(consensus, synthesis_mode="not-live")), (
+        "and it must be treated as templated, not as an absent synthesis"
+    )
+
+
+def test_a_templated_synthesis_does_not_decide_which_models_aligned() -> None:
+    """#171 finding 5, at the verdict ring: the SAME panel and the SAME final
+    text yield a different aligned count depending only on WHO WROTE that text.
+
+    The minority's opening is quoted inside the final answer, so when a model
+    wrote it the minority genuinely landed and is counted. When this product
+    templated it, the match is against Quorum's own words about an answer it
+    never read, so the minority is not counted and alignment falls back to the
+    panel-strength inference.
+
+    The assertion is the DIFFERENCE, which is the cardinality no single-mode
+    implementation can satisfy: 3 aligned with a model-written final answer, 2
+    with a templated one, from identical answers and identical prose.
+
+    The panel is TWO clustered answers plus two distinct ones, not three plus
+    one, and the ``strength`` assertion below is why that matters rather than
+    being an arbitrary choice. Three identical answers clear
+    ``_has_strong_overlap``'s "3 of 4 with 2+ partners" bar on their own, which
+    makes the fallback ``"strong"`` and aligns the minority regardless of the
+    synthesis — so the first draft of this test read 4 both ways and proved
+    nothing. Pinning ``strength != "strong"`` means a future change to the
+    overlap heuristic reds this test instead of quietly restoring that.
+
+    What turns it red: drop the ``synthesis_mode != SYNTHESIS_MODE_LIVE`` guard
+    from ``_final_synthesis_alignment_text`` and both branches read 3, so the
+    ``templated.aligned == 2`` assertion fails.
+    """
+    majority = "The tunnel option is best because it avoids the flood plain entirely."
+    unrelated = "Seasonal bird counts in the estuary have risen for six years running."
+    minority = "A bridge could work if reinforced against seasonal flooding downstream."
+    answers = [
+        _answer(1, majority),
+        _answer(2, majority),
+        _answer(3, unrelated),
+        _answer(4, minority),
+    ]
+    # No convergence keyword either, so neither route to "strong" is open.
+    debate = _debate("The panel weighed both options.")
+    assert compute_consensus_strength(answers, debate) != "strong", (
+        "the panel-strength fallback must not align the minority by itself, or "
+        "this test cannot see what the synthesis decided"
+    )
+    final_text = f"{majority} {minority}"
+
+    live, live_positions = build_agreement_and_positions(
+        initial_answers=answers,
+        debate_outputs=debate,
+        final_synthesis=_synthesis(final_text, synthesis_mode=SYNTHESIS_MODE_LIVE),
+    )
+    templated, templated_positions = build_agreement_and_positions(
+        initial_answers=answers,
+        debate_outputs=debate,
+        final_synthesis=_synthesis(final_text, synthesis_mode=SYNTHESIS_MODE_SIMULATED),
+    )
+
+    assert live.total == templated.total == 4
+    assert live.aligned == 3, "a model wrote the final answer and it quotes the minority"
+    assert templated.aligned == 2, "this product wrote it, so it cannot vouch for the minority"
+    # WHICH slot moved, not just how many: slot 4, and only slot 4.
+    assert [p.slot_number for p in live_positions if p.revised] == [4]
+    assert [p.slot_number for p in templated_positions if p.revised] == []
+
+
+def test_a_templated_synthesis_does_not_align_a_minority_on_a_strong_panel() -> None:
+    """Refusing the templated text must not hand the decision to a branch that
+    says yes to everybody.
+
+    Found by adversarial review of the first fix, and it was a REGRESSION that
+    fix introduced. Returning ``None`` for a templated synthesis routed the
+    minority to the panel-strength fallback, which aligns EVERY minority when
+    the panel is ``"strong"`` — no content check at all. On the product's most
+    ordinary panel shape (three of four models saying the same thing) that is
+    the INFLATING direction: measured 3 of 4 before the fix, 4 of 4 after it,
+    with slot 4 additionally flipped to ``revised`` — a manufactured claim that
+    a model changed its mind, on a synthesis no model wrote.
+
+    So "no model-authored final answer" now has two distinct meanings and they
+    are not interchangeable:
+
+    * the synthesis is ABSENT or failed — there is no final answer on screen at
+      all, and the panel-strength inference stands (pre-existing, unchanged,
+      pinned by ``test_minority_that_aligns_is_marked_revised_with_an_inference_note``);
+    * the synthesis is TEMPLATED — a confident-looking final answer IS on
+      screen and this product wrote it. Whether the model's position landed in
+      it is unobservable, so it is not counted.
+
+    The strength assertion is the precondition that makes this test mean
+    something: on a NON-strong panel both branches already agree, so the test
+    would pass without measuring anything.
+
+    What turns it red: delete the ``elif final_answer_was_templated`` branch
+    from ``classify_model_alignment`` and the templated run falls through to
+    ``strength == "strong"``, so ``aligned`` reads 4 and ``revised`` reads [4].
+    """
+    answers = [
+        _answer(1, _AGREE_TEXT),
+        _answer(2, _AGREE_TEXT),
+        _answer(3, _AGREE_TEXT),
+        _answer(4, "An unrelated claim about zebra migration patterns in autumn."),
+    ]
+    debate = _debate("After round 2 the models converged on the load-limit reading.")
+    assert compute_consensus_strength(answers, debate) == "strong", (
+        "this test exists for the strong panel; on any other the fallback and "
+        "the refusal already agree and nothing is being measured"
+    )
+    # A final answer that is the majority reading — the zebra opening is not in it.
+    templated, positions = build_agreement_and_positions(
+        initial_answers=answers,
+        debate_outputs=debate,
+        final_synthesis=_synthesis(_AGREE_TEXT, synthesis_mode=SYNTHESIS_MODE_SIMULATED),
+    )
+
+    assert templated.total == 4
+    assert templated.aligned == 3, "the three clustered openers, and not the outlier"
+    assert [p.slot_number for p in positions if p.revised] == [], (
+        "no model may be reported as having moved to a consensus this product wrote"
+    )
 
 
 def test_minority_whose_opening_lands_in_final_is_marked_revised() -> None:

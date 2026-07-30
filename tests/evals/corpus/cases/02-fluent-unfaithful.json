@@ -57,6 +57,7 @@
     ],
     "final_synthesis": {
       "status": "completed",
+      "synthesis_mode": "live",
       "consensus": "All four models land in the same place. The evidence against calendar-based expiry is now quantitative; scheduled expiry for human passwords is an anti-pattern, and the numbers are not close; dropping the fixed rotation interval is the mainstream position; and the interval-based reset requirement has been withdrawn from the guidance most teams follow. A 90-day mandate costs roughly 27 to 31 percent in additional credential-stuffing success, while breach screening plus a phishing-resistant second factor delivers a 62 percent reduction in account takeover [7] [31].",
       "disagreement": "There is no material disagreement. The models differ only in which cohort they weight most heavily when quoting the effect size.",
       "source_support": "The panel drew on the pooled cohort analysis, the sector benchmark ([Sector Benchmark 2024](https://www.enisa.europa.eu/publications/rotation-sector-benchmark-2024)) and the authenticator efficacy review [15]. Every figure above traces to one of those three.",

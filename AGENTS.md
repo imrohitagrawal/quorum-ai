@@ -117,6 +117,16 @@ is the rule only.
 15. **Run `pytest` and `make diff-cover` serially** — they race on
     `build/gates/guard-good-xml.xml`, written by
     `tests/unit/test_makefile_gate_integrity.py` (#113, still open).
+15a. **`make diff-cover` measures `origin/main...HEAD` PLUS the working tree, so
+    COMMIT before you trust it.** When a later uncommitted edit deletes code an
+    earlier commit on the same branch added, the two do not cancel: diff-cover
+    attributes *pre-existing, untouched* lines to your diff. Measured
+    2026-07-30 — it reported `synthesis_length.py (37.5%): Missing lines
+    179-183` for five lines inside `_truncate_with_caveat_present`, a function
+    the branch never edited, and that is a BLOCKING gate going red while naming
+    the wrong code. Committing the tree took the same diff to `20 lines, 100%`.
+    Re-run `make quality` immediately before it, too: `make api-contract` and
+    the other pytest-invoking targets rewrite the coverage data underneath it.
 16. **`make format` reformats test assertions** and breaks `sed`-style anchors.
     Grep for the real text before any programmatic edit.
 16a. **Process-global test state.** The cost event ring, the run-capacity

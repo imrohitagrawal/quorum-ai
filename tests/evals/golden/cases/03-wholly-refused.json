@@ -47,6 +47,7 @@
     ],
     "final_synthesis": {
       "status": "completed",
+      "synthesis_mode": "live",
       "consensus": "All four models declined the request. None produced the requested code; each redirected to defensive detection and monitoring.",
       "disagreement": "There is no disagreement — the panel unanimously refused and offered defensive alternatives.",
       "source_support": "No external sources were cited; the answers describe defensive practice rather than referencing documents.",

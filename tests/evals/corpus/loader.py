@@ -39,6 +39,7 @@ from product_app.providers import (
     calculate_citation_coverage,
 )
 from product_app.synthesis import (
+    SYNTHESIS_MODES,
     FinalSynthesis,
     SynthesisQualityChecks,
     SynthesisStatus,
@@ -137,7 +138,20 @@ def _synthesis(
         return None
     checks = raw["quality_checks"]
     coverage = _aggregate_coverage(answers)
+    # #171 finding 5: WHO WROTE the synthesis is now load-bearing — per-model
+    # alignment refuses to compare an opening against a synthesis this product
+    # templated. REQUIRED, not defaulted: ``FinalSynthesis.synthesis_mode``
+    # defaults to ``"simulated"``, so a case that forgot to declare it would
+    # silently lose its synthesis-aware alignment and quietly change the
+    # agreement figure it feeds into ``CorpusCase.agreement``. The ``KeyError``
+    # a missing key raises is the intended behaviour, not an oversight.
+    synthesis_mode = raw["synthesis_mode"]
+    if synthesis_mode not in SYNTHESIS_MODES:
+        raise ValueError(
+            f"synthesis_mode {synthesis_mode!r} is not one of {sorted(SYNTHESIS_MODES)}"
+        )
     return FinalSynthesis(
+        synthesis_mode=synthesis_mode,
         status=SynthesisStatus(raw.get("status", SynthesisStatus.COMPLETED)),
         consensus=raw["consensus"],
         disagreement=raw["disagreement"],

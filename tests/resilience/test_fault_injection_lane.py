@@ -43,7 +43,7 @@ from decimal import Decimal
 from email.message import Message
 from typing import Any
 from urllib.error import HTTPError
-from uuid import uuid4
+from uuid import UUID, uuid4
 
 import pytest
 from fastapi.testclient import TestClient
@@ -67,6 +67,7 @@ from product_app.query_runs import (
     query_run_repository,
 )
 from product_app.safety import WARNING_VERSION, WarningType
+from product_app.synthesis_consensus import compute_consensus_strength
 
 _FAKE_KEY = "sk-or-v1-fault-injection-not-a-real-key"
 
@@ -422,13 +423,13 @@ def _faulted_model_collides_with_no_moderator() -> None:
     )
 
 
-def _drive_full_run(client: TestClient) -> dict[str, Any]:
+def _drive_full_run(client: TestClient, model_ids: list[str] | None = None) -> dict[str, Any]:
     account_id = uuid4()
     create = client.post(
         "/v1/query-runs",
         json={
             "query_text": "Compare durable storage options for a small team",
-            "model_slots": _MIXED_MODEL_IDS,
+            "model_slots": model_ids if model_ids is not None else _MIXED_MODEL_IDS,
             "safety_acknowledgements": [
                 {"warning_type": WarningType.SENSITIVE_DATA, "version": WARNING_VERSION},
             ],
@@ -873,3 +874,331 @@ def test_a_demo_run_still_simulates_every_slot(monkeypatch: pytest.MonkeyPatch) 
         "asserts is zero, so it must be findable here"
     )
     assert served.count(LOCAL_SIMULATION_URL_PREFIX) == 4
+
+
+# ---------------------------------------------------------------------------
+# #171 finding 5 — the MODERATOR fault. Every participant answers; the
+# SYNTHESIS falls back to its template. Nothing is missing, nothing is
+# simulated, no step failed — and the verdict ring is nonetheless decided by
+# this product's own words.
+#
+# The pair below is the whole point: the two runs are IDENTICAL except for who
+# wrote the five synthesis sections. Same four participants, same four openings,
+# same debate, same query. Only the author of the final answer differs, and the
+# aligned count differs with it.
+# ---------------------------------------------------------------------------
+
+#: Four priced catalog participants, none of which is a moderator model — so
+#: faulting a moderator leaves all four participants answering. Asserted, not
+#: assumed: see ``_participants_collide_with_no_moderator``.
+_MODERATOR_FREE_PARTICIPANTS = [
+    "google/gemini-2.5-flash",
+    "google/gemini-2.5-flash-lite",
+    "nvidia/nemotron-3-nano-30b-a3b",
+    "deepseek/deepseek-chat-v3.1",
+]
+
+#: Slots 1 and 2 share this, so they cluster as the majority.
+_PANEL_MAJORITY_TEXT = (
+    "Durable object storage with versioning enabled is the pragmatic default here, "
+    "because lifecycle rules and cross-region replication are operated by the "
+    "provider rather than by your own on-call rota [1]."
+)
+#: Slot 3 — a minority opener that neither the template nor the live synthesis
+#: mentions. The control: it must stay unaligned in BOTH runs, so the pair is
+#: measuring the synthesis's provenance and not "minorities got switched off".
+_PANEL_UNRELATED_TEXT = (
+    "Attach one block device to a single virtual machine and take nightly "
+    "snapshots into a separate billing account under a different root key [1]."
+)
+#: Slot 4 — the attack. Its first sentence is its own distinctive position; its
+#: second is lifted VERBATIM from the tail of Quorum's own weak-consensus
+#: template (``synthesis._build_consensus``'s ``else`` branch), which is exactly
+#: the kind of generic advisory sentence a real model emits unprompted.
+_PANEL_ECHOES_TEMPLATE_TEXT = (
+    "Encrypted tape archives stay the cheapest long-horizon medium at this scale. "
+    "Some models disagreed on points; treat the consensus as a working hypothesis, "
+    "not a verdict [1]."
+)
+#: The distinctive half of slot 4's opening. A LIVE synthesis that contains this
+#: has genuinely carried slot 4's position into the final answer.
+_SLOT_FOUR_OWN_POSITION = (
+    "Encrypted tape archives stay the cheapest long-horizon medium at this scale."
+)
+#: A moderator critique with no ``synthesis_consensus._CONVERGE_KEYWORDS`` in it.
+#: If the critique signalled convergence the panel would classify "strong", the
+#: panel-strength fallback would align the minority on its own, and the pair
+#: below would read the same number twice. Asserted in the tests via
+#: ``compute_consensus_strength``.
+_NEUTRAL_CRITIQUE = (
+    "The panel weighed retention cost against recovery time and the differences "
+    "between the four positions remain open."
+)
+
+_OPENING_BY_PARTICIPANT = {
+    _MODERATOR_FREE_PARTICIPANTS[0]: _PANEL_MAJORITY_TEXT,
+    _MODERATOR_FREE_PARTICIPANTS[1]: _PANEL_MAJORITY_TEXT,
+    _MODERATOR_FREE_PARTICIPANTS[2]: _PANEL_UNRELATED_TEXT,
+    _MODERATOR_FREE_PARTICIPANTS[3]: _PANEL_ECHOES_TEMPLATE_TEXT,
+}
+
+
+def _participants_collide_with_no_moderator() -> None:
+    """Fail loudly if a participant is also a moderator model.
+
+    Mirrors ``_faulted_model_collides_with_no_moderator`` for the inverse
+    scenario: there, the faulted participant must not be a moderator; here, NO
+    participant may be, because the fault targets the moderator and every
+    participant must still answer. Derived from ``settings`` rather than
+    retyped, so changing either setting reds this instead of quietly changing
+    the scenario under test.
+    """
+    for model_id in _MODERATOR_FREE_PARTICIPANTS:
+        assert config.settings.synthesis_model_id != model_id, (
+            f"participant {model_id} is also the synthesis model — faulting the "
+            "synthesis would take a participant down with it"
+        )
+        assert config.settings.debate_model_id != model_id, (
+            f"participant {model_id} is also the debate model — faulting the "
+            "debate would take a participant down with it"
+        )
+
+
+def _panel_envelope(content: str) -> bytes:
+    return json.dumps(
+        {
+            "choices": [
+                {
+                    "message": {
+                        "content": content,
+                        "annotations": [
+                            {"title": "Live evidence", "url": "https://live.example/evidence"}
+                        ],
+                    }
+                }
+            ],
+            "usage": {"prompt_tokens": 1000, "completion_tokens": 300, "total_tokens": 1300},
+        }
+    ).encode()
+
+
+def _panel_urlopen(synthesis_content: str | None) -> Callable[..., _FakeResponse]:
+    """Route each call by the model id in the POST body.
+
+    Participants always answer with their own opening; the debate moderator
+    always answers with the neutral critique. ``synthesis_content=None`` times
+    the SYNTHESIS moderator out, so all five sections fall back to their
+    template; a string makes it answer with that text.
+    """
+
+    def fake_urlopen(request: Any, timeout: float = 0) -> _FakeResponse:
+        payload = json.loads(request.data.decode())
+        model_id = str(payload.get("model", "")).split(":")[0]
+        if model_id == config.settings.synthesis_model_id:
+            if synthesis_content is None:
+                raise TimeoutError("synthesis moderator timed out")
+            return _FakeResponse(_panel_envelope(synthesis_content))
+        if model_id == config.settings.debate_model_id:
+            return _FakeResponse(_panel_envelope(_NEUTRAL_CRITIQUE))
+        return _FakeResponse(_panel_envelope(_OPENING_BY_PARTICIPANT[model_id]))
+
+    return fake_urlopen
+
+
+def _drive_moderator_fault_run(
+    monkeypatch: pytest.MonkeyPatch, *, synthesis_content: str | None
+) -> dict[str, Any]:
+    query_run_repository.clear()
+    _participants_collide_with_no_moderator()
+    _enable_live(monkeypatch, _panel_urlopen(synthesis_content))
+    monkeypatch.setattr(config.settings, "openrouter_api_key", _FAKE_KEY, raising=False)
+    monkeypatch.setattr(config.settings, "stage_delay_ms", 0, raising=False)
+    return _drive_full_run(TestClient(app), _MODERATOR_FREE_PARTICIPANTS)
+
+
+def _panel_preconditions(body: dict[str, Any]) -> None:
+    """The shape both runs of the pair share, asserted in both.
+
+    Every one of these holds in the DEFECTIVE build too — that is the point of
+    finding 5. A run in which the synthesis was never written by a model looks,
+    by every served signal except ``synthesis_mode``, like a complete live run.
+    """
+    answers = body["result"]["model_answers"]
+    assert len(answers) == 4
+    assert [a["status"] for a in answers] == [InitialAnswerStatus.COMPLETED] * 4
+    assert [a["provider_path"] for a in answers] == [ProviderPath.OPENROUTER_SEARCH] * 4
+    assert body["live_count"] == 4, "every participant answered live"
+    assert body["local_count"] == 0, "nothing was simulated"
+    assert body["demo_mode"] is False
+    assert body["failed_steps"] == [], "no stage reported a failure"
+    assert body["missing_steps"] == []
+    assert json.dumps(body).count(_FABRICATION_SENTENCE) == 0
+
+
+def test_a_templated_synthesis_does_not_decide_the_served_verdict_ring(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """#171 finding 5, end to end: four live answers, a TEMPLATED synthesis, and
+    the served ``agreement`` must not count a model the template vouched for.
+
+    Reproduced at ``9c60bc3`` before the fix, verbatim::
+
+        live_count 4  local_count 0  demo_mode False  failed_steps []
+        synthesis_mode 'simulated'
+        agreement {'aligned': 3, 'total': 4}
+        move slot 4 revised=True final='Aligns with the group consensus ...'
+
+    Slot 4's opening shares 12 of its 25 opening 4-grams with the templated
+    consensus — 48% against a 10% containment threshold — for the single reason
+    that it happens to repeat a sentence Quorum wrote. The run served "3 of 4
+    aligned" with nothing failed, nothing simulated and four live answers, and
+    the third of those three was granted by this product's own boilerplate
+    about an answer it had never read.
+
+    The assertions are cardinalities and every one of them is satisfiable by a
+    different wrong implementation:
+
+    * ``aligned`` is 2 — the two clustered majority openers and nobody else;
+    * exactly 0 slots are marked ``revised``;
+    * the panel strength is NOT "strong", so the fallback did not do this by
+      itself (without this the test could pass for the wrong reason);
+    * every precondition in ``_panel_preconditions`` still holds, so the fix
+      did not buy the number by degrading the run.
+
+    Its positive partner is
+    ``test_a_live_synthesis_still_carries_a_minority_into_the_verdict_ring``,
+    which drives the SAME panel with a model-written synthesis and gets 3 — so
+    ``aligned == 2`` here is not a guard that refuses every minority.
+
+    What turns it red: drop the ``synthesis_mode != SYNTHESIS_MODE_LIVE`` guard
+    from ``synthesis._final_synthesis_alignment_text``; the templated consensus
+    is handed to alignment again, slot 4 is counted, and ``aligned`` reads 3.
+    """
+    body = _drive_moderator_fault_run(monkeypatch, synthesis_content=None)
+
+    _panel_preconditions(body)
+    assert body["result"]["final_synthesis"]["synthesis_mode"] == "simulated", (
+        "the premise: no section came back from the model"
+    )
+    # The templated consensus really is the text that used to decide this, and
+    # slot 4's borrowed sentence really is in it. Asserted so the scenario
+    # cannot rot into a run where the echo is absent and the zero below is free.
+    consensus = body["result"]["final_synthesis"]["consensus"]
+    assert "treat the consensus as a working hypothesis, not a verdict" in consensus
+    assert "treat the consensus as a working hypothesis, not a verdict" in (
+        _PANEL_ECHOES_TEMPLATE_TEXT
+    )
+
+    run = query_run_repository.get(UUID(body["query_run_id"]))
+    assert compute_consensus_strength(run.initial_answers, run.debate_outputs) != "strong", (
+        "a 'strong' panel would align the minority through the panel-strength "
+        "fallback, and this test would pass without measuring the synthesis"
+    )
+
+    assert body["result"]["agreement"] == {"aligned": 2, "total": 4}
+    revised = [m for m in body["result"]["position_movements"] if m["revised"]]
+    assert len(revised) == 0, f"no model may be counted as moved by a template: {revised}"
+
+
+def test_a_live_synthesis_still_carries_a_minority_into_the_verdict_ring(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The positive partner. Same panel, same openings, same debate — but the
+    synthesis moderator ANSWERS, and its final answer carries slot 4's own
+    position. Slot 4 is then counted aligned, and marked ``revised``.
+
+    This is what stops the fix above from being "never align a minority". The
+    only difference between the two runs is who wrote the five sections; the
+    aligned count differs by exactly one, and it is slot 4 that differs.
+
+    Slot 3 is the control inside this test: its opening is in neither
+    synthesis, so it stays unaligned here as well — proving the live synthesis
+    aligns the model it actually quoted rather than every minority.
+
+    Note which assertions are PINS. ``aligned == 3`` does NOT move under the
+    fix: with a live synthesis, ``_final_synthesis_alignment_text`` returns the
+    same text before and after. It is here as the paired positive, not as a
+    bite proof.
+
+    What turns it red: make ``_final_synthesis_alignment_text`` return ``None``
+    unconditionally (rather than only for a non-live mode) — the panel-strength
+    fallback is "weak" here, so slot 4 stops being counted and ``aligned``
+    drops to 2, collapsing the pair to one number.
+    """
+    body = _drive_moderator_fault_run(monkeypatch, synthesis_content=_SLOT_FOUR_OWN_POSITION)
+
+    _panel_preconditions(body)
+    assert body["result"]["final_synthesis"]["synthesis_mode"] == "live", (
+        "the premise: all five sections came back from the model"  # PIN
+    )
+    assert _SLOT_FOUR_OWN_POSITION in body["result"]["final_synthesis"]["consensus"]
+
+    run = query_run_repository.get(UUID(body["query_run_id"]))
+    assert compute_consensus_strength(run.initial_answers, run.debate_outputs) != "strong"
+
+    assert body["result"]["agreement"] == {"aligned": 3, "total": 4}  # PIN
+    revised = [m["slot_number"] for m in body["result"]["position_movements"] if m["revised"]]
+    assert revised == [4], "the model whose position the synthesis actually carried"
+
+
+#: A panel where THREE participants cluster — the product's ordinary shape, and
+#: the one that classifies ``"strong"``. Slot 4 is the outlier.
+_STRONG_OPENING_BY_PARTICIPANT = {
+    _MODERATOR_FREE_PARTICIPANTS[0]: _PANEL_MAJORITY_TEXT,
+    _MODERATOR_FREE_PARTICIPANTS[1]: _PANEL_MAJORITY_TEXT,
+    _MODERATOR_FREE_PARTICIPANTS[2]: _PANEL_MAJORITY_TEXT,
+    _MODERATOR_FREE_PARTICIPANTS[3]: _PANEL_UNRELATED_TEXT,
+}
+
+
+def test_a_templated_synthesis_on_a_strong_panel_invents_no_alignment(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The regression the FIRST version of this fix introduced, pinned at the
+    served-API level. Found by adversarial review, not by me.
+
+    Refusing the templated text is only half the job: it left the minority
+    falling through to the panel-strength inference, which aligns EVERY
+    minority once the panel is ``"strong"`` — three of four models agreeing,
+    the ordinary case. Measured on this exact scenario: 3 of 4 before the
+    original #171 fix, **4 of 4 after it**, with slot 4 additionally flipped to
+    ``revised``. The browser renders that as "4 of 4 models aligned · 1 revised
+    their position" (``app.js``), a manufactured claim that a model changed its
+    mind, on a synthesis no model wrote. The fix made its own target worse.
+
+    Slot 4 answers about single-VM block devices while the other three answer
+    about provider-operated object storage; its position is in neither the
+    panel nor the templated synthesis.
+
+    Asserted as cardinalities:
+
+    * ``aligned`` is 3 — the three clustered openers, and not the outlier;
+    * exactly 0 slots are ``revised``;
+    * the panel really IS ``"strong"``, so the run exercises the branch that
+      was wrong rather than passing for an unrelated reason;
+    * ``_panel_preconditions`` still holds — four live answers, nothing
+      simulated, no failed step — so the number was not bought by degrading
+      the run.
+
+    What turns it red: delete the ``elif final_answer_was_templated`` branch
+    from ``classify_model_alignment``; the minority falls through to
+    ``strength == "strong"``, ``aligned`` reads 4 and one slot reads
+    ``revised``.
+    """
+    monkeypatch.setitem(
+        _OPENING_BY_PARTICIPANT, _MODERATOR_FREE_PARTICIPANTS[2], _PANEL_MAJORITY_TEXT
+    )
+    body = _drive_moderator_fault_run(monkeypatch, synthesis_content=None)
+
+    _panel_preconditions(body)
+    assert body["result"]["final_synthesis"]["synthesis_mode"] == "simulated"
+
+    run = query_run_repository.get(UUID(body["query_run_id"]))
+    assert compute_consensus_strength(run.initial_answers, run.debate_outputs) == "strong", (
+        "this test exists for the strong panel; on any other the panel-strength "
+        "fallback and the templated refusal already agree"
+    )
+
+    assert body["result"]["agreement"] == {"aligned": 3, "total": 4}
+    revised = [m["slot_number"] for m in body["result"]["position_movements"] if m["revised"]]
+    assert revised == [], f"no model moved to a consensus this product wrote: {revised}"

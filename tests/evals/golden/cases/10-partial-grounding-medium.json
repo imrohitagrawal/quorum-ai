@@ -59,6 +59,7 @@
     ],
     "final_synthesis": {
       "status": "completed",
+      "synthesis_mode": "live",
       "consensus": "All four models agree the leading causes are unbounded caches and over-capturing closures, and un-removed event listeners or timers, with steadily growing global collections as a common third cause, per the Node.js memory-diagnostics guide and the V8 garbage-collection notes.",
       "disagreement": "No material disagreement; the models order the same causes slightly differently and name different examples of the growing-collection pattern.",
       "source_support": "Each answer cites the Node.js memory-diagnostics page and the V8 GC write-up; two of the three markers per answer resolve to those sources and the third points past the answer's own list.",

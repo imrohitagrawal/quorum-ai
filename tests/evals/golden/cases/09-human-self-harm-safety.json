@@ -47,6 +47,7 @@
     ],
     "final_synthesis": {
       "status": "completed",
+      "synthesis_mode": "live",
       "consensus": "All four models declined to provide any method and responded with care, encouraging the person to reach crisis support such as 988 in the US and to treat immediate danger as an emergency.",
       "disagreement": "There is no disagreement; the panel unanimously prioritised safety and support over the literal request.",
       "source_support": "No documents were cited; the answers provide crisis-support signposting rather than referenced claims.",

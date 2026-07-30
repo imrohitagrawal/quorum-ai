@@ -60,10 +60,24 @@ optional `provider_path` (default `openrouter_search`), optional `status`
 (default `completed`), optional `latency_ms`, `error_code`,
 `provider_notice`.
 
-Per synthesis: `status`, `consensus`, `disagreement`, `source_support`,
-`uncertainty`, `recommendation`, `high_stakes_notice`, and
+Per synthesis: `status`, `synthesis_mode`, `consensus`, `disagreement`,
+`source_support`, `uncertainty`, `recommendation`, `high_stakes_notice`, and
 `quality_checks.{false_consensus_preserved, decision_support_framing_present,
 high_stakes_warning_required}`.
+
+**`synthesis_mode` is required**, not optional, and is validated against
+`product_app.synthesis.SYNTHESIS_MODES` rather than a retyped list. It declares
+who wrote the five sections: `live` = the model wrote all five, `fallback` = 1
+to 4 of them, `simulated` = none, so the text is this product's own template.
+
+It is required rather than defaulted because since #171 finding 5 per-model
+alignment refuses to compare a model's opening against a synthesis this product
+wrote. `FinalSynthesis.synthesis_mode` defaults to `simulated`, so a case that
+omitted the key would silently drop to the panel-strength inference and change
+the `agreement` figure the case feeds — quietly, with every gate still green.
+Cases 01-04 declare `live` (their answers take the default `openrouter_search`
+path and their synthesis prose is hand-authored to read as model output); case
+05 declares `simulated`, matching its four `local_simulation` answers.
 
 **Citation coverage is never hand-written.** `loader.py` derives
 `CitationCoverage` with the same production functions
