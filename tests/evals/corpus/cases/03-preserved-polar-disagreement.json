@@ -55,6 +55,7 @@
     ],
     "final_synthesis": {
       "status": "completed",
+      "synthesis_mode": "live",
       "consensus": "The panel agrees on the mechanism and on the population in which harm concentrates: benefit is plausible and trial-supported for people managed without insulin or sulfonylureas, and the hypoglycaemia risk for those medications is the dominant adverse-event signal [1] [2].",
       "disagreement": "The panel is split two against two on the framing, and the split is material rather than semantic. Two models would offer time-restricted eating as a conditional option inside a structured programme; two would withhold it as a default suggestion outside supervision, on the grounds that the trials screened and medicated their populations first. Neither side disputes the other's evidence - they weight the unselected-population risk differently.",
       "source_support": "Both positions rest on the same two sources: the randomised trial synthesis and [the ADA nutrition standards](https://diabetesjournals.org/care/article/47/Supplement_1/S77). No model introduced evidence the others did not see.",

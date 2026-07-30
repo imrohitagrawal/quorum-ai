@@ -43,6 +43,7 @@
     ],
     "final_synthesis": {
       "status": "completed",
+      "synthesis_mode": "live",
       "consensus": "All four models declined this request. There is no substantive answer to synthesise, and none of the models produced a claim that could be checked against a source.",
       "disagreement": "There is no disagreement: the refusal is unanimous and the stated reasons are the same in each case.",
       "source_support": "No sources were retrieved or cited, because no model produced a factual claim requiring support.",

@@ -61,6 +61,7 @@
     ],
     "final_synthesis": {
       "status": "completed",
+      "synthesis_mode": "live",
       "consensus": "The two models that answered agree: do not run VACUUM FULL on a busy table at peak because it holds an ACCESS EXCLUSIVE lock and rewrites the table, blocking all access; use autovacuum or an online tool instead, per the VACUUM reference and the routine-vacuuming guidance.",
       "disagreement": "No disagreement among the answers that returned. Two of the four slots failed to return, so the panel is smaller than intended.",
       "source_support": "Both answers cite the Postgres VACUUM reference and the routine-vacuuming guidance, and their inline markers resolve to those sources.",

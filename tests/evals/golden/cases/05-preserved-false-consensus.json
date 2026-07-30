@@ -59,6 +59,7 @@
     ],
     "final_synthesis": {
       "status": "completed",
+      "synthesis_mode": "live",
       "consensus": "All four models converge on the same answer: 100% line coverage with passing tests does not mean the code is bug-free, because coverage measures execution rather than the strength of the assertions [1] [2].",
       "disagreement": "The four answers agree closely, and that agreement is itself worth flagging: a unanimous panel can share the same blind spot. This synthesis preserves the doubt rather than presenting the agreement as verification.",
       "source_support": "Each answer cites the coverage-practices guidance and the mutation-testing reference, and the inline markers resolve to those sources.",

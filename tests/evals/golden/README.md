@@ -65,5 +65,16 @@ Each `cases/NN-name.json` file:
 | `notes` | Why the case exists and what it exercises. |
 | `run.initial_answers` / `run.final_synthesis` | The real-shaped run. Coverage and agreement are DERIVED by the loader (reusing the S2 corpus primitives), never hand-written. |
 
+`run.final_synthesis.synthesis_mode` is **required** and validated against
+`product_app.synthesis.SYNTHESIS_MODES` — the S2 corpus loader these cases reuse
+enforces it (see `tests/evals/corpus/README.md` for why). All ten cases declare
+`live`: every one takes the default `openrouter_search` path on at least one
+answer, and each `final_synthesis` is hand-authored to read as model output.
+Declaring it matters because since #171 finding 5 per-model alignment refuses to
+compare an opening against a synthesis this product templated, so the field
+feeds the `agreement` figure each case is evaluated with. Measured on
+2026-07-30: declaring all ten `live` leaves every case's `agreement` and all ten
+pilot verdicts byte-identical to `9c60bc3`.
+
 A `correctness` field is forbidden and rejected by the loader — subject-matter
 labels belong only in the operator queue.

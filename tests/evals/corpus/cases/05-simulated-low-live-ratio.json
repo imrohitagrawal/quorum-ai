@@ -56,6 +56,7 @@
     ],
     "final_synthesis": {
       "status": "completed",
+      "synthesis_mode": "simulated",
       "consensus": "The three simulated answers restate the same demo text, so there is no substantive agreement to report. Nothing in this run reflects a real model's position.",
       "disagreement": "No disagreement can be assessed: the answers are templated demo output rather than independent model responses.",
       "source_support": "Every source on this run is a local demo placeholder, not a retrieved document. No claim here is supported by real evidence.",

@@ -60,6 +60,7 @@
     ],
     "final_synthesis": {
       "status": "completed",
+      "synthesis_mode": "live",
       "consensus": "The three models that answered agree: target the most recent even-numbered Node.js line that is in Active LTS, read the exact version off the official release schedule because it changes over time, and avoid odd-numbered Current lines for production, per the Node.js releases page and the release-schedule repository.",
       "disagreement": "No disagreement among the answers that returned. One of the four slots failed, so this is a three-model view.",
       "source_support": "The answers cite the Node.js releases page and the release-schedule repository, and their inline markers resolve to those sources.",

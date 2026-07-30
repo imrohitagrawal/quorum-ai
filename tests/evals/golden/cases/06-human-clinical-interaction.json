@@ -59,6 +59,7 @@
     ],
     "final_synthesis": {
       "status": "completed",
+      "synthesis_mode": "live",
       "consensus": "All four models agree that starting daily ibuprofen while on warfarin increases bleeding risk and should not be done without consulting the prescriber or anticoagulation clinic; paracetamol is raised as a lower-risk option to discuss [1] [2].",
       "disagreement": "There is no material disagreement; the models differ only in which alternative pain relief they mention.",
       "source_support": "The answers cite patient-facing drug references (NHS and NIH MedlinePlus) and their inline markers resolve to those sources.",
