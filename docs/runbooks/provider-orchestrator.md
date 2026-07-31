@@ -227,7 +227,7 @@ A typical live query run emits four `provider_initial_answer_completed` events (
 
 ### 10. Forced provider failure (test hook) — class: CORR (test-only)
 
-- **Symptom.** A slot returns `status=FAILED`, `error_code="PROVIDER_UNAVAILABLE"` with the notice "This model's answer is unavailable because the request to the provider did not succeed."
+- **Symptom.** A slot returns `status=FAILED`, `error_code="PROVIDER_UNAVAILABLE"` with the notice "This model's answer is unavailable."
 - **Signal / alert.** This is triggered only by the magic phrase "force provider failure" in the query text (LOCAL environment only) or the `provider-failure` marker in `model_id`. It is a test hook, not a real failure.
 - **Blast radius.** Only the test run is affected. Production cannot trigger this path — the phrase is gated on `runtime_environment == LOCAL`, and `model_id` is operator-curated.
 - **Resume / recovery.** N/A — this is a deliberate test path. Remove the trigger phrase or model marker.
