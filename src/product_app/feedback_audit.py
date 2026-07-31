@@ -62,6 +62,12 @@ class ProviderStats:
     total_calls: int
     fallback_count: int
     simulation_count: int
+    #: #177: calls whose slot came back missing — a
+    #: ``provider_initial_answer_failed`` event. Since #171 a live-call
+    #: failure keeps ``provider_path=openrouter_search`` (the same path a
+    #: healthy call uses), so this cannot be read off ``provider_path``; it
+    #: must come from ``event_type``.
+    failed_count: int
     avg_duration_ms: float
     p95_duration_ms: float
 
@@ -163,6 +169,13 @@ def _aggregate_provider(events: Iterable[Any]) -> dict[str, ProviderStats]:
             total_calls=len(model_events),
             fallback_count=sum(1 for p in provider_paths if "fallback" in p.lower()),
             simulation_count=sum(1 for p in provider_paths if "local_simulation" in p.lower()),
+            # #177: NOT derivable from ``provider_path`` — a failed live call
+            # keeps ``provider_path=openrouter_search``, identical to a
+            # healthy one. ``event_type`` is the only field that carries the
+            # distinction.
+            failed_count=sum(
+                1 for e in model_events if e.event_type == "provider_initial_answer_failed"
+            ),
             avg_duration_ms=statistics.fmean(durations) if durations else 0.0,
             p95_duration_ms=_quantile(durations, 0.95),
         )
