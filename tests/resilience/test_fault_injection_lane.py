@@ -1202,3 +1202,174 @@ def test_a_templated_synthesis_on_a_strong_panel_invents_no_alignment(
     assert body["result"]["agreement"] == {"aligned": 3, "total": 4}
     revised = [m["slot_number"] for m in body["result"]["position_movements"] if m["revised"]]
     assert revised == [], f"no model moved to a consensus this product wrote: {revised}"
+
+
+# ---------------------------------------------------------------------------
+# #171 finding 5, the DEBATE half. The synthesis half (above) shipped first —
+# ``FinalSynthesis.synthesis_mode`` and the ``final_answer_was_templated`` guard
+# in ``classify_model_alignment``. The debate side of the same finding was left
+# open: ``DebateOutput`` had no field saying whether a round was produced by a
+# live moderator call or by ``debate.py``'s own local heuristic, and the notice
+# ``_debate_fallback_notice`` built for that case (``fallback_messages``) was
+# appended to a local list and never read again — not returned on
+# ``DebateResult``, not folded into ``provider_failure_notices``, nothing. A run
+# where all four participants and the synthesis model answer live, but the
+# debate MODERATOR call fails on both rounds, served every signal a genuinely
+# complete live run serves — ``live_count`` 4, ``demo_mode`` False, no failed or
+# missing step — while the two debate critiques on screen were entirely
+# Quorum's own template, indistinguishable from a real moderator's output.
+# ---------------------------------------------------------------------------
+
+
+def _debate_fault_urlopen(*, debate_content: str | None) -> Callable[..., _FakeResponse]:
+    """Route each call by model id. Participants and the synthesis model always
+    answer live; the debate moderator times out on both rounds when
+    ``debate_content`` is ``None``, or answers with that text otherwise.
+    """
+
+    def fake_urlopen(request: Any, timeout: float = 0) -> _FakeResponse:
+        payload = json.loads(request.data.decode())
+        model_id = str(payload.get("model", "")).split(":")[0]
+        if model_id == config.settings.debate_model_id:
+            if debate_content is None:
+                raise TimeoutError("debate moderator timed out")
+            return _FakeResponse(_panel_envelope(debate_content))
+        if model_id == config.settings.synthesis_model_id:
+            return _FakeResponse(_panel_envelope("A live synthesis paragraph [1]."))
+        return _FakeResponse(_panel_envelope(f"A grounded live answer from {model_id} [1]."))
+
+    return fake_urlopen
+
+
+def _drive_debate_fault_run(
+    monkeypatch: pytest.MonkeyPatch, *, debate_content: str | None
+) -> dict[str, Any]:
+    query_run_repository.clear()
+    _participants_collide_with_no_moderator()
+    _enable_live(monkeypatch, _debate_fault_urlopen(debate_content=debate_content))
+    monkeypatch.setattr(config.settings, "openrouter_api_key", _FAKE_KEY, raising=False)
+    monkeypatch.setattr(config.settings, "stage_delay_ms", 0, raising=False)
+    return _drive_full_run(TestClient(app), _MODERATOR_FREE_PARTICIPANTS)
+
+
+def test_a_templated_debate_round_reports_its_own_provenance(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """#171 finding 5, the debate half. Reproduced before the fix, verbatim::
+
+        live_count 4  local_count 0  demo_mode False  failed_steps []
+        debate_outputs[0] -> KeyError: 'debate_mode'  (the field does not exist)
+        provider_failure_notices []
+
+    Every served signal except the debate transcript's own words said this was
+    a complete live run. Nothing distinguished the two on-screen critiques from
+    a real moderator's output.
+
+    Asserted as cardinalities, not a clean-path outcome:
+
+    * exactly 2 of 2 debate rounds report ``debate_mode == "fallback"`` — not
+      "the run degraded somehow", but specifically which rounds and how many;
+    * the four participants and the synthesis are still fully live —
+      ``_panel_preconditions``-equivalent for the debate case, so the number
+      was not bought by degrading an unrelated stage.
+
+    ``provider_failure_notices == []`` is a PIN, not an oversight: the shared
+    notices list is populated only from initial-answer failures
+    (``query_runs.py``'s ``provider_failure_notices`` comprehension), and this
+    run has none — folding the debate's own fallback into that list would
+    conflate two different signals and, since live execution defaults OFF,
+    would surface on nearly every existing demo-mode test. The structural
+    ``debate_mode`` field is the fix in scope here; routing it to a shared
+    notice surface is a separate, larger decision left alone.
+
+    What turns it red: delete the ``debate_mode=`` argument from either
+    ``DebateOutput(...)`` construction in ``run_debate_rounds`` (reverting to
+    the pre-fix constructor call). The field either vanishes from the response
+    (``KeyError``) or reverts to the Pydantic default, and the assertion below
+    fails on the literal value rather than an exception.
+    """
+    body = _drive_debate_fault_run(monkeypatch, debate_content=None)
+
+    answers = body["result"]["model_answers"]
+    assert len(answers) == 4
+    assert [a["status"] for a in answers] == [InitialAnswerStatus.COMPLETED] * 4
+    assert body["live_count"] == 4, "every participant answered live"
+    assert body["local_count"] == 0, "nothing was simulated"
+    assert body["demo_mode"] is False
+    assert body["failed_steps"] == [], "no stage reported a failure"
+    assert body["missing_steps"] == []
+    assert body["result"]["final_synthesis"]["synthesis_mode"] == "live"
+
+    debate_outputs = body["result"]["debate_outputs"]
+    assert len(debate_outputs) == 2, "both rounds still ran, just not live"
+    assert [round_["debate_mode"] for round_ in debate_outputs] == ["fallback", "fallback"], (
+        "both rounds fell back to the local template; neither made it into a live call"
+    )
+    assert body.get("provider_failure_notices") == [], (  # PIN — see docstring
+        "the debate's own fallback is not routed to the shared notices list"
+    )
+
+
+def test_an_unfaulted_debate_reports_live_provenance(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Positive partner to the test above: when the debate moderator succeeds,
+    both rounds report ``debate_mode == "live"``, not the fallback default.
+
+    Without this pair, a defective fix that just hardcodes ``"fallback"`` on
+    every ``DebateOutput`` would still pass the faulted test above.
+    """
+    body = _drive_debate_fault_run(monkeypatch, debate_content=_NEUTRAL_CRITIQUE)
+
+    debate_outputs = body["result"]["debate_outputs"]
+    assert len(debate_outputs) == 2
+    assert [round_["debate_mode"] for round_ in debate_outputs] == ["live", "live"]
+    assert body["live_count"] == 4
+    assert body["demo_mode"] is False
+
+
+def test_a_round_that_recovers_reports_its_own_provenance_per_round(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Round-scoped, not run-scoped: round 1 times out, round 2 (a fresh call
+    to the same moderator model) succeeds. ``debate_mode`` must read
+    ``["fallback", "live"]``, not the same value copied onto both rounds.
+
+    Both prior tests here only exercise a UNIFORM outcome across the two
+    rounds (both fallback, or both live) — a defective fix that computed one
+    ``debate_mode`` value once and stamped it on every ``DebateOutput`` would
+    still pass both of them. This is the scenario that catches that: the
+    orchestrator calls the SAME ``debate_model_id`` twice (round 1, then round
+    2), independently, and each call's own outcome must decide its own round's
+    field — never the other round's.
+
+    What turns it red: compute a single ``debate_mode`` before round 1 runs
+    and reuse it for round 2's ``DebateOutput`` too (instead of the separate
+    ``round_one_mode``/``round_two_mode`` locals). The result flips to
+    ``["fallback", "fallback"]`` and this test fails on the second element.
+    """
+    call_count = {"debate": 0}
+
+    def fake_urlopen(request: Any, timeout: float = 0) -> _FakeResponse:
+        payload = json.loads(request.data.decode())
+        model_id = str(payload.get("model", "")).split(":")[0]
+        if model_id == config.settings.debate_model_id:
+            call_count["debate"] += 1
+            if call_count["debate"] == 1:
+                raise TimeoutError("debate moderator timed out on round 1 only")
+            return _FakeResponse(_panel_envelope(_NEUTRAL_CRITIQUE))
+        if model_id == config.settings.synthesis_model_id:
+            return _FakeResponse(_panel_envelope("A live synthesis paragraph [1]."))
+        return _FakeResponse(_panel_envelope(f"A grounded live answer from {model_id} [1]."))
+
+    query_run_repository.clear()
+    _participants_collide_with_no_moderator()
+    _enable_live(monkeypatch, fake_urlopen)
+    monkeypatch.setattr(config.settings, "openrouter_api_key", _FAKE_KEY, raising=False)
+    monkeypatch.setattr(config.settings, "stage_delay_ms", 0, raising=False)
+    body = _drive_full_run(TestClient(app), _MODERATOR_FREE_PARTICIPANTS)
+
+    assert call_count["debate"] == 2, "both rounds must call the debate moderator independently"
+    debate_outputs = body["result"]["debate_outputs"]
+    assert len(debate_outputs) == 2
+    assert [round_["debate_mode"] for round_ in debate_outputs] == ["fallback", "live"], (
+        "round 1's failure must not be copied onto round 2's genuinely live call"
+    )

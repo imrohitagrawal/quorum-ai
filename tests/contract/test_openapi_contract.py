@@ -97,7 +97,11 @@ def test_debate_output_fields_are_current() -> None:
     The stale spec declared ``contributing_models``/``latency_ms``/
     ``provider_notice`` (which do not exist on the model) and a wrong
     ``required`` list; the real model is
-    ``{round_number, focus_areas, critique_text, status}``.
+    ``{round_number, focus_areas, critique_text, status, debate_mode}``.
+    ``debate_mode`` (#171 finding 5) is the per-round structural provenance —
+    ``"live"`` or ``"fallback"`` — added so a templated debate round can be
+    told apart from a real moderator's output; it carries a default so it
+    stays out of ``required``.
     """
     spec = yaml.safe_load(OPENAPI_PATH.read_text(encoding="utf-8"))
     debate = spec["components"]["schemas"]["DebateOutput"]
@@ -106,6 +110,7 @@ def test_debate_output_fields_are_current() -> None:
         "focus_areas",
         "critique_text",
         "status",
+        "debate_mode",
     }
     for phantom in ("contributing_models", "latency_ms", "provider_notice"):
         assert phantom not in debate["properties"], (
