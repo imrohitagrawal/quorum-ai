@@ -223,10 +223,14 @@ def test_partial_live_with_some_failed_does_not_ask_to_enable(harness: str) -> N
     assert "enable live execution" not in result["message"], result
     assert "2 returned nothing" in result["message"], result
     assert "The synthesis below" in result["message"], result
-    # readinessState "live": the startup probe's key passed, so the specific
-    # instruction is checking the provider/account, never "enable" (already on).
+    # readinessState "live": the startup probe's key passed, so the missing
+    # slots are NOT attributed to "enable live execution" (already on) — but
+    # nor is a specific provider cause asserted, since a "live" readiness
+    # state says nothing about whether THIS run's gap is a provider issue, a
+    # cancel, or the run deadline (round 1 review finding).
     assert result["message"].endswith(
-        "Ask the operator to check the provider's status and this deployment's account credit."
+        "Ask the operator to check whether this reflects a provider or account "
+        "issue, a cancelled run, or the run's time limit."
     ), result
 
 

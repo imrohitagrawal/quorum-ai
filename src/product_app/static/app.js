@@ -2264,7 +2264,14 @@
       return "Ask the operator to add the provider key and restart.";
     }
     if (readinessState === "live") {
-      return "Ask the operator to check the provider's status and this deployment's account credit.";
+      // Round 1 review: naming "the provider's status and account credit" as
+      // THE cause overclaims. ``readinessState: "live"`` means the STARTUP
+      // probe's key check passed — it says nothing about why THIS run has a
+      // missing slot, which is just as often a mid-run cancel or the run
+      // deadline as a live provider/account problem. Neutral about cause,
+      // matching the message body above it (and ``describePanelShortfall``,
+      // which never names a cause for a missing slot either).
+      return "Ask the operator to check whether this reflects a provider or account issue, a cancelled run, or the run's time limit.";
     }
     return "Ask the operator to enable live execution to run against real models.";
   }

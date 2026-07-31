@@ -144,9 +144,7 @@ def test_result_endpoint_projects_provider_failure_notice_without_secrets() -> N
 
     assert response.status_code == 200
     body = response.json()
-    assert body["provider_failure_notices"] == [
-        ("This model's answer is unavailable because the request to the provider did not succeed.")
-    ]
+    assert body["provider_failure_notices"] == ["This model's answer is unavailable."]
     assert body["status"] == "partial"
     assert body["result"]["debate_outputs"] == []
     assert body["failed_steps"] == [

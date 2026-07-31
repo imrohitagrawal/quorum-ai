@@ -211,15 +211,21 @@ NOTICE_DEMO_MODE = (
     "real model answer."
 )
 # #176: "did not return a usable response" claimed the provider responded.
-# It is the production copy for DNS failure, connection refused, 401, 402 and
-# 429 (``_failed_answer`` — see its call sites in ``_post_messages`` /
-# ``produce_initial_answer``) — cases where the request never reached the
-# model at all, or was refused before any generation happened. Its deleted
-# predecessor's own comment said explicitly: "it must not claim the model was
-# asked." Neither must this one claim a response arrived.
-NOTICE_PROVIDER_UNAVAILABLE = (
-    "This model's answer is unavailable because the request to the provider did not succeed."
-)
+# It is the production copy for at least SIX distinct shapes, and no single
+# causal clause is true of all of them: DNS failure and connection refused
+# (the request never reached the provider at all); 401, 402 and 429 (the
+# provider refused it before any generation happened); AND a whitespace-only
+# completion (``_live_openrouter_response``, guarded by ``.strip()`` — a REAL
+# response the provider generated and billed for, see ``_failed_answer``'s own
+# docstring). A first replacement said "the request to the provider did not
+# succeed" — true for the first five, false for the sixth, where the request
+# succeeded and only the content was unusable. Round-1 review caught this by
+# reproducing the whitespace-completion path directly, not by reasoning about
+# the fix. The only sentence true of all six says nothing about whether a
+# request or a response happened at all. Its deleted predecessor's own comment
+# said explicitly: "it must not claim the model was asked." Neither must this
+# one claim a response arrived, and now neither must it claim one didn't.
+NOTICE_PROVIDER_UNAVAILABLE = "This model's answer is unavailable."
 NOTICE_CANCELLED = "Cancelled before this model was asked for an answer."
 NOTICE_RUN_DEADLINE = "The run reached its time limit before this model answered."
 

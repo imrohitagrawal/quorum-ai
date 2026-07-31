@@ -161,8 +161,11 @@ class ReadinessReport:
     * ``"offline_by_bad_key"`` — a key IS set and the provider
       REFUSED it (401/403 from the zero-cost ``GET /key`` probe).
       Configuration-only checks cannot see this, which makes it the
-      quieter sibling of ``offline_by_no_key``: everything reports
-      configured and every run simulates anyway.
+      quieter sibling of ``offline_by_no_key`` — except the failure
+      mode differs: a refused key is still a PRESENT key (#171), so
+      live execution stays on and every query FAILS rather than
+      simulating. See ``REASON_BAD_KEY`` for the reason text and
+      ``tests/unit/test_readiness_key_auth.py`` for the executed proof.
 
     ``reasons`` carries human-readable detail for logs and the
     ``/ready`` endpoint payload. ``catalog_drift_ids`` is the list

@@ -570,32 +570,45 @@ def test_initial_answer_path_reports_the_slot_missing_and_invents_nothing(
         ("429-rate-limited", _http_error(429)),
         ("connection-refused", URLError(ConnectionRefusedError(61, "Connection refused"))),
         ("dns-failure", URLError(OSError("nodename nor servname provided, or not known"))),
+        # Round-1 review (#176): a whitespace-only completion is the SIXTH
+        # shape this notice covers, and it is the mirror-image case — a REAL,
+        # BILLED response the provider generated (see ``_live_openrouter_response``'s
+        # ``.strip()`` guard and ``_failed_answer``'s own docstring). A first
+        # replacement text ("the request to the provider did not succeed") was
+        # true for the first five and FALSE for this one — the request
+        # succeeded; only the content was unusable. Included here so the same
+        # constant cannot silently regress for whichever class the next
+        # reviewer does not think to check.
+        ("whitespace-completion", _Body(_completion("   \n  "))),
     ],
 )
-def test_notice_provider_unavailable_never_claims_a_response_arrived(
+def test_notice_provider_unavailable_never_claims_a_response_arrived_or_absent(
     monkeypatch: pytest.MonkeyPatch, label: str, outcome: Any
 ) -> None:
-    """#176 surface 3: pin the EXACT served string across all five failure
-    modes it now covers, and pin that it does not overclaim.
+    """#176 surface 3: pin the EXACT served string across all six failure
+    modes it now covers, and pin that it does not overclaim in EITHER
+    direction.
 
-    "did not return a usable response" claims the provider responded. For
-    ``connection-refused`` and ``dns-failure`` the request never reached the
-    provider at all (``URLError`` — CPython's own "the opener failed" signal);
-    for 401/402/429 the provider refused it before any generation happened.
-    Neither class supports "returned a response".
+    "did not return a usable response" claimed the provider responded —
+    false for connection-refused/dns-failure (the request never reached the
+    provider — ``URLError``, CPython's own "the opener failed" signal) and
+    for 401/402/429 (refused before any generation happened). A first
+    replacement, "the request to the provider did not succeed", flipped which
+    class it was wrong for: false for whitespace-completion, where the
+    request DID succeed. The only sentence true of all six says nothing about
+    whether a request or a response happened at all.
 
-    What turns it red: revert ``NOTICE_PROVIDER_UNAVAILABLE`` to the old text
-    and the exact-string assertion fails on all five parametrizations at once
-    — verified by mutation (``cp``-aside the copy, restore from the copy).
+    What turns it red: revert ``NOTICE_PROVIDER_UNAVAILABLE`` to either prior
+    text and the exact-string assertion fails — verified by mutation
+    (``cp``-aside the copy, restore from the copy) for both prior texts.
     """
     _install(monkeypatch, outcome)
     answer = _produce_initial()
 
     assert answer.status is InitialAnswerStatus.FAILED, label
-    assert answer.provider_notice == (
-        "This model's answer is unavailable because the request to the provider did not succeed."
-    ), label
+    assert answer.provider_notice == "This model's answer is unavailable.", label
     assert "did not return a usable response" not in (answer.provider_notice or ""), label
+    assert "did not succeed" not in (answer.provider_notice or ""), label
     assert "returned" not in (answer.provider_notice or ""), label
 
 
