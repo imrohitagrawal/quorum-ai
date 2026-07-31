@@ -389,6 +389,7 @@ class SynthesisOrchestrationService:
         safety_acknowledgements: list[SafetyAcknowledgement] | None = None,
         openrouter_key: str = "",
         context: dict[str, Any] | None = None,
+        should_stop: Callable[[], bool] | None = None,
     ) -> SynthesisResult:
         started_at = perf_counter()
         if safety_acknowledgements is None:
@@ -463,6 +464,7 @@ class SynthesisOrchestrationService:
             openrouter_key=openrouter_key,
             user_prompt=user_prompt,
             context=context,
+            should_stop=should_stop,
         )
         disagreement_future = _submit_section(
             "Disagreement",
@@ -472,6 +474,7 @@ class SynthesisOrchestrationService:
             openrouter_key=openrouter_key,
             user_prompt=user_prompt,
             context=context,
+            should_stop=should_stop,
         )
         source_future = _submit_section(
             "Source support",
@@ -480,6 +483,7 @@ class SynthesisOrchestrationService:
             openrouter_key=openrouter_key,
             user_prompt=user_prompt,
             context=context,
+            should_stop=should_stop,
         )
         uncertainty_future = _submit_section(
             "Uncertainty",
@@ -489,6 +493,7 @@ class SynthesisOrchestrationService:
             openrouter_key=openrouter_key,
             user_prompt=user_prompt,
             context=context,
+            should_stop=should_stop,
         )
         recommendation_future = _submit_section(
             "Recommendation",
@@ -499,6 +504,7 @@ class SynthesisOrchestrationService:
             openrouter_key=openrouter_key,
             user_prompt=user_prompt,
             context=context,
+            should_stop=should_stop,
         )
 
         # PR-2 Item 3: per-section failure isolation. The
@@ -773,6 +779,7 @@ class SynthesisOrchestrationService:
         openrouter_key: str,
         user_prompt: str,
         context: dict[str, Any] | None = None,
+        should_stop: Callable[[], bool] | None = None,
     ) -> tuple[str, str | None, LiveProviderResult | None]:
         successful = [
             answer for answer in initial_answers if answer.status is InitialAnswerStatus.COMPLETED
@@ -826,6 +833,7 @@ class SynthesisOrchestrationService:
             system_prompt=_CONSENSUS_PROMPT,
             user_prompt=user_prompt,
             context=context,
+            should_stop=should_stop,
         )
         # F-06: ``live`` is non-None whenever the call MAY HAVE BEEN BILLED,
         # even if its output was unusable — a request the provider refused
@@ -850,6 +858,7 @@ class SynthesisOrchestrationService:
         openrouter_key: str,
         user_prompt: str,
         context: dict[str, Any] | None = None,
+        should_stop: Callable[[], bool] | None = None,
     ) -> tuple[str, str | None, LiveProviderResult | None]:
         fallback_paths = {answer.provider_path for answer in initial_answers}
         if ProviderPath.FALLBACK_SEARCH in fallback_paths and len(fallback_paths) > 1:
@@ -874,6 +883,7 @@ class SynthesisOrchestrationService:
             system_prompt=_DISAGREEMENT_PROMPT,
             user_prompt=user_prompt,
             context=context,
+            should_stop=should_stop,
         )
         # F-06: ``live`` is non-None whenever the call MAY HAVE BEEN BILLED,
         # even if its output was unusable — a request the provider refused
@@ -897,6 +907,7 @@ class SynthesisOrchestrationService:
         openrouter_key: str,
         user_prompt: str,
         context: dict[str, Any] | None = None,
+        should_stop: Callable[[], bool] | None = None,
     ) -> tuple[str, str | None, LiveProviderResult | None]:
         # WP-C review A1/A4: this prose sits directly under the "Source support"
         # tile that renders ``sourced_answer_ratio``. It MUST use the same
@@ -930,6 +941,7 @@ class SynthesisOrchestrationService:
             # ``context`` and then dropped it, so ``prior_question`` never
             # reached its system prompt while every run paid for it.
             context=context,
+            should_stop=should_stop,
         )
         # F-06: ``live`` is non-None whenever the call MAY HAVE BEEN BILLED,
         # even if its output was unusable — a request the provider refused
@@ -954,6 +966,7 @@ class SynthesisOrchestrationService:
         openrouter_key: str,
         user_prompt: str,
         context: dict[str, Any] | None = None,
+        should_stop: Callable[[], bool] | None = None,
     ) -> tuple[str, str | None, LiveProviderResult | None]:
         failed = sum(1 for answer in initial_answers if answer.status is InitialAnswerStatus.FAILED)
         if failed:
@@ -981,6 +994,7 @@ class SynthesisOrchestrationService:
             system_prompt=_UNCERTAINTY_PROMPT,
             user_prompt=user_prompt,
             context=context,
+            should_stop=should_stop,
         )
         # F-06: ``live`` is non-None whenever the call MAY HAVE BEEN BILLED,
         # even if its output was unusable — a request the provider refused
@@ -1006,6 +1020,7 @@ class SynthesisOrchestrationService:
         openrouter_key: str,
         user_prompt: str,
         context: dict[str, Any] | None = None,
+        should_stop: Callable[[], bool] | None = None,
     ) -> tuple[str, str | None, LiveProviderResult | None]:
         target_met = coverage.target_met
         if target_met and failed_count == 0:
@@ -1037,6 +1052,7 @@ class SynthesisOrchestrationService:
             system_prompt=_RECOMMENDATION_PROMPT,
             user_prompt=user_prompt,
             context=context,
+            should_stop=should_stop,
         )
         # F-06: see the other section builders — blank text means a call that
         # may have been billed came back unusable, not that no call was made.
@@ -1052,6 +1068,7 @@ class SynthesisOrchestrationService:
         system_prompt: str,
         user_prompt: str,
         context: dict[str, Any] | None = None,
+        should_stop: Callable[[], bool] | None = None,
     ) -> LiveProviderResult | None:
         # Same operator-opt-in guard as in ``debate._call_debate_model``:
         # if live execution is disabled, return ``None`` and let the
@@ -1061,6 +1078,13 @@ class SynthesisOrchestrationService:
         if not settings.openrouter_live_execution_enabled:
             return None
         if not openrouter_key or not settings.synthesis_model_id:
+            return None
+        # F-05 Layer 2 (#106): each of the 5 sections dispatches through this
+        # one seam, so gating here stops EVERY section's call in one place —
+        # a cancel that lands before ``produce_final_synthesis`` is entered
+        # (the only window this closes; there is no per-section stagger to
+        # interrupt mid-flight the way debate has between its two rounds).
+        if should_stop is not None and should_stop():
             return None
         # No post-processing — see ``debate._call_debate_model`` for the F-06
         # billing contract this preserves. ``None`` means nothing was billed

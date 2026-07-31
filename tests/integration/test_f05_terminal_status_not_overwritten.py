@@ -65,9 +65,11 @@ from product_app.debate import DebateResult, debate_stub_service
 from product_app.main import app
 from product_app.model_slots import ModelSlot
 from product_app.query_runs import (
+    BillableStage,
     InvalidQueryRunTransitionError,
     QueryRun,
     QueryRunStatus,
+    StageBillingState,
     StageState,
     _initial_progress,
     query_run_repository,
@@ -274,23 +276,23 @@ def _run_pipeline_with_cancel_at(
 # falls back to templated because the faked provider body carries no sources,
 # so a full run is 10 calls, not 11):
 #
-#   window               unguarded   guarded   exact?
-#   pre_debate                   6         2   yes — debate rounds 1+2 only
-#   mid_debate_round_1           5         1   yes — debate round 2 only
-#   pre_synthesis                4         4   no  — Layer 2 territory
+#   window               Layer 1 only   Layer 1 + 2   exact?
+#   pre_debate                     2             0   yes — both rounds gated
+#   mid_debate_round_1             1             0   yes — round 2 gated
+#   pre_synthesis                  4             0   yes — all 5 sections gated
 #
-# Layer 1 (this fix) stops the run at the NEXT ``_should_stop`` gate after the
-# cancel. It cannot cut a stage service that has already been entered: that is
-# Layer 2 (cancel-awareness inside ``run_debate_rounds`` /
-# ``produce_final_synthesis``) — see FOLLOWUP-F05-LAYER2.md. For
-# ``pre_synthesis`` the count is therefore unchanged and the biting assertion
-# is the preserved ``cancelled`` label (unguarded: ``completed``).
+# Layer 1 (#98) stops the run at the NEXT ``_should_stop`` gate after the
+# cancel. It cannot cut a stage service that has already been entered. Layer 2
+# (#106) closes that gap: ``should_stop`` is threaded into the single
+# provider-call seam each stage uses (``debate._call_debate_model`` /
+# ``synthesis._call_synthesis_model``), so a call not yet dispatched when the
+# cancel commits is never dispatched at all — see FOLLOWUP-F05-LAYER2.md.
 @pytest.mark.parametrize(
     ("window", "max_calls_after_cancel", "exact_calls_after_cancel"),
     [
-        ("pre_debate", 2, 2),
-        ("mid_debate_round_1", 1, 1),
-        ("pre_synthesis", 4, None),
+        ("pre_debate", 0, 0),
+        ("mid_debate_round_1", 0, 0),
+        ("pre_synthesis", 0, 0),
     ],
 )
 def test_cancel_is_not_reverted_and_bounds_billed_calls(
@@ -323,6 +325,73 @@ def test_cancel_is_not_reverted_and_bounds_billed_calls(
         )
     assert final_status == "cancelled", (
         f"{window}: the run ended {final_status!r} after the user was told 'cancelled'"
+    )
+
+
+@pytest.mark.parametrize("window", ["pre_debate", "pre_synthesis"])
+def test_a_cancel_with_nothing_billed_skips_the_record_call_entirely(
+    monkeypatch: pytest.MonkeyPatch,
+    _live_provider_seam: _CallCounter,
+    window: str,
+) -> None:
+    """Layer 2's second half: when nothing was billed, record_* must not land.
+
+    ``record_debate_outputs`` / ``record_final_synthesis`` are NOT guarded by
+    the F-05 terminal-write refusal (deliberately — see
+    FOLLOWUP-F05-LAYER2.md, "guarding record_* masks a symptom whose cause is
+    that the stage service was already entered"). So the fix has to stop the
+    ORCHESTRATOR from calling them at all once it knows nothing new was
+    billed, rather than making the repository swallow the write. Proven here
+    by the field the record call would have populated staying at its
+    pre-run default (``[]`` / ``None``), not by inspecting ``updated_at``
+    (timing-based and not deterministic under a fast fallback path).
+    """
+    _, _, run = _run_pipeline_with_cancel_at(monkeypatch, _live_provider_seam, window)
+
+    if window == "pre_debate":
+        assert run.debate_outputs == [], (
+            "record_debate_outputs landed on a cancelled run with nothing billed"
+        )
+        assert run.billing_stages[BillableStage.DEBATE] is StageBillingState.ENTERED, (
+            "the debate billing stage was marked RECORDED despite the skipped record call"
+        )
+    else:
+        assert run.final_synthesis is None, (
+            "record_final_synthesis landed on a cancelled run with nothing billed"
+        )
+        assert run.billing_stages[BillableStage.SYNTHESIS] is StageBillingState.ENTERED, (
+            "the synthesis billing stage was marked RECORDED despite the skipped record call"
+        )
+
+
+def test_a_mid_flight_billed_debate_round_is_still_recorded_after_cancel(
+    monkeypatch: pytest.MonkeyPatch,
+    _live_provider_seam: _CallCounter,
+) -> None:
+    """The one window where record_debate_outputs legitimately still lands.
+
+    Round 1's provider call is already in flight when the cancel commits
+    (``mid_debate_round_1``): it cannot be un-billed, so its usage MUST be
+    recorded or a real charge would silently vanish from the receipt — the
+    exact defect the F-06 contract exists to prevent. This is the
+    counter-case to the skip above: proves the skip is conditioned on
+    "nothing new was billed", not on "the run is cancelled".
+    """
+    _, _, run = _run_pipeline_with_cancel_at(monkeypatch, _live_provider_seam, "mid_debate_round_1")
+
+    assert len(run.debate_outputs) == 2, (
+        "round 1's billed output must still be recorded, not dropped with round 2's skip"
+    )
+    assert run.debate_outputs[0].debate_mode == "live", "round 1 was genuinely billed and live"
+    assert run.debate_outputs[1].debate_mode == "fallback", (
+        "round 2 must have been stopped before it could bill, and fall back to the template"
+    )
+    assert run.debate_call_usages != [], "round 1's billed usage must not be lost"
+    assert len(run.debate_call_usages) == 1, (
+        f"expected exactly round 1's usage entry, got {len(run.debate_call_usages)}"
+    )
+    assert run.billing_stages[BillableStage.DEBATE] is StageBillingState.RECORDED, (
+        "a genuinely billed stage must reach RECORDED, not stay ENTERED"
     )
 
 

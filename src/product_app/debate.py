@@ -21,6 +21,7 @@ thread — debate failures degrade gracefully to a partial result.
 from __future__ import annotations
 
 import re
+from collections.abc import Callable
 from dataclasses import asdict, dataclass, field
 from enum import StrEnum
 from threading import RLock
@@ -269,6 +270,7 @@ class DebateOrchestrationService:
         safety_acknowledgements: list[SafetyAcknowledgement] | None = None,
         openrouter_key: str = "",
         context: dict[str, Any] | None = None,
+        should_stop: Callable[[], bool] | None = None,
     ) -> DebateResult:
         if model_slots is None:
             model_slots = []
@@ -290,6 +292,7 @@ class DebateOrchestrationService:
             query_text=query_text,
             openrouter_key=openrouter_key,
             context=context,
+            should_stop=should_stop,
         )
         round_one_ms = max(1, round((perf_counter() - round_one_started) * 1000))
         round_timings_ms[1] = round_one_ms
@@ -358,6 +361,7 @@ class DebateOrchestrationService:
             round_one_text=round_one_text,
             openrouter_key=openrouter_key,
             context=context,
+            should_stop=should_stop,
         )
         round_two_ms = max(1, round((perf_counter() - round_two_started) * 1000))
         round_timings_ms[2] = round_two_ms
@@ -414,6 +418,7 @@ class DebateOrchestrationService:
         query_text: str,
         openrouter_key: str,
         context: dict[str, Any] | None = None,
+        should_stop: Callable[[], bool] | None = None,
     ) -> tuple[str, str | None, LiveProviderResult | None]:
         disagreement = self._extract_disagreement(initial_answers=initial_answers)
         weak_support = self._extract_weak_support(initial_answers=initial_answers)
@@ -434,6 +439,7 @@ class DebateOrchestrationService:
                 prior_round=None,
             ),
             context=context,
+            should_stop=should_stop,
         )
         # F-06: ``live`` is non-None whenever the call MAY HAVE BEEN BILLED,
         # even if its output was unusable — a request the provider refused
@@ -454,6 +460,7 @@ class DebateOrchestrationService:
         round_one_text: str,
         openrouter_key: str,
         context: dict[str, Any] | None = None,
+        should_stop: Callable[[], bool] | None = None,
     ) -> tuple[str, str | None, LiveProviderResult | None]:
         disagreement = self._extract_disagreement(initial_answers=initial_answers)
         weak_support = self._extract_weak_support(initial_answers=initial_answers)
@@ -474,6 +481,7 @@ class DebateOrchestrationService:
                 prior_round=round_one_text,
             ),
             context=context,
+            should_stop=should_stop,
         )
         # F-06: see ``_build_round_one_text`` — blank text means a call that may
         # have been billed came back unusable, not that no call was made.
@@ -489,6 +497,7 @@ class DebateOrchestrationService:
         system_prompt: str,
         user_prompt: str,
         context: dict[str, Any] | None = None,
+        should_stop: Callable[[], bool] | None = None,
     ) -> LiveProviderResult | None:
         """Call the configured debate model.
 
@@ -517,6 +526,13 @@ class DebateOrchestrationService:
         if not settings.openrouter_live_execution_enabled:
             return None
         if not openrouter_key or not settings.debate_model_id:
+            return None
+        # F-05 Layer 2 (#106): a cancel that lands between rounds must stop
+        # the NEXT round from billing at all. Checked here rather than in
+        # ``run_debate_rounds`` because this is the one seam both rounds
+        # dispatch through — round 1's own in-flight call cannot be un-billed
+        # by this check, only the round that has not yet been dispatched.
+        if should_stop is not None and should_stop():
             return None
         # No post-processing: the provider seam already encodes "not billed"
         # (``None``) versus "dispatched, maybe billed, unusable" (blank text).
