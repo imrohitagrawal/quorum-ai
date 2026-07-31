@@ -110,12 +110,19 @@ def test_record_event_is_noop_when_store_unconfigured() -> None:
 # ---------------------------------------------------------------------------
 
 
-def _provider_event(model_id: str, provider_path: str, duration_ms: int) -> object:
+def _provider_event(
+    model_id: str,
+    provider_path: str,
+    duration_ms: int,
+    *,
+    event_type: str = "provider_initial_answer_completed",
+) -> object:
     return type(
         "Row",
         (),
         {
             "recorder": "provider",
+            "event_type": event_type,
             "payload": {
                 "model_id": model_id,
                 "provider_path": provider_path,
@@ -161,6 +168,131 @@ def test_aggregate_provider_computes_stats_per_model() -> None:
     assert slot_stats.total_calls == 3
     assert slot_stats.simulation_count == 1
     assert slot_stats.avg_duration_ms == pytest.approx(866.66, abs=1)
+
+
+def test_aggregate_provider_counts_failed_events_mixed_with_completed() -> None:
+    """#177: a model failing every live call used to be indistinguishable
+
+    from a healthy one, because ``_aggregate_provider`` read only
+    ``model_id``, ``duration_ms`` and ``provider_path`` from the payload and
+    never ``event_type`` — the field that actually distinguishes a
+    ``provider_initial_answer_failed`` event from a completed one. Since
+    #171 a live-call failure keeps ``provider_path=openrouter_search`` (the
+    same path a healthy call uses), so path-based counting cannot see it
+    either.
+
+    This is the MIXED case on purpose: 2 completed and 3 failed calls for
+    the SAME model in the SAME window. A test built only from the two
+    uniform extremes (all-healthy or all-failed) would not catch an
+    aggregator that conflates the two counters or returns one of them
+    unconditionally.
+
+    What turns it red: change ``_aggregate_provider`` back to reading
+    ``provider_path`` (or nothing) instead of ``event.event_type`` for
+    ``failed_count`` — every failed call keeps
+    ``provider_path=openrouter_search``, identical to a healthy one, so the
+    count silently reads 0.
+    """
+    events = [
+        _provider_event("openai/gpt-4o-mini", "openrouter_search", 800),
+        _provider_event("openai/gpt-4o-mini", "openrouter_search", 900),
+        _provider_event(
+            "openai/gpt-4o-mini",
+            "openrouter_search",
+            50,
+            event_type="provider_initial_answer_failed",
+        ),
+        _provider_event(
+            "openai/gpt-4o-mini",
+            "openrouter_search",
+            60,
+            event_type="provider_initial_answer_failed",
+        ),
+        _provider_event(
+            "openai/gpt-4o-mini",
+            "openrouter_search",
+            70,
+            event_type="provider_initial_answer_failed",
+        ),
+    ]
+    stats = _aggregate_provider(events)
+    slot_stats = stats["openai/gpt-4o-mini"]
+    assert slot_stats.total_calls == 5
+    assert slot_stats.failed_count == 3
+
+
+def test_aggregate_provider_all_healthy_events_have_zero_failed_count() -> None:
+    """Positive partner to the mixed test above.
+
+    A guard that reports "not real" / "failed" for everything would satisfy
+    the mixed test's ``!= 0`` shape by accident if it were written as a
+    negative-only check; this drives the all-completed case explicitly, so
+    a counter that is wired backwards (counting COMPLETED events instead of
+    FAILED ones) reds here instead of passing silently.
+    """
+    events = [
+        _provider_event("openai/gpt-4o-mini", "openrouter_search", 800),
+        _provider_event("openai/gpt-4o-mini", "openrouter_search", 900),
+        _provider_event("openai/gpt-4o-mini", "openrouter_search", 1000),
+    ]
+    stats = _aggregate_provider(events)
+    slot_stats = stats["openai/gpt-4o-mini"]
+    assert slot_stats.total_calls == 3
+    assert slot_stats.failed_count == 0
+
+
+def test_a_model_failing_every_live_call_is_visible_through_the_real_recorder() -> None:
+    """#177's own reproduction, end to end through the real store.
+
+    Before this fix: ten calls, every one failing, driven through the real
+    ``record_event`` + ``FeedbackStore.iter_events`` path (not the synthetic
+    ``_provider_event`` helper) reported ``failed_count`` absent entirely and
+    a ``simulation_count`` of 0 — a model failing 100% of its calls was
+    statistically indistinguishable from a perfectly healthy one, because
+    #171 made every live-call failure keep ``provider_path=openrouter_search``
+    (the same path a healthy call uses) and ``_aggregate_provider`` never
+    read ``event_type``.
+
+    Mixed with 2 healthy calls for a SECOND model in the same window, so the
+    aggregation-by-model-id grouping is exercised too, not just a single
+    uniform bucket.
+    """
+    with configure_for_tests() as store:
+        run_id = uuid4()
+        for _ in range(10):
+            record_event(
+                recorder="provider",
+                event_type="provider_initial_answer_failed",
+                account_id=uuid4(),
+                query_run_id=run_id,
+                payload={
+                    "model_id": "openai/gpt-4o-mini",
+                    "provider_path": "openrouter_search",
+                    "duration_ms": 30,
+                    "fallback_used": False,
+                    "source_count": 0,
+                },
+            )
+        for _ in range(2):
+            record_event(
+                recorder="provider",
+                event_type="provider_initial_answer_completed",
+                account_id=uuid4(),
+                query_run_id=run_id,
+                payload={
+                    "model_id": "anthropic/claude-3-haiku",
+                    "provider_path": "openrouter_search",
+                    "duration_ms": 700,
+                    "fallback_used": False,
+                    "source_count": 2,
+                },
+            )
+        rows = list(store.iter_events())
+
+    stats = _aggregate_provider(rows)
+    assert stats["openai/gpt-4o-mini"].failed_count == 10
+    assert stats["openai/gpt-4o-mini"].simulation_count == 0
+    assert stats["anthropic/claude-3-haiku"].failed_count == 0
 
 
 def test_aggregate_synthesis_computes_coverage_average() -> None:
@@ -227,6 +359,7 @@ def test_collect_statistics_counts_distinct_runs() -> None:
                 (),
                 {
                     "recorder": "provider",
+                    "event_type": "provider_initial_answer_completed",
                     "query_run_id": run_id,
                     "payload": {
                         "model_id": "openai/gpt-4o-mini",
