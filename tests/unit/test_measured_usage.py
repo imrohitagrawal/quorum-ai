@@ -55,25 +55,26 @@ def test_live_provider_result_usage_defaults_to_none() -> None:
 def test_measured_call_cost_exact_input_and_output_pricing() -> None:
     """Pin the EXACT per-call value so a price swap or /1000 typo can't ship.
 
-    An unknown model falls to the default floor prices ($0.0008/1K input,
-    $0.002/1K output), independent of any catalog state, so the expected
+    An unknown model falls to the default floor prices (#151: derived from
+    the max real price across ``DEFAULT_MODEL_IDS`` — $0.001/1K input,
+    $0.005/1K output), independent of any catalog state, so the expected
     figures are deterministic. Pricing input-only and output-only separately
     is what catches an input/output swap (mutation the reviewer found green).
     """
     # Input tokens only → input price; output tokens only → output price.
     assert measured_call_cost_usd(
         model_id="x/unknown", prompt_tokens=1000, completion_tokens=0
-    ) == Decimal("0.0008")
+    ) == Decimal("0.001")
     assert measured_call_cost_usd(
         model_id="x/unknown", prompt_tokens=0, completion_tokens=1000
-    ) == Decimal("0.002")
+    ) == Decimal("0.005")
     # Both, and the /1000 scaling.
     assert measured_call_cost_usd(
         model_id="x/unknown", prompt_tokens=1000, completion_tokens=1000
-    ) == Decimal("0.0028")
+    ) == Decimal("0.006")
     assert measured_call_cost_usd(
         model_id="x/unknown", prompt_tokens=2000, completion_tokens=0
-    ) == Decimal("0.0016")
+    ) == Decimal("0.002")
 
 
 def test_measured_breakdown_partitions_reconcile_and_attribute_rounds() -> None:

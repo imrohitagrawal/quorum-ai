@@ -636,7 +636,7 @@ pre code {
           <li><strong>BLOCK</strong> — estimated cost &gt; $0.25. Cannot run, regardless of confirmation. There is also a per-account daily cap of $0.20 in any rolling 24-hour window.</li>
         </ul>
         <p>The estimate is a <em>realistic</em> point figure — it models each of the seven billed calls (4 initial answers + 2 debate rounds + 1 synthesis × 5 sections) using actual token counts and cached per-model prices. The guardrail keys off a <em>fail-safe upper bound</em> (pricing initial-answer output at the enforced 2000-token cap), so real cost can never exceed a limit the run was waved through under.</p>
-        <p>A <strong>token</strong> is the billing unit LLMs use. Roughly 4 characters of English text ≈ 1 token. A 500-word query is ~375 tokens; a 500-word model answer is ~375 tokens of output. Providers charge per 1,000 tokens (e.g. $0.0008 per 1K input tokens for gpt-4o-mini).</p>
+        <p>A <strong>token</strong> is the billing unit LLMs use. Roughly 4 characters of English text ≈ 1 token. A 500-word query is ~375 tokens; a 500-word model answer is ~375 tokens of output. Providers charge per 1,000 tokens (e.g. $0.00015 per 1K input tokens for gpt-4o-mini).</p>
         <span class="honesty built">● Built</span>
         <div class="example project">
           <div class="example-label">In your project</div>

@@ -158,20 +158,22 @@ def test_exact_partition_pins_the_split() -> None:
     fully determined — pin the exact per-line values, not just the sum.
 
     Hand computation for ``query_text = "x" * 1000`` with 4 fallback-priced
-    slots (all at ``_DEFAULT_PRICE_PER_1K_INPUT=0.0008`` /
-    ``_DEFAULT_PRICE_PER_1K_OUTPUT=0.002``) under the issue #16 token model
-    (system 350, web-search 2000, initial-output floor 700 + 0.5/query-token,
-    debate-output 400, synthesis-output 3000; debate priced on haiku-4.5
-    0.001/0.005, synthesis on gpt-4o-mini 0.00015/0.0006). The point estimate
-    now models ALL ``cost_synthesis_sections``=5 synthesis calls (the real live
-    fan-out), each at the per-section floor:
+    slots (all at ``_DEFAULT_PRICE_PER_1K_INPUT=0.001`` /
+    ``_DEFAULT_PRICE_PER_1K_OUTPUT=0.005`` — #151: derived from the max real
+    price across ``DEFAULT_MODEL_IDS``, was a hand-picked 0.0008/0.002)
+    under the issue #16 token model (system 350, web-search 2000,
+    initial-output floor 700 + 0.5/query-token, debate-output 400,
+    synthesis-output 3000; debate priced on haiku-4.5 0.001/0.005, synthesis
+    on gpt-4o-mini 0.00015/0.0006). The point estimate models ALL
+    ``cost_synthesis_sections``=5 synthesis calls (the real live fan-out),
+    each at the per-section floor:
 
       query_tokens   = 1000 / 4 = 250
       init_output    = 700 + 0.5*250 = 825
       init_prompt    = 350 + 2000 + 250 = 2600  (all slots search=True)
-      initial_i      = 0.0008*2600/1000 + 0.002*825/1000 = 0.00208 + 0.00165
-                     = 0.00373  (per model)
-      initial_total  = 4 * 0.00373 = 0.01492
+      initial_i      = 0.001*2600/1000 + 0.005*825/1000 = 0.0026 + 0.004125
+                     = 0.006725  (per model)
+      initial_total  = 4 * 0.006725 = 0.0269
       ctx4           = 4 * 825 = 3300
       debate_prompt  = 350 + 250 + 3300 = 3900
       debate_round   = 0.001*3900/1000 + 0.005*400/1000 = 0.0039 + 0.002 = 0.0059
@@ -179,7 +181,7 @@ def test_exact_partition_pins_the_split() -> None:
       synth_section  = 0.00015*4700/1000 + 0.0006*3000/1000 = 0.000705 + 0.0018
                      = 0.002505
       synthesis      = 5 * 0.002505 = 0.012525   (five section calls)
-      raw_total      = 0.01492 + 2*0.0059 + 0.012525 = 0.039245 -> total 0.0392
+      raw_total      = 0.0269 + 2*0.0059 + 0.012525 = 0.051425 -> total 0.0512
 
     NOTE the term that is deliberately ABSENT here. WP-D made ``max_cost_usd``
     a true ceiling by pricing round 2's prompt, which carries round 1's
@@ -196,12 +198,12 @@ def test_exact_partition_pins_the_split() -> None:
     )
     breakdown = estimate.breakdown
     assert breakdown is not None
-    assert breakdown.total == Decimal("0.0392")
+    assert breakdown.total == Decimal("0.0512")
 
     # by_stage — initial_answers; two debate rounds at 0.0059 each;
     # synthesis (five sections) is 0.012525 -> floors to 0.0125.
     assert [(line.stage, line.usd) for line in breakdown.by_stage] == [
-        ("initial_answers", Decimal("0.0149")),
+        ("initial_answers", Decimal("0.0269")),
         ("debate_round_1", Decimal("0.0059")),
         ("debate_round_2", Decimal("0.0059")),
         ("synthesis", Decimal("0.0125")),
@@ -209,10 +211,10 @@ def test_exact_partition_pins_the_split() -> None:
 
     # by_model — fallback-a gets the extra quantum (largest remainder tie → lowest index).
     assert [(line.model_id, line.usd) for line in breakdown.by_model] == [
-        ("test/fallback-a", Decimal("0.0038")),
-        ("test/fallback-b", Decimal("0.0037")),
-        ("test/fallback-c", Decimal("0.0037")),
-        ("test/fallback-d", Decimal("0.0037")),
+        ("test/fallback-a", Decimal("0.0068")),
+        ("test/fallback-b", Decimal("0.0067")),
+        ("test/fallback-c", Decimal("0.0067")),
+        ("test/fallback-d", Decimal("0.0067")),
         ("synthesis", Decimal("0.0243")),
     ]
 

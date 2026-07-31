@@ -34,9 +34,10 @@ from uuid import UUID, uuid4
 
 from pydantic import BaseModel, Field
 
+from product_app.catalog_fetcher import _FALLBACK_CATALOG
 from product_app.config import settings
 from product_app.feedback_store import record_event as _record_feedback_event
-from product_app.model_slots import ModelSlot, openrouter_model_catalog_service
+from product_app.model_slots import DEFAULT_MODEL_IDS, ModelSlot, openrouter_model_catalog_service
 
 _log = logging.getLogger(__name__)
 
@@ -146,11 +147,35 @@ DAILY_CAP_BYPASS_LOG_INTERVAL_S = 60.0
 #: typical "show 2/4 dp" consumer expectation.
 COST_DISPLAY_QUANTUM = Decimal("0.0001")
 
-#: Per-1K-token prices (USD) used when the catalog is unreachable or
-#: the model id is unknown. The catalog is the authoritative source
-#: for pricing; this is the single fallback floor.
-_DEFAULT_PRICE_PER_1K_INPUT = Decimal("0.0008")
-_DEFAULT_PRICE_PER_1K_OUTPUT = Decimal("0.002")
+#: Per-1K-token prices (USD) used when a model id is absent from whatever
+#: ``price_index()`` currently returns. That is NOT only "the catalog is
+#: down": a full outage falls back to the static ``_FALLBACK_CATALOG``,
+#: which has a row for every shipped default, so this floor does not fire
+#: for a default model in that case. The real trigger a shipped default can
+#: hit is narrower — the LIVE catalog fetch succeeds and returns a non-empty
+#: list that happens not to include this id (a live id renamed or dropped
+#: upstream; see ``default_model_ids()``'s own "stale" docstring in
+#: ``model_slots.py``) — since a successful live fetch is used as-is, with
+#: no union against the fallback catalog. A shipped default never hits this
+#: via total outage, per
+#: ``test_every_shipped_default_model_has_a_fallback_catalog_row``. The
+#: catalog is the authoritative source for pricing; this is the last-resort
+#: floor beneath it.
+#:
+#: #151: DERIVED, not guessed — the max real input/output price across the
+#: four shipped ``DEFAULT_MODEL_IDS``, read from ``_FALLBACK_CATALOG``. A
+#: hand-picked constant (the pre-#151 value was 0.0008/0.002) over-charged
+#: three of the four shipped models by up to 16x while UNDER-charging
+#: anthropic/claude-haiku-4.5 by 25% — the unsafe direction for a spend cap,
+#: since the daily cap is enforced against this same estimate. Taking the
+#: max per column is conservative in the safe direction for every model this
+#: deployment actually ships, by construction rather than by tuning.
+_DEFAULT_PRICE_PER_1K_INPUT = max(
+    entry.input_price_per_1k for entry in _FALLBACK_CATALOG if entry.model_id in DEFAULT_MODEL_IDS
+)
+_DEFAULT_PRICE_PER_1K_OUTPUT = max(
+    entry.output_price_per_1k for entry in _FALLBACK_CATALOG if entry.model_id in DEFAULT_MODEL_IDS
+)
 
 
 #: Chars-per-token conversion used to turn query text length into a
