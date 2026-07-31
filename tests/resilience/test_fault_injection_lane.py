@@ -1324,3 +1324,52 @@ def test_an_unfaulted_debate_reports_live_provenance(monkeypatch: pytest.MonkeyP
     assert [round_["debate_mode"] for round_ in debate_outputs] == ["live", "live"]
     assert body["live_count"] == 4
     assert body["demo_mode"] is False
+
+
+def test_a_round_that_recovers_reports_its_own_provenance_per_round(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Round-scoped, not run-scoped: round 1 times out, round 2 (a fresh call
+    to the same moderator model) succeeds. ``debate_mode`` must read
+    ``["fallback", "live"]``, not the same value copied onto both rounds.
+
+    Both prior tests here only exercise a UNIFORM outcome across the two
+    rounds (both fallback, or both live) — a defective fix that computed one
+    ``debate_mode`` value once and stamped it on every ``DebateOutput`` would
+    still pass both of them. This is the scenario that catches that: the
+    orchestrator calls the SAME ``debate_model_id`` twice (round 1, then round
+    2), independently, and each call's own outcome must decide its own round's
+    field — never the other round's.
+
+    What turns it red: compute a single ``debate_mode`` before round 1 runs
+    and reuse it for round 2's ``DebateOutput`` too (instead of the separate
+    ``round_one_mode``/``round_two_mode`` locals). The result flips to
+    ``["fallback", "fallback"]`` and this test fails on the second element.
+    """
+    call_count = {"debate": 0}
+
+    def fake_urlopen(request: Any, timeout: float = 0) -> _FakeResponse:
+        payload = json.loads(request.data.decode())
+        model_id = str(payload.get("model", "")).split(":")[0]
+        if model_id == config.settings.debate_model_id:
+            call_count["debate"] += 1
+            if call_count["debate"] == 1:
+                raise TimeoutError("debate moderator timed out on round 1 only")
+            return _FakeResponse(_panel_envelope(_NEUTRAL_CRITIQUE))
+        if model_id == config.settings.synthesis_model_id:
+            return _FakeResponse(_panel_envelope("A live synthesis paragraph [1]."))
+        return _FakeResponse(_panel_envelope(f"A grounded live answer from {model_id} [1]."))
+
+    query_run_repository.clear()
+    _participants_collide_with_no_moderator()
+    _enable_live(monkeypatch, fake_urlopen)
+    monkeypatch.setattr(config.settings, "openrouter_api_key", _FAKE_KEY, raising=False)
+    monkeypatch.setattr(config.settings, "stage_delay_ms", 0, raising=False)
+    body = _drive_full_run(TestClient(app), _MODERATOR_FREE_PARTICIPANTS)
+
+    assert call_count["debate"] == 2, "both rounds must call the debate moderator independently"
+    debate_outputs = body["result"]["debate_outputs"]
+    assert len(debate_outputs) == 2
+    assert [round_["debate_mode"] for round_ in debate_outputs] == ["fallback", "live"], (
+        "round 1's failure must not be copied onto round 2's genuinely live call"
+    )
