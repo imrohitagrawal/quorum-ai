@@ -147,10 +147,18 @@ DAILY_CAP_BYPASS_LOG_INTERVAL_S = 60.0
 #: typical "show 2/4 dp" consumer expectation.
 COST_DISPLAY_QUANTUM = Decimal("0.0001")
 
-#: Per-1K-token prices (USD) used when the catalog is unreachable AND the
-#: model id is unknown even to the static fallback catalog (a model id with
-#: no ``_FALLBACK_CATALOG`` row at all — a shipped default never hits this,
-#: per ``test_every_shipped_default_model_has_a_fallback_catalog_row``). The
+#: Per-1K-token prices (USD) used when a model id is absent from whatever
+#: ``price_index()`` currently returns. That is NOT only "the catalog is
+#: down": a full outage falls back to the static ``_FALLBACK_CATALOG``,
+#: which has a row for every shipped default, so this floor does not fire
+#: for a default model in that case. The real trigger a shipped default can
+#: hit is narrower — the LIVE catalog fetch succeeds and returns a non-empty
+#: list that happens not to include this id (a live id renamed or dropped
+#: upstream; see ``default_model_ids()``'s own "stale" docstring in
+#: ``model_slots.py``) — since a successful live fetch is used as-is, with
+#: no union against the fallback catalog. A shipped default never hits this
+#: via total outage, per
+#: ``test_every_shipped_default_model_has_a_fallback_catalog_row``. The
 #: catalog is the authoritative source for pricing; this is the last-resort
 #: floor beneath it.
 #:
