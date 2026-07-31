@@ -2007,9 +2007,13 @@ def _execute_query_run(query_run_id: UUID, account_id: UUID) -> None:
     # F-05 Layer 2 (#106): see the matching comment at the debate call site —
     # if the cancel stopped every section from billing, recording the
     # all-templated output would be the exact residual this fix closes.
-    # Synthesis has no debate-style mid-flight case: all 5 sections dispatch
-    # in PARALLEL right at entry, so ``should_stop`` is either true before any
-    # of them start (nothing billed) or false throughout (all normal).
+    # Unlike debate's two SEQUENTIAL rounds, all 5 synthesis sections dispatch
+    # in PARALLEL, so a cancel landing in the submission window could in
+    # principle gate some sections and not others. That is still safe: each
+    # section's OWN ``live_call_usages`` entry is independently correct either
+    # way (present iff that section actually dispatched), and this guard only
+    # skips the record call when the run is cancelled AND the combined list is
+    # genuinely empty — never when any section billed.
     if _should_stop(query_run_id) and not synthesis_result.live_call_usages:
         return
     if synthesis_result.final_synthesis is None:
