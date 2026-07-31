@@ -68,6 +68,16 @@ class ProviderStats:
     #: healthy call uses), so this cannot be read off ``provider_path``; it
     #: must come from ``event_type``.
     failed_count: int
+    #: #188: a slot cancelled mid-flight (``provider_initial_answer_cancelled``)
+    #: — kept separate from ``failed_count`` so "the user cancelled" stays
+    #: distinguishable from "the provider failed", the same way ``error_code``
+    #: already distinguishes them on the answer itself.
+    cancelled_count: int
+    #: #188: a slot cut by the run-level wall-clock deadline
+    #: (``provider_initial_answer_deadline_exceeded``) — kept separate from
+    #: ``failed_count`` so a model that is systematically too slow shows up
+    #: as a distinct signal rather than folded into generic failures.
+    deadline_exceeded_count: int
     avg_duration_ms: float
     p95_duration_ms: float
 
@@ -156,6 +166,23 @@ def _quantile(values: list[int] | list[float], q: float) -> float:
     return float(sorted_values[lower] * (1 - weight) + sorted_values[upper] * weight)
 
 
+#: #188 review finding: ``cancelled_answer``/``deadline_exceeded_answer``
+#: record ``duration_ms=0`` by construction -- no work was attempted, or the
+#: elapsed time was never measured -- NOT a real latency sample. Mixing them
+#: into ``avg_duration_ms``/``p95_duration_ms`` silently pulls both DOWN,
+#: making a model that is frequently cancelled or timing out look
+#: artificially fast in the report an operator reads. ``failed_count``
+#: events are NOT in this set: ``_failed_answer`` records a real measured
+#: elapsed time (the call was attempted and failed after real processing),
+#: so it belongs in the average.
+_ZERO_DURATION_EVENT_TYPES = frozenset(
+    {
+        "provider_initial_answer_cancelled",
+        "provider_initial_answer_deadline_exceeded",
+    }
+)
+
+
 def _aggregate_provider(events: Iterable[Any]) -> dict[str, ProviderStats]:
     by_model: dict[str, list[Any]] = defaultdict(list)
     for event in events:
@@ -163,7 +190,11 @@ def _aggregate_provider(events: Iterable[Any]) -> dict[str, ProviderStats]:
         by_model[model_id].append(event)
     stats: dict[str, ProviderStats] = {}
     for model_id, model_events in by_model.items():
-        durations = [int(e.payload.get("duration_ms") or 0) for e in model_events]
+        durations = [
+            int(e.payload.get("duration_ms") or 0)
+            for e in model_events
+            if e.event_type not in _ZERO_DURATION_EVENT_TYPES
+        ]
         provider_paths = [str(e.payload.get("provider_path") or "") for e in model_events]
         stats[model_id] = ProviderStats(
             total_calls=len(model_events),
@@ -175,6 +206,17 @@ def _aggregate_provider(events: Iterable[Any]) -> dict[str, ProviderStats]:
             # distinction.
             failed_count=sum(
                 1 for e in model_events if e.event_type == "provider_initial_answer_failed"
+            ),
+            # #188: cancelled/deadline-exceeded slots used to record no event
+            # at all, so they were absent from every counter here, not merely
+            # miscounted into one of them.
+            cancelled_count=sum(
+                1 for e in model_events if e.event_type == "provider_initial_answer_cancelled"
+            ),
+            deadline_exceeded_count=sum(
+                1
+                for e in model_events
+                if e.event_type == "provider_initial_answer_deadline_exceeded"
             ),
             avg_duration_ms=statistics.fmean(durations) if durations else 0.0,
             p95_duration_ms=_quantile(durations, 0.95),

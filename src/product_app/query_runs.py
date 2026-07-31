@@ -1773,7 +1773,12 @@ def _execute_query_run(query_run_id: UUID, account_id: UUID) -> None:
             # ``_failed_answer`` so the downstream debate/synthesis
             # path can consume a cancelled slot identically to a
             # provider-failed one — see its docstring.
-            return provider_execution_service.cancelled_answer(model_slot)
+            return provider_execution_service.cancelled_answer(
+                model_slot=model_slot,
+                account_id=account_id,
+                query_run_id=query_run_id,
+                credential_source=credential_source,
+            )
         return provider_execution_service.produce_initial_answer(
             account_id=account_id,
             query_run_id=query_run_id,
@@ -1807,7 +1812,12 @@ def _execute_query_run(query_run_id: UUID, account_id: UUID) -> None:
             if _budget_remaining() > 0:
                 continue
             deadline_breached = True
-            answer = provider_execution_service.deadline_exceeded_answer(model_slot)
+            answer = provider_execution_service.deadline_exceeded_answer(
+                model_slot=model_slot,
+                account_id=account_id,
+                query_run_id=query_run_id,
+                credential_source=credential_source,
+            )
         except Exception:
             # Future failed unexpectedly; skip and continue
             continue

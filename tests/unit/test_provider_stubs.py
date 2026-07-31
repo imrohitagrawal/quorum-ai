@@ -7,6 +7,7 @@ from uuid import uuid4
 import pytest
 
 from product_app.model_slots import ModelSlot, validate_model_slots
+from product_app.provider_keys import ProviderCredentialSource
 from product_app.providers import (
     _SEARCH_REJECTED,
     NOTICE_DEMO_MODE,
@@ -661,7 +662,12 @@ def test_cancelled_answer_has_expected_shape() -> None:
     (no work was attempted).
     """
     slot = ModelSlot(slot_number=2, model_id="anthropic/claude-haiku-4.5", search=True)
-    answer = provider_execution_service.cancelled_answer(slot)
+    answer = provider_execution_service.cancelled_answer(
+        model_slot=slot,
+        account_id=uuid4(),
+        query_run_id=uuid4(),
+        credential_source=ProviderCredentialSource.APP_OWNED,
+    )
 
     # Identity fields carry through from the slot.
     assert answer.slot_number == 2
@@ -685,6 +691,81 @@ def test_cancelled_answer_has_expected_shape() -> None:
     assert answer.citation_coverage.answer_count == 0
     assert answer.citation_coverage.sourced_answer_count == 0
     assert answer.citation_coverage.sourced_answer_ratio == Decimal("0")
+
+
+def test_deadline_exceeded_answer_has_expected_shape() -> None:
+    """Sibling of ``test_cancelled_answer_has_expected_shape``.
+
+    ``deadline_exceeded_answer`` mirrors ``cancelled_answer``'s field shape,
+    differing only in ``error_code`` and ``provider_notice``.
+    """
+    slot = ModelSlot(slot_number=3, model_id="google/gemini-2.5-flash", search=True)
+    answer = provider_execution_service.deadline_exceeded_answer(
+        model_slot=slot,
+        account_id=uuid4(),
+        query_run_id=uuid4(),
+        credential_source=ProviderCredentialSource.APP_OWNED,
+    )
+
+    assert answer.slot_number == 3
+    assert answer.model_id == "google/gemini-2.5-flash"
+    assert answer.status.value == "failed"
+    assert answer.answer_text == ""
+    assert answer.latency_ms == 0
+    assert answer.provider_path == ProviderPath.OPENROUTER_SEARCH
+    assert answer.error_code == "RUN_DEADLINE_EXCEEDED"
+    assert answer.citation_coverage.answer_count == 0
+
+
+def test_cancelled_answer_records_a_provider_event() -> None:
+    """#188: a cancelled slot used to record NO event at all, so it was
+    entirely absent from the ops audit's per-model stats — not merely
+    miscounted, the way a failed live call was before #177.
+
+    What turns it red: remove the ``provider_event_recorder.record(...)``
+    call from ``cancelled_answer`` — ``list_events()`` then returns empty
+    and this assertion fails on the length check.
+    """
+    account_id = uuid4()
+    query_run_id = uuid4()
+    slot = ModelSlot(slot_number=1, model_id="openai/gpt-4o-mini", search=True)
+
+    provider_execution_service.cancelled_answer(
+        model_slot=slot,
+        account_id=account_id,
+        query_run_id=query_run_id,
+        credential_source=ProviderCredentialSource.APP_OWNED,
+    )
+
+    events = provider_event_recorder.list_events()
+    assert len(events) == 1
+    assert events[0].event_type == "provider_initial_answer_cancelled"
+    assert events[0].account_id == account_id
+    assert events[0].query_run_id == query_run_id
+    assert events[0].model_id == "openai/gpt-4o-mini"
+
+
+def test_deadline_exceeded_answer_records_a_provider_event() -> None:
+    """Sibling of ``test_cancelled_answer_records_a_provider_event``: the
+    run-deadline path had the identical gap, in a different function.
+    """
+    account_id = uuid4()
+    query_run_id = uuid4()
+    slot = ModelSlot(slot_number=4, model_id="nvidia/nemotron-3-nano-30b-a3b", search=True)
+
+    provider_execution_service.deadline_exceeded_answer(
+        model_slot=slot,
+        account_id=account_id,
+        query_run_id=query_run_id,
+        credential_source=ProviderCredentialSource.APP_OWNED,
+    )
+
+    events = provider_event_recorder.list_events()
+    assert len(events) == 1
+    assert events[0].event_type == "provider_initial_answer_deadline_exceeded"
+    assert events[0].account_id == account_id
+    assert events[0].query_run_id == query_run_id
+    assert events[0].model_id == "nvidia/nemotron-3-nano-30b-a3b"
 
 
 class _FakeResponse:

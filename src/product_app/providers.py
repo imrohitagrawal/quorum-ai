@@ -729,7 +729,14 @@ class ProviderExecutionService:
             provider_notice=NOTICE_PROVIDER_UNAVAILABLE,
         )
 
-    def cancelled_answer(self, model_slot: ModelSlot) -> InitialModelAnswer:
+    def cancelled_answer(
+        self,
+        *,
+        model_slot: ModelSlot,
+        account_id: UUID,
+        query_run_id: UUID,
+        credential_source: ProviderCredentialSource,
+    ) -> InitialModelAnswer:
         """Build a stub ``InitialModelAnswer`` for a slot cancelled before
         the model call started.
 
@@ -749,7 +756,23 @@ class ProviderExecutionService:
         field drift between the two failure constructors is a known
         footgun (each new ``InitialModelAnswer`` field would otherwise
         have to be added in two places).
+
+        #188: also records a ``provider_initial_answer_cancelled`` event —
+        before this, a cancelled slot contributed to neither
+        ``total_calls`` nor ``failed_count`` in the ops audit; it was
+        entirely absent, not merely miscounted.
         """
+        provider_event_recorder.record(
+            event_type="provider_initial_answer_cancelled",
+            account_id=account_id,
+            query_run_id=query_run_id,
+            model_id=model_slot.model_id,
+            provider_path=ProviderPath.OPENROUTER_SEARCH,
+            duration_ms=0,
+            fallback_used=False,
+            source_count=0,
+            credential_source=credential_source,
+        )
         return InitialModelAnswer(
             slot_number=model_slot.slot_number,
             model_id=model_slot.model_id,
@@ -769,7 +792,14 @@ class ProviderExecutionService:
             provider_notice=NOTICE_CANCELLED,
         )
 
-    def deadline_exceeded_answer(self, model_slot: ModelSlot) -> InitialModelAnswer:
+    def deadline_exceeded_answer(
+        self,
+        *,
+        model_slot: ModelSlot,
+        account_id: UUID,
+        query_run_id: UUID,
+        credential_source: ProviderCredentialSource,
+    ) -> InitialModelAnswer:
         """Build a stub ``InitialModelAnswer`` for a slot cut by the run-level
         wall-clock deadline (NFR-004 / P3).
 
@@ -785,7 +815,21 @@ class ProviderExecutionService:
 
         FAILED status keeps the RB-5 rule automatic: a cut slot is never a
         live answer, so it can never inflate the served ``live_count``.
+
+        #188: also records a ``provider_initial_answer_deadline_exceeded``
+        event — mirrors :meth:`cancelled_answer`'s fix, for the sibling gap.
         """
+        provider_event_recorder.record(
+            event_type="provider_initial_answer_deadline_exceeded",
+            account_id=account_id,
+            query_run_id=query_run_id,
+            model_id=model_slot.model_id,
+            provider_path=ProviderPath.OPENROUTER_SEARCH,
+            duration_ms=0,
+            fallback_used=False,
+            source_count=0,
+            credential_source=credential_source,
+        )
         return InitialModelAnswer(
             slot_number=model_slot.slot_number,
             model_id=model_slot.model_id,
