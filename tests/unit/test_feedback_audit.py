@@ -300,6 +300,63 @@ def test_aggregate_provider_counts_cancelled_and_deadline_exceeded_mixed_with_ot
     assert slot_stats.deadline_exceeded_count == 1
 
 
+def test_cancelled_and_deadline_exceeded_events_do_not_dilute_the_duration_average() -> None:
+    """#188 review finding: a cancelled or deadline-exceeded slot records a
+
+    ``duration_ms=0`` event by construction (no work was attempted, or the
+    elapsed time was never measured) -- NOT a real latency sample. Before
+    #188 these slots recorded no event at all, so ``avg_duration_ms`` and
+    ``p95_duration_ms`` reflected only real attempts. Naively including the
+    new zero-duration events in the same ``durations`` list #188 added
+    silently pulls both statistics DOWN, making a model that is frequently
+    cancelled or timing out look artificially FAST in the nightly ops-audit
+    report an operator reads -- the opposite of what the audit needs to
+    surface.
+
+    Mixed with a genuinely failed call (``duration_ms=50``, which DOES carry
+    a real measured elapsed time and must stay in the average), so a fix
+    that excludes ALL non-completed events would fail this test too.
+
+    What turns it red: include events with
+    ``event_type in {"provider_initial_answer_cancelled",
+    "provider_initial_answer_deadline_exceeded"}`` in the ``durations`` list
+    -- ``avg_duration_ms`` drops from the true 583.33 to 291.67.
+    """
+    events = [
+        _provider_event("openai/gpt-4o-mini", "openrouter_search", 800),
+        _provider_event("openai/gpt-4o-mini", "openrouter_search", 900),
+        _provider_event(
+            "openai/gpt-4o-mini",
+            "openrouter_search",
+            50,
+            event_type="provider_initial_answer_failed",
+        ),
+        _provider_event(
+            "openai/gpt-4o-mini",
+            "openrouter_search",
+            0,
+            event_type="provider_initial_answer_cancelled",
+        ),
+        _provider_event(
+            "openai/gpt-4o-mini",
+            "openrouter_search",
+            0,
+            event_type="provider_initial_answer_cancelled",
+        ),
+        _provider_event(
+            "openai/gpt-4o-mini",
+            "openrouter_search",
+            0,
+            event_type="provider_initial_answer_deadline_exceeded",
+        ),
+    ]
+    stats = _aggregate_provider(events)
+    slot_stats = stats["openai/gpt-4o-mini"]
+    assert slot_stats.total_calls == 6
+    assert slot_stats.avg_duration_ms == pytest.approx(583.33, abs=0.1)
+    assert slot_stats.p95_duration_ms == pytest.approx(890.0, abs=0.1)
+
+
 def test_a_model_failing_every_live_call_is_visible_through_the_real_recorder() -> None:
     """#177's own reproduction, end to end through the real store.
 

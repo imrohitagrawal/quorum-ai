@@ -166,6 +166,23 @@ def _quantile(values: list[int] | list[float], q: float) -> float:
     return float(sorted_values[lower] * (1 - weight) + sorted_values[upper] * weight)
 
 
+#: #188 review finding: ``cancelled_answer``/``deadline_exceeded_answer``
+#: record ``duration_ms=0`` by construction -- no work was attempted, or the
+#: elapsed time was never measured -- NOT a real latency sample. Mixing them
+#: into ``avg_duration_ms``/``p95_duration_ms`` silently pulls both DOWN,
+#: making a model that is frequently cancelled or timing out look
+#: artificially fast in the report an operator reads. ``failed_count``
+#: events are NOT in this set: ``_failed_answer`` records a real measured
+#: elapsed time (the call was attempted and failed after real processing),
+#: so it belongs in the average.
+_ZERO_DURATION_EVENT_TYPES = frozenset(
+    {
+        "provider_initial_answer_cancelled",
+        "provider_initial_answer_deadline_exceeded",
+    }
+)
+
+
 def _aggregate_provider(events: Iterable[Any]) -> dict[str, ProviderStats]:
     by_model: dict[str, list[Any]] = defaultdict(list)
     for event in events:
@@ -173,7 +190,11 @@ def _aggregate_provider(events: Iterable[Any]) -> dict[str, ProviderStats]:
         by_model[model_id].append(event)
     stats: dict[str, ProviderStats] = {}
     for model_id, model_events in by_model.items():
-        durations = [int(e.payload.get("duration_ms") or 0) for e in model_events]
+        durations = [
+            int(e.payload.get("duration_ms") or 0)
+            for e in model_events
+            if e.event_type not in _ZERO_DURATION_EVENT_TYPES
+        ]
         provider_paths = [str(e.payload.get("provider_path") or "") for e in model_events]
         stats[model_id] = ProviderStats(
             total_calls=len(model_events),
