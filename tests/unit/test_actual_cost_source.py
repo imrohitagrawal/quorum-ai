@@ -243,11 +243,12 @@ def test_measured_total_is_exact_from_captured_tokens(monkeypatch: pytest.Monkey
     """Pin the EXACT measured grand total so a mispricing can't ship green.
 
     Every priced model (the four slots + the debate/synthesis writers) is
-    forced to an unknown id → the default floor prices ($0.0008/1K input,
-    $0.002/1K output), independent of catalog state. With every call at
+    forced to an unknown id → the default floor prices (#151: derived from
+    the max real price across ``DEFAULT_MODEL_IDS`` — $0.001/1K input,
+    $0.005/1K output), independent of catalog state. With every call at
     prompt=1000/completion=500 the per-call cost is
-    0.0008 + 0.002*0.5 = 0.0018; there are 4 initial + 2 debate + 5 synthesis
-    = 11 calls → 11 * 0.0018 = 0.0198.
+    0.001 + 0.005*0.5 = 0.0035; there are 4 initial + 2 debate + 5 synthesis
+    = 11 calls → 11 * 0.0035 = 0.0385.
     """
     from product_app import config
 
@@ -272,8 +273,8 @@ def test_measured_total_is_exact_from_captured_tokens(monkeypatch: pytest.Monkey
     )
     actual, breakdown, source = _actual_cost(run)  # type: ignore[arg-type]
     assert source == "measured"
-    assert actual == Decimal("0.0198")
-    assert breakdown is not None and breakdown.total == Decimal("0.0198")
+    assert actual == Decimal("0.0385")
+    assert breakdown is not None and breakdown.total == Decimal("0.0385")
 
 
 def test_simulated_slot_forces_estimated() -> None:

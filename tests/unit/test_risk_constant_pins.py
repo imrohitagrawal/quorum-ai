@@ -299,27 +299,56 @@ def test_money_constants_are_pinned_to_their_literal_values() -> None:
     """Turns red if: any spend rail moves. That is the point — it must be reviewed.
 
     A PIN IS NOT A VALIDATION. This makes a change visible; it does not say the
-    value is right. Measured 2026-07-29, `_DEFAULT_PRICE_PER_1K_INPUT = 0.0008`
-    is the fallback used when the catalog is unreachable, and against the four
-    shipped default models it OVER-charges three (5.3x, 2.7x, and 16.0x for
-    nvidia — that is the recorded "16x mispricing", derived here from first
-    principles) while UNDER-charging anthropic/claude-haiku-4.5, whose real
-    input price is 0.001. Under-charging is the unsafe direction for a spend
-    cap. No document derives 0.0008. Tracked as an issue; pinned here so it
-    cannot drift further while that is decided.
+    value is right. **#151, resolved 2026-08-01**: `_DEFAULT_PRICE_PER_1K_INPUT`
+    / `_OUTPUT` were a hand-picked 0.0008 / 0.002 that, against the four
+    shipped default models, OVER-charged three (5.3x, 2.7x, and 16.0x for
+    nvidia — the recorded "16x mispricing") while UNDER-charging
+    anthropic/claude-haiku-4.5 by 25% — the unsafe direction for a spend cap.
+    Now DERIVED (`costs.py`, next to the constants): the max real input/output
+    price across `DEFAULT_MODEL_IDS`, read from `_FALLBACK_CATALOG` — 0.001 /
+    0.005, conservative for every shipped model by construction.
+    `test_default_price_floor_never_undercharges_a_shipped_model` (this file)
+    pins that PROPERTY independently of this literal, so a future re-add of
+    a fifth default model with an even higher real price is still caught even
+    if this literal pin is updated to match a bad value by mistake.
 
-    These are statements about real money. `costs._DEFAULT_PRICE_PER_1K_INPUT`
-    is the standout: 0.0008 is the default behind the recorded 16x mispricing,
-    and it had no test reference at all before this line.
+    These are statements about real money.
     """
     assert Decimal("0.15") == costs.SOFT_THRESHOLD_USD
     assert Decimal("0.20") == costs.DAILY_CAP_USD
     assert Decimal("0.25") == costs.HARD_LIMIT_USD
-    assert Decimal("0.0008") == costs._DEFAULT_PRICE_PER_1K_INPUT
-    assert Decimal("0.002") == costs._DEFAULT_PRICE_PER_1K_OUTPUT
+    assert Decimal("0.001") == costs._DEFAULT_PRICE_PER_1K_INPUT
+    assert Decimal("0.005") == costs._DEFAULT_PRICE_PER_1K_OUTPUT
     assert Decimal(4) == costs.CHARS_PER_TOKEN
     assert Decimal("0.0001") == costs.COST_DISPLAY_QUANTUM
     assert timedelta(minutes=5) == costs.CONFIRMATION_TOKEN_TTL
+
+
+def test_default_price_floor_never_undercharges_a_shipped_model() -> None:
+    """#151: the floor must be >= every DEFAULT_MODEL_IDS model's real
+    fallback-catalog price, in both directions — independent of the exact
+    derivation formula, so a future re-derivation (or a new default model
+    with a higher real price than today's four) that still under-covers one
+    model is caught here even if the literal pin above is updated to match
+    a bad value.
+
+    What turns it red: the pre-#151 constants (0.0008 / 0.002) — the
+    anthropic/claude-haiku-4.5 row's real input price (0.001) exceeds the
+    old input floor, and the real output price (0.005) exceeds the old
+    output floor too. Verified by mutation: hardcoding the old literals back
+    in reds this test on both assertions for that model.
+    """
+    catalog = {entry.model_id: entry for entry in catalog_fetcher._FALLBACK_CATALOG}
+    for model_id in model_slots.DEFAULT_MODEL_IDS:
+        entry = catalog[model_id]
+        assert entry.input_price_per_1k <= costs._DEFAULT_PRICE_PER_1K_INPUT, (
+            f"{model_id}: floor {costs._DEFAULT_PRICE_PER_1K_INPUT} under-covers "
+            f"real input price {entry.input_price_per_1k}"
+        )
+        assert entry.output_price_per_1k <= costs._DEFAULT_PRICE_PER_1K_OUTPUT, (
+            f"{model_id}: floor {costs._DEFAULT_PRICE_PER_1K_OUTPUT} under-covers "
+            f"real output price {entry.output_price_per_1k}"
+        )
 
 
 def test_the_spend_rails_keep_their_ordering() -> None:
