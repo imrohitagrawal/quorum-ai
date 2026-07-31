@@ -357,6 +357,53 @@ def test_cancelled_and_deadline_exceeded_events_do_not_dilute_the_duration_avera
     assert slot_stats.p95_duration_ms == pytest.approx(890.0, abs=0.1)
 
 
+def test_avg_and_p95_duration_are_none_when_every_event_is_zero_duration() -> None:
+    """#189: when EVERY event for a model in the window is cancelled or
+
+    deadline-exceeded, ``durations`` ends up empty. The pre-#189 guard
+    reported ``0.0`` for both ``avg_duration_ms`` and ``p95_duration_ms`` --
+    indistinguishable from "measured, averaged 0ms" -- making a model that
+    is cancelled or times out on every single call look artificially FAST
+    in the nightly ops-audit report an operator reads, the same failure
+    shape #188's own review fix closed for the mixed case, at the 100%
+    extreme instead.
+
+    Mixed between cancelled AND deadline-exceeded (not just one repeated
+    event type), so a fix that special-cases only one of the two event
+    types cannot pass this by accident.
+
+    What turns it red: revert to ``0.0`` -- both assertions below fail
+    with ``0.0 is not None``.
+    """
+    events = [
+        _provider_event(
+            "openai/gpt-4o-mini",
+            "openrouter_search",
+            0,
+            event_type="provider_initial_answer_cancelled",
+        ),
+        _provider_event(
+            "openai/gpt-4o-mini",
+            "openrouter_search",
+            0,
+            event_type="provider_initial_answer_cancelled",
+        ),
+        _provider_event(
+            "openai/gpt-4o-mini",
+            "openrouter_search",
+            0,
+            event_type="provider_initial_answer_deadline_exceeded",
+        ),
+    ]
+    stats = _aggregate_provider(events)
+    slot_stats = stats["openai/gpt-4o-mini"]
+    assert slot_stats.total_calls == 3
+    assert slot_stats.cancelled_count == 2
+    assert slot_stats.deadline_exceeded_count == 1
+    assert slot_stats.avg_duration_ms is None
+    assert slot_stats.p95_duration_ms is None
+
+
 def test_a_model_failing_every_live_call_is_visible_through_the_real_recorder() -> None:
     """#177's own reproduction, end to end through the real store.
 

@@ -78,8 +78,13 @@ class ProviderStats:
     #: ``failed_count`` so a model that is systematically too slow shows up
     #: as a distinct signal rather than folded into generic failures.
     deadline_exceeded_count: int
-    avg_duration_ms: float
-    p95_duration_ms: float
+    #: #189: ``None`` when every event for this model in the window is a
+    #: ``_ZERO_DURATION_EVENT_TYPES`` event (cancelled/deadline-exceeded),
+    #: so ``durations`` is empty and there is nothing measured -- distinct
+    #: from a real 0ms measurement, which cannot occur (a live call always
+    #: takes non-zero wall-clock time).
+    avg_duration_ms: float | None
+    p95_duration_ms: float | None
 
 
 @dataclass(frozen=True)
@@ -218,8 +223,8 @@ def _aggregate_provider(events: Iterable[Any]) -> dict[str, ProviderStats]:
                 for e in model_events
                 if e.event_type == "provider_initial_answer_deadline_exceeded"
             ),
-            avg_duration_ms=statistics.fmean(durations) if durations else 0.0,
-            p95_duration_ms=_quantile(durations, 0.95),
+            avg_duration_ms=statistics.fmean(durations) if durations else None,
+            p95_duration_ms=_quantile(durations, 0.95) if durations else None,
         )
     return stats
 
