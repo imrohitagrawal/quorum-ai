@@ -34,6 +34,7 @@ from product_app.feedback_store import (
     configure_for_tests,
     record_event,
 )
+from product_app.model_slots import ModelSlot
 
 # ---------------------------------------------------------------------------
 # FeedbackStore
@@ -239,6 +240,64 @@ def test_aggregate_provider_all_healthy_events_have_zero_failed_count() -> None:
     slot_stats = stats["openai/gpt-4o-mini"]
     assert slot_stats.total_calls == 3
     assert slot_stats.failed_count == 0
+    assert slot_stats.cancelled_count == 0
+    assert slot_stats.deadline_exceeded_count == 0
+
+
+def test_aggregate_provider_counts_cancelled_and_deadline_exceeded_mixed_with_other_events() -> (
+    None
+):
+    """#188: ``cancelled_answer``/``deadline_exceeded_answer`` used to record
+
+    NO event at all, so a cancelled or deadline-cut slot was entirely absent
+    from ``_aggregate_provider``'s output — not merely miscounted the way a
+    failed live call was before #177.
+
+    MIXED on purpose: 2 completed, 1 failed, 2 cancelled and 1
+    deadline-exceeded event for the SAME model in the SAME window, so an
+    aggregator that conflates any two of the four counters (e.g. folds
+    cancelled into failed, or double-counts an event under two labels)
+    cannot pass this by accident the way a uniform-extreme test would allow.
+
+    What turns it red: change ``cancelled_count``/``deadline_exceeded_count``
+    back to reading nothing (or ``provider_path``, which is
+    ``openrouter_search`` for all four event types here) instead of
+    ``event.event_type`` — both counts silently read 0.
+    """
+    events = [
+        _provider_event("openai/gpt-4o-mini", "openrouter_search", 800),
+        _provider_event("openai/gpt-4o-mini", "openrouter_search", 900),
+        _provider_event(
+            "openai/gpt-4o-mini",
+            "openrouter_search",
+            50,
+            event_type="provider_initial_answer_failed",
+        ),
+        _provider_event(
+            "openai/gpt-4o-mini",
+            "openrouter_search",
+            0,
+            event_type="provider_initial_answer_cancelled",
+        ),
+        _provider_event(
+            "openai/gpt-4o-mini",
+            "openrouter_search",
+            0,
+            event_type="provider_initial_answer_cancelled",
+        ),
+        _provider_event(
+            "openai/gpt-4o-mini",
+            "openrouter_search",
+            0,
+            event_type="provider_initial_answer_deadline_exceeded",
+        ),
+    ]
+    stats = _aggregate_provider(events)
+    slot_stats = stats["openai/gpt-4o-mini"]
+    assert slot_stats.total_calls == 6
+    assert slot_stats.failed_count == 1
+    assert slot_stats.cancelled_count == 2
+    assert slot_stats.deadline_exceeded_count == 1
 
 
 def test_a_model_failing_every_live_call_is_visible_through_the_real_recorder() -> None:
@@ -293,6 +352,81 @@ def test_a_model_failing_every_live_call_is_visible_through_the_real_recorder() 
     assert stats["openai/gpt-4o-mini"].failed_count == 10
     assert stats["openai/gpt-4o-mini"].simulation_count == 0
     assert stats["anthropic/claude-3-haiku"].failed_count == 0
+
+
+def test_cancelled_and_deadline_exceeded_slots_are_visible_through_the_real_recorder() -> None:
+    """#188's own reproduction, end to end through the REAL provider service
+    and the real store — the issue's own acceptance criterion: "a probe
+    driving a cancelled slot and a deadline-exceeded slot through the real
+    recorder asserts each produces exactly one event, with the correct
+    event_type."
+
+    Before this fix: ``provider_execution_service.cancelled_answer`` and
+    ``.deadline_exceeded_answer`` built and returned an ``InitialModelAnswer``
+    stub directly with no call to ``provider_event_recorder.record(...)``
+    anywhere in either function, so a cancelled or deadline-cut slot
+    contributed to NEITHER ``total_calls`` NOR ``failed_count`` — it was
+    entirely absent, not merely miscounted.
+
+    Drives the actual production methods (not the synthetic
+    ``_provider_event``/``record_event`` helpers), mixed with one healthy
+    call for a SECOND model, so both the event-type discrimination and the
+    per-model grouping are exercised together.
+    """
+    from product_app.provider_keys import ProviderCredentialSource
+    from product_app.providers import provider_execution_service
+
+    with configure_for_tests() as store:
+        run_id = uuid4()
+        account_id = uuid4()
+        cancelled_slot = ModelSlot(slot_number=1, model_id="openai/gpt-4o-mini", search=True)
+        deadline_slot = ModelSlot(slot_number=2, model_id="openai/gpt-4o-mini", search=True)
+
+        provider_execution_service.cancelled_answer(
+            model_slot=cancelled_slot,
+            account_id=account_id,
+            query_run_id=run_id,
+            credential_source=ProviderCredentialSource.APP_OWNED,
+        )
+        provider_execution_service.deadline_exceeded_answer(
+            model_slot=deadline_slot,
+            account_id=account_id,
+            query_run_id=run_id,
+            credential_source=ProviderCredentialSource.APP_OWNED,
+        )
+        record_event(
+            recorder="provider",
+            event_type="provider_initial_answer_completed",
+            account_id=account_id,
+            query_run_id=run_id,
+            payload={
+                "model_id": "anthropic/claude-3-haiku",
+                "provider_path": "openrouter_search",
+                "duration_ms": 700,
+                "fallback_used": False,
+                "source_count": 2,
+            },
+        )
+        rows = list(store.iter_events())
+
+    provider_rows = [r for r in rows if r.recorder == "provider"]
+    assert len(provider_rows) == 3
+    cancelled_rows = [
+        r for r in provider_rows if r.event_type == "provider_initial_answer_cancelled"
+    ]
+    deadline_rows = [
+        r for r in provider_rows if r.event_type == "provider_initial_answer_deadline_exceeded"
+    ]
+    assert len(cancelled_rows) == 1
+    assert len(deadline_rows) == 1
+
+    stats = _aggregate_provider(rows)
+    assert stats["openai/gpt-4o-mini"].total_calls == 2
+    assert stats["openai/gpt-4o-mini"].cancelled_count == 1
+    assert stats["openai/gpt-4o-mini"].deadline_exceeded_count == 1
+    assert stats["openai/gpt-4o-mini"].failed_count == 0
+    assert stats["anthropic/claude-3-haiku"].cancelled_count == 0
+    assert stats["anthropic/claude-3-haiku"].deadline_exceeded_count == 0
 
 
 def test_aggregate_synthesis_computes_coverage_average() -> None:

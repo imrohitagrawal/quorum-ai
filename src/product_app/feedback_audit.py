@@ -68,6 +68,16 @@ class ProviderStats:
     #: healthy call uses), so this cannot be read off ``provider_path``; it
     #: must come from ``event_type``.
     failed_count: int
+    #: #188: a slot cancelled mid-flight (``provider_initial_answer_cancelled``)
+    #: — kept separate from ``failed_count`` so "the user cancelled" stays
+    #: distinguishable from "the provider failed", the same way ``error_code``
+    #: already distinguishes them on the answer itself.
+    cancelled_count: int
+    #: #188: a slot cut by the run-level wall-clock deadline
+    #: (``provider_initial_answer_deadline_exceeded``) — kept separate from
+    #: ``failed_count`` so a model that is systematically too slow shows up
+    #: as a distinct signal rather than folded into generic failures.
+    deadline_exceeded_count: int
     avg_duration_ms: float
     p95_duration_ms: float
 
@@ -175,6 +185,17 @@ def _aggregate_provider(events: Iterable[Any]) -> dict[str, ProviderStats]:
             # distinction.
             failed_count=sum(
                 1 for e in model_events if e.event_type == "provider_initial_answer_failed"
+            ),
+            # #188: cancelled/deadline-exceeded slots used to record no event
+            # at all, so they were absent from every counter here, not merely
+            # miscounted into one of them.
+            cancelled_count=sum(
+                1 for e in model_events if e.event_type == "provider_initial_answer_cancelled"
+            ),
+            deadline_exceeded_count=sum(
+                1
+                for e in model_events
+                if e.event_type == "provider_initial_answer_deadline_exceeded"
             ),
             avg_duration_ms=statistics.fmean(durations) if durations else 0.0,
             p95_duration_ms=_quantile(durations, 0.95),

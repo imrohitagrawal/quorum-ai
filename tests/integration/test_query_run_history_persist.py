@@ -112,7 +112,12 @@ def test_partial_run_is_persisted(monkeypatch: pytest.MonkeyPatch) -> None:
     # Force every initial slot to fail so the run terminates PARTIAL early.
     def _all_fail(*args: Any, **kwargs: Any) -> object:
         slot = kwargs.get("model_slot") or args[3]
-        return service.cancelled_answer(slot)
+        return service.cancelled_answer(
+            model_slot=slot,
+            account_id=kwargs["account_id"],
+            query_run_id=kwargs["query_run_id"],
+            credential_source=kwargs["credential_source"],
+        )
 
     monkeypatch.setattr(service, "produce_initial_answer", _all_fail)
 
