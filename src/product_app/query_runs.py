@@ -1890,7 +1890,21 @@ def _execute_query_run(query_run_id: UUID, account_id: UUID) -> None:
         initial_answers=refreshed.initial_answers,
         openrouter_key=openrouter_key,
         context=query_run.context,
+        should_stop=lambda: _should_stop(query_run_id),
     )
+    # F-05 Layer 2 (#106): a cancel that landed while the debate stage was
+    # already entered stopped every round from BILLING (the should_stop
+    # gate above), but the stage still ran and produced templated output for
+    # any round it never dispatched. If NOTHING was billed, recording that
+    # templated output would be the exact "record_* still lands on a
+    # cancelled run" residual this fix exists to close, so skip the record
+    # entirely — the billing stage stays ``ENTERED``, which ``_actual_cost``
+    # already treats as "correctly excluded", not "lost". If something WAS
+    # billed (a round's call was already in flight when the cancel landed),
+    # it must still be recorded — an unrecorded billed call is a worse
+    # defect (F-06: a billed call must never vanish from the receipt).
+    if _should_stop(query_run_id) and not debate_result.live_call_usages:
+        return
     query_run_repository.record_debate_outputs(
         query_run_id,
         debate_result.debate_outputs,
@@ -1988,7 +2002,20 @@ def _execute_query_run(query_run_id: UUID, account_id: UUID) -> None:
         # this call was not, so ``prior_synthesis`` was priced into every one
         # of the five synthesis calls and sent to none of them.
         context=query_run.context,
+        should_stop=lambda: _should_stop(query_run_id),
     )
+    # F-05 Layer 2 (#106): see the matching comment at the debate call site —
+    # if the cancel stopped every section from billing, recording the
+    # all-templated output would be the exact residual this fix closes.
+    # Unlike debate's two SEQUENTIAL rounds, all 5 synthesis sections dispatch
+    # in PARALLEL, so a cancel landing in the submission window could in
+    # principle gate some sections and not others. That is still safe: each
+    # section's OWN ``live_call_usages`` entry is independently correct either
+    # way (present iff that section actually dispatched), and this guard only
+    # skips the record call when the run is cancelled AND the combined list is
+    # genuinely empty — never when any section billed.
+    if _should_stop(query_run_id) and not synthesis_result.live_call_usages:
+        return
     if synthesis_result.final_synthesis is None:
         query_run_repository.update_status(
             query_run_id,
