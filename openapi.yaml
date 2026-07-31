@@ -558,6 +558,10 @@ components:
           title: Critique Text
         status:
           $ref: '#/components/schemas/DebateRoundStatus'
+        debate_mode:
+          type: string
+          title: Debate Mode
+          default: fallback
       type: object
       required:
       - round_number

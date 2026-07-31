@@ -113,11 +113,37 @@ class DebateRoundStatus(StrEnum):
     SKIPPED = "skipped"
 
 
+#: The two values ``DebateOutput.debate_mode`` can take. Named constants for the
+#: same reason ``synthesis.py`` names ``SYNTHESIS_MODE_LIVE`` /
+#: ``SYNTHESIS_MODE_FALLBACK``: since #171 finding 5 the value is READ, not just
+#: written, so a producer/consumer spelling drift must fail loudly rather than
+#: silently restore the defect this field exists to close.
+#:
+#: ``"live"`` = the round's critique came from the configured debate moderator's
+#: own response. ``"fallback"`` = the moderator was not configured, or its call
+#: made no usable text, and the critique is this product's own template
+#: (:meth:`DebateOrchestrationService._build_round_one_text` /
+#: ``_build_round_two_text``).
+DEBATE_MODE_LIVE = "live"
+DEBATE_MODE_FALLBACK = "fallback"
+
+#: Every value :data:`DebateOutput.debate_mode` can hold, as a set, so a test can
+#: cover both without retyping the members (``AGENTS.md`` rule 7a).
+DEBATE_MODES: frozenset[str] = frozenset({DEBATE_MODE_LIVE, DEBATE_MODE_FALLBACK})
+
+
 class DebateOutput(BaseModel):
     round_number: int = Field(ge=1, le=2)
     focus_areas: list[str]
     critique_text: str
     status: DebateRoundStatus
+    #: Structural provenance for this ONE round — see :data:`DEBATE_MODE_LIVE` /
+    #: :data:`DEBATE_MODE_FALLBACK`. Defaults to the fallback value: a caller
+    #: that constructs a ``DebateOutput`` without stating otherwise gets the
+    #: conservative reading (assume templated, not live), matching
+    #: ``FinalSynthesis.synthesis_mode``'s default of
+    #: ``SYNTHESIS_MODE_SIMULATED``.
+    debate_mode: str = DEBATE_MODE_FALLBACK
 
 
 @dataclass(frozen=True)
@@ -212,10 +238,21 @@ class DebateOrchestrationService:
     L4: each round's critique text is produced by a live LLM call when
     a key is configured; otherwise the templated critique is used. The
     LLM call is opt-in: a missing key or a hard LLM failure both fall
-    back to the template, with a ``provider_notice`` (added to the
-    ``provider_failure_notices`` at the response level) explaining the
-    fallback. A failed round is NOT treated as a pipeline failure —
-    the run still produces a useful synthesis from the templated text.
+    back to the template. A failed round is NOT treated as a pipeline
+    failure — the run still produces a useful synthesis from the
+    templated text.
+
+    Which happened is recorded STRUCTURALLY on each round
+    (:attr:`DebateOutput.debate_mode`), not narrated in prose. #171
+    finding 5 measured that an earlier version of this docstring claimed
+    the fallback added a notice to the response-level
+    ``provider_failure_notices`` — it never did; the notice text was
+    built and discarded. That shared list is populated only from
+    initial-answer failures, and folding a per-round debate signal into
+    it would conflate two different things and, since live execution
+    defaults off, surface on nearly every existing demo-mode run.
+    ``debate_mode`` is the honest, scoped fix: a queryable field, not a
+    notice competing for space in an unrelated list.
     """
 
     def __init__(self, *, hard_timeout_ms: int = DEBATE_HARD_TIMEOUT_MS) -> None:
@@ -242,7 +279,6 @@ class DebateOrchestrationService:
         failed_steps: list[str] = []
         missing_steps: list[str] = []
         round_timings_ms: dict[int, int] = {}
-        fallback_messages: list[str] = []
         live_call_usages: list[tuple[int, TokenUsage | None]] = []
 
         # Round 1 always runs. The orchestrator pulls disagreement, weak
@@ -257,8 +293,9 @@ class DebateOrchestrationService:
         )
         round_one_ms = max(1, round((perf_counter() - round_one_started) * 1000))
         round_timings_ms[1] = round_one_ms
-        if round_one_fallback is not None:
-            fallback_messages.append(round_one_fallback)
+        round_one_mode = (
+            DEBATE_MODE_FALLBACK if round_one_fallback is not None else DEBATE_MODE_LIVE
+        )
         # A non-None live result means a billed moderator call happened; record
         # it against round 1 (usage may itself be None if the provider omitted it).
         if round_one_live is not None:
@@ -279,6 +316,7 @@ class DebateOrchestrationService:
                 focus_areas=list(FOCUS_AREAS),
                 critique_text=round_one_text,
                 status=DebateRoundStatus.COMPLETED,
+                debate_mode=round_one_mode,
             ),
         )
 
@@ -323,8 +361,9 @@ class DebateOrchestrationService:
         )
         round_two_ms = max(1, round((perf_counter() - round_two_started) * 1000))
         round_timings_ms[2] = round_two_ms
-        if round_two_fallback is not None:
-            fallback_messages.append(round_two_fallback)
+        round_two_mode = (
+            DEBATE_MODE_FALLBACK if round_two_fallback is not None else DEBATE_MODE_LIVE
+        )
         if round_two_live is not None:
             live_call_usages.append((2, round_two_live.usage))
         debate_event_recorder.record(
@@ -343,6 +382,7 @@ class DebateOrchestrationService:
                 focus_areas=list(FOCUS_AREAS),
                 critique_text=round_two_text,
                 status=DebateRoundStatus.COMPLETED,
+                debate_mode=round_two_mode,
             ),
         )
 
@@ -1027,6 +1067,9 @@ debate_orchestration_service = debate_stub_service
 # keep working without importing two modules.
 __all__ = [
     "DEBATE_HARD_TIMEOUT_MS",
+    "DEBATE_MODE_FALLBACK",
+    "DEBATE_MODE_LIVE",
+    "DEBATE_MODES",
     "AgreementSummary",
     "AlignmentState",
     "DebateOrchestrationService",
