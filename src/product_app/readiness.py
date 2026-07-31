@@ -113,12 +113,22 @@ REASON_CATALOG_DRIFT_PREFIX = "Default model ids not in current catalog: "
 # It can also be something between us and the provider (a proxy answering
 # 403 by policy), so the text names the check that failed rather than
 # declaring the key itself dead.
+#
+# #176: this used to say "every query will fall back to local_simulation" —
+# describing the PRE-#171 behaviour. Since #171, the key is still PRESENT (only
+# refused), so ``_live_execution_enabled`` stays true and every model call is
+# still attempted against the real provider — and refused the same way, so
+# every query FAILS rather than falling back to anything. Measured by driving
+# ``ProviderExecutionService.produce_initial_answers`` with a refused key: 4 of
+# 4 slots come back FAILED, zero LOCAL_SIMULATION.
 REASON_BAD_KEY = (
     "The OPENROUTER_API_KEY credential check was refused (HTTP 401/403). "
-    "Every query will fall back to local_simulation. The key is either "
-    "invalid or its account has no remaining credit — an unfunded key is "
-    "refused here exactly like an invalid one. Check both (and that any "
-    "network proxy allows the request), then restart to enable live "
+    "The key is present, so live execution stays on and every model call is "
+    "still attempted against the real provider — and refused the same way, so "
+    "every query FAILS rather than falling back to local_simulation. The key "
+    "is either invalid or its account has no remaining credit — an unfunded "
+    "key is refused here exactly like an invalid one. Check both (and that "
+    "any network proxy allows the request), then restart to enable live "
     "execution."
 )
 
@@ -151,8 +161,11 @@ class ReadinessReport:
     * ``"offline_by_bad_key"`` — a key IS set and the provider
       REFUSED it (401/403 from the zero-cost ``GET /key`` probe).
       Configuration-only checks cannot see this, which makes it the
-      quieter sibling of ``offline_by_no_key``: everything reports
-      configured and every run simulates anyway.
+      quieter sibling of ``offline_by_no_key`` — except the failure
+      mode differs: a refused key is still a PRESENT key (#171), so
+      live execution stays on and every query FAILS rather than
+      simulating. See ``REASON_BAD_KEY`` for the reason text and
+      ``tests/unit/test_readiness_key_auth.py`` for the executed proof.
 
     ``reasons`` carries human-readable detail for logs and the
     ``/ready`` endpoint payload. ``catalog_drift_ids`` is the list
