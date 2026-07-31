@@ -362,8 +362,11 @@ Findings you should look for:
    ratio is upside-down (most requests require confirmation).
 5. pipeline_timing — A debate round or synthesis stage is consistently
    slow (>2x the other stages).
-6. provider_fallback — A specific model_id has a high local_simulation
-   rate (>30%) suggesting it does not authenticate with the demo key.
+6. provider_fallback — A high share of entire RUNS (>30%) come back
+   local_simulation, suggesting the demo key is missing, invalid, or
+   unfunded. This is a WHOLE-RUN signal, not a per-model one: since #171 a
+   live-call failure is reported per model as FAILED (see model_slot above),
+   never as a per-model fallback to simulation.
 7. prompt_quality — Synthesis sections consistently fall back to
    templates (a separate signal would be needed; skip if not visible
    from the stats given).

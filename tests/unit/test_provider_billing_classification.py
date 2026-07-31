@@ -562,6 +562,43 @@ def test_initial_answer_path_reports_the_slot_missing_and_invents_nothing(
     assert answer.citation_coverage.sourced_answer_count == 0
 
 
+@pytest.mark.parametrize(
+    ("label", "outcome"),
+    [
+        ("401-unauthorized", _http_error(401)),
+        ("402-payment-required", _http_error(402)),
+        ("429-rate-limited", _http_error(429)),
+        ("connection-refused", URLError(ConnectionRefusedError(61, "Connection refused"))),
+        ("dns-failure", URLError(OSError("nodename nor servname provided, or not known"))),
+    ],
+)
+def test_notice_provider_unavailable_never_claims_a_response_arrived(
+    monkeypatch: pytest.MonkeyPatch, label: str, outcome: Any
+) -> None:
+    """#176 surface 3: pin the EXACT served string across all five failure
+    modes it now covers, and pin that it does not overclaim.
+
+    "did not return a usable response" claims the provider responded. For
+    ``connection-refused`` and ``dns-failure`` the request never reached the
+    provider at all (``URLError`` — CPython's own "the opener failed" signal);
+    for 401/402/429 the provider refused it before any generation happened.
+    Neither class supports "returned a response".
+
+    What turns it red: revert ``NOTICE_PROVIDER_UNAVAILABLE`` to the old text
+    and the exact-string assertion fails on all five parametrizations at once
+    — verified by mutation (``cp``-aside the copy, restore from the copy).
+    """
+    _install(monkeypatch, outcome)
+    answer = _produce_initial()
+
+    assert answer.status is InitialAnswerStatus.FAILED, label
+    assert answer.provider_notice == (
+        "This model's answer is unavailable because the request to the provider did not succeed."
+    ), label
+    assert "did not return a usable response" not in (answer.provider_notice or ""), label
+    assert "returned" not in (answer.provider_notice or ""), label
+
+
 def test_initial_answer_path_torn_body_now_degrades_instead_of_raising(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

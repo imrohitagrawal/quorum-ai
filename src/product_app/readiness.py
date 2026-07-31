@@ -113,12 +113,22 @@ REASON_CATALOG_DRIFT_PREFIX = "Default model ids not in current catalog: "
 # It can also be something between us and the provider (a proxy answering
 # 403 by policy), so the text names the check that failed rather than
 # declaring the key itself dead.
+#
+# #176: this used to say "every query will fall back to local_simulation" —
+# describing the PRE-#171 behaviour. Since #171, the key is still PRESENT (only
+# refused), so ``_live_execution_enabled`` stays true and every model call is
+# still attempted against the real provider — and refused the same way, so
+# every query FAILS rather than falling back to anything. Measured by driving
+# ``ProviderExecutionService.produce_initial_answers`` with a refused key: 4 of
+# 4 slots come back FAILED, zero LOCAL_SIMULATION.
 REASON_BAD_KEY = (
     "The OPENROUTER_API_KEY credential check was refused (HTTP 401/403). "
-    "Every query will fall back to local_simulation. The key is either "
-    "invalid or its account has no remaining credit — an unfunded key is "
-    "refused here exactly like an invalid one. Check both (and that any "
-    "network proxy allows the request), then restart to enable live "
+    "The key is present, so live execution stays on and every model call is "
+    "still attempted against the real provider — and refused the same way, so "
+    "every query FAILS rather than falling back to local_simulation. The key "
+    "is either invalid or its account has no remaining credit — an unfunded "
+    "key is refused here exactly like an invalid one. Check both (and that "
+    "any network proxy allows the request), then restart to enable live "
     "execution."
 )
 

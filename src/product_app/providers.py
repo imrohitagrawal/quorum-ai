@@ -210,8 +210,15 @@ NOTICE_DEMO_MODE = (
     "shown here was produced by Quorum's local simulation. It is not a "
     "real model answer."
 )
+# #176: "did not return a usable response" claimed the provider responded.
+# It is the production copy for DNS failure, connection refused, 401, 402 and
+# 429 (``_failed_answer`` — see its call sites in ``_post_messages`` /
+# ``produce_initial_answer``) — cases where the request never reached the
+# model at all, or was refused before any generation happened. Its deleted
+# predecessor's own comment said explicitly: "it must not claim the model was
+# asked." Neither must this one claim a response arrived.
 NOTICE_PROVIDER_UNAVAILABLE = (
-    "This model's answer is unavailable because the provider did not return a usable response."
+    "This model's answer is unavailable because the request to the provider did not succeed."
 )
 NOTICE_CANCELLED = "Cancelled before this model was asked for an answer."
 NOTICE_RUN_DEADLINE = "The run reached its time limit before this model answered."

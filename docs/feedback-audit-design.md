@@ -67,7 +67,7 @@ finding has:
 | `citation_threshold` | Citation coverage is consistently below 80% | "Average citation coverage over 7 days: 42%. The 80% target is not being met for any model." |
 | `cost_threshold` | Cost estimates are wrong relative to actual provider bills | (requires cost tracking, deferred to L5) |
 | `pipeline_timing` | A pipeline stage is consistently slow | "Debate round 2 averages 12s, 4× round 1. Consider reducing DEBATE_HARD_TIMEOUT_MS or simplifying round 2 prompt." |
-| `provider_fallback` | A model consistently falls back to local simulation | "Slot 1 (gpt-4o-mini) returned LOCAL_SIMULATION in 60% of calls — the :online suffix may be rejected by this model." |
+| `provider_fallback` | A high share of entire RUNS come back local_simulation — since #171 a live-call failure is reported per model as FAILED (see `model_slot` above), never as a per-model fallback to simulation; local_simulation only ever covers a WHOLE run | "62% of runs in the last 24h were entirely local_simulation — the demo key may be missing, invalid, or unfunded." |
 | `prompt_quality` | Synthesis sections are consistently falling back to templates | "Consensus section used local heuristic in 35% of runs — the synthesis model (gpt-4o-mini) may be too small for the consensus prompt." |
 
 ## Report format

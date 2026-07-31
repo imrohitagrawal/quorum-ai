@@ -114,6 +114,7 @@
   const workflowSteps = qsa(".workflow-step");
   const demoModeBanner = el("demo-mode-banner");
   const demoModeTarget = demoModeBanner ? demoModeBanner.querySelector("[data-demo-mode-target]") : null;
+  const demoModeTitle = el("demo-mode-banner-title");
   const infoTooltip = el("info-tooltip");
   // Screen 03 (cost gate) elements. ``renderCostGate`` fills these from
   // ``cost_estimate.breakdown``; the confirm button reuses ``proceedWithRun``.
@@ -2167,12 +2168,15 @@
   // nested field is guarded. The green treatment is GATED behind
   // ``isConsensus`` (AC-019 "no false consensus").
   // #26: surface a degraded/simulated banner on the PRIMARY result view. A
-  // production run whose live provider is unavailable silently falls back to
-  // local simulation (or the fallback-search stub); the response marks that via
-  // ``live_count``/``local_count``/``demo_mode``, but the result view rendered
-  // the verdict/synthesis as if real. This makes the fallback visible so
-  // simulated output can never be mistaken for a real model panel. Shown
-  // whenever fewer than all answers were live (any local/fallback answer).
+  // production run whose live provider is unavailable used to silently fall
+  // back to local simulation (or the fallback-search stub); since #171 that
+  // per-model fallback no longer happens — a live-execution failure now
+  // reports the slot MISSING instead, counted in neither ``live_count`` nor
+  // ``local_count``. Either way the response marks the shortfall, but the
+  // result view rendered the verdict/synthesis as if real. This makes the
+  // shortfall visible so simulated (or missing) output can never be mistaken
+  // for a real model panel. Shown whenever fewer than all answers were live
+  // (any local/fallback/missing answer).
   // A panel can come up short in TWO independent ways, and any combination of
   // the two is reachable: answers that were SIMULATED, and slots that returned
   // NOTHING (cancelled, or the run deadline expired — counted in neither
@@ -2241,6 +2245,110 @@
         "The verdict and synthesis below mix real and simulated output — do not rely on them as a fully live result.";
     }
     return { title, message };
+  }
+
+  // Which sentence tells the operator what to DO about a non-live run.
+  // Shared by the all-local and mixed states of ``computeDemoModeBannerCopy``
+  // below so the two states cannot drift into contradicting instructions.
+  //
+  // #176: "offline_by_bad_key" and "live" both mean the flag is ALREADY on —
+  // a refused key still counts as present (#171), so live execution stays
+  // enabled and every call is still attempted (and still fails) rather than
+  // falling back to simulation. Telling that operator to "enable live
+  // execution" sends them to a switch that is already flipped.
+  function demoModeActionClause(readinessState) {
+    if (readinessState === "offline_by_bad_key") {
+      return "Ask the operator to replace the provider key and restart.";
+    }
+    if (readinessState === "offline_by_no_key") {
+      return "Ask the operator to add the provider key and restart.";
+    }
+    if (readinessState === "live") {
+      return "Ask the operator to check the provider's status and this deployment's account credit.";
+    }
+    return "Ask the operator to enable live execution to run against real models.";
+  }
+
+  // The pure decision at the heart of the (currently invisible — #115)
+  // ``#demo-mode-banner``. Kept DOM-free, like ``describePanelShortfall``
+  // above, so it can be driven directly by a test with plain objects.
+  //
+  // ``hasFinalSynthesis`` must be measured from the SAME poll response this
+  // banner renders for — never assumed. #176: the previous copy asserted "the
+  // synthesis below is also produced by a configured synthesis model"
+  // unconditionally, which is false both transiently (mid-run, before the
+  // synthesis stage is reached) and permanently (a run that is cancelled or
+  // hits its deadline before synthesis, where ``final_synthesis`` stays null
+  // forever).
+  function computeDemoModeBannerCopy({
+    liveCount,
+    localCount,
+    failedCount,
+    total,
+    readinessState,
+    hasFinalSynthesis,
+  }) {
+    if (liveCount != null && total != null && liveCount === total) {
+      return { bannerState: "all-live", title: "", message: "" };
+    }
+    if (liveCount === 0 && failedCount === 0) {
+      // The CAUSE matters, not just the effect. This banner used to say
+      // "turned off" unconditionally, which is wrong — and actively
+      // misleading — whenever live execution IS enabled and something else
+      // stopped it: a refused key (offline_by_bad_key) or a missing one
+      // (offline_by_no_key). Telling that operator to "enable live
+      // execution" sends them to a switch that is already on.
+      //
+      // NOTE: ``readinessState === "offline_by_bad_key"`` cannot reach this
+      // branch in production — since #171 a refused key produces FAILED
+      // slots, never LOCAL_SIMULATION, so ``failedCount`` would be > 0. Kept
+      // for an older payload shape / defence in depth; it is provably dead
+      // code today, not a live defect (measured:
+      // ``ProviderExecutionService.produce_initial_answers`` with a refused
+      // key returns 4 of 4 slots FAILED, zero LOCAL_SIMULATION).
+      let causeClause =
+        "Live execution is turned off, so all four model answers and the synthesis below come from Quorum's local simulation helpers.";
+      if (readinessState === "offline_by_bad_key") {
+        causeClause =
+          "The model provider refused this deployment's key, so all four model answers and the synthesis below come from Quorum's local simulation helpers.";
+      } else if (readinessState === "offline_by_no_key") {
+        causeClause =
+          "No model provider key is configured, so all four model answers and the synthesis below come from Quorum's local simulation helpers.";
+      }
+      const message =
+        causeClause +
+        " They look like real output but are not generated by GPT, Claude, Gemini, or Deepseek." +
+        " " +
+        demoModeActionClause(readinessState);
+      return { bannerState: "all-local", title: "Demo mode is active", message };
+    }
+    // Neutral about the cause, matching renderResultDegraded: the browser
+    // cannot know WHY a slot is empty, and "the provider failed" is usually
+    // wrong (a live provider error becomes a FAILED slot, never a simulated
+    // answer, since #171; an empty slot can also mean a cancel or the run
+    // deadline). This output is currently invisible — see #115 — so fixing
+    // the wording now means it is not false on the day that banner is made
+    // visible.
+    const failedClause = failedCount > 0 ? `${failedCount} returned nothing. ` : "";
+    const synthesisClause = hasFinalSynthesis
+      ? "The synthesis below is also produced by a configured synthesis model. "
+      : "";
+    const message =
+      `${liveCount} of ${total ?? 4} model answers came from a live provider; ` +
+      `${localCount ?? 0} are from Quorum's local simulation helpers. ` +
+      failedClause +
+      synthesisClause +
+      demoModeActionClause(readinessState);
+    // Reuse ``describePanelShortfall``'s title scheme so the two banners
+    // that describe the same shortfall cannot disagree (the #128 class of
+    // defect the comment on that function already documents).
+    const { title } = describePanelShortfall({
+      live: liveCount,
+      simulated: localCount ?? 0,
+      missing: failedCount,
+      total,
+    });
+    return { bannerState: "mixed", title, message };
   }
 
   // A count is only usable if it is a non-negative WHOLE number. A float or a
@@ -4540,67 +4648,27 @@
           slotCount != null && liveCount != null && localCount != null
             ? Math.max(0, slotCount - liveCount - localCount)
             : 0;
-        let bannerState;
-        let bannerCopy = "";
-        if (liveCount != null && total != null && liveCount === total) {
-          bannerState = "all-live";
-          bannerCopy = "";
-        } else if (liveCount === 0 && failedCount === 0) {
-          bannerState = "all-local";
-          // The CAUSE matters, not just the effect. This banner used to
-          // say "turned off" unconditionally, which is wrong — and
-          // actively misleading — whenever live execution IS enabled and
-          // something else stopped it: a refused key (offline_by_bad_key)
-          // or a missing one (offline_by_no_key). Telling that operator
-          // to "enable live execution" sends them to a switch that is
-          // already on, while the readiness banner a few hundred pixels
-          // away correctly says the key was refused.
-          const readinessState =
-            state.lastReadiness && state.lastReadiness.state
-              ? state.lastReadiness.state
-              : null;
-          let causeClause =
-            "Live execution is turned off, so all four model answers and the synthesis below come from Quorum's local simulation helpers.";
-          let actionClause =
-            " Ask the operator to enable live execution to run against real models.";
-          if (readinessState === "offline_by_bad_key") {
-            causeClause =
-              "The model provider refused this deployment's key, so all four model answers and the synthesis below come from Quorum's local simulation helpers.";
-            actionClause =
-              " Ask the operator to replace the provider key and restart.";
-          } else if (readinessState === "offline_by_no_key") {
-            causeClause =
-              "No model provider key is configured, so all four model answers and the synthesis below come from Quorum's local simulation helpers.";
-            actionClause =
-              " Ask the operator to add the provider key and restart.";
-          }
-          bannerCopy =
-            causeClause +
-            " They look like real output but are not generated by GPT, Claude, Gemini, or Deepseek." +
-            actionClause;
-        } else {
-          bannerState = "mixed";
-          // Neutral about the cause, matching renderResultDegraded: the browser
-          // cannot know WHY a slot is empty, and "the provider failed" is usually
-          // wrong (a live provider error becomes a simulated answer; an empty slot
-          // means a cancel or the run deadline). This output is currently
-          // invisible — see #115 — so fixing the wording now means it is not false
-          // on the day that banner is made visible.
-          const failedClause = failedCount > 0 ? `${failedCount} returned nothing. ` : "";
-          bannerCopy =
-            `${liveCount} of ${total ?? 4} model answers came from a live provider; ` +
-            `${localCount ?? 0} are from Quorum's local simulation helpers. ` +
-            failedClause +
-            `The synthesis below is also produced by a configured synthesis model. ` +
-            `Ask the operator to enable live execution for all four models to run everything against real providers.`;
-        }
+        const readinessState =
+          state.lastReadiness && state.lastReadiness.state ? state.lastReadiness.state : null;
+        const hasFinalSynthesis = Boolean(result.result && result.result.final_synthesis);
+        const { bannerState, title, message } = computeDemoModeBannerCopy({
+          liveCount,
+          localCount,
+          failedCount,
+          total,
+          readinessState,
+          hasFinalSynthesis,
+        });
         if (bannerState !== state.lastDemoMode) {
           state.lastDemoMode = bannerState;
           if (bannerState === "all-live") {
             demoModeBanner.hidden = true;
           } else {
+            if (demoModeTitle) {
+              demoModeTitle.textContent = title;
+            }
             if (demoModeTarget) {
-              demoModeTarget.textContent = bannerCopy;
+              demoModeTarget.textContent = message;
             }
             demoModeBanner.hidden = false;
           }

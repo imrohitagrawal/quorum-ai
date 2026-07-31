@@ -6,7 +6,9 @@ Neither fact means the provider will accept the key. The deployment this
 repo runs against reports ``state=live`` on every surface — the ops
 readiness tile, the ``/status.live_execution`` monitoring bool, the
 workspace connection pill ("provider configured") — while the key 401s
-on every model, so every run silently falls back to local simulation.
+on every model, so every run FAILS outright (since #171 a refused key
+still counts as present, so live execution stays on and nothing falls
+back to local simulation).
 
 That is the same silent-failure class the probe exists to catch, one
 level deeper: the probe was built to catch a MISSING key and is blind to
@@ -506,3 +508,70 @@ def test_the_bad_key_reason_names_credit_as_well_as_validity() -> None:
     lowered = readiness.REASON_BAD_KEY.lower()
     assert "credit" in lowered, readiness.REASON_BAD_KEY
     assert "invalid" in lowered, readiness.REASON_BAD_KEY
+
+
+def test_the_bad_key_reason_does_not_promise_a_fallback_that_no_longer_happens() -> None:
+    """#176 surface 1: pin the exact served string, and pin what it must NOT say.
+
+    The pre-#171 REASON_BAD_KEY said "Every query will fall back to
+    local_simulation." Since #171 a refused key is still a PRESENT key, so
+    ``_live_execution_enabled`` stays true and every model call is still
+    attempted against the real provider — and refused the same way. See
+    ``test_every_slot_fails_on_a_refused_key_none_fall_back_to_simulation``
+    below for the executed proof of what actually happens instead.
+    """
+    assert readiness.REASON_BAD_KEY == (
+        "The OPENROUTER_API_KEY credential check was refused (HTTP 401/403). "
+        "The key is present, so live execution stays on and every model call is "
+        "still attempted against the real provider — and refused the same way, so "
+        "every query FAILS rather than falling back to local_simulation. The key "
+        "is either invalid or its account has no remaining credit — an unfunded "
+        "key is refused here exactly like an invalid one. Check both (and that "
+        "any network proxy allows the request), then restart to enable live "
+        "execution."
+    )
+    assert "fall back to local_simulation" not in readiness.REASON_BAD_KEY
+    assert "every query fails" in readiness.REASON_BAD_KEY.lower()
+
+
+def test_every_slot_fails_on_a_refused_key_none_fall_back_to_simulation(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Drives the REAL provider layer (network-free) to prove REASON_BAD_KEY's
+    claim: with live execution on and the key refused, EVERY slot fails —
+    cardinality, not a clean-path outcome. Before this test's fix, the
+    identical setup produced 4 FAILED / 0 LOCAL_SIMULATION just the same (the
+    behaviour was already correct); only the copy describing it was wrong.
+    """
+    from uuid import uuid4
+
+    from product_app import providers as providers_mod
+    from product_app.model_slots import ModelSlot
+    from product_app.provider_keys import ProviderCredentialSource
+    from product_app.providers import (
+        InitialAnswerStatus,
+        ProviderPath,
+        provider_execution_service,
+    )
+
+    def _refused(request: object, timeout: float = 0) -> None:
+        raise _http_error(401)
+
+    monkeypatch.setattr(settings, "openrouter_live_execution_enabled", True)
+    monkeypatch.setattr(providers_mod, "urlopen", _refused)
+
+    slots = [
+        ModelSlot(slot_number=i, model_id=f"vendor/model-{i}", search=False) for i in (1, 2, 3, 4)
+    ]
+    answers = provider_execution_service.produce_initial_answers(
+        account_id=uuid4(),
+        query_run_id=uuid4(),
+        query_text="hello",
+        model_slots=slots,
+        credential_source=ProviderCredentialSource.APP_OWNED,
+        openrouter_key="sk-refused-key",
+    )
+
+    assert len(answers) == 4
+    assert sum(1 for a in answers if a.status is InitialAnswerStatus.FAILED) == 4
+    assert sum(1 for a in answers if a.provider_path is ProviderPath.LOCAL_SIMULATION) == 0

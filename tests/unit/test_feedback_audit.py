@@ -333,6 +333,25 @@ def test_build_audit_user_prompt_includes_current_defaults() -> None:
     assert "42" in prompt  # total_runs
 
 
+def test_provider_fallback_prompt_describes_a_whole_run_signal_not_a_per_model_one() -> None:
+    """#176: the ``provider_fallback`` category used to tell the audit LLM to
+    look for "a specific model_id" with a high local_simulation rate. Since
+    #171 that premise is dead: a per-model live-call failure is reported as
+    FAILED (the ``model_slot`` category's domain), and local_simulation only
+    ever happens uniformly for a WHOLE run (the flag/key are checked once per
+    run, not per model). Sending the auditor a category description built
+    on an impossible scenario risks a mis-grounded finding.
+
+    What turns it red: restore the old sentence ("A specific model_id has a
+    high local_simulation rate (>30%)") — verified by mutation.
+    """
+    from product_app.feedback_audit import AUDIT_SYSTEM_PROMPT
+
+    assert "A specific model_id has a high local_simulation" not in AUDIT_SYSTEM_PROMPT
+    assert "high share of entire RUNS" in AUDIT_SYSTEM_PROMPT
+    assert "WHOLE-RUN signal, not a per-model one" in AUDIT_SYSTEM_PROMPT
+
+
 def test_render_report_no_findings_uses_health_indicator() -> None:
     now = datetime.now(UTC)
     stats = AuditStatistics(
