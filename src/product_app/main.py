@@ -50,6 +50,7 @@ from product_app.costs import (
     _DEFAULT_PRICE_PER_1K_INPUT,
     _DEFAULT_PRICE_PER_1K_OUTPUT,
     CHARS_PER_TOKEN,
+    GLOBAL_DAILY_CEILING_USD,
 )
 from product_app.feedback_store import FeedbackStore, get_store
 from product_app.feedback_store import configure as configure_feedback_store
@@ -832,6 +833,20 @@ def status_snapshot() -> dict[str, object]:
     # Latest audit date
     latest_report = _latest_feedback_report()
     latest_audit = latest_report.stem.replace("audit-", "") if latest_report else None
+    # Issue #100 §2.8: ongoing visibility into today's global spend against
+    # the $5/24h ceiling, not just an alert after it trips. Best-effort and
+    # independent of the ``feedback_db`` state machine above (a read failure
+    # here is its own, narrower thing — the ceiling checked at estimate time
+    # already fails open the same way — and must not flip the unrelated
+    # write-health token).
+    global_daily_spend_usd: str | None
+    if store is None:
+        global_daily_spend_usd = None
+    else:
+        try:
+            global_daily_spend_usd = str(store.global_daily_spend())
+        except Exception:  # noqa: BLE001 - status must not 500
+            global_daily_spend_usd = None
     # Sentry state
     sentry_client = sentry_sdk.get_client()
     sentry_state = "active" if sentry_client.is_active() else "inactive"
@@ -863,6 +878,13 @@ def status_snapshot() -> dict[str, object]:
         "feedback_lost_billed_writes": feedback_lost_billed_writes,
         "feedback_events_total": feedback_events_total,
         "latest_audit": latest_audit,
+        # Issue #100. ``null`` when unavailable (no store, or a read
+        # failure) rather than "0" — a demo deployment with a real store
+        # can genuinely be at 0.00, and collapsing "no data" into that same
+        # string would hide the difference from an operator glancing at
+        # this field.
+        "global_daily_spend_usd": global_daily_spend_usd,
+        "global_daily_ceiling_usd": str(GLOBAL_DAILY_CEILING_USD),
         "model_catalog_loaded": report.catalog_loaded,
         # Generic key on purpose (was ``sentry``): naming the vendor on an
         # unauthenticated endpoint is free recon for an attacker probing

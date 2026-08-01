@@ -813,6 +813,92 @@ class FeedbackStore:
                 total += Decimal(str(raw))
         return total
 
+    def global_daily_spend(
+        self,
+        *,
+        now: datetime | None = None,
+    ) -> Decimal:
+        """Sum ``estimated_cost_usd`` across ALL accounts in the last 24 hours.
+
+        Issue #100: the deployment-wide spend ceiling. Identical query to
+        :meth:`daily_spend_for` with the ``account_id`` predicate dropped —
+        that is deliberately the whole difference, so the two stay in sync
+        by construction (same event type, same durability rationale, same
+        24h rolling window) rather than by two authors independently
+        remembering to keep them consistent.
+
+        A run that gets degraded to simulation by the ceiling this method
+        enforces must NOT be counted here — see
+        ``CostEstimationService.record_guardrail_event``'s
+        ``cost_guardrail_degraded_to_simulation`` event type. If it were
+        counted, the meter would keep climbing from runs that spent nothing
+        real, permanently outrunning actual spend for the rest of the 24h
+        window and making ``/status``'s "today's global spend" figure a lie.
+
+        Args:
+            now: Override for test determinism. Defaults to
+                ``datetime.now(UTC)``.
+
+        Returns:
+            Total spend in USD as ``Decimal``. Zero if no events in window.
+        """
+        cutoff = (now or datetime.now(UTC)) - timedelta(hours=24)
+        total = Decimal("0")
+        with self._lock:
+            cursor = self._conn.execute(
+                "SELECT payload FROM events "
+                "WHERE recorder = 'cost' AND event_type = 'cost_guardrail_accepted' "
+                "AND recorded_at >= ?",
+                (cutoff.isoformat(),),
+            )
+            for row in cursor:
+                payload = json.loads(row["payload"])
+                raw = payload.get("estimated_cost_usd", "0")
+                total += Decimal(str(raw))
+        return total
+
+    def session_mint_count_for_ip(
+        self,
+        ip: str,
+        *,
+        now: datetime | None = None,
+    ) -> int:
+        """Count session-mint events for ``ip`` in the last 24 hours.
+
+        Issue #100 §2.3: a durable per-IP daily cap on NEW session mints
+        (distinct from the existing in-memory per-minute burst limiter,
+        which resets on every restart/redeploy — this app deploys many
+        times a day during active sessions, so an in-memory mint cap would
+        silently reset with it). Written by ``record_session_mint`` below,
+        via the generic ``recorder='session'`` event type; there is no
+        ``ip`` column on ``events``; the IP lives in the JSON payload and is
+        filtered in Python, matching how ``daily_spend_for`` already reads
+        this table (a scan of a bounded, already-rate-limited event volume,
+        not a hot path).
+
+        Args:
+            ip: The client IP to count mints for.
+            now: Override for test determinism. Defaults to
+                ``datetime.now(UTC)``.
+
+        Returns:
+            Number of session-mint events recorded for ``ip`` in the window.
+        """
+        cutoff = (now or datetime.now(UTC)) - timedelta(hours=24)
+        count = 0
+        with self._lock:
+            cursor = self._conn.execute(
+                "SELECT payload FROM events "
+                "WHERE recorder = 'session' AND event_type = 'session_minted' "
+                "AND recorded_at >= ?",
+                (cutoff.isoformat(),),
+            )
+            for row in cursor:
+                payload = json.loads(row["payload"])
+                if payload.get("ip") == ip:
+                    count += 1
+        return count
+
     def close(self) -> None:
         """Close the connection. Idempotent — the exit hook, ``configure_for_tests``
         and ``__del__`` can all reach the same instance.

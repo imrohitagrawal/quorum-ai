@@ -231,8 +231,8 @@ test.describe("ops dashboard", () => {
     await expect(page.locator('[data-current="version"]')).not.toHaveText("—", {
       timeout: 10_000,
     });
-    // All six tiles explain why the number matters…
-    for (const key of ["rate", "p95", "err", "ready", "uptime", "version"]) {
+    // All seven tiles explain why the number matters…
+    for (const key of ["rate", "p95", "err", "ready", "spend", "uptime", "version"]) {
       const why = page.locator(`[data-why="${key}"]`);
       await expect(why, `tile ${key} why-copy`).toBeVisible();
       const text = (await why.textContent()) ?? "";
@@ -241,7 +241,7 @@ test.describe("ops dashboard", () => {
       );
     }
     // …and the tiles with a red/non-live state carry a first-action hint.
-    for (const key of ["rate", "p95", "err", "ready"]) {
+    for (const key of ["rate", "p95", "err", "ready", "spend"]) {
       await expect(
         page.locator(`[data-red="${key}"]`),
         `tile ${key} red-hint`,
