@@ -255,8 +255,8 @@ def test_explainer_slo_names_source_of_truth_doc() -> None:
 # red" first-action hint where a red state exists. Keyed off stable data-*
 # hooks (data-why / data-red), never brittle prose.
 
-_ALL_TILE_KEYS = ("rate", "p95", "err", "ready", "uptime", "version")
-_RED_HINT_KEYS = ("rate", "p95", "err", "ready")
+_ALL_TILE_KEYS = ("rate", "p95", "err", "ready", "spend", "uptime", "version")
+_RED_HINT_KEYS = ("rate", "p95", "err", "ready", "spend")
 
 
 def test_every_tile_carries_why_it_matters_copy() -> None:

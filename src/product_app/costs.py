@@ -101,14 +101,49 @@ HARD_LIMIT_USD = Decimal("0.25")
 #: the first factor is the per-IP session bucket
 #: (``query_runs._InMemoryIpRateLimiter.CAPACITY`` = 30/min, per IP, in-process
 #: only). Read as an operator ratification, "$0.20" is the per-user blast
-#: radius of an honest mistake, not the day's worst case. A real spend ceiling
-#: for the deployment is a separate control and does not exist yet.
+#: radius of an honest mistake, not the day's worst case. The deployment-level
+#: bound is ``GLOBAL_DAILY_CEILING_USD`` below (issue #100) — a SEPARATE
+#: control layered on top of this one, not a replacement for it.
 #:
 #: The envelope is now asserted, not emergent:
 #: ``tests/integration/test_query_run_cost_guardrails.py::
 #: test_daily_cap_admits_the_number_of_runs_its_dollar_value_pays_for``
 #: fails if either the meter or this value moves.
 DAILY_CAP_USD = Decimal("0.20")
+
+#: Deployment-wide spend ceiling (USD), summed across ALL accounts, per
+#: rolling 24 hours. Issue #100, operator-decided 2026-08-01 (locked, see
+#: ``gh issue view 100`` comments) — this is a business-policy figure, not
+#: derived from any ordering constraint the way ``DAILY_CAP_USD`` is.
+#:
+#: BEHAVIOUR AT THE CEILING IS A DEGRADE, NOT A BLOCK. Unlike every other
+#: threshold in this module, reaching this ceiling does not change
+#: ``threshold_action`` and never produces a 402 — ``CostEstimate.
+#: global_ceiling_reached`` is a separate, orthogonal signal that
+#: ``_execute_query_run`` (``query_runs.py``) reads to force the WHOLE run
+#: into local simulation (never a per-slot substitution — see #171, whose
+#: fix this reuses rather than re-implementing: forcing the local
+#: ``openrouter_key`` to empty for a ceiling-tripped run routes through the
+#: exact same, already-tested "no live key" path every slot already falls
+#: back to when the deployment has none configured).
+#:
+#: METER HONESTY. A ceiling-tripped run's own cost estimate must NEVER be
+#: recorded as ``cost_guardrail_accepted`` — see
+#: ``record_guardrail_event``'s ``cost_guardrail_degraded_to_simulation``
+#: branch and ``FeedbackStore.global_daily_spend``'s docstring. If it were,
+#: every subsequent degraded run would keep pushing the meter further past
+#: the ceiling with money that was never spent, and the 24h window would
+#: never roll over on real spend.
+#:
+#: RACE, ACCEPTED BY DESIGN (same posture as the per-account cumulative
+#: guard above, which has an identical unsynchronised read-then-act window):
+#: two concurrent requests can both read "under $5" before either one's
+#: spend is recorded, and both proceed live. Worst-case overshoot is bounded
+#: by ``query_runs._MAX_CONCURRENT_RUNS`` (16) x ``HARD_LIMIT_USD`` (0.25) =
+#: $4.00 in the extreme case every in-flight slot races the same instant —
+#: not unbounded, and not worth a distributed lock for a demo-safety rail
+#: that degrades rather than blocks.
+GLOBAL_DAILY_CEILING_USD = Decimal("5.00")
 
 #: Minimum gap between two "the daily cap is not being enforced" ERROR records
 #: (P1 / issue #101).
@@ -261,6 +296,16 @@ class CostEstimate(BaseModel):
     #: (tests, cancel path) keep working; ``estimate()`` always attaches a
     #: real breakdown to every returned estimate.
     breakdown: CostBreakdown | None = None
+    #: Issue #100. Whether the deployment-wide $5/24h ceiling was already
+    #: reached at estimate time. Orthogonal to ``threshold_action`` — the
+    #: ceiling degrades to simulation, it never blocks, so this can be
+    #: ``True`` alongside ``ALLOW`` or ``REQUIRE_CONFIRMATION``. Decided
+    #: ONCE here (not re-checked at execute time) and persisted on the
+    #: ``QueryRun`` so the run that actually executes, and the event that
+    #: gets billed for it, can never disagree about which mode this run is
+    #: in. Defaults ``False`` so pre-existing ``CostEstimate(...)``
+    #: constructions keep working.
+    global_ceiling_reached: bool = False
 
 
 class CostConfirmation(BaseModel):
@@ -536,6 +581,25 @@ class CostEstimationService:
                             ),
                         ],
                     )
+        # Issue #100: the deployment-wide ceiling. Independent of
+        # ``account_id`` (it sums across every account) and independent of
+        # ``threshold_action`` (it degrades, never blocks — see the
+        # constant's docstring). Decided once, here, and persisted on the
+        # returned ``CostEstimate`` / the ``QueryRun`` it gets attached to;
+        # ``_execute_query_run`` reads that stored decision rather than
+        # re-querying at execute time, so what got billed and what actually
+        # ran can never disagree.
+        global_ceiling_reached = False
+        from product_app.feedback_store import get_store  # local import to avoid cycles
+
+        global_store = get_store()
+        if global_store is not None:
+            global_ceiling_reached = global_store.global_daily_spend() >= GLOBAL_DAILY_CEILING_USD
+        # else: fail open, same posture as the per-account bypass above —
+        # a storage fault must not silently turn into "everyone gets
+        # simulated answers" any more than it silently turns into "nobody
+        # is capped".
+
         confirmation_token: str | None = None
         if threshold_action is not CostThresholdAction.BLOCK:
             # Mint a token whenever the estimate is at all confirmable. The
@@ -556,6 +620,7 @@ class CostEstimationService:
             confirmation_token=confirmation_token,
             reasons=reasons,
             breakdown=breakdown,
+            global_ceiling_reached=global_ceiling_reached,
         )
 
     def _log_daily_cap_bypassed(self) -> None:
@@ -633,13 +698,18 @@ class CostEstimationService:
         threshold_action: CostThresholdAction,
         confirmed: bool,
         preview: bool = False,
+        global_ceiling_reached: bool = False,
+        client_ip: str | None = None,
     ) -> None:
-        # Map the (threshold_action, confirmed) pair to an event type.
+        # Map the (threshold_action, confirmed, preview, global_ceiling_reached)
+        # combination to an event type.
         #  - BLOCK  → cost_guardrail_blocked (the request was refused)
         #  - REQUIRE_CONFIRMATION + confirmed=False → cost_confirmation_required
-        #  - REQUIRE_CONFIRMATION + confirmed=True → cost_guardrail_accepted
-        #  - ALLOW  → cost_guardrail_accepted (the request was allowed
-        #    without confirmation, ``confirmed=False``)
+        #  - preview → cost_estimate_previewed
+        #  - global_ceiling_reached → cost_guardrail_degraded_to_simulation
+        #    (issue #100 — see below)
+        #  - otherwise → cost_guardrail_accepted (the request was allowed,
+        #    with or without confirmation)
         #
         # F-01: ``preview=True`` marks a call from ``POST /estimate``, which
         # only shows the user what a run *would* cost — nothing has been spent.
@@ -650,12 +720,23 @@ class CostEstimationService:
         # bill it again when the user actually starts the run. The preview is
         # still recorded, under a name that says what happened, so the audit
         # trail and the estimate-time BLOCK/Sentry path are untouched.
+        #
+        # Issue #100: the SAME reasoning applies to a ceiling-degraded run.
+        # It is about to execute as a whole-run local simulation (see
+        # ``_execute_query_run``) and will spend nothing real, so counting it
+        # as ``cost_guardrail_accepted`` would let the global meter this
+        # branch just tripped keep climbing forever on money nobody spent —
+        # the ceiling would never clear on real spend again this window.
+        # Checked AFTER ``preview`` on purpose: a preview is already
+        # unmetered regardless of the ceiling, so it keeps its own label.
         if threshold_action is CostThresholdAction.BLOCK:
             event_type = "cost_guardrail_blocked"
         elif threshold_action is CostThresholdAction.REQUIRE_CONFIRMATION and not confirmed:
             event_type = "cost_confirmation_required"
         elif preview:
             event_type = "cost_estimate_previewed"
+        elif global_ceiling_reached:
+            event_type = "cost_guardrail_degraded_to_simulation"
         else:
             event_type = "cost_guardrail_accepted"
         cost_event_recorder.record(
@@ -666,11 +747,11 @@ class CostEstimationService:
             threshold_action=threshold_action,
             confirmed=confirmed,
         )
-        # Surface BLOCK events to Sentry so a rate of rejected
-        # estimates (per-call, cumulative, or daily cap) is visible
-        # to operators. ALLOW and REQUIRE_CONFIRMATION events are
-        # normal traffic and would just spam the Sentry quota.
-        if threshold_action is CostThresholdAction.BLOCK:
+        # Surface BLOCK events (rejected estimates) and the #100
+        # ceiling-degrade event to Sentry so operators see both without
+        # polling. ALLOW and REQUIRE_CONFIRMATION events are normal traffic
+        # and would just spam the Sentry quota.
+        if event_type in ("cost_guardrail_blocked", "cost_guardrail_degraded_to_simulation"):
             import sentry_sdk  # local import to avoid loading the SDK in tests
 
             try:
@@ -680,8 +761,21 @@ class CostEstimationService:
                     scope.set_extra("estimated_cost_usd", str(estimated_cost_usd))
                     if query_run_id is not None:
                         scope.set_extra("query_run_id", str(query_run_id))
+                    if event_type == "cost_guardrail_degraded_to_simulation":
+                        if client_ip is not None:
+                            scope.set_extra("client_ip", client_ip)
+                        from product_app.feedback_store import (
+                            get_store,  # local import to avoid cycles
+                        )
+
+                        alert_store = get_store()
+                        if alert_store is not None:
+                            scope.set_extra(
+                                "global_daily_spend_usd", str(alert_store.global_daily_spend())
+                            )
+                        scope.set_extra("global_daily_ceiling_usd", str(GLOBAL_DAILY_CEILING_USD))
                     sentry_sdk.capture_message(
-                        f"cost_guardrail_blocked:{event_type}",
+                        f"{event_type}:{event_type}",
                         level="warning",
                     )
             except Exception as exc:  # noqa: BLE001 — Sentry must never crash the request
@@ -693,7 +787,7 @@ class CostEstimationService:
                 import logging
 
                 logging.getLogger(__name__).debug(
-                    "Sentry capture failed for cost_guardrail_blocked: %s", exc
+                    "Sentry capture failed for %s: %s", event_type, exc
                 )
 
     # -- internals --------------------------------------------------------

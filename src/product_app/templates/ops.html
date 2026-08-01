@@ -74,6 +74,14 @@
           <p class="tile-why" data-why="ready"><strong>Why this matters:</strong> whether live execution is actually available (real models and catalog reachable) — not just "process up".</p>
           <p class="tile-red" data-red="ready"><strong>When it's not live:</strong> any state other than <code>live</code> means runs fall back to simulation — the reasons above say exactly why.</p>
         </section>
+        <section class="tile" id="tile-spend" aria-labelledby="tile-spend-h">
+          <h2 id="tile-spend-h">Global daily spend</h2>
+          <p class="tile-value"><span data-current="spend">—</span></p>
+          <p class="tile-slo" data-slo="spend">Ceiling: <span data-current="spend-ceiling">—</span> · <span data-verdict="spend"></span></p>
+          <p class="tile-note">summed across ALL accounts, rolling 24h (issue #100)</p>
+          <p class="tile-why" data-why="spend"><strong>Why this matters:</strong> once this reaches the ceiling every run degrades to local simulation, deployment-wide, until the 24h window rolls over.</p>
+          <p class="tile-red" data-red="spend"><strong>When it's at the ceiling:</strong> expected, not a bug — check Sentry for the <code>cost_guardrail_degraded_to_simulation</code> alert for the account/IP breakdown.</p>
+        </section>
         <section class="tile" id="tile-uptime" aria-labelledby="tile-uptime-h">
           <h2 id="tile-uptime-h">Uptime</h2>
           <p class="tile-value"><span data-current="uptime">—</span></p>

@@ -58,6 +58,9 @@ class _ZeroSpendStore:
     def daily_spend_for(self, account_id: object, **_kwargs: object) -> Decimal:
         return Decimal("0")
 
+    def global_daily_spend(self, **_kwargs: object) -> Decimal:
+        return Decimal("0")
+
 
 @pytest.fixture(autouse=True)
 def _point_below_cap_bound_above(monkeypatch: pytest.MonkeyPatch) -> None:

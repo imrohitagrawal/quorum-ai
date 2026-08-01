@@ -491,6 +491,10 @@ components:
           anyOf:
           - $ref: '#/components/schemas/CostBreakdown'
           - type: 'null'
+        global_ceiling_reached:
+          type: boolean
+          title: Global Ceiling Reached
+          default: false
       type: object
       required:
       - estimated_cost_usd
@@ -1168,6 +1172,10 @@ components:
           minimum: 0.0
           title: Local Count
           default: 0
+        global_spend_ceiling_reached:
+          type: boolean
+          title: Global Spend Ceiling Reached
+          default: false
         material_claim_count:
           type: integer
           minimum: 0.0

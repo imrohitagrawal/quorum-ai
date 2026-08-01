@@ -466,6 +466,15 @@ class QueryRunResultResponse(BaseModel):
     #: slot count. This is deliberate: a failed slot must not be laundered into
     #: either honest bucket.
     local_count: int = Field(ge=0, default=0)
+    #: Issue #100. ``True`` when the deployment-wide $5/24h ceiling had
+    #: already been reached when this run was created, forcing the WHOLE
+    #: run into local simulation (never a per-slot substitution — see
+    #: #171). Distinct from ``demo_mode`` (also ``True`` here, since
+    #: ``local_count > 0``): this flag lets the frontend show the
+    #: operator-approved #100 banner copy instead of the generic no-key
+    #: demo copy. Mirrors ``cost_estimate.global_ceiling_reached``, decided
+    #: once at create time — never re-derived from run-time state.
+    global_spend_ceiling_reached: bool = False
     #: Informational only: how many material claims the four answers were
     #: LONG ENOUGH to hold, from ``providers.estimate_material_claim_count``
     #: (a ~200-chars-per-claim heuristic).
@@ -1316,6 +1325,12 @@ def create_query_run(
             cost_estimate=cost_estimate,
             cost_decision=cost_decision,
             capacity_permit=capacity_permit,
+            # Issue #100 §2.8: the global-ceiling Sentry alert wants an
+            # IP breakdown alongside account_id. Same extraction as
+            # ``main.browser_session`` — no shared helper existed before
+            # this, and adding one is out of scope for a one-field alert
+            # payload.
+            client_ip=(request.client.host if request.client else None),
         )
     except BaseException:
         # Nothing below took ownership of the permit (the worker thread only
@@ -1335,6 +1350,7 @@ def _start_reserved_query_run(
     cost_estimate: CostEstimate,
     cost_decision: CostGuardrailDecision,
     capacity_permit: BoundedSemaphore | None,
+    client_ip: str | None = None,
 ) -> QueryRunCreateResponse:
     """Create, bill and launch a run whose capacity permit is already held.
 
@@ -1384,7 +1400,9 @@ def _start_reserved_query_run(
     # the final state synchronously. Production / cookie path runs in a
     # background thread that cannot block the request response.
     if session.legacy:
-        _record_run_billing(session=session, query_run=query_run, cost_decision=cost_decision)
+        _record_run_billing(
+            session=session, query_run=query_run, cost_decision=cost_decision, client_ip=client_ip
+        )
         _execute_query_run(query_run.query_run_id, session.account_id)
         query_run = query_run_repository.get(query_run.query_run_id)
         # Legacy/test path runs inline (no safety wrapper), so persist the
@@ -1421,7 +1439,9 @@ def _start_reserved_query_run(
         raise
     # The worker owns the run now. Bill it: this is the ONE spend-counted
     # event for this logical run (F-01).
-    _record_run_billing(session=session, query_run=query_run, cost_decision=cost_decision)
+    _record_run_billing(
+        session=session, query_run=query_run, cost_decision=cost_decision, client_ip=client_ip
+    )
     return response
 
 
@@ -1430,6 +1450,7 @@ def _record_run_billing(
     session: SessionContext,
     query_run: QueryRun,
     cost_decision: CostGuardrailDecision,
+    client_ip: str | None = None,
 ) -> None:
     """Record the one spend-counted cost event for a run that is executing.
 
@@ -1452,6 +1473,13 @@ def _record_run_billing(
             cost_decision.confirmed
             and query_run.cost_estimate.threshold_action is CostThresholdAction.REQUIRE_CONFIRMATION
         ),
+        # Issue #100: a ceiling-degraded run must NOT record
+        # ``cost_guardrail_accepted`` — see
+        # ``record_guardrail_event``'s docstring for why (meter
+        # honesty: it would keep pushing the global meter past the
+        # ceiling on money that was never spent).
+        global_ceiling_reached=query_run.cost_estimate.global_ceiling_reached,
+        client_ip=client_ip,
     )
 
 
@@ -1736,6 +1764,22 @@ def _execute_query_run(query_run_id: UUID, account_id: UUID) -> None:
 
     openrouter_key = settings.openrouter_api_key or ""
     credential_source = ProviderCredentialSource.APP_OWNED
+    # Issue #100: the deployment-wide $5/24h ceiling degrades the WHOLE run
+    # to local simulation, never a per-slot substitution (the #171 defect
+    # class). The decision was made ONCE, at create time
+    # (``CostEstimationService.estimate``), and is read back here rather
+    # than re-queried — re-querying now would open a window where what was
+    # billed (or deliberately NOT billed, see ``record_guardrail_event``'s
+    # ``cost_guardrail_degraded_to_simulation`` branch) could disagree with
+    # what actually ran. Forcing the LOCAL ``openrouter_key`` empty (not
+    # ``settings.openrouter_api_key`` itself) routes every slot through the
+    # exact same, already-tested "no live key" path used when the
+    # deployment has none configured — see
+    # ``ProviderExecutionService._live_execution_enabled`` — rather than
+    # inventing a second bypass. It does not affect the misconfiguration
+    # check directly below, which reads ``settings.openrouter_api_key``.
+    if query_run.cost_estimate.global_ceiling_reached:
+        openrouter_key = ""
     if settings.openrouter_live_execution_enabled and not settings.openrouter_api_key:
         halted = query_run_repository.update_status(
             query_run_id,
@@ -2570,6 +2614,7 @@ def _result_response(query_run: QueryRun) -> QueryRunResultResponse:
         demo_mode=demo_mode,
         live_count=live_count,
         local_count=local_count,
+        global_spend_ceiling_reached=query_run.cost_estimate.global_ceiling_reached,
         material_claim_count=material_claim_count,
         actual_cost_usd=actual_cost_usd,
         actual_breakdown=actual_breakdown,

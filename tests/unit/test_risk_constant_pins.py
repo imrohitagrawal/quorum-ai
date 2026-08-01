@@ -98,6 +98,7 @@ BUCKET_A_LITERAL_PIN = (
     "costs.SOFT_THRESHOLD_USD",
     "costs.DAILY_CAP_USD",
     "costs.HARD_LIMIT_USD",
+    "costs.GLOBAL_DAILY_CEILING_USD",
     "costs._DEFAULT_PRICE_PER_1K_INPUT",
     "costs._DEFAULT_PRICE_PER_1K_OUTPUT",
     "costs.CHARS_PER_TOKEN",

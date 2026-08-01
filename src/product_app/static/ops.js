@@ -310,6 +310,18 @@
         var reasons = (live.reasons || []).join("; ");
         setCurrent("ready-reasons", reasons ? "reasons: " + reasons : "");
 
+        /* Global daily spend vs. the #100 ceiling, from /status. */
+        var ceilingUsd = statusJson.global_daily_ceiling_usd;
+        setCurrent("spend-ceiling", ceilingUsd != null ? "$" + String(ceilingUsd) : "—");
+        if (statusJson.global_daily_spend_usd == null) {
+          setCurrent("spend", "no data");
+          setVerdict("spend", null);
+        } else {
+          var spendUsd = parseFloat(statusJson.global_daily_spend_usd);
+          setCurrent("spend", "$" + String(statusJson.global_daily_spend_usd));
+          setVerdict("spend", ceilingUsd != null ? spendUsd < parseFloat(ceilingUsd) : null);
+        }
+
         /* Uptime + version from /status. */
         if (typeof statusJson.uptime_seconds === "number") {
           setCurrent("uptime", fmtUptime(statusJson.uptime_seconds));
