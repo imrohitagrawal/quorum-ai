@@ -100,9 +100,13 @@ class Settings(BaseSettings):
     #: tight loop — a self-inflicted DoS against the provider). Both are
     #: excluded here so a bad override fails LOUD at startup (like a
     #: non-numeric value already does) instead of failing silently at
-    #: runtime. Found by adversarial review of #112, confirmed by executing
-    #: both failure modes.
-    key_auth_reprobe_interval_seconds: float = Field(default=1800.0, gt=0)
+    #: runtime. ``allow_inf_nan=False`` closes the same failure mode for a
+    #: THIRD input ``gt=0`` alone does not exclude: ``inf`` is ``> 0`` in
+    #: Python, so it passes ``gt=0``, and ``time.sleep(float("inf"))``
+    #: raises ``OverflowError`` — the identical silent-thread-death bug on
+    #: an input the first fix missed. Found by round-2 adversarial review
+    #: of #112, confirmed by executing all three failure modes.
+    key_auth_reprobe_interval_seconds: float = Field(default=1800.0, gt=0, allow_inf_nan=False)
 
     # --- Real web-search fallback (Tavily) ------------------------------
     # The fallback source path replaces a fabricated ``example.test`` stub

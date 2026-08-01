@@ -484,6 +484,24 @@ def test_key_auth_reprobe_interval_accepts_the_documented_default() -> None:
     assert Settings(_env_file=None).key_auth_reprobe_interval_seconds == 1800.0  # type: ignore[call-arg]
 
 
+@pytest.mark.parametrize("non_finite", ["inf", "-inf", "nan"])
+def test_key_auth_reprobe_interval_rejects_non_finite_values(non_finite: str) -> None:
+    """Round 2 of round 2: ``gt=0`` alone does not exclude ``inf``.
+
+    ``float("inf") > 0`` is ``True`` in Python, so ``inf`` passes ``gt=0``
+    cleanly — and ``time.sleep(float("inf"))`` raises ``OverflowError``,
+    the identical silent-thread-death bug the non-positive-value fix above
+    exists to close, just via a third input that fix didn't cover. Found
+    by a second pass of the same adversarial review.
+    """
+    from pydantic import ValidationError
+
+    from product_app.config import Settings
+
+    with pytest.raises(ValidationError, match="key_auth_reprobe_interval_seconds"):
+        Settings(_env_file=None, key_auth_reprobe_interval_seconds=non_finite)  # type: ignore[call-arg,arg-type]
+
+
 # ---------------------------------------------------------------------------
 # Found by adversarial review of this work.
 # ---------------------------------------------------------------------------
