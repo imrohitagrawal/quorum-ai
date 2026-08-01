@@ -247,7 +247,7 @@ test.describe("F-12 — export completeness and section expanders", () => {
     resp.result.final_synthesis.synthesis_mode = "simulated";
     await driveToResult(page, resp);
     const md = await exportedMarkdown(page);
-    expect(md).toMatch(/- Synthesis: local simulation \(not a model\)/);
+    expect(md).toContain("- Synthesis: local simulation (not a model)");
     expect(md).not.toContain("- Synthesis: Automated summary");
   });
 
