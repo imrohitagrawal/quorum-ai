@@ -857,6 +857,55 @@ class FeedbackStore:
                 total += Decimal(str(raw))
         return total
 
+    def try_record_session_mint(
+        self,
+        *,
+        ip: str,
+        account_id: UUID,
+        cap: int,
+        now: datetime | None = None,
+    ) -> bool:
+        """Atomically check-and-record a session mint for ``ip`` against ``cap``.
+
+        Closes a TOCTOU race between a separate count-then-insert: two
+        concurrent callers could otherwise both read "count < cap" before
+        either's insert lands, minting more than ``cap`` sessions total.
+        MEASURED in adversarial review (issue #100 PR2): 50 concurrent
+        ``issue_session`` calls against a cap of 2, using the ORIGINAL
+        separate ``session_mint_count_for_ip`` + ``record`` calls, let 3-4
+        mints through per run instead of 2 — reproduced 5/5 times. The count
+        and the insert now run under ONE continuous hold of ``self._lock``,
+        so no other thread can observe a stale count between them; every
+        other caller blocks on the same lock until this whole sequence
+        (check, and insert if under cap) completes.
+
+        Returns:
+            ``True`` if the mint was recorded (the caller may proceed).
+            ``False`` if ``ip`` was already at ``cap`` (the caller must
+            refuse — nothing was written).
+        """
+        when = now or datetime.now(UTC)
+        cutoff = when - timedelta(hours=24)
+        with self._lock:
+            cursor = self._conn.execute(
+                "SELECT payload FROM events "
+                "WHERE recorder = 'session' AND event_type = 'session_minted' "
+                "AND recorded_at >= ?",
+                (cutoff.isoformat(),),
+            )
+            count = sum(1 for row in cursor if json.loads(row["payload"]).get("ip") == ip)
+            if count >= cap:
+                return False
+            self.record(
+                recorder="session",
+                event_type="session_minted",
+                account_id=account_id,
+                query_run_id=None,
+                recorded_at=when,
+                payload={"ip": ip},
+            )
+            return True
+
     def session_mint_count_for_ip(
         self,
         ip: str,

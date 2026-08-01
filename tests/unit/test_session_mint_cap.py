@@ -87,6 +87,33 @@ class TestIssueSessionMintCap:
             issue_session()  # no client_ip
             assert store.session_mint_count_for_ip("1.2.3.4") == 0
 
+    def test_concurrent_mints_never_exceed_the_cap(self) -> None:
+        """Adversarial review, issue #100 PR2: a separate count-then-insert
+        let 50 concurrent requests mint 3-4 sessions against a cap of 2
+        (reproduced 5/5 runs). The check and the record must happen in ONE
+        atomic step (``FeedbackStore.try_record_session_mint``) or this goes
+        red. Not a flake-prone timing assertion — it counts how many of 50
+        concurrent callers actually succeeded, which is exact and
+        deterministic regardless of scheduling."""
+        import concurrent.futures
+
+        def _attempt(_: int) -> bool:
+            try:
+                issue_session(client_ip="9.8.7.6")
+                return True
+            except SessionMintCapExceeded:
+                return False
+
+        with configure_for_tests() as store:
+            with concurrent.futures.ThreadPoolExecutor(max_workers=50) as pool:
+                outcomes = list(pool.map(_attempt, range(50)))
+            successes = sum(outcomes)
+            assert successes == SESSION_MINT_CAP_PER_IP, (
+                f"expected exactly {SESSION_MINT_CAP_PER_IP} successful mints "
+                f"under 50 concurrent callers, got {successes}"
+            )
+            assert store.session_mint_count_for_ip("9.8.7.6") == SESSION_MINT_CAP_PER_IP
+
 
 class TestResumeDoesNotConsumeAMintSlot:
     def test_repeated_resume_never_raises_even_past_the_cap(self) -> None:

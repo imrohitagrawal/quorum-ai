@@ -303,29 +303,32 @@ def issue_session(
     bypass in this codebase (see ``costs.py``'s daily-cap bypass): a
     storage fault must not silently turn into "nobody can start a
     session".
+
+    The check and the record happen in ONE atomic call
+    (``FeedbackStore.try_record_session_mint``), not a separate
+    count-then-insert — adversarial review (issue #100 PR2) measured a
+    separate check-then-act letting concurrent requests mint 3-4 sessions
+    against a cap of 2. ``account_id`` is resolved BEFORE that call
+    (nothing about generating a random uuid4 needs to wait for it) so the
+    mint event can carry the real id in the same atomic step, rather than
+    recording against a placeholder and reconciling after.
     """
     _enforce_production_guards(require_legacy_disabled=True)
+    if account_id is None:
+        account_id = uuid4()
     if client_ip is not None:
         from product_app.feedback_store import get_store  # local import to avoid cycles
 
         store = get_store()
         if store is not None:
-            minted_today = store.session_mint_count_for_ip(client_ip)
-            if minted_today >= _effective_session_mint_cap():
+            allowed = store.try_record_session_mint(
+                ip=client_ip,
+                account_id=account_id,
+                cap=_effective_session_mint_cap(),
+            )
+            if not allowed:
                 raise SessionMintCapExceeded(client_ip)
-    if account_id is None:
-        account_id = uuid4()
     session = session_repository.create(account_id=account_id)
-    if client_ip is not None:
-        from product_app.feedback_store import record_event
-
-        record_event(
-            recorder="session",
-            event_type="session_minted",
-            account_id=account_id,
-            query_run_id=None,
-            payload={"ip": client_ip},
-        )
     return SessionIssueResponse(
         account_id=session.account_id,
         session_id=session.session_id,
