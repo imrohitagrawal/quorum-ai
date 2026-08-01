@@ -2578,13 +2578,17 @@
   // already turned the provider's Markdown into HTML, and a `.md` file wants
   // the Markdown back. Taking it from the payload means `**bold**` stays
   // `**bold**` and no tag can leak into the file.
-  //: Mirrors the on-screen provenance badge. The raw enum means nothing to a
-  //: reader of the exported file.
-  const SYNTHESIS_MODE_EXPORT_LABEL = {
-    live: "written by a model",
-    fallback: "partially automated (Quorum templates)",
-    template: "automated summary (Quorum templates, not a model)",
-    simulated: "local simulation (not a model)",
+  //: Single source of truth for how `synthesis_mode` reads on screen (the
+  //: `.badge-summary` span) and in the exported Markdown footer. #128: these
+  //: used to be two independent lookups and drifted — `simulated` (the
+  //: default in production today) badged as "Automated summary" on screen
+  //: while the export correctly said "local simulation (not a model)". Only
+  //: `fallback` and `simulated` are reachable — `synthesis.py`'s
+  //: `SYNTHESIS_MODES` is the producer-side enum and has no third value.
+  const SYNTHESIS_MODE_LABELS = {
+    live: { export: "written by a model" },
+    fallback: { badge: "Partially automated", export: "partially automated (Quorum templates)" },
+    simulated: { badge: "Local simulation", export: "local simulation (not a model)" },
   };
 
   // Neutralise Markdown link syntax in an untrusted INLINE value (a source
@@ -2757,7 +2761,8 @@
       // The screen renders this enum as a badge a reader understands; a raw
       // "fallback" in a footer tells them nothing about whether a model wrote
       // the verdict above.
-      push(`- Synthesis: ${SYNTHESIS_MODE_EXPORT_LABEL[fs.synthesis_mode] || fs.synthesis_mode}`);
+      const modeLabel = SYNTHESIS_MODE_LABELS[fs.synthesis_mode];
+      push(`- Synthesis: ${(modeLabel && modeLabel.export) || fs.synthesis_mode}`);
     }
     // An answer the provider cut short is marked on screen; an exported record
     // that drops the mark presents an interrupted answer as complete.
@@ -3317,14 +3322,17 @@
     // Provenance badge. ``synthesis_mode`` is the backend's own account of how
     // this synthesis was produced; badging it replaces the "[Template] " /
     // "Heuristic fallback: " prefix that used to leak into the prose itself.
+    // #128: driven from SYNTHESIS_MODE_LABELS so this can never again read
+    // differently than the exported Markdown does. An unmapped mode (the
+    // server's ``synthesis_mode`` field is a bare string, not a closed
+    // enum, on the wire) echoes the raw value rather than falling back to a
+    // fixed claim — a fixed fallback string is exactly how this bug shipped
+    // in the first place, badging an unrecognized mode as confidently as a
+    // recognized one.
     if (fs.synthesis_mode && fs.synthesis_mode !== "live") {
-      content.appendChild(
-        mkEl(
-          "span",
-          "badge badge-summary",
-          fs.synthesis_mode === "fallback" ? "Partially automated" : "Automated summary",
-        ),
-      );
+      const modeLabel = SYNTHESIS_MODE_LABELS[fs.synthesis_mode];
+      const badgeText = (modeLabel && modeLabel.badge) || `Automated (${fs.synthesis_mode})`;
+      content.appendChild(mkEl("span", "badge badge-summary", badgeText));
     }
 
     const recommendation = fs.recommendation ? String(fs.recommendation).trim() : "";

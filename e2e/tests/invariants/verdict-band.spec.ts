@@ -379,16 +379,24 @@ test.describe("PR6 — verdict band is agreement-led (#8/#15)", () => {
     await expect(page.locator(".result-verdict-coverage")).toHaveCount(0);
   });
 
-  test("a non-live synthesis_mode renders an automated-summary badge", async ({ page }) => {
+  test("a simulated synthesis_mode is badged as simulation, not as an automated summary", async ({ page }) => {
+    // #128: the screen used to badge `simulated` as "Automated summary" — the
+    // same text a templated-but-real run gets — which implies Quorum's
+    // templates ran when in fact no model was involved at all. The export
+    // footer already said "local simulation (not a model)"; the badge must
+    // say the same thing, not merely something non-empty.
     await driveWith(page, withSynthesis({ synthesis_mode: "simulated" }));
     const badge = page.locator(".badge-summary");
-    await expect(badge, "a templated synthesis must be badged, not silently presented as model output").toHaveCount(1);
-    await expect(badge).toContainText(/Automated summary/i);
+    await expect(badge, "a simulated synthesis must be badged, not silently presented as model output").toHaveCount(1);
+    await expect(badge).toContainText(/local simulation/i);
+    await expect(badge).not.toContainText(/Automated summary/i);
   });
 
-  test("a partially-live synthesis_mode is badged distinctly", async ({ page }) => {
+  test("a partially-live synthesis_mode is badged distinctly from a fully simulated one", async ({ page }) => {
     await driveWith(page, withSynthesis({ synthesis_mode: "fallback" }));
-    await expect(page.locator(".badge-summary")).toContainText(/Partially automated/i);
+    const badge = page.locator(".badge-summary");
+    await expect(badge).toContainText(/Partially automated/i);
+    await expect(badge).not.toContainText(/local simulation/i);
   });
 
   test("a fully live synthesis carries NO badge", async ({ page }) => {
