@@ -41,6 +41,47 @@ from product_app.config import RuntimeEnvironment, settings
 #: Session lifetime. Renewed on every successful ``/v1/session`` call.
 SESSION_TTL = timedelta(hours=2)
 
+#: Issue #100 §2.3. Durable per-IP cap on NEW session MINTS per rolling 24h —
+#: distinct from the in-memory per-minute BURST limiter
+#: (``query_runs._InMemoryIpRateLimiter``, tightened separately to 10/min in
+#: the same issue), which resets on every restart/redeploy and never bounded
+#: how many DIFFERENT accounts one IP could mint in a day. A follow-up
+#: question within an already-open session does NOT consume a slot: only
+#: ``issue_session`` — the one place a NEW account id is minted — checks and
+#: consumes this cap; a resumed session never reaches it.
+#:
+#: DURABLE, not in-memory (issue #100 §2.10, engineering call made in the
+#: build session, not the operator conversation): this app deploys many times
+#: in quick succession during active development (see this repo's own deploy
+#: history), and an in-memory counter would silently reset the cap on every
+#: deploy — materially weakening it on an active day, the same failure mode
+#: the burst limiter already has and that this mechanism exists to not
+#: repeat. Follows the precedent in ``costs.py``/``feedback_store.py``: the
+#: in-memory ``InMemoryCostEventRecorder`` is a bounded hot-path ring buffer,
+#: explicitly NOT the source of truth for a daily total; ``daily_spend_for``
+#: reads the durable SQLite sink for exactly that reason. The mint cap is the
+#: same shape as that daily total, not the same shape as a per-minute burst
+#: bucket, so it follows the durable precedent.
+SESSION_MINT_CAP_PER_IP = 2
+
+
+def _effective_session_mint_cap() -> int:
+    """``SESSION_MINT_CAP_PER_IP``, or the LOCAL-only test-lane override.
+
+    Same shape as ``query_runs._session_limit`` for the burst limiter:
+    checked dynamically (not baked into a module-level singleton) because
+    unlike the burst limiter this cap is a durable, per-request DB read, not
+    a constructed object. Belt-and-suspenders behind
+    ``validate_production_environment()``, which additionally REFUSES TO
+    START if the override is set in any non-LOCAL environment — so even if
+    that startup guard were bypassed, this still only reads the override
+    when ``runtime_environment is LOCAL``.
+    """
+    if settings.runtime_environment is RuntimeEnvironment.LOCAL:
+        return settings.session_mint_cap_override or SESSION_MINT_CAP_PER_IP
+    return SESSION_MINT_CAP_PER_IP
+
+
 #: Cookie name. In production and staging we use the ``__Host-`` prefix
 #: for defense in depth: the browser will refuse to set the cookie unless
 #: ``Secure`` is true, ``Path=/``, and the ``Domain`` attribute is absent.
@@ -81,6 +122,17 @@ def get_session_cookie_from_request(request: Request) -> str | None:
 #: path never validates CSRF (see ``enforce_csrf``), so the value just
 #: needs to be a stable, non-empty string for logging purposes.
 LEGACY_CSRF_PLACEHOLDER = "legacy-csrf-placeholder"
+
+
+class SessionMintCapExceeded(Exception):
+    """Raised by :func:`issue_session` when ``client_ip`` has already minted
+    ``SESSION_MINT_CAP_PER_IP`` new sessions in the last 24 hours.
+
+    A plain exception, not an ``HTTPException``: this module is transport-
+    agnostic (see the module docstring), so the route layer (``main.
+    browser_session``) is the one place that translates this into a 429,
+    matching how the existing per-minute burst limiter is handled there.
+    """
 
 
 class AuthError(StrEnum):
@@ -233,10 +285,49 @@ def _enforce_production_guards(*, require_legacy_disabled: bool) -> None:
             )
 
 
-def issue_session(*, account_id: UUID | None = None) -> SessionIssueResponse:
+def issue_session(
+    *, account_id: UUID | None = None, client_ip: str | None = None
+) -> SessionIssueResponse:
+    """Mint a brand-new session (and account id).
+
+    ``client_ip`` is the ONE checkpoint for issue #100's durable per-IP
+    daily mint cap: this is the single function that mints a NEW account,
+    called both directly (no cookie presented) and as
+    :func:`issue_or_resume_session`'s fallback when a resume fails. A
+    resumed session never reaches this function, so it never consumes a
+    slot — matching the spec's "a follow-up question within an
+    already-open session does NOT consume a slot".
+
+    ``client_ip=None`` (no caller supplied one, or the store is
+    unavailable) fails OPEN — same posture as every other durable-store
+    bypass in this codebase (see ``costs.py``'s daily-cap bypass): a
+    storage fault must not silently turn into "nobody can start a
+    session".
+
+    The check and the record happen in ONE atomic call
+    (``FeedbackStore.try_record_session_mint``), not a separate
+    count-then-insert — adversarial review (issue #100 PR2) measured a
+    separate check-then-act letting concurrent requests mint 3-4 sessions
+    against a cap of 2. ``account_id`` is resolved BEFORE that call
+    (nothing about generating a random uuid4 needs to wait for it) so the
+    mint event can carry the real id in the same atomic step, rather than
+    recording against a placeholder and reconciling after.
+    """
     _enforce_production_guards(require_legacy_disabled=True)
     if account_id is None:
         account_id = uuid4()
+    if client_ip is not None:
+        from product_app.feedback_store import get_store  # local import to avoid cycles
+
+        store = get_store()
+        if store is not None:
+            allowed = store.try_record_session_mint(
+                ip=client_ip,
+                account_id=account_id,
+                cap=_effective_session_mint_cap(),
+            )
+            if not allowed:
+                raise SessionMintCapExceeded(client_ip)
     session = session_repository.create(account_id=account_id)
     return SessionIssueResponse(
         account_id=session.account_id,
@@ -418,7 +509,9 @@ def attach_session_cookie(response: object, session: SessionIssueResponse) -> No
     )
 
 
-def issue_or_resume_session(presented_session_id: str | None) -> SessionIssueResponse:
+def issue_or_resume_session(
+    presented_session_id: str | None, *, client_ip: str | None = None
+) -> SessionIssueResponse:
     """Return the active session or create a new one.
 
     A malformed or expired cookie is treated as "no cookie" so the
@@ -432,6 +525,10 @@ def issue_or_resume_session(presented_session_id: str | None) -> SessionIssueRes
     longer valid after the next call. The ``session_id`` itself is
     not rotated because it is the cookie's identifier and changing
     it would force every active client to drop their cookie.
+
+    ``client_ip`` is passed straight through to :func:`issue_session` on
+    every path that actually mints (both below) — a RESUME never touches
+    it, since resuming never consumes a mint-cap slot (issue #100 §2.3).
     """
     _enforce_production_guards(require_legacy_disabled=True)
     if presented_session_id:
@@ -445,7 +542,7 @@ def issue_or_resume_session(presented_session_id: str | None) -> SessionIssueRes
                 # Race: the session expired between ``get`` and
                 # ``rotate_csrf``. Fall through to issuing a new
                 # session.
-                return issue_session()
+                return issue_session(client_ip=client_ip)
             return SessionIssueResponse(
                 account_id=rotated.account_id,
                 session_id=rotated.session_id,
@@ -453,4 +550,4 @@ def issue_or_resume_session(presented_session_id: str | None) -> SessionIssueRes
                 expires_at=rotated.last_used_at + SESSION_TTL,
                 session_expires_in_seconds=int(SESSION_TTL.total_seconds()),
             )
-    return issue_session()
+    return issue_session(client_ip=client_ip)

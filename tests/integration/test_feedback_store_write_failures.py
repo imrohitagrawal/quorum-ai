@@ -951,14 +951,18 @@ def test_status_reports_unverified_writes_on_a_cold_store(
         client = TestClient(app)
         # Every read-only operator surface: none of them writes an event, which
         # is why "unverified" is a real state and not a rounding error.
+        #
+        # ``/v1/session`` and ``/ui`` are deliberately EXCLUDED (issue #100):
+        # both mint a session on a cookie-less request, and a mint now writes
+        # a durable ``session_minted`` event for the per-IP daily cap — so
+        # they are no longer read-only surfaces, and hitting them here would
+        # make this test assert something that is no longer true by design.
         for path in (
             "/health",
             "/ready",
             "/status",
             "/metrics",
-            "/v1/session",
             "/v1/models/defaults",
-            "/ui",
             "/ui/ops",
         ):
             client.get(path, headers={"X-Account-Id": str(uuid4())})

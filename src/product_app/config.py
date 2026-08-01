@@ -197,6 +197,47 @@ class Settings(BaseSettings):
     #: lanes that mint the most sessions. Not configurable.
     SESSION_RATE_LIMIT_MAX: ClassVar[int] = 10_000
 
+    #: Issue #100 §2.3's per-IP daily MINT cap (``auth.SESSION_MINT_CAP_PER_IP``
+    #: = 2) is durable, not in-memory — it survives the process restart the
+    #: burst-limiter override above does not need to. Discovered the SAME way
+    #: that override was: every ``TestClient``/e2e run's browser contexts share
+    #: one real loopback IP, and the e2e suite boots ~53 times per run
+    #: (same measured need cited above) — almost all cookie-less, almost all
+    #: real MINTS. Without an override, the 3rd boot in ANY e2e run gets a 429
+    #: and the suite cannot render past the landing view. Same shape, same
+    #: guards as ``session_rate_limit_per_minute``: ``None`` by default,
+    #: applied ONLY in LOCAL, refused at startup outside LOCAL, bounded so it
+    #: can never mean "uncapped". Env var: ``SESSION_MINT_CAP_OVERRIDE``.
+    session_mint_cap_override: int | None = None
+
+    #: Inclusive upper bound on the mint-cap override. Same headroom
+    #: reasoning as ``SESSION_RATE_LIMIT_MAX`` — bounds e2e's real durable
+    #: mint volume, not "unlimited". Not configurable.
+    SESSION_MINT_CAP_OVERRIDE_MAX: ClassVar[int] = 10_000
+
+    @field_validator("session_mint_cap_override", mode="before")
+    @classmethod
+    def _blank_mint_cap_override_is_unset(cls, value: object) -> object:
+        """Same footgun guard as ``_blank_session_rate_is_unset``."""
+        if isinstance(value, str) and value.strip() == "":
+            return None
+        return value
+
+    @field_validator("session_mint_cap_override", mode="after")
+    @classmethod
+    def _mint_cap_override_within_bounds(cls, value: int | None) -> int | None:
+        """Reject a zero/negative/absurd override — ``0`` must never mean
+        "unlimited" (it would mean "nobody can ever mint")."""
+        if value is None:
+            return None
+        if value < 1 or value > cls.SESSION_MINT_CAP_OVERRIDE_MAX:
+            raise ValueError(
+                "SESSION_MINT_CAP_OVERRIDE must be between 1 and "
+                f"{cls.SESSION_MINT_CAP_OVERRIDE_MAX} (got {value}); "
+                "0 or negative would lock every IP out, not open it."
+            )
+        return value
+
     @field_validator("session_rate_limit_per_minute", mode="before")
     @classmethod
     def _blank_session_rate_is_unset(cls, value: object) -> object:
@@ -392,6 +433,15 @@ def validate_production_environment() -> None:
             + " requires SESSION_RATE_LIMIT_PER_MINUTE to be unset. "
             "The session rate-limit override is a hermetic-test-lane control "
             "and must never weaken the per-IP limiter in a deployed environment."
+        )
+    if settings.session_mint_cap_override is not None:
+        raise RuntimeError(
+            "Refusing to start: runtime_environment="
+            + settings.runtime_environment.value
+            + " requires SESSION_MINT_CAP_OVERRIDE to be unset. "
+            "The session mint-cap override is a hermetic-test-lane control "
+            "and must never weaken the durable per-IP daily cap in a deployed "
+            "environment."
         )
     # SEC-H2: enforce QUORUM_TOKEN_SECRET in non-local environments.
     # An auto-generated per-process secret breaks multi-instance

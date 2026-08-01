@@ -1,6 +1,9 @@
 """Stage B / D0 — the LOCAL-only ``/v1/session`` rate-limit override.
 
-The per-IP limiter is pinned to 30/min in production. A LOCAL-only override
+The per-IP limiter is pinned to 10/min in production (tightened from 30/min,
+issue #100 §2.4 — server-load/availability protection against a scripted
+flood; a separate concern from the durable per-IP daily session-mint cap in
+``test_session_mint_cap.py``). A LOCAL-only override
 (``SESSION_RATE_LIMIT_PER_MINUTE``) raises it for the hermetic e2e lanes, which
 otherwise measure the limiter (parity ≈ 53 boots/run × 10 repeats) instead of
 the product. This is a security control: it is refused at startup outside LOCAL,
@@ -30,26 +33,26 @@ def _settings(**overrides: object) -> Settings:
 # --- The production default is 30, from both sources -----------------------
 
 
-def test_production_default_is_thirty(monkeypatch: pytest.MonkeyPatch) -> None:
-    """The resolved production capacity/refill is 30 and the override is unset.
+def test_production_default_is_ten(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The resolved production capacity/refill is 10 and the override is unset.
 
     Neutralises BOTH sources: ``_env_file=None`` (the ``.env`` file) AND
     ``monkeypatch.delenv`` (``os.environ`` — Stage B itself exports the override
     into CI jobs, so without the delenv this reads the CI value and passes
     vacuously).
 
-    Bite proof: change ``_InMemoryIpRateLimiter.CAPACITY = 30`` → 31 and the
+    Bite proof: change ``_InMemoryIpRateLimiter.CAPACITY = 10`` → 11 and the
     capacity assertion goes red.
     """
     monkeypatch.delenv("SESSION_RATE_LIMIT_PER_MINUTE", raising=False)
     settings = _settings()
     assert settings.session_rate_limit_per_minute is None
-    assert _InMemoryIpRateLimiter.CAPACITY == 30
-    assert _InMemoryIpRateLimiter.REFILL_PER_MINUTE == 30
+    assert _InMemoryIpRateLimiter.CAPACITY == 10
+    assert _InMemoryIpRateLimiter.REFILL_PER_MINUTE == 10
     # A default-constructed limiter (no override) inherits the class default.
     default_limiter = _InMemoryIpRateLimiter()
-    assert default_limiter.CAPACITY == 30
-    assert default_limiter.REFILL_PER_MINUTE == 30
+    assert default_limiter.CAPACITY == 10
+    assert default_limiter.REFILL_PER_MINUTE == 10
 
 
 # --- Refused outside LOCAL --------------------------------------------------
@@ -146,7 +149,7 @@ def test_override_applies_in_local() -> None:
       request is refused — proves the burst ceiling is N.
     * REFILL_PER_MINUTE: advance the clock 6s and assert 5 consecutive requests
       succeed. At the overridden 100/min, 6s refills ~10 tokens; at the class
-      default 30/min it would refill only ~3, so the 4th would be refused. This
+      default 10/min it would refill only ~1, so the 2nd would be refused. This
       is what makes the test bite the refill wiring, not just capacity — a fixed
       epoch never exercises refill (verified: mis-seeding refill left this green
       until this assertion was added).
@@ -169,7 +172,7 @@ def test_override_applies_in_local() -> None:
     for i in range(5):
         assert limiter.allow(ip=ip, now_epoch=t1), (
             f"refill request {i} at t0+6s should pass at refill {n}/min "
-            "(only ~3 would refill at the un-overridden 30/min)"
+            "(only ~1 would refill at the un-overridden 10/min)"
         )
 
 

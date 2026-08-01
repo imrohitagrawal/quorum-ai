@@ -10,7 +10,8 @@ beyond the cap receive a 503 with a clear error code.
 C9: the ``/v1/session`` endpoint mints a new account id on every
 call. Without a per-IP limit a script can create thousands of
 sessions per second and bloat the in-memory ``session_repository``.
-The limiter is a token bucket: 30 requests per IP per minute.
+The limiter is a token bucket: 10 requests per IP per minute
+(tightened from 30, issue #100 §2.4).
 """
 
 from __future__ import annotations
@@ -44,22 +45,22 @@ def test_session_endpoint_rate_limited_after_burst() -> None:
     """After exceeding the per-IP token bucket the session endpoint
     returns 429 with the ``RATE_LIMITED`` code.
     """
-    # Precondition: the resolved per-IP capacity is the production 30. A stray
+    # Precondition: the resolved per-IP capacity is the production 10. A stray
     # SESSION_RATE_LIMIT_PER_MINUTE (Stage B exports it into the e2e lanes)
     # would flip this bucket to N and make the burst assertion green-but-
-    # meaningless — the 31st request would pass. Fail loudly instead.
+    # meaningless — the 11th request would pass. Fail loudly instead.
     from product_app.query_runs import _ip_rate_limiter
 
-    assert _ip_rate_limiter.CAPACITY == 30, (
-        f"expected the pinned production capacity 30, got {_ip_rate_limiter.CAPACITY}; "
+    assert _ip_rate_limiter.CAPACITY == 10, (
+        f"expected the pinned production capacity 10, got {_ip_rate_limiter.CAPACITY}; "
         "SESSION_RATE_LIMIT_PER_MINUTE must not be set in the pytest lane."
     )
     client = _client()
-    # Drain the bucket: 30 sessions should all return 200.
-    for i in range(30):
+    # Drain the bucket: 10 requests should all return 200.
+    for i in range(10):
         response = client.get("/v1/session")
         assert response.status_code == 200, f"session {i} expected 200, got {response.status_code}"
-    # The 31st request should be rate-limited.
+    # The 11th request should be rate-limited.
     response = client.get("/v1/session")
     assert response.status_code == 429
     assert response.json()["detail"]["code"] == "RATE_LIMITED"

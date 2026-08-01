@@ -28,6 +28,20 @@ os.environ.setdefault("ACCOUNT_LEGACY_HEADER_ENABLED", "true")
 # ``run_history_store.configure_for_tests``.
 os.environ.setdefault("RUN_HISTORY_DB_PATH", ":memory:")
 
+# Same reasoning, same fix, for the feedback-events sink (issue #100): without
+# this, importing ``product_app.main`` opens the REAL on-disk
+# ``.data/feedback_events.sqlite3`` (``FeedbackStore.from_env()``'s default),
+# and every test that hits a route minting or billing through it writes real,
+# PERSISTENT rows there — durable across pytest invocations, not just within
+# one. This was latent (nothing read cross-account/cross-test totals) until
+# #100's global $5/24h ceiling and the per-IP daily session-mint cap started
+# reading real SUMS across every account/IP. ``:memory:`` here only fixes
+# cross-RUN persistence; see ``_reset_feedback_store`` below for the
+# WITHIN-run fix (every ``TestClient`` reports the same fake peer IP,
+# ``"testclient"``, so the mint cap — a 2-per-IP threshold, unlike the $5
+# ceiling's much larger margin — collides across unrelated tests without it).
+os.environ.setdefault("FEEDBACK_DB_PATH", ":memory:")
+
 # Egress guard (Stage B): the working-tree ``.env`` sets
 # ``OPENROUTER_LIVE_EXECUTION_ENABLED=true`` with a real key, and ``Settings``
 # reads ``.env`` on every local pytest run. Force live execution OFF before any
@@ -44,6 +58,7 @@ from typing import Any
 
 import pytest
 
+from product_app import feedback_store
 from product_app.auth import session_repository
 from product_app.query_runs import (
     _account_rate_limiter,
@@ -139,3 +154,29 @@ def reset_state() -> Iterator[None]:
     _reset_state()
     yield
     _reset_state()
+
+
+@pytest.fixture(autouse=True)
+def _isolated_feedback_store() -> Iterator[None]:
+    """Give every test its own fresh, empty ``:memory:`` feedback store.
+
+    Issue #100: every ``TestClient`` reports the same fake peer address
+    (``request.client.host == "testclient"`` — verified directly; there is
+    no per-instance override), so without this fixture the durable per-IP
+    session-mint cap (2/24h) and, at large enough test-suite scale, the
+    global $5/24h ceiling would accumulate real events across UNRELATED
+    tests that happen to mint a session or bill a run — exhausting a
+    2-per-IP cap within the first couple of such tests in the whole suite,
+    not just this file's own.
+
+    Reuses ``feedback_store.configure_for_tests()`` (the existing, already
+    correct isolation primitive individual tests opt into) as the AUTOUSE
+    default instead, mirroring ``reset_state`` above for every other piece
+    of shared process-global state. A test that explicitly calls
+    ``configure_for_tests()`` or ``configure(...)`` itself simply layers a
+    further swap on top for its own scope, restored back to THIS fixture's
+    fresh store on exit — nesting composes safely because both are the same
+    save-and-restore shape.
+    """
+    with feedback_store.configure_for_tests():
+        yield

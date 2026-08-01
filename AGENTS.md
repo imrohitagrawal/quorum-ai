@@ -72,11 +72,15 @@ is the rule only.
     agent inherited.
 
 **Commands that bite if you get them wrong**
-13. **Run e2e exactly as CI does**, or ~95 phantom failures appear:
+13. **Run e2e exactly as CI does**, or ~95 phantom failures appear. Since
+    #100, `SESSION_RATE_LIMIT_PER_MINUTE` alone is not enough — the DURABLE
+    per-IP daily mint cap (2/24h in production) needs its own LOCAL-only
+    override too, or the 3rd cookie-less `/ui` boot in the run gets a 429
+    and every invariant spec after it fails to even render:
     ```bash
     lsof -ti tcp:18085 | xargs -r kill -9
-    cd e2e && SESSION_RATE_LIMIT_PER_MINUTE=600 npx playwright test <spec> \
-      --project=chromium --workers=1 --retries=0
+    cd e2e && SESSION_RATE_LIMIT_PER_MINUTE=600 SESSION_MINT_CAP_OVERRIDE=600 \
+      npx playwright test <spec> --project=chromium --workers=1 --retries=0
     ```
 14. **`make quality` and `make validate` do NOT cover the merge gates.** Six
     contexts are required by branch protection. Passing both targets locally

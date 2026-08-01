@@ -63,6 +63,11 @@ jobs:
       # /v1/session GET from tripping the 30/min per-IP limiter across engines.
       RUNTIME_ENVIRONMENT: "local"
       SESSION_RATE_LIMIT_PER_MINUTE: "600"
+      # Issue #100: the DURABLE per-IP daily mint cap (2/24h in production)
+      # is a separate control from the burst limiter above and needs its
+      # own override for the same reason — every browser engine here shares
+      # one real loopback IP.
+      SESSION_MINT_CAP_OVERRIDE: "600"
     steps:
       - name: Check out repository
         uses: actions/checkout@v4

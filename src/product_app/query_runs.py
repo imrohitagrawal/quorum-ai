@@ -986,8 +986,12 @@ _synthesis_pool = ThreadPoolExecutor(
 # C9: per-IP rate limiter on ``/v1/session``. Each new session mints a
 # new account id; without a limiter, a script can create thousands of
 # sessions per second and bloat the in-memory ``session_repository``.
-# The limiter is a simple token bucket: 30 requests per IP per minute.
-# 429 is returned when the bucket is empty.
+# The limiter is a simple token bucket: 10 requests per IP per minute
+# (tightened from 30, issue #100 §2.4 — server-load/availability
+# protection against a scripted flood; a DIFFERENT concern from the
+# durable per-IP daily session-MINT cap in ``auth.py``, which closes
+# the dollar-drain problem this limiter never addressed). 429 is
+# returned when the bucket is empty.
 class _InMemoryIpRateLimiter:
     """Naive per-IP token bucket. Single-process only.
 
@@ -997,12 +1001,12 @@ class _InMemoryIpRateLimiter:
     """
 
     #: Default per-IP capacity/refill. Kept as class constants so the
-    #: production posture (30/min) is pinned and greppable, but the
+    #: production posture (10/min) is pinned and greppable, but the
     #: instance seeds ``self.CAPACITY``/``self.REFILL_PER_MINUTE`` from
     #: them so a LOCAL-only override (Stage B / D0) can raise the bucket
     #: for the hermetic e2e lanes without touching production.
-    CAPACITY = 30
-    REFILL_PER_MINUTE = 30
+    CAPACITY = 10
+    REFILL_PER_MINUTE = 10
     # SEC-H3: stale buckets are evicted after 5 minutes of full
     # capacity (refill window). Without this, a /16 IPv4 scan would
     # add 65K entries that never expire.
