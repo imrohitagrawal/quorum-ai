@@ -102,6 +102,24 @@ class TestResumeDoesNotConsumeAMintSlot:
             with pytest.raises(SessionMintCapExceeded):
                 issue_or_resume_session("still-not-real", client_ip="1.2.3.4")
 
+    def test_the_rotate_race_fallback_also_threads_client_ip(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """The rare race window (session expires between ``get`` and
+        ``rotate_csrf``) falls through to a real mint too — and that mint
+        must still respect and count against the cap, not silently bypass
+        it because it took the OTHER fallback path than an unknown id."""
+        from product_app.auth import session_repository
+
+        with configure_for_tests() as store:
+            minted = issue_session(client_ip="1.2.3.4")
+            monkeypatch.setattr(session_repository, "rotate_csrf", lambda _id: None)
+            issue_or_resume_session(minted.session_id, client_ip="1.2.3.4")
+            # One mint from setup + one from the race fallback = 2.
+            assert store.session_mint_count_for_ip("1.2.3.4") == SESSION_MINT_CAP_PER_IP
+            with pytest.raises(SessionMintCapExceeded):
+                issue_or_resume_session(minted.session_id, client_ip="1.2.3.4")
+
 
 class TestSessionRouteReturns429:
     """Integration: the real ``/v1/session`` and ``/ui`` routes."""
