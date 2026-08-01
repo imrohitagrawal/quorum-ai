@@ -170,12 +170,30 @@ is the rule only.
     remote and the local ref does not follow.
 17f. **Hermetic / $0.** No paid API calls for routine checks. Never fabricate a
     number — flag the gap instead.
+17g. **Before selecting a work package, check whether several open issues are
+    the SAME concern under different issue numbers** — same function/file/
+    narrow area, one a direct follow-on of another, or a batch of trivial
+    same-surface copy/doc fixes. Club those into ONE PR to cut redundant
+    review-and-deploy churn on the same code. **Do not club issues just
+    because each is individually small** if they are actually unrelated
+    concerns — rule 17 (one CONCERN per PR) still binds; this changes work-
+    package *selection*, not the one-concern-per-PR rule itself. State which
+    issues are in the cluster and why each belongs, same as rule 20 requires
+    for a single issue.
 18. **Done means merged AND running in production.** Verify three ways: the
     deploy **job** ran (not `skipped`/`cancelled` — check the job, not the run's
     rollup), `/status.build_sha` equals the merged SHA, and the thing you built
     actually fires. Probe production only where it costs nothing — `/ready`,
     `/status`, `/metrics`, `/ui/ops` and `/estimate` are all free; a full run
     is not.
+18a. **Close out in this order, every time — do not skip or reorder:**
+    (1) local gates green (rule 14) and every review finding resolved;
+    (2) merge (rule 17c); (3) verify the deploy per rule 18, on the newest
+    run for the merge SHA if a concurrency-cancelled run appears first;
+    (4) `git branch -f main origin/main` (rule 17e), delete the merged
+    branch (local + remote), remove the dedicated worktree. Merging without
+    step 3 and leaving a stale branch/worktree without step 4 are both
+    measured failure modes, not edge cases.
     A docs-only merge still redeploys (no workflow has a paths filter), so
     `build_sha` tracks `main`'s tip after **every** merge, not only code ones.
     Traps:
