@@ -235,6 +235,22 @@ test.describe("F-12 — export completeness and section expanders", () => {
     ).toBeLessThan(verdict);
   });
 
+  test("the export's Synthesis: footer line names the real synthesis_mode, not a generic label (#128)", async ({
+    page,
+  }) => {
+    // Screen and export used to read this from two independent lookups that
+    // had drifted: the on-screen badge collapsed `simulated` into "Automated
+    // summary" while the export already said "local simulation (not a
+    // model)". This pins the export half so the two surfaces cannot drift
+    // apart again without a test noticing.
+    const resp = goldenCompletedResp() as any;
+    resp.result.final_synthesis.synthesis_mode = "simulated";
+    await driveToResult(page, resp);
+    const md = await exportedMarkdown(page);
+    expect(md).toMatch(/- Synthesis: local simulation \(not a model\)/);
+    expect(md).not.toContain("- Synthesis: Automated summary");
+  });
+
   test("the export tells the same story as the screen when nothing was simulated", async ({
     page,
   }) => {
