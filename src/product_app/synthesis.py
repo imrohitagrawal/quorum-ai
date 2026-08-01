@@ -26,7 +26,7 @@ from decimal import Decimal
 from enum import StrEnum
 from threading import RLock
 from time import perf_counter
-from typing import Any
+from typing import Any, Final, Literal
 from uuid import UUID
 
 from pydantic import BaseModel
@@ -98,14 +98,29 @@ TEMPLATED_FALLBACK_PREFIX = ""
 #: ``"live"`` = all five sections came back from the model with usable text.
 #: ``"fallback"`` = 1 to 4 did (a MIXED run; it does not record which).
 #: ``"simulated"`` = none did, so every section is this product's template.
-SYNTHESIS_MODE_LIVE = "live"
-SYNTHESIS_MODE_FALLBACK = "fallback"
-SYNTHESIS_MODE_SIMULATED = "simulated"
+SYNTHESIS_MODE_LIVE: Final[Literal["live"]] = "live"
+SYNTHESIS_MODE_FALLBACK: Final[Literal["fallback"]] = "fallback"
+SYNTHESIS_MODE_SIMULATED: Final[Literal["simulated"]] = "simulated"
+
+#: #206: the same three values named above, as a TYPE, so
+#: ``FinalSynthesis.synthesis_mode`` below is a CLOSED enum at the type and
+#: API-contract layer, not just by constructor discipline. Found during
+#: #128's adversarial review: nothing previously stopped a 4th value from
+#: reaching the client, where it would have fallen through to a fallback
+#: path silently rather than failing.
+#:
+#: mypy does not accept ``Final`` variable references inside ``Literal[...]``
+#: (only literal values are valid there — a PEP 586 implementation choice,
+#: not a bug), so this repeats the three strings rather than reusing the
+#: named constants above. If a 4th mode is ever added, update BOTH this and
+#: the constants — a test pins that ``SYNTHESIS_MODES`` and the literal args
+#: of this type stay in sync.
+SynthesisMode = Literal["live", "fallback", "simulated"]
 
 #: Every value :data:`FinalSynthesis.synthesis_mode` can hold, as a set, so a
 #: test can cover all of them without retyping the members (``AGENTS.md`` rule
 #: 7a). Derived from the three constants above, never listed independently.
-SYNTHESIS_MODES: frozenset[str] = frozenset(
+SYNTHESIS_MODES: frozenset[SynthesisMode] = frozenset(
     {SYNTHESIS_MODE_LIVE, SYNTHESIS_MODE_FALLBACK, SYNTHESIS_MODE_SIMULATED}
 )
 
@@ -290,7 +305,7 @@ class FinalSynthesis(BaseModel):
     high_stakes_notice: str | None
     citation_coverage: CitationCoverage
     quality_checks: SynthesisQualityChecks
-    synthesis_mode: str = SYNTHESIS_MODE_SIMULATED
+    synthesis_mode: SynthesisMode = SYNTHESIS_MODE_SIMULATED
 
 
 @dataclass(frozen=True)

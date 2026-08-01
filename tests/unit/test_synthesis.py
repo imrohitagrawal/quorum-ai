@@ -1,5 +1,5 @@
 from decimal import Decimal
-from typing import cast
+from typing import cast, get_args
 from uuid import uuid4
 
 import pytest
@@ -11,7 +11,13 @@ from product_app.providers import (
     provider_execution_service,
     provider_stub_service,
 )
-from product_app.synthesis import SynthesisStatus, synthesis_event_recorder, synthesis_stub_service
+from product_app.synthesis import (
+    SYNTHESIS_MODES,
+    SynthesisMode,
+    SynthesisStatus,
+    synthesis_event_recorder,
+    synthesis_stub_service,
+)
 
 DEFAULT_MODEL_IDS = [
     "openai/gpt-4o-mini",
@@ -741,4 +747,23 @@ def test_synthesis_mode_reports_usable_live_text_not_merely_a_billed_call() -> N
     # ...but the user is reading TEMPLATED prose, so it is not a live run.
     assert result.final_synthesis.synthesis_mode != "live", (
         "templated sections were labelled as live model output"
+    )
+
+
+def test_synthesis_modes_frozenset_matches_the_closed_literal_type() -> None:
+    """#206: ``SYNTHESIS_MODES`` (the runtime set) and ``SynthesisMode`` (the
+    Pydantic field's closed type) are two independent spellings of the same
+    three values — mypy cannot check that a runtime `frozenset` literal and a
+    `Literal[...]` type alias agree, so nothing stops them drifting apart if a
+    mode is ever added to one and not the other.
+
+    What turns it red: add a 4th string to ``SYNTHESIS_MODES`` (or remove one)
+    without touching ``SynthesisMode``, or vice versa — the two sets stop
+    being equal and this fails, forcing whoever adds a mode to update BOTH
+    instead of shipping a value the Pydantic field would silently reject (or
+    a Literal member `SYNTHESIS_MODES` never covers).
+    """
+    assert set(get_args(SynthesisMode)) == SYNTHESIS_MODES, (
+        f"SYNTHESIS_MODES {sorted(SYNTHESIS_MODES)} and SynthesisMode's Literal "
+        f"args {sorted(get_args(SynthesisMode))} have drifted apart"
     )

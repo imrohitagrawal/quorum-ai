@@ -34,6 +34,7 @@ from product_app.synthesis import (
     SYNTHESIS_MODE_SIMULATED,
     SYNTHESIS_MODES,
     FinalSynthesis,
+    SynthesisMode,
     SynthesisQualityChecks,
     SynthesisStatus,
     _final_synthesis_alignment_text,
@@ -94,7 +95,7 @@ def _synthesis(
     *,
     recommendation: str = "",
     status: SynthesisStatus = SynthesisStatus.COMPLETED,
-    synthesis_mode: str = SYNTHESIS_MODE_LIVE,
+    synthesis_mode: SynthesisMode = SYNTHESIS_MODE_LIVE,
 ) -> FinalSynthesis:
     """Minimal COMPLETED FinalSynthesis whose consensus/recommendation carry the
     final-answer content that per-model alignment is compared against.
@@ -282,22 +283,27 @@ def test_only_a_live_synthesis_supplies_the_text_alignment_is_measured_against()
     # the real thing, both sections, not an empty string.
     assert yields_text[SYNTHESIS_MODE_LIVE] == f"{consensus} {recommendation}"
 
-    # A value outside SYNTHESIS_MODES fails CLOSED. ``synthesis_mode`` is a bare
-    # ``str`` on the model with no validator, so an unknown value is
-    # constructible, and the check must be exact equality rather than anything
-    # looser. Adversarial review landed a mutant here: rewriting the guard as
-    # ``SYNTHESIS_MODE_LIVE not in final_synthesis.synthesis_mode`` — a
-    # SUBSTRING test — passed all seven new tests and 150 others, because every
-    # canonical value either is "live" or does not contain it. "not-live" does
-    # contain it, and is the value that tells the two apart.
+    # A value outside SYNTHESIS_MODES must still fail CLOSED if one somehow
+    # reaches the comparison, so the check must be exact equality rather than
+    # anything looser. Adversarial review landed a mutant here: rewriting the
+    # guard as ``SYNTHESIS_MODE_LIVE not in final_synthesis.synthesis_mode`` —
+    # a SUBSTRING test — passed all seven new tests and 150 others, because
+    # every canonical value either is "live" or does not contain it. "not-live"
+    # does contain it, and is the value that tells the two apart.
+    #
+    # #206 closed `synthesis_mode` to a Literal, so the normal constructor no
+    # longer accepts "not-live" (Pydantic raises ValidationError). This
+    # assertion is about the COMPARISON's robustness, not about what values
+    # can be constructed today — `model_copy(update=...)` deliberately bypasses
+    # validation (documented Pydantic behaviour) to keep exercising the guard
+    # against a value the type system no longer lets a normal caller produce.
     assert "not-live" not in SYNTHESIS_MODES
-    assert (
-        _final_synthesis_alignment_text(
-            _synthesis(consensus, recommendation=recommendation, synthesis_mode="not-live")
-        )
-        is None
-    ), "an unrecognised mode is not a model-authored synthesis"
-    assert _final_synthesis_was_templated(_synthesis(consensus, synthesis_mode="not-live")), (
+    valid = _synthesis(consensus, recommendation=recommendation, synthesis_mode=SYNTHESIS_MODE_LIVE)
+    off_enum = valid.model_copy(update={"synthesis_mode": "not-live"})
+    assert _final_synthesis_alignment_text(off_enum) is None, (
+        "an unrecognised mode is not a model-authored synthesis"
+    )
+    assert _final_synthesis_was_templated(off_enum), (
         "and it must be treated as templated, not as an absent synthesis"
     )
 

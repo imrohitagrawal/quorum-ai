@@ -3323,12 +3323,13 @@
     // this synthesis was produced; badging it replaces the "[Template] " /
     // "Heuristic fallback: " prefix that used to leak into the prose itself.
     // #128: driven from SYNTHESIS_MODE_LABELS so this can never again read
-    // differently than the exported Markdown does. An unmapped mode (the
-    // server's ``synthesis_mode`` field is a bare string, not a closed
-    // enum, on the wire) echoes the raw value rather than falling back to a
-    // fixed claim — a fixed fallback string is exactly how this bug shipped
-    // in the first place, badging an unrecognized mode as confidently as a
-    // recognized one.
+    // differently than the exported Markdown does. An unmapped mode echoes
+    // the raw value rather than falling back to a fixed claim — a fixed
+    // fallback string is exactly how this bug shipped in the first place,
+    // badging an unrecognized mode as confidently as a recognized one.
+    // (#206 closed ``synthesis_mode`` to a Literal server-side, so this
+    // branch is unreachable from the current API — kept as defense in
+    // depth against a version-skew deploy serving old cached JS.)
     if (fs.synthesis_mode && fs.synthesis_mode !== "live") {
       const modeLabel = SYNTHESIS_MODE_LABELS[fs.synthesis_mode];
       const badgeText = (modeLabel && modeLabel.badge) || `Automated (${fs.synthesis_mode})`;
