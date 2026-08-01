@@ -83,6 +83,13 @@ class Settings(BaseSettings):
     openrouter_app_url: str = "http://localhost:18084"
     openrouter_app_title: str = "Quorum AI"
     openrouter_timeout_seconds: float = 8.0
+    #: How often the background credential probe re-checks the configured
+    #: key after the initial startup probe (#112). The check is
+    #: auth-required and costs zero tokens, so the interval is bounded by
+    #: politeness to the provider, not money — tens of minutes is ample to
+    #: catch a key revoked or drained mid-process-life without waiting for
+    #: a restart.
+    key_auth_reprobe_interval_seconds: float = 1800.0
 
     # --- Real web-search fallback (Tavily) ------------------------------
     # The fallback source path replaces a fabricated ``example.test`` stub

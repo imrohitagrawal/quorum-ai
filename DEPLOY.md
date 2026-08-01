@@ -251,14 +251,19 @@ curl -sS -o /dev/null -w "%{http_code}\n" \
 fly secrets set OPENROUTER_API_KEY="sk-or-v1-..."   # then redeploy
 ```
 
-The probe runs **once per process**, on a background thread, and only an
-explicit refusal is recorded — an inconclusive result never overwrites a
-verdict. Two consequences worth knowing:
+The probe runs on a background thread, and only an explicit refusal is
+recorded — an inconclusive result never overwrites a verdict. Since #112 it
+also **re-checks every `KEY_AUTH_REPROBE_INTERVAL_SECONDS` (default 1800s /
+30min)** for as long as the process runs, not just once at startup:
 
-- the state clears on the next **restart**, not on the next `/ready` hit; and
-- a key that is revoked or defunded **mid-life** is not detected until the next
-  restart, so `/ready` keeps saying `live`. A periodic re-probe is the obvious
-  follow-up and is not implemented.
+- a key that is revoked or defunded **mid-life** is caught within one
+  interval — `/ready` does not keep saying `live` indefinitely; and
+- a key you just fixed **self-heals within one interval** too, no restart
+  needed — though a restart still clears the state immediately if you don't
+  want to wait.
+
+Known gap, not fixed here: a network proxy or WAF answering 403 on the
+app's behalf is indistinguishable from the provider doing so.
 
 ### Users get logged out every deploy
 

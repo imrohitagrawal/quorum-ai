@@ -16,16 +16,25 @@ loud signal when they're in offline mode but expected live mode
 traffic that "looks fine" for hours until someone runs a real
 query and notices all four slots are templated.
 
-The probe runs once at process start, logs to the standard
+The startup probe runs once at process start, logs to the standard
 logger, and exposes its findings on the ``/ready`` endpoint as
 ``live_readiness`` so an external check (load balancer, ops
 dashboard) can surface the state without needing log access.
+
+The credential probe (``start_key_auth_probe``) additionally keeps
+re-checking the key every ``key_auth_reprobe_interval_seconds`` for as
+long as the process runs (#112) — a key that is revoked or drained of
+credit AFTER startup is exactly the case a once-only probe cannot see,
+and it is the empirically likely one for this project (prod has
+previously run for days on an unfunded key).
 """
 
 from __future__ import annotations
 
+import contextlib
 import logging
 import threading
+import time as _time_module
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from typing import Literal
@@ -340,31 +349,53 @@ def probe_key_auth(*, transport: KeyAuthTransport | None = None) -> KeyAuthState
     return "unknown"
 
 
+def _probe_once_and_record(transport: KeyAuthTransport | None) -> None:
+    """One probe call, applying the "inconclusive never erases" invariant.
+
+    "Inconclusive" is not a verdict, it is the ABSENCE of one. Recording
+    it would let a single timeout erase a proven rejection and
+    re-advertise the deployment as live — which is exactly what every
+    "leaving state unchanged" log line in ``probe_key_auth`` already
+    promises does not happen. This holds on every call, not just the
+    first, so a network blip on re-probe #40 is exactly as harmless as
+    one on re-probe #1.
+    """
+    verdict = probe_key_auth(transport=transport)
+    if verdict == "unknown":
+        return
+    record_key_auth_state(verdict)
+
+
 def start_key_auth_probe(*, transport: KeyAuthTransport | None = None) -> threading.Thread | None:
-    """Run the credential probe on a background daemon thread.
+    """Run the credential probe on a background daemon thread, then keep
+    re-probing every ``key_auth_reprobe_interval_seconds`` for as long as
+    the process runs (#112).
 
     Returns ``None`` when there is nothing to prove (live execution off,
     or no key) — so a gated-off deployment starts no thread and opens no
-    socket.
+    socket. The gate is re-checked on every iteration too, because
+    ``probe_key_auth`` itself reads the live settings on each call and
+    returns ``"unknown"`` (no dial) the moment they cease to hold.
 
     It must not be synchronous: ``main.py`` already blocks module import
     on the catalog fetch, and this probe is a second network round-trip
     against an endpoint that can be slow or unreachable. Startup latency
-    is not the price of honesty.
+    is not the price of honesty. The FIRST probe happens immediately
+    (no initial sleep) so cold-start behaviour is unchanged from before
+    #112; only the re-probing is new.
     """
     if not (settings.openrouter_live_execution_enabled and settings.openrouter_api_key):
         return None
 
     def _run() -> None:
-        verdict = probe_key_auth(transport=transport)
-        if verdict == "unknown":
-            # "Inconclusive" is not a verdict, it is the ABSENCE of one.
-            # Recording it would let a single timeout erase a proven
-            # rejection and re-advertise the deployment as live — which
-            # is exactly what every "leaving state unchanged" log line
-            # in ``probe_key_auth`` already promises does not happen.
-            return
-        record_key_auth_state(verdict)
+        while True:
+            # Consistent with the session-gc daemon thread's house
+            # pattern (auth.py): don't let one bad iteration kill the
+            # thread. ``probe_key_auth`` already catches everything
+            # itself, so this is defense in depth, not the primary guard.
+            with contextlib.suppress(Exception):
+                _probe_once_and_record(transport)
+            _time_module.sleep(settings.key_auth_reprobe_interval_seconds)
 
     thread = threading.Thread(target=_run, daemon=True, name="key-auth-probe")
     try:
