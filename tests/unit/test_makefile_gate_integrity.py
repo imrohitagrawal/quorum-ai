@@ -23,6 +23,8 @@ from __future__ import annotations
 
 import os
 import subprocess
+import sys
+import time as _time
 from pathlib import Path
 
 import pytest
@@ -47,6 +49,21 @@ def _make(*args: str, check: bool = False) -> subprocess.CompletedProcess[str]:
         text=True,
         check=check,
     )
+
+
+def _unique_guard_name(base: str) -> str:
+    """A ``GATE_NAME`` unique to this OS process (#113 / #104 item 2).
+
+    ``gate-min-executed`` reads a fixed ``build/gates/$(GATE_NAME).xml`` path
+    (see the Makefile target) — there is no override for a per-test tmp
+    directory, so ``tmp_path`` cannot isolate these invocations the way the
+    synthetic-suite tests above do. Suffixing with ``os.getpid()`` gives two
+    concurrent OS processes (e.g. ``pytest`` and ``make diff-cover``'s own
+    nested ``pytest`` run) distinct files under the same fixed directory, so
+    one process's ``finally: xml.unlink()`` can no longer delete a file a
+    different process is still using.
+    """
+    return f"{base}-{os.getpid()}"
 
 
 @pytest.fixture(scope="module")
@@ -245,9 +262,10 @@ def test_executed_guard_rejects_a_missing_junit_xml() -> None:
     success line and exited 0 — a blocking gate reporting green on a report
     that does not exist.
     """
-    xml = REPO_ROOT / "build" / "gates" / "guard-no-xml.xml"
+    name = _unique_guard_name("guard-no-xml")
+    xml = REPO_ROOT / "build" / "gates" / f"{name}.xml"
     xml.unlink(missing_ok=True)
-    result = _make("gate-min-executed", "GATE_NAME=guard-no-xml", "GATE_MIN=1")
+    result = _make("gate-min-executed", f"GATE_NAME={name}", "GATE_MIN=1")
     assert result.returncode != 0, (
         "gate-min-executed passed with no JUnit XML on disk — the false-green "
         f"fall-through is back:\n{result.stdout}\n{result.stderr}"
@@ -259,11 +277,12 @@ def test_executed_guard_rejects_a_missing_junit_xml() -> None:
 
 def test_executed_guard_rejects_a_malformed_junit_xml() -> None:
     """Same fall-through, second door: unparseable XML must also fail loudly."""
-    xml = REPO_ROOT / "build" / "gates" / "guard-bad-xml.xml"
+    name = _unique_guard_name("guard-bad-xml")
+    xml = REPO_ROOT / "build" / "gates" / f"{name}.xml"
     xml.parent.mkdir(parents=True, exist_ok=True)
     xml.write_text("<unclosed", encoding="utf-8")
     try:
-        result = _make("gate-min-executed", "GATE_NAME=guard-bad-xml", "GATE_MIN=1")
+        result = _make("gate-min-executed", f"GATE_NAME={name}", "GATE_MIN=1")
         assert result.returncode != 0, (
             "gate-min-executed passed on unparseable XML — it measured "
             f"nothing:\n{result.stdout}\n{result.stderr}"
@@ -276,7 +295,8 @@ def test_executed_guard_counts_every_suite_in_a_testsuites_wrapper() -> None:
     """Cycle-1 review finding: the counter used to read only the FIRST
     ``<testsuite>`` child, so skips hidden in a second suite passed a
     blocking gate. The counts must be summed across ALL suites."""
-    xml = REPO_ROOT / "build" / "gates" / "guard-two-suites.xml"
+    name = _unique_guard_name("guard-two-suites")
+    xml = REPO_ROOT / "build" / "gates" / f"{name}.xml"
     xml.parent.mkdir(parents=True, exist_ok=True)
     xml.write_text(
         "<testsuites>"
@@ -286,7 +306,7 @@ def test_executed_guard_counts_every_suite_in_a_testsuites_wrapper() -> None:
         encoding="utf-8",
     )
     try:
-        result = _make("gate-min-executed", "GATE_NAME=guard-two-suites", "GATE_MIN=5")
+        result = _make("gate-min-executed", f"GATE_NAME={name}", "GATE_MIN=5")
         assert result.returncode != 0, (
             "5 skips in the second testsuite were invisible — the gate "
             f"counted only the first suite:\n{result.stdout}\n{result.stderr}"
@@ -296,21 +316,93 @@ def test_executed_guard_counts_every_suite_in_a_testsuites_wrapper() -> None:
         xml.unlink(missing_ok=True)
 
 
-def test_executed_guard_still_accepts_a_healthy_junit_xml() -> None:
-    """The fail-fast checks must not reject a genuine, passing report."""
-    xml = REPO_ROOT / "build" / "gates" / "guard-good-xml.xml"
+def _run_healthy_guard_cycle(
+    name: str, *, pre_make_delay: float = 0.0
+) -> subprocess.CompletedProcess[str]:
+    """Write a healthy JUnit XML under ``name``, run the executed-count guard
+    against it, and clean up. Shared by the single-process test below and by
+    the concurrency regression test, so both exercise the exact same cycle
+    the real gate recipes do (write -> make gate-min-executed -> unlink).
+
+    ``pre_make_delay`` widens the window between the write and the ``make``
+    call — the exact window the original race exploited (a second process's
+    ``finally: xml.unlink()`` firing in between) — so the regression test
+    below can reproduce the collision deterministically instead of depending
+    on luck.
+    """
+    xml = REPO_ROOT / "build" / "gates" / f"{name}.xml"
     xml.parent.mkdir(parents=True, exist_ok=True)
     xml.write_text(
         '<testsuite tests="3" skipped="0" failures="0" errors="0"/>',
         encoding="utf-8",
     )
+    if pre_make_delay:
+        _time.sleep(pre_make_delay)
     try:
-        result = _make("gate-min-executed", "GATE_NAME=guard-good-xml", "GATE_MIN=1")
-        assert result.returncode == 0, (
-            f"a healthy report was rejected (false red):\n{result.stdout}\n{result.stderr}"
-        )
+        return _make("gate-min-executed", f"GATE_NAME={name}", "GATE_MIN=1")
     finally:
         xml.unlink(missing_ok=True)
+
+
+def test_executed_guard_still_accepts_a_healthy_junit_xml() -> None:
+    """The fail-fast checks must not reject a genuine, passing report."""
+    result = _run_healthy_guard_cycle(_unique_guard_name("guard-good-xml"))
+    assert result.returncode == 0, (
+        f"a healthy report was rejected (false red):\n{result.stdout}\n{result.stderr}"
+    )
+
+
+def test_concurrent_healthy_guard_checks_do_not_race() -> None:
+    """#113 / #104 item 2: two concurrent OS processes must not delete each
+    other's JUnit XML.
+
+    Reproduces the reported failure mode directly: spawn two REAL child
+    processes (not threads — threads share one PID, and the fix keys on
+    ``os.getpid()``, so only separate processes can prove it) that each run
+    ``_run_healthy_guard_cycle`` under a name built the same way the real
+    tests build it. One process sleeps between its write and its ``make``
+    call to widen the window the original bug exploited (one process's
+    ``finally: xml.unlink()`` firing between another's write and its own
+    ``make`` subprocess reading the file). With the pid-suffixed name, the
+    two processes can never touch the same path, so both must succeed
+    regardless of the injected delay.
+
+    What turns this red: reverting ``_unique_guard_name`` to return its
+    ``base`` unchanged (dropping the pid suffix) — the two child processes
+    then race on the identical ``build/gates/guard-good-xml.xml`` path and
+    one reliably fails with ``FileNotFoundError`` (verified via the mutate/
+    restore cycle below, not asserted from prose).
+    """
+    script = (
+        "import sys; sys.path.insert(0, %r)\n"
+        "from tests.unit.test_makefile_gate_integrity import ("
+        "_run_healthy_guard_cycle, _unique_guard_name)\n"
+        "name = _unique_guard_name('guard-good-xml')\n"
+        "result = _run_healthy_guard_cycle(name, pre_make_delay=%s)\n"
+        "sys.exit(0 if result.returncode == 0 else 1)\n"
+    )
+    procs = [
+        subprocess.Popen(
+            # ``sys.executable``, not ``uv run python``: this must also pass
+            # inside test_mutation_copy_completeness.py's bare mutmut-shaped
+            # copy, which has no .venv/lock for ``uv run`` to resolve.
+            # Reusing the interpreter already running this test (which
+            # already has pytest importable) mirrors how that test invokes
+            # its own subprocess, and matches ``_make``'s own ``make``
+            # subprocess call, which needs no fresh venv resolution either.
+            [sys.executable, "-c", script % (str(REPO_ROOT), delay)],
+            cwd=REPO_ROOT,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            text=True,
+        )
+        for delay in (0.0, 0.5)
+    ]
+    outputs = [p.communicate()[0] for p in procs]
+    returncodes = [p.returncode for p in procs]
+    assert returncodes == [0, 0], (
+        "two concurrent guard checks collided on a shared path:\n" + "\n---\n".join(outputs)
+    )
 
 
 @pytest.mark.parametrize("target", ["perf-gate", "api-contract"])
