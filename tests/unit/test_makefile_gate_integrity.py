@@ -370,8 +370,14 @@ def test_concurrent_healthy_guard_checks_do_not_race() -> None:
     What turns this red: reverting ``_unique_guard_name`` to return its
     ``base`` unchanged (dropping the pid suffix) — the two child processes
     then race on the identical ``build/gates/guard-good-xml.xml`` path and
-    one reliably fails with ``FileNotFoundError`` (verified via the mutate/
-    restore cycle below, not asserted from prose).
+    one of the two ``make gate-min-executed`` invocations exits non-zero
+    (returncode 1). Depending on the exact interleaving this shows up either
+    as a raw ``FileNotFoundError`` (the file is deleted between the recipe's
+    own ``[ -f ... ]`` check and the ``python -c`` step that parses it) or as
+    the recipe's own "is missing" message (deleted before the check even
+    runs) — both are the same underlying collision; the assertion below
+    catches either by checking the returncode, not by matching either
+    message.
     """
     script = (
         "import sys; sys.path.insert(0, %r)\n"
