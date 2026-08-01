@@ -764,16 +764,16 @@ class CostEstimationService:
                     if event_type == "cost_guardrail_degraded_to_simulation":
                         if client_ip is not None:
                             scope.set_extra("client_ip", client_ip)
-                        from product_app.feedback_store import get_store  # local import to avoid cycles
+                        from product_app.feedback_store import (
+                            get_store,  # local import to avoid cycles
+                        )
 
                         alert_store = get_store()
                         if alert_store is not None:
                             scope.set_extra(
                                 "global_daily_spend_usd", str(alert_store.global_daily_spend())
                             )
-                        scope.set_extra(
-                            "global_daily_ceiling_usd", str(GLOBAL_DAILY_CEILING_USD)
-                        )
+                        scope.set_extra("global_daily_ceiling_usd", str(GLOBAL_DAILY_CEILING_USD))
                     sentry_sdk.capture_message(
                         f"{event_type}:{event_type}",
                         level="warning",

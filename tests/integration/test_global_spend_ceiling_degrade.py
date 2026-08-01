@@ -7,17 +7,21 @@ class). Live execution is enabled and a key IS configured in every test
 here; only the ceiling being tripped should be why nothing goes live.
 """
 
-from decimal import Decimal
-from uuid import UUID, uuid4
+from uuid import uuid4
 
 import pytest
 from fastapi.testclient import TestClient
 
 from product_app.config import settings
-from product_app.costs import GLOBAL_DAILY_CEILING_USD, cost_estimation_service
+from product_app.costs import GLOBAL_DAILY_CEILING_USD
 from product_app.feedback_store import configure_for_tests
 from product_app.main import app
-from product_app.providers import LiveProviderResult, ProviderPath, SourceReference, provider_stub_service
+from product_app.providers import (
+    LiveProviderResult,
+    ProviderPath,
+    SourceReference,
+    provider_stub_service,
+)
 from product_app.query_runs import query_run_repository
 from product_app.safety import WARNING_VERSION, WarningType
 

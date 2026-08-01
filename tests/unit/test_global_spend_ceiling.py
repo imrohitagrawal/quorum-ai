@@ -156,7 +156,8 @@ class TestCostEstimateGlobalCeiling:
     def test_reached_when_global_spend_at_or_over_ceiling(self) -> None:
         with configure_for_tests() as store:
             now = datetime.now(UTC)
-            _seed_accepted_event(store, account_id=ACCOUNT_A, usd=str(GLOBAL_DAILY_CEILING_USD), when=now)
+            ceiling_usd = str(GLOBAL_DAILY_CEILING_USD)
+            _seed_accepted_event(store, account_id=ACCOUNT_A, usd=ceiling_usd, when=now)
             service = CostEstimationService(now_provider=lambda: now)
             estimate = service.estimate(
                 query_text="hi",
@@ -223,7 +224,8 @@ class TestRecordGuardrailEventDoesNotPolluteTheMeterWhenDegraded:
                 global_ceiling_reached=True,
             )
             events = list(store.iter_events())
-            degraded = [e for e in events if e.event_type == "cost_guardrail_degraded_to_simulation"]
+            degraded_type = "cost_guardrail_degraded_to_simulation"
+            degraded = [e for e in events if e.event_type == degraded_type]
             assert len(degraded) == 1
 
     def test_preview_takes_priority_over_degraded_labelling(self) -> None:
