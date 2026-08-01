@@ -1325,6 +1325,12 @@ def create_query_run(
             cost_estimate=cost_estimate,
             cost_decision=cost_decision,
             capacity_permit=capacity_permit,
+            # Issue #100 §2.8: the global-ceiling Sentry alert wants an
+            # IP breakdown alongside account_id. Same extraction as
+            # ``main.browser_session`` — no shared helper existed before
+            # this, and adding one is out of scope for a one-field alert
+            # payload.
+            client_ip=(request.client.host if request.client else None),
         )
     except BaseException:
         # Nothing below took ownership of the permit (the worker thread only
@@ -1344,6 +1350,7 @@ def _start_reserved_query_run(
     cost_estimate: CostEstimate,
     cost_decision: CostGuardrailDecision,
     capacity_permit: BoundedSemaphore | None,
+    client_ip: str | None = None,
 ) -> QueryRunCreateResponse:
     """Create, bill and launch a run whose capacity permit is already held.
 
@@ -1393,7 +1400,9 @@ def _start_reserved_query_run(
     # the final state synchronously. Production / cookie path runs in a
     # background thread that cannot block the request response.
     if session.legacy:
-        _record_run_billing(session=session, query_run=query_run, cost_decision=cost_decision)
+        _record_run_billing(
+            session=session, query_run=query_run, cost_decision=cost_decision, client_ip=client_ip
+        )
         _execute_query_run(query_run.query_run_id, session.account_id)
         query_run = query_run_repository.get(query_run.query_run_id)
         # Legacy/test path runs inline (no safety wrapper), so persist the
@@ -1430,7 +1439,9 @@ def _start_reserved_query_run(
         raise
     # The worker owns the run now. Bill it: this is the ONE spend-counted
     # event for this logical run (F-01).
-    _record_run_billing(session=session, query_run=query_run, cost_decision=cost_decision)
+    _record_run_billing(
+        session=session, query_run=query_run, cost_decision=cost_decision, client_ip=client_ip
+    )
     return response
 
 
@@ -1439,6 +1450,7 @@ def _record_run_billing(
     session: SessionContext,
     query_run: QueryRun,
     cost_decision: CostGuardrailDecision,
+    client_ip: str | None = None,
 ) -> None:
     """Record the one spend-counted cost event for a run that is executing.
 
@@ -1467,6 +1479,7 @@ def _record_run_billing(
         # honesty: it would keep pushing the global meter past the
         # ceiling on money that was never spent).
         global_ceiling_reached=query_run.cost_estimate.global_ceiling_reached,
+        client_ip=client_ip,
     )
 
 

@@ -272,6 +272,42 @@ class TestRecordGuardrailEventDoesNotPolluteTheMeterWhenDegraded:
             assert "cost_guardrail_degraded_to_simulation" in message
             assert kwargs.get("level") == "warning"
 
+    def test_sentry_scope_receives_the_client_ip_extra(self) -> None:
+        """§2.8: "a spend/account/IP breakdown in the event context"."""
+        with configure_for_tests():
+            service = CostEstimationService()
+            seen_extras: dict[str, object] = {}
+
+            class _FakeScope:
+                def set_tag(self, *_a: object, **_k: object) -> None:
+                    pass
+
+                def set_extra(self, key: str, value: object) -> None:
+                    seen_extras[key] = value
+
+            class _FakePushScope:
+                def __enter__(self) -> _FakeScope:
+                    return _FakeScope()
+
+                def __exit__(self, *_a: object) -> None:
+                    return None
+
+            with (
+                mock.patch("sentry_sdk.capture_message"),
+                mock.patch("sentry_sdk.push_scope", return_value=_FakePushScope()),
+            ):
+                service.record_guardrail_event(
+                    account_id=ACCOUNT_A,
+                    query_run_id=None,
+                    estimated_cost_usd=Decimal("0.03"),
+                    threshold_action=CostThresholdAction.ALLOW,
+                    confirmed=False,
+                    global_ceiling_reached=True,
+                    client_ip="9.9.9.9",
+                )
+            assert seen_extras["client_ip"] == "9.9.9.9"
+            assert seen_extras["global_daily_ceiling_usd"] == str(GLOBAL_DAILY_CEILING_USD)
+
     def test_ordinary_accepted_event_unaffected_when_ceiling_not_reached(self) -> None:
         with configure_for_tests() as store:
             service = CostEstimationService()
