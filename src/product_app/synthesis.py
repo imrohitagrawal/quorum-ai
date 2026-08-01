@@ -73,8 +73,9 @@ from product_app.untrusted_text import UNTRUSTED_DATA_SYSTEM_RULE, fence
 from product_app.visible_text import is_visible
 
 #: PR6/#8/#15: templated-section provenance is now carried STRUCTURALLY by
-#: ``FinalSynthesis.synthesis_mode`` and rendered as an "Automated summary"
-#: badge, not smuggled into the prose as a text prefix. The old prefixes
+#: ``FinalSynthesis.synthesis_mode`` and rendered as a provenance badge (text
+#: keyed by mode — see ``SYNTHESIS_MODE_LABELS`` in ``app.js``), not smuggled
+#: into the prose as a text prefix. The old prefixes
 #: ("Heuristic fallback: ", then "[Template] ") leaked internal jargon into
 #: the user-visible recommendation — the exact complaint in issues #8/#15.
 #:
