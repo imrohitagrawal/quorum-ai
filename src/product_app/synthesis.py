@@ -70,6 +70,7 @@ from product_app.synthesis_length import (
     truncate_section,
 )
 from product_app.untrusted_text import UNTRUSTED_DATA_SYSTEM_RULE, fence
+from product_app.visible_text import is_visible
 
 #: PR6/#8/#15: templated-section provenance is now carried STRUCTURALLY by
 #: ``FinalSynthesis.synthesis_mode`` and rendered as an "Automated summary"
@@ -605,7 +606,7 @@ class SynthesisOrchestrationService:
                 _uncertainty_live,
                 _recommendation_live,
             )
-            if live is not None and live.answer_text.strip()
+            if live is not None and is_visible(live.answer_text)
         )
         synthesis_mode = (
             SYNTHESIS_MODE_LIVE
@@ -842,7 +843,7 @@ class SynthesisOrchestrationService:
         # templated section" while STILL returning the result, so its usage is
         # recorded and a billed call cannot vanish from the receipt.
         text = "" if live is None else live.answer_text.strip()
-        if not text:
+        if not is_visible(text):
             return truncate_section(templated, max_chars=SYNTHESIS_SECTION_MAX_CHARS), None, live
         return (
             truncate_section(text, max_chars=SYNTHESIS_SECTION_MAX_CHARS),
@@ -892,7 +893,7 @@ class SynthesisOrchestrationService:
         # templated section" while STILL returning the result, so its usage is
         # recorded and a billed call cannot vanish from the receipt.
         text = "" if live is None else live.answer_text.strip()
-        if not text:
+        if not is_visible(text):
             return truncate_section(templated, max_chars=SYNTHESIS_SECTION_MAX_CHARS), None, live
         return (
             truncate_section(text, max_chars=SYNTHESIS_SECTION_MAX_CHARS),
@@ -950,7 +951,7 @@ class SynthesisOrchestrationService:
         # templated section" while STILL returning the result, so its usage is
         # recorded and a billed call cannot vanish from the receipt.
         text = "" if live is None else live.answer_text.strip()
-        if not text:
+        if not is_visible(text):
             return truncate_section(templated, max_chars=SYNTHESIS_SECTION_MAX_CHARS), None, live
         return (
             truncate_section(text, max_chars=SYNTHESIS_SECTION_MAX_CHARS),
@@ -1003,7 +1004,7 @@ class SynthesisOrchestrationService:
         # templated section" while STILL returning the result, so its usage is
         # recorded and a billed call cannot vanish from the receipt.
         text = "" if live is None else live.answer_text.strip()
-        if not text:
+        if not is_visible(text):
             return truncate_section(templated, max_chars=SYNTHESIS_SECTION_MAX_CHARS), None, live
         return (
             truncate_section(text, max_chars=SYNTHESIS_SECTION_MAX_CHARS),
@@ -1057,7 +1058,7 @@ class SynthesisOrchestrationService:
         # F-06: see the other section builders — blank text means a call that
         # may have been billed came back unusable, not that no call was made.
         text = "" if live is None else live.answer_text.strip()
-        if not text:
+        if not is_visible(text):
             return truncate_recommendation(templated), None, live
         return truncate_recommendation(text), None, live
 
@@ -1265,7 +1266,7 @@ def build_agreement_and_positions(
     # the narration test. Nothing asserts the two expressions agree.
     final_answer_provenance = (
         FinalAnswerProvenance.MODEL_AUTHORED
-        if (model_authored_final_text or "").strip()
+        if is_visible(model_authored_final_text)
         else FinalAnswerProvenance.NOT_MODEL_AUTHORED
     )
     alignments = classify_model_alignment(

@@ -1017,6 +1017,8 @@ def test_detect_refusal_fires_on_real_refusal_shapes(text: str) -> None:
     [
         "",
         "   ",
+        "​​​​",  # #178: ZWSP-only, must not fire (or crash) on invisible text
+        "️",  # variation selector 16, alone
         "The guidance says a verifier should not require periodic change.",
         "I would not present this as a settled first-line intervention.",
         "I am describing published guidance, not your regulator's reading of it.",
