@@ -106,6 +106,7 @@ from product_app.synthesis import (
     build_agreement_and_positions,
     synthesis_stub_service,
 )
+from product_app.visible_text import is_visible
 
 router = APIRouter(prefix="/v1/query-runs", tags=["query-runs"])
 
@@ -2584,7 +2585,7 @@ def _result_response(query_run: QueryRun) -> QueryRunResultResponse:
         # slots timed out would report 4 material claims over zero characters
         # of output, and that value is persisted to SQLite. Skip the slots that
         # produced nothing. (Before WP-C these paths carried an explicit 0.)
-        if answer.answer_text.strip()
+        if is_visible(answer.answer_text)
     )
     agreement, position_movements = build_agreement_and_positions(
         initial_answers=initial_answers,

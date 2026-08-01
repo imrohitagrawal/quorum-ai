@@ -39,11 +39,14 @@ from product_app.synthesis import (
 
 _USAGE = TokenUsage(prompt_tokens=4000, completion_tokens=700, total_tokens=4700)
 
-#: Whitespace-only and truly-empty both have to be caught: the first is what a
-#: model that emitted only a newline before hitting the token cap returns, the
-#: second is what ``call_with_prompt`` synthesises for a dispatched-but-
-#: unmeasured call (5xx, timeout, torn body).
-_BLANK_TEXTS = ["", "   \n  ", "\t"]
+#: Whitespace-only, truly-empty, and invisible-only all have to be caught: the
+#: first is what a model that emitted only a newline before hitting the token
+#: cap returns, the second is what ``call_with_prompt`` synthesises for a
+#: dispatched-but-unmeasured call (5xx, timeout, torn body), and the third is
+#: #178's measured residual — a completion of zero-width spaces survives
+#: ``str.strip()`` (ZWSP is not ``str.isspace()``) but has nothing a user can
+#: see.
+_BLANK_TEXTS = ["", "   \n  ", "\t", "​​​​"]
 
 
 def _answers() -> list[InitialModelAnswer]:

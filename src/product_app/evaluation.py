@@ -62,6 +62,7 @@ from product_app.untrusted_text import (
     UNTRUSTED_END,
     neutralize_delimiters,
 )
+from product_app.visible_text import is_visible
 
 #: Bumped whenever the persisted shape or the meaning of a signal changes.
 #: Stored payloads from different versions are not comparable.
@@ -872,7 +873,7 @@ def _uncertainty_surfaced(final_synthesis: FinalSynthesis | None) -> bool:
 
 
 def _substantive(answer: InitialModelAnswer) -> bool:
-    return answer.status is InitialAnswerStatus.COMPLETED and bool(answer.answer_text.strip())
+    return answer.status is InitialAnswerStatus.COMPLETED and is_visible(answer.answer_text)
 
 
 def _synthesis_texts(final_synthesis: FinalSynthesis | None) -> list[str]:

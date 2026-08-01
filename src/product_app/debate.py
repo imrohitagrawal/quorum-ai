@@ -47,6 +47,7 @@ from product_app.safety import (
     SafetyAcknowledgement,
 )
 from product_app.untrusted_text import UNTRUSTED_DATA_SYSTEM_RULE, fence
+from product_app.visible_text import is_visible
 
 DEBATE_HARD_TIMEOUT_MS = 180_000
 
@@ -448,7 +449,7 @@ class DebateOrchestrationService:
         # back to the templated critique" while STILL returning the result, so
         # its usage is recorded and a billed call cannot vanish.
         text = "" if live is None else live.answer_text.strip()
-        if not text:
+        if not is_visible(text):
             return templated, self._debate_fallback_notice(round_number=1), live
         return text, None, live
 
@@ -486,7 +487,7 @@ class DebateOrchestrationService:
         # F-06: see ``_build_round_one_text`` — blank text means a call that may
         # have been billed came back unusable, not that no call was made.
         text = "" if live is None else live.answer_text.strip()
-        if not text:
+        if not is_visible(text):
             return templated, self._debate_fallback_notice(round_number=2), live
         return text, None, live
 
@@ -844,7 +845,7 @@ def _opening_synopsis(answer_text: str, *, limit: int = 140) -> str:
     """
     text = (answer_text or "").strip().replace("\n", " ")
     text = re.sub(r"\s+", " ", text)
-    if not text:
+    if not is_visible(text):
         return "No usable answer was returned for this model."
     first_sentence = re.split(r"(?<=[.!?])\s+", text, maxsplit=1)[0]
     if len(first_sentence) <= limit:

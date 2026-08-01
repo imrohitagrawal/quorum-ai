@@ -29,6 +29,7 @@ from typing import Literal
 
 from product_app.debate import DebateOutput, ModelAlignment
 from product_app.providers import InitialAnswerStatus, InitialModelAnswer
+from product_app.visible_text import is_visible
 
 ConsensusStrength = Literal["strong", "weak", "divided"]
 
@@ -124,7 +125,7 @@ def compute_consensus_strength(
     completed = [
         answer
         for answer in initial_answers
-        if answer.status is InitialAnswerStatus.COMPLETED and (answer.answer_text or "").strip()
+        if answer.status is InitialAnswerStatus.COMPLETED and is_visible(answer.answer_text)
     ]
 
     # 0 completed answers → no signal at all. Treat as "divided".
@@ -429,13 +430,14 @@ def classify_model_alignment(
     completed_indices = [
         index
         for index, answer in enumerate(initial_answers)
-        if answer.status is InitialAnswerStatus.COMPLETED and (answer.answer_text or "").strip()
+        if answer.status is InitialAnswerStatus.COMPLETED and is_visible(answer.answer_text)
     ]
     completed_texts = [initial_answers[index].answer_text for index in completed_indices]
     majority_flags = _opening_majority_flags(completed_texts)
     majority_by_index = dict(zip(completed_indices, majority_flags, strict=True))
     text_by_index = dict(zip(completed_indices, completed_texts, strict=True))
     final_text = (model_authored_final_text or "").strip()
+    final_text_visible = is_visible(final_text)
 
     alignments: list[ModelAlignment] = []
     for index, answer in enumerate(initial_answers):
@@ -448,7 +450,7 @@ def classify_model_alignment(
             # inflation bug, and keeping it True preserves the honest 4-state
             # narration (a majority opener is never "moved to consensus").
             final_aligned = True
-        elif final_text:
+        elif final_text_visible:
             # Minority opener with a final answer to check against: aligned ONLY
             # if its OWN opening survives into the final synthesis. A panel-level
             # convergence keyword no longer aligns an unrelated minority.

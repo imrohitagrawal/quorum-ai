@@ -51,6 +51,7 @@ from product_app.feedback_store import record_event as _record_feedback_event
 from product_app.model_slots import ModelSlot, openrouter_model_catalog_service
 from product_app.provider_keys import ProviderCredentialSource
 from product_app.untrusted_text import fence
+from product_app.visible_text import is_visible
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -932,13 +933,13 @@ class ProviderExecutionService:
         # not reproduce that either. A count in prose is a claim; this sentence
         # names the SET so a reader greps it instead of trusting a figure.
         #
-        # KNOWN RESIDUAL (#178): ``str.strip()`` removes only characters where
-        # ``str.isspace()`` is true. A completion of zero-width or invisible
-        # characters (U+200B, U+FEFF, U+00AD, U+2800 ...) is still served as an
-        # answer, with the same wrong numbers described above. Filed rather than
-        # fixed here: closing it means deciding which Unicode categories count
-        # as invisible, and applying that one predicate at every site named
-        # above so they do not start disagreeing again.
+        # #178 FIXED: ``str.strip()`` removed only characters where
+        # ``str.isspace()`` is true, so a completion of zero-width or
+        # invisible characters (U+200B, U+FEFF, U+00AD, U+2800 ...) was still
+        # served as an answer, with the same wrong numbers described above.
+        # ``visible_text.is_visible`` extends the predicate to Unicode format
+        # (Cf) and control (Cc) characters plus two named outliers, and is
+        # applied at every site named above so they do not disagree again.
         #
         # The correction to the note this replaced, which is the reason the
         # defect looked safe: it quoted ``initial_fully_captured`` as requiring
@@ -948,7 +949,7 @@ class ProviderExecutionService:
         # a whitespace slot's usage reach a measured receipt while a failed
         # slot's cannot, and it is why the fix costs the run its ``measured``
         # label: see ``_failed_answer`` for the money decision (#175).
-        if not result.answer_text.strip():
+        if not is_visible(result.answer_text):
             return None
         return result
 
@@ -1850,7 +1851,7 @@ def estimate_material_claim_count(answer_text: str) -> int:
     denominator.
     """
     text = (answer_text or "").strip()
-    if not text:
+    if not is_visible(text):
         return 1
     return max(1, ceil(len(text) / MATERIAL_CLAIM_CHAR_DENOMINATOR))
 
