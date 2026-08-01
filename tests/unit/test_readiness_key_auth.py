@@ -38,7 +38,8 @@ from __future__ import annotations
 import ast
 import pathlib
 import threading
-from collections.abc import Iterator
+import time
+from collections.abc import Callable, Iterator
 from email.message import Message
 from http.server import BaseHTTPRequestHandler, HTTPServer
 from urllib.error import HTTPError, URLError
@@ -89,6 +90,53 @@ def _http_error(code: int) -> HTTPError:
         hdrs=Message(),
         fp=None,
     )
+
+
+class _StopLoop(Exception):
+    """Sentinel used to end the probe's ``while True`` loop deterministically.
+
+    The loop only ever exits via an exception escaping the ``time.sleep``
+    call (nothing else in the loop body is left unsuppressed). Patching
+    ``time.sleep`` directly — rather than a private attribute on the
+    ``readiness`` module — works because ``readiness`` imports the same
+    module object (``import time as _time_module``); patching the shared
+    singleton's attribute affects both names. Raising this after a fixed
+    number of calls turns an otherwise-infinite background thread into one
+    that reliably finishes within a test's ``thread.join(timeout=)``,
+    without the production code needing a test-only "stop after N"
+    parameter.
+    """
+
+
+#: Every test using ``_sleep_stub_raising_after`` deliberately lets this
+#: sentinel escape the daemon thread to end its loop — pytest's own
+#: ``threading.excepthook`` capture reports that as
+#: ``PytestUnhandledThreadExceptionWarning``. It is the intended, only
+#: exit path (see ``_StopLoop`` above), not a bug, so it is silenced with
+#: a marker rather than left to rot into a real failure the day CI turns
+#: on ``-W error``.
+_IGNORE_INTENTIONAL_STOP_LOOP_WARNING = pytest.mark.filterwarnings(
+    "ignore::pytest.PytestUnhandledThreadExceptionWarning"
+)
+
+
+def _sleep_stub_raising_after(n: int) -> Callable[[float], None]:
+    """A fake ``sleep`` that lets ``n`` iterations complete, then ends the loop.
+
+    Also records the interval it was called with, so a test can assert the
+    production loop actually slept for ``settings.key_auth_reprobe_interval_seconds``
+    rather than some other value.
+    """
+    calls: list[float] = []
+
+    def _sleep(seconds: float) -> None:
+        calls.append(seconds)
+        if len(calls) >= n:
+            raise _StopLoop
+        return None
+
+    _sleep.calls = calls  # type: ignore[attr-defined]
+    return _sleep
 
 
 # ---------------------------------------------------------------------------
@@ -290,12 +338,20 @@ def test_start_key_auth_probe_starts_no_thread_when_gated_off(
     assert start_key_auth_probe() is None
 
 
+@_IGNORE_INTENTIONAL_STOP_LOOP_WARNING
 def test_start_key_auth_probe_runs_off_the_calling_thread_and_records(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """Startup must never block on this: ``main.py`` already pays a
-    synchronous catalog fetch at import time."""
+    synchronous catalog fetch at import time.
+
+    ``sleep`` is stubbed to end the loop after the first iteration so the
+    test observes exactly one probe (#112 turned this into a periodic
+    loop; the sleep-raises trick is what keeps a single-probe assertion
+    deterministic without a test-only "stop after N" parameter in prod).
+    """
     _set_live(monkeypatch, enabled=True, key=_FAKE_KEY)
+    monkeypatch.setattr(time, "sleep", _sleep_stub_raising_after(1))
 
     def _transport(*, url: str, api_key: str, timeout: float) -> int:
         raise _http_error(401)
@@ -309,11 +365,13 @@ def test_start_key_auth_probe_runs_off_the_calling_thread_and_records(
     assert readiness.key_auth_state() == "unauthorized"
 
 
+@_IGNORE_INTENTIONAL_STOP_LOOP_WARNING
 def test_start_key_auth_probe_survives_a_transport_that_explodes(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """A probe failure may never take the process down."""
     _set_live(monkeypatch, enabled=True, key=_FAKE_KEY)
+    monkeypatch.setattr(time, "sleep", _sleep_stub_raising_after(1))
 
     record_key_auth_state("ok")
 
@@ -331,11 +389,125 @@ def test_start_key_auth_probe_survives_a_transport_that_explodes(
     assert readiness.key_auth_state() == "ok"
 
 
+@_IGNORE_INTENTIONAL_STOP_LOOP_WARNING
+def test_start_key_auth_probe_reprobes_after_the_configured_interval(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The core of #112: the probe does not stop after one check.
+
+    Three iterations are allowed to run; the transport is called three
+    times and ``sleep`` is invoked with the configured interval between
+    each — proving this is a periodic loop, not the pre-#112 one-shot.
+    """
+    _set_live(monkeypatch, enabled=True, key=_FAKE_KEY)
+    monkeypatch.setattr(settings, "key_auth_reprobe_interval_seconds", 42.0)
+    sleep_stub = _sleep_stub_raising_after(3)
+    monkeypatch.setattr(time, "sleep", sleep_stub)
+
+    call_count = 0
+
+    def _transport(*, url: str, api_key: str, timeout: float) -> int:
+        nonlocal call_count
+        call_count += 1
+        return 200
+
+    thread = start_key_auth_probe(transport=_transport)
+    assert thread is not None
+    thread.join(timeout=5)
+    assert not thread.is_alive()
+
+    assert call_count == 3, "expected exactly 3 probes across 3 loop iterations"
+    assert sleep_stub.calls == [42.0, 42.0, 42.0]  # type: ignore[attr-defined]
+    assert readiness.key_auth_state() == "ok"
+
+
+@_IGNORE_INTENTIONAL_STOP_LOOP_WARNING
+def test_start_key_auth_probe_reprobe_does_not_erase_an_earlier_proven_verdict(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The single-call invariant, proven ACROSS iterations, not just within one.
+
+    Iteration 1 proves ``unauthorized``; iteration 2 is an inconclusive
+    network blip. If the loop's re-probe logic ever regressed to "always
+    record whatever this iteration returned", the blip on iteration 2
+    would silently re-advertise the deployment as live.
+    """
+    _set_live(monkeypatch, enabled=True, key=_FAKE_KEY)
+    monkeypatch.setattr(time, "sleep", _sleep_stub_raising_after(2))
+
+    call_count = 0
+
+    def _transport(*, url: str, api_key: str, timeout: float) -> int:
+        nonlocal call_count
+        call_count += 1
+        if call_count == 1:
+            raise _http_error(401)
+        raise TimeoutError("network blip on re-probe")
+
+    thread = start_key_auth_probe(transport=_transport)
+    assert thread is not None
+    thread.join(timeout=5)
+    assert not thread.is_alive()
+
+    assert call_count == 2
+    assert readiness.key_auth_state() == "unauthorized"
+
+
+# ---------------------------------------------------------------------------
+# Found by adversarial review (round 2) of #112's periodic re-probe.
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize("bad_interval", ["-5", "0"])
+def test_key_auth_reprobe_interval_rejects_non_positive_values(bad_interval: str) -> None:
+    """A non-positive interval must fail LOUD at startup, not silently at runtime.
+
+    ``time.sleep()`` raises on a negative value, and that call sits OUTSIDE
+    the probe loop's ``contextlib.suppress(Exception)`` — so ``-5`` used to
+    kill the daemon thread forever after exactly one probe, permanently
+    reintroducing the pre-#112 stale-verdict bug. ``0`` doesn't raise but
+    busy-spins the loop (a live socket call with no delay between calls —
+    a self-inflicted DoS against the provider). Both are excluded at the
+    config layer, matching how a non-numeric value already fails closed.
+    """
+    from pydantic import ValidationError
+
+    from product_app.config import Settings
+
+    with pytest.raises(ValidationError, match="key_auth_reprobe_interval_seconds"):
+        Settings(_env_file=None, key_auth_reprobe_interval_seconds=bad_interval)  # type: ignore[call-arg,arg-type]
+
+
+def test_key_auth_reprobe_interval_accepts_the_documented_default() -> None:
+    from product_app.config import Settings
+
+    assert Settings(_env_file=None).key_auth_reprobe_interval_seconds == 1800.0  # type: ignore[call-arg]
+
+
+@pytest.mark.parametrize("non_finite", ["inf", "-inf", "nan"])
+def test_key_auth_reprobe_interval_rejects_non_finite_values(non_finite: str) -> None:
+    """Round 2 of round 2: ``gt=0`` alone does not exclude ``inf``.
+
+    ``float("inf") > 0`` is ``True`` in Python, so ``inf`` passes ``gt=0``
+    cleanly — and ``time.sleep(float("inf"))`` raises ``OverflowError``,
+    the identical silent-thread-death bug the non-positive-value fix above
+    exists to close, just via a third input that fix didn't cover. Found
+    by a second pass of the same adversarial review.
+    """
+    from pydantic import ValidationError
+
+    from product_app.config import Settings
+
+    with pytest.raises(ValidationError, match="key_auth_reprobe_interval_seconds"):
+        Settings(_env_file=None, key_auth_reprobe_interval_seconds=non_finite)  # type: ignore[call-arg,arg-type]
+
+
 # ---------------------------------------------------------------------------
 # Found by adversarial review of this work.
 # ---------------------------------------------------------------------------
 
 
+@_IGNORE_INTENTIONAL_STOP_LOOP_WARNING
 def test_an_inconclusive_probe_does_not_erase_a_proven_rejection(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -347,6 +519,7 @@ def test_an_inconclusive_probe_does_not_erase_a_proven_rejection(
     line was telling the truth about the intent and a lie about the code.
     """
     _set_live(monkeypatch, enabled=True, key=_FAKE_KEY)
+    monkeypatch.setattr(time, "sleep", _sleep_stub_raising_after(1))
     record_key_auth_state("unauthorized")
 
     def _blip(*, url: str, api_key: str, timeout: float) -> int:
@@ -355,6 +528,7 @@ def test_an_inconclusive_probe_does_not_erase_a_proven_rejection(
     thread = start_key_auth_probe(transport=_blip)
     assert thread is not None
     thread.join(timeout=5)
+    assert not thread.is_alive()
 
     assert readiness.key_auth_state() == "unauthorized"
     assert run_startup_probe().state == "offline_by_bad_key"

@@ -83,6 +83,30 @@ class Settings(BaseSettings):
     openrouter_app_url: str = "http://localhost:18084"
     openrouter_app_title: str = "Quorum AI"
     openrouter_timeout_seconds: float = 8.0
+    #: How often the background credential probe re-checks the configured
+    #: key after the initial startup probe (#112). The check is
+    #: auth-required and costs zero tokens, so the interval is bounded by
+    #: politeness to the provider, not money — tens of minutes is ample to
+    #: catch a key revoked or drained mid-process-life without waiting for
+    #: a restart.
+    #:
+    #: ``gt=0`` is load-bearing, not decorative: ``time.sleep()`` raises
+    #: ``ValueError`` on a negative value, and that call sits OUTSIDE the
+    #: probe loop's ``contextlib.suppress(Exception)`` (which only guards
+    #: the probe itself) — so a negative override silently killed the
+    #: daemon thread forever, reintroducing the exact stale-verdict bug
+    #: #112 exists to fix, just via bad config instead of by design.
+    #: ``0`` doesn't raise but busy-spins the loop (a live socket call in a
+    #: tight loop — a self-inflicted DoS against the provider). Both are
+    #: excluded here so a bad override fails LOUD at startup (like a
+    #: non-numeric value already does) instead of failing silently at
+    #: runtime. ``allow_inf_nan=False`` closes the same failure mode for a
+    #: THIRD input ``gt=0`` alone does not exclude: ``inf`` is ``> 0`` in
+    #: Python, so it passes ``gt=0``, and ``time.sleep(float("inf"))``
+    #: raises ``OverflowError`` — the identical silent-thread-death bug on
+    #: an input the first fix missed. Found by round-2 adversarial review
+    #: of #112, confirmed by executing all three failure modes.
+    key_auth_reprobe_interval_seconds: float = Field(default=1800.0, gt=0, allow_inf_nan=False)
 
     # --- Real web-search fallback (Tavily) ------------------------------
     # The fallback source path replaces a fabricated ``example.test`` stub
