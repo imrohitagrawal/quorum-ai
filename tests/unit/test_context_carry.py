@@ -16,12 +16,16 @@ Each test below names the change that turns it red.
 
 from __future__ import annotations
 
+import re
 from decimal import Decimal
+from pathlib import Path
 from unittest.mock import patch
 from uuid import UUID, uuid4
 
 import pytest
 from fastapi.testclient import TestClient
+from tests.code_text import code_without_comments
+from tests.repo_root import find_repo_root
 
 from product_app.main import app
 from product_app.providers import (
@@ -47,6 +51,8 @@ from product_app.synthesis import (
     SYNTHESIS_SECTION_MAX_CHARS,
     synthesis_stub_service,
 )
+
+_REPO_ROOT = find_repo_root(Path(__file__))
 
 DEFAULT_MODEL_IDS = [
     "openai/gpt-4o-mini",
@@ -81,6 +87,11 @@ PRIOR_SYNTHESIS = (
     "flagging that the operational burden only appears past the first million "
     "rows. "
 ) * 20
+
+#: Fields on ``QueryRunCreateRequest`` that authorise a run rather than price
+#: it — shared between the drift test and its structural partner below so the
+#: two cannot silently disagree about what "authorisation-only" means.
+_AUTHORISATION_ONLY_FIELDS = {"safety_acknowledgements", "cost_confirmation"}
 
 
 @pytest.fixture(autouse=True)
@@ -174,15 +185,48 @@ def test_the_estimate_body_carries_every_cost_affecting_create_field() -> None:
     """
     # These two are about AUTHORISING a run, not pricing it: an acknowledgement
     # and a confirmation token have no cost term. Everything else must match.
-    authorisation_only = {"safety_acknowledgements", "cost_confirmation"}
     create_fields = set(QueryRunCreateRequest.model_fields)
     estimate_fields = set(QueryRunEstimateRequest.model_fields)
 
     # The positive partner for the subtraction below: the excluded names are
     # really on the create model, so this is not silently subtracting nothing.
-    assert authorisation_only <= create_fields
+    assert create_fields >= _AUTHORISATION_ONLY_FIELDS
 
-    assert create_fields - authorisation_only == estimate_fields
+    assert create_fields - _AUTHORISATION_ONLY_FIELDS == estimate_fields
+
+
+def test_the_authorisation_only_exclusion_names_no_field_the_cost_layer_reads() -> None:
+    """RED when: a field is added to BOTH ``QueryRunCreateRequest`` and
+    ``_AUTHORISATION_ONLY_FIELDS`` above while ``costs.py`` is ALSO taught to
+    price it under the SAME name — the drift test above stays green in that
+    case, because both sides of its subtraction move together (measured end
+    to end with a synthetic ``extra_rounds`` field, #156 item 1).
+
+    NARROWER than "any future cost-affecting exclusion is caught": this is a
+    same-name textual check, not a data-flow one. Adversarial review (this
+    session) constructed the gap directly — thread a create-only field into
+    ``costs.py.estimate()`` under a DIFFERENT parameter name (e.g.
+    ``query_runs.py`` reads ``payload.extra_rounds`` and calls
+    ``estimate(..., bonus_rounds=payload.extra_rounds)``) and this guard
+    stays green while the estimate/charge genuinely diverge. Closing that
+    fully needs data-flow analysis across ``query_runs.py`` and ``costs.py``,
+    which is out of scope here; this guard closes the SAME-NAME case only,
+    which is the one #156 measured live.
+    """
+    # Word-boundary, not a bare substring: ``costs.py`` has an unrelated
+    # ``"cost_confirmation_required"`` event-type literal that a naive
+    # ``field_name not in costs_source`` check false-positives on, because
+    # ``cost_confirmation`` is a substring of it — exactly the substring-vs-
+    # structure trap AGENTS.md rule 8 names. ``\b`` does not split
+    # underscore-joined identifiers, so it will not match inside that longer
+    # literal but will still match a real ``.cost_confirmation`` reference.
+    costs_source = code_without_comments(_REPO_ROOT / "src" / "product_app" / "costs.py")
+    for field_name in _AUTHORISATION_ONLY_FIELDS:
+        assert re.search(rf"\b{re.escape(field_name)}\b", costs_source) is None, (
+            f"{field_name!r} is excluded from the create/estimate parity check "
+            "as authorisation-only, but costs.py references it — it may be "
+            "cost-affecting and wrongly excluded"
+        )
 
 
 def test_the_flattener_covers_every_separator_this_module_tests() -> None:
@@ -454,6 +498,73 @@ def test_the_synthesis_prompt_omits_context_when_there_is_none() -> None:
 
     assert marker not in _synthesis_user_prompt(None)
     assert marker not in _synthesis_user_prompt({"prior_question": marker})
+
+
+def test_a_whitespace_only_prior_synthesis_emits_no_label_or_directive() -> None:
+    """RED when: ``.strip()`` is dropped from the ``_flatten_for_prompt(...)``
+    call that builds ``prior_synthesis`` in ``_user_prompt``.
+
+    ``_flatten_for_prompt`` only replaces line-breaking characters and
+    truncates — it does not strip whitespace, so a string of only spaces
+    stays truthy after it runs. Without the outer ``.strip()``, the
+    ``if prior_synthesis:`` guard fires on that whitespace and emits a
+    labelled block plus a directive claiming a prior synthesis is present,
+    even though there is no real content.
+    """
+    prompt = _synthesis_user_prompt({"prior_synthesis": "   "})
+
+    assert "Synthesis of the user's previous question:" not in prompt
+    assert "prior context for this follow-up" not in prompt
+
+
+def test_prior_synthesis_block_is_blank_line_separated_from_the_next_section() -> None:
+    """RED when: the ``lines.append("")`` spacer after the prior-synthesis
+    block is deleted.
+
+    Without it, the flattened prior-synthesis text and the "Four model
+    answers" header land on adjacent lines with nothing between them, which
+    lets a crafted ``prior_synthesis`` value visually merge into the next
+    section's content instead of staying a clearly bounded block.
+    """
+    marker = "PRIOR-SYNTHESIS-SPACING-MARKER"
+
+    prompt = _synthesis_user_prompt({"prior_synthesis": marker})
+
+    assert f"{marker}\n\nFour model answers" in prompt, (
+        "no blank line separates the prior-synthesis block from the next section"
+    )
+
+
+def test_prior_synthesis_is_capped_even_if_the_request_bound_is_loosened() -> None:
+    """RED when: the consumer-side cap inside ``_user_prompt`` is removed or
+    widened past its own value (e.g. ``max_chars=FINAL_SYNTHESIS_MAX_CHARS``
+    -> ``max_chars=10**9``) — the mutation #163 measured surviving the full
+    suite, because no test drove ``_user_prompt`` with a ``prior_synthesis``
+    longer than the request-level bound.
+
+    Asserted against an INDEPENDENT LITERAL, never against
+    ``FINAL_SYNTHESIS_MAX_CHARS`` itself: a test written against the constant
+    passes no matter what the constant is set to, because both sides of the
+    comparison move together (AGENTS.md rule 7a).
+
+    The literal is deliberately TIGHT, not just "large enough to sit below
+    unbounded": adversarial review (this session) measured that an earlier,
+    looser 65_000 bound left a ~4_400-char blind spot (``max_chars=63_000``,
+    a real, meaningful cap regression, produced a 63_475-char prompt that
+    still passed under 65_000). 61_000 leaves ~400 chars of margin above the
+    correctly-capped length this app produces today (measured: 60_592 chars
+    for a 200_000-char input) — enough to absorb incidental wording drift in
+    the surrounding directives/labels without flaking, while shrinking the
+    undetected-regression window to roughly 400 chars instead of 4_400.
+    """
+    oversized = "X" * 200_000  # far above FINAL_SYNTHESIS_MAX_CHARS (60_117 today)
+
+    prompt = _synthesis_user_prompt({"prior_synthesis": oversized})
+
+    assert len(prompt) <= 61_000, (
+        f"the synthesis prompt was {len(prompt)} chars — the consumer-side "
+        "prior_synthesis cap did not bite"
+    )
 
 
 def test_prior_synthesis_is_fenced_as_untrusted_data() -> None:
