@@ -597,7 +597,20 @@
       // correctly configured (state IS "live"), the shared daily budget is
       // just used up. Only fires when the deployment is otherwise healthy —
       // every offline_* branch below already discloses simulation for its
-      // own, different, cause.
+      // own, different, cause (adversarial review round 1: an offline_*
+      // deployment that ALSO happens to be over the ceiling still tells the
+      // user every answer will be simulated — the ceiling-specific reason
+      // is just not layered onto an already-honest offline banner).
+      //
+      // STALENESS, BY DESIGN, NOT A BUG (adversarial review round 1):
+      // ``readiness`` is refreshed once at boot (see ``refreshReadiness``'s
+      // single call site) and NOT polled continuously, so if the ceiling
+      // trips from OTHER visitors' spend after this page loaded, this
+      // banner stays hidden until the next reload — even though the next
+      // run this user starts will in fact come back ceiling-degraded (the
+      // POST-run banner, computed fresh from that run's own response, is
+      // never stale this way). Same tradeoff every other readiness-driven
+      // banner on this page already accepts.
       if (readiness.global_spend_ceiling_reached) {
         readinessRegion.dataset.severity = "info";
         readinessTitle.textContent = "Today's shared demo budget has been used up";
