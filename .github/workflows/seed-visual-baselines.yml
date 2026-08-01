@@ -27,6 +27,9 @@ jobs:
       # repo, so raising the bucket matters most here.
       RUNTIME_ENVIRONMENT: "local"
       SESSION_RATE_LIMIT_PER_MINUTE: "600"
+      # Issue #100: same reasoning, the DURABLE per-IP daily mint cap — a
+      # 429 during boot here would bake a broken baseline into the repo.
+      SESSION_MINT_CAP_OVERRIDE: "600"
     steps:
       - name: Check out the dispatched branch
         uses: actions/checkout@v4

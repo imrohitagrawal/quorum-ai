@@ -64,6 +64,24 @@ SESSION_TTL = timedelta(hours=2)
 #: bucket, so it follows the durable precedent.
 SESSION_MINT_CAP_PER_IP = 2
 
+
+def _effective_session_mint_cap() -> int:
+    """``SESSION_MINT_CAP_PER_IP``, or the LOCAL-only test-lane override.
+
+    Same shape as ``query_runs._session_limit`` for the burst limiter:
+    checked dynamically (not baked into a module-level singleton) because
+    unlike the burst limiter this cap is a durable, per-request DB read, not
+    a constructed object. Belt-and-suspenders behind
+    ``validate_production_environment()``, which additionally REFUSES TO
+    START if the override is set in any non-LOCAL environment — so even if
+    that startup guard were bypassed, this still only reads the override
+    when ``runtime_environment is LOCAL``.
+    """
+    if settings.runtime_environment is RuntimeEnvironment.LOCAL:
+        return settings.session_mint_cap_override or SESSION_MINT_CAP_PER_IP
+    return SESSION_MINT_CAP_PER_IP
+
+
 #: Cookie name. In production and staging we use the ``__Host-`` prefix
 #: for defense in depth: the browser will refuse to set the cookie unless
 #: ``Secure`` is true, ``Path=/``, and the ``Domain`` attribute is absent.
@@ -293,7 +311,7 @@ def issue_session(
         store = get_store()
         if store is not None:
             minted_today = store.session_mint_count_for_ip(client_ip)
-            if minted_today >= SESSION_MINT_CAP_PER_IP:
+            if minted_today >= _effective_session_mint_cap():
                 raise SessionMintCapExceeded(client_ip)
     if account_id is None:
         account_id = uuid4()
