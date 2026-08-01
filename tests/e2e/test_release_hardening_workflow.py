@@ -1,13 +1,14 @@
 from time import sleep
 from typing import Any
-from uuid import UUID
+from uuid import UUID, uuid4
 
 import pytest
 from fastapi.testclient import TestClient
 
 from product_app.debate import debate_event_recorder
 from product_app.main import app
-from product_app.providers import provider_event_recorder
+from product_app.provider_keys import ProviderCredentialSource
+from product_app.providers import ProviderPath, provider_event_recorder
 from product_app.query_runs import query_run_repository
 from product_app.safety import WARNING_VERSION, WarningType, warning_event_recorder
 from product_app.synthesis import synthesis_event_recorder
@@ -109,7 +110,38 @@ def test_core_query_workflow_with_env_configured_access(
     assert active_response.status_code == 200
     assert active_response.json()["query_run_id"] is None
 
-    provider_events = provider_event_recorder.list_events()
+    # #104 item 1: filter by this run's own account_id, not the raw global
+    # list. ``provider_event_recorder`` is a process-global recorder with an
+    # async background worker whose completion can outlive the autouse
+    # ``clear_state`` fixture's clearing/assertion window (the same class of
+    # bug the ``cost_event_recorder`` protection was built to close — see
+    # ``tests/integration/test_query_run_cost_guardrails.py``'s ``_events_for``).
+    # Measured: 1/14 sequential runs saw ``len(provider_events) == 6`` instead
+    # of 4 with the unfiltered read.
+    #
+    # Simulate exactly that leak: a background worker from an unrelated run
+    # finishing late and appending to the same process-global list, after
+    # this test's own four real calls. What turns this red: reading
+    # ``provider_event_recorder.list_events()`` directly (unfiltered) instead
+    # of filtering by ``run_account_id`` below — the assertion would then see
+    # 5 events, not 4.
+    provider_event_recorder.record(
+        event_type="initial_answer_recorded",
+        account_id=uuid4(),
+        query_run_id=uuid4(),
+        model_id="foreign/leaked-event",
+        provider_path=ProviderPath.LOCAL_SIMULATION,
+        duration_ms=1,
+        fallback_used=False,
+        source_count=0,
+        credential_source=ProviderCredentialSource.APP_OWNED,
+    )
+    run_account_id = query_run_repository.get(query_run_id).account_id
+    provider_events = [
+        event
+        for event in provider_event_recorder.list_events()
+        if event.account_id == run_account_id
+    ]
     assert len(provider_events) == 4
     assert {event.credential_source for event in provider_events} == {"app_owned"}
     assert [event.round_number for event in debate_event_recorder.list_events()] == [1, 2]
