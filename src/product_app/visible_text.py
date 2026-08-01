@@ -36,9 +36,44 @@ _INVISIBLE_CATEGORIES = frozenset({"Cf", "Cc"})
 #: this exact set; extending it needs the same evidence, not a hunch).
 _INVISIBLE_OUTLIERS = frozenset({"ㅤ", "⠀"})
 
+#: Variation selectors (U+FE00-FE0F) and the variation selectors supplement
+#: (U+E0100-E01EF): category Mn, so the Cf/Cc rule misses them, but — unlike
+#: an ordinary combining mark, which is genuinely visible stacked on its base
+#: character (Arabic tashkil, Vietnamese/Hindi diacritics) — these are
+#: Unicode's own documented mechanism for a code point that renders nothing
+#: by itself (formally, a subset of ``Default_Ignorable_Code_Point``). Found
+#: by adversarial review of #178: VS16 in particular is a real emoji
+#: presentation selector LLMs occasionally emit stray. Named as explicit
+#: RANGES, not a blanket ``category == "Mn"`` rule, because most of Mn
+#: (combining diacritics) is real, visible content in properly rendered text.
+_VARIATION_SELECTOR_RANGES = ((0xFE00, 0xFE0F), (0xE0100, 0xE01EF))
+
+
+def _is_variation_selector(char: str) -> bool:
+    codepoint = ord(char)
+    return any(lo <= codepoint <= hi for lo, hi in _VARIATION_SELECTOR_RANGES)
+
+
+def _is_noncharacter(char: str) -> bool:
+    """U+FDD0-FDEF and the last two code points of every plane.
+
+    A CLOSED, permanently-reserved set (the Unicode Standard guarantees no
+    noncharacter will ever be assigned), so unlike a heuristic this needs no
+    "more evidence" caveat: ``cp & 0xFFFE == 0xFFFE`` is true exactly when the
+    low 16 bits are 0xFFFE or 0xFFFF, which is the plane-final pair for every
+    plane 0-16. Found by adversarial review of #178.
+    """
+    codepoint = ord(char)
+    return 0xFDD0 <= codepoint <= 0xFDEF or (codepoint & 0xFFFE) == 0xFFFE
+
 
 def _is_invisible_char(char: str) -> bool:
-    return unicodedata.category(char) in _INVISIBLE_CATEGORIES or char in _INVISIBLE_OUTLIERS
+    return (
+        unicodedata.category(char) in _INVISIBLE_CATEGORIES
+        or char in _INVISIBLE_OUTLIERS
+        or _is_variation_selector(char)
+        or _is_noncharacter(char)
+    )
 
 
 def is_visible(text: str | None) -> bool:

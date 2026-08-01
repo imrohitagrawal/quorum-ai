@@ -700,7 +700,7 @@ def detect_refusal(text: str) -> bool:
 
     ADVISORY (FS-6) and NOT calibrated.
     """
-    if not text or not text.strip():
+    if not is_visible(text):
         return False
     lowered = _normalize_decline_spelling(text.lower())
     anchor = _first_sentence(lowered)
