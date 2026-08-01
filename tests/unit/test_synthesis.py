@@ -763,7 +763,7 @@ def test_synthesis_modes_frozenset_matches_the_closed_literal_type() -> None:
     instead of shipping a value the Pydantic field would silently reject (or
     a Literal member `SYNTHESIS_MODES` never covers).
     """
-    assert SYNTHESIS_MODES == set(get_args(SynthesisMode)), (
+    assert set(get_args(SynthesisMode)) == SYNTHESIS_MODES, (
         f"SYNTHESIS_MODES {sorted(SYNTHESIS_MODES)} and SynthesisMode's Literal "
         f"args {sorted(get_args(SynthesisMode))} have drifted apart"
     )
