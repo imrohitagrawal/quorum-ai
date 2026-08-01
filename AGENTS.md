@@ -118,9 +118,15 @@ is the rule only.
     ```
     **Never lower a threshold, add `# pragma: no cover`, or delete a test to go
     green.** If a line is genuinely untestable, say so with evidence.
-15. **Run `pytest` and `make diff-cover` serially** — they race on
-    `build/gates/guard-good-xml.xml`, written by
-    `tests/unit/test_makefile_gate_integrity.py` (#113, still open).
+15. **Run `pytest` and `make diff-cover` serially.** Until 2026-08-02 they
+    also raced on the fixed, shared `build/gates/guard-good-xml.xml` written
+    by `tests/unit/test_makefile_gate_integrity.py` (#113, #104 item 2) —
+    that race is now closed (the guard names are suffixed per-`os.getpid()`,
+    so two concurrent processes never touch the same file). Still run them
+    serially anyway: per rule 15a below, `make api-contract` and the other
+    pytest-invoking targets rewrite the SAME shared coverage data
+    (`.coverage` / `build/coverage/coverage.xml`) that `diff-cover` reads,
+    which is a separate reason and is not fixed by the guard-xml change.
 15a. **`make diff-cover` measures `origin/main...HEAD` PLUS the working tree, so
     COMMIT before you trust it.** When a later uncommitted edit deletes code an
     earlier commit on the same branch added, the two do not cancel: diff-cover
