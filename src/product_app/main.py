@@ -575,10 +575,18 @@ def _render_workspace_html() -> str:
     # snapshot from a different request). Drift ids are folded in so the
     # client does not have to merge the two islands.
     report = run_startup_probe()
+    # Issue #100 §2.6: same fail-open ceiling read as the /ready route, so
+    # the pre-run banner renders correctly on FIRST PAINT too, not only
+    # after the first client-side /ready round-trip.
+    global_spend_ceiling_reached = False
+    seed_store = get_store()
+    if seed_store is not None:
+        global_spend_ceiling_reached = seed_store.global_daily_spend() >= GLOBAL_DAILY_CEILING_USD
     readiness_payload = {
         "state": report.state,
         "reasons": list(report.reasons),
         "catalog_drift_ids": list(report.catalog_drift_ids),
+        "global_spend_ceiling_reached": global_spend_ceiling_reached,
     }
     live_readiness_json = json.dumps(readiness_payload).replace("<", "\\u003c")
     # PR-0 / Bug 7: inject the actual default model ids into the
@@ -654,10 +662,21 @@ def ready() -> dict[str, object]:
     # start. The startup-time ``current_readiness`` snapshot is
     # still used for the boot banner — that's logged once.
     report = run_startup_probe()
+    # Issue #100 §2.6: the pre-run banner is a deployment-level disclosure
+    # that fires before any query run exists, so it cannot read the
+    # per-run field PR1 added to QueryRunResultResponse — this is the
+    # equivalent signal for a page that has not submitted anything yet.
+    # Same fail-open posture as CostEstimationService.estimate()'s own
+    # ceiling check: no store means "unknown", not "tripped".
+    global_spend_ceiling_reached = False
+    store = get_store()
+    if store is not None:
+        global_spend_ceiling_reached = store.global_daily_spend() >= GLOBAL_DAILY_CEILING_USD
     payload["live_readiness"] = {
         "state": report.state,
         "reasons": list(report.reasons),
         "catalog_drift_ids": list(report.catalog_drift_ids),
+        "global_spend_ceiling_reached": global_spend_ceiling_reached,
     }
     return payload
 

@@ -42,7 +42,12 @@ import {
  * every answer on screen is simulated.
  */
 
-type Readiness = { state: string; reasons?: string[]; catalog_drift_ids?: string[] };
+type Readiness = {
+  state: string;
+  reasons?: string[];
+  catalog_drift_ids?: string[];
+  global_spend_ceiling_reached?: boolean;
+};
 
 async function mockReadiness(page: Page, readiness: Readiness): Promise<void> {
   await page.route("**/ready", (route) =>
@@ -210,6 +215,48 @@ test.describe("#111 — the offline disclosure is visible where a user decides t
     // The paired negative. Without it, a banner hardcoded visible would pass
     // every assertion above.
     await bootFirstVisit(page, { state: "live" });
+
+    await expect(banner(page)).toBeHidden();
+  });
+
+  test("live + ceiling reached: the exact #100 §2.6 pre-run banner, on the LANDING view", async ({
+    page,
+  }) => {
+    // Orthogonal to configuration: state IS "live" (the deployment is fully
+    // configured), but today's shared budget is used up. Distinct from every
+    // OFFLINE_STATES case above — same visibility requirement (#111), exact
+    // operator-approved copy, locked 2026-08-01. Pinned exact, not a
+    // substring: this build ships operator-approved copy.
+    await bootFirstVisit(page, { state: "live", global_spend_ceiling_reached: true });
+
+    await expect(banner(page)).toBeVisible();
+    await expect(page.locator("#readiness-banner-title")).toHaveText(
+      "Today's shared demo budget has been used up",
+    );
+    await expect(page.locator("#readiness-banner-message")).toHaveText(
+      "This application limits total live AI usage across all visitors combined to one shared daily budget, and today's has already been used. Every model answer and the synthesis will come from Quorum's local simulation helpers instead of a real AI model provider. This resets automatically within 24 hours — please check back later for live results.",
+    );
+    const box = await banner(page).boundingBox();
+    expect(box, "no layout box").not.toBeNull();
+    expect(box!.height).toBeGreaterThan(0);
+  });
+
+  test("live + ceiling reached: still visible on the COMPOSER view", async ({ page }) => {
+    await mockReadiness(page, { state: "live", global_spend_ceiling_reached: true });
+    await boot(page);
+    await page.reload();
+    await expect(page.locator('[data-view="composer"]')).toBeVisible();
+
+    await expect(banner(page)).toBeVisible();
+    await expect(page.locator("#readiness-banner-title")).toHaveText(
+      "Today's shared demo budget has been used up",
+    );
+  });
+
+  test("live without the ceiling flag stays hidden (the flag, not the state alone, drives it)", async ({
+    page,
+  }) => {
+    await bootFirstVisit(page, { state: "live", global_spend_ceiling_reached: false });
 
     await expect(banner(page)).toBeHidden();
   });
