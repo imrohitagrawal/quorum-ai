@@ -35,6 +35,7 @@ from sentry_sdk.types import Event as SentryEvent
 
 from product_app.auth import (
     SessionContext,
+    SessionMintCapExceeded,
     attach_session_cookie,
     get_session_cookie_from_request,
     issue_or_resume_session,
@@ -915,7 +916,28 @@ def browser_session(
             },
         )
     session_id = get_session_cookie_from_request(request)
-    session = issue_or_resume_session(session_id)
+    try:
+        session = issue_or_resume_session(session_id, client_ip=client_ip)
+    except SessionMintCapExceeded:
+        # Issue #100 §2.3: this IP has already minted
+        # ``auth.SESSION_MINT_CAP_PER_IP`` new sessions in the last 24h.
+        # A DIFFERENT 429 code from the burst limiter above — that one is
+        # a per-minute flood guard, this one is the durable daily
+        # dollar-drain guard — so an operator reading the code can tell
+        # which control fired.
+        return JSONResponse(
+            status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+            content={
+                "detail": {
+                    "code": "SESSION_MINT_CAP_EXCEEDED",
+                    "message": (
+                        "This IP has reached today's limit on new sessions. "
+                        "An already-open session can still be used; retry "
+                        "starting a new one after the daily window resets."
+                    ),
+                },
+            },
+        )
     response = JSONResponse(
         {
             "csrf_token": session.csrf_token,
@@ -941,8 +963,22 @@ def ops_dashboard() -> HTMLResponse:
 
 @app.get("/ui", response_class=HTMLResponse, tags=["browser-ui"])
 def browser_ui(request: Request) -> HTMLResponse:
+    # Issue #100 §2.3: this route mints/resumes a session exactly like
+    # ``/v1/session`` does (a first-time visitor loading the page with no
+    # cookie mints one here) — passing ``client_ip`` is required, not
+    # optional, or an attacker mints unlimited accounts by hitting ``/ui``
+    # directly instead of ``/v1/session`` and the cap never fires.
+    client_ip = (request.client.host if request.client else "unknown") or "unknown"
     session_id = get_session_cookie_from_request(request)
-    session = issue_or_resume_session(session_id)
+    try:
+        session = issue_or_resume_session(session_id, client_ip=client_ip)
+    except SessionMintCapExceeded:
+        return HTMLResponse(
+            "This IP has reached today's limit on new sessions. "
+            "An already-open session can still be used; retry starting a "
+            "new one after the daily window resets.",
+            status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+        )
     response = HTMLResponse(_render_workspace_html())
     attach_session_cookie(response, session)
     return response

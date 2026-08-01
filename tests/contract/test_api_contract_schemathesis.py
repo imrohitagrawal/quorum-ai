@@ -235,7 +235,8 @@ def test_api_conforms_to_openapi_contract(case: Case) -> None:
     Failures are allowed through ONLY if their ``<status>:<FailureClass>`` key
     is registered in :data:`KNOWN_CONTRACT_DEFECTS` for that operation.
     """
-    # The rate limiters are process-global token buckets (30/min). A fuzz run
+    # The rate limiters are process-global token buckets (IP: 10/min, issue
+    # #100 §2.4; account: 30/min). A fuzz run
     # would exhaust them and turn every later example into an undocumented 429,
     # which tells us nothing about the contract. Reset per example; the 429
     # path has its own dedicated tests in tests/security.
