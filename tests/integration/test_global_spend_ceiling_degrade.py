@@ -7,6 +7,8 @@ class). Live execution is enabled and a key IS configured in every test
 here; only the ceiling being tripped should be why nothing goes live.
 """
 
+from collections.abc import Callable
+from datetime import UTC, datetime
 from uuid import uuid4
 
 import pytest
@@ -48,7 +50,9 @@ def acknowledged_request(query_text: str) -> dict[str, object]:
     }
 
 
-def _fake_post_messages_tracking_calls(calls: list[str]):
+def _fake_post_messages_tracking_calls(
+    calls: list[str],
+) -> Callable[..., LiveProviderResult]:
     def fake_post_messages(
         *,
         openrouter_key: str,
@@ -104,7 +108,7 @@ def test_ceiling_reached_forces_the_whole_run_to_local_simulation_and_calls_no_p
             event_type="cost_guardrail_accepted",
             account_id=uuid4(),
             query_run_id=None,
-            recorded_at=__import__("datetime").datetime.now(__import__("datetime").UTC),
+            recorded_at=datetime.now(UTC),
             payload={"estimated_cost_usd": str(GLOBAL_DAILY_CEILING_USD)},
         )
 
@@ -195,7 +199,7 @@ def test_status_reports_global_daily_spend_against_the_ceiling() -> None:
             event_type="cost_guardrail_accepted",
             account_id=uuid4(),
             query_run_id=None,
-            recorded_at=__import__("datetime").datetime.now(__import__("datetime").UTC),
+            recorded_at=datetime.now(UTC),
             payload={"estimated_cost_usd": "1.23"},
         )
         client = TestClient(app)

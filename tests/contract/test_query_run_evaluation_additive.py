@@ -35,6 +35,10 @@ PRE_S2_REQUIRED = {
 }
 
 #: Every property the pre-S2 contract exposed, same source, 20 fields.
+#: Issue #100 added ``global_spend_ceiling_reached`` (optional, defaulted)
+#: after S2 shipped — folded in here rather than into the S2-specific
+#: assertion below, which stays pinned to exactly ``{"evaluation"}`` so it
+#: keeps meaning what its name says.
 PRE_S2_PROPERTIES = PRE_S2_REQUIRED | {
     "actual_breakdown",
     "cost_source",
@@ -43,6 +47,7 @@ PRE_S2_PROPERTIES = PRE_S2_REQUIRED | {
     "local_count",
     "material_claim_count",
     "partial_failure_notice",
+    "global_spend_ceiling_reached",
 }
 
 

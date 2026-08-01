@@ -8,7 +8,7 @@ estimate must never count as spend, or the meter never recovers).
 """
 
 from collections.abc import Iterator
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 from unittest import mock
 from uuid import UUID
@@ -20,8 +20,15 @@ from product_app.costs import (
     CostEstimationService,
     CostThresholdAction,
 )
-from product_app.feedback_store import configure_for_tests
-from product_app.model_slots import DEFAULT_MODEL_IDS, validate_model_slots
+from product_app.feedback_store import FeedbackStore, configure_for_tests
+from product_app.model_slots import validate_model_slots
+
+DEFAULT_MODEL_IDS = [
+    "openai/gpt-4o-mini",
+    "anthropic/claude-haiku-4.5",
+    "google/gemini-2.5-flash",
+    "nvidia/nemotron-3-nano-30b-a3b",
+]
 
 
 @pytest.fixture(autouse=True)
@@ -34,7 +41,9 @@ ACCOUNT_A = UUID("00000000-0000-0000-0000-0000000000a1")
 ACCOUNT_B = UUID("00000000-0000-0000-0000-0000000000b2")
 
 
-def _seed_accepted_event(store, *, account_id: UUID, usd: str, when: datetime) -> None:
+def _seed_accepted_event(
+    store: FeedbackStore, *, account_id: UUID, usd: str, when: datetime
+) -> None:
     store.record(
         recorder="cost",
         event_type="cost_guardrail_accepted",
@@ -66,7 +75,7 @@ class TestGlobalDailySpendQuery:
     def test_ignores_events_outside_the_24h_window(self) -> None:
         with configure_for_tests() as store:
             now = datetime.now(UTC)
-            stale = now - __import__("datetime").timedelta(hours=25)
+            stale = now - timedelta(hours=25)
             _seed_accepted_event(store, account_id=ACCOUNT_A, usd="4.00", when=stale)
             assert store.global_daily_spend(now=now) == Decimal("0")
 
@@ -138,7 +147,7 @@ class TestSessionMintCountForIp:
     def test_ignores_mints_outside_the_24h_window(self) -> None:
         with configure_for_tests() as store:
             now = datetime.now(UTC)
-            stale = now - __import__("datetime").timedelta(hours=25)
+            stale = now - timedelta(hours=25)
             store.record(
                 recorder="session",
                 event_type="session_minted",
