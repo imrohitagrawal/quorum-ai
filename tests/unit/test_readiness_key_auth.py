@@ -454,6 +454,37 @@ def test_start_key_auth_probe_reprobe_does_not_erase_an_earlier_proven_verdict(
 
 
 # ---------------------------------------------------------------------------
+# Found by adversarial review (round 2) of #112's periodic re-probe.
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize("bad_interval", ["-5", "0"])
+def test_key_auth_reprobe_interval_rejects_non_positive_values(bad_interval: str) -> None:
+    """A non-positive interval must fail LOUD at startup, not silently at runtime.
+
+    ``time.sleep()`` raises on a negative value, and that call sits OUTSIDE
+    the probe loop's ``contextlib.suppress(Exception)`` — so ``-5`` used to
+    kill the daemon thread forever after exactly one probe, permanently
+    reintroducing the pre-#112 stale-verdict bug. ``0`` doesn't raise but
+    busy-spins the loop (a live socket call with no delay between calls —
+    a self-inflicted DoS against the provider). Both are excluded at the
+    config layer, matching how a non-numeric value already fails closed.
+    """
+    from pydantic import ValidationError
+
+    from product_app.config import Settings
+
+    with pytest.raises(ValidationError, match="key_auth_reprobe_interval_seconds"):
+        Settings(_env_file=None, key_auth_reprobe_interval_seconds=bad_interval)  # type: ignore[call-arg,arg-type]
+
+
+def test_key_auth_reprobe_interval_accepts_the_documented_default() -> None:
+    from product_app.config import Settings
+
+    assert Settings(_env_file=None).key_auth_reprobe_interval_seconds == 1800.0  # type: ignore[call-arg]
+
+
+# ---------------------------------------------------------------------------
 # Found by adversarial review of this work.
 # ---------------------------------------------------------------------------
 
