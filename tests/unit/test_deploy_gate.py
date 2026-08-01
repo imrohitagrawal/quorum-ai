@@ -350,3 +350,107 @@ def test_main_missing_sha_refuses(monkeypatch: pytest.MonkeyPatch, tmp_path: Pat
     monkeypatch.delenv("SHA", raising=False)
     assert gate.main() == 0
     assert "proceed=false" in out.read_text()
+
+
+# --- main(): a stranded merge (required workflow failed, SHA still main's tip) --
+# must FAIL LOUD (issue #62). Before this fix, ``main()`` returned 0 for every
+# outcome, so a genuinely failed required workflow still produced a green
+# ``gate`` job, a skipped ``deploy`` job, and an overall Deploy run reporting
+# ``success`` — indistinguishable from an actual deploy at a glance or to any
+# status-rollup consumer. A run whose SHA has since been superseded by a newer
+# main commit must stay a quiet skip (that is not a stranding; the newer
+# commit's own deploy handles it).
+
+
+def _setup_main_env(monkeypatch: pytest.MonkeyPatch, tmp_path: Path, sha: str = "deadbeef") -> Path:
+    out = tmp_path / "gh_out"
+    monkeypatch.setenv("GITHUB_EVENT_NAME", "workflow_run")
+    monkeypatch.setenv("GITHUB_OUTPUT", str(out))
+    monkeypatch.setenv("REPO", "owner/quorum-ai")
+    monkeypatch.setenv("SHA", sha)
+    monkeypatch.setenv("GATE_TIMEOUT_SECONDS", "1")
+    monkeypatch.setenv("GATE_POLL_SECONDS", "1")
+    return out
+
+
+def test_main_blocked_failure_with_sha_still_tip_exits_nonzero(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """A required workflow fails while this SHA is still main's tip: a real
+    stranding. The gate job itself must fail (non-zero), turning the Deploy
+    run RED instead of a green run with a silently-skipped deploy job."""
+    out = _setup_main_env(monkeypatch, tmp_path, sha="deadbeef")
+    monkeypatch.setattr(gate, "gh_fetch_conclusion", lambda repo, sha, wf: "failure")
+    monkeypatch.setattr(gate, "gh_fetch_main_tip", lambda repo: "deadbeef")
+    assert gate.main() != 0
+    assert "proceed=false" in out.read_text()
+
+
+def test_main_blocked_timeout_with_sha_still_tip_exits_nonzero(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    out = _setup_main_env(monkeypatch, tmp_path, sha="deadbeef")
+    monkeypatch.setattr(gate, "gh_fetch_conclusion", lambda repo, sha, wf: None)
+    monkeypatch.setattr(gate, "gh_fetch_main_tip", lambda repo: "deadbeef")
+    assert gate.main() != 0
+    assert "proceed=false" in out.read_text()
+
+
+def test_main_blocked_failure_with_sha_superseded_stays_quiet(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """A required workflow fails, but a NEWER commit is now main's tip — this
+    SHA was superseded, not stranded. The newer commit's own Deploy run
+    handles verification, so this run must stay a quiet (exit 0) skip, not a
+    false red."""
+    out = _setup_main_env(monkeypatch, tmp_path, sha="deadbeef")
+    monkeypatch.setattr(gate, "gh_fetch_conclusion", lambda repo, sha, wf: "failure")
+    monkeypatch.setattr(gate, "gh_fetch_main_tip", lambda repo: "newer0000")
+    assert gate.main() == 0
+    assert "proceed=false" in out.read_text()
+
+
+def test_main_blocked_but_tip_unknown_defaults_to_loud(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """When the tip-check itself cannot be verified (API blip), fail-safe means
+    treat it as a possible stranding (loud) rather than silently assuming the
+    benign case — the same fail-safe posture the rest of this gate already
+    uses for pending/ambiguous states."""
+    out = _setup_main_env(monkeypatch, tmp_path, sha="deadbeef")
+    monkeypatch.setattr(gate, "gh_fetch_conclusion", lambda repo, sha, wf: "failure")
+    monkeypatch.setattr(gate, "gh_fetch_main_tip", lambda repo: None)
+    assert gate.main() != 0
+    assert "proceed=false" in out.read_text()
+
+
+def test_main_proceed_never_checks_tip(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    """The tip check is only meaningful when the gate is about to block —
+    calling it on the successful path would be a wasted API call."""
+    out = _setup_main_env(monkeypatch, tmp_path, sha="deadbeef")
+    monkeypatch.setattr(gate, "gh_fetch_conclusion", lambda repo, sha, wf: "success")
+
+    def _boom(repo: str) -> str | None:
+        raise AssertionError("gh_fetch_main_tip must not be called on the PROCEED path")
+
+    monkeypatch.setattr(gate, "gh_fetch_main_tip", _boom)
+    assert gate.main() == 0
+    assert "proceed=true" in out.read_text()
+
+
+def test_gh_fetch_main_tip_parses_sha(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(gate.subprocess, "run", lambda *a, **k: _fake_proc("mainsha123\n"))
+    assert gate.gh_fetch_main_tip("owner/quorum-ai") == "mainsha123"
+
+
+def test_gh_fetch_main_tip_api_error_is_none(monkeypatch: pytest.MonkeyPatch) -> None:
+    def boom(*a: object, **k: object) -> object:
+        raise gate.subprocess.SubprocessError("gh 502")
+
+    monkeypatch.setattr(gate.subprocess, "run", boom)
+    assert gate.gh_fetch_main_tip("owner/quorum-ai") is None
+
+
+def test_gh_fetch_main_tip_blank_output_is_none(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(gate.subprocess, "run", lambda *a, **k: _fake_proc("\n"))
+    assert gate.gh_fetch_main_tip("owner/quorum-ai") is None

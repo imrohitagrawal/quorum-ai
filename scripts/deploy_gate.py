@@ -238,6 +238,30 @@ def gh_fetch_conclusion(repo: str, sha: str, workflow: str) -> str | None:
     return _select_conclusion(runs, workflow=workflow, repo=repo)
 
 
+def gh_fetch_main_tip(repo: str) -> str | None:
+    """Return ``main``'s current tip SHA, or ``None`` if it cannot be determined.
+
+    Used only when the gate is about to BLOCK, to tell a real stranding (this
+    SHA is still main's tip — a required workflow genuinely failed/timed out)
+    from a benign supersession (a newer commit has since become main's tip, so
+    that commit's own Deploy run is the one that verifies deployment). Never
+    raises — an API blip returns ``None``, which the caller treats as "cannot
+    rule out a stranding" (fail-safe: loud, not a silent skip).
+    """
+    try:
+        proc = subprocess.run(  # noqa: S603 - fixed argv, no shell, trusted `gh`
+            ["gh", "api", f"repos/{repo}/commits/main", "--jq", ".sha"],
+            capture_output=True,
+            text=True,
+            timeout=30,
+            check=True,
+        )
+    except (subprocess.SubprocessError, OSError):
+        return None
+    sha = proc.stdout.strip()
+    return sha or None
+
+
 def _write_output(proceed: bool) -> None:
     """Emit ``proceed=<bool>`` to ``$GITHUB_OUTPUT`` (and stdout for logs)."""
     value = "true" if proceed else "false"
@@ -272,6 +296,28 @@ def main() -> int:
     )
     print("Conclusions: " + json.dumps(result.conclusions))
     _write_output(result.proceed)
+    if result.proceed:
+        return 0
+
+    # A blocked decision is either a real STRANDING (this SHA is still main's
+    # tip — nothing else will ever deploy it) or a benign SUPERSESSION (a
+    # newer commit is now main's tip, and that commit's own Deploy run is the
+    # one that verifies deployment). Only the former must turn this run red —
+    # issue #62: before this check, main() returned 0 for every outcome, so a
+    # genuinely failed/timed-out required workflow still produced a green
+    # `gate` job, a skipped `deploy` job, and a Deploy run whose overall
+    # conclusion reported `success` — indistinguishable from an actual deploy.
+    main_tip = gh_fetch_main_tip(repo)
+    stranded = main_tip is None or main_tip == sha
+    if stranded:
+        print(
+            f"SHA {sha} is still main's tip (or main's tip could not be verified) "
+            f"and a required workflow did not succeed — this is a STRANDED merge, "
+            f"not a benign skip. Failing the gate job so the Deploy run reports "
+            f"failure, not success."
+        )
+        return 1
+    print(f"SHA {sha} was superseded by main's tip {main_tip} — quiet skip, not a stranding.")
     return 0
 
 

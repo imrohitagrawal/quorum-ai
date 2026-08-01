@@ -77,9 +77,17 @@ actual deploy. This is the same failure surface as the silent-undeploy incidents
 (#21, #37, #44) and the `/health`-200 trap of 2026-07-17..21.
 
 **Durable fix.** Verify deploys by the per-SHA Deploy **job** conclusion, never
-the run conclusion or a `/health` 200. Tracked for a mechanism fix by **#62**:
-make a *stranded* merge (a required workflow non-success while the SHA is still
-main's tip) fail loud, while keeping a *superseded* SHA a quiet skip.
+the run conclusion or a `/health` 200. **#62 (fixed):** `scripts/deploy_gate.py`
+now exits non-zero when a required workflow did not succeed AND the SHA is
+still main's tip — a real stranding, since nothing else will ever deploy it —
+so the `gate` job itself fails and the whole Deploy run reports failure, not a
+green run with a silently skipped `deploy` job. A SHA superseded by a newer
+main commit (checked via `gh_fetch_main_tip`) still exits 0 — a quiet skip,
+since the newer commit's own Deploy run is the one that verifies deployment.
+Pinned by `tests/unit/test_deploy_gate.py` (`test_main_blocked_*`,
+`test_gh_fetch_main_tip_*`). The manual one-command check below remains the
+right way to verify a *specific* past run; the fix means a future stranding no
+longer needs it to be noticed at all — the run itself goes red.
 
 **How to detect next time (one command):**
 ```bash

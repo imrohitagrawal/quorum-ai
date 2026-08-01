@@ -15,6 +15,14 @@ name: Deploy to Fly.io
 # where a trigger from a fast check ran the gate before the slow E2E finished,
 # skipped, and no later trigger deployed — leaving a merge silently undeployed
 # (PR #44). A per-SHA concurrency group collapses duplicate triggers to one.
+#
+# When the gate blocks (a required workflow failed, or timed out unresolved),
+# `deploy_gate.py` exits non-zero IFF that SHA is still main's tip — a real
+# stranding, since nothing else will ever deploy it — so this `gate` job (and
+# therefore the whole run) reports failure, not a green run with a silently
+# skipped `deploy` job (issue #62). A SHA that has since been superseded by a
+# newer main commit stays a quiet (exit 0) skip: the newer commit's own Deploy
+# run is the one that verifies deployment.
 on:
   workflow_run:
     workflows: ["CI", "Tests", "E2E (axe + parity)"]
