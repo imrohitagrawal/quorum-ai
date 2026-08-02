@@ -2329,6 +2329,26 @@ class _JudgeOutcome:
     treats a memo entry with ``usage=None`` as "billed, unpriceable" and
     demotes the whole run to ``estimated``, the same honesty gate already
     applied to debate/synthesis/initial-answer usage.
+
+    DELIBERATE, CURRENTLY-UNREACHABLE gap (adversarial review, 2026-08-02):
+    unlike ``StageBillingState`` for debate/synthesis, there is no PERMANENT
+    marker on the ``QueryRun`` itself recording "a judge fired for this run" —
+    only this bounded LRU (``_JUDGE_VERDICT_MEMO_MAX = 512``). If this run's
+    entry were evicted BETWEEN ``_evaluate_terminal_run`` writing it and
+    ``_actual_cost`` reading it via :meth:`InMemoryQueryRunRepository.billing_snapshot`,
+    a miss reads as "no judge ever ran" (not "ran, billed, evicted"), and the
+    served total would silently omit a real cost. In practice this cannot
+    happen on any SERVED read: those two calls are sequential statements in
+    ONE request (``_result_response``), so the only way to evict THIS run's
+    fresh entry in that gap is 512 OTHER judges completing a real HTTP round
+    trip apiece inside a few CPU instructions — not physically reachable. The
+    one caller that runs ``_actual_cost`` WITHOUT that ordering guarantee,
+    ``_log_estimate_accuracy``, always runs BEFORE any GET has happened (at
+    synthesis completion), so no judge could have fired yet regardless of
+    eviction. Documented rather than defended against, per this file's own
+    convention for a latent-but-currently-unreachable risk (see the E2
+    tradeoff in :func:`_actual_cost`'s docstring) — a permanent marker would
+    cost real complexity for a benefit no real traffic pattern can reach today.
     """
 
     verdict: EvalJudgeVerdict | None
