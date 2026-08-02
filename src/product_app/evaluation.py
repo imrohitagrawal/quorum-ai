@@ -52,6 +52,7 @@ from product_app.providers import (
     InitialModelAnswer,
     ProviderPath,
     SourceReference,
+    TokenUsage,
     calculate_citation_coverage,
     provider_execution_service,
 )
@@ -1353,7 +1354,19 @@ class EvalJudgeService:
 
     verifies_support = True
 
+    def __init__(self) -> None:
+        #: Real per-call token usage from the MOST RECENT ``evaluate()`` call
+        #: on this instance, or ``None`` if that call never reached a live
+        #: response (disabled, unpinned, raised, or the provider omitted
+        #: ``usage``). Issue #110: a billed judge call was previously
+        #: dispatched with no way for the billing layer to price it — this is
+        #: the seam ``query_runs._MemoisedRunJudge`` reads to close that gap.
+        #: Reset at the top of every ``evaluate()`` call so a caller can never
+        #: read a PRIOR call's usage as if it belonged to the current one.
+        self.last_usage: TokenUsage | None = None
+
     def evaluate(self, evidence: JudgeEvidence) -> EvalJudgeVerdict | None:
+        self.last_usage = None
         if not _judge_enabled():
             return None
         model_id = settings.quorum_eval_judge_model_id
@@ -1372,6 +1385,7 @@ class EvalJudgeService:
             return None
         if result is None:
             return None
+        self.last_usage = result.usage
         return parse_judge_verdict(result.answer_text)
 
 

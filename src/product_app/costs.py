@@ -245,14 +245,21 @@ class CostLineByModel(BaseModel):
     usd: Decimal = Field(ge=Decimal("0"))
     #: Discriminator so consumers distinguish the pseudo "Debate + synthesis"
     #: row from a real model row without matching the magic ``model_id``.
-    #: ``"model"`` for the four model rows, ``"synthesis"`` for the writer.
+    #: ``"model"`` for the four model rows, ``"synthesis"`` for the writer,
+    #: ``"judge"`` for a fired-and-priced Layer-B judge call (issue #110).
     kind: str = "model"
 
 
 class CostLineByStage(BaseModel):
     #: One of ``initial_answers`` | ``debate_round_1`` | ``debate_round_2`` |
     #: ``synthesis`` — the same vocabulary as ``progress.stages[].stage`` (see
-    #: ``query_runs._initial_progress``) so a UI can join the two directly.
+    #: ``query_runs._initial_progress``) so a UI can join the two directly —
+    #: PLUS an optional ``"judge"`` row (issue #110) that has no progress-stage
+    #: counterpart: the Layer-B judge is a request-path advisory call, never a
+    #: pipeline stage. Present only in a MEASURED breakdown, only when a
+    #: configured judge fired and reported usage. A UI that joins ``by_stage``
+    #: against ``progress.stages`` by key simply has no match for it; it must
+    #: not be dropped from ``total``.
     stage: str
     usd: Decimal = Field(ge=Decimal("0"))
 
@@ -1370,6 +1377,7 @@ def build_measured_breakdown(
     per_model_initial: list[tuple[str, str, Decimal]],
     debate_by_round: dict[int, Decimal],
     synthesis_cost: Decimal,
+    judge: tuple[str, Decimal] | None = None,
 ) -> CostBreakdown:
     """Assemble a measured :class:`CostBreakdown` that re-sums to the total.
 
@@ -1382,19 +1390,29 @@ def build_measured_breakdown(
       money was actually spent on.
     * ``synthesis_cost`` — summed measured cost of the live synthesis section
       calls.
+    * ``judge`` — ``(model_id, measured_cost)`` for a Layer-B judge call that
+      fired AND reported usage (issue #110), or ``None`` when no judge fired
+      for this run. A PRESENT-but-``None``-usage judge call must never reach
+      here — the caller (``query_runs._actual_cost``) demotes the whole run
+      to ``estimated`` first, so a possibly-billed, unpriced call is never
+      silently absent from a ``"measured"`` total.
 
     Debate + synthesis are attributed to a single ``"Debate + synthesis"``
     ``by_model`` row because they use the dedicated debate/synthesis writer
     models, not the four slot models. (issue #16 relabel: the old
     ``"Synthesis writer"`` name hid that this line also folds in the two
-    debate rounds — which are the bulk of the inner-call cost.) Both partitions
+    debate rounds — which are the bulk of the inner-call cost.) The judge, when
+    present, gets its OWN ``by_model``/``by_stage`` row (``kind="judge"``) —
+    folding it into the writer row would mislabel spend on a different model as
+    synthesis spend. Both partitions
     are reconciled to the quantized grand total with the same rule as the estimate,
     so every line is ``>= 0`` and the lines sum to the total exactly (the UI's
     reconciliation invariant).
     """
+    judge_cost = judge[1] if judge is not None else Decimal("0")
     initial_total = sum((cost for _, _, cost in per_model_initial), Decimal("0"))
     debate_total = sum(debate_by_round.values(), Decimal("0"))
-    raw_total = initial_total + debate_total + synthesis_cost
+    raw_total = initial_total + debate_total + synthesis_cost + judge_cost
     total = raw_total.quantize(COST_DISPLAY_QUANTUM, rounding=ROUND_HALF_UP)
 
     debate_round_1 = debate_by_round.get(1, Decimal("0"))
@@ -1405,6 +1423,8 @@ def build_measured_breakdown(
         ("debate_round_2", debate_round_2),
         ("synthesis", synthesis_cost),
     ]
+    if judge is not None:
+        raw_stage.append(("judge", judge_cost))
     stage_usd = CostEstimationService._reconcile_usd_lines([v for _, v in raw_stage], total)
     by_stage = [
         CostLineByStage(stage=name, usd=usd)
@@ -1412,16 +1432,18 @@ def build_measured_breakdown(
     ]
 
     writer_cost = debate_total + synthesis_cost
-    raw_model: list[tuple[str, str, Decimal]] = list(per_model_initial)
-    raw_model.append(("synthesis", "Debate + synthesis", writer_cost))
-    model_usd = CostEstimationService._reconcile_usd_lines([c for *_, c in raw_model], total)
+    raw_model: list[tuple[str, str, Decimal, str]] = [
+        (mid, name, cost, "model") for mid, name, cost in per_model_initial
+    ]
+    raw_model.append(("synthesis", "Debate + synthesis", writer_cost, "synthesis"))
+    if judge is not None:
+        judge_model_id, _cost = judge
+        raw_model.append((judge_model_id, "Layer-B judge", judge_cost, "judge"))
+    model_usd = CostEstimationService._reconcile_usd_lines(
+        [cost for _, _, cost, _ in raw_model], total
+    )
     by_model = [
-        CostLineByModel(
-            model_id=mid,
-            display_name=name,
-            usd=usd,
-            kind="synthesis" if mid == "synthesis" else "model",
-        )
-        for (mid, name, _), usd in zip(raw_model, model_usd, strict=True)
+        CostLineByModel(model_id=mid, display_name=name, usd=usd, kind=kind)
+        for (mid, name, _cost, kind), usd in zip(raw_model, model_usd, strict=True)
     ]
     return CostBreakdown(by_model=by_model, by_stage=by_stage, total=total)
