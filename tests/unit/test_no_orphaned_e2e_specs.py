@@ -7,9 +7,10 @@ because a spec under ``invariants/`` must be in the BLOCKING lane or it is not
 really gated. That narrower guard cannot see a spec sitting in a sibling
 directory (``e2e/tests/workspace/``, ``accessibility/``, ``api-mocking/``,
 ``navigation/``) that runs in NO workflow whatsoever — advisory or blocking.
-That is exactly how ``workspace.spec.ts`` (17 tests), ``accessibility.spec.ts``
-(16), ``api-mocking.spec.ts`` (9) and ``navigation.spec.ts`` (10) went
-uncollected by any CI job: none of them lived under ``invariants/`` or
+That is exactly how ``workspace.spec.ts`` (originally 17 tests; 16 after this
+PR deletes one testing dead markup, see its own diff), ``accessibility.
+spec.ts`` (16), ``api-mocking.spec.ts`` (9) and ``navigation.spec.ts`` (10)
+went uncollected by any CI job: none of them lived under ``invariants/`` or
 ``ops/``, so the existing guard never looked at them. (The issue that reported
 this undercounted by one file: it named three specs, 42 tests; ``navigation.
 spec.ts``, 10 more tests, was in exactly the same unrun state and the issue
