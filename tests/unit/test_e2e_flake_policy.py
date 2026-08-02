@@ -16,6 +16,11 @@ policy is therefore:
   one container on one engine; running it on firefox/webkit compares
   like-for-unlike and can only ever produce noise. RB-6's cross-engine job
   must therefore never touch a visual spec (D-18).
+* **zero skips, ever, in a blocking lane** (ratified 2026-08-02, issue #165
+  item 3). The only sanctioned ``test.skip()`` shape is the chromium-only
+  reference-engine guard; quarantine works by EXCLUDING a flaky spec from the
+  blocking lane's invocation, never by skipping it in place. See
+  ``docs/metrics/flake-rate.md``.
 
 These assert on the workflow/config TEXT rather than on prose in a doc, so a
 regression in the machinery reds here — the same pattern as
@@ -109,6 +114,166 @@ def _spec_arguments(command: str) -> list[str]:
         for token in tokens[3:]  # skip `npx playwright test`
         if not token.startswith("-") and ("/" in token or token.endswith(".spec.ts"))
     ]
+
+
+def _gated_spec_arguments(command: str) -> list[str]:
+    """The bare path arguments of ONE playwright invocation, comment-free.
+
+    Deliberately narrower than ``_spec_arguments`` above: that helper keeps
+    reading tokens across the whole slice ``_playwright_invocations`` returns,
+    which runs past the end of the real YAML folded scalar and into the next
+    step's PRECEDING COMMENT BLOCK (the slice only terminates at the next
+    step's ``- key:`` line, exactly as designed for the retries/project
+    checks above, which only ever look for a substring). Several of those
+    comments name a spec file by filename alone, e.g. "dropping
+    session-trail.spec.ts (7 tests) from the list above" — a bare token
+    ending in ``.spec.ts`` with no directory, which is indistinguishable from
+    a real argument to a token-level filter and resolves to a path that does
+    not exist. A real YAML folded block scalar ends at the first line whose
+    indentation returns to the key's own level — which, in every invocation
+    here, is exactly the first blank line after the flags. Stopping there
+    (and additionally at the first ``#`` line, belt-and-braces) reads only
+    what the shell would actually receive.
+    """
+    arguments: list[str] = []
+    for line in command.splitlines()[1:]:  # [0] is "npx playwright test"
+        stripped = line.strip()
+        if not stripped or stripped.startswith("#"):
+            break
+        if stripped.startswith("-"):
+            continue  # a flag, e.g. --project=chromium
+        arguments.append(stripped)
+    return arguments
+
+
+def _gated_spec_files() -> list[Path]:
+    """Every concrete ``.spec.ts`` file the BLOCKING ``e2e.yml`` lanes actually
+    invoke, resolved to a real path.
+
+    Built on the same invocation parser the ``--retries=0`` tests above
+    already rely on, so this list can never drift from what CI actually runs:
+    a spec added to (or dropped from) a blocking lane changes this list on
+    the very next collection, with no second place to keep in sync.
+    """
+    files: list[Path] = []
+    for command in _playwright_invocations(_read(E2E_WORKFLOW)):
+        for argument in _gated_spec_arguments(command):
+            target = REPO_ROOT / "e2e" / argument
+            if argument.endswith(".spec.ts"):
+                assert target.is_file(), (
+                    f"e2e.yml names {argument}, which does not exist at {target}"
+                )
+                files.append(target)
+            else:
+                assert target.is_dir(), (
+                    f"e2e.yml names {argument} as a directory argument, but "
+                    f"{target} is not a directory"
+                )
+                files.extend(sorted(target.rglob("*.spec.ts")))
+    # De-duplicate while preserving order: the invariants and axe+parity lanes
+    # never share a spec today, but a future third lane reusing one shouldn't
+    # double-count it as two parametrize cases.
+    seen: set[Path] = set()
+    unique: list[Path] = []
+    for file in files:
+        if file not in seen:
+            seen.add(file)
+            unique.append(file)
+    return unique
+
+
+#: The only test.skip() shape a gated spec may use — the chromium-only
+#: reference-engine guard, verified by `grep` across every current gated spec
+#: (2026-08-02) to be the sole reason any of them skips anything.
+_ALLOWED_SKIP = re.compile(
+    r'test\.skip\(\(\{\s*browserName\s*\}\)\s*=>\s*browserName\s*!==\s*"chromium"\s*,'
+)
+
+
+@pytest.mark.parametrize(
+    "spec",
+    _gated_spec_files(),
+    ids=lambda p: str(p.relative_to(REPO_ROOT)),
+)
+def test_every_skip_in_a_gated_e2e_spec_is_the_known_chromium_only_shape(
+    spec: Path,
+) -> None:
+    """Ratified 2026-08-02 (issue #165 item 3): zero skips, ever, in a
+    blocking lane, except the one sanctioned chromium-only reference-engine
+    guard.
+
+    ``scripts/check_e2e_executed.py`` rejects the blocking CI job outright
+    the moment any spec skips a test, with a message that assumes the reader
+    already knows the policy. Issue #165 named the risk: the first
+    conditional or environment-gated skip added to a gated spec would trip
+    that BLOCKING floor with no local warning it was even a policy question.
+
+    Turns red if: a future edit adds a ``test.skip()`` — OR a
+    ``test.describe.skip()``, which disables an entire suite the same way and
+    is caught by the same broadened extraction below (round-2 adversarial
+    review finding: the original ``test.skip(`` regex does not match the
+    literal substring ``test.describe.skip(``, since ``.describe`` sits
+    between the two tokens, so it slipped through as an invisible bypass;
+    confirmed by injecting one and watching this test stay green, then fixed
+    and reconfirmed red-then-green by the same injection) — to any spec this
+    repo actually gates in ``e2e.yml``, for any reason other than the
+    chromium-only guard (a flake workaround, an environment gate, a temporary
+    disable) — exactly the shape this decision exists to catch, and catches
+    it here, locally, before it ever reaches the confusing CI-side floor
+    message.
+
+    This is still a LEXICAL match, not an AST parse (matching the sibling
+    ``test_makefile_gate_integrity.py`` pattern this file already follows) —
+    a bracket-notation call (``test["skip"](...)``) or a locally rebound
+    ``test`` import would still slip past both this and the CI floor's own
+    skip check. Broadening further than the two real Playwright call forms
+    actually used in this codebase (``test.skip(`` and ``test.describe.skip(``)
+    would be defending against a form nothing here has ever written.
+    """
+    text = _read(spec)
+    calls = re.findall(r"test(?:\.describe)?\.skip\(.*?\);", text, re.DOTALL)
+    for call in calls:
+        assert _ALLOWED_SKIP.match(call), (
+            f"{spec.relative_to(REPO_ROOT)} has a test.skip() that is not the "
+            "sanctioned chromium-only reference-engine guard. Policy "
+            "(docs/metrics/flake-rate.md): zero skips, ever, in a blocking e2e "
+            "lane — quarantine a flaky spec by EXCLUDING it from this lane's "
+            f"invocation instead. Offending call:\n{call.strip()[:400]}"
+        )
+
+
+def test_the_skip_extraction_also_catches_test_describe_skip(tmp_path: Path) -> None:
+    """Round-2 adversarial-review finding, self-fixed: ``test.describe.skip()``
+    disables an entire suite exactly like ``test.skip()``, but the literal
+    substring ``test.skip(`` does not occur inside ``test.describe.skip(`` —
+    ``.describe`` sits between the two tokens — so the original extraction
+    regex (``test\\.skip\\(.*?\\);``, no ``.describe`` alternative) returned
+    zero matches for it. Confirmed by direct reproduction: injecting an
+    unconditional ``test.describe.skip(true, "...")`` into a real gated spec
+    left the parametrized test above green.
+
+    A synthetic fixture on purpose, not a real spec: this pins the
+    EXTRACTION-AND-MATCH logic in isolation, independent of which specs
+    ``e2e.yml`` happens to gate today.
+
+    Turns red if: the ``(?:\\.describe)?`` alternative is removed from the
+    extraction regex above — reproduced directly before writing this test.
+    """
+    spec = tmp_path / "fixture.spec.ts"
+    spec.write_text(
+        'test.describe("suite", () => {\n'
+        '  test.describe.skip(true, "not the chromium-only guard");\n'
+        "});\n",
+        encoding="utf-8",
+    )
+    calls = re.findall(
+        r"test(?:\.describe)?\.skip\(.*?\);", spec.read_text(encoding="utf-8"), re.DOTALL
+    )
+    assert calls, "test.describe.skip(...) must be extracted, not silently passed over"
+    assert not _ALLOWED_SKIP.match(calls[0]), (
+        "a test.describe.skip() call must never satisfy the chromium-only allowed pattern — "
+        f"got a match against: {calls[0]!r}"
+    )
 
 
 def test_playwright_default_retries_is_zero() -> None:
