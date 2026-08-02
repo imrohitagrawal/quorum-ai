@@ -277,6 +277,16 @@ jobs:
     # Measured locally: ~7-8m for the 21 changed functions (504 mutants, after
     # the RB-3 leak fix widened the scope from 425) on this branch with
     # --max-children 8. 30 min leaves headroom for a slower, 2-core runner.
+    #
+    # Issue #182: PR #181's diff touched one large function (146+ mutants)
+    # and this JOB-level timeout fired mid-run, killing the whole job before
+    # `make mutation-baseline`'s own report() step ever ran -- no score was
+    # printed at all. `make mutation-baseline` now bounds `mutmut run` itself
+    # to MUTATION_RUN_DEADLINE_SECONDS (scripts/run_with_deadline.py, default
+    # 24 minutes) well inside this 30-minute ceiling, so report() always
+    # runs and always scores whatever mutants/**/*.py.meta state exists --
+    # partial or complete -- instead of this external timeout silently
+    # eating the whole job.
     timeout-minutes: 30
     env:
       OPENROUTER_LIVE_EXECUTION_ENABLED: "false"

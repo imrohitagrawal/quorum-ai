@@ -244,6 +244,23 @@ api-contract:
 # the same 6.4-point harness-noise headroom the previous derivation used.
 MUTATION_MIN_SCORE ?= 80
 MUTMUT_MAX_CHILDREN ?= 8
+# Issue #182: the CI job's `timeout-minutes: 30` is a JOB-level GitHub
+# Actions setting. When IT fires mid-run, the whole job (including the
+# report() step below) dies with no score printed at all -- reproduced on
+# PR #181 (30m16s, killed mid-mutant, zero score line). `run_with_deadline.py`
+# gives `mutmut run` its OWN, shorter, internally-enforced deadline, so this
+# recipe always reaches `report()` -- which scores whatever
+# `mutants/**/*.py.meta` state exists, partial or complete, since mutmut
+# writes those incrementally per mutant (verified against the installed
+# mutmut/mutation/data.py: `register_result` calls `self.save()` after every
+# completed mutant). 1440s (24m) leaves ~6 minutes of the 30-minute job
+# budget for checkout/setup/report -- a judgment call with margin, not a
+# freshly measured number (a real 24-minute mutation run was not executed
+# to re-derive it, to avoid burning CI minutes on this batch); the CI job's
+# own setup steps (checkout, fetch base ref, setup-uv, python install, uv
+# sync) are comfortably under a minute in the existing measured baseline
+# above, so the margin here is intentionally generous.
+MUTATION_RUN_DEADLINE_SECONDS ?= 1440
 
 define MUTMUT_SCOPE_PY
 import ast, collections, glob, json, os, re, subprocess, sys
@@ -497,6 +514,7 @@ mutation-baseline:
 	@if [ -s build/mutation/scope.txt ]; then \
 		rm -rf mutants; \
 		SENTRY_DSN= OPENROUTER_LIVE_EXECUTION_ENABLED=false QUORUM_RUNTIME_ENVIRONMENT=ci QUORUM_TOKEN_SECRET=mutation-baseline UV_CACHE_DIR=$(UV_CACHE_DIR) \
+			$(PYTHON) scripts/run_with_deadline.py $(MUTATION_RUN_DEADLINE_SECONDS) \
 			uv run mutmut run --max-children $(MUTMUT_MAX_CHILDREN) $$(tr '\n' ' ' < build/mutation/scope.txt) > build/mutation/run.log 2>&1 \
 			|| { tail -40 build/mutation/run.log; \
 			echo "mutation-baseline: mutmut run failed — see build/mutation/run.log"; \
