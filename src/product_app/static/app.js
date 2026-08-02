@@ -3677,6 +3677,11 @@
     debate_round_1: "Round 1",
     debate_round_2: "Round 2",
     synthesis: "Synthesis",
+    // Deliberately NO entry for a Layer-B judge's advisory cost-stage row
+    // (issue #110/#217): the frontend must contain no `judge` identifier at
+    // all (D-5, tests/unit/test_evaluation_projection_has_no_judge.py), so
+    // an actual-only stage row for it falls through to its own raw label via
+    // the `|| line.stage` fallback below rather than a friendly mapping here.
   };
   const RECEIPT_PIPELINE_ORDER = [
     "initial_answers",
@@ -3919,17 +3924,24 @@
     if (est && Array.isArray(est.by_model) && est.by_model.length) {
       const actualByModel =
         actual && Array.isArray(actual.by_model) ? actual.by_model : null;
+      // Issue #217 (breaker review): key on `kind` PLUS `model_id`/
+      // `display_name`, never the model id alone. A Layer-B judge call can be
+      // configured to reuse one of the four slot models' id (nothing enforces
+      // otherwise), which would make a "model" row and the "judge" row
+      // compare equal under an id-only key — misattributing the judge's cost
+      // onto the slot's pairing and then wrongly suppressing the judge's own
+      // actual-only row below.
+      const modelLineKey = (line) =>
+        `${line.kind || "model"} ${line.model_id || line.display_name}`;
       est.by_model.forEach((line) => {
         // Fix 10: null-entry guard (parity with the positions loop).
         if (!line) return;
         // Fix 9: pair est→actual by model key, not array index, so a real
         // (reordered/partial) actual breakdown can never be misattributed.
-        const key = line.model_id || line.display_name;
+        const key = modelLineKey(line);
         let actUsd = NaN;
         if (actualByModel) {
-          const match = actualByModel.find(
-            (a) => a && (a.model_id || a.display_name) === key,
-          );
+          const match = actualByModel.find((a) => a && modelLineKey(a) === key);
           if (match) actUsd = Number(match.usd);
         }
         c2.appendChild(
@@ -3940,6 +3952,26 @@
           ),
         );
       });
+      // Issue #217: a row present ONLY in the actual breakdown (e.g. a fired
+      // Layer-B judge call — issue #110 — which is realized post-hoc and never
+      // appears in the pre-run estimate) still needs its own line, or the
+      // itemized rows silently under-sum the Total below. No "est" figure to
+      // pair it with, so the est side renders "—", same as any other missing
+      // pairing.
+      if (actualByModel) {
+        const estModelKeys = new Set(est.by_model.filter(Boolean).map(modelLineKey));
+        actualByModel.forEach((line) => {
+          if (!line) return;
+          if (estModelKeys.has(modelLineKey(line))) return;
+          c2.appendChild(
+            buildReceiptCostRow(
+              line.display_name || line.model_id || "—",
+              NaN,
+              Number(line.usd),
+            ),
+          );
+        });
+      }
       c2.appendChild(
         buildReceiptCostRow(
           "Total",
@@ -3980,6 +4012,23 @@
           ),
         );
       });
+      // Issue #217: same actual-only-row gap as the "by model" column above,
+      // for the stage partition (e.g. the judge's "judge" stage row).
+      if (actualByStage) {
+        const estStageKeys = new Set(
+          est.by_stage.filter(Boolean).map((line) => line.stage),
+        );
+        actualByStage.forEach((line) => {
+          if (!line || estStageKeys.has(line.stage)) return;
+          c3.appendChild(
+            buildReceiptCostRow(
+              RECEIPT_STAGE_SHORT[line.stage] || line.stage,
+              NaN,
+              Number(line.usd),
+            ),
+          );
+        });
+      }
     } else {
       c3.appendChild(
         mkEl("p", "result-receipt-note", "Itemized stage breakdown is not available for this run."),

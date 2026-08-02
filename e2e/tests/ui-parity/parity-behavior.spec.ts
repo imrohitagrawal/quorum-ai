@@ -433,6 +433,87 @@ test.describe("UI parity — behaviour", () => {
     expect(overflows, `receipt values overflow their column: ${JSON.stringify(overflows)}`).toEqual([]);
   });
 
+  test("Run details receipt: an ACTUAL-only cost row (e.g. a fired Layer-B judge call, absent from the pre-run estimate) still gets its own line in both itemized columns", async ({ page }) => {
+    // Issue #217: the "Cost by model"/"Cost by stage" columns iterate the
+    // PRE-RUN ESTIMATE's rows and backfill an actual figure only for a
+    // matching key. A judge call is realized post-hoc (issue #110) and never
+    // appears in the estimate, so its actual-only row used to be dropped
+    // entirely from BOTH columns even though the receipt's Total (read
+    // straight from actual.total) already included it — the itemized rows
+    // silently summed to less than the displayed Total, hiding that a paid
+    // judge call happened at all.
+    const judgeModelRow = { model_id: "openai/gpt-4o", display_name: "Layer-B judge", usd: "0.006", kind: "judge" };
+    const judgeStageRow = { stage: "judge", usd: "0.006" };
+    const resp = completedResp();
+    resp.actual_breakdown = {
+      by_model: [...BY_MODEL, judgeModelRow],
+      by_stage: [...BY_STAGE, judgeStageRow],
+      total: "0.194",
+    };
+    resp.actual_cost_usd = "0.194";
+    await driveToResult(page, resp);
+    await page.locator("#result-details-toggle").click();
+    await expect(page.locator("#result-receipt")).toBeVisible();
+
+    const modelCol = page.locator('#result-receipt [aria-label="Cost by model, estimate to actual"]');
+    const judgeModelRowEl = modelCol.locator(".result-receipt-row", { hasText: "Layer-B judge" });
+    await expect(judgeModelRowEl).toHaveCount(1);
+    await expect(judgeModelRowEl).toContainText("$0.006");
+    // No matching estimate line for a judge-only row — the est side reads
+    // "—", never a fabricated number (same rule as any other missing pairing).
+    await expect(judgeModelRowEl.locator(".result-receipt-value")).toContainText("—");
+
+    // No friendly-label mapping for the judge's stage row (D-5,
+    // tests/unit/test_evaluation_projection_has_no_judge.py bans a `judge`
+    // identifier anywhere in app.js) — it falls through to its own raw
+    // "judge" stage string, same as any other stage RECEIPT_STAGE_SHORT has
+    // no mapping for.
+    const stageCol = page.locator('#result-receipt [aria-label="Cost by stage, estimate to actual"]');
+    const judgeStageRowEl = stageCol.locator(".result-receipt-row", { hasText: "judge" });
+    await expect(judgeStageRowEl).toHaveCount(1);
+    await expect(judgeStageRowEl).toContainText("$0.006");
+    await expect(judgeStageRowEl.locator(".result-receipt-value")).toContainText("—");
+  });
+
+  test("Run details receipt: a judge call configured on the SAME model_id as a slot still gets its own separate line (kind, not model_id alone, is the row identity)", async ({ page }) => {
+    // Issue #217 (breaker-review finding): the operator-set judge model id
+    // (QUORUM_EVAL_JUDGE_MODEL_ID) is a free-standing config value with
+    // nothing enforcing it differs from one of the four debate-slot models —
+    // an operator reusing a cheap slot model as the judge is a realistic
+    // config. If the "actual-only row" fix keyed only on model_id, a judge
+    // row sharing a slot's model_id would compare equal to that slot's row
+    // and get silently dropped again — reproducing the ORIGINAL #217 bug
+    // under a different trigger. The row identity must be (kind, model_id).
+    const collidingId = BY_MODEL[0].model_id; // "openai/gpt-4o-mini" — slot 1
+    const judgeModelRow = { model_id: collidingId, display_name: "Layer-B judge", usd: "0.006", kind: "judge" };
+    const resp = completedResp();
+    resp.actual_breakdown = {
+      by_model: [...BY_MODEL, judgeModelRow],
+      by_stage: [...BY_STAGE, { stage: "judge", usd: "0.006" }],
+      total: "0.194",
+    };
+    resp.actual_cost_usd = "0.194";
+    await driveToResult(page, resp);
+    await page.locator("#result-details-toggle").click();
+    await expect(page.locator("#result-receipt")).toBeVisible();
+
+    const modelCol = page.locator('#result-receipt [aria-label="Cost by model, estimate to actual"]');
+    // The judge's own row still renders, distinct from the slot's row.
+    const judgeModelRowEl = modelCol.locator(".result-receipt-row", { hasText: "Layer-B judge" });
+    await expect(judgeModelRowEl).toHaveCount(1);
+    await expect(judgeModelRowEl).toContainText("$0.006");
+    await expect(judgeModelRowEl.locator(".result-receipt-value")).toContainText("—");
+    // The colliding slot's own row is UNAFFECTED — it still pairs with its
+    // own actual figure ($0.034 from BY_MODEL[0]), never the judge's $0.006.
+    const slotRowEl = modelCol
+      .locator(".result-receipt-row")
+      .filter({ hasText: "GPT-4o-mini" })
+      .filter({ hasNotText: "Layer-B judge" });
+    await expect(slotRowEl).toHaveCount(1);
+    await expect(slotRowEl).toContainText("$0.034");
+    await expect(slotRowEl).not.toContainText("$0.006");
+  });
+
   test("composer 'Run now' is a solid secondary button, not a borderless ghost", async ({ page }) => {
     // The ghost variant renders as plain text until hover — it did not read as a
     // button. It must be a solid secondary CTA (visible surface + border) beside
