@@ -353,6 +353,29 @@ def report():
     """Score the run. Timeouts are reported but excluded: measured, they are a
     harness artifact of mutmut's fork-based runner on this app, not evidence
     that a test caught the mutant."""
+    # #142: mirrors mutmut's own status_by_exit_code map (mutmut/__main__.py)
+    # instead of a sign test on the raw exit code. `"killed" if code > 0 else
+    # "timeout"` treated ANY positive code not in a three-entry dict as a kill
+    # — silently scoring pytest's NO_TESTS_COLLECTED (5, the same meaning as
+    # mutmut's own 33), pytest's USAGE_ERROR (4), mutmut's other timeout codes
+    # (24/36/152/255), and mutmut's `skipped` (34) as proof a test caught the
+    # mutant. It also relabelled a segfault/OOM (-11/-9) as the same ordinary
+    # fork-runner timeout this file already excuses.
+    EXIT_STATUS = {
+        0: "survived", 1: "killed", 3: "killed",
+        5: "no_tests", 33: "no_tests",
+        34: "skipped",
+        24: "timeout", 36: "timeout", 152: "timeout", 255: "timeout", -24: "timeout",
+        37: "type_check",
+        4: "error",
+        -9: "crash", -11: "crash",
+        # Found by adversarial review of this fix: mutmut's own map has
+        # `2: "check was interrupted by user"` (a local Ctrl-C mid-run) — the
+        # first version of this dict omitted it, so it fell to the
+        # "suspicious" default and read as a generic broken-run message
+        # instead of naming what actually happened.
+        2: "interrupted",
+    }
     counts = collections.Counter()
     survivors = []
     for meta in glob.glob("mutants/src/**/*.py.meta", recursive=True):
@@ -361,13 +384,27 @@ def report():
         for key, code in data["exit_code_by_key"].items():
             if code is None:
                 continue
-            bucket = {0: "survived", 33: "no_tests", 37: "type_check"}.get(code, "killed" if code > 0 else "timeout")
+            # Any code this map does not recognize fails closed as
+            # "suspicious" rather than defaulting to a kill — an unenumerated
+            # exit code is exactly the gap a sign test cannot see.
+            bucket = EXIT_STATUS.get(code, "suspicious")
             counts[bucket] += 1
             if bucket == "survived":
                 survivors.append(key)
     checked = counts["killed"] + counts["survived"]
     print("mutants scored: %d killed, %d survived, %d timeout (excluded), %d no-tests" % (
         counts["killed"], counts["survived"], counts["timeout"], counts["no_tests"]))
+    if (counts["skipped"] or counts["crash"] or counts["error"] or counts["suspicious"]
+            or counts["type_check"] or counts["interrupted"]):
+        # Found by adversarial review of the fix above: type_check (37, a
+        # mutant caught by mypy rather than a test) was already excluded from
+        # the score before this file, correctly — but was never named
+        # anywhere in the printed summary, unlike every other excluded
+        # bucket. A reader could not tell 10 type-checked mutants from 0.
+        print("  (%d skipped, %d crash, %d error, %d type-checked, %d interrupted, "
+              "%d suspicious/unrecognized exit code)" % (
+            counts["skipped"], counts["crash"], counts["error"], counts["type_check"],
+            counts["interrupted"], counts["suspicious"]))
     if counts["no_tests"]:
         # Checked BEFORE the `not checked` branch below, because a scope where
         # EVERY mutant is no_tests also has `killed + survived == 0` and would
@@ -390,22 +427,51 @@ def report():
               "exist but are deselected under [tool.mutmut], that deselection is "
               "hiding this function." % counts["no_tests"])
         raise SystemExit(1)
+    if counts["interrupted"]:
+        # exit 2 = mutmut's own "check was interrupted by user" (a local
+        # Ctrl-C mid-run). Named distinctly rather than folded into the
+        # generic error/suspicious message below, so a developer who
+        # interrupted their own local run sees why, instead of hunting for a
+        # broken-run cause that never existed.
+        print("%d mutant(s) were interrupted by the user (Ctrl-C) mid-run — "
+              "not a kill, and not evidence of anything about the code under "
+              "test. Re-run the gate to completion." % counts["interrupted"])
+        raise SystemExit(1)
+    if counts["error"] or counts["suspicious"]:
+        # #142: a pytest USAGE_ERROR (4) or any exit code this map does not
+        # recognize means the mutant was never genuinely tested — the same
+        # "not a kill" gap as no_tests, so it fails closed the same way rather
+        # than falling through to `killed` the way the old sign test did.
+        print("%d mutant(s) exited with a broken-run or unrecognized code (a "
+              "pytest usage error, or a code this gate does not know) — that "
+              "is not a kill, and this gate refuses to guess. See the exit "
+              "codes above." % (counts["error"] + counts["suspicious"]))
+        raise SystemExit(1)
     if not checked:
         # Two very different states used to share one message, and the message
         # was only true of the first. Now the gate blocks, telling an author to
         # go hunting for a crashed run that did not crash costs real time.
-        if counts["timeout"]:
-            # Every mutant timed out. Measured (baseline §5): 66/66 mutants of
-            # _persist_terminal_run time out under mutmut's fork-based runner
-            # while the same tests pass in 1.34s standalone. Timeouts are
-            # already excluded from the score by a recorded decision — counting
-            # them as survivors would fail the gate for a tooling defect — and
-            # an all-timeout scope is the limit case of that same decision, so
-            # it is NOT failed here. It is also NOT a pass: nothing was
-            # measured, and this line says so in the log and in score.txt so it
-            # can never be read as a clean score.
-            print("UNMEASURED: every mutant timed out (%d) — mutmut's fork runner, "
-                  "not a test failure. No mutation evidence for this change." % counts["timeout"])
+        if counts["timeout"] or counts["crash"]:
+            # Every mutant timed out or crashed. Measured (baseline §5): 66/66
+            # mutants of _persist_terminal_run time out under mutmut's
+            # fork-based runner while the same tests pass in 1.34s standalone.
+            # Timeouts are already excluded from the score by a recorded
+            # decision — counting them as survivors would fail the gate for a
+            # tooling defect — and an all-timeout (or all-crash) scope is the
+            # limit case of that same decision, so it is NOT failed here. It
+            # is also NOT a pass: nothing was measured, and this line says so
+            # in the log and in score.txt so it can never be read as a clean
+            # score. #142: a segfault/OOM (crash) is named separately from an
+            # ordinary fork-runner timeout — they are different failures and
+            # the old sign test conflated them under one "timeout" label.
+            parts = []
+            if counts["timeout"]:
+                parts.append("%d timed out" % counts["timeout"])
+            if counts["crash"]:
+                parts.append("%d crashed (segfault/OOM)" % counts["crash"])
+            print("UNMEASURED: every mutant %s — a harness/environment "
+                  "artifact, not a test failure. No mutation evidence for "
+                  "this change." % " and ".join(parts))
             return
         # Fail closed: absent/crashed run == no measurement, not a perfect score.
         print("no mutants were scored — the run did not happen (empty or absent mutants/)")

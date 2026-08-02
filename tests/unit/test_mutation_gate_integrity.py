@@ -233,6 +233,196 @@ def test_an_entirely_untested_function_names_the_real_cause(
     assert "no covering test" in output.lower(), (
         f"the message must name the missing tests, not a crash:\n{output}"
     )
+
+
+# #142: the old bucket map was a sign test —
+# `{0: "survived", 33: "no_tests", 37: "type_check"}.get(code, "killed" if
+# code > 0 else "timeout")` — so ANY positive exit code not in that three-entry
+# dict scored as `killed`, and any negative one scored as `timeout`. Checked
+# against mutmut's own `status_by_exit_code` map (mutmut/__main__.py), five
+# real codes fell through: pytest's NO_TESTS_COLLECTED (5, mutmut's OWN second
+# no-tests code alongside 33), pytest's USAGE_ERROR (4), mutmut's other timeout
+# codes (24/36/152/255 — this file already covers -24), mutmut's `skipped` (34,
+# e.g. `# pragma: no mutate`), and segfault/OOM (-11/-9), which the sign test's
+# negative branch silently relabelled as an ordinary fork-runner timeout.
+
+
+def test_pytest_no_tests_collected_exit_5_is_treated_as_no_tests_not_killed(
+    scope_script: Path, tmp_path: Path
+) -> None:
+    """Exit 5 is pytest's NO_TESTS_COLLECTED — the same meaning as mutmut's own
+    exit 33, which report() already treats as `no_tests`. #140's no_tests guard
+    only recognized 33, so exit 5 kept the "silence a function's tests" evasion
+    open through a second, wider door.
+
+    Turns red if: exit 5 is folded back into the `killed` bucket.
+    """
+    _write_meta(tmp_path, "evaluation", {"a__mutmut_1": 1, "b__mutmut_2": 5, "c__mutmut_3": 5})
+    result = _run(scope_script, tmp_path, "report", "origin/main", "80")
+    output = result.stdout + result.stderr
+
+    assert result.returncode != 0, (
+        "a mutant with NO_TESTS_COLLECTED (exit 5) was counted as killed "
+        f"instead of failing the run:\n{output}"
+    )
+    assert "no-tests" in output.lower() or "no covering test" in output.lower(), (
+        f"the failure must name the cause:\n{output}"
+    )
+
+
+def test_pytest_usage_error_exit_4_is_not_scored_as_killed(
+    scope_script: Path, tmp_path: Path
+) -> None:
+    """Exit 4 is pytest's USAGE_ERROR — a broken invocation, not a kill.
+
+    Turns red if: exit 4 falls through to the `killed` bucket.
+    """
+    _write_meta(tmp_path, "evaluation", {"a__mutmut_1": 1, "b__mutmut_2": 0, "c__mutmut_3": 4})
+    result = _run(scope_script, tmp_path, "report", "origin/main", "80")
+    output = result.stdout + result.stderr
+
+    assert "1 killed" in output, (
+        "exactly one real kill (exit 1) exists; a usage error (exit 4) must "
+        f"not inflate the killed count:\n{output}"
+    )
+    assert result.returncode != 0, (
+        f"a usage error was silently absorbed instead of flagging the run as broken:\n{output}"
+    )
+
+
+def test_mutmut_timeout_codes_beyond_the_pinned_one_are_excluded_not_killed(
+    scope_script: Path, tmp_path: Path
+) -> None:
+    """mutmut's own map marks 24/36/152/255 as timeout (SIGXCPU family), not
+    just the -24 the rest of this file already covers.
+
+    Turns red if: 36, 152, or 255 fall through to `killed`.
+    """
+    _write_meta(
+        tmp_path,
+        "evaluation",
+        {
+            "a__mutmut_1": 1,
+            "b__mutmut_2": 0,
+            "c__mutmut_3": 36,
+            "d__mutmut_4": 152,
+            "e__mutmut_5": 255,
+        },
+    )
+    result = _run(scope_script, tmp_path, "report", "origin/main", "80")
+    output = result.stdout + result.stderr
+
+    assert "1 killed" in output, (
+        f"exactly one real kill exists; timeout codes 36/152/255 must not inflate it:\n{output}"
+    )
+    assert "3 timeout" in output, f"all three timeout codes must be counted as timeout:\n{output}"
+
+
+def test_mutmut_skipped_exit_34_is_not_scored_as_killed(scope_script: Path, tmp_path: Path) -> None:
+    """Exit 34 means mutmut skipped the mutant (e.g. `# pragma: no mutate`) —
+    deliberate, unlike an uncovered function, so it must not inflate `killed`
+    and must not fail the run the way `no_tests` does.
+
+    Turns red if: exit 34 falls through to `killed`.
+    """
+    _write_meta(tmp_path, "evaluation", {"a__mutmut_1": 1, "c__mutmut_3": 34})
+    result = _run(scope_script, tmp_path, "report", "origin/main", "80")
+    output = result.stdout + result.stderr
+
+    assert "1 killed" in output, f"a skipped mutant (exit 34) must not count as killed:\n{output}"
+    assert result.returncode == 0, (
+        f"a deliberate skip must not fail the run the way an uncovered function does:\n{output}"
+    )
+
+
+def test_an_unrecognized_exit_code_is_not_scored_as_killed(
+    scope_script: Path, tmp_path: Path
+) -> None:
+    """The whole point of #142: mirror mutmut's own exit-code map instead of a
+    sign test, so a code NOBODY has enumerated yet still fails closed instead
+    of defaulting to `killed` just because it happens to be positive.
+
+    Turns red if: the bucket lookup's default falls back to `"killed"` (the
+    old sign test's behavior) instead of failing the run.
+    """
+    _write_meta(tmp_path, "evaluation", {"a__mutmut_1": 1, "c__mutmut_3": 99})
+    result = _run(scope_script, tmp_path, "report", "origin/main", "80")
+    output = result.stdout + result.stderr
+
+    assert "1 killed" in output, f"an unrecognized exit code must not count as killed:\n{output}"
+    assert result.returncode != 0, (
+        f"an unrecognized exit code was silently treated as a pass:\n{output}"
+    )
+
+
+def test_type_check_mutants_are_named_in_the_summary_not_silently_dropped(
+    scope_script: Path, tmp_path: Path
+) -> None:
+    """Found by adversarial review of the fix above: exit 37 (`type_check`, a
+    mutant caught by mypy rather than a test) was already excluded from the
+    score before this file — correctly — but was never counted in the printed
+    summary anywhere, unlike every other excluded bucket. A reader could not
+    tell 10 type-checked mutants from 0 by looking at the report.
+
+    Turns red if: type_check mutants stop being named in the summary line.
+    """
+    _write_meta(
+        tmp_path,
+        "evaluation",
+        {"a__mutmut_1": 1, "b__mutmut_2": 37, "c__mutmut_3": 37},
+    )
+    result = _run(scope_script, tmp_path, "report", "origin/main", "80")
+    output = result.stdout + result.stderr
+
+    assert "1 killed" in output, f"type_check mutants must not inflate killed:\n{output}"
+    assert "2 type" in output.lower(), (
+        f"type_check mutants must be named in the summary, not silently dropped:\n{output}"
+    )
+
+
+def test_an_interrupted_run_exit_2_is_named_not_lumped_into_suspicious(
+    scope_script: Path, tmp_path: Path
+) -> None:
+    """Found by adversarial review of the fix above: mutmut's own map has
+    `2: "check was interrupted by user"` (a local Ctrl-C mid-run), which the
+    first version of this fix omitted — it fell to the `suspicious` default
+    and failed with a generic "broken-run or unrecognized code" message,
+    contradicting this fix's own claim to mirror mutmut's real map.
+
+    Turns red if: exit 2 is not named as an interruption, or falls back to
+    `killed`/`suspicious` with no distinguishing message.
+    """
+    _write_meta(tmp_path, "evaluation", {"a__mutmut_1": 1, "b__mutmut_2": 2})
+    result = _run(scope_script, tmp_path, "report", "origin/main", "80")
+    output = result.stdout + result.stderr
+
+    assert "1 killed" in output, f"an interrupted mutant must not count as killed:\n{output}"
+    assert result.returncode != 0, f"an interrupted run must not pass silently:\n{output}"
+    assert "interrupt" in output.lower(), (
+        "an interrupted run must name itself, not read as a generic "
+        f"broken-run/unrecognized code:\n{output}"
+    )
+
+
+def test_segfault_is_reported_as_a_crash_not_folded_into_ordinary_timeout(
+    scope_script: Path, tmp_path: Path
+) -> None:
+    """-11/-9 (segfault/OOM) is a real crash, not the fork-runner timeout
+    artifact baseline §5 documents. The old sign test's negative-code branch
+    silently relabelled both as the same "timeout" the harness already excuses.
+
+    Turns red if: a segfault is printed under the plain "timeout" label instead
+    of being named as a crash.
+    """
+    _write_meta(tmp_path, "evaluation", {"a__mutmut_1": -9, "b__mutmut_2": -11})
+    result = _run(scope_script, tmp_path, "report", "origin/main", "80")
+    output = result.stdout + result.stderr
+
+    assert result.returncode == 0, f"an all-crash scope must not block the run:\n{output}"
+    assert "crash" in output.lower(), (
+        "a segfault must be named as a crash, not silently folded into the "
+        f"ordinary timeout label:\n{output}"
+    )
     assert "the run did not happen" not in output, (
         "an untested function was reported as a crashed run — false, and it "
         f"sends the author after a mutants/ tree that is fine:\n{output}"
