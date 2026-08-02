@@ -3,6 +3,7 @@ import {
   boot,
   goldenCreateResp,
   goldenCompletedResp,
+  goldenRunningResp,
 } from "../../fixtures/golden-run";
 
 const fulfil = (body: unknown, status = 200) => ({
@@ -210,5 +211,68 @@ test.describe("PR8 — Conversation trail UI", () => {
     const questions = await page.locator(".session-trail-question").allTextContents();
     expect(questions.some((q) => q.includes("First question here?"))).toBe(true);
     expect(questions.some((q) => q.includes("Second question here?"))).toBe(true);
+  });
+
+  // Found by adversarial review of the fix above (same PR, same file/
+  // mechanism — self-fixed here rather than filed separately). Before this
+  // fix, the trail was ALWAYS empty during a live run (every submission
+  // cleared it), so a trail entry was never reachable while a run was in
+  // flight. Now that a follow-up's prior entry survives, it stays visible —
+  // and clickable — on the live-run view too, since the trail panel renders
+  // on every view. Clicking it called `restoreTrailRun()`, which
+  // unconditionally `stopPolling()`s and reassigns `state.currentRunId`:
+  // the server keeps executing (and billing) the abandoned run, but the
+  // client never polls it again, so the user silently loses it.
+  test("a stale trail entry cannot hijack a run that is still in flight", async ({ page }) => {
+    await boot(page);
+    const runIds = [
+      "11111111-1111-4111-8111-111111111111",
+      "22222222-2222-4222-8222-222222222222",
+    ];
+    let createCount = 0;
+    await Promise.all([
+      page.route("**/v1/query-runs/estimate", (r) => r.fulfill(fulfil(costEstimateEnvelope()))),
+      page.route("**/v1/query-runs/warnings", (r) => r.fulfill(fulfil({ warnings: [] }))),
+      page.route("**/v1/query-runs/active", (r) => r.fulfill(fulfil({ query_run_id: null }))),
+    ]);
+    await page.route(/\/v1\/query-runs$/, (r) => {
+      if (r.request().method() !== "POST") return r.continue();
+      const id = runIds[Math.min(createCount, runIds.length - 1)];
+      createCount += 1;
+      return r.fulfill(fulfil({ ...goldenCreateResp(), query_run_id: id, correlation_id: `corr-${id}` }));
+    });
+    await page.route(/\/v1\/query-runs\/[0-9a-f-]{36}$/, (r) => {
+      const url = r.request().url();
+      // Run 1 completes; run 2 (the one in flight) never reaches a terminal
+      // state for the duration of this test, so the UI stays on live-run.
+      if (url.includes(runIds[1])) {
+        return r.fulfill(fulfil({ ...goldenRunningResp(2000), query_run_id: runIds[1] }));
+      }
+      return r.fulfill(fulfil({ ...goldenCompletedResp(), query_run_id: runIds[0] }));
+    });
+
+    await page.getByRole("textbox").first().fill("First question here?");
+    await page.locator("#run-now").click();
+    await expect(page.locator("#result-verdict[data-consensus]")).toBeVisible({ timeout: 20000 });
+    await expect(page.locator(".session-trail-entry")).toHaveCount(1);
+
+    await page.locator("#result-next-run").click();
+    await expect(page.locator("#query-text")).toBeVisible({ timeout: 10000 });
+    await page.getByRole("textbox").first().fill("Second question here?");
+    await page.locator("#run-now").click();
+
+    // Run 2 is in flight (never completes): confirm we land on live-run,
+    // and the prior entry from run 1 is visible but disabled.
+    await expect(page.locator("[data-view='live-run']")).toBeVisible({ timeout: 20000 });
+    const staleEntry = page.locator(".session-trail-entry");
+    await expect(staleEntry).toHaveCount(1);
+    await expect(staleEntry).toBeDisabled();
+
+    // A disabled button does not dispatch a click in a real browser even
+    // with Playwright's actionability checks bypassed — proving the guard
+    // actually prevents the hijack, not just that the test never tried.
+    await staleEntry.click({ force: true, timeout: 2000 }).catch(() => {});
+    await expect(page.locator("[data-view='live-run']")).toBeVisible();
+    await expect(page.locator("#result-verdict[data-consensus]")).toBeHidden();
   });
 });
