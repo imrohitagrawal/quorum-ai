@@ -269,3 +269,120 @@ test.describe("#111 — the offline disclosure is visible where a user decides t
     await expect(banner(page)).toBeVisible();
   });
 });
+
+/**
+ * #116 — on a narrow viewport the ~230-word disclosure must not push the
+ * landing hero (or the composer's question field) below the fold.
+ *
+ * Measured on an iPhone 13 viewport (390x664) before this fix:
+ * `{x:10, y:48, w:370, h:319}` — 319px of 664px, 48% of the screen, with the
+ * entire landing hero, run bar and both CTAs pushed below the fold.
+ *
+ * Fix sketch from the issue: progressive disclosure on narrow viewports — a
+ * collapsed view under a `#readiness-banner-toggle` "Show more" control, full
+ * text on request. `readiness-banner.spec.ts`'s existing OFFLINE_STATES suite
+ * (no viewport set, so it runs at the desktop project size) is the POSITIVE
+ * partner: it already asserts the full message text is present via
+ * `toContainText`, so a media query that leaked outside its intended width
+ * would fail those tests, not just leave this file silent about it.
+ */
+test.describe("#116 — the offline disclosure collapses on a narrow viewport", () => {
+  const IPHONE_13 = { width: 390, height: 664 };
+
+  // Found by adversarial review: a test covering only ONE readiness state
+  // passed at a 25% threshold, but the ceiling-reached state's title
+  // ("Today's shared demo budget has been used up") wraps to 2 lines and
+  // measured 27.4% — a real, reachable state (#100 §2.6) the original
+  // single-state test never exercised. Every state that can drive the
+  // banner is covered here, not just the one that happened to fit.
+  const NARROW_VIEWPORT_STATES: ReadonlyArray<{
+    label: string;
+    readiness: { state: string; reasons?: string[]; global_spend_ceiling_reached?: boolean };
+  }> = [
+    { label: "offline_by_no_key", readiness: { state: "offline_by_no_key", reasons: ["operator reason"] } },
+    { label: "offline_by_config", readiness: { state: "offline_by_config", reasons: ["operator reason"] } },
+    { label: "offline_by_bad_key", readiness: { state: "offline_by_bad_key", reasons: ["operator reason"] } },
+    {
+      label: "live + ceiling reached",
+      readiness: { state: "live", global_spend_ceiling_reached: true },
+    },
+  ];
+
+  for (const { label, readiness } of NARROW_VIEWPORT_STATES) {
+    test(`collapsed height stays well under the 48% of viewport measured before the fix (${label})`, async ({
+      page,
+    }) => {
+      await page.setViewportSize(IPHONE_13);
+      await bootFirstVisit(page, readiness);
+
+      await expect(banner(page)).toBeVisible();
+      const box = await banner(page).boundingBox();
+      expect(box, "no layout box").not.toBeNull();
+      // Comfortably under the 319px (48%) measured before the fix. 30%, not
+      // 25%: the ceiling-reached state's two-line title needs the extra
+      // margin, and a bound that only passes for one lucky state is not a
+      // real regression guard.
+      expect(box!.height).toBeLessThan(IPHONE_13.height * 0.3);
+    });
+  }
+
+  test("the landing hero heading is still on screen on a narrow viewport", async ({ page }) => {
+    // The concrete, user-facing consequence the issue names for the HERO:
+    // before the fix, the entire landing hero (including this heading) was
+    // pushed below the fold.
+    //
+    // NOT covered here, and NOT fixed by this change (found and measured
+    // during adversarial review): the issue's text also named "the run bar
+    // and both CTAs" (#landing-estimate / #landing-run). Measured directly:
+    // those sit at y≈830-990 in a 390x664 viewport even with the banner
+    // given ZERO height, because the landing page's own content above them
+    // (nav, eyebrow, hero copy, disclaimers) already exceeds 664px on its
+    // own. This fix reduces the banner's OWN footprint from 319px to
+    // ~159-182px, which is real and brings the hero into view — it cannot,
+    // by itself, bring the run-bar CTAs into view too. That is a separate,
+    // pre-existing landing-page-density issue, filed separately rather than
+    // silently left implied-fixed by an inaccurate test name.
+    await page.setViewportSize(IPHONE_13);
+    await bootFirstVisit(page, { state: "offline_by_no_key", reasons: ["operator reason"] });
+
+    await expect(banner(page)).toBeVisible();
+    await expect(page.locator("#landing-heading")).toBeInViewport();
+  });
+
+  test("'Show more' expands the full disclosure text, and 'Show less' re-collapses it", async ({
+    page,
+  }) => {
+    await page.setViewportSize(IPHONE_13);
+    await bootFirstVisit(page, { state: "offline_by_no_key", reasons: ["operator reason"] });
+
+    const toggle = page.locator("#readiness-banner-toggle");
+    await expect(toggle).toBeVisible();
+    await expect(toggle).toHaveAttribute("aria-expanded", "false");
+    const collapsedHeight = (await banner(page).boundingBox())!.height;
+
+    await toggle.click();
+    await expect(toggle).toHaveAttribute("aria-expanded", "true");
+    await expect(page.locator("#readiness-banner-message")).toContainText(/provider key is missing/i);
+    const expandedHeight = (await banner(page).boundingBox())!.height;
+    // Proves the toggle actually changes layout, not just an ARIA attribute —
+    // a class that toggles with no matching CSS rule would pass a
+    // toHaveAttribute-only assertion while the text stayed clipped.
+    expect(expandedHeight).toBeGreaterThan(collapsedHeight);
+
+    await toggle.click();
+    await expect(toggle).toHaveAttribute("aria-expanded", "false");
+    const reCollapsedHeight = (await banner(page).boundingBox())!.height;
+    expect(reCollapsedHeight).toBeLessThan(expandedHeight);
+  });
+
+  test("the toggle is not shown on a desktop-width viewport — full text is already on screen", async ({
+    page,
+  }) => {
+    await page.setViewportSize({ width: 1280, height: 800 });
+    await bootFirstVisit(page, { state: "offline_by_no_key", reasons: ["operator reason"] });
+
+    await expect(banner(page)).toBeVisible();
+    await expect(page.locator("#readiness-banner-toggle")).toBeHidden();
+    await expect(page.locator("#readiness-banner-message")).toContainText(/provider key is missing/i);
+  });
+});

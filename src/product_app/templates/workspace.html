@@ -190,6 +190,11 @@
           <div class="callout-body">
             <div class="callout-title" id="readiness-banner-title">Live execution is unavailable</div>
             <div class="callout-message" id="readiness-banner-message"></div>
+            <!-- #116: on a narrow viewport the full disclosure text pushed
+                 the landing hero and the composer's question field below the
+                 fold. Only shown there (see app.css); the desktop layout has
+                 room for the full text and needs no toggle. -->
+            <button type="button" id="readiness-banner-toggle" class="readiness-banner-toggle" aria-expanded="false" aria-controls="readiness-banner-message">Show more</button>
           </div>
         </div>
         <div data-view="composer">

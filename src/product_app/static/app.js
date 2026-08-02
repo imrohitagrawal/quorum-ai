@@ -70,6 +70,7 @@
   const readinessRegion = el("readiness-banner");
   const readinessTitle = el("readiness-banner-title");
   const readinessMessage = el("readiness-banner-message");
+  const readinessToggle = el("readiness-banner-toggle");
   const toastRegion = el("toast-region");
   const modelInputs = el("model-inputs");
   const modelGrid = el("model-grid");
@@ -696,6 +697,14 @@
     readinessTitle.textContent = title;
     readinessMessage.textContent = body;
     readinessRegion.hidden = false;
+    // #116: always start collapsed on a fresh render, so a new readiness
+    // snapshot (e.g. after refreshReadiness()) never inherits a stale
+    // expanded state from whatever the banner showed before it.
+    readinessRegion.classList.remove("readiness-banner-expanded");
+    if (readinessToggle) {
+      readinessToggle.setAttribute("aria-expanded", "false");
+      readinessToggle.textContent = "Show more";
+    }
   }
 
   // Pull the current readiness snapshot from the server. The /ready
@@ -7890,6 +7899,19 @@
     errorDismiss.addEventListener("click", clearError);
   }
 
+  // #116: progressive disclosure for the readiness banner on a narrow
+  // viewport — see the media query in app.css. Desktop never shows this
+  // button (display:none there), so the toggle has no effect to test outside
+  // the collapsed CSS state.
+  function initReadinessBannerToggle() {
+    if (!readinessToggle || !readinessRegion) return;
+    readinessToggle.addEventListener("click", () => {
+      const expanded = readinessRegion.classList.toggle("readiness-banner-expanded");
+      readinessToggle.setAttribute("aria-expanded", String(expanded));
+      readinessToggle.textContent = expanded ? "Show less" : "Show more";
+    });
+  }
+
   function initWorkflowKeyboard() {
     workflowSteps.forEach((step) => {
       step.addEventListener("keydown", (event) => {
@@ -7946,6 +7968,7 @@
     initHighStakesGate();
     initKeyboardShortcuts();
     initBannerDismiss();
+    initReadinessBannerToggle();
     initWorkflowKeyboard();
     // PR8: wire the session-trail clear button and render the initial (empty) state.
     const trailClearBtn = el("session-trail-clear");

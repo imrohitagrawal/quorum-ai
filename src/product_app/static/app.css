@@ -981,6 +981,35 @@ select {
   color: var(--on-tonal);
 }
 
+/* #116: the ~230-word disclosure measured 319px of a 664px iPhone-13
+   viewport (48%), pushing the landing hero, run bar and both CTAs below the
+   fold. Desktop is unaffected — the toggle stays display:none there, and the
+   message is never clipped, so the full text is always on screen. */
+#readiness-banner-toggle {
+  display: none;
+  background: none;
+  border: none;
+  padding: 0;
+  margin-top: var(--space-1);
+  color: inherit;
+  font: inherit;
+  font-weight: 700;
+  text-decoration: underline;
+  text-underline-offset: 2px;
+  cursor: pointer;
+}
+@media (max-width: 600px) {
+  #readiness-banner:not(.readiness-banner-expanded) .callout-message {
+    max-height: 2.8em;
+    overflow: hidden;
+    -webkit-mask-image: linear-gradient(to bottom, black 65%, transparent 100%);
+    mask-image: linear-gradient(to bottom, black 65%, transparent 100%);
+  }
+  #readiness-banner-toggle {
+    display: inline-block;
+  }
+}
+
 .callout-cost {
   background: var(--accent-soft);
   border-color: rgba(214, 102, 63, 0.30);
