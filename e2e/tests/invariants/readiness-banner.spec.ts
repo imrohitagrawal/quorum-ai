@@ -269,3 +269,87 @@ test.describe("#111 — the offline disclosure is visible where a user decides t
     await expect(banner(page)).toBeVisible();
   });
 });
+
+/**
+ * #116 — on a narrow viewport the ~230-word disclosure must not push the
+ * landing hero (or the composer's question field) below the fold.
+ *
+ * Measured on an iPhone 13 viewport (390x664) before this fix:
+ * `{x:10, y:48, w:370, h:319}` — 319px of 664px, 48% of the screen, with the
+ * entire landing hero, run bar and both CTAs pushed below the fold.
+ *
+ * Fix sketch from the issue: progressive disclosure on narrow viewports — a
+ * collapsed view under a `#readiness-banner-toggle` "Show more" control, full
+ * text on request. `readiness-banner.spec.ts`'s existing OFFLINE_STATES suite
+ * (no viewport set, so it runs at the desktop project size) is the POSITIVE
+ * partner: it already asserts the full message text is present via
+ * `toContainText`, so a media query that leaked outside its intended width
+ * would fail those tests, not just leave this file silent about it.
+ */
+test.describe("#116 — the offline disclosure collapses on a narrow viewport", () => {
+  const IPHONE_13 = { width: 390, height: 664 };
+
+  test("collapsed height stays well under the 48% of viewport measured before the fix", async ({
+    page,
+  }) => {
+    await page.setViewportSize(IPHONE_13);
+    await bootFirstVisit(page, { state: "offline_by_no_key", reasons: ["operator reason"] });
+
+    await expect(banner(page)).toBeVisible();
+    const box = await banner(page).boundingBox();
+    expect(box, "no layout box").not.toBeNull();
+    // Comfortably under the 319px (48%) measured before the fix, and under
+    // the fraction the issue's own fix sketch calls "sensible".
+    expect(box!.height).toBeLessThan(IPHONE_13.height * 0.25);
+  });
+
+  test("the landing hero's run bar is still on screen on a narrow viewport", async ({ page }) => {
+    // The concrete, user-facing consequence the issue names: before the fix
+    // "the entire landing hero, the run bar and both CTAs are pushed below
+    // the fold." This is the property that actually matters — the height
+    // assertion above is a proxy for it.
+    await page.setViewportSize(IPHONE_13);
+    await bootFirstVisit(page, { state: "offline_by_no_key", reasons: ["operator reason"] });
+
+    await expect(banner(page)).toBeVisible();
+    const heroCta = page.locator('[data-view="landing"] a, [data-view="landing"] button').first();
+    await expect(heroCta).toBeInViewport();
+  });
+
+  test("'Show more' expands the full disclosure text, and 'Show less' re-collapses it", async ({
+    page,
+  }) => {
+    await page.setViewportSize(IPHONE_13);
+    await bootFirstVisit(page, { state: "offline_by_no_key", reasons: ["operator reason"] });
+
+    const toggle = page.locator("#readiness-banner-toggle");
+    await expect(toggle).toBeVisible();
+    await expect(toggle).toHaveAttribute("aria-expanded", "false");
+    const collapsedHeight = (await banner(page).boundingBox())!.height;
+
+    await toggle.click();
+    await expect(toggle).toHaveAttribute("aria-expanded", "true");
+    await expect(page.locator("#readiness-banner-message")).toContainText(/provider key is missing/i);
+    const expandedHeight = (await banner(page).boundingBox())!.height;
+    // Proves the toggle actually changes layout, not just an ARIA attribute —
+    // a class that toggles with no matching CSS rule would pass a
+    // toHaveAttribute-only assertion while the text stayed clipped.
+    expect(expandedHeight).toBeGreaterThan(collapsedHeight);
+
+    await toggle.click();
+    await expect(toggle).toHaveAttribute("aria-expanded", "false");
+    const reCollapsedHeight = (await banner(page).boundingBox())!.height;
+    expect(reCollapsedHeight).toBeLessThan(expandedHeight);
+  });
+
+  test("the toggle is not shown on a desktop-width viewport — full text is already on screen", async ({
+    page,
+  }) => {
+    await page.setViewportSize({ width: 1280, height: 800 });
+    await bootFirstVisit(page, { state: "offline_by_no_key", reasons: ["operator reason"] });
+
+    await expect(banner(page)).toBeVisible();
+    await expect(page.locator("#readiness-banner-toggle")).toBeHidden();
+    await expect(page.locator("#readiness-banner-message")).toContainText(/provider key is missing/i);
+  });
+});
