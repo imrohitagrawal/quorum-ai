@@ -4774,8 +4774,20 @@
           hasFinalSynthesis,
           globalSpendCeilingReached,
         });
-        if (bannerState !== state.lastDemoMode) {
-          state.lastDemoMode = bannerState;
+        // #115 (adversarial review): the cache key used to be the coarse
+        // 3-value ``bannerState`` bucket alone, so two DIFFERENT "mixed"
+        // runs in one session (e.g. 2 live/2 simulated, then later 1
+        // live/3 simulated) both hash to "mixed" and the second run's DOM
+        // write was skipped — the banner kept showing the FIRST run's
+        // counts while the user was looking at the second run's transcript.
+        // That was always true of this code, but it was inert before #115
+        // moved the banner out of permanently-hidden markup; once visible,
+        // a stale count is a real, reachable false disclosure (the same
+        // mechanism #199 documents for the readiness banner). Key on the
+        // counts that actually appear in the copy, not just the bucket.
+        const cacheKey = `${bannerState}|${liveCount}|${localCount}|${failedCount}`;
+        if (cacheKey !== state.lastDemoMode) {
+          state.lastDemoMode = cacheKey;
           if (bannerState === "all-live") {
             demoModeBanner.hidden = true;
           } else {

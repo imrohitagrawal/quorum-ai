@@ -325,6 +325,43 @@ test.describe("transcript-view disclosure banner (#115)", () => {
       "a fully-live run must not claim a shortfall in the transcript view",
     ).toBeHidden();
   });
+
+  test("a second run's banner replaces a stale count from an earlier run in the same session", async ({
+    page,
+  }) => {
+    // Adversarial-review finding on #115: the DOM write was cached on the
+    // coarse 3-value ``bannerState`` bucket ("mixed") alone, so two
+    // DIFFERENT "mixed" runs in one session both hash to "mixed" and the
+    // second run's write was skipped — the banner kept showing the FIRST
+    // run's counts while the user looked at the SECOND run's transcript.
+    // Always inert before #115 (nobody could see the banner at all); now a
+    // real, reachable false disclosure through the ordinary
+    // ask-a-follow-up flow, with no page reload involved.
+    const run1 = { ...goldenCompletedResp(), demo_mode: true, live_count: 2, local_count: 2 };
+    await driveWithCompleted(page, run1);
+    await driveToTranscript(page);
+    await expect(page.locator("#demo-mode-banner")).toContainText(
+      /2 of 4 model answers came from a live provider/i,
+    );
+
+    // Real user navigation back to the composer: transcript -> result ->
+    // "ask your next question" -> run again (app.js `nextRun` handler).
+    await page.locator("#transcript-back").click();
+    await page.locator("#result-next-run").click();
+
+    // Second run, still "mixed", but with DIFFERENT counts.
+    const run2 = { ...goldenCompletedResp(), demo_mode: true, live_count: 1, local_count: 3 };
+    await page.route(/\/v1\/query-runs\/[0-9a-f-]{36}$/, (r) => r.fulfill(fulfil(run2)));
+    await page.locator("#run-now").click();
+    await expect(page.locator("#result-verdict[data-consensus]")).toBeVisible({ timeout: 20000 });
+    await driveToTranscript(page);
+
+    const banner = page.locator("#demo-mode-banner");
+    // TURNS RED IF the cache key reverts to the coarse ``bannerState``
+    // bucket alone — the banner would still read the FIRST run's "2 of 4".
+    await expect(banner).toContainText(/1 of 4 model answers came from a live provider/i);
+    await expect(banner).not.toContainText(/2 of 4 model answers came from a live provider/i);
+  });
 });
 
 /**
