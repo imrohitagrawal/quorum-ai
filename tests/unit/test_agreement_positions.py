@@ -13,7 +13,13 @@ from decimal import Decimal
 from uuid import UUID, uuid4
 
 from product_app.costs import cost_estimation_service
-from product_app.debate import DebateOutput, DebateRoundStatus, PositionMovement
+from product_app.debate import (
+    DEBATE_MODE_FALLBACK,
+    DEBATE_MODE_LIVE,
+    DebateOutput,
+    DebateRoundStatus,
+    PositionMovement,
+)
 from product_app.model_slots import ModelSlot
 from product_app.providers import (
     CitationCoverage,
@@ -369,6 +375,60 @@ def test_a_templated_synthesis_does_not_decide_which_models_aligned() -> None:
     # WHICH slot moved, not just how many: slot 4, and only slot 4.
     assert [p.slot_number for p in live_positions if p.revised] == [4]
     assert [p.slot_number for p in templated_positions if p.revised] == []
+
+
+def test_templated_debate_critique_does_not_trigger_convergence_strong() -> None:
+    """#185: ``_debate_signals_convergence`` substring-matched every critique for
+    a convergence keyword without checking who wrote it. A critique this product
+    templated (``debate_mode`` anything other than ``"live"``) must not be able
+    to swing the panel to ``"strong"`` on its own — the same honesty rule #171
+    already applies to a templated final synthesis
+    (``final_answer_was_templated``), mirrored here for the debate stage.
+
+    The panel is deliberately NOT strong via overlap — the majority/unrelated/
+    minority shape used above, already pinned there to read != "strong" on a
+    neutral critique — so the ONLY route to "strong" open here is the
+    convergence keyword, and this test measures exactly the guard and nothing
+    else.
+
+    What turns it red: drop the ``debate_mode != DEBATE_MODE_LIVE`` guard from
+    ``_debate_signals_convergence`` — the keyword is a substring match with no
+    provenance check, and the templated critique below (an ordinary
+    fallback-round critique that happens to contain "converged") flips the
+    panel to "strong".
+    """
+    majority = "The tunnel option is best because it avoids the flood plain entirely."
+    unrelated = "Seasonal bird counts in the estuary have risen for six years running."
+    minority = "A bridge could work if reinforced against seasonal flooding downstream."
+    answers = [
+        _answer(1, majority),
+        _answer(2, majority),
+        _answer(3, unrelated),
+        _answer(4, minority),
+    ]
+    templated_convergence_critique = [
+        DebateOutput(
+            round_number=n,
+            focus_areas=list(FOCUS),
+            critique_text="After round 2 the models converged on the load-limit reading.",
+            status=DebateRoundStatus.COMPLETED,
+            debate_mode=DEBATE_MODE_FALLBACK,
+        )
+        for n in (1, 2)
+    ]
+
+    assert compute_consensus_strength(answers, templated_convergence_critique) != "strong", (
+        "a critique this product templated must not decide the panel is strong"
+    )
+
+    # Positive partner: the SAME words, attributed to a real moderator call,
+    # still count — the guard must key on provenance, not silently disable the
+    # convergence path outright.
+    live_convergence_critique = [
+        output.model_copy(update={"debate_mode": DEBATE_MODE_LIVE})
+        for output in templated_convergence_critique
+    ]
+    assert compute_consensus_strength(answers, live_convergence_critique) == "strong"
 
 
 def test_a_templated_synthesis_does_not_align_a_minority_on_a_strong_panel() -> None:

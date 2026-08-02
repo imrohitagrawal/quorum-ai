@@ -27,7 +27,7 @@ from __future__ import annotations
 import re
 from typing import Literal
 
-from product_app.debate import DebateOutput, ModelAlignment
+from product_app.debate import DEBATE_MODE_LIVE, DebateOutput, ModelAlignment
 from product_app.providers import InitialAnswerStatus, InitialModelAnswer
 from product_app.visible_text import is_visible
 
@@ -220,7 +220,7 @@ def _excerpt(text: str) -> str:
 
 
 def _debate_signals_convergence(debate_outputs: list[DebateOutput]) -> bool:
-    """Return ``True`` if any debate critique contains a convergence
+    """Return ``True`` if any LIVE debate critique contains a convergence
     keyword as a substring.
 
     We deliberately do NOT match negative forms like "did not
@@ -229,8 +229,17 @@ def _debate_signals_convergence(debate_outputs: list[DebateOutput]) -> bool:
     reporting the result, not negating it. The orchestrator's
     failure paths (timed-out rounds, etc.) yield empty
     ``critique_text``, which will not match.
+
+    #185: a round whose ``debate_mode`` is not ``DEBATE_MODE_LIVE`` is this
+    product's own template, not a moderator's observation — mirroring the
+    guard ``classify_model_alignment`` already applies to a templated final
+    synthesis (``final_answer_was_templated``). Skipping it here means a
+    template wording change can never silently swing the panel to "strong"
+    on words this product wrote about itself.
     """
     for round_output in debate_outputs:
+        if round_output.debate_mode != DEBATE_MODE_LIVE:
+            continue
         critique = (round_output.critique_text or "").lower()
         if not critique:
             continue
