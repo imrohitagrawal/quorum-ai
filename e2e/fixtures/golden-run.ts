@@ -632,6 +632,29 @@ export async function driveDecreasingTimer(page: Page, elapsedSequence: number[]
   await expect(page.locator("#live-elapsed")).toBeVisible({ timeout: 15000 });
 }
 
+/**
+ * Clone `goldenCompletedResp()` with one answer slot's provider notice
+ * overridden — for issue #124, which needs EVERY registered notice proven to
+ * reach a real transcript render, not just the zero-source shape already
+ * seeded above via `goldenAnswer`'s own ternary.
+ *
+ * Deliberately assigns via bracket notation (`answer["provider_notice"] =`)
+ * rather than an object-literal key followed by a colon: this file's text is
+ * scanned by `tests/unit/test_golden_fixture_notice_sync.py` for exactly that
+ * key shape to catch a stale seeded notice, and a bare identifier there would
+ * break its literal/window scan. The text this function assigns is supplied
+ * by the caller and pinned to the registry separately by
+ * `tests/unit/test_notice_coverage_spec_sync.py`, which checks
+ * `notice-coverage-cases.ts` instead.
+ */
+export function goldenCompletedRespWithNotice(notice: string, slotIndex = 3): unknown {
+  const resp = goldenCompletedResp() as any;
+  const answer = { ...resp.result.model_answers[slotIndex] };
+  answer["provider_notice"] = notice;
+  resp.result.model_answers[slotIndex] = answer;
+  return resp;
+}
+
 /** Parse the "#live-elapsed" readout ("12.0s elapsed" / "1m 05s elapsed") → ms. */
 export function parseElapsedMs(text: string | null): number | null {
   if (!text) return null;
