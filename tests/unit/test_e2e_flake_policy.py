@@ -208,14 +208,30 @@ def test_every_skip_in_a_gated_e2e_spec_is_the_known_chromium_only_shape(
     conditional or environment-gated skip added to a gated spec would trip
     that BLOCKING floor with no local warning it was even a policy question.
 
-    Turns red if: a future edit adds a ``test.skip()`` to any spec this repo
-    actually gates in ``e2e.yml``, for any reason other than the chromium-only
-    guard (a flake workaround, an environment gate, a temporary disable) —
-    exactly the shape this decision exists to catch, and catches it here,
-    locally, before it ever reaches the confusing CI-side floor message.
+    Turns red if: a future edit adds a ``test.skip()`` — OR a
+    ``test.describe.skip()``, which disables an entire suite the same way and
+    is caught by the same broadened extraction below (round-2 adversarial
+    review finding: the original ``test.skip(`` regex does not match the
+    literal substring ``test.describe.skip(``, since ``.describe`` sits
+    between the two tokens, so it slipped through as an invisible bypass;
+    confirmed by injecting one and watching this test stay green, then fixed
+    and reconfirmed red-then-green by the same injection) — to any spec this
+    repo actually gates in ``e2e.yml``, for any reason other than the
+    chromium-only guard (a flake workaround, an environment gate, a temporary
+    disable) — exactly the shape this decision exists to catch, and catches
+    it here, locally, before it ever reaches the confusing CI-side floor
+    message.
+
+    This is still a LEXICAL match, not an AST parse (matching the sibling
+    ``test_makefile_gate_integrity.py`` pattern this file already follows) —
+    a bracket-notation call (``test["skip"](...)``) or a locally rebound
+    ``test`` import would still slip past both this and the CI floor's own
+    skip check. Broadening further than the two real Playwright call forms
+    actually used in this codebase (``test.skip(`` and ``test.describe.skip(``)
+    would be defending against a form nothing here has ever written.
     """
     text = _read(spec)
-    calls = re.findall(r"test\.skip\(.*?\);", text, re.DOTALL)
+    calls = re.findall(r"test(?:\.describe)?\.skip\(.*?\);", text, re.DOTALL)
     for call in calls:
         assert _ALLOWED_SKIP.match(call), (
             f"{spec.relative_to(REPO_ROOT)} has a test.skip() that is not the "
@@ -224,6 +240,40 @@ def test_every_skip_in_a_gated_e2e_spec_is_the_known_chromium_only_shape(
             "lane — quarantine a flaky spec by EXCLUDING it from this lane's "
             f"invocation instead. Offending call:\n{call.strip()[:400]}"
         )
+
+
+def test_the_skip_extraction_also_catches_test_describe_skip(tmp_path: Path) -> None:
+    """Round-2 adversarial-review finding, self-fixed: ``test.describe.skip()``
+    disables an entire suite exactly like ``test.skip()``, but the literal
+    substring ``test.skip(`` does not occur inside ``test.describe.skip(`` —
+    ``.describe`` sits between the two tokens — so the original extraction
+    regex (``test\\.skip\\(.*?\\);``, no ``.describe`` alternative) returned
+    zero matches for it. Confirmed by direct reproduction: injecting an
+    unconditional ``test.describe.skip(true, "...")`` into a real gated spec
+    left the parametrized test above green.
+
+    A synthetic fixture on purpose, not a real spec: this pins the
+    EXTRACTION-AND-MATCH logic in isolation, independent of which specs
+    ``e2e.yml`` happens to gate today.
+
+    Turns red if: the ``(?:\\.describe)?`` alternative is removed from the
+    extraction regex above — reproduced directly before writing this test.
+    """
+    spec = tmp_path / "fixture.spec.ts"
+    spec.write_text(
+        'test.describe("suite", () => {\n'
+        '  test.describe.skip(true, "not the chromium-only guard");\n'
+        "});\n",
+        encoding="utf-8",
+    )
+    calls = re.findall(
+        r"test(?:\.describe)?\.skip\(.*?\);", spec.read_text(encoding="utf-8"), re.DOTALL
+    )
+    assert calls, "test.describe.skip(...) must be extracted, not silently passed over"
+    assert not _ALLOWED_SKIP.match(calls[0]), (
+        "a test.describe.skip() call must never satisfy the chromium-only allowed pattern — "
+        f"got a match against: {calls[0]!r}"
+    )
 
 
 def test_playwright_default_retries_is_zero() -> None:
