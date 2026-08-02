@@ -215,6 +215,19 @@ const isTestCall = (node) =>
       node.callee.object.name === "test" &&
       ["only", "skip", "fixme"].includes(node.callee.property.name)));
 
+/**
+ * #148 follow-up (found by adversarial review, same PR, self-fixed here):
+ * the three-level chain (`test.describe.<modifier>(...)`) used to check
+ * `property.name` against a hardcoded `["only", "skip"]` allowlist.
+ * `.parallel`/`.serial` are real, documented Playwright modifiers that were
+ * invisible as describe calls at all under that allowlist, so
+ * `collectBeforeEachAssertions` never fired for them and their
+ * `beforeEach`'s positive assertion never reached the tests inside — the
+ * exact false-positive class this issue exists to close, on a different
+ * modifier. Matching ANY `test.describe.X` chain (not enumerating modifier
+ * names) is correct here: the only question this function answers is
+ * "does this open a describe block", and every `test.describe.*` call does.
+ */
 const isDescribeCall = (node) =>
   node.type === "CallExpression" &&
   ((node.callee.type === "Identifier" && node.callee.name === "describe") ||
@@ -224,8 +237,7 @@ const isDescribeCall = (node) =>
     (node.callee.type === "MemberExpression" &&
       node.callee.object.type === "MemberExpression" &&
       node.callee.object.object.name === "test" &&
-      node.callee.object.property.name === "describe" &&
-      ["only", "skip"].includes(node.callee.property.name)));
+      node.callee.object.property.name === "describe"));
 
 const isBeforeEachCall = (node) =>
   node.type === "CallExpression" &&

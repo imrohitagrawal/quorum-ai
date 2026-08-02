@@ -568,6 +568,65 @@ def test_a_before_each_with_no_positive_assertion_still_reports(tmp_path: Path) 
     )
 
 
+DESCRIBE_PARALLEL_PARTNERED = """\
+import { test, expect } from "@playwright/test";
+
+test.describe.parallel("badge rendering", () => {
+  test.beforeEach(async ({ page }) => {
+    await driveWith(page, fixture);
+    await expect(page.locator("#result-verdict")).toBeVisible();
+  });
+
+  test("a fully live synthesis carries NO badge", async ({ page }) => {
+    await expect(page.locator(".badge-summary")).toHaveCount(0);
+  });
+});
+"""
+
+DESCRIBE_SERIAL_PARTNERED = """\
+import { test, expect } from "@playwright/test";
+
+test.describe.serial("badge rendering", () => {
+  test.beforeEach(async ({ page }) => {
+    await driveWith(page, fixture);
+    await expect(page.locator("#result-verdict")).toBeVisible();
+  });
+
+  test("a fully live synthesis carries NO badge", async ({ page }) => {
+    await expect(page.locator(".badge-summary")).toHaveCount(0);
+  });
+});
+"""
+
+
+def test_describe_parallel_still_associates_its_beforeEach(tmp_path: Path) -> None:
+    """Found by adversarial review of the fix above, same file/mechanism,
+    self-fixed here rather than filed separately: `isDescribeCall`'s
+    three-level chain check only recognized `test.describe.only`/`.skip` —
+    two real, documented Playwright modifiers, `.parallel` and `.serial`,
+    were not in the allowlist, so a describe using either was invisible as
+    a describe at all. `collectBeforeEachAssertions` never fired for it, so
+    its `beforeEach`'s positive assertion never reached the test inside —
+    the exact false-positive class #148 exists to close, on a different
+    modifier. Not live in this repo's corpus today (verified: no spec uses
+    either), but a real gap for the next spec author who reaches for one.
+
+    Turns red if: `parallel`/`serial` are dropped from the three-level
+    describe-chain allowlist.
+    """
+    result = _run(DESCRIBE_PARALLEL_PARTNERED, tmp_path)
+    assert result.returncode == 0, (
+        f"test.describe.parallel's beforeEach partner was not seen:\n{result.stdout}{result.stderr}"
+    )
+
+
+def test_describe_serial_still_associates_its_beforeEach(tmp_path: Path) -> None:
+    result = _run(DESCRIBE_SERIAL_PARTNERED, tmp_path)
+    assert result.returncode == 0, (
+        f"test.describe.serial's beforeEach partner was not seen:\n{result.stdout}{result.stderr}"
+    )
+
+
 NUMERIC_ZERO_TO_BE_FALSE_POSITIVE = """\
 import { test, expect } from "@playwright/test";
 
