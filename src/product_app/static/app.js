@@ -3677,6 +3677,11 @@
     debate_round_1: "Round 1",
     debate_round_2: "Round 2",
     synthesis: "Synthesis",
+    // Deliberately NO entry for a Layer-B judge's advisory cost-stage row
+    // (issue #110/#217): the frontend must contain no `judge` identifier at
+    // all (D-5, tests/unit/test_evaluation_projection_has_no_judge.py), so
+    // an actual-only stage row for it falls through to its own raw label via
+    // the `|| line.stage` fallback below rather than a friendly mapping here.
   };
   const RECEIPT_PIPELINE_ORDER = [
     "initial_answers",
@@ -3940,6 +3945,31 @@
           ),
         );
       });
+      // Issue #217: a row present ONLY in the actual breakdown (e.g. a fired
+      // Layer-B judge call — issue #110 — which is realized post-hoc and never
+      // appears in the pre-run estimate) still needs its own line, or the
+      // itemized rows silently under-sum the Total below. No "est" figure to
+      // pair it with, so the est side renders "—", same as any other missing
+      // pairing.
+      if (actualByModel) {
+        const estModelKeys = new Set(
+          est.by_model
+            .filter(Boolean)
+            .map((line) => line.model_id || line.display_name),
+        );
+        actualByModel.forEach((line) => {
+          if (!line) return;
+          const key = line.model_id || line.display_name;
+          if (estModelKeys.has(key)) return;
+          c2.appendChild(
+            buildReceiptCostRow(
+              line.display_name || line.model_id || "—",
+              NaN,
+              Number(line.usd),
+            ),
+          );
+        });
+      }
       c2.appendChild(
         buildReceiptCostRow(
           "Total",
@@ -3980,6 +4010,23 @@
           ),
         );
       });
+      // Issue #217: same actual-only-row gap as the "by model" column above,
+      // for the stage partition (e.g. the judge's "judge" stage row).
+      if (actualByStage) {
+        const estStageKeys = new Set(
+          est.by_stage.filter(Boolean).map((line) => line.stage),
+        );
+        actualByStage.forEach((line) => {
+          if (!line || estStageKeys.has(line.stage)) return;
+          c3.appendChild(
+            buildReceiptCostRow(
+              RECEIPT_STAGE_SHORT[line.stage] || line.stage,
+              NaN,
+              Number(line.usd),
+            ),
+          );
+        });
+      }
     } else {
       c3.appendChild(
         mkEl("p", "result-receipt-note", "Itemized stage breakdown is not available for this run."),

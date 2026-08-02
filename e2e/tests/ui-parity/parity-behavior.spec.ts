@@ -433,6 +433,48 @@ test.describe("UI parity — behaviour", () => {
     expect(overflows, `receipt values overflow their column: ${JSON.stringify(overflows)}`).toEqual([]);
   });
 
+  test("Run details receipt: an ACTUAL-only cost row (e.g. a fired Layer-B judge call, absent from the pre-run estimate) still gets its own line in both itemized columns", async ({ page }) => {
+    // Issue #217: the "Cost by model"/"Cost by stage" columns iterate the
+    // PRE-RUN ESTIMATE's rows and backfill an actual figure only for a
+    // matching key. A judge call is realized post-hoc (issue #110) and never
+    // appears in the estimate, so its actual-only row used to be dropped
+    // entirely from BOTH columns even though the receipt's Total (read
+    // straight from actual.total) already included it — the itemized rows
+    // silently summed to less than the displayed Total, hiding that a paid
+    // judge call happened at all.
+    const judgeModelRow = { model_id: "openai/gpt-4o", display_name: "Layer-B judge", usd: "0.006", kind: "judge" };
+    const judgeStageRow = { stage: "judge", usd: "0.006" };
+    const resp = completedResp();
+    resp.actual_breakdown = {
+      by_model: [...BY_MODEL, judgeModelRow],
+      by_stage: [...BY_STAGE, judgeStageRow],
+      total: "0.194",
+    };
+    resp.actual_cost_usd = "0.194";
+    await driveToResult(page, resp);
+    await page.locator("#result-details-toggle").click();
+    await expect(page.locator("#result-receipt")).toBeVisible();
+
+    const modelCol = page.locator('#result-receipt [aria-label="Cost by model, estimate to actual"]');
+    const judgeModelRowEl = modelCol.locator(".result-receipt-row", { hasText: "Layer-B judge" });
+    await expect(judgeModelRowEl).toHaveCount(1);
+    await expect(judgeModelRowEl).toContainText("$0.006");
+    // No matching estimate line for a judge-only row — the est side reads
+    // "—", never a fabricated number (same rule as any other missing pairing).
+    await expect(judgeModelRowEl.locator(".result-receipt-value")).toContainText("—");
+
+    // No friendly-label mapping for the judge's stage row (D-5,
+    // tests/unit/test_evaluation_projection_has_no_judge.py bans a `judge`
+    // identifier anywhere in app.js) — it falls through to its own raw
+    // "judge" stage string, same as any other stage RECEIPT_STAGE_SHORT has
+    // no mapping for.
+    const stageCol = page.locator('#result-receipt [aria-label="Cost by stage, estimate to actual"]');
+    const judgeStageRowEl = stageCol.locator(".result-receipt-row", { hasText: "judge" });
+    await expect(judgeStageRowEl).toHaveCount(1);
+    await expect(judgeStageRowEl).toContainText("$0.006");
+    await expect(judgeStageRowEl.locator(".result-receipt-value")).toContainText("—");
+  });
+
   test("composer 'Run now' is a solid secondary button, not a borderless ghost", async ({ page }) => {
     // The ghost variant renders as plain text until hover — it did not read as a
     // button. It must be a solid secondary CTA (visible surface + border) beside
