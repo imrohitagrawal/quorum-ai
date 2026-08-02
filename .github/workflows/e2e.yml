@@ -240,6 +240,38 @@ jobs:
       - name: "axe + parity lane: floor on tests actually executed"
         run: python3 scripts/check_e2e_executed.py --report e2e/results.xml --min 96 --lane "axe + parity lane"
 
+      - name: Clear the previous lane's JUnit report
+        run: rm -f e2e/results.xml
+
+      # Issue #127: workspace.spec.ts (16), accessibility.spec.ts (16),
+      # api-mocking.spec.ts (9) and navigation.spec.ts (10) ran in ZERO CI
+      # workflows -- committed, passing locally, never executed anywhere.
+      # Per the issue's own two-part order: fixed genuine test staleness
+      # first (a first-visit-gate localStorage seed the page object never
+      # set; dead `#cost-confirmation-message`/`#proceed-run` markup from a
+      # superseded single-step cost flow; an exact-vs-wildcard route pattern
+      # that missed the estimate-first Ctrl+Enter path; a copy-drifted
+      # button-name regex; an impossible Shift+Tab-from-the-first-element
+      # focus assertion; a permanently `display:none` legacy nav landmark)
+      # -- THEN wired the now-healthy result in here, never a still-red one.
+      - name: Run workspace + accessibility + api-mocking + navigation suites (blocking)
+        working-directory: e2e
+        env:
+          CI: "true"
+        run: >-
+          npx playwright test
+          tests/workspace/workspace.spec.ts
+          tests/accessibility/accessibility.spec.ts
+          tests/api-mocking/api-mocking.spec.ts
+          tests/navigation/navigation.spec.ts
+          --project=chromium
+          --retries=0
+
+      # EXECUTED-COUNT FLOOR, same reasoning as the two lanes above. Floor is
+      # the EXACT count measured on 2026-08-03 (51 = 16 + 16 + 9 + 10).
+      - name: "workspace/accessibility/api-mocking/navigation lane: floor on tests actually executed"
+        run: python3 scripts/check_e2e_executed.py --report e2e/results.xml --min 51 --lane "workspace/accessibility/api-mocking/navigation lane"
+
       - name: Run visual snapshots (BLOCKING)
         working-directory: e2e
         # toHaveScreenshot baselines for the result + transcript views against the
