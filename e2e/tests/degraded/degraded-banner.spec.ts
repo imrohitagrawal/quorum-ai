@@ -5,6 +5,7 @@ import {
   goldenCompletedResp,
   withEvaluation,
   goldenEvaluation,
+  driveToTranscript,
   EVAL_LAUNDERED,
   EVAL_UNKNOWN_GROUNDING_REFUSAL,
   EVAL_MISSING_HIGH_STAKES,
@@ -236,37 +237,95 @@ test.describe("degraded-mode result banner (#26)", () => {
 });
 
 /*
- * RB-5 / D3 lived here as a gate over `#demo-mode-banner [data-demo-mode-target]`,
- * asserting the honest "3 of 4 ... 1 could not be retrieved" copy with
- * `toContainText`. REMOVED (#115): `toContainText` does not require visibility,
- * and that element measures 0x0 in every view — it sits inside the
- * `section.panel.panel-section` that app.css hides by design. So a BLOCKING merge
- * gate was certifying the honesty of markup no user can read, which reads as
- * covered and is worse than no gate at all.
+ * #115 — the transcript view's OWN disclosure banner (`#demo-mode-banner`).
  *
- * The PROPERTY it pinned — a slot counted in NEITHER bucket must keep the true
- * slot count as the denominator, and must be named as a failure rather than
- * folded into "the rest are from local simulation" — is now pinned on a surface a
- * user can actually see, by two tests above, both asserting toBeVisible() on
- * `#result-degraded`.
+ * Until this fix, `#demo-mode-banner` sat inside `section.panel.panel-section`,
+ * which `app.css` hides on every view by design (screen-isolation parity).
+ * `renderModelPanels` kept it correctly up to date (right hidden state, right
+ * copy) but no user could ever see it — and the blocking gate that used to
+ * assert on it (RB-5 / D3) used `toContainText`, which does not require
+ * visibility, so it certified the honesty of markup nobody could read. That
+ * half was removed above; the property it pinned now lives on `#result-degraded`
+ * (the two tests above asserting `toBeVisible()`).
  *
- * BE PRECISE ABOUT WHAT THAT DOES AND DOES NOT COVER. Those tests drive
- * `renderResultDegraded`, a DIFFERENT function. `renderModelPanels` still
- * contains its own copy of the same arithmetic for `#demo-mode-banner`, and after
- * this removal NOTHING asserts on it: reverting its denominator to `live + local`
- * leaves every e2e lane green. That code is invisible to users, so this is a
- * coverage gap over dead output rather than an unguarded user-facing behaviour —
- * but it is a gap, it is recorded on #115, and moving the banner out of the
- * hidden section (#115) must bring a gate with it. The two tests are:
- *   * "a run with a FAILED provider slot keeps the honest 'of 4' denominator"
- *     (2 live + 1 simulated + 1 failed) covers the mixed case and the copy.
- *   * "a short panel is disclosed even when NOTHING was simulated"
- *     (3 live + 0 simulated + 1 missing) covers the case that had no banner.
+ * `#demo-mode-banner` itself is NOT redundant with `#result-degraded` — WP-H
+ * measured a real run (3 live, 0 simulated, 1 slot that produced no answer) where
+ * `#result-degraded` stayed correctly scoped to the result view and the
+ * transcript view had no run-level disclosure of its own at all. So #115 moves
+ * the banner out of the hidden section into the transcript view's own markup
+ * (`.transcript-body`, above the opening positions), giving the transcript a
+ * disclosure surface that matches the result view's.
  *
- * When `#demo-mode-banner` is moved OUT of the hidden section so the transcript
- * view regains a run-level disclosure (#115), a gate for it belongs here again —
- * asserting toBeVisible(), never toContainText alone.
+ * These tests assert `toBeVisible()`, never `toContainText` alone — the exact
+ * failure mode this file already lived through once.
  */
+test.describe("transcript-view disclosure banner (#115)", () => {
+  test.skip(({ browserName }) => browserName !== "chromium", "reference run is chromium-only");
+
+  test("a run with a FAILED provider slot shows the transcript's own disclosure banner", async ({
+    page,
+  }) => {
+    // 2 live + 1 simulated across 4 slots leaves 1 slot that returned nothing.
+    const completed = {
+      ...goldenCompletedResp(),
+      demo_mode: true,
+      live_count: 2,
+      local_count: 1,
+    };
+    await driveWithCompleted(page, completed);
+    await driveToTranscript(page);
+
+    const banner = page.locator("#demo-mode-banner");
+    // TURNS RED IF #demo-mode-banner is left inside the hidden
+    // `.panel.panel-section` — this is exactly the #115 defect.
+    await expect(banner, "the transcript view must disclose a short panel").toBeVisible();
+    await expect(page.locator("#demo-mode-banner-title")).toHaveText(/Partly simulated result/);
+    await expect(banner).toContainText(/2 of 4 model answers came from a live provider/i);
+    await expect(banner).toContainText(/1 returned nothing/i);
+  });
+
+  test("a short panel with NOTHING simulated is still disclosed in the transcript view", async ({
+    page,
+  }) => {
+    // 3 live + 0 simulated across 4 slots ⇒ 1 slot returned nothing, and
+    // nothing was simulated — the case the old `localCount > 0` gating missed.
+    const completed = {
+      ...goldenCompletedResp(),
+      demo_mode: false,
+      live_count: 3,
+      local_count: 0,
+    };
+    await driveWithCompleted(page, completed);
+    await driveToTranscript(page);
+
+    const banner = page.locator("#demo-mode-banner");
+    await expect(
+      banner,
+      "a panel missing an answer must be disclosed in the transcript view too, even though nothing was simulated",
+    ).toBeVisible();
+    await expect(page.locator("#demo-mode-banner-title")).toHaveText(
+      /Incomplete result — not every model answered/,
+    );
+    await expect(banner).toContainText(/3 of 4 model answers came from a live provider/i);
+    await expect(banner).toContainText(/1 returned nothing/i);
+  });
+
+  test("a fully-LIVE run does NOT show the transcript disclosure banner", async ({ page }) => {
+    const completed = {
+      ...goldenCompletedResp(),
+      demo_mode: false,
+      live_count: 4,
+      local_count: 0,
+    };
+    await driveWithCompleted(page, completed);
+    await driveToTranscript(page);
+
+    await expect(
+      page.locator("#demo-mode-banner"),
+      "a fully-live run must not claim a shortfall in the transcript view",
+    ).toBeHidden();
+  });
+});
 
 /**
  * OC-5 — the misleading-output gate (S3, FR-016). The DEBT-012 laundering shape

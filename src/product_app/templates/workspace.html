@@ -664,6 +664,28 @@
             </div>
 
             <div class="transcript-body">
+              <!-- #115: the transcript view's own run-level disclosure,
+                   mirroring #result-degraded on the result view. Previously
+                   this element lived inside the legacy "Model outputs"
+                   `.panel.panel-section`, which app.css hides on every view
+                   by design (screen-isolation parity) — so it was correctly
+                   kept up to date by renderModelPanels but no user could ever
+                   see it. Moved here so the transcript regains a visible
+                   disclosure when a slot was simulated or produced nothing.
+                   Toggled by renderModelPanels. -->
+              <div
+                id="demo-mode-banner"
+                class="callout callout-demo-mode"
+                role="alert"
+                aria-live="assertive"
+                hidden
+              >
+                <div class="callout-icon" aria-hidden="true">!</div>
+                <div class="callout-body">
+                  <div class="callout-title" id="demo-mode-banner-title">Demo mode is active</div>
+                  <div class="callout-message" data-demo-mode-target></div>
+                </div>
+              </div>
               <h1 id="transcript-heading" class="transcript-question" tabindex="-1"></h1>
 
               <section class="transcript-section" aria-label="Opening positions">
@@ -909,13 +931,6 @@
             aria-label="What are the model outputs?"
           >&#9432;</button>
         </h2>
-        <div id="demo-mode-banner" class="callout callout-demo-mode" role="alert" aria-live="assertive" hidden>
-          <div class="callout-icon" aria-hidden="true">!</div>
-          <div class="callout-body">
-            <div class="callout-title" id="demo-mode-banner-title">Demo mode is active</div>
-            <div class="callout-message" data-demo-mode-target></div>
-          </div>
-        </div>
         <div id="model-grid" class="model-grid" aria-live="polite" aria-atomic="true"></div>
       </section>
     </main>
