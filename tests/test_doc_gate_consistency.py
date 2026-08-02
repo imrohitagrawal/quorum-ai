@@ -246,7 +246,17 @@ def _effective_status(job: dict[str, Any]) -> str:
 
 
 #: A status word in prose. ``non-blocking`` must win over ``blocking``.
-_STATUS_RE = re.compile(r"\bnon-blocking\b|\bblocking\b|\badvisory\b", re.IGNORECASE)
+#: #141: the verbs "blocks"/"blocked" carry the same claim as the adjective
+#: "blocking" ("Since #130 the job blocks" passed silently before this).
+_STATUS_RE = re.compile(
+    r"\bnon-blocking\b|\bblocking\b|\bblocks\b|\bblocked\b|\badvisory\b", re.IGNORECASE
+)
+
+#: Matched words that assert BLOCKING. Anything else `_STATUS_RE` matches
+#: (``advisory``, ``non-blocking``) asserts advisory. #141: a naive fix that
+#: only widened `_STATUS_RE` without also widening this set would classify
+#: "blocks"/"blocked" as advisory, since neither literally equals "blocking".
+_BLOCKING_WORDS = {"blocking", "blocks", "blocked"}
 
 #: Context immediately before a status word that makes it hypothetical, negated
 #: or historical ("the gate ran BLOCKING", "NOT blocking", "then flip
@@ -274,10 +284,22 @@ def _window(line: str, end: int) -> str:
     Bounded by length and by a clause break: ``changed-lines coverage
     (`diff-cover` >=95%), advisory mutation baseline`` must not attribute
     "advisory" to diff-cover.
+
+    #141: a comma immediately after the identifier's own closing markdown
+    punctuation — the idiomatic ``(`gate`, blocking)`` shape — is part of
+    that same parenthetical, not a clause break, so it must not end the
+    window early. Confirmed by execution: this hid 7 real "blocking" claims.
+    Skip past a short run of closing punctuation first, and only exempt the
+    comma immediately following it; any LATER comma in the window still
+    cuts, which is what protects the diff-cover list-item case above.
     """
     chunk = line[end : end + _WINDOW]
-    for boundary in (",", ";", ". "):
-        cut = chunk.find(boundary)
+    i = 0
+    while i < len(chunk) and chunk[i] in "`)]\"'":
+        i += 1
+    comma_search_start = i + 1 if i < len(chunk) and chunk[i] == "," else 0
+    for boundary, start in ((",", comma_search_start), (";", 0), (". ", 0)):
+        cut = chunk.find(boundary, start)
         if cut != -1:
             chunk = chunk[:cut]
     return chunk
@@ -293,7 +315,7 @@ def _claims(gate: Gate, line: str) -> list[str]:
                 if _NOT_A_CLAIM_RE.search(chunk[: status.start()]):
                     continue
                 word = status.group(0).lower()
-                found.append("advisory" if word != "blocking" else "blocking")
+                found.append("blocking" if word in _BLOCKING_WORDS else "advisory")
     return found
 
 
@@ -380,6 +402,82 @@ def test_e2e_workflow_has_no_effective_continue_on_error() -> None:
                 f"e2e.yml step {step.get('name', '?')!r} is continue-on-error, but "
                 "docs/analysis/03-enforcement-machinery.md calls the invariants BLOCKING"
             )
+
+
+# --------------------------------------------------------------------------
+# Part A2 — #141: the comma-shaped hole in _window(), and the missing verb
+# --------------------------------------------------------------------------
+#
+# Found by adversarial review of PR #140: 7 real doc claims shaped like
+# ``(`make mutation-baseline`, blocking on pull requests)`` were invisible to
+# this gate, because `_window()` cut at the FIRST comma unconditionally — and
+# that comma sits right after the identifier's own closing backtick in the
+# idiomatic doc form. Confirmed by execution:
+#
+#     "(`make mutation-baseline`, blocking on pull requests)"   -> []
+#     "the mutation-baseline gate is blocking on pull requests" -> ['blocking']
+#
+# A second, independent cause: `_STATUS_RE` matched the adjective "blocking"
+# but not the verb "blocks", so "Since #130 the job blocks" also passed
+# silently.
+
+
+def _gate(key: str) -> Gate:
+    return next(g for g in GATES if g.key == key)
+
+
+def test_a_comma_right_after_the_identifier_does_not_hide_the_status() -> None:
+    """The exact string from the issue that shipped 7 missed claims.
+
+    Turns red if: `_window()` reverts to cutting at the first comma
+    unconditionally.
+    """
+    line = "(`make mutation-baseline`, blocking on pull requests)"
+    assert _claims(_gate("mutation-baseline"), line) == ["blocking"], (
+        "a comma immediately after the gate identifier's closing backtick "
+        f"hid a real blocking claim: {_window(line, line.index('baseline`') + len('baseline'))!r}"
+    )
+
+
+def test_the_same_claim_written_without_the_comma_is_still_caught() -> None:
+    """Positive partner: the un-mangled phrasing must keep working exactly as
+    before — this is the shape the original (buggy) window already caught.
+    """
+    line = "the mutation-baseline gate is blocking on pull requests"
+    assert _claims(_gate("mutation-baseline"), line) == ["blocking"]
+
+
+def test_the_comma_rule_still_stops_a_status_leaking_across_a_list_item() -> None:
+    """The property the first-comma cut existed to protect, restated as its
+    own test so widening the window cannot silently lose it: a LATER,
+    unrelated status in the same line must not attach to an earlier gate.
+
+    Turns red if: the comma-skip is widened to skip every comma, not just
+    one immediately following closing markdown punctuation.
+    """
+    line = "changed-lines coverage (`diff-cover` >=95%), advisory mutation baseline"
+    assert _claims(_gate("diff-cover"), line) == [], (
+        "widening the window let a later item's status attach to diff-cover, "
+        "which the comma-cut exists to prevent"
+    )
+
+
+def test_the_verb_blocks_is_recognised_same_as_the_adjective_blocking() -> None:
+    """#141's second cause: "Since #130 the job blocks" passed silently
+    because `_STATUS_RE` only matched the adjective, not the verb.
+
+    Turns red if: `blocks`/`blocked` are removed from `_STATUS_RE`, or the
+    classification logic maps them to "advisory" instead of "blocking"
+    (a real risk of a naive fix: `_claims` used to classify anything whose
+    matched text was not the literal string "blocking" as "advisory").
+    """
+    line = "Since #130 the mutation-baseline job blocks a below-threshold PR."
+    assert _claims(_gate("mutation-baseline"), line) == ["blocking"]
+
+
+def test_the_verb_blocked_past_tense_is_also_recognised() -> None:
+    line = "The mutation-baseline gate blocked this PR until the score improved."
+    assert _claims(_gate("mutation-baseline"), line) == ["blocking"]
 
 
 # --------------------------------------------------------------------------
