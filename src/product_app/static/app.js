@@ -4672,6 +4672,10 @@
       btn.type = "button";
       btn.className = trailEntryClass(e.status);
       btn.dataset.trailRunId = e.runId;
+      // Disabled while a run is in flight: a stale entry must never be able
+      // to hijack the live run out from under the user (see the comment in
+      // setRunning()).
+      btn.disabled = !!state.isRunning;
       const statusLabel = (e.status || "").toLowerCase();
       const statusTag = statusLabel
         ? `<span class="session-trail-status">${escapeHtml(statusLabel)}</span>`
@@ -4689,6 +4693,9 @@
 
   function restoreTrailRun(runId) {
     if (!runId) return;
+    // Defense in depth alongside the disabled attribute in renderSessionTrail:
+    // never let a trail click hijack a run that is actively in flight.
+    if (state.isRunning) return;
     state.currentRunId = runId;
     state.terminalHandled = true;
     stopPolling();
@@ -5697,6 +5704,16 @@
     // an un-acknowledged safety topic keeps the CTA disabled after a run
     // finishes.
     applyHighStakesGate();
+    // #126 follow-up (found in review, same PR): the trail now survives a
+    // follow-up run, so a PRIOR entry can be visible and clickable while a
+    // NEW run is in flight (the trail panel renders on every view, including
+    // live-run). Clicking it calls restoreTrailRun(), which unconditionally
+    // stopPolling()s and reassigns state.currentRunId — hijacking the
+    // in-flight run: the server keeps executing (and billing) it, but the
+    // client never polls it again, so it silently never completes for the
+    // user. Re-render so the trail's disabled state tracks isRunning exactly
+    // like every other CTA above.
+    renderSessionTrail();
   }
 
   // PR-0 / Bug 8: the "Current time" card is a state machine. It
@@ -6649,8 +6666,13 @@
       // the drill-down can never render stale openings/critiques for a new run.
       state.lastResult = null;
       state.terminalHandled = false;
-      // PR8: a new run starts a fresh session thread; clear the old trail.
-      clearSessionTrail();
+      // #126: do NOT clear the trail here. This fires on EVERY run creation,
+      // including a follow-up (the same session thread continuing) — only
+      // "Start fresh" (clearSessionTrail() at the #result-startfresh handler)
+      // and the manual trail-clear button are supposed to reset the trail.
+      // Clearing unconditionally here made SESSION_TRAIL_CAP and the
+      // append/dedupe logic below unreachable: every run replaced the trail
+      // instead of appending to it.
       // Fix 3: a NEW run must re-render every live block even if its first
       // payload is byte-identical to the previous run's — reset the guards.
       state.liveSig = {
