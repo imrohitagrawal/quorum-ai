@@ -103,18 +103,26 @@ def test_workspace_html_has_proceed_and_cancel_buttons() -> None:
 
 
 def test_workspace_html_has_demo_mode_banner_target() -> None:
-    """The demo-mode banner sits above the model grid and is hidden
-    until ``renderModelPanels`` toggles it on a result whose
-    ``demo_mode`` field is true."""
+    """#115: the demo-mode banner lives in the transcript view (NOT the
+    legacy, permanently-hidden "Model outputs" panel-section it used to sit
+    in — app.css hides ``.panel.panel-section`` on every view by design, so
+    a banner left there can never be seen by a user), and is hidden until
+    ``renderModelPanels`` toggles it on a result with a non-live slot."""
     html = _fetch_ui()
     assert 'id="demo-mode-banner"' in html
     assert 'role="alert"' in html
     assert 'aria-live="assertive"' in html
-    # The banner precedes the model grid in the DOM so screen readers
-    # announce it before the per-panel updates.
+    # The banner sits INSIDE the transcript view's markup, before its
+    # opening-positions section, so screen readers announce the run-level
+    # disclosure before the per-model openings. It must NOT sit anywhere
+    # near the "Model outputs" panel-section's own #model-grid — that
+    # section is unconditionally hidden by app.css, which was the #115
+    # defect (the banner was correctly toggled but no user could see it).
+    transcript_view_pos = html.find('data-view="transcript"')
     banner_pos = html.find('id="demo-mode-banner"')
+    openings_pos = html.find('id="transcript-openings"')
     grid_pos = html.find('id="model-grid"')
-    assert 0 <= banner_pos < grid_pos
+    assert 0 <= transcript_view_pos < banner_pos < openings_pos < grid_pos
 
 
 def test_workspace_html_has_info_icons() -> None:

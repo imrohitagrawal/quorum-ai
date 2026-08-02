@@ -1,4 +1,5 @@
-"""#176 surface 2: the (currently invisible — #115) ``#demo-mode-banner``.
+"""#176 surface 2: the transcript view's ``#demo-mode-banner`` (moved out of
+the permanently-hidden legacy "Model outputs" panel-section by #115).
 
 ``renderModelPanels`` in ``app.js`` used to build the "mixed" banner copy
 inline, unconditionally. Two claims in it were false in reachable classes:

@@ -2306,8 +2306,8 @@
     return "Ask the operator to enable live execution to run against real models.";
   }
 
-  // The pure decision at the heart of the (currently invisible — #115)
-  // ``#demo-mode-banner``. Kept DOM-free, like ``describePanelShortfall``
+  // The pure decision at the heart of the transcript view's
+  // ``#demo-mode-banner`` (#115). Kept DOM-free, like ``describePanelShortfall``
   // above, so it can be driven directly by a test with plain objects.
   //
   // ``hasFinalSynthesis`` must be measured from the SAME poll response this
@@ -2381,9 +2381,7 @@
     // cannot know WHY a slot is empty, and "the provider failed" is usually
     // wrong (a live provider error becomes a FAILED slot, never a simulated
     // answer, since #171; an empty slot can also mean a cancel or the run
-    // deadline). This output is currently invisible — see #115 — so fixing
-    // the wording now means it is not false on the day that banner is made
-    // visible.
+    // deadline).
     const failedClause = failedCount > 0 ? `${failedCount} returned nothing. ` : "";
     const synthesisClause = hasFinalSynthesis
       ? "The synthesis below is also produced by a configured synthesis model. "
@@ -4717,8 +4715,10 @@
   }
 
   function renderModelPanels(modelAnswers = [], result = null) {
-    // The demo-mode banner lives in static HTML directly above the
-    // model grid. We toggle its ``hidden`` attribute here and update
+    // The demo-mode banner (#115: moved into the transcript view's own
+    // markup, above ``#transcript-heading``, so it is actually visible — it
+    // used to sit inside a `.panel.panel-section` that app.css hides on every
+    // view by design). We toggle its ``hidden`` attribute here and update
     // the body copy. The banner has ``role="alert"`` and
     // ``aria-live="assertive"`` so screen readers announce it before
     // the polite model-panel announcements.
@@ -4774,8 +4774,20 @@
           hasFinalSynthesis,
           globalSpendCeilingReached,
         });
-        if (bannerState !== state.lastDemoMode) {
-          state.lastDemoMode = bannerState;
+        // #115 (adversarial review): the cache key used to be the coarse
+        // 3-value ``bannerState`` bucket alone, so two DIFFERENT "mixed"
+        // runs in one session (e.g. 2 live/2 simulated, then later 1
+        // live/3 simulated) both hash to "mixed" and the second run's DOM
+        // write was skipped — the banner kept showing the FIRST run's
+        // counts while the user was looking at the second run's transcript.
+        // That was always true of this code, but it was inert before #115
+        // moved the banner out of permanently-hidden markup; once visible,
+        // a stale count is a real, reachable false disclosure (the same
+        // mechanism #199 documents for the readiness banner). Key on the
+        // counts that actually appear in the copy, not just the bucket.
+        const cacheKey = `${bannerState}|${liveCount}|${localCount}|${failedCount}`;
+        if (cacheKey !== state.lastDemoMode) {
+          state.lastDemoMode = cacheKey;
           if (bannerState === "all-live") {
             demoModeBanner.hidden = true;
           } else {
