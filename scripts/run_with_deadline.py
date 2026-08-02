@@ -70,7 +70,26 @@ def run_with_deadline(deadline_seconds: float, command: list[str]) -> int:
         except subprocess.TimeoutExpired:
             with contextlib.suppress(ProcessLookupError):
                 os.killpg(pgid, signal.SIGKILL)
-            proc.wait()
+            try:
+                # BOUNDED even after SIGKILL. Adversarial review (round 1):
+                # SIGKILL cannot force a process out of uninterruptible I/O
+                # (disk/NFS D-state) -- the kernel queues delivery until the
+                # blocking syscall returns, which can be indefinite. An
+                # unbounded wait() here would defeat the one guarantee this
+                # whole script exists to make: control returns to the caller
+                # before the external 30-minute job timeout. If even this
+                # bound is exceeded we give up on reaping and return anyway;
+                # the OS reclaims a truly-dead process eventually, and this
+                # process no longer waits on it.
+                proc.wait(timeout=10)
+            except subprocess.TimeoutExpired:
+                print(
+                    f"run_with_deadline: process group {pgid} did not exit "
+                    "even after SIGKILL within 10s (likely blocked in "
+                    "uninterruptible I/O) -- giving up on reaping it and "
+                    "returning control anyway",
+                    file=sys.stderr,
+                )
     return 0
 
 

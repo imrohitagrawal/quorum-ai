@@ -120,3 +120,53 @@ def test_the_whole_process_group_is_killed_not_just_the_direct_child() -> None:
             "wrapper returned -- only the direct child was killed, leaving "
             "an orphan"
         )
+
+
+def test_the_final_wait_after_sigkill_is_also_bounded() -> None:
+    """Adversarial review (round 1): SIGKILL cannot force a process out of
+    uninterruptible I/O (disk/NFS D-state) -- the kernel queues delivery
+    until the blocking syscall returns, which can be indefinite. A final
+    ``proc.wait()`` with no timeout after the SIGKILL escalation would defeat
+    the one guarantee this whole script exists to make.
+
+    A real D-state process cannot be reproduced portably, so this mocks
+    ``subprocess.Popen`` with a fake whose ``wait()`` always raises
+    ``TimeoutExpired`` and records every timeout it was called with. Turns
+    red if: the post-SIGKILL ``proc.wait()`` call has no timeout argument
+    (``None``) -- reproduced by reverting the fix and watching the last
+    recorded timeout become ``None``.
+    """
+    import importlib.util
+    import subprocess as subprocess_module
+    from unittest.mock import patch
+
+    spec = importlib.util.spec_from_file_location("run_with_deadline", SCRIPT)
+    assert spec and spec.loader
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+
+    wait_timeouts: list[float | None] = []
+
+    class FakeProc:
+        pid = 999999
+
+        def wait(self, timeout: float | None = None) -> int:
+            wait_timeouts.append(timeout)
+            raise subprocess_module.TimeoutExpired(cmd="fake", timeout=timeout or 0)
+
+    fake_proc = FakeProc()
+
+    with (
+        patch.object(module.subprocess, "Popen", return_value=fake_proc),
+        patch.object(module.os, "getpgid", return_value=42424),
+        patch.object(module.os, "killpg"),
+    ):
+        result = module.run_with_deadline(1.0, ["ignored", "command"])
+
+    assert result == 0
+    # Three wait() calls: the initial deadline wait, the SIGTERM grace wait,
+    # and the post-SIGKILL wait -- every one bounded, none left as None.
+    assert len(wait_timeouts) == 3, wait_timeouts
+    assert all(t is not None for t in wait_timeouts), (
+        f"a wait() call had no timeout, meaning it could block forever: {wait_timeouts}"
+    )
