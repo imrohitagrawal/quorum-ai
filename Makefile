@@ -369,6 +369,12 @@ def report():
         37: "type_check",
         4: "error",
         -9: "crash", -11: "crash",
+        # Found by adversarial review of this fix: mutmut's own map has
+        # `2: "check was interrupted by user"` (a local Ctrl-C mid-run) — the
+        # first version of this dict omitted it, so it fell to the
+        # "suspicious" default and read as a generic broken-run message
+        # instead of naming what actually happened.
+        2: "interrupted",
     }
     counts = collections.Counter()
     survivors = []
@@ -388,14 +394,17 @@ def report():
     checked = counts["killed"] + counts["survived"]
     print("mutants scored: %d killed, %d survived, %d timeout (excluded), %d no-tests" % (
         counts["killed"], counts["survived"], counts["timeout"], counts["no_tests"]))
-    if counts["skipped"] or counts["crash"] or counts["error"] or counts["suspicious"] or counts["type_check"]:
+    if (counts["skipped"] or counts["crash"] or counts["error"] or counts["suspicious"]
+            or counts["type_check"] or counts["interrupted"]):
         # Found by adversarial review of the fix above: type_check (37, a
         # mutant caught by mypy rather than a test) was already excluded from
         # the score before this file, correctly — but was never named
         # anywhere in the printed summary, unlike every other excluded
         # bucket. A reader could not tell 10 type-checked mutants from 0.
-        print("  (%d skipped, %d crash, %d error, %d type-checked, %d suspicious/unrecognized exit code)" % (
-            counts["skipped"], counts["crash"], counts["error"], counts["type_check"], counts["suspicious"]))
+        print("  (%d skipped, %d crash, %d error, %d type-checked, %d interrupted, "
+              "%d suspicious/unrecognized exit code)" % (
+            counts["skipped"], counts["crash"], counts["error"], counts["type_check"],
+            counts["interrupted"], counts["suspicious"]))
     if counts["no_tests"]:
         # Checked BEFORE the `not checked` branch below, because a scope where
         # EVERY mutant is no_tests also has `killed + survived == 0` and would
@@ -417,6 +426,16 @@ def report():
               "score — so this is a gap, not a pass. Add a test, or if the tests "
               "exist but are deselected under [tool.mutmut], that deselection is "
               "hiding this function." % counts["no_tests"])
+        raise SystemExit(1)
+    if counts["interrupted"]:
+        # exit 2 = mutmut's own "check was interrupted by user" (a local
+        # Ctrl-C mid-run). Named distinctly rather than folded into the
+        # generic error/suspicious message below, so a developer who
+        # interrupted their own local run sees why, instead of hunting for a
+        # broken-run cause that never existed.
+        print("%d mutant(s) were interrupted by the user (Ctrl-C) mid-run — "
+              "not a kill, and not evidence of anything about the code under "
+              "test. Re-run the gate to completion." % counts["interrupted"])
         raise SystemExit(1)
     if counts["error"] or counts["suspicious"]:
         # #142: a pytest USAGE_ERROR (4) or any exit code this map does not

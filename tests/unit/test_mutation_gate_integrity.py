@@ -380,6 +380,30 @@ def test_type_check_mutants_are_named_in_the_summary_not_silently_dropped(
     )
 
 
+def test_an_interrupted_run_exit_2_is_named_not_lumped_into_suspicious(
+    scope_script: Path, tmp_path: Path
+) -> None:
+    """Found by adversarial review of the fix above: mutmut's own map has
+    `2: "check was interrupted by user"` (a local Ctrl-C mid-run), which the
+    first version of this fix omitted — it fell to the `suspicious` default
+    and failed with a generic "broken-run or unrecognized code" message,
+    contradicting this fix's own claim to mirror mutmut's real map.
+
+    Turns red if: exit 2 is not named as an interruption, or falls back to
+    `killed`/`suspicious` with no distinguishing message.
+    """
+    _write_meta(tmp_path, "evaluation", {"a__mutmut_1": 1, "b__mutmut_2": 2})
+    result = _run(scope_script, tmp_path, "report", "origin/main", "80")
+    output = result.stdout + result.stderr
+
+    assert "1 killed" in output, f"an interrupted mutant must not count as killed:\n{output}"
+    assert result.returncode != 0, f"an interrupted run must not pass silently:\n{output}"
+    assert "interrupt" in output.lower(), (
+        "an interrupted run must name itself, not read as a generic "
+        f"broken-run/unrecognized code:\n{output}"
+    )
+
+
 def test_segfault_is_reported_as_a_crash_not_folded_into_ordinary_timeout(
     scope_script: Path, tmp_path: Path
 ) -> None:
