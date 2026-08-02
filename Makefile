@@ -388,9 +388,14 @@ def report():
     checked = counts["killed"] + counts["survived"]
     print("mutants scored: %d killed, %d survived, %d timeout (excluded), %d no-tests" % (
         counts["killed"], counts["survived"], counts["timeout"], counts["no_tests"]))
-    if counts["skipped"] or counts["crash"] or counts["error"] or counts["suspicious"]:
-        print("  (%d skipped, %d crash, %d error, %d suspicious/unrecognized exit code)" % (
-            counts["skipped"], counts["crash"], counts["error"], counts["suspicious"]))
+    if counts["skipped"] or counts["crash"] or counts["error"] or counts["suspicious"] or counts["type_check"]:
+        # Found by adversarial review of the fix above: type_check (37, a
+        # mutant caught by mypy rather than a test) was already excluded from
+        # the score before this file, correctly — but was never named
+        # anywhere in the printed summary, unlike every other excluded
+        # bucket. A reader could not tell 10 type-checked mutants from 0.
+        print("  (%d skipped, %d crash, %d error, %d type-checked, %d suspicious/unrecognized exit code)" % (
+            counts["skipped"], counts["crash"], counts["error"], counts["type_check"], counts["suspicious"]))
     if counts["no_tests"]:
         # Checked BEFORE the `not checked` branch below, because a scope where
         # EVERY mutant is no_tests also has `killed + survived == 0` and would

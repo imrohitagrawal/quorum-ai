@@ -355,6 +355,31 @@ def test_an_unrecognized_exit_code_is_not_scored_as_killed(
     )
 
 
+def test_type_check_mutants_are_named_in_the_summary_not_silently_dropped(
+    scope_script: Path, tmp_path: Path
+) -> None:
+    """Found by adversarial review of the fix above: exit 37 (`type_check`, a
+    mutant caught by mypy rather than a test) was already excluded from the
+    score before this file — correctly — but was never counted in the printed
+    summary anywhere, unlike every other excluded bucket. A reader could not
+    tell 10 type-checked mutants from 0 by looking at the report.
+
+    Turns red if: type_check mutants stop being named in the summary line.
+    """
+    _write_meta(
+        tmp_path,
+        "evaluation",
+        {"a__mutmut_1": 1, "b__mutmut_2": 37, "c__mutmut_3": 37},
+    )
+    result = _run(scope_script, tmp_path, "report", "origin/main", "80")
+    output = result.stdout + result.stderr
+
+    assert "1 killed" in output, f"type_check mutants must not inflate killed:\n{output}"
+    assert "2 type" in output.lower(), (
+        f"type_check mutants must be named in the summary, not silently dropped:\n{output}"
+    )
+
+
 def test_segfault_is_reported_as_a_crash_not_folded_into_ordinary_timeout(
     scope_script: Path, tmp_path: Path
 ) -> None:
