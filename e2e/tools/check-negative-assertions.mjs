@@ -53,6 +53,11 @@ const NEGATIVE_UNDER_NOT = new Set([
   "toHaveText",
   "toBeAttached",
   "toBeChecked",
+  // #148: found missing by running a 9-assertion absence fixture through the
+  // shipped checker — only 1 of 9 was reported.
+  "toHaveClass",
+  "toHaveAttribute",
+  "toBeInViewport",
 ]);
 
 function run(cmd, args, { required = false } = {}) {
@@ -104,6 +109,20 @@ function assertionOf(node) {
       if (cursor.callee.type === "Identifier" && cursor.callee.name === "expect") {
         return { matcher, negated, args: node.arguments, subject: cursor.arguments[0] };
       }
+      // #148: `expect.soft(...)` and `expect.poll(...)` are the same claim
+      // as `expect(...)` for this guard's purposes. The chain root for
+      // these is a MemberExpression (`expect.soft`), not the bare
+      // Identifier `expect` — without this, every soft/poll assertion was
+      // invisible in BOTH directions: a vacuous one passed, and a genuine
+      // one never counted as a partner either.
+      if (
+        cursor.callee.type === "MemberExpression" &&
+        cursor.callee.object.type === "Identifier" &&
+        cursor.callee.object.name === "expect" &&
+        (cursor.callee.property.name === "soft" || cursor.callee.property.name === "poll")
+      ) {
+        return { matcher, negated, args: node.arguments, subject: cursor.arguments[0] };
+      }
       cursor = cursor.callee;
     } else if (cursor.type === "AwaitExpression") {
       cursor = cursor.argument;
@@ -117,6 +136,10 @@ function assertionOf(node) {
 const isZero = (arg) => arg && arg.type === "Literal" && arg.value === 0;
 const isEmptyArray = (arg) => arg && arg.type === "ArrayExpression" && arg.elements.length === 0;
 const isPositiveNumber = (arg) => arg && arg.type === "Literal" && typeof arg.value === "number" && arg.value > 0;
+/** #148: an explicit empty-string literal argument — `toHaveText("")`,
+ * `toEqual("")` — is as much an emptiness claim as `toHaveCount(0)`. */
+const isEmptyStringLiteral = (arg) =>
+  arg && arg.type === "Literal" && typeof arg.value === "string" && arg.value.length === 0;
 /** A non-empty string/regex literal argument — proof the subject holds something. */
 const isNonEmptyLiteral = (arg) =>
   arg &&
@@ -152,10 +175,23 @@ function classify(a) {
     if (NEGATIVE_UNDER_NOT.has(a.matcher)) return "negative";
     return "other";
   }
-  if (a.matcher === "toEqual" && isEmptyArray(first)) return "negative";
-  if ((a.matcher === "toHaveCount" || a.matcher === "toBe" || a.matcher === "toHaveLength") && isZero(first))
+  // #148: `toStrictEqual` joins `toEqual` for the empty-array/empty-string
+  // check — both are full-equality matchers making the same emptiness claim.
+  if (
+    (a.matcher === "toEqual" || a.matcher === "toStrictEqual") &&
+    (isEmptyArray(first) || isEmptyStringLiteral(first))
+  )
     return "negative";
+  if (a.matcher === "toHaveText" && isEmptyStringLiteral(first)) return "negative";
+  // #148: `toBe` dropped from this zero-check — `expect(scrollTop).toBe(0)`
+  // is a legitimate generic numeric-equality assertion, not an emptiness
+  // claim the way `toHaveCount(0)`/`toHaveLength(0)` specifically are.
+  if ((a.matcher === "toHaveCount" || a.matcher === "toHaveLength") && isZero(first)) return "negative";
   if (a.matcher === "toBeNull" || a.matcher === "toBeFalsy" || a.matcher === "toBeUndefined") return "negative";
+  // #148: the most idiomatic Playwright absence matchers — found completely
+  // absent from this function despite being at least as common as the
+  // `.not`-qualified forms above.
+  if (a.matcher === "toBeHidden" || a.matcher === "toBeEmpty") return "negative";
   // A positive over a literal subject is a tautology, not evidence.
   if (isTautologicalSubject(a.subject)) return "other";
   if (a.matcher === "toBeGreaterThan" && isZero(first)) return "positive";
@@ -169,28 +205,96 @@ function classify(a) {
   return "other";
 }
 
-/** Every `test(...)`/`it(...)` call with its body node. */
-function testsIn(ast) {
-  const found = [];
+const isFunctionLike = (node) =>
+  node && (node.type === "ArrowFunctionExpression" || node.type === "FunctionExpression");
+
+const isTestCall = (node) =>
+  node.type === "CallExpression" &&
+  ((node.callee.type === "Identifier" && ["test", "it"].includes(node.callee.name)) ||
+    (node.callee.type === "MemberExpression" &&
+      node.callee.object.name === "test" &&
+      ["only", "skip", "fixme"].includes(node.callee.property.name)));
+
+const isDescribeCall = (node) =>
+  node.type === "CallExpression" &&
+  ((node.callee.type === "Identifier" && node.callee.name === "describe") ||
+    (node.callee.type === "MemberExpression" &&
+      node.callee.object.name === "test" &&
+      node.callee.property.name === "describe") ||
+    (node.callee.type === "MemberExpression" &&
+      node.callee.object.type === "MemberExpression" &&
+      node.callee.object.object.name === "test" &&
+      node.callee.object.property.name === "describe" &&
+      ["only", "skip"].includes(node.callee.property.name)));
+
+const isBeforeEachCall = (node) =>
+  node.type === "CallExpression" &&
+  ((node.callee.type === "Identifier" && node.callee.name === "beforeEach") ||
+    (node.callee.type === "MemberExpression" &&
+      node.callee.object.name === "test" &&
+      node.callee.property.name === "beforeEach"));
+
+/**
+ * #148: assertions inside a `test.beforeEach(...)` run before every test in
+ * the SAME `describe` (Playwright semantics) — the flat walk this replaced
+ * never associated them, so this extremely common "drive once, assert
+ * per-test" layout was a guaranteed false positive (measured 15-25% of what
+ * the guard flagged). A shallow walk: it stops at a nested `describe`/`test`
+ * boundary, because that nested block's own `beforeEach` belongs to IT, not
+ * to the assertions this call collects for its own siblings.
+ */
+function collectBeforeEachAssertions(describeBody) {
+  const out = [];
   (function walk(node) {
     if (!node || typeof node.type !== "string") return;
-    if (
-      node.type === "CallExpression" &&
-      ((node.callee.type === "Identifier" && ["test", "it"].includes(node.callee.name)) ||
-        (node.callee.type === "MemberExpression" &&
-          node.callee.object.name === "test" &&
-          ["only", "skip", "fixme"].includes(node.callee.property.name)))
-    ) {
-      const title = node.arguments[0];
-      const body = node.arguments.find((a) => a && (a.type === "ArrowFunctionExpression" || a.type === "FunctionExpression"));
-      if (body) found.push({ title: title && title.value ? String(title.value) : "<dynamic>", body });
+    if (node.type === "CallExpression" && (isDescribeCall(node) || isTestCall(node))) return;
+    if (node.type === "CallExpression" && isBeforeEachCall(node)) {
+      const body = node.arguments.find(isFunctionLike);
+      if (body) out.push(...collectAssertions(body));
+      return;
     }
     for (const key of Object.keys(node)) {
       const child = node[key];
       if (Array.isArray(child)) child.forEach(walk);
       else if (child && typeof child.type === "string") walk(child);
     }
-  })(ast);
+  })(describeBody);
+  return out;
+}
+
+/** Every `test(...)`/`it(...)` call with its body node, plus the assertions
+ * from any `test.beforeEach(...)` in an enclosing `describe` (accumulated
+ * through nested describes, matching Playwright's own execution order). */
+function testsIn(ast) {
+  const found = [];
+  (function walk(node, inheritedBeforeEach) {
+    if (!node || typeof node.type !== "string") return;
+    if (node.type === "CallExpression" && isDescribeCall(node)) {
+      const describeBody = node.arguments.find(isFunctionLike);
+      if (describeBody) {
+        const combined = [...inheritedBeforeEach, ...collectBeforeEachAssertions(describeBody)];
+        walk(describeBody, combined);
+      }
+      return;
+    }
+    if (node.type === "CallExpression" && isTestCall(node)) {
+      const title = node.arguments[0];
+      const body = node.arguments.find(isFunctionLike);
+      if (body) {
+        found.push({
+          title: title && title.value ? String(title.value) : "<dynamic>",
+          body,
+          inheritedBeforeEach,
+        });
+      }
+      return;
+    }
+    for (const key of Object.keys(node)) {
+      const child = node[key];
+      if (Array.isArray(child)) child.forEach((c) => walk(c, inheritedBeforeEach));
+      else if (child && typeof child.type === "string") walk(child, inheritedBeforeEach);
+    }
+  })(ast, []);
   return found;
 }
 
@@ -221,9 +325,13 @@ export function checkSource(source, file) {
     if (comment.type === "Line" && match) exemptionLines.set(comment.loc.start.line, false);
   }
   const violations = [];
-  for (const { title, body } of testsIn(ast)) {
+  for (const { title, body, inheritedBeforeEach } of testsIn(ast)) {
     const assertions = collectAssertions(body);
-    const hasPositive = assertions.some((a) => a.kind === "positive");
+    // #148: a positive partner in an enclosing `test.beforeEach` counts too
+    // — Playwright runs it before every test in the same `describe`.
+    const hasPositive =
+      assertions.some((a) => a.kind === "positive") ||
+      inheritedBeforeEach.some((a) => a.kind === "positive");
     for (const a of assertions) {
       if (a.kind !== "negative" || hasPositive) continue;
       // The annotation may end the assertion's own line, or sit in a contiguous

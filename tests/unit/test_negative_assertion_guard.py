@@ -279,6 +279,335 @@ def test_one_exemption_does_not_cover_a_second_assertion(tmp_path: Path) -> None
     )
 
 
+SOFT_VACUOUS = """\
+import { test, expect } from "@playwright/test";
+
+test("a fully live synthesis carries NO badge", async ({ page }) => {
+  await driveWith(page, fixture);
+  expect.soft(page.locator(".badge-summary")).toHaveCount(0);
+});
+"""
+
+SOFT_PARTNERED = """\
+import { test, expect } from "@playwright/test";
+
+test("a fully live synthesis carries NO badge", async ({ page }) => {
+  await driveWith(page, fixture);
+  await expect(page.locator("#result-verdict")).toBeVisible();
+  expect.soft(page.locator(".badge-summary")).toHaveCount(0);
+});
+"""
+
+
+def test_expect_soft_negative_with_no_partner_is_reported(tmp_path: Path) -> None:
+    """#148: `assertionOf` bailed on `expect.soft(...)` because the chain root
+    is a `MemberExpression` (`expect.soft`) rather than the `Identifier`
+    `assertionOf` looked for — so every soft assertion was invisible in BOTH
+    directions: a vacuous `expect.soft` negative passed, and a genuine
+    `expect.soft` positive partner did not count either.
+
+    Turns red if: the walk in `assertionOf` stops recognizing `expect.soft`.
+    """
+    result = _run(SOFT_VACUOUS, tmp_path)
+    assert result.returncode != 0, (
+        f"a vacuous expect.soft negative passed:\n{result.stdout}{result.stderr}"
+    )
+
+
+def test_expect_soft_negative_with_a_soft_partner_passes(tmp_path: Path) -> None:
+    """Positive partner, `expect.soft` on both sides — proves the whole chain
+    (partner detection AND negative detection) works for the soft form, not
+    just one half of it.
+    """
+    result = _run(SOFT_PARTNERED, tmp_path)
+    assert result.returncode == 0, f"a partnered test was rejected:\n{result.stdout}{result.stderr}"
+
+
+POLL_VACUOUS = """\
+import { test, expect } from "@playwright/test";
+
+test("no leftover toast messages", async ({ page }) => {
+  await driveWith(page, fixture);
+  await expect.poll(() => page.locator(".toast").allTextContents()).toHaveLength(0);
+});
+"""
+
+POLL_NEGATIVE_PARTNERED = """\
+import { test, expect } from "@playwright/test";
+
+test("no leftover toast messages", async ({ page }) => {
+  await driveWith(page, fixture);
+  await expect(page.locator("#result-verdict")).toBeVisible();
+  await expect.poll(() => page.locator(".toast").allTextContents()).toHaveLength(0);
+});
+"""
+
+POLL_POSITIVE_PARTNER = """\
+import { test, expect } from "@playwright/test";
+
+test("a fully live synthesis carries NO badge", async ({ page }) => {
+  await driveWith(page, fixture);
+  await expect.poll(() => page.locator("#result-verdict").count()).toBeGreaterThan(0);
+  await expect(page.locator(".badge-summary")).toHaveCount(0);
+});
+"""
+
+
+def test_expect_poll_negative_with_no_partner_is_reported(tmp_path: Path) -> None:
+    """Same `assertionOf` blind spot, the `expect.poll` form: `toHaveLength(0)`
+    on a polled array is exactly as much an emptiness claim as `toHaveCount(0)`
+    on a locator.
+    """
+    result = _run(POLL_VACUOUS, tmp_path)
+    assert result.returncode != 0, (
+        f"a vacuous expect.poll negative passed:\n{result.stdout}{result.stderr}"
+    )
+
+
+def test_expect_poll_negative_with_a_partner_passes(tmp_path: Path) -> None:
+    """Positive partner for the poll negative above."""
+    result = _run(POLL_NEGATIVE_PARTNERED, tmp_path)
+    assert result.returncode == 0, (
+        f"a poll-partnered test was rejected:\n{result.stdout}{result.stderr}"
+    )
+
+
+def test_expect_poll_positive_partner_counts(tmp_path: Path) -> None:
+    """`expect.poll(...).toBeGreaterThan(0)` proving liveness must count as a
+    real partner — table-confirmed false positive in the issue: this shape
+    was REJECTED before the fix.
+    """
+    result = _run(POLL_POSITIVE_PARTNER, tmp_path)
+    assert result.returncode == 0, (
+        f"a poll-partnered test was rejected:\n{result.stdout}{result.stderr}"
+    )
+
+
+TO_BE_HIDDEN_VACUOUS = """\
+import { test, expect } from "@playwright/test";
+
+test("the loading spinner disappears", async ({ page }) => {
+  await driveWith(page, fixture);
+  await expect(page.locator(".spinner")).toBeHidden();
+});
+"""
+
+TO_BE_EMPTY_VACUOUS = """\
+import { test, expect } from "@playwright/test";
+
+test("the error list is empty", async ({ page }) => {
+  await driveWith(page, fixture);
+  await expect(page.locator("#error-list")).toBeEmpty();
+});
+"""
+
+
+def test_to_be_hidden_with_no_partner_is_reported(tmp_path: Path) -> None:
+    """#148: `toBeHidden()` is the most idiomatic Playwright absence matcher
+    and was absent from `classify()` entirely — an unpartnered one read as
+    "other", not "negative", so the guard never even considered it.
+
+    Turns red if: `toBeHidden` is removed from the negative-matcher set.
+    """
+    result = _run(TO_BE_HIDDEN_VACUOUS, tmp_path)
+    assert result.returncode != 0, f"a vacuous toBeHidden() passed:\n{result.stdout}{result.stderr}"
+
+
+def test_to_be_empty_with_no_partner_is_reported(tmp_path: Path) -> None:
+    """Turns red if: `toBeEmpty` is removed from the negative-matcher set."""
+    result = _run(TO_BE_EMPTY_VACUOUS, tmp_path)
+    assert result.returncode != 0, f"a vacuous toBeEmpty() passed:\n{result.stdout}{result.stderr}"
+
+
+NOT_TO_HAVE_CLASS_VACUOUS = """\
+import { test, expect } from "@playwright/test";
+
+test("the tab loses its active class", async ({ page }) => {
+  await driveWith(page, fixture);
+  await expect(page.locator("#tab-2")).not.toHaveClass(/active/);
+});
+"""
+
+NOT_TO_HAVE_ATTRIBUTE_VACUOUS = """\
+import { test, expect } from "@playwright/test";
+
+test("the button loses aria-disabled", async ({ page }) => {
+  await driveWith(page, fixture);
+  await expect(page.locator("#submit")).not.toHaveAttribute("aria-disabled", "true");
+});
+"""
+
+NOT_TO_BE_IN_VIEWPORT_VACUOUS = """\
+import { test, expect } from "@playwright/test";
+
+test("the banner scrolls out of view", async ({ page }) => {
+  await driveWith(page, fixture);
+  await expect(page.locator("#banner")).not.toBeInViewport();
+});
+"""
+
+
+def test_not_to_have_class_with_no_partner_is_reported(tmp_path: Path) -> None:
+    """Turns red if: `toHaveClass` is removed from `NEGATIVE_UNDER_NOT`."""
+    result = _run(NOT_TO_HAVE_CLASS_VACUOUS, tmp_path)
+    assert result.returncode != 0, (
+        f"a vacuous .not.toHaveClass() passed:\n{result.stdout}{result.stderr}"
+    )
+
+
+def test_not_to_have_attribute_with_no_partner_is_reported(tmp_path: Path) -> None:
+    """Turns red if: `toHaveAttribute` is removed from `NEGATIVE_UNDER_NOT`."""
+    result = _run(NOT_TO_HAVE_ATTRIBUTE_VACUOUS, tmp_path)
+    assert result.returncode != 0, (
+        f"a vacuous .not.toHaveAttribute() passed:\n{result.stdout}{result.stderr}"
+    )
+
+
+def test_not_to_be_in_viewport_with_no_partner_is_reported(tmp_path: Path) -> None:
+    """Turns red if: `toBeInViewport` is removed from `NEGATIVE_UNDER_NOT`."""
+    result = _run(NOT_TO_BE_IN_VIEWPORT_VACUOUS, tmp_path)
+    assert result.returncode != 0, (
+        f"a vacuous .not.toBeInViewport() passed:\n{result.stdout}{result.stderr}"
+    )
+
+
+TO_STRICT_EQUAL_EMPTY_VACUOUS = """\
+import { test, expect } from "@playwright/test";
+
+test("the notice list is empty", async ({ page }) => {
+  const notices = await page.locator(".notice").all();
+  expect(notices).toStrictEqual([]);
+});
+"""
+
+TO_EQUAL_EMPTY_STRING_VACUOUS = """\
+import { test, expect } from "@playwright/test";
+
+test("the error text clears", async ({ page }) => {
+  const text = await page.locator("#error").textContent();
+  expect(text).toEqual("");
+});
+"""
+
+
+def test_to_strict_equal_empty_array_with_no_partner_is_reported(tmp_path: Path) -> None:
+    """Turns red if: `toStrictEqual` is dropped from the empty-array check
+    that already covers `toEqual`.
+    """
+    result = _run(TO_STRICT_EQUAL_EMPTY_VACUOUS, tmp_path)
+    assert result.returncode != 0, (
+        f"a vacuous toStrictEqual([]) passed:\n{result.stdout}{result.stderr}"
+    )
+
+
+def test_to_equal_empty_string_with_no_partner_is_reported(tmp_path: Path) -> None:
+    """Turns red if: the empty-string-literal check is removed from `toEqual`."""
+    result = _run(TO_EQUAL_EMPTY_STRING_VACUOUS, tmp_path)
+    assert result.returncode != 0, f"a vacuous toEqual('') passed:\n{result.stdout}{result.stderr}"
+
+
+BEFORE_EACH_PARTNERED = """\
+import { test, expect } from "@playwright/test";
+
+test.describe("badge rendering", () => {
+  test.beforeEach(async ({ page }) => {
+    await driveWith(page, fixture);
+    await expect(page.locator("#result-verdict")).toBeVisible();
+  });
+
+  test("a fully live synthesis carries NO badge", async ({ page }) => {
+    await expect(page.locator(".badge-summary")).toHaveCount(0);
+  });
+});
+"""
+
+BEFORE_EACH_UNRELATED_DESCRIBE_STILL_VACUOUS = """\
+import { test, expect } from "@playwright/test";
+
+test.describe("badge rendering", () => {
+  test.beforeEach(async ({ page }) => {
+    await driveWith(page, fixture);
+  });
+
+  test("a fully live synthesis carries NO badge", async ({ page }) => {
+    await expect(page.locator(".badge-summary")).toHaveCount(0);
+  });
+});
+"""
+
+
+def test_a_positive_in_before_each_counts_as_a_partner_for_every_test_in_the_describe(
+    tmp_path: Path,
+) -> None:
+    """#148: `test.beforeEach` is the most common Playwright layout for
+    "drive to the screen once, assert per-test" — the guard walked the AST
+    flatly and never associated a `beforeEach`'s assertions with the tests
+    in its `describe`, so this extremely common shape was a guaranteed false
+    positive (measured false-alarm rate 15-25%).
+
+    Turns red if: `beforeEach` assertions stop being attributed to sibling
+    tests in the same `describe`.
+    """
+    result = _run(BEFORE_EACH_PARTNERED, tmp_path)
+    assert result.returncode == 0, (
+        "a test with its liveness partner in beforeEach was rejected:\n"
+        f"{result.stdout}{result.stderr}"
+    )
+
+
+def test_a_before_each_with_no_positive_assertion_still_reports(tmp_path: Path) -> None:
+    """Positive partner for the fix above: attributing `beforeEach` assertions
+    to sibling tests must not become "any `beforeEach` silences everything in
+    its `describe`" — a `beforeEach` with NO positive assertion of its own
+    must not manufacture one.
+    """
+    result = _run(BEFORE_EACH_UNRELATED_DESCRIBE_STILL_VACUOUS, tmp_path)
+    assert result.returncode != 0, (
+        "a beforeEach with no positive assertion silenced a real violation:\n"
+        f"{result.stdout}{result.stderr}"
+    )
+
+
+NUMERIC_ZERO_TO_BE_FALSE_POSITIVE = """\
+import { test, expect } from "@playwright/test";
+
+test("the page has not scrolled", async ({ page }) => {
+  const scrollTop = await page.evaluate(() => document.documentElement.scrollTop);
+  expect(scrollTop).toBe(0);
+});
+"""
+
+
+def test_a_generic_toBe_zero_is_not_flagged_as_a_negative_assertion(tmp_path: Path) -> None:
+    """#148: `expect(scrollTop).toBe(0)` is a legitimate numeric-zero
+    assertion — nothing to do with "is this collection empty" — but the old
+    rule grouped bare `toBe(0)` with `toHaveCount(0)`/`toHaveLength(0)`,
+    flagging an honest, single-assertion test as vacuous. `toHaveCount(0)`
+    and `toHaveLength(0)` are specifically about collection/string size and
+    stay negative; generic `toBe(0)` does not.
+
+    Turns red if: `toBe` rejoins the zero-matcher set that drives `negative`.
+    """
+    result = _run(NUMERIC_ZERO_TO_BE_FALSE_POSITIVE, tmp_path)
+    assert result.returncode == 0, (
+        "a legitimate toBe(0) assertion was flagged as an unpartnered negative:\n"
+        f"{result.stdout}{result.stderr}"
+    )
+
+
+def test_to_have_count_zero_is_still_negative_after_the_toBe_narrowing(tmp_path: Path) -> None:
+    """Positive partner for the narrowing above: `toHaveCount(0)` must still
+    be treated as a real emptiness claim needing a partner — the fix narrows
+    which MATCHERS count as zero-checks, it must not narrow away the ones
+    that are genuinely about collection size.
+    """
+    result = _run(VACUOUS, tmp_path)
+    assert result.returncode != 0, (
+        "toHaveCount(0) stopped being treated as a negative assertion:\n"
+        f"{result.stdout}{result.stderr}"
+    )
+
+
 def test_an_unresolvable_base_ref_fails_closed(tmp_path: Path) -> None:
     """A git failure must not read as "no changed specs".
 
