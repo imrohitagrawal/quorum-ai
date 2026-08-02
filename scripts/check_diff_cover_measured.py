@@ -25,6 +25,17 @@ WHAT THIS CHECKS — and it is narrower than it sounds
     coverage run that imported nothing, an excluded path — which is the case
     where the percentage is computed over the wrong denominator entirely.
 
+    It also requires `--json-report` (`diff-cover ... --format
+    json:...`) to be present, valid JSON, and to contain `total_num_lines` —
+    otherwise it fails with that reason named. This closed #165: a missing,
+    keyless, or malformed json-report file used to fall through to the
+    generic success message with the changed-lines count silently omitted —
+    a pass with no denominator, inside the floor built to abolish exactly
+    that shape. Reachable only if the json report is lost between being
+    written and being read; the shipped Makefile recipe always writes it
+    first, so this is hardening against a gap in the contract, not a fix to
+    a path CI has ever hit.
+
 WHAT IT DOES **NOT** CLOSE — read this before citing it
     It does not make diff-cover see a change that has no executable lines. A
     module-level constant or config table is exactly that shape, and it is this
@@ -156,10 +167,32 @@ def main(argv: list[str] | None = None) -> int:
         return 1
 
     # Positive partner: say what was actually measured, so a pass is falsifiable.
-    total = None
     report = Path(args.json_report)
-    if report.is_file():
-        total = json.loads(report.read_text()).get("total_num_lines")
+    if not report.is_file():
+        print(
+            f"diff-cover floor: {report} is missing — the changed-lines count cannot "
+            "be read, so this would be a pass with no denominator. A gate measures or "
+            "it fails."
+        )
+        return 1
+
+    try:
+        payload = json.loads(report.read_text())
+    except json.JSONDecodeError as exc:
+        print(
+            f"diff-cover floor: {report} is not valid JSON ({exc}) — the changed-lines "
+            "count cannot be read."
+        )
+        return 1
+
+    total = payload.get("total_num_lines") if isinstance(payload, dict) else None
+    if total is None:
+        print(
+            f"diff-cover floor: {report} has no readable 'total_num_lines' value "
+            "(missing key, or explicitly null) — the changed-lines count cannot be "
+            "read."
+        )
+        return 1
 
     if total == 0:
         # Not a failure — see the module docstring. But it must not hide inside a

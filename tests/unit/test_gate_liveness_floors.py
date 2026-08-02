@@ -171,8 +171,10 @@ def test_a_changed_file_present_in_the_report_passes(
     monkeypatch.setattr(
         diff_floor, "changed_source_files", lambda base: ["src/product_app/thing.py"]
     )
+    json_report = tmp_path / "diff-cover.json"
+    json_report.write_text('{"total_num_lines": 5}', encoding="utf-8")
 
-    args = ["--coverage-xml", str(report), "--json-report", str(tmp_path / "none")]
+    args = ["--coverage-xml", str(report), "--json-report", str(json_report)]
 
     assert diff_floor.main(args) == 0
 
@@ -205,6 +207,151 @@ def test_a_missing_coverage_report_fails(tmp_path: Path, monkeypatch: pytest.Mon
     monkeypatch.chdir(tmp_path)
 
     assert diff_floor.main(["--coverage-xml", str(tmp_path / "gone.xml")]) == 1
+
+
+def _present_args(tmp_path: Path, *, json_report: Path) -> list[str]:
+    """Args for a run where every changed file is already known to be covered.
+
+    Isolates the json-report-reading branch under test from the earlier
+    changed/missing-file checks, which already have their own tests above.
+    """
+    report = _coverage_xml(tmp_path, ["product_app/thing.py"])
+    return ["--coverage-xml", str(report), "--json-report", str(json_report)]
+
+
+def test_a_missing_json_report_fails(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """#165: a missing --json-report silently passed with the count omitted.
+
+    Every changed file is present in the coverage XML, so the only thing left
+    unmeasured is the changed-lines count itself — exactly the "pass with no
+    denominator" shape this floor exists to abolish, this time inside itself.
+
+    Turns red if: a missing json-report file stops being a failure.
+    """
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(
+        diff_floor, "changed_source_files", lambda base: ["src/product_app/thing.py"]
+    )
+
+    assert diff_floor.main(_present_args(tmp_path, json_report=tmp_path / "gone.json")) == 1
+
+
+def test_a_keyless_json_report_fails(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """`{}` has no total_num_lines — the count is just as absent as a missing file.
+
+    Turns red if: a dict without the key is treated as `total is None` and
+    falls through to the success message with the count silently omitted.
+    """
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(
+        diff_floor, "changed_source_files", lambda base: ["src/product_app/thing.py"]
+    )
+    json_report = tmp_path / "diff-cover.json"
+    json_report.write_text("{}", encoding="utf-8")
+
+    assert diff_floor.main(_present_args(tmp_path, json_report=json_report)) == 1
+
+
+def test_a_null_json_report_fails(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """`null` parses without error but is not a dict — same failure, different shape.
+
+    Turns red if: the isinstance(dict) check is dropped and `null.get(...)` is
+    trusted to raise instead of being checked explicitly.
+    """
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(
+        diff_floor, "changed_source_files", lambda base: ["src/product_app/thing.py"]
+    )
+    json_report = tmp_path / "diff-cover.json"
+    json_report.write_text("null", encoding="utf-8")
+
+    assert diff_floor.main(_present_args(tmp_path, json_report=json_report)) == 1
+
+
+def test_a_present_but_null_valued_total_fails(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The key exists but its value is `null` — a shape none of the checks above catch.
+
+    `"total_num_lines" in payload` is True and `payload["total_num_lines"]` is
+    `None`, which is neither the missing-key case nor the `total == 0` NOTICE
+    case: it must not fall through to the generic pass with the count silently
+    omitted, which is the exact defect #165 exists to abolish.
+
+    Turns red if: the check reverts to testing key presence instead of the
+    resolved value, or `total is None` stops being treated as unreadable.
+    """
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(
+        diff_floor, "changed_source_files", lambda base: ["src/product_app/thing.py"]
+    )
+    json_report = tmp_path / "diff-cover.json"
+    json_report.write_text('{"total_num_lines": null}', encoding="utf-8")
+
+    assert diff_floor.main(_present_args(tmp_path, json_report=json_report)) == 1
+
+
+def test_a_zero_total_is_a_notice_not_a_failure(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """The module docstring's own central case: a real report, genuinely zero
+    measured lines (a module-level-constant-only diff). This must pass loudly,
+    not fail — a floor that fires on legitimate work is a floor somebody
+    switches off.
+
+    Turns red if: `total is None` accidentally also catches `total == 0`
+    (e.g. via a falsy check instead of an identity check), turning the
+    documented non-failure case into a failure.
+    """
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(
+        diff_floor, "changed_source_files", lambda base: ["src/product_app/thing.py"]
+    )
+    json_report = tmp_path / "diff-cover.json"
+    json_report.write_text('{"total_num_lines": 0}', encoding="utf-8")
+
+    assert diff_floor.main(_present_args(tmp_path, json_report=json_report)) == 0
+    assert "NOTICE" in capsys.readouterr().out
+
+
+def test_a_malformed_json_report_fails_with_a_message_not_a_traceback(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """A truncated write (crash mid-write, disk full) must not crash the floor too.
+
+    Turns red if: JSONDecodeError is left uncaught, or the failure prints a raw
+    traceback instead of a readable message.
+    """
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(
+        diff_floor, "changed_source_files", lambda base: ["src/product_app/thing.py"]
+    )
+    json_report = tmp_path / "diff-cover.json"
+    json_report.write_text("{not valid json", encoding="utf-8")
+
+    assert diff_floor.main(_present_args(tmp_path, json_report=json_report)) == 1
+    assert "not valid JSON" in capsys.readouterr().out
+
+
+def test_a_valid_json_report_surfaces_the_measured_count(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """Positive partner: a real count must still print and still pass.
+
+    Without this, a floor that failed on every json-report shape would satisfy
+    all four tests above.
+
+    Turns red if: a valid report with a real count is rejected.
+    """
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(
+        diff_floor, "changed_source_files", lambda base: ["src/product_app/thing.py"]
+    )
+    json_report = tmp_path / "diff-cover.json"
+    json_report.write_text('{"total_num_lines": 7}', encoding="utf-8")
+
+    assert diff_floor.main(_present_args(tmp_path, json_report=json_report)) == 0
+    assert "7 changed lines measured" in capsys.readouterr().out
 
 
 def test_the_worktree_is_included_in_the_changed_set(
