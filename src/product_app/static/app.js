@@ -6649,8 +6649,13 @@
       // the drill-down can never render stale openings/critiques for a new run.
       state.lastResult = null;
       state.terminalHandled = false;
-      // PR8: a new run starts a fresh session thread; clear the old trail.
-      clearSessionTrail();
+      // #126: do NOT clear the trail here. This fires on EVERY run creation,
+      // including a follow-up (the same session thread continuing) — only
+      // "Start fresh" (clearSessionTrail() at the #result-startfresh handler)
+      // and the manual trail-clear button are supposed to reset the trail.
+      // Clearing unconditionally here made SESSION_TRAIL_CAP and the
+      // append/dedupe logic below unreachable: every run replaced the trail
+      // instead of appending to it.
       // Fix 3: a NEW run must re-render every live block even if its first
       // payload is byte-identical to the previous run's — reset the guards.
       state.liveSig = {
