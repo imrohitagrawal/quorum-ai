@@ -3,6 +3,7 @@ import {
   boot,
   goldenCreateResp,
   goldenCompletedResp,
+  goldenRunningResp,
 } from "../../fixtures/golden-run";
 
 const fulfil = (body: unknown, status = 200) => ({
@@ -97,25 +98,16 @@ test.describe("PR8 — Conversation trail UI", () => {
     await expect(page.locator(".session-trail-entry")).toHaveCount(1);
   });
 
-  // REMOVED: "the trail is capped at 10 entries". It could not fail, and this
-  // spec is now in the BLOCKING lane, so it was a gate enforcing nothing.
-  //
-  // Proved by mutation, twice over. Deleting the cap branch outright
-  // (app.js:3882) left it green, because the assertion was `count <= 10` while
-  // `count` is always 1: every run calls clearSessionTrail() (app.js:5823,
-  // and again via "Start fresh" at :6903), AND appendSessionTrailEntry dedupes
-  // by runId (app.js:3880) while the golden fixture returns the same
-  // query_run_id every time. Two independent reasons the trail cannot grow.
-  //
-  // So SESSION_TRAIL_CAP is unreachable dead code today: the trail is REPLACED
-  // per run, never appended across runs. Reaching it from a test needs either a
-  // test-only hook in production JS or distinct per-run ids in the shared
-  // golden fixture — neither is worth it for dead code, and a fake gate is
-  // worse than no gate. The remaining cases in this file are real: disabling
-  // the clear at app.js:6903 fails "'Start fresh' clears the session trail".
-  //
-  // WP-F owns this surface. Decide there whether the cap should exist at all;
-  // if the trail is ever changed to accumulate, add a real test with it.
+  // STILL REMOVED: "the trail is capped at 10 entries". #126 fixed the bug
+  // documented below (a follow-up run now appends instead of replacing — see
+  // "a follow-up run (not Start fresh) appends to the trail instead of
+  // replacing it"), so SESSION_TRAIL_CAP is no longer unreachable dead code
+  // in principle. A dedicated 11-distinct-run cap test is still not added
+  // here: it needs 11 distinct create+complete route cycles (expensive, and
+  // out of #126's scope, which was the single-entry defect, not the cap).
+  // Leaving this noted rather than silently dropped, per #126's own finding
+  // that WP-F's original "if the trail is ever changed to accumulate, add a
+  // real test with it" condition is now true.
 
   test("long questions are truncated to 80 characters", async ({ page }) => {
     const longQuestion = "A".repeat(200);
@@ -146,11 +138,12 @@ test.describe("PR8 — Conversation trail UI", () => {
     await expect(page.locator("#session-trail-list")).toBeHidden();
   });
 
-  test("starting a new run replaces the trail with the new entry", async ({ page }) => {
+  test("'Start fresh' followed by a new run replaces the trail with the new entry", async ({ page }) => {
     await driveWithCompleted(page, goldenCompletedResp());
     await expect(page.locator(".session-trail-entry")).toHaveCount(1);
-    // Navigate back to composer and start another run — the old entry should be
-    // replaced by the new one (trail is not permanently hidden, just refreshed).
+    // Navigate back to composer via "Start fresh" and start another run — the
+    // old entry should be replaced by the new one (Start fresh explicitly
+    // clears the trail; this is a genuinely new session thread).
     await goBackToComposer(page);
     await page.getByRole("textbox").first().fill("Second question here?");
     await page.locator("#run-now").click();
@@ -160,5 +153,126 @@ test.describe("PR8 — Conversation trail UI", () => {
     await expect(page.locator(".session-trail-entry")).toHaveCount(1);
     const q = await page.locator(".session-trail-question").first().textContent();
     expect(q).toContain("Second question here?");
+  });
+
+  // #126: a FOLLOW-UP run (the "Follow up" mode is the default on the result
+  // view's next-run panel — distinct from "Start fresh") is explicitly the
+  // SAME session thread continuing, not a new one. Before this fix,
+  // `clearSessionTrail()` fired unconditionally on every run creation
+  // (app.js, inside the submit handler), so a follow-up silently dropped the
+  // prior entry exactly like Start fresh did — the trail could never hold
+  // more than 1 entry regardless of which button the user clicked.
+  //
+  // The two prior tests above use the SAME golden `query_run_id` for every
+  // run, so `appendSessionTrailEntry`'s runId-dedupe alone would keep the
+  // count at 1 even with the clear removed — they cannot distinguish
+  // "cleared" from "deduped-and-replaced". This test uses two DISTINCT run
+  // ids so only the clear-on-every-run bug can collapse the count.
+  test("a follow-up run (not Start fresh) appends to the trail instead of replacing it", async ({ page }) => {
+    await boot(page);
+    const runIds = [
+      "11111111-1111-4111-8111-111111111111",
+      "22222222-2222-4222-8222-222222222222",
+    ];
+    let createCount = 0;
+    await Promise.all([
+      page.route("**/v1/query-runs/estimate", (r) => r.fulfill(fulfil(costEstimateEnvelope()))),
+      page.route("**/v1/query-runs/warnings", (r) => r.fulfill(fulfil({ warnings: [] }))),
+      page.route("**/v1/query-runs/active", (r) => r.fulfill(fulfil({ query_run_id: null }))),
+    ]);
+    await page.route(/\/v1\/query-runs$/, (r) => {
+      if (r.request().method() !== "POST") return r.continue();
+      const id = runIds[Math.min(createCount, runIds.length - 1)];
+      createCount += 1;
+      return r.fulfill(fulfil({ ...goldenCreateResp(), query_run_id: id, correlation_id: `corr-${id}` }));
+    });
+    await page.route(/\/v1\/query-runs\/[0-9a-f-]{36}$/, (r) => {
+      const url = r.request().url();
+      const id = runIds.find((rid) => url.includes(rid)) ?? runIds[0];
+      return r.fulfill(fulfil({ ...goldenCompletedResp(), query_run_id: id, correlation_id: `corr-${id}` }));
+    });
+
+    await page.getByRole("textbox").first().fill("First question here?");
+    await page.locator("#run-now").click();
+    await expect(page.locator("#result-verdict[data-consensus]")).toBeVisible({ timeout: 20000 });
+    await expect(page.locator(".session-trail-entry")).toHaveCount(1);
+
+    // "Follow up" is the DEFAULT next-run mode (not "Start fresh") — click
+    // straight through to the composer without touching #result-startfresh.
+    await page.locator("#result-next-run").click();
+    await expect(page.locator("#query-text")).toBeVisible({ timeout: 10000 });
+    await page.getByRole("textbox").first().fill("Second question here?");
+    await page.locator("#run-now").click();
+    await expect(page.locator("#result-verdict[data-consensus]")).toBeVisible({ timeout: 20000 });
+
+    // Both entries must be present — the follow-up continues the same
+    // session thread, it does not start a new one.
+    await expect(page.locator(".session-trail-entry")).toHaveCount(2);
+    const questions = await page.locator(".session-trail-question").allTextContents();
+    expect(questions.some((q) => q.includes("First question here?"))).toBe(true);
+    expect(questions.some((q) => q.includes("Second question here?"))).toBe(true);
+  });
+
+  // Found by adversarial review of the fix above (same PR, same file/
+  // mechanism — self-fixed here rather than filed separately). Before this
+  // fix, the trail was ALWAYS empty during a live run (every submission
+  // cleared it), so a trail entry was never reachable while a run was in
+  // flight. Now that a follow-up's prior entry survives, it stays visible —
+  // and clickable — on the live-run view too, since the trail panel renders
+  // on every view. Clicking it called `restoreTrailRun()`, which
+  // unconditionally `stopPolling()`s and reassigns `state.currentRunId`:
+  // the server keeps executing (and billing) the abandoned run, but the
+  // client never polls it again, so the user silently loses it.
+  test("a stale trail entry cannot hijack a run that is still in flight", async ({ page }) => {
+    await boot(page);
+    const runIds = [
+      "11111111-1111-4111-8111-111111111111",
+      "22222222-2222-4222-8222-222222222222",
+    ];
+    let createCount = 0;
+    await Promise.all([
+      page.route("**/v1/query-runs/estimate", (r) => r.fulfill(fulfil(costEstimateEnvelope()))),
+      page.route("**/v1/query-runs/warnings", (r) => r.fulfill(fulfil({ warnings: [] }))),
+      page.route("**/v1/query-runs/active", (r) => r.fulfill(fulfil({ query_run_id: null }))),
+    ]);
+    await page.route(/\/v1\/query-runs$/, (r) => {
+      if (r.request().method() !== "POST") return r.continue();
+      const id = runIds[Math.min(createCount, runIds.length - 1)];
+      createCount += 1;
+      return r.fulfill(fulfil({ ...goldenCreateResp(), query_run_id: id, correlation_id: `corr-${id}` }));
+    });
+    await page.route(/\/v1\/query-runs\/[0-9a-f-]{36}$/, (r) => {
+      const url = r.request().url();
+      // Run 1 completes; run 2 (the one in flight) never reaches a terminal
+      // state for the duration of this test, so the UI stays on live-run.
+      if (url.includes(runIds[1])) {
+        return r.fulfill(fulfil({ ...goldenRunningResp(2000), query_run_id: runIds[1] }));
+      }
+      return r.fulfill(fulfil({ ...goldenCompletedResp(), query_run_id: runIds[0] }));
+    });
+
+    await page.getByRole("textbox").first().fill("First question here?");
+    await page.locator("#run-now").click();
+    await expect(page.locator("#result-verdict[data-consensus]")).toBeVisible({ timeout: 20000 });
+    await expect(page.locator(".session-trail-entry")).toHaveCount(1);
+
+    await page.locator("#result-next-run").click();
+    await expect(page.locator("#query-text")).toBeVisible({ timeout: 10000 });
+    await page.getByRole("textbox").first().fill("Second question here?");
+    await page.locator("#run-now").click();
+
+    // Run 2 is in flight (never completes): confirm we land on live-run,
+    // and the prior entry from run 1 is visible but disabled.
+    await expect(page.locator("[data-view='live-run']")).toBeVisible({ timeout: 20000 });
+    const staleEntry = page.locator(".session-trail-entry");
+    await expect(staleEntry).toHaveCount(1);
+    await expect(staleEntry).toBeDisabled();
+
+    // A disabled button does not dispatch a click in a real browser even
+    // with Playwright's actionability checks bypassed — proving the guard
+    // actually prevents the hijack, not just that the test never tried.
+    await staleEntry.click({ force: true, timeout: 2000 }).catch(() => {});
+    await expect(page.locator("[data-view='live-run']")).toBeVisible();
+    await expect(page.locator("#result-verdict[data-consensus]")).toBeHidden();
   });
 });
