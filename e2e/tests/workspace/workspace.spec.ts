@@ -51,11 +51,17 @@ test.describe("Quorum-AI Workspace", () => {
     });
 
     test.describe("Keyboard Shortcuts", () => {
+      // Issue #127: both shortcuts map to the ESTIMATE-first path, not to
+      // running a query directly — the composer's own keyboard hint says so
+      // ("Ctrl+Enter shows the estimate"), and app.js documents it explicitly
+      // ("Ctrl/Cmd+Enter maps to the estimate-first path"). "See the
+      // estimate" always opens the cost-gate view, even for a cheap
+      // allow-band estimate, so these assert on that view opening rather
+      // than a run actually starting.
       test("should accept Ctrl+Enter for submission", async ({ page }) => {
         await workspacePage.askQuestion("Test question for submission", true);
 
-        // Check that some response or loading state appears
-        await expect(page.getByText(/Initial answers running|Synthesising/i)).toBeVisible({
+        await expect(page.locator("#gate-confirm")).toBeVisible({
           timeout: 5000,
         });
       });
@@ -65,8 +71,7 @@ test.describe("Quorum-AI Workspace", () => {
         await workspacePage.askQuestion("Mac test question");
         await page.keyboard.press("Meta+Enter");
 
-        // Check for response
-        await expect(page.getByText(/Initial answers running|Synthesising/i)).toBeVisible({
+        await expect(page.locator("#gate-confirm")).toBeVisible({
           timeout: 5000,
         });
       });
@@ -106,33 +111,40 @@ test.describe("Quorum-AI Workspace", () => {
     test("should display cost estimates", async ({ page }) => {
       await workspacePage.askQuestion("What is the capital of France?");
 
+      // Issue #127: this used to read `#cost-confirmation-message`, an
+      // element `app.js` declares (`el("cost-confirmation-message")`) but
+      // never writes to or shows anywhere — dead markup from a superseded
+      // single-step flow. The live estimate total renders into the cost-gate
+      // view's `#cost-gate-total`, which `estimateCost()` now waits on.
       const cost = await workspacePage.estimateCost();
 
       // Cost should be present (could be "$0.00" or actual cost)
       expect(cost).toMatch(/\$/);
     });
 
-    test("should show cost info tooltip", async ({ page }) => {
-      // First estimate cost to show the cost info button
-      await workspacePage.askQuestion("What is AI?");
-      await workspacePage.estimateCostButton.click();
-      await page.waitForTimeout(1000);
-
-      // Now click the info icon
-      const infoIcon = page.locator(".info-icon").filter({ hasText: "ⓘ" }).first();
-      await infoIcon.click();
-
-      // Check that tooltip is shown (not hidden)
-      await expect(
-        page.locator("#info-tooltip")
-      ).not.toHaveAttribute("hidden", "true", { timeout: 3000 });
-    });
+    // Issue #127: "should show cost info tooltip" is deleted, not fixed.
+    // It targeted `.info-icon[aria-label="What does this cost estimate
+    // mean?"]`, which lives only inside the same dead `#cost-confirmation`
+    // block as `#cost-confirmation-message` above (grep confirms exactly one
+    // occurrence of that aria-label in workspace.html, inside that block,
+    // and app.js never shows that block). There is no live equivalent
+    // surface today — the cost-gate view explains the estimate as static
+    // prose (`#cost-gate-reason`, `.cost-review-card-note`), with no
+    // click-to-reveal tooltip. Reassigning this test to different markup
+    // would test a feature invented for the occasion, not the one this test
+    // was written for.
   });
 
   test.describe("Error Handling", () => {
     test("should display error banner when errors occur", async ({ page }) => {
-      // Mock an API error
-      await page.route("**/v1/query-runs", (route) => {
+      // Issue #127: `askQuestion(text, true)` sends Ctrl+Enter, which maps
+      // to the ESTIMATE-first path (see the Keyboard Shortcuts tests above),
+      // so the request that actually fires is POST /v1/query-runs/estimate,
+      // not /v1/query-runs. The exact-path pattern below never matched it,
+      // so this 500 mock never fired and no error ever occurred. Widened to
+      // match both, the same way the "should dismiss error banners" test
+      // below already does.
+      await page.route("**/v1/query-runs/**", (route) => {
         route.fulfill({
           status: 500,
           contentType: "application/json",
@@ -171,21 +183,58 @@ test.describe("Quorum-AI Workspace", () => {
 
   test.describe("Catalog Drift", () => {
     test("should show catalog drift warning when models drift", async ({ page }) => {
-      // Mock readiness endpoint to return catalog drift
-      await page.route("**/ready", (route) => {
+      // Issue #127: mocking /ready's catalog_drift_ids (as this test
+      // originally did) can never trigger `#drift-region`. Traced
+      // `renderDriftBanner()` in app.js: it reads only
+      // `state.lastStaleModelIds`, itself seeded once, at boot, from
+      // `window.STALE_MODEL_IDS` — a data island the SERVER renders
+      // directly into the initial HTML (`workspace.html:945`), not
+      // something the client ever fetches over the network. /ready's
+      // `catalog_drift_ids` feeds a DIFFERENT banner (`#readiness-banner`,
+      // via `refreshReadiness()`), already covered by
+      // `e2e/tests/invariants/readiness-banner.spec.ts`.
+      //
+      // So the only way to actually drive this banner is to patch the
+      // server-rendered HTML itself before the page parses it. Intersects
+      // with the user's SELECTED model ids too, so the injected stale id
+      // must be one of the real defaults (`model_slots.DEFAULT_MODEL_IDS`
+      // slot 1) rather than an arbitrary string like the original
+      // "test/model", which no selection could ever match.
+      //
+      // One more layer: `refreshDefaults()` (fired on every boot) re-seeds
+      // `state.lastStaleModelIds` from the LIVE `/v1/models/defaults`
+      // response and re-renders the banner — overwriting the page-load seed
+      // within the same boot. Verified directly: without also mocking this
+      // endpoint, `window.STALE_MODEL_IDS` carries the injected id but
+      // `#drift-region`'s `hidden` attribute never clears. So both the
+      // page-load seed AND the live re-seed need the same stale id.
+      await page.route("**/v1/models/defaults", async (route) => {
         route.fulfill({
           status: 200,
           contentType: "application/json",
           body: JSON.stringify({
-            live_readiness: {
-              state: "drift",
-              catalog_drift_ids: ["test/model"],
-            },
+            model_slots: [
+              { slot_number: 1, model_id: "openai/gpt-4o-mini", search: true },
+              { slot_number: 2, model_id: "anthropic/claude-haiku-4.5", search: true },
+              { slot_number: 3, model_id: "google/gemini-2.5-flash", search: true },
+              { slot_number: 4, model_id: "nvidia/nemotron-3-nano-30b-a3b", search: true },
+            ],
+            stale_model_ids: ["openai/gpt-4o-mini"],
           }),
         });
       });
+      await page.route("**/ui", async (route) => {
+        const response = await route.fetch();
+        const body = await response.text();
+        const patched = body.replace(
+          /window\.STALE_MODEL_IDS\s*=\s*\[[^\]]*\];/,
+          'window.STALE_MODEL_IDS = ["openai/gpt-4o-mini"];'
+        );
+        await route.fulfill({ response, body: patched });
+      });
 
       await workspacePage.page.reload();
+      await workspacePage.page.waitForLoadState("networkidle");
 
       // Wait for drift banner to appear
       await expect(page.locator("#drift-region:not([hidden])")).toBeVisible({
