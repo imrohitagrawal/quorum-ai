@@ -14,6 +14,18 @@ WHAT IT CHECKS
     From the lane's own JUnit XML: tests executed (total minus failures and
     errors) is at or above a floor, and nothing was skipped.
 
+    Zero skips is a deliberate, ratified policy (docs/metrics/flake-rate.md,
+    issue #165 item 3), not just today's incidental count: the only sanctioned
+    `test.skip()` shape in a gated spec is the chromium-only reference-engine
+    guard, which always evaluates to 0 skipped under this repo's
+    `--project=chromium` CI. Quarantining a flaky spec means excluding it from
+    the blocking lane's invocation entirely (dropping it from the argument
+    list, or `--grep-invert` on a real tag) — that never shows up as
+    `skipped` in the report, so it never trips this check. A skip that DOES
+    trip this check is therefore always either a policy violation (remove it)
+    or a spec being skipped instead of excluded (exclude it and re-measure the
+    floor below).
+
 WHAT IT CANNOT SEE
     Whether the specs assert anything useful. A lane of 138 vacuous tests
     satisfies this completely. It closes the "the lane stopped running" hole,
@@ -59,9 +71,13 @@ def main(argv: list[str] | None = None) -> int:
     executed, skipped = counts(report)
     if skipped:
         print(
-            f"{args.lane}: {skipped} test(s) were SKIPPED. A blocking lane must not be "
-            "silenced — remove the skip, or delete the spec deliberately and re-measure "
-            "the floor below.",
+            f"{args.lane}: {skipped} test(s) were SKIPPED. Policy "
+            "(docs/metrics/flake-rate.md): zero skips, ever, in a blocking e2e lane — "
+            "the only sanctioned test.skip() is the chromium-only reference-engine "
+            "guard, which always evaluates to 0 under --project=chromium. Either a "
+            "skip fired for some other reason (a policy violation — remove it) or a "
+            "flaky spec was skipped instead of excluded (exclude it from this lane's "
+            "invocation and re-measure the floor below).",
             file=sys.stderr,
         )
         return 1

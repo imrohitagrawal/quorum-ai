@@ -32,6 +32,34 @@ not a test artefact — ships to users. The scan job is deliberately
 `continue-on-error: true`: it measures, it does not gate, so there is never
 pressure to quarantine for convenience.
 
+### Ratified 2026-08-02 (issue #165 item 3): zero skips, ever, in a blocking lane
+
+`scripts/check_e2e_executed.py` rejects any lane whose JUnit report shows
+`skipped != 0`. That was already true in practice — every `test.skip(...)` in
+every gated spec is the same chromium-only reference-engine guard
+(`browserName !== "chromium"`), which always evaluates to `skipped: 0` under
+this repo's chromium-only CI — but it was an implicit side effect, not a
+written decision, and issue #165 named the risk directly: the first
+conditional or environment-gated skip added to a gated spec would red a
+BLOCKING job with no warning that it was colliding with an unstated policy.
+
+The decision, made explicit here: **a blocking e2e spec may never use
+`test.skip()` for any reason other than that one chromium-only guard.** The
+QUARANTINE row above ("move behind a `@flaky` tag excluded from the blocking
+steps") does not conflict with this — quarantining a spec means dropping it
+from the blocking lane's `npx playwright test` argument list (or, once a real
+`@flaky` tag exists, invoking with `--grep-invert @flaky`), which excludes the
+test from collection entirely. An excluded test is never counted as
+`skipped` in the JUnit report; only a literal `test.skip()` call is. So
+quarantine-by-exclusion and zero-skips-ever are the same policy, not two
+policies in tension.
+
+Pinned by `test_every_skip_in_a_gated_e2e_spec_is_the_known_chromium_only_shape`
+in `tests/unit/test_e2e_flake_policy.py`: any `test.skip()` added to a gated
+spec with a condition other than the chromium-only guard fails that test
+**locally**, with a message pointing back to this section — before it ever
+reaches the confusing blocking-CI floor message this decision was prompted by.
+
 ## KNOWN CONFOUND — RESOLVED 2026-07-22 (run `29911231157`)
 
 **RESOLVED.** The seam landed (Stage B, D0, `bba01c78`) and a real post-seam scan
