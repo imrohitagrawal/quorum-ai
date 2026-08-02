@@ -65,6 +65,7 @@ from product_app.debate import DebateResult, debate_stub_service
 from product_app.main import app
 from product_app.model_slots import ModelSlot
 from product_app.query_runs import (
+    TERMINAL_STATUSES,
     BillableStage,
     InvalidQueryRunTransitionError,
     QueryRun,
@@ -444,13 +445,26 @@ def test_a_cancelled_run_is_never_left_with_a_stage_still_running(
 # ---------------------------------------------------------------------------
 
 
-TERMINAL_STATUSES_UNDER_TEST = [
-    QueryRunStatus.CANCELLED,
-    QueryRunStatus.COMPLETED,
-    QueryRunStatus.PARTIAL,
-    QueryRunStatus.TIMED_OUT,
-    QueryRunStatus.FAILED,
-]
+TERMINAL_STATUSES_UNDER_TEST = sorted(TERMINAL_STATUSES, key=lambda status: status.value)
+
+
+def test_terminal_statuses_under_test_covers_every_production_terminal_status() -> None:
+    """Guard against re-hardcoding the coverage list (#161).
+
+    ``TERMINAL_STATUSES_UNDER_TEST`` used to be a retyped literal list that
+    silently omitted ``BLOCKED_BY_COST`` — the one terminal status this
+    file's own backstop test exists to guard never got exercised. Deriving
+    the list from the production ``TERMINAL_STATUSES`` set means a future
+    terminal status is automatically covered; this test exists so that if
+    someone re-hardcodes the list, it goes red instead of silently
+    dropping coverage again. Non-vacuity: also asserts the set is not
+    empty, so a derivation bug collapsing to nothing can't pass by having
+    nothing to compare.
+    """
+    assert TERMINAL_STATUSES_UNDER_TEST, "the derived coverage list must not be empty"
+    assert set(TERMINAL_STATUSES_UNDER_TEST) == TERMINAL_STATUSES, (
+        "TERMINAL_STATUSES_UNDER_TEST has drifted from the production TERMINAL_STATUSES set"
+    )
 
 
 def _seed_run(
