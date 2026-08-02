@@ -185,14 +185,14 @@ def main(argv: list[str] | None = None) -> int:
         )
         return 1
 
-    if not isinstance(payload, dict) or "total_num_lines" not in payload:
+    total = payload.get("total_num_lines") if isinstance(payload, dict) else None
+    if total is None:
         print(
-            f"diff-cover floor: {report} has no 'total_num_lines' key — the "
-            "changed-lines count cannot be read."
+            f"diff-cover floor: {report} has no readable 'total_num_lines' value "
+            "(missing key, or explicitly null) — the changed-lines count cannot be "
+            "read."
         )
         return 1
-
-    total = payload["total_num_lines"]
 
     if total == 0:
         # Not a failure — see the module docstring. But it must not hide inside a

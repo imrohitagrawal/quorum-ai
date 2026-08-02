@@ -268,6 +268,52 @@ def test_a_null_json_report_fails(tmp_path: Path, monkeypatch: pytest.MonkeyPatc
     assert diff_floor.main(_present_args(tmp_path, json_report=json_report)) == 1
 
 
+def test_a_present_but_null_valued_total_fails(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The key exists but its value is `null` — a shape none of the checks above catch.
+
+    `"total_num_lines" in payload` is True and `payload["total_num_lines"]` is
+    `None`, which is neither the missing-key case nor the `total == 0` NOTICE
+    case: it must not fall through to the generic pass with the count silently
+    omitted, which is the exact defect #165 exists to abolish.
+
+    Turns red if: the check reverts to testing key presence instead of the
+    resolved value, or `total is None` stops being treated as unreadable.
+    """
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(
+        diff_floor, "changed_source_files", lambda base: ["src/product_app/thing.py"]
+    )
+    json_report = tmp_path / "diff-cover.json"
+    json_report.write_text('{"total_num_lines": null}', encoding="utf-8")
+
+    assert diff_floor.main(_present_args(tmp_path, json_report=json_report)) == 1
+
+
+def test_a_zero_total_is_a_notice_not_a_failure(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """The module docstring's own central case: a real report, genuinely zero
+    measured lines (a module-level-constant-only diff). This must pass loudly,
+    not fail — a floor that fires on legitimate work is a floor somebody
+    switches off.
+
+    Turns red if: `total is None` accidentally also catches `total == 0`
+    (e.g. via a falsy check instead of an identity check), turning the
+    documented non-failure case into a failure.
+    """
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(
+        diff_floor, "changed_source_files", lambda base: ["src/product_app/thing.py"]
+    )
+    json_report = tmp_path / "diff-cover.json"
+    json_report.write_text('{"total_num_lines": 0}', encoding="utf-8")
+
+    assert diff_floor.main(_present_args(tmp_path, json_report=json_report)) == 0
+    assert "NOTICE" in capsys.readouterr().out
+
+
 def test_a_malformed_json_report_fails_with_a_message_not_a_traceback(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:
