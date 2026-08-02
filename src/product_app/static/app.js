@@ -3924,17 +3924,24 @@
     if (est && Array.isArray(est.by_model) && est.by_model.length) {
       const actualByModel =
         actual && Array.isArray(actual.by_model) ? actual.by_model : null;
+      // Issue #217 (breaker review): key on `kind` PLUS `model_id`/
+      // `display_name`, never the model id alone. A Layer-B judge call can be
+      // configured to reuse one of the four slot models' id (nothing enforces
+      // otherwise), which would make a "model" row and the "judge" row
+      // compare equal under an id-only key — misattributing the judge's cost
+      // onto the slot's pairing and then wrongly suppressing the judge's own
+      // actual-only row below.
+      const modelLineKey = (line) =>
+        `${line.kind || "model"} ${line.model_id || line.display_name}`;
       est.by_model.forEach((line) => {
         // Fix 10: null-entry guard (parity with the positions loop).
         if (!line) return;
         // Fix 9: pair est→actual by model key, not array index, so a real
         // (reordered/partial) actual breakdown can never be misattributed.
-        const key = line.model_id || line.display_name;
+        const key = modelLineKey(line);
         let actUsd = NaN;
         if (actualByModel) {
-          const match = actualByModel.find(
-            (a) => a && (a.model_id || a.display_name) === key,
-          );
+          const match = actualByModel.find((a) => a && modelLineKey(a) === key);
           if (match) actUsd = Number(match.usd);
         }
         c2.appendChild(
@@ -3952,15 +3959,10 @@
       // pair it with, so the est side renders "—", same as any other missing
       // pairing.
       if (actualByModel) {
-        const estModelKeys = new Set(
-          est.by_model
-            .filter(Boolean)
-            .map((line) => line.model_id || line.display_name),
-        );
+        const estModelKeys = new Set(est.by_model.filter(Boolean).map(modelLineKey));
         actualByModel.forEach((line) => {
           if (!line) return;
-          const key = line.model_id || line.display_name;
-          if (estModelKeys.has(key)) return;
+          if (estModelKeys.has(modelLineKey(line))) return;
           c2.appendChild(
             buildReceiptCostRow(
               line.display_name || line.model_id || "—",
