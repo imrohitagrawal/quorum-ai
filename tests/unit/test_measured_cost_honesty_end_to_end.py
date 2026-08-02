@@ -195,6 +195,7 @@ def _run(
     ``ENTERED`` would block regardless of the list.
     """
     return SimpleNamespace(
+        query_run_id=uuid4(),
         cost_estimate=CostEstimate(
             estimated_cost_usd=Decimal("0.0200"),
             threshold_action=CostThresholdAction.ALLOW,

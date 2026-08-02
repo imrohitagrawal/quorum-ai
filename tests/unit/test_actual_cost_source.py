@@ -16,6 +16,7 @@ from uuid import uuid4
 
 import pytest
 
+from product_app import query_runs as qr
 from product_app.costs import CostEstimate, CostThresholdAction
 from product_app.debate import DebateOutput, DebateRoundStatus
 from product_app.model_slots import ModelSlot
@@ -128,6 +129,7 @@ def _run(
     ids = model_ids if model_ids is not None else DEFAULT_MODEL_IDS
     slots = [ModelSlot(slot_number=i + 1, model_id=mid) for i, mid in enumerate(ids)]
     return SimpleNamespace(
+        query_run_id=uuid4(),
         cost_estimate=estimate,
         model_slots=slots,
         initial_answers=initial_answers,
@@ -275,6 +277,98 @@ def test_measured_total_is_exact_from_captured_tokens(monkeypatch: pytest.Monkey
     assert source == "measured"
     assert actual == Decimal("0.0385")
     assert breakdown is not None and breakdown.total == Decimal("0.0385")
+
+
+# --- issue #110: a billed Layer-B judge call must never be invisible -------
+
+
+def test_judge_call_with_captured_usage_is_priced_into_the_measured_total() -> None:
+    """A judge that fired and reported usage is NOT dropped from the
+    receipt: it prices into the total and gets its own by_model/by_stage row,
+    distinct from every other model's spend."""
+    run = _run(
+        initial_answers=_fully_live_answers(),
+        debate_call_usages=[(1, _usage()), (2, _usage())],
+        synthesis_call_usages=[_usage() for _ in range(5)],
+        estimate=_estimate("0.0400"),
+    )
+    run_id_key = str(run.query_run_id)
+    qr._judge_verdict_memo[run_id_key] = qr._JudgeOutcome(
+        verdict=None, usage=_usage(200, 50), model_id="vendor/judge-model"
+    )
+    try:
+        actual, breakdown, source = _actual_cost(run)  # type: ignore[arg-type]
+    finally:
+        qr._judge_verdict_memo.pop(run_id_key, None)
+
+    assert source == "measured"
+    assert breakdown is not None
+    judge_model_rows = [row for row in breakdown.by_model if row.kind == "judge"]
+    assert len(judge_model_rows) == 1
+    assert judge_model_rows[0].model_id == "vendor/judge-model"
+    assert judge_model_rows[0].usd > Decimal("0")
+    judge_stage_rows = [row for row in breakdown.by_stage if row.stage == "judge"]
+    assert len(judge_stage_rows) == 1
+    assert judge_stage_rows[0].usd == judge_model_rows[0].usd
+    # Reconciliation invariant still holds with the new row present.
+    assert sum((line.usd for line in breakdown.by_model), Decimal("0")) == breakdown.total
+    assert sum((line.usd for line in breakdown.by_stage), Decimal("0")) == breakdown.total
+    assert actual == breakdown.total
+    # Without the judge line, the total would have been strictly smaller —
+    # the judge dollar is genuinely additive, not just present-but-zero.
+    without_judge = _run(
+        initial_answers=_fully_live_answers(),
+        debate_call_usages=[(1, _usage()), (2, _usage())],
+        synthesis_call_usages=[_usage() for _ in range(5)],
+        estimate=_estimate("0.0400"),
+    )
+    _, no_judge_breakdown, _ = _actual_cost(without_judge)  # type: ignore[arg-type]
+    assert no_judge_breakdown is not None
+    assert breakdown.total > no_judge_breakdown.total
+
+
+def test_judge_dispatched_without_captured_usage_forces_estimated() -> None:
+    """A judge call that fired but never reported usage (failed call, or a
+    non-conforming response) is a POSSIBLY-billed call this function cannot
+    price — same honesty gate as every other uncaptured live call: the whole
+    run stays ``estimated``, even though initial/debate/synthesis are fully
+    captured."""
+    run = _run(
+        initial_answers=_fully_live_answers(),
+        debate_call_usages=[(1, _usage()), (2, _usage())],
+        synthesis_call_usages=[_usage() for _ in range(5)],
+        estimate=_estimate("0.0400"),
+    )
+    run_id_key = str(run.query_run_id)
+    qr._judge_verdict_memo[run_id_key] = qr._JudgeOutcome(
+        verdict=None, usage=None, model_id="vendor/judge-model"
+    )
+    try:
+        actual, breakdown, source = _actual_cost(run)  # type: ignore[arg-type]
+    finally:
+        qr._judge_verdict_memo.pop(run_id_key, None)
+
+    assert source == "estimated"
+    assert actual == run.cost_estimate.estimated_cost_usd
+    assert breakdown is run.cost_estimate.breakdown
+
+
+def test_no_judge_outcome_is_unaffected_by_the_judge_gate() -> None:
+    """The common case (no judge configured, or none dispatched for this
+    run): behavior is byte-identical to before issue #110's fix."""
+    run = _run(
+        initial_answers=_fully_live_answers(),
+        debate_call_usages=[(1, _usage()), (2, _usage())],
+        synthesis_call_usages=[_usage() for _ in range(5)],
+        estimate=_estimate("0.0400"),
+    )
+    assert str(run.query_run_id) not in qr._judge_verdict_memo
+    actual, breakdown, source = _actual_cost(run)  # type: ignore[arg-type]
+    assert source == "measured"
+    assert breakdown is not None
+    assert all(row.kind != "judge" for row in breakdown.by_model)
+    assert all(row.stage != "judge" for row in breakdown.by_stage)
+    assert actual == breakdown.total
 
 
 def test_simulated_slot_forces_estimated() -> None:

@@ -627,6 +627,12 @@ class BillingSnapshot:
     synthesis_call_usages: tuple[TokenUsage | None, ...]
     debate_stage: StageBillingState
     synthesis_stage: StageBillingState
+    #: The Layer-B judge's memoised outcome for THIS run, or ``None`` if no
+    #: judge ever fired for it (issue #110). Read from the SAME judge memo the
+    #: request path consults, under its own lock, inside this same atomic
+    #: snapshot — so the honesty gate and the measured computation below it
+    #: decide from one consistent view, matching every other field here.
+    judge_outcome: _JudgeOutcome | None
 
 
 class InMemoryQueryRunRepository:
@@ -920,6 +926,8 @@ class InMemoryQueryRunRepository:
         writer blocks, without it the receipt changes.
         """
         with self._lock:
+            with _judge_memo_lock:
+                judge_outcome = _judge_verdict_memo.get(str(query_run.query_run_id))
             return BillingSnapshot(
                 cost_estimate=query_run.cost_estimate,
                 model_slots=tuple(query_run.model_slots),
@@ -928,6 +936,7 @@ class InMemoryQueryRunRepository:
                 synthesis_call_usages=tuple(query_run.synthesis_call_usages),
                 debate_stage=query_run.billing_stages[BillableStage.DEBATE],
                 synthesis_stage=query_run.billing_stages[BillableStage.SYNTHESIS],
+                judge_outcome=judge_outcome,
             )
 
     def clear(self) -> None:
@@ -2306,8 +2315,49 @@ _JUDGE_VERDICT_MEMO_MAX = 512
 #: serves the suppressed shape ONCE (no spend, no memo write); the owner still
 #: finishes and memoises, so later reads converge on the one verdict.
 _JUDGE_INFLIGHT_WAIT_SECONDS = 30.0
-_judge_verdict_memo: OrderedDict[str, EvalJudgeVerdict | None] = OrderedDict()
-_judge_inflight: dict[str, Future[EvalJudgeVerdict | None]] = {}
+
+
+@dataclass(frozen=True)
+class _JudgeOutcome:
+    """One memoised judge call: the verdict AND its billing facts (issue #110).
+
+    Previously only the verdict was memoised, so a real, billed judge call had
+    no path to the cost layer at all — ``EvalJudgeService`` captured
+    ``result.usage`` and immediately discarded it. ``usage`` is ``None``
+    whenever the call never reached a priceable response (disabled, unpinned,
+    raised, or the provider omitted ``usage``) — ``query_runs._actual_cost``
+    treats a memo entry with ``usage=None`` as "billed, unpriceable" and
+    demotes the whole run to ``estimated``, the same honesty gate already
+    applied to debate/synthesis/initial-answer usage.
+
+    DELIBERATE, CURRENTLY-UNREACHABLE gap (adversarial review, 2026-08-02):
+    unlike ``StageBillingState`` for debate/synthesis, there is no PERMANENT
+    marker on the ``QueryRun`` itself recording "a judge fired for this run" —
+    only this bounded LRU (``_JUDGE_VERDICT_MEMO_MAX = 512``). If this run's
+    entry were evicted BETWEEN ``_evaluate_terminal_run`` writing it and
+    ``_actual_cost`` reading it via :meth:`InMemoryQueryRunRepository.billing_snapshot`,
+    a miss reads as "no judge ever ran" (not "ran, billed, evicted"), and the
+    served total would silently omit a real cost. In practice this cannot
+    happen on any SERVED read: those two calls are sequential statements in
+    ONE request (``_result_response``), so the only way to evict THIS run's
+    fresh entry in that gap is 512 OTHER judges completing a real HTTP round
+    trip apiece inside a few CPU instructions — not physically reachable. The
+    one caller that runs ``_actual_cost`` WITHOUT that ordering guarantee,
+    ``_log_estimate_accuracy``, always runs BEFORE any GET has happened (at
+    synthesis completion), so no judge could have fired yet regardless of
+    eviction. Documented rather than defended against, per this file's own
+    convention for a latent-but-currently-unreachable risk (see the E2
+    tradeoff in :func:`_actual_cost`'s docstring) — a permanent marker would
+    cost real complexity for a benefit no real traffic pattern can reach today.
+    """
+
+    verdict: EvalJudgeVerdict | None
+    usage: TokenUsage | None
+    model_id: str
+
+
+_judge_verdict_memo: OrderedDict[str, _JudgeOutcome] = OrderedDict()
+_judge_inflight: dict[str, Future[_JudgeOutcome]] = {}
 _judge_memo_lock = RLock()
 
 
@@ -2339,7 +2389,7 @@ class _MemoisedRunJudge:
         with _judge_memo_lock:
             if run_id in _judge_verdict_memo:
                 _judge_verdict_memo.move_to_end(run_id)
-                return _judge_verdict_memo[run_id]
+                return _judge_verdict_memo[run_id].verdict
             future = _judge_inflight.get(run_id)
             owner = future is None
             if future is None:
@@ -2355,25 +2405,31 @@ class _MemoisedRunJudge:
             # docstring's same-verdict guarantee holds for every memo-served
             # read, which is all of them once the owner resolves.)
             try:
-                return future.result(timeout=_JUDGE_INFLIGHT_WAIT_SECONDS)
+                return future.result(timeout=_JUDGE_INFLIGHT_WAIT_SECONDS).verdict
             except FuturesTimeoutError:
                 with _judge_memo_lock:
                     if run_id in _judge_verdict_memo:
-                        return _judge_verdict_memo[run_id]
+                        return _judge_verdict_memo[run_id].verdict
                 return None
+        service = EvalJudgeService()
         verdict: EvalJudgeVerdict | None = None
         try:
             # ``EvalJudgeService.evaluate`` is contractually non-raising (the
             # judge is advisory), but the finally block guarantees the future
             # resolves and the in-flight claim clears even if that ever breaks.
-            verdict = EvalJudgeService().evaluate(evidence)
+            verdict = service.evaluate(evidence)
         finally:
+            outcome = _JudgeOutcome(
+                verdict=verdict,
+                usage=service.last_usage,
+                model_id=settings.quorum_eval_judge_model_id,
+            )
             with _judge_memo_lock:
-                _judge_verdict_memo[run_id] = verdict
+                _judge_verdict_memo[run_id] = outcome
                 while len(_judge_verdict_memo) > _JUDGE_VERDICT_MEMO_MAX:
                     _judge_verdict_memo.popitem(last=False)
                 _judge_inflight.pop(run_id, None)
-            future.set_result(verdict)
+            future.set_result(outcome)
         return verdict
 
 
@@ -2673,6 +2729,15 @@ def _actual_cost(
       usage recording also stays ``estimated``. An empty usage list is only
       trustworthy once the stage's marker says the recording ran — see
       :class:`StageBillingState` and :func:`_stage_captured`.
+    * Issue #110: a Layer-B judge call is dispatched from THIS function's own
+      caller path (``_evaluate_terminal_run``, always run before this on a
+      served read) — a paid, real OpenRouter call the pre-run estimate never
+      priced. If a judge fired for this run but its usage was never captured
+      (a failed or non-conforming call — we cannot tell whether OpenRouter
+      still billed it), the run stays ``estimated``, same as any other
+      uncaptured live call. If it fired and reported usage, its price is
+      added to the ``"measured"`` total and gets its own ``by_model``/
+      ``by_stage`` row — never silently folded into another model's spend.
 
     Deliberately NOT consulted: the run's STATUS. A cancelled/partial/timed-out
     run whose captured calls are all present is still ``measured``, because its
@@ -2723,7 +2788,9 @@ def _actual_cost(
         snapshot.synthesis_stage,
         all(usage is not None for usage in snapshot.synthesis_call_usages),
     )
-    if not (initial_fully_captured and debate_captured and synthesis_captured):
+    judge_outcome = snapshot.judge_outcome
+    judge_captured = judge_outcome is None or judge_outcome.usage is not None
+    if not (initial_fully_captured and debate_captured and synthesis_captured and judge_captured):
         return estimate.estimated_cost_usd, estimate.breakdown, "estimated"
 
     # --- measured computation (guarded) --------------------------------------
@@ -2778,10 +2845,22 @@ def _actual_cost(
             Decimal("0"),
         )
 
+        judge_line: tuple[str, Decimal] | None = None
+        if judge_outcome is not None and judge_outcome.usage is not None:
+            judge_line = (
+                judge_outcome.model_id,
+                measured_call_cost_usd(
+                    model_id=judge_outcome.model_id,
+                    prompt_tokens=judge_outcome.usage.prompt_tokens,
+                    completion_tokens=judge_outcome.usage.completion_tokens,
+                ),
+            )
+
         breakdown = build_measured_breakdown(
             per_model_initial=per_model_initial_named,
             debate_by_round=debate_by_round,
             synthesis_cost=synthesis_cost,
+            judge=judge_line,
         )
         return breakdown.total, breakdown, "measured"
     except (InvalidOperation, ArithmeticError, ValueError):

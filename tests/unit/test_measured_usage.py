@@ -122,6 +122,56 @@ def test_measured_breakdown_partitions_reconcile_and_attribute_rounds() -> None:
     ]
 
 
+def test_measured_breakdown_with_no_judge_has_no_judge_row() -> None:
+    """Default (``judge=None``) is byte-identical to pre-#110 behavior: no
+    extra row, no vocabulary change."""
+    breakdown = build_measured_breakdown(
+        per_model_initial=[("a/model", "A", Decimal("0.01"))],
+        debate_by_round={},
+        synthesis_cost=Decimal("0"),
+    )
+    assert all(line.kind != "judge" for line in breakdown.by_model)
+    assert all(line.stage != "judge" for line in breakdown.by_stage)
+
+
+def test_measured_breakdown_prices_a_fired_judge_call_into_its_own_row() -> None:
+    """Issue #110: a billed judge call gets its OWN row — never folded into
+    the "Debate + synthesis" writer row (which would mislabel spend on a
+    different model), and never silently dropped from the total."""
+    initial_cost = measured_call_cost_usd(
+        model_id="a/model", prompt_tokens=1000, completion_tokens=500
+    )
+    judge_cost = measured_call_cost_usd(
+        model_id="vendor/judge-model", prompt_tokens=200, completion_tokens=50
+    )
+    breakdown = build_measured_breakdown(
+        per_model_initial=[("a/model", "A", initial_cost)],
+        debate_by_round={},
+        synthesis_cost=Decimal("0"),
+        judge=("vendor/judge-model", judge_cost),
+    )
+    judge_model_rows = [line for line in breakdown.by_model if line.kind == "judge"]
+    assert len(judge_model_rows) == 1
+    assert judge_model_rows[0].model_id == "vendor/judge-model"
+    assert judge_model_rows[0].display_name == "Layer-B judge"
+    judge_stage_rows = [line for line in breakdown.by_stage if line.stage == "judge"]
+    assert len(judge_stage_rows) == 1
+    # The synthesis-writer row is untouched: the judge is NOT folded into it.
+    writer_rows = [line for line in breakdown.by_model if line.kind == "synthesis"]
+    assert len(writer_rows) == 1
+    assert writer_rows[0].usd == Decimal("0")
+    assert sum((line.usd for line in breakdown.by_model), Decimal("0")) == breakdown.total
+    assert sum((line.usd for line in breakdown.by_stage), Decimal("0")) == breakdown.total
+    # The total is strictly larger than without the judge — the dollar is
+    # genuinely additive, not just present-but-zero.
+    without_judge = build_measured_breakdown(
+        per_model_initial=[("a/model", "A", initial_cost)],
+        debate_by_round={},
+        synthesis_cost=Decimal("0"),
+    )
+    assert breakdown.total > without_judge.total
+
+
 def test_measured_breakdown_attributes_round2_only_to_round2() -> None:
     """A round-2-only live debate must NOT be labelled debate_round_1."""
     r2_cost = measured_call_cost_usd(

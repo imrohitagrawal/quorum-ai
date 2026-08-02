@@ -37,6 +37,7 @@ from product_app.providers import (
     LiveProviderResult,
     ProviderPath,
     SourceReference,
+    TokenUsage,
     provider_execution_service,
 )
 from product_app.synthesis import FinalSynthesis, SynthesisQualityChecks, SynthesisStatus
@@ -219,6 +220,99 @@ def test_an_enabled_judge_calls_the_seam_with_a_pinned_model_and_zero_temperatur
     assert captured["openrouter_key"] == "sk-not-a-real-key"
     assert JUDGE_PROMPT_ID in captured["system_prompt"]
     assert "temperature 0" in captured["system_prompt"].lower()
+
+
+# --------------------------------------------------------------------------
+# Usage capture (issue #110): a billed judge call must expose its real
+# tokens so the billing layer can price it, instead of the caller silently
+# discarding ``result.usage``.
+# --------------------------------------------------------------------------
+
+
+def test_a_successful_call_captures_its_usage(monkeypatch: pytest.MonkeyPatch) -> None:
+    usage = TokenUsage(prompt_tokens=120, completion_tokens=40, total_tokens=160)
+
+    def _fake(**_kwargs: Any) -> LiveProviderResult:
+        return LiveProviderResult(answer_text=json.dumps(VALID_VERDICT), sources=[], usage=usage)
+
+    monkeypatch.setattr(settings, "quorum_eval_judge_api_key", "sk-not-a-real-key")
+    monkeypatch.setattr(settings, "quorum_eval_judge_model_id", "vendor/judge-model")
+    monkeypatch.setattr(provider_execution_service, "call_with_prompt", _fake)
+
+    service = EvalJudgeService()
+    assert service.last_usage is None  # nothing captured before any call
+    verdict = service.evaluate(_evidence())
+    assert verdict is not None
+    assert service.last_usage == usage
+
+
+def test_a_call_the_provider_reported_no_usage_for_captures_none(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The provider can omit ``usage`` on a real response; the service must
+    not fabricate a number — a missing capture must read as ``None``, never
+    a stale value from a previous call on the SAME instance."""
+    monkeypatch.setattr(settings, "quorum_eval_judge_api_key", "sk-not-a-real-key")
+    monkeypatch.setattr(settings, "quorum_eval_judge_model_id", "vendor/judge-model")
+
+    calls = iter(
+        [
+            LiveProviderResult(
+                answer_text=json.dumps(VALID_VERDICT),
+                sources=[],
+                usage=TokenUsage(prompt_tokens=1, completion_tokens=1, total_tokens=2),
+            ),
+            LiveProviderResult(answer_text=json.dumps(VALID_VERDICT), sources=[], usage=None),
+        ]
+    )
+    monkeypatch.setattr(provider_execution_service, "call_with_prompt", lambda **_kw: next(calls))
+
+    service = EvalJudgeService()
+    service.evaluate(_evidence())
+    assert service.last_usage is not None
+    service.evaluate(_evidence())  # second call on the SAME instance, no usage
+    assert service.last_usage is None
+
+
+def test_last_usage_stays_none_when_the_judge_is_disabled(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(settings, "quorum_eval_judge_api_key", "")
+    service = EvalJudgeService()
+    assert service.evaluate(_evidence()) is None
+    assert service.last_usage is None
+
+
+def test_last_usage_stays_none_when_the_seam_raises(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(settings, "quorum_eval_judge_api_key", "sk-not-a-real-key")
+    monkeypatch.setattr(settings, "quorum_eval_judge_model_id", "vendor/judge-model")
+
+    def _boom(**_kwargs: Any) -> None:
+        raise TimeoutError("provider timed out")
+
+    monkeypatch.setattr(provider_execution_service, "call_with_prompt", _boom)
+    service = EvalJudgeService()
+    assert service.evaluate(_evidence()) is None
+    assert service.last_usage is None
+
+
+def test_last_usage_is_captured_even_when_the_response_does_not_parse(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A billed call whose JSON is malformed still consumed real tokens —
+    the usage must be captured even though ``evaluate`` yields no verdict,
+    or the billing layer would wrongly treat this run as unbilled."""
+    usage = TokenUsage(prompt_tokens=50, completion_tokens=10, total_tokens=60)
+    monkeypatch.setattr(settings, "quorum_eval_judge_api_key", "sk-not-a-real-key")
+    monkeypatch.setattr(settings, "quorum_eval_judge_model_id", "vendor/judge-model")
+    monkeypatch.setattr(
+        provider_execution_service,
+        "call_with_prompt",
+        lambda **_kw: LiveProviderResult(answer_text="not json", sources=[], usage=usage),
+    )
+    service = EvalJudgeService()
+    assert service.evaluate(_evidence()) is None  # non-conforming: no verdict
+    assert service.last_usage == usage  # but the spend still happened
 
 
 def test_the_judge_is_skipped_when_no_model_is_pinned(monkeypatch: pytest.MonkeyPatch) -> None:

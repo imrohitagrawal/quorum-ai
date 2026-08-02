@@ -108,6 +108,7 @@ def _run(
     synthesis_call_usages: list[TokenUsage | None] | None = None,
 ) -> SimpleNamespace:
     return SimpleNamespace(
+        query_run_id=uuid4(),
         cost_estimate=CostEstimate(
             estimated_cost_usd=_ESTIMATE_USD,
             threshold_action=CostThresholdAction.ALLOW,

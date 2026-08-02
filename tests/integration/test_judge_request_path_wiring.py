@@ -45,6 +45,7 @@ from product_app.evaluation import (
 from product_app.main import app
 from product_app.providers import (
     LiveProviderResult,
+    TokenUsage,
     provider_event_recorder,
     provider_execution_service,
 )
@@ -86,7 +87,10 @@ def _enable_judge(monkeypatch: pytest.MonkeyPatch) -> None:
 
 
 def _judge_seam(
-    monkeypatch: pytest.MonkeyPatch, *, verdict_json: str | None = None
+    monkeypatch: pytest.MonkeyPatch,
+    *,
+    verdict_json: str | None = None,
+    usage: Any = None,
 ) -> list[dict[str, Any]]:
     """Monkeypatch the ONE provider seam to return a conforming verdict."""
     calls: list[dict[str, Any]] = []
@@ -94,7 +98,7 @@ def _judge_seam(
 
     def _fake(**kwargs: Any) -> LiveProviderResult:
         calls.append(kwargs)
-        return LiveProviderResult(answer_text=payload, sources=[])
+        return LiveProviderResult(answer_text=payload, sources=[], usage=usage)
 
     monkeypatch.setattr(provider_execution_service, "call_with_prompt", _fake)
     return calls
@@ -221,6 +225,36 @@ def test_a_failed_judge_call_serves_the_suppressed_shape(
         assert trust["band"] == "unverified"
 
     assert len(calls) == 1, "a failed judge call must be memoised, not retried per read"
+
+
+def test_judge_outcome_reaches_the_billing_snapshot_under_the_real_run_id(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Wiring regression (issue #110): the request path memoises the judge
+    outcome keyed by ``str(query_run_id)`` (``_MemoisedRunJudge.__init__``);
+    ``billing_snapshot`` must read it back with the SAME key format, or a real
+    run's judge cost would silently never reach ``_actual_cost`` even though
+    a unit test that pokes the memo directly (assuming the key format is
+    right) would stay green regardless."""
+    _enable_judge(monkeypatch)
+    usage = TokenUsage(prompt_tokens=80, completion_tokens=20, total_tokens=100)
+    _judge_seam(monkeypatch, usage=usage)
+
+    with run_history_store.configure_for_tests():
+        client = TestClient(app)
+        account_id = uuid4()
+        body = _create_terminal_run(client, account_id)
+        _get_result(client, account_id, body["query_run_id"])
+
+        run = query_run_repository.get(UUID(body["query_run_id"]))
+        assert run is not None
+        snapshot = query_run_repository.billing_snapshot(run)
+        assert snapshot.judge_outcome is not None, (
+            "the judge outcome the request path just memoised was not found "
+            "by billing_snapshot's lookup — the memo key formats disagree"
+        )
+        assert snapshot.judge_outcome.usage == usage
+        assert snapshot.judge_outcome.model_id == "vendor/judge-model"
 
 
 # ---------------------------------------------------------------------------
@@ -505,7 +539,9 @@ def test_a_reader_waiting_on_a_stuck_inflight_call_serves_suppressed_once(
 
     class _TimesOutAsTheOwnerLands(Future):  # type: ignore[type-arg]
         def result(self, timeout: float | None = None) -> Any:
-            qr._judge_verdict_memo["run-landed"] = landed
+            qr._judge_verdict_memo["run-landed"] = qr._JudgeOutcome(
+                verdict=landed, usage=None, model_id="vendor/judge-model"
+            )
             raise FuturesTimeoutError()
 
     qr._judge_inflight["run-landed"] = _TimesOutAsTheOwnerLands()
