@@ -85,9 +85,11 @@ def strip_own_caveat(text: str) -> str:
     sentence — see ``_OWN_CAVEAT_PATTERN`` for why the anchoring carries the
     security property. Everything else is returned untouched, so hostile
     wording sitting next to a genuine caveat still reaches the scanner.
+
+    No empty-string guard: ``re.sub`` already returns ``""`` for ``""``, and
+    the caller skips falsy values anyway, so a guard here would be an
+    unreachable branch dressed as defensiveness.
     """
-    if not text:
-        return text
     return _OWN_CAVEAT_PATTERN.sub(" ", text)
 
 

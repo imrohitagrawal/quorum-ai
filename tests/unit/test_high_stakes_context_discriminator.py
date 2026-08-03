@@ -220,3 +220,9 @@ def test_strip_own_caveat_leaves_ordinary_prose_untouched() -> None:
     removal test above."""
     prose = "The models agree the rollout succeeded and error rates are flat."
     assert strip_own_caveat(prose) == prose
+
+
+def test_strip_own_caveat_handles_an_empty_string() -> None:
+    """No guard exists for this — ``re.sub`` handles it — so pin that it
+    really does, rather than leaving the claim in a docstring only."""
+    assert strip_own_caveat("") == ""
