@@ -182,6 +182,7 @@ jobs:
           tests/invariants/answer-completeness.spec.ts
           tests/invariants/export-and-expanders.spec.ts
           tests/invariants/provider-notice-coverage.spec.ts
+          tests/invariants/readiness-no-flash.spec.ts
           tests/invariants/landing-mobile-density.spec.ts
           --project=chromium
           --retries=0
@@ -189,7 +190,7 @@ jobs:
       # EXECUTED-COUNT FLOOR. Playwright exits 0 when a spec path matches nothing
       # and when every test it found was skipped, so a lane that quietly stopped
       # running is indistinguishable from a clean pass — on a BLOCKING gate.
-      # Floor is the EXACT count measured on 2026-08-03 (163), not a rounded-down
+      # Floor is the EXACT count measured on 2026-08-03 (171), not a rounded-down
       # one. Re-measured for issue #124, which added
       # provider-notice-coverage.spec.ts (7 tests): the prior floor recorded here
       # (139, dated 2026-07-30) undercounted the CURRENT tree by 13 tests even
@@ -198,11 +199,13 @@ jobs:
       # itself the failure mode this floor exists to catch, just not yet wide
       # enough to trip a 139 floor; measuring fresh rather than adding 7 to a
       # stale number is why the floor reads a re-measured value rather than an
-      # incremented one. Issue #222 added landing-mobile-density.spec.ts (4
-      # tests) and the lane was re-measured end to end at 163. NOTE: the held
-      # #193 branch and the #117 branch each edit this same line to their own
-      # fresh measurements; whoever lands second must RE-MEASURE, not resolve
-      # the conflict by taking the larger number. Headroom hides a
+      # incremented one. Issue #117 added readiness-no-flash.spec.ts and #222
+      # added landing-mobile-density.spec.ts. The two branches were developed
+      # in parallel and BOTH edited this line, so merging them conflicted here
+      # by design -- and the resolution was to re-measure the merged lane end
+      # to end (171), NOT to take the larger of 163 and 167. Taking the larger
+      # would have silently under-counted by the other branch's tests, which
+      # is the exact failure this floor exists to catch. Headroom hides a
       # deleted spec: at a floor of 130, dropping session-trail.spec.ts (7 tests)
       # from the list above left this green — and session-trail is the spec this
       # workflow already records as having shipped ungated once. Adding tests
@@ -210,7 +213,7 @@ jobs:
       # are not derived from the spec list above, or they could never detect
       # that list shrinking.
       - name: "invariants lane: floor on tests actually executed"
-        run: python3 scripts/check_e2e_executed.py --report e2e/results.xml --min 163 --lane "invariants lane"
+        run: python3 scripts/check_e2e_executed.py --report e2e/results.xml --min 171 --lane "invariants lane"
 
       - name: Clear the previous lane's JUnit report
         run: rm -f e2e/results.xml
