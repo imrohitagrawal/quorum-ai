@@ -178,6 +178,15 @@
     // literals so the pre-run banners can render before the first
     // client-initiated fetch completes.
     lastReadiness: null,
+    //: #117. Has ``/ready`` settled yet? The page-load seed alone must not
+    //: paint the readiness banner: the credential probe runs on a background
+    //: thread at startup (#112), so a page served inside that window carries
+    //: a seed that can disagree with the verdict landing moments later.
+    //: Painting both produced a measured flash-and-reflow — "Live execution
+    //: is unavailable" for ~137px on desktop, ~319px on mobile, then gone.
+    //: Showing a warning and retracting it is its own small dishonesty, so
+    //: the first paint waits for the real answer.
+    readinessConfirmed: false,
     lastStaleModelIds: null,
     // Track if user has attempted to submit (gates inline error display)
     submissionAttempted: false,
@@ -580,6 +589,15 @@
     // are driven by the same cache so they cannot disagree.
     renderDriftBanner();
     if (!readinessRegion || !readinessTitle || !readinessMessage) return;
+    // #117: suppress the FIRST paint until /ready has settled. Until then the
+    // only readiness we have is the server-rendered seed, which can be stale
+    // by construction. The drift banner above is deliberately NOT suppressed:
+    // it is a different surface with a different data source, and nothing has
+    // measured it flashing.
+    if (!state.readinessConfirmed) {
+      readinessRegion.hidden = true;
+      return;
+    }
     const readiness = state.lastReadiness;
     // No snapshot yet (probe never ran): keep the banner hidden. The
     // first ``refreshReadiness`` call will fill the cache and
@@ -755,6 +773,13 @@
     }
     if (nextReadiness) state.lastReadiness = nextReadiness;
     if (nextStale) state.lastStaleModelIds = nextStale;
+    // #117: /ready has now SETTLED — it either answered, or failed and left
+    // the page-load seed in place. Either way the banner may paint, and every
+    // later call paints immediately. Set OUTSIDE both try/catch blocks above,
+    // so a probe failure still ends the suppression: a deployment that is
+    // genuinely offline must not stay silent because its probe was
+    // unreachable.
+    state.readinessConfirmed = true;
     applyReadinessState();
   }
 
