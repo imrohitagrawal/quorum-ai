@@ -55,7 +55,7 @@ DIFF_BASE ?= origin/main
 # disagrees with the real pathspec is a lie waiting to be believed; the banner
 # now states the pathspec the code actually uses.
 
-.PHONY: check-python publishing-check skill-onboarding-check skill-discover handoff check-breaking apply-orbi-profile skill-route start next capture-idea validate validate-strict fr-completeness openapi-export openapi-check quality format format-check lint type-check test evals test-report gate-min-collected gate-min-executed perf-gate api-contract mutation-baseline diff-cover security-scan ci-evidence run docker-build feedback-audit
+.PHONY: check-python publishing-check skill-onboarding-check skill-discover handoff check-breaking apply-orbi-profile skill-route start next capture-idea validate validate-strict fr-completeness openapi-export openapi-check adr-index-check quality format format-check lint type-check test evals test-report gate-min-collected gate-min-executed perf-gate api-contract mutation-baseline diff-cover security-scan ci-evidence run docker-build feedback-audit
 
 check-python:
 	@if [ -z "$(PYTHON)" ]; then 		echo "ERROR: Python 3 is required. Install python3, or set PYTHON=/path/to/python3."; 		exit 127; 	fi
@@ -69,8 +69,13 @@ next: check-python
 capture-idea: check-python
 	@if [ -n "$(IDEA)" ]; then 		$(PYTHON) scripts/capture_idea.py "$(IDEA)"; 	else 		$(PYTHON) scripts/capture_idea.py; 	fi
 
-validate: check-python fr-completeness
+validate: check-python fr-completeness adr-index-check
 	$(PYTHON) scripts/validate_all.py
+
+# The ADR index is a DERIVED fact. It went stale by hand twice; it is now
+# generated and verified rather than trusted. See ADR-0004..0007's arrival.
+adr-index-check:
+	$(PYTHON) scripts/generate_adr_index.py --check
 
 validate-strict: check-python fr-completeness
 	FACTORY_STRICT=1 $(PYTHON) scripts/validate_all.py
