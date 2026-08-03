@@ -63,6 +63,18 @@ is the rule only.
 12. **Cap review at TWO rounds**, then STOP and escalate with open findings
     listed. If two fixes in a row add defects, change the approach.
     **Expect your own fix to introduce a defect — budget a round for it.**
+11a. **Tell every reviewer to audit the diff's PROSE, not only its code.**
+    Verbatim, in the prompt: *"for every number, superlative, and causal claim
+    in the diff's comments, commit body and PR description, name the command
+    that produces it — or mark it UNVERIFIED."*
+    Measured 2026-08-03: six false claims shipped inside one session — a
+    containment figure quoted as a Jaccard, an agent's "1,836 attempts" cited
+    as a repo fact, "the guaranteed floor" (false on a truncation path), "that
+    clamp responded to CONTAINER width" (it was `5vw`). Every one was in prose,
+    none in code, and the reviewers who were not asked to look at prose did not
+    look. Research into mechanical alternatives concluded no tool anywhere
+    flags an unverified claim in prose; this line is the highest-yield
+    mitigation available and it costs nothing.
 12a. **Reviewers refute by default** and report only findings backed by a
     demonstrated failure. Reviews are **read-only**; a separate single writer
     applies fixes.
@@ -173,6 +185,18 @@ is the rule only.
     "did you write the ADR at all" is not, and cannot be. If you notice this
     rule being skipped, that is the signal to make it mechanical, not to
     restate it louder.
+
+16e. **Before writing code that touches money, auth or safety, list the known
+    failure modes first.** One page, from research and from existing ADRs, then
+    design against that list. Front-loaded and cheap.
+    Measured 2026-08-03: the spend-cap work went five review rounds, each fix
+    correct in isolation and each revealing the next, because the failure modes
+    were discovered one at a time from defects instead of enumerated up front.
+    Thirty minutes on "how do spend meters fail" would have surfaced
+    read-modify-write races, lost writes, reconciliation and idempotency — the
+    exact four. Worse, ADR-0002 already recorded the governing constraint and
+    was not re-read. **The homework mostly already exists in `docs/adr/`; the
+    failure is not reading it.**
 
 **Shipping**
 17. **One CONCERN per pull request**, merged before the next starts — a reviewer
