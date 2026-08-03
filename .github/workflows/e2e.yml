@@ -287,6 +287,22 @@ jobs:
         # STALE 51-test report from the lane above and passing on old data
         # instead of catching the gap. Matches the same clear-before-run
         # pattern already used between the invariants and axe+parity lanes.
+        #
+        # It carries the SAME `if:` as the two steps below it, and must. With no
+        # condition, an earlier lane failing skipped this clear while the visual
+        # lane and its floor still ran — so a visual run that matched nothing
+        # left the PREVIOUS lane's report in place and the floor passed on it.
+        # Demonstrated by review: a Playwright run naming a spec that does not
+        # exist exits "No tests found." WITHOUT rewriting results.xml, and the
+        # floor then reported `51 tests executed (floor 8)`, exit 0. It could not
+        # produce green-when-broken (the job was already red from the earlier
+        # lane), but it is the exact misreport this step exists to prevent.
+        #
+        # Deliberately worded without the literal command: the retries guard in
+        # tests/unit/test_e2e_flake_policy.py scrapes this file for that string
+        # as raw TEXT, so naming it inside a comment reds the gate. Rule 8, from
+        # the other side.
+        if: ${{ !cancelled() && steps.install-chromium.outcome == 'success' }}
         run: rm -f e2e/results.xml
 
       - name: Run visual snapshots (BLOCKING)

@@ -136,10 +136,18 @@ test.describe("readiness banner does not flash (#117)", () => {
     // Positive partner (#131). `toBeHidden()` is also satisfied by a page that
     // never booted at all — and "app.js threw, so the disclosure stayed hidden
     // forever" is the exact defect this file exists to prevent, which makes
-    // that blind spot self-defeating. `data-active-view` is written ONLY by
-    // app.js's setView() (app.js:302) and is never server-rendered, so its
-    // presence proves the app ran before we assert what it did not paint.
-    await expect(page.locator("#main-content[data-active-view]")).toBeVisible();
+    // that blind spot self-defeating.
+    //
+    // This asserted `#main-content[data-active-view]` for one review round.
+    // The attribute really is written only by app.js's setView() and never
+    // server-rendered — but `setView` is the FIRST statement of `boot()`
+    // (app.js:8040), so a throw anywhere in the whole wiring region after it
+    // still leaves the attribute set. A reviewer demonstrated it: renaming
+    // `estimate-run` killed boot (`data-app-state="error"`) and this test
+    // stayed green. `data-app-state` is the signal app.js:8294 documents as
+    // "ALWAYS written, exactly once, on every path" — `ready` at :8273,
+    // `error` at :8275 and :8304 — so it distinguishes the two.
+    await expect(page.locator("html")).toHaveAttribute("data-app-state", "ready");
 
     // Let /ready land and the app settle.
     await expect(banner(page)).toBeHidden();
@@ -311,8 +319,10 @@ test.describe("a hung probe cannot silence the disclosure (#117 review 2)", () =
     // it must not invent a warning when the seed says the deployment is fine.
     await bootWithHungEndpoint(page, "**/ready", "live");
     // Positive partner (#131) — same reasoning as the first test: prove app.js
-    // booted, or "hidden" could just mean "nothing rendered".
-    await expect(page.locator("#main-content[data-active-view]")).toBeVisible();
+    // booted, or "hidden" could just mean "nothing rendered". `ready` is
+    // reachable even here: app.js stamps it at :8273, BEFORE the
+    // `refreshReadiness()` this test hangs at :8288.
+    await expect(page.locator("html")).toHaveAttribute("data-app-state", "ready");
     await page.waitForTimeout(3000); // past READINESS_DISCLOSURE_FALLBACK_MS
     await expect(banner(page)).toBeHidden();
     expect(await page.evaluate(() => (window as any).__bannerShows)).toBe(0);

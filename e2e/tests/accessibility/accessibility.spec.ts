@@ -214,9 +214,18 @@ test.describe("Accessibility", () => {
       await page.getByRole("textbox").fill("Test error");
       await page.getByRole("button", { name: /run now/i }).click();
 
-      const alert = page.getByRole("alert").first();
-      await expect(alert).toBeVisible();
-      await expect(alert).not.toBeEmpty();
+      // NOT `getByRole("alert").first()`. `.first()` resolves in DOM order and
+      // `#toast-region` (workspace.html:80) precedes `#error-region`
+      // (workspace.html:121), while app.js:850 gives an error-tone toast
+      // `role="alert"` too. That version bit today only by accident: a
+      // reviewer kept a mutation that broke the banner, added the error toast
+      // `handleError` already raises elsewhere (app.js:6949, :910), and the
+      // test went green on the toast while the banner stayed hidden. Naming
+      // the region keeps the role assertion — the point of this test — without
+      // letting a different alert stand in for it.
+      const errorAlert = page.locator("#error-region[role='alert']");
+      await expect(errorAlert).toBeVisible();
+      await expect(errorAlert).not.toBeEmpty();
     });
   });
 
