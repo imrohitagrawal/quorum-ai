@@ -305,3 +305,36 @@ def test_a_successful_reopen_installs_the_new_store() -> None:
         store_reconnect._reopen_feedback_store()
 
     assert configured == [sentinel]
+
+
+def test_a_failed_run_history_reopen_leaves_the_previous_store_installed() -> None:
+    """Same contract as the feedback store's failure path, on the sibling
+    reopen body — the two are separate functions, so one being right proves
+    nothing about the other.
+    """
+    configured: list[Any] = []
+
+    with (
+        patch(
+            "product_app.run_history_store.RunHistoryStore.from_env",
+            side_effect=OSError("still locked"),
+        ),
+        patch("product_app.run_history_store.configure", side_effect=configured.append),
+    ):
+        store_reconnect._reopen_run_history_store()
+
+    assert configured == [], "a failed reopen must not call configure() at all"
+
+
+def test_a_successful_run_history_reopen_installs_the_new_store() -> None:
+    """Positive partner for the sibling reopen body."""
+    sentinel = object()
+    configured: list[Any] = []
+
+    with (
+        patch("product_app.run_history_store.RunHistoryStore.from_env", return_value=sentinel),
+        patch("product_app.run_history_store.configure", side_effect=configured.append),
+    ):
+        store_reconnect._reopen_run_history_store()
+
+    assert configured == [sentinel]
