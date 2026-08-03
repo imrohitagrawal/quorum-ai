@@ -120,9 +120,13 @@ BUCKET_B_PIN_BEHAVIOUR = {
         "assert it matches 'medical' and not 'weather'; the regex should grow"
     ),
     "safety._OWN_CAVEAT_TEXT": (
-        "assert it equals synthesis.HIGH_STAKES_NOTICE_FRAGMENT and "
-        "synthesis_length._CaveatEnforcer.FULL_CAVEAT; safety cannot import "
-        "upward so the copy is kept honest by that equality, not by the literal"
+        "not a literal at all — it IS synthesis_length._CaveatEnforcer.FULL_CAVEAT, "
+        "imported; assert it still equals synthesis.HIGH_STAKES_NOTICE_FRAGMENT, "
+        "which remains a separate copy"
+    ),
+    "safety._OWN_CAVEAT_OPTIONAL_OPENING": (
+        "assert a truncated caveat (which synthesis_length emits without this "
+        "opening) is still stripped; the clause tracks _truncate_with_caveat_present"
     ),
     "safety._OWN_CAVEAT_PATTERN": (
         "assert it strips this app's own caveat but NOT a hostile sentence that "

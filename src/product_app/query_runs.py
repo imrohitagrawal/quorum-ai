@@ -310,6 +310,33 @@ _CONTEXT_MAX_LENGTHS = {
 }
 
 
+def _check_context(ctx: dict[str, str | None] | None) -> None:
+    """Validate a ``context`` mapping, or raise ``ValueError``.
+
+    A module-level function rather than a base-class method because the
+    ``/warnings`` probe (``QueryRunWarningsRequest``) is NOT a
+    ``_QueryRunRequestBase`` and must apply exactly these rules (issue #155):
+    a probe that accepts what create rejects hands the client advice it
+    cannot act on. Pydantic v2 validators are not inherited by assignment,
+    so sharing the callable is the only way to guarantee one implementation
+    rather than two copies that drift.
+    """
+    if ctx is None:
+        return
+    allowed = set(_CONTEXT_MAX_LENGTHS)
+    extra = set(ctx.keys()) - allowed
+    if extra:
+        raise ValueError(
+            f"context may only contain {sorted(allowed)}; unexpected keys: {sorted(extra)}"
+        )
+    for key, value in ctx.items():
+        if value is None:
+            continue
+        limit = _CONTEXT_MAX_LENGTHS[key]
+        if len(value) > limit:
+            raise ValueError(f"context.{key} may be at most {limit} characters; got {len(value)}")
+
+
 class _QueryRunRequestBase(BaseModel):
     """The fields that decide what a run COSTS.
 
@@ -341,23 +368,7 @@ class _QueryRunRequestBase(BaseModel):
 
     @model_validator(mode="after")
     def _validate_context(self) -> Self:
-        ctx = self.context
-        if ctx is None:
-            return self
-        allowed = set(_CONTEXT_MAX_LENGTHS)
-        extra = set(ctx.keys()) - allowed
-        if extra:
-            raise ValueError(
-                f"context may only contain {sorted(allowed)}; unexpected keys: {sorted(extra)}"
-            )
-        for key, value in ctx.items():
-            if value is None:
-                continue
-            limit = _CONTEXT_MAX_LENGTHS[key]
-            if len(value) > limit:
-                raise ValueError(
-                    f"context.{key} may be at most {limit} characters; got {len(value)}"
-                )
+        _check_context(self.context)
         return self
 
 
@@ -528,15 +539,37 @@ class QueryRunResultResponse(BaseModel):
 
 
 class QueryRunWarningsRequest(BaseModel):
-    query_text: str = Field(min_length=1, max_length=8_000)
+    """The probe half of the documented probe-then-create flow.
+
+    Every constraint here MUST match ``_QueryRunRequestBase``'s. A field the
+    probe is STRICTER about is a request the client cannot ask about but can
+    submit; one it is LAXER about is advice the create route will refuse.
+    Both are the same "unbreakable loop" defect issue #155 exists to close,
+    and adversarial review found two of them still open here:
+
+    * ``query_text`` was capped at 8,000 while create allows
+      ``_QUERY_TEXT_MAX_LENGTH`` (20,000). Measured: a benign 9,600-character
+      query got 422 from the probe and 202 from create, so a client in that
+      range could not probe at all.
+    * ``context`` had no validator, so the probe answered 200 for unknown keys
+      and over-long values that create rejects — and accepted a 20 MB body.
+    """
+
+    query_text: str = Field(min_length=1, max_length=_QUERY_TEXT_MAX_LENGTH)
     #: Issue #155. Same shape as ``QueryRunCreateRequest.context`` on purpose:
     #: the probe must be able to describe the SAME request the client is about
-    #: to create, or discovery and enforcement disagree and a client following
-    #: the documented flow enters an unbreakable 422 loop.
+    #: to create.
     #:
     #: Optional and defaulted, so a pre-#155 client that omits it is
     #: unaffected — it simply gets the query-text-only answer it got before.
     context: dict[str, str | None] | None = Field(default=None)
+
+    @model_validator(mode="after")
+    def _validate_context(self) -> Self:
+        # The SAME callable the create route validates with, not a copy of
+        # its rules — a copy is what drifts.
+        _check_context(self.context)
+        return self
 
 
 class QueryRunWarningsResponse(BaseModel):

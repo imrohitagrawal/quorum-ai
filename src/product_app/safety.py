@@ -25,6 +25,7 @@ from uuid import UUID
 from pydantic import BaseModel
 
 from product_app.feedback_store import record_event as _record_feedback_event
+from product_app.synthesis_length import _CaveatEnforcer
 
 WARNING_VERSION = "2026-06-17"
 
@@ -80,21 +81,52 @@ HIGH_STAKES_PATTERN = re.compile(
 #: re-punctuates) no longer matches, so such a follow-up asks for a high-stakes
 #: ack it does not strictly need. That direction is deliberate: an unnecessary
 #: acknowledgement is a small friction the client can satisfy, while a missed
-#: one is the safety control not running. The verbatim sentence is the
-#: guaranteed floor — ``synthesis_length._CaveatEnforcer.append_if_missing``
-#: appends it verbatim and the templated branch emits it verbatim — so the
-#: common path is covered exactly.
-_OWN_CAVEAT_TEXT = (
-    "This summary is decision support only and is not medical, "
-    "legal, financial, safety, or regulated professional advice."
-)
+#: one is the safety control not running.
+#:
+#: THE OPENING CLAUSE IS OPTIONAL because THIS APP TRUNCATES ITS OWN CAVEAT.
+#: ``synthesis_length._truncate_with_caveat_present`` locates the caveat by the
+#: marker ``"decision support only"`` and returns ``text[caveat_idx:]``, which
+#: DROPS the leading ``"This summary is "``. So a Recommendation over
+#: ``RECOMMENDATION_MAX_CHARS`` ships a caveat starting mid-sentence. Measured
+#: (adversarial review, second round): a ~1500-char body is unaffected, a
+#: ~2100-char body is mangled and the follow-up got a spurious 422 — the exact
+#: regression that got the first attempt at this issue reverted, narrowed but
+#: not gone. An earlier draft of this comment claimed the verbatim sentence was
+#: "the guaranteed floor ... so the common path is covered exactly". That was
+#: FALSE on the truncation path; corrected here rather than quietly dropped.
+#:
+#: Making the opening optional costs nothing in safety: the remaining tokens are
+#: still literals with no wildcard between them, so a match still consumes only
+#: the caveat's own words.
+#: IMPORTED, not duplicated. An earlier draft copied the sentence here and
+#: justified it with "``safety`` sits below ``synthesis`` and must not import
+#: upward" — which review showed to be FALSE for the module that actually
+#: owns the string: ``synthesis_length`` imports nothing from
+#: ``product_app`` (only ``re``), so there is no cycle and no reason for a
+#: third copy. A pin test can only catch drift after someone writes it; not
+#: having a copy cannot drift at all.
+_OWN_CAVEAT_TEXT = _CaveatEnforcer.FULL_CAVEAT
 
-#: Kept in sync with ``synthesis.HIGH_STAKES_NOTICE_FRAGMENT`` /
-#: ``synthesis_length._CaveatEnforcer.FULL_CAVEAT`` by
-#: ``tests/unit/test_high_stakes_context_discriminator.py``, not by import:
-#: ``safety`` sits below ``synthesis`` and must not import upward.
+#: The clause ``synthesis_length`` drops when it truncates. Everything from
+#: ``"decision"`` onward is what survives, so that is the required part.
+_OWN_CAVEAT_OPTIONAL_OPENING = "This summary is"
+
+
+def _caveat_token_pattern(text: str) -> str:
+    """Literal tokens of ``text`` joined by whitespace/commas only.
+
+    No wildcard anywhere — that is the whole point; see above.
+    """
+    return r"[\s,]+".join(re.escape(word) for word in re.split(r"[\s,]+", text.strip()))
+
+
+#: ``synthesis.HIGH_STAKES_NOTICE_FRAGMENT`` is still a separate literal, and
+#: a test pins it equal to this one — that copy is not ours to delete here.
 _OWN_CAVEAT_PATTERN = re.compile(
-    r"[\s,]+".join(re.escape(word) for word in re.split(r"[\s,]+", _OWN_CAVEAT_TEXT.rstrip(".")))
+    r"(?:"
+    + _caveat_token_pattern(_OWN_CAVEAT_OPTIONAL_OPENING)
+    + r"[\s,]+)?"
+    + _caveat_token_pattern(_OWN_CAVEAT_TEXT.rstrip(".").removeprefix(_OWN_CAVEAT_OPTIONAL_OPENING))
     + r"[\s,]*\.",
     re.IGNORECASE,
 )

@@ -1258,7 +1258,7 @@ components:
       properties:
         query_text:
           type: string
-          maxLength: 8000
+          maxLength: 20000
           minLength: 1
           title: Query Text
         context:
@@ -1274,6 +1274,7 @@ components:
       required:
       - query_text
       title: QueryRunWarningsRequest
+      description: "The probe half of the documented probe-then-create flow.\n\nEvery constraint here MUST match ``_QueryRunRequestBase``'s. A field the\nprobe is STRICTER about is a request the client cannot ask about but can\nsubmit; one it is LAXER about is advice the create route will refuse.\nBoth are the same \"unbreakable loop\" defect issue #155 exists to close,\nand adversarial review found two of them still open here:\n\n* ``query_text`` was capped at 8,000 while create allows\n  ``_QUERY_TEXT_MAX_LENGTH`` (20,000). Measured: a benign 9,600-character\n  query got 422 from the probe and 202 from create, so a client in that\n  range could not probe at all.\n* ``context`` had no validator, so the probe answered 200 for unknown keys\n  and over-long values that create rejects — and accepted a 20 MB body."
     QueryRunWarningsResponse:
       properties:
         warnings:
