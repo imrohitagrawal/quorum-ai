@@ -39,12 +39,20 @@ gate versus 10 of 16 by review.
 
 FALSE-POSITIVE COST: near zero after THREE narrowings, all found by running it:
 paths relative to `working-directory: e2e`; this file's own regex fixtures; and
-an empty diff. The third was not a narrowing so much as a design error — the
-anti-vacuity floor asserted `checked > 0` against the live diff, so on `main`,
-where that range is empty by definition, the gate failed on every push. It
-reddened `main` at the merge of the batch that introduced it and blocked the
-deploy. An empty DIFF is not a broken EXTRACTOR; the floor now lives where it
-can hold, over this file's own fixture (see the positive-control test below).
+a diff with no added lines in a scanned file type. The third was a design error,
+not a narrowing. The anti-vacuity floor asserted `checked > 0` against the live
+diff, which is empty on `main` by definition — so the gate failed on every push
+to main, reddening it at the merge of the batch that introduced it and blocking
+the deploy. Review then showed it would equally have red'd every UI-only pull
+request, since `_SCANNED_SUFFIXES` excludes `.css`, `.html` and `.js`.
+
+An empty DIFF is not a broken EXTRACTOR. The floor now compares our hand-rolled
+diff parsing against `git diff --numstat`, an independent count of the same
+quantity, and fires only when git says there are added lines and the parser
+found none. Two claims made while fixing this were themselves false and are
+recorded so nobody re-derives them: the regex fixture test is NOT a partner for
+the diff plumbing (it never calls `_added_lines`), and printing the count did
+NOT report anything, because pytest captures stdout and CI does not pass `-s`.
 
 WHEN TO REMOVE: when prose stops carrying repo paths, or when a docs toolchain
 resolves links at build time and fails on a broken one. Its scope is
@@ -86,18 +94,23 @@ _CITATION_ROOTS = ("", "e2e")
 _EXEMPT = ("tests/unit/test_cited_paths_resolve.py",)
 
 
-def _added_lines() -> list[tuple[str, str]]:
-    """(file, line) for every line this branch adds vs origin/main."""
-    merge_base = subprocess.run(
+def _merge_base() -> str:
+    """The base this gate diffs against, or skip if origin/main is absent."""
+    result = subprocess.run(
         ["git", "merge-base", "origin/main", "HEAD"],
         capture_output=True,
         text=True,
         cwd=ROOT,
     )
-    if merge_base.returncode != 0:
+    if result.returncode != 0:
         pytest.skip("origin/main not available; cannot diff-scope")
+    return result.stdout.strip()
+
+
+def _added_lines(base: str) -> list[tuple[str, str]]:
+    """(file, line) for every line this branch adds vs ``base``."""
     diff = subprocess.run(
-        ["git", "diff", "--unified=0", f"{merge_base.stdout.strip()}...HEAD"],
+        ["git", "diff", "--unified=0", f"{base}...HEAD"],
         capture_output=True,
         text=True,
         cwd=ROOT,
@@ -118,41 +131,103 @@ def _added_lines() -> list[tuple[str, str]]:
     return out
 
 
+def _added_line_count_from_git(base: str) -> int:
+    """Added lines in scanned file types, counted by git rather than by us.
+
+    THE POINT IS THE INDEPENDENCE. ``_added_lines`` above parses ``git diff``
+    text by hand — the ``+++ b/`` prefix, the leading ``+``. If that parsing
+    breaks, it returns an empty list and every negative check downstream passes
+    over nothing. ``--numstat`` is a different code path through git that yields
+    the same quantity, so the two disagreeing is exactly the signal that our
+    parser is broken.
+
+    A review of the first version of this fix demonstrated the gap: mutating
+    ``"+++ b/"`` to ``"+++ zz/"`` left the gate green on a branch that really
+    did cite a missing path. The docstring at the time claimed the regex fixture
+    test covered this. It does not — that test exercises ``_CITATION`` and never
+    touches this function.
+    """
+    out = subprocess.run(
+        ["git", "diff", "--numstat", f"{base}...HEAD"],
+        capture_output=True,
+        text=True,
+        cwd=ROOT,
+    )
+    assert out.returncode == 0, out.stderr
+    total = 0
+    for row in out.stdout.splitlines():
+        fields = row.split("\t")
+        if len(fields) != 3:
+            continue
+        added, _deleted, path = fields
+        if added == "-":  # binary file; numstat reports no line counts
+            continue
+        if Path(path).suffix in _SCANNED_SUFFIXES:
+            total += int(added)
+    return total
+
+
 def test_every_repo_path_cited_on_an_added_line_exists() -> None:
     """Turns red if: a comment, docstring or doc names a file that is not there.
 
     The phantom `docs/adr/0003-chromium-only-e2e.md` in this repo's history is
     the exact shape.
     """
-    added = _added_lines()
-    if not added:
-        # ON MAIN THIS IS THE NORMAL STATE, NOT A FAULT. The scope is
-        # `merge-base(origin/main, HEAD)...HEAD`; on `main` itself that range is
-        # empty by definition, so there is nothing in scope to examine.
-        #
-        # This gate shipped asserting `checked > 0` unconditionally, and that
-        # turned every push to `main` RED — including the merge of the very
-        # batch that introduced it, which blocked the deploy. The floor aimed at
-        # the right risk (a broken extractor passing vacuously) but attached it
-        # to the wrong signal: an empty DIFF is not a broken EXTRACTOR.
-        #
-        # The extractor's real anti-vacuity partner is
-        # `test_the_extractor_finds_a_citation_and_ignores_ordinary_prose`
-        # below — a fixture-based positive control that runs on EVERY
-        # invocation, including this one, and does not depend on what the diff
-        # happens to contain. That is where a floor can actually hold: over a
-        # set this file controls, not one the branch supplies.
-        pytest.skip("no added lines vs origin/main — nothing in scope")
+    base = _merge_base()
+    added = _added_lines(base)
+    expected = _added_line_count_from_git(base)
 
+    if expected == 0:
+        # NOTHING IN SCOPE — and on `main` this is the normal state, not a
+        # fault. The scope is `merge-base(origin/main, HEAD)...HEAD`; on `main`
+        # itself that range is empty by definition.
+        #
+        # This gate shipped asserting `checked > 0` unconditionally, which
+        # turned every push to `main` RED — including the merge of the batch
+        # that introduced it, blocking the deploy. Review then showed it would
+        # equally have red'd every UI-only pull request, because
+        # `_SCANNED_SUFFIXES` excludes `.css`, `.html` and `.js`: a diff
+        # touching only those yields no added lines either.
+        #
+        # The condition is `expected == 0`, not `not added`, so this message is
+        # TRUE in both cases. An earlier revision skipped on `not added` and
+        # told a branch that had added lines to two files that there were none.
+        pytest.skip(
+            "the diff adds no lines to any file type this gate scans "
+            f"({', '.join(sorted(_SCANNED_SUFFIXES))}) — nothing in scope"
+        )
+
+    # PLUMBING FLOOR — the anti-vacuity check that can actually hold.
+    #
+    # git says there are added lines in scannable files. If our own hand-rolled
+    # diff parser found none, the parser is broken and every negative check
+    # below would pass over an empty set. Keyed on git's own count rather than
+    # on "were any files changed", because a pure DELETION changes a scanned
+    # file while legitimately adding nothing.
+    assert added, (
+        f"git reports {expected} added line(s) in scanned file types, but "
+        "`_added_lines` extracted none — the diff parser is broken, not the "
+        "branch. Every citation check below would pass vacuously."
+    )
+
+    # No count is kept. A diff can add lines and cite no paths at all — any
+    # ordinary code change without prose — so "zero citations examined" is a
+    # legitimate outcome here and asserting against it is what broke `main`.
+    # The quantity that must never be silently zero is the PARSER's output, and
+    # the plumbing floor above is what holds that.
+    #
+    # An earlier revision printed the count "so the gate reports what it
+    # measured". Review demonstrated that was decoration: `pytest -q` showed the
+    # line 0 times, `-s` showed it 1 time, and CI runs `make test-report`
+    # without `-s`. The numbers that matter now live in the failure messages,
+    # where they are actually read.
     broken: list[str] = []
-    checked = 0
     for path, line in added:
         if path in _EXEMPT:
             continue
         for cited in _CITATION.findall(line):
             # Strip trailing punctuation prose leaves behind.
             cited = cited.rstrip(".,;:)")
-            checked += 1
             if not any((ROOT / prefix / cited).exists() for prefix in _CITATION_ROOTS):
                 broken.append(f"{path}: {cited}")
 
@@ -160,11 +235,6 @@ def test_every_repo_path_cited_on_an_added_line_exists() -> None:
         "these paths are cited on lines this branch adds, but do not exist:\n  "
         + "\n  ".join(sorted(set(broken)))
     )
-    # Report what was counted, per the repo's rule that a gate must say what it
-    # measured. Deliberately NOT an assertion: a diff can add lines and cite no
-    # paths at all — an ordinary code change with no prose is exactly that — so
-    # `checked == 0` here is a legitimate outcome, not evidence of a fault.
-    print(f"citation gate: examined {checked} cited path(s) across {len(added)} added line(s)")
 
 
 def test_the_extractor_finds_a_citation_and_ignores_ordinary_prose() -> None:
