@@ -5535,6 +5535,24 @@ html[data-theme="dark"] .landing-preview { background: var(--accent-soft); }
   .landing-header { min-height: 52px; padding: 0 var(--space-4); }
   .landing-runbar-foot { padding: var(--space-3) 14px 14px; margin-top: var(--space-2); }
 
+  /* #222, review round 1. The session trail is `position: fixed; z-index: 100`
+     at this width, pinned to the bottom. MEASURED: after the density rules
+     above brought the run-bar CTAs to y=616-660, the trail occupied 610-664
+     and covered them **100%** — `document.elementFromPoint` returned
+     `session-trail-head` across every sampled point of both buttons, and a
+     real click on "Run the debate" hit the trail and did nothing.
+
+     So the density work alone moved the CTAs from "below the fold" to
+     "underneath an opaque panel", which is no better for the user and was
+     worse for honesty, because the spec claimed success. `toBeInViewport`
+     cannot see paint-order occlusion — it is an IntersectionObserver against
+     the viewport — which is why the partner test missed it.
+
+     The trail is a WORKSPACE affordance: on the landing view a first-time
+     visitor has no session to show. Hiding it there costs nothing and is
+     what makes the CTAs actually clickable. */
+  [data-active-view="landing"] .session-trail-panel { display: none; }
+
   /* PR8: the session trail collapses into a bottom bar on small screens. */
   .session-trail-panel {
     position: fixed;
