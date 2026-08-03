@@ -429,6 +429,33 @@ class Settings(BaseSettings):
     # environment.
     sentry_dsn: str = ""
 
+    # --- Durable-store reconnect (issue #123) ---------------------------
+    # `configure_feedback_store()` / `configure_run_history_store()` open
+    # their SQLite sinks exactly once, at import. A transient lock at boot
+    # (or a volume that goes read-only mid-life) used to disable the
+    # per-account 24h spend cap for the entire process lifetime, with no
+    # way back short of a restart. This flag lets a background attempt
+    # re-open the store once its write-health signal (or, for
+    # run_history_store, which has no such signal, its mere absence) says
+    # it needs one. Defaults True: the risk is asymmetric (a failed reopen
+    # attempt costs one 5.24s SQLite lock-open timeout in a background
+    # thread, off the request path; leaving it off costs a silently
+    # unenforced spend cap for the rest of the process's life) and,
+    # crucially, the trigger only ever fires when a store is ALREADY
+    # `None` or already reporting `"failing"` — an ordinary healthy store
+    # (every test using `:memory:` that never simulates a write failure)
+    # never reaches the reopen path at all, so this default does not by
+    # itself risk new test flakiness.
+    store_reconnect_enabled: bool = True
+    #: Matches the existing 60s cooldown pattern already used by
+    #: `feedback_store._claim_lost_cost_event_log_slot` and
+    #: `costs._log_daily_cap_bypassed` — long enough that a burst of
+    #: requests during an outage does not hammer the lock-open cost this
+    #: mechanism exists to keep off the request path, short enough that a
+    #: recovered volume is usable again within one minute of the next
+    #: `estimate` call, without an operator having to restart the process.
+    store_reconnect_cooldown_seconds: float = Field(default=60.0, gt=0, allow_inf_nan=False)
+
 
 settings = Settings()
 

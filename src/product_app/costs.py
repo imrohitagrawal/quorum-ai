@@ -459,6 +459,20 @@ class CostEstimationService:
         query_run_id: UUID | None = None,
         context: dict[str, Any] | None = None,
     ) -> CostEstimate:
+        # Issue #123: the cheapest, most frequently-hit request path is where
+        # a stale-store reconnect gets kicked off. Both calls are cheap on
+        # the common healthy-store path (one property read under a lock the
+        # store already holds) and never block THIS request: an actual
+        # reopen, if one is due, runs on a background thread and is picked
+        # up by a LATER call once it finishes.
+        from product_app.store_reconnect import (
+            maybe_reconnect_feedback_store,
+            maybe_reconnect_run_history_store,
+        )
+
+        maybe_reconnect_feedback_store()
+        maybe_reconnect_run_history_store()
+
         breakdown = self._estimate_breakdown(
             query_text=query_text,
             model_slots=model_slots,
@@ -656,10 +670,13 @@ class CostEstimationService:
         _log.error(
             "costs: feedback store unavailable, so the USD %s per-account 24h "
             "daily spend cap is NOT being enforced — every estimate is passing "
-            "the cap check unmetered. The store is a process-wide singleton with "
-            "no reconnect path: restart the process once the database is "
-            "reachable (see /status feedback_db). Repeats suppressed for %ss.",
+            "the cap check unmetered. A background reconnect is attempted from "
+            "this same request path (issue #123, at most one attempt per %ss); "
+            "if this line keeps repeating, the reopen is failing too — check "
+            "/status feedback_db and restart once the database is reachable. "
+            "Repeats suppressed for %ss.",
             DAILY_CAP_USD,
+            settings.store_reconnect_cooldown_seconds,
             DAILY_CAP_BYPASS_LOG_INTERVAL_S,
         )
 
