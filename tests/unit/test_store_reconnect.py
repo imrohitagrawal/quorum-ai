@@ -567,6 +567,28 @@ def test_a_reopen_whose_new_handle_is_already_writable_does_not_arm_the_block() 
     assert store_reconnect.feedback_reopen_tried_without_recovery() is False
 
 
+def test_a_lost_billed_writes_that_raises_is_not_read_as_a_clean_ledger() -> None:
+    """Same guard as ``write_health``, on the money counter.
+
+    A store that reports a landed write but cannot say whether it lost a
+    charge has not demonstrated the ledger is sound, so it must not stand the
+    block down — and it must not propagate out of ``estimate()`` either.
+
+    Turns red if: the ``try/except`` around ``lost_billed_writes()`` is
+    dropped (the call then raises out of this test), or if the except branch
+    returns ``True``.
+    """
+
+    class _CounterExplodes:
+        def write_health(self) -> str:
+            return "ok"
+
+        def lost_billed_writes(self) -> int:
+            raise RuntimeError("simulated counter explosion")
+
+    assert store_reconnect.feedback_ledger_is_trustworthy(_CounterExplodes()) is False
+
+
 def test_a_write_health_that_raises_is_treated_as_stale_not_as_a_crash() -> None:
     """Adversarial review (#122): the ``callable(...)`` guard only covered a
     MISSING method. A ``write_health`` that EXISTS and raises propagated
