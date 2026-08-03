@@ -58,7 +58,7 @@ from typing import Any
 
 import pytest
 
-from product_app import feedback_store
+from product_app import feedback_store, store_reconnect
 from product_app.auth import session_repository
 from product_app.query_runs import (
     _account_rate_limiter,
@@ -146,6 +146,24 @@ def _reset_state() -> None:
     session_repository.clear()
     _ip_rate_limiter.clear()
     _account_rate_limiter.clear()
+    # Issue #122/#123. The reconnect cooldown stamps and the "a reopen was
+    # tried and the store still cannot be shown to write" flag are module
+    # globals, and any test whose ``estimate()`` runs against a stale store
+    # spawns a REAL background reopen that sets them. MEASURED: that leaked
+    # out of ``tests/integration/test_feedback_store_write_failures.py`` and
+    # failed two unrelated tests in
+    # ``tests/integration/test_feedback_store_locked_database.py`` — the
+    # flag was still set, so the daily-cap guard blocked and the bypass
+    # ERROR those tests assert on never fired. Same class of process-global
+    # hazard as the cost event ring and the run-capacity semaphore.
+    #
+    # PREVENTIVE, not currently load-bearing: both of those files now pin
+    # `store_reconnect_enabled = False` for their own reasons, so deleting
+    # this line leaves the whole suite green today (verified by mutation, not
+    # assumed). It stays because the hazard is real and was realised once,
+    # and because every other process global above is reset here for exactly
+    # the same reason.
+    store_reconnect._reset_for_tests()
 
 
 @pytest.fixture(autouse=True)

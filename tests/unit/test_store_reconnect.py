@@ -371,7 +371,7 @@ def test_a_successful_reopen_installs_the_new_store() -> None:
     assert configured == [sentinel]
 
 
-def test_a_failed_feedback_reopen_sets_the_failure_flag() -> None:
+def test_a_failed_feedback_reopen_sets_the_flag() -> None:
     """Issue #122's own signal: ``costs.py`` gates its BLOCK policy on this
     flag, not on staleness alone. If a failed reopen didn't set it, #122's
     fail-closed path would never fire even after a genuinely failed
@@ -383,22 +383,115 @@ def test_a_failed_feedback_reopen_sets_the_failure_flag() -> None:
     ):
         store_reconnect._reopen_feedback_store()
 
-    assert store_reconnect.feedback_reconnect_has_failed() is True
+    assert store_reconnect.feedback_reopen_tried_without_recovery() is True
 
 
-def test_a_successful_feedback_reopen_clears_the_failure_flag() -> None:
-    """The positive partner: a reopen that fixes the store must let #122's
-    BLOCK policy stand down, not stay latched forever from an earlier,
-    now-resolved failure."""
+def test_a_reopen_that_merely_OPENS_does_not_clear_the_flag() -> None:
+    """The defect adversarial review found, at unit scale.
+
+    ``FeedbackStore.from_env()`` on an existing, already-migrated database
+    attempts ZERO writes, so it returns successfully even against a
+    still-read-only volume. Treating that as "recovered" latched the flag to
+    ``False`` on a reopen that fixed nothing, and #122's BLOCK then never
+    fired for the very fault shape it exists to fix.
+
+    Turns red if: ``_reopen_feedback_store`` clears the flag on a
+    non-raising open.
+    """
     store_reconnect._reset_for_tests()
-    store_reconnect._feedback_reopen_has_failed = True
     with (
         patch("product_app.feedback_store.FeedbackStore.from_env", return_value=object()),
         patch("product_app.feedback_store.configure"),
     ):
         store_reconnect._reopen_feedback_store()
 
-    assert store_reconnect.feedback_reconnect_has_failed() is False
+    assert store_reconnect.feedback_reopen_tried_without_recovery() is True, (
+        "an open that wrote nothing is not evidence the store recovered"
+    )
+
+
+def test_a_landed_write_clears_the_flag() -> None:
+    """The positive partner: the fail-closed policy MUST stand down once the
+    store demonstrably writes again, or a one-off fault blocks an account
+    forever. Only ``write_health() == "ok"`` counts as that evidence."""
+    store_reconnect._reset_for_tests()
+    store_reconnect._feedback_reopen_tried_without_recovery = True
+
+    class _RecoveredStore:
+        def write_health(self) -> str:
+            return "ok"
+
+    with (
+        patch("product_app.feedback_store.get_store", return_value=_RecoveredStore()),
+        patch("product_app.store_reconnect.threading.Thread", _FakeThread),
+    ):
+        store_reconnect.maybe_reconnect_feedback_store()
+
+    assert store_reconnect.feedback_reopen_tried_without_recovery() is False
+
+
+def test_a_freshly_reopened_unverified_store_does_not_clear_the_flag() -> None:
+    """``"unverified"`` is neither stale nor recovered — and it is exactly
+    what a reopen onto a still-broken volume leaves behind. Reading "not
+    stale" as "recovered" here is what made the defect above survive.
+
+    Turns red if: the clear condition widens from ``== "ok"`` to
+    ``!= "failing"``.
+    """
+    store_reconnect._reset_for_tests()
+    store_reconnect._feedback_reopen_tried_without_recovery = True
+
+    class _UnverifiedStore:
+        def write_health(self) -> str:
+            return "unverified"
+
+    with (
+        patch("product_app.feedback_store.get_store", return_value=_UnverifiedStore()),
+        patch("product_app.store_reconnect.threading.Thread", _FakeThread),
+    ):
+        store_reconnect.maybe_reconnect_feedback_store()
+
+    assert store_reconnect.feedback_reopen_tried_without_recovery() is True
+
+
+def test_a_write_health_that_raises_is_treated_as_stale_not_as_a_crash() -> None:
+    """Adversarial review (#122): the ``callable(...)`` guard only covered a
+    MISSING method. A ``write_health`` that EXISTS and raises propagated
+    straight out of ``estimate()`` — the request path for
+    ``POST /v1/query-runs/estimate`` — which is the bare-500-with-no-error-
+    envelope outcome #122 says must never ship as the fix. Reproduced by
+    execution before this guard existed, and the first raiser was this
+    module's own trigger, one frame before ``costs.py`` ever looked.
+
+    A store that blows up when asked its own health is not a healthy store,
+    so it reads as stale rather than as a clean bill of health.
+
+    Turns red if: the ``try/except`` in ``feedback_ledger_is_stale`` is
+    dropped (the call then raises out of this test).
+    """
+
+    class _ExplodingStore:
+        def write_health(self) -> str:
+            raise RuntimeError("simulated write_health explosion")
+
+    assert store_reconnect.feedback_ledger_is_stale(_ExplodingStore()) is True
+    assert store_reconnect.feedback_ledger_is_trustworthy(_ExplodingStore()) is False
+
+
+def test_a_store_with_no_write_health_signal_is_neither_stale_nor_recovered() -> None:
+    """The distinction the two predicates rest on. A narrow duck-typed double
+    (or any implementation predating #109) has no signal at all — that is an
+    ABSENCE of evidence, not evidence of a fault, so it must not read as
+    stale. It also cannot demonstrate recovery, which is harmless precisely
+    because it is never stale: the conjunction ``costs.py`` blocks on can
+    never be true for it.
+    """
+
+    class _NoSignalStore:
+        pass
+
+    assert store_reconnect.feedback_ledger_is_stale(_NoSignalStore()) is False
+    assert store_reconnect.feedback_ledger_is_trustworthy(_NoSignalStore()) is True
 
 
 def test_a_failed_run_history_reopen_leaves_the_previous_store_installed() -> None:

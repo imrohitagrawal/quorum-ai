@@ -129,7 +129,7 @@ def test_a_stale_ledger_after_a_failed_reopen_blocks_with_an_honest_reason() -> 
     create routes)."""
     from product_app import feedback_store
 
-    store_reconnect._feedback_reopen_has_failed = True
+    store_reconnect._feedback_reopen_tried_without_recovery = True
 
     with pytest.MonkeyPatch.context() as mp:
         mp.setattr(feedback_store, "get_store", lambda: None)
@@ -164,7 +164,7 @@ def test_a_store_reporting_failing_writes_after_a_failed_reopen_blocks() -> None
     confidently-wrong-low ``daily_spend_for`` figure is trusted outright."""
     from product_app import feedback_store
 
-    store_reconnect._feedback_reopen_has_failed = True
+    store_reconnect._feedback_reopen_tried_without_recovery = True
 
     with pytest.MonkeyPatch.context() as mp:
         mp.setattr(feedback_store, "get_store", lambda: _FailingWritesStore())
@@ -191,6 +191,38 @@ def test_a_store_double_without_write_health_is_read_normally_not_treated_as_sta
     assert not any("last 24 hours" in r for r in estimate.reasons)
 
 
+def test_a_store_whose_write_health_raises_does_not_500_the_request() -> None:
+    """Adversarial review (#122). The ``callable(...)`` guard only covered a
+    MISSING ``write_health``; one that EXISTS and raises propagated straight
+    out of ``estimate()``, producing exactly the bare 500 with no error
+    envelope that #122 says must never ship as the fix (reproduced by
+    execution). A store that blows up when asked its own health reads as
+    stale, so with a tried-and-unrecovered reopen it BLOCKs — cleanly.
+    """
+    from product_app import feedback_store
+
+    class _ExplodingHealthStore:
+        def daily_spend_for(self, account_id: object, **_kwargs: object) -> Decimal:
+            return Decimal("0")
+
+        def global_daily_spend(self, **_kwargs: object) -> Decimal:
+            return Decimal("0")
+
+        def write_health(self) -> str:
+            raise RuntimeError("simulated write_health explosion")
+
+    store_reconnect._feedback_reopen_tried_without_recovery = True
+
+    with pytest.MonkeyPatch.context() as mp:
+        mp.setattr(feedback_store, "get_store", lambda: _ExplodingHealthStore())
+        estimate = cost_estimation_service.estimate(
+            query_text="hi", model_slots=_slots(), account_id=uuid4()
+        )
+
+    assert estimate.threshold_action is CostThresholdAction.BLOCK
+    assert estimate.confirmation_token is None
+
+
 def test_a_healthy_store_under_the_cap_is_never_blocked_by_this_policy() -> None:
     """Sanity check: a genuinely healthy, spend-free account must still be
     allowed. This policy must only ever narrow the ALLOW band on a fault it
@@ -207,7 +239,9 @@ def test_a_healthy_store_under_the_cap_is_never_blocked_by_this_policy() -> None
         def write_health(self) -> str:
             return "ok"
 
-    store_reconnect._feedback_reopen_has_failed = True  # must not matter on a healthy store
+    store_reconnect._feedback_reopen_tried_without_recovery = (
+        True  # must not matter on a healthy store
+    )
 
     with pytest.MonkeyPatch.context() as mp:
         mp.setattr(feedback_store, "get_store", lambda: _HealthyZeroSpendStore())

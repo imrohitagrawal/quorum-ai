@@ -115,6 +115,7 @@ from uuid import UUID, uuid4
 import pytest
 from fastapi.testclient import TestClient
 
+from product_app.config import settings
 from product_app.costs import (
     DAILY_CAP_USD,
     CostEstimationService,
@@ -165,6 +166,24 @@ class _MonoClock:
 
     def advance(self, seconds: float) -> None:
         self._t += seconds
+
+
+@pytest.fixture(autouse=True)
+def _no_background_reconnect(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Pin this file's premise: a cap that stays BYPASSED, not one that blocks.
+
+    These tests measure the fail-open the operator decision leaves in place —
+    five estimates ALLOW while every charge is swallowed. That premise
+    requires no reconnect: since issue #122, once a reopen has been attempted
+    and the store still cannot be shown to write, the cap BLOCKS, so the
+    five-ALLOW sequence stops being the behaviour under test.
+
+    Not a workaround — it restores the exact condition each test was written
+    to measure. #122's block is covered on its own terms, against a real
+    read-only volume, in
+    ``tests/integration/test_stale_ledger_block_on_a_real_volume.py``.
+    """
+    monkeypatch.setattr(settings, "store_reconnect_enabled", False)
 
 
 @pytest.fixture

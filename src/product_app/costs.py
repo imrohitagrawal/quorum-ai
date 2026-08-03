@@ -552,42 +552,51 @@ class CostEstimationService:
             from product_app.feedback_store import get_store  # local import to avoid cycles
 
             store = get_store()
-            # Issue #122. Two shapes of "the ledger cannot be trusted":
-            # ``store is None`` (#101's boot-lock case) and a store that
-            # opened fine but ``write_health()`` now reports ``"failing"``
-            # (#109's read-only-volume-under-an-already-open-handle case).
-            # ``getattr`` + ``callable`` guard, not a bare ``store.write_health()``
-            # call: mirrors ``store_reconnect.maybe_reconnect_feedback_store``,
-            # for the same reason — a duck-typed test double or any future
-            # store implementation that predates #109's signal must be read
-            # as "cannot report health" rather than crash the request.
-            health = getattr(store, "write_health", None) if store is not None else None
-            ledger_is_stale = store is None or (callable(health) and health() == "failing")
-            if ledger_is_stale:
-                # Pre-decided policy (issue #122, confirmed with the operator,
-                # not a code guess): BLOCK, but only AFTER a reopen attempt
-                # (issue #123) has actually been tried and failed — never an
-                # immediate block on staleness alone (a reconnect triggered
-                # earlier in THIS SAME call may still be in flight), and never
-                # a bare raise (measured: an unwrapped raise here produced a
-                # bare 500 with no error envelope on both routes).
-                from product_app.store_reconnect import feedback_reconnect_has_failed
+            # Issue #122. TWO predicates, not one, and the difference is
+            # load-bearing (both defined once in ``store_reconnect`` and
+            # shared with the reconnect trigger at the top of this method —
+            # two copies of a money-guard test drift):
+            #
+            # * ``feedback_ledger_is_stale``  → "is there positive evidence
+            #   of a fault?" Drives the loud bypass log below.
+            # * ``feedback_ledger_is_trustworthy`` → "is there positive
+            #   evidence the ledger is SOUND?" Drives the block. A freshly
+            #   reopened handle reports ``"unverified"`` — neither — and
+            #   measured, keying the block on staleness alone let that state
+            #   un-block one request per cooldown window for the whole
+            #   outage, metering spend off a frozen ledger each time.
+            from product_app.store_reconnect import (
+                feedback_ledger_is_stale,
+                feedback_ledger_is_trustworthy,
+                feedback_reopen_tried_without_recovery,
+            )
 
-                if feedback_reconnect_has_failed():
-                    return CostEstimate(
-                        estimated_cost_usd=estimated,
-                        max_cost_usd=bound,
-                        threshold_action=CostThresholdAction.BLOCK,
-                        confirmation_token=None,
-                        breakdown=breakdown,
-                        reasons=[
-                            (
-                                "The daily spend ledger is stale and a reconnect "
-                                "attempt has already failed, so the 24h cap for "
-                                "this account cannot be verified right now."
-                            ),
-                        ],
-                    )
+            ledger_is_stale = feedback_ledger_is_stale(store)
+            # Pre-decided policy (issue #122, confirmed with the operator,
+            # not a code guess): BLOCK, but only AFTER a reopen has been
+            # tried and the store has STILL not proven it can write — never
+            # an immediate block on staleness alone (a reconnect triggered
+            # earlier in THIS SAME call may still be in flight), and never a
+            # bare raise (measured: an unwrapped raise here produced a bare
+            # 500 with no error envelope on both routes).
+            if feedback_reopen_tried_without_recovery() and not feedback_ledger_is_trustworthy(
+                store
+            ):
+                return CostEstimate(
+                    estimated_cost_usd=estimated,
+                    max_cost_usd=bound,
+                    threshold_action=CostThresholdAction.BLOCK,
+                    confirmation_token=None,
+                    breakdown=breakdown,
+                    reasons=[
+                        (
+                            "The daily spend ledger is not writable and a reconnect "
+                            "attempt has already been made without restoring it, so "
+                            "the 24h cap for this account cannot be verified right now."
+                        ),
+                    ],
+                )
+            if ledger_is_stale:
                 # LOUD ONLY (issue #101's original decision, unchanged for the
                 # first observation of staleness): the request is NOT denied
                 # and ``threshold_action`` is NOT changed, because failing
