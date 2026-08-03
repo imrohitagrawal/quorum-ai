@@ -243,3 +243,41 @@ The search (#31/#32), cost (#18–#20), observability (#26), and persistence (#2
 dimensions need their own gates (contract test, cost unit tests, degraded-mode
 signal, post-deploy persistence smoke). They are specified in the ledger and
 mechanism map but were out of scope for this run's UI-focused harness.
+
+
+---
+
+## Gates added 2026-08-03, with charters
+
+Every gate below carries a **charter** in its own module docstring answering
+four questions, and `tests/unit/test_gates_carry_a_charter.py` fails if one is
+dropped. The charter lives in the gate file rather than here on purpose: the
+person who needs it is the one standing in that file with a red test.
+
+**Why this section exists.** The table above records *what* each gate does. It
+does not record why it was added, what it cannot see, or when it has done its
+job — so a future session hitting one red cannot tell load-bearing from
+leftover, and will either delete it or exempt it. Both lose.
+
+**The field that matters is WHEN TO REMOVE.** A gate without a removal
+condition is permanent by default, and that is how a gate suite becomes sludge.
+
+| Gate | Bridges | Cannot see | Removal condition |
+|---|---|---|---|
+| `tests/unit/test_adr_index_matches_directory.py` | the ADR index rotted by hand twice (0002 unlisted 11 days; 0004-0007 unlisted) | whether an ADR *should* have been written — it would have caught **0 of the 6** this batch missed | the index stops being hand-maintainable (generated at docs-build time, or a tool owns it) |
+| `tests/unit/test_spend_cap_state_table.py` | 6 defects in a ~40-line predicate across 4 passes; 3 were dead ends. Found the 6th itself, in code hours old | whether production wires the *right* predicate (the integration test does); thread interleavings | the ledger moves to reserve-then-commit (ADR-0004) — the state space collapses and this file goes with it |
+| `tests/unit/test_cited_paths_resolve.py` | 38 of 1,352 repo-path citations unresolved (2.8%), incl. a phantom ADR filename | whether the *claim* around the path is true — nothing mechanical can | prose stops carrying repo paths, or a docs toolchain resolves links at build time |
+| `tests/unit/test_gates_carry_a_charter.py` | a gate whose rationale is lost becomes cargo cult or casualty | quality — it checks the four sections are present, not honest. "WHEN TO REMOVE: never" would pass | gate rationale gets its own tooling (an ADR per gate, or a register generated from source) |
+
+**Scope note.** The charter check registers only these four. The ~30 gates in
+the table above are **not** retrofitted: a meta-gate that opens red against
+unrelated history gets deleted, which is the exact failure it exists to
+prevent. Retrofit opportunistically, when touching a gate for another reason.
+
+**What is still missing, honestly.** None of these records *yield* — whether
+the gate has ever caught anything since it was added. Without that you cannot
+distinguish a gate that saved you three times from one that has never fired,
+which is the data that should drive removal. `docs/metrics/defect-discovery-audit.md`
+is the closest thing (0 of 16 src/ defects caught by any gate, 10 of 16 by
+adversarial review) and it is what makes this repo's scepticism about gates
+correct. Add a dated line here when a gate catches something real.

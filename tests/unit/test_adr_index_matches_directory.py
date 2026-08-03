@@ -6,6 +6,25 @@ and ADR-0004..0007 landed unlisted in August 2026. The index's own note said
 which is exactly what did not happen, because a note is a suggestion.
 
 This is the same note as a condition.
+
+GATE CHARTER
+------------
+WHY THIS EXISTS: the index went stale by hand twice -- ADR-0002 unlisted for 11
+days (2026-07-19..30), then ADR-0004..0007 landed unlisted (2026-08-03). Its own
+note already said "generate it rather than fix it by hand a second time", which
+is precisely what did not happen, because a note is a suggestion.
+
+WHAT IT CANNOT SEE: whether an ADR *should* have been written. It checks the
+index matches the directory, nothing about decisions that were never recorded.
+Measured by review: it would have caught **zero** of the 6 ADRs this batch
+failed to write.
+
+FALSE-POSITIVE COST: zero. It fires only when the file disagrees with the
+directory, which is always a real defect.
+
+WHEN TO REMOVE: when the index stops being a hand-maintainable artifact --
+e.g. it is generated at docs-build time, or the ADR list moves to a tool that
+owns it. Not before: the failure it guards has recurred once already.
 """
 
 from __future__ import annotations

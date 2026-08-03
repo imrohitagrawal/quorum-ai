@@ -22,6 +22,27 @@ wrong — the point is to turn a 20-minute re-derivation into a 5-second one.
 Nothing mechanical can tell Jaccard from containment by reading a sentence;
 adversarial review remains the primary defence, and this repo has measured that
 (0 of 16 src/ defects caught by a gate, 10 of 16 by review).
+
+GATE CHARTER
+------------
+WHY THIS EXISTS: prose in this repo cites files constantly, and a citation that
+does not resolve reads as evidence while being unfollowable. Measured
+2026-08-03: 1,352 repo-path citations, 38 unresolved (2.8%), including a
+phantom ADR filename that never existed. The same session cited an agent report
+that exists nowhere in the repo as if it were a repo fact.
+
+WHAT IT CANNOT SEE: whether the CLAIM around the path is true. "0.267
+(`scripts/probe.py`)" passes even when 0.267 is wrong. Nothing mechanical can
+tell Jaccard from containment by reading a sentence; adversarial review remains
+the primary defence, and this repo measured 0 of 16 src/ defects caught by any
+gate versus 10 of 16 by review.
+
+FALSE-POSITIVE COST: near zero after two narrowings, both found by running it:
+paths relative to `working-directory: e2e`, and this file's own regex fixtures.
+
+WHEN TO REMOVE: when prose stops carrying repo paths, or when a docs toolchain
+resolves links at build time and fails on a broken one. Its scope is
+diff-only; the 38 pre-existing breaks are backlog, not this gate's job.
 """
 
 from __future__ import annotations

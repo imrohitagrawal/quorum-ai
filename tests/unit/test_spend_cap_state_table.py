@@ -28,6 +28,27 @@ are complementary and neither is sufficient alone.
 Track record so far: this file found a live absorbing state --
 ``("ok", lost=1, tried=False)`` -- in code committed hours before it, which
 three review passes and a full suite had not.
+
+GATE CHARTER
+------------
+WHY THIS EXISTS: a ~40-line spend-cap predicate produced SIX defects across
+four review passes (2026-08-03), none in the predicates, all in wiring. Three
+were dead ends -- states the system could enter and never leave. This table
+found the sixth itself, in code committed hours earlier, that a green suite and
+three reviews had missed.
+
+WHAT IT CANNOT SEE: (a) whether production wires the RIGHT predicate -- it
+calls the same one, so it proves the algebra and not the wiring; the integration
+test covers that. (b) thread interleavings; this repo measured that a bare
+Barrier schedules nothing useful (0 reverts in 5,000 iterations against a real
+mutant), so stress is not the answer -- a deterministic window-opening test is.
+
+FALSE-POSITIVE COST: zero. The space is enumerated, not sampled.
+
+WHEN TO REMOVE: when the decision stops being derived from multiple signals
+with different lifetimes. If the ledger moves to reserve-then-commit (ADR-0004's
+recommended next design), affordability comes from one transaction, the state
+space collapses, and this file should be deleted with it rather than migrated.
 """
 
 from __future__ import annotations
