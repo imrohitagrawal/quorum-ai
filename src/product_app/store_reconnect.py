@@ -49,14 +49,34 @@ _lock = threading.Lock()
 _feedback_last_attempt_at: float | None = None
 _run_history_last_attempt_at: float | None = None
 
+#: Issue #122: whether the MOST RECENT completed feedback-store reopen
+#: attempt failed. ``False`` at process start and after any successful
+#: reopen — not merely "the store looks stale", but "an actual attempt was
+#: made and did not fix it". This is what lets ``costs.py`` distinguish
+#: "just went stale, a reconnect may still be in flight" (allow-and-log,
+#: today's posture) from "we tried and it's still broken" (block, per the
+#: issue's own confirmed policy).
+_feedback_reopen_has_failed: bool = False
+
 
 def _reset_for_tests() -> None:
-    """Clear both cooldown timestamps. Test-only — a real process never needs
-    to forget it just tried."""
-    global _feedback_last_attempt_at, _run_history_last_attempt_at
+    """Clear both cooldown timestamps and the failure flag. Test-only — a
+    real process never needs to forget it just tried."""
+    global _feedback_last_attempt_at, _run_history_last_attempt_at, _feedback_reopen_has_failed
     with _lock:
         _feedback_last_attempt_at = None
         _run_history_last_attempt_at = None
+        _feedback_reopen_has_failed = False
+
+
+def feedback_reconnect_has_failed() -> bool:
+    """Has the most recent completed feedback-store reopen attempt failed?
+
+    Used by :mod:`product_app.costs` (issue #122) to gate the daily-spend-cap
+    fail-closed policy: staleness alone must not block a request, only a
+    reopen that was actually tried and did not succeed.
+    """
+    return _feedback_reopen_has_failed
 
 
 def _spawn(target: Callable[[], None], *, name: str) -> None:
@@ -83,9 +103,11 @@ def _reopen_feedback_store() -> None:
     from product_app.feedback_store import FeedbackStore
     from product_app.feedback_store import configure as configure_feedback_store
 
+    global _feedback_reopen_has_failed
     try:
         store = FeedbackStore.from_env()
     except Exception as exc:  # noqa: BLE001 - best-effort background reopen
+        _feedback_reopen_has_failed = True
         _log.error(
             "store_reconnect: feedback store reopen attempt failed — the "
             "per-account 24h daily spend cap is still NOT being enforced: %s",
@@ -93,6 +115,7 @@ def _reopen_feedback_store() -> None:
         )
         return
     configure_feedback_store(store)
+    _feedback_reopen_has_failed = False
     _log.info("store_reconnect: feedback store reopened — the daily spend cap is enforced again")
 
 

@@ -552,27 +552,58 @@ class CostEstimationService:
             from product_app.feedback_store import get_store  # local import to avoid cycles
 
             store = get_store()
-            if store is None:
-                # P1 / issue #101. The store is gone — the boot-time open
-                # raised out of ``FeedbackStore.__init__`` and ``main``
-                # swallowed it (MEASURED: an EXCLUSIVE lock, a RESERVED lock on
-                # a database with no schema yet, or an unwritable volume with
-                # no database FILE yet; an unwritable volume whose file already
-                # exists opens fine) — so this guard is about to be skipped.
-                # The decision taken in the working session on issue #101's
-                # "operator decision required" item is LOUD ONLY: the request
-                # is NOT denied and ``threshold_action`` is NOT changed,
-                # because failing closed here would refuse every priced request
-                # on a storage fault. That decision is REAL but not yet written
-                # down anywhere durable — as of this change #101 carries no
-                # comment recording it — so treat this comment as the rationale
-                # and the issue as the place it still needs to land. What
-                # changes here is that the bypass stops being invisible: before
-                # this, a spend guard could be off for the whole life of a
-                # process with nothing but one boot-time WARNING about
-                # "persistence".
+            # Issue #122. Two shapes of "the ledger cannot be trusted":
+            # ``store is None`` (#101's boot-lock case) and a store that
+            # opened fine but ``write_health()`` now reports ``"failing"``
+            # (#109's read-only-volume-under-an-already-open-handle case).
+            # ``getattr`` + ``callable`` guard, not a bare ``store.write_health()``
+            # call: mirrors ``store_reconnect.maybe_reconnect_feedback_store``,
+            # for the same reason — a duck-typed test double or any future
+            # store implementation that predates #109's signal must be read
+            # as "cannot report health" rather than crash the request.
+            health = getattr(store, "write_health", None) if store is not None else None
+            ledger_is_stale = store is None or (callable(health) and health() == "failing")
+            if ledger_is_stale:
+                # Pre-decided policy (issue #122, confirmed with the operator,
+                # not a code guess): BLOCK, but only AFTER a reopen attempt
+                # (issue #123) has actually been tried and failed — never an
+                # immediate block on staleness alone (a reconnect triggered
+                # earlier in THIS SAME call may still be in flight), and never
+                # a bare raise (measured: an unwrapped raise here produced a
+                # bare 500 with no error envelope on both routes).
+                from product_app.store_reconnect import feedback_reconnect_has_failed
+
+                if feedback_reconnect_has_failed():
+                    return CostEstimate(
+                        estimated_cost_usd=estimated,
+                        max_cost_usd=bound,
+                        threshold_action=CostThresholdAction.BLOCK,
+                        confirmation_token=None,
+                        breakdown=breakdown,
+                        reasons=[
+                            (
+                                "The daily spend ledger is stale and a reconnect "
+                                "attempt has already failed, so the 24h cap for "
+                                "this account cannot be verified right now."
+                            ),
+                        ],
+                    )
+                # LOUD ONLY (issue #101's original decision, unchanged for the
+                # first observation of staleness): the request is NOT denied
+                # and ``threshold_action`` is NOT changed, because failing
+                # closed on the very first sighting — before a reopen has had
+                # a chance to run — would refuse every priced request on a
+                # transient storage blip. What changes here is that the
+                # bypass stops being invisible: before #101's fix, a spend
+                # guard could be off for the whole life of a process with
+                # nothing but one boot-time WARNING about "persistence".
                 self._log_daily_cap_bypassed()
             else:
+                # ``ledger_is_stale`` is False here, and its first disjunct
+                # is ``store is None`` — so ``store`` is proven non-None.
+                # Spelled out for mypy, which cannot follow narrowing through
+                # an intermediate boolean.
+                assert store is not None
                 already_spent = store.daily_spend_for(account_id)
                 # Same unit rule as the cumulative rail above: ``daily_spend_for``
                 # sums ``estimated_cost_usd``, so the addend is the point

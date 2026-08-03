@@ -371,6 +371,36 @@ def test_a_successful_reopen_installs_the_new_store() -> None:
     assert configured == [sentinel]
 
 
+def test_a_failed_feedback_reopen_sets_the_failure_flag() -> None:
+    """Issue #122's own signal: ``costs.py`` gates its BLOCK policy on this
+    flag, not on staleness alone. If a failed reopen didn't set it, #122's
+    fail-closed path would never fire even after a genuinely failed
+    reconnect attempt."""
+    store_reconnect._reset_for_tests()
+    with patch(
+        "product_app.feedback_store.FeedbackStore.from_env",
+        side_effect=OSError("still locked"),
+    ):
+        store_reconnect._reopen_feedback_store()
+
+    assert store_reconnect.feedback_reconnect_has_failed() is True
+
+
+def test_a_successful_feedback_reopen_clears_the_failure_flag() -> None:
+    """The positive partner: a reopen that fixes the store must let #122's
+    BLOCK policy stand down, not stay latched forever from an earlier,
+    now-resolved failure."""
+    store_reconnect._reset_for_tests()
+    store_reconnect._feedback_reopen_has_failed = True
+    with (
+        patch("product_app.feedback_store.FeedbackStore.from_env", return_value=object()),
+        patch("product_app.feedback_store.configure"),
+    ):
+        store_reconnect._reopen_feedback_store()
+
+    assert store_reconnect.feedback_reconnect_has_failed() is False
+
+
 def test_a_failed_run_history_reopen_leaves_the_previous_store_installed() -> None:
     """Same contract as the feedback store's failure path, on the sibling
     reopen body — the two are separate functions, so one being right proves
