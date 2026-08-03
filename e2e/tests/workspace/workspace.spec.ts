@@ -1,5 +1,48 @@
+import type { Page } from "@playwright/test";
 import { test, expect } from "../../fixtures/test-data";
 import { WorkspacePage } from "../../pages/WorkspacePage";
+
+/**
+ * Put the page into catalog-drift, the only way that actually works.
+ *
+ * `renderDriftBanner()` reads `state.lastStaleModelIds`, seeded at boot from
+ * the `window.STALE_MODEL_IDS` data island the SERVER renders into the initial
+ * HTML — so the HTML itself must be patched before the page parses it. Then
+ * `refreshDefaults()` re-seeds the same state from the live
+ * `/v1/models/defaults` response within the same boot, overwriting the island,
+ * so BOTH need the same stale id. The id must be a real default
+ * (`model_slots.DEFAULT_MODEL_IDS` slot 1); the banner intersects it with the
+ * user's selection, so an arbitrary string never matches.
+ */
+async function seedCatalogDrift(page: Page): Promise<void> {
+  await page.route("**/v1/models/defaults", async (route) => {
+    route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      body: JSON.stringify({
+        model_slots: [
+          { slot_number: 1, model_id: "openai/gpt-4o-mini", search: true },
+          { slot_number: 2, model_id: "anthropic/claude-haiku-4.5", search: true },
+          { slot_number: 3, model_id: "google/gemini-2.5-flash", search: true },
+          { slot_number: 4, model_id: "nvidia/nemotron-3-nano-30b-a3b", search: true },
+        ],
+        stale_model_ids: ["openai/gpt-4o-mini"],
+      }),
+    });
+  });
+  await page.route("**/ui", async (route) => {
+    const response = await route.fetch();
+    const body = await response.text();
+    const patched = body.replace(
+      /window\.STALE_MODEL_IDS\s*=\s*\[[^\]]*\];/,
+      'window.STALE_MODEL_IDS = ["openai/gpt-4o-mini"];'
+    );
+    await route.fulfill({ response, body: patched });
+  });
+
+  await page.reload();
+  await page.waitForLoadState("networkidle");
+}
 
 /**
  * End-to-end tests for the Quorum-AI workspace UI
@@ -169,12 +212,14 @@ test.describe("Quorum-AI Workspace", () => {
 
       await workspacePage.askQuestion("Test dismissal", true);
 
-      // Wait for error to appear
-      await workspacePage.page.waitForTimeout(1000);
+      // The positive partner (#131). Without it a run where the error never
+      // rendered at all would sail through the `not.toBeVisible()` below and
+      // report that dismissal works. This also replaces a bare
+      // `waitForTimeout(1000)` — an assertion that retries beats a fixed sleep
+      // that is either flaky or wasted.
+      await expect(workspacePage.errorBanner).toBeVisible({ timeout: 10000 });
 
-      // Dismiss the banner
-      const dismissButton = page.getByRole("button", { name: /dismiss error/i });
-      await dismissButton.click();
+      await page.getByRole("button", { name: /dismiss error/i }).click();
 
       // Error banner should no longer be visible
       await expect(workspacePage.errorBanner).not.toBeVisible();
@@ -183,58 +228,12 @@ test.describe("Quorum-AI Workspace", () => {
 
   test.describe("Catalog Drift", () => {
     test("should show catalog drift warning when models drift", async ({ page }) => {
-      // Issue #127: mocking /ready's catalog_drift_ids (as this test
-      // originally did) can never trigger `#drift-region`. Traced
-      // `renderDriftBanner()` in app.js: it reads only
-      // `state.lastStaleModelIds`, itself seeded once, at boot, from
-      // `window.STALE_MODEL_IDS` — a data island the SERVER renders
-      // directly into the initial HTML (`workspace.html:945`), not
-      // something the client ever fetches over the network. /ready's
-      // `catalog_drift_ids` feeds a DIFFERENT banner (`#readiness-banner`,
-      // via `refreshReadiness()`), already covered by
-      // `e2e/tests/invariants/readiness-banner.spec.ts`.
-      //
-      // So the only way to actually drive this banner is to patch the
-      // server-rendered HTML itself before the page parses it. Intersects
-      // with the user's SELECTED model ids too, so the injected stale id
-      // must be one of the real defaults (`model_slots.DEFAULT_MODEL_IDS`
-      // slot 1) rather than an arbitrary string like the original
-      // "test/model", which no selection could ever match.
-      //
-      // One more layer: `refreshDefaults()` (fired on every boot) re-seeds
-      // `state.lastStaleModelIds` from the LIVE `/v1/models/defaults`
-      // response and re-renders the banner — overwriting the page-load seed
-      // within the same boot. Verified directly: without also mocking this
-      // endpoint, `window.STALE_MODEL_IDS` carries the injected id but
-      // `#drift-region`'s `hidden` attribute never clears. So both the
-      // page-load seed AND the live re-seed need the same stale id.
-      await page.route("**/v1/models/defaults", async (route) => {
-        route.fulfill({
-          status: 200,
-          contentType: "application/json",
-          body: JSON.stringify({
-            model_slots: [
-              { slot_number: 1, model_id: "openai/gpt-4o-mini", search: true },
-              { slot_number: 2, model_id: "anthropic/claude-haiku-4.5", search: true },
-              { slot_number: 3, model_id: "google/gemini-2.5-flash", search: true },
-              { slot_number: 4, model_id: "nvidia/nemotron-3-nano-30b-a3b", search: true },
-            ],
-            stale_model_ids: ["openai/gpt-4o-mini"],
-          }),
-        });
-      });
-      await page.route("**/ui", async (route) => {
-        const response = await route.fetch();
-        const body = await response.text();
-        const patched = body.replace(
-          /window\.STALE_MODEL_IDS\s*=\s*\[[^\]]*\];/,
-          'window.STALE_MODEL_IDS = ["openai/gpt-4o-mini"];'
-        );
-        await route.fulfill({ response, body: patched });
-      });
-
-      await workspacePage.page.reload();
-      await workspacePage.page.waitForLoadState("networkidle");
+      // Issue #127: mocking /ready's `catalog_drift_ids` (as this test
+      // originally did) can never trigger `#drift-region` — that field feeds a
+      // DIFFERENT banner (`#readiness-banner`, covered by
+      // `tests/invariants/readiness-banner.spec.ts`). See `seedCatalogDrift`
+      // above for what actually drives this one, and why.
+      await seedCatalogDrift(page);
 
       // Wait for drift banner to appear
       await expect(page.locator("#drift-region:not([hidden])")).toBeVisible({
@@ -243,13 +242,21 @@ test.describe("Quorum-AI Workspace", () => {
     });
 
     test("should dismiss drift warning", async ({ page }) => {
-      // Assume drift warning is visible
-      if (await workspacePage.hasDriftWarning()) {
-        const dismissButton = page.locator("#drift-region-dismiss");
-        await dismissButton.click();
+      // This test read `if (await hasDriftWarning()) { ... }` and nothing in
+      // it ever CREATED the drift, so the condition was false on every run
+      // and the whole body — click, assertion and all — was skipped while the
+      // test reported green. The #131 negative-assertion guard caught it: an
+      // `expect(...).not.toBeVisible()` with no partner proving the banner was
+      // ever visible. Driving the same seed as the test above makes the
+      // dismissal real, and the `toBeVisible` below is the partner.
+      await seedCatalogDrift(page);
+      await expect(page.locator("#drift-region:not([hidden])")).toBeVisible({
+        timeout: 5000,
+      });
 
-        await expect(workspacePage.driftBanner).not.toBeVisible();
-      }
+      await page.locator("#drift-region-dismiss").click();
+
+      await expect(workspacePage.driftBanner).not.toBeVisible();
     });
   });
 

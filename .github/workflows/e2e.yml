@@ -139,6 +139,7 @@ jobs:
         run: node tools/check-negative-assertions.mjs --base "origin/${{ github.base_ref }}"
 
       - name: Install Playwright Chromium (+ system deps)
+        id: install-chromium
         working-directory: e2e
         run: npx playwright install --with-deps chromium
 
@@ -297,12 +298,20 @@ jobs:
         # are COMPARED like-for-like. Dynamic regions (timer/run-id) + toasts are
         # masked/hidden so the diff never flakes.
         #
-        # `if: !cancelled()` — run REGARDLESS of a prior step's outcome (but not
-        # on cancellation). This is still a HARD gate (it fails the job if IT
+        # `if: !cancelled()` — run REGARDLESS of a prior TEST step's outcome (but
+        # not on cancellation). This is still a HARD gate (it fails the job if IT
         # fails; no continue-on-error), but it is no longer SKIPPED when an
         # earlier step reds — so a flake in the axe/parity suite can never mask a
         # real visual regression here. Independent gates, each reporting itself.
-        if: ${{ !cancelled() }}
+        #
+        # The `install-chromium` conjunct was added after this bit us: a failure
+        # in the negative-assertion guard (a SETUP step, before the browser was
+        # installed) skipped every lane, and then this one ran anyway with no
+        # browser on disk. It produced 8 `browserType.launch: Executable doesn't
+        # exist` failures plus a "0 executed" floor red — three loud signals all
+        # pointing away from the one-line real cause. Independence from a failing
+        # TEST lane is the point; running without a browser is not.
+        if: ${{ !cancelled() && steps.install-chromium.outcome == 'success' }}
         env:
           CI: "true"
         # trust-score-visual.spec.ts is BLOCKING alongside visual-snapshots (the
@@ -331,7 +340,7 @@ jobs:
       # executed, 3 failed" are different failure modes this floor exists to
       # tell apart.
       - name: "visual-snapshots lane: floor on tests actually executed"
-        if: ${{ !cancelled() }}
+        if: ${{ !cancelled() && steps.install-chromium.outcome == 'success' }}
         run: python3 scripts/check_e2e_executed.py --report e2e/results.xml --min 8 --lane "visual-snapshots lane"
 
       - name: Upload Playwright report

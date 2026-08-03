@@ -133,6 +133,14 @@ test.describe("readiness banner does not flash (#117)", () => {
   test("a stale offline seed on a healthy deployment never paints the banner", async ({ page }) => {
     await bootWithSeedDisagreement(page, "offline_by_bad_key", { state: "live" });
 
+    // Positive partner (#131). `toBeHidden()` is also satisfied by a page that
+    // never booted at all — and "app.js threw, so the disclosure stayed hidden
+    // forever" is the exact defect this file exists to prevent, which makes
+    // that blind spot self-defeating. `data-active-view` is written ONLY by
+    // app.js's setView() (app.js:302) and is never server-rendered, so its
+    // presence proves the app ran before we assert what it did not paint.
+    await expect(page.locator("#main-content[data-active-view]")).toBeVisible();
+
     // Let /ready land and the app settle.
     await expect(banner(page)).toBeHidden();
     await page.waitForTimeout(500);
@@ -302,6 +310,9 @@ test.describe("a hung probe cannot silence the disclosure (#117 review 2)", () =
     // The no-false-fire partner: the time-bounded fallback paints the SEED, so
     // it must not invent a warning when the seed says the deployment is fine.
     await bootWithHungEndpoint(page, "**/ready", "live");
+    // Positive partner (#131) — same reasoning as the first test: prove app.js
+    // booted, or "hidden" could just mean "nothing rendered".
+    await expect(page.locator("#main-content[data-active-view]")).toBeVisible();
     await page.waitForTimeout(3000); // past READINESS_DISCLOSURE_FALLBACK_MS
     await expect(banner(page)).toBeHidden();
     expect(await page.evaluate(() => (window as any).__bannerShows)).toBe(0);

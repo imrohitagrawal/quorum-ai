@@ -197,7 +197,26 @@ test.describe("Accessibility", () => {
     });
 
     test("should have visible error indicators", async ({ page }) => {
-      await expect(page.getByRole("alert")).toHaveCount(0);
+      // This asserted `expect(getByRole("alert")).toHaveCount(0)` on a clean
+      // page — the OPPOSITE of the test's own name, and vacuous besides:
+      // `#error-region` ships `hidden` (workspace.html:121) and `getByRole`
+      // skips hidden nodes, so the count is 0 no matter what the app does.
+      // The #131 guard caught it. What this test is actually for — and what
+      // the sibling above does not cover — is that the error reaches a screen
+      // reader BY ROLE, not merely that it is painted.
+      await page.route("**/v1/query-runs", (route) => {
+        route.fulfill({
+          status: 500,
+          body: JSON.stringify({ error: "Internal Server Error" }),
+        });
+      });
+
+      await page.getByRole("textbox").fill("Test error");
+      await page.getByRole("button", { name: /run now/i }).click();
+
+      const alert = page.getByRole("alert").first();
+      await expect(alert).toBeVisible();
+      await expect(alert).not.toBeEmpty();
     });
   });
 
