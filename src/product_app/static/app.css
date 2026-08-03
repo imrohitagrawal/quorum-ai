@@ -5506,6 +5506,35 @@ html[data-theme="dark"] .landing-preview { background: var(--accent-soft); }
 @media (max-width: 600px) {
   .landing-runbar-foot { flex-direction: column; align-items: stretch; }
   .landing-runbar-actions { justify-content: space-between; }
+
+  /* #222 — landing density on a phone. MEASURED at 390x664 (iPhone 13): the
+     run bar's CTAs sat at y=830 with NO readiness banner present at all, so
+     they were 166px below the fold on the page's own content. #116 collapsed
+     the banner, which was the straw, not the cause.
+
+     A deliberate design trade-off, scoped to narrow viewports only — nothing
+     above 600px changes, so the heading keeps its comp-01 treatment on every
+     screen that can afford it.
+
+     NOTE, because this partially revisits an earlier decision: the 52px h1 is
+     commented "fixed per comp 01 (was a clamp that shrank to ~33px inside the
+     card)". That clamp responded to CONTAINER width, which is why it misfired
+     inside a card. This is a VIEWPORT media query, so it cannot shrink the
+     heading in a wide-screen card — a different mechanism with a different
+     failure mode. */
+  .landing-column { padding: 12px 0 32px; gap: var(--space-4); }
+  .landing-hero { gap: var(--space-3); }
+  .landing .landing-h1 {
+    font-size: 2.25rem; /* 36px */
+    line-height: 1.1;
+    max-width: 18ch; /* fewer, longer lines at the smaller size */
+  }
+  .landing-subhead { font-size: 1rem; line-height: 1.5; }
+  .landing-runbar-prompt { padding: 14px var(--space-4) var(--space-1); min-height: 60px; }
+  .landing-runbar-input { min-height: 40px; }
+  .landing-header { min-height: 52px; padding: 0 var(--space-4); }
+  .landing-runbar-foot { padding: var(--space-3) 14px 14px; margin-top: var(--space-2); }
+
   /* PR8: the session trail collapses into a bottom bar on small screens. */
   .session-trail-panel {
     position: fixed;
