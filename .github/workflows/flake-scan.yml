@@ -174,7 +174,12 @@ jobs:
               with summary.open("a") as fh:
                   fh.write(f"## flake scan — `{spec}`\n\nno junit report produced\n")
               print(f"[FLAKE] {spec}: NO REPORT — treat as unmeasured, not as clean")
-              sys.exit(0)
+              # Issue #162/#166: this used to exit 0 here -- an honest log
+              # line next to a lying (green) step status. The JOB is already
+              # advisory via `continue-on-error: true`, so failing this step
+              # cannot block a merge; it only stops the status from claiming
+              # a measurement that never happened.
+              sys.exit(1)
           root = ET.parse(report).getroot()
           suites = root.iter("testsuite") if root.tag == "testsuites" else [root]
           collected = skipped = failed = 0
@@ -203,6 +208,13 @@ jobs:
               fh.write(f"- verdict: **{verdict}**\n")
               fh.write(f"- run id: `{os.environ.get('GITHUB_RUN_ID', 'unknown')}`\n")
           print(f"[FLAKE] {spec}: {rate} failed of executed — {verdict}")
+          # Issue #162/#166: an UNMEASURED verdict used to fall through this
+          # whole script with no exit call, so the step (and the summary
+          # line) read as an ordinary pass. Failing this STEP -- not the
+          # already-advisory JOB -- keeps the status honest without changing
+          # what actually gates a merge.
+          if executed <= 0:
+              sys.exit(1)
           PY
 
       - name: Upload the junit report

@@ -111,3 +111,11 @@ jobs:
           tests/csp/csp-smoke.spec.ts
           --project=${{ matrix.browser }}
           --retries=0
+
+      # Issue #162/#166: a spec path that matches nothing, or every test
+      # skipped, exits 0 -- indistinguishable from a clean pass. Floor is the
+      # EXACT count measured per engine (2, both tests in csp-smoke.spec.ts;
+      # identical across chromium/firefox/webkit since it is the same spec).
+      - name: "csp-smoke ${{ matrix.browser }}: floor on tests actually executed"
+        working-directory: e2e
+        run: python3 ../scripts/check_e2e_executed.py --report results.xml --min 2 --lane "csp-smoke (${{ matrix.browser }})"

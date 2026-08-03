@@ -29,8 +29,15 @@ fails the build if any doc's blocking/advisory wording contradicts reality
 | `diff-cover` — *Changed-lines coverage >= 95% (blocking)* | blocking-on-pull-requests-only | `if: github.event_name == 'pull_request'`, so a direct push to `main` has no changed-lines gate (`docs/analysis/09-enforcement-hooks.md` records the same PARTIAL) |
 | `perf-gate` | advisory | `continue-on-error: true` — macOS-derived budgets would false-fail a slower runner; DEBT-009 |
 | `mutation-baseline` | advisory | `continue-on-error: true` — a MEASURED decision, not a default: yield 6/158 escaped defects, 7% false-abort, 8% silent pass (docs/metrics/mutation-gate-study.md). Also pull-request-only |
-| `codex-review` | vacuous (no executable step) | the `openai/codex-action` step is commented out pending an `OPENAI_API_KEY` secret, so the job only checks out and always passes |
 | `e2e` (`e2e.yml`) | blocking | — |
+
+Update, 2026-08-03 (#166): `codex-review` — previously vacuous (no executable
+step: the `openai/codex-action` step was commented out pending an
+`OPENAI_API_KEY` secret, so the job only checked out and always passed) — was
+**removed**, not repaired. Wiring the paid secret was out of scope for the
+batch that closed it; a permanently-green job that checks nothing is worse
+than no job. If it is ever reintroduced, add its row back here with a real
+mechanism, not a restored placeholder.
 
 ## Can a gate here finish having measured nothing? (2026-07-29)
 
@@ -62,12 +69,22 @@ of #130 and #158. Audited by execution and by reading real CI job logs:
 | `e2e` both lanes (blocking) | executed-count floors 138 / 94 — the EXACT measured counts, zero skips (`scripts/check_e2e_executed.py`) | missing report, all-skipped, and zero-matched all → rc=1; the real 94-test lane → rc=0 |
 | `mutation-baseline` (advisory) | a non-empty scope must leave a score or an explicit `UNMEASURED` in `score.txt`; the empty-scope branch now says in words that no score was produced | the recipe's own failure branch |
 
-**Still unfloored, named rather than hidden:** the `visual-snapshots` step (its
-executed count was not measured on this machine — the baselines are Linux-only),
-`csp-smoke`, `flake-scan`, `perf-sample`, `check-error-rate` and the
-`perf-gate` missing-JSON branch. The last four *detect* the unmeasured state and
-print `UNMEASURED`, then still `exit 0` — so the status remains a lie even though
-the log is honest.
+**Update, 2026-08-03 (issue #162, worked as the follow-up work package #166):
+all six of the above, closed.**
+
+| Gate | What changed | Proven RED by |
+|---|---|---|
+| `visual-snapshots` step (`e2e.yml`, blocking) | executed-count floor added, `--min 8` (6 `trust-score-visual.spec.ts` + 2 `visual-snapshots.spec.ts`) — measured via `--update-snapshots`, which executes every test regardless of platform-specific baseline availability without touching the committed `*-chromium-linux.png` files the real gate compares against | floor step removed → the guard test reds |
+| `csp-smoke` (advisory, `csp-smoke.yml`) | executed-count floor added per matrix engine, `--min 2` (both tests in `csp-smoke.spec.ts`, run once per browser) | floor step removed → the guard test reds |
+| `flake-scan` (advisory) | both the "no junit report" branch and the "every repetition skipped" (`executed <= 0`) branch now `sys.exit(1)` instead of falling through / exiting 0 | either `sys.exit(1)` reverted → the guard test reds |
+| `perf-sample` (advisory, nightly) | the missing-JSON `else` branch now `exit 1`s | `exit 1` removed → the guard test reds |
+| `perf-gate` missing-JSON branch (`ci.yml`, advisory) | same fix, same shape, in the CI (not nightly) copy of the perf gate | `exit 1` removed → the guard test reds |
+| `check-error-rate` / `skip_low_traffic` | `exit_code_for()`'s contract is UNCHANGED (alert is still the only exit-1 path — an abstention must never fire the alert email, and an alert must never go silent); instead the workflow step now writes an explicit, visually separate `$GITHUB_STEP_SUMMARY` section labelled `ABSTAINED` whenever the probe prints `SKIP_LOW_TRAFFIC:`/`SKIP_COUNTER_RESET:`, so an abstention is no longer indistinguishable from a verified-healthy run at a glance | the `ABSTAINED` marker / grep pattern / `exit $code` propagation removed → the guard test reds |
+
+Every row proven RED-then-GREEN in `tests/unit/test_gate_liveness_wp166.py`
+(codex-review's removal is guarded there too): each fix reverted on a copy of
+the real workflow file, the corresponding test confirmed red, the file
+restored from the copy (never `git checkout`), the test confirmed green again.
 
 **What none of these floors can see:** whether the tests that ran assert anything
 worth asserting. A lane of 138 vacuous specs satisfies its floor completely. These

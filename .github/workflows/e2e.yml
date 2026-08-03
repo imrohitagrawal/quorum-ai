@@ -272,6 +272,16 @@ jobs:
       - name: "workspace/accessibility/api-mocking/navigation lane: floor on tests actually executed"
         run: python3 scripts/check_e2e_executed.py --report e2e/results.xml --min 51 --lane "workspace/accessibility/api-mocking/navigation lane"
 
+      - name: Clear the previous lane's JUnit report
+        # Adversarial review (#162/#166): without this, a Playwright run that
+        # exits 0 having genuinely written nothing (the exact "all-skipped"
+        # or "matched nothing" shape every floor in this file exists to
+        # catch) would leave the new visual-snapshots floor below reading the
+        # STALE 51-test report from the lane above and passing on old data
+        # instead of catching the gap. Matches the same clear-before-run
+        # pattern already used between the invariants and axe+parity lanes.
+        run: rm -f e2e/results.xml
+
       - name: Run visual snapshots (BLOCKING)
         working-directory: e2e
         # toHaveScreenshot baselines for the result + transcript views against the
@@ -300,6 +310,23 @@ jobs:
           tests/invariants/trust-score-visual.spec.ts
           --project=chromium
           --retries=0
+
+      # EXECUTED-COUNT FLOOR. Issue #162/#166: this step was the one gap left
+      # by the two floors above, because its count was never measured on the
+      # authoring machine — the baselines are Linux-only, seeded in CI, so a
+      # pixel-comparison run couldn't be trusted locally. Measured fresh here
+      # via `--update-snapshots` (which executes every test regardless of
+      # platform-specific baseline availability, without touching the
+      # committed *-chromium-linux.png files this step actually compares
+      # against): 8 = 6 (trust-score-visual, 2 themes x 3 viewports) + 2
+      # (visual-snapshots, result + transcript). `!cancelled()` matches the
+      # run step above: this must still report even if visual-snapshots
+      # itself failed on a real regression, since "0 executed" and "8
+      # executed, 3 failed" are different failure modes this floor exists to
+      # tell apart.
+      - name: "visual-snapshots lane: floor on tests actually executed"
+        if: ${{ !cancelled() }}
+        run: python3 scripts/check_e2e_executed.py --report e2e/results.xml --min 8 --lane "visual-snapshots lane"
 
       - name: Upload Playwright report
         if: ${{ !cancelled() }}
