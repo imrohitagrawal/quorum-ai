@@ -5516,12 +5516,20 @@ html[data-theme="dark"] .landing-preview { background: var(--accent-soft); }
      above 600px changes, so the heading keeps its comp-01 treatment on every
      screen that can afford it.
 
-     NOTE, because this partially revisits an earlier decision: the 52px h1 is
-     commented "fixed per comp 01 (was a clamp that shrank to ~33px inside the
-     card)". That clamp responded to CONTAINER width, which is why it misfired
-     inside a card. This is a VIEWPORT media query, so it cannot shrink the
-     heading in a wide-screen card — a different mechanism with a different
-     failure mode. */
+     NOTE, because this partially revisits an earlier decision — and because
+     the first version of this comment got it WRONG. The 52px h1 is commented
+     "fixed per comp 01 (was a clamp that shrank to ~33px inside the card)". I
+     claimed that clamp responded to CONTAINER width. It did not: `git log -S`
+     shows it was `clamp(2.2rem, 5vw, 3.25rem)`, and `5vw` is VIEWPORT width —
+     there is no `container-type` or `@container` anywhere in this file. So "a
+     different mechanism with a different failure mode" was false, and review
+     caught it.
+
+     The honest difference is narrower: the clamp scaled CONTINUOUSLY, so it
+     shrank the heading at intermediate widths too (at 600px it would give
+     max(2.2rem, 30px) = 35.2px, within a pixel of the 36px used here). These
+     rules apply only below 600px, so every width above keeps the comp-01 52px
+     exactly. Same mechanism, narrower blast radius. */
   .landing-column { padding: 12px 0 32px; gap: var(--space-4); }
   .landing-hero { gap: var(--space-3); }
   .landing .landing-h1 {
@@ -5530,9 +5538,15 @@ html[data-theme="dark"] .landing-preview { background: var(--accent-soft); }
     max-width: 18ch; /* fewer, longer lines at the smaller size */
   }
   .landing-subhead { font-size: 1rem; line-height: 1.5; }
-  .landing-runbar-prompt { padding: 14px var(--space-4) var(--space-1); min-height: 60px; }
-  .landing-runbar-input { min-height: 40px; }
-  .landing-header { min-height: 52px; padding: 0 var(--space-4); }
+  /* Only the PADDING binds here. Review ablated each declaration at 320 / 360
+     / 375 / 390 and measured `.landing-runbar-input { min-height: 40px }`,
+     `.landing-header { min-height: 52px; padding }` and a `min-height: 60px`
+     on the prompt as contributing 0px at EVERY width — the textarea already
+     renders 53px over its 52px base, and the header is 90px because it
+     flex-wraps, so neither min-height ever binds. Removed rather than left
+     in: CSS that looks like it does something and does not is the same class
+     of dishonesty as a comment claiming a number nobody measured. */
+  .landing-runbar-prompt { padding: 14px var(--space-4) var(--space-1); }
   .landing-runbar-foot { padding: var(--space-3) 14px 14px; margin-top: var(--space-2); }
 
   /* #222, review round 1. The session trail is `position: fixed; z-index: 100`

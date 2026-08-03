@@ -203,7 +203,9 @@ jobs:
       # added landing-mobile-density.spec.ts. The two branches were developed
       # in parallel and BOTH edited this line, so merging them conflicted here
       # by design -- and the resolution was to re-measure the merged lane end
-      # to end (171), NOT to take the larger of 163 and 167. Taking the larger
+      # to end (171), NOT to take the larger of the two branch values (163 on
+      # #222, 167 on #117 -- an earlier draft of this note mis-recorded #193's
+      # 164 as #222's number; corrected). Taking the larger
       # would have silently under-counted by the other branch's tests, which
       # is the exact failure this floor exists to catch. Headroom hides a
       # deleted spec: at a floor of 130, dropping session-trail.spec.ts (7 tests)

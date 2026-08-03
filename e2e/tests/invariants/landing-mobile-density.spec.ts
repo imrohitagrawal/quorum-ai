@@ -97,7 +97,10 @@ test.describe("landing fits a 390x664 phone (#222)", () => {
       expect(
         bottom,
         `#${id} bottom edge is ${bottom}px, below the ${MOBILE.height}px fold ` +
-          `(was 830 before #222)`,
+          `(was 830 before #222). NOTE this fold has only 4px of slack and the ` +
+          `serif heading loads cross-origin from fonts.googleapis.com: with that ` +
+          `blocked the layout sits permanently at 679, so a number near 679 means ` +
+          `check network access to the font CDN before suspecting a CSS regression.`,
       ).toBeLessThanOrEqual(MOBILE.height);
     }
   });
@@ -158,9 +161,12 @@ test.describe("landing fits a 390x664 phone (#222)", () => {
   });
 
   test("desktop keeps the full-size hero treatment", async ({ page }) => {
-    // The density rules are scoped to <=600px on purpose. Without this, a
-    // future "simplification" that drops the media query and shrinks the
-    // heading everywhere would pass every assertion above.
+    // WHAT THIS ACTUALLY GUARDS, corrected after review measured it: NOT "a
+    // future simplification that drops the media query" -- deleting the whole
+    // block leaves this green and turns tests 1-3 red, so they are the ones
+    // covering that. This bites on the BASE `.landing-h1` size: mutating the
+    // 3.25rem default to 2.25rem turns it red ("Received: 36"). Keeping it,
+    // with an honest description of its job.
     await page.setViewportSize({ width: 1440, height: 900 });
     await mockReadiness(page, "live");
     await page.goto("/ui", { waitUntil: "domcontentloaded" });
