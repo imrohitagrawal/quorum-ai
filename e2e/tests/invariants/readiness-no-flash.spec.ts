@@ -243,3 +243,67 @@ test.describe("suppression can never outlive boot (#117 review)", () => {
     await expect(banner(page)).toBeVisible({ timeout: 10000 });
   });
 });
+
+test.describe("a hung probe cannot silence the disclosure (#117 review 2)", () => {
+  /** Serve /ui with an explicit seed, and hang the named endpoint forever. */
+  async function bootWithHungEndpoint(page: Page, hang: string, seedState: string): Promise<void> {
+    await recordBannerVisibility(page);
+    // Never resolve and never reject: `api()` uses a bare fetch with no
+    // timeout, so this is the shape a `finally` cannot rescue.
+    await page.route(hang, () => {});
+    await page.route("**/ui", async (route) => {
+      const response = await route.fetch();
+      const html = await response.text();
+      const seeded = html.replace(
+        /window\.LIVE_READINESS = .*;$/m,
+        `window.LIVE_READINESS = ${JSON.stringify({
+          state: seedState,
+          reasons: [],
+          catalog_drift_ids: [],
+          global_spend_ceiling_reached: false,
+        })};`,
+      );
+      expect(seeded).not.toBe(html);
+      await route.fulfill({ response, body: seeded, headers: response.headers() });
+    });
+    await page.goto("/ui", { waitUntil: "domcontentloaded" });
+  }
+
+  test("a hung /ready still discloses, from the seed", async ({ page }) => {
+    // Measured before the fix: hidden indefinitely. `api()` has no timeout, so
+    // the request never settles and neither the finally nor boot().catch runs.
+    await bootWithHungEndpoint(page, "**/ready", "offline_by_bad_key");
+    await expect(banner(page)).toBeVisible({ timeout: 10000 });
+    await expect(page.locator("#readiness-banner-title")).toContainText(
+      "Live execution is unavailable",
+    );
+  });
+
+  test("a hung /v1/models/defaults does not silence the disclosure either", async ({ page }) => {
+    // Review's worst case was "the server gave the correct offline verdict and
+    // the banner was STILL suppressed". Measuring it turned up something
+    // sharper: `boot()` awaits `refreshDefaults()` BEFORE it ever calls
+    // `refreshReadiness()`, so hanging that endpoint stalls boot earlier still
+    // and `/ready` is never even requested. The disclosure therefore cannot
+    // come from the verdict — only from the seed — which is precisely why the
+    // time-bounded fallback exists. Asserting a `/ready` verdict here would be
+    // asserting a value the page never fetched.
+    await recordBannerVisibility(page);
+    await page.route("**/v1/models/defaults", () => {});
+    await bootWithHungEndpoint(page, "**/v1/models/defaults", "offline_by_bad_key");
+
+    await expect(banner(page)).toBeVisible({ timeout: 10000 });
+    await expect(page.locator("#readiness-banner-title")).toContainText(
+      "Live execution is unavailable",
+    );
+  });
+
+  test("a hung probe on a HEALTHY seed still does not paint", async ({ page }) => {
+    // The no-false-fire partner: the time-bounded fallback paints the SEED, so
+    // it must not invent a warning when the seed says the deployment is fine.
+    await bootWithHungEndpoint(page, "**/ready", "live");
+    await page.waitForTimeout(3000); // past READINESS_DISCLOSURE_FALLBACK_MS
+    await expect(banner(page)).toBeHidden();
+    expect(await page.evaluate(() => (window as any).__bannerShows)).toBe(0);
+  });
+});

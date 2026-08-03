@@ -745,8 +745,7 @@
       // disclosure, strictly worse than the flash this change exists to
       // remove. `boot()`'s outer catch carries the same guarantee for a throw
       // that happens before this function is ever reached.
-      state.readinessConfirmed = true;
-      applyReadinessState();
+      confirmReadiness();
     }
   }
 
@@ -776,6 +775,14 @@
         timeout: 5000,
       });
     }
+    // #117, review round 2. CONFIRM HERE — after /ready has settled, and
+    // BEFORE the second fetch. Measured: with the confirmation after BOTH
+    // awaits, a hung `/v1/models/defaults` suppressed the banner even though
+    // `/ready` had already returned the correct OFFLINE verdict. The drift
+    // list is a diagnostic; the readiness verdict is a safety disclosure, and
+    // the disclosure must not wait on the diagnostic.
+    if (nextReadiness) state.lastReadiness = nextReadiness;
+    confirmReadiness();
     try {
       // /v1/models/defaults requires a session cookie. If the session
       // bootstrap has not completed yet (we are called from boot
@@ -790,8 +797,50 @@
       // alone — renderDriftBanner / applyReadinessState will fall
       // back to the page-load seed.
     }
-    if (nextReadiness) state.lastReadiness = nextReadiness;
     if (nextStale) state.lastStaleModelIds = nextStale;
+    applyReadinessState();
+  }
+
+  /**
+   * Lift the #117 first-paint suppression and paint. Idempotent.
+   *
+   * Every path that can end the suppression funnels through here, so there is
+   * one place to read rather than four to keep in step.
+   */
+  function confirmReadiness() {
+    state.readinessConfirmed = true;
+    applyReadinessState();
+  }
+
+  /**
+   * Guarantee the disclosure appears even if the probe never answers.
+   *
+   * #117, review round 2. `api()` uses a bare `fetch` with NO timeout
+   * (measured: zero AbortController/AbortSignal uses in this file), so a
+   * request that HANGS never resolves and never rejects — and a `finally`
+   * that waits on it never runs either. Measured against a hung `/ready` on
+   * an offline deployment: the banner stayed hidden indefinitely, including
+   * the case where the seed said the deployment was over its spend ceiling.
+   * That is the safety disclosure silenced by a slow network.
+   *
+   * So the suppression is time-bounded. After this long we stop waiting and
+   * paint whatever the page-load seed says — which may later be corrected by
+   * /ready, i.e. the original flash, but only on a probe this slow. A brief
+   * flash on a degraded network is a far better failure than a permanently
+   * invisible "every answer here is simulated".
+   *
+   * JUDGMENT CALL, NOT MEASURED: 2000ms is chosen, not derived. Long enough
+   * that a healthy loopback/LAN probe (~12ms measured locally) never reaches
+   * it, short enough to bound the window in which the run button is enabled
+   * with nothing on screen saying answers will be simulated.
+   */
+  const READINESS_DISCLOSURE_FALLBACK_MS = 2000;
+
+  function armReadinessDisclosureFallback(delayMs = READINESS_DISCLOSURE_FALLBACK_MS) {
+    window.setTimeout(() => {
+      if (state.readinessConfirmed) return;
+      confirmReadiness();
+    }, delayMs);
   }
 
   // Lightweight toast for transient, non-blocking messages.
@@ -8024,6 +8073,7 @@
     // deployment does not flash a clean composer on first paint.
     seedReadinessFromPageLoad();
     applyReadinessState();
+    armReadinessDisclosureFallback();
     estimateButton.addEventListener("click", () => {
       // "See the estimate" always opens the cost gate first (autoProceed
       // false), even for a cheap allow-band run.
@@ -8266,8 +8316,7 @@
     // screen is simulated -- strictly the wrong direction. So a failed boot
     // falls back to the page-load seed and paints it.
     try {
-      state.readinessConfirmed = true;
-      applyReadinessState();
+      confirmReadiness();
     } catch (_) {
       /* the banner itself is broken; the state stamp above still stands */
     }
