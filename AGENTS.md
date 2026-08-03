@@ -155,6 +155,25 @@ is the rule only.
     unrecoverable on the strength of `git log --all` alone, and then recovered in
     full from dangling blobs. **Check the object store before declaring loss.**
 
+**Decisions**
+16d. **A decision gets an ADR in the same PR that makes it.** A decision is:
+    a default value, a failure posture (open vs closed), a policy, a rejected
+    alternative that cost real work, or anything a future reader would ask
+    "why is it like this?" about. Use `docs/adr/`, follow ADR-0002's shape
+    (measured table, rejected alternatives, consequences), and regenerate the
+    index with `python3 scripts/generate_adr_index.py` — `make validate` fails
+    if you don't. **Do not hand-edit the index.**
+    Measured 2026-08-03: a nine-issue batch made ~6 architecture decisions and
+    recorded **zero**, while `docs/adr/`, the index, AND
+    `.agents/skills/architecture-and-decisions/` all already existed. Every
+    mechanism was discoverable and optional, and the task list did not name
+    them. Worse, ADR-0002 pinned the exact constraint (`SQLite single-writer`)
+    that the batch's money work then reasoned on top of without re-reading.
+    **This rule is influence, not enforcement.** The index gate is mechanical;
+    "did you write the ADR at all" is not, and cannot be. If you notice this
+    rule being skipped, that is the signal to make it mechanical, not to
+    restate it louder.
+
 **Shipping**
 17. **One CONCERN per pull request**, merged before the next starts — a reviewer
     cannot audit a billing fix and a docs restructure in the same diff. Merge

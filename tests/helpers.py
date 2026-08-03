@@ -75,3 +75,43 @@ def wait_for_free_permits(
             return expected
         time.sleep(0.01)
     return semaphore._value  # noqa: SLF001
+
+
+def unreachable_recoveries[S](
+    transitions: dict[S, set[S]],
+    healthy: set[S],
+) -> list[S]:
+    """Return the states from which no sequence of events reaches ``healthy``.
+
+    An **absorbing** state is one you can enter and never leave. It is invisible
+    when a decision is written as a boolean expression, and obvious the moment
+    the states are enumerated as a table.
+
+    Why this exists, measured (quorum-ai, 2026-08-03): a ~40-line spend-cap
+    predicate had FIVE defects found across four review passes, and **none were
+    in the predicates** -- all were wiring. One of them was exactly this: a
+    recovered store could never become "trustworthy" (a monotonic loss counter
+    never resets) and could never be replaced (the reopen was gated on a
+    staleness the recovery had just cleared), so every priced request was
+    refused until a process restart. Each fix added a *term* to a boolean
+    instead of a *row* to a table, which is why fixing one revealed the next.
+
+    Usage: build ``transitions`` as ``{state: {reachable states}}`` over the
+    real signal domain (``itertools.product`` is exhaustive for a space this
+    size and strictly beats random search), name the states that mean "serving
+    normally", and assert the result is empty.
+
+    Deliberately plain BFS: for ~40 cells a model checker is a week of learning
+    to decide what twenty lines settles.
+    """
+    recovers: set[S] = set(healthy)
+    changed = True
+    while changed:
+        changed = False
+        for state, successors in transitions.items():
+            if state in recovers:
+                continue
+            if successors & recovers:
+                recovers.add(state)
+                changed = True
+    return sorted((s for s in transitions if s not in recovers), key=repr)

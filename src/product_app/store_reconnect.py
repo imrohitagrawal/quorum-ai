@@ -428,10 +428,26 @@ def maybe_reconnect_feedback_store(*, monotonic: Callable[[], float] = time.mono
     # broken right now"). It still belongs in ``trustworthy``, because a handle
     # that dropped a charge must not be metered against; it just cannot be the
     # only thing gating the retry that would replace that handle.
-    needs_reopen = feedback_ledger_is_stale(store) or (
-        _feedback_reopen_tried_without_recovery and not feedback_ledger_is_trustworthy(store)
-    )
-    if not needs_reopen:
+    # REOPEN WHENEVER THE LEDGER CANNOT BE METERED. This subsumes staleness and
+    # needs no flag: `may_be_metered` is already False for no store, for
+    # "failing", for a raising signal, and for any handle that has dropped a
+    # billed charge.
+    #
+    # The flag-based version this replaces had ANOTHER absorbing state, found
+    # by `tests/unit/test_spend_cap_state_table.py` the day it was written --
+    # in code committed hours earlier. `("ok", lost=1, tried=False)`: a charge
+    # was lost during a window in which no request happened to observe the
+    # store, so no reopen was ever triggered and the flag stayed False; by the
+    # next request the handle had recovered to "ok", so it was not stale
+    # either. The counter is monotonic, so it could never be metered again,
+    # and nothing would ever replace the handle. The cap silently stopped
+    # working for the life of the process.
+    #
+    # That is the SIXTH defect in this predicate and the third of the same
+    # shape. The lesson is in the shape, not the instance: a decision derived
+    # from a process-global flag written by two thread classes keeps producing
+    # dead ends. Deriving it from the handle alone does not.
+    if feedback_ledger_may_be_metered(store):
         return
 
     global _feedback_last_attempt_at
