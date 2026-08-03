@@ -733,6 +733,25 @@
   // toast and the cached snapshot is preserved, so a flaky probe
   // cannot wipe a known-good banner.
   async function refreshReadiness() {
+    try {
+      await readReadinessIntoCache();
+    } finally {
+      // #117 + review round 1. The flag MUST be set on EVERY exit path, and a
+      // `finally` is the only construct that guarantees it: the body below
+      // calls `toast()` from INSIDE a catch, so a throw there escapes before
+      // any trailing statement could run — and that path is precisely "the
+      // /ready probe failed", i.e. exactly when the page-load seed is the only
+      // disclosure we have. A suppression that outlives this call is a HIDDEN
+      // disclosure, strictly worse than the flash this change exists to
+      // remove. `boot()`'s outer catch carries the same guarantee for a throw
+      // that happens before this function is ever reached.
+      state.readinessConfirmed = true;
+      applyReadinessState();
+    }
+  }
+
+  /** Fetch /ready and /v1/models/defaults into the readiness caches. */
+  async function readReadinessIntoCache() {
     let nextReadiness = null;
     let nextStale = null;
     try {
@@ -773,14 +792,6 @@
     }
     if (nextReadiness) state.lastReadiness = nextReadiness;
     if (nextStale) state.lastStaleModelIds = nextStale;
-    // #117: /ready has now SETTLED — it either answered, or failed and left
-    // the page-load seed in place. Either way the banner may paint, and every
-    // later call paints immediately. Set OUTSIDE both try/catch blocks above,
-    // so a probe failure still ends the suppression: a deployment that is
-    // genuinely offline must not stay silent because its probe was
-    // unreachable.
-    state.readinessConfirmed = true;
-    applyReadinessState();
   }
 
   // Lightweight toast for transient, non-blocking messages.
@@ -8241,6 +8252,24 @@
   boot().catch((error) => {
     if (!document.documentElement.dataset.appState) {
       document.documentElement.dataset.appState = "error";
+    }
+    // #117, review round 1. ``boot()``'s own try block does not open until
+    // long after ``applyReadinessState()`` runs, so a throw anywhere in the
+    // unguarded wiring region between them -- the "renamed id, a template
+    // change" the comment above already calls realistic -- means
+    // ``refreshReadiness`` is never reached and the suppression never lifts.
+    //
+    // MEASURED with an injected throw against a genuinely offline deployment:
+    // the pre-change seed paint showed the disclosure, and the suppression
+    // alone hid it completely. That trades a cosmetic flash for a SILENT
+    // DISCLOSURE FAILURE on the one surface telling a user every answer on
+    // screen is simulated -- strictly the wrong direction. So a failed boot
+    // falls back to the page-load seed and paints it.
+    try {
+      state.readinessConfirmed = true;
+      applyReadinessState();
+    } catch (_) {
+      /* the banner itself is broken; the state stamp above still stands */
     }
     try {
       handleError(error);

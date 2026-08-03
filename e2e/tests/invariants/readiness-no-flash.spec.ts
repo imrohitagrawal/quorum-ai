@@ -47,13 +47,22 @@ async function recordBannerVisibility(page: Page): Promise<void> {
       const visible = () => !el.hidden && getComputedStyle(el).display !== "none";
       let wasVisible = visible();
       if (wasVisible) (window as any).__bannerShows++;
-      new MutationObserver(() => {
+      const obs = new MutationObserver(() => {
         const now = visible();
         // Count only OFF -> ON edges: that is what a user perceives as the
         // banner appearing, and it is what a flash-then-retract produces.
         if (now && !wasVisible) (window as any).__bannerShows++;
         wasVisible = now;
-      }).observe(el, { attributes: true, attributeFilter: ["hidden", "style", "class"] });
+      });
+      obs.observe(el, { attributes: true, attributeFilter: ["hidden", "style", "class"] });
+      // Also watch the ANCESTOR whose attribute can hide this banner:
+      // app.css has `#main-content[data-active-view="result"] #readiness-banner
+      // { display: none }`, so a view switch changes visibility WITHOUT
+      // mutating the banner itself. Review caught that watching only the
+      // element left that trigger uncounted -- `visible()` computed the right
+      // answer, but nothing woke it up.
+      const main = document.getElementById("main-content");
+      if (main) obs.observe(main, { attributes: true, attributeFilter: ["data-active-view"] });
     };
     if (document.readyState === "loading") {
       document.addEventListener("DOMContentLoaded", start, { once: true });
@@ -89,8 +98,15 @@ async function bootWithSeedDisagreement(
   await page.route("**/ui", async (route) => {
     const response = await route.fetch();
     const html = await response.text();
+    // ANCHORED TO END OF LINE, not to the first `;`. Review caught that a
+    // lazy `.*?;` stops at the first semicolon -- and a real readiness reason
+    // contains one (REASON_CATALOG_UNREACHABLE: "...will still be served;
+    // live pricing is unavailable."). That truncation left broken JS, which
+    // killed the whole inline island, so LIVE_READINESS / DEFAULT_MODEL_IDS /
+    // COST_MODEL were all undefined and the "banner hidden" assertion passed
+    // VACUOUSLY.
     const seeded = html.replace(
-      /window\.LIVE_READINESS = .*?;/s,
+      /window\.LIVE_READINESS = .*;$/m,
       `window.LIVE_READINESS = ${JSON.stringify({
         state: seedState,
         reasons: [],
@@ -98,9 +114,13 @@ async function bootWithSeedDisagreement(
         global_spend_ceiling_reached: false,
       })};`,
     );
-    // Guard: if the island's shape ever changes, this test would silently
-    // stop seeding anything and pass for the wrong reason.
+    // Guards. The first alone is not enough -- it only proves SOMETHING was
+    // replaced, which the truncating regex above also satisfied. The second
+    // proves the result still parses and carries the state we asked for.
     expect(seeded).not.toBe(html);
+    const seededState = seeded.match(/window\.LIVE_READINESS = (\{.*?\});/s);
+    expect(seededState, "the seeded island must be findable and well-formed").not.toBeNull();
+    expect(JSON.parse(seededState![1]).state).toBe(seedState);
     await route.fulfill({ response, body: seeded, headers: response.headers() });
   });
 
@@ -151,5 +171,75 @@ test.describe("readiness banner does not flash (#117)", () => {
     await expect(banner(page)).toBeVisible();
     const shows = await page.evaluate(() => (window as any).__bannerShows);
     expect(shows).toBe(1);
+  });
+});
+
+test.describe("suppression can never outlive boot (#117 review)", () => {
+  test("a boot failure still shows the offline disclosure", async ({ page }) => {
+    // THE REGRESSION THIS SUPPRESSION COULD HAVE CAUSED, and the reason it is
+    // worth a dedicated test: boot()'s own try block does not open until long
+    // after applyReadinessState() runs. A throw in the unguarded wiring region
+    // between them means refreshReadiness() is never reached — so before the
+    // fix, the banner stayed hidden for the life of the page on a genuinely
+    // offline deployment. The pre-change seed paint would have shown it.
+    // Trading a cosmetic flash for a silent disclosure failure is strictly the
+    // wrong direction.
+    //
+    // The throw is injected by removing an element boot() wires a listener
+    // onto, which is exactly the "renamed id / template change" shape app.js's
+    // own comment calls realistic — not a synthetic error.
+    await recordBannerVisibility(page);
+    // Strip the element from the SERVED HTML, not at DOMContentLoaded: app.js
+    // is `defer`, so it runs BEFORE that event and would already have wired
+    // its listener. Removing it from the markup is also the more faithful
+    // simulation of the "renamed id / template change" this guards against.
+    await page.route("**/ui", async (route) => {
+      const response = await route.fetch();
+      const html = await response.text();
+      let stripped = html.replace(/id="estimate-run"/, 'id="estimate-run-RENAMED"');
+      expect(stripped, "the injection must actually change the markup").not.toBe(html);
+      // Seed an OFFLINE state too. boot() never reaches refreshReadiness on
+      // this path, so /ready is never fetched — the seed is the only
+      // disclosure available, which is exactly the point being tested.
+      stripped = stripped.replace(
+        /window\.LIVE_READINESS = .*;$/m,
+        `window.LIVE_READINESS = ${JSON.stringify({
+          state: "offline_by_no_key",
+          reasons: [],
+          catalog_drift_ids: [],
+          global_spend_ceiling_reached: false,
+        })};`,
+      );
+      await route.fulfill({ response, body: stripped, headers: response.headers() });
+    });
+    await page.route("**/ready", (route) =>
+      route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: JSON.stringify({
+          status: "ready",
+          environment: "test",
+          live_readiness: { state: "offline_by_no_key", reasons: [], catalog_drift_ids: [] },
+        }),
+      }),
+    );
+
+    await page.goto("/ui", { waitUntil: "domcontentloaded" });
+    await expect(banner(page)).toBeVisible({ timeout: 10000 });
+    await expect(page.locator("#readiness-banner-title")).toContainText(
+      "Live execution is unavailable",
+    );
+  });
+
+  test("a /ready probe that rejects still shows the seeded disclosure", async ({ page }) => {
+    // The other unguarded exit: toast() is called from INSIDE refreshReadiness's
+    // first catch, so a throw there escapes before any trailing statement. That
+    // path is precisely "the probe failed" — when the page-load seed is the
+    // only disclosure available. The flag is set in a `finally` for this.
+    await bootWithSeedDisagreement(page, "offline_by_no_key", { state: "live" });
+    await page.route("**/ready", (route) => route.abort("failed"));
+    await page.reload({ waitUntil: "domcontentloaded" });
+
+    await expect(banner(page)).toBeVisible({ timeout: 10000 });
   });
 });
