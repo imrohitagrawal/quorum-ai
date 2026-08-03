@@ -85,11 +85,18 @@ def _reset_for_tests() -> None:
 
 
 def feedback_reopen_tried_without_recovery() -> bool:
-    """Has a reopen completed with the store still not proven writable?
+    """Has a reopen COMPLETED with the store still not proven writable?
 
-    Used by :mod:`product_app.costs` (issue #122) to gate the daily-spend-cap
-    fail-closed policy: staleness alone must not block a request, only
-    staleness that has already survived a reopen attempt.
+    Completed, not merely started — the flag is written after
+    ``FeedbackStore.from_env()`` returns or raises, so during a slow or hung
+    open this still reads whatever the previous attempt concluded. That
+    matters: ``costs.py`` gates its fail-closed policy on this, and the
+    operator's policy is "block only after a reopen has actually been TRIED
+    AND FAILED", not "after one has been scheduled".
+
+    ``costs.estimate`` additionally SNAPSHOTS this before spawning its own
+    reconnect, so a reopen a request starts can never condemn that same
+    request. See the comment at that call site for the measurement behind it.
     """
     return _feedback_reopen_tried_without_recovery
 
@@ -172,6 +179,26 @@ def feedback_ledger_is_trustworthy(store: object | None) -> bool:
     block holds continuously from the first completed reopen until a write
     actually lands.
 
+    ``write_health() == "ok"`` is NECESSARY BUT NOT SUFFICIENT, and getting
+    that wrong was the third defect adversarial review found here.
+    ``feedback_store.lost_billed_writes``'s own docstring says it in capitals:
+    *write_health is not the money signal* — it reports the store's LAST
+    write, whoever made it, so a landed telemetry write re-stamps success over
+    a lost charge. Measured with a flapping fault: one ``"ok"`` reading stood
+    the guard down, and ten subsequent priced requests went through with
+    ``daily_spend_for`` never consulted once, because the store had gone
+    ``"failing"`` again by the time the cap looked. That is the pre-#122 leak
+    returning for a whole cooldown window, per flap.
+
+    So a landed write must ALSO come with no billed charge lost on this
+    handle. ``lost_billed_writes`` counts exactly the ``(recorder,
+    event_type)`` pair ``daily_spend_for`` sums, and it is per-instance: every
+    reopen installs a FRESH handle whose count starts at zero. So a handle
+    that has lost a charge stays untrustworthy for its whole life, and
+    recovery arrives the ordinary way — the next reopen's fresh handle lands a
+    write and loses nothing. No permanent block, and no standing down on a
+    signal that cannot see the money.
+
     A store with NO ``write_health`` at all answers **True**: the signal was
     never built for that type (a narrow duck-typed double, or any
     implementation predating issue #109), so nothing has ever suggested a
@@ -185,7 +212,17 @@ def feedback_ledger_is_trustworthy(store: object | None) -> bool:
     if not callable(health):
         return True
     try:
-        return bool(health() == "ok")
+        if health() != "ok":
+            return False
+    except Exception:  # noqa: BLE001 - must never break the caller's request
+        return False
+    lost = getattr(store, "lost_billed_writes", None)
+    if not callable(lost):
+        # Same rule as the missing-write_health case above: a type that never
+        # carried the counter cannot be judged by it.
+        return True
+    try:
+        return int(lost()) == 0
     except Exception:  # noqa: BLE001 - must never break the caller's request
         return False
 
@@ -215,15 +252,11 @@ def _reopen_feedback_store() -> None:
     from product_app.feedback_store import configure as configure_feedback_store
 
     global _feedback_reopen_tried_without_recovery
-    # Set BEFORE the attempt, and never cleared here. An open that does not
-    # raise is not a recovery: on the production shape (an existing,
-    # already-migrated database) the open attempts zero writes and succeeds
-    # against a still-read-only volume. Only a LANDED write clears this, in
-    # ``maybe_reconnect_feedback_store`` below. See the flag's own comment.
-    _feedback_reopen_tried_without_recovery = True
     try:
         store = FeedbackStore.from_env()
     except Exception as exc:  # noqa: BLE001 - best-effort background reopen
+        # Tried, and failed outright.
+        _feedback_reopen_tried_without_recovery = True
         _log.error(
             "store_reconnect: feedback store reopen attempt failed — the "
             "per-account 24h daily spend cap is still NOT being enforced: %s",
@@ -231,6 +264,14 @@ def _reopen_feedback_store() -> None:
         )
         return
     configure_feedback_store(store)
+    # Tried, and the open did not raise — which is NOT the same as recovered.
+    # On the production shape (an existing, already-migrated database) the
+    # open attempts zero writes and succeeds against a still-read-only
+    # volume, leaving a handle that reports ``"unverified"``. So the outcome
+    # is judged on what the NEW store can actually show, not on the absence
+    # of an exception. Set AFTER the attempt completes, so the flag means
+    # what its name says: a reopen was tried and did not restore writability.
+    _feedback_reopen_tried_without_recovery = not feedback_ledger_is_trustworthy(store)
     _log.info(
         "store_reconnect: feedback store reopened — the daily spend cap is "
         "enforced again once a write lands on the new handle"

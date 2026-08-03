@@ -34,6 +34,7 @@ it is deliberately an integration test with a real SQLite file and real
 from __future__ import annotations
 
 import os
+import threading
 from datetime import UTC, datetime
 from pathlib import Path
 from uuid import UUID, uuid4
@@ -72,6 +73,19 @@ def _charge(store: FeedbackStore, account_id: UUID, usd: str) -> None:
 def _skip_if_root() -> None:
     if hasattr(os, "geteuid") and os.geteuid() == 0:
         pytest.skip("root ignores the read-only mode bits this test depends on")
+
+
+def _join_reconnect_threads(timeout: float = 5.0) -> None:
+    """Wait for any in-flight background reopen to finish.
+
+    The reopen is a daemon thread by design, so nothing else waits for it.
+    A trial that starts while the previous trial's reopen is still running
+    would see that reopen set the flag and mis-attribute the resulting block
+    to its own request.
+    """
+    for thread in threading.enumerate():
+        if thread.name.startswith("feedback-store-reconnect"):
+            thread.join(timeout)
 
 
 class _NoOpThread:
@@ -138,8 +152,11 @@ def test_a_read_only_volume_eventually_blocks_even_though_the_reopen_succeeds(
         service = CostEstimationService(binding_secret="x" * 32)
 
         # Before any reopen has completed, the policy is allow-and-log:
-        # staleness alone must never block (the reopen may still be in
-        # flight). This is #122's own confirmed policy, not an accident.
+        # staleness alone must never block. This is #122's own confirmed
+        # policy, not an accident -- and it is asserted with REAL threads in
+        # ``test_the_first_sighting_of_staleness_never_blocks_with_real_threads``
+        # below, because with the ``_NoOpThread`` stub active here this
+        # assertion cannot fail and would be worth nothing on its own.
         first = service.estimate(query_text="hi", model_slots=_slots(), account_id=account_id)
         assert first.threshold_action is not CostThresholdAction.BLOCK, (
             "first sighting of staleness must not block"
@@ -246,3 +263,77 @@ def test_the_block_stands_down_once_the_volume_is_writable_again(
         "a healed volume must stop refusing traffic without a restart"
     )
     assert store_reconnect.feedback_reopen_tried_without_recovery() is False
+
+
+def test_the_first_sighting_of_staleness_never_blocks_with_real_threads(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The one guarantee the ``_NoOpThread`` stub cannot honestly assert.
+
+    Deliberately does NOT use ``_clean_state``: real ``threading.Thread``, so
+    the reconnect ``estimate()`` spawns actually runs and races the block
+    check ~100 lines further down the same call.
+
+    Round 1's fix failed this 20/20 and round 2's adversarial pass measured
+    30/30 -- not flaky, deterministic. The reopen completed INSIDE the first
+    request, installed an ``"unverified"`` handle, and the cap refused a
+    request that the operator's policy says must be allowed ("only after a
+    reopen attempt has actually been tried and failed, not an immediate
+    block on staleness alone"). The fix is a snapshot of the flag taken
+    before the reconnect is spawned, so a reopen a request starts can never
+    condemn that same request.
+
+    Repeated because the failure it guards is a RACE: a single green run
+    would prove very little.
+
+    Each trial JOINS the reopen threads the previous trial spawned before
+    resetting. Without that the test failed in the full suite while passing
+    alone — a reopen from trial N landed during trial N+1 and set the flag
+    before its snapshot. That is CORRECT product behaviour (an earlier
+    request's reopen is exactly what should condemn a later one); the
+    guarantee under test is narrower — a request is never condemned by the
+    reopen IT started — so leaking threads across trials measured the wrong
+    thing.
+
+    Turns red if: ``costs.estimate`` reads
+    ``feedback_reopen_tried_without_recovery()`` live at the block check
+    instead of using the snapshot taken before ``maybe_reconnect_*``.
+    """
+    _skip_if_root()
+    db = tmp_path / "feedback_events.sqlite3"
+    monkeypatch.setenv("FEEDBACK_DB_PATH", str(db))
+
+    seed = FeedbackStore(str(db))
+    _charge(seed, uuid4(), "0.01")
+    seed.close()
+
+    db.chmod(0o444)
+    db.parent.chmod(0o555)
+    try:
+        blocked_first = 0
+        trials = 20
+        for _ in range(trials):
+            _join_reconnect_threads()
+            store_reconnect._reset_for_tests()
+            account_id = uuid4()
+            broken = FeedbackStore(str(db))
+            _charge(broken, account_id, "0.01")
+            configure(broken)
+            assert broken.write_health() == "failing", "precondition: the fault must be real"
+
+            first = CostEstimationService(binding_secret="x" * 32).estimate(
+                query_text="hi", model_slots=_slots(), account_id=account_id
+            )
+            if first.threshold_action is CostThresholdAction.BLOCK:
+                blocked_first += 1
+
+        assert blocked_first == 0, (
+            f"the first sighting of staleness blocked in {blocked_first}/{trials} trials; "
+            "a reconnect spawned by a request must not condemn that same request"
+        )
+    finally:
+        db.parent.chmod(0o755)
+        db.chmod(0o644)
+        store_reconnect._reset_for_tests()
+        configure(None)

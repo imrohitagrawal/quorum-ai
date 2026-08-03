@@ -437,6 +437,9 @@ class CostEstimationService:
         #: instance rather than module-global so the app's one singleton keeps
         #: one window while a test's throwaway service starts from silence.
         self._cap_bypass_logged_at: float | None = None
+        #: Same shape, separate window, for the issue #122 BLOCK announcement.
+        #: See ``_log_daily_cap_blocked`` for why the two must not share one.
+        self._cap_block_logged_at: float | None = None
         if now_provider is None:
             self._now: Callable[[], datetime] = lambda: datetime.now(UTC)
         else:
@@ -466,9 +469,28 @@ class CostEstimationService:
         # reopen, if one is due, runs on a background thread and is picked
         # up by a LATER call once it finishes.
         from product_app.store_reconnect import (
+            feedback_reopen_tried_without_recovery,
             maybe_reconnect_feedback_store,
             maybe_reconnect_run_history_store,
         )
+
+        # Issue #122, second review round. SNAPSHOT the flag BEFORE spawning
+        # a reconnect, and decide this request against the snapshot.
+        #
+        # Without this the guarantee below is a lie, and it was: MEASURED
+        # 20/20 on a real read-only volume, the reopen thread spawned by THIS
+        # call set the flag before the block check ~100 lines down read it,
+        # so the very first sighting of staleness blocked. That contradicts
+        # the operator's policy in the exact words it was given in — "only
+        # after a reopen attempt has actually been TRIED AND FAILED, not an
+        # immediate block on staleness alone" — and it did so
+        # non-deterministically, on thread scheduling.
+        #
+        # The snapshot makes it deterministic: a reopen this request starts
+        # can never condemn this request, only the next one. Recovery is
+        # unaffected, because the block needs BOTH this flag and a
+        # not-trustworthy store, and the store side is read live.
+        reopen_tried_without_recovery = feedback_reopen_tried_without_recovery()
 
         maybe_reconnect_feedback_store()
         maybe_reconnect_run_history_store()
@@ -568,20 +590,24 @@ class CostEstimationService:
             from product_app.store_reconnect import (
                 feedback_ledger_is_stale,
                 feedback_ledger_is_trustworthy,
-                feedback_reopen_tried_without_recovery,
             )
 
             ledger_is_stale = feedback_ledger_is_stale(store)
             # Pre-decided policy (issue #122, confirmed with the operator,
             # not a code guess): BLOCK, but only AFTER a reopen has been
             # tried and the store has STILL not proven it can write — never
-            # an immediate block on staleness alone (a reconnect triggered
-            # earlier in THIS SAME call may still be in flight), and never a
-            # bare raise (measured: an unwrapped raise here produced a bare
-            # 500 with no error envelope on both routes).
-            if feedback_reopen_tried_without_recovery() and not feedback_ledger_is_trustworthy(
-                store
-            ):
+            # an immediate block on staleness alone, and never a bare raise
+            # (measured: an unwrapped raise here produced a bare 500 with no
+            # error envelope on both routes).
+            #
+            # ``reopen_tried_without_recovery`` is the SNAPSHOT taken at the
+            # top of this method, before any reconnect this call may have
+            # spawned — see the comment there for the measurement that made
+            # the snapshot necessary. The store side is read LIVE, so a
+            # recovery that lands mid-request stands the block down
+            # immediately rather than waiting for the next one.
+            if reopen_tried_without_recovery and not feedback_ledger_is_trustworthy(store):
+                self._log_daily_cap_blocked()
                 return CostEstimate(
                     estimated_cost_usd=estimated,
                     max_cost_usd=bound,
@@ -717,6 +743,39 @@ class CostEstimationService:
             "Repeats suppressed for %ss.",
             DAILY_CAP_USD,
             settings.store_reconnect_cooldown_seconds,
+            DAILY_CAP_BYPASS_LOG_INTERVAL_S,
+        )
+
+    def _log_daily_cap_blocked(self) -> None:
+        """Announce a REFUSED request, at most once per window.
+
+        Issue #122, second review round. Before this, the block path emitted
+        nothing at all: ``_log_daily_cap_bypassed`` above is keyed on the
+        bypass branch, and once the block engages that branch is never
+        reached again for this fault. So the operator's only signal that the
+        cap had gone from *not enforcing* to *refusing every priced request*
+        was its absence — a money guard silently turning into an outage.
+
+        Deliberately a SEPARATE monotonic stamp from the bypass log's, not a
+        shared one: the two describe opposite states, and sharing a window
+        would let whichever fired first suppress the other and leave the
+        operator reading the wrong story.
+        """
+        now = self._monotonic()
+        with self._lock:
+            last = self._cap_block_logged_at
+            if last is not None and (now - last) < DAILY_CAP_BYPASS_LOG_INTERVAL_S:
+                return
+            self._cap_block_logged_at = now
+        _log.error(
+            "costs: the feedback store is not writable and a reopen has already "
+            "been tried without restoring it, so the USD %s per-account 24h daily "
+            "spend cap can no longer be verified and every priced request is being "
+            "REFUSED (402). This is a storage fault, not a user cost problem. "
+            "Restore write access to the database; the block clears itself on the "
+            "next write that lands. Check /status feedback_db. "
+            "Repeats suppressed for %ss.",
+            DAILY_CAP_USD,
             DAILY_CAP_BYPASS_LOG_INTERVAL_S,
         )
 

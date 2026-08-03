@@ -395,12 +395,29 @@ def test_a_reopen_that_merely_OPENS_does_not_clear_the_flag() -> None:
     ``False`` on a reopen that fixed nothing, and #122's BLOCK then never
     fired for the very fault shape it exists to fix.
 
+    The double reports ``"unverified"`` because that is what a real reopened
+    handle reports on a still-broken volume — it has attempted no write yet.
+    A signal-less stand-in would be the wrong shape here: absence of a signal
+    reads as trustworthy by design, so the test would pass for the wrong
+    reason.
+
     Turns red if: ``_reopen_feedback_store`` clears the flag on a
     non-raising open.
     """
     store_reconnect._reset_for_tests()
+
+    class _FreshlyOpenedUnprovenStore:
+        def write_health(self) -> str:
+            return "unverified"
+
+        def lost_billed_writes(self) -> int:
+            return 0
+
     with (
-        patch("product_app.feedback_store.FeedbackStore.from_env", return_value=object()),
+        patch(
+            "product_app.feedback_store.FeedbackStore.from_env",
+            return_value=_FreshlyOpenedUnprovenStore(),
+        ),
         patch("product_app.feedback_store.configure"),
     ):
         store_reconnect._reopen_feedback_store()
@@ -454,6 +471,102 @@ def test_a_freshly_reopened_unverified_store_does_not_clear_the_flag() -> None:
     assert store_reconnect.feedback_reopen_tried_without_recovery() is True
 
 
+def test_a_landed_write_does_not_clear_the_flag_if_a_billed_charge_was_lost() -> None:
+    """``write_health`` is NOT the money signal — its own docstring says so.
+
+    The defect (adversarial review, round 2): the store is shared by every
+    recorder, so a landed TELEMETRY write re-stamps ``"ok"`` over a lost
+    charge. Keying recovery on health alone let one such reading stand the
+    guard down; measured, ten priced requests then went through with
+    ``daily_spend_for`` never consulted, because the store was ``"failing"``
+    again by the time the cap looked. A whole cooldown window of unmetered
+    spend, per flap.
+
+    Turns red if: ``feedback_ledger_is_trustworthy`` drops the
+    ``lost_billed_writes() == 0`` conjunct.
+    """
+    store_reconnect._reset_for_tests()
+    store_reconnect._feedback_reopen_tried_without_recovery = True
+
+    class _WroteButLostACharge:
+        def write_health(self) -> str:
+            return "ok"
+
+        def lost_billed_writes(self) -> int:
+            return 1
+
+    with (
+        patch("product_app.feedback_store.get_store", return_value=_WroteButLostACharge()),
+        patch("product_app.store_reconnect.threading.Thread", _FakeThread),
+    ):
+        store_reconnect.maybe_reconnect_feedback_store()
+
+    assert store_reconnect.feedback_reopen_tried_without_recovery() is True, (
+        "a landed telemetry write must not stand the money guard down while "
+        "a billed charge has been lost on this handle"
+    )
+
+
+def test_a_clean_handle_that_landed_a_write_does_clear_the_flag() -> None:
+    """The positive partner for the test above. Without it, a predicate that
+    always returned False would satisfy the loss case and block forever.
+
+    ``lost_billed_writes`` is per-instance, so the fresh handle every reopen
+    installs starts at zero — this is the ordinary recovery path, not an
+    exotic one.
+    """
+    store_reconnect._reset_for_tests()
+    store_reconnect._feedback_reopen_tried_without_recovery = True
+
+    class _CleanRecoveredStore:
+        def write_health(self) -> str:
+            return "ok"
+
+        def lost_billed_writes(self) -> int:
+            return 0
+
+    with (
+        patch("product_app.feedback_store.get_store", return_value=_CleanRecoveredStore()),
+        patch("product_app.store_reconnect.threading.Thread", _FakeThread),
+    ):
+        store_reconnect.maybe_reconnect_feedback_store()
+
+    assert store_reconnect.feedback_reopen_tried_without_recovery() is False
+
+
+def test_a_reopen_whose_new_handle_is_already_writable_does_not_arm_the_block() -> None:
+    """The flag is set from the ATTEMPT'S OUTCOME, not from its start.
+
+    A reopen that lands on a healthy volume produces a handle that has
+    already written (schema/migration), so there is nothing to fail closed
+    about. Arming here would refuse traffic on a store that just proved
+    itself.
+
+    Turns red if: the flag is set unconditionally at the top of
+    ``_reopen_feedback_store`` (which is what shipped in round 1's fix and
+    made the first sighting of staleness block).
+    """
+    store_reconnect._reset_for_tests()
+
+    class _AlreadyWritingStore:
+        def write_health(self) -> str:
+            return "ok"
+
+        def lost_billed_writes(self) -> int:
+            return 0
+
+    with (
+        patch(
+            "product_app.feedback_store.FeedbackStore.from_env",
+            return_value=_AlreadyWritingStore(),
+        ),
+        patch("product_app.feedback_store.configure"),
+    ):
+        store_reconnect._reopen_feedback_store()
+
+    assert store_reconnect.feedback_reopen_tried_without_recovery() is False
+
+
 def test_a_write_health_that_raises_is_treated_as_stale_not_as_a_crash() -> None:
     """Adversarial review (#122): the ``callable(...)`` guard only covered a
     MISSING method. A ``write_health`` that EXISTS and raises propagated
@@ -478,13 +591,17 @@ def test_a_write_health_that_raises_is_treated_as_stale_not_as_a_crash() -> None
     assert store_reconnect.feedback_ledger_is_trustworthy(_ExplodingStore()) is False
 
 
-def test_a_store_with_no_write_health_signal_is_neither_stale_nor_recovered() -> None:
+def test_a_store_with_no_write_health_signal_is_neither_stale_nor_distrusted() -> None:
     """The distinction the two predicates rest on. A narrow duck-typed double
     (or any implementation predating #109) has no signal at all — that is an
-    ABSENCE of evidence, not evidence of a fault, so it must not read as
-    stale. It also cannot demonstrate recovery, which is harmless precisely
-    because it is never stale: the conjunction ``costs.py`` blocks on can
-    never be true for it.
+    ABSENCE of evidence, not evidence of a fault. So it reads as neither
+    stale nor untrustworthy: nothing ever suggested it was broken, and
+    refusing traffic over a store type that simply never carried the signal
+    would be a wrongful block.
+
+    Production-unreachable either way — only ``FeedbackStore`` is ever passed
+    to ``configure()`` in ``src/`` — so this pins the contract for test
+    doubles rather than a live code path.
     """
 
     class _NoSignalStore:
