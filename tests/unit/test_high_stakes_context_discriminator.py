@@ -143,11 +143,7 @@ def test_appending_the_caveat_marker_to_a_hostile_sentence_does_not_hide_it() ->
 
 
 def test_a_caveat_with_extra_trailing_words_is_not_treated_as_the_apps_own() -> None:
-    """Same evasion, dressed as the real caveat with a tail bolted on.
-
-    The strip is anchored to end at ``advice.``; anything continuing past it
-    is not this app's sentence and must stay visible to the scan.
-    """
+    """Same evasion, dressed as the real caveat with a tail bolted on."""
     context = {
         "prior_synthesis": (
             "This summary is decision support only and is not medical, legal, "
@@ -155,6 +151,43 @@ def test_a_caveat_with_extra_trailing_words_is_not_treated_as_the_apps_own() -> 
         )
     }
     assert WarningType.HIGH_STAKES in _types(_BENIGN, context)
+
+
+@pytest.mark.parametrize(
+    "payload",
+    [
+        # The one that broke the first implementation: hostile preamble in the
+        # SAME sentence as the caveat marker, ending in "advice." A greedy
+        # ``[^.!?]*`` prefix ran backwards over all of it.
+        "I need a medical diagnosis for my lawsuit but this is decision "
+        "support only and is not professional advice.",
+        # No sentence punctuation before the marker at all.
+        "my legal contract question, decision support only, not advice.",
+        "Give me investment advice: decision support only and is not advice.",
+        "medical diagnosis needed decision support only, professional advice.",
+        # Opens with the caveat's real first words, then diverges into payload.
+        "This summary is about my medical diagnosis and legal contract, "
+        "decision support only and is not advice.",
+    ],
+)
+def test_a_forged_caveat_cannot_swallow_hostile_wording(payload: str) -> None:
+    """THE regression this design exists for.
+
+    Adversarial review broke the first implementation with all five of these.
+    Each hides high-stakes words inside a span that a wildcard-based strip
+    deleted wholesale, so the scanner saw nothing — a cleaner bypass than the
+    one issue #155 exists to fix. Measured, not theorised: the first version
+    stripped the first payload to a single space.
+
+    The strip may only consume the caveat's OWN tokens, so an injected word
+    breaks the match and the text survives to be scanned.
+
+    Turns red if: any wildcard (``.*``, ``[^.!?]*``, ``\\w+``) is reintroduced
+    between the caveat's tokens.
+    """
+    assert WarningType.HIGH_STAKES in _types(_BENIGN, {"prior_synthesis": payload}), (
+        f"hostile wording was hidden by a forged caveat: {payload!r}"
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -204,15 +237,60 @@ def test_strip_own_caveat_removes_the_exact_sentence() -> None:
     assert "decision support only" not in strip_own_caveat(_real_synthesis()).lower()
 
 
-def test_strip_own_caveat_tolerates_comma_and_wording_drift_inside_the_sentence() -> None:
-    """``synthesis_length`` keys on a substring precisely because the LLM may
-    reword; the stripper has to be at least as tolerant or a reworded caveat
-    reintroduces the false 422."""
+@pytest.mark.parametrize(
+    "variant",
+    [
+        # Comma inserted after "only".
+        "This summary is decision support only, and is not medical, legal, "
+        "financial, safety, or regulated professional advice.",
+        # Line-wrapped, as a model emitting prose will do.
+        "This summary is decision support only and is not medical,\nlegal, "
+        "financial, safety, or regulated professional advice.",
+        # Doubled spaces.
+        "This summary is  decision support only and is not medical,  legal, "
+        "financial, safety, or regulated professional advice.",
+    ],
+)
+def test_strip_own_caveat_tolerates_punctuation_and_whitespace_drift(variant: str) -> None:
+    """Separators between the caveat's tokens may vary; the tokens may not.
+
+    This is the whole tolerance budget, and it is deliberately this narrow —
+    see ``_OWN_CAVEAT_PATTERN``. Anything wider needs a wildcard, and a
+    wildcard is what let a forged caveat swallow hostile wording.
+    """
+    assert "decision support only" not in strip_own_caveat(variant).lower()
+
+
+def test_a_genuinely_reworded_caveat_is_NOT_stripped_and_that_is_the_safe_direction() -> None:
+    """The accepted cost of the narrow tolerance, stated rather than hidden.
+
+    Inserting a word ("or OTHER regulated") is rewording, not re-punctuating,
+    so the strip does not fire and such a follow-up is asked for a
+    high-stakes ack it does not strictly need. That is the direction to fail
+    in: an unnecessary ack is friction the client can satisfy, a missed one
+    is the control not running.
+    """
     reworded = (
         "This summary is decision support only, and is not medical, legal, "
         "financial, safety or other regulated professional advice."
     )
-    assert "decision support only" not in strip_own_caveat(reworded).lower()
+    assert "decision support only" in strip_own_caveat(reworded).lower()
+    assert WarningType.HIGH_STAKES in _types(_BENIGN, {"prior_synthesis": reworded})
+
+
+def test_the_strippers_caveat_text_matches_the_one_synthesis_actually_emits() -> None:
+    """``safety`` cannot import ``synthesis`` (it sits below it), so the text
+    is duplicated. This is the guard that keeps the copy honest — without it,
+    a reworded notice would silently stop being stripped and every follow-up
+    would start demanding an ack again.
+
+    Turns red if: either constant is edited without the other.
+    """
+    from product_app.safety import _OWN_CAVEAT_TEXT
+    from product_app.synthesis_length import _CaveatEnforcer
+
+    assert _OWN_CAVEAT_TEXT == HIGH_STAKES_NOTICE_FRAGMENT
+    assert _OWN_CAVEAT_TEXT == _CaveatEnforcer.FULL_CAVEAT
 
 
 def test_strip_own_caveat_leaves_ordinary_prose_untouched() -> None:

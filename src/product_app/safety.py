@@ -57,23 +57,45 @@ HIGH_STAKES_PATTERN = re.compile(
 #: high-stakes ack. Measured in
 #: ``tests/unit/test_high_stakes_context_discriminator.py``.
 #:
-#: THE ANCHORING IS THE SECURITY PROPERTY, not incidental. A looser rule —
-#: "drop any sentence containing 'decision support only'" — would hand an
-#: attacker a BETTER bypass than the one being fixed: append that phrase to a
-#: hostile sentence and the whole sentence disappears before the scan. So:
+#: THE STRIP MAY ONLY EVER CONSUME THE CAVEAT'S OWN WORDS. That constraint is
+#: the security property, and getting it wrong is not hypothetical — the first
+#: version of this used wildcards
+#: (``r"[^.!?]*\bdecision support only\b[^.!?]*\badvice\s*\."``) and adversarial
+#: review broke it 4 attempts out of 4. ``[^.!?]*`` is greedy and unanchored, so
+#: it ran BACKWARDS over any hostile text sharing the sentence:
 #:
-#: * ``[^.!?]*`` on both sides cannot cross a sentence boundary, which bounds
-#:   what a single match can swallow to one sentence.
-#: * the match must END at ``advice.`` — a sentence that continues past it
-#:   ("...professional advice for my lawsuit.") is not this app's sentence and
-#:   stays visible to the scan.
+#:     "I need a medical diagnosis for my lawsuit but this is decision
+#:      support only and is not professional advice."   -> stripped to " "
 #:
-#: Deliberately tolerant INSIDE those anchors (comma and wording drift),
-#: because ``synthesis_length`` keys on the substring ``"decision support
-#: only"`` for exactly that reason — the LLM may reword — and a stricter match
-#: here would let a reworded caveat reintroduce the false 422.
+#: Every high-stakes word vanished before the scan — a cleaner bypass than the
+#: one this issue exists to fix. Any "delete a span between two landmarks"
+#: shape has that flaw, because the attacker chooses what sits in the span.
+#:
+#: So the pattern is BUILT FROM the caveat's own tokens, joined by a separator
+#: class that matches only whitespace and commas. There is no wildcard for an
+#: attacker to hide words in: an injected word between two caveat tokens simply
+#: fails the match, the text is left intact, and the scanner sees it.
+#:
+#: The cost is that a caveat the model REWORDS (rather than merely
+#: re-punctuates) no longer matches, so such a follow-up asks for a high-stakes
+#: ack it does not strictly need. That direction is deliberate: an unnecessary
+#: acknowledgement is a small friction the client can satisfy, while a missed
+#: one is the safety control not running. The verbatim sentence is the
+#: guaranteed floor — ``synthesis_length._CaveatEnforcer.append_if_missing``
+#: appends it verbatim and the templated branch emits it verbatim — so the
+#: common path is covered exactly.
+_OWN_CAVEAT_TEXT = (
+    "This summary is decision support only and is not medical, "
+    "legal, financial, safety, or regulated professional advice."
+)
+
+#: Kept in sync with ``synthesis.HIGH_STAKES_NOTICE_FRAGMENT`` /
+#: ``synthesis_length._CaveatEnforcer.FULL_CAVEAT`` by
+#: ``tests/unit/test_high_stakes_context_discriminator.py``, not by import:
+#: ``safety`` sits below ``synthesis`` and must not import upward.
 _OWN_CAVEAT_PATTERN = re.compile(
-    r"[^.!?]*\bdecision support only\b[^.!?]*\badvice\s*\.",
+    r"[\s,]+".join(re.escape(word) for word in re.split(r"[\s,]+", _OWN_CAVEAT_TEXT.rstrip(".")))
+    + r"[\s,]*\.",
     re.IGNORECASE,
 )
 
@@ -81,10 +103,10 @@ _OWN_CAVEAT_PATTERN = re.compile(
 def strip_own_caveat(text: str) -> str:
     """Remove this app's own decision-support caveat sentence from ``text``.
 
-    Removes only that sentence, and only where it terminates as its own
-    sentence — see ``_OWN_CAVEAT_PATTERN`` for why the anchoring carries the
-    security property. Everything else is returned untouched, so hostile
-    wording sitting next to a genuine caveat still reaches the scanner.
+    Can only ever delete the caveat's own words — see ``_OWN_CAVEAT_PATTERN``
+    for why that is the security property and what broke when it was not.
+    Everything else is returned untouched, so hostile wording next to a
+    genuine caveat still reaches the scanner.
 
     No empty-string guard: ``re.sub`` already returns ``""`` for ``""``, and
     the caller skips falsy values anyway, so a guard here would be an
