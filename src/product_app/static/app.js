@@ -3253,6 +3253,17 @@
     return Number.isFinite(n) && n >= 0 && n <= 1;
   }
 
+  // #193. A count the UI is willing to PRINT as a denominator, or null.
+  // Deliberately stricter than Number(): a non-integer, negative, or
+  // unparseable value must render nothing rather than "(2.5 of -1 answers)".
+  // Same posture as coverageRatioOrNull above — refuse to display a number
+  // the server did not clearly send.
+  function countOrNull(raw) {
+    if (raw === null || raw === undefined) return null;
+    const n = typeof raw === "number" ? raw : typeof raw === "string" ? Number(raw.trim()) : NaN;
+    return Number.isInteger(n) && n >= 0 ? n : null;
+  }
+
   function renderVerdictBand(result, fs, ctx) {
     const band = el("result-verdict");
     if (!band) return;
@@ -3421,6 +3432,23 @@
       const ratio = coverageRatioOrNull(coverage.sourced_answer_ratio);
       if (ratio !== null) coveragePct = Math.round(ratio * 100);
     }
+    // #193: a bare percentage states no denominator, which is what #171's own
+    // rule forbids — "75%" reads as authoritative without saying 75% OF WHAT,
+    // and the panel is four answers, so 3-of-4 and 18-of-25 are very different
+    // claims wearing the same number. Both counts are already served (required
+    // fields on CitationCoverage), so nothing new is computed here; this only
+    // stops discarding them.
+    //
+    // Rendered only when both are present non-negative integers AND the
+    // denominator is non-zero. A fabricated "(0 of 0 answers)" would be worse
+    // than the bare percentage it replaces, so that case falls back to the
+    // percentage alone.
+    const answerCount = coverage ? countOrNull(coverage.answer_count) : null;
+    const sourcedCount = coverage ? countOrNull(coverage.sourced_answer_count) : null;
+    const coverageDenominator =
+      answerCount !== null && sourcedCount !== null && answerCount > 0
+        ? ` (${sourcedCount} of ${answerCount} answer${answerCount === 1 ? "" : "s"})`
+        : "";
     const answers = Array.isArray(res.model_answers) ? res.model_answers : [];
     // Count DISTINCT non-fallback sources (de-dupe by url/title) so two
     // models citing the same page don't inflate "N sources cited".
@@ -3439,7 +3467,7 @@
       buildTrustCard({
         accent: "source",
         kicker: "Source support",
-        value: coveragePct != null ? `${coveragePct}%` : "—",
+        value: coveragePct != null ? `${coveragePct}%${coverageDenominator}` : "—",
         valueSub: sourceSub,
         caption: "Share of the answers that came back carrying a primary source.",
       }),
