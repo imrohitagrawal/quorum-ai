@@ -52,6 +52,12 @@ _SCANNED_SUFFIXES = {".md", ".py", ".ts", ".yml", ".yaml"}
 #: time this gate ran. A gate that cries wolf gets deleted.
 _CITATION_ROOTS = ("", "e2e")
 
+#: This file is exempt from its own check. It necessarily contains example
+#: paths that do NOT resolve -- regex fixtures, and the phantom ADR that
+#: motivated the gate. A linter's test data is not a claim about the repo.
+#: Scoped to exactly one file so the exemption cannot quietly widen.
+_EXEMPT = ("tests/unit/test_cited_paths_resolve.py",)
+
 
 def _added_lines() -> list[tuple[str, str]]:
     """(file, line) for every line this branch adds vs origin/main."""
@@ -95,6 +101,8 @@ def test_every_repo_path_cited_on_an_added_line_exists() -> None:
     broken: list[str] = []
     checked = 0
     for path, line in added:
+        if path in _EXEMPT:
+            continue
         for cited in _CITATION.findall(line):
             # Strip trailing punctuation prose leaves behind.
             cited = cited.rstrip(".,;:)")
