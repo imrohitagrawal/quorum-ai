@@ -37,8 +37,14 @@ tell Jaccard from containment by reading a sentence; adversarial review remains
 the primary defence, and this repo measured 0 of 16 src/ defects caught by any
 gate versus 10 of 16 by review.
 
-FALSE-POSITIVE COST: near zero after two narrowings, both found by running it:
-paths relative to `working-directory: e2e`, and this file's own regex fixtures.
+FALSE-POSITIVE COST: near zero after THREE narrowings, all found by running it:
+paths relative to `working-directory: e2e`; this file's own regex fixtures; and
+an empty diff. The third was not a narrowing so much as a design error — the
+anti-vacuity floor asserted `checked > 0` against the live diff, so on `main`,
+where that range is empty by definition, the gate failed on every push. It
+reddened `main` at the merge of the batch that introduced it and blocked the
+deploy. An empty DIFF is not a broken EXTRACTOR; the floor now lives where it
+can hold, over this file's own fixture (see the positive-control test below).
 
 WHEN TO REMOVE: when prose stops carrying repo paths, or when a docs toolchain
 resolves links at build time and fails on a broken one. Its scope is
@@ -119,6 +125,25 @@ def test_every_repo_path_cited_on_an_added_line_exists() -> None:
     the exact shape.
     """
     added = _added_lines()
+    if not added:
+        # ON MAIN THIS IS THE NORMAL STATE, NOT A FAULT. The scope is
+        # `merge-base(origin/main, HEAD)...HEAD`; on `main` itself that range is
+        # empty by definition, so there is nothing in scope to examine.
+        #
+        # This gate shipped asserting `checked > 0` unconditionally, and that
+        # turned every push to `main` RED — including the merge of the very
+        # batch that introduced it, which blocked the deploy. The floor aimed at
+        # the right risk (a broken extractor passing vacuously) but attached it
+        # to the wrong signal: an empty DIFF is not a broken EXTRACTOR.
+        #
+        # The extractor's real anti-vacuity partner is
+        # `test_the_extractor_finds_a_citation_and_ignores_ordinary_prose`
+        # below — a fixture-based positive control that runs on EVERY
+        # invocation, including this one, and does not depend on what the diff
+        # happens to contain. That is where a floor can actually hold: over a
+        # set this file controls, not one the branch supplies.
+        pytest.skip("no added lines vs origin/main — nothing in scope")
+
     broken: list[str] = []
     checked = 0
     for path, line in added:
@@ -135,12 +160,11 @@ def test_every_repo_path_cited_on_an_added_line_exists() -> None:
         "these paths are cited on lines this branch adds, but do not exist:\n  "
         + "\n  ".join(sorted(set(broken)))
     )
-    # Anti-vacuity: "no broken citations" is trivially true over nothing.
-    # This branch cites plenty; if it suddenly cites none, the regex broke.
-    assert checked > 0, (
-        "no repo-path citations were examined at all — the extractor is broken, "
-        "not the branch. A negative check over an empty set proves nothing."
-    )
+    # Report what was counted, per the repo's rule that a gate must say what it
+    # measured. Deliberately NOT an assertion: a diff can add lines and cite no
+    # paths at all — an ordinary code change with no prose is exactly that — so
+    # `checked == 0` here is a legitimate outcome, not evidence of a fault.
+    print(f"citation gate: examined {checked} cited path(s) across {len(added)} added line(s)")
 
 
 def test_the_extractor_finds_a_citation_and_ignores_ordinary_prose() -> None:
