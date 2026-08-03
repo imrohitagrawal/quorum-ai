@@ -59,6 +59,7 @@ from uuid import UUID, uuid4
 import pytest
 
 from product_app import main
+from product_app.config import settings
 from product_app.costs import (
     DAILY_CAP_BYPASS_LOG_INTERVAL_S,
     DAILY_CAP_USD,
@@ -129,6 +130,25 @@ class _MonoClock:
 
     def advance(self, seconds: float) -> None:
         self._t += seconds
+
+
+@pytest.fixture(autouse=True)
+def _no_background_reconnect(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Pin this file's premise: a cap that stays BYPASSED, not one that blocks.
+
+    Every test here measures the LOUD-ONLY posture — the estimate is
+    unchanged, the bypass is merely no longer silent. That premise requires
+    no reconnect: since issue #122, once a reopen has been attempted and the
+    store still cannot be shown to write, the cap BLOCKS instead of
+    bypassing, and the "bypassed" ERROR these tests count stops firing
+    because it is no longer true.
+
+    So this is not a workaround — it restores the exact condition each test
+    was written to measure. #122's block is covered on its own terms, against
+    a real read-only volume, in
+    ``tests/integration/test_stale_ledger_block_on_a_real_volume.py``.
+    """
+    monkeypatch.setattr(settings, "store_reconnect_enabled", False)
 
 
 @pytest.fixture

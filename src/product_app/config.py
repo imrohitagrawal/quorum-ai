@@ -446,6 +446,16 @@ class Settings(BaseSettings):
     # (every test using `:memory:` that never simulates a write failure)
     # never reaches the reopen path at all, so this default does not by
     # itself risk new test flakiness.
+    #
+    # TURNING THIS OFF ALSO DISABLES ISSUE #122's FAIL-CLOSED SPEND CAP.
+    # Flagged by adversarial review; it is a consequence of #122's own
+    # confirmed policy rather than a separate bug. The cap blocks only once
+    # a reopen has been TRIED and the store still cannot be shown to write.
+    # With no reopen ever attempted that condition is honestly never met,
+    # so a stale ledger reverts to allow-and-log — the pre-#122 money leak
+    # — for as long as this stays False. Default True, so this is not live
+    # out of the box; do not set it False in production without accepting
+    # that trade.
     store_reconnect_enabled: bool = True
     #: Matches the existing 60s cooldown pattern already used by
     #: `feedback_store._claim_lost_cost_event_log_slot` and

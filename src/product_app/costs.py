@@ -437,6 +437,9 @@ class CostEstimationService:
         #: instance rather than module-global so the app's one singleton keeps
         #: one window while a test's throwaway service starts from silence.
         self._cap_bypass_logged_at: float | None = None
+        #: Same shape, separate window, for the issue #122 BLOCK announcement.
+        #: See ``_log_daily_cap_blocked`` for why the two must not share one.
+        self._cap_block_logged_at: float | None = None
         if now_provider is None:
             self._now: Callable[[], datetime] = lambda: datetime.now(UTC)
         else:
@@ -466,9 +469,28 @@ class CostEstimationService:
         # reopen, if one is due, runs on a background thread and is picked
         # up by a LATER call once it finishes.
         from product_app.store_reconnect import (
+            feedback_reopen_tried_without_recovery,
             maybe_reconnect_feedback_store,
             maybe_reconnect_run_history_store,
         )
+
+        # Issue #122, second review round. SNAPSHOT the flag BEFORE spawning
+        # a reconnect, and decide this request against the snapshot.
+        #
+        # Without this the guarantee below is a lie, and it was: MEASURED
+        # 20/20 on a real read-only volume, the reopen thread spawned by THIS
+        # call set the flag before the block check ~100 lines down read it,
+        # so the very first sighting of staleness blocked. That contradicts
+        # the operator's policy in the exact words it was given in — "only
+        # after a reopen attempt has actually been TRIED AND FAILED, not an
+        # immediate block on staleness alone" — and it did so
+        # non-deterministically, on thread scheduling.
+        #
+        # The snapshot makes it deterministic: a reopen this request starts
+        # can never condemn this request, only the next one. Recovery is
+        # unaffected, because the block needs BOTH this flag and a
+        # not-trustworthy store, and the store side is read live.
+        reopen_tried_without_recovery = feedback_reopen_tried_without_recovery()
 
         maybe_reconnect_feedback_store()
         maybe_reconnect_run_history_store()
@@ -552,27 +574,71 @@ class CostEstimationService:
             from product_app.feedback_store import get_store  # local import to avoid cycles
 
             store = get_store()
-            if store is None:
-                # P1 / issue #101. The store is gone — the boot-time open
-                # raised out of ``FeedbackStore.__init__`` and ``main``
-                # swallowed it (MEASURED: an EXCLUSIVE lock, a RESERVED lock on
-                # a database with no schema yet, or an unwritable volume with
-                # no database FILE yet; an unwritable volume whose file already
-                # exists opens fine) — so this guard is about to be skipped.
-                # The decision taken in the working session on issue #101's
-                # "operator decision required" item is LOUD ONLY: the request
-                # is NOT denied and ``threshold_action`` is NOT changed,
-                # because failing closed here would refuse every priced request
-                # on a storage fault. That decision is REAL but not yet written
-                # down anywhere durable — as of this change #101 carries no
-                # comment recording it — so treat this comment as the rationale
-                # and the issue as the place it still needs to land. What
-                # changes here is that the bypass stops being invisible: before
-                # this, a spend guard could be off for the whole life of a
-                # process with nothing but one boot-time WARNING about
-                # "persistence".
+            # Issue #122. TWO predicates, not one, and the difference is
+            # load-bearing (both defined once in ``store_reconnect`` and
+            # shared with the reconnect trigger at the top of this method —
+            # two copies of a money-guard test drift):
+            #
+            # * ``feedback_ledger_is_stale``  → "is there positive evidence
+            #   of a fault?" Drives the loud bypass log below.
+            # * ``feedback_ledger_is_trustworthy`` → "is there positive
+            #   evidence the ledger is SOUND?" Drives the block. A freshly
+            #   reopened handle reports ``"unverified"`` — neither — and
+            #   measured, keying the block on staleness alone let that state
+            #   un-block one request per cooldown window for the whole
+            #   outage, metering spend off a frozen ledger each time.
+            from product_app.store_reconnect import (
+                feedback_ledger_is_stale,
+                feedback_ledger_is_trustworthy,
+            )
+
+            ledger_is_stale = feedback_ledger_is_stale(store)
+            # Pre-decided policy (issue #122, confirmed with the operator,
+            # not a code guess): BLOCK, but only AFTER a reopen has been
+            # tried and the store has STILL not proven it can write — never
+            # an immediate block on staleness alone, and never a bare raise
+            # (measured: an unwrapped raise here produced a bare 500 with no
+            # error envelope on both routes).
+            #
+            # ``reopen_tried_without_recovery`` is the SNAPSHOT taken at the
+            # top of this method, before any reconnect this call may have
+            # spawned — see the comment there for the measurement that made
+            # the snapshot necessary. The store side is read LIVE, so a
+            # recovery that lands mid-request stands the block down
+            # immediately rather than waiting for the next one.
+            if reopen_tried_without_recovery and not feedback_ledger_is_trustworthy(store):
+                self._log_daily_cap_blocked()
+                return CostEstimate(
+                    estimated_cost_usd=estimated,
+                    max_cost_usd=bound,
+                    threshold_action=CostThresholdAction.BLOCK,
+                    confirmation_token=None,
+                    breakdown=breakdown,
+                    reasons=[
+                        (
+                            "The daily spend ledger is not writable and a reconnect "
+                            "attempt has already been made without restoring it, so "
+                            "the 24h cap for this account cannot be verified right now."
+                        ),
+                    ],
+                )
+            if ledger_is_stale:
+                # LOUD ONLY (issue #101's original decision, unchanged for the
+                # first observation of staleness): the request is NOT denied
+                # and ``threshold_action`` is NOT changed, because failing
+                # closed on the very first sighting — before a reopen has had
+                # a chance to run — would refuse every priced request on a
+                # transient storage blip. What changes here is that the
+                # bypass stops being invisible: before #101's fix, a spend
+                # guard could be off for the whole life of a process with
+                # nothing but one boot-time WARNING about "persistence".
                 self._log_daily_cap_bypassed()
             else:
+                # ``ledger_is_stale`` is False here, and its first disjunct
+                # is ``store is None`` — so ``store`` is proven non-None.
+                # Spelled out for mypy, which cannot follow narrowing through
+                # an intermediate boolean.
+                assert store is not None
                 already_spent = store.daily_spend_for(account_id)
                 # Same unit rule as the cumulative rail above: ``daily_spend_for``
                 # sums ``estimated_cost_usd``, so the addend is the point
@@ -677,6 +743,39 @@ class CostEstimationService:
             "Repeats suppressed for %ss.",
             DAILY_CAP_USD,
             settings.store_reconnect_cooldown_seconds,
+            DAILY_CAP_BYPASS_LOG_INTERVAL_S,
+        )
+
+    def _log_daily_cap_blocked(self) -> None:
+        """Announce a REFUSED request, at most once per window.
+
+        Issue #122, second review round. Before this, the block path emitted
+        nothing at all: ``_log_daily_cap_bypassed`` above is keyed on the
+        bypass branch, and once the block engages that branch is never
+        reached again for this fault. So the operator's only signal that the
+        cap had gone from *not enforcing* to *refusing every priced request*
+        was its absence — a money guard silently turning into an outage.
+
+        Deliberately a SEPARATE monotonic stamp from the bypass log's, not a
+        shared one: the two describe opposite states, and sharing a window
+        would let whichever fired first suppress the other and leave the
+        operator reading the wrong story.
+        """
+        now = self._monotonic()
+        with self._lock:
+            last = self._cap_block_logged_at
+            if last is not None and (now - last) < DAILY_CAP_BYPASS_LOG_INTERVAL_S:
+                return
+            self._cap_block_logged_at = now
+        _log.error(
+            "costs: the feedback store is not writable and a reopen has already "
+            "been tried without restoring it, so the USD %s per-account 24h daily "
+            "spend cap can no longer be verified and every priced request is being "
+            "REFUSED (402). This is a storage fault, not a user cost problem. "
+            "Restore write access to the database; the block clears itself on the "
+            "next write that lands. Check /status feedback_db. "
+            "Repeats suppressed for %ss.",
+            DAILY_CAP_USD,
             DAILY_CAP_BYPASS_LOG_INTERVAL_S,
         )
 
