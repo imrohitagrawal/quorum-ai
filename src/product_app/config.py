@@ -466,6 +466,33 @@ class Settings(BaseSettings):
     #: `estimate` call, without an operator having to restart the process.
     store_reconnect_cooldown_seconds: float = Field(default=60.0, gt=0, allow_inf_nan=False)
 
+    # --- Daily-cap posture on an untrustworthy ledger (issue #122) --------
+    # When the per-account 24h spend ledger cannot be trusted (the store is
+    # gone, or its writes are failing) and a reopen has been tried without
+    # restoring it, should a priced request be REFUSED (402) or allowed and
+    # loudly logged?
+    #
+    # DEFAULTS OFF — i.e. fail OPEN — and that default is the decision, not
+    # an oversight. Three things argued for it, all measured:
+    #
+    # * The exposure from failing open is small and bounded. The in-memory
+    #   cumulative rail (`costs._cumulative_spend_for`, a process-memory ring)
+    #   is untouched by a SQLite fault and still binds each account at
+    #   ~HARD_LIMIT_USD, and new accounts need sessions (2/24h per IP). Tens
+    #   of cents.
+    # * The exposure from failing CLOSED is the whole product: every visitor
+    #   refused for as long as the fault lasts.
+    # * The GLOBAL_DAILY_CEILING_USD rail — 25x larger than the per-account
+    #   cap this guards — already chooses fail-open on the IDENTICAL fault,
+    #   deliberately and in a comment. Fail-closing the small rail while its
+    #   bigger sibling fails open is incoherent.
+    #
+    # The mechanism ships complete and tested; only its activation waits. The
+    # issue itself framed fail-closed as a "recommendation to consider", and
+    # it should be switched on by a human who has decided that trade, not
+    # inherited from a plan. Set `DAILY_CAP_FAIL_CLOSED=true` to enable.
+    daily_cap_fail_closed: bool = False
+
 
 settings = Settings()
 

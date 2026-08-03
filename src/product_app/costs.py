@@ -579,8 +579,11 @@ class CostEstimationService:
             # shared with the reconnect trigger at the top of this method —
             # two copies of a money-guard test drift):
             #
-            # * ``feedback_ledger_is_stale``  → "is there positive evidence
-            #   of a fault?" Drives the loud bypass log below.
+            # * ``feedback_ledger_is_stale`` → "is there positive evidence of
+            #   a fault?" Used by the RECONNECT TRIGGER only. This method no
+            #   longer consults it: review measured that the gap between the
+            #   two predicates ("ok" health with lost charges) was exactly
+            #   where the money leaked.
             # * ``feedback_ledger_is_trustworthy`` → "is there positive
             #   evidence the ledger is SOUND?" Drives the block. A freshly
             #   reopened handle reports ``"unverified"`` — neither — and
@@ -588,11 +591,10 @@ class CostEstimationService:
             #   un-block one request per cooldown window for the whole
             #   outage, metering spend off a frozen ledger each time.
             from product_app.store_reconnect import (
-                feedback_ledger_is_stale,
                 feedback_ledger_is_trustworthy,
+                feedback_ledger_may_be_metered,
             )
 
-            ledger_is_stale = feedback_ledger_is_stale(store)
             # Pre-decided policy (issue #122, confirmed with the operator,
             # not a code guess): BLOCK, but only AFTER a reopen has been
             # tried and the store has STILL not proven it can write — never
@@ -606,7 +608,12 @@ class CostEstimationService:
             # the snapshot necessary. The store side is read LIVE, so a
             # recovery that lands mid-request stands the block down
             # immediately rather than waiting for the next one.
-            if reopen_tried_without_recovery and not feedback_ledger_is_trustworthy(store):
+            ledger_is_trustworthy = feedback_ledger_is_trustworthy(store)
+            if (
+                settings.daily_cap_fail_closed
+                and reopen_tried_without_recovery
+                and not ledger_is_trustworthy
+            ):
                 self._log_daily_cap_blocked()
                 return CostEstimate(
                     estimated_cost_usd=estimated,
@@ -624,22 +631,48 @@ class CostEstimationService:
                         ),
                     ],
                 )
-            if ledger_is_stale:
-                # LOUD ONLY (issue #101's original decision, unchanged for the
-                # first observation of staleness): the request is NOT denied
-                # and ``threshold_action`` is NOT changed, because failing
-                # closed on the very first sighting — before a reopen has had
-                # a chance to run — would refuse every priced request on a
-                # transient storage blip. What changes here is that the
-                # bypass stops being invisible: before #101's fix, a spend
-                # guard could be off for the whole life of a process with
-                # nothing but one boot-time WARNING about "persistence".
+            # METER ONLY WHAT WE CAN TRUST — and this line is the whole of a
+            # measured, LIVE money leak that predates this batch.
+            #
+            # This used to read ``if ledger_is_stale: log else: meter``, so
+            # ``trustworthy`` — the predicate whose own docstring asks "may the
+            # daily spend cap be METERED off this store's ledger?" — was never
+            # consulted on the allow path at all. The gap is the cell
+            # ``write_health() == "ok"`` AND ``lost_billed_writes() >= 1``:
+            # billed charges have been dropped, but any later unrelated write
+            # (an ordinary telemetry row) re-stamps health to "ok", so the
+            # ledger LOOKS healthy while missing money. ``is_stale`` is False
+            # there, so the code metered against it.
+            #
+            # MEASURED end to end against a real SQLite lock: 12 requests
+            # allowed, real spend $0.3180, ledger reporting $0.00 against a
+            # $0.20 cap, zero ``cost_guardrail_accepted`` rows on disk — and
+            # unbounded, the reproduction simply stopped looping. The control,
+            # identical fault with the masking telemetry write removed, held
+            # spend at $0.0530. The only difference was a write that has
+            # nothing to do with billing.
+            #
+            # That is F-01 itself, the leak ``lost_billed_writes`` exists to
+            # make unmaskable, surviving #109, #122 and #123 intact: the
+            # counter climbed correctly and nothing on this path read it.
+            #
+            # Keying the meter on ``trustworthy`` closes it, and makes the
+            # money decision a pure function of the handle rather than of a
+            # process-global flag written by two thread classes.
+            if not feedback_ledger_may_be_metered(store):
+                # LOUD ONLY (issue #101's original decision): the request is
+                # NOT denied and ``threshold_action`` is NOT changed. Failing
+                # closed here is what ``daily_cap_fail_closed`` above turns on,
+                # deliberately off by default — see its comment in config.py.
+                # What matters is that we no longer PRETEND to meter: an
+                # untrustworthy ledger produces a loud bypass, not a
+                # confident-looking wrong number.
                 self._log_daily_cap_bypassed()
             else:
-                # ``ledger_is_stale`` is False here, and its first disjunct
-                # is ``store is None`` — so ``store`` is proven non-None.
-                # Spelled out for mypy, which cannot follow narrowing through
-                # an intermediate boolean.
+                # ``ledger_is_trustworthy`` is False for ``store is None``, so
+                # reaching here proves ``store`` is not None. Spelled out for
+                # mypy, which cannot follow narrowing through an intermediate
+                # boolean.
                 assert store is not None
                 already_spent = store.daily_spend_for(account_id)
                 # Same unit rule as the cumulative rail above: ``daily_spend_for``

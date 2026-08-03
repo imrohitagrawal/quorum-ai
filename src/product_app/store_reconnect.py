@@ -155,6 +155,61 @@ def feedback_ledger_is_stale(store: object | None) -> bool:
         return True
 
 
+def feedback_ledger_may_be_metered(store: object | None) -> bool:
+    """May the daily spend cap be COMPUTED from this store's rows?
+
+    A THIRD question, distinct from both predicates below, and the distinction
+    is a live money leak's worth of important.
+
+    * :func:`feedback_ledger_is_stale` → "should we reconnect?"
+    * :func:`feedback_ledger_is_trustworthy` → "has this handle PROVEN it
+      writes?" — requires an actual landed write, so a cold store answers
+      False.
+    * this one → "are the rows on disk missing money?"
+
+    True unless there is positive evidence the ledger is INCOMPLETE:
+
+    * no store at all → False.
+    * ``write_health() == "failing"``, or a ``write_health`` that raises →
+      False. Writes are being lost right now.
+    * ``lost_billed_writes() > 0`` → False. Billed charges have been dropped,
+      and the counter is monotonic precisely so a later unrelated write cannot
+      hide that.
+    * everything else → True, INCLUDING ``"unverified"``.
+
+    ``"unverified"`` must meter, and getting that wrong is not hypothetical —
+    it broke the A/B control test the moment this function's first draft used
+    ``trustworthy`` here instead. ``"unverified"`` means "this handle has
+    attempted no write yet", which is the ORDINARY state of a cold process:
+    ``fly.toml`` sets ``min_machines_running = 0``, and every read-only
+    surface writes nothing. The rows are on disk regardless. Refusing to meter
+    there would silently disable the cap on every cold boot — a far bigger
+    hole than the one being closed.
+
+    The leak this closes, MEASURED against a real SQLite lock: the allow path
+    used to key on ``is_stale`` alone, so the cell ``write_health() == "ok"``
+    AND ``lost_billed_writes() >= 1`` metered against a ledger missing money —
+    12 requests allowed, real spend $0.3180, ledger reporting $0.00 against a
+    $0.20 cap, zero billed rows on disk, and unbounded. Any ordinary telemetry
+    write re-stamps health to ``"ok"``, which is exactly what makes the
+    monotonic counter, not the health comparator, the signal that matters here.
+    """
+    if store is None:
+        return False
+    if feedback_ledger_is_stale(store):
+        return False
+    lost = getattr(store, "lost_billed_writes", None)
+    if not callable(lost):
+        # A store type that never carried the counter cannot be judged by it —
+        # same rule as the missing-``write_health`` case elsewhere in this
+        # module. Absence of a signal is not evidence of loss.
+        return True
+    try:
+        return int(lost()) == 0
+    except Exception:  # noqa: BLE001 - must never break the caller's request
+        return False
+
+
 def feedback_ledger_is_trustworthy(store: object | None) -> bool:
     """May the daily spend cap be METERED off this store's ledger?
 

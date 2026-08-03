@@ -110,6 +110,10 @@ class _NoOpThread:
 
 @pytest.fixture
 def _clean_state(monkeypatch: pytest.MonkeyPatch) -> object:
+    # These tests prove the fail-closed mechanism is correct WHEN enabled.
+    # It ships OFF by default (see config.daily_cap_fail_closed); the shipped
+    # default is asserted in tests/unit/test_stale_ledger_spend_policy.py.
+    monkeypatch.setattr(settings, "daily_cap_fail_closed", True)
     store_reconnect._reset_for_tests()
     monkeypatch.setattr("product_app.store_reconnect.threading.Thread", _NoOpThread)
     yield

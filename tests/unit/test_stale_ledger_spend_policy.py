@@ -78,6 +78,25 @@ class _DuckTypedStoreWithNoWriteHealth:
 
 
 @pytest.fixture(autouse=True)
+def _fail_closed_enabled(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Switch the mechanism ON for this file.
+
+    ``settings.daily_cap_fail_closed`` defaults to **False** (see its comment
+    in ``config.py``): the exposure from failing open is bounded at tens of
+    cents by the in-memory cumulative rail, the exposure from failing closed
+    is the whole product, and the 25x-larger global ceiling already fails open
+    on the identical fault. The mechanism ships complete and switched off,
+    with activation left to a human who has decided that trade.
+
+    These tests exist to prove the mechanism is correct WHEN enabled, so they
+    enable it. The default-off posture is asserted separately below.
+    """
+    from product_app.config import settings
+
+    monkeypatch.setattr(settings, "daily_cap_fail_closed", True)
+
+
+@pytest.fixture(autouse=True)
 def _reset_reconnect_state() -> Iterator[None]:
     store_reconnect._reset_for_tests()
     yield
@@ -249,3 +268,107 @@ def test_a_healthy_store_under_the_cap_is_never_blocked_by_this_policy() -> None
             query_text="hi", model_slots=_slots(), account_id=uuid4()
         )
     assert estimate.threshold_action is not CostThresholdAction.BLOCK
+
+
+def test_the_fail_closed_mechanism_is_OFF_by_default() -> None:
+    """The shipped posture, asserted rather than assumed.
+
+    Every other test in this file monkeypatches the flag ON, so without this
+    one the suite would be green whichever way the default went — and the
+    default is the actual production behaviour.
+    """
+    from product_app.config import Settings
+
+    assert Settings().daily_cap_fail_closed is False
+
+
+def test_with_the_default_posture_an_untrustworthy_ledger_allows_but_does_not_meter(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Fail OPEN, but never pretend to meter.
+
+    This is the pairing that matters: with the mechanism off the request is
+    allowed (availability preserved), and the cap does NOT consult a ledger it
+    cannot trust (no confident wrong number). Before the fix the else-branch
+    metered against exactly such a ledger — a measured, live money leak.
+    """
+    from product_app import feedback_store
+    from product_app.config import settings
+
+    monkeypatch.setattr(settings, "daily_cap_fail_closed", False)
+    store_reconnect._feedback_reopen_tried_without_recovery = True
+
+    consulted: list[object] = []
+
+    class _MaskedLossStore:
+        """Health masked back to "ok" by a later unrelated write, but charges
+        were dropped. The exact cell the leak lived in."""
+
+        def write_health(self) -> str:
+            return "ok"
+
+        def lost_billed_writes(self) -> int:
+            return 3
+
+        def daily_spend_for(self, account_id: object, **_kwargs: object) -> Decimal:
+            consulted.append(account_id)
+            return Decimal("0")
+
+        def global_daily_spend(self, **_kwargs: object) -> Decimal:
+            return Decimal("0")
+
+    with pytest.MonkeyPatch.context() as mp:
+        mp.setattr(feedback_store, "get_store", lambda: _MaskedLossStore())
+        estimate = cost_estimation_service.estimate(
+            query_text="hi", model_slots=_slots(), account_id=uuid4()
+        )
+
+    assert estimate.threshold_action is not CostThresholdAction.BLOCK, (
+        "with fail-closed off the request must still be served"
+    )
+    assert consulted == [], (
+        "the cap must NOT meter against a ledger that has dropped billed "
+        "writes — that is the leak this fix closes"
+    )
+
+
+def test_a_COLD_healthy_store_still_meters(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A REGRESSION guard, not a hypothetical.
+
+    The first draft of the metering fix keyed on ``trustworthy``, which
+    requires a LANDED write. A cold process reports ``"unverified"`` -- the
+    ordinary state, since ``fly.toml`` sets ``min_machines_running = 0`` and
+    every read-only surface writes nothing -- so the cap silently stopped
+    metering on every cold boot. Caught by the existing A/B control test in
+    ``test_feedback_store_locked_database.py``, not by reasoning.
+
+    Turns red if: the meter path goes back to requiring ``trustworthy``.
+    """
+    from product_app import feedback_store
+    from product_app.config import settings
+
+    monkeypatch.setattr(settings, "daily_cap_fail_closed", False)
+    consulted: list[object] = []
+
+    class _ColdHealthyStore:
+        def write_health(self) -> str:
+            return "unverified"
+
+        def lost_billed_writes(self) -> int:
+            return 0
+
+        def daily_spend_for(self, account_id: object, **_kwargs: object) -> Decimal:
+            consulted.append(account_id)
+            return Decimal("0")
+
+        def global_daily_spend(self, **_kwargs: object) -> Decimal:
+            return Decimal("0")
+
+    with pytest.MonkeyPatch.context() as mp:
+        mp.setattr(feedback_store, "get_store", lambda: _ColdHealthyStore())
+        cost_estimation_service.estimate(query_text="hi", model_slots=_slots(), account_id=uuid4())
+
+    assert len(consulted) == 1, (
+        "a cold store has attempted no write, which is not evidence its rows "
+        "are missing money -- the cap must still be metered from them"
+    )
