@@ -510,6 +510,32 @@ def test_missing_store_skips_the_daily_cap_and_logs_it_once_per_window(
     assert "NOT being enforced" in message
     assert str(DAILY_CAP_USD) in message
 
+    # Every clause an operator has to ACT on, pinned.
+    #
+    # ADR-0004 makes this ERROR the only signal that the cap has stopped
+    # metering — there is no `/status` field meaning "the cap is not being
+    # enforced", so if this sentence degrades, nobody finds out. The three
+    # assertions above left that unguarded: the advisory mutation gate on
+    # PR #240 scored 79.5% against an 80% threshold with **15 survivors**, all
+    # of them in this one function, because mutmut rewrites each implicitly
+    # concatenated chunk of the message separately and only three chunks were
+    # asserted.
+    #
+    # What turns this red: blank or reword any chunk of the `_log.error(...)`
+    # format string in `costs._log_daily_cap_bypassed`, or drop either of its
+    # trailing interpolation arguments.
+    assert "feedback store unavailable" in message  # what broke
+    assert "unmetered" in message  # what it costs
+    assert "background reconnect" in message  # what the app is already doing
+    assert "issue #123" in message  # where that behaviour is specified
+    assert "keeps repeating" in message  # how to tell reconnect is failing too
+    assert "/status feedback_db" in message  # where to look
+    assert "restart" in message  # what to do
+    assert "Repeats suppressed" in message  # why the log is quiet afterwards
+    # Both interpolated values, so a dropped or reordered argument is caught.
+    assert str(settings.store_reconnect_cooldown_seconds) in message
+    assert str(DAILY_CAP_BYPASS_LOG_INTERVAL_S) in message
+
     # ...and the guard's OUTPUT is untouched: still fail-open, still a token.
     assert estimates[0].threshold_action is not CostThresholdAction.BLOCK
     assert estimates[0].confirmation_token is not None
