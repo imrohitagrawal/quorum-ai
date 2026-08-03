@@ -119,6 +119,12 @@ BUCKET_B_PIN_BEHAVIOUR = {
     "safety.HIGH_STAKES_PATTERN": (
         "assert it matches 'medical' and not 'weather'; the regex should grow"
     ),
+    "safety._OWN_CAVEAT_PATTERN": (
+        "assert it strips this app's own caveat but NOT a hostile sentence that "
+        "merely appends the marker, nor one continuing past 'advice.'; the "
+        "wording tolerance inside the anchors should grow, the anchors must not "
+        "(tests/unit/test_high_stakes_context_discriminator.py)"
+    ),
     "safety.WARNING_VERSION": "assert the ISO-date shape, not the value",
     "model_slots._MODEL_ID_RE": "assert accept/reject on samples",
     "catalog_fetcher._VENDOR_RE": "assert accept/reject on samples",

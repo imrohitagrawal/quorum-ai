@@ -1261,6 +1261,15 @@ components:
           maxLength: 8000
           minLength: 1
           title: Query Text
+        context:
+          anyOf:
+          - additionalProperties:
+              anyOf:
+              - type: string
+              - type: 'null'
+            type: object
+          - type: 'null'
+          title: Context
       type: object
       required:
       - query_text

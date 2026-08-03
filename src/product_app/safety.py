@@ -19,6 +19,7 @@ import re
 from dataclasses import asdict, dataclass
 from enum import StrEnum
 from threading import RLock
+from typing import Any
 from uuid import UUID
 
 from pydantic import BaseModel
@@ -39,6 +40,55 @@ HIGH_STAKES_PATTERN = re.compile(
     r")\b",
     re.IGNORECASE,
 )
+
+
+#: Issue #155. Matches THIS APP'S OWN mandated decision-support caveat, so it
+#: can be removed from ``context`` before the high-stakes scan runs.
+#:
+#: Why any of this is needed: both ``context`` values reach a provider prompt
+#: (``prior_question`` the system message, ``prior_synthesis`` the synthesis
+#: user message since WP-G2), so high-stakes wording placed there used to skip
+#: the acknowledgement entirely. But the obvious fix — scan the context too —
+#: was shipped and REVERTED in review, because ``synthesis_length`` guarantees
+#: that caveat is present in 100% of recommendations and it matches
+#: ``HIGH_STAKES_PATTERN`` five times ("medical", "legal", "financial",
+#: "safety", "regulated"). Scanning it wholesale made every legitimate
+#: follow-up — a client re-sending this app's own output — demand a
+#: high-stakes ack. Measured in
+#: ``tests/unit/test_high_stakes_context_discriminator.py``.
+#:
+#: THE ANCHORING IS THE SECURITY PROPERTY, not incidental. A looser rule —
+#: "drop any sentence containing 'decision support only'" — would hand an
+#: attacker a BETTER bypass than the one being fixed: append that phrase to a
+#: hostile sentence and the whole sentence disappears before the scan. So:
+#:
+#: * ``[^.!?]*`` on both sides cannot cross a sentence boundary, which bounds
+#:   what a single match can swallow to one sentence.
+#: * the match must END at ``advice.`` — a sentence that continues past it
+#:   ("...professional advice for my lawsuit.") is not this app's sentence and
+#:   stays visible to the scan.
+#:
+#: Deliberately tolerant INSIDE those anchors (comma and wording drift),
+#: because ``synthesis_length`` keys on the substring ``"decision support
+#: only"`` for exactly that reason — the LLM may reword — and a stricter match
+#: here would let a reworded caveat reintroduce the false 422.
+_OWN_CAVEAT_PATTERN = re.compile(
+    r"[^.!?]*\bdecision support only\b[^.!?]*\badvice\s*\.",
+    re.IGNORECASE,
+)
+
+
+def strip_own_caveat(text: str) -> str:
+    """Remove this app's own decision-support caveat sentence from ``text``.
+
+    Removes only that sentence, and only where it terminates as its own
+    sentence — see ``_OWN_CAVEAT_PATTERN`` for why the anchoring carries the
+    security property. Everything else is returned untouched, so hostile
+    wording sitting next to a genuine caveat still reaches the scanner.
+    """
+    if not text:
+        return text
+    return _OWN_CAVEAT_PATTERN.sub(" ", text)
 
 
 class WarningType(StrEnum):
@@ -139,7 +189,23 @@ class InMemoryWarningEventRecorder:
 class SafetyWarningPolicyService:
     """Classifies a query into the set of required warnings."""
 
-    def required_warnings_for_query(self, query_text: str) -> list[SafetyWarning]:
+    def required_warnings_for_query(
+        self,
+        query_text: str,
+        *,
+        context: dict[str, Any] | None = None,
+    ) -> list[SafetyWarning]:
+        """Warnings a client must acknowledge before this query may run.
+
+        ``context`` is scanned as well as ``query_text`` (issue #155): both
+        of its values reach a provider prompt, so high-stakes wording placed
+        there used to skip the acknowledgement. The app's own mandated
+        caveat is removed first — see :func:`strip_own_caveat` for why that
+        is required and why it is anchored the way it is.
+
+        Additive: ``context=None`` reproduces the previous behaviour exactly,
+        which is what every pre-#155 caller gets.
+        """
         warnings: list[SafetyWarning] = [
             SafetyWarning(
                 warning_type=WarningType.SENSITIVE_DATA,
@@ -148,7 +214,7 @@ class SafetyWarningPolicyService:
                 acknowledgement_required=True,
             ),
         ]
-        if HIGH_STAKES_PATTERN.search(query_text):
+        if HIGH_STAKES_PATTERN.search(self._scannable_text(query_text, context)):
             warnings.append(
                 SafetyWarning(
                     warning_type=WarningType.HIGH_STAKES,
@@ -158,6 +224,25 @@ class SafetyWarningPolicyService:
                 ),
             )
         return warnings
+
+    @staticmethod
+    def _scannable_text(query_text: str, context: dict[str, Any] | None) -> str:
+        """The query plus every string in ``context``, minus this app's caveat.
+
+        Scans EVERY string value rather than a hardcoded list of known keys.
+        A future context field that reaches a prompt must not become a silent
+        bypass just because this function predates it — the list would go
+        stale without anything going red, which is the failure mode issue
+        #155 exists to fix in the first place. Non-string values are skipped:
+        they cannot carry wording.
+        """
+        if not context:
+            return query_text
+        parts = [query_text]
+        for value in context.values():
+            if isinstance(value, str) and value:
+                parts.append(strip_own_caveat(value))
+        return "\n".join(parts)
 
     def missing_acknowledgements(
         self,

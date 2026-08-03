@@ -529,6 +529,14 @@ class QueryRunResultResponse(BaseModel):
 
 class QueryRunWarningsRequest(BaseModel):
     query_text: str = Field(min_length=1, max_length=8_000)
+    #: Issue #155. Same shape as ``QueryRunCreateRequest.context`` on purpose:
+    #: the probe must be able to describe the SAME request the client is about
+    #: to create, or discovery and enforcement disagree and a client following
+    #: the documented flow enters an unbreakable 422 loop.
+    #:
+    #: Optional and defaulted, so a pre-#155 client that omits it is
+    #: unaffected — it simply gets the query-text-only answer it got before.
+    context: dict[str, str | None] | None = Field(default=None)
 
 
 class QueryRunWarningsResponse(BaseModel):
@@ -1224,7 +1232,10 @@ def create_query_run(
         payload.model_slots,
         slot_search=payload.slot_search,
     )
-    required_warnings = safety_warning_policy.required_warnings_for_query(payload.query_text)
+    # Issue #155: ``context`` reaches provider prompts, so it is scanned too.
+    required_warnings = safety_warning_policy.required_warnings_for_query(
+        payload.query_text, context=payload.context
+    )
     missing_acknowledgements = safety_warning_policy.missing_acknowledgements(
         required_warnings=required_warnings,
         acknowledgements=payload.safety_acknowledgements,
@@ -1534,7 +1545,14 @@ def get_query_run_warnings(
     enforce_csrf(request, session)
     # SEC-C3: per-account rate limit to prevent rapid-fire warning polls
     _enforce_account_rate_limit(request, session)
-    warnings = safety_warning_policy.required_warnings_for_query(payload.query_text)
+    # Issue #155: discovery and enforcement MUST agree. Without ``context``
+    # here, a client following the documented probe-then-create flow gets a
+    # warning list that omits ``high_stakes``, acknowledges exactly what it
+    # was told to, and is then refused 422 by the create route on a warning
+    # it was never shown — an unbreakable loop.
+    warnings = safety_warning_policy.required_warnings_for_query(
+        payload.query_text, context=payload.context
+    )
     safety_warning_policy.record_warning_impression(
         account_id=session.account_id,
         query_run_id=None,
