@@ -3338,6 +3338,122 @@
     return Number.isFinite(n) && n >= 0 && n <= 1;
   }
 
+  /**
+   * #193. A count we are willing to PRINT, or null.
+   *
+   * Same posture as ``coverageRatioOrNull`` above: ``answer_count`` and
+   * ``sourced_answer_count`` are required non-negative ints on
+   * ``CitationCoverage``, so a conforming backend cannot send anything else.
+   * This refuses ""/"   "/null/undefined/2.5/-1/true/[3]/{} and any non-SAFE
+   * integer, rather than coercing, because the caption built from these is a
+   * sentence a reader will take as measured fact. A numeric string IS accepted
+   * once trimmed: ``"3 "`` yields 3. That is deliberate — the value is right —
+   * but this comment listed ``"3 "`` among the REFUSED inputs until a reviewer
+   * ran it, which is the repo's "quote what the code does" rule broken inside
+   * the sentence describing the guard.
+   */
+  function countOrNull(raw) {
+    let n;
+    if (typeof raw === "number") {
+      n = raw;
+    } else if (typeof raw === "string") {
+      const trimmed = raw.trim();
+      // ``Number("")`` and ``Number("   ")`` are both a finite, non-negative,
+      // INTEGER 0 — so an integer check alone lets a missing count through as a
+      // measured zero, and the caption reads "0 of 4 answers came back carrying
+      // a primary source". That is the WP-B/F-18 defect exactly — first found
+      // on the verdict BAND's coverage-caution line (``renderVerdictBand``),
+      // not on this card, though ``coverageRatioOrNull`` already guards this
+      // card's value line. Reject before coercing, the same way that function
+      // does (see its ``trimmed === ""`` check).
+      if (trimmed === "") return null;
+      n = Number(trimmed);
+    } else {
+      return null;
+    }
+    // SAFE integer, not merely integer: ``Number.isInteger(1e21)`` is true and
+    // renders "1e+21 answers", and 9007199254740993 prints as ...992 — a
+    // different number than the payload carried. Same principle as the
+    // coherence guard below: a conforming server cannot send these, and that
+    // is exactly why the client refuses them rather than trusting the
+    // validator.
+    return Number.isSafeInteger(n) && n >= 0 ? n : null;
+  }
+
+  /**
+   * #193. The Source support caption: the percentage's denominator, named.
+   *
+   * A bare "75%" says nothing about what it is a share of, and "3 of 4" and
+   * "15 of 20" are both 75%. The counts go HERE, in the caption, rather than
+   * on the value line, for two measured reasons:
+   *
+   *   - the Agreement card's VALUE is literally ``3 of 4`` and sits in the same
+   *     3-up grid, so a second bare fraction beside it reads as the same
+   *     measurement when the two are unrelated (models that AGREED versus
+   *     answers that CITED A SOURCE); and
+   *   - the value line already carries ``· N sources cited``, so a third number
+   *     there invites reading the percentage against the source count, which
+   *     is not its denominator either.
+   *
+   * The caption already said this without the numbers, so this REPLACES a
+   * generic sentence rather than adding one.
+   *
+   * Returns the numberless fallback whenever the counts cannot support the
+   * sentence. Input classes and the test for each:
+   * ``e2e/tests/invariants/source-support-denominator.spec.ts``.
+   *
+   * NOTE on the denominator, which is NOT the Agreement card's: ``answer_count``
+   * counts answers that CAME BACK (``synthesis.py``: failed / cancelled /
+   * deadline-exceeded slots carry 0 and are out of scope), while the Agreement
+   * card's ``total`` is every initial answer INCLUDING the failed ones
+   * (``debate.py``, ``AgreementSummary``). On a degraded run the two cards
+   * therefore show different denominators for one run — "2 of 4 aligned" beside
+   * "1 of 3 answers". That is accurate, not a bug, and the words "came back"
+   * carry the distinction; it is recorded here because the discrepancy looks
+   * like a defect to anyone who has not read both definitions.
+   */
+  const SOURCE_SUPPORT_CAPTION_FALLBACK =
+    "Share of the answers that came back carrying a primary source.";
+
+  /** Largest gap allowed between the printed % and the counts (2dp quantised). */
+  const COVERAGE_RATIO_TOLERANCE = 0.01;
+
+  function sourceSupportCaption(coverage, ratio) {
+    if (!coverage) return SOURCE_SUPPORT_CAPTION_FALLBACK;
+    // The caption must never state a measurement the VALUE LINE suppressed.
+    // ``coverageRatioOrNull`` renders "—" for an absent/out-of-range ratio
+    // precisely because, per WP-B/F-18, suppressing the figure is the honest
+    // failure mode; a caption that then says "3 of 4" hands the reader back the
+    // 75% the card just refused to claim. So the counts require a usable ratio.
+    if (ratio === null || ratio === undefined) return SOURCE_SUPPORT_CAPTION_FALLBACK;
+    const total = countOrNull(coverage.answer_count);
+    const sourced = countOrNull(coverage.sourced_answer_count);
+    // Refuse: absent, malformed, an empty panel ("0 of 0 answers" is worse than
+    // saying nothing), or incoherent.
+    //
+    // HONESTY NOTE on ``sourced > total``: no input can isolate it, so no test
+    // turns it red on its own, and it is kept as defence in depth rather than
+    // as a proved guard. Incoherent counts imply a ratio above 1, which
+    // ``coverageRatioOrNull`` rejects as out of unit range, so the usable-ratio
+    // gate above fires first; and if a ratio inside [0,1] is sent anyway, it
+    // cannot agree with a fraction greater than 1, so the agreement check below
+    // fires. This clause only becomes load-bearing if one of those two is later
+    // loosened — which is exactly when a reader will be glad it is here.
+    if (total === null || sourced === null) return SOURCE_SUPPORT_CAPTION_FALLBACK;
+    if (total === 0 || sourced > total) return SOURCE_SUPPORT_CAPTION_FALLBACK;
+    // ...and the counts must AGREE with the percentage printed above them.
+    // ``CitationCoverage`` validates ``sourced <= answer`` but never checks the
+    // ratio against the counts, so "10%" over "3 of 4 answers" is reachable
+    // from a payload no server-side validator rejects. Two numbers on one card
+    // that contradict each other are worse than one number with no denominator,
+    // which is the whole complaint this issue exists to answer. The ratio is
+    // quantised to 2dp upstream, so the tolerance covers rounding only.
+    if (Math.abs(ratio - sourced / total) > COVERAGE_RATIO_TOLERANCE) {
+      return SOURCE_SUPPORT_CAPTION_FALLBACK;
+    }
+    return `${sourced} of ${total} answer${total === 1 ? "" : "s"} came back carrying a primary source.`;
+  }
+
   function renderVerdictBand(result, fs, ctx) {
     const band = el("result-verdict");
     if (!band) return;
@@ -3497,14 +3613,22 @@
     // number of DISTINCT non-fallback sources across model_answers. The two are
     // deliberately different quantities — the caption names the percentage's
     // denominator so they cannot be read as numerator/denominator of each other.
+    // Until #193 that sentence described a contract this code did NOT have: the
+    // caption was a fixed string with no number in it, so nothing named the
+    // denominator anywhere on the card. ``sourceSupportCaption`` is what makes
+    // the line above true.
     // Degrade gracefully if absent.
     const coverage = fs && fs.citation_coverage ? fs.citation_coverage : null;
     let coveragePct = null;
-    if (coverage) {
+    // Hoisted so the CAPTION is decided from the same parsed ratio the VALUE
+    // LINE renders. Deriving them independently is how the card came to be able
+    // to print "—" above "3 of 4 answers" — the caption restoring a figure the
+    // value line had deliberately suppressed.
+    const coverageRatio = coverage ? coverageRatioOrNull(coverage.sourced_answer_ratio) : null;
+    if (coverageRatio !== null) {
       // WP-B/F-18: same trap as the verdict band's caution line — an absent
       // ratio must render the "—" no-data treatment, never a fabricated 0%.
-      const ratio = coverageRatioOrNull(coverage.sourced_answer_ratio);
-      if (ratio !== null) coveragePct = Math.round(ratio * 100);
+      coveragePct = Math.round(coverageRatio * 100);
     }
     const answers = Array.isArray(res.model_answers) ? res.model_answers : [];
     // Count DISTINCT non-fallback sources (de-dupe by url/title) so two
@@ -3526,7 +3650,7 @@
         kicker: "Source support",
         value: coveragePct != null ? `${coveragePct}%` : "—",
         valueSub: sourceSub,
-        caption: "Share of the answers that came back carrying a primary source.",
+        caption: sourceSupportCaption(coverage, coverageRatio),
       }),
     );
 

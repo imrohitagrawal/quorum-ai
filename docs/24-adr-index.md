@@ -13,6 +13,7 @@ ways, so the record shows what was believed on a date and what replaced it.
 | [ADR-0005](adr/0005-background-reconnect-for-the-durable-stores.md) | Reconnect the durable SQLite stores in the background, not at boot only | Architecture | Accepted — 2026-08-03 (major-issues batch, issue #123) |
 | [ADR-0006](adr/0006-high-stakes-scan-excludes-only-our-own-caveat.md) | The high-stakes scan strips our own caveat by token, never by wildcard | Architecture | Accepted — 2026-08-03 (major-issues batch, issue #155) |
 | [ADR-0007](adr/0007-suppress-the-readiness-first-paint-time-bounded.md) | Suppress the readiness banner's first paint, with a time bound | Architecture | Accepted — 2026-08-03 (major-issues batch, issue #117) |
+| [ADR-0008](adr/0008-the-source-support-denominator-goes-in-the-caption.md) | the Source support denominator goes in the caption, and states no exclusion count | Architecture | Accepted — 2026-08-04 (issue #193) |
 
 **This index was itself stale** until 2026-07-30: ADR-0002 had existed since
 2026-07-19 and was never listed here. A hand-maintained index is a derived fact
