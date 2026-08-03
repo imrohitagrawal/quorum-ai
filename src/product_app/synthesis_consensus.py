@@ -211,12 +211,48 @@ def _four_grams(text: str) -> frozenset[str]:
 
 def _excerpt(text: str) -> str:
     """Return the first ``_OVERLAP_EXCERPT_CHARS`` characters of
-    ``text`` with newlines collapsed to spaces. Empty if ``text``
-    is falsy.
+    ``text`` with newlines collapsed to spaces, MINUS this product's own
+    mandated caveat. Empty if ``text`` is falsy.
+
+    Issue #180. The decision-support caveat is 17 words that
+    ``synthesis._RECOMMENDATION_PROMPT`` rule 1 orders verbatim and
+    ``synthesis_length._CaveatEnforcer`` appends when a model omits it, so in
+    any regulated domain every answer tends to carry it. Clustering on it
+    means four models that agree on NOTHING are served as "strong consensus,
+    4 of 4 aligned" — a trust number decided by text the models did not
+    choose.
+
+    MEASURED before choosing this approach, on four mutually unrelated
+    answers (the issue's own reproduction):
+
+        bodies only        pairwise Jaccard 0.000  partners [0,0,0,0]  weak
+        caveat prepended   pairwise Jaccard 0.350  partners [3,3,3,3]  strong
+        caveat appended    pairwise Jaccard 0.267  partners [3,3,3,3]  strong
+
+    and, decomposing one excerpt: the caveat contributed **14 of its 28
+    4-grams (50%)**, and **14 of 14 — 100% — of the shared grams between two
+    unrelated answers**. So the boilerplate does not merely inflate the
+    overlap here, it IS the entire overlap. That measurement is what selects
+    targeted exclusion over the alternative the issue lists (changing the
+    clustering primitive itself, e.g. IDF weighting), which is the right
+    answer only when the boilerplate is diffuse. It is not; it is one exact
+    sentence.
+
+    Stripped BEFORE truncating, deliberately: strip-after-truncate would
+    leave a short remainder of whatever the caveat had already crowded out,
+    so the excerpt would still be dominated by having contained it.
+
+    Reuses ``safety.strip_own_caveat`` rather than matching the sentence
+    again here. That primitive was hardened under adversarial review for
+    issue #155 (it may only consume the caveat's own tokens — no wildcard an
+    attacker or a model can hide text inside) and survived 1,836 structured
+    attack attempts. Two matchers for one sentence would drift.
     """
     if not text:
         return ""
-    return text.replace("\n", " ")[:_OVERLAP_EXCERPT_CHARS]
+    from product_app.safety import strip_own_caveat
+
+    return strip_own_caveat(text).replace("\n", " ")[:_OVERLAP_EXCERPT_CHARS]
 
 
 def _debate_signals_convergence(debate_outputs: list[DebateOutput]) -> bool:
