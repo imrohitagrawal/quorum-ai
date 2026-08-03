@@ -29,6 +29,7 @@ from typing import Literal
 
 from product_app.debate import DEBATE_MODE_LIVE, DebateOutput, ModelAlignment
 from product_app.providers import InitialAnswerStatus, InitialModelAnswer
+from product_app.safety import strip_own_caveat
 from product_app.visible_text import is_visible
 
 ConsensusStrength = Literal["strong", "weak", "divided"]
@@ -136,7 +137,7 @@ def compute_consensus_strength(
     if not completed:
         return _classify_divided_or_weak(completed_texts=[])
 
-    completed_texts = [a.answer_text for a in completed]
+    completed_texts = [_scoring_text(a) for a in completed]
 
     # Strong path 1: 3+ of 4 share substantive overlap.
     if _has_strong_overlap(completed_texts):
@@ -207,6 +208,37 @@ def _four_grams(text: str) -> frozenset[str]:
     if len(words) < 4:
         return frozenset(words)
     return frozenset(" ".join(words[i : i + 4]) for i in range(len(words) - 3))
+
+
+def _scoring_text(answer: InitialModelAnswer) -> str:
+    """The text of ``answer`` that may count as EVIDENCE OF AGREEMENT.
+
+    Sentences this system dictates are not the model's words, so they are not
+    evidence that two models agree. Stripped with ``safety.strip_own_caveat``,
+    which already existed for exactly this sentence and is comma-tolerant and
+    opening-optional — it handles the truncated form this app itself emits
+    (``synthesis_length._truncate_with_caveat_present``) and a missing oxford
+    comma, both of which defeat a naive whitespace-only matcher. A second,
+    weaker matcher was written here first and deliberately is not kept: two
+    matchers built from one constant drift.
+
+    Applied ONCE, where the population is built, so every downstream primitive
+    — ``_overlap_partner_counts``, ``_polar_split``, ``_opening_majority_flags``
+    — scores the same corrected corpus. That matters: ``_polar_split`` keys on
+    the word "support", which appears inside the caveat ("decision support
+    only"), so before this a panel split 2-vs-2 in open disagreement classified
+    ``strong``. Stripping per-primitive instead would have left that standing.
+
+    KNOWN GAP, deliberately not closed here: an answer produced WITHOUT
+    invoking a model (``ProviderPath.LOCAL_SIMULATION``) carries
+    ``providers._local_simulation_text``, one template differing only by the
+    model id. Four such slots score pairwise Jaccard 0.500-0.579 against the
+    0.1 threshold and still read as "4 of 4 models aligned". That is a separate
+    concern with a 13-test blast radius, four of which assert the current
+    behaviour as correct, and it needs its own decision about what demo mode
+    should say. Filed separately; do not fold it in here.
+    """
+    return strip_own_caveat(answer.answer_text)
 
 
 def _excerpt(text: str) -> str:
@@ -356,7 +388,10 @@ def _opening_reflected_in_final(opening_text: str, final_text: str) -> bool:
     opening_ngrams = _four_grams(_excerpt(opening_text))
     if not opening_ngrams:
         return False
-    final_ngrams = _four_grams(final_text)
+    # #180: the final synthesis is where the caveat REALLY lands — the
+    # synthesizer's prompt orders it and ``_CaveatEnforcer`` appends it — and
+    # this text is not excerpted, so it is stripped here rather than upstream.
+    final_ngrams = _four_grams(strip_own_caveat(final_text))
     if not final_ngrams:
         return False
     shared = len(opening_ngrams & final_ngrams)
@@ -441,7 +476,7 @@ def classify_model_alignment(
         for index, answer in enumerate(initial_answers)
         if answer.status is InitialAnswerStatus.COMPLETED and is_visible(answer.answer_text)
     ]
-    completed_texts = [initial_answers[index].answer_text for index in completed_indices]
+    completed_texts = [_scoring_text(initial_answers[index]) for index in completed_indices]
     majority_flags = _opening_majority_flags(completed_texts)
     majority_by_index = dict(zip(completed_indices, majority_flags, strict=True))
     text_by_index = dict(zip(completed_indices, completed_texts, strict=True))
