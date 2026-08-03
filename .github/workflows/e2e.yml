@@ -272,6 +272,16 @@ jobs:
       - name: "workspace/accessibility/api-mocking/navigation lane: floor on tests actually executed"
         run: python3 scripts/check_e2e_executed.py --report e2e/results.xml --min 51 --lane "workspace/accessibility/api-mocking/navigation lane"
 
+      - name: Clear the previous lane's JUnit report
+        # Adversarial review (#162/#166): without this, a Playwright run that
+        # exits 0 having genuinely written nothing (the exact "all-skipped"
+        # or "matched nothing" shape every floor in this file exists to
+        # catch) would leave the new visual-snapshots floor below reading the
+        # STALE 51-test report from the lane above and passing on old data
+        # instead of catching the gap. Matches the same clear-before-run
+        # pattern already used between the invariants and axe+parity lanes.
+        run: rm -f e2e/results.xml
+
       - name: Run visual snapshots (BLOCKING)
         working-directory: e2e
         # toHaveScreenshot baselines for the result + transcript views against the
