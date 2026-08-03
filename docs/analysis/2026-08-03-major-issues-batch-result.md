@@ -1,14 +1,23 @@
-# AWAITING `/code-review ultra` — nothing below is merged to main yet
+# Major-issues batch — the record
 
-Integration branch: **`feature/major-issues-batch`** — open as **PR #240**.
+Integration branch: **`feature/major-issues-batch`** — merged to `main` as
+**PR #240**.
+
+**`/code-review ultra` was attempted and failed** with an orchestrator error
+and zero findings. It was not re-run: a second billed attempt on the same tree
+buys a repeat of an infrastructure failure, not a second opinion. What replaced
+it — a focused local review of the risky predicate, plus the required CI gates —
+is what found the fifth and sixth defects recorded below. Both are real, and
+neither came from the reviewer that failed.
 
 **Tracked in git deliberately.** The ~40 `ISSUE-*-RESULT.md` files at the repo
 root are all untracked, so the project's record of what was learned lives on one
 laptop. This one is in `docs/analysis/` instead.
 
-Run stopped at §8.4a of `MAJOR-ISSUES-BATCH-ULTRACODE-PROMPT.md`, as
-instructed. `/code-review ultra` is user-triggered and billed; it was not
-invoked, simulated, or substituted.
+The autonomous run stopped at §8.4a of
+`MAJOR-ISSUES-BATCH-ULTRACODE-PROMPT.md`, as instructed, and did not merge or
+deploy on its own authority. Everything after that point — the ultra attempt,
+the policy reversal, the merge — happened with the operator in the loop.
 
 ---
 
@@ -22,7 +31,7 @@ invoked, simulated, or substituted.
 | 162 + 166 | Six gate-liveness fixes; deleted the dead codex-review job | each bite-proofed by reverting the real workflow YAML on a copy |
 | 182 | `mutation-baseline` always prints a partial score, even on timeout | orphan-process-group kill proven; the post-SIGKILL wait is bounded too (review finding) |
 | 123 | A recovered volume no longer needs a process restart | background reconnect keyed on #109's write-health signal, not on `store is None` |
-| 122 | The daily spend cap fails **closed** on a ledger a reopen could not restore | see the correction record below |
+| 122 | The spend cap **stops metering a ledger known to have dropped charges**, and says so loudly. It fails **open** — a fail-closed mechanism ships complete and tested behind `daily_cap_fail_closed`, defaulting to `False` | ADR-0004, and the correction record below. An earlier revision of this branch shipped the opposite default; the reversal is the most important thing on this page |
 | 155 | High-stakes wording in `context` no longer skips the acknowledgement | the review agent reported 1,836 structured attack attempts with 0 bypasses — that is *its* measurement, reproducible from its method but not asserted by any test in this repo, so read it as reviewer testimony rather than a checked-in fact |
 | 117 | The readiness banner no longer flashes — and cannot be silenced | MutationObserver installed before `app.js`; `toBeHidden()` auto-retries and structurally cannot see a ~100ms flash |
 
@@ -214,11 +223,21 @@ paths. Where a reviewer disagreed with me, the reviewer was right every time.
 
 ## What I need from you
 
-1. Run `/code-review ultra` against `feature/major-issues-batch`.
-2. Decide **#222** (PR #238) — merge with the fold test demoted, merge as-is,
+Three decisions, all still open after the merge:
+
+1. Decide **#222** (PR #238) — merge with the fold test demoted, merge as-is,
    or hold for a landing redesign.
-3. Decide **#193** (PR #236) — reseed visual baselines, then merge.
-4. Nothing is merged to `main` and nothing is deployed.
+2. Decide **#193** (PR #236) — run `seed-visual-baselines.yml`, review the PNGs,
+   then merge.
+3. Decide whether `daily_cap_fail_closed` is ever switched on. It ships `False`
+   (ADR-0004). If it is ever switched on, `/status` must first gain a field
+   meaning "traffic is being refused" — today an operator reading
+   `feedback_writes: ok` would conclude the fault is over while users are still
+   being turned away.
+
+Both held PRs target `feature/major-issues-batch`, which no longer exists after
+the merge. **Re-target them to `main` and re-measure their e2e floors** before
+doing anything else with them.
 
 
 ---
@@ -264,3 +283,73 @@ Plus ADRs 0004–0007, AGENTS.md rules 11a / 16d / 16e, and three memory entries
 - **No gate records its own yield.** You cannot yet tell one that saved you
   three times from one that has never fired — and that is the data that should
   drive removal.
+
+---
+
+## Addendum 2 — a gate this batch hardened blocked this batch's merge
+
+The first full CI run on PR #240 went red on
+`Negative assertions have a positive partner (#131)` — the guard whose four
+blind spots were closed in #148, three commits before this batch started. It
+found **six** assertions in specs *this branch* added or edited, and every one
+was real. Reproduced locally first
+(`cd e2e && node tools/check-negative-assertions.mjs --base origin/main`), 6/6.
+
+The worst was `workspace.spec.ts` "should dismiss drift warning": the entire
+body sat inside `if (await workspacePage.hasDriftWarning())`, and nothing in
+the test or its `beforeEach` ever created the drift. `#drift-region` ships
+`hidden`, so the condition was false on every run and the click, the dismissal
+and the assertion were all skipped while the test reported green.
+
+Measured, not argued. With the drift-dismiss handler disabled in `app.js`
+(`cp` aside, restored and confirmed byte-exact with `diff -q`):
+
+| test body | dismiss handler disabled | result |
+|---|---|---|
+| original (`if (hasDriftWarning())`) | yes | **1 passed** (3.7s) |
+| new (seed → assert visible → dismiss → assert hidden) | yes | **1 failed** (12.1s) |
+
+Same mutation, same file, opposite results. That is the whole difference
+between a test and a decoration.
+
+`accessibility.spec.ts` "should have visible error indicators" was the same
+shape in a different costume: it asserted `getByRole("alert")).toHaveCount(0)`
+on a clean page — the **opposite** of its own name, and vacuous anyway, since
+`#error-region` ships `hidden` and `getByRole` skips hidden nodes. The count is
+0 no matter what the app does.
+
+The three `readiness-no-flash.spec.ts` sites were subtler and worth stating:
+they **did** have positive partners, but as separate tests. `toBeHidden()` also
+passes on a page that never booted — and "app.js threw, so the disclosure
+stayed hidden forever" is precisely the defect that file exists to prevent, so
+the blind spot was self-defeating. Each now asserts
+`#main-content[data-active-view]`, an attribute written only by app.js's
+`setView()` and never server-rendered.
+
+### And a diagnostic defect in this batch's own workflow edit
+
+The same run produced **three** red signals — 8
+`browserType.launch: Executable doesn't exist` failures, and a
+"visual-snapshots lane: only 0 test(s) executed" floor — all pointing away
+from the one-line real cause. A **setup** step failed, every lane skipped, and
+the visual lane ran anyway because this batch had given it `if: !cancelled()`
+so a flaky test lane could never mask a visual regression. Sound reason,
+unconsidered case: with no browser on disk there was nothing to run. Now
+`!cancelled() && steps.install-chromium.outcome == 'success'`.
+
+Worth recording because the floor was **right**: "0 executed" is exactly what
+it exists to say, and it said it. The noise came from running a lane whose
+precondition had failed, not from the floor.
+
+### What this says about the batch
+
+The batch's own count of "five of nine landed issues had a first
+implementation that was wrong" is now **six**, and the sixth was caught by a
+mechanical gate rather than by review — the first time in this repo's measured
+history that has happened (`docs/metrics/defect-discovery-audit.md` records 0
+of 16). It caught vacuous **tests**, not a `src/` defect, which is consistent
+with the audit's finding rather than a counterexample to it: gates here catch
+shapes, review catches behaviour.
+
+**#226** already tracks 20 *pre-existing* specs that are vacuous under the same
+widened guard. This addendum is evidence that issue is worth doing.
