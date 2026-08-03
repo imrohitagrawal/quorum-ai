@@ -753,3 +753,38 @@ def test_a_run_history_thread_failure_does_not_arm_the_spend_cap() -> None:
         store_reconnect.maybe_reconnect_run_history_store()
 
     assert store_reconnect.feedback_reopen_tried_without_recovery() is False
+
+
+def test_a_counter_that_raises_means_the_ledger_may_NOT_be_metered() -> None:
+    """Fail toward not-metering when the money counter cannot be read.
+
+    A store that reports healthy writes but cannot say whether it dropped a
+    charge has not shown its rows are complete. Metering off it would be the
+    same confident-wrong-number this predicate exists to prevent, and it must
+    not propagate out of ``estimate()`` either.
+
+    Turns red if: the ``try/except`` is dropped (the call raises out of this
+    test), or the except branch returns ``True``.
+    """
+
+    class _CounterExplodes:
+        def write_health(self) -> str:
+            return "ok"
+
+        def lost_billed_writes(self) -> int:
+            raise RuntimeError("simulated counter explosion")
+
+    assert store_reconnect.feedback_ledger_may_be_metered(_CounterExplodes()) is False
+
+
+def test_a_store_with_no_loss_counter_may_still_be_metered() -> None:
+    """The positive partner, and the reason the guard is ``callable`` rather
+    than a bare call: a narrow duck-typed double, or any store predating the
+    counter, has no evidence of loss against it. Absence of a signal is not
+    evidence of a fault — the same rule the rest of this module follows."""
+
+    class _NoCounter:
+        def write_health(self) -> str:
+            return "ok"
+
+    assert store_reconnect.feedback_ledger_may_be_metered(_NoCounter()) is True
