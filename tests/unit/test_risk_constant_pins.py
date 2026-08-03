@@ -90,6 +90,16 @@ RISK_TIER_MODULES = (
     "safety.py",
     "auth.py",
     "main.py",
+    # Added 2026-08-03. These three hold the module-level state behind the
+    # spend cap, and a review pass found FIVE defects in ~40 lines of that
+    # logic -- none in the predicates, all in wiring. The 2000ms readiness
+    # timeout and the reconnect cooldown are exactly the shape this gate
+    # exists to force a decision about, and neither was triaged because
+    # neither module was listed here.
+    "feedback_store.py",
+    "readiness.py",
+    "query_runs.py",
+    "store_reconnect.py",
 )
 
 #: A wrong value here is silently harmful and nothing else constrains it.
@@ -115,9 +125,54 @@ BUCKET_A_LITERAL_PIN = (
 #: Pin the BEHAVIOUR, not the literal — these legitimately change, and a literal
 #: pin would teach people to edit the test alongside the code.
 BUCKET_B_PIN_BEHAVIOUR = {
+    # --- Added 2026-08-03 with feedback_store / query_runs / readiness ---
+    "query_runs._MAX_CONCURRENT_RUNS": (
+        "assert the (N+1)th concurrent run is refused, not the number 16 -- the "
+        "capacity is tunable, the refusal is not"
+    ),
+    "query_runs._QUERY_TEXT_MAX_LENGTH": (
+        "assert over-length is refused and that /warnings uses the SAME bound; "
+        "they diverged once (8000 vs 20000) and broke the probe-then-create flow"
+    ),
+    "query_runs.ALLOWED_TRANSITIONS": (
+        "assert the legal moves and that a terminal status has no successor; "
+        "the map grows when a status is added"
+    ),
+    "query_runs.TERMINAL_STATUSES": (
+        "assert membership of completed/failed/cancelled, not the literal set"
+    ),
+    "query_runs._CONTEXT_MAX_LENGTHS": (
+        "assert an over-long value is refused on BOTH the create and /warnings "
+        "routes; the numbers are tunable, the shared refusal is not (#155)"
+    ),
+    "readiness.APPROVED_REASON_PREFIXES": (
+        "assert an unapproved reason cannot reach /ready; the list grows"
+    ),
+    "readiness._CREDENTIAL_REFUSED_STATUSES": (
+        "assert 401/403 map to offline_by_bad_key; the set may grow"
+    ),
+    "feedback_store._METERED_WRITE": (
+        "assert lost_billed_writes counts exactly the pair daily_spend_for sums "
+        "-- ADR-0004 depends on those two agreeing"
+    ),
     "main._CSP_POLICY": "assert the key directives, not the whole string",
     "safety.HIGH_STAKES_PATTERN": (
         "assert it matches 'medical' and not 'weather'; the regex should grow"
+    ),
+    "safety._OWN_CAVEAT_TEXT": (
+        "not a literal at all — it IS synthesis_length._CaveatEnforcer.FULL_CAVEAT, "
+        "imported; assert it still equals synthesis.HIGH_STAKES_NOTICE_FRAGMENT, "
+        "which remains a separate copy"
+    ),
+    "safety._OWN_CAVEAT_OPTIONAL_OPENING": (
+        "assert a truncated caveat (which synthesis_length emits without this "
+        "opening) is still stripped; the clause tracks _truncate_with_caveat_present"
+    ),
+    "safety._OWN_CAVEAT_PATTERN": (
+        "assert it strips this app's own caveat but NOT a hostile sentence that "
+        "merely appends the marker, nor one continuing past 'advice.'; the "
+        "wording tolerance inside the anchors should grow, the anchors must not "
+        "(tests/unit/test_high_stakes_context_discriminator.py)"
     ),
     "safety.WARNING_VERSION": "assert the ISO-date shape, not the value",
     "model_slots._MODEL_ID_RE": "assert accept/reject on samples",
@@ -159,6 +214,36 @@ BUCKET_B_PIN_BEHAVIOUR = {
 
 #: No pin. A literal here restates the implementation and catches nothing.
 BUCKET_C_NO_PIN = {
+    # --- Added 2026-08-03 with feedback_store / query_runs / readiness ---
+    "feedback_store.DEFAULT_DB_PATH": (
+        "filesystem path, overridden by FEEDBACK_DB_PATH everywhere it matters"
+    ),
+    "feedback_store.LOST_COST_EVENT_LOG_INTERVAL_S": (
+        "log rate limit; a wrong value costs log volume, not money or safety"
+    ),
+    "feedback_store._CLOSE_LOCK_TIMEOUT_S": (
+        "teardown-only bound; a wrong value delays process exit, nothing else"
+    ),
+    "query_runs.QUERY_RUN_ACTIVE_TTL": "cache lifetime; exercised by the resume tests",
+    "query_runs.QUERY_RUN_TERMINAL_TTL": "cache lifetime; exercised by the result-fetch tests",
+    "query_runs._CONTEXT_PRIOR_QUESTION_MAX_LENGTH": "derived from _QUERY_TEXT_MAX_LENGTH",
+    "query_runs._CONTEXT_PRIOR_SYNTHESIS_MAX_LENGTH": (
+        "derived; the pair is pinned via _CONTEXT_MAX_LENGTHS"
+    ),
+    "query_runs._INITIAL_ANSWER_POOL_SIZE": (
+        "thread-pool width; a wrong value costs latency, not correctness"
+    ),
+    "query_runs._SYNTHESIS_POOL_SIZE": (
+        "thread-pool width; a wrong value costs latency, not correctness"
+    ),
+    "query_runs._JUDGE_INFLIGHT_WAIT_SECONDS": "coalescing wait; a wrong value costs latency",
+    "query_runs._JUDGE_VERDICT_MEMO_MAX": "memo bound; a wrong value costs memory, not correctness",
+    "readiness.REASON_BAD_KEY": "reason string; pinned as a set via APPROVED_REASON_PREFIXES",
+    "readiness.REASON_NO_KEY": "reason string; pinned as a set via APPROVED_REASON_PREFIXES",
+    "readiness.REASON_OFFLINE_BY_CONFIG": "reason string; pinned via APPROVED_REASON_PREFIXES",
+    "readiness.REASON_CATALOG_UNREACHABLE": "reason string; pinned via APPROVED_REASON_PREFIXES",
+    "readiness.REASON_CATALOG_DRIFT_PREFIX": "reason prefix; pinned via APPROVED_REASON_PREFIXES",
+    "readiness._KEY_PROBE_OPENER": "probe path; exercised by the readiness probe tests",
     "main.TEMPLATES_DIR": "filesystem path, exercised by every template render",
     "main.STATIC_DIR": "filesystem path, exercised by every static fetch",
     "main._FEEDBACK_DIR": "filesystem path, exercised by the feedback store tests",

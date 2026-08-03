@@ -62,11 +62,15 @@ open is the `IF NOT EXISTS` DDL plus one primary-key `SELECT` against
 `schema_migrations`.
 
 **Who opens the production database.** On the Fly machine, only the app
-process, once, at startup (`main.py`). There is no other opener: the nightly
-`feedback-audit.yml` workflow runs on `ubuntu-latest`, not on the machine, and
-does not set `FEEDBACK_DB_PATH` — so its `FeedbackStore.from_env()` calls open
-`.data/feedback_events.sqlite3` inside a fresh checkout, a different and empty
-database. In practice that means **the F-01 migration ran exactly once on
+process, once, at startup (`main.py`). There used to be a scheduled
+`feedback-audit.yml` GitHub Actions workflow that also called
+`FeedbackStore.from_env()`, but it ran on `ubuntu-latest`, not on the machine,
+and never set `FEEDBACK_DB_PATH` — so it opened its own empty
+`.data/feedback_events.sqlite3` inside a fresh checkout instead of the volume,
+a green audit signal that audited nothing (issue #103). That workflow has
+been removed; run the audit CLI (`feedback_audit.py`) by hand from
+`fly ssh console` against the real file when you need one. In practice that
+means **the F-01 migration ran exactly once on
 `/data/feedback_events.sqlite3`, at the first app boot after the F-01 deploy**,
 and it will not be retried without a machine restart.
 

@@ -25,39 +25,56 @@ test.describe("Network Mocking", () => {
       // Click estimate and wait - should show loading state
       await workspacePage.estimateCostButton.click();
 
-      // Should see some loading indicator in cost confirmation
+      // Issue #127: `#cost-confirmation-message` is dead markup (declared in
+      // app.js, never written to or shown). "See the estimate" always opens
+      // the cost-gate view once the (slowed) response lands; that view's
+      // total renders into `#cost-gate-total`.
       await expect(
-        page.locator("#cost-confirmation-message")
+        page.locator("#cost-gate-total")
       ).toBeVisible({ timeout: 5000 });
     });
 
     test("should display cost when mocked", async ({ page }) => {
-      // Mock the cost estimate endpoint
+      // Mock the cost estimate endpoint. Issue #127: the original body's
+      // `breakdown` was a bare array of `{model, cost}` objects; the real
+      // schema (golden-run.ts's `breakdown()`, and `QueryRunEstimateResponse`
+      // in openapi.yaml) is `{by_model: [...], by_stage: [...], total}` --
+      // `renderCostGate` reads `breakdown.by_model`/`by_stage`, which was
+      // `undefined` against the old shape.
       await page.route("**/v1/query-runs/estimate", (route) => {
         route.fulfill({
           status: 200,
           contentType: "application/json",
           body: JSON.stringify({
+            correlation_id: "corr-api-mocking-est",
             cost_estimate: {
-              estimated_cost_usd: 0.025,
-              breakdown: [
-                { model: "openai/gpt-4o-mini", cost: 0.009 },
-                { model: "anthropic/claude-3-haiku", cost: 0.008 },
-                { model: "google/gemini-2.5-flash-lite", cost: 0.004 },
-                { model: "nvidia/nemotron-3-nano-30b-a3b", cost: 0.004 },
-              ],
-              threshold_action: "proceed",
+              estimated_cost_usd: "0.025",
+              currency: "USD",
+              threshold_action: "allow",
+              confirmation_token: "tok-api-mocking",
+              breakdown: {
+                by_model: [
+                  { model_id: "openai/gpt-4o-mini", display_name: "GPT-4o-mini", usd: "0.009", kind: "model" },
+                  { model_id: "anthropic/claude-haiku-4.5", display_name: "Claude Haiku 4.5", usd: "0.008", kind: "model" },
+                  { model_id: "google/gemini-2.5-flash", display_name: "Gemini 2.5 Flash", usd: "0.004", kind: "model" },
+                  { model_id: "nvidia/nemotron-3-nano-30b-a3b", display_name: "Nemotron 3 Nano", usd: "0.004", kind: "model" },
+                ],
+                by_stage: [{ stage: "initial_answers", usd: "0.025" }],
+                total: "0.025",
+              },
             },
+            model_slots: [],
+            reasons: [],
           }),
         });
       });
 
       await workspacePage.askQuestion("What is AI?");
       await workspacePage.estimateCostButton.click();
-      await page.waitForTimeout(1000);
 
-      const costMessage = await page.locator("#cost-confirmation-message").textContent();
-      expect(costMessage).toContain("$");
+      const costMessage = page.locator("#cost-gate-total");
+      await expect(costMessage).toBeVisible({ timeout: 5000 });
+      await expect(costMessage).toContainText("$");
     });
 
     test("should handle model unavailability", async ({ page }) => {
@@ -86,8 +103,16 @@ test.describe("Network Mocking", () => {
   });
 
   test.describe("Error State Mocking", () => {
+    // Issue #127: `askQuestion(text, true)` sends Ctrl+Enter, which maps to
+    // the ESTIMATE-first path (workspace.spec.ts's Keyboard Shortcuts
+    // tests), so the request that actually fires is
+    // POST /v1/query-runs/estimate, not /v1/query-runs. The exact-path
+    // pattern below never matched it, so none of these mocks ever fired.
+    // Widened to `**/v1/query-runs/**`, matching what the api-mocking spec's
+    // OWN passing sibling further up this file already relies on for the
+    // same reason.
     test("should show user-friendly error on 500", async ({ page }) => {
-      await page.route("**/v1/query-runs", (route) => {
+      await page.route("**/v1/query-runs/**", (route) => {
         route.fulfill({
           status: 500,
           contentType: "application/json",
@@ -107,7 +132,7 @@ test.describe("Network Mocking", () => {
     });
 
     test("should show user-friendly error on 403", async ({ page }) => {
-      await page.route("**/v1/query-runs", (route) => {
+      await page.route("**/v1/query-runs/**", (route) => {
         route.fulfill({
           status: 403,
           body: JSON.stringify({
@@ -125,7 +150,7 @@ test.describe("Network Mocking", () => {
     });
 
     test("should handle network failures", async ({ page }) => {
-      await page.route("**/v1/query-runs", (route) => {
+      await page.route("**/v1/query-runs/**", (route) => {
         route.abort("failed");
       });
 
@@ -137,7 +162,7 @@ test.describe("Network Mocking", () => {
     });
 
     test("should handle timeout errors", async ({ page }) => {
-      await page.route("**/v1/query-runs", (route) => {
+      await page.route("**/v1/query-runs/**", (route) => {
         route.abort("timedout");
       });
 

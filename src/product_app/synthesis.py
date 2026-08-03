@@ -592,6 +592,7 @@ class SynthesisOrchestrationService:
         high_stakes_required = self._high_stakes_required(
             query_text=query_text,
             safety_acknowledgements=safety_acknowledgements,
+            context=context,
         )
         high_stakes_notice = HIGH_STAKES_NOTICE_FRAGMENT if high_stakes_required else None
 
@@ -1154,10 +1155,22 @@ class SynthesisOrchestrationService:
         *,
         query_text: str,
         safety_acknowledgements: list[SafetyAcknowledgement],
+        context: dict[str, Any] | None = None,
     ) -> bool:
+        """Must the output carry the high-stakes notice?
+
+        Issue #155: this scanned ``query_text`` only, so a user who was
+        FORCED to acknowledge high stakes because of context wording still
+        got ``high_stakes_notice: None`` in the output — the enforcement
+        route and the thing it enforces disagreed about the same run.
+        ``context`` now goes through the same discriminator, so the two
+        agree by construction rather than by coincidence.
+        """
         if HIGH_STAKES_PATTERN.search(query_text):
             return True
-        for warning in safety_warning_policy.required_warnings_for_query(query_text):
+        for warning in safety_warning_policy.required_warnings_for_query(
+            query_text, context=context
+        ):
             if warning.warning_type is WarningType.HIGH_STAKES:
                 return True
         return False

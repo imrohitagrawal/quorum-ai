@@ -55,28 +55,25 @@ _log = logging.getLogger(__name__)
 
 #: Default on-disk location. Operators can override via the
 #: ``FEEDBACK_DB_PATH`` env var, which ``fly.toml``'s ``[env]`` block sets for
-#: production. The load-bearing claim is the narrow negative one: no workflow
-#: sets it — VERIFIED 2026-07-28, zero occurrences of ``FEEDBACK_DB_PATH``
-#: across all 15 files under ``.github/``. (Test code does set it, via
-#: ``monkeypatch.setenv`` in
+#: production. No CI workflow sets it — VERIFIED 2026-08-03, zero occurrences
+#: of ``FEEDBACK_DB_PATH`` across all files under ``.github/``. (Test code
+#: does set it, via ``monkeypatch.setenv`` in
 #: ``tests/integration/test_feedback_store_locked_database.py``; that is
-#: process-local and never reaches a runner's audit job.)
-#: ``feedback_audit.py`` does READ it, indirectly, at both its entry points —
-#: each behind a guard that the nightly workflow always falls through:
+#: process-local and never reaches a runner.)
+#: ``feedback_audit.py`` does READ it, indirectly, at both its entry points:
 #: ``_load_events_by_recorder`` calls :meth:`FeedbackStore.from_env` only when
 #: ``get_store()`` is ``None``, and it is — the audit runs as its own CLI
-#: process that never configures a store (VERIFIED by import); and
-#: ``generate_status_md`` calls it only when its ``status`` argument is
-#: ``None``, and it is — ``feedback-audit.yml`` passes ``--status-only`` and no
-#: ``--status-json``, which is the only thing that populates ``status``.
-#: ``from_env`` is ``os.environ.get("FEEDBACK_DB_PATH", DEFAULT_DB_PATH)``, so
-#: the consequence follows from the workflow half alone — with nothing setting
-#: the var on the runner, that ``get`` falls back to this default and the
-#: nightly audit opens its own empty, checkout-local database rather than the
-#: production volume (issue #103). An operator who exports
-#: ``FEEDBACK_DB_PATH=/data/...`` by hand (e.g. running the audit under
-#: ``fly ssh console``, as ``docs/23-data-model.md`` and the locked-database
-#: runbook describe) DOES redirect it at the real volume.
+#: process that never configures a store; and ``generate_status_md`` calls it
+#: only when its ``status`` argument is ``None``. There used to be a scheduled
+#: ``feedback-audit.yml`` GitHub Actions workflow that invoked this CLI
+#: nightly on a GitHub-hosted runner with no ``FEEDBACK_DB_PATH`` set, so it
+#: silently audited its own empty checkout-local database rather than the
+#: production volume — a green signal that meant nothing. That workflow was
+#: removed rather than wired to a Fly credential it never had (issue #103);
+#: the CLI itself stays, for an operator to run by hand. An operator who
+#: exports ``FEEDBACK_DB_PATH=/data/...`` by hand (e.g. running the audit
+#: under ``fly ssh console``, as ``docs/23-data-model.md`` and the
+#: locked-database runbook describe) DOES redirect it at the real volume.
 #: A Fly volume is the production home; ``:memory:`` is the test home; a
 #: local file under ``.data/`` is the dev default so dev runs do not pollute
 #: the repo.

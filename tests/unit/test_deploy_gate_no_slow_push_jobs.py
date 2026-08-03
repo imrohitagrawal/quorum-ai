@@ -19,8 +19,11 @@ Two durable invariants, enforced here so the class of bug cannot recur:
    (perf-gate, api-contract, e2e) with headroom.
 2. The pathological advisory ``mutation-baseline`` job (30-minute ceiling, a per-PR
    changed-function concept meaningless on a push to main) is gated to
-   ``pull_request`` only — the same gating ``codex-review`` already uses — so it never
-   runs on push and cannot stall the gate at all.
+   ``pull_request`` only, so it never runs on push and cannot stall the gate at
+   all. (``codex-review`` used the same ``pull_request``-only gating before it
+   was removed in #166 as vacuous by construction — its only real step was
+   commented out pending a secret, so the job always passed having checked
+   nothing.)
 
 These are structural checks on the workflow YAML, in the default blocking suite.
 """

@@ -29,8 +29,15 @@ fails the build if any doc's blocking/advisory wording contradicts reality
 | `diff-cover` — *Changed-lines coverage >= 95% (blocking)* | blocking-on-pull-requests-only | `if: github.event_name == 'pull_request'`, so a direct push to `main` has no changed-lines gate (`docs/analysis/09-enforcement-hooks.md` records the same PARTIAL) |
 | `perf-gate` | advisory | `continue-on-error: true` — macOS-derived budgets would false-fail a slower runner; DEBT-009 |
 | `mutation-baseline` | advisory | `continue-on-error: true` — a MEASURED decision, not a default: yield 6/158 escaped defects, 7% false-abort, 8% silent pass (docs/metrics/mutation-gate-study.md). Also pull-request-only |
-| `codex-review` | vacuous (no executable step) | the `openai/codex-action` step is commented out pending an `OPENAI_API_KEY` secret, so the job only checks out and always passes |
 | `e2e` (`e2e.yml`) | blocking | — |
+
+Update, 2026-08-03 (#166): `codex-review` — previously vacuous (no executable
+step: the `openai/codex-action` step was commented out pending an
+`OPENAI_API_KEY` secret, so the job only checked out and always passed) — was
+**removed**, not repaired. Wiring the paid secret was out of scope for the
+batch that closed it; a permanently-green job that checks nothing is worse
+than no job. If it is ever reintroduced, add its row back here with a real
+mechanism, not a restored placeholder.
 
 ## Can a gate here finish having measured nothing? (2026-07-29)
 
@@ -59,15 +66,25 @@ of #130 and #158. Audited by execution and by reading real CI job logs:
 | `diff-cover` (blocking) | every changed `src/**.py` file must be present in the coverage report (`scripts/check_diff_cover_measured.py`) | a real `src/` edit plus a report with no packages → rc=1; the same edit with the real report → rc=0; a comment-only edit → rc=0 (no false fire) |
 | `validate-and-test` security scan (blocking) | ≥50 files actually read | a 1-file tree → `FAILED TO MEASURE`, rc=1; the real tree → ~1369 files, rc=0 (the exact count moves with untracked files, so only the order of magnitude is meaningful against a floor of 50) |
 | `fr-completeness` (blocking) | ≥25 requirements actually parsed | doc 10 truncated to 2 sections → 14 parsed → rc=1; **without** the floor the same truncation printed `OK` and rc=0 |
-| `e2e` both lanes (blocking) | executed-count floors 138 / 94 — the EXACT measured counts, zero skips (`scripts/check_e2e_executed.py`) | missing report, all-skipped, and zero-matched all → rc=1; the real 94-test lane → rc=0 |
+| `e2e` FOUR lanes (blocking) | executed-count floors 167 / 96 / 51 / 8 — the EXACT measured counts, zero skips (`scripts/check_e2e_executed.py`) | missing report, all-skipped, and zero-matched all → rc=1; a real lane at its floor → rc=0 |
 | `mutation-baseline` (advisory) | a non-empty scope must leave a score or an explicit `UNMEASURED` in `score.txt`; the empty-scope branch now says in words that no score was produced | the recipe's own failure branch |
 
-**Still unfloored, named rather than hidden:** the `visual-snapshots` step (its
-executed count was not measured on this machine — the baselines are Linux-only),
-`csp-smoke`, `flake-scan`, `perf-sample`, `check-error-rate` and the
-`perf-gate` missing-JSON branch. The last four *detect* the unmeasured state and
-print `UNMEASURED`, then still `exit 0` — so the status remains a lie even though
-the log is honest.
+**Update, 2026-08-03 (issue #162, worked as the follow-up work package #166):
+all six of the above, closed.**
+
+| Gate | What changed | Proven RED by |
+|---|---|---|
+| `visual-snapshots` step (`e2e.yml`, blocking) | executed-count floor added, `--min 8` (6 `trust-score-visual.spec.ts` + 2 `visual-snapshots.spec.ts`) — measured via `--update-snapshots`, which executes every test regardless of platform-specific baseline availability without touching the committed `*-chromium-linux.png` files the real gate compares against | floor step removed → the guard test reds |
+| `csp-smoke` (advisory, `csp-smoke.yml`) | executed-count floor added per matrix engine, `--min 2` (both tests in `csp-smoke.spec.ts`, run once per browser) | floor step removed → the guard test reds |
+| `flake-scan` (advisory) | both the "no junit report" branch and the "every repetition skipped" (`executed <= 0`) branch now `sys.exit(1)` instead of falling through / exiting 0 | either `sys.exit(1)` reverted → the guard test reds |
+| `perf-sample` (advisory, nightly) | the missing-JSON `else` branch now `exit 1`s | `exit 1` removed → the guard test reds |
+| `perf-gate` missing-JSON branch (`ci.yml`, advisory) | same fix, same shape, in the CI (not nightly) copy of the perf gate | `exit 1` removed → the guard test reds |
+| `check-error-rate` / `skip_low_traffic` | `exit_code_for()`'s contract is UNCHANGED (alert is still the only exit-1 path — an abstention must never fire the alert email, and an alert must never go silent); instead the workflow step now writes an explicit, visually separate `$GITHUB_STEP_SUMMARY` section labelled `ABSTAINED` whenever the probe prints `SKIP_LOW_TRAFFIC:`/`SKIP_COUNTER_RESET:`, so an abstention is no longer indistinguishable from a verified-healthy run at a glance | the `ABSTAINED` marker / grep pattern / `exit $code` propagation removed → the guard test reds |
+
+Every row proven RED-then-GREEN in `tests/unit/test_gate_liveness_wp166.py`
+(codex-review's removal is guarded there too): each fix reverted on a copy of
+the real workflow file, the corresponding test confirmed red, the file
+restored from the copy (never `git checkout`), the test confirmed green again.
 
 **What none of these floors can see:** whether the tests that ran assert anything
 worth asserting. A lane of 138 vacuous specs satisfies its floor completely. These
@@ -226,3 +243,41 @@ The search (#31/#32), cost (#18–#20), observability (#26), and persistence (#2
 dimensions need their own gates (contract test, cost unit tests, degraded-mode
 signal, post-deploy persistence smoke). They are specified in the ledger and
 mechanism map but were out of scope for this run's UI-focused harness.
+
+
+---
+
+## Gates added 2026-08-03, with charters
+
+Every gate below carries a **charter** in its own module docstring answering
+four questions, and `tests/unit/test_gates_carry_a_charter.py` fails if one is
+dropped. The charter lives in the gate file rather than here on purpose: the
+person who needs it is the one standing in that file with a red test.
+
+**Why this section exists.** The table above records *what* each gate does. It
+does not record why it was added, what it cannot see, or when it has done its
+job — so a future session hitting one red cannot tell load-bearing from
+leftover, and will either delete it or exempt it. Both lose.
+
+**The field that matters is WHEN TO REMOVE.** A gate without a removal
+condition is permanent by default, and that is how a gate suite becomes sludge.
+
+| Gate | Bridges | Cannot see | Removal condition |
+|---|---|---|---|
+| `tests/unit/test_adr_index_matches_directory.py` | the ADR index rotted by hand twice (0002 unlisted 11 days; 0004-0007 unlisted) | whether an ADR *should* have been written — it would have caught **0 of the 6** this batch missed | the index stops being hand-maintainable (generated at docs-build time, or a tool owns it) |
+| `tests/unit/test_spend_cap_state_table.py` | 6 defects in a ~40-line predicate across 4 passes; 3 were dead ends. Found the 6th itself, in code hours old | whether production wires the *right* predicate (the integration test does); thread interleavings | the ledger moves to reserve-then-commit (ADR-0004) — the state space collapses and this file goes with it |
+| `tests/unit/test_cited_paths_resolve.py` | 38 of 1,352 repo-path citations unresolved (2.8%), incl. a phantom ADR filename | whether the *claim* around the path is true — nothing mechanical can | prose stops carrying repo paths, or a docs toolchain resolves links at build time |
+| `tests/unit/test_gates_carry_a_charter.py` | a gate whose rationale is lost becomes cargo cult or casualty | quality — it checks the four sections are present, not honest. "WHEN TO REMOVE: never" would pass | gate rationale gets its own tooling (an ADR per gate, or a register generated from source) |
+
+**Scope note.** The charter check registers only these four. The ~30 gates in
+the table above are **not** retrofitted: a meta-gate that opens red against
+unrelated history gets deleted, which is the exact failure it exists to
+prevent. Retrofit opportunistically, when touching a gate for another reason.
+
+**What is still missing, honestly.** None of these records *yield* — whether
+the gate has ever caught anything since it was added. Without that you cannot
+distinguish a gate that saved you three times from one that has never fired,
+which is the data that should drive removal. `docs/metrics/defect-discovery-audit.md`
+is the closest thing (0 of 16 src/ defects caught by any gate, 10 of 16 by
+adversarial review) and it is what makes this repo's scepticism about gates
+correct. Add a dated line here when a gate catches something real.

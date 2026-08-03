@@ -429,6 +429,70 @@ class Settings(BaseSettings):
     # environment.
     sentry_dsn: str = ""
 
+    # --- Durable-store reconnect (issue #123) ---------------------------
+    # `configure_feedback_store()` / `configure_run_history_store()` open
+    # their SQLite sinks exactly once, at import. A transient lock at boot
+    # (or a volume that goes read-only mid-life) used to disable the
+    # per-account 24h spend cap for the entire process lifetime, with no
+    # way back short of a restart. This flag lets a background attempt
+    # re-open the store once its write-health signal (or, for
+    # run_history_store, which has no such signal, its mere absence) says
+    # it needs one. Defaults True: the risk is asymmetric (a failed reopen
+    # attempt costs one 5.24s SQLite lock-open timeout in a background
+    # thread, off the request path; leaving it off costs a silently
+    # unenforced spend cap for the rest of the process's life) and,
+    # crucially, the trigger only ever fires when a store is ALREADY
+    # `None` or already reporting `"failing"` — an ordinary healthy store
+    # (every test using `:memory:` that never simulates a write failure)
+    # never reaches the reopen path at all, so this default does not by
+    # itself risk new test flakiness.
+    #
+    # TURNING THIS OFF ALSO DISABLES ISSUE #122's FAIL-CLOSED SPEND CAP.
+    # Flagged by adversarial review; it is a consequence of #122's own
+    # confirmed policy rather than a separate bug. The cap blocks only once
+    # a reopen has been TRIED and the store still cannot be shown to write.
+    # With no reopen ever attempted that condition is honestly never met,
+    # so a stale ledger reverts to allow-and-log — the pre-#122 money leak
+    # — for as long as this stays False. Default True, so this is not live
+    # out of the box; do not set it False in production without accepting
+    # that trade.
+    store_reconnect_enabled: bool = True
+    #: Matches the existing 60s cooldown pattern already used by
+    #: `feedback_store._claim_lost_cost_event_log_slot` and
+    #: `costs._log_daily_cap_bypassed` — long enough that a burst of
+    #: requests during an outage does not hammer the lock-open cost this
+    #: mechanism exists to keep off the request path, short enough that a
+    #: recovered volume is usable again within one minute of the next
+    #: `estimate` call, without an operator having to restart the process.
+    store_reconnect_cooldown_seconds: float = Field(default=60.0, gt=0, allow_inf_nan=False)
+
+    # --- Daily-cap posture on an untrustworthy ledger (issue #122) --------
+    # When the per-account 24h spend ledger cannot be trusted (the store is
+    # gone, or its writes are failing) and a reopen has been tried without
+    # restoring it, should a priced request be REFUSED (402) or allowed and
+    # loudly logged?
+    #
+    # DEFAULTS OFF — i.e. fail OPEN — and that default is the decision, not
+    # an oversight. Three things argued for it, all measured:
+    #
+    # * The exposure from failing open is small and bounded. The in-memory
+    #   cumulative rail (`costs._cumulative_spend_for`, a process-memory ring)
+    #   is untouched by a SQLite fault and still binds each account at
+    #   ~HARD_LIMIT_USD, and new accounts need sessions (2/24h per IP). Tens
+    #   of cents.
+    # * The exposure from failing CLOSED is the whole product: every visitor
+    #   refused for as long as the fault lasts.
+    # * The GLOBAL_DAILY_CEILING_USD rail — 25x larger than the per-account
+    #   cap this guards — already chooses fail-open on the IDENTICAL fault,
+    #   deliberately and in a comment. Fail-closing the small rail while its
+    #   bigger sibling fails open is incoherent.
+    #
+    # The mechanism ships complete and tested; only its activation waits. The
+    # issue itself framed fail-closed as a "recommendation to consider", and
+    # it should be switched on by a human who has decided that trade, not
+    # inherited from a plan. Set `DAILY_CAP_FAIL_CLOSED=true` to enable.
+    daily_cap_fail_closed: bool = False
+
 
 settings = Settings()
 

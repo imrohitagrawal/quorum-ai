@@ -103,8 +103,11 @@ Enforced configuration (GitHub → Settings → Branches, or the REST protection
   - `e2e axe + parity (chromium)`
 - **Include administrators** (`enforce_admins: true`) — the incident's trigger was
   an admin's direct docs push, so admins are bound too. Advisory checks
-  (`Mutation score`, `Hermetic perf`, `codex-review`) are intentionally **not**
-  required so they cannot block a merge.
+  (`Mutation score`, `Hermetic perf`) are intentionally **not**
+  required so they cannot block a merge. (`codex-review` was removed in #166 —
+  it was vacuous by construction, checking out and always passing because its
+  only real step was commented out pending an `OPENAI_API_KEY` secret; a
+  permanently-green job is worse than no job.)
 
 Inspect / re-apply:
 

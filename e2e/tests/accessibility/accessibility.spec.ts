@@ -32,31 +32,46 @@ test.describe("Accessibility", () => {
     });
 
     test("should handle Shift+Tab for reverse navigation", async ({ page }) => {
-      // Focus somewhere first
+      // Issue #127: Tab ONCE then Shift+Tab asserts an impossible focus
+      // state — Shift+Tab from the FIRST focusable element in the document
+      // has nothing in-page to land on (focus legitimately leaves the
+      // document), so `:focus` correctly resolves to nothing. Reproduced
+      // directly: this always timed out regardless of the button-name drift
+      // fixed elsewhere in this file. Tab twice (landing on the SECOND
+      // focusable element), then Shift+Tab once, so the reverse step has a
+      // real in-page predecessor to return to.
       await page.keyboard.press("Tab");
-      const firstElement = page.locator(":focus");
-      await expect(firstElement).toBeVisible();
+      await page.keyboard.press("Tab");
+      const secondElement = page.locator(":focus");
+      await expect(secondElement).toBeVisible();
 
       // Go backwards
       await page.keyboard.press("Shift+Tab");
       await page.waitForTimeout(100); // Wait for focus change
-      const previousElement = page.locator(":focus");
-      await expect(previousElement).toBeVisible();
+      const firstElement = page.locator(":focus");
+      await expect(firstElement).toBeVisible();
     });
 
     test("should allow Enter key to activate elements", async ({ page }) => {
       const testQuestion = "Test accessibility";
       await page.getByRole("textbox").fill(testQuestion);
 
-      // Focus and activate estimate cost button with Enter
-      const estimateButton = page.getByRole("button", { name: /estimate cost/i });
+      // Issue #127: the accessible name drifted from "estimate cost" to
+      // "See the estimate →" (workspace.html's actual button label); the old
+      // regex never matched, so `.focus()` waited the full test timeout for
+      // an element that was never going to appear. Matches WorkspacePage.ts's
+      // own already-correct pattern.
+      const estimateButton = page.getByRole("button", { name: /see the estimate|estimate cost/i });
       await estimateButton.focus();
       await page.keyboard.press("Enter");
 
-      // Should show loading or cost in specific element
+      // Issue #127: "See the estimate" ALWAYS opens the cost-gate view (even
+      // for a cheap allow-band estimate) — app.js's own contract comment.
+      // `#cost-confirmation-message` is dead markup (declared, never
+      // written to or shown).
       await expect(
-        page.locator("#cost-confirmation-message")
-      ).toBeVisible({ timeout: 3000 });
+        page.locator("#gate-confirm")
+      ).toBeVisible({ timeout: 5000 });
     });
 
     test.describe("Screen Reader Support", () => {
@@ -64,10 +79,18 @@ test.describe("Accessibility", () => {
         // Check for main content landmark
         await expect(page.locator('main')).toBeVisible();
 
-        // Check for navigation if present
-        const nav = page.locator('nav');
-        if (await nav.count() > 0) {
-          await expect(nav).toBeVisible();
+        // Issue #127: `.count()` counts every matching element regardless
+        // of visibility, so this guard ("only check if present") never
+        // actually filtered anything out. `<nav class="workflow-progress">`
+        // IS present in the DOM but is permanently `display: none` in CSS
+        // (app.css: a superseded "legacy section", per its own comment —
+        // "the result view now renders its own synthesis block ... nothing
+        // is lost by hiding the legacy sections"). A landmark that will
+        // never be shown is not a real navigation landmark to assert
+        // visibility on. Scope to VISIBLE navs only.
+        const visibleNav = page.locator('nav:visible');
+        if (await visibleNav.count() > 0) {
+          await expect(visibleNav.first()).toBeVisible();
         }
       });
 
@@ -126,7 +149,7 @@ test.describe("Accessibility", () => {
       test("should have sufficient contrast in dark mode", async ({ page }) => {
         // Test that UI elements are still visible in dark mode
         await expect(page.getByRole("textbox")).toBeVisible();
-        await expect(page.getByRole("button", { name: /estimate cost/i })).toBeVisible();
+        await expect(page.getByRole("button", { name: /see the estimate|estimate cost/i })).toBeVisible();
       });
     });
   });
@@ -134,7 +157,7 @@ test.describe("Accessibility", () => {
   test.describe("Focus Management", () => {
     test("should maintain focus on interaction", async ({ page }) => {
       // Click on an element
-      await page.getByRole("button", { name: /estimate cost/i }).click();
+      await page.getByRole("button", { name: /see the estimate|estimate cost/i }).click();
 
       // Focus should still be visible
       const focus = page.locator(":focus");
@@ -174,7 +197,35 @@ test.describe("Accessibility", () => {
     });
 
     test("should have visible error indicators", async ({ page }) => {
-      await expect(page.getByRole("alert")).toHaveCount(0);
+      // This asserted `expect(getByRole("alert")).toHaveCount(0)` on a clean
+      // page — the OPPOSITE of the test's own name, and vacuous besides:
+      // `#error-region` ships `hidden` (workspace.html:121) and `getByRole`
+      // skips hidden nodes, so the count is 0 no matter what the app does.
+      // The #131 guard caught it. What this test is actually for — and what
+      // the sibling above does not cover — is that the error reaches a screen
+      // reader BY ROLE, not merely that it is painted.
+      await page.route("**/v1/query-runs", (route) => {
+        route.fulfill({
+          status: 500,
+          body: JSON.stringify({ error: "Internal Server Error" }),
+        });
+      });
+
+      await page.getByRole("textbox").fill("Test error");
+      await page.getByRole("button", { name: /run now/i }).click();
+
+      // NOT `getByRole("alert").first()`. `.first()` resolves in DOM order and
+      // `#toast-region` (workspace.html:80) precedes `#error-region`
+      // (workspace.html:121), while app.js:850 gives an error-tone toast
+      // `role="alert"` too. That version bit today only by accident: a
+      // reviewer kept a mutation that broke the banner, added the error toast
+      // `handleError` already raises elsewhere (app.js:6949, :910), and the
+      // test went green on the toast while the banner stayed hidden. Naming
+      // the region keeps the role assertion — the point of this test — without
+      // letting a different alert stand in for it.
+      const errorAlert = page.locator("#error-region[role='alert']");
+      await expect(errorAlert).toBeVisible();
+      await expect(errorAlert).not.toBeEmpty();
     });
   });
 
@@ -203,7 +254,7 @@ test.describe("Accessibility", () => {
 
       // Should still be navigable with touch
       await expect(page.getByRole("textbox")).toBeVisible();
-      await expect(page.getByRole("button", { name: /estimate cost/i })).toBeVisible();
+      await expect(page.getByRole("button", { name: /see the estimate|estimate cost/i })).toBeVisible();
     });
   });
 

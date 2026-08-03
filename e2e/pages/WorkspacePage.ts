@@ -82,8 +82,15 @@ export class WorkspacePage {
     // Run ID
     this.runIdDisplay = page.getByRole("button", { name: /not started|copy run id/i });
 
-    // Cost display
-    this.costDisplay = page.locator("#cost-confirmation-message");
+    // Cost display. Issue #127: `#cost-confirmation-message` /
+    // `#proceed-run` / `#cancel-estimate` are declared in app.js (`el(...)`)
+    // but never written to or shown anywhere else in the module — dead
+    // markup from a superseded single-step flow. The live flow always
+    // routes "See the estimate" (and Ctrl/Cmd+Enter) through the separate
+    // cost-gate view (`app.js`: "``estimate-run`` ... ALWAYS opens the cost
+    // gate ... even a cheap ``allow``-band run"), which renders the total
+    // into `#cost-gate-total`.
+    this.costDisplay = page.locator("#cost-gate-total");
 
     // Modal buttons
     this.proceedButton = page.getByRole("button", { name: /proceed/i });
@@ -94,6 +101,22 @@ export class WorkspacePage {
   }
 
   async goto() {
+    // Issue #127: this page object's own locators (estimateCostButton,
+    // runNowButton, etc.) target the COMPOSER (screen 02). Since the
+    // first-visit gate landed, a fresh browser context with no
+    // `quorum.workspaceSeen` flag boots onto the marketing landing (screen
+    // 01) instead — `app.js`: `setView(hasSeenWorkspace() ? "composer" :
+    // "landing")` — where none of those elements exist. Seed the flag
+    // before navigating, the same way `accessibility.spec.ts` already does
+    // in its own `beforeEach`, so this page object lands where its own
+    // locators expect.
+    await this.page.addInitScript(() => {
+      try {
+        window.localStorage.setItem("quorum.workspaceSeen", "1");
+      } catch (_) {
+        /* private-mode / storage-disabled browsers: harmless, see app.js */
+      }
+    });
     await this.page.goto("/ui");
     await this.page.waitForLoadState("networkidle");
   }
@@ -161,11 +184,13 @@ export class WorkspacePage {
   }
 
   /**
-   * Click estimate cost and return the cost estimate text
+   * Click estimate cost, wait for the cost-gate view to open (it always
+   * does, per app.js's own contract comment — even for a cheap `allow`-band
+   * estimate), and return the total it displays.
    */
   async estimateCost(): Promise<string> {
     await this.estimateCostButton.click();
-    await this.page.waitForTimeout(1000); // Wait for cost calculation
+    await this.costDisplay.waitFor({ state: "visible", timeout: 10000 });
     const costText = await this.costDisplay.textContent().catch(() => "");
     return costText || "";
   }

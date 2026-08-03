@@ -6,12 +6,21 @@ ways, so the record shows what was believed on a date and what replaced it.
 
 | ADR | Title | Kind | Status |
 |---|---|---|---|
-| [ADR-0001](adr/0001-initial-architecture.md) | Initial architecture | Architecture | Draft |
-| [ADR-0002](adr/0002-sqlite-single-writer-ceiling.md) | SQLite stores stay single-writer (one connection, one lock, no WAL) | Architecture | Accepted — 2026-07-19 |
+| [ADR-0001](adr/0001-initial-architecture.md) | Initial Architecture | Architecture | Draft |
+| [ADR-0002](adr/0002-sqlite-single-writer-ceiling.md) | SQLite stores stay single-writer (one connection, one lock, no WAL) | Architecture | Accepted — 2026-07-19 (R2 Phase 0, ledger RB-3) |
 | [ADR-0003](adr/0003-measure-review-yield-before-setting-a-review-budget.md) | Measure review yield before setting a review budget | Method | Accepted — 2026-07-30 |
+| [ADR-0004](adr/0004-spend-cap-fails-open-on-an-untrustworthy-ledger.md) | The per-account spend cap fails OPEN on an untrustworthy ledger | Architecture | Accepted — 2026-08-03 (major-issues batch, issues #101 / #109 / #122 / #123) |
+| [ADR-0005](adr/0005-background-reconnect-for-the-durable-stores.md) | Reconnect the durable SQLite stores in the background, not at boot only | Architecture | Accepted — 2026-08-03 (major-issues batch, issue #123) |
+| [ADR-0006](adr/0006-high-stakes-scan-excludes-only-our-own-caveat.md) | The high-stakes scan strips our own caveat by token, never by wildcard | Architecture | Accepted — 2026-08-03 (major-issues batch, issue #155) |
+| [ADR-0007](adr/0007-suppress-the-readiness-first-paint-time-bounded.md) | Suppress the readiness banner's first paint, with a time bound | Architecture | Accepted — 2026-08-03 (major-issues batch, issue #117) |
 
 **This index was itself stale** until 2026-07-30: ADR-0002 had existed since
 2026-07-19 and was never listed here. A hand-maintained index is a derived fact
 living in prose, and derived facts in prose rot — see
-`docs/analysis/2026-07-30-session-record.md` §6. If it drifts again, generate it
-from the directory rather than fixing it by hand a second time.
+`docs/analysis/2026-07-30-session-record.md` §6. It drifted a **second** time on
+2026-08-03, when ADR-0004..0007 landed unlisted.
+
+Per that note's own instruction, the fix is no longer manual: this table is
+regenerated from `docs/adr/` and **`tests/unit/test_adr_index_matches_directory.py`
+fails if it drifts again**. Do not hand-edit rows; add the ADR file and re-run
+`python3 scripts/generate_adr_index.py`.
