@@ -210,43 +210,58 @@ def _four_grams(text: str) -> frozenset[str]:
 
 
 def _excerpt(text: str) -> str:
-    """Return the first ``_OVERLAP_EXCERPT_CHARS`` characters of
-    ``text`` with newlines collapsed to spaces, MINUS this product's own
-    mandated caveat. Empty if ``text`` is falsy.
+    """Return the first ``_OVERLAP_EXCERPT_CHARS`` characters of ``text`` with
+    newlines collapsed to spaces, minus this product's own mandated caveat.
+    Empty if ``text`` is falsy.
 
-    Issue #180. The decision-support caveat is 17 words that
-    ``synthesis._RECOMMENDATION_PROMPT`` rule 1 orders verbatim and
-    ``synthesis_length._CaveatEnforcer`` appends when a model omits it, so in
-    any regulated domain every answer tends to carry it. Clustering on it
-    means four models that agree on NOTHING are served as "strong consensus,
-    4 of 4 aligned" — a trust number decided by text the models did not
-    choose.
+    Issue #180, and READ THIS BEFORE TRUSTING IT. Two independent adversarial
+    reviews showed this change is **not the fix for #180 as framed**, and the
+    branch carrying it was deliberately NOT merged. It is kept only because it
+    is safe and directionally right. What review established, all by
+    execution:
 
-    MEASURED before choosing this approach, on four mutually unrelated
-    answers (the issue's own reproduction):
+    * **The caveat does not reach the texts this function clusters.**
+      ``_excerpt`` runs on ``InitialModelAnswer.answer_text``. The verbatim
+      caveat order lives in ``_RECOMMENDATION_PROMPT``, passed only at
+      ``synthesis.py:1070`` — the synthesis RECOMMENDATION — and
+      ``_CaveatEnforcer.append_if_missing`` is reachable only through
+      ``truncate_recommendation``, called only at ``synthesis.py:1079-1080``.
+      The initial-answer prompt mandates nothing (``grep -c "decision
+      support" providers.py`` → 0). So the issue's premise, which I repeated
+      — "in any regulated domain every answer tends to carry it" — is FALSE
+      for this code path. The only route left is a model volunteering a
+      disclaimer unprompted.
 
-        bodies only        pairwise Jaccard 0.000  partners [0,0,0,0]  weak
-        caveat prepended   pairwise Jaccard 0.350  partners [3,3,3,3]  strong
-        caveat appended    pairwise Jaccard 0.267  partners [3,3,3,3]  strong
+    * **The strip is evadable exactly where it would matter.** It requires the
+      sentence to terminate in a period. Measured: a caveat with no trailing
+      period, one ending ``!``, or one continuing past "advice" all fail to
+      strip and restore the false positive ``[3,3,3,3] strong``. A model
+      paraphrasing the sentence is precisely the case that reaches here.
 
-    and, decomposing one excerpt: the caveat contributed **14 of its 28
-    4-grams (50%)**, and **14 of 14 — 100% — of the shared grams between two
-    unrelated answers**. So the boilerplate does not merely inflate the
-    overlap here, it IS the entire overlap. That measurement is what selects
-    targeted exclusion over the alternative the issue lists (changing the
-    clustering primitive itself, e.g. IDF weighting), which is the right
-    answer only when the boilerplate is diffuse. It is not; it is one exact
-    sentence.
+    * **The reachable instance of this defect is untouched.**
+      ``ProviderExecutionService._local_simulation_text`` returns text
+      identical across slots but for the model id, assigned straight to
+      ``answer_text``. Measured on the real method: pair Jaccard **0.541**
+      against a 0.1 threshold, ``opening_majority [True]*4``, strong overlap
+      True — four models that were NEVER INVOKED read as "strong consensus,
+      4 of 4 aligned", on every deployment with live execution off.
 
-    Stripped BEFORE truncating, deliberately: strip-after-truncate would
-    leave a short remainder of whatever the caveat had already crowded out,
-    so the excerpt would still be dominated by having contained it.
+    The numbers in the first version of this docstring are corrected here
+    rather than deleted: the caveat-prepended Jaccard (0.333–0.359, of which
+    0.350 is one pair) and the 14-of-28 / 14-of-14 gram decomposition are
+    real, but they came from a synthetic injection on a fixture shorter than
+    the one in the test file, and the "0.267" quoted for the appended case
+    was containment, not Jaccard — the real value there is 0.125–0.148. The
+    label "MEASURED" was doing work it had not earned: it was a constructed
+    input, not an observation of production.
 
-    Reuses ``safety.strip_own_caveat`` rather than matching the sentence
-    again here. That primitive was hardened under adversarial review for
-    issue #155 (it may only consume the caveat's own tokens — no wildcard an
-    attacker or a model can hide text inside) and survived 1,836 structured
-    attack attempts. Two matchers for one sentence would drift.
+    Stripping happens BEFORE truncation, and the reason is stronger than the
+    one first given: truncation cuts the caveat mid-sentence, so the
+    period-anchored pattern then matches nothing at all and the appended case
+    stays fully broken (measured: ``[3,3,3,3] strong``).
+
+    Reuses ``safety.strip_own_caveat`` so there is one matcher for one
+    sentence rather than two that drift.
     """
     if not text:
         return ""

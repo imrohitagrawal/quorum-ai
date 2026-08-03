@@ -7,9 +7,17 @@ verbatim and ``synthesis_length._CaveatEnforcer`` appends when a model omits
 it — so in any regulated domain every answer tends to carry it, and four
 models that agree on NOTHING cluster on that sentence alone.
 
-THREE PRIOR FIX ATTEMPTS WERE BROKEN IN REVIEW, so this one was measured
-before it was written, per the issue's own first step. On four mutually
-unrelated answers:
+THIS WAS THE FOURTH ATTEMPT AND IT ALSO DID NOT CLEAR REVIEW. The branch is
+recorded, not merged. Two independent reviews established, by execution, that
+the caveat never reaches ``InitialModelAnswer.answer_text`` at all — it is
+mandated for the synthesis RECOMMENDATION — so this closes a shape production
+cannot currently produce, while the reachable instance of the identical defect
+(four LOCAL-SIMULATION answers, identical but for the model id, scoring
+Jaccard 0.541 and "strong, 4 of 4 aligned") is untouched. See ``_excerpt``'s
+docstring for the full record.
+
+These tests are kept because they are correct about what they assert and will
+matter to whoever picks the issue up. On four mutually unrelated answers:
 
     bodies only        pairwise Jaccard 0.000   partners [0,0,0,0]   weak
     caveat prepended   pairwise Jaccard 0.350   partners [3,3,3,3]   strong
@@ -87,9 +95,18 @@ def test_unrelated_answers_do_not_cluster_when_each_opens_with_the_caveat() -> N
 
 
 def test_unrelated_answers_do_not_cluster_when_the_caveat_is_appended() -> None:
-    """``_CaveatEnforcer.append_if_missing`` puts it at the END, so the
-    appended shape is the one production actually produces most often. It
-    scored 0.267 — still far over the 0.1 threshold — before this fix."""
+    """``_CaveatEnforcer.append_if_missing`` puts it at the END.
+
+    CORRECTED after review: an earlier version of this docstring said the
+    appended case "scored 0.267 — still far over the 0.1 threshold". 0.267 was
+    containment, not Jaccard; the real Jaccard is 0.125–0.148, so the margin
+    over the threshold is ~25%, not "far over". The case is still broken
+    without the fix — the adjective was wrong, not the conclusion.
+
+    It also said this was "the shape production actually produces most
+    often". That is false: ``append_if_missing`` is reachable only from
+    ``truncate_recommendation``, which runs on the synthesis RECOMMENDATION,
+    not on the initial answers this module clusters."""
     assert _opening_majority_flags(_with_caveat_last(_UNRELATED)) == [False] * 4
     assert _has_strong_overlap(_with_caveat_last(_UNRELATED)) is False
 
