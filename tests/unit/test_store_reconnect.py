@@ -26,11 +26,15 @@ from product_app.config import settings
 class _FakeThread:
     """Records that a reopen was SCHEDULED, without running it.
 
-    The reopen body itself is exercised directly by the last two tests in
-    this file; here we only care whether the trigger decided to spawn one.
+    Records both the thread NAME (what most tests below assert on) and the
+    actual TARGET callable it was constructed with (what
+    ``test_the_trigger_is_wired_to_the_right_reopen_function`` asserts on —
+    without that, every "schedules a reopen" test here would pass identically
+    even if the trigger were wired to the wrong body, or a no-op).
     """
 
     started: list[str] = []
+    targets: dict[str, Any] = {}
 
     def __init__(self, *, target: Any, daemon: bool, name: str) -> None:
         self._target = target
@@ -39,6 +43,18 @@ class _FakeThread:
 
     def start(self) -> None:
         _FakeThread.started.append(self.name)
+        _FakeThread.targets[self.name] = self._target
+
+
+class _RaisingOnStartThread:
+    """A thread double whose construction succeeds but ``.start()`` raises —
+    the real-world shape of thread-count exhaustion."""
+
+    def __init__(self, *, target: Any, daemon: bool, name: str) -> None:
+        pass
+
+    def start(self) -> None:
+        raise RuntimeError("can't start new thread (simulated exhaustion)")
 
 
 @pytest.fixture(autouse=True)
@@ -51,9 +67,11 @@ def _clean_reconnect_state() -> Any:
     """
     store_reconnect._reset_for_tests()
     _FakeThread.started = []
+    _FakeThread.targets = {}
     yield
     store_reconnect._reset_for_tests()
     _FakeThread.started = []
+    _FakeThread.targets = {}
 
 
 # --------------------------------------------------------------------------
@@ -227,6 +245,52 @@ def test_the_off_switch_suppresses_every_reopen(monkeypatch: pytest.MonkeyPatch)
     assert _FakeThread.started == []
 
 
+def test_the_trigger_is_wired_to_the_right_reopen_function() -> None:
+    """Adversarial review (#123): every "schedules a reopen" test above only
+    checks the thread NAME, so the trigger could be wired to the WRONG body
+    (swapped with the run-history reopen, or a no-op) and every one of them
+    would still pass. Assert on the actual callable the thread was
+    constructed with.
+
+    Turns red if: the ``target=`` argument at either call site is changed to
+    anything other than the matching ``_reopen_*`` function.
+    """
+    with (
+        patch("product_app.feedback_store.get_store", return_value=None),
+        patch("product_app.run_history_store.get_store", return_value=None),
+        patch("product_app.store_reconnect.threading.Thread", _FakeThread),
+    ):
+        store_reconnect.maybe_reconnect_feedback_store()
+        store_reconnect.maybe_reconnect_run_history_store()
+
+    assert _FakeThread.targets["feedback-store-reconnect"] is store_reconnect._reopen_feedback_store
+    assert (
+        _FakeThread.targets["run-history-store-reconnect"]
+        is store_reconnect._reopen_run_history_store
+    )
+
+
+def test_a_thread_creation_failure_does_not_break_the_caller() -> None:
+    """Adversarial review (#123): the real-world shape of thread-count
+    exhaustion is ``Thread(...).start()`` raising. Before this test existed,
+    that exception propagated straight out of ``maybe_reconnect_*`` — and
+    since these are called from ``CostEstimationService.estimate()`` with no
+    surrounding try/except, it would have turned "best-effort background
+    reconnect" into a 500 on ``POST /v1/query-runs/estimate``, recurring once
+    per cooldown window for as long as the exhaustion persisted.
+
+    Turns red if: the try/except around ``.start()`` in ``_spawn`` is removed.
+    """
+    with (
+        patch("product_app.feedback_store.get_store", return_value=None),
+        patch("product_app.run_history_store.get_store", return_value=None),
+        patch("product_app.store_reconnect.threading.Thread", _RaisingOnStartThread),
+    ):
+        # Must not raise.
+        store_reconnect.maybe_reconnect_feedback_store()
+        store_reconnect.maybe_reconnect_run_history_store()
+
+
 # --------------------------------------------------------------------------
 # run history store — deliberately a NARROWER trigger
 # --------------------------------------------------------------------------
@@ -338,3 +402,40 @@ def test_a_successful_run_history_reopen_installs_the_new_store() -> None:
         store_reconnect._reopen_run_history_store()
 
     assert configured == [sentinel]
+
+
+# --------------------------------------------------------------------------
+# the actual call site — CostEstimationService.estimate()
+# --------------------------------------------------------------------------
+
+
+def test_estimate_actually_calls_both_reconnect_triggers() -> None:
+    """Review finding: every test above drives ``store_reconnect`` directly,
+    so none of them would notice if ``CostEstimationService.estimate()`` —
+    the real call site, the one place this is supposed to run on every
+    request — stopped calling it at all.
+
+    Turns red if: either call is removed from ``estimate()``.
+    """
+    from uuid import uuid4
+
+    from product_app.costs import cost_estimation_service
+    from product_app.model_slots import ModelSlot
+
+    slots = [
+        ModelSlot(slot_number=1, model_id="openai/gpt-4o-mini", search=True),
+        ModelSlot(slot_number=2, model_id="anthropic/claude-haiku-4.5", search=True),
+        ModelSlot(slot_number=3, model_id="google/gemini-2.5-flash", search=True),
+        ModelSlot(slot_number=4, model_id="nvidia/nemotron-3-nano-30b-a3b", search=True),
+    ]
+
+    with (
+        patch("product_app.store_reconnect.maybe_reconnect_feedback_store") as feedback_call,
+        patch("product_app.store_reconnect.maybe_reconnect_run_history_store") as run_history_call,
+    ):
+        cost_estimation_service.estimate(
+            query_text="a real question", model_slots=slots, account_id=uuid4()
+        )
+
+    feedback_call.assert_called_once_with()
+    run_history_call.assert_called_once_with()

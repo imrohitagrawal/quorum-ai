@@ -59,6 +59,26 @@ def _reset_for_tests() -> None:
         _run_history_last_attempt_at = None
 
 
+def _spawn(target: Callable[[], None], *, name: str) -> None:
+    """Start a background reopen, never letting thread creation itself
+    become a request failure.
+
+    Adversarial review (#123): ``threading.Thread(...).start()`` can raise
+    (real thread-count exhaustion under a container's process limits), and
+    the caller is ``CostEstimationService.estimate()`` — the request path
+    for ``POST /v1/query-runs/estimate`` — with no surrounding try/except.
+    An uncaught exception here would turn "best-effort background
+    reconnect" into a 500 on that endpoint, recurring once per cooldown
+    window for as long as thread exhaustion persists — worse than doing
+    nothing at all, and the opposite of what "off the request thread" is
+    supposed to buy.
+    """
+    try:
+        threading.Thread(target=target, daemon=True, name=name).start()
+    except Exception as exc:  # noqa: BLE001 - must never break the caller's request
+        _log.error("store_reconnect: could not start reopen thread %r: %s", name, exc)
+
+
 def _reopen_feedback_store() -> None:
     from product_app.feedback_store import FeedbackStore
     from product_app.feedback_store import configure as configure_feedback_store
@@ -122,9 +142,7 @@ def maybe_reconnect_feedback_store(*, monotonic: Callable[[], float] = time.mono
             return
         _feedback_last_attempt_at = now
 
-    threading.Thread(
-        target=_reopen_feedback_store, daemon=True, name="feedback-store-reconnect"
-    ).start()
+    _spawn(_reopen_feedback_store, name="feedback-store-reconnect")
 
 
 def maybe_reconnect_run_history_store(*, monotonic: Callable[[], float] = time.monotonic) -> None:
@@ -150,6 +168,4 @@ def maybe_reconnect_run_history_store(*, monotonic: Callable[[], float] = time.m
             return
         _run_history_last_attempt_at = now
 
-    threading.Thread(
-        target=_reopen_run_history_store, daemon=True, name="run-history-store-reconnect"
-    ).start()
+    _spawn(_reopen_run_history_store, name="run-history-store-reconnect")
