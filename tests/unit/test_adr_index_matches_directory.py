@@ -53,10 +53,11 @@ def test_the_generator_refuses_to_write_an_empty_index(tmp_path: Path) -> None:
     """A generator that emits an empty table on a bad path would silently
     erase the record. Asserted rather than assumed."""
     import importlib.util
+    from typing import Any
 
     spec = importlib.util.spec_from_file_location("gen", GENERATOR)
     assert spec and spec.loader
-    module = importlib.util.module_from_spec(spec)
+    module: Any = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
 
     module.ADR_DIR = tmp_path  # empty directory
