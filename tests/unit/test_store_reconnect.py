@@ -701,3 +701,55 @@ def test_estimate_actually_calls_both_reconnect_triggers() -> None:
 
     feedback_call.assert_called_once_with()
     run_history_call.assert_called_once_with()
+
+
+def test_a_thread_that_cannot_start_still_counts_as_a_tried_reopen() -> None:
+    """Issue #122's fail-closed cap must not silently fail OPEN.
+
+    Found by the end-of-batch adversarial review. The flag is set inside
+    ``_reopen_feedback_store``, which never runs if the thread cannot start,
+    while ``_spawn`` swallows the failure and the cooldown has already been
+    stamped. Measured with ``Thread.start`` raising — the real shape of
+    container thread exhaustion — 25 of 25 requests were allowed against a
+    frozen ledger with ``daily_spend_for`` consulted zero times.
+
+    Thread exhaustion is exactly when a deployment is least healthy, so
+    failing open there is the wrong direction.
+
+    Turns red if: ``_spawn``'s except branch stops recording the attempt.
+    """
+    store_reconnect._reset_for_tests()
+
+    class _FailingStore:
+        def write_health(self) -> str:
+            return "failing"
+
+        def lost_billed_writes(self) -> int:
+            return 0
+
+    with (
+        patch("product_app.feedback_store.get_store", return_value=_FailingStore()),
+        patch("product_app.store_reconnect.threading.Thread", _RaisingOnStartThread),
+    ):
+        store_reconnect.maybe_reconnect_feedback_store()
+
+    assert store_reconnect.feedback_reopen_tried_without_recovery() is True
+
+
+def test_a_run_history_thread_failure_does_not_arm_the_spend_cap() -> None:
+    """The partner: only the FEEDBACK store's reopen gates the money guard.
+
+    A run-history reopen that cannot start is a persistence problem, not a
+    reason to refuse priced traffic. Without this, widening the ``_spawn``
+    failure branch to every target would silently arm the cap on an unrelated
+    fault.
+    """
+    store_reconnect._reset_for_tests()
+
+    with (
+        patch("product_app.run_history_store.get_store", return_value=None),
+        patch("product_app.store_reconnect.threading.Thread", _RaisingOnStartThread),
+    ):
+        store_reconnect.maybe_reconnect_run_history_store()
+
+    assert store_reconnect.feedback_reopen_tried_without_recovery() is False

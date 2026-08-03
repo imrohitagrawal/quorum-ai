@@ -34,7 +34,9 @@ it is deliberately an integration test with a real SQLite file and real
 from __future__ import annotations
 
 import os
+import sqlite3
 import threading
+import time
 from datetime import UTC, datetime
 from pathlib import Path
 from uuid import UUID, uuid4
@@ -42,6 +44,7 @@ from uuid import UUID, uuid4
 import pytest
 
 from product_app import store_reconnect
+from product_app.config import settings
 from product_app.costs import CostEstimationService, CostThresholdAction
 from product_app.feedback_store import FeedbackStore, configure, get_store
 from product_app.model_slots import ModelSlot
@@ -337,3 +340,115 @@ def test_the_first_sighting_of_staleness_never_blocks_with_real_threads(
         db.chmod(0o644)
         store_reconnect._reset_for_tests()
         configure(None)
+
+
+def test_a_healed_store_is_not_blocked_forever(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    _clean_state: object,
+) -> None:
+    """THE END-OF-BATCH HOLISTIC-REVIEW BLOCKER: #122 x #123 deadlocked.
+
+    Issue #122 owns the trust predicate and issue #123 owns the reopen
+    trigger, so each per-issue review saw only half of this. Measured against
+    a real SQLite RESERVED lock -- a fault ``feedback_store`` documents as
+    recovering on the SAME handle:
+
+        fault begins        health=failing    lost=1  stale=True   flag=False
+        after reopen        health=unverified lost=0  stale=False  flag=True
+        new handle loses 1  health=failing    lost=1  stale=True   flag=True
+        OPERATOR FIXES IT   health=ok         lost=1  stale=False  flag=True
+        +5 more requests    health=ok         lost=1  stale=False  flag=True
+
+    ``lost_billed_writes`` is monotonic per handle, so the reopened handle
+    could never become trustworthy again; the clear-path needed
+    ``trustworthy`` and the reopen that would supply a clean handle needed
+    ``stale``, which recovery had just cleared. Every priced request 402'd
+    until a process restart -- reintroducing exactly what #123 exists to
+    remove.
+
+    Turns red if: ``maybe_reconnect_feedback_store`` goes back to reopening
+    only on ``feedback_ledger_is_stale``.
+    """
+    _skip_if_root()
+    db = tmp_path / "feedback_events.sqlite3"
+    account_id = uuid4()
+    monkeypatch.setenv("FEEDBACK_DB_PATH", str(db))
+
+    seed = FeedbackStore(str(db))
+    _charge(seed, account_id, "0.01")
+    seed.close()
+
+    # A RESERVED holder: writes fail now, and resume on the same handle later.
+    holder = sqlite3.connect(str(db), timeout=0.2)
+    holder.execute("BEGIN IMMEDIATE")
+    try:
+        broken = FeedbackStore(str(db))
+        _charge(broken, account_id, "0.01")
+        configure(broken)
+        assert broken.write_health() == "failing", "precondition: the fault must be real"
+
+        store_reconnect._reopen_feedback_store()
+        reopened = get_store()
+        assert reopened is not None
+        # The request that slips through loses ITS charge on the NEW handle --
+        # this is what poisons lost_billed_writes and creates the deadlock.
+        _charge(reopened, account_id, "0.01")
+        assert reopened.lost_billed_writes() == 1, "precondition: the new handle must be poisoned"
+
+        service = CostEstimationService(binding_secret="x" * 32)
+        blocked = service.estimate(query_text="hi", model_slots=_slots(), account_id=account_id)
+        assert blocked.threshold_action is CostThresholdAction.BLOCK, (
+            "precondition: the cap must actually be failing closed before we heal it"
+        )
+    finally:
+        holder.rollback()
+        holder.close()
+
+    # THE OPERATOR FIXES THE FAULT. Writes land again on the SAME handle, but
+    # it still carries lost=1 forever, so it can never become trustworthy.
+    healed = get_store()
+    assert healed is not None
+    _charge(healed, account_id, "0.01")
+    assert healed.write_health() == "ok", "precondition: the fault is genuinely over"
+    assert healed.lost_billed_writes() == 1, "precondition: the counter never resets"
+
+    # THE ASSERTION THIS TEST EXISTS FOR: a reopen must still be considered
+    # due. Before the fix the trigger asked only `feedback_ledger_is_stale`,
+    # which recovery had just made False -- so no reopen ever fired again and
+    # the block was permanent.
+    #
+    # Driven past the 60s cooldown via the injectable monotonic seam rather
+    # than by sleeping; the cooldown is why a millisecond-scale test would
+    # otherwise see no retry even with the fix in place.
+    scheduled: list[str] = []
+
+    class _RecordingThread:
+        def __init__(self, *, target: object, daemon: bool, name: str) -> None:
+            self.name = name
+
+        def start(self) -> None:
+            scheduled.append(self.name)
+
+    later = time.monotonic() + settings.store_reconnect_cooldown_seconds + 1
+    monkeypatch.setattr("product_app.store_reconnect.threading.Thread", _RecordingThread)
+    store_reconnect.maybe_reconnect_feedback_store(monotonic=lambda: later)
+    assert scheduled == ["feedback-store-reconnect"], (
+        "a recovered-but-poisoned handle must still be retried; without this the "
+        "402 is permanent until a process restart"
+    )
+
+    # Let that reopen actually run: a clean handle, then a landed write.
+    store_reconnect._reopen_feedback_store()
+    fresh = get_store()
+    assert fresh is not None and fresh.lost_billed_writes() == 0
+    _charge(fresh, account_id, "0.01")
+    store_reconnect.maybe_reconnect_feedback_store(monotonic=lambda: later + 1)
+
+    allowed = CostEstimationService(binding_secret="x" * 32).estimate(
+        query_text="hi", model_slots=_slots(), account_id=account_id
+    )
+    assert allowed.threshold_action is not CostThresholdAction.BLOCK, (
+        "a store that has fully recovered must stop refusing traffic without a restart"
+    )
+    assert store_reconnect.feedback_reopen_tried_without_recovery() is False

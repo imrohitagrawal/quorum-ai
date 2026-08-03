@@ -66,7 +66,7 @@ of #130 and #158. Audited by execution and by reading real CI job logs:
 | `diff-cover` (blocking) | every changed `src/**.py` file must be present in the coverage report (`scripts/check_diff_cover_measured.py`) | a real `src/` edit plus a report with no packages → rc=1; the same edit with the real report → rc=0; a comment-only edit → rc=0 (no false fire) |
 | `validate-and-test` security scan (blocking) | ≥50 files actually read | a 1-file tree → `FAILED TO MEASURE`, rc=1; the real tree → ~1369 files, rc=0 (the exact count moves with untracked files, so only the order of magnitude is meaningful against a floor of 50) |
 | `fr-completeness` (blocking) | ≥25 requirements actually parsed | doc 10 truncated to 2 sections → 14 parsed → rc=1; **without** the floor the same truncation printed `OK` and rc=0 |
-| `e2e` both lanes (blocking) | executed-count floors 138 / 94 — the EXACT measured counts, zero skips (`scripts/check_e2e_executed.py`) | missing report, all-skipped, and zero-matched all → rc=1; the real 94-test lane → rc=0 |
+| `e2e` FOUR lanes (blocking) | executed-count floors 167 / 96 / 51 / 8 — the EXACT measured counts, zero skips (`scripts/check_e2e_executed.py`) | missing report, all-skipped, and zero-matched all → rc=1; a real lane at its floor → rc=0 |
 | `mutation-baseline` (advisory) | a non-empty scope must leave a score or an explicit `UNMEASURED` in `score.txt`; the empty-scope branch now says in words that no score was produced | the recipe's own failure branch |
 
 **Update, 2026-08-03 (issue #162, worked as the follow-up work package #166):

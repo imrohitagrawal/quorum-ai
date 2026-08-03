@@ -196,8 +196,15 @@ def feedback_ledger_is_trustworthy(store: object | None) -> bool:
     reopen installs a FRESH handle whose count starts at zero. So a handle
     that has lost a charge stays untrustworthy for its whole life, and
     recovery arrives the ordinary way — the next reopen's fresh handle lands a
-    write and loses nothing. No permanent block, and no standing down on a
-    signal that cannot see the money.
+    write and loses nothing, and no standing down on a signal that cannot see
+    the money.
+
+    "No permanent block" is TRUE ONLY BECAUSE of the second clause in
+    ``maybe_reconnect_feedback_store``'s reopen condition. An earlier draft of
+    this sentence asserted it while the code deadlocked: a handle that had lost
+    a charge could never become trustworthy, and the reopen that would replace
+    it was gated on staleness, which recovery cleared. See that call site for
+    the measured sequence.
 
     A store with NO ``write_health`` at all answers **True**: the signal was
     never built for that type (a narrow duck-typed double, or any
@@ -244,6 +251,22 @@ def _spawn(target: Callable[[], None], *, name: str) -> None:
     try:
         threading.Thread(target=target, daemon=True, name=name).start()
     except Exception as exc:  # noqa: BLE001 - must never break the caller's request
+        if target is _reopen_feedback_store:
+            # A reopen was DUE and could not even be started, so it has been
+            # tried and has not restored anything — record that, or issue
+            # #122's fail-closed cap silently fails OPEN.
+            #
+            # Found by the end-of-batch adversarial review: the flag is set
+            # inside ``_reopen_feedback_store``, which never runs if the thread
+            # cannot start, while ``_spawn`` swallows the failure AND the
+            # cooldown has already been stamped. Measured with ``Thread.start``
+            # raising (the real shape of container thread exhaustion): 25 of 25
+            # requests allowed against a frozen ledger, ``daily_spend_for``
+            # consulted zero times, the flag never set. Thread exhaustion is
+            # exactly when a deployment is least healthy, so failing open there
+            # is the wrong direction.
+            global _feedback_reopen_tried_without_recovery
+            _feedback_reopen_tried_without_recovery = True
         _log.error("store_reconnect: could not start reopen thread %r: %s", name, exc)
 
 
@@ -315,7 +338,45 @@ def maybe_reconnect_feedback_store(*, monotonic: Callable[[], float] = time.mono
             "the per-account 24h daily spend cap is enforced again"
         )
 
-    if not feedback_ledger_is_stale(store):
+    # A reopen is due when the ledger shows a fault, OR when we are already
+    # failing closed and the current handle still cannot be shown to write.
+    #
+    # THE SECOND CLAUSE EXISTS BECAUSE THE FIRST ALONE DEADLOCKS — found by the
+    # end-of-batch holistic review, the only pass that could see it: issue #122
+    # owns the predicate and issue #123 owns this trigger, so each per-issue
+    # review saw half of it. Reproduced end to end against a real SQLite
+    # RESERVED lock (a fault feedback_store documents as recovering on the
+    # SAME handle):
+    #
+    #   fault begins        health=failing    lost=1  stale=True   flag=False
+    #   after reopen        health=unverified lost=0  stale=False  flag=True
+    #   new handle loses 1  health=failing    lost=1  stale=True   flag=True
+    #   OPERATOR FIXES IT   health=ok         lost=1  stale=False  flag=True
+    #   +5 more requests    health=ok         lost=1  stale=False  flag=True
+    #
+    # ``lost_billed_writes`` is monotonic per handle and never resets, so once
+    # the reopened handle has lost even one charge, ``trustworthy`` can never
+    # go true for it again. The clear-path needs ``trustworthy``; the reopen
+    # that would supply a clean handle needed ``stale``, which recovery had
+    # just made False. Every priced request 402s until a process restart —
+    # precisely the "no way back short of a restart" issue #123 exists to
+    # remove, reintroduced by its own sibling fix.
+    #
+    # Keying the retry on ``not trustworthy`` while the flag is set keeps
+    # trying for a clean handle, and cannot fire on a quiet boot: the flag is
+    # False there, so an ordinary ``"unverified"`` cold store still drags no
+    # reopen out of every idle process.
+    #
+    # The underlying mistake was mine and is worth naming: I used
+    # ``lost_billed_writes`` — a COMPLETENESS signal, permanently true once
+    # anything has been lost — to answer a LIVENESS question ("is this store
+    # broken right now"). It still belongs in ``trustworthy``, because a handle
+    # that dropped a charge must not be metered against; it just cannot be the
+    # only thing gating the retry that would replace that handle.
+    needs_reopen = feedback_ledger_is_stale(store) or (
+        _feedback_reopen_tried_without_recovery and not feedback_ledger_is_trustworthy(store)
+    )
+    if not needs_reopen:
         return
 
     global _feedback_last_attempt_at

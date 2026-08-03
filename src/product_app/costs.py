@@ -618,7 +618,9 @@ class CostEstimationService:
                         (
                             "The daily spend ledger is not writable and a reconnect "
                             "attempt has already been made without restoring it, so "
-                            "the 24h cap for this account cannot be verified right now."
+                            "no account's 24h cap can be verified right now. This is "
+                            "a storage fault on the shared ledger, not a limit this "
+                            "account has reached."
                         ),
                     ],
                 )
@@ -772,8 +774,10 @@ class CostEstimationService:
             "been tried without restoring it, so the USD %s per-account 24h daily "
             "spend cap can no longer be verified and every priced request is being "
             "REFUSED (402). This is a storage fault, not a user cost problem. "
-            "Restore write access to the database; the block clears itself on the "
-            "next write that lands. Check /status feedback_db. "
+            "Restore write access to the database; the block then clears itself "
+            "once a reopened handle lands a write without losing a charge — "
+            "reopens are retried automatically while this state holds. "
+            "Check /status feedback_db. "
             "Repeats suppressed for %ss.",
             DAILY_CAP_USD,
             DAILY_CAP_BYPASS_LOG_INTERVAL_S,
