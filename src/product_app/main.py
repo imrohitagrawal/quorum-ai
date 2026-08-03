@@ -351,10 +351,13 @@ def _configure_feedback_store() -> None:
     serving. But ERROR, not WARNING, and the message names the consequence
     that actually costs money. Losing the store does not only disable
     persistence — ``costs.CostEstimationService.estimate`` guards the 24h
-    ``DAILY_CAP_USD`` spend cap behind ``store is not None``, so this boot also
-    turns that cap off for the life of the process (there is no reconnect
-    path). ``costs`` re-states it per estimate window; this is the first and
-    earliest place an operator can see it.
+    ``DAILY_CAP_USD`` spend cap behind ``store is not None``, so this boot
+    also turns that cap off until a reopen succeeds. Since issue #123 there
+    IS a reconnect path: ``store_reconnect.maybe_reconnect_feedback_store``,
+    triggered from that same ``estimate`` call behind a monotonic cooldown,
+    with the reopen itself on a background thread. It is best-effort — if
+    the database stays unreachable the cap stays off — so this line is still
+    the earliest place an operator sees the money consequence.
     """
     try:
         configure_feedback_store(FeedbackStore.from_env())
@@ -362,8 +365,9 @@ def _configure_feedback_store() -> None:
         logging.getLogger(__name__).error(
             "feedback_store: could not open SQLite sink — persistence is "
             "disabled AND the per-account 24h daily spend cap will not be "
-            "enforced for the life of this process (no reconnect path; "
-            "restart once the database is reachable): %s",
+            "enforced until a reopen succeeds. A background reconnect is "
+            "attempted from the estimate path (issue #123); if the database "
+            "stays unreachable, restart once it is: %s",
             exc,
         )
 
