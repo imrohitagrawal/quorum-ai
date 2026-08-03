@@ -128,8 +128,14 @@ jobs:
             echo '```' >> "$GITHUB_STEP_SUMMARY"
             cat build/gates/perf-percentiles.json
           else
+            # Issue #162/#166: this used to print the message below and exit 0
+            # -- an honest log next to a lying (green) status. The JOB is
+            # already advisory via `continue-on-error: true` above, so failing
+            # THIS step cannot block a merge; it only stops the step's own
+            # status from claiming a measurement that never happened.
             echo "no perf-percentiles.json produced — treat as UNMEASURED, not as clean" \
               | tee -a "$GITHUB_STEP_SUMMARY"
+            exit 1
           fi
 
       - name: Upload the percentiles artifact
@@ -200,9 +206,9 @@ jobs:
     # timeout). Because this job lives in the deploy-gate-required "CI" workflow,
     # that 30m kept "CI" `in_progress` past the gate's 900s wait, so the gate
     # fail-safe refused to deploy and EVERY merge since 2026-07-17 (S1+Phase-0,
-    # S2) silently never reached prod. Gating to pull_request (as `codex-review`
-    # already does) keeps "CI" fast on push so the gate can pass. The invariant is
-    # pinned by tests/unit/test_deploy_gate_no_slow_push_jobs.py.
+    # S2) silently never reached prod. Gating to pull_request keeps "CI" fast on
+    # push so the gate can pass. The invariant is pinned by
+    # tests/unit/test_deploy_gate_no_slow_push_jobs.py.
     if: github.event_name == 'pull_request'
     # ADVISORY — and this is now a MEASURED decision, not an unexamined default.
     # Full evidence: docs/metrics/mutation-gate-study.md.
@@ -349,18 +355,4 @@ jobs:
           name: mutation-report
           path: build/mutation/
           if-no-files-found: ignore
-
-  codex-review:
-    if: github.event_name == 'pull_request'
-    runs-on: ubuntu-latest
-    permissions:
-      contents: read
-      pull-requests: write
-    steps:
-      - uses: actions/checkout@v4
-      # Enable after storing OPENAI_API_KEY as a GitHub secret.
-      # - uses: openai/codex-action@v1
-      #   with:
-      #     openai-api-key: ${{ secrets.OPENAI_API_KEY }}
-      #     prompt-file: .github/codex/pr-review.md
 

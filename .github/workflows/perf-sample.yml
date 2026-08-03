@@ -68,8 +68,13 @@ jobs:
             echo '```' >> "$GITHUB_STEP_SUMMARY"
             cat build/gates/perf-percentiles.json
           else
+            # Issue #162/#166: used to exit 0 here. The JOB is already
+            # advisory (`continue-on-error: true` above), so failing this
+            # step cannot block anything; it only stops the status from
+            # claiming a measurement that never happened.
             echo "no sample produced — UNMEASURED tonight, NOT a clean result" \
               | tee -a "$GITHUB_STEP_SUMMARY"
+            exit 1
           fi
 
       - name: Upload the sample

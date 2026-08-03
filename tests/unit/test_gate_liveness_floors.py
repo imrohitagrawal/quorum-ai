@@ -562,15 +562,20 @@ def test_the_e2e_floors_are_wired_into_the_workflow() -> None:
     """Same rule for the Playwright lanes: deleting the step must be visible.
 
     Turns red if: any floor step is removed from e2e.yml, or the script is
-    renamed without updating the workflow. Count is 3, not the original 2:
+    renamed without updating the workflow. Count is 4, not the original 2:
     issue #127 added a third blocking lane (workspace/accessibility/
     api-mocking/navigation, previously unregistered anywhere in CI) with its
-    own executed-count floor, alongside the pre-existing invariants and axe
-    + parity lanes.
+    own executed-count floor, and issue #162/#166 added a fourth for the
+    visual-snapshots step — previously left unfloored because nobody had
+    measured its count; measured here via `--update-snapshots` (which
+    executes every test regardless of platform-specific baseline
+    availability, without touching the committed *-chromium-linux.png files
+    the real gate compares against) — alongside the pre-existing invariants
+    and axe + parity lanes.
     """
     workflow = (REPO_ROOT / ".github" / "workflows" / "e2e.yml").read_text(encoding="utf-8")
 
-    assert workflow.count("scripts/check_e2e_executed.py") == 3, (
+    assert workflow.count("scripts/check_e2e_executed.py") == 4, (
         "e2e.yml must invoke the executed-count floor once per blocking lane; "
         f"found {workflow.count('scripts/check_e2e_executed.py')}"
     )

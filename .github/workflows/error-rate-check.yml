@@ -63,4 +63,31 @@ jobs:
         # Stdlib-only script — no dependency install. Threshold/floor/window
         # defaults live IN the script beside their rationale; the job logs
         # the measured window and both raw samples for every run.
-        run: python3 scripts/error_rate_probe.py --url https://quorum.stackclimb.com/metrics
+        #
+        # Issue #162/#166: exit_code_for() returns 1 only for "alert" (by
+        # design -- a real alert must fail this job and fire GitHub's native
+        # failure email, and a skip must NOT, or a quiet traffic window would
+        # spam that channel). That correctly-quiet exit code is exactly what
+        # made a SKIP_LOW_TRAFFIC / SKIP_COUNTER_RESET run indistinguishable
+        # from a verified-healthy one at a glance -- both a plain green tick,
+        # neither with any summary at all. Writes an explicit, visually
+        # separate $GITHUB_STEP_SUMMARY section for an abstention specifically,
+        # naming it as judging nothing, without touching the exit code (still
+        # 0, still no alert email) or the alert path (still exit 1, untouched).
+        run: |
+          set +e
+          output=$(python3 scripts/error_rate_probe.py --url https://quorum.stackclimb.com/metrics)
+          code=$?
+          echo "$output"
+          if echo "$output" | grep -qE '^SKIP_(LOW_TRAFFIC|COUNTER_RESET):'; then
+            {
+              echo "## Error-rate check: ABSTAINED — judged nothing this run"
+              echo '```'
+              echo "$output" | tail -1
+              echo '```'
+              echo "Not a verified-healthy result: traffic was too low, or a"
+              echo "counter reset made the two samples incomparable. See rule 1"
+              echo "(availability-check.yml) for whether prod is up at all."
+            } >> "$GITHUB_STEP_SUMMARY"
+          fi
+          exit $code

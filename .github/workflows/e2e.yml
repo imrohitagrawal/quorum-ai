@@ -301,6 +301,23 @@ jobs:
           --project=chromium
           --retries=0
 
+      # EXECUTED-COUNT FLOOR. Issue #162/#166: this step was the one gap left
+      # by the two floors above, because its count was never measured on the
+      # authoring machine — the baselines are Linux-only, seeded in CI, so a
+      # pixel-comparison run couldn't be trusted locally. Measured fresh here
+      # via `--update-snapshots` (which executes every test regardless of
+      # platform-specific baseline availability, without touching the
+      # committed *-chromium-linux.png files this step actually compares
+      # against): 8 = 6 (trust-score-visual, 2 themes x 3 viewports) + 2
+      # (visual-snapshots, result + transcript). `!cancelled()` matches the
+      # run step above: this must still report even if visual-snapshots
+      # itself failed on a real regression, since "0 executed" and "8
+      # executed, 3 failed" are different failure modes this floor exists to
+      # tell apart.
+      - name: "visual-snapshots lane: floor on tests actually executed"
+        if: ${{ !cancelled() }}
+        run: python3 scripts/check_e2e_executed.py --report e2e/results.xml --min 8 --lane "visual-snapshots lane"
+
       - name: Upload Playwright report
         if: ${{ !cancelled() }}
         uses: actions/upload-artifact@v4

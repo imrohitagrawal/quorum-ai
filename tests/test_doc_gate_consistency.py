@@ -18,9 +18,13 @@ Design constraints that are load-bearing here
 ---------------------------------------------
 * **"Blocking == no continue-on-error" is false on this repo.** ``diff-cover``
   has no ``continue-on-error`` but is gated on ``if: github.event_name ==
-  'pull_request'``, so a direct push to ``main`` is ungated; ``codex-review``
-  has no ``continue-on-error`` and always passes because its only real step is
-  commented out. Effective status is therefore a four-valued model
+  'pull_request'``, so a direct push to ``main`` is ungated. (``codex-review``
+  used to be the standing example of the fourth status, VACUOUS — no
+  ``continue-on-error`` yet always passing because its only real step was
+  commented out — until it was removed in #166 for exactly that reason; the
+  ``VACUOUS``/``_is_vacuous`` machinery below stays, since a future gate could
+  regress into that same shape, but nothing in the current ``GATES`` registry
+  exercises it.) Effective status is therefore a four-valued model
   (blocking / blocking-on-pull-requests-only / advisory / vacuous) and docs are
   asked to state the *qualified* truth. ``continue-on-error`` is read at BOTH
   levels: a flag on the step that does the gate's real work downgrades the gate
@@ -151,7 +155,6 @@ GATES: tuple[Gate, ...] = (
         "fr-completeness",
         (r"FR traceability completeness", r"fr-completeness"),
     ),
-    Gate("codex-review", "ci.yml", "codex-review", (r"codex-review",)),
     Gate(
         "e2e-invariants",
         "e2e.yml",
