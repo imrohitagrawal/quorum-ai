@@ -57,6 +57,50 @@ is the rule only.
    against the constant that defines it.
 8. **Assert structure, not substrings** — a substring matches the prose that
    explains the thing. Use `tests/code_text.py` when you must read a file.
+8a. **The repo's `HTTPError` doubles have an EMPTY body, and they do not say so.**
+   Both PRE-EXISTING `_http_error` helpers — `tests/unit/test_provider_billing_classification.py:119`
+   (`hdrs=None`) and `tests/unit/test_readiness_key_auth.py:85` (`hdrs=Message()`,
+   used by 5 call sites) — pass `fp=None`, and that does NOT raise on `.read()`.
+   Measured on CPython 3.12.13: `.read()` returns `b''` because CPython
+   substitutes an empty `BytesIO`; `.headers` is `None` for the first and an
+   EMPTY `email.message.Message` for the second (`== {}` is False — do not
+   assert that). So any test asserting "the error body does not contain X"
+   against either double passes **vacuously, against every implementation,
+   including one that never reads the body at all**. This bites #105 and #203
+   identically, since both fixes turn on reading a real response body. Give
+   every such test a REAL body and a positive partner proving the present case
+   is detected.
+8b. **A bound enforced downstream of the operation is not a bound**, and a
+   BYTE bound is not a TIME bound. Both measured on one 40-line function,
+   2026-08-05:
+   - A test asserting `body_bytes <= LIMIT` survived deleting the read's size
+     argument entirely, because a slice taken *after* an unbounded read still
+     reported a bounded number. Assert on the ARGUMENT, not the result — and
+     never against the constant that defines the bound (rule 7a): pinning
+     `<= LIMIT` also let `LIMIT` itself be raised 8192 → 40000 undetected.
+     Pin the exact boundary with literals on both sides.
+   - `exc.read()` on an `HTTPError` is a SOCKET read. A 503 with no
+     `Content-Length` and the socket held open blocked for the full
+     `openrouter_timeout_seconds` — **0.015s → 8.009s, a 1144x regression on
+     the error path** — then raised `TimeoutError`, paying the whole timeout to
+     learn nothing. No unit test can see this; it took a reviewer driving a
+     real loopback server that withholds a body. If you read a body anywhere,
+     gate it on a declared `Content-Length`.
+
+8c. **A mitigation gated on an upstream's behaviour is worth exactly as much as
+   your MEASUREMENT of that upstream — and you probably have none.** Measured
+   2026-08-05, on a fix that had already survived two review lenses and 20
+   mutations: it bounded a body read by refusing to read unless the response
+   declared `Content-Length`. Correct against a loopback server, green on every
+   gate. **The real OpenRouter API is behind Cloudflare and answers errors with
+   `Transfer-Encoding: chunked` and NO `Content-Length`**, so it would have
+   collected nothing at all in production while looking perfectly healthy. One
+   `curl` to the live API — free, a 401 costs no tokens — found it in seconds.
+   Before you gate on an upstream header, status or body shape, GO AND LOOK.
+   Useful facts already paid for: OpenRouter errors are chunked, JSON, ~50
+   bytes, `Server: cloudflare`; a bad key gives `401 {"error":{"message":"User
+   not found.","code":401}}` with NO `error.metadata`; and it exposes
+   `X-Provider-Name` in `Access-Control-Expose-Headers`.
 
 **Review**
 9. **Fan out for review, never for building.** Subagents share one working tree.

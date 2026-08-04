@@ -1170,21 +1170,34 @@ class ProviderExecutionService:
             # we silently return).
             if exc.code in (400, 404) and model_id.endswith(":online"):
                 return _SEARCH_REJECTED
-            _LOGGER.warning(
-                "upstream_provider_http_error",
-                extra={
-                    "status_code": exc.code,
-                    "url": exc.url,
-                    "model_id": model_id,
-                },
-            )
             # F-06 billing classification. A rejected REQUEST (bad JSON body,
             # bad/insufficient credentials, unknown model, rate limit) is
             # refused before any token is generated, so nothing was billed and
             # the caller must be free to keep the run ``measured``. Any other
             # status — 5xx above all — can follow a generation that already
             # consumed tokens, so it is reported as dispatched-but-unmeasured.
-            if exc.code in _UNBILLED_HTTP_STATUSES:
+            #
+            # Issue #105: that 5xx premise has NO evidence behind it, and a
+            # router-level 503 ("no allowed providers") is decided before any
+            # provider is engaged — measured overstating one run's served cost
+            # by 5.27x. The classification is deliberately NOT changed here on
+            # a guess about an external API's semantics. Instead the evidence
+            # that decides it is recorded, so the question can be settled from
+            # a week of production logs. ``billed`` is computed once and feeds
+            # both the log and the return, so the record can never disagree
+            # with the decision it describes.
+            billed = exc.code not in _UNBILLED_HTTP_STATUSES
+            _LOGGER.warning(
+                "upstream_provider_http_error",
+                extra={
+                    "status_code": exc.code,
+                    "url": exc.url,
+                    "model_id": model_id,
+                    "billing_class": "possibly_billed" if billed else "not_billed",
+                    **_billing_evidence_shape(exc),
+                },
+            )
+            if not billed:
                 return None
             return _DISPATCH_UNMEASURED
         except URLError as exc:
@@ -1201,7 +1214,24 @@ class ProviderExecutionService:
             # (The timeout that genuinely cannot be told apart from a slow
             # generation is the one out of ``getresponse()``, which arrives as a
             # BARE ``TimeoutError`` and is handled by the catch-all below.)
-            if isinstance(exc.reason, TimeoutError):
+            #
+            # Issue #105 folds this branch into the same review, and measured
+            # on 56edd1b it logged NOTHING AT ALL — so the conservative
+            # possibly-billed call above produced no evidence to review later.
+            # Only the reason's CLASS NAME is recorded, never ``str(exc)``: a
+            # ``URLError`` reason can carry a header value verbatim and a
+            # header value can be key material (the same lesson
+            # ``_log_post_dispatch_failure`` records).
+            billed = isinstance(exc.reason, TimeoutError)
+            _LOGGER.warning(
+                "upstream_provider_opener_error",
+                extra={
+                    "error_type": type(exc.reason).__name__,
+                    "model_id": model_id,
+                    "billing_class": "possibly_billed" if billed else "not_billed",
+                },
+            )
+            if billed:
                 return _DISPATCH_UNMEASURED
             return None
         except Exception as exc:
@@ -1559,6 +1589,173 @@ _DISPATCH_UNMEASURED: _DispatchedUnmeasured = _DispatchedUnmeasured()
 #: limit (429). Each is decided before any token is generated, so no charge is
 #: possible. Every other status is treated as possibly-billed.
 _UNBILLED_HTTP_STATUSES: frozenset[int] = frozenset({400, 401, 402, 403, 404, 429})
+
+
+#: Issue #105 step 1. Bound on how much of a provider ERROR body is read to
+#: describe its shape. The two error envelopes this repo has fixtures for are
+#: 96 and 133 bytes (no real captured OpenRouter body exists here, so treat the
+#: typical size as ASSUMED, not measured); a corporate proxy's HTML denial can
+#: be arbitrarily large, and this code runs on the failure path, where the
+#: upstream is already misbehaving. A body whose DECLARED length exceeds this
+#: is reported ``too_large`` and never read, so the evidence stays honestly
+#: unknown instead of being guessed from a fragment.
+_ERROR_BODY_SNIFF_LIMIT_BYTES: int = 8192
+
+#: Issue #105. How long the evidence read may block, in seconds. The
+#: connection carries ``openrouter_timeout_seconds`` (8.0), and a 503 whose
+#: body never arrives was measured blocking this branch for the whole of it —
+#: 0.015s to 8.009s, a 1144x regression on the error path — before raising
+#: ``TimeoutError`` and learning nothing. A real OpenRouter error is answered
+#: by Cloudflare in about 13ms (its own ``Server-Timing: cfWorker;dur=13``), so
+#: two seconds is generous by two orders of magnitude while capping the damage
+#: a misbehaving upstream can do.
+_ERROR_BODY_SNIFF_TIMEOUT_SECONDS: float = 2.0
+
+
+def _billing_evidence_shape(exc: HTTPError) -> dict[str, object]:
+    """Describe a provider error body's SHAPE — never its content (issue #105).
+
+    ``_UNBILLED_HTTP_STATUSES`` treats every 5xx as possibly-billed on the
+    premise that a 5xx can follow a generation that already consumed tokens.
+    Issue #105's finding is that no evidence for that premise exists anywhere
+    in this repo, and its instruction is to gather the evidence rather than
+    guess: OpenRouter names the provider it engaged at
+    ``error.metadata.provider_name``, so that key's ABSENCE from a well-formed
+    error envelope means the router refused before any provider ran, and
+    nothing could have been billed.
+
+    ``provider_name_present`` is deliberately THREE-VALUED, and collapsing it
+    is the specific defect this function exists to avoid:
+
+    * ``True``  — a provider was named; a charge is possible.
+    * ``False`` — an error envelope arrived and named no provider. Read it
+      together with ``error_metadata_present``: ``False``/``False`` is the
+      router refusal issue #105 is about, while ``False``/``True`` means the
+      provider block existed but carried no name, which is NOT the same
+      evidence and must not be counted as one.
+    * ``None``  — unknown: no declared length, too large, unreadable, empty,
+      not JSON, or JSON carrying no ``error`` mapping to read.
+
+    A ``False`` that also meant "we could not tell" would make the production
+    log sample this exists to produce unreadable, because the router refusal
+    and a parse failure would be the same record.
+
+    THE READ IS GATED ON ``Content-Length``, and that is about TIME, not bytes.
+    ``exc.read()`` is a socket read: measured on a real loopback server, a 503
+    sent with no ``Content-Length`` and the socket held open blocked for the
+    full ``openrouter_timeout_seconds`` (8.0s, a 1144x slowdown of this branch)
+    and then raised ``TimeoutError`` — paying the whole timeout to learn
+    nothing. Reading only a body whose length the upstream has already declared
+    keeps this branch as fast as it was before instrumentation for every other
+    shape. A body with no declared length is reported ``no_length`` and not
+    read at all, so step 2 can SEE how often that happens instead of the
+    evidence silently going missing.
+
+    NEVER returns body content. The values are two shape names, an integer and
+    two tri-state flags. An error body can echo the user's query text back
+    verbatim — and a proxy's HTML denial page routinely echoes the request
+    headers, including ``Authorization`` — so logging any of it would be a data
+    leak on an error path. Same lesson :func:`_log_post_dispatch_failure`
+    records about exception messages carrying key material.
+
+    NEVER raises. ``_post_messages`` guarantees that once ``urlopen`` has been
+    called it RETURNS rather than raises; an instrumentation read that escaped
+    would break that invariant on the very path it is measuring, turning a
+    priced-but-unmeasured call into one that vanished entirely.
+    """
+    shape: dict[str, object] = {
+        "body_shape": "unreadable",
+        "body_bytes": 0,
+        "error_metadata_present": None,
+        "provider_name_present": None,
+        "provider_name_header": _provider_name_header_present(exc),
+        "sniff_time_bounded": False,
+    }
+    shape["sniff_time_bounded"] = _bound_sniff_time(exc)
+    try:
+        # One byte past the bound, purely so an over-large body is detectable;
+        # the extra byte is dropped and never reported or parsed.
+        raw = exc.read(_ERROR_BODY_SNIFF_LIMIT_BYTES + 1)
+        over = len(raw) > _ERROR_BODY_SNIFF_LIMIT_BYTES
+        raw = raw[:_ERROR_BODY_SNIFF_LIMIT_BYTES]
+        body_bytes = len(raw)
+    except Exception:
+        # Any failure to read at all — a dead socket, a consumed body, a
+        # double whose ``read`` returns something that is not bytes — is
+        # reported as "unreadable" and nothing more. ``len`` sits INSIDE the
+        # try deliberately: it was outside at first, and a body object
+        # returning ``None`` then raised ``TypeError`` straight through this
+        # function, making the "never raises" promise above false.
+        return shape
+    shape["body_bytes"] = body_bytes
+    if not raw:
+        shape["body_shape"] = "empty"
+        return shape
+    if over:
+        shape["body_shape"] = "too_large"
+        return shape
+    try:
+        parsed = json.loads(raw)
+    except Exception:
+        shape["body_shape"] = "not_json"
+        return shape
+    shape["body_shape"] = "json"
+    if isinstance(parsed, dict) and isinstance(parsed.get("error"), dict):
+        metadata = parsed["error"].get("metadata")
+        has_metadata = isinstance(metadata, dict)
+        shape["error_metadata_present"] = has_metadata
+        provider_name = metadata.get("provider_name") if has_metadata else None
+        shape["provider_name_present"] = bool(provider_name)
+    return shape
+
+
+def _bound_sniff_time(exc: HTTPError) -> bool:
+    """Best-effort: cap how long the evidence read may block. Never raises.
+
+    ``exc.read()`` is a SOCKET read, and the connection carries whatever
+    timeout ``urlopen`` was given (``openrouter_timeout_seconds``, 8.0s).
+    Measured against a real loopback server: a 503 with the socket held open
+    blocked this branch for the full 8.009s and then raised ``TimeoutError``,
+    paying the whole timeout to learn nothing.
+
+    An earlier version avoided that by reading only when ``Content-Length``
+    was declared. **Measured against the real OpenRouter API, that was fatal:**
+    OpenRouter is behind Cloudflare and answers errors with
+    ``Transfer-Encoding: chunked`` and NO ``Content-Length``, so the gate would
+    have reported ``no_length`` for every real provider error and collected
+    nothing at all. Bounding TIME is the correct lever; bounding on a header
+    the upstream never sends is not.
+
+    Reaching the socket is CPython-implementation-specific, so failure is
+    tolerated: the read still happens, just with the original timeout.
+    """
+    try:
+        # Deliberately untyped hops: ``exc.fp`` is declared ``IO[bytes]`` but is
+        # really an ``HTTPResponse`` wrapping a ``BufferedReader`` over an
+        # ``SSLSocket``. Verified against the live API on 2026-08-05.
+        sock = exc.fp.fp.raw._sock  # type: ignore[attr-defined]
+        sock.settimeout(_ERROR_BODY_SNIFF_TIMEOUT_SECONDS)
+    except Exception:
+        return False
+    return True
+
+
+def _provider_name_header_present(exc: HTTPError) -> bool | None:
+    """Did the response carry OpenRouter's ``X-Provider-Name`` header?
+
+    A second, INDEPENDENT signal for the same question the body answers, found
+    by probing the live API: OpenRouter lists ``X-Provider-Name`` in its
+    ``Access-Control-Expose-Headers``. A header survives a body that is
+    truncated, unreadable or not JSON, so the two together fail independently.
+    ``None`` means there were no headers to read at all.
+    """
+    try:
+        headers = exc.headers
+        if headers is None:
+            return None
+        return bool(headers.get("X-Provider-Name"))
+    except Exception:
+        return None
 
 
 #: Post-dispatch failures a healthy deployment genuinely produces: a torn or
