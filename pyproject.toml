@@ -146,6 +146,13 @@ also_copy = [
   # with it absent: that spec fails inside ./mutants/ and mutmut aborts with
   # "failed to collect stats" before scoring a mutant.
   "PRODUCT_IDEA.md",
+  # ``AGENTS.md`` is read from ``REPO_ROOT`` by
+  # tests/test_doc_gate_consistency.py Part D, which pins the invariant-spec
+  # count the doc states against the number of files on disk. Added the same
+  # hour that test was written, because ``test_mutation_copy_completeness``
+  # caught the omission and named this fix in its failure message — the guard
+  # doing exactly the job it was built for.
+  "AGENTS.md",
   # ``Dockerfile`` carries the deployed uvicorn argv, including which peers may
   # set X-Forwarded-For. tests/security/test_trusted_proxy_ips.py reads it from
   # ``REPO_ROOT`` to prove the per-IP rate limiter is not header-spoofable.

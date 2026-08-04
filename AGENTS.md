@@ -12,7 +12,23 @@ is the rule only.
 
 **Truth**
 1. **Verify by executing, never by reading.** State the command and what it
-   printed, or say UNVERIFIED out loud.
+   printed, or say UNVERIFIED out loud. **This includes claims about WHERE
+   something is, not only about what it does** — "this file says X" is a claim,
+   and `grep` is the command that settles it.
+   Measured 2026-08-04, on a list of **three** stale items in this very file,
+   written by an agent that had just spent a session applying this rule:
+   one was real, one named a file that did not contain the text at all (the
+   location was recalled, not grepped), and one was already correct and would
+   have been "fixed" into being wrong. **Two of three evaporated on contact with
+   a command.** Assume your own list is the same until you have run it.
+1a. **Prefer a check over a corrected sentence.** The same session found
+   `AGENTS.md` claiming a directory held "twelve" specs when it held 15 — three
+   were added over months and nothing ever failed, because nothing compared the
+   sentence to the tree. A corrected number lasts until the next change; a gate
+   lasts. Where a number is derivable from the repo OFFLINE, pin it:
+   `tests/test_doc_gate_consistency.py` Part D is the worked example, and the
+   place to add the next one. Numbers that need the network (the rule-14
+   contexts table) cannot be pinned this way and stay a human step.
 2. **A green advisory job is not evidence it ran; a RED one is not evidence it
    measured.** Open the log and find the number.
 3. **If a premise you were handed turns out to be false, STOP and say so.** Never
@@ -398,14 +414,27 @@ this file. But when you touch the workspace UI (`src/product_app/static/app.js`,
   ordered lists, blockquotes, long multi-paragraph answers, an empty-citation
   slot — and look at it as a user would (screenshot at 1440px).
 - **The below-the-line gate is `e2e/tests/invariants/`** — driven in CI by
-  `.github/workflows/e2e.yml`. That directory holds **twelve** specs, not the
+  `.github/workflows/e2e.yml`. That directory holds **15** specs, not the
   three described below: `answer-completeness`, `export-and-expanders`,
-  `readiness-banner`, `real-integration-smoke`, `rendering-invariants`,
-  `session-trail`, `source-expander`, `theme-toggle`, `trust-score-invariants`,
-  `trust-score-visual`, `verdict-band`, `visual-snapshots`. All twelve are
-  currently wired into blocking lanes. Three are detailed below because they
-  have contracts worth stating; the other nine bind just as hard. Enumerate the
-  directory rather than trusting this list.
+  `provider-notice-coverage`, `readiness-banner`, `readiness-no-flash`,
+  `real-integration-smoke`, `rendering-invariants`, `session-trail`,
+  `source-expander`, `source-support-denominator`, `theme-toggle`,
+  `trust-score-invariants`, `trust-score-visual`, `verdict-band`,
+  `visual-snapshots`. All 15 are named in a `playwright test` command in
+  `e2e.yml` — 12 in the first blocking lane, `real-integration-smoke` in the
+  second, and `trust-score-visual` + `visual-snapshots` in the visual-baseline
+  lane. Three are detailed below because they have contracts worth stating; the
+  other twelve bind just as hard. Enumerate the directory rather than trusting
+  this list.
+  **This count said "twelve" until 2026-08-04**, and the error is instructive:
+  the FIRST blocking lane runs exactly 12 invariant specs, so a number that was
+  right about the LANE got written down about the DIRECTORY, and three more
+  specs were added later without anyone noticing. Nothing failed, because
+  nothing checked. It is checked now —
+  `tests/test_doc_gate_consistency.py::test_agents_md_states_the_real_invariant_spec_count`
+  compares this sentence against `ls -1 e2e/tests/invariants/*.spec.ts | wc -l`
+  and goes red the moment a spec is added or removed without editing it. **Keep
+  the number a digit**: the gate cannot read "twelve".
   **Two holes in the guard that is supposed to keep that true**
   (`tests/test_e2e_workflow_covers_all_invariant_specs.py`) — both pre-existing,
   neither fixed here:
