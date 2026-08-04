@@ -110,6 +110,49 @@ is the rule only.
     cd e2e && SESSION_RATE_LIMIT_PER_MINUTE=600 SESSION_MINT_CAP_OVERRIDE=600 \
       npx playwright test <spec> --project=chromium --workers=1 --retries=0
     ```
+13a. **`e2e/tests/review/` makes `make quality` RED on your machine and green in
+    CI.** That directory is gitignored (`.gitignore:59`) and holds local review
+    scratch specs. `tests/unit/test_no_orphaned_e2e_specs.py:95` enumerates with
+    `rglob` — the FILESYSTEM — so it finds them and fails with
+    *"is committed under e2e/tests/ but no workflow invokes it"*, which
+    `git check-ignore` flatly contradicts. Measured 2026-08-04: **7 failed, 28
+    passed** locally; `28 passed` on a clean `git archive HEAD` copy. Before
+    blaming your diff for a red `test_no_orphaned_e2e_specs`, run
+    `ls e2e/tests/review/`. The mirror-image bug is in
+    `e2e/tools/check-negative-assertions.mjs:380`, whose `--all` mode uses
+    `git ls-files` and is therefore BLIND to those same 7 files.
+13b. **`pytest-randomly` is NOT installed**, though `pyproject.toml:192` sets
+    `-p no:randomly`. Verified: `uv run python -c "import pytest_randomly"` →
+    `ModuleNotFoundError`. So that flag disables a plugin that is not there, and
+    **test order is deterministic-alphabetical, locally and in CI**. Do not
+    reach for `--randomly-seed` to shake out ordering bugs; it does not exist
+    here. Shuffle at the module level (pass test files in a different order)
+    instead.
+13c. **`timeout` does not exist on this macOS box** (`command not found`). Use
+    your tool's own timeout, or `perl -e 'alarm shift; exec @ARGV'`.
+13d. **Growing `goldenCompletedResp()` changes a BLOCKING visual lane you cannot
+    re-baseline locally.** It feeds `visual-snapshots.spec.ts` /
+    `trust-score-visual.spec.ts`, whose Linux baselines are seeded only by
+    `.github/workflows/seed-visual-baselines.yml`; only the `-darwin` ones exist
+    on your machine. To give a rendering gate a new shape, add a DEDICATED
+    builder (see `goldenRespWithBlockStructure`, added for #120) rather than
+    mutating the shared one.
+
+13e. **The visual lane fails 8/8 on your Mac, on CLEAN `main`, and that is not a
+    regression.** Playwright compares `*-chromium-darwin.png` locally; CI
+    compares `*-chromium-linux.png`. They were NOT seeded together — darwin was
+    added in `f25696e` (2026-07-25), linux first in `2533fd3` (2026-07-17) and
+    last re-seeded by `94fc256` (2026-07-28) — and the page has grown since, so
+    the darwin images are stale:
+    measured 2026-08-04 on clean `main`, `result-verdict` expects 1440x**3137**
+    and the page renders 1440x**3385** — 248px taller, 3% of pixels. `e2e.yml`
+    already says a local pixel comparison "couldn't be trusted locally"; this is
+    what that looks like. **Never `--update-snapshots` to make it green** — the
+    darwin images are dev-only and CI ignores them, so you would commit noise
+    and still not have tested what CI tests. To show a rendering change is SAFE
+    for the Linux baselines, dump the relevant `outerHTML` on
+    `goldenCompletedResp()` before and after and prove it byte-identical.
+
 14. **`make quality` and `make validate` do NOT cover the merge gates.** Six
     contexts are required by branch protection. Passing both targets locally
     proves almost nothing about whether the pull request can merge. Each
