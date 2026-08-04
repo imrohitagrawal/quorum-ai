@@ -31,6 +31,7 @@ from __future__ import annotations
 import json
 import logging
 import re
+import time
 from dataclasses import asdict, dataclass
 from decimal import Decimal
 from enum import StrEnum
@@ -1604,12 +1605,16 @@ _ERROR_BODY_SNIFF_LIMIT_BYTES: int = 8192
 #: Issue #105. How long the evidence read may block, in seconds. The
 #: connection carries ``openrouter_timeout_seconds`` (8.0), and a 503 whose
 #: body never arrives was measured blocking this branch for the whole of it —
-#: 0.015s to 8.009s, a 1144x regression on the error path — before raising
+#: 0.008-0.013s (5 reps on main) to 8.009s on the error path — before raising
 #: ``TimeoutError`` and learning nothing. A real OpenRouter error is answered
 #: by Cloudflare in about 13ms (its own ``Server-Timing: cfWorker;dur=13``), so
 #: two seconds is generous by two orders of magnitude while capping the damage
 #: a misbehaving upstream can do.
 _ERROR_BODY_SNIFF_TIMEOUT_SECONDS: float = 2.0
+
+#: Chunk size for the budgeted read. Small enough that the deadline is checked
+#: often; large enough that a normal ~50-byte error body arrives in one pass.
+_ERROR_BODY_SNIFF_CHUNK_BYTES: int = 2048
 
 
 def _billing_evidence_shape(exc: HTTPError) -> dict[str, object]:
@@ -1644,7 +1649,8 @@ def _billing_evidence_shape(exc: HTTPError) -> dict[str, object]:
     ``exc.read()`` is a socket read carrying the connection's
     ``openrouter_timeout_seconds`` (8.0s): measured on a real loopback server,
     a 503 with the socket held open and the body withheld blocked this branch
-    for the whole 8.009s — a 1144x slowdown — and then raised ``TimeoutError``,
+    for the whole 8.009s, against 0.008-0.013s on ``main``, and then raised
+    ``TimeoutError``,
     paying the entire timeout to learn nothing. So
     :func:`_bound_sniff_time` lowers the socket timeout to
     ``_ERROR_BODY_SNIFF_TIMEOUT_SECONDS`` first, capping the worst case at
@@ -1679,11 +1685,13 @@ def _billing_evidence_shape(exc: HTTPError) -> dict[str, object]:
         "provider_name_header": _provider_name_header_present(exc),
         "sniff_time_bounded": False,
     }
-    shape["sniff_time_bounded"] = _bound_sniff_time(exc)
     try:
         # One byte past the bound, purely so an over-large body is detectable;
         # the extra byte is dropped and never reported or parsed.
-        raw = exc.read(_ERROR_BODY_SNIFF_LIMIT_BYTES + 1)
+        raw, bounded = _read_within_budget(
+            exc, _ERROR_BODY_SNIFF_LIMIT_BYTES, _ERROR_BODY_SNIFF_TIMEOUT_SECONDS
+        )
+        shape["sniff_time_bounded"] = bounded
         over = len(raw) > _ERROR_BODY_SNIFF_LIMIT_BYTES
         raw = raw[:_ERROR_BODY_SNIFF_LIMIT_BYTES]
         body_bytes = len(raw)
@@ -1717,35 +1725,72 @@ def _billing_evidence_shape(exc: HTTPError) -> dict[str, object]:
     return shape
 
 
-def _bound_sniff_time(exc: HTTPError) -> bool:
-    """Best-effort: cap how long the evidence read may block. Never raises.
+def _read_within_budget(exc: HTTPError, limit: int, budget: float) -> tuple[bytes, bool]:
+    """Read at most ``limit + 1`` bytes in at most ``budget`` seconds TOTAL.
 
-    ``exc.read()`` is a SOCKET read, and the connection carries whatever
-    timeout ``urlopen`` was given (``openrouter_timeout_seconds``, 8.0s).
-    Measured against a real loopback server: a 503 with the socket held open
-    blocked this branch for the full 8.009s and then raised ``TimeoutError``,
-    paying the whole timeout to learn nothing.
+    Returns ``(body, time_bounded)``. Raises only what ``read`` raises.
 
-    An earlier version avoided that by reading only when ``Content-Length``
-    was declared. **Measured against the real OpenRouter API, that was fatal:**
-    OpenRouter is behind Cloudflare and answers errors with
-    ``Transfer-Encoding: chunked`` and NO ``Content-Length``, so the gate would
-    have reported ``no_length`` for every real provider error and collected
-    nothing at all. Bounding TIME is the correct lever; bounding on a header
-    the upstream never sends is not.
+    **A socket timeout is per-``recv``, not cumulative, and that distinction is
+    the whole reason this function exists.** The previous version simply
+    lowered the socket timeout once and called ``exc.read(limit + 1)``, which
+    loops internally until it has the bytes or hits EOF. Measured against a
+    loopback server dribbling 512 bytes every 1.0s — every gap comfortably
+    under the 2s cap, so the cap never fired — that took **16.051 seconds**,
+    twice the 8.009s of the unbounded version it was introduced to fix, while
+    cheerfully reporting ``sniff_time_bounded=True``.
 
-    Reaching the socket is CPython-implementation-specific, so failure is
-    tolerated: the read still happens, just with the original timeout.
+    So the budget is enforced as a DEADLINE across the whole read: before each
+    chunk the socket timeout is set to whatever remains, and the loop stops
+    when the deadline passes. Worst case is the budget plus at most one
+    already-started ``recv`` — and if the socket cannot be reached at all
+    (the hop is CPython-implementation-specific), the deadline check between
+    chunks still bounds the total.
     """
-    try:
-        # Deliberately untyped hops: ``exc.fp`` is declared ``IO[bytes]`` but is
-        # really an ``HTTPResponse`` wrapping a ``BufferedReader`` over an
-        # ``SSLSocket``. Verified against the live API on 2026-08-05.
-        sock = exc.fp.fp.raw._sock  # type: ignore[attr-defined]
-        sock.settimeout(_ERROR_BODY_SNIFF_TIMEOUT_SECONDS)
-    except Exception:
-        return False
-    return True
+    deadline = time.monotonic() + budget
+    want = limit + 1
+    chunks: list[bytes] = []
+    got = 0
+    bounded = True
+    while got < want:
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            break
+        try:
+            exc.fp.fp.raw._sock.settimeout(remaining)  # type: ignore[attr-defined]
+        except Exception:
+            # Cannot reach the socket: the per-chunk read keeps the
+            # connection's own timeout, and only the deadline check above
+            # bounds us. Say so rather than claim a bound we do not have.
+            bounded = False
+        size = min(_ERROR_BODY_SNIFF_CHUNK_BYTES, want - got)
+        # ``read1`` returns after ONE ``recv`` instead of looping until it has
+        # ``size`` bytes, which is what keeps a slow dribble from overrunning
+        # the deadline inside a single call. Not every file object has it.
+        reader = getattr(exc, "read1", None)
+        try:
+            chunk = reader(size) if callable(reader) else exc.read(size)
+        except Exception:
+            # A read that fails after we already have bytes must not throw the
+            # evidence away: a partial body still says whether it is JSON and
+            # whether it names a provider. With nothing in hand there is
+            # nothing to salvage, so the caller's handler reports "unreadable".
+            if not chunks:
+                raise
+            break
+        if not isinstance(chunk, bytes):
+            # A transport that hands back something other than bytes is
+            # BROKEN, not finished. Treating it as EOF would report "empty",
+            # which claims the upstream sent an empty body — a different and
+            # wrong finding. With nothing in hand, let the caller report
+            # "unreadable"; with a partial body, keep it.
+            if not chunks:
+                raise TypeError(f"read returned {type(chunk).__name__}, not bytes")
+            break
+        if not chunk:
+            break
+        chunks.append(chunk)
+        got += len(chunk)
+    return b"".join(chunks), bounded
 
 
 def _provider_name_header_present(exc: HTTPError) -> bool | None:
