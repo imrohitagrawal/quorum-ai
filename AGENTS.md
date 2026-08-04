@@ -81,11 +81,12 @@ is the rule only.
      Pin the exact boundary with literals on both sides.
    - `exc.read()` on an `HTTPError` is a SOCKET read. A 503 with no
      `Content-Length` and the socket held open blocked for the full
-     `openrouter_timeout_seconds` — **0.015s → 8.009s, a 1144x regression on
-     the error path** — then raised `TimeoutError`, paying the whole timeout to
+     `openrouter_timeout_seconds` — **0.008-0.013s (5 reps) → 8.009s on the
+     error path** — then raised `TimeoutError`, paying the whole timeout to
      learn nothing. No unit test can see this; it took a reviewer driving a
-     real loopback server that withholds a body. If you read a body anywhere,
-     gate it on a declared `Content-Length`.
+     real loopback server that withholds a body. Bound the TIME — lower the
+     socket timeout before the read. **Do NOT "fix" this by gating on
+     `Content-Length`**: that was tried, and rule 8c below is what it cost.
 
 8c. **A mitigation gated on an upstream's behaviour is worth exactly as much as
    your MEASUREMENT of that upstream — and you probably have none.** Measured

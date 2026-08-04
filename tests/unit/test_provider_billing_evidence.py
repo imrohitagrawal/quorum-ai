@@ -51,6 +51,7 @@ from __future__ import annotations
 import io
 import json
 import logging
+import time
 from email.message import Message
 from typing import Any
 from urllib.error import HTTPError, URLError
@@ -283,6 +284,10 @@ def test_the_error_body_read_is_actually_bounded(
             seen.append(args[0] if args else None)
             return super().read(*args, **kwargs)
 
+        def read1(self, *args: Any, **kwargs: Any) -> bytes:
+            seen.append(args[0] if args else None)
+            return super().read1(*args, **kwargs)
+
     exc = HTTPError(
         url="https://openrouter.ai/api/v1/chat/completions",
         code=503,
@@ -292,8 +297,21 @@ def test_the_error_body_read_is_actually_bounded(
     )
     _record(monkeypatch, caplog, exc)
     assert seen, "the evidence read never happened"
-    assert seen[0] is not None, "the body was read UNBOUNDED — read() got no size limit"
-    assert seen[0] == 8193, "the read must ask for at most the bound plus one"
+    assert all(n is not None for n in seen), "a read was issued with NO size limit"
+    # A NEGATIVE or zero size means "read everything available", which defeats
+    # the memory bound while still producing a correct-looking shape — the
+    # mutation `size = -1` survived an earlier `max(seen) <= CHUNK` assertion
+    # precisely because -1 is a small number.
+    assert all(isinstance(n, int) and n > 0 for n in seen), (
+        f"every read must ask for a POSITIVE, explicit size, got {seen}"
+    )
+    assert max(seen) <= providers._ERROR_BODY_SNIFF_CHUNK_BYTES, (
+        "each read must be capped at the chunk size, so the deadline is "
+        "re-checked often rather than once"
+    )
+    assert sum(seen) <= providers._ERROR_BODY_SNIFF_LIMIT_BYTES + 1, (
+        "the total requested must never exceed the byte bound plus one"
+    )
 
 
 # --- the instrumentation must never leak, never raise, never reclassify ------
@@ -350,6 +368,12 @@ def test_a_body_that_raises_on_read_does_not_escape(
         def read(self, *args: Any, **kwargs: Any) -> bytes:
             raise OSError("socket died mid-body")
 
+        # ``read1`` is preferred by the budgeted reader, and on a real socket
+        # both fail together. A double that overrides only ``read`` silently
+        # stops exploding — measured.
+        def read1(self, *args: Any, **kwargs: Any) -> bytes:
+            raise OSError("socket died mid-body")
+
     exc = HTTPError(
         url="https://openrouter.ai/api/v1/chat/completions",
         code=503,
@@ -376,6 +400,9 @@ def test_a_body_returning_a_non_bytes_value_does_not_escape(
 
     class _WrongTypeBody(io.BytesIO):
         def read(self, *args: Any, **kwargs: Any) -> Any:
+            return None
+
+        def read1(self, *args: Any, **kwargs: Any) -> Any:
             return None
 
     exc = HTTPError(
@@ -535,7 +562,7 @@ def test_the_evidence_read_is_time_bounded(
 ) -> None:
     """RED when: the socket timeout is not lowered before the sniff read.
 
-    Time, not bytes, is what a withheld body costs: 0.015s to 8.009s measured
+    Time, not bytes, is what a withheld body costs: 0.008-0.013s to 8.009s measured
     on a real loopback server. Reaching the socket is CPython-specific, so the
     helper is best-effort and the record says whether it worked — a field that
     would otherwise silently read as "no problem" on a platform where it
@@ -564,7 +591,19 @@ def test_the_evidence_read_is_time_bounded(
         fp=_TimedBody(_ROUTER_REFUSAL_BODY),
     )
     record = _record(monkeypatch, caplog, exc)
-    assert settimeouts == [providers._ERROR_BODY_SNIFF_TIMEOUT_SECONDS]
+    assert settimeouts, "the socket timeout was never lowered"
+    # Each chunk gets the time REMAINING against a single deadline, not a fresh
+    # full timeout. That distinction is the defect this pins: a per-recv
+    # timeout re-armed on every chunk is not a bound at all — measured, a
+    # server dribbling 512 bytes every 1.0s took 16.051s under the old
+    # design, TWICE the 8.009s it was introduced to fix, while still
+    # reporting sniff_time_bounded=True.
+    assert all(0 < t <= providers._ERROR_BODY_SNIFF_TIMEOUT_SECONDS for t in settimeouts), (
+        f"every deadline slice must fit inside the budget, got {settimeouts}"
+    )
+    assert settimeouts == sorted(settimeouts, reverse=True), (
+        f"the remaining budget must not grow between chunks, got {settimeouts}"
+    )
     assert settimeouts[0] < 8.0, "the sniff must be shorter than the connection timeout"
     assert record["sniff_time_bounded"] is True
 
@@ -786,3 +825,230 @@ def test_headers_that_raise_on_lookup_report_unknown_not_absent(
     record = _record(monkeypatch, caplog, exc)
     assert record["provider_name_header"] is None, "unknown must not read as absent"
     assert record["body_shape"] == "json", "the BODY is still read and parsed"
+
+
+# --- the deadline semantics, which only a SLOW body can pin -----------------
+
+
+class _SlowBody(io.BytesIO):
+    """A body that yields 512 bytes per call after a real delay.
+
+    In-memory doubles return instantly, which is precisely why the 16-second
+    defect survived every unit test: with no elapsed time, a deadline and a
+    re-armed constant timeout are indistinguishable. This makes time real.
+    """
+
+    delay = 0.25
+    calls: list[str]
+
+    def __init__(self, payload: bytes) -> None:
+        super().__init__(payload)
+        self.calls = []
+
+    def read1(self, size: int | None = -1, /) -> bytes:
+        self.calls.append("read1")
+        time.sleep(self.delay)
+        return super().read1(min(size, 512) if size and size > 0 else 512)
+
+    def read(self, size: int | None = -1, /) -> bytes:  # pragma: no cover - read1 wins
+        self.calls.append("read")
+        time.sleep(self.delay)
+        return super().read(min(size, 512) if size and size > 0 else 512)
+
+
+def _slow_exc(payload: bytes, settimeouts: list[float]) -> tuple[HTTPError, _SlowBody]:
+    class _Sock:
+        def settimeout(self, value: float) -> None:
+            settimeouts.append(value)
+
+    class _Raw:
+        _sock = _Sock()
+
+    class _Inner:
+        raw = _Raw()
+
+    body = _SlowBody(payload)
+    body.fp = _Inner()  # type: ignore[attr-defined]
+    return (
+        HTTPError(
+            url="https://openrouter.ai/api/v1/chat/completions",
+            code=503,
+            msg="upstream said no",
+            hdrs=_headers(Transfer_Encoding="chunked"),
+            fp=body,
+        ),
+        body,
+    )
+
+
+def test_a_slow_body_cannot_overrun_the_total_budget(
+    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    """RED when: the budget is a per-read timeout instead of a total deadline.
+
+    A socket timeout is per-``recv``, NOT cumulative. Measured against a real
+    loopback server dribbling 512 bytes every 1.0s — every gap well under the
+    2s cap, so the cap never fired — the previous design took **16.051s**,
+    twice the 8.009s it was introduced to fix, while reporting
+    ``sniff_time_bounded=True``. Baseline on ``main`` is 0.008-0.013s.
+
+    Here the body is far larger than the 8 KiB bound and each read costs
+    0.25s, so an unbounded loop would take ~4s. The deadline must stop it.
+    """
+    settimeouts: list[float] = []
+    exc, _body = _slow_exc(b'{"error": {"pad": "' + b"x" * 20000 + b'"}}', settimeouts)
+    started = time.monotonic()
+    record = _record(monkeypatch, caplog, exc)
+    elapsed = time.monotonic() - started
+
+    budget = providers._ERROR_BODY_SNIFF_TIMEOUT_SECONDS
+    assert elapsed <= budget + _SlowBody.delay + 0.5, (
+        f"the read overran its budget: {elapsed:.3f}s against a {budget}s deadline"
+    )
+    # A partial body is still evidence, and must not be thrown away.
+    assert record["body_shape"] != "unreadable", "a partial body must be kept"
+    assert record["sniff_time_bounded"] is True
+
+
+def test_each_chunk_gets_the_REMAINING_budget_not_a_fresh_one(
+    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    """RED when: the socket timeout is re-armed at the full budget per chunk.
+
+    That is the refuted design, and it is indistinguishable from a real
+    deadline unless you check that the value SHRINKS. It is what turned a
+    dribbling body into a 16.051s block.
+    """
+    settimeouts: list[float] = []
+    exc, _body = _slow_exc(b'{"error": {"pad": "' + b"x" * 20000 + b'"}}', settimeouts)
+    _record(monkeypatch, caplog, exc)
+
+    budget = providers._ERROR_BODY_SNIFF_TIMEOUT_SECONDS
+    assert len(settimeouts) >= 2, f"expected several chunks, got {settimeouts}"
+    assert settimeouts[-1] < settimeouts[0], (
+        f"the budget was re-armed rather than counted down: {settimeouts}"
+    )
+    assert settimeouts[-1] < budget - _SlowBody.delay, (
+        f"the remaining budget did not shrink by the time actually spent: {settimeouts}"
+    )
+    assert all(t <= budget for t in settimeouts)
+
+
+def test_the_reader_prefers_read1_so_one_call_cannot_overrun(
+    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    """RED when: ``read`` is used instead of ``read1``.
+
+    ``read(n)`` loops internally until it has ``n`` bytes, so a single call can
+    blow the whole deadline no matter what the socket timeout says. ``read1``
+    returns after one ``recv``.
+    """
+    settimeouts: list[float] = []
+    exc, body = _slow_exc(_ROUTER_REFUSAL_BODY, settimeouts)
+    _record(monkeypatch, caplog, exc)
+    assert body.calls, "the body was never read"
+    assert set(body.calls) == {"read1"}, f"expected read1 only, got {sorted(set(body.calls))}"
+
+
+def test_a_non_bytes_read_is_unreadable_not_empty(
+    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    """RED when: a non-bytes chunk is treated as EOF.
+
+    "empty" asserts the upstream sent an empty body. A transport handing back
+    ``None`` is BROKEN, and reporting that as an empty body would put a
+    fabricated finding into the very log sample #105 step 2 depends on.
+    """
+
+    class _NoneBody(io.BytesIO):
+        def read1(self, *args: Any, **kwargs: Any) -> Any:
+            return None
+
+        def read(self, *args: Any, **kwargs: Any) -> Any:
+            return None
+
+    exc = HTTPError(
+        url="https://openrouter.ai/api/v1/chat/completions",
+        code=503,
+        msg="upstream said no",
+        hdrs=_headers(Transfer_Encoding="chunked"),
+        fp=_NoneBody(b"ignored"),
+    )
+    record = _record(monkeypatch, caplog, exc)
+    assert record["body_shape"] == "unreadable"
+    assert record["body_bytes"] == 0
+
+
+def test_a_read_that_fails_midway_keeps_the_bytes_already_in_hand(
+    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    """RED when: a mid-read failure discards the partial body.
+
+    A body that arrives and then dies still answers #105's question — it says
+    whether it is JSON and whether it names a provider. Throwing it away turns
+    a usable record into ``unreadable`` and loses evidence the run already
+    paid for. The distinction only appears when the read RAISES after
+    succeeding at least once, which the deadline-driven tests never do.
+    """
+    engaged = json.dumps(
+        {"error": {"code": 502, "metadata": {"provider_name": "Anthropic"}}}
+    ).encode()
+
+    class _DiesAfterFirstChunk(io.BytesIO):
+        def __init__(self, payload: bytes) -> None:
+            super().__init__(payload)
+            self.reads = 0
+
+        def read1(self, size: int | None = -1, /) -> bytes:
+            self.reads += 1
+            if self.reads > 1:
+                raise OSError("connection reset mid-body")
+            return super().read1(size)
+
+    exc = HTTPError(
+        url="https://openrouter.ai/api/v1/chat/completions",
+        code=502,
+        msg="upstream said no",
+        hdrs=_headers(Transfer_Encoding="chunked"),
+        fp=_DiesAfterFirstChunk(engaged),
+    )
+    record = _record(monkeypatch, caplog, exc)
+    assert record["body_shape"] == "json", "the bytes already read must be parsed"
+    assert record["provider_name_present"] is True, "the salvaged body still names a provider"
+    assert record["body_bytes"] == len(engaged)
+
+
+def test_a_non_bytes_chunk_after_real_bytes_keeps_what_arrived(
+    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    """RED when: a broken chunk mid-stream discards the bytes already read.
+
+    The sibling of ``test_a_read_that_fails_midway_keeps_the_bytes_already_in_hand``,
+    for a transport that returns a non-bytes value instead of raising. With
+    nothing in hand that is ``unreadable``; with a partial body it must be
+    kept and parsed, exactly as a raised error is.
+    """
+    engaged = json.dumps(
+        {"error": {"code": 502, "metadata": {"provider_name": "Anthropic"}}}
+    ).encode()
+
+    class _BytesThenNone(io.BytesIO):
+        def __init__(self, payload: bytes) -> None:
+            super().__init__(payload)
+            self.reads = 0
+
+        def read1(self, size: int | None = -1, /) -> Any:
+            self.reads += 1
+            return None if self.reads > 1 else super().read1(size)
+
+    exc = HTTPError(
+        url="https://openrouter.ai/api/v1/chat/completions",
+        code=502,
+        msg="upstream said no",
+        hdrs=_headers(Transfer_Encoding="chunked"),
+        fp=_BytesThenNone(engaged),
+    )
+    record = _record(monkeypatch, caplog, exc)
+    assert record["body_shape"] == "json", "the bytes already read must be parsed"
+    assert record["provider_name_present"] is True
+    assert record["body_bytes"] == len(engaged)

@@ -133,7 +133,25 @@ tri-state flags. An error body can echo the user's query text back verbatim.
 This follows the rule `_log_post_dispatch_failure` already records for
 exception messages, which can carry key material.
 
-**5. The read is bounded in TIME, not gated on a header.** `exc.read()` is a
+**5. The read is bounded by a TOTAL DEADLINE, not by a socket timeout.**
+
+This took three attempts, and the two failures are the useful part:
+
+| Attempt | Withheld body | Dribbling body (512B/1.0s) | Real OpenRouter error |
+|---|---|---|---|
+| unconditional read | 8.009s | 8.009s | read |
+| gate on `Content-Length` | 0.010s | 0.010s | **never read — collects nothing** |
+| lower the socket timeout once | 2.013s | **16.051s** — worse than attempt 1 | read |
+| **total deadline + `read1`** | **2.010s** | **2.002s** | **read** |
+
+A socket timeout is per-`recv`, not cumulative: `read(n)` loops until it has
+`n` bytes, so a slow dribble never trips the cap. `_read_within_budget` sets
+the socket timeout to the time REMAINING against one deadline before each
+chunk, prefers `read1` (which returns after a single `recv` instead of looping),
+and keeps a partial body rather than throwing the evidence away on timeout.
+Baseline on `main` for comparison: **0.008–0.013s** over 5 reps.
+
+**5a. The old decision text.** `exc.read()` is a
 socket read carrying the connection's `openrouter_timeout_seconds` (8.0s).
 Before sniffing, the socket timeout is lowered to
 `_ERROR_BODY_SNIFF_TIMEOUT_SECONDS = 2.0` — best-effort, because reaching the
@@ -211,9 +229,11 @@ one bounded read on a path that has already failed.
   Measured cost against `main` on the shapes that DO get read: 0.020s → 0.014s,
   i.e. no measurable change.
 - **Known gap, stated rather than implied:** `_billing_evidence_shape` consumes
-  the body when it reads one. Nothing downstream reads it today (measured: 0
-  accesses), but a future reader of `exc` on this path will find it empty. On
-  the `no_length` and `too_large` paths the body is untouched.
+  the body. Nothing downstream reads it today (measured: 0 accesses), but a
+  future reader of `exc` on this path will find it empty, or — past the byte
+  bound — missing its first 8193 bytes. (8193, not 8192: the reader asks for
+  one byte past the bound so an over-large body is detectable, and that extra
+  byte is dropped from the RETURNED value but is already gone from the socket.)
 - **Also stated:** the load-bearing schema claim — that OpenRouter names the
   engaged provider at `error.metadata.provider_name` — is **ASSUMED, not
   measured**. This repo holds no captured OpenRouter error body
@@ -260,9 +280,10 @@ the defect that would have made the whole change worthless in production.
 | TDD (write the test first) | the feature itself; 21 tests green |
 | mutation round 1 | 2 vacuous assertions of my own: a byte bound asserted downstream of the read, and a truncation check a cut-off body satisfied anyway |
 | prose review | a leak guard asserting only on `caplog.text`, which renders no `extra` fields — `str(exc.reason)` leaked into the production JSON with all 22 tests green |
-| correctness review | **a real 1144x regression** (8.009s block on a withheld body); `billing_class` unasserted on the HTTP branch; the leak test reaching only 1 of 5 branches; `len()` outside the defensive `try`; `provider_name_present` conflating two different findings |
+| correctness review | **a real timing regression** (8.009s block on a withheld body, against 0.008-0.013s on `main`); `billing_class` unasserted on the HTTP branch; the leak test reaching only 1 of 5 branches; `len()` outside the defensive `try`; `provider_name_present` conflating two different findings |
 | mutation round 2 | the byte limit asserted against its own constant (rule 7a), so raising it survived |
-| **one free call to the LIVE API** | **the `Content-Length` gate — added to fix the 1144x regression — would have read NOTHING in production, because OpenRouter answers errors chunked.** Also handed over `X-Provider-Name`, a second signal nobody knew existed |
+| **prose review, round 2** | **the time bound did not bound anything.** A socket timeout is per-`recv`, not cumulative, so a server dribbling 512 bytes every 1.0s — every gap under the 2s cap — took **16.051s**, TWICE the 8.009s it was introduced to fix, while reporting `sniff_time_bounded=True`. Also: an off-by-one (8192 vs 8193) and a `1144x` ratio matching no baseline in the repo |
+| **one free call to the LIVE API** | **the `Content-Length` gate — added to fix that regression — would have read NOTHING in production, because OpenRouter answers errors chunked.** Also handed over `X-Provider-Name`, a second signal nobody knew existed |
 
 Every earlier instrument was green on the design the last one destroyed.
 
