@@ -669,7 +669,7 @@ class DebateOrchestrationService:
 
 
 class AlignmentState(StrEnum):
-    """The four mutually exclusive alignment cases a model can land in.
+    """The five mutually exclusive alignment cases a model can land in.
 
     Single source of truth shared by the classifier and the stance copy: the
     ``final_aligned`` derivation in
@@ -678,8 +678,24 @@ class AlignmentState(StrEnum):
     (via :attr:`ModelAlignment.state`) instead of duplicating parallel
     if-chains. Every state is an INFERENCE from opening-vs-final, never an
     observed mid-debate action.
+
+    This enum is INTERNAL. It is not a field on :class:`PositionMovement` and
+    never crosses the API boundary — the served payload carries only the
+    narrated strings — so adding a member costs no OpenAPI or contract change.
     """
 
+    #: #247: no model was ever sent the question for this slot, so its text is
+    #: this product's own (``providers.NOT_INVOKED_PATHS``). It is evidence of
+    #: neither agreement nor disagreement.
+    #:
+    #: A SEPARATE state from ``NO_ANSWER`` on purpose, and the difference is not
+    #: cosmetic. Both mean "nothing here to count", but a not-invoked slot DID
+    #: produce text and the user can read it on screen. Routing it to
+    #: ``NO_ANSWER`` narrates "No usable answer was returned" over a visible
+    #: answer, and routing it to ``HELD_MINORITY`` narrates "Opening clustered as
+    #: a minority reading" about a stance no model took. Both were measured on
+    #: 2026-08-04; each replaces #247's lie with a smaller one.
+    NOT_INVOKED = "not_invoked"
     #: Model returned no usable answer; there is no stance to place.
     NO_ANSWER = "no_answer"
     #: Opening clustered with the majority, and it is counted inside the
@@ -766,17 +782,40 @@ class ModelAlignment:
     opening_majority: bool
     final_aligned: bool
     revised: bool
+    #: #247: was the question actually sent to a model for this slot? ``False``
+    #: for a simulated slot, whose text this product wrote. Defaulted ``True`` so
+    #: that the many fixtures constructing a genuinely-live alignment need no
+    #: change — the default is the safe direction ONLY because the sole producer
+    #: (:func:`product_app.synthesis_consensus.classify_model_alignment`) always
+    #: passes it explicitly, which
+    #: ``test_classify_model_alignment_always_sets_invoked_explicitly`` pins.
+    invoked: bool = True
 
     @property
     def state(self) -> AlignmentState:
         """Map the alignment booleans onto the single :class:`AlignmentState`.
 
-        This is the ONLY place the boolean triple is collapsed into a case;
+        This is the ONLY place the boolean tuple is collapsed into a case;
         the stance copy table then keys off the state, so the narration and
         the honesty of the revision note derive from one source of truth.
+
+        ``completed`` is tested before ``invoked``, and the order is load-bearing
+        for the one combination where both are ``False``. "No usable answer was
+        returned" is the more informative of the two true sentences when there is
+        no text at all; ``NOT_INVOKED``'s copy says "this answer", which reads
+        oddly about an answer that does not exist. (That combination needs a
+        FAILED slot on a simulated path; ``providers._failed_answer`` stamps
+        ``OPENROUTER_SEARCH`` on every failure, so it is not reachable today —
+        the ordering is defensive, not a live path.)
+
+        An ordinary simulated slot is ``completed=True`` and falls through to
+        ``invoked``, which is what routes it to ``NOT_INVOKED`` instead of
+        ``HELD_MINORITY``.
         """
         if not self.completed:
             return AlignmentState.NO_ANSWER
+        if not self.invoked:
+            return AlignmentState.NOT_INVOKED
         if self.revised:
             return AlignmentState.MOVED_TO_CONSENSUS
         if self.final_aligned:
@@ -934,6 +973,9 @@ class _StanceCopy:
 #: the final answer was produced — so it is keyed by state alone and shared by
 #: both provenances rather than written out twice.
 _OPENING_COPY: dict[AlignmentState, str] = {
+    AlignmentState.NOT_INVOKED: (
+        "This answer was not produced by a model, so there is no round-1 stance to place."
+    ),
     AlignmentState.NO_ANSWER: (
         "No usable answer was returned, so there is no round-1 stance to place."
     ),
@@ -948,6 +990,30 @@ _OPENING_COPY: dict[AlignmentState, str] = {
 _NO_ANSWER_COPY = _StanceCopy(
     after_round_1=_OPENING_COPY[AlignmentState.NO_ANSWER],
     final="No final stance; this model's answer was unavailable.",
+    revised=False,
+    revision_note=None,
+)
+
+#: #247. A slot nobody asked has no position to place and no position to move,
+#: and this copy claims neither. It says the ONE thing that is observed — the
+#: text did not come from a model — and then states the consequence the verdict
+#: ring acts on, so the row and the "N of 4 aligned" number explain each other
+#: instead of contradicting.
+#:
+#: The same row under both provenances: it asserts nothing about a final answer,
+#: so it cannot be made false by how that answer was produced. Written once
+#: rather than as two identical literals that could drift apart, matching
+#: ``_NO_ANSWER_COPY`` above.
+#:
+#: ``revised=False`` is load-bearing, not incidental. ``revised`` drives the
+#: "✓ Revised" chip and the UI's ``revisedCount``; a slot that was never asked
+#: can never have changed its mind.
+_NOT_INVOKED_COPY = _StanceCopy(
+    after_round_1=_OPENING_COPY[AlignmentState.NOT_INVOKED],
+    final=(
+        "This answer was not produced by a model, so it is counted as neither "
+        "agreement nor disagreement."
+    ),
     revised=False,
     revision_note=None,
 )
@@ -977,7 +1043,8 @@ _NO_ANSWER_COPY = _StanceCopy(
 #: :class:`FinalAnswerProvenance` for the mixed (``"fallback"``) run on which a
 #: sentence about the synthesis's authorship would itself be false.
 #:
-#: All eight rows exist. ``(NOT_MODEL_AUTHORED, MOVED_TO_CONSENSUS)`` is
+#: All ten rows exist (eight, plus the two #247 ``NOT_INVOKED`` rows).
+#: ``(NOT_MODEL_AUTHORED, MOVED_TO_CONSENSUS)`` is
 #: reachable — the no-synthesis strong panel reaches it, and
 #: ``test_a_revised_row_still_carries_a_note_when_no_model_wrote_the_final_answer``
 #: exercises it. What is unreachable, measured 2026-07-30 by enumerating the
@@ -990,6 +1057,8 @@ _NO_ANSWER_COPY = _StanceCopy(
 #: ``test_stance_copy_covers_every_provenance_and_alignment_state`` pins the
 #: count, so the lookup cannot raise ``KeyError`` in a served path.
 _STANCE_COPY: dict[tuple[FinalAnswerProvenance, AlignmentState], _StanceCopy] = {
+    (FinalAnswerProvenance.MODEL_AUTHORED, AlignmentState.NOT_INVOKED): _NOT_INVOKED_COPY,
+    (FinalAnswerProvenance.NOT_MODEL_AUTHORED, AlignmentState.NOT_INVOKED): _NOT_INVOKED_COPY,
     (FinalAnswerProvenance.MODEL_AUTHORED, AlignmentState.NO_ANSWER): _NO_ANSWER_COPY,
     (FinalAnswerProvenance.NOT_MODEL_AUTHORED, AlignmentState.NO_ANSWER): _NO_ANSWER_COPY,
     # --- a model wrote the final answer: the narration may describe it -------

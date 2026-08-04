@@ -83,6 +83,38 @@ class ProviderPath(StrEnum):
     FALLBACK_SEARCH = "fallback_search"
 
 
+#: The provider paths on which NO model was ever sent the question. A COMPLETED
+#: answer on one of these carries ``_local_simulation_text`` — this product's own
+#: words, not a model's.
+#:
+#: BOTH members belong here, and the second is easy to miss. #247 was filed
+#: naming ``LOCAL_SIMULATION`` alone; measured 2026-08-04, a fallback-forced demo
+#: run produces four ``FALLBACK_SEARCH`` slots carrying the same template and
+#: rendered the same "4 of 4 models aligned". A ``LOCAL_SIMULATION``-only set
+#: fixes half the defect.
+#:
+#: Why the PATH is a sound discriminator, when the branch at line ~546 appears to
+#: let ``FALLBACK_SEARCH`` carry live text: that arm is dead. The
+#: ``OPENROUTER_SEARCH`` branch above returns whenever
+#: ``live_response is not None and live_response.answer_text``, and
+#: ``live_response`` is not reassigned in between, so the condition is provably
+#: ``False`` there. Proved by execution as well as by reading: replacing that arm
+#: with ``raise AssertionError`` and running the suite gave 2279 passed, 0 failed
+#: — it never fired.
+#:
+#: ``query_runs`` derives ``demo_mode`` and ``local_count`` from this same pair.
+#: It is expressed ONCE, here, because two matchers built from one constant
+#: drift.
+NOT_INVOKED_PATHS = frozenset({ProviderPath.LOCAL_SIMULATION, ProviderPath.FALLBACK_SEARCH})
+
+#: The complement. Written out rather than derived so that
+#: ``test_every_provider_path_is_classified_as_invoked_or_not`` can prove the two
+#: sets PARTITION :class:`ProviderPath`. A new enum member added to neither set
+#: would otherwise default silently to "a model was invoked" and re-open #247 on
+#: the new path.
+INVOKED_PATHS = frozenset({ProviderPath.OPENROUTER_SEARCH})
+
+
 class InitialAnswerStatus(StrEnum):
     COMPLETED = "completed"
     FAILED = "failed"
@@ -289,6 +321,32 @@ class InitialModelAnswer(BaseModel):
     #: "(shortened)" instead of presenting a mid-sentence stop as the model's
     #: complete view. It is INERT until that surface exists (WP-F).
     shortened: bool = False
+
+
+def model_was_invoked(answer: InitialModelAnswer) -> bool:
+    """Was this answer's text produced by actually sending the question to a
+    model?
+
+    ``False`` for the two simulated paths (:data:`NOT_INVOKED_PATHS`), whose
+    text this product wrote. The distinction matters wherever an answer is read
+    as EVIDENCE — #247: four simulated slots differ only by the model id, score
+    pairwise 4-gram Jaccard 0.500-0.579 against a 0.1 threshold, and were
+    reported as "4 of 4 models aligned" on a run that asked nobody.
+
+    Deliberately keyed on ``provider_path`` and not on matching the template
+    text: a second matcher built from the same constant drifts the moment the
+    template is reworded, and drifts silently. Deliberately not a new field on
+    :class:`InitialModelAnswer` either — that model crosses the API boundary, so
+    a field costs an OpenAPI change and a contract change to express what the
+    path already determines.
+
+    Says NOTHING about whether the slot produced text. A simulated slot did
+    produce text and it is shown on screen; callers that need "did this slot
+    come up empty?" must still test ``status`` / ``is_visible``. Conflating the
+    two makes the stance table narrate "No usable answer was returned" over an
+    answer the user can read.
+    """
+    return answer.provider_path not in NOT_INVOKED_PATHS
 
 
 @dataclass(frozen=True)
