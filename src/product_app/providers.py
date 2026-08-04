@@ -1386,12 +1386,39 @@ class ProviderExecutionService:
         )
 
     def _local_simulation_sources(self, *, model_slot: ModelSlot) -> list[SourceReference]:
+        """The demo placeholder "source" for a slot no model was asked.
+
+        ``is_fallback=True``, and that single flag is the whole fix for the
+        second half of #247. It was ``False``, which is what made a citation this
+        product invented count as a PRIMARY source: on a keyless run all four
+        slots carried one, so ``citation_coverage`` reported **4 of 4, 100%**,
+        and the Source-support section read "4 of 4 responding models returned
+        visible source references" — about four answers this product wrote
+        itself, citing ``example.test/local-demo/N``, an IANA-reserved domain
+        that resolves to nothing.
+
+        The flag means "not the model's own citation", which is exactly what this
+        is, so no new concept is needed. Both consumers already key on it —
+        ``synthesis._build_source_support`` and the aggregated
+        ``calculate_citation_coverage`` numerator both test
+        ``any(not source.is_fallback ...)`` — so correcting it here corrects the
+        metric and the prose at once rather than in two places that could drift.
+
+        #171 diagnosed this exact mechanism in ``produce_initial_answer`` ("its
+        ``is_fallback=False`` demo source is what makes it count as PRIMARY") and
+        closed the PER-MODEL route by making a live failure a FAILED slot. The
+        WHOLE-RUN demo route it named was left open; this closes it.
+
+        The source is still RETURNED, not dropped: the slot really does show the
+        user a reference, and hiding it would be its own dishonesty. It simply no
+        longer counts toward a coverage figure that claims model-cited evidence.
+        """
         return [
             SourceReference(
                 title=f"Local demo evidence for slot {model_slot.slot_number}",
                 url=f"{LOCAL_SIMULATION_URL_PREFIX}{model_slot.slot_number}",
                 provider=ProviderPath.LOCAL_SIMULATION,
-                is_fallback=False,
+                is_fallback=True,
             ),
         ]
 

@@ -59,21 +59,38 @@ def test_synthesis_stub_returns_required_sections_and_quality_checks() -> None:
     synthesis = result.final_synthesis
     assert synthesis.status is SynthesisStatus.COMPLETED
     assert synthesis.consensus
-    assert "disagreement" in synthesis.disagreement
-    assert "visible source references" in synthesis.source_support
+    # #247: both of these were bare substrings that STAYED GREEN while the
+    # sentences under them inverted in meaning — "The disagreement is preserved
+    # as the dominant signal" became "there is no disagreement to preserve", and
+    # "4 of 4 responding models returned visible source references" became "No
+    # model returned visible source references". The substring matches both
+    # halves of each pair. Asserted on content now, which is what rule 8 asks
+    # for and what a reader would assume these lines already did.
+    assert "No model was asked this question" in synthesis.disagreement
+    assert "Models do not agree" not in synthesis.disagreement
+    assert synthesis.source_support == "No model returned visible source references for this query."
+
     assert synthesis.uncertainty
     assert "decision support only" in synthesis.recommendation
     assert synthesis.synthesis_mode == "simulated"
     # WP-C / F-03: coverage is the share of ANSWERS carrying a primary source.
-    # Four stub answers, four primary sources -> 4/4, target met. The old math
-    # divided this same boolean numerator by a chars-per-claim denominator and
-    # reported 0.50, so every run was labelled provisional.
-    # Length invariance is pinned in tests/unit/test_citation_coverage_semantics.py.
+    # #247: these asserted 4/4 and target-met, on the reasoning quoted from the
+    # comment they replace — that "all four local-simulation answers carry a
+    # primary source". They do not. Each carries ``example.test/local-demo/N``,
+    # a placeholder this product wrote on an IANA-reserved domain, for a slot no
+    # model was asked. That is what made a keyless run claim 100% source coverage
+    # with every quarter invented.
+    #
+    # ``answer_count`` stays 4 — the slots did produce text. The WP-C / F-03
+    # redefinition this comment used to defend is untouched: coverage is still
+    # the share of ANSWERS carrying a primary source, and length still does not
+    # move it (pinned in tests/unit/test_citation_coverage_semantics.py). What
+    # changed is only which sources count as primary.
     assert synthesis.citation_coverage.answer_count == 4
-    assert synthesis.citation_coverage.sourced_answer_count == 4
-    assert synthesis.citation_coverage.sourced_answer_ratio == Decimal("1.00")
-    assert synthesis.citation_coverage.target_met
-    assert synthesis.quality_checks.citation_coverage_target_met
+    assert synthesis.citation_coverage.sourced_answer_count == 0
+    assert synthesis.citation_coverage.sourced_answer_ratio == Decimal("0.00")
+    assert not synthesis.citation_coverage.target_met
+    assert not synthesis.quality_checks.citation_coverage_target_met
     # #247: this asserted ``not ...false_consensus_preserved``, on the reasoning
     # (quoted verbatim from the comment it replaces) that "with all four stub
     # answers being identical, the consensus strength is 'strong'". That

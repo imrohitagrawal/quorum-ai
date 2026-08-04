@@ -58,14 +58,28 @@ def test_query_run_response_marks_local_simulation_when_live_execution_is_disabl
         for answer in body["initial_answers"]
     )
     assert all(answer["provider_path"] == "local_simulation" for answer in body["initial_answers"])
+    # The demo reference is still SERVED — the slot really does show the user a
+    # source, and hiding it would be its own dishonesty.
     assert all(answer["sources"] for answer in body["initial_answers"])
-    # WP-C / F-03: one completed answer is one unit of coverage, and each stub
-    # answer carries a primary source — so every answer is 1/1 and meets the
-    # target. Answer LENGTH no longer moves this number.
+    # #247: this asserted ``sourced_answer_count == 1`` and ``target_met``, on the
+    # reasoning quoted from the comment it replaces — that "each stub answer
+    # carries a primary source". It does not. The reference is
+    # ``example.test/local-demo/N``, a placeholder this product wrote on an
+    # IANA-reserved domain that resolves to nothing, for a slot no model was
+    # asked. Counting it as primary is what made a keyless run report 100% source
+    # coverage with every quarter of it invented.
+    #
+    # ``answer_count`` stays 1: the slot did produce text. Only the claim that the
+    # text carries a model's own citation changes.
     assert all(
         answer["citation_coverage"]["answer_count"] == 1
-        and answer["citation_coverage"]["sourced_answer_count"] == 1
-        and answer["citation_coverage"]["target_met"]
+        and answer["citation_coverage"]["sourced_answer_count"] == 0
+        and not answer["citation_coverage"]["target_met"]
+        for answer in body["initial_answers"]
+    )
+    # The one flag both the coverage metric and the Source-support prose read.
+    assert all(
+        all(source["is_fallback"] for source in answer["sources"])
         for answer in body["initial_answers"]
     )
     # Identity, not substring: the two simulation notices share their

@@ -402,6 +402,81 @@ def test_an_all_failed_live_panel_is_never_described_as_simulated() -> None:
     assert synthesis.disagreement.strip()
 
 
+def test_a_source_this_product_invented_is_not_primary_evidence() -> None:
+    """#247, second half: the demo placeholder source must not count toward the
+    figure that claims model-cited evidence.
+
+    A keyless run gave every slot a source at ``example.test/local-demo/N`` —
+    an IANA-reserved domain that resolves to nothing — flagged
+    ``is_fallback=False``, so ``citation_coverage`` read 4 of 4, 100%, and the
+    Source-support section said "4 of 4 responding models returned visible
+    source references". About four answers this product wrote itself.
+
+    Turns red if ``_local_simulation_sources`` goes back to
+    ``is_fallback=False``."""
+    from product_app.synthesis import synthesis_stub_service
+
+    answers = _demo_answers()
+    # The source is still SERVED. Not counting it is not the same as hiding it,
+    # and this assertion is what keeps the fix from becoming the latter.
+    assert all(answer.sources for answer in answers)
+    assert all(
+        source.url.startswith("https://example.test/local-demo/")
+        for answer in answers
+        for source in answer.sources
+    )
+    assert all(source.is_fallback for answer in answers for source in answer.sources)
+
+    result = synthesis_stub_service.produce_final_synthesis(
+        account_id=uuid4(),
+        query_run_id=uuid4(),
+        query_text="What is the capital of France?",
+        initial_answers=answers,
+        debate_outputs=[],
+    )
+    synthesis = result.final_synthesis
+    assert synthesis is not None
+    # The slots DID produce text, so they stay in the denominator.
+    assert synthesis.citation_coverage.answer_count == 4
+    assert synthesis.citation_coverage.sourced_answer_count == 0
+    assert not synthesis.citation_coverage.target_met
+    assert synthesis.source_support == (
+        "No model returned visible source references for this query."
+    )
+
+    # Positive partner. Every assertion above is a zero or a negation and would
+    # hold over a metric that counts nothing at all. A genuinely live panel
+    # carrying a real citation must still score 4 of 4 and meet the target.
+    from product_app.providers import SourceReference
+
+    real_source = SourceReference(
+        title="Encyclopaedia entry",
+        url="https://example.org/paris",
+        provider=ProviderPath.OPENROUTER_SEARCH,
+        is_fallback=False,
+    )
+    live = [
+        answer.model_copy(
+            update={
+                "provider_path": ProviderPath.OPENROUTER_SEARCH,
+                "sources": [real_source],
+            }
+        )
+        for answer in answers
+    ]
+    live_result = synthesis_stub_service.produce_final_synthesis(
+        account_id=uuid4(),
+        query_run_id=uuid4(),
+        query_text="What is the capital of France?",
+        initial_answers=live,
+        debate_outputs=[],
+    )
+    assert live_result.final_synthesis is not None
+    assert live_result.final_synthesis.citation_coverage.sourced_answer_count == 4
+    assert live_result.final_synthesis.citation_coverage.target_met
+    assert "4 of 4 responding models" in live_result.final_synthesis.source_support
+
+
 def test_false_consensus_preserved_is_derived_and_not_pinned_true_everywhere() -> None:
     """The positive partner for the four contract-test reverts.
 

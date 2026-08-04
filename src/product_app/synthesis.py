@@ -1013,13 +1013,24 @@ class SynthesisOrchestrationService:
         )
         total = sum(answer.citation_coverage.answer_count for answer in initial_answers)
         if cited == 0:
-            return "No model returned visible source references for this query.", None, None
-        base = (
-            f"{cited} of {total} responding model{'' if total == 1 else 's'} returned visible "
-            "source references. The references come "
-            "from the primary provider; fallback sources are listed separately and are not "
-            "counted toward the source coverage target."
-        )
+            # #247: a ``base`` assignment, NOT the early return this used to be.
+            #
+            # The early return skipped ``_call_synthesis_model`` below, which was
+            # tolerable while ``cited == 0`` was rare — but flagging the demo
+            # placeholder source ``is_fallback=True`` makes EVERY keyless run land
+            # here, so a configured synthesis model silently stopped being called
+            # for this one section. That breaks the same F-06 invariant twice
+            # corrected elsewhere in this change: a call that may have been billed
+            # must still be returned for recording, and ``synthesis_mode`` is
+            # derived from whether the sections came back live.
+            base = "No model returned visible source references for this query."
+        else:
+            base = (
+                f"{cited} of {total} responding model{'' if total == 1 else 's'} returned visible "
+                "source references. The references come "
+                "from the primary provider; fallback sources are listed separately and are not "
+                "counted toward the source coverage target."
+            )
         templated = TEMPLATED_FALLBACK_PREFIX + base
         live = self._call_synthesis_model(
             openrouter_key=openrouter_key,

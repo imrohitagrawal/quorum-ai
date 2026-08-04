@@ -91,13 +91,11 @@ def test_core_query_workflow_with_env_configured_access(
     assert len(result_body["result"]["debate_outputs"]) == 2
     assert result_body["result"]["final_synthesis"]["high_stakes_notice"] is not None
     assert result_body["result"]["final_synthesis"]["quality_checks"] == {
-        # L5d: with the honest heuristic the four ~218-char stub
-        # answers yield 2 material claims each → 8 total. With 4
-        # cited that is 0.50 coverage, below the 0.80 target.
-        # WP-C / F-03: all four local-simulation answers carry a primary source,
-        # so coverage is 4/4 and the target is met. This was False only because
-        # the old ratio divided a per-answer boolean by a chars-per-claim count.
-        "citation_coverage_target_met": True,
+        # #247: was True on the reasoning that "all four local-simulation answers
+        # carry a primary source". Each carries a placeholder this product wrote
+        # on an IANA-reserved domain, for a slot no model was asked, so the
+        # target is not met and saying it is was the invented 100%.
+        "citation_coverage_target_met": False,
         # #247: ``eee93ca`` flipped this from True on the reasoning that
         # identical stub answers mean a strong consensus. They are identical
         # because one template wrote all four. Restored to the original value.
