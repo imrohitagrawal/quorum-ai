@@ -15,6 +15,7 @@ ways, so the record shows what was believed on a date and what replaced it.
 | [ADR-0007](adr/0007-suppress-the-readiness-first-paint-time-bounded.md) | Suppress the readiness banner's first paint, with a time bound | Architecture | Accepted — 2026-08-03 (major-issues batch, issue #117) |
 | [ADR-0008](adr/0008-the-source-support-denominator-goes-in-the-caption.md) | the Source support denominator goes in the caption, and states no exclusion count | Architecture | Accepted — 2026-08-04 (issue #193) |
 | [ADR-0009](adr/0009-mandated-boilerplate-is-not-evidence-of-agreement.md) | sentences the system dictates are stripped before consensus scoring | Architecture | Accepted — 2026-08-04 (issue #180, part 1 of 2) |
+| [ADR-0010](adr/0010-an-answer-nobody-asked-for-is-not-evidence.md) | an answer produced without invoking a model is not evidence of agreement | Architecture | Accepted — 2026-08-04 (issue #247, part 2 of 2; part 1 is ADR-0009) |
 
 **This index was itself stale** until 2026-07-30: ADR-0002 had existed since
 2026-07-19 and was never listed here. A hand-maintained index is a derived fact

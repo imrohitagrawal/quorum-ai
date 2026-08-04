@@ -87,10 +87,12 @@ def test_result_endpoint_projects_model_answers_debate_cost_elapsed_and_synthesi
     assert synthesis["citation_coverage"]["sourced_answer_ratio"] == "1.00"
     assert synthesis["citation_coverage"]["target_met"] is True
     assert synthesis["quality_checks"]["citation_coverage_target_met"] is True
-    # PR-2 Defect 3 fix: stub answers are identical, so
-    # ``consensus_strength`` is "strong" and
-    # ``false_consensus_preserved`` is now correctly False.
-    assert synthesis["quality_checks"]["false_consensus_preserved"] is False
+    # #247: ``eee93ca`` flipped this from ``is True`` on the reasoning that
+    # identical stub answers mean a strong consensus. They are identical because
+    # one template wrote all four, so the original value is restored. This is the
+    # API-boundary assertion — the payload this endpoint serves is where the
+    # "4 of 4 models aligned" headline was rendered from.
+    assert synthesis["quality_checks"]["false_consensus_preserved"] is True
     # Honest-notice contract: with the test env having
     # OPENROUTER_LIVE_EXECUTION_ENABLED=true but the live call
     # failing in CI, each per-slot notice names the live failure

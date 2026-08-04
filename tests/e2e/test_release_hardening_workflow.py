@@ -98,10 +98,12 @@ def test_core_query_workflow_with_env_configured_access(
         # so coverage is 4/4 and the target is met. This was False only because
         # the old ratio divided a per-answer boolean by a chars-per-claim count.
         "citation_coverage_target_met": True,
-        # PR-2 Defect 3 fix: stub answers are identical, so
-        # ``consensus_strength`` is "strong" and
-        # ``false_consensus_preserved`` is correctly False.
-        "false_consensus_preserved": False,
+        # #247: ``eee93ca`` flipped this from True on the reasoning that
+        # identical stub answers mean a strong consensus. They are identical
+        # because one template wrote all four. Restored to the original value.
+        # The whole-dict equality is deliberately kept: it asserts CARDINALITY
+        # over the quality-check surface and would catch a silently added key.
+        "false_consensus_preserved": True,
         "decision_support_framing_present": True,
         "high_stakes_warning_required": True,
     }

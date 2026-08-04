@@ -2519,7 +2519,14 @@
   // DECISION. That is exactly how #128 let the file a user kept disagree with
   // the screen they exported it from, and why ``describePanelShortfall`` above
   // is a single function too.
-  const mayClaimDisagreement = (ctx) => !ctx.isConsensus && !ctx.noLiveAnswers;
+  // A ``function`` declaration, not a ``const`` arrow, so that
+  // ``tests/unit/test_agreement_clause_honesty.py`` can lift it out with the
+  // brace-counting extractor the sibling app.js unit tests already use and drive
+  // it under Node. A pure function with no DOM access, like
+  // ``describePanelShortfall``.
+  function mayClaimDisagreement(ctx) {
+    return !ctx.isConsensus && !ctx.noLiveAnswers;
+  }
 
   function renderResultDegraded(result) {
     const banner = el("result-degraded");
