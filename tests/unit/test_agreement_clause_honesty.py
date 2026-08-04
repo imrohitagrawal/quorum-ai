@@ -85,7 +85,8 @@ def _run(harness: str, cases: list[dict[str, Any]]) -> list[bool]:
     result = subprocess.run(
         ["node", "-e", script], capture_output=True, text=True, timeout=30, check=True
     )
-    return json.loads(result.stdout)
+    decoded: list[bool] = json.loads(result.stdout)
+    return decoded
 
 
 def test_the_clause_is_withheld_only_when_no_answer_was_live(harness: str) -> None:

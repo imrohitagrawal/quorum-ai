@@ -29,6 +29,7 @@ from product_app.providers import (
     INVOKED_PATHS,
     NOT_INVOKED_PATHS,
     InitialAnswerStatus,
+    InitialModelAnswer,
     ProviderPath,
     provider_execution_service,
 )
@@ -52,12 +53,14 @@ FORCE_FALLBACK = "force fallback search"
 
 def _slots() -> list[ModelSlot]:
     return [
-        ModelSlot(slot_number=index + 1, model_id=model_id, display_name=model_id, search=True)
+        ModelSlot(slot_number=index + 1, model_id=model_id, search=True)
         for index, model_id in enumerate(MODEL_IDS)
     ]
 
 
-def _demo_answers(query_text: str = "What is the capital of France?"):
+def _demo_answers(
+    query_text: str = "What is the capital of France?",
+) -> list[InitialModelAnswer]:
     """Four answers from the REAL provider with no key — production's demo shape."""
     return provider_execution_service.produce_initial_answers(
         account_id=uuid4(),
@@ -68,7 +71,7 @@ def _demo_answers(query_text: str = "What is the capital of France?"):
     )
 
 
-def _aligned_count(answers) -> int:
+def _aligned_count(answers: list[InitialModelAnswer]) -> int:
     alignments = classify_model_alignment(
         answers, [], model_authored_final_text=None, final_answer_was_templated=True
     )
@@ -156,9 +159,7 @@ def test_a_genuine_live_panel_with_one_failure_is_unchanged() -> None:
         answer.model_copy(update={"provider_path": ProviderPath.OPENROUTER_SEARCH})
         for answer in simulated
     ]
-    live[3] = live[3].model_copy(
-        update={"answer_text": "", "status": InitialAnswerStatus.FAILED}
-    )
+    live[3] = live[3].model_copy(update={"answer_text": "", "status": InitialAnswerStatus.FAILED})
 
     assert compute_consensus_strength(live, []) == "strong"
     assert _aligned_count(live) == 3
@@ -221,7 +222,7 @@ def test_every_provider_path_is_classified_as_invoked_or_not() -> None:
     for, applied to the one enum where the default is a live falsehood.
 
     Turns red by adding a member to ``ProviderPath`` and to neither set."""
-    assert NOT_INVOKED_PATHS | INVOKED_PATHS == set(ProviderPath), (
+    assert set(ProviderPath) == NOT_INVOKED_PATHS | INVOKED_PATHS, (
         "every ProviderPath must be classified"
     )
     assert not (NOT_INVOKED_PATHS & INVOKED_PATHS), "a path cannot be both"
@@ -286,9 +287,14 @@ def test_classify_model_alignment_always_sets_invoked_explicitly() -> None:
         answer.model_copy(update={"provider_path": ProviderPath.OPENROUTER_SEARCH})
         for answer in simulated
     ]
-    kwargs = {"model_authored_final_text": None, "final_answer_was_templated": True}
-    assert [a.invoked for a in classify_model_alignment(simulated, [], **kwargs)] == [False] * 4
-    assert [a.invoked for a in classify_model_alignment(live, [], **kwargs)] == [True] * 4
+    simulated_rows = classify_model_alignment(
+        simulated, [], model_authored_final_text=None, final_answer_was_templated=True
+    )
+    live_rows = classify_model_alignment(
+        live, [], model_authored_final_text=None, final_answer_was_templated=True
+    )
+    assert [row.invoked for row in simulated_rows] == [False] * 4
+    assert [row.invoked for row in live_rows] == [True] * 4
 
 
 # --------------------------------------------------------------------------
@@ -363,7 +369,7 @@ def test_false_consensus_preserved_is_derived_and_not_pinned_true_everywhere() -
         for answer in simulated
     ]
 
-    def _flag(answers) -> bool:
+    def _flag(answers: list[InitialModelAnswer]) -> bool:
         result = synthesis_stub_service.produce_final_synthesis(
             account_id=uuid4(),
             query_run_id=uuid4(),
