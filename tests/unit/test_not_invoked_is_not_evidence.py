@@ -350,6 +350,14 @@ def test_the_synthesis_prose_does_not_claim_models_were_asked_or_disagreed() -> 
     assert live_result.final_synthesis is not None
     assert "Four models were asked" in live_result.final_synthesis.consensus
     assert "No model was asked this question" not in live_result.final_synthesis.consensus
+    # The DISAGREEMENT section too, and these two lines are not decoration.
+    # Round 2 of review demonstrated that without them the ENTIRE suite passes
+    # against a ``_build_disagreement`` guarded on ``someone_answered`` alone —
+    # an implementation that tells a fully live panel "The answers on this run
+    # came from Quorum's local simulation". That condition has two halves and
+    # only one of them was pinned; the live panel is what pins the other.
+    assert "No model was asked this question" not in live_result.final_synthesis.disagreement
+    assert "local simulation" not in live_result.final_synthesis.disagreement
 
 
 def test_an_all_failed_live_panel_is_never_described_as_simulated() -> None:

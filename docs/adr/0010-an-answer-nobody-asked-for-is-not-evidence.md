@@ -80,8 +80,15 @@ fired.
 
 No line numbers are cited for the shipped design, and no pass-count. Both go
 stale silently: this ADR's first draft named lines 445/546 (correct on `9981bab`,
-wrong at HEAD once the change added 58 lines above them) and quoted "2279
-passed", which was the pre-change total. Adversarial review caught all three.
+wrong at HEAD once the change added lines above them) and quoted "2279 passed",
+which was the pre-change total. Adversarial review caught both.
+
+It then caught a third, inside this very paragraph: the sentence above said "58
+lines", and `git diff origin/main...HEAD --numstat -- src/product_app/providers.py`
+reports **69**. A round of review dedicated to removing four stale numbers
+introduced a fifth, in the paragraph whose subject is that numbers go stale. The
+count is now simply not quoted — which is the actual lesson, and the reason the
+rest of this ADR names commands rather than figures wherever it can.
 
 `query_runs` derives `demo_mode` and `local_count` from this same pair of paths
 and now READS `NOT_INVOKED_PATHS` to do so — it spelled the pair out inline twice
