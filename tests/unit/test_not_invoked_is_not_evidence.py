@@ -7,7 +7,7 @@ pairwise 4-gram Jaccard 0.500-0.579 against a 0.1 threshold, and the product
 reported **"4 of 4 models aligned"** on a run that asked nobody.
 
 These tests drive the REAL ``provider_execution_service`` rather than
-hand-building ``InitialModelAnswer`` fixtures. That is deliberate. The nine
+hand-building ``InitialModelAnswer`` fixtures. That is deliberate. The ten
 fixture corrections this change also required existed because
 ``tests/unit/test_agreement_positions.py`` built ``LOCAL_SIMULATION`` slots
 carrying real, distinct, meaningful text — a combination ``providers.py`` cannot
@@ -350,6 +350,48 @@ def test_the_synthesis_prose_does_not_claim_models_were_asked_or_disagreed() -> 
     assert live_result.final_synthesis is not None
     assert "Four models were asked" in live_result.final_synthesis.consensus
     assert "No model was asked this question" not in live_result.final_synthesis.consensus
+
+
+def test_an_all_failed_live_panel_is_never_described_as_simulated() -> None:
+    """ "Nothing counts as evidence" is true of a SIMULATED panel and of one where
+    every slot FAILED. Only the first was simulated.
+
+    Found by adversarial review: the disagreement section told an all-FAILED live
+    panel "The answers on this run came from Quorum's local simulation" — an
+    invented provenance, contradicting the consensus section's "No model returned
+    a usable response" in the same payload.
+
+    Turns red if ``_build_disagreement`` drops its ``someone_answered`` condition
+    and keys on ``counts_as_evidence`` alone."""
+    from product_app.synthesis import synthesis_stub_service
+
+    failed = [
+        answer.model_copy(
+            update={
+                "answer_text": "",
+                "status": InitialAnswerStatus.FAILED,
+                "provider_path": ProviderPath.OPENROUTER_SEARCH,
+            }
+        )
+        for answer in _demo_answers()
+    ]
+    result = synthesis_stub_service.produce_final_synthesis(
+        account_id=uuid4(),
+        query_run_id=uuid4(),
+        query_text="What is the capital of France?",
+        initial_answers=failed,
+        debate_outputs=[],
+    )
+    synthesis = result.final_synthesis
+    assert synthesis is not None
+
+    for section in (synthesis.consensus, synthesis.disagreement):
+        assert "local simulation" not in section
+        assert "No model was asked this question" not in section
+    # Positive partner: the sections must still SAY something about the failure,
+    # or the two negative assertions above would hold over empty strings.
+    assert "No model returned a usable response" in synthesis.consensus
+    assert synthesis.disagreement.strip()
 
 
 def test_false_consensus_preserved_is_derived_and_not_pinned_true_everywhere() -> None:

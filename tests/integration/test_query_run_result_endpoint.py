@@ -75,7 +75,14 @@ def test_result_endpoint_projects_model_answers_debate_cost_elapsed_and_synthesi
     )
     synthesis = body["result"]["final_synthesis"]
     assert synthesis["consensus"]
-    assert "disagreement" in synthesis["disagreement"]
+    # #247: this read ``assert "disagreement" in synthesis["disagreement"]``, and
+    # it stayed green through a change that INVERTED the sentence's meaning —
+    # "The disagreement is preserved as the dominant signal" became "there is no
+    # disagreement to preserve", and the bare substring matches both. Found by
+    # adversarial review. The section is now asserted for what this run actually
+    # is: a demo run that asked nobody, which has no disagreement to report.
+    assert "No model was asked this question" in synthesis["disagreement"]
+    assert "Models do not agree" not in synthesis["disagreement"]
     assert "visible source references" in synthesis["source_support"]
     assert "decision support only" in synthesis["recommendation"]
     # WP-C / F-03: coverage is the share of ANSWERS carrying a primary source.

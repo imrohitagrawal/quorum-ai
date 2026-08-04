@@ -70,16 +70,23 @@ a fix**, and would have looked complete.
 `providers.model_was_invoked(answer)`.
 
 The path is sound because the only arm that could put live text under a non-live
-path is dead code. Statically: the `OPENROUTER_SEARCH` branch at line 445 returns
-whenever `live_response is not None and live_response.answer_text`, and
-`live_response` is not reassigned before line 546, so that condition is provably
+path is dead code. Statically: the `OPENROUTER_SEARCH` branch returns whenever
+`live_response is not None and live_response.answer_text`, and `live_response` is
+not reassigned before the `use_fallback` branch, so that condition is provably
 `False` there. Proved by execution as well, not left on the strength of the
 comment that asserts it: replacing the arm with `raise AssertionError` and
-running the whole suite gave **2279 passed, 0 failed** — it never fired.
+running the whole suite left the pass/fail counts **byte-identical** — it never
+fired.
 
-`query_runs` already derives `demo_mode` and `local_count` from this same pair
-of paths, so this is the definition of "local" the product already ships, not a
-second one.
+No line numbers are cited for the shipped design, and no pass-count. Both go
+stale silently: this ADR's first draft named lines 445/546 (correct on `9981bab`,
+wrong at HEAD once the change added 58 lines above them) and quoted "2279
+passed", which was the pre-change total. Adversarial review caught all three.
+
+`query_runs` derives `demo_mode` and `local_count` from this same pair of paths
+and now READS `NOT_INVOKED_PATHS` to do so — it spelled the pair out inline twice
+until this change, so the constant is genuinely the single definition rather than
+a third copy beside two literals.
 
 ### 2. Exclusion, not a weight
 
@@ -88,6 +95,13 @@ A not-invoked answer is removed from the scored population by
 `compute_consensus_strength` and `classify_model_alignment` — so the panel
 strength and the per-model ring are built from one population and cannot drift.
 This follows ADR-0009's structure exactly, and for the same reason.
+
+Two further callers were added once it became clear the templated PROSE was built
+from a separate, uncorrected population: `synthesis._build_consensus` and
+`synthesis._build_disagreement`. Excluding the answers from the score alone left
+the consensus section reading "Four models were asked the same question; 4
+returned a usable response but did not agree" — a smaller invention about the
+same panel nobody asked. Four callers, one predicate.
 
 There is no down-weighting because there is no measurement that would justify a
 weight, and this repo's rules forbid a guardrail number chosen by guess. A slot
@@ -150,8 +164,10 @@ they exported it from.
   fallback-to-simulation path — a funded key that fails mid-run — still lying,
   which is the reachable production case rather than the demo one.
 * **Match the template text instead of the path.** Builds a second matcher from
-  the same constant. ADR-0009 rejected this for the caveat for the same reason:
-  two matchers built from one constant drift, and drift silently.
+  the same constant. ADR-0009 decided the same way for the caveat, for the same
+  reason — "Reuse, do not reimplement… Two matchers built from one constant
+  drift". (That is a Decision bullet there, not an entry in its rejected-
+  alternatives list.)
 * **A new field on `InitialModelAnswer`.** That model crosses the API boundary,
   so it costs an OpenAPI change, a Schemathesis contract change and a payload
   migration to express what `provider_path` already determines. Reconsider only
@@ -163,16 +179,28 @@ they exported it from.
 * A keyless or fallback demo run is visibly less impressive: `divided`, 0 of 4,
   and four "not produced by a model" stance rows. That is the point.
 * Genuine agreement detection is unchanged. Measured across the input-class
-  table, every all-live class (4 aligned, 3 aligned + 1 failed, 3 aligned + 1
-  simulated, all-unrelated, polar-split) produced an identical strength and an
-  identical count before and after.
+  table, every class containing no simulated answer — 4 aligned, 3 aligned + 1
+  failed, all-unrelated, polar-split — produced an identical strength and an
+  identical count before and after. "3 aligned + 1 simulated" is also unchanged
+  at strong / 3 of 4, and is listed separately because it is not an all-live
+  class.
 * `NOT_INVOKED_PATHS` and `INVOKED_PATHS` must PARTITION `ProviderPath`. A new
   enum member added to neither would default silently to "a model was invoked"
   and re-open this issue on the new path, so
   `test_every_provider_path_is_classified_as_invoked_or_not` asserts the
   partition rather than trusting review to notice.
-* Four tests that asserted the old behaviour as correct are deliberately
+* **Ten** tests were fixture corrections with the assertions untouched — the
+  fixture built `LOCAL_SIMULATION` slots carrying real, distinct, meaningful
+  text, a combination `providers.py` cannot produce. Correcting one default
+  fixed all ten.
+* **Five** tests asserted the old behaviour as correct and are deliberately
   changed, each argued individually, each with a new test pinning the honest
-  behaviour. Nine more were fixture corrections with the assertions untouched —
-  the fixture built `LOCAL_SIMULATION` slots carrying real, distinct, meaningful
-  text, a combination `providers.py` cannot produce.
+  behaviour. Four of them had been flipped from the opposite assertion by one
+  commit (`eee93ca`), so those four are reverts rather than weakenings; the
+  fifth pinned `"Four models were asked"` on a keyless run where zero models
+  were asked.
+* One test was a deliberate cardinality change (8 → 10 stance-copy rows).
+* The counts above are 10 + 5 + 1 = 16, not the 15 quoted mid-review: "15" was
+  measured at the source-only commit, before the templated prose was corrected.
+  Stated here because a blast-radius number that stops being re-derived is
+  exactly how the stale "nine" got inherited from the issue in the first place.

@@ -93,18 +93,29 @@ class ProviderPath(StrEnum):
 #: rendered the same "4 of 4 models aligned". A ``LOCAL_SIMULATION``-only set
 #: fixes half the defect.
 #:
-#: Why the PATH is a sound discriminator, when the branch at line ~546 appears to
-#: let ``FALLBACK_SEARCH`` carry live text: that arm is dead. The
-#: ``OPENROUTER_SEARCH`` branch above returns whenever
+#: Why the PATH is a sound discriminator, when the ``use_fallback`` branch of
+#: ``produce_initial_answer`` appears to let ``FALLBACK_SEARCH`` carry live text:
+#: that arm is dead. The ``OPENROUTER_SEARCH`` branch above it returns whenever
 #: ``live_response is not None and live_response.answer_text``, and
 #: ``live_response`` is not reassigned in between, so the condition is provably
 #: ``False`` there. Proved by execution as well as by reading: replacing that arm
-#: with ``raise AssertionError`` and running the suite gave 2279 passed, 0 failed
-#: — it never fired.
+#: with ``raise AssertionError`` and running the whole suite left it green — the
+#: assertion never fired.
 #:
-#: ``query_runs`` derives ``demo_mode`` and ``local_count`` from this same pair.
-#: It is expressed ONCE, here, because two matchers built from one constant
-#: drift.
+#: No pass-count is quoted, deliberately. The first draft said "2279 passed, 0
+#: failed", which was the total on ``9981bab`` BEFORE this change added its own
+#: tests; re-running the same experiment on HEAD gives a different total, so a
+#: reviewer who checked the figure found it irreproducible and was right to. The
+#: claim that matters reproduces on any tree: the assertion never fires.
+#:
+#: Line numbers are deliberately not cited either — they shift with every edit to
+#: the file and go stale silently.
+#:
+#: ``query_runs`` derives ``demo_mode`` and ``local_count`` from this same pair
+#: and now READS this constant to do it. It spelled the pair out inline twice
+#: until #247; adversarial review caught this comment claiming "expressed ONCE"
+#: while a second and third copy sat in ``query_runs``. One definition, because
+#: two matchers built from one constant drift.
 NOT_INVOKED_PATHS = frozenset({ProviderPath.LOCAL_SIMULATION, ProviderPath.FALLBACK_SEARCH})
 
 #: The complement. Written out rather than derived so that

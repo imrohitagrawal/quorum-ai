@@ -847,7 +847,9 @@ class SynthesisOrchestrationService:
             # this fix returned here and thereby skipped
             # ``_call_synthesis_model`` below — which silently broke the F-06
             # invariant that a possibly-billed call is always returned for
-            # recording, and changed ``synthesis_mode``. Four tests caught it.
+            # recording, and changed ``synthesis_mode``. Three tests in
+            # ``test_synthesis.py`` / ``test_synthesis_section_storage_cap.py``
+            # caught it.
             # Whether a synthesis model should be asked to summarise simulated
             # answers is a separate question from what the TEMPLATE says, and
             # this change answers only the second.
@@ -922,7 +924,26 @@ class SynthesisOrchestrationService:
         #
         # A ``base`` assignment, NOT an early return — see the matching note in
         # ``_build_consensus`` for the F-06 invariant an early return broke.
-        if not any(counts_as_evidence(answer) for answer in initial_answers):
+        #
+        # Two conditions, and the first is not redundant. "Nothing counts as
+        # evidence" is ALSO true when every slot FAILED, when every slot was
+        # cancelled, and over an empty list — none of which simulated anything.
+        # Adversarial review caught this branch telling an all-FAILED live panel
+        # "The answers on this run came from Quorum's local simulation", which
+        # invents a provenance and contradicts ``_build_consensus``'s own
+        # "No model returned a usable response" in the same payload. Not
+        # reachable through ``POST /v1/query-runs`` today — ``_process_query_run``
+        # halts at PARTIAL before synthesis when no slot completed — so this was
+        # a latent trap rather than a served defect, and it is guarded here
+        # rather than left for the change that makes it reachable.
+        #
+        # ``_build_consensus`` needs no equivalent because its ``if not
+        # successful`` early return already claims that case first.
+        someone_answered = any(
+            answer.status is InitialAnswerStatus.COMPLETED and is_visible(answer.answer_text)
+            for answer in initial_answers
+        )
+        if someone_answered and not any(counts_as_evidence(answer) for answer in initial_answers):
             base = (
                 "No model was asked this question, so there is no disagreement "
                 "to preserve. The answers on this run came from Quorum's local "

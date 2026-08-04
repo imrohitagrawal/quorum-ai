@@ -85,6 +85,7 @@ from product_app.model_slots import (
 )
 from product_app.provider_keys import ProviderCredentialSource
 from product_app.providers import (
+    NOT_INVOKED_PATHS,
     InitialAnswerStatus,
     InitialModelAnswer,
     ProviderPath,
@@ -2660,15 +2661,14 @@ def _result_response(query_run: QueryRun) -> QueryRunResultResponse:
             "This run finished without every planned stage. Review failed and missing steps "
             "before relying on the synthesis."
         )
-    demo_mode = any(
-        answer.provider_path in {ProviderPath.LOCAL_SIMULATION, ProviderPath.FALLBACK_SEARCH}
-        for answer in initial_answers
-    )
-    local_count = sum(
-        1
-        for answer in initial_answers
-        if answer.provider_path in {ProviderPath.LOCAL_SIMULATION, ProviderPath.FALLBACK_SEARCH}
-    )
+    # #247: both of these spelled the pair out inline, twice, and
+    # ``providers.NOT_INVOKED_PATHS`` then made a third copy — while its own
+    # comment claimed the pair was "expressed ONCE". Adversarial review caught
+    # the contradiction. Routed through the constant so the claim is true and so
+    # a fourth ``ProviderPath`` member cannot be classified differently here than
+    # by the consensus scorer.
+    demo_mode = any(answer.provider_path in NOT_INVOKED_PATHS for answer in initial_answers)
+    local_count = sum(1 for answer in initial_answers if answer.provider_path in NOT_INVOKED_PATHS)
     # RB-5 / D3 honesty fix: a slot that FAILED on the OpenRouter path is NOT a
     # live answer. ``providers._failed_answer`` / ``cancelled_answer`` stamp
     # ``provider_path=OPENROUTER_SEARCH`` on FAILED slots, so the path alone

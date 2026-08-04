@@ -166,15 +166,19 @@ def counts_as_evidence(answer: InitialModelAnswer) -> bool:
     nobody. Measured 2026-08-04, on BOTH simulated paths.
 
     Excluding rather than down-weighting is deliberate: there is no measurement
-    that would justify a weight, and rule 5 of this repo's working rules forbids
-    a guardrail number picked by guess. A slot nobody asked carries no evidence
-    at any weight.
+    that would justify a weight, and a guardrail number picked by guess is not
+    something this repo ships. (An earlier draft attributed that to "rule 5" of
+    ``AGENTS.md``; rule 5 there is "Plain English". The principle is real, the
+    citation was invented.) A slot nobody asked carries no evidence at any
+    weight.
 
     Called by ``compute_consensus_strength`` AND ``classify_model_alignment`` so
     the panel-level strength and the per-model ring are built from ONE
-    population. #180 moved the caveat strip to the population level for exactly
-    this reason: two consumers filtering separately drift, and the drift is
-    invisible because both keep returning plausible numbers.
+    population — and, since #247 also corrected the templated prose, by
+    ``synthesis._build_consensus`` and ``synthesis._build_disagreement``. Four
+    callers, one predicate. #180 moved the caveat strip to the population level
+    for exactly this reason: two consumers filtering separately drift, and the
+    drift is invisible because both keep returning plausible numbers.
 
     NOT the same question as "did this slot come up empty?". A not-invoked slot
     is excluded here but still shows the user text, which is why
@@ -561,9 +565,17 @@ def classify_model_alignment(
             # it too). This makes the no-synthesis path identical to the pre-fix
             # behaviour, and is deliberately NOT the templated case above.
             final_aligned = strength == "strong"
-        # Keyed on ``scored``, not ``completed``: a slot nobody asked cannot have
-        # changed its mind, and ``revised`` drives both the "✓ Revised" chip and
-        # the UI's ``revisedCount``.
+        # Keyed on ``scored`` rather than ``completed``. DEFENSIVE, not a
+        # behavioural correction, and adversarial review was right to challenge an
+        # earlier version of this comment that implied otherwise: an unscored row
+        # has ``opening_majority`` and ``final_aligned`` both ``False``, so the
+        # inequality is ``False`` and the conjunction is ``False`` whichever
+        # variable leads. Mutating ``scored`` to ``completed`` here leaves the
+        # suite green, measured.
+        #
+        # Kept because the two are different questions and only their current
+        # values coincide: ``revised`` drives the "✓ Revised" chip and the UI's
+        # ``revisedCount``, and a slot nobody asked must never reach either.
         revised = scored and opening_majority != final_aligned
         alignments.append(
             ModelAlignment(
