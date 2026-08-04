@@ -1633,23 +1633,31 @@ def _billing_evidence_shape(exc: HTTPError) -> dict[str, object]:
       router refusal issue #105 is about, while ``False``/``True`` means the
       provider block existed but carried no name, which is NOT the same
       evidence and must not be counted as one.
-    * ``None``  — unknown: no declared length, too large, unreadable, empty,
-      not JSON, or JSON carrying no ``error`` mapping to read.
+    * ``None``  — unknown: unreadable, too large, empty, not JSON, or JSON
+      carrying no ``error`` mapping to read.
 
     A ``False`` that also meant "we could not tell" would make the production
     log sample this exists to produce unreadable, because the router refusal
     and a parse failure would be the same record.
 
-    THE READ IS GATED ON ``Content-Length``, and that is about TIME, not bytes.
-    ``exc.read()`` is a socket read: measured on a real loopback server, a 503
-    sent with no ``Content-Length`` and the socket held open blocked for the
-    full ``openrouter_timeout_seconds`` (8.0s, a 1144x slowdown of this branch)
-    and then raised ``TimeoutError`` — paying the whole timeout to learn
-    nothing. Reading only a body whose length the upstream has already declared
-    keeps this branch as fast as it was before instrumentation for every other
-    shape. A body with no declared length is reported ``no_length`` and not
-    read at all, so step 2 can SEE how often that happens instead of the
-    evidence silently going missing.
+    THE READ IS BOUNDED IN TIME, and that matters more than bytes.
+    ``exc.read()`` is a socket read carrying the connection's
+    ``openrouter_timeout_seconds`` (8.0s): measured on a real loopback server,
+    a 503 with the socket held open and the body withheld blocked this branch
+    for the whole 8.009s — a 1144x slowdown — and then raised ``TimeoutError``,
+    paying the entire timeout to learn nothing. So
+    :func:`_bound_sniff_time` lowers the socket timeout to
+    ``_ERROR_BODY_SNIFF_TIMEOUT_SECONDS`` first, capping the worst case at
+    about 2s, and ``sniff_time_bounded`` records whether that succeeded — it is
+    best-effort, and a platform where it fails must say so rather than read as
+    "no problem".
+
+    It is NOT gated on ``Content-Length``. An earlier version was, and that was
+    measured fatal against the real API: OpenRouter is behind Cloudflare and
+    answers errors with ``Transfer-Encoding: chunked`` and no
+    ``Content-Length``, so such a gate collects nothing in production while
+    every local gate stays green. See :func:`_bound_sniff_time` and AGENTS.md
+    rule 8c.
 
     NEVER returns body content. The values are two shape names, an integer and
     two tri-state flags. An error body can echo the user's query text back

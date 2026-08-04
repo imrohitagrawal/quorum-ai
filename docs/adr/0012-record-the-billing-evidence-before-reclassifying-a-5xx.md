@@ -211,9 +211,9 @@ one bounded read on a path that has already failed.
   Measured cost against `main` on the shapes that DO get read: 0.020s → 0.014s,
   i.e. no measurable change.
 - **Known gap, stated rather than implied:** `_billing_evidence_shape` consumes
-  the body when it reads one. Nothing downstream reads it today (measured: 0
-  accesses), but a future reader of `exc` on this path will find it empty. On
-  the `no_length` and `too_large` paths the body is untouched.
+  the body. Nothing downstream reads it today (measured: 0 accesses), but a
+  future reader of `exc` on this path will find it empty, or — past the byte
+  bound — missing its first 8192 bytes.
 - **Also stated:** the load-bearing schema claim — that OpenRouter names the
   engaged provider at `error.metadata.provider_name` — is **ASSUMED, not
   measured**. This repo holds no captured OpenRouter error body
