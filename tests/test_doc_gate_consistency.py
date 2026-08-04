@@ -646,3 +646,118 @@ def test_the_documented_out_of_tree_red_proof_reports_instead_of_crashing(
         test_prose_thresholds_match_the_enforced_values()
 
     assert str(drift) in str(caught.value)
+
+
+# --------------------------------------------------------------------------
+# Part D — countable claims: a number a doc states ABOUT THE REPO ITSELF
+#
+# Part B above pins a threshold quoted in prose against the value the repo
+# enforces. This part pins the other kind of number: a COUNT of things that
+# exist in the tree.
+#
+# Why it exists. ``AGENTS.md`` said "That directory holds **twelve** specs"
+# about ``e2e/tests/invariants/``. Three specs were added over time and the
+# sentence never moved. Nothing failed — the suite was fully green throughout,
+# because no check existed. Measured 2026-08-04: the directory held **15**.
+#
+# The likely origin of the wrong number, and the reason this is worth a gate
+# rather than a careful re-read: ``e2e.yml``'s FIRST blocking lane runs exactly
+# 12 invariant specs. The count was almost certainly correct about the lane and
+# then written down about the directory. That is not a mistake a reader catches
+# by being careful; it is one an arithmetic check catches every time.
+#
+# SCOPE, deliberately narrow. Only numbers DERIVABLE FROM THE TREE, OFFLINE,
+# belong here. The rule-14 table of required merge contexts is NOT a candidate:
+# it comes from the GitHub branch-protection API, and these tests are hermetic.
+# Re-deriving that one stays a human step (AGENTS.md rule 14 says so, and gives
+# the command). Adding brittle regexes over every figure in every doc would
+# break on innocent rewording and be switched off within a week — the same
+# reasoning ``tests/code_text.py`` records for not banning substring assertions
+# outright.
+# --------------------------------------------------------------------------
+
+AGENTS_MD = REPO_ROOT / "AGENTS.md"
+
+#: The prose form the count must appear in. A DIGIT, not a spelled-out word:
+#: "twelve" is not machine-readable, and the whole point is that a machine
+#: re-checks it. Bold so the sentence still reads naturally to a human.
+_INVARIANT_COUNT_PATTERN = r"That directory holds \*\*(\d+)\*\* specs"
+
+
+def _invariant_spec_files() -> list[Path]:
+    return sorted((REPO_ROOT / "e2e" / "tests" / "invariants").glob("*.spec.ts"))
+
+
+def _check_countable_claim(*, text: str, pattern: str, actual: int, label: str) -> None:
+    """Raise ``AssertionError`` unless ``text`` states ``actual`` for ``label``.
+
+    Split out from the test so the bite-proof below can drive it with mutated
+    text without touching the real ``AGENTS.md`` — the same shape Part C uses
+    for the workflow guards.
+    """
+    match = re.search(pattern, text)
+    assert match, (
+        f"AGENTS.md no longer states the {label} in the form this gate checks "
+        f"({pattern!r}). Restore the sentence or update the pattern — do not "
+        f"delete the check, which would let the number drift again."
+    )
+    quoted = int(match.group(1))
+    assert quoted == actual, (
+        f"AGENTS.md says {quoted} {label}; there are {actual}. "
+        f"Update the sentence (the command that produces the real number is "
+        f"`ls -1 e2e/tests/invariants/*.spec.ts | wc -l`)."
+    )
+
+
+def test_agents_md_states_the_real_invariant_spec_count() -> None:
+    """The count AGENTS.md gives for ``e2e/tests/invariants/`` must be the truth.
+
+    What turns it red: add or delete a spec in that directory without editing
+    the sentence in AGENTS.md.
+    """
+    specs = _invariant_spec_files()
+    # Positive partner. Every assertion below compares two numbers, and both
+    # would be 0 over a glob that matched nothing — a moved directory or a typo
+    # in the pattern would otherwise make this gate pass while measuring
+    # nothing, which is the failure mode most of this repo's gates were built
+    # to avoid.
+    assert specs, (
+        "no *.spec.ts found under e2e/tests/invariants/ — the directory moved "
+        "or the glob is wrong. This gate refuses to pass over an empty input."
+    )
+    _check_countable_claim(
+        text=AGENTS_MD.read_text(encoding="utf-8"),
+        pattern=_INVARIANT_COUNT_PATTERN,
+        actual=len(specs),
+        label="invariant specs",
+    )
+
+
+def test_the_countable_claim_guard_bites() -> None:
+    """The guard must FAIL on a wrong number, not merely pass on a right one.
+
+    Without this, ``test_agents_md_states_the_real_invariant_spec_count`` could
+    be satisfied by a pattern that never matches anything real.
+
+    What turns it red: make ``_check_countable_claim`` stop comparing.
+    """
+    real = len(_invariant_spec_files())
+    wrong = f"That directory holds **{real + 1}** specs"
+
+    with pytest.raises(AssertionError) as caught:
+        _check_countable_claim(
+            text=wrong, pattern=_INVARIANT_COUNT_PATTERN, actual=real, label="invariant specs"
+        )
+    assert f"says {real + 1}" in str(caught.value)
+    assert f"there are {real}" in str(caught.value)
+
+    # And it must fail LOUDLY when the sentence is gone entirely, rather than
+    # silently finding nothing to check.
+    with pytest.raises(AssertionError) as removed:
+        _check_countable_claim(
+            text="the sentence was deleted",
+            pattern=_INVARIANT_COUNT_PATTERN,
+            actual=real,
+            label="invariant specs",
+        )
+    assert "no longer states" in str(removed.value)
