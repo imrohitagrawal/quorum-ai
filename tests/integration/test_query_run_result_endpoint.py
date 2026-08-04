@@ -75,22 +75,42 @@ def test_result_endpoint_projects_model_answers_debate_cost_elapsed_and_synthesi
     )
     synthesis = body["result"]["final_synthesis"]
     assert synthesis["consensus"]
-    assert "disagreement" in synthesis["disagreement"]
-    assert "visible source references" in synthesis["source_support"]
+    # #247: this read ``assert "disagreement" in synthesis["disagreement"]``, and
+    # it stayed green through a change that INVERTED the sentence's meaning —
+    # "The disagreement is preserved as the dominant signal" became "there is no
+    # disagreement to preserve", and the bare substring matches both. Found by
+    # adversarial review. The section is now asserted for what this run actually
+    # is: a demo run that asked nobody, which has no disagreement to report.
+    assert "No model was asked this question" in synthesis["disagreement"]
+    assert "Models do not agree" not in synthesis["disagreement"]
+    # #247: another bare substring that survived a meaning inversion — the
+    # section moved from "4 of 4 responding models returned visible source
+    # references" to "No model returned visible source references", and the
+    # substring matches both. Asserted exactly now.
+    assert synthesis["source_support"] == (
+        "No model returned visible source references for this query."
+    )
     assert "decision support only" in synthesis["recommendation"]
-    # WP-C / F-03: coverage is the share of ANSWERS carrying a primary source.
-    # All four local-simulation answers cite one, so 4/4 = 1.00 and the target
-    # is met. The old chars-per-claim denominator reported 0.50 for this exact
-    # run and told the user to pause for human review.
+    # #247: this block asserted 4/4 = 1.00, target met, on the reasoning quoted
+    # from the comment it replaces — "All four local-simulation answers cite
+    # one". Each cites ``example.test/local-demo/N``, a placeholder this product
+    # wrote on an IANA-reserved domain, for a slot no model was asked. This is
+    # the API boundary, so this is the payload that carried the invented 100%.
+    #
+    # WP-C / F-03 is untouched: coverage is still the share of ANSWERS carrying a
+    # primary source, and ``answer_count`` still counts the four that produced
+    # text. Only which sources qualify as primary changed.
     assert synthesis["citation_coverage"]["answer_count"] == 4
-    assert synthesis["citation_coverage"]["sourced_answer_count"] == 4
-    assert synthesis["citation_coverage"]["sourced_answer_ratio"] == "1.00"
-    assert synthesis["citation_coverage"]["target_met"] is True
-    assert synthesis["quality_checks"]["citation_coverage_target_met"] is True
-    # PR-2 Defect 3 fix: stub answers are identical, so
-    # ``consensus_strength`` is "strong" and
-    # ``false_consensus_preserved`` is now correctly False.
-    assert synthesis["quality_checks"]["false_consensus_preserved"] is False
+    assert synthesis["citation_coverage"]["sourced_answer_count"] == 0
+    assert synthesis["citation_coverage"]["sourced_answer_ratio"] == "0.00"
+    assert synthesis["citation_coverage"]["target_met"] is False
+    assert synthesis["quality_checks"]["citation_coverage_target_met"] is False
+    # #247: ``eee93ca`` flipped this from ``is True`` on the reasoning that
+    # identical stub answers mean a strong consensus. They are identical because
+    # one template wrote all four, so the original value is restored. This is the
+    # API-boundary assertion — the payload this endpoint serves is where the
+    # "4 of 4 models aligned" headline was rendered from.
+    assert synthesis["quality_checks"]["false_consensus_preserved"] is True
     # Honest-notice contract: with the test env having
     # OPENROUTER_LIVE_EXECUTION_ENABLED=true but the live call
     # failing in CI, each per-slot notice names the live failure

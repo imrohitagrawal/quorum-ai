@@ -83,6 +83,49 @@ class ProviderPath(StrEnum):
     FALLBACK_SEARCH = "fallback_search"
 
 
+#: The provider paths on which NO model was ever sent the question. A COMPLETED
+#: answer on one of these carries ``_local_simulation_text`` — this product's own
+#: words, not a model's.
+#:
+#: BOTH members belong here, and the second is easy to miss. #247 was filed
+#: naming ``LOCAL_SIMULATION`` alone; measured 2026-08-04, a fallback-forced demo
+#: run produces four ``FALLBACK_SEARCH`` slots carrying the same template and
+#: rendered the same "4 of 4 models aligned". A ``LOCAL_SIMULATION``-only set
+#: fixes half the defect.
+#:
+#: Why the PATH is a sound discriminator, when the ``use_fallback`` branch of
+#: ``produce_initial_answer`` appears to let ``FALLBACK_SEARCH`` carry live text:
+#: that arm is dead. The ``OPENROUTER_SEARCH`` branch above it returns whenever
+#: ``live_response is not None and live_response.answer_text``, and
+#: ``live_response`` is not reassigned in between, so the condition is provably
+#: ``False`` there. Proved by execution as well as by reading: replacing that arm
+#: with ``raise AssertionError`` and running the whole suite left it green — the
+#: assertion never fired.
+#:
+#: No pass-count is quoted, deliberately. The first draft said "2279 passed, 0
+#: failed", which was the total on ``9981bab`` BEFORE this change added its own
+#: tests; re-running the same experiment on HEAD gives a different total, so a
+#: reviewer who checked the figure found it irreproducible and was right to. The
+#: claim that matters reproduces on any tree: the assertion never fires.
+#:
+#: Line numbers are deliberately not cited either — they shift with every edit to
+#: the file and go stale silently.
+#:
+#: ``query_runs`` derives ``demo_mode`` and ``local_count`` from this same pair
+#: and now READS this constant to do it. It spelled the pair out inline twice
+#: until #247; adversarial review caught this comment claiming "expressed ONCE"
+#: while a second and third copy sat in ``query_runs``. One definition, because
+#: two matchers built from one constant drift.
+NOT_INVOKED_PATHS = frozenset({ProviderPath.LOCAL_SIMULATION, ProviderPath.FALLBACK_SEARCH})
+
+#: The complement. Written out rather than derived so that
+#: ``test_every_provider_path_is_classified_as_invoked_or_not`` can prove the two
+#: sets PARTITION :class:`ProviderPath`. A new enum member added to neither set
+#: would otherwise default silently to "a model was invoked" and re-open #247 on
+#: the new path.
+INVOKED_PATHS = frozenset({ProviderPath.OPENROUTER_SEARCH})
+
+
 class InitialAnswerStatus(StrEnum):
     COMPLETED = "completed"
     FAILED = "failed"
@@ -289,6 +332,32 @@ class InitialModelAnswer(BaseModel):
     #: "(shortened)" instead of presenting a mid-sentence stop as the model's
     #: complete view. It is INERT until that surface exists (WP-F).
     shortened: bool = False
+
+
+def model_was_invoked(answer: InitialModelAnswer) -> bool:
+    """Was this answer's text produced by actually sending the question to a
+    model?
+
+    ``False`` for the two simulated paths (:data:`NOT_INVOKED_PATHS`), whose
+    text this product wrote. The distinction matters wherever an answer is read
+    as EVIDENCE — #247: four simulated slots differ only by the model id, score
+    pairwise 4-gram Jaccard 0.500-0.579 against a 0.1 threshold, and were
+    reported as "4 of 4 models aligned" on a run that asked nobody.
+
+    Deliberately keyed on ``provider_path`` and not on matching the template
+    text: a second matcher built from the same constant drifts the moment the
+    template is reworded, and drifts silently. Deliberately not a new field on
+    :class:`InitialModelAnswer` either — that model crosses the API boundary, so
+    a field costs an OpenAPI change and a contract change to express what the
+    path already determines.
+
+    Says NOTHING about whether the slot produced text. A simulated slot did
+    produce text and it is shown on screen; callers that need "did this slot
+    come up empty?" must still test ``status`` / ``is_visible``. Conflating the
+    two makes the stance table narrate "No usable answer was returned" over an
+    answer the user can read.
+    """
+    return answer.provider_path not in NOT_INVOKED_PATHS
 
 
 @dataclass(frozen=True)
@@ -1317,12 +1386,39 @@ class ProviderExecutionService:
         )
 
     def _local_simulation_sources(self, *, model_slot: ModelSlot) -> list[SourceReference]:
+        """The demo placeholder "source" for a slot no model was asked.
+
+        ``is_fallback=True``, and that single flag is the whole fix for the
+        second half of #247. It was ``False``, which is what made a citation this
+        product invented count as a PRIMARY source: on a keyless run all four
+        slots carried one, so ``citation_coverage`` reported **4 of 4, 100%**,
+        and the Source-support section read "4 of 4 responding models returned
+        visible source references" — about four answers this product wrote
+        itself, citing ``example.test/local-demo/N``, an IANA-reserved domain
+        that resolves to nothing.
+
+        The flag means "not the model's own citation", which is exactly what this
+        is, so no new concept is needed. Both consumers already key on it —
+        ``synthesis._build_source_support`` and the aggregated
+        ``calculate_citation_coverage`` numerator both test
+        ``any(not source.is_fallback ...)`` — so correcting it here corrects the
+        metric and the prose at once rather than in two places that could drift.
+
+        #171 diagnosed this exact mechanism in ``produce_initial_answer`` ("its
+        ``is_fallback=False`` demo source is what makes it count as PRIMARY") and
+        closed the PER-MODEL route by making a live failure a FAILED slot. The
+        WHOLE-RUN demo route it named was left open; this closes it.
+
+        The source is still RETURNED, not dropped: the slot really does show the
+        user a reference, and hiding it would be its own dishonesty. It simply no
+        longer counts toward a coverage figure that claims model-cited evidence.
+        """
         return [
             SourceReference(
                 title=f"Local demo evidence for slot {model_slot.slot_number}",
                 url=f"{LOCAL_SIMULATION_URL_PREFIX}{model_slot.slot_number}",
                 provider=ProviderPath.LOCAL_SIMULATION,
-                is_fallback=False,
+                is_fallback=True,
             ),
         ]
 

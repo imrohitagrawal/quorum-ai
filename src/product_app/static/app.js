@@ -2504,6 +2504,30 @@
   // degraded warning on a run that was entirely live.
   const isUsableCount = (n) => Number.isInteger(n) && n >= 0;
 
+  // #247: may this run's agreement line tell the reader that the models who did
+  // not align are "preserved as disagreement"?
+  //
+  // Only when some answer actually came from a model. On a run where none did —
+  // fully simulated, or every slot failed — there is no disagreement to
+  // preserve, and saying so invents one: a keyless demo run rendered "0 of 4
+  // models aligned — the rest are preserved as disagreement below." about four
+  // models nobody asked.
+  //
+  // ONE predicate for all THREE surfaces that make this claim (the verdict band,
+  // the Copy summary, the Markdown export). They each carry their own wording,
+  // which is fine; what they must not each carry is their own copy of the
+  // DECISION. That is exactly how #128 let the file a user kept disagree with
+  // the screen they exported it from, and why ``describePanelShortfall`` above
+  // is a single function too.
+  // A ``function`` declaration, not a ``const`` arrow, so that
+  // ``tests/unit/test_agreement_clause_honesty.py`` can lift it out with the
+  // brace-counting extractor the sibling app.js unit tests already use and drive
+  // it under Node. A pure function with no DOM access, like
+  // ``describePanelShortfall``.
+  function mayClaimDisagreement(ctx) {
+    return !ctx.isConsensus && !ctx.noLiveAnswers;
+  }
+
   function renderResultDegraded(result) {
     const banner = el("result-degraded");
     if (!banner) return;
@@ -2594,6 +2618,15 @@
     // never drift out of lockstep.
     const isConsensus = isConsensusResult(result);
 
+    // #247: did ANY answer on this run come from a live provider? When none did,
+    // the verdict band must not tell the reader the rest are "preserved as
+    // disagreement" — see ``renderVerdictBand``. ``live_count`` counts COMPLETED
+    // ``openrouter_search`` slots only, so this is 0 both for a fully simulated
+    // run and for one where every slot failed; in both, nothing on screen came
+    // from a model. Absent field => treated as "some were live", so an older
+    // payload keeps the existing sentence rather than silently losing it.
+    const noLiveAnswers = Number.isInteger(result.live_count) && result.live_count === 0;
+
     // Revised count — INFERRED from position_movements' ``revised`` flag.
     const movements = Array.isArray(res.position_movements)
       ? res.position_movements
@@ -2626,7 +2659,14 @@
     renderResultDegraded(result);
     renderResultMeta(result, status, durationText);
     renderResultReceipt(result, res);
-    renderVerdictBand(result, fs, { isConsensus, aligned, total, revisedCount, movements });
+    renderVerdictBand(result, fs, {
+      isConsensus,
+      aligned,
+      total,
+      revisedCount,
+      movements,
+      noLiveAnswers,
+    });
     renderTrustTriangle(result, res, fs, { isConsensus, aligned, total });
     renderTrustScore(result);
     renderResultPositions(res);
@@ -2643,9 +2683,9 @@
       summaryLines.push("Verdict: No synthesis was produced for this run.");
     }
     summaryLines.push(
-      isConsensus
-        ? `Agreement: ${aligned} of ${total} models aligned.`
-        : `Agreement: ${aligned} of ${total} models aligned; the rest are preserved as disagreement.`,
+      mayClaimDisagreement({ isConsensus, noLiveAnswers })
+        ? `Agreement: ${aligned} of ${total} models aligned; the rest are preserved as disagreement.`
+        : `Agreement: ${aligned} of ${total} models aligned.`,
     );
     if (result.correlation_id) summaryLines.push(`Run: ${result.correlation_id}`);
     state.lastResultSummary = summaryLines.join("\n");
@@ -2661,6 +2701,11 @@
       aligned,
       total,
       movements,
+      // #247: the export must reach the SAME disagreement verdict as the screen.
+      // Omitting it here would leave ``mayClaimDisagreement`` reading
+      // ``undefined`` in the export and the file would keep the sentence the
+      // band had just dropped — the #128 defect exactly.
+      noLiveAnswers,
     });
   }
 
@@ -2887,9 +2932,9 @@
         : "**Verdict:** No synthesis was produced for this run.",
     );
     push(
-      ctx.isConsensus
-        ? `**Agreement:** ${ctx.aligned} of ${ctx.total} models aligned.`
-        : `**Agreement:** ${ctx.aligned} of ${ctx.total} models aligned; the rest are preserved as disagreement.`,
+      mayClaimDisagreement(ctx)
+        ? `**Agreement:** ${ctx.aligned} of ${ctx.total} models aligned; the rest are preserved as disagreement.`
+        : `**Agreement:** ${ctx.aligned} of ${ctx.total} models aligned.`,
       "",
     );
 
@@ -3468,7 +3513,7 @@
       return;
     }
 
-    const { isConsensus, aligned, total, revisedCount } = ctx;
+    const { isConsensus, aligned, total, revisedCount, noLiveAnswers } = ctx;
     band.dataset.consensus = isConsensus ? "true" : "false";
 
     band.appendChild(buildTrustRing(aligned, total));
@@ -3495,6 +3540,15 @@
       if (revisedCount > 0) {
         summary += ` · ${revisedCount} revised their position`;
       }
+    } else if (!mayClaimDisagreement(ctx)) {
+      // #247: no answer on this run came from a live provider, so there is no
+      // disagreement below to preserve and the clause the branch below appends
+      // would be this band's own invention. On a fully simulated run it read
+      // "0 of 4 models aligned — the rest are preserved as disagreement below.",
+      // telling the reader four models disagreed when four models were never
+      // asked. The count itself stays — 0 aligned is true — and the degraded
+      // banner directly above already says why.
+      summary = `${aligned} of ${total} models aligned`;
     } else {
       summary = `${aligned} of ${total} models aligned — the rest are preserved as disagreement below.`;
     }

@@ -64,6 +64,7 @@ from product_app.synthesis_consensus import (
     ConsensusStrength,
     classify_model_alignment,
     compute_consensus_strength,
+    counts_as_evidence,
 )
 from product_app.synthesis_length import (
     truncate_recommendation,
@@ -823,7 +824,42 @@ class SynthesisOrchestrationService:
         # strength. "strong" and "weak" both describe a real
         # signal; "divided" frames the section as "the models
         # do not agree". The audit pins the boundary.
-        if consensus_strength == "strong":
+        if not any(counts_as_evidence(answer) for answer in successful):
+            # #247: the slots completed and put text on the screen, but NO model
+            # was asked — every answer is this product's own local simulation.
+            # Tested before the three strength branches because all three open
+            # "Four models were asked the same question", false here, and then
+            # attribute agreement or disagreement to models never invoked.
+            # Dropping those answers from the SCORED population (see
+            # ``synthesis_consensus.counts_as_evidence``) fixed the "4 of 4
+            # models aligned" number and left this sentence reading "4 returned a
+            # usable response but did not agree" — a smaller claim about the same
+            # panel nobody asked, and still one this product invented.
+            #
+            # Simulation is a WHOLE-RUN mode, so this is all-or-nothing rather
+            # than a per-slot correction. Measured 2026-08-04 by driving the real
+            # provider: with live execution OFF every slot is simulated; with it
+            # ON every slot is ``openrouter_search`` (completed or FAILED) and
+            # none is simulated. A panel mixing invoked and not-invoked answers
+            # is not a shape production can produce.
+            #
+            # A ``base`` assignment, NOT an early return. An earlier draft of
+            # this fix returned here and thereby skipped
+            # ``_call_synthesis_model`` below — which silently broke the F-06
+            # invariant that a possibly-billed call is always returned for
+            # recording, and changed ``synthesis_mode``. Three tests in
+            # ``test_synthesis.py`` / ``test_synthesis_section_storage_cap.py``
+            # caught it.
+            # Whether a synthesis model should be asked to summarise simulated
+            # answers is a separate question from what the TEMPLATE says, and
+            # this change answers only the second.
+            base = (
+                "No model was asked this question. Every answer on this run was "
+                "produced by Quorum's local simulation, so there is no consensus "
+                "to report and no disagreement either. Treat this run as a demo, "
+                "not a model panel."
+            )
+        elif consensus_strength == "strong":
             base = (
                 f"Four models were asked the same question; {len(successful)} returned "
                 f"a usable response and broadly agree. Roughly {sourced_pct}% of those "
@@ -879,7 +915,41 @@ class SynthesisOrchestrationService:
         should_stop: Callable[[], bool] | None = None,
     ) -> tuple[str, str | None, LiveProviderResult | None]:
         fallback_paths = {answer.provider_path for answer in initial_answers}
-        if ProviderPath.FALLBACK_SEARCH in fallback_paths and len(fallback_paths) > 1:
+        # #247: no model was asked, so there is nothing to disagree. Tested
+        # FIRST, ahead of every branch below, because all of them assert that
+        # models disagreed — and on this run "Models do not agree" is exactly as
+        # invented as the "4 of 4 models aligned" this issue exists to remove.
+        # Silence would be wrong too: the section renders either way, so it has
+        # to say something, and the honest thing is why it is empty.
+        #
+        # A ``base`` assignment, NOT an early return — see the matching note in
+        # ``_build_consensus`` for the F-06 invariant an early return broke.
+        #
+        # Two conditions, and the first is not redundant. "Nothing counts as
+        # evidence" is ALSO true when every slot FAILED, when every slot was
+        # cancelled, and over an empty list — none of which simulated anything.
+        # Adversarial review caught this branch telling an all-FAILED live panel
+        # "The answers on this run came from Quorum's local simulation", which
+        # invents a provenance and contradicts ``_build_consensus``'s own
+        # "No model returned a usable response" in the same payload. Not
+        # reachable through ``POST /v1/query-runs`` today — ``_process_query_run``
+        # halts at PARTIAL before synthesis when no slot completed — so this was
+        # a latent trap rather than a served defect, and it is guarded here
+        # rather than left for the change that makes it reachable.
+        #
+        # ``_build_consensus`` needs no equivalent because its ``if not
+        # successful`` early return already claims that case first.
+        someone_answered = any(
+            answer.status is InitialAnswerStatus.COMPLETED and is_visible(answer.answer_text)
+            for answer in initial_answers
+        )
+        if someone_answered and not any(counts_as_evidence(answer) for answer in initial_answers):
+            base = (
+                "No model was asked this question, so there is no disagreement "
+                "to preserve. The answers on this run came from Quorum's local "
+                "simulation, not from a model panel."
+            )
+        elif ProviderPath.FALLBACK_SEARCH in fallback_paths and len(fallback_paths) > 1:
             base = (
                 "Models disagree on whether to rely on the primary provider or the fallback "
                 "search path. This disagreement must be preserved explicitly to avoid an "
@@ -943,13 +1013,24 @@ class SynthesisOrchestrationService:
         )
         total = sum(answer.citation_coverage.answer_count for answer in initial_answers)
         if cited == 0:
-            return "No model returned visible source references for this query.", None, None
-        base = (
-            f"{cited} of {total} responding model{'' if total == 1 else 's'} returned visible "
-            "source references. The references come "
-            "from the primary provider; fallback sources are listed separately and are not "
-            "counted toward the source coverage target."
-        )
+            # #247: a ``base`` assignment, NOT the early return this used to be.
+            #
+            # The early return skipped ``_call_synthesis_model`` below, which was
+            # tolerable while ``cited == 0`` was rare — but flagging the demo
+            # placeholder source ``is_fallback=True`` makes EVERY keyless run land
+            # here, so a configured synthesis model silently stopped being called
+            # for this one section. That breaks the same F-06 invariant twice
+            # corrected elsewhere in this change: a call that may have been billed
+            # must still be returned for recording, and ``synthesis_mode`` is
+            # derived from whether the sections came back live.
+            base = "No model returned visible source references for this query."
+        else:
+            base = (
+                f"{cited} of {total} responding model{'' if total == 1 else 's'} returned visible "
+                "source references. The references come "
+                "from the primary provider; fallback sources are listed separately and are not "
+                "counted toward the source coverage target."
+            )
         templated = TEMPLATED_FALLBACK_PREFIX + base
         live = self._call_synthesis_model(
             openrouter_key=openrouter_key,

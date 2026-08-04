@@ -45,23 +45,41 @@ def test_synthesis_eval_preserves_disagreement_and_meets_citation_target() -> No
         "Compare evidence where models materially disagree on the recommendation",
     )
 
-    # PR-2 Defect 3 fix: the four stub answers are identical
-    # regardless of query text, so ``consensus_strength`` is
-    # "strong" and ``false_consensus_preserved`` is correctly
-    # False. The eval asserts the *visible* disagreement
-    # section text instead, which is still templated to
-    # mention "unsupported consensus" on the conservative path.
-    assert "unsupported consensus" in synthesis.disagreement
-    assert not synthesis.quality_checks.false_consensus_preserved
-    # WP-C / F-03: all four local-simulation answers carry a primary source,
-    # so coverage is 4/4 and the target IS met. That is the point of the
-    # redefinition — under the old chars-per-claim denominator this same
-    # fully-sourced run scored 0.50 and was reported as failing the target.
+    # #247. Two assertions here, needing two different corrections.
+    #
+    # The flag: ``eee93ca`` flipped this from
+    # ``assert synthesis.quality_checks.false_consensus_preserved`` on the
+    # reasoning that four identical stub answers are a "strong" consensus. They
+    # are identical because ONE template produced all four, so the original
+    # value is restored. Note the flipped version contradicted this test's own
+    # name — ``..._preserves_disagreement_...`` asserting disagreement was NOT
+    # preserved.
+    #
+    # The prose: this run asks nobody, so the disagreement section no longer
+    # carries "unsupported consensus" (the weak-path wording). Asserting the
+    # section's PROPERTY rather than one branch's incidental phrase — it must
+    # say something, and it must not claim the models disagreed.
+    assert synthesis.disagreement.strip()
+    assert "No model was asked this question" in synthesis.disagreement
+    assert "Models disagree" not in synthesis.disagreement
+    assert synthesis.quality_checks.false_consensus_preserved
+    # #247: these asserted 4/4 and target-met, on the reasoning quoted from the
+    # comment they replace — that "all four local-simulation answers carry a
+    # primary source". They do not. Each carries ``example.test/local-demo/N``,
+    # a placeholder this product wrote on an IANA-reserved domain, for a slot no
+    # model was asked. That is what made a keyless run claim 100% source coverage
+    # with every quarter invented.
+    #
+    # ``answer_count`` stays 4 — the slots did produce text. The WP-C / F-03
+    # redefinition this comment used to defend is untouched: coverage is still
+    # the share of ANSWERS carrying a primary source, and length still does not
+    # move it (pinned in tests/unit/test_citation_coverage_semantics.py). What
+    # changed is only which sources count as primary.
     assert synthesis.citation_coverage.answer_count == 4
-    assert synthesis.citation_coverage.sourced_answer_count == 4
+    assert synthesis.citation_coverage.sourced_answer_count == 0
     coverage = synthesis.citation_coverage
-    assert coverage.sourced_answer_ratio >= coverage.target_ratio
-    assert synthesis.quality_checks.citation_coverage_target_met
+    assert coverage.sourced_answer_ratio < coverage.target_ratio
+    assert not synthesis.quality_checks.citation_coverage_target_met
 
 
 def test_synthesis_eval_flags_high_stakes_examples_as_decision_support() -> None:

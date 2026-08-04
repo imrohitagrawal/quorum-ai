@@ -28,7 +28,7 @@ import re
 from typing import Literal
 
 from product_app.debate import DEBATE_MODE_LIVE, DebateOutput, ModelAlignment
-from product_app.providers import InitialAnswerStatus, InitialModelAnswer
+from product_app.providers import InitialAnswerStatus, InitialModelAnswer, model_was_invoked
 from product_app.safety import strip_own_caveat
 from product_app.visible_text import is_visible
 
@@ -123,11 +123,7 @@ def compute_consensus_strength(
     in a future revision. The test names ``*_strong_*``,
     ``*_weak_*``, ``*_divided_*`` are stable.
     """
-    completed = [
-        answer
-        for answer in initial_answers
-        if answer.status is InitialAnswerStatus.COMPLETED and is_visible(answer.answer_text)
-    ]
+    completed = [answer for answer in initial_answers if counts_as_evidence(answer)]
 
     # 0 completed answers → no signal at all. Treat as "divided".
     # The orchestrator's templated "No model returned a usable
@@ -152,6 +148,48 @@ def compute_consensus_strength(
         return "divided"
 
     return "weak"
+
+
+def counts_as_evidence(answer: InitialModelAnswer) -> bool:
+    """May this answer be scored as EVIDENCE about what the panel thinks?
+
+    Three things must all hold, and they are three different questions:
+
+    * the slot finished (``status is COMPLETED``),
+    * it produced something a reader can see (``is_visible``), and
+    * #247: a model was actually sent the question (``model_was_invoked``).
+
+    The third is the one this function was extracted for. Before it, four slots
+    filled with ``providers._local_simulation_text`` — one template differing
+    only by the model id — scored pairwise 4-gram Jaccard 0.500-0.579 against a
+    0.1 threshold and rendered "4 of 4 models aligned" on a run that asked
+    nobody. Measured 2026-08-04, on BOTH simulated paths.
+
+    Excluding rather than down-weighting is deliberate: there is no measurement
+    that would justify a weight, and a guardrail number picked by guess is not
+    something this repo ships. (An earlier draft attributed that to "rule 5" of
+    ``AGENTS.md``; rule 5 there is "Plain English". The principle is real, the
+    citation was invented.) A slot nobody asked carries no evidence at any
+    weight.
+
+    Called by ``compute_consensus_strength`` AND ``classify_model_alignment`` so
+    the panel-level strength and the per-model ring are built from ONE
+    population — and, since #247 also corrected the templated prose, by
+    ``synthesis._build_consensus`` and ``synthesis._build_disagreement``. Four
+    callers, one predicate. #180 moved the caveat strip to the population level
+    for exactly this reason: two consumers filtering separately drift, and the
+    drift is invisible because both keep returning plausible numbers.
+
+    NOT the same question as "did this slot come up empty?". A not-invoked slot
+    is excluded here but still shows the user text, which is why
+    ``classify_model_alignment`` keeps it ``completed=True`` and gives it the
+    ``NOT_INVOKED`` narration rather than the ``NO_ANSWER`` one.
+    """
+    return (
+        answer.status is InitialAnswerStatus.COMPLETED
+        and is_visible(answer.answer_text)
+        and model_was_invoked(answer)
+    )
 
 
 def _overlap_partner_counts(completed_texts: list[str]) -> list[int]:
@@ -229,14 +267,11 @@ def _scoring_text(answer: InitialModelAnswer) -> str:
     only"), so before this a panel split 2-vs-2 in open disagreement classified
     ``strong``. Stripping per-primitive instead would have left that standing.
 
-    KNOWN GAP, deliberately not closed here: an answer produced WITHOUT
-    invoking a model (``ProviderPath.LOCAL_SIMULATION``) carries
-    ``providers._local_simulation_text``, one template differing only by the
-    model id. Four such slots score pairwise Jaccard 0.500-0.579 against the
-    0.1 threshold and still read as "4 of 4 models aligned". That is a separate
-    concern with a 13-test blast radius, four of which assert the current
-    behaviour as correct, and it needs its own decision about what demo mode
-    should say. Filed separately; do not fold it in here.
+    The gap this docstring used to record as open — an answer produced WITHOUT
+    invoking a model still counting as evidence — is closed by #247, one level
+    up: :func:`counts_as_evidence` drops such an answer from the population
+    before this function is reached. So this function now only ever sees text a
+    model really wrote, and the caveat strip is the only correction it applies.
     """
     return strip_own_caveat(answer.answer_text)
 
@@ -469,25 +504,41 @@ def classify_model_alignment(
       the model changed its mind during the debate (unobservable here).
 
     Failed / empty answers are ``completed=False`` and never aligned.
+
+    #247: an answer produced without invoking a model is ``completed=True`` — it
+    put text on the screen — but ``invoked=False``, so it is outside the scored
+    population, is never aligned, is never ``revised``, and narrates through
+    ``AlignmentState.NOT_INVOKED`` rather than borrowing the failed slot's copy.
     """
     strength = compute_consensus_strength(initial_answers, debate_outputs)
-    completed_indices = [
-        index
-        for index, answer in enumerate(initial_answers)
-        if answer.status is InitialAnswerStatus.COMPLETED and is_visible(answer.answer_text)
+    # The SCORED population — the same predicate ``compute_consensus_strength``
+    # filters on, so the per-model ring and the panel strength can never be
+    # computed over different sets of answers.
+    scored_indices = [
+        index for index, answer in enumerate(initial_answers) if counts_as_evidence(answer)
     ]
-    completed_texts = [_scoring_text(initial_answers[index]) for index in completed_indices]
+    completed_texts = [_scoring_text(initial_answers[index]) for index in scored_indices]
     majority_flags = _opening_majority_flags(completed_texts)
-    majority_by_index = dict(zip(completed_indices, majority_flags, strict=True))
-    text_by_index = dict(zip(completed_indices, completed_texts, strict=True))
+    majority_by_index = dict(zip(scored_indices, majority_flags, strict=True))
+    text_by_index = dict(zip(scored_indices, completed_texts, strict=True))
     final_text = (model_authored_final_text or "").strip()
     final_text_visible = is_visible(final_text)
 
     alignments: list[ModelAlignment] = []
     for index, answer in enumerate(initial_answers):
-        completed = index in majority_by_index
+        scored = index in majority_by_index
+        # #247: ``completed`` and ``scored`` are DIFFERENT questions and were one
+        # variable before. ``completed`` is "did this slot put text on the
+        # screen?" and drives the narration; ``scored`` is "may that text be read
+        # as evidence?" and drives the number. A simulated slot is completed and
+        # not scored — collapsing the two makes the stance row say "No usable
+        # answer was returned" about an answer the user is looking at.
+        completed = answer.status is InitialAnswerStatus.COMPLETED and is_visible(
+            answer.answer_text
+        )
+        invoked = model_was_invoked(answer)
         opening_majority = majority_by_index.get(index, False)
-        if not completed:
+        if not scored:
             final_aligned = False
         elif opening_majority:
             # A majority opener lands in the consensus — this was never the
@@ -514,7 +565,18 @@ def classify_model_alignment(
             # it too). This makes the no-synthesis path identical to the pre-fix
             # behaviour, and is deliberately NOT the templated case above.
             final_aligned = strength == "strong"
-        revised = completed and opening_majority != final_aligned
+        # Keyed on ``scored`` rather than ``completed``. DEFENSIVE, not a
+        # behavioural correction, and adversarial review was right to challenge an
+        # earlier version of this comment that implied otherwise: an unscored row
+        # has ``opening_majority`` and ``final_aligned`` both ``False``, so the
+        # inequality is ``False`` and the conjunction is ``False`` whichever
+        # variable leads. Mutating ``scored`` to ``completed`` here leaves the
+        # suite green, measured.
+        #
+        # Kept because the two are different questions and only their current
+        # values coincide: ``revised`` drives the "✓ Revised" chip and the UI's
+        # ``revisedCount``, and a slot nobody asked must never reach either.
+        revised = scored and opening_majority != final_aligned
         alignments.append(
             ModelAlignment(
                 slot_number=answer.slot_number,
@@ -522,6 +584,7 @@ def classify_model_alignment(
                 opening_majority=opening_majority,
                 final_aligned=final_aligned,
                 revised=revised,
+                invoked=invoked,
             )
         )
     return alignments

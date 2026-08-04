@@ -62,7 +62,20 @@ def _answer(
     text: str,
     *,
     status: InitialAnswerStatus = InitialAnswerStatus.COMPLETED,
-    provider_path: ProviderPath = ProviderPath.LOCAL_SIMULATION,
+    # #247: was ``LOCAL_SIMULATION``, which no caller here wanted and no comment
+    # defended. Every test in this file passes real, distinct, model-shaped
+    # answer text, and ``providers.py`` cannot produce that combination: the two
+    # not-invoked paths are stamped at exactly two sites (the FALLBACK_SEARCH and
+    # LOCAL_SIMULATION returns in ``produce_initial_answer``) and BOTH emit
+    # ``_local_simulation_text`` — one template differing only by the model id.
+    # A simulated slot carrying a real bridge answer is not a shape production
+    # has. ``_failed_answer`` likewise stamps ``OPENROUTER_SEARCH``, never a
+    # simulated path, so a FAILED slot below uses the live path too.
+    #
+    # The default was load-bearing only by accident, which is why correcting it
+    # fixes ten tests without touching a single assertion. The file already
+    # overrode it to ``OPENROUTER_SEARCH`` wherever the path is the subject.
+    provider_path: ProviderPath = ProviderPath.OPENROUTER_SEARCH,
 ) -> InitialModelAnswer:
     return InitialModelAnswer(
         slot_number=slot,
@@ -693,7 +706,7 @@ def test_no_stance_row_names_a_final_synthesis_no_model_wrote() -> None:
 def test_stance_copy_covers_every_provenance_and_alignment_state() -> None:
     """The copy table is TOTAL over its key, so a served lookup cannot raise.
 
-    All eight rows are reachable, including
+    All ten rows are reachable, including
     ``(NOT_MODEL_AUTHORED, MOVED_TO_CONSENSUS)`` — the no-synthesis strong panel
     reaches it, and the test below exercises it. What is unreachable is that row
     via a TEMPLATED or MIXED synthesis specifically. Totality is asserted anyway
@@ -701,17 +714,24 @@ def test_stance_copy_covers_every_provenance_and_alignment_state() -> None:
     today's classifier, and a ``KeyError`` inside a served response is a worse
     failure than a redundant row.
 
+    #247 took this from 8 to 10 by adding ``AlignmentState.NOT_INVOKED``. Only
+    the two cardinality literals moved; the totality assertion below is derived
+    from the enums and needed no edit, which is the property that makes it worth
+    having. What the new rows SAY is pinned separately, in
+    ``tests/unit/test_not_invoked_is_not_evidence.py`` — a bump here on its own
+    would let the two rows exist without anyone asserting their contents.
+
     What turns it red: delete any entry from ``_STANCE_COPY`` — the count drops
-    below 8 and the missing-key list names it.
+    below 10 and the missing-key list names it.
     """
     from product_app.debate import _STANCE_COPY, AlignmentState, FinalAnswerProvenance
 
     expected = {
         (provenance, state) for provenance in FinalAnswerProvenance for state in AlignmentState
     }
-    assert len(expected) == 8, "2 provenances x 4 alignment states"
+    assert len(expected) == 10, "2 provenances x 5 alignment states"
     assert set(_STANCE_COPY) == expected, sorted(str(k) for k in expected - set(_STANCE_COPY))
-    assert len(_STANCE_COPY) == 8
+    assert len(_STANCE_COPY) == 10
 
 
 def test_a_revised_row_still_carries_a_note_when_no_model_wrote_the_final_answer() -> None:
