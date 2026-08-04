@@ -156,6 +156,42 @@ wording still differs, which is fine; what they must not each own is the
 DECISION. #128 was precisely that: the file a user kept disagreed with the screen
 they exported it from.
 
+### 5. A source this product invented is not primary evidence
+
+`_local_simulation_sources` is flagged `is_fallback=True`.
+
+Folded in on the operator's explicit direction after the two review rounds; my
+recommendation had been to file it separately, and that recommendation was
+overruled deliberately. Same root cause as the rest of this ADR — output nobody
+asked for being counted as a model's contribution — but a different metric, so it
+is recorded as its own decision.
+
+The demo placeholder cites `example.test/local-demo/N`, an IANA-reserved domain
+that resolves to nothing, and carried `is_fallback=False`. That one flag made an
+invented citation count as PRIMARY, so a keyless run reported **4 of 4, 100%**
+source coverage and the Source-support section read "4 of 4 responding models
+returned visible source references" — about four answers this product wrote.
+
+`is_fallback` already means "not the model's own citation", which is exactly what
+this is, so no new concept was needed. Both consumers already key on it, so one
+flag corrects the metric and the prose together rather than in two places that
+could drift.
+
+#171 diagnosed this same mechanism in `produce_initial_answer` ("its
+`is_fallback=False` demo source is what makes it count as PRIMARY") and closed the
+PER-MODEL route by making a live failure a FAILED slot. The WHOLE-RUN demo route
+it named was left open; this closes it.
+
+The source is still returned and still shown to the user. Not counting it is not
+the same as hiding it, and a test asserts the reference is still served.
+
+**A defect this fix introduced, caught by the suite.** Making `cited == 0`
+reachable on every demo run exposed a pre-existing early return in
+`_build_source_support` that skipped `_call_synthesis_model` — so a configured
+synthesis model silently stopped being called for that one section, breaking the
+same F-06 billing-record invariant already corrected twice in this change. Three
+tests caught it. It is now a `base` assignment like the other two.
+
 ## Rejected alternatives
 
 * **Raise `_OVERLAP_JACCARD_THRESHOLD` above 0.579.** The module's own comment
