@@ -51,6 +51,7 @@ a mutated *copy* of a workflow or doc tree without dirtying the working tree
 
 from __future__ import annotations
 
+import importlib.util
 import os
 import re
 import shutil
@@ -761,3 +762,52 @@ def test_the_countable_claim_guard_bites() -> None:
             label="invariant specs",
         )
     assert "no longer states" in str(removed.value)
+
+
+# Part D2 — a CAPABILITY claim, pinned the same way a count is (#120 session).
+#
+# AGENTS.md rule 13b tells the next agent that `pytest-randomly` is not
+# installed, so `-p no:randomly` disables a plugin that is not there and test
+# order is deterministic. That claim was measured, and it is exactly the kind
+# that rots silently: the day someone adds the plugin to `pyproject.toml`, the
+# rule becomes actively misleading advice about how to reproduce an ordering
+# bug, and nothing goes red to say so.
+#
+# Unlike the rule-14 contexts table this needs no network, so per AGENTS.md
+# rule 1a it gets a gate instead of a careful re-read.
+
+
+def test_agents_md_is_right_that_pytest_randomly_is_absent() -> None:
+    """RED IF: `pytest-randomly` is installed while rule 13b still says it is not.
+
+    The fix when this fires is to correct rule 13b, not to uninstall anything —
+    the gate pins the DOC to the tree, not the tree to the doc.
+    """
+    text = AGENTS_MD.read_text(encoding="utf-8")
+    claims_absent = "**`pytest-randomly` is NOT installed**" in text
+    assert claims_absent, (
+        "AGENTS.md no longer states rule 13b in the form this gate checks. "
+        "Restore the sentence or update this pattern — do not delete the gate."
+    )
+
+    installed = importlib.util.find_spec("pytest_randomly") is not None
+    assert not installed, (
+        "`pytest-randomly` IS installed, but AGENTS.md rule 13b tells the next "
+        "agent it is not — and therefore that `--randomly-seed` is unavailable "
+        "and test order is deterministic. Both halves are now false. Correct "
+        "rule 13b."
+    )
+
+
+def test_the_capability_claim_guard_bites() -> None:
+    """The partner proving the check above is not vacuous.
+
+    It asserts the *absence* of a module, which is trivially true in an
+    environment where nothing is installed. This drives the same predicate
+    against a module that certainly IS importable, and requires it to fail — so
+    a `find_spec` that always returned ``None`` could not go unnoticed.
+    """
+    assert importlib.util.find_spec("pytest") is not None, (
+        "find_spec cannot see `pytest` itself, so the absence check above "
+        "proves nothing about `pytest_randomly`"
+    )

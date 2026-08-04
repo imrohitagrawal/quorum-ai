@@ -390,6 +390,52 @@ export const goldenCompletedResp = () => ({
   actual_cost_usd: "0.188", actual_breakdown: breakdown("0.188"),
 });
 
+// ---- #120: block structure on the two paths that had none -------------------
+//
+// These are NOT folded into goldenCompletedResp(). That builder feeds the
+// visual-snapshot lane, whose Linux baselines can only be seeded in CI
+// (.github/workflows/seed-visual-baselines.yml), so changing what it renders
+// would red a blocking lane with no way to regenerate the baseline locally.
+// A dedicated builder gives the rendering gate the shapes without touching a
+// single pixel of the visual lane. Stated because it is a real constraint on
+// how this fixture may grow, not a stylistic preference.
+//
+// Every one of these is markdown a provider emits routinely: a quoted set of
+// steps, a caveat list in a caption. MEASURED on 2ba0519 (before the #120 fix)
+// they produced, in the real browser: ol=0 / ul=2 / li=2 inside the blockquote
+// with both ordered markers surviving as literal text, `UL inside <p>` on
+// .result-source-support, and 4 text nodes matching the gate's own
+// ordered-list-marker pattern.
+export const QUOTED_ORDERED_AND_BULLETS =
+  "Here is the panel's reading.\n\n" +
+  "> Steps to follow:\n" +
+  "> 1. Instrument the events first.\n" +
+  "> 2. Then enable the export.\n" +
+  "> - side note alpha\n" +
+  "> - side note beta\n\n" +
+  "The model continued the same procedure in a later quote:\n\n" +
+  "> 4. Reconcile the ledger.\n" +
+  "> 5. Archive the run.\n\n" +
+  "That is the recommendation.";
+
+export const INLINE_ORDERED_LIST =
+  "Open items:\n1. cohort definition\n2. export gate";
+
+export const INLINE_BULLET_LIST =
+  "Caveats:\n- verify the cost figure\n- keep the cap";
+
+/**
+ * The golden completed run, with block structure seeded onto the blockquote
+ * path and both inline-prose paths — the three surfaces issue #120 names.
+ */
+export const goldenRespWithBlockStructure = () => {
+  const resp = goldenCompletedResp() as Record<string, any>;
+  resp.result.final_synthesis.recommendation = QUOTED_ORDERED_AND_BULLETS;
+  resp.result.final_synthesis.uncertainty = INLINE_ORDERED_LIST;
+  resp.result.final_synthesis.source_support = INLINE_BULLET_LIST;
+  return resp;
+};
+
 /**
  * The CONSENSUS shape — 4 of 4 aligned, so `isConsensusResult()` is true and the
  * band paints the one sanctioned large green surface.
