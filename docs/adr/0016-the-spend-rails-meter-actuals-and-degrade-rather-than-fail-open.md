@@ -23,7 +23,7 @@ governed least.
 Three consequences followed, each measured on `main` at `dfc0419`:
 
 1. **The screen was wrong.** The user approved one figure while the system
-   authorised another, 2.34×–2.57× larger across realistic query sizes. The
+   authorised another, **2.23×–2.44×** larger across realistic query sizes. The
    panel also promised *"The run stops itself if spend would pass the approved
    figure"* — a mechanism that does not exist: grepping `src/` finds **no
    runtime spend abort of any kind**. The only real ceiling is `max_cost_usd`,
@@ -67,14 +67,15 @@ All on `main` at `dfc0419`, Python 3.12.13, hermetic, `$0`.
 
 | Claim | Command | Result |
 |---|---|---|
-| Estimate/bound ratio | drive `estimate()` over query sizes 50–8000 chars | **2.573 / 2.536 / 2.462 / 2.343 / 1.465** |
+| Estimate/bound ratio | `estimate()` over 1–19,000 chars with `default_model_slots()` | **2.440 / 2.425 / 2.393 / 2.265 / 2.118 / 1.559 / 1.265** at 1 / 50 / 200 / 800 / 1600 / 6400 / 19,000 chars |
 | Ledger under-meters | book runs until the cap fires | ledger `$0.1758`, bounds `$0.4458` → **2.23×** |
 | Completion moves the ledger | complete a run at 2× its estimate | **`$0.0000`** |
 | No field for an actual | `dataclasses.fields(CostGuardrailEvent)` | `event_type, account_id, query_run_id, estimated_cost_usd, threshold_action, confirmed` — **no actual** |
 | Only one atomic writer | `[m for m in dir(store) if m.startswith("try_")]` | **`['try_record_session_mint']`** |
 | Judge absent from the estimate | breakdown `by_stage` | `initial_answers, debate_round_1, debate_round_2, synthesis` — **no judge** |
 | No runtime spend abort | grep `src/` for a cost abort | **zero hits** |
-| The race | barrier-release N threads between the rail read and the write | 8 → `$0.2344` (1.17×), **32 → `$0.9376` (4.69×)**; serial control `$0.1758`, under cap |
+| The race, `estimate()`-driven harness ($0.0293/run) | barrier-release N threads between the rail read and the write | 8 → `$0.2344` (1.17×), **32 → `$0.9376` (4.69×)**; serial control `$0.1758`, under cap |
+| The race, the shipped test's harness (`UNIT` = $0.02/run) | same barrier | 8 → `$0.16` (0.80×), 16 → `$0.32` (1.60×), 32 → `$0.64` (3.20×) |
 
 **Not reproduced.** The issue-#256 triage claimed the confirmation boundary sits
 at `n=690, est=$0.0677, max=$0.1500` — "the figure on screen is less than half
@@ -85,7 +86,9 @@ which lists `max=$0.0782` at 1000 chars. The defect is real; **the honest
 statement of it is the ratio table, not the boundary.**
 
 **UNVERIFIED.** Whether real cost tracks the estimate or the bound. `/metrics`
-carries no cost series, `/ui/ops` carries none, and
+carries no cost series; `/ui/ops` has a "Global daily spend" tile, but it shows
+the BOOKED total from `/status.global_daily_spend_usd`, not an
+estimate-vs-actual series; and
 `flyctl logs -a quorum-ai --no-tail` retains **100 lines from 2026-08-05T21:03**
 with no `cost_estimate_accuracy` line among them. The reconciliation mechanism
 is correct either way, and it is what makes the ratio measurable from production
@@ -94,8 +97,8 @@ once real runs land.
 ## Rejected alternatives
 
 **Swap the daily rail's addend from `estimated` to `bound`.** Pre-refuted in
-`costs.py` and re-run rather than trusted: it turns **four** tests red, not the
-two the comment names, by converting the confirmation band into a hard block
+`costs.py` and re-run rather than trusted: it turns **at least seven** tests red
+— four cost-related files alone yield seven — by converting the confirmation band into a hard block
 (`AssertionError: assert 'COST_LIMIT_EXCEEDED' == 'COST_CONFIRMATION_REQUIRED'`).
 The ladder `SOFT $0.15 < DAILY $0.20 < HARD $0.25` is load-bearing on itself.
 A post-hoc reconciliation event is untouched by that objection, which is why it
@@ -114,7 +117,8 @@ hold on a path that already takes that lock.
 **Fail closed on an untrustworthy ledger** (`DAILY_CAP_FAIL_CLOSED=true`, the
 mechanism ADR-0004 shipped complete and off). Rejected: it refuses **every**
 priced request with a 402 for the duration of the fault — ADR-0004 measured this
-as "the whole product: every visitor refused" — and it fixes only the small rail,
+as refusing "**every** priced request from **every** account for the duration of
+the fault" — and it fixes only the small rail,
 leaving the 25×-larger global ceiling failing open on the identical fault, which
 is the incoherence ADR-0004 itself names. Degrading is strictly stronger on the
 money question: fail-closed says *we will not authorise what we cannot measure*;

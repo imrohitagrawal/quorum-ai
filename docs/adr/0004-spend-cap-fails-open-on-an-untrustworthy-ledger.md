@@ -5,7 +5,7 @@
 Accepted — 2026-08-03 (major-issues batch, issues #101 / #109 / #122 / #123).
 
 **Superseded on the fault POSTURE by [ADR-0016](0016-the-spend-rails-meter-actuals-and-degrade-rather-than-fail-open.md)**
-(2026-08-06). This ADR weighed exactly two options — refuse every priced
+(2026-08-06). On the POSTURE question this ADR weighed two options — refuse every priced
 request (402), or serve and log loudly — and chose the second. ADR-0016 takes
 a third it did not consider: serve, but force the run into local simulation so
 it spends $0. Everything else here still stands, in particular the three

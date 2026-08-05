@@ -19,6 +19,7 @@ the instant money is committed rather than a whole request earlier.
 
 from __future__ import annotations
 
+import sqlite3
 import threading
 from collections.abc import Iterator
 from datetime import UTC, datetime, timedelta
@@ -30,7 +31,9 @@ import pytest
 from product_app.costs import (
     DAILY_CAP_USD,
     GLOBAL_DAILY_CEILING_USD,
+    CostEstimationService,
     CostThresholdAction,
+    cost_event_recorder,
 )
 from product_app.feedback_store import (
     COST_ACCEPTED_EVENT,
@@ -38,6 +41,7 @@ from product_app.feedback_store import (
     COST_RECONCILED_EVENT,
     ChargeOutcome,
     FeedbackStore,
+    configure,
 )
 
 ACCOUNT_A = UUID("00000000-0000-0000-0000-0000000000a1")
@@ -87,11 +91,7 @@ def _charge(
 
 
 def _event_types(store: FeedbackStore, query_run_id: UUID) -> list[str]:
-    return [
-        row.event_type
-        for row in store.iter_events()
-        if row.query_run_id == str(query_run_id)
-    ]
+    return [row.event_type for row in store.iter_events() if row.query_run_id == str(query_run_id)]
 
 
 # --------------------------------------------------------------- literal pins
@@ -391,9 +391,7 @@ def _race(store: FeedbackStore, *, threads: int, atomic: bool) -> Decimal:
 
 
 @pytest.mark.parametrize("threads", [16, 32])
-def test_concurrent_charges_never_exceed_the_daily_cap(
-    store: FeedbackStore, threads: int
-) -> None:
+def test_concurrent_charges_never_exceed_the_daily_cap(store: FeedbackStore, threads: int) -> None:
     """RED IF the check and the insert stop sharing one hold of the store lock.
 
     MEASURED on the unsynchronised sequence at ``dfc0419``: 8 threads booked
@@ -418,3 +416,130 @@ def test_the_unsynchronised_sequence_really_does_overshoot(
     """
     booked = _race(store, threads=threads, atomic=False)
     assert booked > DAILY_CAP_USD
+
+
+# ------------------------------------------------- defects found by review
+
+
+def test_a_charge_whose_write_fails_does_not_report_recorded(
+    store: FeedbackStore,
+) -> None:
+    """RED IF ``try_record_cost_charge`` stops checking whether ``record()``
+    actually landed the row.
+
+    ``record()`` is best-effort and SWALLOWS its own exception, so a charge can
+    "succeed" with nothing on disk. Adversarial review demonstrated the
+    consequence: the charge returned ``RECORDED``, ``daily_spend_for`` read
+    ``0``, ``lost_billed_writes`` read ``1``, and the caller — which treats
+    ``RECORDED`` as "money may be spent" — started the worker. That is live,
+    unmetered spend against a ledger with no row in it, and it is the exact
+    hole ADR-0016 claims to close, because ``may_be_metered`` is sampled
+    BEFORE the write.
+    """
+    # Positive partner first: the same call on a healthy store DOES record, so
+    # the assertion below cannot pass because charging is broken outright.
+    assert _charge(store)[0] is ChargeOutcome.RECORDED
+
+    class _InsertRefusingConn:
+        """Proxy: reads pass through, INSERTs raise. ``sqlite3.Connection``
+        attributes are read-only, so the connection is WRAPPED rather than
+        patched."""
+
+        def __init__(self, real: object) -> None:
+            self._real = real
+
+        def execute(self, sql: str, *args: object) -> object:
+            if sql.lstrip().upper().startswith("INSERT"):
+                raise sqlite3.OperationalError("disk I/O error")
+            return self._real.execute(sql, *args)  # type: ignore[attr-defined]
+
+        def __getattr__(self, name: str) -> object:
+            return getattr(self._real, name)
+
+    before = store.lost_billed_writes()
+    real_conn = store._conn
+    store._conn = _InsertRefusingConn(real_conn)  # type: ignore[assignment]
+    try:
+        outcome, run_id = _charge(store)
+    finally:
+        store._conn = real_conn
+
+    assert outcome is ChargeOutcome.METERING_UNAVAILABLE
+    assert _event_types(store, run_id) == []
+    # The operator's signal still fires — the run is unmetered, and says so.
+    assert store.lost_billed_writes() == before + 1
+
+
+def test_a_reconciliation_corrects_the_in_memory_rail_too(
+    store: FeedbackStore,
+) -> None:
+    """RED IF ``reconcile_run_charge`` stops correcting the ring.
+
+    The durable ledger and the in-process ring are two meters over the same
+    runs, and only the ring feeds ``_cumulative_spend_for`` /
+    ``HARD_LIMIT_USD``. Reconciling one and not the other was measured
+    blocking an account at $0.2303 of its $0.25 hard limit while the durable
+    ledger — the reconciled truth — read $0.011515 of its $0.20 cap, and
+    telling the user "Cumulative spend for this account is 0.2303 USD": a
+    money figure 20x the truth, shipped by the change that exists to stop
+    false money figures.
+    """
+    configure(store)
+    try:
+        cost_event_recorder.clear()
+        account = uuid4()
+        service = CostEstimationService(binding_secret="x" * 32)
+        run_id = uuid4()
+        outcome = service.try_record_run_charge(
+            account_id=account,
+            query_run_id=run_id,
+            estimated_cost_usd=Decimal("0.02"),
+            threshold_action=CostThresholdAction.ALLOW,
+            confirmed=False,
+            global_ceiling_reached=False,
+        )
+        assert outcome is ChargeOutcome.RECORDED
+        # Positive partner: the ring holds the ESTIMATE before reconciling, so
+        # the assertion below is not measuring an empty ring.
+        assert service._cumulative_spend_for(account) == Decimal("0.02")
+
+        assert service.reconcile_run_charge(
+            account_id=account,
+            query_run_id=run_id,
+            estimated_cost_usd=Decimal("0.02"),
+            actual_cost_usd=Decimal("0.001"),
+        )
+
+        assert store.daily_spend_for(account) == Decimal("0.001")
+        assert service._cumulative_spend_for(account) == Decimal("0.001")
+    finally:
+        configure(None)
+        cost_event_recorder.clear()
+
+
+def test_corrections_are_applied_in_insertion_order_not_query_plan_order(
+    store: FeedbackStore,
+) -> None:
+    """RED IF the ``ORDER BY id`` is removed from the corrections query.
+
+    Corrections overwrite one another in visit order, so without an explicit
+    order the money answer depends on which index SQLite happens to pick.
+    Adversarial review observed the planner returning a void BEFORE a
+    reconciliation for the same run, which let the reconciliation resurrect a
+    voided charge at its measured cost. This writes them in that causal order
+    — reconcile, then void — and pins that the LAST one wins.
+    """
+    _outcome, run_id = _charge(store, amount=Decimal("0.02"))
+    assert store.try_record_cost_reconciliation(
+        account_id=ACCOUNT_A,
+        query_run_id=run_id,
+        estimated_cost_usd=Decimal("0.02"),
+        actual_cost_usd=Decimal("0.05"),
+    )
+    assert store.daily_spend_for(ACCOUNT_A) == Decimal("0.05")  # positive partner
+
+    store.void_cost_charge(account_id=ACCOUNT_A, query_run_id=run_id, reason="test")
+
+    # The void was written LAST, so the void wins. A plan-order-dependent
+    # implementation can return 0.05 here.
+    assert store.daily_spend_for(ACCOUNT_A) == Decimal("0")

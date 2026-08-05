@@ -25,11 +25,12 @@ import time
 import warnings
 from collections.abc import Callable
 from dataclasses import asdict, dataclass
+from dataclasses import replace as dataclass_replace
 from datetime import UTC, datetime, timedelta
 from decimal import ROUND_FLOOR, ROUND_HALF_UP, Decimal
 from enum import StrEnum
 from threading import RLock
-from typing import Any
+from typing import TYPE_CHECKING, Any
 from uuid import UUID, uuid4
 
 from pydantic import BaseModel, Field
@@ -38,6 +39,9 @@ from product_app.catalog_fetcher import _FALLBACK_CATALOG
 from product_app.config import settings
 from product_app.feedback_store import record_event as _record_feedback_event
 from product_app.model_slots import DEFAULT_MODEL_IDS, ModelSlot, openrouter_model_catalog_service
+
+if TYPE_CHECKING:  # import cycle at runtime; the annotation is a string
+    from product_app.feedback_store import ChargeOutcome
 
 _log = logging.getLogger(__name__)
 
@@ -327,9 +331,14 @@ class CostEstimate(BaseModel):
     #: screen.
     #:
     #: ADR-0016 records this decision and supersedes ADR-0004, which chose to
-    #: fail OPEN here. ADR-0004 weighed exactly two options — refuse everyone
-    #: (402) or serve and log — and this is the third it did not consider:
-    #: serve, but spend nothing.
+    #: fail OPEN here. On the POSTURE question ADR-0004 chose between refusing
+    #: everyone (402) and serving-and-logging; this is a third it did not
+    #: consider: serve, but spend nothing. It did NOT weigh only two
+    #: alternatives overall — it lists five, one of which,
+    #: "reserve-then-commit in one transaction", it called *the correct design,
+    #: deferred*. That is what ``try_record_cost_charge`` implements, so the
+    #: atomic half of this work is ADR-0004's own recommendation taken up, not
+    #: a new idea.
     spend_metering_unavailable: bool = False
 
 
@@ -425,11 +434,35 @@ class InMemoryCostEventRecorder:
                 e
                 for e in self._events
                 if not (
-                    e.query_run_id == query_run_id
-                    and e.event_type == "cost_guardrail_accepted"
+                    e.query_run_id == query_run_id and e.event_type == "cost_guardrail_accepted"
                 )
             ]
             return before - len(self._events)
+
+    def reconcile_charge_for_run(self, query_run_id: UUID, actual_cost_usd: Decimal) -> int:
+        """Correct this run's ring entry from its estimate to its measured cost.
+
+        The ring is the meter ``_cumulative_spend_for`` reads, and it is a
+        SEPARATE rail from the durable ledger. Reconciling only the durable one
+        makes the two disagree about the same run, and the un-reconciled one is
+        the one that binds first: adversarial review measured an account whose
+        runs each really cost a twentieth of their estimate blocked at
+        ``$0.2303`` of the ``$0.25`` hard limit while the durable ledger — the
+        reconciled truth — read ``$0.011515`` of its ``$0.20`` cap. The account
+        was refused after spending 5.8% of its budget AND shown "Cumulative
+        spend for this account is 0.2303 USD", a money figure 20x the truth, in
+        the very change whose other half exists to stop false money figures.
+
+        Returns the number of ring entries corrected, so a caller can assert
+        cardinality rather than trusting the call happened.
+        """
+        with self._lock:
+            corrected = 0
+            for i, e in enumerate(self._events):
+                if e.query_run_id == query_run_id and e.event_type == "cost_guardrail_accepted":
+                    self._events[i] = dataclass_replace(e, estimated_cost_usd=actual_cost_usd)
+                    corrected += 1
+            return corrected
 
     def list_events(self) -> list[CostGuardrailEvent]:
         with self._lock:
@@ -732,9 +765,10 @@ class CostEstimationService:
                 # local simulation, so an unmeasurable window costs $0 instead
                 # of an unmetered amount bounded only by the in-memory rail.
                 #
-                # ADR-0004 weighed exactly two options, refuse or serve-and-log,
-                # and measured the first as "the whole product: every visitor
-                # refused". This is the third: serve, but spend nothing. It also
+                # ADR-0004 weighed refuse-everyone against serve-and-log on
+                # this question, and described the first as refusing "every
+                # priced request from every account for the duration of the
+                # fault". This is a third: serve, but spend nothing. It also
                 # removes the incoherence ADR-0004 itself named — the 25x-larger
                 # global rail fails open on the identical fault — because the
                 # SAME degrade now covers both.
@@ -829,9 +863,13 @@ class CostEstimationService:
     def _log_daily_cap_bypassed(self) -> None:
         """Announce a skipped daily cap, at most once per window.
 
-        Emits nothing else and returns nothing: the caller's ``CostEstimate``
-        must be identical with and without this call (asserted by
-        ``test_the_bypass_log_does_not_change_the_returned_estimate``).
+        Emits nothing else and returns nothing. THIS CALL still changes no field
+        of the caller's ``CostEstimate`` — but since ADR-0016 the surrounding
+        branch does: it sets ``spend_metering_unavailable``, so the run degrades
+        to simulation rather than spending unmetered. Asserted field-by-field by
+        ``test_a_bypassed_cap_changes_exactly_one_field_on_the_returned_estimate``
+        — renamed from ``…_does_not_change_the_returned_estimate``, which named
+        the superseded ADR-0004 contract.
 
         The window bookkeeping runs under the service lock so two concurrent
         request threads cannot both decide they are the first — the point of a
@@ -1141,6 +1179,42 @@ class CostEstimationService:
                 client_ip=client_ip,
             )
         return outcome
+
+    def reconcile_run_charge(
+        self,
+        *,
+        account_id: UUID,
+        query_run_id: UUID,
+        estimated_cost_usd: Decimal,
+        actual_cost_usd: Decimal,
+    ) -> bool:
+        """Correct this run's charge to its measured cost on BOTH spend rails.
+
+        The durable ledger and the in-process ring are separate meters over the
+        same runs, and correcting one without the other makes them disagree —
+        see :meth:`InMemoryCostEventRecorder.reconcile_charge_for_run` for the
+        measured consequence. Kept in one method for the same reason
+        :meth:`void_run_charge` is.
+
+        The ring is corrected ONLY when the durable write succeeded, so the two
+        rails cannot diverge in the other direction either: the store's guards
+        (no open charge / already reconciled / already voided) decide once, and
+        the ring follows that decision rather than making its own.
+        """
+        from product_app.feedback_store import get_store  # local import to avoid cycles
+
+        store = get_store()
+        if store is None:
+            return False
+        written = store.try_record_cost_reconciliation(
+            account_id=account_id,
+            query_run_id=query_run_id,
+            estimated_cost_usd=estimated_cost_usd,
+            actual_cost_usd=actual_cost_usd,
+        )
+        if written:
+            cost_event_recorder.reconcile_charge_for_run(query_run_id, actual_cost_usd)
+        return written
 
     def void_run_charge(
         self,

@@ -489,6 +489,18 @@ class QueryRunResultResponse(BaseModel):
     #: demo copy. Mirrors ``cost_estimate.global_ceiling_reached``, decided
     #: once at create time — never re-derived from run-time state.
     global_spend_ceiling_reached: bool = False
+    #: ``True`` when this run was degraded to local simulation because the
+    #: spend LEDGER could not be metered, not because a budget was reached
+    #: (ADR-0016). Mirrors ``cost_estimate.spend_metering_unavailable``.
+    #:
+    #: It exists for the same reason ``global_spend_ceiling_reached`` does, and
+    #: shipping the degrade without it was caught in adversarial review: with
+    #: no signal on the wire, the banner fell through to its default clause and
+    #: told the user "Live execution is turned off", which is FALSE on this
+    #: path — live execution is on, a key is configured, and the ledger is the
+    #: thing that failed. The separate-flag decision was justified by "never
+    #: put a false reason on screen", so the flag has to reach the screen.
+    spend_metering_unavailable: bool = False
     #: Informational only: how many material claims the four answers were
     #: LONG ENOUGH to hold, from ``providers.estimate_material_claim_count``
     #: (a ~200-chars-per-claim heuristic).
@@ -1511,9 +1523,7 @@ def _start_reserved_query_run(
         if charge is ChargeOutcome.OVER_GLOBAL_CEILING:
             query_run = query_run_repository.mark_global_ceiling_reached(query_run.query_run_id)
         elif charge is ChargeOutcome.METERING_UNAVAILABLE:
-            query_run = query_run_repository.mark_spend_metering_unavailable(
-                query_run.query_run_id
-            )
+            query_run = query_run_repository.mark_spend_metering_unavailable(query_run.query_run_id)
         _execute_query_run(query_run.query_run_id, session.account_id)
         query_run = query_run_repository.get(query_run.query_run_id)
         # Legacy/test path runs inline (no safety wrapper), so persist the
@@ -2346,12 +2356,11 @@ def _reconcile_run_billing(*, query_run: QueryRun, response: QueryRunResultRespo
     if response.cost_source != "measured":
         return
     with contextlib.suppress(Exception):
-        from product_app.feedback_store import get_store
-
-        store = get_store()
-        if store is None:
-            return
-        store.try_record_cost_reconciliation(
+        # BOTH rails, through ONE call. The durable ledger and the in-process
+        # cumulative ring are separate meters over the same run; correcting
+        # only the durable one leaves the ring summing estimates forever, and
+        # the ring is the rail that binds first.
+        cost_estimation_service.reconcile_run_charge(
             account_id=query_run.account_id,
             query_run_id=query_run.query_run_id,
             estimated_cost_usd=query_run.cost_estimate.estimated_cost_usd,
@@ -2900,6 +2909,7 @@ def _result_response(query_run: QueryRun) -> QueryRunResultResponse:
         live_count=live_count,
         local_count=local_count,
         global_spend_ceiling_reached=query_run.cost_estimate.global_ceiling_reached,
+        spend_metering_unavailable=query_run.cost_estimate.spend_metering_unavailable,
         material_claim_count=material_claim_count,
         actual_cost_usd=actual_cost_usd,
         actual_breakdown=actual_breakdown,

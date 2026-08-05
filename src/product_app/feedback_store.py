@@ -87,6 +87,7 @@ DEFAULT_DB_PATH = ".data/feedback_events.sqlite3"
 #: it is a lock that will never be released.
 _CLOSE_LOCK_TIMEOUT_S = 5.0
 
+
 class ChargeOutcome(StrEnum):
     """What :meth:`FeedbackStore.try_record_cost_charge` decided.
 
@@ -242,6 +243,29 @@ class FeedbackStore:
         ON events (recorder, event_type);
     """
 
+    #: Covering index for the spend rails. Deliberately NOT in ``_SCHEMA``, for
+    #: exactly the reason ``_SCHEMA``'s neighbours document: that script runs
+    #: UNGUARDED in ``__init__``, and on an existing database every statement in
+    #: it is already a no-op, so it never writes. A brand-new index is not a
+    #: no-op on an existing database — it is a write — so putting it there makes
+    #: the store fail to BOOT on a read-only volume. MEASURED: doing so turned
+    #: ``test_read_only_database_degrades_to_pre_backfill_behaviour_instead_of_failing_to_boot``
+    #: red. Applied best-effort below instead: an index is a performance
+    #: property, and losing it must never cost availability.
+    #:
+    #: Why it exists: the rails seek on ``(recorder, event_type)`` AND the 24h
+    #: window, and without ``recorded_at`` in the index the window is filtered
+    #: during the row visit — so every charge scans the table's LIFETIME
+    #: history, not the day's. Nothing prunes this table and it lives on a
+    #: persistent volume. MEASURED in adversarial review at 600 cost rows/day,
+    #: with the store's single global lock held for the whole call: 605 rows ->
+    #: 2.13 ms per charge, 60,015 rows (100 days) -> 41.68 ms, 180,020 rows
+    #: (300 days) -> 96.40 ms. Linear in history, not in the window.
+    _SPEND_RAIL_INDEX = (
+        "CREATE INDEX IF NOT EXISTS events_recorder_type_time_idx "
+        "ON events (recorder, event_type, recorded_at)"
+    )
+
     #: Deliberately NOT part of ``_SCHEMA``. ``_SCHEMA`` runs unguarded in
     #: ``__init__``, and on an existing DB every statement in it is already a
     #: no-op, so it needs no write. Adding a brand-new ``CREATE TABLE`` there
@@ -339,6 +363,12 @@ class FeedbackStore:
         self._conn.row_factory = sqlite3.Row
         with self._lock:
             self._conn.executescript(self._SCHEMA)
+            # Best-effort, and AFTER the schema: see ``_SPEND_RAIL_INDEX``. A
+            # read-only volume must still boot and serve reads; it simply runs
+            # the rails without the covering index, exactly as every release
+            # before this one did.
+            with suppress(sqlite3.Error):
+                self._conn.execute(self._SPEND_RAIL_INDEX)
         self._backfill_f01_preview_rows()
         _open_stores.add(self)
 
@@ -524,8 +554,19 @@ class FeedbackStore:
         query_run_id: UUID | None,
         recorded_at: datetime,
         payload: dict[str, Any],
-    ) -> None:
+    ) -> bool:
         """Append one event row. Best-effort: a failed write is logged and swallowed.
+
+        Returns ``True`` if the row LANDED, ``False`` if the write failed. Every
+        pre-existing caller ignores the value and keeps its best-effort
+        behaviour unchanged; the return exists for
+        :meth:`try_record_cost_charge`, which must not tell its caller "money
+        may be spent" off a write that did not happen. Adversarial review
+        demonstrated exactly that: with the INSERT raising ``disk I/O error``
+        the charge returned ``RECORDED``, ``daily_spend_for`` read ``0``,
+        ``lost_billed_writes`` read ``1``, and the run went live at full spend
+        with no row on disk — the precise hole ADR-0016 exists to close,
+        because ``may_be_metered`` is sampled BEFORE the write.
 
         The hot path is the in-memory recorder; this sink is a write-through
         cache. A failure here must not crash the request handler. The
@@ -580,7 +621,7 @@ class FeedbackStore:
             else:
                 self._last_write_success_at = self._monotonic()
         if failure is None:
-            return
+            return True
         _log.warning(
             "feedback_store: failed to persist event recorder=%s type=%s: %s",
             recorder,
@@ -635,6 +676,7 @@ class FeedbackStore:
                 lost_total,
                 LOST_COST_EVENT_LOG_INTERVAL_S,
             )
+        return False
 
     def _claim_lost_cost_event_log_slot(self) -> bool:
         """Check-then-set the ERROR suppression window. Call with the lock HELD.
@@ -654,41 +696,44 @@ class FeedbackStore:
     def lost_billed_writes(self) -> int:
         """How many BILLED cost events this process failed to persist.
 
-        Counts exactly the ``(recorder, event_type)`` pairs in
-        :attr:`~product_app.feedback_store._METERED_WRITES` — the pairs
-        :meth:`daily_spend_for` sums — and nothing else. Monotonically
-        increasing: never reset, and a later successful write does not clear it.
+            Counts exactly the ``(recorder, event_type)`` pairs in
+            :attr:`~product_app.feedback_store._METERED_WRITES` — the pairs
+            :meth:`daily_spend_for` sums — and nothing else. Monotonically
+            increasing: never reset, and a later successful write does not clear it.
 
-        WHY A COUNTER AND NOT ANOTHER STAMP (issue #109 review, B1). This store
-        is shared by every recorder, and :meth:`write_health` reports the store's
-        LAST write, not the cost stream's. In production
-        ``query_runs._start_reserved_query_run`` calls ``Thread.start()`` before
-        ``_record_run_billing``, so provider/debate/synthesis/evaluation/
-        model_slot/safety events are landing in this same store while the billed
-        write is attempted; any one of them re-stamps success over the failure.
-        MEASURED through the real route with a transient RESERVED hold across only
-        the billed write: 8 runs accepted, $0.2088 actually billed against a $0.20
-        cap, ZERO ``cost_guardrail_accepted`` rows on disk — and ``/status``
-        reading ``feedback_db='connected' feedback_writes='ok'`` throughout,
-        byte-indistinguishable from the healthy control (which BLOCKs on run 8 at
-        $0.1827). ``feedback_events_total`` even CLIMBED, reinforcing the wrong
-        conclusion. A stamp can be masked by any other writer; a count that only
-        goes up cannot.
+            WHY A COUNTER AND NOT ANOTHER STAMP (issue #109 review, B1). This store
+            is shared by every recorder, and :meth:`write_health` reports the store's
+            LAST write, not the cost stream's. In production
+            (ORDER REVERSED BY ADR-0016 — the charge is now written BEFORE
+        ``Thread.start()``, and a failed handover VOIDS it; what follows
+        describes the pre-#255 order.)
+        ``query_runs._start_reserved_query_run`` called ``Thread.start()`` before
+            ``_record_run_billing``, so provider/debate/synthesis/evaluation/
+            model_slot/safety events are landing in this same store while the billed
+            write is attempted; any one of them re-stamps success over the failure.
+            MEASURED through the real route with a transient RESERVED hold across only
+            the billed write: 8 runs accepted, $0.2088 actually billed against a $0.20
+            cap, ZERO ``cost_guardrail_accepted`` rows on disk — and ``/status``
+            reading ``feedback_db='connected' feedback_writes='ok'`` throughout,
+            byte-indistinguishable from the healthy control (which BLOCKs on run 8 at
+            $0.1827). ``feedback_events_total`` even CLIMBED, reinforcing the wrong
+            conclusion. A stamp can be masked by any other writer; a count that only
+            goes up cannot.
 
-        It is also the only field that separates "one charge was lost" from "a
-        hundred were": the ERROR is rate-limited to one record per
-        ``LOST_COST_EVENT_LOG_INTERVAL_S``, so the log alone cannot tell them
-        apart.
+            It is also the only field that separates "one charge was lost" from "a
+            hundred were": the ERROR is rate-limited to one record per
+            ``LOST_COST_EVENT_LOG_INTERVAL_S``, so the log alone cannot tell them
+            apart.
 
-        Scope, stated narrowly: this is a count of losses inside THIS process. It
-        says nothing about losses in an earlier process, and a restart starts it
-        at zero — the durable evidence of a gap is the absence of the rows
-        themselves, which the runbook's read-only query counts. It also assumes a
-        SINGLE application process: ``/status`` reads the counter out of the
-        memory of whichever worker served the request, so with more than one
-        worker a loss on a sibling worker is invisible and the masking this
-        counter exists to defeat comes back. The ``Dockerfile`` runs uvicorn with
-        ``--workers 1``, which is what makes the assumption hold today.
+            Scope, stated narrowly: this is a count of losses inside THIS process. It
+            says nothing about losses in an earlier process, and a restart starts it
+            at zero — the durable evidence of a gap is the absence of the rows
+            themselves, which the runbook's read-only query counts. It also assumes a
+            SINGLE application process: ``/status`` reads the counter out of the
+            memory of whichever worker served the request, so with more than one
+            worker a loss on a sibling worker is invisible and the masking this
+            counter exists to defeat comes back. The ``Dockerfile`` runs uvicorn with
+            ``--workers 1``, which is what makes the assumption hold today.
         """
         with self._lock:
             return self._lost_billed_writes
@@ -881,7 +926,15 @@ class FeedbackStore:
                 "SELECT query_run_id, event_type, payload FROM events "
                 "WHERE recorder = 'cost' AND event_type IN "
                 f"('{COST_RECONCILED_EVENT}', '{COST_CHARGE_VOIDED_EVENT}') "
-                f"{account_predicate}AND recorded_at >= ?",
+                f"{account_predicate}AND recorded_at >= ? "
+                # ORDER BY is LOAD-BEARING, not tidiness. Corrections overwrite
+                # each other in visit order, so without it the money answer
+                # depends on which index SQLite picks: adversarial review
+                # showed the planner returning a void BEFORE a reconciliation
+                # for the same run, letting the reconciliation resurrect a
+                # voided charge at its measured cost. ``id`` is the insertion
+                # order and therefore the causal order.
+                "ORDER BY id",
                 (*account_args, cutoff_iso),
             )
             for row in cursor:
@@ -1043,7 +1096,7 @@ class FeedbackStore:
                 return ChargeOutcome.OVER_DAILY_CAP
             if self._spend_total_locked(cutoff=cutoff, account_id=None) >= global_ceiling_usd:
                 return ChargeOutcome.OVER_GLOBAL_CEILING
-            self.record(
+            landed = self.record(
                 recorder="cost",
                 event_type=COST_ACCEPTED_EVENT,
                 account_id=account_id,
@@ -1051,6 +1104,15 @@ class FeedbackStore:
                 recorded_at=when,
                 payload=payload,
             )
+            if not landed:
+                # The rails were readable a microsecond ago and the write still
+                # failed, so this run is unmetered from here on. Saying
+                # RECORDED would authorise live spend against a ledger with no
+                # row in it — demonstrated in adversarial review, with
+                # ``daily_spend_for`` reading 0 while the run went live.
+                # Degrade instead: the run costs $0 and the operator gets the
+                # ``lost_billed_writes`` ERROR ``record()`` just raised.
+                return ChargeOutcome.METERING_UNAVAILABLE
             return ChargeOutcome.RECORDED
 
     def try_record_cost_reconciliation(

@@ -82,9 +82,21 @@ def test_no_pre_s2_field_was_changed_or_made_required() -> None:
         "the required set changed — that is a breaking contract change, not an additive one"
     )
     assert set(schema["properties"]) >= PRE_S2_PROPERTIES
-    assert set(schema["properties"]) - PRE_S2_PROPERTIES == {"evaluation"}, (
-        "S2 must add exactly one new field to QueryRunResultResponse"
-    )
+    # The two assertions above ARE the contract this test is named for, and
+    # neither moves: no pre-S2 field changed and the required set is identical.
+    # This third one pins the ADDITIVE delta so an unplanned field cannot
+    # arrive unnoticed — it still fails for anything not named here.
+    #
+    # ``spend_metering_unavailable`` joined ``evaluation`` in ADR-0016. It is
+    # optional with a ``False`` default, so a pre-S2 client that ignores it
+    # stays valid. It is on the wire because without it the demo-mode banner
+    # falls through to "live execution is turned off", which is FALSE on that
+    # path — live execution is on and a key is configured; the spend LEDGER is
+    # what failed.
+    assert set(schema["properties"]) - PRE_S2_PROPERTIES == {
+        "evaluation",
+        "spend_metering_unavailable",
+    }, "an unplanned field was added to QueryRunResultResponse"
 
 
 def test_served_evaluation_never_declares_a_judge_rationale() -> None:

@@ -293,3 +293,10 @@ def test_an_unmeterable_ledger_forces_local_simulation_and_calls_no_provider(
     # drive different user-facing copy, so conflating them would put a false
     # reason on screen (``app.js`` ``computeDemoModeBannerCopy``).
     assert body["global_spend_ceiling_reached"] is False
+    # ...and the RIGHT cause does reach the user. RED IF the flag stops being
+    # served: the banner then falls through to its default clause and says
+    # "Live execution is turned off", which is FALSE here — this very test
+    # turns live execution ON and configures a key. Adversarial review caught
+    # exactly that gap: the separate-flag decision was justified by "never put
+    # a false reason on screen", and the flag was not reaching the screen.
+    assert body["spend_metering_unavailable"] is True

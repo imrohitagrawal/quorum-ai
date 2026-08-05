@@ -69,7 +69,10 @@ Both directions are asserted below.
 
 WHY THE COMPARATOR IS NOT ENOUGH ON ITS OWN, and why a second signal exists: the
 stamps describe the STORE's last write, not the COST stream's. In production
-``_record_run_billing`` runs after ``Thread.start()`` in
+(ORDER REVERSED BY ADR-0016 — the charge is now written BEFORE
+    ``Thread.start()``, and a failed handover VOIDS it; what follows
+    describes the pre-#255 order.)
+    ``_record_run_billing`` ran after ``Thread.start()`` in
 ``query_runs._start_reserved_query_run``, so provider/debate/synthesis/
 evaluation/model_slot/safety events from the worker are landing in the same
 store while the billed write is being attempted. Any landed write of any
@@ -345,7 +348,10 @@ def _telemetry(store: FeedbackStore, *, pad: str = "") -> None:
     """Write one PROVIDER event — a stream ``daily_spend_for`` never reads.
 
     Deliberately the shape the worker thread emits while a billed write is in
-    flight: ``query_runs._start_reserved_query_run`` calls ``Thread.start()``
+    flight: (ORDER REVERSED BY ADR-0016 — the charge is now written BEFORE
+    ``Thread.start()``, and a failed handover VOIDS it; what follows
+    describes the pre-#255 order.)
+    ``query_runs._start_reserved_query_run`` called ``Thread.start()``
     BEFORE ``_record_run_billing``, so these are exactly the writes that can
     re-stamp success over a lost charge.
     """
@@ -1101,7 +1107,10 @@ def test_a_landed_telemetry_write_masks_the_stamp_but_not_the_counter(
 ) -> None:
     """The production interleaving, reduced to one charge and one worker event.
 
-    ``query_runs._start_reserved_query_run`` calls ``Thread.start()`` before
+    (ORDER REVERSED BY ADR-0016 — the charge is now written BEFORE
+    ``Thread.start()``, and a failed handover VOIDS it; what follows
+    describes the pre-#255 order.)
+    ``query_runs._start_reserved_query_run`` called ``Thread.start()`` before
     ``_record_run_billing``, so the worker's provider/synthesis/debate writes are
     landing in the same store while the billed write is attempted. MEASURED
     through the real route with a transient RESERVED hold across only the billed

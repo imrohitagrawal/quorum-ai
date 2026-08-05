@@ -1184,6 +1184,10 @@ components:
           type: boolean
           title: Global Spend Ceiling Reached
           default: false
+        spend_metering_unavailable:
+          type: boolean
+          title: Spend Metering Unavailable
+          default: false
         material_claim_count:
           type: integer
           minimum: 0.0
