@@ -76,6 +76,7 @@ from product_app.evaluation import (
     judge_configured,
     presentation_confidence,
 )
+from product_app.feedback_store import ChargeOutcome
 from product_app.feedback_store import record_event as _record_feedback_event
 from product_app.model_slots import (
     InvalidModelSlotError,
@@ -895,6 +896,23 @@ class InMemoryQueryRunRepository:
             query_run.updated_at = datetime.now(UTC)
             return query_run
 
+    def mark_global_ceiling_reached(self, query_run_id: UUID) -> QueryRun:
+        """Flag a run as ceiling-degraded after its estimate was taken (#255).
+
+        ``estimate`` decides this for the common case and the decision rides on
+        the stored ``CostEstimate``. This mutator exists for the ONE case that
+        decision cannot cover: the deployment-wide ceiling was crossed between
+        this run's estimate and its atomic charge, by another account's run
+        that got there first. ``_execute_query_run`` reads the stored flag, so
+        setting it here — before ``Thread.start()`` — is what makes the worker
+        simulate rather than spend.
+        """
+        with self._lock:
+            query_run = self._query_runs[query_run_id]
+            query_run.cost_estimate.global_ceiling_reached = True
+            query_run.updated_at = datetime.now(UTC)
+            return query_run
+
     def record_debate_outputs(
         self,
         query_run_id: UUID,
@@ -1459,9 +1477,26 @@ def _start_reserved_query_run(
     # the final state synchronously. Production / cookie path runs in a
     # background thread that cannot block the request response.
     if session.legacy:
-        _record_run_billing(
+        charge = _record_run_billing(
             session=session, query_run=query_run, cost_decision=cost_decision, client_ip=client_ip
         )
+        # Same three-way decision as the production path below. Kept in step
+        # deliberately: a rail that only holds on one of the two paths is a rail
+        # whose tests can pass while production overspends.
+        if charge is ChargeOutcome.OVER_DAILY_CAP:
+            _abandon_unstarted_run(query_run.query_run_id)
+            raise HTTPException(
+                status_code=status.HTTP_402_PAYMENT_REQUIRED,
+                detail={
+                    "code": "COST_LIMIT_EXCEEDED",
+                    "message": (
+                        "Account has reached its daily spend cap; no further "
+                        "queries can be accepted until the window resets."
+                    ),
+                },
+            )
+        if charge is ChargeOutcome.OVER_GLOBAL_CEILING:
+            query_run = query_run_repository.mark_global_ceiling_reached(query_run.query_run_id)
         _execute_query_run(query_run.query_run_id, session.account_id)
         query_run = query_run_repository.get(query_run.query_run_id)
         # Legacy/test path runs inline (no safety wrapper), so persist the
@@ -1474,11 +1509,48 @@ def _start_reserved_query_run(
     # the permit, and once it returns the worker owns it and releases it in its
     # ``finally``. So everything that can fail is arranged around that one
     # statement — the response is built before it (a failure there must not
-    # leave a running worker unaccounted for), the billing after it (a run that
-    # never started must not be charged). Anything raising before the handover
-    # propagates to the caller's handler, which returns the permit; nothing
-    # after it can leak or double-release.
+    # leave a running worker unaccounted for). Anything raising before the
+    # handover propagates to the caller's handler, which returns the permit;
+    # nothing after it can leak or double-release.
+    #
+    # WHY THE CHARGE MOVED AHEAD OF ``start()`` (issue #255, the spend race).
+    # It used to be recorded strictly AFTER the handover, so that a run whose
+    # worker never started could not be billed (F-01). But the worker is what
+    # SPENDS, so a charge written after it starts cannot gate anything: the two
+    # rails were read a whole request earlier in ``costs.estimate`` and nothing
+    # re-tested them at the moment money was committed. MEASURED: 32 concurrent
+    # runs booked 4.69x the $0.20 daily cap. The charge is now an ATOMIC
+    # check-and-record (``try_record_run_charge``) placed BEFORE the handover,
+    # so it precedes every dollar the worker can spend. F-01 is preserved by
+    # the ``except`` below, which VOIDS the charge if the handover fails —
+    # a compensating event, because the sink is append-only.
     response = _create_response_for(query_run)
+    charge = _record_run_billing(
+        session=session, query_run=query_run, cost_decision=cost_decision, client_ip=client_ip
+    )
+    if charge is ChargeOutcome.OVER_DAILY_CAP:
+        # The cap was crossed between this run's estimate and its charge — by
+        # another request for the same account that got there first. Nothing
+        # was written and nothing has run, so refuse with the same 402 the
+        # estimate-time check would have produced.
+        _abandon_unstarted_run(query_run.query_run_id)
+        raise HTTPException(
+            status_code=status.HTTP_402_PAYMENT_REQUIRED,
+            detail={
+                "code": "COST_LIMIT_EXCEEDED",
+                "message": (
+                    "Account has reached its daily spend cap; no further "
+                    "queries can be accepted until the window resets."
+                ),
+            },
+        )
+    if charge is ChargeOutcome.OVER_GLOBAL_CEILING:
+        # The deployment-wide ceiling degrades rather than blocks. Mark the
+        # stored run so the worker simulates the whole thing — the same signal
+        # ``estimate`` sets when it sees the ceiling, read at the one place
+        # that acts on it (``_execute_query_run``).
+        query_run = query_run_repository.mark_global_ceiling_reached(query_run.query_run_id)
+        response = _create_response_for(query_run)
     try:
         Thread(
             target=_execute_query_run_with_semaphore_release,
@@ -1490,17 +1562,12 @@ def _start_reserved_query_run(
         # must not keep the account's single active-run slot — the same
         # failure class the 503 path above closes. ``Thread.start()`` raises
         # ``RuntimeError`` under thread exhaustion and during interpreter
-        # shutdown. Billing is deliberately recorded only AFTER ``start()``
-        # returns, so there is nothing to un-bill here (the sink is
-        # append-only); all that is left is to free the account's slot. The
-        # caller's handler returns the capacity permit.
+        # shutdown. The charge is now written BEFORE this point, so there IS
+        # something to un-bill: void it. The caller's handler returns the
+        # capacity permit.
+        _void_run_billing(session=session, query_run=query_run, reason="worker_never_started")
         _abandon_unstarted_run(query_run.query_run_id)
         raise
-    # The worker owns the run now. Bill it: this is the ONE spend-counted
-    # event for this logical run (F-01).
-    _record_run_billing(
-        session=session, query_run=query_run, cost_decision=cost_decision, client_ip=client_ip
-    )
     return response
 
 
@@ -1510,16 +1577,22 @@ def _record_run_billing(
     query_run: QueryRun,
     cost_decision: CostGuardrailDecision,
     client_ip: str | None = None,
-) -> None:
-    """Record the one spend-counted cost event for a run that is executing.
+) -> ChargeOutcome:
+    """Open the one spend-counted charge for a run that is about to execute.
 
     ``cost_guardrail_accepted`` is the only event type the two spend guards
     (``CostEstimationService._cumulative_spend_for`` and
     ``FeedbackStore.daily_spend_for``) count, so this call is the account's
     bill for this run. It must therefore happen once, and only for a run that
-    really runs — see F-01.
+    really runs — see F-01, and ``_void_run_billing`` for the one path that
+    takes it back.
+
+    Both rails are re-tested INSIDE the store's lock as the row goes in, so the
+    returned outcome is the caller's instruction, not advice: ``OVER_DAILY_CAP``
+    means refuse, ``OVER_GLOBAL_CEILING`` means degrade to simulation, and only
+    ``RECORDED`` means money may be spent.
     """
-    cost_estimation_service.record_guardrail_event(
+    return cost_estimation_service.try_record_run_charge(
         account_id=session.account_id,
         query_run_id=query_run.query_run_id,
         estimated_cost_usd=query_run.cost_estimate.estimated_cost_usd,
@@ -1540,6 +1613,28 @@ def _record_run_billing(
         global_ceiling_reached=query_run.cost_estimate.global_ceiling_reached,
         client_ip=client_ip,
     )
+
+
+def _void_run_billing(
+    *,
+    session: SessionContext,
+    query_run: QueryRun,
+    reason: str,
+) -> None:
+    """Take back the charge for a run whose worker never started (F-01).
+
+    The events sink is append-only, so the charge is cancelled by a later event
+    keyed on the same ``query_run_id``, never by a DELETE. Best-effort: this
+    runs on a path that is already raising, and failing to tidy up must not
+    mask that error. The direction it fails in is over-metering, which is the
+    safe one.
+    """
+    with contextlib.suppress(Exception):
+        cost_estimation_service.void_run_charge(
+            account_id=session.account_id,
+            query_run_id=query_run.query_run_id,
+            reason=reason,
+        )
 
 
 def _abandon_unstarted_run(query_run_id: UUID) -> None:
@@ -2194,6 +2289,46 @@ def _log_estimate_accuracy(query_run_id: UUID) -> None:
         logger.debug("cost_estimate_accuracy logging failed: %s", exc)
 
 
+def _reconcile_run_billing(*, query_run: QueryRun, response: QueryRunResultResponse) -> None:
+    """Replace this run's booked estimate with what it really cost (issue #255).
+
+    Before this, both spend rails metered ESTIMATES and nothing ever corrected
+    them: a $0.20 daily cap admitted six runs booked at $0.1758 whose worst-case
+    bounds summed to $0.4458, and the measured actual — which this very function
+    is handed — was written only to ``run_history.sqlite3``, a different SQLite
+    file the caps never read.
+
+    Only a **measured** cost is written back. ``cost_source == "estimated"``
+    means the strict honesty gate in :func:`_actual_cost` did NOT pass, so the
+    "actual" is the estimate standing in for itself; booking it would be a
+    correction that corrects nothing while looking like evidence the ledger is
+    reconciled. The store's own guards do the rest: a run with no open charge
+    (a preview, a BLOCK, a ceiling-degraded run) is refused, and a second
+    reconciliation for the same run is refused — which is what makes this safe
+    to call from a choke point documented as able to double-fire.
+
+    Best-effort, like every other terminal-path write: a failure here must never
+    change the run's terminal state. It fails toward the ledger keeping the
+    estimate, i.e. under-metering, so the ERROR that
+    ``FeedbackStore.lost_billed_writes`` raises on a lost reconciliation is the
+    operator's signal that it happened.
+    """
+    if response.cost_source != "measured":
+        return
+    with contextlib.suppress(Exception):
+        from product_app.feedback_store import get_store
+
+        store = get_store()
+        if store is None:
+            return
+        store.try_record_cost_reconciliation(
+            account_id=query_run.account_id,
+            query_run_id=query_run.query_run_id,
+            estimated_cost_usd=query_run.cost_estimate.estimated_cost_usd,
+            actual_cost_usd=response.actual_cost_usd,
+        )
+
+
 def _persist_terminal_run(query_run_id: UUID) -> None:
     """Write a durable, PII-minimised row for a terminal run (S1 / FR-014).
 
@@ -2213,6 +2348,12 @@ def _persist_terminal_run(query_run_id: UUID) -> None:
         if not query_run.is_terminal:
             return
         response = _result_response(query_run)
+        # Issue #255: correct this run's charge from the ESTIMATE it was booked
+        # at to what it actually cost. Ordered FIRST and guarded separately, so
+        # a run-history write that fails cannot also lose the money correction —
+        # the two are best-effort for different reasons and must not share a
+        # fate. Values come from the SAME ``_result_response`` the user sees.
+        _reconcile_run_billing(query_run=query_run, response=response)
         agreement = response.result.agreement
         citation_ratio = None
         final_synthesis = query_run.final_synthesis

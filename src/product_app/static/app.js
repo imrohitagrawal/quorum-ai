@@ -1958,19 +1958,34 @@
     host.hidden = false;
   }
 
-  // Approved-cap panel. Shows the APPROVED CAP (estimated_cost_usd) labelled as
-  // a cap, the REAL auto-stop guarantee, and the receipt reconciliation note.
+  // Spend-cap panel. Shows the figure that ACTUALLY bounds this run
+  // (``max_cost_usd``), the real guarantee behind it, the point estimate
+  // labelled as an estimate, and the receipt reconciliation note.
   // NO spend bar, NO accruing "so far" figure — none exists.
+  //
+  // Issue #256. This used to show ``estimated_cost_usd`` under the label
+  // "Approved cap" and promise "The run stops itself if spend would pass the
+  // approved figure". Both were false. The guardrail gates on ``max_cost_usd``
+  // (costs.py `_threshold_for(bound)`), MEASURED at 2.34x-2.57x the point
+  // estimate across realistic query sizes — so the user approved one number
+  // while the system authorised another, over twice as large. And nothing
+  // stops a run mid-flight: grepping src/ finds no runtime spend abort at all.
+  // The only real ceiling is ``max_cost_usd``, and it holds because the initial
+  // answers are capped at ``settings.initial_answer_max_tokens``, which is
+  // exactly what that figure prices.
   function renderLiveCap(result) {
     const host = el("live-cap");
     if (!host) return;
-    const cap =
-      result.cost_estimate && result.cost_estimate.estimated_cost_usd;
+    const ce = result.cost_estimate;
+    const estimate = ce && ce.estimated_cost_usd;
+    // Fall back to the estimate only when an (older) response omits
+    // ``max_cost_usd`` — never as a preference.
+    const cap = ce && ce.max_cost_usd != null ? ce.max_cost_usd : estimate;
     const head = document.createElement("div");
     head.className = "live-cap-head";
     const label = document.createElement("span");
     label.className = "live-cap-label";
-    label.textContent = "Approved cap";
+    label.textContent = "Spend cap";
     const value = document.createElement("span");
     value.className = "live-cap-value mono";
     value.textContent = cap != null ? formatUsd(cap, { suffix: false }) : "—";
@@ -1978,11 +1993,23 @@
     const guarantee = document.createElement("p");
     guarantee.className = "live-cap-note";
     guarantee.textContent =
-      "The run stops itself if spend would pass the approved figure.";
+      "This run cannot cost more than the cap — each model's answer is " +
+      "length-limited, which is what makes the ceiling hold.";
+    const nodes = [head, guarantee];
+    if (estimate != null && cap != null && Number(estimate) < Number(cap)) {
+      const typical = document.createElement("p");
+      typical.className = "live-cap-note muted";
+      typical.textContent =
+        "Typical cost is lower, around " +
+        formatUsd(estimate, { suffix: false }) +
+        ".";
+      nodes.push(typical);
+    }
     const reconcile = document.createElement("p");
     reconcile.className = "live-cap-note muted";
     reconcile.textContent = "Final cost reconciles on the receipt.";
-    host.replaceChildren(head, guarantee, reconcile);
+    nodes.push(reconcile);
+    host.replaceChildren(...nodes);
   }
 
   // Fix 1: surface failure notices inside the live-run card. While the live

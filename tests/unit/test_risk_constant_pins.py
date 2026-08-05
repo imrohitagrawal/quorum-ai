@@ -120,6 +120,15 @@ BUCKET_A_LITERAL_PIN = (
     "auth.CSRF_HEADER_NAME",
     "main._HSTS_HEADER",
     "model_slots.EXPECTED_SLOT_COUNT",
+    # The three cost event-type strings (#255). A LITERAL pin, not a behaviour
+    # one, because these values are written into a DURABLE table that outlives
+    # every deploy: change one and the meter stops counting every row already
+    # on the production volume — silently, and in the fail-open direction. The
+    # string IS the contract with rows that already exist, which is exactly
+    # "a wrong value is silently harmful and nothing else constrains it".
+    "feedback_store.COST_ACCEPTED_EVENT",
+    "feedback_store.COST_RECONCILED_EVENT",
+    "feedback_store.COST_CHARGE_VOIDED_EVENT",
 )
 
 #: Pin the BEHAVIOUR, not the literal — these legitimately change, and a literal
@@ -151,9 +160,10 @@ BUCKET_B_PIN_BEHAVIOUR = {
     "readiness._CREDENTIAL_REFUSED_STATUSES": (
         "assert 401/403 map to offline_by_bad_key; the set may grow"
     ),
-    "feedback_store._METERED_WRITE": (
-        "assert lost_billed_writes counts exactly the pair daily_spend_for sums "
-        "-- ADR-0004 depends on those two agreeing"
+    "feedback_store._METERED_WRITES": (
+        "assert lost_billed_writes counts exactly the pairs daily_spend_for sums "
+        "-- ADR-0004 depends on those two agreeing; the SET grows (it gained "
+        "cost_reconciled in #255), the agreement must not"
     ),
     "main._CSP_POLICY": "assert the key directives, not the whole string",
     "safety.HIGH_STAKES_PATTERN": (

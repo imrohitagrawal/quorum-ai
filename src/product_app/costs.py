@@ -351,7 +351,20 @@ class InMemoryCostEventRecorder:
         estimated_cost_usd: Decimal,
         threshold_action: CostThresholdAction,
         confirmed: bool,
-    ) -> None:
+        persist: bool = True,
+    ) -> CostGuardrailEvent:
+        """Append one guardrail event to the ring, and (by default) persist it.
+
+        ``persist=False`` appends to the in-memory ring ONLY. It exists for one
+        caller: :meth:`CostEstimationService.try_record_run_charge`, where the
+        durable row was already written INSIDE the store's lock, atomically with
+        the cap check that authorised it (issue #255 / the spend race). Writing
+        it again here would double-meter the account, because
+        ``daily_spend_for`` counts rows, not runs.
+
+        Returns the event, so a caller that persisted separately can reuse the
+        exact payload rather than rebuilding it.
+        """
         event = CostGuardrailEvent(
             event_type=event_type,
             account_id=account_id,
@@ -364,13 +377,41 @@ class InMemoryCostEventRecorder:
             self._events.append(event)
             if len(self._events) > self.MAX_EVENTS:
                 del self._events[: len(self._events) - self.MAX_EVENTS]
-        _record_feedback_event(
-            recorder="cost",
-            event_type=event.event_type,
-            account_id=event.account_id,
-            query_run_id=event.query_run_id,
-            payload=asdict(event),
-        )
+        if persist:
+            _record_feedback_event(
+                recorder="cost",
+                event_type=event.event_type,
+                account_id=event.account_id,
+                query_run_id=event.query_run_id,
+                payload=asdict(event),
+            )
+        return event
+
+    def discard_charge_for_run(self, query_run_id: UUID) -> int:
+        """Forget every accepted charge in the ring for ``query_run_id``.
+
+        The ring is the meter ``_cumulative_spend_for`` reads, and unlike the
+        durable sink it is NOT append-only — it is a bounded in-process buffer,
+        so a charge is undone by removing it rather than by a compensating
+        event. Called only from ``query_runs._void_run_billing``, for a run
+        whose worker never started (F-01): without this the run would be
+        un-billed in the durable ledger and still billed in the ring, and the
+        two rails would disagree about the same run.
+
+        Returns the number of events removed, so a caller can assert
+        cardinality rather than trusting the call happened.
+        """
+        with self._lock:
+            before = len(self._events)
+            self._events = [
+                e
+                for e in self._events
+                if not (
+                    e.query_run_id == query_run_id
+                    and e.event_type == "cost_guardrail_accepted"
+                )
+            ]
+            return before - len(self._events)
 
     def list_events(self) -> list[CostGuardrailEvent]:
         with self._lock:
@@ -691,9 +732,15 @@ class CostEstimationService:
                         confirmation_token=None,
                         breakdown=breakdown,
                         reasons=[
+                            # Says what it MEASURES. The comparison two lines
+                            # above is ``already_spent + estimated``, both
+                            # point estimates against a ledger of measured
+                            # actuals (#255) — it is not a worst-case figure,
+                            # and calling it one told the operator the rail
+                            # was stricter than it is.
                             (
-                                f"Worst-case cost would exceed the USD "
-                                f"{DAILY_CAP_USD} daily cap for this account."
+                                f"This run would take the account past its USD "
+                                f"{DAILY_CAP_USD} daily cap."
                             ),
                             (
                                 "Account has spent "
@@ -949,6 +996,151 @@ class CostEstimationService:
                 logging.getLogger(__name__).debug(
                     "Sentry capture failed for %s: %s", event_type, exc
                 )
+
+    def try_record_run_charge(
+        self,
+        *,
+        account_id: UUID,
+        query_run_id: UUID,
+        estimated_cost_usd: Decimal,
+        threshold_action: CostThresholdAction,
+        confirmed: bool,
+        global_ceiling_reached: bool,
+        client_ip: str | None = None,
+    ) -> ChargeOutcome:
+        """Open this run's charge, re-testing both rails ATOMICALLY as it does.
+
+        This is the one call that books a run's money, and it is the successor
+        to calling :meth:`record_guardrail_event` directly for the accepted
+        case. The difference is not the row it writes — that is byte-identical —
+        but WHEN the rails are tested: inside the same lock hold as the write,
+        instead of a whole request earlier in :meth:`estimate`.
+
+        MEASURED on the old unsynchronised path, against ``DAILY_CAP_USD`` of
+        $0.20: 8 concurrent runs booked $0.2344 (1.17x over) and 32 booked
+        $0.9376 (**4.69x over**), while the serial control booked $0.1758 and
+        stayed under. ``costs.GLOBAL_DAILY_CEILING_USD``'s docstring accepted
+        that window by design and bounded it at ``_MAX_CONCURRENT_RUNS`` (16) x
+        ``HARD_LIMIT_USD`` ($0.25) = $4.00 of overshoot on a $5.00 rail. The
+        operator's decision on 2026-08-06 was that a cap should mean its number,
+        so the window is closed rather than bounded — see ADR-0016.
+
+        Fails OPEN, exactly like :meth:`estimate`'s daily-cap branch and for the
+        same reason (ADR-0004): if the ledger cannot be trusted, the request is
+        not denied. A storage fault must not turn into "nobody can run".
+        """
+        from product_app.feedback_store import (  # local import to avoid cycles
+            ChargeOutcome,
+            get_store,
+        )
+        from product_app.store_reconnect import feedback_ledger_may_be_metered
+
+        if global_ceiling_reached:
+            # Decided at estimate time and already persisted on the run; the
+            # worker will simulate the whole thing and spend nothing. Record the
+            # degrade (and its Sentry alert) and book NO charge — meter honesty,
+            # see ``FeedbackStore.global_daily_spend``.
+            self.record_guardrail_event(
+                account_id=account_id,
+                query_run_id=query_run_id,
+                estimated_cost_usd=estimated_cost_usd,
+                threshold_action=threshold_action,
+                confirmed=confirmed,
+                global_ceiling_reached=True,
+                client_ip=client_ip,
+            )
+            return ChargeOutcome.OVER_GLOBAL_CEILING
+
+        store = get_store()
+        if not feedback_ledger_may_be_metered(store):
+            # No trustworthy ledger to be atomic against. Take the pre-existing
+            # non-atomic path so the charge is still attempted and still
+            # counted by ``lost_billed_writes`` if it fails.
+            self._log_daily_cap_bypassed()
+            self.record_guardrail_event(
+                account_id=account_id,
+                query_run_id=query_run_id,
+                estimated_cost_usd=estimated_cost_usd,
+                threshold_action=threshold_action,
+                confirmed=confirmed,
+                client_ip=client_ip,
+            )
+            return ChargeOutcome.RECORDED
+        assert store is not None  # narrowed by feedback_ledger_may_be_metered
+
+        event = CostGuardrailEvent(
+            event_type="cost_guardrail_accepted",
+            account_id=account_id,
+            query_run_id=query_run_id,
+            estimated_cost_usd=estimated_cost_usd,
+            threshold_action=threshold_action,
+            confirmed=confirmed,
+        )
+        outcome = store.try_record_cost_charge(
+            account_id=account_id,
+            query_run_id=query_run_id,
+            estimated_cost_usd=estimated_cost_usd,
+            payload=asdict(event),
+            daily_cap_usd=DAILY_CAP_USD,
+            global_ceiling_usd=GLOBAL_DAILY_CEILING_USD,
+        )
+        if outcome is ChargeOutcome.RECORDED:
+            # Ring only: the durable row went in under the store's lock above.
+            cost_event_recorder.record(
+                event_type=event.event_type,
+                account_id=account_id,
+                query_run_id=query_run_id,
+                estimated_cost_usd=estimated_cost_usd,
+                threshold_action=threshold_action,
+                confirmed=confirmed,
+                persist=False,
+            )
+        elif outcome is ChargeOutcome.OVER_GLOBAL_CEILING:
+            # The ceiling was crossed between this run's estimate and its
+            # charge. Same treatment as the estimate-time decision above.
+            self.record_guardrail_event(
+                account_id=account_id,
+                query_run_id=query_run_id,
+                estimated_cost_usd=estimated_cost_usd,
+                threshold_action=threshold_action,
+                confirmed=confirmed,
+                global_ceiling_reached=True,
+                client_ip=client_ip,
+            )
+        return outcome
+
+    def void_run_charge(
+        self,
+        *,
+        account_id: UUID,
+        query_run_id: UUID,
+        reason: str,
+    ) -> None:
+        """Take back a charge on BOTH spend rails (F-01).
+
+        The two rails undo a charge differently and neither is optional:
+
+        * the durable ledger is append-only, so it gets a compensating
+          ``cost_charge_voided`` event keyed on the run;
+        * the in-process ring is a bounded buffer, so the charge is REMOVED.
+
+        Kept in one method on purpose. The first version of this fix voided the
+        ledger from ``query_runs`` and reached for ``cost_event_recorder``,
+        which is not imported there; the ``contextlib.suppress(Exception)`` that
+        makes the caller best-effort swallowed the ``NameError`` whole, and the
+        ring silently kept the charge. The test caught it, and the shape that
+        allowed it is what this method removes.
+        """
+        cost_event_recorder.discard_charge_for_run(query_run_id)
+        from product_app.feedback_store import get_store  # local import to avoid cycles
+
+        store = get_store()
+        if store is not None:
+            store.void_cost_charge(
+                account_id=account_id,
+                query_run_id=query_run_id,
+                reason=reason,
+            )
 
     # -- internals --------------------------------------------------------
 
