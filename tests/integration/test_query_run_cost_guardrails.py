@@ -673,3 +673,161 @@ def test_thread_start_failure_neither_bills_nor_orphans_a_run(
             assert query_run_repository.get_active_for_account(account_id) is None
             # ...and the capacity permit came back.
             assert semaphore._value == 1  # noqa: SLF001
+
+
+def _charge_outcome_stub(outcome: object):
+    """Force ``try_record_run_charge`` to a chosen outcome, writing nothing.
+
+    The three non-RECORDED outcomes are decided INSIDE the store's lock, at the
+    instant of the write, by a rail another request moved. Driving them through
+    two real concurrent requests would be a race the test has to win; stubbing
+    the outcome exercises the request path's response to each one, which is the
+    part that lives in ``query_runs`` and the part these tests are about.
+    """
+
+    def _stub(**_kwargs: object) -> object:
+        return outcome
+
+    return _stub
+
+
+def test_a_cap_crossed_between_estimate_and_charge_refuses_the_run(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """RED IF the request path stops refusing on ``OVER_DAILY_CAP``.
+
+    The daily cap is re-tested atomically as the charge is written, because the
+    estimate-time read is a whole request stale. When it says the cap is now
+    crossed, the run must be refused with the same 402 the estimate-time check
+    would have produced -- and it must NOT be left occupying the account's one
+    in-flight slot, or the caller is locked out for 30 minutes by
+    ACTIVE_QUERY_EXISTS.
+    """
+    from product_app.feedback_store import ChargeOutcome
+
+    monkeypatch.setattr(
+        cost_estimation_service,
+        "try_record_run_charge",
+        _charge_outcome_stub(ChargeOutcome.OVER_DAILY_CAP),
+    )
+    with isolated_run_semaphore(2):
+        client = TestClient(app)
+        with configure_for_tests() as store:
+            session = client.get("/v1/session")
+            csrf = session.json()["csrf_token"]
+            response = client.post(
+                "/v1/query-runs",
+                json=acknowledged_request("Compare these answers"),
+                headers={"x-csrf-token": csrf},
+            )
+
+            assert response.status_code == 402
+            assert response.json()["detail"]["code"] == "COST_LIMIT_EXCEEDED"
+
+            row = session_repository.get(client.cookies[get_session_cookie_name()])
+            assert row is not None
+            # Refused, so nothing was billed...
+            assert store.daily_spend_for(row.account_id) == Decimal("0")
+            # ...and the account is not locked out of the product.
+            assert query_run_repository.get_active_for_account(row.account_id) is None
+
+
+def test_a_ceiling_crossed_between_estimate_and_charge_degrades_the_run(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """RED IF the request path stops degrading on ``OVER_GLOBAL_CEILING``.
+
+    The deployment-wide ceiling degrades rather than blocks, so the run is
+    accepted (202) and marked so the worker simulates it. Distinct from the
+    daily cap above, which refuses -- the caller sees a completely different
+    outcome and the difference is the point.
+    """
+    from product_app.feedback_store import ChargeOutcome
+
+    monkeypatch.setattr(
+        cost_estimation_service,
+        "try_record_run_charge",
+        _charge_outcome_stub(ChargeOutcome.OVER_GLOBAL_CEILING),
+    )
+    with isolated_run_semaphore(2):
+        client = TestClient(app)
+        with configure_for_tests():
+            session = client.get("/v1/session")
+            csrf = session.json()["csrf_token"]
+            response = client.post(
+                "/v1/query-runs",
+                json=acknowledged_request("Compare these answers"),
+                headers={"x-csrf-token": csrf},
+            )
+
+            assert response.status_code == 202
+            run = query_run_repository.get(UUID(response.json()["query_run_id"]))
+            assert run.cost_estimate.global_ceiling_reached is True
+            # The OTHER degrade cause must not be claimed as well.
+            assert run.cost_estimate.spend_metering_unavailable is False
+
+
+def test_a_ledger_that_goes_unmeterable_mid_request_degrades_the_run(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """RED IF the request path stops degrading on ``METERING_UNAVAILABLE``.
+
+    ADR-0016. Same effect as the ceiling, DIFFERENT cause, and the two must not
+    be conflated: the flags drive different user-facing copy, and reporting a
+    storage fault as a spend ceiling puts a false reason on screen.
+    """
+    from product_app.feedback_store import ChargeOutcome
+
+    monkeypatch.setattr(
+        cost_estimation_service,
+        "try_record_run_charge",
+        _charge_outcome_stub(ChargeOutcome.METERING_UNAVAILABLE),
+    )
+    with isolated_run_semaphore(2):
+        client = TestClient(app)
+        with configure_for_tests():
+            session = client.get("/v1/session")
+            csrf = session.json()["csrf_token"]
+            response = client.post(
+                "/v1/query-runs",
+                json=acknowledged_request("Compare these answers"),
+                headers={"x-csrf-token": csrf},
+            )
+
+            assert response.status_code == 202
+            run = query_run_repository.get(UUID(response.json()["query_run_id"]))
+            assert run.cost_estimate.spend_metering_unavailable is True
+            assert run.cost_estimate.global_ceiling_reached is False
+
+
+def test_the_legacy_path_refuses_on_a_crossed_cap_exactly_like_production(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """RED IF the legacy/test path stops mirroring the production decision.
+
+    The legacy path runs the query INLINE so the suite can assert against the
+    final state synchronously. That makes it the path most of this repo's tests
+    exercise -- so a rail enforced only on the production path would be a rail
+    whose tests pass while production overspends, and vice versa. Kept in step
+    deliberately.
+    """
+    from product_app.feedback_store import ChargeOutcome
+
+    monkeypatch.setattr(
+        cost_estimation_service,
+        "try_record_run_charge",
+        _charge_outcome_stub(ChargeOutcome.OVER_DAILY_CAP),
+    )
+    account_id = uuid4()
+    with configure_for_tests() as store:
+        client = TestClient(app)
+        response = client.post(
+            "/v1/query-runs",
+            json=acknowledged_request("Compare these answers"),
+            headers={"X-Account-Id": str(account_id)},
+        )
+
+        assert response.status_code == 402
+        assert response.json()["detail"]["code"] == "COST_LIMIT_EXCEEDED"
+        assert store.daily_spend_for(account_id) == Decimal("0")
+        assert query_run_repository.get_active_for_account(account_id) is None

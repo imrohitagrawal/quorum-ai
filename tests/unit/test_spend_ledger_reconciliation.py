@@ -552,3 +552,120 @@ def test_corrections_are_applied_in_insertion_order_not_query_plan_order(
     # The void was written LAST, so the void wins. A plan-order-dependent
     # implementation can return 0.05 here.
     assert store.daily_spend_for(ACCOUNT_A) == Decimal("0")
+
+
+# ------------------------------------------- the branches the rails take
+
+
+def test_the_charge_degrades_when_the_ceiling_is_crossed_mid_request(
+    store: FeedbackStore,
+) -> None:
+    """RED IF ``try_record_run_charge`` stops handling a ceiling crossed
+    BETWEEN this run's estimate and its charge.
+
+    ``estimate`` decides the ceiling once, up front. This is the window it
+    cannot see: another account's run pushes the deployment past the ceiling
+    while this request is in flight. The atomic charge is the only thing that
+    can notice, and the run must degrade — not book a charge, and not be
+    refused.
+    """
+    configure(store)
+    try:
+        cost_event_recorder.clear()
+        # Another account puts the deployment at the ceiling.
+        other = uuid4()
+        store.record(
+            recorder="cost",
+            event_type=COST_ACCEPTED_EVENT,
+            account_id=other,
+            query_run_id=uuid4(),
+            recorded_at=datetime.now(UTC),
+            payload={"estimated_cost_usd": str(GLOBAL_DAILY_CEILING_USD)},
+        )
+        service = CostEstimationService(binding_secret="x" * 32)
+        account = uuid4()
+        run_id = uuid4()
+
+        outcome = service.try_record_run_charge(
+            account_id=account,
+            query_run_id=run_id,
+            estimated_cost_usd=Decimal("0.02"),
+            threshold_action=CostThresholdAction.ALLOW,
+            confirmed=False,
+            global_ceiling_reached=False,
+        )
+
+        assert outcome is ChargeOutcome.OVER_GLOBAL_CEILING
+        # No charge booked: a degraded run spends nothing, and booking it would
+        # push the meter past the ceiling on money nobody spent.
+        assert _event_types(store, run_id) == ["cost_guardrail_degraded_to_simulation"]
+        assert store.daily_spend_for(account) == Decimal("0")
+    finally:
+        configure(None)
+        cost_event_recorder.clear()
+
+
+def test_reconciling_without_a_store_reports_failure_rather_than_raising() -> None:
+    """RED IF ``reconcile_run_charge`` stops guarding a missing store.
+
+    The terminal path is best-effort and wrapped in ``suppress(Exception)``, so
+    a raise here would be swallowed and the reconciliation would vanish
+    silently. Returning ``False`` keeps the failure visible to a caller that
+    checks it.
+    """
+    configure(None)
+    service = CostEstimationService(binding_secret="x" * 32)
+    assert (
+        service.reconcile_run_charge(
+            account_id=uuid4(),
+            query_run_id=uuid4(),
+            estimated_cost_usd=Decimal("0.02"),
+            actual_cost_usd=Decimal("0.05"),
+        )
+        is False
+    )
+
+
+def test_a_reconciliation_with_no_measured_figure_leaves_the_estimate_standing(
+    store: FeedbackStore,
+) -> None:
+    """RED IF the missing-``actual_cost_usd`` guard is replaced by a default.
+
+    An earlier revision defaulted the missing value to ``"0"``, which would
+    ZERO the run's cost — free money, the fail-open direction on a money rail.
+    A correction that carries no measurement corrects nothing.
+    """
+    _outcome, run_id = _charge(store, amount=Decimal("0.02"))
+    # A malformed reconciliation: right type, right run, no measured figure.
+    store.record(
+        recorder="cost",
+        event_type=COST_RECONCILED_EVENT,
+        account_id=ACCOUNT_A,
+        query_run_id=run_id,
+        recorded_at=datetime.now(UTC),
+        payload={"event_type": COST_RECONCILED_EVENT},
+    )
+    assert store.daily_spend_for(ACCOUNT_A) == Decimal("0.02")
+
+
+def test_a_correction_for_a_run_this_window_never_charged_is_ignored(
+    store: FeedbackStore,
+) -> None:
+    """RED IF ``_spend_total_locked`` stops filtering corrections to charged runs.
+
+    A reconciliation for a preview, a BLOCK, or a ceiling-degraded run would
+    otherwise INVENT spend the rails should never see.
+    """
+    stranger = uuid4()
+    store.record(
+        recorder="cost",
+        event_type=COST_RECONCILED_EVENT,
+        account_id=ACCOUNT_A,
+        query_run_id=stranger,
+        recorded_at=datetime.now(UTC),
+        payload={"event_type": COST_RECONCILED_EVENT, "actual_cost_usd": "9.99"},
+    )
+    # Positive partner: a real charge in the same window IS counted, so this is
+    # not passing over an empty ledger.
+    _charge(store, amount=Decimal("0.02"))
+    assert store.daily_spend_for(ACCOUNT_A) == Decimal("0.02")
