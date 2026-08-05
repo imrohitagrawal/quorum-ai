@@ -139,6 +139,7 @@ jobs:
         run: node tools/check-negative-assertions.mjs --base "origin/${{ github.base_ref }}"
 
       - name: Install Playwright Chromium (+ system deps)
+        id: install-chromium
         working-directory: e2e
         run: npx playwright install --with-deps chromium
 
@@ -181,22 +182,76 @@ jobs:
           tests/invariants/source-expander.spec.ts
           tests/invariants/answer-completeness.spec.ts
           tests/invariants/export-and-expanders.spec.ts
+          tests/invariants/provider-notice-coverage.spec.ts
+          tests/invariants/readiness-no-flash.spec.ts
+          tests/invariants/source-support-denominator.spec.ts
+          tests/invariants/markdown-corpus.spec.ts
           --project=chromium
           --retries=0
 
       # EXECUTED-COUNT FLOOR. Playwright exits 0 when a spec path matches nothing
       # and when every test it found was skipped, so a lane that quietly stopped
       # running is indistinguishable from a clean pass — on a BLOCKING gate.
-      # Floor is the EXACT count measured on 2026-07-30 (139 — WP-H added an export
-      # honesty test), not a rounded-down
-      # one. Headroom hides a deleted spec: at a floor of 130, dropping
-      # session-trail.spec.ts (7 tests) from the list above left this green — and
-      # session-trail is the spec this workflow already records as having shipped
-      # ungated once. Adding tests still passes; removing one is now a deliberate
-      # edit to this number: they are not derived from
-      # the spec list above, or they could never detect that list shrinking.
+      # Floor is the EXACT count measured on 2026-08-04 (187), not a rounded-down
+      # one. Re-measured for issue #124, which added
+      # provider-notice-coverage.spec.ts (7 tests): the prior floor recorded here
+      # (139, dated 2026-07-30) undercounted the CURRENT tree by 13 tests even
+      # before this addition — other specs in the list above grew their own test
+      # counts in the meantime, and nobody re-measured this comment. That gap is
+      # itself the failure mode this floor exists to catch, just not yet wide
+      # enough to trip a 139 floor; measuring fresh rather than adding 7 to a
+      # stale number is why the floor reads a re-measured value rather than an
+      # incremented one. Issue #117 added readiness-no-flash.spec.ts (3 tests at
+      # the time; `grep -c "  test(" ` counts 8 there today, so do not read that
+      # 3 as current — it is the delta that was measured, not the file's size)
+      # and the lane was re-measured end to end after EACH review round rather
+      # than incremented: 162, then 164, then 167. Never assumed.
+      # Issue #193 added source-support-denominator.spec.ts (20 tests) and the
+      # lane was re-measured end to end on 2026-08-04: "187 passed (3.7m)",
+      # locally with the CI invocation above plus the two rate-limit overrides
+      # local runs require. The earlier note here warned that a held #193 branch
+      # would edit this line to 164 and that whichever landed second must
+      # re-measure rather than take the larger number. That branch was abandoned
+      # in favour of one cut from 52f72da: it predates the #240 batch, so it
+      # conflicts in 7 files. It does NOT revert #117 — a three-way merge keeps
+      # main's side, verified with `git merge-tree --write-tree` (the merged
+      # tree carries `readinessConfirmed` 4 times, as main does). An earlier
+      # draft of this comment claimed the revert; `git diff main..branch` shows
+      # those lines as deletions only because the branch predates them, which is
+      # not what a merge does. Headroom hides a
+      # deleted spec: at a floor of 130, dropping session-trail.spec.ts (7 tests)
+      # from the list above left this green — and session-trail is the spec this
+      # workflow already records as having shipped ungated once. Adding tests
+      # still passes; removing one is now a deliberate edit to this number: they
+      # are not derived from the spec list above, or they could never detect
+      # that list shrinking.
       - name: "invariants lane: floor on tests actually executed"
-        run: python3 scripts/check_e2e_executed.py --report e2e/results.xml --min 139 --lane "invariants lane"
+        # 187 -> 196 with the nine #120 specs (4 block-structure, 3 rendered-
+        # marker, 2 caller-coverage). Raised in the same PR that adds them,
+        # because leaving it at 187 would bank exactly the headroom the comment
+        # above warns about: nine tests could then be deleted and this stays
+        # green. Measured 2026-08-04, lane run exactly as this step runs it:
+        # 196 passed.
+        #
+        # 196 -> 233 with markdown-corpus.spec.ts (37 tests: the whole #257
+        # failure corpus driven through a real browser, the `html: false` XSS
+        # pins, the obfuscated-link-scheme resolution check, and four tests for
+        # the content loss two adversarial review lenses found). Same reasoning,
+        # same PR — and MEASURED rather than added up, THREE times as the spec
+        # grew: the lane gave 228, then 229, then 233, and the spec alone
+        # reports 32, 33, 37. Every arithmetic guess in between was wrong, which
+        # is the argument for re-running the lane rather than adding.
+        #
+        # Two notes for whoever measures next, both cost time here:
+        #   * `--reporter=line` on the command line REPLACES the config's
+        #     reporter list, so NO results.xml is written and this step then
+        #     fails with "the lane never produced its JUnit report" — which
+        #     looks like a lane that did not run. Drop the flag to re-measure.
+        #   * one of the 32 is a `test.fail()` (a documented known gap,
+        #     ADR-0015). Measured, JUnit records it as a normal pass — 32 tests,
+        #     0 failures, 0 skipped — so it counts toward this floor and does
+        #     not trip the no-skips policy above.
+        run: python3 scripts/check_e2e_executed.py --report e2e/results.xml --min 233 --lane "invariants lane"
 
       - name: Clear the previous lane's JUnit report
         run: rm -f e2e/results.xml
@@ -232,6 +287,64 @@ jobs:
       - name: "axe + parity lane: floor on tests actually executed"
         run: python3 scripts/check_e2e_executed.py --report e2e/results.xml --min 96 --lane "axe + parity lane"
 
+      - name: Clear the previous lane's JUnit report
+        run: rm -f e2e/results.xml
+
+      # Issue #127: workspace.spec.ts (16), accessibility.spec.ts (16),
+      # api-mocking.spec.ts (9) and navigation.spec.ts (10) ran in ZERO CI
+      # workflows -- committed, passing locally, never executed anywhere.
+      # Per the issue's own two-part order: fixed genuine test staleness
+      # first (a first-visit-gate localStorage seed the page object never
+      # set; dead `#cost-confirmation-message`/`#proceed-run` markup from a
+      # superseded single-step cost flow; an exact-vs-wildcard route pattern
+      # that missed the estimate-first Ctrl+Enter path; a copy-drifted
+      # button-name regex; an impossible Shift+Tab-from-the-first-element
+      # focus assertion; a permanently `display:none` legacy nav landmark)
+      # -- THEN wired the now-healthy result in here, never a still-red one.
+      - name: Run workspace + accessibility + api-mocking + navigation suites (blocking)
+        working-directory: e2e
+        env:
+          CI: "true"
+        run: >-
+          npx playwright test
+          tests/workspace/workspace.spec.ts
+          tests/accessibility/accessibility.spec.ts
+          tests/api-mocking/api-mocking.spec.ts
+          tests/navigation/navigation.spec.ts
+          --project=chromium
+          --retries=0
+
+      # EXECUTED-COUNT FLOOR, same reasoning as the two lanes above. Floor is
+      # the EXACT count measured on 2026-08-03 (51 = 16 + 16 + 9 + 10).
+      - name: "workspace/accessibility/api-mocking/navigation lane: floor on tests actually executed"
+        run: python3 scripts/check_e2e_executed.py --report e2e/results.xml --min 51 --lane "workspace/accessibility/api-mocking/navigation lane"
+
+      - name: Clear the previous lane's JUnit report
+        # Adversarial review (#162/#166): without this, a Playwright run that
+        # exits 0 having genuinely written nothing (the exact "all-skipped"
+        # or "matched nothing" shape every floor in this file exists to
+        # catch) would leave the new visual-snapshots floor below reading the
+        # STALE 51-test report from the lane above and passing on old data
+        # instead of catching the gap. Matches the same clear-before-run
+        # pattern already used between the invariants and axe+parity lanes.
+        #
+        # It carries the SAME `if:` as the two steps below it, and must. With no
+        # condition, an earlier lane failing skipped this clear while the visual
+        # lane and its floor still ran — so a visual run that matched nothing
+        # left the PREVIOUS lane's report in place and the floor passed on it.
+        # Demonstrated by review: a Playwright run naming a spec that does not
+        # exist exits "No tests found." WITHOUT rewriting results.xml, and the
+        # floor then reported `51 tests executed (floor 8)`, exit 0. It could not
+        # produce green-when-broken (the job was already red from the earlier
+        # lane), but it is the exact misreport this step exists to prevent.
+        #
+        # Deliberately worded without the literal command: the retries guard in
+        # tests/unit/test_e2e_flake_policy.py scrapes this file for that string
+        # as raw TEXT, so naming it inside a comment reds the gate. Rule 8, from
+        # the other side.
+        if: ${{ !cancelled() && steps.install-chromium.outcome == 'success' }}
+        run: rm -f e2e/results.xml
+
       - name: Run visual snapshots (BLOCKING)
         working-directory: e2e
         # toHaveScreenshot baselines for the result + transcript views against the
@@ -241,12 +354,20 @@ jobs:
         # are COMPARED like-for-like. Dynamic regions (timer/run-id) + toasts are
         # masked/hidden so the diff never flakes.
         #
-        # `if: !cancelled()` — run REGARDLESS of a prior step's outcome (but not
-        # on cancellation). This is still a HARD gate (it fails the job if IT
+        # `if: !cancelled()` — run REGARDLESS of a prior TEST step's outcome (but
+        # not on cancellation). This is still a HARD gate (it fails the job if IT
         # fails; no continue-on-error), but it is no longer SKIPPED when an
         # earlier step reds — so a flake in the axe/parity suite can never mask a
         # real visual regression here. Independent gates, each reporting itself.
-        if: ${{ !cancelled() }}
+        #
+        # The `install-chromium` conjunct was added after this bit us: a failure
+        # in the negative-assertion guard (a SETUP step, before the browser was
+        # installed) skipped every lane, and then this one ran anyway with no
+        # browser on disk. It produced 8 `browserType.launch: Executable doesn't
+        # exist` failures plus a "0 executed" floor red — three loud signals all
+        # pointing away from the one-line real cause. Independence from a failing
+        # TEST lane is the point; running without a browser is not.
+        if: ${{ !cancelled() && steps.install-chromium.outcome == 'success' }}
         env:
           CI: "true"
         # trust-score-visual.spec.ts is BLOCKING alongside visual-snapshots (the
@@ -260,6 +381,23 @@ jobs:
           tests/invariants/trust-score-visual.spec.ts
           --project=chromium
           --retries=0
+
+      # EXECUTED-COUNT FLOOR. Issue #162/#166: this step was the one gap left
+      # by the two floors above, because its count was never measured on the
+      # authoring machine — the baselines are Linux-only, seeded in CI, so a
+      # pixel-comparison run couldn't be trusted locally. Measured fresh here
+      # via `--update-snapshots` (which executes every test regardless of
+      # platform-specific baseline availability, without touching the
+      # committed *-chromium-linux.png files this step actually compares
+      # against): 8 = 6 (trust-score-visual, 2 themes x 3 viewports) + 2
+      # (visual-snapshots, result + transcript). `!cancelled()` matches the
+      # run step above: this must still report even if visual-snapshots
+      # itself failed on a real regression, since "0 executed" and "8
+      # executed, 3 failed" are different failure modes this floor exists to
+      # tell apart.
+      - name: "visual-snapshots lane: floor on tests actually executed"
+        if: ${{ !cancelled() && steps.install-chromium.outcome == 'success' }}
+        run: python3 scripts/check_e2e_executed.py --report e2e/results.xml --min 8 --lane "visual-snapshots lane"
 
       - name: Upload Playwright report
         if: ${{ !cancelled() }}

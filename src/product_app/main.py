@@ -53,6 +53,7 @@ from product_app.costs import (
     CHARS_PER_TOKEN,
     GLOBAL_DAILY_CEILING_USD,
 )
+from product_app.evaluation import judge_configured
 from product_app.feedback_store import FeedbackStore, get_store
 from product_app.feedback_store import configure as configure_feedback_store
 from product_app.logging_config import setup_json_logging
@@ -351,10 +352,13 @@ def _configure_feedback_store() -> None:
     serving. But ERROR, not WARNING, and the message names the consequence
     that actually costs money. Losing the store does not only disable
     persistence — ``costs.CostEstimationService.estimate`` guards the 24h
-    ``DAILY_CAP_USD`` spend cap behind ``store is not None``, so this boot also
-    turns that cap off for the life of the process (there is no reconnect
-    path). ``costs`` re-states it per estimate window; this is the first and
-    earliest place an operator can see it.
+    ``DAILY_CAP_USD`` spend cap behind ``store is not None``, so this boot
+    also turns that cap off until a reopen succeeds. Since issue #123 there
+    IS a reconnect path: ``store_reconnect.maybe_reconnect_feedback_store``,
+    triggered from that same ``estimate`` call behind a monotonic cooldown,
+    with the reopen itself on a background thread. It is best-effort — if
+    the database stays unreachable the cap stays off — so this line is still
+    the earliest place an operator sees the money consequence.
     """
     try:
         configure_feedback_store(FeedbackStore.from_env())
@@ -362,8 +366,9 @@ def _configure_feedback_store() -> None:
         logging.getLogger(__name__).error(
             "feedback_store: could not open SQLite sink — persistence is "
             "disabled AND the per-account 24h daily spend cap will not be "
-            "enforced for the life of this process (no reconnect path; "
-            "restart once the database is reachable): %s",
+            "enforced until a reopen succeeds. A background reconnect is "
+            "attempted from the estimate path (issue #123); if the database "
+            "stays unreachable, restart once it is: %s",
             exc,
         )
 
@@ -905,6 +910,20 @@ def status_snapshot() -> dict[str, object]:
         # this field.
         "global_daily_spend_usd": global_daily_spend_usd,
         "global_daily_ceiling_usd": str(GLOBAL_DAILY_CEILING_USD),
+        # Whether the optional, PAID Layer-B judge is configured. Until this
+        # field existed the judge could be switched on or off — by setting two
+        # Fly secrets — with NO external signal at all, and that is a money
+        # question rather than a nicety: issue #216 is latent only while the
+        # judge is off, because a judge call fired on a GET never reaches the
+        # daily spend ledger.
+        #
+        # STATE, never the values. Same discipline as ``error_tracking``: the
+        # key is a credential and the pinned model id is free recon on an
+        # unauthenticated endpoint. ``judge_configured`` is the SAME predicate
+        # ``query_runs._request_path_judge`` gates on, so this cannot drift
+        # from the behaviour it reports — and it is true only when BOTH the
+        # key and the model id are set, since a key alone runs no judge.
+        "judge_enabled": judge_configured(),
         "model_catalog_loaded": report.catalog_loaded,
         # Generic key on purpose (was ``sentry``): naming the vendor on an
         # unauthenticated endpoint is free recon for an attacker probing

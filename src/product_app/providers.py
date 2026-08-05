@@ -31,6 +31,7 @@ from __future__ import annotations
 import json
 import logging
 import re
+import time
 from dataclasses import asdict, dataclass
 from decimal import Decimal
 from enum import StrEnum
@@ -81,6 +82,49 @@ class ProviderPath(StrEnum):
     LOCAL_SIMULATION = "local_simulation"
     OPENROUTER_SEARCH = "openrouter_search"
     FALLBACK_SEARCH = "fallback_search"
+
+
+#: The provider paths on which NO model was ever sent the question. A COMPLETED
+#: answer on one of these carries ``_local_simulation_text`` — this product's own
+#: words, not a model's.
+#:
+#: BOTH members belong here, and the second is easy to miss. #247 was filed
+#: naming ``LOCAL_SIMULATION`` alone; measured 2026-08-04, a fallback-forced demo
+#: run produces four ``FALLBACK_SEARCH`` slots carrying the same template and
+#: rendered the same "4 of 4 models aligned". A ``LOCAL_SIMULATION``-only set
+#: fixes half the defect.
+#:
+#: Why the PATH is a sound discriminator, when the ``use_fallback`` branch of
+#: ``produce_initial_answer`` appears to let ``FALLBACK_SEARCH`` carry live text:
+#: that arm is dead. The ``OPENROUTER_SEARCH`` branch above it returns whenever
+#: ``live_response is not None and live_response.answer_text``, and
+#: ``live_response`` is not reassigned in between, so the condition is provably
+#: ``False`` there. Proved by execution as well as by reading: replacing that arm
+#: with ``raise AssertionError`` and running the whole suite left it green — the
+#: assertion never fired.
+#:
+#: No pass-count is quoted, deliberately. The first draft said "2279 passed, 0
+#: failed", which was the total on ``9981bab`` BEFORE this change added its own
+#: tests; re-running the same experiment on HEAD gives a different total, so a
+#: reviewer who checked the figure found it irreproducible and was right to. The
+#: claim that matters reproduces on any tree: the assertion never fires.
+#:
+#: Line numbers are deliberately not cited either — they shift with every edit to
+#: the file and go stale silently.
+#:
+#: ``query_runs`` derives ``demo_mode`` and ``local_count`` from this same pair
+#: and now READS this constant to do it. It spelled the pair out inline twice
+#: until #247; adversarial review caught this comment claiming "expressed ONCE"
+#: while a second and third copy sat in ``query_runs``. One definition, because
+#: two matchers built from one constant drift.
+NOT_INVOKED_PATHS = frozenset({ProviderPath.LOCAL_SIMULATION, ProviderPath.FALLBACK_SEARCH})
+
+#: The complement. Written out rather than derived so that
+#: ``test_every_provider_path_is_classified_as_invoked_or_not`` can prove the two
+#: sets PARTITION :class:`ProviderPath`. A new enum member added to neither set
+#: would otherwise default silently to "a model was invoked" and re-open #247 on
+#: the new path.
+INVOKED_PATHS = frozenset({ProviderPath.OPENROUTER_SEARCH})
 
 
 class InitialAnswerStatus(StrEnum):
@@ -289,6 +333,32 @@ class InitialModelAnswer(BaseModel):
     #: "(shortened)" instead of presenting a mid-sentence stop as the model's
     #: complete view. It is INERT until that surface exists (WP-F).
     shortened: bool = False
+
+
+def model_was_invoked(answer: InitialModelAnswer) -> bool:
+    """Was this answer's text produced by actually sending the question to a
+    model?
+
+    ``False`` for the two simulated paths (:data:`NOT_INVOKED_PATHS`), whose
+    text this product wrote. The distinction matters wherever an answer is read
+    as EVIDENCE — #247: four simulated slots differ only by the model id, score
+    pairwise 4-gram Jaccard 0.500-0.579 against a 0.1 threshold, and were
+    reported as "4 of 4 models aligned" on a run that asked nobody.
+
+    Deliberately keyed on ``provider_path`` and not on matching the template
+    text: a second matcher built from the same constant drifts the moment the
+    template is reworded, and drifts silently. Deliberately not a new field on
+    :class:`InitialModelAnswer` either — that model crosses the API boundary, so
+    a field costs an OpenAPI change and a contract change to express what the
+    path already determines.
+
+    Says NOTHING about whether the slot produced text. A simulated slot did
+    produce text and it is shown on screen; callers that need "did this slot
+    come up empty?" must still test ``status`` / ``is_visible``. Conflating the
+    two makes the stance table narrate "No usable answer was returned" over an
+    answer the user can read.
+    """
+    return answer.provider_path not in NOT_INVOKED_PATHS
 
 
 @dataclass(frozen=True)
@@ -1101,21 +1171,34 @@ class ProviderExecutionService:
             # we silently return).
             if exc.code in (400, 404) and model_id.endswith(":online"):
                 return _SEARCH_REJECTED
-            _LOGGER.warning(
-                "upstream_provider_http_error",
-                extra={
-                    "status_code": exc.code,
-                    "url": exc.url,
-                    "model_id": model_id,
-                },
-            )
             # F-06 billing classification. A rejected REQUEST (bad JSON body,
             # bad/insufficient credentials, unknown model, rate limit) is
             # refused before any token is generated, so nothing was billed and
             # the caller must be free to keep the run ``measured``. Any other
             # status — 5xx above all — can follow a generation that already
             # consumed tokens, so it is reported as dispatched-but-unmeasured.
-            if exc.code in _UNBILLED_HTTP_STATUSES:
+            #
+            # Issue #105: that 5xx premise has NO evidence behind it, and a
+            # router-level 503 ("no allowed providers") is decided before any
+            # provider is engaged — measured overstating one run's served cost
+            # by 5.27x. The classification is deliberately NOT changed here on
+            # a guess about an external API's semantics. Instead the evidence
+            # that decides it is recorded, so the question can be settled from
+            # a week of production logs. ``billed`` is computed once and feeds
+            # both the log and the return, so the record can never disagree
+            # with the decision it describes.
+            billed = exc.code not in _UNBILLED_HTTP_STATUSES
+            _LOGGER.warning(
+                "upstream_provider_http_error",
+                extra={
+                    "status_code": exc.code,
+                    "url": exc.url,
+                    "model_id": model_id,
+                    "billing_class": "possibly_billed" if billed else "not_billed",
+                    **_billing_evidence_shape(exc),
+                },
+            )
+            if not billed:
                 return None
             return _DISPATCH_UNMEASURED
         except URLError as exc:
@@ -1132,7 +1215,24 @@ class ProviderExecutionService:
             # (The timeout that genuinely cannot be told apart from a slow
             # generation is the one out of ``getresponse()``, which arrives as a
             # BARE ``TimeoutError`` and is handled by the catch-all below.)
-            if isinstance(exc.reason, TimeoutError):
+            #
+            # Issue #105 folds this branch into the same review, and measured
+            # on 56edd1b it logged NOTHING AT ALL — so the conservative
+            # possibly-billed call above produced no evidence to review later.
+            # Only the reason's CLASS NAME is recorded, never ``str(exc)``: a
+            # ``URLError`` reason can carry a header value verbatim and a
+            # header value can be key material (the same lesson
+            # ``_log_post_dispatch_failure`` records).
+            billed = isinstance(exc.reason, TimeoutError)
+            _LOGGER.warning(
+                "upstream_provider_opener_error",
+                extra={
+                    "error_type": type(exc.reason).__name__,
+                    "model_id": model_id,
+                    "billing_class": "possibly_billed" if billed else "not_billed",
+                },
+            )
+            if billed:
                 return _DISPATCH_UNMEASURED
             return None
         except Exception as exc:
@@ -1317,12 +1417,39 @@ class ProviderExecutionService:
         )
 
     def _local_simulation_sources(self, *, model_slot: ModelSlot) -> list[SourceReference]:
+        """The demo placeholder "source" for a slot no model was asked.
+
+        ``is_fallback=True``, and that single flag is the whole fix for the
+        second half of #247. It was ``False``, which is what made a citation this
+        product invented count as a PRIMARY source: on a keyless run all four
+        slots carried one, so ``citation_coverage`` reported **4 of 4, 100%**,
+        and the Source-support section read "4 of 4 responding models returned
+        visible source references" — about four answers this product wrote
+        itself, citing ``example.test/local-demo/N``, an IANA-reserved domain
+        that resolves to nothing.
+
+        The flag means "not the model's own citation", which is exactly what this
+        is, so no new concept is needed. Both consumers already key on it —
+        ``synthesis._build_source_support`` and the aggregated
+        ``calculate_citation_coverage`` numerator both test
+        ``any(not source.is_fallback ...)`` — so correcting it here corrects the
+        metric and the prose at once rather than in two places that could drift.
+
+        #171 diagnosed this exact mechanism in ``produce_initial_answer`` ("its
+        ``is_fallback=False`` demo source is what makes it count as PRIMARY") and
+        closed the PER-MODEL route by making a live failure a FAILED slot. The
+        WHOLE-RUN demo route it named was left open; this closes it.
+
+        The source is still RETURNED, not dropped: the slot really does show the
+        user a reference, and hiding it would be its own dishonesty. It simply no
+        longer counts toward a coverage figure that claims model-cited evidence.
+        """
         return [
             SourceReference(
                 title=f"Local demo evidence for slot {model_slot.slot_number}",
                 url=f"{LOCAL_SIMULATION_URL_PREFIX}{model_slot.slot_number}",
                 provider=ProviderPath.LOCAL_SIMULATION,
-                is_fallback=False,
+                is_fallback=True,
             ),
         ]
 
@@ -1463,6 +1590,225 @@ _DISPATCH_UNMEASURED: _DispatchedUnmeasured = _DispatchedUnmeasured()
 #: limit (429). Each is decided before any token is generated, so no charge is
 #: possible. Every other status is treated as possibly-billed.
 _UNBILLED_HTTP_STATUSES: frozenset[int] = frozenset({400, 401, 402, 403, 404, 429})
+
+
+#: Issue #105 step 1. Bound on how much of a provider ERROR body is read to
+#: describe its shape. The two error envelopes this repo has fixtures for are
+#: 96 and 133 bytes (no real captured OpenRouter body exists here, so treat the
+#: typical size as ASSUMED, not measured); a corporate proxy's HTML denial can
+#: be arbitrarily large, and this code runs on the failure path, where the
+#: upstream is already misbehaving. A body whose DECLARED length exceeds this
+#: is reported ``too_large`` and never read, so the evidence stays honestly
+#: unknown instead of being guessed from a fragment.
+_ERROR_BODY_SNIFF_LIMIT_BYTES: int = 8192
+
+#: Issue #105. How long the evidence read may block, in seconds. The
+#: connection carries ``openrouter_timeout_seconds`` (8.0), and a 503 whose
+#: body never arrives was measured blocking this branch for the whole of it —
+#: 0.008-0.013s (5 reps on main) to 8.009s on the error path — before raising
+#: ``TimeoutError`` and learning nothing. A real OpenRouter error is answered
+#: by Cloudflare in about 13ms (its own ``Server-Timing: cfWorker;dur=13``), so
+#: two seconds is generous by two orders of magnitude while capping the damage
+#: a misbehaving upstream can do.
+_ERROR_BODY_SNIFF_TIMEOUT_SECONDS: float = 2.0
+
+#: Chunk size for the budgeted read. Small enough that the deadline is checked
+#: often; large enough that a normal ~50-byte error body arrives in one pass.
+_ERROR_BODY_SNIFF_CHUNK_BYTES: int = 2048
+
+
+def _billing_evidence_shape(exc: HTTPError) -> dict[str, object]:
+    """Describe a provider error body's SHAPE — never its content (issue #105).
+
+    ``_UNBILLED_HTTP_STATUSES`` treats every 5xx as possibly-billed on the
+    premise that a 5xx can follow a generation that already consumed tokens.
+    Issue #105's finding is that no evidence for that premise exists anywhere
+    in this repo, and its instruction is to gather the evidence rather than
+    guess: OpenRouter names the provider it engaged at
+    ``error.metadata.provider_name``, so that key's ABSENCE from a well-formed
+    error envelope means the router refused before any provider ran, and
+    nothing could have been billed.
+
+    ``provider_name_present`` is deliberately THREE-VALUED, and collapsing it
+    is the specific defect this function exists to avoid:
+
+    * ``True``  — a provider was named; a charge is possible.
+    * ``False`` — an error envelope arrived and named no provider. Read it
+      together with ``error_metadata_present``: ``False``/``False`` is the
+      router refusal issue #105 is about, while ``False``/``True`` means the
+      provider block existed but carried no name, which is NOT the same
+      evidence and must not be counted as one.
+    * ``None``  — unknown: unreadable, too large, empty, not JSON, or JSON
+      carrying no ``error`` mapping to read.
+
+    A ``False`` that also meant "we could not tell" would make the production
+    log sample this exists to produce unreadable, because the router refusal
+    and a parse failure would be the same record.
+
+    THE READ IS BOUNDED IN TIME, and that matters more than bytes.
+    ``exc.read()`` is a socket read carrying the connection's
+    ``openrouter_timeout_seconds`` (8.0s): measured on a real loopback server,
+    a 503 with the socket held open and the body withheld blocked this branch
+    for the whole 8.009s, against 0.008-0.013s on ``main``, and then raised
+    ``TimeoutError``,
+    paying the entire timeout to learn nothing. So
+    :func:`_bound_sniff_time` lowers the socket timeout to
+    ``_ERROR_BODY_SNIFF_TIMEOUT_SECONDS`` first, capping the worst case at
+    about 2s, and ``sniff_time_bounded`` records whether that succeeded — it is
+    best-effort, and a platform where it fails must say so rather than read as
+    "no problem".
+
+    It is NOT gated on ``Content-Length``. An earlier version was, and that was
+    measured fatal against the real API: OpenRouter is behind Cloudflare and
+    answers errors with ``Transfer-Encoding: chunked`` and no
+    ``Content-Length``, so such a gate collects nothing in production while
+    every local gate stays green. See :func:`_bound_sniff_time` and AGENTS.md
+    rule 8c.
+
+    NEVER returns body content. The values are two shape names, an integer and
+    two tri-state flags. An error body can echo the user's query text back
+    verbatim — and a proxy's HTML denial page routinely echoes the request
+    headers, including ``Authorization`` — so logging any of it would be a data
+    leak on an error path. Same lesson :func:`_log_post_dispatch_failure`
+    records about exception messages carrying key material.
+
+    NEVER raises. ``_post_messages`` guarantees that once ``urlopen`` has been
+    called it RETURNS rather than raises; an instrumentation read that escaped
+    would break that invariant on the very path it is measuring, turning a
+    priced-but-unmeasured call into one that vanished entirely.
+    """
+    shape: dict[str, object] = {
+        "body_shape": "unreadable",
+        "body_bytes": 0,
+        "error_metadata_present": None,
+        "provider_name_present": None,
+        "provider_name_header": _provider_name_header_present(exc),
+        "sniff_time_bounded": False,
+    }
+    try:
+        # One byte past the bound, purely so an over-large body is detectable;
+        # the extra byte is dropped and never reported or parsed.
+        raw, bounded = _read_within_budget(
+            exc, _ERROR_BODY_SNIFF_LIMIT_BYTES, _ERROR_BODY_SNIFF_TIMEOUT_SECONDS
+        )
+        shape["sniff_time_bounded"] = bounded
+        over = len(raw) > _ERROR_BODY_SNIFF_LIMIT_BYTES
+        raw = raw[:_ERROR_BODY_SNIFF_LIMIT_BYTES]
+        body_bytes = len(raw)
+    except Exception:
+        # Any failure to read at all — a dead socket, a consumed body, a
+        # double whose ``read`` returns something that is not bytes — is
+        # reported as "unreadable" and nothing more. ``len`` sits INSIDE the
+        # try deliberately: it was outside at first, and a body object
+        # returning ``None`` then raised ``TypeError`` straight through this
+        # function, making the "never raises" promise above false.
+        return shape
+    shape["body_bytes"] = body_bytes
+    if not raw:
+        shape["body_shape"] = "empty"
+        return shape
+    if over:
+        shape["body_shape"] = "too_large"
+        return shape
+    try:
+        parsed = json.loads(raw)
+    except Exception:
+        shape["body_shape"] = "not_json"
+        return shape
+    shape["body_shape"] = "json"
+    if isinstance(parsed, dict) and isinstance(parsed.get("error"), dict):
+        metadata = parsed["error"].get("metadata")
+        has_metadata = isinstance(metadata, dict)
+        shape["error_metadata_present"] = has_metadata
+        provider_name = metadata.get("provider_name") if has_metadata else None
+        shape["provider_name_present"] = bool(provider_name)
+    return shape
+
+
+def _read_within_budget(exc: HTTPError, limit: int, budget: float) -> tuple[bytes, bool]:
+    """Read at most ``limit + 1`` bytes in at most ``budget`` seconds TOTAL.
+
+    Returns ``(body, time_bounded)``. Raises only what ``read`` raises.
+
+    **A socket timeout is per-``recv``, not cumulative, and that distinction is
+    the whole reason this function exists.** The previous version simply
+    lowered the socket timeout once and called ``exc.read(limit + 1)``, which
+    loops internally until it has the bytes or hits EOF. Measured against a
+    loopback server dribbling 512 bytes every 1.0s — every gap comfortably
+    under the 2s cap, so the cap never fired — that took **16.051 seconds**,
+    twice the 8.009s of the unbounded version it was introduced to fix, while
+    cheerfully reporting ``sniff_time_bounded=True``.
+
+    So the budget is enforced as a DEADLINE across the whole read: before each
+    chunk the socket timeout is set to whatever remains, and the loop stops
+    when the deadline passes. Worst case is the budget plus at most one
+    already-started ``recv`` — and if the socket cannot be reached at all
+    (the hop is CPython-implementation-specific), the deadline check between
+    chunks still bounds the total.
+    """
+    deadline = time.monotonic() + budget
+    want = limit + 1
+    chunks: list[bytes] = []
+    got = 0
+    bounded = True
+    while got < want:
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            break
+        try:
+            exc.fp.fp.raw._sock.settimeout(remaining)  # type: ignore[attr-defined]
+        except Exception:
+            # Cannot reach the socket: the per-chunk read keeps the
+            # connection's own timeout, and only the deadline check above
+            # bounds us. Say so rather than claim a bound we do not have.
+            bounded = False
+        size = min(_ERROR_BODY_SNIFF_CHUNK_BYTES, want - got)
+        # ``read1`` returns after ONE ``recv`` instead of looping until it has
+        # ``size`` bytes, which is what keeps a slow dribble from overrunning
+        # the deadline inside a single call. Not every file object has it.
+        reader = getattr(exc, "read1", None)
+        try:
+            chunk = reader(size) if callable(reader) else exc.read(size)
+        except Exception:
+            # A read that fails after we already have bytes must not throw the
+            # evidence away: a partial body still says whether it is JSON and
+            # whether it names a provider. With nothing in hand there is
+            # nothing to salvage, so the caller's handler reports "unreadable".
+            if not chunks:
+                raise
+            break
+        if not isinstance(chunk, bytes):
+            # A transport that hands back something other than bytes is
+            # BROKEN, not finished. Treating it as EOF would report "empty",
+            # which claims the upstream sent an empty body — a different and
+            # wrong finding. With nothing in hand, let the caller report
+            # "unreadable"; with a partial body, keep it.
+            if not chunks:
+                raise TypeError(f"read returned {type(chunk).__name__}, not bytes")
+            break
+        if not chunk:
+            break
+        chunks.append(chunk)
+        got += len(chunk)
+    return b"".join(chunks), bounded
+
+
+def _provider_name_header_present(exc: HTTPError) -> bool | None:
+    """Did the response carry OpenRouter's ``X-Provider-Name`` header?
+
+    A second, INDEPENDENT signal for the same question the body answers, found
+    by probing the live API: OpenRouter lists ``X-Provider-Name`` in its
+    ``Access-Control-Expose-Headers``. A header survives a body that is
+    truncated, unreadable or not JSON, so the two together fail independently.
+    ``None`` means there were no headers to read at all.
+    """
+    try:
+        headers = exc.headers
+        if headers is None:
+            return None
+        return bool(headers.get("X-Provider-Name"))
+    except Exception:
+        return None
 
 
 #: Post-dispatch failures a healthy deployment genuinely produces: a torn or

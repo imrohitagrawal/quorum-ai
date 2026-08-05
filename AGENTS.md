@@ -12,7 +12,23 @@ is the rule only.
 
 **Truth**
 1. **Verify by executing, never by reading.** State the command and what it
-   printed, or say UNVERIFIED out loud.
+   printed, or say UNVERIFIED out loud. **This includes claims about WHERE
+   something is, not only about what it does** — "this file says X" is a claim,
+   and `grep` is the command that settles it.
+   Measured 2026-08-04, on a list of **three** stale items in this very file,
+   written by an agent that had just spent a session applying this rule:
+   one was real, one named a file that did not contain the text at all (the
+   location was recalled, not grepped), and one was already correct and would
+   have been "fixed" into being wrong. **Two of three evaporated on contact with
+   a command.** Assume your own list is the same until you have run it.
+1a. **Prefer a check over a corrected sentence.** The same session found
+   `AGENTS.md` claiming a directory held "twelve" specs when it held 15 — three
+   were added over months and nothing ever failed, because nothing compared the
+   sentence to the tree. A corrected number lasts until the next change; a gate
+   lasts. Where a number is derivable from the repo OFFLINE, pin it:
+   `tests/test_doc_gate_consistency.py` Part D is the worked example, and the
+   place to add the next one. Numbers that need the network (the rule-14
+   contexts table) cannot be pinned this way and stay a human step.
 2. **A green advisory job is not evidence it ran; a RED one is not evidence it
    measured.** Open the log and find the number.
 3. **If a premise you were handed turns out to be false, STOP and say so.** Never
@@ -41,6 +57,51 @@ is the rule only.
    against the constant that defines it.
 8. **Assert structure, not substrings** — a substring matches the prose that
    explains the thing. Use `tests/code_text.py` when you must read a file.
+8a. **The repo's `HTTPError` doubles have an EMPTY body, and they do not say so.**
+   Both PRE-EXISTING `_http_error` helpers — `tests/unit/test_provider_billing_classification.py:119`
+   (`hdrs=None`) and `tests/unit/test_readiness_key_auth.py:85` (`hdrs=Message()`,
+   used by 5 call sites) — pass `fp=None`, and that does NOT raise on `.read()`.
+   Measured on CPython 3.12.13: `.read()` returns `b''` because CPython
+   substitutes an empty `BytesIO`; `.headers` is `None` for the first and an
+   EMPTY `email.message.Message` for the second (`== {}` is False — do not
+   assert that). So any test asserting "the error body does not contain X"
+   against either double passes **vacuously, against every implementation,
+   including one that never reads the body at all**. This bites #105 and #203
+   identically, since both fixes turn on reading a real response body. Give
+   every such test a REAL body and a positive partner proving the present case
+   is detected.
+8b. **A bound enforced downstream of the operation is not a bound**, and a
+   BYTE bound is not a TIME bound. Both measured on one 40-line function,
+   2026-08-05:
+   - A test asserting `body_bytes <= LIMIT` survived deleting the read's size
+     argument entirely, because a slice taken *after* an unbounded read still
+     reported a bounded number. Assert on the ARGUMENT, not the result — and
+     never against the constant that defines the bound (rule 7a): pinning
+     `<= LIMIT` also let `LIMIT` itself be raised 8192 → 40000 undetected.
+     Pin the exact boundary with literals on both sides.
+   - `exc.read()` on an `HTTPError` is a SOCKET read. A 503 with no
+     `Content-Length` and the socket held open blocked for the full
+     `openrouter_timeout_seconds` — **0.008-0.013s (5 reps) → 8.009s on the
+     error path** — then raised `TimeoutError`, paying the whole timeout to
+     learn nothing. No unit test can see this; it took a reviewer driving a
+     real loopback server that withholds a body. Bound the TIME — lower the
+     socket timeout before the read. **Do NOT "fix" this by gating on
+     `Content-Length`**: that was tried, and rule 8c below is what it cost.
+
+8c. **A mitigation gated on an upstream's behaviour is worth exactly as much as
+   your MEASUREMENT of that upstream — and you probably have none.** Measured
+   2026-08-05, on a fix that had already survived two review lenses and 20
+   mutations: it bounded a body read by refusing to read unless the response
+   declared `Content-Length`. Correct against a loopback server, green on every
+   gate. **The real OpenRouter API is behind Cloudflare and answers errors with
+   `Transfer-Encoding: chunked` and NO `Content-Length`**, so it would have
+   collected nothing at all in production while looking perfectly healthy. One
+   `curl` to the live API — free, a 401 costs no tokens — found it in seconds.
+   Before you gate on an upstream header, status or body shape, GO AND LOOK.
+   Useful facts already paid for: OpenRouter errors are chunked, JSON, ~50
+   bytes, `Server: cloudflare`; a bad key gives `401 {"error":{"message":"User
+   not found.","code":401}}` with NO `error.metadata`; and it exposes
+   `X-Provider-Name` in `Access-Control-Expose-Headers`.
 
 **Review**
 9. **Fan out for review, never for building.** Subagents share one working tree.
@@ -63,6 +124,18 @@ is the rule only.
 12. **Cap review at TWO rounds**, then STOP and escalate with open findings
     listed. If two fixes in a row add defects, change the approach.
     **Expect your own fix to introduce a defect — budget a round for it.**
+11a. **Tell every reviewer to audit the diff's PROSE, not only its code.**
+    Verbatim, in the prompt: *"for every number, superlative, and causal claim
+    in the diff's comments, commit body and PR description, name the command
+    that produces it — or mark it UNVERIFIED."*
+    Measured 2026-08-03: six false claims shipped inside one session — a
+    containment figure quoted as a Jaccard, an agent's "1,836 attempts" cited
+    as a repo fact, "the guaranteed floor" (false on a truncation path), "that
+    clamp responded to CONTAINER width" (it was `5vw`). Every one was in prose,
+    none in code, and the reviewers who were not asked to look at prose did not
+    look. Research into mechanical alternatives concluded no tool anywhere
+    flags an unverified claim in prose; this line is the highest-yield
+    mitigation available and it costs nothing.
 12a. **Reviewers refute by default** and report only findings backed by a
     demonstrated failure. Reviews are **read-only**; a separate single writer
     applies fixes.
@@ -82,6 +155,49 @@ is the rule only.
     cd e2e && SESSION_RATE_LIMIT_PER_MINUTE=600 SESSION_MINT_CAP_OVERRIDE=600 \
       npx playwright test <spec> --project=chromium --workers=1 --retries=0
     ```
+13a. **`e2e/tests/review/` makes `make quality` RED on your machine and green in
+    CI.** That directory is gitignored (`.gitignore:59`) and holds local review
+    scratch specs. `tests/unit/test_no_orphaned_e2e_specs.py:95` enumerates with
+    `rglob` — the FILESYSTEM — so it finds them and fails with
+    *"is committed under e2e/tests/ but no workflow invokes it"*, which
+    `git check-ignore` flatly contradicts. Measured 2026-08-04: **7 failed, 28
+    passed** locally; `28 passed` on a clean `git archive HEAD` copy. Before
+    blaming your diff for a red `test_no_orphaned_e2e_specs`, run
+    `ls e2e/tests/review/`. The mirror-image bug is in
+    `e2e/tools/check-negative-assertions.mjs:380`, whose `--all` mode uses
+    `git ls-files` and is therefore BLIND to those same 7 files.
+13b. **`pytest-randomly` is NOT installed**, though `pyproject.toml:192` sets
+    `-p no:randomly`. Verified: `uv run python -c "import pytest_randomly"` →
+    `ModuleNotFoundError`. So that flag disables a plugin that is not there, and
+    **test order is deterministic-alphabetical, locally and in CI**. Do not
+    reach for `--randomly-seed` to shake out ordering bugs; it does not exist
+    here. Shuffle at the module level (pass test files in a different order)
+    instead.
+13c. **`timeout` does not exist on this macOS box** (`command not found`). Use
+    your tool's own timeout, or `perl -e 'alarm shift; exec @ARGV'`.
+13d. **Growing `goldenCompletedResp()` changes a BLOCKING visual lane you cannot
+    re-baseline locally.** It feeds `visual-snapshots.spec.ts` /
+    `trust-score-visual.spec.ts`, whose Linux baselines are seeded only by
+    `.github/workflows/seed-visual-baselines.yml`; only the `-darwin` ones exist
+    on your machine. To give a rendering gate a new shape, add a DEDICATED
+    builder (see `goldenRespWithBlockStructure`, added for #120) rather than
+    mutating the shared one.
+
+13e. **The visual lane fails 8/8 on your Mac, on CLEAN `main`, and that is not a
+    regression.** Playwright compares `*-chromium-darwin.png` locally; CI
+    compares `*-chromium-linux.png`. They were NOT seeded together — darwin was
+    added in `f25696e` (2026-07-25), linux first in `2533fd3` (2026-07-17) and
+    last re-seeded by `94fc256` (2026-07-28) — and the page has grown since, so
+    the darwin images are stale:
+    measured 2026-08-04 on clean `main`, `result-verdict` expects 1440x**3137**
+    and the page renders 1440x**3385** — 248px taller, 3% of pixels. `e2e.yml`
+    already says a local pixel comparison "couldn't be trusted locally"; this is
+    what that looks like. **Never `--update-snapshots` to make it green** — the
+    darwin images are dev-only and CI ignores them, so you would commit noise
+    and still not have tested what CI tests. To show a rendering change is SAFE
+    for the Linux baselines, dump the relevant `outerHTML` on
+    `goldenCompletedResp()` before and after and prove it byte-identical.
+
 14. **`make quality` and `make validate` do NOT cover the merge gates.** Six
     contexts are required by branch protection. Passing both targets locally
     proves almost nothing about whether the pull request can merge. Each
@@ -154,6 +270,37 @@ is the rule only.
     Recorded 2026-07-30: three untracked handoff documents were deleted, declared
     unrecoverable on the strength of `git log --all` alone, and then recovered in
     full from dangling blobs. **Check the object store before declaring loss.**
+
+**Decisions**
+16d. **A decision gets an ADR in the same PR that makes it.** A decision is:
+    a default value, a failure posture (open vs closed), a policy, a rejected
+    alternative that cost real work, or anything a future reader would ask
+    "why is it like this?" about. Use `docs/adr/`, follow ADR-0002's shape
+    (measured table, rejected alternatives, consequences), and regenerate the
+    index with `python3 scripts/generate_adr_index.py` — `make validate` fails
+    if you don't. **Do not hand-edit the index.**
+    Measured 2026-08-03: a nine-issue batch made ~6 architecture decisions and
+    recorded **zero**, while `docs/adr/`, the index, AND
+    `.agents/skills/architecture-and-decisions/` all already existed. Every
+    mechanism was discoverable and optional, and the task list did not name
+    them. Worse, ADR-0002 pinned the exact constraint (`SQLite single-writer`)
+    that the batch's money work then reasoned on top of without re-reading.
+    **This rule is influence, not enforcement.** The index gate is mechanical;
+    "did you write the ADR at all" is not, and cannot be. If you notice this
+    rule being skipped, that is the signal to make it mechanical, not to
+    restate it louder.
+
+16e. **Before writing code that touches money, auth or safety, list the known
+    failure modes first.** One page, from research and from existing ADRs, then
+    design against that list. Front-loaded and cheap.
+    Measured 2026-08-03: the spend-cap work went five review rounds, each fix
+    correct in isolation and each revealing the next, because the failure modes
+    were discovered one at a time from defects instead of enumerated up front.
+    Thirty minutes on "how do spend meters fail" would have surfaced
+    read-modify-write races, lost writes, reconciliation and idempotency — the
+    exact four. Worse, ADR-0002 already recorded the governing constraint and
+    was not re-read. **The homework mostly already exists in `docs/adr/`; the
+    failure is not reading it.**
 
 **Shipping**
 17. **One CONCERN per pull request**, merged before the next starts — a reviewer
@@ -355,14 +502,27 @@ this file. But when you touch the workspace UI (`src/product_app/static/app.js`,
   ordered lists, blockquotes, long multi-paragraph answers, an empty-citation
   slot — and look at it as a user would (screenshot at 1440px).
 - **The below-the-line gate is `e2e/tests/invariants/`** — driven in CI by
-  `.github/workflows/e2e.yml`. That directory holds **twelve** specs, not the
+  `.github/workflows/e2e.yml`. That directory holds **16** specs, not the
   three described below: `answer-completeness`, `export-and-expanders`,
-  `readiness-banner`, `real-integration-smoke`, `rendering-invariants`,
-  `session-trail`, `source-expander`, `theme-toggle`, `trust-score-invariants`,
-  `trust-score-visual`, `verdict-band`, `visual-snapshots`. All twelve are
-  currently wired into blocking lanes. Three are detailed below because they
-  have contracts worth stating; the other nine bind just as hard. Enumerate the
-  directory rather than trusting this list.
+  `markdown-corpus`, `provider-notice-coverage`, `readiness-banner`,
+  `readiness-no-flash`, `real-integration-smoke`, `rendering-invariants`,
+  `session-trail`, `source-expander`, `source-support-denominator`,
+  `theme-toggle`, `trust-score-invariants`, `trust-score-visual`,
+  `verdict-band`, `visual-snapshots`. All 16 are named in a `playwright test`
+  command in `e2e.yml` — 13 in the first blocking lane, `real-integration-smoke`
+  in the second, and `trust-score-visual` + `visual-snapshots` in the
+  visual-baseline lane. Three are detailed below because they have contracts
+  worth stating; the other thirteen bind just as hard. Enumerate the directory
+  rather than trusting this list.
+  **This count said "twelve" until 2026-08-04**, and the error is instructive:
+  the FIRST blocking lane runs exactly 12 invariant specs, so a number that was
+  right about the LANE got written down about the DIRECTORY, and three more
+  specs were added later without anyone noticing. Nothing failed, because
+  nothing checked. It is checked now —
+  `tests/test_doc_gate_consistency.py::test_agents_md_states_the_real_invariant_spec_count`
+  compares this sentence against `ls -1 e2e/tests/invariants/*.spec.ts | wc -l`
+  and goes red the moment a spec is added or removed without editing it. **Keep
+  the number a digit**: the gate cannot read "twelve".
   **Two holes in the guard that is supposed to keep that true**
   (`tests/test_e2e_workflow_covers_all_invariant_specs.py`) — both pre-existing,
   neither fixed here:

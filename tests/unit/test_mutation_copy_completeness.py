@@ -57,6 +57,21 @@ EXEMPT = {
     ".env": "secrets — deliberately never copied (hermetic, $0)",
     "build": "gate artifacts; the specs that read them skip when absent",
     "mutants": "the copy target itself",
+    # FALSE POSITIVE of `_ROOT_FILE_LITERAL`, not a real read. The only
+    # `"README.md"` literal in the suite is in
+    # `tests/unit/test_vendored_assets_are_pinned.py`, as the right operand of
+    # `VENDOR_DIR / "README.md"` — i.e. `src/product_app/static/vendor/README.md`,
+    # which lives under `src/` and is already copied. The extractor cannot see
+    # which directory a bare filename is joined to, exactly as its own docstring
+    # notes for `"schemas"`.
+    #
+    # The COST of this entry, stated rather than implied: if a future test
+    # really does read the ROOT `README.md`, this gate will now stay silent
+    # about it. Before assuming otherwise, run: grep -rn '"README.md"' tests/
+    "README.md": (
+        'false positive: the only literal is `VENDOR_DIR / "README.md"`, which '
+        "resolves under src/ and is already copied"
+    ),
 }
 
 # Modules that read REPO_ROOT paths and therefore fail inside ./mutants/ when

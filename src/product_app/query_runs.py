@@ -72,8 +72,8 @@ from product_app.evaluation import (
     PresentationConfidence,
     RunEvaluationResult,
     TrustScore,
-    _judge_enabled,
     evaluate_run,
+    judge_configured,
     presentation_confidence,
 )
 from product_app.feedback_store import record_event as _record_feedback_event
@@ -85,6 +85,7 @@ from product_app.model_slots import (
 )
 from product_app.provider_keys import ProviderCredentialSource
 from product_app.providers import (
+    NOT_INVOKED_PATHS,
     InitialAnswerStatus,
     InitialModelAnswer,
     ProviderPath,
@@ -310,6 +311,33 @@ _CONTEXT_MAX_LENGTHS = {
 }
 
 
+def _check_context(ctx: dict[str, str | None] | None) -> None:
+    """Validate a ``context`` mapping, or raise ``ValueError``.
+
+    A module-level function rather than a base-class method because the
+    ``/warnings`` probe (``QueryRunWarningsRequest``) is NOT a
+    ``_QueryRunRequestBase`` and must apply exactly these rules (issue #155):
+    a probe that accepts what create rejects hands the client advice it
+    cannot act on. Pydantic v2 validators are not inherited by assignment,
+    so sharing the callable is the only way to guarantee one implementation
+    rather than two copies that drift.
+    """
+    if ctx is None:
+        return
+    allowed = set(_CONTEXT_MAX_LENGTHS)
+    extra = set(ctx.keys()) - allowed
+    if extra:
+        raise ValueError(
+            f"context may only contain {sorted(allowed)}; unexpected keys: {sorted(extra)}"
+        )
+    for key, value in ctx.items():
+        if value is None:
+            continue
+        limit = _CONTEXT_MAX_LENGTHS[key]
+        if len(value) > limit:
+            raise ValueError(f"context.{key} may be at most {limit} characters; got {len(value)}")
+
+
 class _QueryRunRequestBase(BaseModel):
     """The fields that decide what a run COSTS.
 
@@ -341,23 +369,7 @@ class _QueryRunRequestBase(BaseModel):
 
     @model_validator(mode="after")
     def _validate_context(self) -> Self:
-        ctx = self.context
-        if ctx is None:
-            return self
-        allowed = set(_CONTEXT_MAX_LENGTHS)
-        extra = set(ctx.keys()) - allowed
-        if extra:
-            raise ValueError(
-                f"context may only contain {sorted(allowed)}; unexpected keys: {sorted(extra)}"
-            )
-        for key, value in ctx.items():
-            if value is None:
-                continue
-            limit = _CONTEXT_MAX_LENGTHS[key]
-            if len(value) > limit:
-                raise ValueError(
-                    f"context.{key} may be at most {limit} characters; got {len(value)}"
-                )
+        _check_context(self.context)
         return self
 
 
@@ -528,7 +540,37 @@ class QueryRunResultResponse(BaseModel):
 
 
 class QueryRunWarningsRequest(BaseModel):
-    query_text: str = Field(min_length=1, max_length=8_000)
+    """The probe half of the documented probe-then-create flow.
+
+    Every constraint here MUST match ``_QueryRunRequestBase``'s. A field the
+    probe is STRICTER about is a request the client cannot ask about but can
+    submit; one it is LAXER about is advice the create route will refuse.
+    Both are the same "unbreakable loop" defect issue #155 exists to close,
+    and adversarial review found two of them still open here:
+
+    * ``query_text`` was capped at 8,000 while create allows
+      ``_QUERY_TEXT_MAX_LENGTH`` (20,000). Measured: a benign 9,600-character
+      query got 422 from the probe and 202 from create, so a client in that
+      range could not probe at all.
+    * ``context`` had no validator, so the probe answered 200 for unknown keys
+      and over-long values that create rejects — and accepted a 20 MB body.
+    """
+
+    query_text: str = Field(min_length=1, max_length=_QUERY_TEXT_MAX_LENGTH)
+    #: Issue #155. Same shape as ``QueryRunCreateRequest.context`` on purpose:
+    #: the probe must be able to describe the SAME request the client is about
+    #: to create.
+    #:
+    #: Optional and defaulted, so a pre-#155 client that omits it is
+    #: unaffected — it simply gets the query-text-only answer it got before.
+    context: dict[str, str | None] | None = Field(default=None)
+
+    @model_validator(mode="after")
+    def _validate_context(self) -> Self:
+        # The SAME callable the create route validates with, not a copy of
+        # its rules — a copy is what drifts.
+        _check_context(self.context)
+        return self
 
 
 class QueryRunWarningsResponse(BaseModel):
@@ -1224,7 +1266,10 @@ def create_query_run(
         payload.model_slots,
         slot_search=payload.slot_search,
     )
-    required_warnings = safety_warning_policy.required_warnings_for_query(payload.query_text)
+    # Issue #155: ``context`` reaches provider prompts, so it is scanned too.
+    required_warnings = safety_warning_policy.required_warnings_for_query(
+        payload.query_text, context=payload.context
+    )
     missing_acknowledgements = safety_warning_policy.missing_acknowledgements(
         required_warnings=required_warnings,
         acknowledgements=payload.safety_acknowledgements,
@@ -1534,7 +1579,14 @@ def get_query_run_warnings(
     enforce_csrf(request, session)
     # SEC-C3: per-account rate limit to prevent rapid-fire warning polls
     _enforce_account_rate_limit(request, session)
-    warnings = safety_warning_policy.required_warnings_for_query(payload.query_text)
+    # Issue #155: discovery and enforcement MUST agree. Without ``context``
+    # here, a client following the documented probe-then-create flow gets a
+    # warning list that omits ``high_stakes``, acknowledges exactly what it
+    # was told to, and is then refused 422 by the create route on a warning
+    # it was never shown — an unbreakable loop.
+    warnings = safety_warning_policy.required_warnings_for_query(
+        payload.query_text, context=payload.context
+    )
     safety_warning_policy.record_warning_impression(
         account_id=session.account_id,
         query_run_id=None,
@@ -2440,7 +2492,7 @@ def _request_path_judge(query_run: QueryRun) -> _MemoisedRunJudge | None:
     ``QUORUM_EVAL_JUDGE_MODEL_ID`` are configured — gated HERE, before any
     judge object exists, so the OFF path builds no evidence and performs
     zero I/O (NFR-011/NFR-012), byte-identical to the pre-wiring behaviour.
-    Reuses ``_judge_enabled`` + ``EvalJudgeService``; no fork, no stub.
+    Reuses ``judge_configured`` + ``EvalJudgeService``; no fork, no stub.
 
     Even when configured, contentless or unsettled runs are never judged:
 
@@ -2461,7 +2513,9 @@ def _request_path_judge(query_run: QueryRun) -> _MemoisedRunJudge | None:
     answers; the run's own status/notice discloses what is missing. Pinned
     by ``test_a_timed_out_run_with_completed_answers_is_judged``.
     """
-    if not (_judge_enabled() and settings.quorum_eval_judge_model_id):
+    # ONE predicate, shared with ``/status.judge_enabled`` so the signal an
+    # operator reads cannot drift from the gate that spends the money.
+    if not judge_configured():
         return None
     if query_run.status in {QueryRunStatus.CANCELLED, QueryRunStatus.BLOCKED_BY_COST}:
         return None
@@ -2609,15 +2663,14 @@ def _result_response(query_run: QueryRun) -> QueryRunResultResponse:
             "This run finished without every planned stage. Review failed and missing steps "
             "before relying on the synthesis."
         )
-    demo_mode = any(
-        answer.provider_path in {ProviderPath.LOCAL_SIMULATION, ProviderPath.FALLBACK_SEARCH}
-        for answer in initial_answers
-    )
-    local_count = sum(
-        1
-        for answer in initial_answers
-        if answer.provider_path in {ProviderPath.LOCAL_SIMULATION, ProviderPath.FALLBACK_SEARCH}
-    )
+    # #247: both of these spelled the pair out inline, twice, and
+    # ``providers.NOT_INVOKED_PATHS`` then made a third copy — while its own
+    # comment claimed the pair was "expressed ONCE". Adversarial review caught
+    # the contradiction. Routed through the constant so the claim is true and so
+    # a fourth ``ProviderPath`` member cannot be classified differently here than
+    # by the consensus scorer.
+    demo_mode = any(answer.provider_path in NOT_INVOKED_PATHS for answer in initial_answers)
+    local_count = sum(1 for answer in initial_answers if answer.provider_path in NOT_INVOKED_PATHS)
     # RB-5 / D3 honesty fix: a slot that FAILED on the OpenRouter path is NOT a
     # live answer. ``providers._failed_answer`` / ``cancelled_answer`` stamp
     # ``provider_path=OPENROUTER_SEARCH`` on FAILED slots, so the path alone

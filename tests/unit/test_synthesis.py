@@ -59,33 +59,66 @@ def test_synthesis_stub_returns_required_sections_and_quality_checks() -> None:
     synthesis = result.final_synthesis
     assert synthesis.status is SynthesisStatus.COMPLETED
     assert synthesis.consensus
-    assert "disagreement" in synthesis.disagreement
-    assert "visible source references" in synthesis.source_support
+    # #247: both of these were bare substrings that STAYED GREEN while the
+    # sentences under them inverted in meaning — "The disagreement is preserved
+    # as the dominant signal" became "there is no disagreement to preserve", and
+    # "4 of 4 responding models returned visible source references" became "No
+    # model returned visible source references". The substring matches both
+    # halves of each pair. Asserted on content now, which is what rule 8 asks
+    # for and what a reader would assume these lines already did.
+    assert "No model was asked this question" in synthesis.disagreement
+    assert "Models do not agree" not in synthesis.disagreement
+    assert synthesis.source_support == "No model returned visible source references for this query."
+
     assert synthesis.uncertainty
     assert "decision support only" in synthesis.recommendation
     assert synthesis.synthesis_mode == "simulated"
     # WP-C / F-03: coverage is the share of ANSWERS carrying a primary source.
-    # Four stub answers, four primary sources -> 4/4, target met. The old math
-    # divided this same boolean numerator by a chars-per-claim denominator and
-    # reported 0.50, so every run was labelled provisional.
-    # Length invariance is pinned in tests/unit/test_citation_coverage_semantics.py.
+    # #247: these asserted 4/4 and target-met, on the reasoning quoted from the
+    # comment they replace — that "all four local-simulation answers carry a
+    # primary source". They do not. Each carries ``example.test/local-demo/N``,
+    # a placeholder this product wrote on an IANA-reserved domain, for a slot no
+    # model was asked. That is what made a keyless run claim 100% source coverage
+    # with every quarter invented.
+    #
+    # ``answer_count`` stays 4 — the slots did produce text. The WP-C / F-03
+    # redefinition this comment used to defend is untouched: coverage is still
+    # the share of ANSWERS carrying a primary source, and length still does not
+    # move it (pinned in tests/unit/test_citation_coverage_semantics.py). What
+    # changed is only which sources count as primary.
     assert synthesis.citation_coverage.answer_count == 4
-    assert synthesis.citation_coverage.sourced_answer_count == 4
-    assert synthesis.citation_coverage.sourced_answer_ratio == Decimal("1.00")
-    assert synthesis.citation_coverage.target_met
-    assert synthesis.quality_checks.citation_coverage_target_met
-    # PR-2 Defect 3 fix: with all four stub answers being
-    # identical, the consensus strength is "strong", so
-    # ``false_consensus_preserved`` is now correctly False.
-    # The old substring check on the templated disagreement
-    # text was a false positive — see ``docs/SYNTHESIS_AUDIT.md``.
-    assert not synthesis.quality_checks.false_consensus_preserved
+    assert synthesis.citation_coverage.sourced_answer_count == 0
+    assert synthesis.citation_coverage.sourced_answer_ratio == Decimal("0.00")
+    assert not synthesis.citation_coverage.target_met
+    assert not synthesis.quality_checks.citation_coverage_target_met
+    # #247: this asserted ``not ...false_consensus_preserved``, on the reasoning
+    # (quoted verbatim from the comment it replaces) that "with all four stub
+    # answers being identical, the consensus strength is 'strong'". That
+    # reasoning IS the defect: the four stub answers are identical because this
+    # product wrote all four from one template, not because four models agreed.
+    #
+    # ``git log -S`` shows this line read ``assert
+    # synthesis.quality_checks.false_consensus_preserved`` until PR-2
+    # (``eee93ca``), which flipped it. Restoring it is a revert to the original
+    # assertion, not a weakening — the flag is True because the strength is now
+    # "divided", which is what a panel nobody asked deserves.
+    #
+    # The ``docs/SYNTHESIS_AUDIT.md`` citation is kept because Defect 3 was real
+    # (the old check substring-matched the templated disagreement text and could
+    # never fail). But §5 of that audit prescribes ``true`` only when the
+    # strength is weak/divided AND the disagreement came from a live LLM; PR-2
+    # implemented the first clause, dropped the second, and asserted the result
+    # as correct. The audit does not prescribe False here.
+    assert synthesis.quality_checks.false_consensus_preserved
     assert synthesis.quality_checks.decision_support_framing_present
     event = synthesis_event_recorder.list_events()[0]
     assert event.account_id == account_id
     assert event.query_run_id == query_run_id
     assert event.status is SynthesisStatus.COMPLETED
-    assert not event.false_consensus_preserved
+    # #247: same revert as above — ``eee93ca`` flipped this from
+    # ``assert event.false_consensus_preserved`` in the same commit. The served
+    # flag and the recorded event must agree, so they move together.
+    assert event.false_consensus_preserved
     assert not hasattr(event, "query_text")
     assert not hasattr(event, "provider_key")
 
@@ -252,8 +285,17 @@ def test_synthesis_falls_back_to_template_when_live_execution_disabled(
     )
 
     assert result.final_synthesis is not None
-    # Templated consensus text mentions "Four models were asked".
-    assert "Four models were asked" in result.final_synthesis.consensus
+    # #247: this line asserted ``"Four models were asked" in ...consensus``. This
+    # run has NO key, so every slot is local simulation and no model was asked —
+    # the test was pinning a sentence that is false about its own fixture. It was
+    # only ever a marker for "the templated path produced this", and a redundant
+    # one: ``called["count"] == 0`` and ``synthesis_mode == "simulated"`` below
+    # both say that directly and neither can be true of a live run.
+    #
+    # Replaced with the templated text this run actually produces, so the
+    # consensus section is still pinned exactly rather than left unasserted.
+    assert "No model was asked this question" in result.final_synthesis.consensus
+    assert "Four models were asked" not in result.final_synthesis.consensus
     # The "visible source references" phrase from the templated source_support
     # is what the existing integration test pins.
     assert "visible source references" in result.final_synthesis.source_support

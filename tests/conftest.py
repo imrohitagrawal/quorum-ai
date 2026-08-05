@@ -5,15 +5,25 @@ since the default in production is False. Tests that exercise the
 session path (cookie + CSRF) should NOT use this fixture; the
 CSRF enforcement tests explicitly rely on the cookie path.
 
-Also confirms the runtime environment is "local" before any tests
-import the config, so the production guards do not trigger.
+The suite runs as runtime environment "local", so the production guards
+do not trigger. That comes from the FIELD DEFAULT
+(``RuntimeEnvironment.LOCAL``), not from anything set here — see below.
 """
 
 from __future__ import annotations
 
 import os
 
-# Set the test environment BEFORE importing any product_app modules.
+# ``ENVIRONMENT`` is read by NOTHING, and this line has always been a no-op.
+# The field is ``runtime_environment``, so the variable pydantic-settings
+# looks for is ``RUNTIME_ENVIRONMENT``; ``Settings`` sets ``extra="ignore"``,
+# which silently discards this one. MEASURED 2026-08-05: a .env containing
+# ``ENVIRONMENT=production`` yields ``runtime_environment=local``.
+# The docstring above used to claim this line "confirms the runtime
+# environment is local". It does not — the field default does.
+# Kept, labelled, because deleting it changes nothing and the label stops the
+# next reader copying the wrong variable name. Setting ``RUNTIME_ENVIRONMENT``
+# here WOULD be a real change and is deliberately not done.
 os.environ.setdefault("ENVIRONMENT", "local")
 
 # Enable the legacy X-Account-Id header for tests that need to bypass
@@ -58,7 +68,7 @@ from typing import Any
 
 import pytest
 
-from product_app import feedback_store
+from product_app import feedback_store, store_reconnect
 from product_app.auth import session_repository
 from product_app.query_runs import (
     _account_rate_limiter,
@@ -146,6 +156,24 @@ def _reset_state() -> None:
     session_repository.clear()
     _ip_rate_limiter.clear()
     _account_rate_limiter.clear()
+    # Issue #122/#123. The reconnect cooldown stamps and the "a reopen was
+    # tried and the store still cannot be shown to write" flag are module
+    # globals, and any test whose ``estimate()`` runs against a stale store
+    # spawns a REAL background reopen that sets them. MEASURED: that leaked
+    # out of ``tests/integration/test_feedback_store_write_failures.py`` and
+    # failed two unrelated tests in
+    # ``tests/integration/test_feedback_store_locked_database.py`` — the
+    # flag was still set, so the daily-cap guard blocked and the bypass
+    # ERROR those tests assert on never fired. Same class of process-global
+    # hazard as the cost event ring and the run-capacity semaphore.
+    #
+    # PREVENTIVE, not currently load-bearing: both of those files now pin
+    # `store_reconnect_enabled = False` for their own reasons, so deleting
+    # this line leaves the whole suite green today (verified by mutation, not
+    # assumed). It stays because the hazard is real and was realised once,
+    # and because every other process global above is reset here for exactly
+    # the same reason.
+    store_reconnect._reset_for_tests()
 
 
 @pytest.fixture(autouse=True)

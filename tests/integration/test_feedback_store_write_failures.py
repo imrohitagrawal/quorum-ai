@@ -3,9 +3,20 @@
 ``FeedbackStore.record`` swallows every write failure with a ``WARNING`` and keeps
 **no state**. So when the database is present but unwritable the store *opens*,
 cost events are dropped, ``daily_spend_for`` reads a **frozen ledger**, the 24 h
-``DAILY_CAP_USD`` cap silently stops firing, ``/status`` reports ``connected``,
-and there are **zero** ERROR records — P1 / issue #101's two ERRORs are both keyed
-on ``store is None``, which none of these shapes produces.
+``DAILY_CAP_USD`` cap silently stops firing, and ``/status`` reports ``connected``.
+
+Originally there were **zero** ``product_app.costs`` ERROR records for this shape —
+P1 / issue #101's two ERRORs are both keyed on ``store is None``, which none of
+these shapes produces, and ``CostEstimationService.estimate`` did not yet read
+``write_health()`` at all. Issue #122 closed that gap: ``estimate`` now treats
+``write_health() == "failing"`` as a stale ledger exactly like ``store is None``,
+so the same rate-limited ``costs`` ERROR fires for this shape too (see
+``test_every_fault_shape_disarms_the_cap_and_says_so`` below). The daily cap
+itself still fails OPEN on the first observation of staleness — #122's own
+confirmed policy is BLOCK only after a reopen attempt (issue #123) has actually
+been tried and failed, never on staleness alone — so the five-run ALLOW
+sequence this file pins is still correct; only the "zero ERROR records" half of
+the old claim changed.
 
 Three fault shapes reach ``record()``'s ``except`` branch, all reproduced here
 with real SQLite (no mocks of the failure itself):
@@ -104,6 +115,7 @@ from uuid import UUID, uuid4
 import pytest
 from fastapi.testclient import TestClient
 
+from product_app.config import settings
 from product_app.costs import (
     DAILY_CAP_USD,
     CostEstimationService,
@@ -154,6 +166,24 @@ class _MonoClock:
 
     def advance(self, seconds: float) -> None:
         self._t += seconds
+
+
+@pytest.fixture(autouse=True)
+def _no_background_reconnect(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Pin this file's premise: a cap that stays BYPASSED, not one that blocks.
+
+    These tests measure the fail-open the operator decision leaves in place —
+    five estimates ALLOW while every charge is swallowed. That premise
+    requires no reconnect: since issue #122, once a reopen has been attempted
+    and the store still cannot be shown to write, the cap BLOCKS, so the
+    five-ALLOW sequence stops being the behaviour under test.
+
+    Not a workaround — it restores the exact condition each test was written
+    to measure. #122's block is covered on its own terms, against a real
+    read-only volume, in
+    ``tests/integration/test_stale_ledger_block_on_a_real_volume.py``.
+    """
+    monkeypatch.setattr(settings, "store_reconnect_enabled", False)
 
 
 @pytest.fixture
@@ -779,8 +809,9 @@ def test_every_fault_shape_disarms_the_cap_and_says_so(
     five estimates give ALLOW x4 then BLOCK. Under any of these faults every
     charge is swallowed, ``daily_spend_for`` never leaves zero, and the same five
     estimates all ALLOW with a confirmation token minted — free spend. That is
-    the fail-open the operator decision leaves in place; what this change adds is
-    that it is no longer silent.
+    the fail-open the operator decision leaves in place (issue #122's own
+    confirmed policy: staleness alone must not block, only a reopen that was
+    tried and failed); what this change adds is that it is no longer silent.
     """
     db = tmp_path / "feedback_events.sqlite3"
     _seed_store(db)
@@ -836,10 +867,16 @@ def test_every_fault_shape_disarms_the_cap_and_says_so(
         assert _rows(db) == 0
         assert store.write_health() == "failing"
 
-        # P1 / #101's two ERRORs are keyed on ``store is None`` — neither fires.
+        # P1 / #101's two ERRORs are keyed on ``store is None`` — neither fires,
+        # since the store here opened fine. Issue #122 closed the OTHER gap this
+        # module's docstring used to describe as permanent: ``estimate`` now also
+        # reads ``write_health()``, so its own bypass ERROR fires for this shape
+        # too — rate-limited per instance, one record for five calls.
         assert get_store() is not None
-        assert _records(caplog, _COSTS_LOGGER, logging.ERROR) == []
-        # ...so this one has to. Rate-limited: five losses, one record.
+        cost_errors = _records(caplog, _COSTS_LOGGER, logging.ERROR)
+        assert len(cost_errors) == 1, cost_errors
+        assert "daily spend cap" in cost_errors[0]
+        # feedback_store.py's own loss-of-write ERROR still fires independently.
         errors = _records(caplog, _STORE_LOGGER, logging.ERROR)
         assert len(errors) == 1, errors
         assert "daily spend cap" in errors[0]

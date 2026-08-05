@@ -8,7 +8,7 @@ The recurring failure was placing UI-testing entirely in the influence column.
 
 | Mechanism | Durability | Shared? | Notes (verified) |
 |-----------|-----------|---------|------------------|
-| **CI-CD** (`.github/workflows/*`) | **Gate** | Yes (tracked) | The only always-runs-for-everyone layer. Existing: `ci.yml`, `test.yml`, `e2e.yml`, `deploy.yml`, `feedback-audit.yml` |
+| **CI-CD** (`.github/workflows/*`) | **Gate** | Yes (tracked) | The only always-runs-for-everyone layer. Existing: `ci.yml`, `test.yml`, `e2e.yml`, `deploy.yml`. (`feedback-audit.yml` was removed in #103 — it audited an empty checkout-local DB, never the production volume.) |
 | **Hook** (`.claude/settings.json`) | Gate (local) | **NO** | `.claude/` is **gitignored** (`git check-ignore .claude` → ignored); `settings.json` has no `hooks` key today. A hook here runs only on the author's machine |
 | **AGENTS.md / CLAUDE.md** | Influence | Yes (tracked) | Always loaded, strongest influence — but not a guarantee. **Verified: contains NO UI/visual/e2e testing rule** |
 | **Skill** (built-in / vendored / factory) | Influence | Varies | Opt-in; nothing auto-invokes a skill on a code change. `/verify` exists but was never invoked on a UI change |

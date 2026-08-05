@@ -1339,6 +1339,22 @@ def _judge_enabled() -> bool:
     return bool(settings.quorum_eval_judge_api_key)
 
 
+def judge_configured() -> bool:
+    """Whether the Layer-B judge is fully configured, i.e. a call CAN happen.
+
+    The judge needs TWO values, not one: a key (``_judge_enabled``) AND a
+    pinned model id, because verdicts from different models are not
+    comparable. A key on its own is OFF.
+
+    This is the single predicate. ``query_runs._request_path_judge`` gates on
+    it and ``main.status_snapshot`` reports it, so the operator-visible
+    ``/status.judge_enabled`` cannot drift from the behaviour it describes —
+    pinned by
+    ``tests/integration/test_judge_configuration_is_observable.py::test_the_reported_state_matches_the_real_request_path_gate``.
+    """
+    return bool(_judge_enabled() and settings.quorum_eval_judge_model_id)
+
+
 class EvalJudgeService:
     """Real Layer-B judge. OFF unless a key AND a pinned model id are set.
 
@@ -1367,11 +1383,13 @@ class EvalJudgeService:
 
     def evaluate(self, evidence: JudgeEvidence) -> EvalJudgeVerdict | None:
         self.last_usage = None
-        if not _judge_enabled():
+        # The SAME predicate as the request-path gate and /status.judge_enabled.
+        # This site used to re-implement the two-value rule inline; adversarial
+        # review deleted its model-id half and NO test in the repo went red, so
+        # "one predicate" was three copies, one of them unguarded.
+        if not judge_configured():
             return None
         model_id = settings.quorum_eval_judge_model_id
-        if not model_id:
-            return None
         system_prompt, user_prompt = build_judge_prompt(evidence)
         try:
             result = provider_execution_service.call_with_prompt(

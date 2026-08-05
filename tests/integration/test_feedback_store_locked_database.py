@@ -59,6 +59,7 @@ from uuid import UUID, uuid4
 import pytest
 
 from product_app import main
+from product_app.config import settings
 from product_app.costs import (
     DAILY_CAP_BYPASS_LOG_INTERVAL_S,
     DAILY_CAP_USD,
@@ -129,6 +130,25 @@ class _MonoClock:
 
     def advance(self, seconds: float) -> None:
         self._t += seconds
+
+
+@pytest.fixture(autouse=True)
+def _no_background_reconnect(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Pin this file's premise: a cap that stays BYPASSED, not one that blocks.
+
+    Every test here measures the LOUD-ONLY posture — the estimate is
+    unchanged, the bypass is merely no longer silent. That premise requires
+    no reconnect: since issue #122, once a reopen has been attempted and the
+    store still cannot be shown to write, the cap BLOCKS instead of
+    bypassing, and the "bypassed" ERROR these tests count stops firing
+    because it is no longer true.
+
+    So this is not a workaround — it restores the exact condition each test
+    was written to measure. #122's block is covered on its own terms, against
+    a real read-only volume, in
+    ``tests/integration/test_stale_ledger_block_on_a_real_volume.py``.
+    """
+    monkeypatch.setattr(settings, "store_reconnect_enabled", False)
 
 
 @pytest.fixture
@@ -489,6 +509,32 @@ def test_missing_store_skips_the_daily_cap_and_logs_it_once_per_window(
     assert "daily spend cap" in message
     assert "NOT being enforced" in message
     assert str(DAILY_CAP_USD) in message
+
+    # Every clause an operator has to ACT on, pinned.
+    #
+    # ADR-0004 makes this ERROR the only signal that the cap has stopped
+    # metering — there is no `/status` field meaning "the cap is not being
+    # enforced", so if this sentence degrades, nobody finds out. The three
+    # assertions above left that unguarded: the advisory mutation gate on
+    # PR #240 scored 79.5% against an 80% threshold with **15 survivors**, all
+    # of them in this one function, because mutmut rewrites each implicitly
+    # concatenated chunk of the message separately and only three chunks were
+    # asserted.
+    #
+    # What turns this red: blank or reword any chunk of the `_log.error(...)`
+    # format string in `costs._log_daily_cap_bypassed`, or drop either of its
+    # trailing interpolation arguments.
+    assert "feedback store unavailable" in message  # what broke
+    assert "unmetered" in message  # what it costs
+    assert "background reconnect" in message  # what the app is already doing
+    assert "issue #123" in message  # where that behaviour is specified
+    assert "keeps repeating" in message  # how to tell reconnect is failing too
+    assert "/status feedback_db" in message  # where to look
+    assert "restart" in message  # what to do
+    assert "Repeats suppressed" in message  # why the log is quiet afterwards
+    # Both interpolated values, so a dropped or reordered argument is caught.
+    assert str(settings.store_reconnect_cooldown_seconds) in message
+    assert str(DAILY_CAP_BYPASS_LOG_INTERVAL_S) in message
 
     # ...and the guard's OUTPUT is untouched: still fail-open, still a token.
     assert estimates[0].threshold_action is not CostThresholdAction.BLOCK

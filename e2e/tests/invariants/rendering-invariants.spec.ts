@@ -4,6 +4,8 @@ import {
   driveToTranscript,
   driveDecreasingTimer,
   parseElapsedMs,
+  goldenRespWithBlockStructure,
+  goldenCompletedResp,
   RAW_MARKDOWN_PATTERNS,
 } from "../../fixtures/golden-run";
 
@@ -47,6 +49,7 @@ test.describe("rendering invariants (golden fixture)", () => {
           }
           return parts.join(" > ");
         };
+        let walked = 0;
         while ((node = walker.nextNode())) {
           // Skip hidden subtrees so we only judge what a user can see.
           const parent = node.parentElement;
@@ -58,6 +61,7 @@ test.describe("rendering invariants (golden fixture)", () => {
           if (parent.closest("code, pre")) continue;
           const text = node.textContent || "";
           if (!text.trim()) continue;
+          walked += 1;
           for (const p of patterns) {
             if (new RegExp(p.re, p.flags).test(text)) {
               offenders.push({
@@ -69,7 +73,7 @@ test.describe("rendering invariants (golden fixture)", () => {
             }
           }
         }
-        return offenders;
+        return { offenders, walked };
       },
       {
         scopeSelector,
@@ -80,7 +84,12 @@ test.describe("rendering invariants (golden fixture)", () => {
 
   test("no raw Markdown control syntax survives in the RESULT view (#30)", async ({ page }) => {
     await driveToResult(page);
-    const offenders = await collectRawMarkdown(page, "#main-content");
+    const { offenders, walked } = await collectRawMarkdown(page, "#main-content");
+    // Positive partner (#131/#226): "no offenders" is trivially true of a page
+    // that rendered nothing at all. This was one of the 16 violations the
+    // negative-assertion guard reports repo-wide; it blocked this merge, so it
+    // is fixed here rather than filed.
+    expect(walked, "walked no text nodes — the check below would be vacuous").toBeGreaterThan(0);
     expect(
       offenders,
       `Raw Markdown leaked into rendered text (a surface bypassed the formatter):\n` +
@@ -91,7 +100,8 @@ test.describe("rendering invariants (golden fixture)", () => {
   test("no raw Markdown control syntax survives in the TRANSCRIPT view (#30)", async ({ page }) => {
     await driveToResult(page);
     await driveToTranscript(page);
-    const offenders = await collectRawMarkdown(page, "#main-content");
+    const { offenders, walked } = await collectRawMarkdown(page, "#main-content");
+    expect(walked, "walked no text nodes — the check below would be vacuous").toBeGreaterThan(0);
     expect(
       offenders,
       `Raw Markdown leaked into the transcript (openings/critiques/source titles):\n` +
@@ -136,25 +146,40 @@ test.describe("rendering invariants (golden fixture)", () => {
       .first();
     await expect(body).toBeVisible();
     const shape = await body.evaluate((el) => ({
-      lists: el.querySelectorAll("ul").length,
+      // TOP-LEVEL lists only. The defect this guards is "six bullets became six
+      // SIBLING single-item lists" — a statement about siblings. Counting every
+      // <ul> in the subtree also counts a correctly NESTED sub-list, which is
+      // the fix, not the defect. The comment below already said pinning the
+      // ITEM count would "block the fix for the defect it half-describes"; the
+      // list count had the identical flaw and nobody noticed, because no
+      // renderer had ever nested anything. ADR-0014's parser does: it took this
+      // number from 1 to 2 while the six bullets stayed in ONE sibling list.
+      topLevelLists: el.querySelectorAll(":scope > ul").length,
+      nestedLists: el.querySelectorAll("ul ul, ul ol, ol ul, ol ol").length,
       items: el.querySelectorAll("ul li").length,
       emptyParagraphs: [...el.querySelectorAll("p")].filter(
         (p) => !(p.textContent || "").trim()
       ).length,
     }));
     expect(
-      shape.lists,
-      `expected exactly ONE <ul> for the six-item list; saw ${shape.lists}. ` +
+      shape.topLevelLists,
+      `expected exactly ONE top-level <ul> for the six-item list; saw ${shape.topLevelLists}. ` +
         "More than one means each line became its own single-item list."
     ).toBe(1);
-    // At LEAST six: the fixture seeds an indented sub-bullet, and this
-    // formatter flattens it to a sibling item. Pinning exactly 6 would make a
-    // future correct nested-<ul> implementation RED — a gate that blocks the
-    // fix for the defect it half-describes.
+    // At LEAST six: the fixture seeds an indented sub-bullet, so the flat count
+    // and the nested count differ by how that item is ATTACHED, not by content.
     expect(
       shape.items,
       "the six seeded bullets must all be <li> of that list"
     ).toBeGreaterThanOrEqual(6);
+    // Positive partner for `topLevelLists === 1`: that assertion is ALSO
+    // satisfied by a renderer that dropped the indented sub-bullet outright.
+    // The fixture seeds exactly one, so exactly one nested list must exist.
+    expect(
+      shape.nestedLists,
+      "the fixture's indented sub-bullet must render as a NESTED list — not " +
+        "flattened to a sibling item, and not dropped"
+    ).toBe(1);
     // No item may carry the stripped indent as literal text.
     const untrimmed = await body.evaluate(() =>
       [...document.querySelectorAll(".result-synth-body li")]
@@ -395,6 +420,13 @@ test.describe("rendering invariants (golden fixture)", () => {
         return bad;
       });
 
+      // Positive partner (#131/#226): "nothing clipped" is trivially true of a
+      // page that rendered no elements. Third of the three pre-existing
+      // violations in this file that blocked the #120 merge.
+      const examined = await page.evaluate(
+        () => document.querySelectorAll("#main-content *").length,
+      );
+      expect(examined, "examined no elements — the check below would be vacuous").toBeGreaterThan(0);
       expect(
         clipped,
         `elements clipping their own content at ${width}px:\n${clipped
@@ -435,3 +467,278 @@ async function pageScrollsHorizontally(page: Page) {
     return el.scrollWidth > el.clientWidth + 1;
   });
 }
+
+/**
+ * #120 — BLOCK STRUCTURE ON THE BLOCKQUOTE AND INLINE-PROSE PATHS.
+ *
+ * Until this landed, `formatAnswerText`'s blockquote branch handed raw lines to
+ * `mdInline` and `setInlineProse` called `mdInline` directly, so neither path
+ * had list handling. The fixture deliberately seeded no list into either — and
+ * `golden-run.ts` said so out loud: "a numbered list in a blockquote would fire
+ * this with no fix available. The fixture seeds none — that, and not the
+ * pattern, is why this is green there."
+ *
+ * So the gate was green because nothing exercised it, which is exactly the
+ * vacuous-guard shape AGENTS.md rule 7 exists to stop. These four tests seed
+ * the shapes and assert STRUCTURE, not substrings.
+ *
+ * WHAT TURNS EACH RED is stated per test. All four were measured RED on 2ba0519
+ * and GREEN after the fix; the before/after numbers are in the ADR.
+ */
+test.describe("#120 — lists inside blockquotes and inline surfaces", () => {
+  test.beforeEach(async ({ page }) => {
+    await driveToResult(page, goldenRespWithBlockStructure());
+  });
+
+  // RED IF: flushQuote stops re-entering formatAnswerText and goes back to
+  // joining mdInline output with <br>. Measured before the fix: ol=0.
+  test("an ordered list inside a blockquote renders a real <ol>", async ({ page }) => {
+    const quoted = page.locator("#main-content blockquote", { hasText: "Steps to follow" }).first();
+    await expect(quoted).toBeVisible();
+    await expect(quoted.locator("ol")).toHaveCount(1);
+    // The positive partner: the <ol> must carry BOTH steps, not an empty shell.
+    await expect(quoted.locator("ol > li")).toHaveCount(2);
+    await expect(quoted.locator("ol > li").first()).toHaveText("Instrument the events first.");
+  });
+
+  // RED IF: consecutive bullets inside a quote each become their own list
+  // again. Measured before the fix: ul=2, li=2 for two bullets — one
+  // single-item <ul> per line.
+  test("consecutive bullets inside a blockquote form ONE <ul>", async ({ page }) => {
+    const quoted = page.locator("#main-content blockquote", { hasText: "Steps to follow" }).first();
+    await expect(quoted.locator("ul")).toHaveCount(1);
+    await expect(quoted.locator("ul > li")).toHaveCount(2);
+  });
+
+  // RED IF: setInlineProse stops pre-rendering markers, so a list reaches
+  // mdInline intact AND mdInline can build a list from it. Measured before the
+  // fix: exactly one violation, "UL inside <p> (result-source-support)".
+  //
+  // Review correction: an earlier version of this comment said "mdInline
+  // regains a <ul> rule, OR setInlineProse stops pre-rendering". The first
+  // disjunct is FALSE and was demonstrated so — re-injecting the deleted <ul>
+  // rule into mdInline leaves all four tests green, because inlineListMarkers
+  // has already consumed every marker before mdInline runs. Only the
+  // conjunction turns this red. The structural guard in
+  // tests/unit/test_mdinline_bullets.py is what covers mdInline on its own.
+  test("no list element is ever a child of a <span> or <p>", async ({ page }) => {
+    const violations = await page.evaluate(() => {
+      const main = document.querySelector("#main-content");
+      if (!main) return ["#main-content missing"];
+      return Array.from(main.querySelectorAll("ul,ol"))
+        .filter((el) => el.parentElement && ["SPAN", "P"].includes(el.parentElement.tagName))
+        .map(
+          (el) =>
+            `${el.tagName} inside <${el.parentElement!.tagName.toLowerCase()}>` +
+            ` (${el.parentElement!.className})`,
+        );
+    });
+    expect(violations, "list element inside an inline-only container").toEqual([]);
+    // Positive partner — without it this passes over a page that rendered no
+    // list at all, which is the very failure the assertion above cannot see.
+    const lists = await page.locator("#main-content ul, #main-content ol").count();
+    expect(lists, "fixture must actually render lists for the check above to mean anything").toBeGreaterThan(0);
+  });
+
+  // RED IF: any path stops rendering a marker — this runs the SAME patterns the
+  // whole-DOM sweep above uses, but over the seeded payload. Measured before
+  // the fix: 4 text nodes matched "ordered-list marker (1. )".
+  test("no raw markdown marker survives on the seeded block-structure payload", async ({ page }) => {
+    const hits = await page.evaluate(
+      (patterns: { name: string; src: string }[]) => {
+        const main = document.querySelector("#main-content");
+        const walker = document.createTreeWalker(main as Node, NodeFilter.SHOW_TEXT);
+        const texts: string[] = [];
+        for (let n = walker.nextNode(); n; n = walker.nextNode()) {
+          if (n.nodeValue && n.nodeValue.trim()) texts.push(n.nodeValue);
+        }
+        const found: string[] = [];
+        for (const p of patterns) {
+          const re = new RegExp(p.src);
+          for (const t of texts) {
+            if (re.test(t)) found.push(`${p.name} :: ${JSON.stringify(t.slice(0, 60))}`);
+          }
+        }
+        // Returned alongside so an empty `found` cannot mean "walked nothing".
+        return { found, textNodeCount: texts.length };
+      },
+      RAW_MARKDOWN_PATTERNS.map((p) => ({ name: p.name, src: p.re.source })),
+    );
+    // toBeGreaterThanOrEqual, not toBeGreaterThan: the guard only treats
+    // `toBeGreaterThan` as a positive partner when it compares against ZERO
+    // (check-negative-assertions.mjs:197), while `toBeGreaterThanOrEqual`
+    // counts for any positive number (:198). Same assertion, recognised.
+    expect(hits.textNodeCount, "walked no text nodes — the check would be vacuous").toBeGreaterThanOrEqual(20);
+    expect(hits.found, "raw markdown survived into a text node").toEqual([]);
+  });
+});
+
+/**
+ * #120, ROUND 2 — the assertions review proved were MISSING.
+ *
+ * Lens 1 built two implementations the ADR explicitly rejects — "delete every
+ * marker" and "keep bullets, delete every ordinal" — and measured that ALL
+ * four tests above plus all 13 unit tests stayed green against both. The suite
+ * asserted that no RAW marker survives, and nothing anywhere asserted that a
+ * RENDERED one appears. A negative check with no positive partner, which is
+ * the exact shape AGENTS.md rule 7 names, sitting inside the gate written to
+ * close a rendering issue.
+ *
+ * These three are that partner. Each states what turns it red.
+ */
+test.describe("#120 round 2 — the rendered marker, and the number the model wrote", () => {
+  test.beforeEach(async ({ page }) => {
+    await driveToResult(page, goldenRespWithBlockStructure());
+  });
+
+  // RED IF: inlineListMarkers deletes a bullet instead of rendering one, or
+  // stops emitting <br> so the items collapse onto a single run-on line.
+  test("an inline bullet list renders a bullet character, one item per line", async ({ page }) => {
+    const support = page.locator("#main-content .result-source-support").first();
+    await expect(support).toContainText("• verify the cost figure");
+    await expect(support).toContainText("• keep the cap");
+    // The <br> is what stacks them; without it white-space:normal collapses the
+    // newline and both items share a line. Measured on .result-source-support:
+    // 88px stacked before #120, 20px run-on with a bare newline, 61px with <br>.
+    expect(await support.locator("br").count(), "items must be separated by <br>").toBeGreaterThan(0);
+  });
+
+  // RED IF: an ordinal is DELETED rather than rendered — the ADR's rejected
+  // alternative, which passed every other test in this file.
+  test("an inline ordered list keeps the model's numbers", async ({ page }) => {
+    const caption = page
+      .locator("#main-content .result-trust-caption")
+      .filter({ hasText: "Open items" })
+      .first();
+    await expect(caption).toContainText("(1) cohort definition");
+    await expect(caption).toContainText("(2) export gate");
+  });
+
+  // RED IF: <ol> loses its `start` attribute. Then a quoted procedure that the
+  // model opened at "4." is RENUMBERED to 1 on screen — the product stating a
+  // fact its input never contained. Invisible to every text-node walk in this
+  // file, because the number lives in ::marker; only the attribute and the
+  // rendered ::marker text can see it.
+  test("a quoted list that opens at 4 is not renumbered to 1", async ({ page }) => {
+    const quoted = page
+      .locator("#main-content blockquote", { hasText: "Reconcile the ledger" })
+      .first();
+    await expect(quoted).toBeVisible();
+    const ol = quoted.locator("ol").first();
+    await expect(ol).toHaveAttribute("start", "4");
+    // Both halves of what the browser actually numbers from: the parsed `start`
+    // property (not just the attribute string) and a decimal list-style. With
+    // start=4 and list-style-type:decimal the first ::marker is "4.".
+    //
+    // The ::marker TEXT itself is deliberately not asserted. Measured:
+    // `getComputedStyle(li, "::marker").content` returns "normal" in Chromium
+    // for a browser-generated counter — the string is never exposed to the DOM.
+    // That is precisely why this defect is invisible to every text-node walk in
+    // this file, and why the attribute is the strongest available proxy. Stated
+    // rather than papered over.
+    const shape = await ol.evaluate((el) => ({
+      start: (el as HTMLOListElement).start,
+      listStyle: getComputedStyle(el).listStyleType,
+    }));
+    expect(shape.start, "the <ol> must be numbered from the model's own 4").toBe(4);
+    expect(
+      shape.listStyle,
+      "a non-decimal list-style would hide the number the start attribute sets",
+    ).toBe("decimal");
+  });
+});
+
+/**
+ * #120 ROUND 3 — the two mdInline callers the fix's own prose forgot.
+ *
+ * The commit body and ADR both claimed "no caller lost anything" and listed
+ * FOUR callers. `grep -n "mdInline(" app.js` returns FIVE. The two missed —
+ * the heading branch and flushQuote's depth-capped fallback — were left
+ * emitting a raw marker once mdInline's <ul> rule was deleted, and BOTH new
+ * shapes match the blocking gate's own patterns. Neither is in the golden
+ * fixture, so review found them and the gate could not.
+ */
+test.describe("#120 round 3 — the callers a superlative hid", () => {
+  const HEADING_AND_DEEP_QUOTE =
+    "### - alpha bravo\n\n" + ">".repeat(6) + " - side note zulu\n";
+
+  test.beforeEach(async ({ page }) => {
+    const resp = goldenCompletedResp() as Record<string, unknown>;
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    (resp as any).result.final_synthesis.recommendation = HEADING_AND_DEEP_QUOTE;
+    await driveToResult(page, resp);
+  });
+
+  // RED IF: the heading branch stops calling inlineListMarkers. Before #120 it
+  // emitted "<h6><ul><li>alpha bravo</li></ul></h6>" — a <ul> inside a heading,
+  // illegal. Removing mdInline's rule without adding the call left a raw "- ".
+  test("a heading renders its marker and contains no list", async ({ page }) => {
+    const heading = page
+      .locator("#main-content h4, #main-content h5, #main-content h6")
+      .filter({ hasText: "alpha bravo" })
+      .first();
+    await expect(heading).toBeVisible();
+    await expect(heading).toHaveText("• alpha bravo");
+    expect(await heading.locator("ul, ol").count(), "a heading may not contain a list").toBe(0);
+  });
+
+  // RED IF: the depth-capped fallback stops flattening leftover "> " markers.
+  // MEASURED on this 6-deep input: main leaves ">>>>> - side note zulu", which
+  // the gate's `(^|\n)>\s` pattern does NOT match; stripping one level per
+  // recursion leaves "> - side note zulu", which DOES — 3 hits. Flattening
+  // gives 0.
+  test("a quote nested past the depth cap leaks no marker", async ({ page }) => {
+    const found = await page.evaluate(
+      (patterns: { name: string; src: string }[]) => {
+        const main = document.querySelector("#main-content");
+        const walker = document.createTreeWalker(main as Node, NodeFilter.SHOW_TEXT);
+        const texts: string[] = [];
+        for (let n = walker.nextNode(); n; n = walker.nextNode()) {
+          if ((n.parentElement as Element | null)?.closest("code, pre")) continue;
+          if (n.nodeValue && n.nodeValue.trim()) texts.push(n.nodeValue);
+        }
+        const hits: string[] = [];
+        for (const p of patterns) {
+          for (const t of texts) {
+            if (new RegExp(p.src).test(t)) hits.push(`${p.name} :: ${JSON.stringify(t.slice(0, 50))}`);
+          }
+        }
+        return { hits, zulu: texts.filter((t) => t.includes("zulu")) };
+      },
+      RAW_MARKDOWN_PATTERNS.map((p) => ({ name: p.name, src: p.re.source })),
+    );
+    // Positive partner: the deep-quoted content must actually be on the page,
+    // or "no markers found" would be true of a page that dropped it entirely.
+    expect(found.zulu.length, "the deeply quoted line must still be rendered").toBeGreaterThan(0);
+    expect(found.hits, "a marker survived past the depth cap").toEqual([]);
+    // The bullet must survive as STRUCTURE, inside the quote. This used to
+    // assert the literal text "• side note zulu" — the rendered-marker
+    // WORKAROUND the hand-rolled formatter emitted once it hit a recursion cap
+    // it needed because it re-entered itself per "> " level. ADR-0014's parser
+    // is iterative and has no cap, so it renders the real thing: nested
+    // <blockquote>s ending in a genuine <li>. Asserting the workaround's glyph
+    // would have failed the strictly better output — so this now asserts the
+    // structure, which the old renderer could NOT produce at this depth and the
+    // new one must.
+    const structure = await page.evaluate(() => {
+      const li = [...document.querySelectorAll("#main-content blockquote li")]
+        .find((el) => (el.textContent || "").includes("side note zulu"));
+      return {
+        found: Boolean(li),
+        insideList: Boolean(li?.closest("ul, ol")),
+        quoteDepth: li ? li.closest("blockquote") ? (() => {
+          let n = 0;
+          for (let el: Element | null = li; el; el = el.parentElement) {
+            if (el.tagName === "BLOCKQUOTE") n++;
+          }
+          return n;
+        })() : 0 : 0,
+      };
+    });
+    expect(structure.found, "the deeply quoted bullet must be a real <li>").toBe(true);
+    expect(structure.insideList, "that <li> must sit inside a <ul>/<ol>").toBe(true);
+    // Six "> " markers in the source, so six nested quote levels — proof the
+    // nesting is parsed rather than flattened at a cap.
+    expect(structure.quoteDepth, "all six quote levels must be represented").toBe(6);
+  });
+});

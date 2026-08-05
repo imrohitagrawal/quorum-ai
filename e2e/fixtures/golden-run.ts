@@ -390,6 +390,115 @@ export const goldenCompletedResp = () => ({
   actual_cost_usd: "0.188", actual_breakdown: breakdown("0.188"),
 });
 
+// ---- #120: block structure on the two paths that had none -------------------
+//
+// These are NOT folded into goldenCompletedResp(). That builder feeds the
+// visual-snapshot lane, whose Linux baselines can only be seeded in CI
+// (.github/workflows/seed-visual-baselines.yml), so changing what it renders
+// would red a blocking lane with no way to regenerate the baseline locally.
+// A dedicated builder gives the rendering gate the shapes without touching a
+// single pixel of the visual lane. Stated because it is a real constraint on
+// how this fixture may grow, not a stylistic preference.
+//
+// Every one of these is markdown a provider emits routinely: a quoted set of
+// steps, a caveat list in a caption. MEASURED on 2ba0519 (before the #120 fix)
+// they produced, in the real browser: ol=0 / ul=2 / li=2 inside the blockquote
+// with both ordered markers surviving as literal text, `UL inside <p>` on
+// .result-source-support, and 4 text nodes matching the gate's own
+// ordered-list-marker pattern.
+export const QUOTED_ORDERED_AND_BULLETS =
+  "Here is the panel's reading.\n\n" +
+  "> Steps to follow:\n" +
+  "> 1. Instrument the events first.\n" +
+  "> 2. Then enable the export.\n" +
+  "> - side note alpha\n" +
+  "> - side note beta\n\n" +
+  "The model continued the same procedure in a later quote:\n\n" +
+  "> 4. Reconcile the ledger.\n" +
+  "> 5. Archive the run.\n\n" +
+  "That is the recommendation.";
+
+export const INLINE_ORDERED_LIST =
+  "Open items:\n1. cohort definition\n2. export gate";
+
+export const INLINE_BULLET_LIST =
+  "Caveats:\n- verify the cost figure\n- keep the cap";
+
+/**
+ * The golden completed run, with block structure seeded onto the blockquote
+ * path and both inline-prose paths — the three surfaces issue #120 names.
+ */
+export const goldenRespWithBlockStructure = () => {
+  const resp = goldenCompletedResp() as Record<string, any>;
+  resp.result.final_synthesis.recommendation = QUOTED_ORDERED_AND_BULLETS;
+  resp.result.final_synthesis.uncertainty = INLINE_ORDERED_LIST;
+  resp.result.final_synthesis.source_support = INLINE_BULLET_LIST;
+  return resp;
+};
+
+// ---- #257: the shapes that leaked in production ----------------------------
+//
+// Thirteen raw-Markdown leaks reached the screen in one real paid run while all
+// 196 invariant-lane tests stayed green. Every one of them was a shape this
+// fixture had never contained: a Markdown TABLE, a literal `<br>`, and a
+// heading-led answer flattened onto an INLINE surface. A gate only covers what
+// its fixture renders, so the fixture is where the fix has to start.
+//
+// Like `goldenRespWithBlockStructure` above, these are DEDICATED builders.
+// `goldenCompletedResp()` feeds the blocking visual-snapshot lane, whose Linux
+// baselines can only be seeded in CI, so growing it to hold new shapes would
+// red that lane with no way to regenerate locally (AGENTS.md 13d).
+
+/** The exact table two of four live models emitted for a comparison question. */
+export const PRODUCTION_TABLE =
+  "| Option | When it makes sense | Rough effort |\n" +
+  "|--------|--------------------|--------------|\n" +
+  "| Scale vertically | CPU headroom exists | Low |\n" +
+  "| Shard by tenant | A single tenant dominates writes | High |";
+
+/** Models write `<br>` to get two lines into one cell. 6 reached the screen. */
+export const TABLE_WITH_LITERAL_BR =
+  "| Step | Note |\n" +
+  "|---|---|\n" +
+  "| Upgrade the box | Just a host upgrade. <br>Risk: the same timeout returns. |";
+
+/** A model answering with a `# ` heading first — the shape #257 §2 shows. */
+export const HEADING_LED_ANSWER =
+  "# PostgreSQL Scaling Decision\n\n" +
+  "Based on your profile, do not shard yet. Vertical scaling is **3**x cheaper here.";
+
+/**
+ * The golden completed run with the three #257 shapes seeded onto the surfaces
+ * they actually leaked from: a table and a `<br>` on a BLOCK surface
+ * (`setProse`), and a heading-led answer on the INLINE one (`setInlineProse` —
+ * the "How positions moved" OPENING cell, which is where it was seen).
+ */
+export const goldenRespWithMarkdownShapes = () => {
+  const resp = goldenCompletedResp() as Record<string, any>;
+  resp.result.final_synthesis.recommendation =
+    PRODUCTION_TABLE + "\n\n" + TABLE_WITH_LITERAL_BR;
+  resp.result.position_movements[0].opening = HEADING_LED_ANSWER;
+  return resp;
+};
+
+/**
+ * Put ONE arbitrary provider string on ONE surface, so a spec can sweep a
+ * corpus of inputs without a bespoke builder per case.
+ *
+ * `surface: "block"` targets the synthesis recommendation (`setProse`);
+ * `surface: "inline"` targets the first position-movement opening cell
+ * (`setInlineProse`). Both render inside `#main-content` on the result view.
+ */
+export const goldenRespWithProviderText = (
+  text: string,
+  surface: "block" | "inline" = "block",
+) => {
+  const resp = goldenCompletedResp() as Record<string, any>;
+  if (surface === "block") resp.result.final_synthesis.recommendation = text;
+  else resp.result.position_movements[0].opening = text;
+  return resp;
+};
+
 /**
  * The CONSENSUS shape — 4 of 4 aligned, so `isConsensusResult()` is true and the
  * band paints the one sanctioned large green surface.
@@ -630,6 +739,29 @@ export async function driveDecreasingTimer(page: Page, elapsedSequence: number[]
   await fill(page);
   await clickRunNow(page);
   await expect(page.locator("#live-elapsed")).toBeVisible({ timeout: 15000 });
+}
+
+/**
+ * Clone `goldenCompletedResp()` with one answer slot's provider notice
+ * overridden — for issue #124, which needs EVERY registered notice proven to
+ * reach a real transcript render, not just the zero-source shape already
+ * seeded above via `goldenAnswer`'s own ternary.
+ *
+ * Deliberately assigns via bracket notation (`answer["provider_notice"] =`)
+ * rather than an object-literal key followed by a colon: this file's text is
+ * scanned by `tests/unit/test_golden_fixture_notice_sync.py` for exactly that
+ * key shape to catch a stale seeded notice, and a bare identifier there would
+ * break its literal/window scan. The text this function assigns is supplied
+ * by the caller and pinned to the registry separately by
+ * `tests/unit/test_notice_coverage_spec_sync.py`, which checks
+ * `notice-coverage-cases.ts` instead.
+ */
+export function goldenCompletedRespWithNotice(notice: string, slotIndex = 3): unknown {
+  const resp = goldenCompletedResp() as any;
+  const answer = { ...resp.result.model_answers[slotIndex] };
+  answer["provider_notice"] = notice;
+  resp.result.model_answers[slotIndex] = answer;
+  return resp;
 }
 
 /** Parse the "#live-elapsed" readout ("12.0s elapsed" / "1m 05s elapsed") → ms. */

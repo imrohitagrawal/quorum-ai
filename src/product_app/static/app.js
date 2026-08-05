@@ -178,6 +178,15 @@
     // literals so the pre-run banners can render before the first
     // client-initiated fetch completes.
     lastReadiness: null,
+    //: #117. Has ``/ready`` settled yet? The page-load seed alone must not
+    //: paint the readiness banner: the credential probe runs on a background
+    //: thread at startup (#112), so a page served inside that window carries
+    //: a seed that can disagree with the verdict landing moments later.
+    //: Painting both produced a measured flash-and-reflow — "Live execution
+    //: is unavailable" for ~137px on desktop, ~319px on mobile, then gone.
+    //: Showing a warning and retracting it is its own small dishonesty, so
+    //: the first paint waits for the real answer.
+    readinessConfirmed: false,
     lastStaleModelIds: null,
     // Track if user has attempted to submit (gates inline error display)
     submissionAttempted: false,
@@ -580,6 +589,15 @@
     // are driven by the same cache so they cannot disagree.
     renderDriftBanner();
     if (!readinessRegion || !readinessTitle || !readinessMessage) return;
+    // #117: suppress the FIRST paint until /ready has settled. Until then the
+    // only readiness we have is the server-rendered seed, which can be stale
+    // by construction. The drift banner above is deliberately NOT suppressed:
+    // it is a different surface with a different data source, and nothing has
+    // measured it flashing.
+    if (!state.readinessConfirmed) {
+      readinessRegion.hidden = true;
+      return;
+    }
     const readiness = state.lastReadiness;
     // No snapshot yet (probe never ran): keep the banner hidden. The
     // first ``refreshReadiness`` call will fill the cache and
@@ -715,6 +733,24 @@
   // toast and the cached snapshot is preserved, so a flaky probe
   // cannot wipe a known-good banner.
   async function refreshReadiness() {
+    try {
+      await readReadinessIntoCache();
+    } finally {
+      // #117 + review round 1. The flag MUST be set on EVERY exit path, and a
+      // `finally` is the only construct that guarantees it: the body below
+      // calls `toast()` from INSIDE a catch, so a throw there escapes before
+      // any trailing statement could run — and that path is precisely "the
+      // /ready probe failed", i.e. exactly when the page-load seed is the only
+      // disclosure we have. A suppression that outlives this call is a HIDDEN
+      // disclosure, strictly worse than the flash this change exists to
+      // remove. `boot()`'s outer catch carries the same guarantee for a throw
+      // that happens before this function is ever reached.
+      confirmReadiness();
+    }
+  }
+
+  /** Fetch /ready and /v1/models/defaults into the readiness caches. */
+  async function readReadinessIntoCache() {
     let nextReadiness = null;
     let nextStale = null;
     try {
@@ -739,6 +775,14 @@
         timeout: 5000,
       });
     }
+    // #117, review round 2. CONFIRM HERE — after /ready has settled, and
+    // BEFORE the second fetch. Measured: with the confirmation after BOTH
+    // awaits, a hung `/v1/models/defaults` suppressed the banner even though
+    // `/ready` had already returned the correct OFFLINE verdict. The drift
+    // list is a diagnostic; the readiness verdict is a safety disclosure, and
+    // the disclosure must not wait on the diagnostic.
+    if (nextReadiness) state.lastReadiness = nextReadiness;
+    confirmReadiness();
     try {
       // /v1/models/defaults requires a session cookie. If the session
       // bootstrap has not completed yet (we are called from boot
@@ -753,9 +797,50 @@
       // alone — renderDriftBanner / applyReadinessState will fall
       // back to the page-load seed.
     }
-    if (nextReadiness) state.lastReadiness = nextReadiness;
     if (nextStale) state.lastStaleModelIds = nextStale;
     applyReadinessState();
+  }
+
+  /**
+   * Lift the #117 first-paint suppression and paint. Idempotent.
+   *
+   * Every path that can end the suppression funnels through here, so there is
+   * one place to read rather than four to keep in step.
+   */
+  function confirmReadiness() {
+    state.readinessConfirmed = true;
+    applyReadinessState();
+  }
+
+  /**
+   * Guarantee the disclosure appears even if the probe never answers.
+   *
+   * #117, review round 2. `api()` uses a bare `fetch` with NO timeout
+   * (measured: zero AbortController/AbortSignal uses in this file), so a
+   * request that HANGS never resolves and never rejects — and a `finally`
+   * that waits on it never runs either. Measured against a hung `/ready` on
+   * an offline deployment: the banner stayed hidden indefinitely, including
+   * the case where the seed said the deployment was over its spend ceiling.
+   * That is the safety disclosure silenced by a slow network.
+   *
+   * So the suppression is time-bounded. After this long we stop waiting and
+   * paint whatever the page-load seed says — which may later be corrected by
+   * /ready, i.e. the original flash, but only on a probe this slow. A brief
+   * flash on a degraded network is a far better failure than a permanently
+   * invisible "every answer here is simulated".
+   *
+   * JUDGMENT CALL, NOT MEASURED: 2000ms is chosen, not derived. Long enough
+   * that a healthy loopback/LAN probe (~12ms measured locally) never reaches
+   * it, short enough to bound the window in which the run button is enabled
+   * with nothing on screen saying answers will be simulated.
+   */
+  const READINESS_DISCLOSURE_FALLBACK_MS = 2000;
+
+  function armReadinessDisclosureFallback(delayMs = READINESS_DISCLOSURE_FALLBACK_MS) {
+    window.setTimeout(() => {
+      if (state.readinessConfirmed) return;
+      confirmReadiness();
+    }, delayMs);
   }
 
   // Lightweight toast for transient, non-blocking messages.
@@ -2419,6 +2504,30 @@
   // degraded warning on a run that was entirely live.
   const isUsableCount = (n) => Number.isInteger(n) && n >= 0;
 
+  // #247: may this run's agreement line tell the reader that the models who did
+  // not align are "preserved as disagreement"?
+  //
+  // Only when some answer actually came from a model. On a run where none did —
+  // fully simulated, or every slot failed — there is no disagreement to
+  // preserve, and saying so invents one: a keyless demo run rendered "0 of 4
+  // models aligned — the rest are preserved as disagreement below." about four
+  // models nobody asked.
+  //
+  // ONE predicate for all THREE surfaces that make this claim (the verdict band,
+  // the Copy summary, the Markdown export). They each carry their own wording,
+  // which is fine; what they must not each carry is their own copy of the
+  // DECISION. That is exactly how #128 let the file a user kept disagree with
+  // the screen they exported it from, and why ``describePanelShortfall`` above
+  // is a single function too.
+  // A ``function`` declaration, not a ``const`` arrow, so that
+  // ``tests/unit/test_agreement_clause_honesty.py`` can lift it out with the
+  // brace-counting extractor the sibling app.js unit tests already use and drive
+  // it under Node. A pure function with no DOM access, like
+  // ``describePanelShortfall``.
+  function mayClaimDisagreement(ctx) {
+    return !ctx.isConsensus && !ctx.noLiveAnswers;
+  }
+
   function renderResultDegraded(result) {
     const banner = el("result-degraded");
     if (!banner) return;
@@ -2509,6 +2618,15 @@
     // never drift out of lockstep.
     const isConsensus = isConsensusResult(result);
 
+    // #247: did ANY answer on this run come from a live provider? When none did,
+    // the verdict band must not tell the reader the rest are "preserved as
+    // disagreement" — see ``renderVerdictBand``. ``live_count`` counts COMPLETED
+    // ``openrouter_search`` slots only, so this is 0 both for a fully simulated
+    // run and for one where every slot failed; in both, nothing on screen came
+    // from a model. Absent field => treated as "some were live", so an older
+    // payload keeps the existing sentence rather than silently losing it.
+    const noLiveAnswers = Number.isInteger(result.live_count) && result.live_count === 0;
+
     // Revised count — INFERRED from position_movements' ``revised`` flag.
     const movements = Array.isArray(res.position_movements)
       ? res.position_movements
@@ -2541,7 +2659,14 @@
     renderResultDegraded(result);
     renderResultMeta(result, status, durationText);
     renderResultReceipt(result, res);
-    renderVerdictBand(result, fs, { isConsensus, aligned, total, revisedCount, movements });
+    renderVerdictBand(result, fs, {
+      isConsensus,
+      aligned,
+      total,
+      revisedCount,
+      movements,
+      noLiveAnswers,
+    });
     renderTrustTriangle(result, res, fs, { isConsensus, aligned, total });
     renderTrustScore(result);
     renderResultPositions(res);
@@ -2558,9 +2683,9 @@
       summaryLines.push("Verdict: No synthesis was produced for this run.");
     }
     summaryLines.push(
-      isConsensus
-        ? `Agreement: ${aligned} of ${total} models aligned.`
-        : `Agreement: ${aligned} of ${total} models aligned; the rest are preserved as disagreement.`,
+      mayClaimDisagreement({ isConsensus, noLiveAnswers })
+        ? `Agreement: ${aligned} of ${total} models aligned; the rest are preserved as disagreement.`
+        : `Agreement: ${aligned} of ${total} models aligned.`,
     );
     if (result.correlation_id) summaryLines.push(`Run: ${result.correlation_id}`);
     state.lastResultSummary = summaryLines.join("\n");
@@ -2576,6 +2701,11 @@
       aligned,
       total,
       movements,
+      // #247: the export must reach the SAME disagreement verdict as the screen.
+      // Omitting it here would leave ``mayClaimDisagreement`` reading
+      // ``undefined`` in the export and the file would keep the sentence the
+      // band had just dropped — the #128 defect exactly.
+      noLiveAnswers,
     });
   }
 
@@ -2802,9 +2932,9 @@
         : "**Verdict:** No synthesis was produced for this run.",
     );
     push(
-      ctx.isConsensus
-        ? `**Agreement:** ${ctx.aligned} of ${ctx.total} models aligned.`
-        : `**Agreement:** ${ctx.aligned} of ${ctx.total} models aligned; the rest are preserved as disagreement.`,
+      mayClaimDisagreement(ctx)
+        ? `**Agreement:** ${ctx.aligned} of ${ctx.total} models aligned; the rest are preserved as disagreement.`
+        : `**Agreement:** ${ctx.aligned} of ${ctx.total} models aligned.`,
       "",
     );
 
@@ -3253,6 +3383,122 @@
     return Number.isFinite(n) && n >= 0 && n <= 1;
   }
 
+  /**
+   * #193. A count we are willing to PRINT, or null.
+   *
+   * Same posture as ``coverageRatioOrNull`` above: ``answer_count`` and
+   * ``sourced_answer_count`` are required non-negative ints on
+   * ``CitationCoverage``, so a conforming backend cannot send anything else.
+   * This refuses ""/"   "/null/undefined/2.5/-1/true/[3]/{} and any non-SAFE
+   * integer, rather than coercing, because the caption built from these is a
+   * sentence a reader will take as measured fact. A numeric string IS accepted
+   * once trimmed: ``"3 "`` yields 3. That is deliberate — the value is right —
+   * but this comment listed ``"3 "`` among the REFUSED inputs until a reviewer
+   * ran it, which is the repo's "quote what the code does" rule broken inside
+   * the sentence describing the guard.
+   */
+  function countOrNull(raw) {
+    let n;
+    if (typeof raw === "number") {
+      n = raw;
+    } else if (typeof raw === "string") {
+      const trimmed = raw.trim();
+      // ``Number("")`` and ``Number("   ")`` are both a finite, non-negative,
+      // INTEGER 0 — so an integer check alone lets a missing count through as a
+      // measured zero, and the caption reads "0 of 4 answers came back carrying
+      // a primary source". That is the WP-B/F-18 defect exactly — first found
+      // on the verdict BAND's coverage-caution line (``renderVerdictBand``),
+      // not on this card, though ``coverageRatioOrNull`` already guards this
+      // card's value line. Reject before coercing, the same way that function
+      // does (see its ``trimmed === ""`` check).
+      if (trimmed === "") return null;
+      n = Number(trimmed);
+    } else {
+      return null;
+    }
+    // SAFE integer, not merely integer: ``Number.isInteger(1e21)`` is true and
+    // renders "1e+21 answers", and 9007199254740993 prints as ...992 — a
+    // different number than the payload carried. Same principle as the
+    // coherence guard below: a conforming server cannot send these, and that
+    // is exactly why the client refuses them rather than trusting the
+    // validator.
+    return Number.isSafeInteger(n) && n >= 0 ? n : null;
+  }
+
+  /**
+   * #193. The Source support caption: the percentage's denominator, named.
+   *
+   * A bare "75%" says nothing about what it is a share of, and "3 of 4" and
+   * "15 of 20" are both 75%. The counts go HERE, in the caption, rather than
+   * on the value line, for two measured reasons:
+   *
+   *   - the Agreement card's VALUE is literally ``3 of 4`` and sits in the same
+   *     3-up grid, so a second bare fraction beside it reads as the same
+   *     measurement when the two are unrelated (models that AGREED versus
+   *     answers that CITED A SOURCE); and
+   *   - the value line already carries ``· N sources cited``, so a third number
+   *     there invites reading the percentage against the source count, which
+   *     is not its denominator either.
+   *
+   * The caption already said this without the numbers, so this REPLACES a
+   * generic sentence rather than adding one.
+   *
+   * Returns the numberless fallback whenever the counts cannot support the
+   * sentence. Input classes and the test for each:
+   * ``e2e/tests/invariants/source-support-denominator.spec.ts``.
+   *
+   * NOTE on the denominator, which is NOT the Agreement card's: ``answer_count``
+   * counts answers that CAME BACK (``synthesis.py``: failed / cancelled /
+   * deadline-exceeded slots carry 0 and are out of scope), while the Agreement
+   * card's ``total`` is every initial answer INCLUDING the failed ones
+   * (``debate.py``, ``AgreementSummary``). On a degraded run the two cards
+   * therefore show different denominators for one run — "2 of 4 aligned" beside
+   * "1 of 3 answers". That is accurate, not a bug, and the words "came back"
+   * carry the distinction; it is recorded here because the discrepancy looks
+   * like a defect to anyone who has not read both definitions.
+   */
+  const SOURCE_SUPPORT_CAPTION_FALLBACK =
+    "Share of the answers that came back carrying a primary source.";
+
+  /** Largest gap allowed between the printed % and the counts (2dp quantised). */
+  const COVERAGE_RATIO_TOLERANCE = 0.01;
+
+  function sourceSupportCaption(coverage, ratio) {
+    if (!coverage) return SOURCE_SUPPORT_CAPTION_FALLBACK;
+    // The caption must never state a measurement the VALUE LINE suppressed.
+    // ``coverageRatioOrNull`` renders "—" for an absent/out-of-range ratio
+    // precisely because, per WP-B/F-18, suppressing the figure is the honest
+    // failure mode; a caption that then says "3 of 4" hands the reader back the
+    // 75% the card just refused to claim. So the counts require a usable ratio.
+    if (ratio === null || ratio === undefined) return SOURCE_SUPPORT_CAPTION_FALLBACK;
+    const total = countOrNull(coverage.answer_count);
+    const sourced = countOrNull(coverage.sourced_answer_count);
+    // Refuse: absent, malformed, an empty panel ("0 of 0 answers" is worse than
+    // saying nothing), or incoherent.
+    //
+    // HONESTY NOTE on ``sourced > total``: no input can isolate it, so no test
+    // turns it red on its own, and it is kept as defence in depth rather than
+    // as a proved guard. Incoherent counts imply a ratio above 1, which
+    // ``coverageRatioOrNull`` rejects as out of unit range, so the usable-ratio
+    // gate above fires first; and if a ratio inside [0,1] is sent anyway, it
+    // cannot agree with a fraction greater than 1, so the agreement check below
+    // fires. This clause only becomes load-bearing if one of those two is later
+    // loosened — which is exactly when a reader will be glad it is here.
+    if (total === null || sourced === null) return SOURCE_SUPPORT_CAPTION_FALLBACK;
+    if (total === 0 || sourced > total) return SOURCE_SUPPORT_CAPTION_FALLBACK;
+    // ...and the counts must AGREE with the percentage printed above them.
+    // ``CitationCoverage`` validates ``sourced <= answer`` but never checks the
+    // ratio against the counts, so "10%" over "3 of 4 answers" is reachable
+    // from a payload no server-side validator rejects. Two numbers on one card
+    // that contradict each other are worse than one number with no denominator,
+    // which is the whole complaint this issue exists to answer. The ratio is
+    // quantised to 2dp upstream, so the tolerance covers rounding only.
+    if (Math.abs(ratio - sourced / total) > COVERAGE_RATIO_TOLERANCE) {
+      return SOURCE_SUPPORT_CAPTION_FALLBACK;
+    }
+    return `${sourced} of ${total} answer${total === 1 ? "" : "s"} came back carrying a primary source.`;
+  }
+
   function renderVerdictBand(result, fs, ctx) {
     const band = el("result-verdict");
     if (!band) return;
@@ -3267,7 +3513,7 @@
       return;
     }
 
-    const { isConsensus, aligned, total, revisedCount } = ctx;
+    const { isConsensus, aligned, total, revisedCount, noLiveAnswers } = ctx;
     band.dataset.consensus = isConsensus ? "true" : "false";
 
     band.appendChild(buildTrustRing(aligned, total));
@@ -3294,6 +3540,15 @@
       if (revisedCount > 0) {
         summary += ` · ${revisedCount} revised their position`;
       }
+    } else if (!mayClaimDisagreement(ctx)) {
+      // #247: no answer on this run came from a live provider, so there is no
+      // disagreement below to preserve and the clause the branch below appends
+      // would be this band's own invention. On a fully simulated run it read
+      // "0 of 4 models aligned — the rest are preserved as disagreement below.",
+      // telling the reader four models disagreed when four models were never
+      // asked. The count itself stays — 0 aligned is true — and the degraded
+      // banner directly above already says why.
+      summary = `${aligned} of ${total} models aligned`;
     } else {
       summary = `${aligned} of ${total} models aligned — the rest are preserved as disagreement below.`;
     }
@@ -3412,14 +3667,22 @@
     // number of DISTINCT non-fallback sources across model_answers. The two are
     // deliberately different quantities — the caption names the percentage's
     // denominator so they cannot be read as numerator/denominator of each other.
+    // Until #193 that sentence described a contract this code did NOT have: the
+    // caption was a fixed string with no number in it, so nothing named the
+    // denominator anywhere on the card. ``sourceSupportCaption`` is what makes
+    // the line above true.
     // Degrade gracefully if absent.
     const coverage = fs && fs.citation_coverage ? fs.citation_coverage : null;
     let coveragePct = null;
-    if (coverage) {
+    // Hoisted so the CAPTION is decided from the same parsed ratio the VALUE
+    // LINE renders. Deriving them independently is how the card came to be able
+    // to print "—" above "3 of 4 answers" — the caption restoring a figure the
+    // value line had deliberately suppressed.
+    const coverageRatio = coverage ? coverageRatioOrNull(coverage.sourced_answer_ratio) : null;
+    if (coverageRatio !== null) {
       // WP-B/F-18: same trap as the verdict band's caution line — an absent
       // ratio must render the "—" no-data treatment, never a fabricated 0%.
-      const ratio = coverageRatioOrNull(coverage.sourced_answer_ratio);
-      if (ratio !== null) coveragePct = Math.round(ratio * 100);
+      coveragePct = Math.round(coverageRatio * 100);
     }
     const answers = Array.isArray(res.model_answers) ? res.model_answers : [];
     // Count DISTINCT non-fallback sources (de-dupe by url/title) so two
@@ -3441,7 +3704,7 @@
         kicker: "Source support",
         value: coveragePct != null ? `${coveragePct}%` : "—",
         valueSub: sourceSub,
-        caption: "Share of the answers that came back carrying a primary source.",
+        caption: sourceSupportCaption(coverage, coverageRatio),
       }),
     );
 
@@ -5220,171 +5483,291 @@
   // Misc helpers
   // ---------------------------------------------------------------------------
 
-  // Light formatter for model answers, debate rounds, and synthesis
-  // sections (L5a). We don't do real markdown (no build step, no
-  // dependency budget) but we do split on blank lines into paragraphs
-  // and convert single newlines into ``<br>`` so LLM output that
-  // already has reasonable structure stays legible on first render —
-  // long blocks of double-spaced prose collapse to a wall of text,
-  // which is hard to scan.
+  // ---------------------------------------------------------------------------
+  // Markdown rendering (ADR-0014 / ADR-0015)
+  // ---------------------------------------------------------------------------
   //
-  // Returns an HTML string. The caller is responsible for inserting
-  // it with ``innerHTML`` — escaping is handled internally via the
-  // existing ``escapeHtml`` helper so a hostile answer cannot inject
-  // script tags through the response payload.
+  // Provider Markdown is parsed by VENDORED markdown-it 14.1.0, served
+  // same-origin from ``/static/vendor/`` (the CSP is ``script-src 'self'
+  // 'unsafe-inline'``, so no policy change was needed and there is no build
+  // step). It replaces ~449 lines of hand-written regex parsing that three
+  // sessions failed to finish: the last attempt went green on every gate and
+  // two review lenses then found 23 defects in it. The measurements behind the
+  // choice — including that ``marked`` renders ``<script>`` live and that a
+  // parser does NOT fix the truncated opening synopsis — are in ADR-0014.
   //
-  // The function is intentionally a no-op on plain prose and on the
-  // "Awaiting provider output." / "Provider did not return text."
-  // placeholders, so a stuck poll still looks like a stuck poll.
+  // ``html: false`` is the whole XSS posture. The OLD renderer escaped every
+  // character and re-emitted an allow-list; this one escapes raw HTML by
+  // CONFIGURATION. That is a flag guarding a security property, so it is
+  // pinned by a behavioural test that feeds a live ``<script>`` through a
+  // provider answer and asserts the DOM holds no script element — flip the
+  // flag and that test goes red (see
+  // ``e2e/tests/invariants/markdown-corpus.spec.ts``).
+  //
+  // EIGHT deliberate deviations from stock markdown-it follow, numbered (1) to
+  // (8) below. Each one exists because removing it was MEASURED to break
+  // something real, and each is named so a reader can find the test that pins
+  // it. The count is checked by
+  // ``tests/test_doc_gate_consistency.py::test_the_deviation_count_matches_the_code``
+  // — this line said "SIX", vendor/README.md said "seven" and ADR-0015 said
+  // "eight", all in one commit, and two independent reviewers each found the
+  // disagreement by grepping. A number three documents state about one list is
+  // exactly the shape a machine should re-derive.
+  const MD_OPTIONS = {
+    // The security flag. Never set this true. See the pin test above.
+    html: false,
+    xhtmlOut: false,
+    // A single newline inside a paragraph becomes <br>, which is what the old
+    // formatter did (it joined buffered lines with "<br>"). Without it, a
+    // provider that soft-wraps its prose renders as one run-on line.
+    breaks: true,
+    // Bare URLs stay text. The old renderer did not autolink them either, and
+    // the golden fixture's visual baselines contain bare URLs as text.
+    linkify: false,
+    // No smart quotes/dashes: they would rewrite provider text, and this
+    // product's whole claim is that nothing on screen is unsupported.
+    typographer: false,
+  };
+
+  function buildMarkdownRenderer() {
+    const MarkdownIt = window.markdownit;
+    if (typeof MarkdownIt !== "function") return null;
+    const md = new MarkdownIt(MD_OPTIONS);
+
+    // (1) NO IMAGES, AND NO LINK REFERENCE DEFINITIONS.
+    //
+    // Images: the old renderer had no image support at all, so enabling it here
+    // would be a NEW surface with no CSS, no visual baseline and a
+    // remote-fetch/data-URI vector. `![x](u)` degrades to `!` plus a link,
+    // byte-identical to what the old link regex produced for the same input.
+    //
+    // Reference definitions: this one is CONTENT LOSS, found by adversarial
+    // review and MEASURED. markdown-it CONSUMES a `[1]: https://…` line and
+    // emits nothing for it, so an answer whose citations are written in
+    // reference style loses them off the screen entirely:
+    //
+    //   "[1]: https://example.com/paper"   NEW ""              OLD "<p>[1]: https://…</p>"
+    //   "Summary\n\n[1]: …\n[2]: …"        NEW "<p>Summary</p>" OLD "<p>Summary</p><p>[1]: …<br>[2]: …</p>"
+    //
+    // An answer made ONLY of definitions renders to "", which makes setProse
+    // take its PLACEHOLDER branch — so a model that answered WITH citations is
+    // shown as "This model did not return an opening answer." The product would
+    // be stating something false about the model, which is the defect class
+    // this whole work package exists to end.
+    //
+    // Disabling the rule restores the old behaviour exactly: a definition
+    // renders as ordinary text and `[text][1]` stays literal, which is what
+    // `main` did. The cost is real and accepted — reference-style links do not
+    // become anchors — because losing a citation entirely is strictly worse
+    // than showing it unlinked.
+    md.disable(["image", "reference"]);
+
+    // (2) HEADINGS ARE DEMOTED BY THREE. `# ` becomes <h4>, not <h1>. Two
+    // reasons, both checkable: `.q-prose` styles h4/h5/h6 and NOTHING else
+    // (app.css), so an <h1> here would render at browser-default size inside
+    // a card; and an <h1> mid-document breaks the heading order that the axe
+    // lane asserts. The old formatter did exactly this (`h${level + 3}`).
+    md.core.ruler.push("demote_headings", (state) => {
+      for (const token of state.tokens) {
+        if (token.type === "heading_open" || token.type === "heading_close") {
+          token.tag = "h" + Math.min(6, Number(token.tag.slice(1)) + 3);
+        }
+      }
+    });
+
+    // (3) A LONE `*` MAY NOT EMPHASISE INTO OR OUT OF A WORD. CommonMark
+    // allows intra-word `*` emphasis (it forbids it only for `_`), and this
+    // product's domain is full of arithmetic. MEASURED on stock markdown-it:
+    //   "total 3*40 and 2*12 per year" -> "total 3<em>40 and 2</em>12 per year"
+    // — the product inventing emphasis the model did not write. The old
+    // renderer carried word-boundary guards for exactly this and they were
+    // argued through two review rounds; this is the same rule, expressed as a
+    // delimiter filter.
+    //
+    // It must run BEFORE `balance_pairs`, not before `emphasis`: pairing is
+    // decided by balance_pairs (it sets `.end`), and the emphasis
+    // post-processor reads only that. Registered before `emphasis` the rule
+    // ran but changed nothing — measured, `3*40` still emphasised.
+    //
+    // Length is checked because `**` must stay unrestricted: `**3**x cheaper`
+    // is the headline case from the live run, and the closing `**` there sits
+    // between two word characters. The cost of the deviation is that
+    // `see *note*s here` renders literally, which is what the old renderer did
+    // too.
+    const dropIntrawordStars = (state, delimiters) => {
+      for (const d of delimiters) {
+        if (d.marker !== 0x2a || d.length !== 1) continue;
+        const prev = state.tokens[d.token - 1];
+        const next = state.tokens[d.token + 1];
+        const before = prev && prev.type === "text" ? prev.content.slice(-1) : "";
+        const after = next && next.type === "text" ? next.content.charAt(0) : "";
+        if (/\w/.test(before)) d.open = false;
+        if (/\w/.test(after)) d.close = false;
+      }
+    };
+    md.inline.ruler2.before("balance_pairs", "no_intraword_star", (state) => {
+      if (state.delimiters) dropIntrawordStars(state, state.delimiters);
+      for (const meta of state.tokens_meta || []) {
+        if (meta && meta.delimiters) dropIntrawordStars(state, meta.delimiters);
+      }
+      return false;
+    });
+
+    // (4) A LITERAL `<br>` BECOMES A LINE BREAK. With `html: false` it would
+    // otherwise be escaped and shown as the text "<br>" — 6 such occurrences
+    // reached the screen in the live run (#257), because models write <br> to
+    // get two lines into one table cell. This emits a TOKEN, never raw HTML,
+    // and matches `<br>`, `<br/>`, `<br />` and their whitespace variants
+    // (`<br   >` is a break too; `<br    />` is NOT, because the 8-character
+    // slice cuts it — harmless, and stated because an earlier draft of this
+    // comment claimed "exactly three spellings", which review measured
+    // false). `<br onload=…>` does not match and stays escaped (asserted in
+    // the XSS pin test). Inline rules do
+    // not run inside code spans or fenced blocks, so `` `<br>` `` stays
+    // literal.
+    md.inline.ruler.before("text", "literal_br", (state, silent) => {
+      if (state.src.charCodeAt(state.pos) !== 0x3c /* < */) return false;
+      const match = /^<br\s*\/?>/i.exec(state.src.slice(state.pos, state.pos + 8));
+      if (!match) return false;
+      if (!silent) state.push("hardbreak", "br", 0);
+      state.pos += match[0].length;
+      return true;
+    });
+
+    // (5) LINKS KEEP THE APP'S OWN ALLOW-LIST, not markdown-it's. Stock
+    // `validateLink` permits some `data:` URLs and has no opinion on
+    // protocol-relative `//host`. `safeMarkdownHref` (unchanged, still shared
+    // with the source chips) allows http(s) via URL(), inert `mailto:`, and
+    // genuinely relative URLs, and rejects `//host`.
+    //
+    // Its backslash-folded variants (`/\host`) are handled by markdown-it
+    // rather than by that guard, and review measured the difference: the
+    // parser percent-encodes the backslash BEFORE `validateLink` runs, so the
+    // guard sees `/%5Chost` and accepts it as relative. NOT exploitable —
+    // `%5C` is not decoded in the authority, so a real browser resolves it
+    // same-origin (measured: `a.protocol` is "http:" on the app's own
+    // origin) — but the mechanism is markdown-it's, not this guard's, and
+    // this comment used to claim otherwise.
+    //
+    // The rel/target pair is re-emitted here because losing
+    // `rel="noopener noreferrer"` on a `target="_blank"` link would be a
+    // silent security regression — the old renderer set both.
+    md.validateLink = (url) => safeMarkdownHref(url) != null;
+    md.renderer.rules.link_open = (tokens, idx) => {
+      const href = safeMarkdownHref(tokens[idx].attrGet("href") || "");
+      // Unreachable while validateLink agrees, but a link with no href beats
+      // one with an unvetted href if the two ever disagree.
+      if (href == null) return "<a>";
+      return `<a href="${escapeHtml(href)}" target="_blank" rel="noopener noreferrer">`;
+    };
+
+    // (6) A BLOCKQUOTE HOLDING ONE PARAGRAPH KEEPS ITS OLD SHAPE. markdown-it
+    // always wraps quote bodies in <p>; the old formatter deliberately did not
+    // when the body was a single prose paragraph, and that choice was made FOR
+    // the blocking visual lane (<p> carries margins). Hiding the paragraph
+    // tokens is markdown-it's own mechanism for this — the same one tight
+    // lists use — so no markup is hand-built. Measured: with this rule the
+    // golden fixture's blockquote HTML is byte-identical to main's.
+    md.core.ruler.push("unwrap_sole_quote_paragraph", (state) => {
+      const tokens = state.tokens;
+      for (let i = 0; i < tokens.length; i++) {
+        if (tokens[i].type !== "blockquote_open") continue;
+        let depth = 0;
+        let end = -1;
+        for (let j = i + 1; j < tokens.length; j++) {
+          if (tokens[j].type === "blockquote_open") depth++;
+          else if (tokens[j].type === "blockquote_close") {
+            if (depth === 0) { end = j; break; }
+            depth--;
+          }
+        }
+        if (end < 0) continue;
+        // An EMPTY quote (a bare ">") is a visible hollow box with a left
+        // border and nothing in it. The old formatter dropped it explicitly —
+        // "an all-blank quote body formats to '', and an empty <blockquote> is
+        // a visible empty box" — and that comment went with the code it
+        // described. Review caught the gap. Hiding both ends leaves nothing on
+        // screen, which is what `main` did.
+        if (end - i === 1) {
+          tokens[i].hidden = true;
+          tokens[end].hidden = true;
+          continue;
+        }
+        const soleParagraph =
+          end - i === 4 &&
+          tokens[i + 1].type === "paragraph_open" &&
+          tokens[i + 3].type === "paragraph_close";
+        if (soleParagraph) {
+          tokens[i + 1].hidden = true;
+          tokens[i + 3].hidden = true;
+        }
+      }
+    });
+
+    // (7) A HEADING WHOSE TEXT STARTS WITH A LIST MARKER RENDERS THE MARKER.
+    // "### - alpha bravo" is, in CommonMark, a heading whose text happens to
+    // begin with a hyphen — so a correct parser leaves "- alpha bravo" in the
+    // heading's text node. The BLOCKING rendering gate matches exactly that
+    // ("bullet marker (- / * )"), because in every other position it means a
+    // surface bypassed the formatter. An <h*> may not contain a <ul> either, so
+    // there is no structural answer: the marker becomes its rendered form,
+    // which is what the old formatter did (it ran `inlineListMarkers` on every
+    // heading — added in #120 for this exact case, and caught then by review
+    // rather than by the gate).
+    //
+    // Runs BEFORE the `inline` core rule, while an inline token's `.content` is
+    // still raw source, so nothing has to be re-parsed afterwards.
+    md.core.ruler.before("inline", "heading_list_markers", (state) => {
+      const tokens = state.tokens;
+      for (let i = 1; i < tokens.length; i++) {
+        if (tokens[i].type !== "inline") continue;
+        if (tokens[i - 1].type !== "heading_open") continue;
+        tokens[i].content = inlineListMarkers(tokens[i].content);
+      }
+    });
+
+    // (8) A TABLE GETS A KEYBOARD-REACHABLE SCROLL CONTAINER. A wide table
+    // must scroll inside its own box rather than push the page sideways (the
+    // no-horizontal-overflow invariant), and a scrollable box that cannot be
+    // focused is an axe SERIOUS violation (`scrollable-region-focusable`) —
+    // which is exactly the regression the abandoned branch shipped. `tabindex`
+    // plus a labelled `role="group"` makes it reachable and announced.
+    md.renderer.rules.table_open = () =>
+      '<div class="q-table-scroll" tabindex="0" role="group" aria-label="Table">'
+      + '<table class="q-table">';
+    md.renderer.rules.table_close = () => "</table></div>";
+
+    return md;
+  }
+
+  // Built once, lazily, so a load-order accident is survivable: if the vendored
+  // script is missing the surfaces fall back to escaped plain text rather than
+  // throwing on every render.
+  let mdRenderer;
+  function markdownRenderer() {
+    if (mdRenderer === undefined) mdRenderer = buildMarkdownRenderer();
+    return mdRenderer;
+  }
+
+  // Render BLOCK-level provider Markdown to an HTML string. The caller inserts
+  // it with ``innerHTML``; safety comes from ``html: false`` plus the link
+  // allow-list above, not from the caller.
+  //
+  // Deliberately a no-op on the two placeholder strings, so a stuck poll still
+  // looks like a stuck poll rather than gaining a paragraph.
+  //
+  // If the vendored parser did not load, the text is escaped and shown as-is:
+  // degraded, never unsafe, and never blank.
   function formatAnswerText(rawText) {
     const placeholder =
       rawText == null ||
       rawText === "Awaiting provider output." ||
       rawText === "Provider did not return text.";
     const text = placeholder ? "" : String(rawText);
-    if (!text) return "";
-    // Normalise line endings and strip trailing whitespace per line.
-    const lines = text
-      .replace(/\r\n?/g, "\n")
-      .split("\n")
-      .map((line) => line.replace(/[ \t]+$/g, ""));
-    // Collapse 3+ blank lines down to a single blank line.
-    const collapsed = [];
-    let blankRun = 0;
-    for (const line of lines) {
-      if (line.trim() === "") {
-        blankRun += 1;
-        if (blankRun <= 1) collapsed.push("");
-      } else {
-        blankRun = 0;
-        collapsed.push(line);
-      }
-    }
-    while (collapsed.length && collapsed[0].trim() === "") collapsed.shift();
-    while (collapsed.length && collapsed[collapsed.length - 1].trim() === "") collapsed.pop();
-    if (!collapsed.length) return "";
-    // Group consecutive non-blank lines into blocks; classify each
-    // block as a list, heading, blockquote, or paragraph (there is NO
-    // fenced-code-block branch — a ``` fence renders as literal text). The
-    // inline renderer (mdInline) handles bold, italic, inline code,
-    // and links within those block contents.
-    const out = [];
-    let buffer = [];
-    const flushParagraph = () => {
-      if (!buffer.length) return;
-      const inner = buffer
-        .map((line) => mdInline(escapeHtml(line)))
-        .join("<br>");
-      out.push(`<p>${inner}</p>`);
-      buffer = [];
-    };
-    // List lines get their OWN buffer, exactly as blockquotes do. They used to
-    // share ``buffer`` with flushParagraph, and that single fact produced every
-    // list defect this formatter had — all of them MEASURED, none theorised:
-    //
-    //   * A list never survived as a list. Every path that reached flushList()
-    //     ran flushParagraph() first, draining the shared buffer, so each item
-    //     was emitted as its own <p>. What looked like a list on screen came
-    //     from mdInline's separate per-line bullet rule, which wrapped each
-    //     item in its OWN <ul> nested inside that <p> — invalid markup the
-    //     browser then hoisted out, leaving empty paragraphs behind. Six
-    //     bullets rendered as eight lists.
-    //   * Ordered lists did not render at all. mdInline's rule matches only
-    //     "-"/"*", so "1. " reached the DOM as literal text — 76 such text
-    //     nodes in the golden run.
-    //   * Ordinary prose became bullets. The one path that did NOT call
-    //     flushParagraph first (the plain-line branch below) called flushList()
-    //     on a buffer full of PROSE, so a paragraph the provider soft-wrapped
-    //     with single newlines rendered as a run of one-item lists.
-    //
-    // With a dedicated buffer each flush owns one block type, so none of the
-    // above is expressible ON THE PARAGRAPH/LIST PATH. It is NOT a whole-file
-    // guarantee: the blockquote and heading branches still hand raw lines to
-    // mdInline, whose per-line bullet rule is deliberately retained for the
-    // inline surfaces, so a bullet inside a blockquote still becomes one
-    // single-item <ul> per line. Ungated and out of scope here; noted so the
-    // next reader does not trust a stronger claim than the code makes.
-    let listBuffer = [];
-    const orderedMarker = (line) => /^\s*\d+\.\s+/.test(line);
-    const flushList = () => {
-      if (!listBuffer.length) return;
-      const items = listBuffer.map((line) => {
-        // Strip leading bullet marker ( "- ", "* ", or "1. " ).
-        // Drop the indent with the marker. Keeping it only pushed literal
-        // spaces into the <li>'s textContent — HTML collapses them, so the
-        // nesting was never visible anyway. Real nested lists are not built
-        // here; a sub-bullet renders as a flat item.
-        const stripped = line.replace(/^(\s*)([-*]|\d+\.)\s+/, "");
-        return `<li>${mdInline(escapeHtml(stripped))}</li>`;
-      });
-      const tag = orderedMarker(listBuffer[0]) ? "ol" : "ul";
-      out.push(`<${tag}>${items.join("")}</${tag}>`);
-      listBuffer = [];
-    };
-    // Blockquote: consecutive lines starting with ">" collapse into one
-    // <blockquote> (the marker + one optional space is stripped per line).
-    let quoteBuffer = [];
-    const flushQuote = () => {
-      if (!quoteBuffer.length) return;
-      const inner = quoteBuffer
-        .map((line) => mdInline(escapeHtml(line)))
-        .join("<br>");
-      out.push(`<blockquote>${inner}</blockquote>`);
-      quoteBuffer = [];
-    };
-    const listMarker = (line) => /^\s*([-*]|\d+\.)\s+/.test(line);
-    const quoteMarker = (line) => /^\s*>\s?/.test(line);
-    for (const line of collapsed) {
-      if (line.trim() === "") {
-        flushParagraph();
-        flushList();
-        flushQuote();
-        continue;
-      }
-      if (quoteMarker(line)) {
-        flushParagraph();
-        flushList();
-        quoteBuffer.push(line.replace(/^\s*>\s?/, ""));
-        continue;
-      }
-      if (listMarker(line)) {
-        // An ordered marker may only INTERRUPT a paragraph when it starts at 1
-        // — CommonMark's rule, and it exists for exactly this case: a provider
-        // soft-wraps a sentence and the wrap lands on a year or a version, so
-        // "…first proposed in\n2025. Nobody has revisited…" would otherwise
-        // become a list item AND have "2025." stripped as its marker. That
-        // deletes content, and no raw-marker gate can see it happen, because
-        // the marker is removed rather than left behind.
-        if (buffer.length && orderedMarker(line) && !/^\s*1\.\s/.test(line)) {
-          buffer.push(line);
-          continue;
-        }
-        flushParagraph();
-        flushQuote();
-        // A change of marker type ends the current list and starts a new one,
-        // so "- a" followed by "1. b" is two lists rather than one list whose
-        // tag is decided by whichever item happened to come first.
-        if (listBuffer.length && orderedMarker(listBuffer[0]) !== orderedMarker(line)) {
-          flushList();
-        }
-        listBuffer.push(line);
-        continue;
-      }
-      flushList();
-      flushQuote();
-      // Headings: "# ", "## ", "### ".
-      const heading = line.match(/^(#{1,3})\s+(.*)$/);
-      if (heading) {
-        const level = heading[1].length;
-        out.push(`<h${level + 3}>${mdInline(escapeHtml(heading[2]))}</h${level + 3}>`);
-        continue;
-      }
-      buffer.push(line);
-    }
-    flushParagraph();
-    flushList();
-    flushQuote();
-    return out.join("");
+    if (!text.trim()) return "";
+    const md = markdownRenderer();
+    if (!md) return `<p>${escapeHtml(text)}</p>`;
+    return md.render(text);
   }
 
   // Render BLOCK-level provider prose (headings, lists, paragraphs, inline
@@ -5410,15 +5793,104 @@
     return el;
   }
 
+  // Render a list marker that an inline surface cannot express structurally.
+  //
+  // <span> and <p> may not contain <ul>/<ol> — that is the whole reason
+  // ``setInlineProse`` exists, and why it calls ``renderInline`` (which never
+  // produces block tags) rather than ``render``. But a provider writes lists
+  // into these surfaces anyway, and ``renderInline`` leaves the raw "- " / "1. "
+  // marker in a text node, which the BLOCKING rendering gate matches.
+  //
+  // So the marker becomes its RENDERED equivalent — "•" for a bullet, "(n)" for
+  // an ordinal. Deleting the ordinal was the rejected alternative: it reads fine
+  // and silently loses the sequence, the same failure this codebase already paid
+  // for once when a soft-wrapped "2025." was eaten as a list marker.
+  //
+  // Takes RAW text and returns RAW text. It ran on ALREADY-ESCAPED text before
+  // the parser landed and emitted its own ``<br>``; both are now wrong —
+  // markdown-it escapes, and ``breaks: true`` turns the surviving newline into
+  // the ``<br>``. Escaping cannot disturb a marker either way (`-`, `*`, digits
+  // and `.` are untouched by it).
+  //
+  // A HEADING MARKER is stripped outright, and that asymmetry is deliberate.
+  // "# PostgreSQL Scaling Decision" reached a real screen with its "#" intact
+  // (#257 §2): `debate._opening_synopsis` flattens a heading-led answer onto
+  // this surface, and a heading has NO inline equivalent, so `renderInline`
+  // correctly leaves the marker as text. A "#" is pure syntax — dropping it
+  // loses nothing — whereas a list ordinal is CONTENT, which is why that one is
+  // rendered rather than deleted. Requires the space, so "#hashtag" is left
+  // alone.
+  //
+  // Two more rules, each stated with what it prevents:
+  //
+  // 1. An ORDERED marker may only interrupt running prose when it starts at 1 —
+  //    CommonMark, and the same rule the block parser applies. Without it this
+  //    function rewrote prose: MEASURED, "…cut the estimate from 15 to\n12.
+  //    Nobody revisited it since." became "(12) Nobody revisited it since.".
+  //    A bullet has no such ambiguity and needs no rule.
+  // 2. Only 1-2 digit ordinals count, so a line starting "2025. Nobody
+  //    revisited…" is left alone.
+  function inlineListMarkers(raw) {
+    const lines = String(raw).split("\n");
+    let inList = false;
+    return lines
+      .map((rawLine, i) => {
+        // Strip a heading marker, then KEEP GOING. Returning early here left
+        // "### - alpha bravo" as "- alpha bravo" on an inline surface — a raw
+        // bullet in a text node, which the BLOCKING gate's own
+        // "bullet marker (- / * )" pattern matches. Found by adversarial
+        // review, not by the gate, because no fixture seeds a heading whose
+        // text is a list item. It is the same shape as deviation 7 on the
+        // block path, one surface over.
+        //
+        // KNOWN COST, recorded rather than hidden: "# of requests: 400" loses
+        // its "#". That is CommonMark — a "#" plus a space at a line start IS
+        // the heading marker — and the BLOCK path agrees, rendering
+        // <h4>of requests: 400</h4>. Both paths treat the character as syntax;
+        // an inline surface simply has no heading element to put it in.
+        const heading = /^[ \t]*#{1,6}[ \t]+/.exec(rawLine);
+        const line = heading ? rawLine.slice(heading[0].length) : rawLine;
+        const m = /^([ \t]*)([-*]|\d{1,2}\.)[ \t]+/.exec(line);
+        if (!m) {
+          inList = false;
+          return line;
+        }
+        const marker = m[2];
+        const bullet = marker === "-" || marker === "*";
+        const interruptsProse = i > 0 && !inList && lines[i - 1].trim() !== "";
+        if (!bullet && interruptsProse && marker !== "1.") {
+          inList = false;
+          return line;
+        }
+        inList = true;
+        const rendered = bullet ? "• " : `(${marker.slice(0, -1)}) `;
+        return rendered + line.slice(m[0].length);
+      })
+      .join("\n");
+  }
+
   // Render INLINE-only provider prose (bold/italic/inline code/links, no block
-  // structure) into ``el`` via ``mdInline`` — escaping first so no raw HTML is
-  // reintroduced. For single-line span/cell/caption surfaces where block tags
-  // would be invalid. Falls back to a muted placeholder. Returns ``el``.
+  // structure) into ``el``. For single-line span/cell/caption surfaces where
+  // block tags would be invalid. Falls back to a muted placeholder. Returns
+  // ``el``.
+  //
+  // ``renderInline`` runs the inline chain ONLY — no paragraph, list, heading,
+  // table or blockquote rule can fire — so a <span> target can never receive an
+  // illegal child. That is a structural guarantee from the parser, where before
+  // it was a promise made by a hand-written function that had already broken it
+  // once (it emitted a <ul> inside a <p>).
+  //
+  // The set of target elements is NOT uniform: `.result-trust-caption` is a
+  // <div> (app.js:2286) where a <ul> would be legal, so the e2e span/p check
+  // cannot see that surface; the rendered-marker assertion is what covers it.
   function setInlineProse(el, rawText, placeholder) {
     const text = rawText == null ? "" : String(rawText).trim();
     if (text) {
       el.classList.remove("muted");
-      el.innerHTML = mdInline(escapeHtml(text));
+      const md = markdownRenderer();
+      el.innerHTML = md
+        ? md.renderInline(inlineListMarkers(text))
+        : escapeHtml(text);
     } else if (placeholder != null) {
       el.classList.add("muted");
       el.textContent = placeholder;
@@ -5428,128 +5900,7 @@
     return el;
   }
 
-  // Inline markdown renderer. Escaped text is the input (so we
-  // never reintroduce unescaped HTML). Recognises: **bold**, *italic*,
-  // `code`, [text](url). Designed for the markdown flavour LLMs
-  // actually emit; not CommonMark-complete.
-  function mdInline(escaped) {
-    let s = escaped;
-    // Inline code first — everything inside backticks is verbatim and
-    // must not be touched by the bold/italic/link rules below.
-    s = s.replace(/`([^`]+)`/g, (_m, code) => `<code>${code}</code>`);
-    // Bullet lists: consecutive lines that START (after optional indent)
-    // with "- " or "* " become a single <ul>. Each <li> carries the
-    // line content (marker stripped, indentation kept); bold/italic/
-    // link/underscore rules run on the whole result afterwards and
-    // applyOutsideTags leaves the <ul>/<li> scaffolding alone while
-    // processing the text inside. The marker regex uses word-boundary
-    // logic: it matches only at the START of a line (or start of the
-    // string), never mid-word — so a lone "*" in "x* y" is never eaten.
-    s = s.replace(
-      /(?:^|\n)((?:[ \t]*[-*][ \t]+[^\n]*\n?)+)/g,
-      (match) => {
-        const block = match.trimStart();
-        const items = block
-          .split("\n")
-          .filter((l) => /^[ \t]*[-*][ \t]/.test(l))
-          .map(
-            (line) =>
-              `<li>${line.replace(/^[ \t]*[-*][ \t]+/, "")}</li>`,
-          );
-        return `\n<ul>${items.join("")}</ul>`;
-      },
-    );
-    // Bold then italic. Order matters: ** must be tried before *, or
-    // the ** would each be consumed as empty italics.
-    s = s.replace(/\*\*([^*]+)\*\*/g, (_m, t) => `<strong>${t}</strong>`);
-    // Italic uses the SAME word-boundary discipline as the underscore rule
-    // below, on BOTH counts: the run may not begin or end with whitespace, AND
-    // the delimiters may not sit against a word character.
-    //
-    // This is a DELIBERATE deviation from CommonMark, which allows intra-word
-    // `*` emphasis (it forbids it only for `_`). The cost of the deviation is
-    // that `see *note*s here` renders literally instead of emphasising "note".
-    // The cost of NOT deviating is that this product invents emphasis in the
-    // one shape its own domain is full of — MEASURED, both halves:
-    //
-    //   "cost * qty and rate * hours" -> cost <em> qty and rate </em> hours
-    //   "total 3*40 and 2*12 per year" -> total 3<em>40 and 2</em>12 per year
-    //
-    // Review round 1 argued the `\w` guards contributed nothing and had them
-    // relaxed; round 2 measured the unspaced case and showed they carry the
-    // whole second half. Fabricating emphasis is a lie about what the model
-    // wrote; failing to render a rare intra-word italic is a fidelity loss.
-    // For a product whose claim is that nothing on screen is unsupported by
-    // the data, that trade is not close.
-    s = s.replace(
-      /(^|[^\w*])\*([^\s*](?:[^*]*[^\s*])?)\*(?!\w)/g,
-      (_m, lead, t) => `${lead}<em>${t}</em>`,
-    );
-    // [text](url). The captured ``url`` reaches us HTML-escaped (every
-    // caller runs its input through ``escapeHtml`` before mdInline), but we
-    // deliberately do NOT rely on that: this replace decodes the URL back,
-    // vets its scheme with the shared ``URL()``-based allow-list, and
-    // re-escapes it for the attribute itself — so a markdown link is safe by
-    // construction here, not by convention at a distant caller. ``URL()``
-    // (like the browser's own href resolution) strips tab/CR/LF before
-    // reading the scheme, so control-char tricks such as ``java\tscript:``
-    // cannot smuggle a scheme past the check.
-    s = s.replace(
-      /\[([^\]]+)\]\(([^)]+)\)/g,
-      (_m, text, url) => {
-        const href = safeMarkdownHref(decodeBasicEntities(url));
-        if (href == null) {
-          // Disallowed scheme (javascript:, data:, vbscript:, tab-obfuscated
-          // variants, …): render inert text, never an anchor.
-          return `${text} (${url})`;
-        }
-        // Attribute-encode the vetted href at the interpolation point so a
-        // quote in the URL can never break out of href="…".
-        return `<a href="${escapeHtml(href)}" target="_blank" rel="noopener noreferrer">${text}</a>`;
-      },
-    );
-    // Underscore emphasis (LLMs emit both ``_x_`` and ``*x*``). Runs LAST and
-    // ONLY on text OUTSIDE already-emitted tags (via ``applyOutsideTags``), so a
-    // URL underscore inside an ``href="…"`` attribute is never touched. Uses
-    // GFM word-boundary rules: the opening marker must follow a non-word char
-    // (or start) and the closing marker must NOT be followed by a word char, so
-    // intra-word underscores in identifiers (``retention_flag``, ``snake_case``)
-    // are left alone. ``__strong__`` before ``_em_``.
-    s = applyOutsideTags(s, (seg) =>
-      seg
-        .replace(/(^|[^\w])__([^\s_](?:[^_]*[^\s_])?)__(?!\w)/g, (_m, lead, t) => `${lead}<strong>${t}</strong>`)
-        .replace(/(^|[^\w])_([^\s_](?:[^_]*[^\s_])?)_(?!\w)/g, (_m, lead, t) => `${lead}<em>${t}</em>`),
-    );
-    return s;
-  }
 
-  // Apply ``fn`` only to the plain-text runs of a string that already contains
-  // emitted HTML — every ``<…>`` tag (with its attributes) AND every whole
-  // ``<code>…</code>`` span is passed through UNTOUCHED. Inline code is verbatim
-  // by contract, so emphasis must never fire inside it (`` `__init__` `` must stay
-  // literal, not become bold). The split captures either a full code span or a
-  // single tag as the delimiter; any part that starts with ``<`` is such a
-  // delimiter (all provider ``<`` were escaped to ``&lt;`` upstream, so only our
-  // emitted markup begins with a literal ``<``) and is left alone.
-  function applyOutsideTags(s, fn) {
-    return s
-      .split(/(<code>[\s\S]*?<\/code>|<[^>]*>)/)
-      .map((part) => (part && part.charAt(0) === "<" ? part : fn(part)))
-      .join("");
-  }
-
-  // Reverse the five entities ``escapeHtml`` emits, so a URL that was escaped
-  // upstream can be scheme-checked and normalised as its real value. ``&amp;``
-  // is decoded last so an escaped literal like ``&amp;lt;`` round-trips to
-  // ``&lt;`` rather than being double-decoded to ``<``.
-  function decodeBasicEntities(text) {
-    return String(text)
-      .replace(/&lt;/g, "<")
-      .replace(/&gt;/g, ">")
-      .replace(/&quot;/g, '"')
-      .replace(/&#39;/g, "'")
-      .replace(/&amp;/g, "&");
-  }
 
   // Return a safe href for a markdown link, or null when the scheme is not
   // allow-listed. Reuses ``safeHttpUrl`` (the same ``URL()`` allow-list the
@@ -5587,7 +5938,30 @@
     // off-origin authority (open-redirect vector). Reject those; they never
     // appear in trustworthy model output. Everything with a scheme that is not
     // http(s)/mailto is also rejected.
-    if (!/^[a-z][a-z0-9+.-]*:/i.test(url) && !/^[/\\]{2}/.test(url)) {
+    //
+    // PERCENT-ENCODED separators count too, and that is not theoretical: it is
+    // the one regression ADR-0014's parser swap introduced here. markdown-it
+    // normalises a link destination BEFORE `validateLink` sees it, so the raw
+    // `/\evil.example/x` this guard was written for arrives as
+    // `/%5Cevil.example/x` — two leading separators to a browser, one slash and
+    // a percent sign to the regex above. It slipped through as "relative".
+    //
+    // MEASURED: `main` rejected that input and rendered no anchor at all; the
+    // first version of the swap emitted `<a href="/%5Cevil.example/x">`, which
+    // resolves to `http://<own-origin>/%5Cevil.example/x`. Same-origin, so not
+    // an open redirect — BOTH adversarial review lenses independently judged it
+    // "not exploitable" — and the existing blocking gate
+    // (`parity-behavior.spec.ts`, "no anchor RESOLVES off-origin to the
+    // attacker host") failed it anyway, because it asserts on the resolved
+    // `.href` and the attacker's hostname is sitting in the path. The gate is
+    // right that this is a behaviour change from `main`, and restoring the old
+    // refusal costs one line. Judged-harmless is not a reason to widen.
+    //
+    // Decoded for THIS test only; the emitted href is always the vetted `url`.
+    // Scoped to the leading pair, so a legitimate `/a%5Cb` deeper in a path is
+    // untouched.
+    const separatorProbe = url.replace(/%5c/gi, "\\").replace(/%2f/gi, "/");
+    if (!/^[a-z][a-z0-9+.-]*:/i.test(url) && !/^[/\\]{2}/.test(separatorProbe)) {
       return url;
     }
     return null;
@@ -7988,6 +8362,7 @@
     // deployment does not flash a clean composer on first paint.
     seedReadinessFromPageLoad();
     applyReadinessState();
+    armReadinessDisclosureFallback();
     estimateButton.addEventListener("click", () => {
       // "See the estimate" always opens the cost gate first (autoProceed
       // false), even for a cheap allow-band run.
@@ -8216,6 +8591,23 @@
   boot().catch((error) => {
     if (!document.documentElement.dataset.appState) {
       document.documentElement.dataset.appState = "error";
+    }
+    // #117, review round 1. ``boot()``'s own try block does not open until
+    // long after ``applyReadinessState()`` runs, so a throw anywhere in the
+    // unguarded wiring region between them -- the "renamed id, a template
+    // change" the comment above already calls realistic -- means
+    // ``refreshReadiness`` is never reached and the suppression never lifts.
+    //
+    // MEASURED with an injected throw against a genuinely offline deployment:
+    // the pre-change seed paint showed the disclosure, and the suppression
+    // alone hid it completely. That trades a cosmetic flash for a SILENT
+    // DISCLOSURE FAILURE on the one surface telling a user every answer on
+    // screen is simulated -- strictly the wrong direction. So a failed boot
+    // falls back to the page-load seed and paints it.
+    try {
+      confirmReadiness();
+    } catch (_) {
+      /* the banner itself is broken; the state stamp above still stands */
     }
     try {
       handleError(error);
