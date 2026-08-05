@@ -5938,7 +5938,30 @@
     // off-origin authority (open-redirect vector). Reject those; they never
     // appear in trustworthy model output. Everything with a scheme that is not
     // http(s)/mailto is also rejected.
-    if (!/^[a-z][a-z0-9+.-]*:/i.test(url) && !/^[/\\]{2}/.test(url)) {
+    //
+    // PERCENT-ENCODED separators count too, and that is not theoretical: it is
+    // the one regression ADR-0014's parser swap introduced here. markdown-it
+    // normalises a link destination BEFORE `validateLink` sees it, so the raw
+    // `/\evil.example/x` this guard was written for arrives as
+    // `/%5Cevil.example/x` — two leading separators to a browser, one slash and
+    // a percent sign to the regex above. It slipped through as "relative".
+    //
+    // MEASURED: `main` rejected that input and rendered no anchor at all; the
+    // first version of the swap emitted `<a href="/%5Cevil.example/x">`, which
+    // resolves to `http://<own-origin>/%5Cevil.example/x`. Same-origin, so not
+    // an open redirect — BOTH adversarial review lenses independently judged it
+    // "not exploitable" — and the existing blocking gate
+    // (`parity-behavior.spec.ts`, "no anchor RESOLVES off-origin to the
+    // attacker host") failed it anyway, because it asserts on the resolved
+    // `.href` and the attacker's hostname is sitting in the path. The gate is
+    // right that this is a behaviour change from `main`, and restoring the old
+    // refusal costs one line. Judged-harmless is not a reason to widen.
+    //
+    // Decoded for THIS test only; the emitted href is always the vetted `url`.
+    // Scoped to the leading pair, so a legitimate `/a%5Cb` deeper in a path is
+    // untouched.
+    const separatorProbe = url.replace(/%5c/gi, "\\").replace(/%2f/gi, "/");
+    if (!/^[a-z][a-z0-9+.-]*:/i.test(url) && !/^[/\\]{2}/.test(separatorProbe)) {
       return url;
     }
     return null;

@@ -501,10 +501,25 @@ test.describe("XSS posture (`html: false` is the whole defence)", () => {
     expect(anchors.length, "no anchor rendered at all — this proves nothing").toBeGreaterThan(0);
     // The plainly hostile destinations must produce NO anchor whatsoever —
     // "resolves to http:" is not good enough for these, they must not link.
+    //
+    // `f` — the backslash-folded `/\evil.example/x` — is in this list because
+    // LEAVING IT OUT is exactly how the first version of this spec passed while
+    // the pre-existing `parity-behavior.spec.ts` failed on the same input. That
+    // gate asserts on the resolved HOST; this one asserted only on the resolved
+    // SCHEME, and `/%5Cevil.example/x` resolves to `http:` on our own origin,
+    // so it sailed through. A sharper gate already existed and mine was the
+    // weaker one.
     const linked = new Set(anchors.map((a) => a.label));
-    for (const label of ["d", "e", "g", "h", "i"]) {
+    for (const label of ["d", "e", "f", "g", "h", "i"]) {
       expect(linked.has(label), `[${label}] must not be linkable at all`).toBe(false);
     }
+    // And the host check itself, not just the scheme: no anchor may carry the
+    // attacker's hostname anywhere in its RESOLVED url, even same-origin.
+    const origin = await page.evaluate(() => document.location.origin);
+    const evil = anchors
+      .map((a) => new URL(a.attr || "", origin).href)
+      .filter((h) => /evil\.example/i.test(h));
+    expect(evil, "an anchor resolved carrying the attacker host").toEqual([]);
     // ...while their TEXT survives unlinked, rather than the content vanishing.
     const text = (await page.locator(".result-verdict-text").textContent()) || "";
     expect(text).toContain("javascript:alert(1)");
