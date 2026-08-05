@@ -63,6 +63,8 @@ from typing import Any
 import pytest
 import yaml
 
+from product_app.config import Settings
+
 REPO_ROOT = Path(__file__).resolve().parents[1]
 
 #: Only ``docs/`` is scanned. The root build prompts deliberately contain
@@ -811,3 +813,544 @@ def test_the_capability_claim_guard_bites() -> None:
         "find_spec cannot see `pytest` itself, so the absence check above "
         "proves nothing about `pytest_randomly`"
     )
+
+
+# --------------------------------------------------------------------------
+# Part E — the CONFIGURATION surface: every knob the app reads must be
+# discoverable in `.env.example`.
+#
+# Why it exists. Measured 2026-08-05 on `bc38bbb`: `Settings` had **44**
+# fields and `.env.example` documented **19** of them. The 25 undocumented
+# ones included both halves of the LLM-as-judge
+# (`QUORUM_EVAL_JUDGE_API_KEY`, `QUORUM_EVAL_JUDGE_MODEL_ID`) and the whole
+# Tavily web-search block — three capabilities a contributor could not learn
+# existed from the file whose entire job is to tell them.
+#
+# SCOPE: every field, not a hand-picked "capability-gating" subset. `Settings`
+# has no `env_prefix`, so pydantic-settings reads EVERY field from the
+# environment under its uppercased name — there is no such thing as a field
+# that cannot be set this way. A hand-written subset would have to be kept in
+# step by a human, and its failure mode is the silent omission this gate
+# exists to stop (AGENTS.md rule 1a: prefer a check over a corrected
+# sentence). Deriving the list from `Settings.model_fields` cannot go stale.
+# --------------------------------------------------------------------------
+
+ENV_EXAMPLE = REPO_ROOT / ".env.example"
+
+#: An ASSIGNMENT in `.env.example`, commented out or not. Some knobs are
+#: deliberately shown commented (`# SENTRY_DSN=`) because an empty value and
+#: an absent one differ — a commented assignment still counts as discoverable.
+#:
+#: The `#? ?` — at most ONE space after an optional `#` — is load-bearing and
+#: was written after the looser `#?\s*` failed its own mutation test. This
+#: file's header explains the three capability gates in prose, indented:
+#:
+#:     #   Web search (Tavily) — no flag; a non-empty key alone turns it on
+#:     #       TAVILY_API_KEY=...
+#:
+#: Under `#?\s*` that prose line COUNTED as documentation, so deleting the
+#: real `TAVILY_API_KEY=` assignment left the gate green. That is exactly the
+#: substring-instead-of-structure trap AGENTS.md rule 8 describes — living
+#: inside a gate written to enforce rule 8. Pinned by
+#: `test_a_name_mentioned_only_in_prose_is_not_documentation`.
+_ENV_NAME_PATTERN = r"^#? ?([A-Z][A-Z0-9_]*)="
+
+
+#: The first section banner. Everything above it is the explanatory header,
+#: which is PROSE and may never be read as documentation — see
+#: `test_the_header_cannot_vouch_for_any_knob`.
+_FIRST_SECTION_BANNER = r"^# --- "
+
+
+def _env_example_body(text: str) -> str:
+    """The part of `.env.example` below its explanatory header.
+
+    Tightening `_ENV_NAME_PATTERN` alone was not enough. Adversarial review
+    reflowed the header's indentation from seven spaces to one — turning a
+    prose line into `# TAVILY_API_KEY=...` — deleted the real assignment, and
+    all 24 doc-gate tests stayed green. The pattern was pinned; the FILE was
+    not. Reading only the body removes the header from the question entirely,
+    so it can be reflowed freely and can never vouch for anything.
+    """
+    match = re.search(_FIRST_SECTION_BANNER, text, re.MULTILINE)
+    return text[match.start() :] if match else text
+
+
+def _env_example_documented_names(text: str) -> set[str]:
+    return set(re.findall(_ENV_NAME_PATTERN, _env_example_body(text), re.MULTILINE))
+
+
+def _check_every_field_is_documented(*, text: str, field_names: list[str]) -> None:
+    """Raise ``AssertionError`` unless every field in ``field_names`` is in ``text``.
+
+    Split out from the test so the bite-proof below can drive it with mutated
+    text without touching the real `.env.example` — the same shape Parts C and
+    D use.
+    """
+    # Positive partner. Both sides of the comparison below would be empty over
+    # a `Settings` whose fields could not be read, and "no field is missing"
+    # is trivially true over no fields at all (AGENTS.md rule 7).
+    assert field_names, (
+        "no Settings fields were enumerated — `Settings.model_fields` moved or "
+        "is empty. This gate refuses to pass over an empty input."
+    )
+    documented = _env_example_documented_names(text)
+    missing = sorted(name.upper() for name in field_names if name.upper() not in documented)
+    assert not missing, (
+        f"{len(missing)} Settings field(s) are readable from the environment but "
+        f"undocumented in .env.example, so a contributor cannot discover them: "
+        f"{', '.join(missing)}. Add a line for each (commented out is fine when "
+        f"an empty value would be invalid) — do not delete this gate."
+    )
+
+
+def test_env_example_documents_every_settings_field() -> None:
+    """RED IF: a `Settings` field exists that `.env.example` never mentions.
+
+    What turns it red: add a field to `Settings` without adding a line for it
+    to `.env.example`.
+    """
+    _check_every_field_is_documented(
+        text=ENV_EXAMPLE.read_text(encoding="utf-8"),
+        field_names=sorted(Settings.model_fields),
+    )
+
+
+def test_the_env_example_guard_bites() -> None:
+    """The guard must FAIL on a real omission, not merely pass on a full file.
+
+    Without this, `_check_every_field_is_documented` could be satisfied by a
+    pattern that matched everything, or by a field list that was always empty.
+
+    What turns it red: make `_check_every_field_is_documented` stop comparing,
+    or make its positive partner stop firing on an empty field list.
+    """
+    fields = sorted(Settings.model_fields)
+    full = ENV_EXAMPLE.read_text(encoding="utf-8")
+
+    # 1. A file that documents nothing must be rejected, and must NAME the
+    #    fields it is missing rather than failing with a bare count.
+    with pytest.raises(AssertionError) as empty_file:
+        _check_every_field_is_documented(text="# nothing here", field_names=fields)
+    assert "QUORUM_EVAL_JUDGE_API_KEY" in str(empty_file.value)
+    assert "undocumented in .env.example" in str(empty_file.value)
+
+    # 2. Deleting exactly ONE real line must be caught. This is the mutation
+    #    that matters: a gate that only notices a wholly empty file would miss
+    #    the single silent omission that is the actual failure mode here.
+    victim = "QUORUM_EVAL_JUDGE_MODEL_ID"
+    holed = re.sub(rf"^#?\s*{victim}=.*$", "", full, flags=re.MULTILINE)
+    assert holed != full, (
+        f"{victim} is not present in .env.example in the form this bite-proof "
+        f"removes, so the mutation below would be a no-op and prove nothing"
+    )
+    with pytest.raises(AssertionError) as one_hole:
+        _check_every_field_is_documented(text=holed, field_names=fields)
+    assert victim in str(one_hole.value)
+
+    # 3. And the positive partner must fire on an empty field list rather than
+    #    letting "nothing is missing" pass as success.
+    with pytest.raises(AssertionError) as no_fields:
+        _check_every_field_is_documented(text=full, field_names=[])
+    assert "empty input" in str(no_fields.value)
+
+
+#: Uncommented example values that DELIBERATELY differ from the field's
+#: default, with the reason. `.env.example` is a local-development template,
+#: so a local-only convenience may legitimately not match a
+#: production-safe default — but each one has to be named here, not assumed.
+_DELIBERATE_VALUE_DEVIATIONS = {
+    # The field defaults False for security. The example turns it on because
+    # the legacy `X-Account-Id` header is how the local test fixture
+    # authenticates, and `auth` refuses it outside `RUNTIME_ENVIRONMENT=local`
+    # anyway. Pre-dates this gate (`git log -S` → bca4ba6).
+    "ACCOUNT_LEGACY_HEADER_ENABLED": "local dev authenticates via the legacy header",
+}
+
+
+def _env_example_live_lines(text: str) -> list[str]:
+    """Uncommented assignments — the lines a copied `.env` would really parse."""
+    return [line for line in text.splitlines() if re.match(r"^[A-Z][A-Z0-9_]*=", line)]
+
+
+def test_env_example_is_a_loadable_env_file(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """RED IF: `.env.example`, used as a real `.env`, cannot boot the app.
+
+    `.env.example` says "copy this file to .env", so every uncommented line in
+    it is a value the app will actually parse. That is not free: `Settings`
+    already carries a validator (`_blank_expose_api_docs_is_unset`) written
+    because a blank `EXPOSE_API_DOCS=` crashed startup with a ValidationError.
+    Part E above forces new fields INTO this file; this test is the partner
+    that stops it being satisfied with a line that would break a boot.
+
+    THE `delenv` LOOP IS LOAD-BEARING. `Settings(_env_file=...)` gives the
+    real `os.environ` PRIORITY over the dotenv file, and `tests/conftest.py`
+    pins `ACCOUNT_LEGACY_HEADER_ENABLED` and `OPENROUTER_LIVE_EXECUTION_ENABLED`
+    into the environment before collection (CI sets the latter too). Without
+    the loop this test was silently vacuous for exactly those two fields:
+    adversarial review set `ACCOUNT_LEGACY_HEADER_ENABLED=totally-not-a-bool`
+    in `.env.example` and it stayed green, while the same file with those two
+    names unset raised `ValidationError`. One of the two is the
+    live-execution switch.
+
+    What turns it red: add `TAVILY_MAX_RESULTS=` (blank, int-typed, no
+    before-validator) uncommented to `.env.example` — MEASURED to raise
+    `ValidationError`. Note that `SESSION_MINT_CAP_OVERRIDE=` blank does NOT
+    turn it red despite also being int-typed: it carries
+    `_blank_mint_cap_override_is_unset`, which absorbs a blank into `None`.
+    Both were executed before this line was written; the difference between
+    them is the whole reason this test is worth having.
+    """
+    text = ENV_EXAMPLE.read_text(encoding="utf-8")
+    live_lines = _env_example_live_lines(text)
+    # Positive partner: an `.env.example` of nothing but comments would load
+    # perfectly and prove nothing about any field.
+    assert len(live_lines) >= 20, (
+        f".env.example has only {len(live_lines)} uncommented assignments; this "
+        f"test would be near-vacuous. Did the file get commented out wholesale?"
+    )
+
+    # Take the ambient environment out of the question, so the file under test
+    # is the only input.
+    for line in live_lines:
+        monkeypatch.delenv(line.split("=", 1)[0], raising=False)
+
+    env_file = tmp_path / ".env"
+    env_file.write_text("\n".join(live_lines) + "\n", encoding="utf-8")
+    # Constructing Settings against the file is the whole assertion: pydantic
+    # raises ValidationError on any value its field cannot parse.
+    Settings(_env_file=str(env_file))  # type: ignore[call-arg]
+
+
+def test_env_example_values_match_the_real_defaults(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """RED IF: an example value silently disagrees with the field's default.
+
+    Documenting all 44 fields turned `.env.example` into a 40-line hard pin of
+    default values, and nothing made those track the code: adversarial review
+    changed `soft_threshold_usd`'s default from 0.15 to 0.99 with the example
+    untouched and every doc gate stayed green. A stale example value is worse
+    than no example — an operator copies it and silently pins the old
+    behaviour.
+
+    Deviations are allowed but must be DECLARED, in
+    `_DELIBERATE_VALUE_DEVIATIONS`, with a reason.
+
+    What turns it red: change any default in `config.py` without updating
+    `.env.example` (or vice versa).
+    """
+    text = ENV_EXAMPLE.read_text(encoding="utf-8")
+    live_lines = _env_example_live_lines(text)
+    for line in live_lines:
+        monkeypatch.delenv(line.split("=", 1)[0], raising=False)
+
+    env_file = tmp_path / ".env"
+    env_file.write_text("\n".join(live_lines) + "\n", encoding="utf-8")
+    loaded = Settings(_env_file=str(env_file))  # type: ignore[call-arg]
+    defaults = Settings.model_construct()
+
+    documented = {line.split("=", 1)[0] for line in live_lines}
+    # Positive partner: no documented name means nothing is compared below.
+    assert len(documented) >= 20, f"only {len(documented)} names to compare"
+
+    mismatches = {}
+    for field in Settings.model_fields:
+        name = field.upper()
+        if name not in documented or name in _DELIBERATE_VALUE_DEVIATIONS:
+            continue
+        actual, expected = getattr(loaded, field), getattr(defaults, field)
+        if actual != expected:
+            mismatches[name] = (actual, expected)
+    assert not mismatches, (
+        f".env.example documents values that are no longer the code's defaults: "
+        f"{ {k: f'example={v[0]!r} default={v[1]!r}' for k, v in mismatches.items()} }. "
+        f"Update the example, or declare the deviation in "
+        f"_DELIBERATE_VALUE_DEVIATIONS with a reason."
+    )
+
+    # The allowlist must not rot either: a declared deviation that no longer
+    # deviates is a stale exemption hiding a future drift.
+    stale = [
+        name
+        for name in _DELIBERATE_VALUE_DEVIATIONS
+        if name in documented and getattr(loaded, name.lower()) == getattr(defaults, name.lower())
+    ]
+    assert not stale, (
+        f"{stale} are listed as deliberate deviations but now MATCH the "
+        f"default. Remove them from _DELIBERATE_VALUE_DEVIATIONS."
+    )
+
+
+# --------------------------------------------------------------------------
+# Part E2 — the MIRROR check: `.env.example` must not document knobs that
+# nothing reads.
+#
+# Part E stops a real field going undocumented. This stops the opposite and
+# more dangerous drift: a documented name that the app ignores. `Settings`
+# sets `extra="ignore"`, so an unrecognised variable in a `.env` is silently
+# discarded — the operator sets it, sees no error, and believes it took.
+#
+# Measured 2026-08-05 on `bc38bbb`, FOUR such names were live in the file:
+#
+# * `ENVIRONMENT` — documented as "Runtime environment: local, staging, or
+#   production. Controls security defaults and validation behavior". The
+#   field is `runtime_environment`, so the variable is `RUNTIME_ENVIRONMENT`
+#   and `ENVIRONMENT` is read by nothing. MEASURED: a `.env` containing
+#   `ENVIRONMENT=production` yields `runtime_environment=local` and
+#   `session_cookie_secure=False` — i.e. an operator who followed this file
+#   to harden a deployment got LOCAL security defaults, and
+#   `validate_production_environment()`'s refusal to start misconfigured
+#   never fired. Production itself was never exposed: `fly.toml` sets BOTH
+#   names. The exposure was anyone configuring from `.env`.
+# * `COST_OUTPUT_TOKEN_MULTIPLIER`, `COST_INNER_CALL_MULTIPLIER`,
+#   `COST_INNER_CALL_CAP_USD` — the pre-#16 cost model's knobs, still
+#   documented with tuning advice ("Higher values = more conservative
+#   estimates") after the model that read them was replaced. The estimate
+#   they claim to tune is what the cost guardrail keys off.
+#
+# THE RULE, fully mechanical: a documented name must either be a `Settings`
+# field or be read from the environment by an ACTUAL `os.environ` call in
+# `src/` (which is how `QUORUM_TOKEN_SECRET`, read at `config.py:541`, is
+# vouched for). No hand-written allowlist.
+#
+# "An `os.environ` call", NOT "the token appears in `src/`". The looser
+# free-text version was written first and adversarial review defeated it two
+# ways, both demonstrated:
+#   * a name surviving only in a COMMENT or docstring vouched for itself, so
+#     documenting a knob deleted from the code stayed green;
+#   * every module CONSTANT vouched for itself — `DAILY_CAP_USD`,
+#     `GLOBAL_DAILY_CEILING_USD`, `DEBATE_ROUND_MAX_TOKENS` and friends are
+#     hardcoded in `costs.py`/`debate.py` and are NOT env-readable, yet all
+#     passed. That is precisely the failure this part exists to catch, and
+#     `.env.example` already discusses `GLOBAL_DAILY_CEILING_USD` in prose,
+#     so the edit that would have walked into the trap was one line away.
+# The whole-token boundary is still load-bearing inside the `os.environ`
+# match: a substring match would let `RUNTIME_ENVIRONMENT` vouch for the dead
+# `ENVIRONMENT` and the headline finding would have been missed.
+# --------------------------------------------------------------------------
+
+#: An actual read of the environment in `src/`: `os.environ["X"]`,
+#: `os.environ.get("X")`, or `os.getenv("X")`.
+_ENV_READ_PATTERN = r"""os\.(?:environ(?:\.get)?\(|getenv\()\s*['"]([A-Z][A-Z0-9_]*)['"]"""
+
+
+def _env_names_read_in_src(src_text: str) -> set[str]:
+    return set(re.findall(_ENV_READ_PATTERN, src_text))
+
+
+def _is_read_anywhere(name: str, *, field_names: set[str], src_text: str) -> bool:
+    if name in field_names:
+        return True
+    return name in _env_names_read_in_src(src_text)
+
+
+def _check_no_documented_knob_is_dead(*, text: str, field_names: set[str], src_text: str) -> None:
+    documented = sorted(_env_example_documented_names(text))
+    # Positive partner: "none of them is dead" is trivially true over none.
+    assert documented, (
+        "no variable names were parsed out of .env.example — the file moved or "
+        "the pattern is wrong. This gate refuses to pass over an empty input."
+    )
+    assert src_text.strip(), (
+        "src/ read as empty, so every documented name would look dead. This "
+        "gate refuses to pass over an empty input."
+    )
+    dead = [
+        name
+        for name in documented
+        if not _is_read_anywhere(name, field_names=field_names, src_text=src_text)
+    ]
+    assert not dead, (
+        f"{len(dead)} name(s) documented in .env.example are read by NOTHING: "
+        f'{", ".join(dead)}. `Settings` sets extra="ignore", so setting one of '
+        f"these in a .env is silently discarded and the operator gets no error. "
+        f"Delete the line, or point it at the name the code really reads."
+    )
+
+
+def _src_text() -> str:
+    return "\n".join(
+        path.read_text(encoding="utf-8") for path in sorted((REPO_ROOT / "src").rglob("*.py"))
+    )
+
+
+def test_env_example_documents_no_knob_that_nothing_reads() -> None:
+    """RED IF: `.env.example` names a variable the app ignores.
+
+    What turns it red: add `FOO_BAR=1` to `.env.example` without a matching
+    `Settings` field or an `os.environ` read in `src/`.
+    """
+    _check_no_documented_knob_is_dead(
+        text=ENV_EXAMPLE.read_text(encoding="utf-8"),
+        field_names={name.upper() for name in Settings.model_fields},
+        src_text=_src_text(),
+    )
+
+
+def test_the_dead_knob_guard_bites() -> None:
+    """The guard must FAIL on a dead knob, and must not be fooled by a prefix.
+
+    The second half is the one that matters. The real finding this gate was
+    built from — `ENVIRONMENT` — is a strict substring of the very field that
+    supersedes it, `RUNTIME_ENVIRONMENT`. A substring-based reader would have
+    reported the file clean.
+
+    What turns it red: relax `_is_read_anywhere` to a substring match, or make
+    `_check_no_documented_knob_is_dead` stop comparing.
+    """
+    fields = {name.upper() for name in Settings.model_fields}
+    src = _src_text()
+
+    # 1. An invented knob is caught and NAMED.
+    with pytest.raises(AssertionError) as dead:
+        _check_no_documented_knob_is_dead(
+            text="NOT_A_REAL_KNOB=1\n", field_names=fields, src_text=src
+        )
+    assert "NOT_A_REAL_KNOB" in str(dead.value)
+
+    # 2. The substring trap: `ENVIRONMENT` must NOT be vouched for by
+    #    `RUNTIME_ENVIRONMENT` appearing in the source. This is the exact
+    #    mutation that would have hidden the measured finding.
+    assert "RUNTIME_ENVIRONMENT" in src, (
+        "RUNTIME_ENVIRONMENT is absent from src/, so the substring trap below "
+        "would not be a trap and this bite-proof would prove nothing"
+    )
+    assert not _is_read_anywhere("ENVIRONMENT", field_names=fields, src_text=src), (
+        "`ENVIRONMENT` was accepted as read, but only `RUNTIME_ENVIRONMENT` "
+        "exists — the whole-token boundary in `_is_read_anywhere` has been lost"
+    )
+
+    # 3. And a name that IS genuinely read only via os.environ must pass, so
+    #    the gate cannot be satisfied by rejecting everything.
+    assert _is_read_anywhere("QUORUM_TOKEN_SECRET", field_names=fields, src_text=src), (
+        "QUORUM_TOKEN_SECRET is read by config.py via os.environ but the gate "
+        "no longer recognises it — the check has become too strict to be true"
+    )
+
+    # 4. The positive partners fire on empty inputs.
+    with pytest.raises(AssertionError) as no_names:
+        _check_no_documented_knob_is_dead(text="# only comments", field_names=fields, src_text=src)
+    assert "empty input" in str(no_names.value)
+    with pytest.raises(AssertionError) as no_src:
+        _check_no_documented_knob_is_dead(text="APP_NAME=x\n", field_names=fields, src_text="  ")
+    assert "empty input" in str(no_src.value)
+
+
+def test_a_name_mentioned_only_in_prose_is_not_documentation() -> None:
+    """RED IF: an indented mention inside a comment counts as a documented knob.
+
+    This is the regression guard for a hole found in this gate's OWN mutation
+    test. `.env.example`'s header explains the capability gates in prose,
+    indented under a bullet:
+
+        #   Web search (Tavily) — no flag; a non-empty key alone turns it on
+        #       TAVILY_API_KEY=...
+
+    With the original `^#?\\s*NAME=` pattern that line satisfied Part E, so
+    deleting the REAL `TAVILY_API_KEY=` assignment left the gate green — the
+    gate passed while the file no longer documented the knob. AGENTS.md rule 8
+    (assert structure, not substrings) describes exactly this, and the gate
+    that broke it exists to enforce rule 1a.
+
+    What turns it red: widen `_ENV_NAME_PATTERN`'s `#? ?` back to `#?\\s*`.
+    """
+    prose = "#   Web search (Tavily)\n#       TAVILY_API_KEY=...\n"
+    assert _env_example_documented_names(prose) == set(), (
+        "an indented mention inside a comment was read as a documented "
+        "assignment; _ENV_NAME_PATTERN has been widened and Part E can now "
+        "pass over a knob that is only talked about"
+    )
+
+    # The positive partner: the two forms that ARE documentation still count,
+    # so the tightened pattern has not become too strict to be useful.
+    assert _env_example_documented_names("TAVILY_API_KEY=\n") == {"TAVILY_API_KEY"}
+    assert _env_example_documented_names("# SENTRY_DSN=\n") == {"SENTRY_DSN"}
+
+    # And the real file must still satisfy Part E under the tightened pattern —
+    # i.e. the fix above was to the GATE, not achieved by loosening the file.
+    _check_every_field_is_documented(
+        text=ENV_EXAMPLE.read_text(encoding="utf-8"),
+        field_names=sorted(Settings.model_fields),
+    )
+
+
+def test_the_header_cannot_vouch_for_any_knob() -> None:
+    """RED IF: `.env.example`'s explanatory header contains an assignment line.
+
+    Part E reads only the body (below the first `# --- ` banner), so a header
+    mention cannot vouch for a knob. This is the other half of that guarantee:
+    it keeps the header free of assignment-SHAPED lines, so nobody can later
+    "document" a knob up there and believe it counts.
+
+    Why both halves exist: tightening `_ENV_NAME_PATTERN` alone was defeated
+    by reflowing the header's indentation from seven spaces to one, which
+    turned prose into `# TAVILY_API_KEY=...` and let the real assignment be
+    deleted with every doc-gate test still green.
+
+    What turns it red: add `# FOO=bar` (one space or none) above the first
+    `# --- ` section banner in `.env.example`.
+    """
+    text = ENV_EXAMPLE.read_text(encoding="utf-8")
+    match = re.search(_FIRST_SECTION_BANNER, text, re.MULTILINE)
+    assert match, (
+        ".env.example has no `# --- ` section banner, so the header/body split "
+        "Part E depends on has collapsed and the whole file is being read as "
+        "documentation. Restore the banners."
+    )
+    header = text[: match.start()]
+    # Positive partner: an empty header would satisfy any "contains no X".
+    assert header.strip(), ".env.example has no header at all — the split is meaningless"
+    stray = re.findall(_ENV_NAME_PATTERN, header, re.MULTILINE)
+    assert not stray, (
+        f"{stray} look like assignments but sit in .env.example's explanatory "
+        f"header, which Part E does not read. Move them below the first "
+        f"`# --- ` banner, or indent them further so they read as prose."
+    )
+
+
+def test_the_dead_knob_guard_requires_a_real_environment_read() -> None:
+    """RED IF: a name is vouched for by mere textual presence in `src/`.
+
+    The first version of `_is_read_anywhere` searched the concatenated text of
+    `src/**/*.py`, so a name surviving only in a COMMENT vouched for itself,
+    and so did every hardcoded module constant. Both were demonstrated against
+    the real tree: `DAILY_CAP_USD`, `GLOBAL_DAILY_CEILING_USD` and
+    `DEBATE_ROUND_MAX_TOKENS` all passed the gate despite being constants that
+    `Settings` cannot read from the environment at all — and `.env.example`
+    already mentions `GLOBAL_DAILY_CEILING_USD` in prose.
+
+    What turns it red: widen `_is_read_anywhere` back to a free-text search.
+    """
+    fields = {name.upper() for name in Settings.model_fields}
+    src = _src_text()
+
+    # 1. A hardcoded constant is NOT an environment read, even though its name
+    #    certainly appears in src/.
+    for constant in ("DAILY_CAP_USD", "GLOBAL_DAILY_CEILING_USD"):
+        assert re.search(rf"(?<![A-Za-z0-9_]){constant}(?![A-Za-z0-9_])", src), (
+            f"{constant} no longer appears in src/ at all, so it cannot "
+            f"demonstrate the free-text trap this test guards"
+        )
+        assert not _is_read_anywhere(constant, field_names=fields, src_text=src), (
+            f"{constant} was accepted as a documentable knob, but it is a "
+            f"hardcoded constant with no os.environ read — documenting it "
+            f"would be silently discarded by Settings(extra='ignore')"
+        )
+
+    # 2. A name that appears ONLY in a comment must not vouch for itself.
+    assert not _is_read_anywhere(
+        "OBSOLETE_KNOB_XYZ",
+        field_names=fields,
+        src_text="# historical note: OBSOLETE_KNOB_XYZ was removed in 2025\n",
+    )
+
+    # 3. Positive partner: a genuine os.environ read IS recognised, so the
+    #    tightened rule has not become too strict to be true.
+    assert _is_read_anywhere("QUORUM_TOKEN_SECRET", field_names=fields, src_text=src), (
+        "QUORUM_TOKEN_SECRET is read via os.environ.get in config.py but the "
+        "gate no longer recognises it"
+    )
+    assert _env_names_read_in_src(src), "no os.environ reads found in src/ at all"
