@@ -876,14 +876,108 @@ def _focus_phrase(debate_outputs: list[DebateOutput]) -> str:
     return "the points of disagreement"
 
 
+#: A GFM table separator row: pipes, dashes, colons and spaces, nothing else,
+#: and at least one dash so a bare "| |" is not mistaken for one.
+_TABLE_SEPARATOR = re.compile(r"^\s*\|?[\s:|-]*-[\s:|-]*\|?\s*$")
+#: An ATX heading marker. The space is required, so "#hashtag" and "#257" are
+#: prose and are left alone.
+_ATX_HEADING = re.compile(r"^\s*#{1,6}\s+")
+#: A fence opener/closer: three or more backticks or tildes at a line start.
+_FENCE = re.compile(r"^\s*(?:```|~~~)")
+#: A MATCHED pair of bold markers. Non-greedy, so "**a** and **b**" is two
+#: pairs rather than one span swallowing the middle. An UNMATCHED "**" —
+#: Python's ``**kwargs`` — has no partner and is therefore never touched.
+_BOLD_PAIR = re.compile(r"\*\*(.+?)\*\*", re.DOTALL)
+#: An inline code span. Its contents are verbatim by contract, so the bold rule
+#: must not fire inside one.
+_CODE_SPAN = re.compile(r"`[^`]*`")
+
+
+def _strip_block_markup(answer_text: str) -> str:
+    """Turn a model's raw Markdown answer into plain prose.
+
+    This exists because of the ORDER the old code used: it truncated first and
+    let the client render whatever was left. A cut can always sever a span, so
+    an orphan ``**`` reached a real screen (#257 §2) — and ADR-0014 measured
+    that an orphan renders literally in BOTH candidate parsers, because that is
+    correct CommonMark rather than a parser bug. Stripping BEFORE truncating
+    removes the class of defect instead of one instance: afterwards there is
+    nothing left to sever.
+
+    Every rule here is deliberately narrower than "remove Markdown", because
+    the abandoned attempt at this was destroyed in review for over-reach. Each
+    of its defects is a test in
+    ``tests/unit/test_opening_synopsis_is_plain_prose.py``:
+
+    * **No underscore is ever touched.** ``__init__`` became ``init``, which is
+      the product stating a fact the model did not. This also protects
+      ``snake_case`` and ``retention_flag`` for free.
+    * **Only MATCHED ``**`` pairs are removed.** ``**kwargs`` is unpaired Python
+      syntax; deleting its markers deletes content.
+    * **A single ``*`` is never touched.** In this product's domain it is
+      multiplication (``5 * 3``, ``3*40``) far more often than emphasis.
+    * **A pipe is table syntax only when a SEPARATOR row says so.** "The line
+      has pipes" flattened ``cat access.log | grep 500 | wc -l`` into a command
+      that does something else entirely.
+    * **Fenced code is left alone**, separator rows included — an answer showing
+      how to WRITE a table is the one place those rows are content.
+    """
+    lines = (answer_text or "").replace("\r\n", "\n").replace("\r", "\n").split("\n")
+    kept: list[str] = []
+    in_fence = False
+    previous_had_pipe = False
+    for line in lines:
+        if _FENCE.match(line):
+            in_fence = not in_fence
+            # The fence markers are syntax; their CONTENTS are kept verbatim.
+            previous_had_pipe = False
+            continue
+        if in_fence:
+            kept.append(line)
+            continue
+        # A separator row, but only where a header row precedes it. Without that
+        # guard a thematic break ("---") or a model's decorative dash rule would
+        # be eaten as table syntax.
+        if previous_had_pipe and _TABLE_SEPARATOR.match(line):
+            continue
+        previous_had_pipe = "|" in line
+        kept.append(_ATX_HEADING.sub("", line))
+
+    text = "\n".join(kept)
+
+    # Matched bold pairs, everywhere EXCEPT inside an inline code span. Done by
+    # splitting on code spans and rewriting only the segments between them, so
+    # `` `a**b**c` `` is untouched — the same discipline the client renderer
+    # applies, for the same reason.
+    parts = _CODE_SPAN.split(text)
+    spans = _CODE_SPAN.findall(text)
+    out: list[str] = []
+    for index, part in enumerate(parts):
+        out.append(_BOLD_PAIR.sub(r"\1", part))
+        if index < len(spans):
+            out.append(spans[index])
+    return "".join(out)
+
+
 def _opening_synopsis(answer_text: str, *, limit: int = 140) -> str:
-    """First-sentence / ~``limit``-char synopsis of a model's answer.
+    """First-sentence / ~``limit``-char synopsis of a model's answer, as PLAIN
+    PROSE.
 
     Deterministic and always non-empty: a failed/empty answer yields a fixed
     stand-in string rather than "".
+
+    The ORDER is the fix for #257 §2: strip the markup FIRST, truncate SECOND.
+    Reversed — which is what this did until 2026-08-05 — a cut at 140 characters
+    can sever an inline span, and the orphan marker it leaves renders literally
+    on the "How positions moved" opening cell. No renderer can pair a marker
+    whose partner the cut removed.
     """
-    text = (answer_text or "").strip().replace("\n", " ")
+    stripped = _strip_block_markup(answer_text)
+    text = stripped.strip().replace("\n", " ")
     text = re.sub(r"\s+", " ", text)
+    # Visibility is judged on the STRIPPED text. An answer that was nothing but
+    # markup ("###", "**") has no words in it, and the stand-in is the honest
+    # thing to show; judged on the raw text it would have passed as a real one.
     if not is_visible(text):
         return "No usable answer was returned for this model."
     first_sentence = re.split(r"(?<=[.!?])\s+", text, maxsplit=1)[0]
