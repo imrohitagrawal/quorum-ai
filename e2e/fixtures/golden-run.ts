@@ -436,6 +436,69 @@ export const goldenRespWithBlockStructure = () => {
   return resp;
 };
 
+// ---- #257: the shapes that leaked in production ----------------------------
+//
+// Thirteen raw-Markdown leaks reached the screen in one real paid run while all
+// 196 invariant-lane tests stayed green. Every one of them was a shape this
+// fixture had never contained: a Markdown TABLE, a literal `<br>`, and a
+// heading-led answer flattened onto an INLINE surface. A gate only covers what
+// its fixture renders, so the fixture is where the fix has to start.
+//
+// Like `goldenRespWithBlockStructure` above, these are DEDICATED builders.
+// `goldenCompletedResp()` feeds the blocking visual-snapshot lane, whose Linux
+// baselines can only be seeded in CI, so growing it to hold new shapes would
+// red that lane with no way to regenerate locally (AGENTS.md 13d).
+
+/** The exact table two of four live models emitted for a comparison question. */
+export const PRODUCTION_TABLE =
+  "| Option | When it makes sense | Rough effort |\n" +
+  "|--------|--------------------|--------------|\n" +
+  "| Scale vertically | CPU headroom exists | Low |\n" +
+  "| Shard by tenant | A single tenant dominates writes | High |";
+
+/** Models write `<br>` to get two lines into one cell. 6 reached the screen. */
+export const TABLE_WITH_LITERAL_BR =
+  "| Step | Note |\n" +
+  "|---|---|\n" +
+  "| Upgrade the box | Just a host upgrade. <br>Risk: the same timeout returns. |";
+
+/** A model answering with a `# ` heading first — the shape #257 §2 shows. */
+export const HEADING_LED_ANSWER =
+  "# PostgreSQL Scaling Decision\n\n" +
+  "Based on your profile, do not shard yet. Vertical scaling is **3**x cheaper here.";
+
+/**
+ * The golden completed run with the three #257 shapes seeded onto the surfaces
+ * they actually leaked from: a table and a `<br>` on a BLOCK surface
+ * (`setProse`), and a heading-led answer on the INLINE one (`setInlineProse` —
+ * the "How positions moved" OPENING cell, which is where it was seen).
+ */
+export const goldenRespWithMarkdownShapes = () => {
+  const resp = goldenCompletedResp() as Record<string, any>;
+  resp.result.final_synthesis.recommendation =
+    PRODUCTION_TABLE + "\n\n" + TABLE_WITH_LITERAL_BR;
+  resp.result.position_movements[0].opening = HEADING_LED_ANSWER;
+  return resp;
+};
+
+/**
+ * Put ONE arbitrary provider string on ONE surface, so a spec can sweep a
+ * corpus of inputs without a bespoke builder per case.
+ *
+ * `surface: "block"` targets the synthesis recommendation (`setProse`);
+ * `surface: "inline"` targets the first position-movement opening cell
+ * (`setInlineProse`). Both render inside `#main-content` on the result view.
+ */
+export const goldenRespWithProviderText = (
+  text: string,
+  surface: "block" | "inline" = "block",
+) => {
+  const resp = goldenCompletedResp() as Record<string, any>;
+  if (surface === "block") resp.result.final_synthesis.recommendation = text;
+  else resp.result.position_movements[0].opening = text;
+  return resp;
+};
+
 /**
  * The CONSENSUS shape — 4 of 4 aligned, so `isConsensusResult()` is true and the
  * band paints the one sanctioned large green surface.

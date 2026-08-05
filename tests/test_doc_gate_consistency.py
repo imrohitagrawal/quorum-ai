@@ -766,6 +766,119 @@ def test_the_countable_claim_guard_bites() -> None:
     assert "no longer states" in str(removed.value)
 
 
+# Part D3 — the SAME count, stated by three files about ONE list (#257 session).
+#
+# `buildMarkdownRenderer()` in app.js numbers its deviations from stock
+# markdown-it `(1)` … `(8)`. In one commit, three documents described that list:
+#
+#   app.js                    "SIX deliberate deviations"    wrong
+#   static/vendor/README.md   "seven deliberate deviations"  wrong
+#   docs/adr/0015-*.md        "Eight deviations"             right
+#
+# Nothing compared any of them to the code. Two independent review lenses each
+# found the disagreement by grepping — which is the tell that a machine should
+# be doing it. Same shape as Part D above: a number derivable from the tree,
+# offline, so it gets a check rather than a corrected sentence (rule 1a).
+# --------------------------------------------------------------------------
+
+APP_JS = REPO_ROOT / "src" / "product_app" / "static" / "app.js"
+VENDOR_README = REPO_ROOT / "src" / "product_app" / "static" / "vendor" / "README.md"
+ADR_0015 = REPO_ROOT / "docs" / "adr" / "0015-how-the-vendored-markdown-parser-is-configured.md"
+
+#: The numbered deviation comments inside `buildMarkdownRenderer`, e.g. "// (3) ".
+_DEVIATION_MARKER = re.compile(r"^    // \((\d)\) ", re.MULTILINE)
+
+#: How each document spells the count. Words, because those sentences read as
+#: prose; mapped rather than banned, since "eight deviations" is the natural
+#: English and a gate nobody can read around gets switched off.
+_NUMBER_WORDS = {
+    "one": 1,
+    "two": 2,
+    "three": 3,
+    "four": 4,
+    "five": 5,
+    "six": 6,
+    "seven": 7,
+    "eight": 8,
+    "nine": 9,
+    "ten": 10,
+}
+
+_DEVIATION_CLAIMS = {
+    "app.js": (APP_JS, r"//\s+([A-Za-z]+) deliberate deviations from stock markdown-it"),
+    "static/vendor/README.md": (VENDOR_README, r"plus ([A-Za-z]+) deliberate deviations"),
+    "docs/adr/0015": (ADR_0015, r"### 3\. ([A-Za-z]+) deviations from stock"),
+}
+
+
+def _deviation_numbers() -> list[int]:
+    return [int(n) for n in _DEVIATION_MARKER.findall(APP_JS.read_text(encoding="utf-8"))]
+
+
+def test_the_deviation_count_matches_the_code() -> None:
+    """Every document stating how many deviations there are must be right.
+
+    What turns it red: add or remove a ``// (n)`` deviation in
+    ``buildMarkdownRenderer`` without editing all three sentences.
+    """
+    numbers = _deviation_numbers()
+    # Positive partner: an empty list would satisfy every comparison below while
+    # measuring nothing, so a renamed function or a reformatted comment would
+    # silently switch this gate off.
+    assert numbers, (
+        "no `// (n)` deviation comments found in app.js. The block moved or was "
+        "reformatted — restore the marker shape or update _DEVIATION_MARKER; do "
+        "not delete this check, which is what let three files disagree."
+    )
+    # They must be a clean 1..N run, or "how many" is not well defined.
+    assert numbers == list(range(1, len(numbers) + 1)), (
+        f"the deviation comments are numbered {numbers}, which is not 1..N"
+    )
+    actual = len(numbers)
+
+    for label, (path, pattern) in _DEVIATION_CLAIMS.items():
+        match = re.search(pattern, path.read_text(encoding="utf-8"))
+        assert match, (
+            f"{label} no longer states the deviation count in the form this gate "
+            f"reads ({pattern!r}). Restore the sentence or update the pattern."
+        )
+        word = match.group(1).lower()
+        quoted = _NUMBER_WORDS.get(word)
+        assert quoted is not None, (
+            f"{label} spells the deviation count {match.group(1)!r}, which this "
+            f"gate cannot read. Use one of: {sorted(_NUMBER_WORDS)}"
+        )
+        assert quoted == actual, (
+            f"{label} says {word} ({quoted}) deviations; app.js implements {actual}."
+        )
+
+
+def test_the_deviation_count_guard_bites() -> None:
+    """The guard must FAIL on a wrong number, not merely pass on a right one.
+
+    What turns it red: make the comparison above stop comparing.
+    """
+    actual = len(_deviation_numbers())
+    assert actual > 0
+
+    pattern = _DEVIATION_CLAIMS["static/vendor/README.md"][1]
+    wrong_word = next(w for w, n in _NUMBER_WORDS.items() if n != actual)
+    right_word = next(w for w, n in _NUMBER_WORDS.items() if n == actual)
+
+    wrong = re.search(pattern, f"`html: false` plus {wrong_word} deliberate deviations — recorded")
+    assert wrong is not None
+    assert _NUMBER_WORDS[wrong.group(1).lower()] != actual, "a wrong number read as agreeing"
+
+    # And a sentence with the RIGHT number must read as agreeing, or the guard
+    # would be red no matter what anyone wrote.
+    ok = re.search(pattern, f"plus {right_word} deliberate deviations")
+    assert ok is not None
+    assert _NUMBER_WORDS[ok.group(1).lower()] == actual
+
+    # A deleted sentence must be caught, not skipped.
+    assert re.search(pattern, "the sentence was deleted") is None
+
+
 # Part D2 — a CAPABILITY claim, pinned the same way a count is (#120 session).
 #
 # AGENTS.md rule 13b tells the next agent that `pytest-randomly` is not

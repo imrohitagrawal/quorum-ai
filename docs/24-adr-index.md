@@ -20,6 +20,7 @@ ways, so the record shows what was believed on a date and what replaced it.
 | [ADR-0012](adr/0012-record-the-billing-evidence-before-reclassifying-a-5xx.md) | record the billing evidence for a provider error, and do not reclassify a 5xx yet | Architecture | Accepted — 2026-08-05 (issue #105) |
 | [ADR-0013](adr/0013-a-paid-subsystem-may-not-be-enabled-invisibly.md) | A paid subsystem may not be enabled invisibly | Architecture | Accepted — 2026-08-05 (config-discoverability work package; issues #216, #110) |
 | [ADR-0014](adr/0014-vendor-a-markdown-parser-instead-of-hand-rolling-one.md) | Vendor `markdown-it` instead of hand-rolling the renderer | Architecture | Proposed — 2026-08-05 (live-validation session; issue #257) |
+| [ADR-0015](adr/0015-how-the-vendored-markdown-parser-is-configured.md) | How the vendored Markdown parser is configured | Architecture | Accepted — 2026-08-05 (issue #257, implementing ADR-0014) |
 
 **This index was itself stale** until 2026-07-30: ADR-0002 had existed since
 2026-07-19 and was never listed here. A hand-maintained index is a derived fact

@@ -21,19 +21,39 @@
  *
  * THE HALF THAT IS EASY TO MISS
  * -----------------------------
- * Nine cases below are BROKEN today. Eight are CORRECT today — and the
- * abandoned branch broke six of them while fixing the first nine. A stripper
- * that "removes Markdown" turned `__init__` into `init`, `**3**x` into `3**x`,
- * and destroyed shell pipelines. So this corpus is as much a regression guard
- * as a to-do list, and a replacement that fixes every BROKEN case while
- * breaking a CORRECT one is a net loss.
+ * Thirteen cases below were BROKEN on `main` and seven were CORRECT — and the
+ * abandoned branch broke several of the correct ones while fixing the others.
+ * A stripper that "removes Markdown" turned `__init__` into `init`, `**3**x`
+ * into `3**x`, and destroyed shell pipelines. So this corpus is as much a
+ * regression guard as a to-do list, and a replacement that fixes every BROKEN
+ * case while breaking a CORRECT one is a net loss.
+ *
+ * THREE OF THESE NUMBERS WERE WRONG WHEN THIS FILE WAS WRITTEN, and the way
+ * they were wrong is the point of the file:
+ *   * this paragraph said "Nine ... Eight" beside a footer saying eleven and
+ *     nine — a file that exists to hold measurements disagreeing with itself
+ *     about its own row count, in prose that nothing checked;
+ *   * `dunder-identifier` was labelled CORRECT. Measured on `e2a39aa` by
+ *     executing the renderer, `Override __init__ and __repr__` already gave
+ *     `Override <strong>init</strong> and <strong>repr</strong>` — the exact
+ *     defect the note blames on the abandoned branch was on `main` all along;
+ *   * `setext-heading` was labelled CORRECT, with the note "renders acceptably
+ *     today". Measured, it gave `<p>Summary<br>=======<br>Use pgbouncer.</p>`
+ *     — the row of `=` its own `expected` field forbids.
+ * Both labels were arrived at by reading, in a file whose next paragraph says
+ * they were arrived at by executing. They are corrected below, and
+ * `e2e/tests/invariants/markdown-corpus.spec.ts` — which drives every case
+ * through a real browser — is what stops the next one drifting.
  *
  * HOW THE `current` FIELD WAS PRODUCED
  * ------------------------------------
- * Measured on `597fc35` by extracting `formatAnswerText` and its helpers from
- * `app.js` and running each input through them, then walking the output's text
- * nodes for raw markers. Not read off the code, and not inherited from the
- * abandoned branch's own claims — several of those were themselves refuted.
+ * Measured by extracting `formatAnswerText` and its helpers from `app.js` and
+ * running each input through them, then walking the output's text nodes for
+ * raw markers. Not read off the code, and not inherited from the abandoned
+ * branch's own claims — several of those were themselves refuted. First done
+ * on `597fc35`; RE-DONE on `e2a39aa` when this file was wired to a spec, which
+ * is when two of the labels turned out to be wrong (see above). The re-run is
+ * the reason the `current` field is trustworthy now and was not before.
  *
  * Re-derive rather than trusting this file: the whole reason #257 exists is
  * that a green suite is not evidence about a shape it never renders.
@@ -46,14 +66,14 @@ export type CorpusCase = {
   readonly input: string;
   /** What a user must see. Plain English, not an assertion. */
   readonly expected: string;
-  /** MEASURED on 597fc35: what the hand-rolled renderer does with it today. */
+  /** MEASURED on `e2a39aa` by EXECUTING the hand-rolled renderer, not reading it. */
   readonly current: "BROKEN" | "CORRECT";
   /** Why this case is in the corpus. */
   readonly note: string;
 };
 
 /**
- * Tables. NINE cases, and on `597fc35` **every one of them renders zero
+ * Tables. NINE cases, and on `e2a39aa` **every one of them renders zero
  * `<table>` elements** — `formatAnswerText` has no table branch at all, so
  * pipe rows fall through to the paragraph buffer. In the live run this put 8
  * paragraphs of raw `|---|` on screen; the page's only `<table>` was app
@@ -129,9 +149,11 @@ export const TABLE_CASES: readonly CorpusCase[] = [
 ] as const;
 
 /**
- * Emphasis and prose. The first two are BROKEN today; the rest are **CORRECT
- * today and were broken by the abandoned fix**. Treat them as a regression
- * guard with at least as much weight as the fixes above.
+ * Emphasis and prose. FOUR are BROKEN on `main` (`orphan-bold-severed`,
+ * `varargs-kwargs`, `dunder-identifier`, `setext-heading` — the last two were
+ * mislabelled CORRECT until they were re-measured); the other seven are
+ * CORRECT and **were broken by the abandoned fix**. Treat those seven as a
+ * regression guard with at least as much weight as the fixes above.
  */
 export const EMPHASIS_CASES: readonly CorpusCase[] = [
   {
@@ -170,8 +192,14 @@ export const EMPHASIS_CASES: readonly CorpusCase[] = [
     id: "dunder-identifier",
     input: "Override __init__ and __repr__ in the subclass.",
     expected: "'__init__' and '__repr__' survive EXACTLY",
-    current: "CORRECT",
-    note: "the abandoned fix rewrote them to 'init' and 'repr' — the product stating a fact the model did not",
+    current: "BROKEN",
+    note:
+      "MEASURED on e2a39aa: `main` ALREADY gives '<strong>init</strong>' and '<strong>repr</strong>'. " +
+      "This case was labelled CORRECT and blamed on the abandoned fix; both halves were wrong. " +
+      "It is valid CommonMark strong emphasis (GitHub renders it identically), and no syntactic " +
+      "rule separates it from the golden fixture's intended `__not__` / `__underscore__`. " +
+      "ADR-0015 accepts it, with backticks as the mitigation; markdown-corpus.spec.ts marks it " +
+      "`test.fail()` so it goes RED the day someone fixes it.",
   },
   {
     id: "arithmetic-spaced",
@@ -205,8 +233,11 @@ export const EMPHASIS_CASES: readonly CorpusCase[] = [
     id: "setext-heading",
     input: "Summary\n=======\nUse pgbouncer.",
     expected: "a heading, or plain text — but no row of '=' on screen",
-    current: "CORRECT",
-    note: "renders acceptably today; listed because neither the old nor the new marker list covers setext",
+    current: "BROKEN",
+    note:
+      "MEASURED on e2a39aa: '<p>Summary<br>=======<br>Use pgbouncer.</p>' — the underline IS on " +
+      "screen, so the 'renders acceptably today' label was wrong. No marker pattern covers setext, " +
+      "which is why nothing caught it. FIXED by ADR-0014's parser, which renders a real heading.",
   },
   {
     id: "heading-led-answer",
@@ -227,16 +258,21 @@ export const MARKDOWN_CORPUS: readonly CorpusCase[] = [
 ] as const;
 
 /**
- * Counts measured on `597fc35`. Stated as data rather than prose so a reader
- * can check them: `MARKDOWN_CORPUS.filter(c => c.current === "BROKEN").length`.
+ * Counts RE-MEASURED on `e2a39aa` by executing the renderer, not by reading it.
+ * Stated as data rather than prose so a reader can check them:
+ * `MARKDOWN_CORPUS.filter(c => c.current === "BROKEN").length`.
  *
- *   20 cases: 11 BROKEN, 9 CORRECT.
+ *   20 cases: 13 BROKEN, 7 CORRECT.
+ *
+ * The constant was renamed from `CORPUS_BASELINE_597FC35` because the numbers
+ * in it changed: two cases labelled CORRECT were not (see the header). Keeping
+ * the old name over new values would have made the SHA in it a lie.
  *
  * Zero `<table>` elements are produced for any of the nine table cases.
  */
-export const CORPUS_BASELINE_597FC35 = {
+export const CORPUS_BASELINE_E2A39AA = {
   total: 20,
-  broken: 11,
-  correct: 9,
+  broken: 13,
+  correct: 7,
   tablesRendered: 0,
 } as const;

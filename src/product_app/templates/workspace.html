@@ -952,6 +952,12 @@
       // in ``app.js``; the names here are the contract surface.
       window.UI_FEATURES = ["renderModelInputs", "Based on current time", "applyReadinessState", "refreshReadiness"];
     </script>
+    <!-- Vendored Markdown parser (ADR-0014). Served same-origin so the strict
+         CSP (`script-src 'self' 'unsafe-inline'`) needs no change. It MUST come
+         before app.js: both are `defer`, which preserves document order, and
+         app.js reads `window.markdownit` when it first renders provider text.
+         Provenance and the pinned checksum: static/vendor/README.md. -->
+    <script src="/static/vendor/markdown-it.min.js" defer></script>
     <script src="/static/app.js" defer></script>
     <div id="info-tooltip" role="tooltip" hidden></div>
   </body>
