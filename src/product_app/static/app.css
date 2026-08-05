@@ -4271,6 +4271,109 @@ html[data-theme="dark"] .workflow-step[data-state="completed"] .workflow-step-nu
 }
 .q-prose blockquote:last-child { margin-bottom: 0; }
 
+/* ---- surfaces the vendored parser can now emit that the hand-rolled one
+   never could (ADR-0014): tables, fenced code, thematic breaks, and genuinely
+   nested lists. Every one of these was previously impossible, so none of them
+   had a style; a table with no style is an unreadable run of unpadded cells. */
+
+/* A wide table must scroll INSIDE its own box. The no-horizontal-overflow
+   invariant is asserted on the whole page, and a model comparing four options
+   across five columns is wider than a 375px card. `tabindex="0"` + the labelled
+   `role="group"` are set in app.js and are not decoration: a scroll container
+   that cannot be focused is an axe SERIOUS violation
+   (`scrollable-region-focusable`), which is what the abandoned branch shipped. */
+/* `min-width: 0` is what actually makes the scroll container work, and it is
+   NOT tidiness. A flex item defaults to `min-width: auto`, which means "never
+   shrink below your content" — so a wide table grew `.q-prose` and its flex
+   parent to the table's own width and the box never scrolled at all. MEASURED
+   on a 12-column table at 1440px, before this line: `.q-table-scroll`
+   clientWidth 1345 == scrollWidth 1345 (nothing to scroll) while its flex
+   grandparent `#result-verdict` reported clientWidth 905 against scrollWidth
+   1377 — the table was hanging out of its own card. The page-level
+   no-horizontal-overflow assertion did NOT catch this; something further up
+   clipped it. Set on both the prose box and the two flex items above it,
+   because the chain is only as good as its widest link. */
+.q-prose,
+.result-verdict-content,
+.synthesis-block-body {
+  min-width: 0;
+}
+
+.q-table-scroll {
+  overflow-x: auto;
+  margin: 0 0 var(--space-3);
+  max-width: 100%;
+  min-width: 0;
+}
+.q-table-scroll:last-child { margin-bottom: 0; }
+.q-table-scroll:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+.q-prose .q-table {
+  border-collapse: collapse;
+  width: 100%;
+  font-size: 0.94em;
+}
+.q-prose .q-table th,
+.q-prose .q-table td {
+  border: 1px solid var(--line);
+  padding: var(--space-2) var(--space-3);
+  text-align: left;
+  vertical-align: top;
+  /* A readability floor per column, and the reason the scroll container above
+     is not decorative. Without it `width: 100%` squeezes a nine-column model
+     comparison into nine one-word-per-line columns rather than scrolling: the
+     page stays inside its bounds and the table becomes unreadable. With it,
+     columns keep a usable width and the table scrolls INSIDE its own box once
+     they no longer fit — which is the behaviour `.q-table-scroll` exists for.
+     A two- or three-column table is well under the container and never
+     scrolls. */
+  min-width: 7rem;
+}
+.q-prose .q-table th {
+  font-weight: 700;
+  color: var(--ink);
+  background: var(--accent-soft);
+}
+
+/* Fenced code. `.q-prose code` above styles the INLINE span (a pill with a
+   soft background); inside a <pre> that pill reads as a stray highlight, so
+   the block form resets it and keeps only the monospace face. */
+.q-prose pre {
+  margin: 0 0 var(--space-3);
+  padding: var(--space-3);
+  border-radius: 8px;
+  border: 1px solid var(--line);
+  background: var(--accent-soft);
+  overflow-x: auto;
+  max-width: 100%;
+}
+.q-prose pre:last-child { margin-bottom: 0; }
+.q-prose pre code {
+  background: none;
+  padding: 0;
+  border-radius: 0;
+  color: var(--ink);
+  font-size: 0.88em;
+  white-space: pre;
+}
+
+.q-prose hr {
+  border: 0;
+  border-top: 1px solid var(--line);
+  margin: var(--space-4) 0;
+}
+
+/* A nested list is a real <ul>/<ol> inside an <li> now, not a flat sibling.
+   The parent rule sets `margin-bottom`, which would open a gap between the
+   sub-list and the next top-level item. */
+.q-prose li > ul,
+.q-prose li > ol {
+  margin-top: 4px;
+  margin-bottom: 0;
+}
+
 /* WP-B/F-04 (second half): the recommendation renders through setProse, so the
    words a user actually reads are `.q-prose` DESCENDANTS — and every rule above
    that names a colour names an INK-family token (--ink, --muted,
@@ -4317,6 +4420,30 @@ html[data-theme="dark"] .workflow-step[data-state="completed"] .workflow-step-nu
 .result-verdict[data-consensus="true"] .q-prose code {
   background: color-mix(in srgb, var(--verdict-on) 12%, transparent);
   color: var(--verdict-on);
+}
+
+/* Same F-04 reasoning, extended to the surfaces the parser newly makes
+   reachable. `.q-prose .q-table th/td` and `.q-prose pre` above name INK-family
+   tokens, which paint at ~1.1-2.8:1 on the theme-invariant dark-green consensus
+   band exactly as the bold/code/blockquote rules did. A model that answers a
+   consensus run with a table would otherwise render it illegible.
+   verdict-band.spec.ts walks EVERY text-bearing node in the band in both
+   themes, so this is gated the moment a fixture puts a table on that band. */
+.result-verdict[data-consensus="true"] .q-prose .q-table th,
+.result-verdict[data-consensus="true"] .q-prose .q-table td,
+.result-verdict[data-consensus="true"] .q-prose pre,
+.result-verdict[data-consensus="true"] .q-prose pre code {
+  color: var(--verdict-on);
+  border-color: color-mix(in srgb, var(--verdict-on) 35%, transparent);
+}
+
+.result-verdict[data-consensus="true"] .q-prose .q-table th,
+.result-verdict[data-consensus="true"] .q-prose pre {
+  background: color-mix(in srgb, var(--verdict-on) 12%, transparent);
+}
+
+.result-verdict[data-consensus="true"] .q-prose hr {
+  border-top-color: color-mix(in srgb, var(--verdict-on) 35%, transparent);
 }
 
 /* UNEXERCISED TODAY — kept deliberately, not dead by accident. `formatAnswerText`

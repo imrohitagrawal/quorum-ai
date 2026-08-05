@@ -185,6 +185,7 @@ jobs:
           tests/invariants/provider-notice-coverage.spec.ts
           tests/invariants/readiness-no-flash.spec.ts
           tests/invariants/source-support-denominator.spec.ts
+          tests/invariants/markdown-corpus.spec.ts
           --project=chromium
           --retries=0
 
@@ -231,7 +232,26 @@ jobs:
         # above warns about: nine tests could then be deleted and this stays
         # green. Measured 2026-08-04, lane run exactly as this step runs it:
         # 196 passed.
-        run: python3 scripts/check_e2e_executed.py --report e2e/results.xml --min 196 --lane "invariants lane"
+        #
+        # 196 -> 233 with markdown-corpus.spec.ts (37 tests: the whole #257
+        # failure corpus driven through a real browser, the `html: false` XSS
+        # pins, the obfuscated-link-scheme resolution check, and four tests for
+        # the content loss two adversarial review lenses found). Same reasoning,
+        # same PR — and MEASURED rather than added up, THREE times as the spec
+        # grew: the lane gave 228, then 229, then 233, and the spec alone
+        # reports 32, 33, 37. Every arithmetic guess in between was wrong, which
+        # is the argument for re-running the lane rather than adding.
+        #
+        # Two notes for whoever measures next, both cost time here:
+        #   * `--reporter=line` on the command line REPLACES the config's
+        #     reporter list, so NO results.xml is written and this step then
+        #     fails with "the lane never produced its JUnit report" — which
+        #     looks like a lane that did not run. Drop the flag to re-measure.
+        #   * one of the 32 is a `test.fail()` (a documented known gap,
+        #     ADR-0015). Measured, JUnit records it as a normal pass — 32 tests,
+        #     0 failures, 0 skipped — so it counts toward this floor and does
+        #     not trip the no-skips policy above.
+        run: python3 scripts/check_e2e_executed.py --report e2e/results.xml --min 233 --lane "invariants lane"
 
       - name: Clear the previous lane's JUnit report
         run: rm -f e2e/results.xml

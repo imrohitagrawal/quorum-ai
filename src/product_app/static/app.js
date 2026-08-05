@@ -5483,263 +5483,291 @@
   // Misc helpers
   // ---------------------------------------------------------------------------
 
-  // Light formatter for model answers, debate rounds, and synthesis
-  // sections (L5a). We don't do real markdown (no build step, no
-  // dependency budget) but we do split on blank lines into paragraphs
-  // and convert single newlines into ``<br>`` so LLM output that
-  // already has reasonable structure stays legible on first render —
-  // long blocks of double-spaced prose collapse to a wall of text,
-  // which is hard to scan.
+  // ---------------------------------------------------------------------------
+  // Markdown rendering (ADR-0014 / ADR-0015)
+  // ---------------------------------------------------------------------------
   //
-  // Returns an HTML string. The caller is responsible for inserting
-  // it with ``innerHTML`` — escaping is handled internally via the
-  // existing ``escapeHtml`` helper so a hostile answer cannot inject
-  // script tags through the response payload.
+  // Provider Markdown is parsed by VENDORED markdown-it 14.1.0, served
+  // same-origin from ``/static/vendor/`` (the CSP is ``script-src 'self'
+  // 'unsafe-inline'``, so no policy change was needed and there is no build
+  // step). It replaces ~449 lines of hand-written regex parsing that three
+  // sessions failed to finish: the last attempt went green on every gate and
+  // two review lenses then found 23 defects in it. The measurements behind the
+  // choice — including that ``marked`` renders ``<script>`` live and that a
+  // parser does NOT fix the truncated opening synopsis — are in ADR-0014.
   //
-  // The function is intentionally a no-op on plain prose and on the
-  // "Awaiting provider output." / "Provider did not return text."
-  // placeholders, so a stuck poll still looks like a stuck poll.
-  // How many levels of "> " nesting are re-parsed as block content before the
-  // formatter stops recursing. A blockquote's body goes back through this same
-  // function (#120), and each pass strips one "> " marker, so a pathological
-  // answer of ">>>>>>…" would otherwise recurse once per marker and overflow
-  // the stack. Past the cap the remaining lines render as inline prose — the
-  // pre-#120 behaviour — so deep nesting degrades rather than crashing.
-  const MAX_QUOTE_DEPTH = 4;
+  // ``html: false`` is the whole XSS posture. The OLD renderer escaped every
+  // character and re-emitted an allow-list; this one escapes raw HTML by
+  // CONFIGURATION. That is a flag guarding a security property, so it is
+  // pinned by a behavioural test that feeds a live ``<script>`` through a
+  // provider answer and asserts the DOM holds no script element — flip the
+  // flag and that test goes red (see
+  // ``e2e/tests/invariants/markdown-corpus.spec.ts``).
+  //
+  // EIGHT deliberate deviations from stock markdown-it follow, numbered (1) to
+  // (8) below. Each one exists because removing it was MEASURED to break
+  // something real, and each is named so a reader can find the test that pins
+  // it. The count is checked by
+  // ``tests/test_doc_gate_consistency.py::test_the_deviation_count_matches_the_code``
+  // — this line said "SIX", vendor/README.md said "seven" and ADR-0015 said
+  // "eight", all in one commit, and two independent reviewers each found the
+  // disagreement by grepping. A number three documents state about one list is
+  // exactly the shape a machine should re-derive.
+  const MD_OPTIONS = {
+    // The security flag. Never set this true. See the pin test above.
+    html: false,
+    xhtmlOut: false,
+    // A single newline inside a paragraph becomes <br>, which is what the old
+    // formatter did (it joined buffered lines with "<br>"). Without it, a
+    // provider that soft-wraps its prose renders as one run-on line.
+    breaks: true,
+    // Bare URLs stay text. The old renderer did not autolink them either, and
+    // the golden fixture's visual baselines contain bare URLs as text.
+    linkify: false,
+    // No smart quotes/dashes: they would rewrite provider text, and this
+    // product's whole claim is that nothing on screen is unsupported.
+    typographer: false,
+  };
 
-  function formatAnswerText(rawText, quoteDepth = 0) {
+  function buildMarkdownRenderer() {
+    const MarkdownIt = window.markdownit;
+    if (typeof MarkdownIt !== "function") return null;
+    const md = new MarkdownIt(MD_OPTIONS);
+
+    // (1) NO IMAGES, AND NO LINK REFERENCE DEFINITIONS.
+    //
+    // Images: the old renderer had no image support at all, so enabling it here
+    // would be a NEW surface with no CSS, no visual baseline and a
+    // remote-fetch/data-URI vector. `![x](u)` degrades to `!` plus a link,
+    // byte-identical to what the old link regex produced for the same input.
+    //
+    // Reference definitions: this one is CONTENT LOSS, found by adversarial
+    // review and MEASURED. markdown-it CONSUMES a `[1]: https://…` line and
+    // emits nothing for it, so an answer whose citations are written in
+    // reference style loses them off the screen entirely:
+    //
+    //   "[1]: https://example.com/paper"   NEW ""              OLD "<p>[1]: https://…</p>"
+    //   "Summary\n\n[1]: …\n[2]: …"        NEW "<p>Summary</p>" OLD "<p>Summary</p><p>[1]: …<br>[2]: …</p>"
+    //
+    // An answer made ONLY of definitions renders to "", which makes setProse
+    // take its PLACEHOLDER branch — so a model that answered WITH citations is
+    // shown as "This model did not return an opening answer." The product would
+    // be stating something false about the model, which is the defect class
+    // this whole work package exists to end.
+    //
+    // Disabling the rule restores the old behaviour exactly: a definition
+    // renders as ordinary text and `[text][1]` stays literal, which is what
+    // `main` did. The cost is real and accepted — reference-style links do not
+    // become anchors — because losing a citation entirely is strictly worse
+    // than showing it unlinked.
+    md.disable(["image", "reference"]);
+
+    // (2) HEADINGS ARE DEMOTED BY THREE. `# ` becomes <h4>, not <h1>. Two
+    // reasons, both checkable: `.q-prose` styles h4/h5/h6 and NOTHING else
+    // (app.css), so an <h1> here would render at browser-default size inside
+    // a card; and an <h1> mid-document breaks the heading order that the axe
+    // lane asserts. The old formatter did exactly this (`h${level + 3}`).
+    md.core.ruler.push("demote_headings", (state) => {
+      for (const token of state.tokens) {
+        if (token.type === "heading_open" || token.type === "heading_close") {
+          token.tag = "h" + Math.min(6, Number(token.tag.slice(1)) + 3);
+        }
+      }
+    });
+
+    // (3) A LONE `*` MAY NOT EMPHASISE INTO OR OUT OF A WORD. CommonMark
+    // allows intra-word `*` emphasis (it forbids it only for `_`), and this
+    // product's domain is full of arithmetic. MEASURED on stock markdown-it:
+    //   "total 3*40 and 2*12 per year" -> "total 3<em>40 and 2</em>12 per year"
+    // — the product inventing emphasis the model did not write. The old
+    // renderer carried word-boundary guards for exactly this and they were
+    // argued through two review rounds; this is the same rule, expressed as a
+    // delimiter filter.
+    //
+    // It must run BEFORE `balance_pairs`, not before `emphasis`: pairing is
+    // decided by balance_pairs (it sets `.end`), and the emphasis
+    // post-processor reads only that. Registered before `emphasis` the rule
+    // ran but changed nothing — measured, `3*40` still emphasised.
+    //
+    // Length is checked because `**` must stay unrestricted: `**3**x cheaper`
+    // is the headline case from the live run, and the closing `**` there sits
+    // between two word characters. The cost of the deviation is that
+    // `see *note*s here` renders literally, which is what the old renderer did
+    // too.
+    const dropIntrawordStars = (state, delimiters) => {
+      for (const d of delimiters) {
+        if (d.marker !== 0x2a || d.length !== 1) continue;
+        const prev = state.tokens[d.token - 1];
+        const next = state.tokens[d.token + 1];
+        const before = prev && prev.type === "text" ? prev.content.slice(-1) : "";
+        const after = next && next.type === "text" ? next.content.charAt(0) : "";
+        if (/\w/.test(before)) d.open = false;
+        if (/\w/.test(after)) d.close = false;
+      }
+    };
+    md.inline.ruler2.before("balance_pairs", "no_intraword_star", (state) => {
+      if (state.delimiters) dropIntrawordStars(state, state.delimiters);
+      for (const meta of state.tokens_meta || []) {
+        if (meta && meta.delimiters) dropIntrawordStars(state, meta.delimiters);
+      }
+      return false;
+    });
+
+    // (4) A LITERAL `<br>` BECOMES A LINE BREAK. With `html: false` it would
+    // otherwise be escaped and shown as the text "<br>" — 6 such occurrences
+    // reached the screen in the live run (#257), because models write <br> to
+    // get two lines into one table cell. This emits a TOKEN, never raw HTML,
+    // and matches `<br>`, `<br/>`, `<br />` and their whitespace variants
+    // (`<br   >` is a break too; `<br    />` is NOT, because the 8-character
+    // slice cuts it — harmless, and stated because an earlier draft of this
+    // comment claimed "exactly three spellings", which review measured
+    // false). `<br onload=…>` does not match and stays escaped (asserted in
+    // the XSS pin test). Inline rules do
+    // not run inside code spans or fenced blocks, so `` `<br>` `` stays
+    // literal.
+    md.inline.ruler.before("text", "literal_br", (state, silent) => {
+      if (state.src.charCodeAt(state.pos) !== 0x3c /* < */) return false;
+      const match = /^<br\s*\/?>/i.exec(state.src.slice(state.pos, state.pos + 8));
+      if (!match) return false;
+      if (!silent) state.push("hardbreak", "br", 0);
+      state.pos += match[0].length;
+      return true;
+    });
+
+    // (5) LINKS KEEP THE APP'S OWN ALLOW-LIST, not markdown-it's. Stock
+    // `validateLink` permits some `data:` URLs and has no opinion on
+    // protocol-relative `//host`. `safeMarkdownHref` (unchanged, still shared
+    // with the source chips) allows http(s) via URL(), inert `mailto:`, and
+    // genuinely relative URLs, and rejects `//host`.
+    //
+    // Its backslash-folded variants (`/\host`) are handled by markdown-it
+    // rather than by that guard, and review measured the difference: the
+    // parser percent-encodes the backslash BEFORE `validateLink` runs, so the
+    // guard sees `/%5Chost` and accepts it as relative. NOT exploitable —
+    // `%5C` is not decoded in the authority, so a real browser resolves it
+    // same-origin (measured: `a.protocol` is "http:" on the app's own
+    // origin) — but the mechanism is markdown-it's, not this guard's, and
+    // this comment used to claim otherwise.
+    //
+    // The rel/target pair is re-emitted here because losing
+    // `rel="noopener noreferrer"` on a `target="_blank"` link would be a
+    // silent security regression — the old renderer set both.
+    md.validateLink = (url) => safeMarkdownHref(url) != null;
+    md.renderer.rules.link_open = (tokens, idx) => {
+      const href = safeMarkdownHref(tokens[idx].attrGet("href") || "");
+      // Unreachable while validateLink agrees, but a link with no href beats
+      // one with an unvetted href if the two ever disagree.
+      if (href == null) return "<a>";
+      return `<a href="${escapeHtml(href)}" target="_blank" rel="noopener noreferrer">`;
+    };
+
+    // (6) A BLOCKQUOTE HOLDING ONE PARAGRAPH KEEPS ITS OLD SHAPE. markdown-it
+    // always wraps quote bodies in <p>; the old formatter deliberately did not
+    // when the body was a single prose paragraph, and that choice was made FOR
+    // the blocking visual lane (<p> carries margins). Hiding the paragraph
+    // tokens is markdown-it's own mechanism for this — the same one tight
+    // lists use — so no markup is hand-built. Measured: with this rule the
+    // golden fixture's blockquote HTML is byte-identical to main's.
+    md.core.ruler.push("unwrap_sole_quote_paragraph", (state) => {
+      const tokens = state.tokens;
+      for (let i = 0; i < tokens.length; i++) {
+        if (tokens[i].type !== "blockquote_open") continue;
+        let depth = 0;
+        let end = -1;
+        for (let j = i + 1; j < tokens.length; j++) {
+          if (tokens[j].type === "blockquote_open") depth++;
+          else if (tokens[j].type === "blockquote_close") {
+            if (depth === 0) { end = j; break; }
+            depth--;
+          }
+        }
+        if (end < 0) continue;
+        // An EMPTY quote (a bare ">") is a visible hollow box with a left
+        // border and nothing in it. The old formatter dropped it explicitly —
+        // "an all-blank quote body formats to '', and an empty <blockquote> is
+        // a visible empty box" — and that comment went with the code it
+        // described. Review caught the gap. Hiding both ends leaves nothing on
+        // screen, which is what `main` did.
+        if (end - i === 1) {
+          tokens[i].hidden = true;
+          tokens[end].hidden = true;
+          continue;
+        }
+        const soleParagraph =
+          end - i === 4 &&
+          tokens[i + 1].type === "paragraph_open" &&
+          tokens[i + 3].type === "paragraph_close";
+        if (soleParagraph) {
+          tokens[i + 1].hidden = true;
+          tokens[i + 3].hidden = true;
+        }
+      }
+    });
+
+    // (7) A HEADING WHOSE TEXT STARTS WITH A LIST MARKER RENDERS THE MARKER.
+    // "### - alpha bravo" is, in CommonMark, a heading whose text happens to
+    // begin with a hyphen — so a correct parser leaves "- alpha bravo" in the
+    // heading's text node. The BLOCKING rendering gate matches exactly that
+    // ("bullet marker (- / * )"), because in every other position it means a
+    // surface bypassed the formatter. An <h*> may not contain a <ul> either, so
+    // there is no structural answer: the marker becomes its rendered form,
+    // which is what the old formatter did (it ran `inlineListMarkers` on every
+    // heading — added in #120 for this exact case, and caught then by review
+    // rather than by the gate).
+    //
+    // Runs BEFORE the `inline` core rule, while an inline token's `.content` is
+    // still raw source, so nothing has to be re-parsed afterwards.
+    md.core.ruler.before("inline", "heading_list_markers", (state) => {
+      const tokens = state.tokens;
+      for (let i = 1; i < tokens.length; i++) {
+        if (tokens[i].type !== "inline") continue;
+        if (tokens[i - 1].type !== "heading_open") continue;
+        tokens[i].content = inlineListMarkers(tokens[i].content);
+      }
+    });
+
+    // (8) A TABLE GETS A KEYBOARD-REACHABLE SCROLL CONTAINER. A wide table
+    // must scroll inside its own box rather than push the page sideways (the
+    // no-horizontal-overflow invariant), and a scrollable box that cannot be
+    // focused is an axe SERIOUS violation (`scrollable-region-focusable`) —
+    // which is exactly the regression the abandoned branch shipped. `tabindex`
+    // plus a labelled `role="group"` makes it reachable and announced.
+    md.renderer.rules.table_open = () =>
+      '<div class="q-table-scroll" tabindex="0" role="group" aria-label="Table">'
+      + '<table class="q-table">';
+    md.renderer.rules.table_close = () => "</table></div>";
+
+    return md;
+  }
+
+  // Built once, lazily, so a load-order accident is survivable: if the vendored
+  // script is missing the surfaces fall back to escaped plain text rather than
+  // throwing on every render.
+  let mdRenderer;
+  function markdownRenderer() {
+    if (mdRenderer === undefined) mdRenderer = buildMarkdownRenderer();
+    return mdRenderer;
+  }
+
+  // Render BLOCK-level provider Markdown to an HTML string. The caller inserts
+  // it with ``innerHTML``; safety comes from ``html: false`` plus the link
+  // allow-list above, not from the caller.
+  //
+  // Deliberately a no-op on the two placeholder strings, so a stuck poll still
+  // looks like a stuck poll rather than gaining a paragraph.
+  //
+  // If the vendored parser did not load, the text is escaped and shown as-is:
+  // degraded, never unsafe, and never blank.
+  function formatAnswerText(rawText) {
     const placeholder =
       rawText == null ||
       rawText === "Awaiting provider output." ||
       rawText === "Provider did not return text.";
     const text = placeholder ? "" : String(rawText);
-    if (!text) return "";
-    // Normalise line endings and strip trailing whitespace per line.
-    const lines = text
-      .replace(/\r\n?/g, "\n")
-      .split("\n")
-      .map((line) => line.replace(/[ \t]+$/g, ""));
-    // Collapse 3+ blank lines down to a single blank line.
-    const collapsed = [];
-    let blankRun = 0;
-    for (const line of lines) {
-      if (line.trim() === "") {
-        blankRun += 1;
-        if (blankRun <= 1) collapsed.push("");
-      } else {
-        blankRun = 0;
-        collapsed.push(line);
-      }
-    }
-    while (collapsed.length && collapsed[0].trim() === "") collapsed.shift();
-    while (collapsed.length && collapsed[collapsed.length - 1].trim() === "") collapsed.pop();
-    if (!collapsed.length) return "";
-    // Group consecutive non-blank lines into blocks; classify each
-    // block as a list, heading, blockquote, or paragraph (there is NO
-    // fenced-code-block branch — a ``` fence renders as literal text). The
-    // inline renderer (mdInline) handles bold, italic, inline code,
-    // and links within those block contents.
-    const out = [];
-    let buffer = [];
-    const flushParagraph = () => {
-      if (!buffer.length) return;
-      const inner = buffer
-        .map((line) => mdInline(escapeHtml(line)))
-        .join("<br>");
-      out.push(`<p>${inner}</p>`);
-      buffer = [];
-    };
-    // List lines get their OWN buffer, exactly as blockquotes do. They used to
-    // share ``buffer`` with flushParagraph, and that single fact produced every
-    // list defect this formatter had — all of them MEASURED, none theorised:
-    //
-    //   * A list never survived as a list. Every path that reached flushList()
-    //     ran flushParagraph() first, draining the shared buffer, so each item
-    //     was emitted as its own <p>. What looked like a list on screen came
-    //     from mdInline's separate per-line bullet rule, which wrapped each
-    //     item in its OWN <ul> nested inside that <p> — invalid markup the
-    //     browser then hoisted out, leaving empty paragraphs behind. Six
-    //     bullets rendered as eight lists.
-    //   * Ordered lists did not render at all. mdInline's rule matches only
-    //     "-"/"*", so "1. " reached the DOM as literal text — 76 such text
-    //     nodes in the golden run.
-    //   * Ordinary prose became bullets. The one path that did NOT call
-    //     flushParagraph first (the plain-line branch below) called flushList()
-    //     on a buffer full of PROSE, so a paragraph the provider soft-wrapped
-    //     with single newlines rendered as a run of one-item lists.
-    //
-    // With a dedicated buffer each flush owns one block type, so none of the
-    // above is expressible ON THE PARAGRAPH/LIST PATH. It is NOT a whole-file
-    // guarantee: the blockquote and heading branches still hand raw lines to
-    // mdInline, whose per-line bullet rule is deliberately retained for the
-    // inline surfaces, so a bullet inside a blockquote still becomes one
-    // single-item <ul> per line. Ungated and out of scope here; noted so the
-    // next reader does not trust a stronger claim than the code makes.
-    let listBuffer = [];
-    const orderedMarker = (line) => /^\s*\d+\.\s+/.test(line);
-    const flushList = () => {
-      if (!listBuffer.length) return;
-      const items = listBuffer.map((line) => {
-        // Strip leading bullet marker ( "- ", "* ", or "1. " ).
-        // Drop the indent with the marker. Keeping it only pushed literal
-        // spaces into the <li>'s textContent — HTML collapses them, so the
-        // nesting was never visible anyway. Real nested lists are not built
-        // here; a sub-bullet renders as a flat item.
-        const stripped = line.replace(/^(\s*)([-*]|\d+\.)\s+/, "");
-        return `<li>${mdInline(escapeHtml(stripped))}</li>`;
-      });
-      const ordered = orderedMarker(listBuffer[0]);
-      const tag = ordered ? "ol" : "ul";
-      // An <ol> with no `start` always numbers from 1, and `.q-prose ol` is
-      // `list-style: decimal`, so a list the model opened at "2." was RENUMBERED
-      // on screen. That is the product inventing a fact — and it is invisible to
-      // every text-node gate here, because the wrong number lives in ::marker.
-      //
-      // This was latent before #120: a quoted list never reached this function,
-      // so only the top-level path could hit it. Making blockquotes re-enter
-      // formatAnswerText made it reachable from quotes too, which is how review
-      // caught it. MEASURED, "> 2. Configure the exporter. / > 3. Verify the
-      // cap." rendered as "1. Configure… / 2. Verify…".
-      const firstNumber = ordered ? parseInt(listBuffer[0].trim(), 10) : NaN;
-      const startAttr =
-        Number.isFinite(firstNumber) && firstNumber !== 1 ? ` start="${firstNumber}"` : "";
-      out.push(`<${tag}${startAttr}>${items.join("")}</${tag}>`);
-      listBuffer = [];
-    };
-    // Blockquote: consecutive lines starting with ">" collapse into one
-    // <blockquote> (the marker + one optional space is stripped per line).
-    let quoteBuffer = [];
-    const flushQuote = () => {
-      if (!quoteBuffer.length) return;
-      // A blockquote's contents are BLOCK content — lists, paragraphs, nested
-      // quotes — so they go back through THIS formatter rather than through the
-      // inline renderer. Before #120 each line was handed to mdInline and joined
-      // with <br>, and that single fact produced both halves of the defect.
-      // MEASURED on the real renderer at 2ba0519, input
-      // "> Steps to follow: / > 1. a / > 2. b / > - c / > - d":
-      //
-      //   ol: 0, ul: 2, li: 2
-      //   "Steps to follow:<br>1. Instrument…<br>2. Then enable…<br>
-      //    <ul><li>side note alpha</li></ul><br><ul><li>side note beta</li></ul>"
-      //
-      // — every ordered marker survived as literal text (the blocking gate's
-      // own ordered-marker pattern fired on it), and two bullets became two
-      // separate single-item lists. Recursing gives a real <ol>/<ul>, whose
-      // numbers live in ::marker where no text-node walker can see them.
-      const formatted =
-        quoteDepth < MAX_QUOTE_DEPTH
-          ? formatAnswerText(quoteBuffer.join("\n"), quoteDepth + 1)
-          : quoteBuffer
-              // Past the cap, flatten whatever "> " markers remain instead of
-              // letting them reach a text node. MEASURED on a 6-deep quote:
-              // main leaves ">>>>> - side note zulu", which the gate's
-              // `(^|\n)>\s` pattern does NOT match (">>" is not "> "), while
-              // stripping one level per pass leaves "> - side note zulu", which
-              // DOES — so recursing without this made the gate newly reachable.
-              // 3 hits on that input before this line, 0 after. Deep nesting
-              // therefore flattens rather than leaking a marker; the fixture
-              // seeds nothing this deep, so review found it, not the gate.
-              .map((line) => line.replace(/^(?:\s*>\s?)+/, ""))
-              .map((line) => mdInline(inlineListMarkers(escapeHtml(line))))
-              .join("<br>");
-      quoteBuffer = [];
-      // An all-blank quote body formats to "", and an empty <blockquote> is a
-      // visible empty box. Drop it rather than emit a hollow one.
-      if (!formatted) return;
-      // A SINGLE-PARAGRAPH prose-only quote is unwrapped back to bare inline
-      // content, so it renders byte-identically to the pre-#120 output ("a<br>b").
-      // The qualifier is load-bearing and was missing from an earlier draft: a
-      // TWO-paragraph quote ("> a\n>\n> b") does gain <p>s, main having produced
-      // "a<br><br>b". The golden fixture holds only single-paragraph quotes,
-      // which is why its DOM is unchanged — that is a fact about the fixture,
-      // not a guarantee about all input.
-      //
-      // WHY, stated carefully, because the first version of this comment got it
-      // wrong. <p> carries margins, so wrapping EVERY quote would move pixels in
-      // the BLOCKING visual-snapshot lane (e2e.yml:353) — a lane whose Linux
-      // baselines are the ones CI compares and can only be seeded by
-      // seed-visual-baselines.yml, so no local run can re-baseline them. The
-      // wrong version claimed the wrapper "regressed 8 committed baselines";
-      // measured, those 8 failures reproduce on CLEAN main too (the darwin
-      // baselines are 1440x3137 against a 1440x3385 page, seeded 2026-07-28),
-      // so they are stale-local-baseline noise and nothing to do with this
-      // change. The real justification is the unmeasurable one: unwrapping keeps
-      // the blockquote DOM byte-identical on goldenCompletedResp() — verified,
-      // identical blockquote outerHTML on both main and this branch (5
-      // blockquotes / 599 bytes in the result view, 6 / 708 in the transcript;
-      // an earlier draft said "1380 bytes", which was the size of the probe's
-      // whole JSON dump, not of the markup) — so
-      // the Linux baselines stay valid and the blast radius is confined to
-      // quotes that actually contain a list, which is the whole of #120.
-      const soleParagraph = /^<p>([\s\S]*)<\/p>$/.exec(formatted);
-      const inner =
-        soleParagraph && !/<(?:p|ul|ol|h[1-6]|blockquote)\b/.test(soleParagraph[1])
-          ? soleParagraph[1]
-          : formatted;
-      out.push(`<blockquote>${inner}</blockquote>`);
-    };
-    const listMarker = (line) => /^\s*([-*]|\d+\.)\s+/.test(line);
-    const quoteMarker = (line) => /^\s*>\s?/.test(line);
-    for (const line of collapsed) {
-      if (line.trim() === "") {
-        flushParagraph();
-        flushList();
-        flushQuote();
-        continue;
-      }
-      if (quoteMarker(line)) {
-        flushParagraph();
-        flushList();
-        quoteBuffer.push(line.replace(/^\s*>\s?/, ""));
-        continue;
-      }
-      if (listMarker(line)) {
-        // An ordered marker may only INTERRUPT a paragraph when it starts at 1
-        // — CommonMark's rule, and it exists for exactly this case: a provider
-        // soft-wraps a sentence and the wrap lands on a year or a version, so
-        // "…first proposed in\n2025. Nobody has revisited…" would otherwise
-        // become a list item AND have "2025." stripped as its marker. That
-        // deletes content, and no raw-marker gate can see it happen, because
-        // the marker is removed rather than left behind.
-        if (buffer.length && orderedMarker(line) && !/^\s*1\.\s/.test(line)) {
-          buffer.push(line);
-          continue;
-        }
-        flushParagraph();
-        flushQuote();
-        // A change of marker type ends the current list and starts a new one,
-        // so "- a" followed by "1. b" is two lists rather than one list whose
-        // tag is decided by whichever item happened to come first.
-        if (listBuffer.length && orderedMarker(listBuffer[0]) !== orderedMarker(line)) {
-          flushList();
-        }
-        listBuffer.push(line);
-        continue;
-      }
-      flushList();
-      flushQuote();
-      // Headings: "# ", "## ", "### ".
-      const heading = line.match(/^(#{1,3})\s+(.*)$/);
-      if (heading) {
-        const level = heading[1].length;
-        // inlineListMarkers here too: a heading is an inline surface (an <h*>
-        // may not contain a <ul>), and before #120 mdInline's own rule produced
-        // exactly that illegal shape — "### - alpha" gave
-        // "<h6><ul><li>alpha</li></ul></h6>". Removing that rule without adding
-        // this call left a raw "- " in the heading's text node, which the
-        // BLOCKING gate's own "bullet marker (- / * )" pattern matches. Found by
-        // review, not by the gate: the golden fixture seeds no such heading.
-        out.push(
-          `<h${level + 3}>${mdInline(inlineListMarkers(escapeHtml(heading[2])))}</h${level + 3}>`,
-        );
-        continue;
-      }
-      buffer.push(line);
-    }
-    flushParagraph();
-    flushList();
-    flushQuote();
-    return out.join("");
+    if (!text.trim()) return "";
+    const md = markdownRenderer();
+    if (!md) return `<p>${escapeHtml(text)}</p>`;
+    return md.render(text);
   }
 
   // Render BLOCK-level provider prose (headings, lists, paragraphs, inline
@@ -5765,88 +5793,104 @@
     return el;
   }
 
-  // Render INLINE-only provider prose (bold/italic/inline code/links, no block
-  // structure) into ``el`` via ``mdInline`` — escaping first so no raw HTML is
-  // reintroduced. For single-line span/cell/caption surfaces where block tags
-  // would be invalid. Falls back to a muted placeholder. Returns ``el``.
   // Render a list marker that an inline surface cannot express structurally.
   //
   // <span> and <p> may not contain <ul>/<ol> — that is the whole reason
-  // setInlineProse exists. The set is NOT uniform: `.result-trust-caption` is a
-  // <div> (app.js:2286), where a <ul> would be legal, so the e2e span/p check
-  // cannot see that surface; the rendered-marker assertion is what covers it. Until #120 the inline path emitted one
-  // anyway, and MEASURED at 2ba0519 that produced, verbatim, on a <p>:
+  // ``setInlineProse`` exists, and why it calls ``renderInline`` (which never
+  // produces block tags) rather than ``render``. But a provider writes lists
+  // into these surfaces anyway, and ``renderInline`` leaves the raw "- " / "1. "
+  // marker in a text node, which the BLOCKING rendering gate matches.
   //
-  //   .result-source-support (P): "Caveats:\n<ul><li>verify the cost figure</li>
-  //                                <li>keep the cap</li></ul>"
+  // So the marker becomes its RENDERED equivalent — "•" for a bullet, "(n)" for
+  // an ordinal. Deleting the ordinal was the rejected alternative: it reads fine
+  // and silently loses the sequence, the same failure this codebase already paid
+  // for once when a soft-wrapped "2025." was eaten as a list marker.
   //
-  // — a UL inside a P, which no browser keeps where it was written. And an
-  // ordered list got no rule at all, so ".result-trust-caption" held the raw
-  // "Open items:\n1. cohort definition\n2. export gate".
+  // Takes RAW text and returns RAW text. It ran on ALREADY-ESCAPED text before
+  // the parser landed and emitted its own ``<br>``; both are now wrong —
+  // markdown-it escapes, and ``breaks: true`` turns the surviving newline into
+  // the ``<br>``. Escaping cannot disturb a marker either way (`-`, `*`, digits
+  // and `.` are untouched by it).
   //
-  // A block renderer moves the marker into presentation (::marker). This does
-  // the same thing for an inline surface: the marker becomes its RENDERED
-  // equivalent — "•" for a bullet, "(n)" for an ordinal — so no raw markdown
-  // reaches a text node AND no ordinal is deleted. Deleting them was the
-  // rejected alternative: it reads fine but silently loses the sequence, which
-  // is the failure mode this codebase already paid for once when a soft-wrapped
-  // "2025." was eaten as a list marker.
+  // A HEADING MARKER is stripped outright, and that asymmetry is deliberate.
+  // "# PostgreSQL Scaling Decision" reached a real screen with its "#" intact
+  // (#257 §2): `debate._opening_synopsis` flattens a heading-led answer onto
+  // this surface, and a heading has NO inline equivalent, so `renderInline`
+  // correctly leaves the marker as text. A "#" is pure syntax — dropping it
+  // loses nothing — whereas a list ordinal is CONTENT, which is why that one is
+  // rendered rather than deleted. Requires the space, so "#hashtag" is left
+  // alone.
   //
-  // Takes ALREADY-ESCAPED text and may emit `<br>`, so it must run after
-  // escapeHtml, never before. Escaping cannot disturb a marker (`-`, `*`,
-  // digits and `.` are untouched by it), and emitting the separator here is the
-  // only way it survives: inserted before escaping, a `<br>` would be escaped
-  // into visible text.
-  //
-  // Two rules that both came out of review, each stated with what it prevents:
+  // Two more rules, each stated with what it prevents:
   //
   // 1. An ORDERED marker may only interrupt running prose when it starts at 1 —
-  //    CommonMark, and the same rule `formatAnswerText` applies at the block
-  //    level. Without it this function rewrote prose: MEASURED,
-  //    "…cut the estimate from 15 to\n12. Nobody revisited it since." became
-  //    "(12) Nobody revisited it since.", while the block path correctly left
-  //    it alone. A bullet has no such ambiguity and needs no rule.
-  // 2. Items are separated by `<br>`, not by the bare newline. These surfaces
-  //    compute `white-space: normal`, so a newline collapses to a space and the
-  //    items run together on one line. MEASURED on `.result-source-support`:
-  //    88px tall and stacked before #120, 20px and run-on with a bare
-  //    newline, 61px with the <br>. (An earlier draft said 75px; measured, it
-  //    is 88px at both 1440 and 1280, so it is not a width artefact.)
-  //
-  // Only 1-2 digit ordinals count, so a line starting "2025. Nobody revisited…"
-  // is left alone. Note this is NARROWER than the block formatter's own marker
-  // test (`/^\s*\d+\.\s+/`, unbounded digits) and WIDER than the gate's pattern
-  // (`1.` only) — three different widths, deliberately, and no longer claimed
-  // to be one.
-  function inlineListMarkers(escaped) {
-    const lines = escaped.split("\n");
+  //    CommonMark, and the same rule the block parser applies. Without it this
+  //    function rewrote prose: MEASURED, "…cut the estimate from 15 to\n12.
+  //    Nobody revisited it since." became "(12) Nobody revisited it since.".
+  //    A bullet has no such ambiguity and needs no rule.
+  // 2. Only 1-2 digit ordinals count, so a line starting "2025. Nobody
+  //    revisited…" is left alone.
+  function inlineListMarkers(raw) {
+    const lines = String(raw).split("\n");
     let inList = false;
     return lines
-      .map((line, i) => {
+      .map((rawLine, i) => {
+        // Strip a heading marker, then KEEP GOING. Returning early here left
+        // "### - alpha bravo" as "- alpha bravo" on an inline surface — a raw
+        // bullet in a text node, which the BLOCKING gate's own
+        // "bullet marker (- / * )" pattern matches. Found by adversarial
+        // review, not by the gate, because no fixture seeds a heading whose
+        // text is a list item. It is the same shape as deviation 7 on the
+        // block path, one surface over.
+        //
+        // KNOWN COST, recorded rather than hidden: "# of requests: 400" loses
+        // its "#". That is CommonMark — a "#" plus a space at a line start IS
+        // the heading marker — and the BLOCK path agrees, rendering
+        // <h4>of requests: 400</h4>. Both paths treat the character as syntax;
+        // an inline surface simply has no heading element to put it in.
+        const heading = /^[ \t]*#{1,6}[ \t]+/.exec(rawLine);
+        const line = heading ? rawLine.slice(heading[0].length) : rawLine;
         const m = /^([ \t]*)([-*]|\d{1,2}\.)[ \t]+/.exec(line);
         if (!m) {
           inList = false;
-          return (i ? "\n" : "") + line;
+          return line;
         }
         const marker = m[2];
         const bullet = marker === "-" || marker === "*";
         const interruptsProse = i > 0 && !inList && lines[i - 1].trim() !== "";
         if (!bullet && interruptsProse && marker !== "1.") {
           inList = false;
-          return "\n" + line;
+          return line;
         }
         inList = true;
         const rendered = bullet ? "• " : `(${marker.slice(0, -1)}) `;
-        return (i ? "<br>" : "") + rendered + line.slice(m[0].length);
+        return rendered + line.slice(m[0].length);
       })
-      .join("");
+      .join("\n");
   }
 
+  // Render INLINE-only provider prose (bold/italic/inline code/links, no block
+  // structure) into ``el``. For single-line span/cell/caption surfaces where
+  // block tags would be invalid. Falls back to a muted placeholder. Returns
+  // ``el``.
+  //
+  // ``renderInline`` runs the inline chain ONLY — no paragraph, list, heading,
+  // table or blockquote rule can fire — so a <span> target can never receive an
+  // illegal child. That is a structural guarantee from the parser, where before
+  // it was a promise made by a hand-written function that had already broken it
+  // once (it emitted a <ul> inside a <p>).
+  //
+  // The set of target elements is NOT uniform: `.result-trust-caption` is a
+  // <div> (app.js:2286) where a <ul> would be legal, so the e2e span/p check
+  // cannot see that surface; the rendered-marker assertion is what covers it.
   function setInlineProse(el, rawText, placeholder) {
     const text = rawText == null ? "" : String(rawText).trim();
     if (text) {
       el.classList.remove("muted");
-      el.innerHTML = mdInline(inlineListMarkers(escapeHtml(text)));
+      const md = markdownRenderer();
+      el.innerHTML = md
+        ? md.renderInline(inlineListMarkers(text))
+        : escapeHtml(text);
     } else if (placeholder != null) {
       el.classList.add("muted");
       el.textContent = placeholder;
@@ -5856,130 +5900,7 @@
     return el;
   }
 
-  // Inline markdown renderer. Escaped text is the input (so we
-  // never reintroduce unescaped HTML). Recognises: **bold**, *italic*,
-  // `code`, [text](url). Designed for the markdown flavour LLMs
-  // actually emit; not CommonMark-complete.
-  function mdInline(escaped) {
-    let s = escaped;
-    // Inline code first — everything inside backticks is verbatim and
-    // must not be touched by the bold/italic/link rules below.
-    s = s.replace(/`([^`]+)`/g, (_m, code) => `<code>${code}</code>`);
-    // NO list rule lives here any more (#120). This function's contract, stated
-    // at setInlineProse above, is "inline-only, no block structure" — and it
-    // spent that contract emitting a <ul>, which is an ILLEGAL child of the
-    // <span>/<p> surfaces setInlineProse targets.
-    //
-    // `grep -n "mdInline(" app.js` returns FIVE callers. An earlier version of
-    // this comment listed four and claimed "no caller lost anything"; review
-    // demonstrated that the two it omitted — the heading branch and flushQuote's
-    // depth-capped fallback — were left leaking a raw marker into a text node
-    // that the BLOCKING gate's own patterns match. Both now call
-    // inlineListMarkers. The full list, so the next reader can check it:
-    //   * flushList strips the marker before calling here, so <li> content
-    //     never starts with one;
-    //   * flushParagraph can never see a list line — the listMarker branch
-    //     above claims it first;
-    //   * flushQuote now re-enters formatAnswerText, which builds a real
-    //     <ul>/<ol> inside the blockquote;
-    //   * setInlineProse pre-renders the marker with inlineListMarkers();
-    //   * the HEADING branch does the same (an <h*> may not hold a <ul> either);
-    //   * flushQuote's capped fallback does the same, after flattening any
-    //     leftover "> " markers.
-    // The one behaviour that changed on purpose is the inline surface, and it
-    // changed from invalid markup to valid markup.
-    //
-    // Bold then italic. Order matters: ** must be tried before *, or
-    // the ** would each be consumed as empty italics.
-    s = s.replace(/\*\*([^*]+)\*\*/g, (_m, t) => `<strong>${t}</strong>`);
-    // Italic uses the SAME word-boundary discipline as the underscore rule
-    // below, on BOTH counts: the run may not begin or end with whitespace, AND
-    // the delimiters may not sit against a word character.
-    //
-    // This is a DELIBERATE deviation from CommonMark, which allows intra-word
-    // `*` emphasis (it forbids it only for `_`). The cost of the deviation is
-    // that `see *note*s here` renders literally instead of emphasising "note".
-    // The cost of NOT deviating is that this product invents emphasis in the
-    // one shape its own domain is full of — MEASURED, both halves:
-    //
-    //   "cost * qty and rate * hours" -> cost <em> qty and rate </em> hours
-    //   "total 3*40 and 2*12 per year" -> total 3<em>40 and 2</em>12 per year
-    //
-    // Review round 1 argued the `\w` guards contributed nothing and had them
-    // relaxed; round 2 measured the unspaced case and showed they carry the
-    // whole second half. Fabricating emphasis is a lie about what the model
-    // wrote; failing to render a rare intra-word italic is a fidelity loss.
-    // For a product whose claim is that nothing on screen is unsupported by
-    // the data, that trade is not close.
-    s = s.replace(
-      /(^|[^\w*])\*([^\s*](?:[^*]*[^\s*])?)\*(?!\w)/g,
-      (_m, lead, t) => `${lead}<em>${t}</em>`,
-    );
-    // [text](url). The captured ``url`` reaches us HTML-escaped (every
-    // caller runs its input through ``escapeHtml`` before mdInline), but we
-    // deliberately do NOT rely on that: this replace decodes the URL back,
-    // vets its scheme with the shared ``URL()``-based allow-list, and
-    // re-escapes it for the attribute itself — so a markdown link is safe by
-    // construction here, not by convention at a distant caller. ``URL()``
-    // (like the browser's own href resolution) strips tab/CR/LF before
-    // reading the scheme, so control-char tricks such as ``java\tscript:``
-    // cannot smuggle a scheme past the check.
-    s = s.replace(
-      /\[([^\]]+)\]\(([^)]+)\)/g,
-      (_m, text, url) => {
-        const href = safeMarkdownHref(decodeBasicEntities(url));
-        if (href == null) {
-          // Disallowed scheme (javascript:, data:, vbscript:, tab-obfuscated
-          // variants, …): render inert text, never an anchor.
-          return `${text} (${url})`;
-        }
-        // Attribute-encode the vetted href at the interpolation point so a
-        // quote in the URL can never break out of href="…".
-        return `<a href="${escapeHtml(href)}" target="_blank" rel="noopener noreferrer">${text}</a>`;
-      },
-    );
-    // Underscore emphasis (LLMs emit both ``_x_`` and ``*x*``). Runs LAST and
-    // ONLY on text OUTSIDE already-emitted tags (via ``applyOutsideTags``), so a
-    // URL underscore inside an ``href="…"`` attribute is never touched. Uses
-    // GFM word-boundary rules: the opening marker must follow a non-word char
-    // (or start) and the closing marker must NOT be followed by a word char, so
-    // intra-word underscores in identifiers (``retention_flag``, ``snake_case``)
-    // are left alone. ``__strong__`` before ``_em_``.
-    s = applyOutsideTags(s, (seg) =>
-      seg
-        .replace(/(^|[^\w])__([^\s_](?:[^_]*[^\s_])?)__(?!\w)/g, (_m, lead, t) => `${lead}<strong>${t}</strong>`)
-        .replace(/(^|[^\w])_([^\s_](?:[^_]*[^\s_])?)_(?!\w)/g, (_m, lead, t) => `${lead}<em>${t}</em>`),
-    );
-    return s;
-  }
 
-  // Apply ``fn`` only to the plain-text runs of a string that already contains
-  // emitted HTML — every ``<…>`` tag (with its attributes) AND every whole
-  // ``<code>…</code>`` span is passed through UNTOUCHED. Inline code is verbatim
-  // by contract, so emphasis must never fire inside it (`` `__init__` `` must stay
-  // literal, not become bold). The split captures either a full code span or a
-  // single tag as the delimiter; any part that starts with ``<`` is such a
-  // delimiter (all provider ``<`` were escaped to ``&lt;`` upstream, so only our
-  // emitted markup begins with a literal ``<``) and is left alone.
-  function applyOutsideTags(s, fn) {
-    return s
-      .split(/(<code>[\s\S]*?<\/code>|<[^>]*>)/)
-      .map((part) => (part && part.charAt(0) === "<" ? part : fn(part)))
-      .join("");
-  }
-
-  // Reverse the five entities ``escapeHtml`` emits, so a URL that was escaped
-  // upstream can be scheme-checked and normalised as its real value. ``&amp;``
-  // is decoded last so an escaped literal like ``&amp;lt;`` round-trips to
-  // ``&lt;`` rather than being double-decoded to ``<``.
-  function decodeBasicEntities(text) {
-    return String(text)
-      .replace(/&lt;/g, "<")
-      .replace(/&gt;/g, ">")
-      .replace(/&quot;/g, '"')
-      .replace(/&#39;/g, "'")
-      .replace(/&amp;/g, "&");
-  }
 
   // Return a safe href for a markdown link, or null when the scheme is not
   // allow-listed. Reuses ``safeHttpUrl`` (the same ``URL()`` allow-list the

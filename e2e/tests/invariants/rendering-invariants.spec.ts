@@ -146,25 +146,40 @@ test.describe("rendering invariants (golden fixture)", () => {
       .first();
     await expect(body).toBeVisible();
     const shape = await body.evaluate((el) => ({
-      lists: el.querySelectorAll("ul").length,
+      // TOP-LEVEL lists only. The defect this guards is "six bullets became six
+      // SIBLING single-item lists" — a statement about siblings. Counting every
+      // <ul> in the subtree also counts a correctly NESTED sub-list, which is
+      // the fix, not the defect. The comment below already said pinning the
+      // ITEM count would "block the fix for the defect it half-describes"; the
+      // list count had the identical flaw and nobody noticed, because no
+      // renderer had ever nested anything. ADR-0014's parser does: it took this
+      // number from 1 to 2 while the six bullets stayed in ONE sibling list.
+      topLevelLists: el.querySelectorAll(":scope > ul").length,
+      nestedLists: el.querySelectorAll("ul ul, ul ol, ol ul, ol ol").length,
       items: el.querySelectorAll("ul li").length,
       emptyParagraphs: [...el.querySelectorAll("p")].filter(
         (p) => !(p.textContent || "").trim()
       ).length,
     }));
     expect(
-      shape.lists,
-      `expected exactly ONE <ul> for the six-item list; saw ${shape.lists}. ` +
+      shape.topLevelLists,
+      `expected exactly ONE top-level <ul> for the six-item list; saw ${shape.topLevelLists}. ` +
         "More than one means each line became its own single-item list."
     ).toBe(1);
-    // At LEAST six: the fixture seeds an indented sub-bullet, and this
-    // formatter flattens it to a sibling item. Pinning exactly 6 would make a
-    // future correct nested-<ul> implementation RED — a gate that blocks the
-    // fix for the defect it half-describes.
+    // At LEAST six: the fixture seeds an indented sub-bullet, so the flat count
+    // and the nested count differ by how that item is ATTACHED, not by content.
     expect(
       shape.items,
       "the six seeded bullets must all be <li> of that list"
     ).toBeGreaterThanOrEqual(6);
+    // Positive partner for `topLevelLists === 1`: that assertion is ALSO
+    // satisfied by a renderer that dropped the indented sub-bullet outright.
+    // The fixture seeds exactly one, so exactly one nested list must exist.
+    expect(
+      shape.nestedLists,
+      "the fixture's indented sub-bullet must render as a NESTED list — not " +
+        "flattened to a sibling item, and not dropped"
+    ).toBe(1);
     // No item may carry the stripped indent as literal text.
     const untrimmed = await body.evaluate(() =>
       [...document.querySelectorAll(".result-synth-body li")]
@@ -695,7 +710,35 @@ test.describe("#120 round 3 — the callers a superlative hid", () => {
     // Positive partner: the deep-quoted content must actually be on the page,
     // or "no markers found" would be true of a page that dropped it entirely.
     expect(found.zulu.length, "the deeply quoted line must still be rendered").toBeGreaterThan(0);
-    expect(found.zulu[0]).toContain("• side note zulu");
     expect(found.hits, "a marker survived past the depth cap").toEqual([]);
+    // The bullet must survive as STRUCTURE, inside the quote. This used to
+    // assert the literal text "• side note zulu" — the rendered-marker
+    // WORKAROUND the hand-rolled formatter emitted once it hit a recursion cap
+    // it needed because it re-entered itself per "> " level. ADR-0014's parser
+    // is iterative and has no cap, so it renders the real thing: nested
+    // <blockquote>s ending in a genuine <li>. Asserting the workaround's glyph
+    // would have failed the strictly better output — so this now asserts the
+    // structure, which the old renderer could NOT produce at this depth and the
+    // new one must.
+    const structure = await page.evaluate(() => {
+      const li = [...document.querySelectorAll("#main-content blockquote li")]
+        .find((el) => (el.textContent || "").includes("side note zulu"));
+      return {
+        found: Boolean(li),
+        insideList: Boolean(li?.closest("ul, ol")),
+        quoteDepth: li ? li.closest("blockquote") ? (() => {
+          let n = 0;
+          for (let el: Element | null = li; el; el = el.parentElement) {
+            if (el.tagName === "BLOCKQUOTE") n++;
+          }
+          return n;
+        })() : 0 : 0,
+      };
+    });
+    expect(structure.found, "the deeply quoted bullet must be a real <li>").toBe(true);
+    expect(structure.insideList, "that <li> must sit inside a <ul>/<ol>").toBe(true);
+    // Six "> " markers in the source, so six nested quote levels — proof the
+    // nesting is parsed rather than flattened at a cap.
+    expect(structure.quoteDepth, "all six quote levels must be represented").toBe(6);
   });
 });
