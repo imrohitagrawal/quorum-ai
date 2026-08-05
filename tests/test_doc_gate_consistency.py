@@ -856,8 +856,28 @@ ENV_EXAMPLE = REPO_ROOT / ".env.example"
 _ENV_NAME_PATTERN = r"^#? ?([A-Z][A-Z0-9_]*)="
 
 
+#: The first section banner. Everything above it is the explanatory header,
+#: which is PROSE and may never be read as documentation — see
+#: `test_the_header_cannot_vouch_for_any_knob`.
+_FIRST_SECTION_BANNER = r"^# --- "
+
+
+def _env_example_body(text: str) -> str:
+    """The part of `.env.example` below its explanatory header.
+
+    Tightening `_ENV_NAME_PATTERN` alone was not enough. Adversarial review
+    reflowed the header's indentation from seven spaces to one — turning a
+    prose line into `# TAVILY_API_KEY=...` — deleted the real assignment, and
+    all 24 doc-gate tests stayed green. The pattern was pinned; the FILE was
+    not. Reading only the body removes the header from the question entirely,
+    so it can be reflowed freely and can never vouch for anything.
+    """
+    match = re.search(_FIRST_SECTION_BANNER, text, re.MULTILINE)
+    return text[match.start() :] if match else text
+
+
 def _env_example_documented_names(text: str) -> set[str]:
-    return set(re.findall(_ENV_NAME_PATTERN, text, re.MULTILINE))
+    return set(re.findall(_ENV_NAME_PATTERN, _env_example_body(text), re.MULTILINE))
 
 
 def _check_every_field_is_documented(*, text: str, field_names: list[str]) -> None:
@@ -935,7 +955,27 @@ def test_the_env_example_guard_bites() -> None:
     assert "empty input" in str(no_fields.value)
 
 
-def test_env_example_is_a_loadable_env_file(tmp_path: Path) -> None:
+#: Uncommented example values that DELIBERATELY differ from the field's
+#: default, with the reason. `.env.example` is a local-development template,
+#: so a local-only convenience may legitimately not match a
+#: production-safe default — but each one has to be named here, not assumed.
+_DELIBERATE_VALUE_DEVIATIONS = {
+    # The field defaults False for security. The example turns it on because
+    # the legacy `X-Account-Id` header is how the local test fixture
+    # authenticates, and `auth` refuses it outside `RUNTIME_ENVIRONMENT=local`
+    # anyway. Pre-dates this gate (`git log -S` → bca4ba6).
+    "ACCOUNT_LEGACY_HEADER_ENABLED": "local dev authenticates via the legacy header",
+}
+
+
+def _env_example_live_lines(text: str) -> list[str]:
+    """Uncommented assignments — the lines a copied `.env` would really parse."""
+    return [line for line in text.splitlines() if re.match(r"^[A-Z][A-Z0-9_]*=", line)]
+
+
+def test_env_example_is_a_loadable_env_file(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     """RED IF: `.env.example`, used as a real `.env`, cannot boot the app.
 
     `.env.example` says "copy this file to .env", so every uncommented line in
@@ -944,6 +984,16 @@ def test_env_example_is_a_loadable_env_file(tmp_path: Path) -> None:
     because a blank `EXPOSE_API_DOCS=` crashed startup with a ValidationError.
     Part E above forces new fields INTO this file; this test is the partner
     that stops it being satisfied with a line that would break a boot.
+
+    THE `delenv` LOOP IS LOAD-BEARING. `Settings(_env_file=...)` gives the
+    real `os.environ` PRIORITY over the dotenv file, and `tests/conftest.py`
+    pins `ACCOUNT_LEGACY_HEADER_ENABLED` and `OPENROUTER_LIVE_EXECUTION_ENABLED`
+    into the environment before collection (CI sets the latter too). Without
+    the loop this test was silently vacuous for exactly those two fields:
+    adversarial review set `ACCOUNT_LEGACY_HEADER_ENABLED=totally-not-a-bool`
+    in `.env.example` and it stayed green, while the same file with those two
+    names unset raised `ValidationError`. One of the two is the
+    live-execution switch.
 
     What turns it red: add `TAVILY_MAX_RESULTS=` (blank, int-typed, no
     before-validator) uncommented to `.env.example` — MEASURED to raise
@@ -954,11 +1004,7 @@ def test_env_example_is_a_loadable_env_file(tmp_path: Path) -> None:
     them is the whole reason this test is worth having.
     """
     text = ENV_EXAMPLE.read_text(encoding="utf-8")
-    live_lines = [
-        line
-        for line in text.splitlines()
-        if re.match(r"^[A-Z][A-Z0-9_]*=", line)  # uncommented assignments only
-    ]
+    live_lines = _env_example_live_lines(text)
     # Positive partner: an `.env.example` of nothing but comments would load
     # perfectly and prove nothing about any field.
     assert len(live_lines) >= 20, (
@@ -966,11 +1012,76 @@ def test_env_example_is_a_loadable_env_file(tmp_path: Path) -> None:
         f"test would be near-vacuous. Did the file get commented out wholesale?"
     )
 
+    # Take the ambient environment out of the question, so the file under test
+    # is the only input.
+    for line in live_lines:
+        monkeypatch.delenv(line.split("=", 1)[0], raising=False)
+
     env_file = tmp_path / ".env"
     env_file.write_text("\n".join(live_lines) + "\n", encoding="utf-8")
     # Constructing Settings against the file is the whole assertion: pydantic
     # raises ValidationError on any value its field cannot parse.
     Settings(_env_file=str(env_file))  # type: ignore[call-arg]
+
+
+def test_env_example_values_match_the_real_defaults(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """RED IF: an example value silently disagrees with the field's default.
+
+    Documenting all 44 fields turned `.env.example` into a 40-line hard pin of
+    default values, and nothing made those track the code: adversarial review
+    changed `soft_threshold_usd`'s default from 0.15 to 0.99 with the example
+    untouched and every doc gate stayed green. A stale example value is worse
+    than no example — an operator copies it and silently pins the old
+    behaviour.
+
+    Deviations are allowed but must be DECLARED, in
+    `_DELIBERATE_VALUE_DEVIATIONS`, with a reason.
+
+    What turns it red: change any default in `config.py` without updating
+    `.env.example` (or vice versa).
+    """
+    text = ENV_EXAMPLE.read_text(encoding="utf-8")
+    live_lines = _env_example_live_lines(text)
+    for line in live_lines:
+        monkeypatch.delenv(line.split("=", 1)[0], raising=False)
+
+    env_file = tmp_path / ".env"
+    env_file.write_text("\n".join(live_lines) + "\n", encoding="utf-8")
+    loaded = Settings(_env_file=str(env_file))  # type: ignore[call-arg]
+    defaults = Settings.model_construct()
+
+    documented = {line.split("=", 1)[0] for line in live_lines}
+    # Positive partner: no documented name means nothing is compared below.
+    assert len(documented) >= 20, f"only {len(documented)} names to compare"
+
+    mismatches = {}
+    for field in Settings.model_fields:
+        name = field.upper()
+        if name not in documented or name in _DELIBERATE_VALUE_DEVIATIONS:
+            continue
+        actual, expected = getattr(loaded, field), getattr(defaults, field)
+        if actual != expected:
+            mismatches[name] = (actual, expected)
+    assert not mismatches, (
+        f".env.example documents values that are no longer the code's defaults: "
+        f"{ {k: f'example={v[0]!r} default={v[1]!r}' for k, v in mismatches.items()} }. "
+        f"Update the example, or declare the deviation in "
+        f"_DELIBERATE_VALUE_DEVIATIONS with a reason."
+    )
+
+    # The allowlist must not rot either: a declared deviation that no longer
+    # deviates is a stale exemption hiding a future drift.
+    stale = [
+        name
+        for name in _DELIBERATE_VALUE_DEVIATIONS
+        if name in documented and getattr(loaded, name.lower()) == getattr(defaults, name.lower())
+    ]
+    assert not stale, (
+        f"{stale} are listed as deliberate deviations but now MATCH the "
+        f"default. Remove them from _DELIBERATE_VALUE_DEVIATIONS."
+    )
 
 
 # --------------------------------------------------------------------------
@@ -1001,19 +1112,39 @@ def test_env_example_is_a_loadable_env_file(tmp_path: Path) -> None:
 #   they claim to tune is what the cost guardrail keys off.
 #
 # THE RULE, fully mechanical: a documented name must either be a `Settings`
-# field or appear as a whole token somewhere in `src/` (which is how the
-# legitimate `os.environ` reads such as `QUORUM_TOKEN_SECRET` are vouched
-# for). No hand-written allowlist — the whole-token boundary is load-bearing,
-# because a substring match would let `RUNTIME_ENVIRONMENT` vouch for the
-# dead `ENVIRONMENT` and the headline finding would have been missed.
+# field or be read from the environment by an ACTUAL `os.environ` call in
+# `src/` (which is how `QUORUM_TOKEN_SECRET`, read at `config.py:541`, is
+# vouched for). No hand-written allowlist.
+#
+# "An `os.environ` call", NOT "the token appears in `src/`". The looser
+# free-text version was written first and adversarial review defeated it two
+# ways, both demonstrated:
+#   * a name surviving only in a COMMENT or docstring vouched for itself, so
+#     documenting a knob deleted from the code stayed green;
+#   * every module CONSTANT vouched for itself — `DAILY_CAP_USD`,
+#     `GLOBAL_DAILY_CEILING_USD`, `DEBATE_ROUND_MAX_TOKENS` and friends are
+#     hardcoded in `costs.py`/`debate.py` and are NOT env-readable, yet all
+#     passed. That is precisely the failure this part exists to catch, and
+#     `.env.example` already discusses `GLOBAL_DAILY_CEILING_USD` in prose,
+#     so the edit that would have walked into the trap was one line away.
+# The whole-token boundary is still load-bearing inside the `os.environ`
+# match: a substring match would let `RUNTIME_ENVIRONMENT` vouch for the dead
+# `ENVIRONMENT` and the headline finding would have been missed.
 # --------------------------------------------------------------------------
+
+#: An actual read of the environment in `src/`: `os.environ["X"]`,
+#: `os.environ.get("X")`, or `os.getenv("X")`.
+_ENV_READ_PATTERN = r"""os\.(?:environ(?:\.get)?\(|getenv\()\s*['"]([A-Z][A-Z0-9_]*)['"]"""
+
+
+def _env_names_read_in_src(src_text: str) -> set[str]:
+    return set(re.findall(_ENV_READ_PATTERN, src_text))
 
 
 def _is_read_anywhere(name: str, *, field_names: set[str], src_text: str) -> bool:
     if name in field_names:
         return True
-    # Whole-token only. `RUNTIME_ENVIRONMENT` must NOT vouch for `ENVIRONMENT`.
-    return bool(re.search(rf"(?<![A-Za-z0-9_]){re.escape(name)}(?![A-Za-z0-9_])", src_text))
+    return name in _env_names_read_in_src(src_text)
 
 
 def _check_no_documented_knob_is_dead(*, text: str, field_names: set[str], src_text: str) -> None:
@@ -1144,3 +1275,82 @@ def test_a_name_mentioned_only_in_prose_is_not_documentation() -> None:
         text=ENV_EXAMPLE.read_text(encoding="utf-8"),
         field_names=sorted(Settings.model_fields),
     )
+
+
+def test_the_header_cannot_vouch_for_any_knob() -> None:
+    """RED IF: `.env.example`'s explanatory header contains an assignment line.
+
+    Part E reads only the body (below the first `# --- ` banner), so a header
+    mention cannot vouch for a knob. This is the other half of that guarantee:
+    it keeps the header free of assignment-SHAPED lines, so nobody can later
+    "document" a knob up there and believe it counts.
+
+    Why both halves exist: tightening `_ENV_NAME_PATTERN` alone was defeated
+    by reflowing the header's indentation from seven spaces to one, which
+    turned prose into `# TAVILY_API_KEY=...` and let the real assignment be
+    deleted with every doc-gate test still green.
+
+    What turns it red: add `# FOO=bar` (one space or none) above the first
+    `# --- ` section banner in `.env.example`.
+    """
+    text = ENV_EXAMPLE.read_text(encoding="utf-8")
+    match = re.search(_FIRST_SECTION_BANNER, text, re.MULTILINE)
+    assert match, (
+        ".env.example has no `# --- ` section banner, so the header/body split "
+        "Part E depends on has collapsed and the whole file is being read as "
+        "documentation. Restore the banners."
+    )
+    header = text[: match.start()]
+    # Positive partner: an empty header would satisfy any "contains no X".
+    assert header.strip(), ".env.example has no header at all — the split is meaningless"
+    stray = re.findall(_ENV_NAME_PATTERN, header, re.MULTILINE)
+    assert not stray, (
+        f"{stray} look like assignments but sit in .env.example's explanatory "
+        f"header, which Part E does not read. Move them below the first "
+        f"`# --- ` banner, or indent them further so they read as prose."
+    )
+
+
+def test_the_dead_knob_guard_requires_a_real_environment_read() -> None:
+    """RED IF: a name is vouched for by mere textual presence in `src/`.
+
+    The first version of `_is_read_anywhere` searched the concatenated text of
+    `src/**/*.py`, so a name surviving only in a COMMENT vouched for itself,
+    and so did every hardcoded module constant. Both were demonstrated against
+    the real tree: `DAILY_CAP_USD`, `GLOBAL_DAILY_CEILING_USD` and
+    `DEBATE_ROUND_MAX_TOKENS` all passed the gate despite being constants that
+    `Settings` cannot read from the environment at all — and `.env.example`
+    already mentions `GLOBAL_DAILY_CEILING_USD` in prose.
+
+    What turns it red: widen `_is_read_anywhere` back to a free-text search.
+    """
+    fields = {name.upper() for name in Settings.model_fields}
+    src = _src_text()
+
+    # 1. A hardcoded constant is NOT an environment read, even though its name
+    #    certainly appears in src/.
+    for constant in ("DAILY_CAP_USD", "GLOBAL_DAILY_CEILING_USD"):
+        assert re.search(rf"(?<![A-Za-z0-9_]){constant}(?![A-Za-z0-9_])", src), (
+            f"{constant} no longer appears in src/ at all, so it cannot "
+            f"demonstrate the free-text trap this test guards"
+        )
+        assert not _is_read_anywhere(constant, field_names=fields, src_text=src), (
+            f"{constant} was accepted as a documentable knob, but it is a "
+            f"hardcoded constant with no os.environ read — documenting it "
+            f"would be silently discarded by Settings(extra='ignore')"
+        )
+
+    # 2. A name that appears ONLY in a comment must not vouch for itself.
+    assert not _is_read_anywhere(
+        "OBSOLETE_KNOB_XYZ",
+        field_names=fields,
+        src_text="# historical note: OBSOLETE_KNOB_XYZ was removed in 2025\n",
+    )
+
+    # 3. Positive partner: a genuine os.environ read IS recognised, so the
+    #    tightened rule has not become too strict to be true.
+    assert _is_read_anywhere("QUORUM_TOKEN_SECRET", field_names=fields, src_text=src), (
+        "QUORUM_TOKEN_SECRET is read via os.environ.get in config.py but the "
+        "gate no longer recognises it"
+    )
+    assert _env_names_read_in_src(src), "no os.environ reads found in src/ at all"

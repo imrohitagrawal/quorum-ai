@@ -1383,11 +1383,13 @@ class EvalJudgeService:
 
     def evaluate(self, evidence: JudgeEvidence) -> EvalJudgeVerdict | None:
         self.last_usage = None
-        if not _judge_enabled():
+        # The SAME predicate as the request-path gate and /status.judge_enabled.
+        # This site used to re-implement the two-value rule inline; adversarial
+        # review deleted its model-id half and NO test in the repo went red, so
+        # "one predicate" was three copies, one of them unguarded.
+        if not judge_configured():
             return None
         model_id = settings.quorum_eval_judge_model_id
-        if not model_id:
-            return None
         system_prompt, user_prompt = build_judge_prompt(evidence)
         try:
             result = provider_execution_service.call_with_prompt(

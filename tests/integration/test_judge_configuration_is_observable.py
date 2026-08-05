@@ -34,18 +34,26 @@ provider seam is never reached because no test here lets a judge call happen.
 
 from __future__ import annotations
 
+import json
 from typing import Any
 from uuid import UUID, uuid4
 
 import pytest
 from fastapi.testclient import TestClient
+from tests.unit.test_evaluation_judge import VALID_VERDICT, _evidence
 
 from product_app import query_runs as qr
 from product_app import run_history_store
 from product_app.config import settings
 from product_app.debate import debate_event_recorder
+from product_app.evaluation import EvalJudgeService
 from product_app.main import app
-from product_app.providers import InitialAnswerStatus, provider_event_recorder
+from product_app.providers import (
+    InitialAnswerStatus,
+    LiveProviderResult,
+    provider_event_recorder,
+    provider_execution_service,
+)
 from product_app.query_runs import query_run_repository
 from product_app.safety import WARNING_VERSION, WarningType
 from product_app.synthesis import synthesis_event_recorder
@@ -232,3 +240,48 @@ def test_the_reported_state_matches_the_real_request_path_gate(
             f"would {'' if gate_would_judge else 'NOT '}judge. The operator-visible "
             f"signal has drifted from the behaviour it describes."
         )
+
+
+@pytest.mark.parametrize(("key", "model_id", "expected"), _COMBINATIONS)
+def test_the_judge_service_itself_uses_the_same_predicate(
+    monkeypatch: pytest.MonkeyPatch, key: str, model_id: str, expected: bool
+) -> None:
+    """RED IF: ``EvalJudgeService.evaluate`` re-implements the two-value rule.
+
+    There were THREE copies of "is the judge configured?": the request-path
+    gate, ``/status``, and this service. Adversarial review deleted the
+    model-id half of THIS one and the entire suite stayed green — so the
+    "single predicate" claim was false and this site was the unguarded copy.
+    It now calls ``judge_configured()`` like the other two, and this test is
+    what keeps it that way.
+
+    Asserts on the PROVIDER SEAM, not just the return value: the thing that
+    costs money is the call, so "returns None" is not enough — nothing may
+    reach the provider when the judge is not fully configured.
+
+    What turns it red: restore a separate model-id check here, then delete it
+    (the mutation that previously went unnoticed); or gate this site on the
+    key alone.
+    """
+    _configure(monkeypatch, key=key, model_id=model_id)
+
+    calls: list[dict[str, Any]] = []
+
+    def _seam(**kwargs: Any) -> LiveProviderResult:
+        calls.append(kwargs)
+        return LiveProviderResult(answer_text=json.dumps(VALID_VERDICT), sources=[], usage=None)
+
+    monkeypatch.setattr(provider_execution_service, "call_with_prompt", _seam)
+
+    verdict = EvalJudgeService().evaluate(_evidence())
+
+    assert (verdict is not None) is expected, (
+        f"EvalJudgeService returned {verdict!r} for "
+        f"key={'set' if key else 'empty'}/model={'set' if model_id else 'empty'}; "
+        f"expected a verdict: {expected}"
+    )
+    assert (len(calls) == 1) is expected, (
+        f"the paid provider seam was called {len(calls)} time(s) for "
+        f"key={'set' if key else 'empty'}/model={'set' if model_id else 'empty'}; "
+        f"a judge that is not fully configured must spend nothing"
+    )

@@ -5,15 +5,25 @@ since the default in production is False. Tests that exercise the
 session path (cookie + CSRF) should NOT use this fixture; the
 CSRF enforcement tests explicitly rely on the cookie path.
 
-Also confirms the runtime environment is "local" before any tests
-import the config, so the production guards do not trigger.
+The suite runs as runtime environment "local", so the production guards
+do not trigger. That comes from the FIELD DEFAULT
+(``RuntimeEnvironment.LOCAL``), not from anything set here — see below.
 """
 
 from __future__ import annotations
 
 import os
 
-# Set the test environment BEFORE importing any product_app modules.
+# ``ENVIRONMENT`` is read by NOTHING, and this line has always been a no-op.
+# The field is ``runtime_environment``, so the variable pydantic-settings
+# looks for is ``RUNTIME_ENVIRONMENT``; ``Settings`` sets ``extra="ignore"``,
+# which silently discards this one. MEASURED 2026-08-05: a .env containing
+# ``ENVIRONMENT=production`` yields ``runtime_environment=local``.
+# The docstring above used to claim this line "confirms the runtime
+# environment is local". It does not — the field default does.
+# Kept, labelled, because deleting it changes nothing and the label stops the
+# next reader copying the wrong variable name. Setting ``RUNTIME_ENVIRONMENT``
+# here WOULD be a real change and is deliberately not done.
 os.environ.setdefault("ENVIRONMENT", "local")
 
 # Enable the legacy X-Account-Id header for tests that need to bypass

@@ -6,8 +6,12 @@ Accepted — 2026-08-05 (config-discoverability work package; issues #216, #110)
 
 ## Context
 
-The optional Layer-B LLM-as-judge (`evaluation.py`) is off in every
-environment. Turning it on takes two Fly secrets and no deploy:
+The optional Layer-B LLM-as-judge (`evaluation.py`) was off everywhere when
+this was written: `fly.toml` sets neither judge variable and both `Settings`
+defaults are `""` (`config.py:136,140`). Whether a *Fly secret* was ever set is
+not answerable from the repo — it took `fly secrets list -a quorum-ai`, which
+on 2026-08-05 listed five secrets and neither judge name. Turning it on takes
+two Fly secrets and no deploy:
 
 ```bash
 fly secrets set QUORUM_EVAL_JUDGE_API_KEY=... QUORUM_EVAL_JUDGE_MODEL_ID=... -a quorum-ai
@@ -36,10 +40,27 @@ itself reached only from `POST ''`. **No GET or DELETE route reaches any
 ledger writer.** So while the judge is on, the daily spend the app reports is
 lower than the money actually spent, by an amount that scales with *reads*.
 
-Issue #216 is exactly (2)+(3). It has been latent since the judge shipped,
-because the judge has never been on anywhere. The question this ADR settles is
-what happens the first time somebody switches it on — which the live-validation
-work package was about to ask an operator to do.
+Issue #216 is exactly (2)+(3). It was latent while the judge was off. The
+question this ADR settles is what happens when somebody switches it on.
+
+**It has since been switched on, and this ADR's own recommendation was
+followed.** On 2026-08-05 both judge secrets were set in production for a
+watched window, one live run was executed, and the judge was turned off again.
+What that measured, and what no hermetic test could have:
+
+- The judge ran and cost **$0.0109** on a **$0.0767** run — 14% of the bill.
+- It appears in the user-visible cost breakdown as its own `kind: "judge"`
+  line, so its cost is NOT invisible in the UI. Only the *ledger* misses it.
+- Repeated `GET`s of the same run did **not** refire it: the memo held and
+  `actual_cost_usd` stayed `0.0767` across three reads. So #216 needs 512 runs
+  of churn (or a restart) to bite — on a low-traffic deployment it is latent
+  in practice, not merely in principle. That nuance matters for its priority
+  and was not previously recorded.
+- The verdict changed nothing a user can see: trust `band` stayed
+  `"unverified"`, `score` stayed `null`, `support_verified` stayed `false`.
+  The run paid for a judge and still displayed "citations were not verified
+  against their sources". Filed separately — it is a defect in the judge's
+  own value, not in this ADR's subject.
 
 ## Decision
 
@@ -97,9 +118,12 @@ implausibly low `global_daily_spend_usd` has the one field that explains it.
   watched window**, and `fly secrets unset QUORUM_EVAL_JUDGE_API_KEY
   QUORUM_EVAL_JUDGE_MODEL_ID` afterwards. OpenRouter's own
   `GET /api/v1/key` usage figure is the meter that does not under-report.
-- `judge_enabled` is a new key on a public payload. `/status` is
-  `additionalProperties: true` in `openapi.yaml` and its contract test uses a
-  superset check, so adding it breaks no consumer.
+- `judge_enabled` is a new key on a public payload. `/status`'s response
+  schema is `additionalProperties: true` with no `required` keys
+  (`openapi.yaml`), and the return annotation is `dict[str, object]`, so the
+  byte-exact `make openapi-check` drift guard does not move. **No test in the
+  repo pins `/status`'s key set at all** — an earlier draft of this line
+  claimed a contract test did a "superset check"; there is no such test.
 - `_judge_enabled()` (key only) survives as the narrower internal predicate;
   callers that mean "can a judge call happen" now use `judge_configured()`.
   Reporting the key-only state as "on" would have been worse than reporting
