@@ -2,9 +2,23 @@
 
 > One question. Four models. One answer you can verify.
 
-Quorum-AI runs your question against four LLMs in parallel, has them critique one another, and returns a single answer with explicit consensus, disagreement, source support, uncertainty, and recommendation. Cost is shown before the run starts; nothing executes without confirmation. Results are ephemeral.
+Quorum-AI runs your question against four LLMs in parallel, has them critique one another, and returns a single answer with explicit consensus, disagreement, source support, uncertainty, and recommendation. Cost is estimated before execution; higher-cost runs require confirmation. Results are ephemeral.
 
-The product brief that drives the brand, lede, and copy decisions lives at [docs/PRODUCT_BRIEF.md](docs/PRODUCT_BRIEF.md). The architecture, requirements, and ops docs are in [docs/](docs/); the dev history behind the security/quality pass is in this README and in the [plan file](.claude/plans/is-there-a-better-floating-adleman.md).
+**Live workspace:** [quorum.stackclimb.com](https://quorum.stackclimb.com) —
+[`/ready`](https://quorum.stackclimb.com/ready) reports whether execution is live
+or degraded. Cost controls gate every run, with explicit approval required for
+higher-cost requests.
+
+**Contribute:** read the account-level
+[CONTRIBUTING.md](https://github.com/imrohitagrawal/.github/blob/main/CONTRIBUTING.md),
+then use [Discussions](https://github.com/imrohitagrawal/quorum-ai/discussions)
+for questions and architectural ideas or
+[Issues](https://github.com/imrohitagrawal/quorum-ai/issues) for reproducible
+defects and accepted work.
+
+The product brief is in [docs/PRODUCT_BRIEF.md](docs/PRODUCT_BRIEF.md). Architecture,
+requirements, operations, security, and evaluation evidence are indexed under
+[docs/](docs/).
 
 ---
 
@@ -75,22 +89,6 @@ Observability details live in [`docs/80-observability.md`](docs/80-observability
 
 ---
 
-## UI/UX Documentation
-
-Comprehensive UI/UX audit and improvement documentation:
-
-- **[UI_UX_Audit_Report.md](UI_UX_Audit_Report.md)** — Complete audit findings with 53 actionable items across 10 priority categories (accessibility, performance, typography, color, forms, animation, navigation, and more). Includes test cases derived from audit findings and success metrics for tracking improvements.
-
-- **[UI_Fix_Plan.md](UI_Fix_Plan.md)** — Detailed 4-phase implementation plan for systematic UI improvements:
-  - Phase 1: Critical Issues (accessibility & performance)
-  - Phase 2: High Priority (layout & typography)
-  - Phase 3: Medium Priority (color & forms)
-  - Phase 4: Low Priority (polish & structure)
-
-These documents enable systematic UI improvements with clear prioritization, ownership, and tracking.
-
----
-
 ## Architecture (one-screen view)
 
 The full architecture document is at [docs/20-architecture.md](docs/20-architecture.md) with C4 diagrams in [diagrams/](diagrams/). The high-level shape:
@@ -136,7 +134,7 @@ A few non-obvious properties that are worth a closer look:
 - **Live-readiness smoke-probe as a four-state machine.** Most apps do a single boolean "is the key set?" check. This one logs at WARNING whenever a degraded state is detected and exposes a JSON envelope on `/ready` so an external monitor can observe the same state.
 - **Drift detection over a static source-of-truth.** The architecture is deliberate: the four model ids in `DEFAULT_MODEL_IDS` are the *what we ship*; the live catalog is the *what's available now*. The drift check surfaces the gap, it doesn't auto-correct.
 - **Redaction as test-pinned contract.** A static-analysis-style set of tests (`tests/security/test_release_security_redaction.py`) asserts that secret-shaped strings never appear in any error log. The redaction coverage was extended in `50c64ea`.
-- **The 16-commit defense-in-depth "C-block" (C1–C16).** A focused security/quality pass that landed as 16 separate commits so each change is bisectable. The full plan is in [`.claude/plans/is-there-a-better-floating-adleman.md`](.claude/plans/is-there-a-better-floating-adleman.md).
+- **The 16-commit defense-in-depth "C-block" (C1–C16).** A focused security/quality pass that landed as 16 separate commits so each change is bisectable; the repository history preserves the implementation trail.
 
 ---
 
@@ -165,8 +163,12 @@ A few non-obvious properties that are worth a closer look:
 ├── docs/                         # Product, architecture, ops docs
 ├── diagrams/                     # C4 + Mermaid diagrams
 ├── openapi.yaml                  # Generated OpenAPI 3.1 spec
-└── .claude/plans/                # Working plans, including the C-block
 ```
+
+Internal design-review history remains available in
+[`UI_UX_Audit_Report.md`](UI_UX_Audit_Report.md) and
+[`UI_Fix_Plan.md`](UI_Fix_Plan.md); it is planning evidence, not a statement that
+every proposed UI change has shipped.
 
 ---
 
