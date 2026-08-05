@@ -58,9 +58,7 @@ def _vendored_files() -> list[Path]:
     app's own origin — so ``script-src 'self'`` permits it — while this file
     reported ``6 passed``. Reproduced here before the fix; it now fails.
     """
-    return sorted(
-        p for p in VENDOR_DIR.rglob("*") if p.is_file() and p.name not in _NOT_PAYLOAD
-    )
+    return sorted(p for p in VENDOR_DIR.rglob("*") if p.is_file() and p.name not in _NOT_PAYLOAD)
 
 
 def _sha256(path: Path) -> str:
@@ -231,6 +229,7 @@ def test_vendored_scripts_are_served_from_this_repo_not_a_cdn(name: str) -> None
     or imports over the network.
     """
     text = (VENDOR_DIR / name).read_text(encoding="utf-8", errors="replace")
+
     # `import(` / `importScripts(` with an absolute URL, or a script element
     # pointed at another origin. Deliberately narrow: matching every "https://"
     # would fire on the licence banner and on documentation URLs in comments.

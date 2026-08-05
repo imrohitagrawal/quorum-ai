@@ -169,10 +169,24 @@ Note also that "byte-identical" is after a normalisation that deletes every
 newline, which is doing real work: `markdown-it` emits `<br>\n` where the old
 formatter emitted `<br>`.
 
-So the Linux baselines need re-seeding via
-`.github/workflows/seed-visual-baselines.yml`, and the human-reviewable diff is
-one list indent. `--update-snapshots` was NOT used (AGENTS.md 13e — the darwin
-baselines are dev-only and fail 8/8 on clean `main` anyway).
+**The Linux baselines did NOT need re-seeding, and predicting that they would
+was wrong.** `seed-visual-baselines.yml` was dispatched against the branch
+(run `31035906943`), ran **242 tests** with `--update-snapshots` — including
+both `visual-snapshots` cases and all six `trust-score-visual` ones — and its
+commit step printed **"No baseline changes to commit."** Not one PNG changed.
+
+The reason is in the spec, and it is worth knowing before predicting a baseline
+move again: `visual-snapshots.spec.ts` captures `fullPage: true` with
+`maxDiffPixelRatio: 0.01`. One extra list indent on a 1440x3000-ish page is far
+under 1% of pixels, and Playwright's update mode does not rewrite a snapshot
+that already matches within tolerance. The DOM difference is real and measured;
+it is simply below the gate's threshold.
+
+So the earlier sentence here — "expect to re-seed" — was a prediction from a
+DOM diff, not a measurement of the gate. The DOM diff was right; the conclusion
+drawn from it was not. `--update-snapshots` was never run locally (AGENTS.md
+13e — the darwin baselines are dev-only and fail 8/8 on clean `main` anyway);
+the seed workflow is the sanctioned way and it reported no change.
 
 ### 6. The fixture gains the shapes that leaked
 
@@ -203,9 +217,11 @@ on one surface so the whole corpus can be swept without a builder per case.
   in `git show e2a39aa:src/product_app/static/app.js`, the four inline helpers
   total 129, not 206. Recorded because this ADR's whole point is that inherited
   figures get re-run.
-- **The visual-baseline lane must be re-seeded before merge.** That is a CI
-  workflow run plus human review of one changed indent; it cannot be done
-  locally.
+- **The visual-baseline lane needed NO re-seeding** — measured, not predicted:
+  the seed workflow regenerated all eight baselines and none changed, because
+  the one DOM difference is under the lane's `maxDiffPixelRatio: 0.01`. An
+  earlier draft of this ADR said re-seeding was required; that was a prediction
+  from the DOM diff and it was wrong.
 - **A version bump of `markdown-it` needs `markdown-corpus.spec.ts` run**, not
   just the checksum updated: deviation 3 depends on internal API.
 - **`inlineListMarkers` survives** as the one piece of hand-written Markdown
