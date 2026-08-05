@@ -87,11 +87,16 @@ success can clear and nothing resets, exposed as
 ``/status``'s ``feedback_lost_billed_writes``. A counter cannot be masked; a
 stamp can. Both are asserted below, including the masking shape itself.
 
-**LOUD ONLY — no request-behaviour change.** Nothing here denies a request or
-moves ``threshold_action``; the fail-open policy is a separate decision. The cap
-stays disarmed under the fault, it just stops being *silent*. So the money tests
-assert the returned ``CostEstimate`` is field-for-field identical with and
-without the fault, and assert on *log records* and ``/status`` for the loudness.
+**LOUD, AND NOW SPENDING NOTHING.** Nothing here denies a request or moves
+``threshold_action`` — that is still the fail-closed policy, still off by
+default. But **ADR-0016 superseded the "no behaviour change" half of this
+paragraph**: a run priced against a ledger nobody can meter now carries
+``spend_metering_unavailable`` and is degraded to local simulation, so the
+unmeasurable window costs $0 instead of an unmetered amount. The money tests
+therefore assert the returned ``CostEstimate`` is field-for-field identical
+with and without the fault **except that one flag**, which they assert in both
+directions, and still assert on *log records* and ``/status`` for the
+loudness.
 
 TIMING. sqlite3's busy timeout defaults to 5.0 s. :func:`fast_busy_timeout` cuts
 it to 0.25 s by wrapping ``sqlite3.connect``; the lock itself stays real, only
@@ -896,16 +901,25 @@ def test_every_fault_shape_disarms_the_cap_and_says_so(
             store.close()
 
 
-def test_the_lost_write_signal_does_not_change_the_returned_estimate(
+def test_the_lost_write_signal_changes_exactly_one_field_on_the_estimate(
     tmp_path: Path,
     restore_store: None,
 ) -> None:
-    """No behaviour change, asserted field-by-field rather than promised.
+    """ADR-0016. RED IF the lost-write path stops flagging the estimate for
+    degrade, or starts changing anything else about it.
 
     The same call against a healthy store whose ledger is empty, and against a
     read-only store whose ledger is empty *because five charges were swallowed*,
-    must produce the identical ``CostEstimate`` — every field except the
-    ``confirmation_token``, which is randomised per mint by construction.
+    must produce ``CostEstimate``s differing in EXACTLY one field.
+
+    This asserted they were IDENTICAL until ADR-0016 — ADR-0004's "loud log
+    only, no behaviour change" posture, now superseded: a run priced against a
+    ledger nobody can meter degrades to local simulation and spends $0. The
+    field-by-field comparison is kept and does MORE work than before, because
+    it still proves the fault does not quietly move the price, the threshold,
+    the breakdown or the reasons — only the degrade flag.
+    ``confirmation_token`` is excluded because it is randomised per mint by
+    construction.
     """
     _skip_if_root()
     healthy_db = tmp_path / "healthy.sqlite3"

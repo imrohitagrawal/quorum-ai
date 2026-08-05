@@ -783,9 +783,12 @@ class CostEstimationService:
                 # boolean.
                 assert store is not None
                 already_spent = store.daily_spend_for(account_id)
-                # Same unit rule as the cumulative rail above: ``daily_spend_for``
-                # sums ``estimated_cost_usd``, so the addend is the point
-                # estimate. With ``bound`` here the cap admitted
+                # Same unit rule as the cumulative rail above. ``daily_spend_for``
+                # books each run at ``estimated_cost_usd`` and then CORRECTS it
+                # to the measured actual once the run ends (#255/ADR-0016), so
+                # the meter is a ledger of real spend and the addend for a run
+                # that has not happened yet is still the point estimate — the
+                # only figure that exists before the run does. With ``bound`` here the cap admitted
                 # ``floor((CAP - bound) / unit) + 1`` runs instead of
                 # ``floor(CAP / unit)`` — one run of headroom permanently
                 # unusable — and any run whose BOUND alone exceeded the cap was

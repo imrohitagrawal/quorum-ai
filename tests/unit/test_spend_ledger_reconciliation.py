@@ -398,7 +398,16 @@ def test_concurrent_charges_never_exceed_the_daily_cap(store: FeedbackStore, thr
     $0.2344 (1.17x the $0.20 cap) and 32 booked $0.9376 (**4.69x**).
     """
     booked = _race(store, threads=threads, atomic=True)
-    assert booked <= DAILY_CAP_USD
+    # Literals on both sides, not ``DAILY_CAP_USD``. The harness is fed that
+    # constant as its cap, so asserting the result against the same constant
+    # would move with it and could never catch the cap itself being changed
+    # (rule 7a). $0.20 is the shipped cap and $0.02 the shipped UNIT, so ten
+    # charges fit exactly and an eleventh must not.
+    assert booked <= Decimal("0.20")
+    assert booked == Decimal("0.20"), "the cap should be reached exactly, not undershot"
+    assert Decimal("0.20") == DAILY_CAP_USD, (
+        "this test's literals track the shipped cap; if the cap moves, re-derive them"
+    )
 
 
 @pytest.mark.parametrize("threads", [16, 32])

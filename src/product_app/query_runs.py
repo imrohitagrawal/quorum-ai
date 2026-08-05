@@ -1552,44 +1552,56 @@ def _start_reserved_query_run(
     # the ``except`` below, which VOIDS the charge if the handover fails —
     # a compensating event, because the sink is append-only.
     response = _create_response_for(query_run)
-    charge = _record_run_billing(
-        session=session, query_run=query_run, cost_decision=cost_decision, client_ip=client_ip
-    )
-    if charge is ChargeOutcome.OVER_DAILY_CAP:
-        # The cap was crossed between this run's estimate and its charge — by
-        # another request for the same account that got there first. Nothing
-        # was written and nothing has run, so refuse with the same 402 the
-        # estimate-time check would have produced.
-        _abandon_unstarted_run(query_run.query_run_id)
-        raise HTTPException(
-            status_code=status.HTTP_402_PAYMENT_REQUIRED,
-            detail={
-                "code": "COST_LIMIT_EXCEEDED",
-                "message": (
-                    "Account has reached its daily spend cap; no further "
-                    "queries can be accepted until the window resets."
-                ),
-            },
-        )
-    if charge is ChargeOutcome.OVER_GLOBAL_CEILING:
-        # The deployment-wide ceiling degrades rather than blocks. Mark the
-        # stored run so the worker simulates the whole thing — the same signal
-        # ``estimate`` sets when it sees the ceiling, read at the one place
-        # that acts on it (``_execute_query_run``).
-        query_run = query_run_repository.mark_global_ceiling_reached(query_run.query_run_id)
-        response = _create_response_for(query_run)
-    elif charge is ChargeOutcome.METERING_UNAVAILABLE:
-        # ADR-0016: the ledger went untrustworthy between this run's estimate
-        # and its charge. Same degrade, different cause — and a separate flag,
-        # so the run is never reported as having hit the spend ceiling.
-        query_run = query_run_repository.mark_spend_metering_unavailable(query_run.query_run_id)
-        response = _create_response_for(query_run)
+    # The charge is INSIDE the try, not before it. Adversarial review pointed
+    # out that everything between the durable insert and ``Thread.start()``
+    # runs unprotected otherwise — including the in-memory ring append inside
+    # ``try_record_run_charge`` — so an exception there would leave a charge on
+    # the books for a run that never started, with nothing to void it. Not
+    # demonstrated reachable; closed anyway, because it costs one indent.
     try:
+        charge = _record_run_billing(
+            session=session, query_run=query_run, cost_decision=cost_decision, client_ip=client_ip
+        )
+        if charge is ChargeOutcome.OVER_DAILY_CAP:
+            # The cap was crossed between this run's estimate and its charge —
+            # by another request for the same account that got there first.
+            # Nothing was written and nothing has run, so refuse with the same
+            # 402 the estimate-time check would have produced.
+            _abandon_unstarted_run(query_run.query_run_id)
+            raise HTTPException(
+                status_code=status.HTTP_402_PAYMENT_REQUIRED,
+                detail={
+                    "code": "COST_LIMIT_EXCEEDED",
+                    "message": (
+                        "Account has reached its daily spend cap; no further "
+                        "queries can be accepted until the window resets."
+                    ),
+                },
+            )
+        if charge is ChargeOutcome.OVER_GLOBAL_CEILING:
+            # The deployment-wide ceiling degrades rather than blocks. Mark the
+            # stored run so the worker simulates the whole thing — the same
+            # signal ``estimate`` sets when it sees the ceiling, read at the one
+            # place that acts on it (``_execute_query_run``).
+            query_run = query_run_repository.mark_global_ceiling_reached(query_run.query_run_id)
+            response = _create_response_for(query_run)
+        elif charge is ChargeOutcome.METERING_UNAVAILABLE:
+            # ADR-0016: the ledger went untrustworthy between this run's
+            # estimate and its charge. Same degrade, different cause — and a
+            # separate flag, so the run is never reported as having hit the
+            # spend ceiling.
+            query_run = query_run_repository.mark_spend_metering_unavailable(query_run.query_run_id)
+            response = _create_response_for(query_run)
         Thread(
             target=_execute_query_run_with_semaphore_release,
             args=(query_run.query_run_id, session.account_id, capacity_permit),
             daemon=True,
         ).start()
+    except HTTPException:
+        # The 402 above. Nothing was charged on that path, so there is nothing
+        # to void — and voiding would write a compensating event for a charge
+        # that does not exist.
+        raise
     except BaseException:
         # F-01: a run whose worker was never started must not be billed and
         # must not keep the account's single active-run slot — the same

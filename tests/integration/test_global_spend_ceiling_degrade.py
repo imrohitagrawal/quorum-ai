@@ -244,6 +244,13 @@ def test_an_unmeterable_ledger_forces_local_simulation_and_calls_no_provider(
     """
     monkeypatch.setattr(settings, "openrouter_live_execution_enabled", True)
     monkeypatch.setattr(settings, "openrouter_api_key", "sk-test-fake-key")
+    # Pin the premise. ``configure(None)`` makes the ledger unmeterable, but the
+    # request path also kicks off a BACKGROUND reconnect (#123); if that wins
+    # the race it reopens a real store, ``may_be_metered`` flips True and the
+    # run goes live — this test would then fail for a reason unrelated to the
+    # degrade. It lost 20/20 in a flake scan, so it is not flaky today, but the
+    # mechanism is real and a test should not depend on winning a race.
+    monkeypatch.setattr(settings, "store_reconnect_enabled", False)
 
     calls: list[str] = []
     monkeypatch.setattr(

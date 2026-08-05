@@ -885,10 +885,19 @@ class FeedbackStore:
 
         ONE ``cutoff`` is correct for all three queries, and that is not an
         accident of convenience: a correction is always written AFTER the charge
-        it corrects, so ``correction.recorded_at >= charge.recorded_at``. A
-        correction can therefore never survive its own charge falling out of the
-        window, and a charge inside the window can never have its correction
-        outside it.
+        it corrects, so ``correction.recorded_at >= charge.recorded_at`` HOLDS
+        WHENEVER THE CLOCK IS MONOTONIC.
+
+        It is not an impossibility proof, and an earlier revision of this
+        docstring wrongly claimed it was. Both events stamp wall-clock
+        ``datetime.now(UTC)``, so a BACKWARD step between them — NTP
+        correction, VM resync, snapshot restore — can leave a charge inside the
+        window whose correction falls outside it. Demonstrated in adversarial
+        review: the reconciliation was written, and ``daily_spend_for`` still
+        reported the estimate. The error is bounded by one run's delta and
+        lands in the under-metering direction, which is why it is accepted
+        rather than fixed by stamping corrections with the charge's own
+        timestamp.
 
         A charge with a NULL ``query_run_id`` cannot be keyed, so it can be
         neither reconciled nor voided and is summed at its estimate. That is
@@ -1062,6 +1071,16 @@ class FeedbackStore:
         ``self._lock`` — the same discipline, and for the same reason, as
         :meth:`try_record_session_mint`, which is the store's other
         check-and-record.
+
+        KNOWN TRADE-OFF, accepted rather than hidden. :meth:`record` promises to
+        log OUTSIDE the lock, because a logging handler can block; called from
+        here it logs while THIS method still holds the RLock, so on the
+        lost-billed-write path (the longest message in the codebase) the store
+        is serialised for the duration of the emit. Measured by adversarial
+        review. It is not fixed by releasing the lock around the log: that
+        reopens the exact check-and-insert window this method exists to close.
+        It costs a bounded stall on an already-degraded path, and the
+        alternative costs correctness.
 
         ORDER MATTERS. The daily cap is tested first because it REFUSES the
         run, and a refused run must not also be reported as degraded. The

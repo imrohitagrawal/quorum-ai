@@ -8,17 +8,20 @@ database is locked``; ``product_app.main`` catches it and the app boots with
 skipped** — measured A/B on the same account at the cap: BLOCK with the store,
 ALLOW plus a minted confirmation token without it.
 
-**The decision taken for this change is LOUD ONLY, no behaviour change.** It
-came out of the working session on issue #101's "operator decision required"
-item (item 3), where fail-closed was considered and declined: denying every
-priced request on a storage fault is the worse outage. That decision has **not
-yet been recorded on the issue** — #101 carries no comment stating it and no PR
-references it — so this docstring and the ``costs.py`` comment are currently its
-only written form. The cap stays skipped when the store is down; it stops being
-*silent*. So every test here that touches the money path asserts the returned
-``CostEstimate`` is byte-identical to the one a healthy-store call produces,
-and asserts on the *log records* for the loudness. A test that made the
-degraded path BLOCK would be testing a policy that was explicitly declined —
+**The decision was LOUD ONLY, no behaviour change — and ADR-0016 (2026-08-06)
+superseded that.** It came out of the working session on issue #101's "operator
+decision required" item (item 3), where fail-closed was considered and
+declined: denying every priced request on a storage fault is the worse outage.
+That reasoning still stands, and fail-closed is still declined.
+
+What changed is the third option neither #101 nor ADR-0004 weighed: the request
+is still served and still not blocked, but the run is DEGRADED to local
+simulation, so an unmeterable window costs $0 rather than an unmetered amount.
+Every test here that touches the money path therefore asserts the returned
+``CostEstimate`` is byte-identical to a healthy-store call **except
+``spend_metering_unavailable``**, asserted in both directions, and still
+asserts on the *log records* for the loudness. A test that made the degraded
+path BLOCK would still be testing a policy that was explicitly declined —
 reopen the decision first, do not change it here.
 
 Two things this file pins that nothing else in the tree did:
