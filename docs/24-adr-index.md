@@ -18,6 +18,7 @@ ways, so the record shows what was believed on a date and what replaced it.
 | [ADR-0010](adr/0010-an-answer-nobody-asked-for-is-not-evidence.md) | an answer produced without invoking a model is not evidence of agreement | Architecture | Accepted — 2026-08-04 (issue #247, part 2 of 2; part 1 is ADR-0009) |
 | [ADR-0011](adr/0011-block-structure-belongs-to-the-block-renderer.md) | block structure belongs to the block renderer, and an inline surface renders the marker instead | Architecture | Accepted — 2026-08-04 (issue #120) |
 | [ADR-0012](adr/0012-record-the-billing-evidence-before-reclassifying-a-5xx.md) | record the billing evidence for a provider error, and do not reclassify a 5xx yet | Architecture | Accepted — 2026-08-05 (issue #105) |
+| [ADR-0013](adr/0013-a-paid-subsystem-may-not-be-enabled-invisibly.md) | A paid subsystem may not be enabled invisibly | Architecture | Accepted — 2026-08-05 (config-discoverability work package; issues #216, #110) |
 
 **This index was itself stale** until 2026-07-30: ADR-0002 had existed since
 2026-07-19 and was never listed here. A hand-maintained index is a derived fact

@@ -72,8 +72,8 @@ from product_app.evaluation import (
     PresentationConfidence,
     RunEvaluationResult,
     TrustScore,
-    _judge_enabled,
     evaluate_run,
+    judge_configured,
     presentation_confidence,
 )
 from product_app.feedback_store import record_event as _record_feedback_event
@@ -2492,7 +2492,7 @@ def _request_path_judge(query_run: QueryRun) -> _MemoisedRunJudge | None:
     ``QUORUM_EVAL_JUDGE_MODEL_ID`` are configured — gated HERE, before any
     judge object exists, so the OFF path builds no evidence and performs
     zero I/O (NFR-011/NFR-012), byte-identical to the pre-wiring behaviour.
-    Reuses ``_judge_enabled`` + ``EvalJudgeService``; no fork, no stub.
+    Reuses ``judge_configured`` + ``EvalJudgeService``; no fork, no stub.
 
     Even when configured, contentless or unsettled runs are never judged:
 
@@ -2513,7 +2513,9 @@ def _request_path_judge(query_run: QueryRun) -> _MemoisedRunJudge | None:
     answers; the run's own status/notice discloses what is missing. Pinned
     by ``test_a_timed_out_run_with_completed_answers_is_judged``.
     """
-    if not (_judge_enabled() and settings.quorum_eval_judge_model_id):
+    # ONE predicate, shared with ``/status.judge_enabled`` so the signal an
+    # operator reads cannot drift from the gate that spends the money.
+    if not judge_configured():
         return None
     if query_run.status in {QueryRunStatus.CANCELLED, QueryRunStatus.BLOCKED_BY_COST}:
         return None

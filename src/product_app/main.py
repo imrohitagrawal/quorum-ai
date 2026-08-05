@@ -53,6 +53,7 @@ from product_app.costs import (
     CHARS_PER_TOKEN,
     GLOBAL_DAILY_CEILING_USD,
 )
+from product_app.evaluation import judge_configured
 from product_app.feedback_store import FeedbackStore, get_store
 from product_app.feedback_store import configure as configure_feedback_store
 from product_app.logging_config import setup_json_logging
@@ -909,6 +910,20 @@ def status_snapshot() -> dict[str, object]:
         # this field.
         "global_daily_spend_usd": global_daily_spend_usd,
         "global_daily_ceiling_usd": str(GLOBAL_DAILY_CEILING_USD),
+        # Whether the optional, PAID Layer-B judge is configured. Until this
+        # field existed the judge could be switched on or off — by setting two
+        # Fly secrets — with NO external signal at all, and that is a money
+        # question rather than a nicety: issue #216 is latent only while the
+        # judge is off, because a judge call fired on a GET never reaches the
+        # daily spend ledger.
+        #
+        # STATE, never the values. Same discipline as ``error_tracking``: the
+        # key is a credential and the pinned model id is free recon on an
+        # unauthenticated endpoint. ``judge_configured`` is the SAME predicate
+        # ``query_runs._request_path_judge`` gates on, so this cannot drift
+        # from the behaviour it reports — and it is true only when BOTH the
+        # key and the model id are set, since a key alone runs no judge.
+        "judge_enabled": judge_configured(),
         "model_catalog_loaded": report.catalog_loaded,
         # Generic key on purpose (was ``sentry``): naming the vendor on an
         # unauthenticated endpoint is free recon for an attacker probing
