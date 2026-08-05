@@ -594,15 +594,24 @@ def test_a_backward_wall_clock_step_does_not_silence_the_bypass_error(
         assert len(_records(caplog, _COSTS_LOGGER, logging.ERROR)) == expected
 
 
-def test_the_bypass_log_does_not_change_the_returned_estimate(
+def test_a_bypassed_cap_changes_exactly_one_field_on_the_returned_estimate(
     tmp_path: Path,
     restore_store: None,
 ) -> None:
-    """No behaviour change, asserted field-by-field rather than promised.
+    """ADR-0016. RED IF the bypass stops flagging the estimate for degrade, or
+    starts changing anything else about it.
 
-    The same call, once with a healthy empty store and once with no store at
-    all, must produce the identical ``CostEstimate`` — every field except the
-    ``confirmation_token``, which is randomised per mint by construction.
+    Until ADR-0016 this asserted the two estimates were IDENTICAL — ADR-0004's
+    "loud log only, no behaviour change" posture. That is superseded: a run
+    priced against a ledger nobody can meter is degraded to local simulation,
+    so it spends $0 instead of an unmetered amount. Exactly one field carries
+    that decision.
+
+    The field-by-field comparison is kept and is doing MORE work than before:
+    it still proves the bypass does not quietly move the price, the threshold,
+    the breakdown or the reasons — only the degrade flag.
+    ``confirmation_token`` is excluded because it is randomised per mint by
+    construction.
     """
     db = tmp_path / "feedback_events.sqlite3"
     account_id = uuid4()
@@ -618,8 +627,12 @@ def test_the_bypass_log_does_not_change_the_returned_estimate(
 
     without_store = service.estimate(query_text=_QUERY, model_slots=_SLOTS, account_id=account_id)
 
-    ignore = {"confirmation_token"}
+    ignore = {"confirmation_token", "spend_metering_unavailable"}
     assert without_store.model_dump(exclude=ignore) == with_store.model_dump(exclude=ignore)
+    # The one field that MUST differ, asserted in both directions so the
+    # exclusion above cannot hide a flag that never gets set (rule 7).
+    assert with_store.spend_metering_unavailable is False
+    assert without_store.spend_metering_unavailable is True
     assert without_store.confirmation_token is not None
 
 

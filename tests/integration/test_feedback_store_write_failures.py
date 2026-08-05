@@ -931,8 +931,15 @@ def test_the_lost_write_signal_does_not_change_the_returned_estimate(
         if broken is not None:
             broken.close()
 
-    ignore = {"confirmation_token"}
+    ignore = {"confirmation_token", "spend_metering_unavailable"}
     assert degraded.model_dump(exclude=ignore) == control.model_dump(exclude=ignore)
+    # ADR-0016 (superseding ADR-0004): a failing ledger no longer leaves the
+    # estimate untouched. It flags the run for degrade-to-simulation, so the
+    # unmeasurable window costs $0. Asserted in both directions so the
+    # exclusion cannot hide a flag that is never set (rule 7); every other
+    # field is still pinned identical by the comparison above.
+    assert control.spend_metering_unavailable is False
+    assert degraded.spend_metering_unavailable is True
     # The exclusion above rests on a claim, so assert the claim rather than
     # restating it in prose: the token is randomised per mint
     # (``_mint_confirmation_token`` mixes ``secrets.token_hex(16)``), so two

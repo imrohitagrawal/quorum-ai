@@ -313,6 +313,24 @@ class CostEstimate(BaseModel):
     #: in. Defaults ``False`` so pre-existing ``CostEstimate(...)``
     #: constructions keep working.
     global_ceiling_reached: bool = False
+    #: The spend ledger could not be trusted when this run was priced, so
+    #: NEITHER rail could be tested. Like ``global_ceiling_reached`` this forces
+    #: the whole run into local simulation — spend goes to $0 for as long as the
+    #: fault lasts, which is what enforcing a cap has to mean when the cap
+    #: cannot be measured.
+    #:
+    #: A SEPARATE field, not a reuse of ``global_ceiling_reached``, because the
+    #: two causes are not the same and the product says different things about
+    #: them: that flag drives the operator-approved "#100 ceiling" banner copy
+    #: (``app.js`` ``computeDemoModeBannerCopy``), and a storage fault is not a
+    #: spend ceiling. Setting one to mean the other would put a false reason on
+    #: screen.
+    #:
+    #: ADR-0016 records this decision and supersedes ADR-0004, which chose to
+    #: fail OPEN here. ADR-0004 weighed exactly two options — refuse everyone
+    #: (402) or serve and log — and this is the third it did not consider:
+    #: serve, but spend nothing.
+    spend_metering_unavailable: bool = False
 
 
 class CostConfirmation(BaseModel):
@@ -601,6 +619,11 @@ class CostEstimationService:
                         ),
                     ],
                 )
+        # Set by the bypass branch below when the ledger cannot be metered, and
+        # carried onto the returned estimate so the run degrades to simulation
+        # (ADR-0016). Initialised HERE, outside the ``account_id is not None``
+        # block, because the field is on every estimate this method returns.
+        spend_metering_unavailable = False
         # Daily-cap guard. Defense-in-depth: even if a user stays
         # under the per-call thresholds AND under the in-memory
         # cumulative check, a patient attacker could trickle out one
@@ -701,14 +724,24 @@ class CostEstimationService:
             # money decision a pure function of the handle rather than of a
             # process-global flag written by two thread classes.
             if not feedback_ledger_may_be_metered(store):
-                # LOUD ONLY (issue #101's original decision): the request is
-                # NOT denied and ``threshold_action`` is NOT changed. Failing
-                # closed here is what ``daily_cap_fail_closed`` above turns on,
-                # deliberately off by default — see its comment in config.py.
-                # What matters is that we no longer PRETEND to meter: an
-                # untrustworthy ledger produces a loud bypass, not a
-                # confident-looking wrong number.
+                # LOUD, AND SPENDING NOTHING (ADR-0016, superseding ADR-0004).
+                # The request is still NOT denied and ``threshold_action`` is
+                # NOT changed — ``daily_cap_fail_closed`` above still selects
+                # the refuse-everyone posture and is still off by default. What
+                # changed is what an ALLOWED run then DOES: it is degraded to
+                # local simulation, so an unmeasurable window costs $0 instead
+                # of an unmetered amount bounded only by the in-memory rail.
+                #
+                # ADR-0004 weighed exactly two options, refuse or serve-and-log,
+                # and measured the first as "the whole product: every visitor
+                # refused". This is the third: serve, but spend nothing. It also
+                # removes the incoherence ADR-0004 itself named — the 25x-larger
+                # global rail fails open on the identical fault — because the
+                # SAME degrade now covers both.
+                #
+                # We still no longer PRETEND to meter: the bypass stays loud.
                 self._log_daily_cap_bypassed()
+                spend_metering_unavailable = True
             else:
                 # ``ledger_is_trustworthy`` is False for ``store is None``, so
                 # reaching here proves ``store`` is not None. Spelled out for
@@ -790,6 +823,7 @@ class CostEstimationService:
             reasons=reasons,
             breakdown=breakdown,
             global_ceiling_reached=global_ceiling_reached,
+            spend_metering_unavailable=spend_metering_unavailable,
         )
 
     def _log_daily_cap_bypassed(self) -> None:
@@ -1053,19 +1087,18 @@ class CostEstimationService:
 
         store = get_store()
         if not feedback_ledger_may_be_metered(store):
-            # No trustworthy ledger to be atomic against. Take the pre-existing
-            # non-atomic path so the charge is still attempted and still
-            # counted by ``lost_billed_writes`` if it fails.
+            # ADR-0016. There is no trustworthy ledger to be atomic against, so
+            # neither rail can be tested — and a rail that cannot be tested must
+            # not be spent through. Degrade to local simulation, which costs $0,
+            # rather than serve an unmetered live run (ADR-0004's old posture)
+            # or refuse every visitor (``daily_cap_fail_closed``).
+            #
+            # No charge is booked, for the same reason a ceiling-degraded run
+            # books none: the run spends nothing. So there is nothing here for
+            # ``lost_billed_writes`` to count either — the bypass ERROR is what
+            # tells the operator, and it still fires.
             self._log_daily_cap_bypassed()
-            self.record_guardrail_event(
-                account_id=account_id,
-                query_run_id=query_run_id,
-                estimated_cost_usd=estimated_cost_usd,
-                threshold_action=threshold_action,
-                confirmed=confirmed,
-                client_ip=client_ip,
-            )
-            return ChargeOutcome.RECORDED
+            return ChargeOutcome.METERING_UNAVAILABLE
         assert store is not None  # narrowed by feedback_ledger_may_be_metered
 
         event = CostGuardrailEvent(

@@ -896,6 +896,19 @@ class InMemoryQueryRunRepository:
             query_run.updated_at = datetime.now(UTC)
             return query_run
 
+    def mark_spend_metering_unavailable(self, query_run_id: UUID) -> QueryRun:
+        """Flag a run as degraded because the ledger cannot be metered (ADR-0016).
+
+        The sibling of :meth:`mark_global_ceiling_reached`, and deliberately a
+        SEPARATE flag: both force local simulation, but they are different
+        causes and the product must not report one as the other.
+        """
+        with self._lock:
+            query_run = self._query_runs[query_run_id]
+            query_run.cost_estimate.spend_metering_unavailable = True
+            query_run.updated_at = datetime.now(UTC)
+            return query_run
+
     def mark_global_ceiling_reached(self, query_run_id: UUID) -> QueryRun:
         """Flag a run as ceiling-degraded after its estimate was taken (#255).
 
@@ -1497,6 +1510,10 @@ def _start_reserved_query_run(
             )
         if charge is ChargeOutcome.OVER_GLOBAL_CEILING:
             query_run = query_run_repository.mark_global_ceiling_reached(query_run.query_run_id)
+        elif charge is ChargeOutcome.METERING_UNAVAILABLE:
+            query_run = query_run_repository.mark_spend_metering_unavailable(
+                query_run.query_run_id
+            )
         _execute_query_run(query_run.query_run_id, session.account_id)
         query_run = query_run_repository.get(query_run.query_run_id)
         # Legacy/test path runs inline (no safety wrapper), so persist the
@@ -1550,6 +1567,12 @@ def _start_reserved_query_run(
         # ``estimate`` sets when it sees the ceiling, read at the one place
         # that acts on it (``_execute_query_run``).
         query_run = query_run_repository.mark_global_ceiling_reached(query_run.query_run_id)
+        response = _create_response_for(query_run)
+    elif charge is ChargeOutcome.METERING_UNAVAILABLE:
+        # ADR-0016: the ledger went untrustworthy between this run's estimate
+        # and its charge. Same degrade, different cause — and a separate flag,
+        # so the run is never reported as having hit the spend ceiling.
+        query_run = query_run_repository.mark_spend_metering_unavailable(query_run.query_run_id)
         response = _create_response_for(query_run)
     try:
         Thread(
@@ -1939,7 +1962,14 @@ def _execute_query_run(query_run_id: UUID, account_id: UUID) -> None:
     # ``ProviderExecutionService._live_execution_enabled`` — rather than
     # inventing a second bypass. It does not affect the misconfiguration
     # check directly below, which reads ``settings.openrouter_api_key``.
-    if query_run.cost_estimate.global_ceiling_reached:
+    # ADR-0016 adds the second cause: a ledger that cannot be metered degrades
+    # the same way a reached ceiling does. Both mean "this run must not spend",
+    # and both reach it through the one already-tested no-live-key path rather
+    # than a second bypass.
+    if (
+        query_run.cost_estimate.global_ceiling_reached
+        or query_run.cost_estimate.spend_metering_unavailable
+    ):
         openrouter_key = ""
     if settings.openrouter_live_execution_enabled and not settings.openrouter_api_key:
         halted = query_run_repository.update_status(

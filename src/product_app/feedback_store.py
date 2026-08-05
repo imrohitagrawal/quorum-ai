@@ -105,6 +105,12 @@ class ChargeOutcome(StrEnum):
     #: caller must degrade the run to local simulation, which spends nothing —
     #: so there is no charge to book. See ``costs.GLOBAL_DAILY_CEILING_USD``.
     OVER_GLOBAL_CEILING = "over_global_ceiling"
+    #: The ledger cannot be trusted, so neither rail can be tested. Nothing was
+    #: written; the caller must degrade the run to local simulation. Distinct
+    #: from ``OVER_GLOBAL_CEILING`` because the CAUSE is different and the user
+    #: is told a different thing — a storage fault is not a spend ceiling.
+    #: See ADR-0016, which supersedes ADR-0004's fail-open posture.
+    METERING_UNAVAILABLE = "metering_unavailable"
 
 
 #: The event type that OPENS a run's charge, carrying the point estimate.
