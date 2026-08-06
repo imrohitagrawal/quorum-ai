@@ -2002,14 +2002,18 @@
     // The first version of this line said "This run cannot cost more than the
     // cap". Adversarial review refused it, correctly: replacing one absolute
     // guarantee with another is the same defect this change exists to fix.
-    // `max_cost_usd` prices FOUR stages — verified `by_stage` is
-    // `initial_answers, debate_round_1, debate_round_2, synthesis`, with no
-    // judge term — while the judge is a real paid call whose cost IS added to
-    // `actual_cost_usd`. So "cannot" is false the moment a judge is
-    // configured. It is $0/day today because `judge_enabled` is false, but a
-    // guarantee that holds only because a feature is switched off is not a
-    // guarantee, and nothing in the code ties the bound to the set of billable
-    // calls (that is #216). Say what is actually true: this is the priced
+    // UPDATED by #265. `max_cost_usd` used to price FOUR stages
+    // (`initial_answers, debate_round_1, debate_round_2, synthesis`) with no
+    // judge term, while the judge is a real paid call whose cost IS added to
+    // `actual_cost_usd` — so "cannot" was false the moment a judge was
+    // configured. The bound now prices the judge too (ADR-0017).
+    //
+    // The hedge STAYS anyway, because "cannot" is still not true: the bound
+    // caps every call's OUTPUT from an enforced cap, but nothing enforces the
+    // INPUT assumptions (`cost_system_prompt_tokens`,
+    // `cost_web_search_context_tokens` — see #268), and the judge's evidence
+    // `source_lines` are not bounded on the OpenRouter annotations path.
+    // Say what is actually true: this is the priced
     // worst case, and the mechanism that holds it.
     guarantee.textContent =
       "This is the worst case this run is priced at — each model's answer is " +
