@@ -36,6 +36,7 @@ from tests.integration.test_judge_request_path_wiring import (
     _enable_judge,
     _get_result,
     _judge_seam,
+    _live_terminal_run,
     _measured_run,
 )
 
@@ -311,8 +312,8 @@ def test_a_billed_judge_that_produced_no_verdict_is_visible_in_the_served_result
     with run_history_store.configure_for_tests():
         client = TestClient(app)
         account_id = uuid4()
-        body = _create_terminal_run(client, account_id)
-        result = _get_result(client, account_id, body["query_run_id"])
+        run_id = str(_live_terminal_run(account_id).query_run_id)
+        result = _get_result(client, account_id, run_id)
 
     evaluation = result["evaluation"]
     assert evaluation["trust"]["support_verified"] is False
@@ -347,8 +348,8 @@ def test_a_conforming_verdict_reports_the_verdict_status(
     with run_history_store.configure_for_tests():
         client = TestClient(app)
         account_id = uuid4()
-        body = _create_terminal_run(client, account_id)
-        result = _get_result(client, account_id, body["query_run_id"])
+        run_id = str(_live_terminal_run(account_id).query_run_id)
+        result = _get_result(client, account_id, run_id)
 
     assert result["evaluation"]["judge_status"] == JudgeCallOutcome.VERDICT.value
     assert result["evaluation"]["trust"]["support_verified"] is True
