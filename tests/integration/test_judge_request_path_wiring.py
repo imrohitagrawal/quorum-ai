@@ -150,8 +150,14 @@ def test_configured_judge_unlocks_numeric_score_in_served_projection(
     with run_history_store.configure_for_tests() as store:
         client = TestClient(app)
         account_id = uuid4()
-        body = _create_terminal_run(client, account_id)
-        result = _get_result(client, account_id, body["query_run_id"])
+        run = _live_terminal_run(account_id)
+        run_id = str(run.query_run_id)
+        result = _get_result(client, account_id, run_id)
+        # The pipeline used to write the durable row on its way to terminal; a
+        # repository-built run needs the same call made explicitly, so the
+        # "persisted row agrees with the served projection" half below compares
+        # two real records instead of passing on a missing one.
+        qr._persist_terminal_run(run.query_run_id)
 
         trust = result["evaluation"]["trust"]
         assert trust["support_verified"] is True
@@ -166,7 +172,7 @@ def test_configured_judge_unlocks_numeric_score_in_served_projection(
         assert calls[0]["model_id"] == "vendor/judge-model"
 
         # The persisted row agrees with the served projection (one engine).
-        row = store.get(body["query_run_id"])
+        row = store.get(run_id)
         assert row is not None and row.trust_json is not None
         assert row.trust_json["support_verified"] is True
         assert row.trust_json["score"] == trust["score"]
@@ -189,10 +195,10 @@ def test_judge_verdict_is_memoised_across_result_reads(
     with run_history_store.configure_for_tests():
         client = TestClient(app)
         account_id = uuid4()
-        body = _create_terminal_run(client, account_id)
-        first = _get_result(client, account_id, body["query_run_id"])
+        run_id = str(_live_terminal_run(account_id).query_run_id)
+        first = _get_result(client, account_id, run_id)
         for _ in range(4):
-            again = _get_result(client, account_id, body["query_run_id"])
+            again = _get_result(client, account_id, run_id)
             assert again["evaluation"]["trust"] == first["evaluation"]["trust"]
 
     assert len(calls) == 1, f"expected exactly one judge call, saw {len(calls)}"
@@ -215,9 +221,9 @@ def test_a_failed_judge_call_serves_the_suppressed_shape(
     with run_history_store.configure_for_tests():
         client = TestClient(app)
         account_id = uuid4()
-        body = _create_terminal_run(client, account_id)
-        result = _get_result(client, account_id, body["query_run_id"])
-        _get_result(client, account_id, body["query_run_id"])
+        run_id = str(_live_terminal_run(account_id).query_run_id)
+        result = _get_result(client, account_id, run_id)
+        _get_result(client, account_id, run_id)
 
         trust = result["evaluation"]["trust"]
         assert trust["support_verified"] is False
@@ -243,10 +249,10 @@ def test_judge_outcome_reaches_the_billing_snapshot_under_the_real_run_id(
     with run_history_store.configure_for_tests():
         client = TestClient(app)
         account_id = uuid4()
-        body = _create_terminal_run(client, account_id)
-        _get_result(client, account_id, body["query_run_id"])
+        run_id = str(_live_terminal_run(account_id).query_run_id)
+        _get_result(client, account_id, run_id)
 
-        run = query_run_repository.get(UUID(body["query_run_id"]))
+        run = query_run_repository.get(UUID(run_id))
         assert run is not None
         snapshot = query_run_repository.billing_snapshot(run)
         assert snapshot.judge_outcome is not None, (
@@ -298,12 +304,21 @@ def test_the_paid_judge_call_precedes_the_ledger_reconciliation(
     billing snapshot. (No line-distance is quoted here on purpose: an earlier
     draft said "21 lines later" and its own comment rewrite made that 32.)
 
-    Scope, stated because the docstring overreached in review: this run is a
-    local simulation, so ``cost_source`` is ``"estimated"`` and
-    ``_reconcile_run_billing`` books NOTHING. What is proven here is the order
-    and the snapshot contents — nothing about dollars. The money claim is
-    ``test_the_judge_dollar_is_inside_the_figure_the_ledger_books``, which
-    drives a genuinely ``measured`` run.
+    Scope, stated because the docstring overreached in review: what is proven
+    here is the ORDER and the snapshot contents — nothing about dollars. The
+    money claim is ``test_the_judge_dollar_is_inside_the_figure_the_ledger_books``,
+    which carries its own judge-OFF control; this test has none, so its figures
+    are not evidence about pricing.
+
+    That paragraph used to justify itself differently: "this run is a local
+    simulation, so ``cost_source`` is ``estimated`` and
+    ``_reconcile_run_billing`` books NOTHING". All three clauses stopped being
+    true on 2026-08-06, when the run had to become live-path for the judge to
+    fire at all — measured, it now reports ``cost_source=measured``,
+    ``actual=0.0101``, stages ``[..., 'judge']``, i.e. it books real money.
+    Review caught the stale paragraph. The SCOPE is unchanged and still right;
+    only its reasoning had to be replaced, which is why the limit now reads
+    "this test has no control" rather than "this run books nothing".
 
     This pins a claim the tree asserted backwards in TWO places —
     ``query_runs._persist_terminal_run``'s comment and ADR-0016 — both saying
@@ -329,8 +344,13 @@ def test_the_paid_judge_call_precedes_the_ledger_reconciliation(
     observed = _reconcile_spy(monkeypatch, judge_calls)
 
     with run_history_store.configure_for_tests():
-        client = TestClient(app)
-        _create_terminal_run(client, uuid4())
+        # A LIVE-path run, and ``_persist_terminal_run`` called directly —
+        # that is the function whose internal ordering is under study. Since
+        # 2026-08-06 a locally-simulated run is not judged at all, so the
+        # simulated pipeline this used to drive would make the claim below
+        # vacuous rather than false.
+        run = _live_terminal_run(uuid4())
+        qr._persist_terminal_run(run.query_run_id)
 
     assert observed.get("spy_completed"), (
         "_reconcile_run_billing never ran, or the spy raised and was swallowed "
@@ -369,13 +389,22 @@ def test_no_judge_outcome_is_memoised_when_the_judge_is_unconfigured(
     WHAT TURNS THIS RED: making ``_request_path_judge`` return a judge when
     ``judge_configured()`` is false — the seam is armed here, so an
     unconfigured judge that dispatches is caught immediately.
+
+    THE RUN MUST BE LIVE-PATH, and that is not cosmetic. This drove
+    ``_create_terminal_run`` (a local simulation) until 2026-08-06, when
+    ``_request_path_judge`` gained a clause rejecting runs with no live answer.
+    That clause then short-circuited the gate BEFORE the configuration check,
+    so deleting the configuration check entirely left this test green —
+    measured, ``1 passed``, against the mutation its own red-maker line names.
+    A test whose subject is gate A must satisfy every OTHER clause of that
+    gate, or it stops testing A without ever going red.
     """
     judge_calls = _judge_seam(monkeypatch)  # seam armed but judge NOT enabled
     observed = _reconcile_spy(monkeypatch, judge_calls)
 
     with run_history_store.configure_for_tests():
-        client = TestClient(app)
-        _create_terminal_run(client, uuid4())
+        run = _live_terminal_run(uuid4())
+        qr._persist_terminal_run(run.query_run_id)
 
     assert observed.get("spy_completed"), (
         "_reconcile_run_billing never ran, or the spy raised and was swallowed "
@@ -383,6 +412,36 @@ def test_no_judge_outcome_is_memoised_when_the_judge_is_unconfigured(
     )
     assert not judge_calls, "the judge fired with no key configured"
     assert observed["snapshot_judge_outcome"] is None
+
+
+def _live_terminal_run(account_id: Any) -> Any:
+    """A terminal run whose four slots came back from a LIVE provider path.
+
+    Every judge test needs one, and until 2026-08-06 they used
+    ``_create_terminal_run`` instead — the real pipeline in local simulation,
+    which produces four answers on ``ProviderPath.LOCAL_SIMULATION``. That was
+    fine while ``_request_path_judge`` asked only "did some answer reach
+    COMPLETED", and became wrong the moment it started asking "did a model
+    actually produce any of this": those tests were asserting that a paid judge
+    call happens on a run where no model was invoked, which is the defect the
+    gate now closes. They are not weakened by the swap — their subject is judge
+    wiring, and this puts them in the configuration where the judge is meant to
+    fire.
+
+    THIS IS A PURE ALIAS for ``_measured_run`` — the same run, no extra
+    behaviour. It exists so a judge test can say what it actually needs (live
+    provider paths) rather than what it does not (a ``measured`` price). The
+    two properties happen to come from one construction today and could stop
+    doing so.
+
+    An earlier version of this docstring described a relationship that does not
+    exist: that ``_measured_run`` is "this run plus the assertion that it prices
+    as measured", and that it "delegates here". Both halves were wrong —
+    ``_measured_run`` contains no ``assert`` at all, and the delegation runs
+    the other way. Review caught it; recorded because a helper documented as a
+    base class of something is read as one.
+    """
+    return _measured_run(account_id)
 
 
 def _measured_run(account_id: Any) -> Any:
@@ -394,6 +453,9 @@ def _measured_run(account_id: Any) -> Any:
     claim can only be tested on a run built with real usage attached. Debate
     and synthesis are never ENTERED here, which ``_stage_captured`` treats as
     trivially captured.
+
+    The answers land on ``ProviderPath.OPENROUTER_SEARCH``, which is also what
+    makes this run eligible for a judge at all — see ``_live_terminal_run``.
     """
     from decimal import Decimal
 
@@ -527,7 +589,16 @@ def test_key_without_model_builds_no_judge_and_no_evidence(
 ) -> None:
     """Half-configured (key, no model) is OFF at the wiring site: no judge
     object is constructed, so ``evaluate_run`` never builds evidence and the
-    NFR-011 zero-I/O invariant holds exactly as with no key at all."""
+    NFR-011 zero-I/O invariant holds exactly as with no key at all.
+
+    LIVE-PATH RUN, deliberately — see
+    ``test_no_judge_outcome_is_memoised_when_the_judge_is_unconfigured``. On a
+    simulated run the 2026-08-06 live-answer clause rejects the judge first,
+    and this test then passes even against a ``judge_configured()`` that has
+    dropped its model-id half — measured green under exactly that mutation.
+
+    WHAT TURNS THIS RED: dropping the model-id half of ``judge_configured()``.
+    """
     monkeypatch.setattr(settings, "quorum_eval_judge_api_key", "sk-not-a-real-key")
     monkeypatch.setattr(settings, "quorum_eval_judge_model_id", "")
 
@@ -550,8 +621,8 @@ def test_key_without_model_builds_no_judge_and_no_evidence(
     with run_history_store.configure_for_tests():
         client = TestClient(app)
         account_id = uuid4()
-        body = _create_terminal_run(client, account_id)
-        result = _get_result(client, account_id, body["query_run_id"])
+        run_id = str(_live_terminal_run(account_id).query_run_id)
+        result = _get_result(client, account_id, run_id)
         trust = result["evaluation"]["trust"]
         assert trust["support_verified"] is False
         assert trust["score"] is None
@@ -615,7 +686,16 @@ def test_stub_judge_can_never_unlock_a_numeric_score() -> None:
 def test_the_wiring_site_never_selects_the_stub(monkeypatch: pytest.MonkeyPatch) -> None:
     """The request path constructs the REAL service or nothing. If the stub
     were ever wired in, this fails loudly rather than silently serving its
-    constant verdict as run metadata."""
+    constant verdict as run metadata.
+
+    LIVE-PATH RUN, deliberately — see
+    ``test_no_judge_outcome_is_memoised_when_the_judge_is_unconfigured``. On a
+    simulated run the 2026-08-06 live-answer clause means no judge of any kind
+    is constructed, so this passed even with ``_request_path_judge`` returning
+    ``StubEvalJudge()`` — measured green under exactly that mutation.
+
+    WHAT TURNS THIS RED: making ``_request_path_judge`` return a stub.
+    """
     _enable_judge(monkeypatch)
     _judge_seam(monkeypatch)
 
@@ -631,8 +711,8 @@ def test_the_wiring_site_never_selects_the_stub(monkeypatch: pytest.MonkeyPatch)
     with run_history_store.configure_for_tests():
         client = TestClient(app)
         account_id = uuid4()
-        body = _create_terminal_run(client, account_id)
-        _get_result(client, account_id, body["query_run_id"])
+        run_id = str(_live_terminal_run(account_id).query_run_id)
+        _get_result(client, account_id, run_id)
 
     assert stub_evals == [], "the stub judge must never run on the request path"
 

@@ -40,6 +40,7 @@ from uuid import UUID, uuid4
 
 import pytest
 from fastapi.testclient import TestClient
+from tests.integration.test_judge_request_path_wiring import _live_terminal_run
 from tests.unit.test_evaluation_judge import VALID_VERDICT, _evidence
 
 from product_app import query_runs as qr
@@ -49,6 +50,7 @@ from product_app.debate import debate_event_recorder
 from product_app.evaluation import EvalJudgeService
 from product_app.main import app
 from product_app.providers import (
+    NOT_INVOKED_PATHS,
     InitialAnswerStatus,
     LiveProviderResult,
     provider_event_recorder,
@@ -215,15 +217,24 @@ def test_the_reported_state_matches_the_real_request_path_gate(
     with run_history_store.configure_for_tests():
         client = TestClient(app)
         account_id = uuid4()
-        body = _create_terminal_run(client, account_id)
-        run = query_run_repository.get(UUID(body["query_run_id"]))
+        run = _live_terminal_run(account_id)
 
         # Sanity: the non-configuration conditions really are satisfied, so a
-        # ``None`` below can only be the configuration gate talking.
+        # ``None`` below can only be the configuration gate talking. This list
+        # must grow whenever ``_request_path_judge`` grows a condition — it
+        # did not when the live-answer clause was added (2026-08-06), and this
+        # test failed for a reason that had nothing to do with what it pins.
         assert run.status is qr.QueryRunStatus.COMPLETED
+        assert not run.cost_estimate.global_ceiling_reached
+        assert not run.cost_estimate.spend_metering_unavailable
         assert any(
-            answer.status is InitialAnswerStatus.COMPLETED for answer in run.initial_answers
-        ), "the run produced no completed answer, so the gate would be None for the wrong reason"
+            answer.status is InitialAnswerStatus.COMPLETED
+            and answer.provider_path not in NOT_INVOKED_PATHS
+            for answer in run.initial_answers
+        ), (
+            "the run produced no live completed answer, so the gate would be "
+            "None for the wrong reason"
+        )
 
         _configure(monkeypatch, key=key, model_id=model_id)
 

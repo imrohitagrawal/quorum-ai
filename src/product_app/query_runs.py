@@ -2796,6 +2796,45 @@ def _request_path_judge(query_run: QueryRun) -> _MemoisedRunJudge | None:
     * ``BLOCKED_BY_COST`` / no COMPLETED initial answer — nothing to judge; a
       paid call over empty evidence is pure spend and could stamp "verified"
       on a run that never produced content.
+    * **A run that must not spend, or that spent nothing.** Two clauses, added
+      after review of #258 measured a real paid judge call on a run with
+      ``live_count: 0``, ``local_count: 4``, ``demo_mode: true`` — which was
+      then served ``support_verified: true, score: 50, band: "moderate"`` over
+      content no model wrote.
+
+      The first clause is the run's DECLARED intent. ``_execute_query_run``
+      degrades a whole run to local simulation when the deployment's $5/24h
+      ceiling is reached or spend metering is unavailable, and says of both:
+      *"Both mean 'this run must not spend'"*. It implements that by blanking
+      the run's local ``openrouter_key`` — which the judge never reads,
+      because the judge has its own key. So the one mechanism that exists to
+      stop a run spending was deaf to the judge.
+
+      The second clause is the OBSERVED outcome: at least one COMPLETED answer
+      must have come from a path where a model was actually invoked.
+      ``NOT_INVOKED_PATHS`` is the repo's own definition of that, and the same
+      constant ``_result_response`` reads for ``demo_mode``/``local_count``, so
+      what counts as "no model was invoked" cannot drift between the gate that
+      spends money and the page that describes the run.
+
+      They are NOT the same predicate, and must not be read as one: the page
+      asks "did ANY slot skip the model?" while this gate asks "did ANY slot
+      reach one?". A mixed run answers yes to both — ``demo_mode: true`` AND a
+      judge call — which is deliberate and is pinned by
+      ``test_a_partly_simulated_run_is_still_judged``. An earlier draft of this
+      comment said the two "cannot disagree"; review refuted it with that very
+      run, and the honest claim is the narrower one above.
+
+      This clause SUBSUMES the first — a degraded run has no live answers — and
+      also covers ``OPENROUTER_LIVE_EXECUTION_ENABLED`` being off, which
+      ``debate.py`` and ``synthesis.py`` each guard on directly and the judge
+      never did. Both are kept: the first is exact and fails closed without
+      depending on any answer's ``provider_path`` being recorded correctly.
+
+      ONE live answer is enough. A partly-simulated run really did serve the
+      user model output, and its citation support is exactly what the judge is
+      for; demanding every slot be live would silently turn the judge off for
+      most real runs.
 
     DELIBERATE (P3 interaction): a ``PARTIAL`` or ``TIMED_OUT`` run WITH
     completed answers IS judged — including a deadline-cut run whose
@@ -2811,8 +2850,20 @@ def _request_path_judge(query_run: QueryRun) -> _MemoisedRunJudge | None:
         return None
     if query_run.status in {QueryRunStatus.CANCELLED, QueryRunStatus.BLOCKED_BY_COST}:
         return None
+    # DECLARED: this run was told not to spend. Read from the estimate the run
+    # was created with — the same value ``_execute_query_run`` reads back to
+    # blank the panel's key — never re-queried, so the judge's decision and the
+    # panel's cannot come from two different views of the ledger.
+    estimate = query_run.cost_estimate
+    if estimate.global_ceiling_reached or estimate.spend_metering_unavailable:
+        return None
+    # OBSERVED: at least one answer a model actually produced. A COMPLETED
+    # answer is not enough on its own — a locally-simulated answer is
+    # COMPLETED too, and judging one is paid work over content we wrote.
     if not any(
-        answer.status is InitialAnswerStatus.COMPLETED for answer in query_run.initial_answers
+        answer.status is InitialAnswerStatus.COMPLETED
+        and answer.provider_path not in NOT_INVOKED_PATHS
+        for answer in query_run.initial_answers
     ):
         return None
     return _MemoisedRunJudge(str(query_run.query_run_id))
