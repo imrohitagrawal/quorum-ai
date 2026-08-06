@@ -1,4 +1,4 @@
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
 from contextlib import contextmanager
 from datetime import UTC, datetime
 from decimal import ROUND_FLOOR, Decimal
@@ -675,7 +675,7 @@ def test_thread_start_failure_neither_bills_nor_orphans_a_run(
             assert semaphore._value == 1  # noqa: SLF001
 
 
-def _charge_outcome_stub(outcome: object):
+def _charge_outcome_stub(outcome: object) -> Callable[..., object]:
     """Force ``try_record_run_charge`` to a chosen outcome, writing nothing.
 
     The three non-RECORDED outcomes are decided INSIDE the store's lock, at the
