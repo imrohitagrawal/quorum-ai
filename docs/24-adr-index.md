@@ -25,6 +25,7 @@ ways, so the record shows what was believed on a date and what replaced it.
 | [ADR-0017](adr/0017-the-spend-cap-prices-every-billable-call.md) | The spend cap prices every billable call, including the judge | Architecture | Accepted — 2026-08-06 (issue #265; operator decision the same day that the |
 | [ADR-0018](adr/0018-a-judge-that-produced-nothing-must-say-so-and-must-not-be-charged-for.md) | A judge that produced nothing must say so, and must not be charged for | Architecture | Accepted — 2026-08-06 (issue #258; operator decision 2026-08-06 that the |
 | [ADR-0019](adr/0019-the-judge-does-not-spend-on-a-run-that-spent-nothing.md) | The judge does not spend on a run that spent nothing | Architecture | Accepted — 2026-08-06 |
+| [ADR-0020](adr/0020-a-verified-badge-must-not-contradict-the-verdict-behind-it.md) | A "verified" badge must not contradict the verdict behind it | Architecture | Accepted — 2026-08-06 (issue #267) |
 
 **This index was itself stale** until 2026-07-30: ADR-0002 had existed since
 2026-07-19 and was never listed here. A hand-maintained index is a derived fact
