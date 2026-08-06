@@ -46,7 +46,7 @@ from contextlib import contextmanager, suppress
 from dataclasses import asdict, dataclass
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
-from enum import Enum
+from enum import Enum, StrEnum
 from pathlib import Path
 from typing import Any, Literal
 from uuid import UUID
@@ -87,15 +87,68 @@ DEFAULT_DB_PATH = ".data/feedback_events.sqlite3"
 #: it is a lock that will never be released.
 _CLOSE_LOCK_TIMEOUT_S = 5.0
 
-#: The (recorder, event_type) pair that IS the daily spend meter.
-#: :meth:`FeedbackStore.daily_spend_for` sums ``estimated_cost_usd`` over exactly
-#: ``recorder = 'cost' AND event_type = 'cost_guardrail_accepted'`` — verified
-#: against that method's SQL, not inferred from its name. Every other event type
-#: this store holds is telemetry the audit job already tolerates gaps in; losing
-#: one of THESE is what freezes the ledger and disarms the cap, so it is the only
-#: loss that earns an ERROR and the only one :meth:`FeedbackStore.lost_billed_writes`
+
+class ChargeOutcome(StrEnum):
+    """What :meth:`FeedbackStore.try_record_cost_charge` decided.
+
+    The three values are NOT interchangeable and the caller must branch on all
+    of them: the daily cap REFUSES a run, the global ceiling DEGRADES one to
+    local simulation, and only ``RECORDED`` means money may be spent.
+    """
+
+    #: The charge is written and the run may spend. This is the ONLY outcome
+    #: that books money.
+    RECORDED = "recorded"
+    #: The per-account daily cap would be exceeded. Nothing was written; the
+    #: caller must refuse the run.
+    OVER_DAILY_CAP = "over_daily_cap"
+    #: The deployment-wide ceiling is already reached. Nothing was written; the
+    #: caller must degrade the run to local simulation, which spends nothing —
+    #: so there is no charge to book. See ``costs.GLOBAL_DAILY_CEILING_USD``.
+    OVER_GLOBAL_CEILING = "over_global_ceiling"
+    #: The ledger cannot be trusted, so neither rail can be tested. Nothing was
+    #: written; the caller must degrade the run to local simulation. Distinct
+    #: from ``OVER_GLOBAL_CEILING`` because the CAUSE is different and the user
+    #: is told a different thing — a storage fault is not a spend ceiling.
+    #: See ADR-0016, which supersedes ADR-0004's fail-open posture.
+    METERING_UNAVAILABLE = "metering_unavailable"
+
+
+#: The event type that OPENS a run's charge, carrying the point estimate.
+COST_ACCEPTED_EVENT = "cost_guardrail_accepted"
+
+#: The event type that CORRECTS a run's charge to what the run really cost
+#: (issue #255). Written once per run, after it reaches a terminal state and
+#: its cost has been measured. Its ``actual_cost_usd`` REPLACES the estimate
+#: booked by the opening charge — see :meth:`FeedbackStore.daily_spend_for`.
+COST_RECONCILED_EVENT = "cost_reconciled"
+
+#: The event type that CANCELS a charge for a run that never started (F-01).
+#: The events table is append-only, so a charge is undone by a later event
+#: keyed on the same ``query_run_id``, never by a DELETE.
+COST_CHARGE_VOIDED_EVENT = "cost_charge_voided"
+
+#: The (recorder, event_type) pairs that ARE the daily spend meter.
+#: :meth:`FeedbackStore.daily_spend_for` sums over exactly
+#: ``recorder = 'cost'`` and these event types — verified against that method's
+#: SQL, not inferred from their names. Every other event type this store holds
+#: is telemetry the audit job already tolerates gaps in; losing one of THESE is
+#: what freezes the ledger and disarms the cap, so it is the only loss that
+#: earns an ERROR and the only one :meth:`FeedbackStore.lost_billed_writes`
 #: counts.
-_METERED_WRITE = ("cost", "cost_guardrail_accepted")
+#:
+#: ``COST_RECONCILED_EVENT`` is metered for the same reason the opening charge
+#: is: a lost reconciliation leaves the ledger holding the ESTIMATE for a run
+#: whose real cost was higher, which under-meters the account — the fail-open
+#: direction, i.e. free money. ``COST_CHARGE_VOIDED_EVENT`` is deliberately NOT
+#: metered: losing it leaves the account charged for a run that never ran,
+#: which over-meters, and over-metering is the safe direction.
+_METERED_WRITES = frozenset(
+    {
+        ("cost", COST_ACCEPTED_EVENT),
+        ("cost", COST_RECONCILED_EVENT),
+    }
+)
 
 #: Minimum gap between two "a billed cost event was lost" ERROR records
 #: (issue #109).
@@ -189,6 +242,29 @@ class FeedbackStore:
     CREATE INDEX IF NOT EXISTS events_recorder_idx
         ON events (recorder, event_type);
     """
+
+    #: Covering index for the spend rails. Deliberately NOT in ``_SCHEMA``, for
+    #: exactly the reason ``_SCHEMA``'s neighbours document: that script runs
+    #: UNGUARDED in ``__init__``, and on an existing database every statement in
+    #: it is already a no-op, so it never writes. A brand-new index is not a
+    #: no-op on an existing database — it is a write — so putting it there makes
+    #: the store fail to BOOT on a read-only volume. MEASURED: doing so turned
+    #: ``test_read_only_database_degrades_to_pre_backfill_behaviour_instead_of_failing_to_boot``
+    #: red. Applied best-effort below instead: an index is a performance
+    #: property, and losing it must never cost availability.
+    #:
+    #: Why it exists: the rails seek on ``(recorder, event_type)`` AND the 24h
+    #: window, and without ``recorded_at`` in the index the window is filtered
+    #: during the row visit — so every charge scans the table's LIFETIME
+    #: history, not the day's. Nothing prunes this table and it lives on a
+    #: persistent volume. MEASURED in adversarial review at 600 cost rows/day,
+    #: with the store's single global lock held for the whole call: 605 rows ->
+    #: 2.13 ms per charge, 60,015 rows (100 days) -> 41.68 ms, 180,020 rows
+    #: (300 days) -> 96.40 ms. Linear in history, not in the window.
+    _SPEND_RAIL_INDEX = (
+        "CREATE INDEX IF NOT EXISTS events_recorder_type_time_idx "
+        "ON events (recorder, event_type, recorded_at)"
+    )
 
     #: Deliberately NOT part of ``_SCHEMA``. ``_SCHEMA`` runs unguarded in
     #: ``__init__``, and on an existing DB every statement in it is already a
@@ -287,6 +363,12 @@ class FeedbackStore:
         self._conn.row_factory = sqlite3.Row
         with self._lock:
             self._conn.executescript(self._SCHEMA)
+            # Best-effort, and AFTER the schema: see ``_SPEND_RAIL_INDEX``. A
+            # read-only volume must still boot and serve reads; it simply runs
+            # the rails without the covering index, exactly as every release
+            # before this one did.
+            with suppress(sqlite3.Error):
+                self._conn.execute(self._SPEND_RAIL_INDEX)
         self._backfill_f01_preview_rows()
         _open_stores.add(self)
 
@@ -472,8 +554,19 @@ class FeedbackStore:
         query_run_id: UUID | None,
         recorded_at: datetime,
         payload: dict[str, Any],
-    ) -> None:
+    ) -> bool:
         """Append one event row. Best-effort: a failed write is logged and swallowed.
+
+        Returns ``True`` if the row LANDED, ``False`` if the write failed. Every
+        pre-existing caller ignores the value and keeps its best-effort
+        behaviour unchanged; the return exists for
+        :meth:`try_record_cost_charge`, which must not tell its caller "money
+        may be spent" off a write that did not happen. Adversarial review
+        demonstrated exactly that: with the INSERT raising ``disk I/O error``
+        the charge returned ``RECORDED``, ``daily_spend_for`` read ``0``,
+        ``lost_billed_writes`` read ``1``, and the run went live at full spend
+        with no row on disk — the precise hole ADR-0016 exists to close,
+        because ``may_be_metered`` is sampled BEFORE the write.
 
         The hot path is the in-memory recorder; this sink is a write-through
         cache. A failure here must not crash the request handler. The
@@ -521,14 +614,14 @@ class FeedbackStore:
             except Exception as exc:  # noqa: BLE001 — feedback store is best-effort
                 failure = exc
                 self._last_write_failure_at = self._monotonic()
-                if (recorder, event_type) == _METERED_WRITE:
+                if (recorder, event_type) in _METERED_WRITES:
                     self._lost_billed_writes += 1
                     lost_total = self._lost_billed_writes
                     announce = self._claim_lost_cost_event_log_slot()
             else:
                 self._last_write_success_at = self._monotonic()
         if failure is None:
-            return
+            return True
         _log.warning(
             "feedback_store: failed to persist event recorder=%s type=%s: %s",
             recorder,
@@ -583,6 +676,7 @@ class FeedbackStore:
                 lost_total,
                 LOST_COST_EVENT_LOG_INTERVAL_S,
             )
+        return False
 
     def _claim_lost_cost_event_log_slot(self) -> bool:
         """Check-then-set the ERROR suppression window. Call with the lock HELD.
@@ -602,41 +696,44 @@ class FeedbackStore:
     def lost_billed_writes(self) -> int:
         """How many BILLED cost events this process failed to persist.
 
-        Counts exactly the ``(recorder, event_type)`` pair
-        :attr:`~product_app.feedback_store._METERED_WRITE` — the pair
-        :meth:`daily_spend_for` sums — and nothing else. Monotonically
-        increasing: never reset, and a later successful write does not clear it.
+            Counts exactly the ``(recorder, event_type)`` pairs in
+            :attr:`~product_app.feedback_store._METERED_WRITES` — the pairs
+            :meth:`daily_spend_for` sums — and nothing else. Monotonically
+            increasing: never reset, and a later successful write does not clear it.
 
-        WHY A COUNTER AND NOT ANOTHER STAMP (issue #109 review, B1). This store
-        is shared by every recorder, and :meth:`write_health` reports the store's
-        LAST write, not the cost stream's. In production
-        ``query_runs._start_reserved_query_run`` calls ``Thread.start()`` before
-        ``_record_run_billing``, so provider/debate/synthesis/evaluation/
-        model_slot/safety events are landing in this same store while the billed
-        write is attempted; any one of them re-stamps success over the failure.
-        MEASURED through the real route with a transient RESERVED hold across only
-        the billed write: 8 runs accepted, $0.2088 actually billed against a $0.20
-        cap, ZERO ``cost_guardrail_accepted`` rows on disk — and ``/status``
-        reading ``feedback_db='connected' feedback_writes='ok'`` throughout,
-        byte-indistinguishable from the healthy control (which BLOCKs on run 8 at
-        $0.1827). ``feedback_events_total`` even CLIMBED, reinforcing the wrong
-        conclusion. A stamp can be masked by any other writer; a count that only
-        goes up cannot.
+            WHY A COUNTER AND NOT ANOTHER STAMP (issue #109 review, B1). This store
+            is shared by every recorder, and :meth:`write_health` reports the store's
+            LAST write, not the cost stream's. In production
+            (ORDER REVERSED BY ADR-0016 — the charge is now written BEFORE
+        ``Thread.start()``, and a failed handover VOIDS it; what follows
+        describes the pre-#255 order.)
+        ``query_runs._start_reserved_query_run`` called ``Thread.start()`` before
+            ``_record_run_billing``, so provider/debate/synthesis/evaluation/
+            model_slot/safety events are landing in this same store while the billed
+            write is attempted; any one of them re-stamps success over the failure.
+            MEASURED through the real route with a transient RESERVED hold across only
+            the billed write: 8 runs accepted, $0.2088 actually billed against a $0.20
+            cap, ZERO ``cost_guardrail_accepted`` rows on disk — and ``/status``
+            reading ``feedback_db='connected' feedback_writes='ok'`` throughout,
+            byte-indistinguishable from the healthy control (which BLOCKs on run 8 at
+            $0.1827). ``feedback_events_total`` even CLIMBED, reinforcing the wrong
+            conclusion. A stamp can be masked by any other writer; a count that only
+            goes up cannot.
 
-        It is also the only field that separates "one charge was lost" from "a
-        hundred were": the ERROR is rate-limited to one record per
-        ``LOST_COST_EVENT_LOG_INTERVAL_S``, so the log alone cannot tell them
-        apart.
+            It is also the only field that separates "one charge was lost" from "a
+            hundred were": the ERROR is rate-limited to one record per
+            ``LOST_COST_EVENT_LOG_INTERVAL_S``, so the log alone cannot tell them
+            apart.
 
-        Scope, stated narrowly: this is a count of losses inside THIS process. It
-        says nothing about losses in an earlier process, and a restart starts it
-        at zero — the durable evidence of a gap is the absence of the rows
-        themselves, which the runbook's read-only query counts. It also assumes a
-        SINGLE application process: ``/status`` reads the counter out of the
-        memory of whichever worker served the request, so with more than one
-        worker a loss on a sibling worker is invisible and the masking this
-        counter exists to defeat comes back. The ``Dockerfile`` runs uvicorn with
-        ``--workers 1``, which is what makes the assumption hold today.
+            Scope, stated narrowly: this is a count of losses inside THIS process. It
+            says nothing about losses in an earlier process, and a restart starts it
+            at zero — the durable evidence of a gap is the absence of the rows
+            themselves, which the runbook's read-only query counts. It also assumes a
+            SINGLE application process: ``/status`` reads the counter out of the
+            memory of whichever worker served the request, so with more than one
+            worker a loss on a sibling worker is invisible and the masking this
+            counter exists to defeat comes back. The ``Dockerfile`` runs uvicorn with
+            ``--workers 1``, which is what makes the assumption hold today.
         """
         with self._lock:
             return self._lost_billed_writes
@@ -766,26 +863,135 @@ class FeedbackStore:
             cursor = self._conn.execute("SELECT COUNT(*) AS n FROM events")
             return int(cursor.fetchone()["n"])
 
+    def _spend_total_locked(
+        self,
+        *,
+        cutoff: datetime,
+        account_id: UUID | None,
+    ) -> Decimal:
+        """Sum what each charged run in the window really cost. Caller holds the lock.
+
+        Issue #255. A run's charge is OPENED by a ``cost_guardrail_accepted``
+        event carrying the point estimate — the only figure available before the
+        run has happened. Two later events, both keyed on the same
+        ``query_run_id``, can correct it:
+
+        * ``cost_reconciled`` — the run finished and its cost was MEASURED. Its
+          ``actual_cost_usd`` replaces the estimate. This is the whole point of
+          the method: before it, a $0.20 cap made of estimates admitted runs
+          whose worst case summed to $0.45.
+        * ``cost_charge_voided`` — the run never started, so the charge is
+          removed entirely (F-01).
+
+        ONE ``cutoff`` is correct for all three queries, and that is not an
+        accident of convenience: a correction is always written AFTER the charge
+        it corrects, so ``correction.recorded_at >= charge.recorded_at`` HOLDS
+        WHENEVER THE CLOCK IS MONOTONIC.
+
+        It is not an impossibility proof, and an earlier revision of this
+        docstring wrongly claimed it was. Both events stamp wall-clock
+        ``datetime.now(UTC)``, so a BACKWARD step between them — NTP
+        correction, VM resync, snapshot restore — can leave a charge inside the
+        window whose correction falls outside it. Demonstrated in adversarial
+        review: the reconciliation was written, and ``daily_spend_for`` still
+        reported the estimate. The error is bounded by one run's delta and
+        lands in the under-metering direction, which is why it is accepted
+        rather than fixed by stamping corrections with the charge's own
+        timestamp.
+
+        A charge with a NULL ``query_run_id`` cannot be keyed, so it can be
+        neither reconciled nor voided and is summed at its estimate. That is
+        deliberate: those rows are the pre-F-01 previews the ``_F01_MIGRATION``
+        relabels once, and the direction this fails in is over-metering, which
+        is the safe one. Dropping them would be free money.
+        """
+        cutoff_iso = cutoff.isoformat()
+        account_predicate = "" if account_id is None else "AND account_id = ? "
+        account_args: tuple[str, ...] = () if account_id is None else (str(account_id),)
+
+        # Opening charges. Keyed rows are correctable, NULL-keyed rows are not.
+        charged: dict[str, Decimal] = {}
+        total = Decimal("0")
+        cursor = self._conn.execute(
+            "SELECT query_run_id, payload FROM events "
+            f"WHERE recorder = 'cost' AND event_type = '{COST_ACCEPTED_EVENT}' "
+            f"{account_predicate}AND recorded_at >= ?",
+            (*account_args, cutoff_iso),
+        )
+        for row in cursor:
+            amount = Decimal(str(json.loads(row["payload"]).get("estimated_cost_usd", "0")))
+            run_id = row["query_run_id"]
+            if run_id is None:
+                total += amount
+            else:
+                charged[run_id] = charged.get(run_id, Decimal("0")) + amount
+
+        if charged:
+            # Corrections. Applied ONLY to a run this window actually charged —
+            # a reconciliation for a run whose charge is not here (a preview, a
+            # BLOCK, a ceiling-degraded run, or a charge already aged out) must
+            # never add spend of its own.
+            cursor = self._conn.execute(
+                "SELECT query_run_id, event_type, payload FROM events "
+                "WHERE recorder = 'cost' AND event_type IN "
+                f"('{COST_RECONCILED_EVENT}', '{COST_CHARGE_VOIDED_EVENT}') "
+                f"{account_predicate}AND recorded_at >= ? "
+                # ORDER BY is LOAD-BEARING, not tidiness. Corrections overwrite
+                # each other in visit order, so without it the money answer
+                # depends on which index SQLite picks: adversarial review
+                # showed the planner returning a void BEFORE a reconciliation
+                # for the same run, letting the reconciliation resurrect a
+                # voided charge at its measured cost. ``id`` is the insertion
+                # order and therefore the causal order.
+                "ORDER BY id",
+                (*account_args, cutoff_iso),
+            )
+            for row in cursor:
+                run_id = row["query_run_id"]
+                if run_id is None or run_id not in charged:
+                    continue
+                if row["event_type"] == COST_CHARGE_VOIDED_EVENT:
+                    charged[run_id] = Decimal("0")
+                    continue
+                # A reconciliation with no measured figure corrects NOTHING and
+                # leaves the estimate standing. Defaulting the missing value to
+                # "0" instead would zero the run's cost — free money, and the
+                # fail-OPEN direction on a money rail. Found by mutation: with
+                # the void branch disabled, a void event fell through to here
+                # and the "0" default silently reproduced the right answer for
+                # the wrong reason, so the test could not see the break.
+                raw = json.loads(row["payload"]).get("actual_cost_usd")
+                if raw is None:
+                    continue
+                charged[run_id] = Decimal(str(raw))
+            total += sum(charged.values(), Decimal("0"))
+
+        return total
+
     def daily_spend_for(
         self,
         account_id: UUID,
         *,
         now: datetime | None = None,
     ) -> Decimal:
-        """Sum the ``estimated_cost_usd`` from cost events for ``account_id``
-        recorded in the last 24 hours.
+        """Sum what ``account_id``'s runs in the last 24 hours really cost.
 
         The daily cap reads from here. The in-memory ring buffer is bounded
         to ``MAX_EVENTS`` (~1024), so it cannot be the source of truth for
         a daily total — a busy day could push old events out of the buffer.
         The SQLite sink is durable and append-only.
 
-        Only ``cost_guardrail_accepted`` events count (these are the events
-        where the estimate was actually charged). ``BLOCK`` events were
+        Only ``cost_guardrail_accepted`` events open a charge (these are the
+        events where a run was actually billed). ``BLOCK`` events were
         never billed; ``cost_estimate_previewed`` events are a
         ``POST /estimate`` preview of a run that has not started (F-01);
         ``REQUIRE_CONFIRMATION`` events were also not charged
         because the user abandoned or cancelled.
+
+        A charge is booked at the point ESTIMATE, because that is the only
+        figure that exists before the run does, and then corrected to the
+        MEASURED actual once the run ends — see :meth:`_spend_total_locked`
+        and :meth:`try_record_cost_reconciliation` (issue #255).
 
         Args:
             account_id: The account to sum over.
@@ -796,33 +1002,23 @@ class FeedbackStore:
             Total spend in USD as ``Decimal``. Zero if no events in window.
         """
         cutoff = (now or datetime.now(UTC)) - timedelta(hours=24)
-        total = Decimal("0")
         with self._lock:
-            cursor = self._conn.execute(
-                "SELECT payload FROM events "
-                "WHERE recorder = 'cost' AND event_type = 'cost_guardrail_accepted' "
-                "AND account_id = ? AND recorded_at >= ?",
-                (str(account_id), cutoff.isoformat()),
-            )
-            for row in cursor:
-                payload = json.loads(row["payload"])
-                raw = payload.get("estimated_cost_usd", "0")
-                total += Decimal(str(raw))
-        return total
+            return self._spend_total_locked(cutoff=cutoff, account_id=account_id)
 
     def global_daily_spend(
         self,
         *,
         now: datetime | None = None,
     ) -> Decimal:
-        """Sum ``estimated_cost_usd`` across ALL accounts in the last 24 hours.
+        """Sum what EVERY account's runs in the last 24 hours really cost.
 
         Issue #100: the deployment-wide spend ceiling. Identical query to
         :meth:`daily_spend_for` with the ``account_id`` predicate dropped —
-        that is deliberately the whole difference, so the two stay in sync
-        by construction (same event type, same durability rationale, same
-        24h rolling window) rather than by two authors independently
-        remembering to keep them consistent.
+        that is deliberately the whole difference, and since #255 both go
+        through the same :meth:`_spend_total_locked`, so the two stay in sync
+        by construction (same event types, same corrections, same durability
+        rationale, same 24h rolling window) rather than by two authors
+        independently remembering to keep them consistent.
 
         A run that gets degraded to simulation by the ceiling this method
         enforces must NOT be counted here — see
@@ -831,6 +1027,7 @@ class FeedbackStore:
         counted, the meter would keep climbing from runs that spent nothing
         real, permanently outrunning actual spend for the rest of the 24h
         window and making ``/status``'s "today's global spend" figure a lie.
+        Such a run never opens a charge, so it is also never reconciled.
 
         Args:
             now: Override for test determinism. Defaults to
@@ -840,19 +1037,197 @@ class FeedbackStore:
             Total spend in USD as ``Decimal``. Zero if no events in window.
         """
         cutoff = (now or datetime.now(UTC)) - timedelta(hours=24)
-        total = Decimal("0")
+        with self._lock:
+            return self._spend_total_locked(cutoff=cutoff, account_id=None)
+
+    def try_record_cost_charge(
+        self,
+        *,
+        account_id: UUID,
+        query_run_id: UUID,
+        estimated_cost_usd: Decimal,
+        payload: dict[str, Any],
+        daily_cap_usd: Decimal,
+        global_ceiling_usd: Decimal,
+        now: datetime | None = None,
+    ) -> ChargeOutcome:
+        """Atomically check both spend rails and open this run's charge.
+
+        Closes the read-modify-write race between the rail READ in
+        ``costs.CostEstimationService.estimate`` and the WRITE that used to
+        happen a whole request later in ``query_runs._record_run_billing``.
+        Concurrent callers could both read "under the cap" before either's
+        charge landed, and both proceed.
+
+        MEASURED on the unsynchronised path, barrier-releasing N threads
+        between that read and that write, against ``DAILY_CAP_USD`` of $0.20:
+        2 threads booked $0.0586 (under), 8 booked $0.2344 (**1.17x over**), 32
+        booked $0.9376 (**4.69x over**). The serial control booked $0.1758 and
+        never exceeded the cap. Both rails were affected, because
+        :meth:`global_daily_spend` reads the same table with the account
+        predicate dropped.
+
+        The check and the insert run under ONE continuous hold of
+        ``self._lock`` — the same discipline, and for the same reason, as
+        :meth:`try_record_session_mint`, which is the store's other
+        check-and-record.
+
+        KNOWN TRADE-OFF, accepted rather than hidden. :meth:`record` promises to
+        log OUTSIDE the lock, because a logging handler can block; called from
+        here it logs while THIS method still holds the RLock, so on the
+        lost-billed-write path (the longest message in the codebase) the store
+        is serialised for the duration of the emit. Measured by adversarial
+        review. It is not fixed by releasing the lock around the log: that
+        reopens the exact check-and-insert window this method exists to close.
+        It costs a bounded stall on an already-degraded path, and the
+        alternative costs correctness.
+
+        ORDER MATTERS. The daily cap is tested first because it REFUSES the
+        run, and a refused run must not also be reported as degraded. The
+        global ceiling is tested second and DEGRADES rather than refuses: the
+        run proceeds on local simulation, spends nothing, and therefore opens
+        no charge at all — writing one would push the meter past the ceiling on
+        money nobody spent, which is the meter-honesty rule
+        :meth:`global_daily_spend` documents.
+
+        Args:
+            account_id: Account the charge belongs to.
+            query_run_id: Run the charge belongs to. Required — an unkeyed
+                charge can never be reconciled or voided
+                (:meth:`_spend_total_locked`).
+            estimated_cost_usd: The point estimate to book. Corrected to the
+                measured actual later by
+                :meth:`try_record_cost_reconciliation`.
+            payload: The durable event payload, built by the caller so this
+                store stays ignorant of the cost event's shape.
+            daily_cap_usd: Per-account cap to test against.
+            global_ceiling_usd: Deployment-wide ceiling to test against.
+            now: Override for test determinism.
+
+        Returns:
+            :class:`ChargeOutcome`. Only ``RECORDED`` wrote anything.
+        """
+        when = now or datetime.now(UTC)
+        cutoff = when - timedelta(hours=24)
+        with self._lock:
+            already = self._spend_total_locked(cutoff=cutoff, account_id=account_id)
+            if already + estimated_cost_usd > daily_cap_usd:
+                return ChargeOutcome.OVER_DAILY_CAP
+            if self._spend_total_locked(cutoff=cutoff, account_id=None) >= global_ceiling_usd:
+                return ChargeOutcome.OVER_GLOBAL_CEILING
+            landed = self.record(
+                recorder="cost",
+                event_type=COST_ACCEPTED_EVENT,
+                account_id=account_id,
+                query_run_id=query_run_id,
+                recorded_at=when,
+                payload=payload,
+            )
+            if not landed:
+                # The rails were readable a microsecond ago and the write still
+                # failed, so this run is unmetered from here on. Saying
+                # RECORDED would authorise live spend against a ledger with no
+                # row in it — demonstrated in adversarial review, with
+                # ``daily_spend_for`` reading 0 while the run went live.
+                # Degrade instead: the run costs $0 and the operator gets the
+                # ``lost_billed_writes`` ERROR ``record()`` just raised.
+                return ChargeOutcome.METERING_UNAVAILABLE
+            return ChargeOutcome.RECORDED
+
+    def try_record_cost_reconciliation(
+        self,
+        *,
+        account_id: UUID,
+        query_run_id: UUID,
+        estimated_cost_usd: Decimal,
+        actual_cost_usd: Decimal,
+        now: datetime | None = None,
+    ) -> bool:
+        """Atomically replace a run's booked estimate with its measured actual.
+
+        Issue #255. Before this, the spend rails metered ESTIMATES and nothing
+        ever corrected them, so a $0.20 daily cap admitted six runs booked at
+        $0.1758 whose worst-case bounds summed to $0.4458 — **2.23x the cap** —
+        and the measured actual, which the app computes and writes to
+        ``run_history.sqlite3``, was never read back by the caps at all. There
+        was not even a field to put it in.
+
+        Two guards, both under one hold of ``self._lock``:
+
+        * **The run must have an open charge in this window.** A preview, a
+          BLOCKed run and a ceiling-degraded run never opened one, and adding
+          their measured cost here would invent spend the rails should not see.
+        * **At most one reconciliation per run.** ``_persist_terminal_run``
+          is documented as able to double-fire across its two terminal call
+          sites, and a retried POST is the failure mode F-01 closed by call-site
+          discipline rather than by a constraint. This is the constraint.
+
+        Returns:
+            ``True`` if the reconciliation was written. ``False`` if the run had
+            no open charge in the window, or was already reconciled — in both
+            cases nothing was written and the ledger is unchanged.
+        """
+        when = now or datetime.now(UTC)
+        cutoff = when - timedelta(hours=24)
         with self._lock:
             cursor = self._conn.execute(
-                "SELECT payload FROM events "
-                "WHERE recorder = 'cost' AND event_type = 'cost_guardrail_accepted' "
-                "AND recorded_at >= ?",
-                (cutoff.isoformat(),),
+                "SELECT event_type FROM events "
+                "WHERE recorder = 'cost' AND query_run_id = ? AND recorded_at >= ? "
+                f"AND event_type IN ('{COST_ACCEPTED_EVENT}', '{COST_RECONCILED_EVENT}', "
+                f"'{COST_CHARGE_VOIDED_EVENT}')",
+                (str(query_run_id), cutoff.isoformat()),
             )
-            for row in cursor:
-                payload = json.loads(row["payload"])
-                raw = payload.get("estimated_cost_usd", "0")
-                total += Decimal(str(raw))
-        return total
+            seen = {row["event_type"] for row in cursor}
+            if COST_ACCEPTED_EVENT not in seen:
+                return False
+            if COST_RECONCILED_EVENT in seen or COST_CHARGE_VOIDED_EVENT in seen:
+                return False
+            self.record(
+                recorder="cost",
+                event_type=COST_RECONCILED_EVENT,
+                account_id=account_id,
+                query_run_id=query_run_id,
+                recorded_at=when,
+                payload={
+                    "event_type": COST_RECONCILED_EVENT,
+                    "account_id": str(account_id),
+                    "query_run_id": str(query_run_id),
+                    "estimated_cost_usd": str(estimated_cost_usd),
+                    "actual_cost_usd": str(actual_cost_usd),
+                },
+            )
+            return True
+
+    def void_cost_charge(
+        self,
+        *,
+        account_id: UUID,
+        query_run_id: UUID,
+        reason: str,
+        now: datetime | None = None,
+    ) -> None:
+        """Cancel the charge for a run that never started (F-01).
+
+        The events table is append-only, so a charge is undone by a later event
+        keyed on the same ``query_run_id``, never by a DELETE.
+
+        Best-effort on purpose, and the direction it fails in is the safe one:
+        a lost void leaves the account charged for a run that never ran, i.e.
+        over-metered. That is why this write is NOT in ``_METERED_WRITES``.
+        """
+        self.record(
+            recorder="cost",
+            event_type=COST_CHARGE_VOIDED_EVENT,
+            account_id=account_id,
+            query_run_id=query_run_id,
+            recorded_at=now or datetime.now(UTC),
+            payload={
+                "event_type": COST_CHARGE_VOIDED_EVENT,
+                "account_id": str(account_id),
+                "query_run_id": str(query_run_id),
+                "reason": reason,
+            },
+        )
 
     def try_record_session_mint(
         self,
@@ -1069,8 +1444,12 @@ def configure_for_tests() -> Iterator[FeedbackStore]:
 # dict from a dataclass. The recorders already do this; re-exporting
 # keeps the call-site a one-liner.
 __all__ = [
+    "COST_ACCEPTED_EVENT",
+    "COST_CHARGE_VOIDED_EVENT",
+    "COST_RECONCILED_EVENT",
     "DEFAULT_DB_PATH",
     "LOST_COST_EVENT_LOG_INTERVAL_S",
+    "ChargeOutcome",
     "FeedbackEventRow",
     "FeedbackStore",
     "WriteHealth",

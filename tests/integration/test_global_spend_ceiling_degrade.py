@@ -220,3 +220,90 @@ def test_status_global_spend_is_null_not_zero_when_no_store() -> None:
         assert body["global_daily_spend_usd"] is None
     finally:
         configure(original)
+
+
+def test_an_unmeterable_ledger_forces_local_simulation_and_calls_no_provider(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """ADR-0016, superseding ADR-0004. The HTTP boundary is never touched when
+    the spend ledger cannot be metered.
+
+    RED IF: the ``spend_metering_unavailable`` term is deleted from the
+    degrade condition in ``_execute_query_run``, or ``estimate`` stops setting
+    the flag on the bypass branch. Either way this run would go live, ``calls``
+    would be non-empty, and the spend would be real and unmetered — which is
+    precisely the window ADR-0004 chose to leave open and this closes.
+
+    Live execution is genuinely enabled and a key is configured, exactly as in
+    the ceiling test above, so a failed degrade really would reach the mocked
+    HTTP layer and succeed.
+
+    NO store is configured here — ``get_store()`` returns ``None``, which is
+    the first of the three "cannot be trusted" shapes ADR-0004 enumerates
+    (no store at all; writes failing now; rows silently missing).
+    """
+    monkeypatch.setattr(settings, "openrouter_live_execution_enabled", True)
+    monkeypatch.setattr(settings, "openrouter_api_key", "sk-test-fake-key")
+    # Pin the premise. ``configure(None)`` makes the ledger unmeterable, but the
+    # request path also kicks off a BACKGROUND reconnect (#123); if that wins
+    # the race it reopens a real store, ``may_be_metered`` flips True and the
+    # run goes live — this test would then fail for a reason unrelated to the
+    # degrade. It lost 20/20 in a flake scan, so it is not flaky today, but the
+    # mechanism is real and a test should not depend on winning a race.
+    monkeypatch.setattr(settings, "store_reconnect_enabled", False)
+
+    calls: list[str] = []
+    monkeypatch.setattr(
+        provider_stub_service,
+        "_post_messages",
+        _fake_post_messages_tracking_calls(calls),
+    )
+
+    # The store handle is a process GLOBAL, so it is restored in a ``finally``.
+    # A leaked ``None`` would silently disarm the daily cap for every test that
+    # ran after this one — the class of bug tests/helpers.py exists for.
+    from product_app.feedback_store import configure, get_store
+
+    original = get_store()
+    try:
+        configure(None)
+        client = TestClient(app)
+        account_id = uuid4()
+
+        create_response = client.post(
+            "/v1/query-runs",
+            json=acknowledged_request("Compare unmeterable-ledger research options"),
+            headers={"X-Account-Id": str(account_id)},
+        )
+        assert create_response.status_code == 202
+        query_run_id = create_response.json()["query_run_id"]
+
+        result_response = client.get(
+            f"/v1/query-runs/{query_run_id}",
+            headers={"X-Account-Id": str(account_id)},
+        )
+    finally:
+        configure(original)
+    assert result_response.status_code == 200
+    body = result_response.json()
+
+    # The money-critical assertion: nothing was spent.
+    assert calls == [], f"provider was billed while the ledger was unmeterable: {calls}"
+
+    model_answers = body["result"]["model_answers"]
+    assert len(model_answers) == 4
+    assert all(answer["provider_path"] == "local_simulation" for answer in model_answers)
+    assert body["live_count"] == 0
+    assert body["local_count"] == 4
+
+    # ...and it is NOT reported as a spend-ceiling degrade. The two causes
+    # drive different user-facing copy, so conflating them would put a false
+    # reason on screen (``app.js`` ``computeDemoModeBannerCopy``).
+    assert body["global_spend_ceiling_reached"] is False
+    # ...and the RIGHT cause does reach the user. RED IF the flag stops being
+    # served: the banner then falls through to its default clause and says
+    # "Live execution is turned off", which is FALSE here — this very test
+    # turns live execution ON and configures a key. Adversarial review caught
+    # exactly that gap: the separate-flag decision was justified by "never put
+    # a false reason on screen", and the flag was not reaching the screen.
+    assert body["spend_metering_unavailable"] is True

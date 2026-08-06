@@ -25,11 +25,12 @@ import time
 import warnings
 from collections.abc import Callable
 from dataclasses import asdict, dataclass
+from dataclasses import replace as dataclass_replace
 from datetime import UTC, datetime, timedelta
 from decimal import ROUND_FLOOR, ROUND_HALF_UP, Decimal
 from enum import StrEnum
 from threading import RLock
-from typing import Any
+from typing import TYPE_CHECKING, Any
 from uuid import UUID, uuid4
 
 from pydantic import BaseModel, Field
@@ -38,6 +39,9 @@ from product_app.catalog_fetcher import _FALLBACK_CATALOG
 from product_app.config import settings
 from product_app.feedback_store import record_event as _record_feedback_event
 from product_app.model_slots import DEFAULT_MODEL_IDS, ModelSlot, openrouter_model_catalog_service
+
+if TYPE_CHECKING:  # import cycle at runtime; the annotation is a string
+    from product_app.feedback_store import ChargeOutcome
 
 _log = logging.getLogger(__name__)
 
@@ -313,6 +317,29 @@ class CostEstimate(BaseModel):
     #: in. Defaults ``False`` so pre-existing ``CostEstimate(...)``
     #: constructions keep working.
     global_ceiling_reached: bool = False
+    #: The spend ledger could not be trusted when this run was priced, so
+    #: NEITHER rail could be tested. Like ``global_ceiling_reached`` this forces
+    #: the whole run into local simulation — spend goes to $0 for as long as the
+    #: fault lasts, which is what enforcing a cap has to mean when the cap
+    #: cannot be measured.
+    #:
+    #: A SEPARATE field, not a reuse of ``global_ceiling_reached``, because the
+    #: two causes are not the same and the product says different things about
+    #: them: that flag drives the operator-approved "#100 ceiling" banner copy
+    #: (``app.js`` ``computeDemoModeBannerCopy``), and a storage fault is not a
+    #: spend ceiling. Setting one to mean the other would put a false reason on
+    #: screen.
+    #:
+    #: ADR-0016 records this decision and supersedes ADR-0004, which chose to
+    #: fail OPEN here. On the POSTURE question ADR-0004 chose between refusing
+    #: everyone (402) and serving-and-logging; this is a third it did not
+    #: consider: serve, but spend nothing. It did NOT weigh only two
+    #: alternatives overall — it lists five, one of which,
+    #: "reserve-then-commit in one transaction", it called *the correct design,
+    #: deferred*. That is what ``try_record_cost_charge`` implements, so the
+    #: atomic half of this work is ADR-0004's own recommendation taken up, not
+    #: a new idea.
+    spend_metering_unavailable: bool = False
 
 
 class CostConfirmation(BaseModel):
@@ -351,7 +378,20 @@ class InMemoryCostEventRecorder:
         estimated_cost_usd: Decimal,
         threshold_action: CostThresholdAction,
         confirmed: bool,
-    ) -> None:
+        persist: bool = True,
+    ) -> CostGuardrailEvent:
+        """Append one guardrail event to the ring, and (by default) persist it.
+
+        ``persist=False`` appends to the in-memory ring ONLY. It exists for one
+        caller: :meth:`CostEstimationService.try_record_run_charge`, where the
+        durable row was already written INSIDE the store's lock, atomically with
+        the cap check that authorised it (issue #255 / the spend race). Writing
+        it again here would double-meter the account, because
+        ``daily_spend_for`` counts rows, not runs.
+
+        Returns the event, so a caller that persisted separately can reuse the
+        exact payload rather than rebuilding it.
+        """
         event = CostGuardrailEvent(
             event_type=event_type,
             account_id=account_id,
@@ -364,13 +404,65 @@ class InMemoryCostEventRecorder:
             self._events.append(event)
             if len(self._events) > self.MAX_EVENTS:
                 del self._events[: len(self._events) - self.MAX_EVENTS]
-        _record_feedback_event(
-            recorder="cost",
-            event_type=event.event_type,
-            account_id=event.account_id,
-            query_run_id=event.query_run_id,
-            payload=asdict(event),
-        )
+        if persist:
+            _record_feedback_event(
+                recorder="cost",
+                event_type=event.event_type,
+                account_id=event.account_id,
+                query_run_id=event.query_run_id,
+                payload=asdict(event),
+            )
+        return event
+
+    def discard_charge_for_run(self, query_run_id: UUID) -> int:
+        """Forget every accepted charge in the ring for ``query_run_id``.
+
+        The ring is the meter ``_cumulative_spend_for`` reads, and unlike the
+        durable sink it is NOT append-only — it is a bounded in-process buffer,
+        so a charge is undone by removing it rather than by a compensating
+        event. Called only from ``query_runs._void_run_billing``, for a run
+        whose worker never started (F-01): without this the run would be
+        un-billed in the durable ledger and still billed in the ring, and the
+        two rails would disagree about the same run.
+
+        Returns the number of events removed, so a caller can assert
+        cardinality rather than trusting the call happened.
+        """
+        with self._lock:
+            before = len(self._events)
+            self._events = [
+                e
+                for e in self._events
+                if not (
+                    e.query_run_id == query_run_id and e.event_type == "cost_guardrail_accepted"
+                )
+            ]
+            return before - len(self._events)
+
+    def reconcile_charge_for_run(self, query_run_id: UUID, actual_cost_usd: Decimal) -> int:
+        """Correct this run's ring entry from its estimate to its measured cost.
+
+        The ring is the meter ``_cumulative_spend_for`` reads, and it is a
+        SEPARATE rail from the durable ledger. Reconciling only the durable one
+        makes the two disagree about the same run, and the un-reconciled one is
+        the one that binds first: adversarial review measured an account whose
+        runs each really cost a twentieth of their estimate blocked at
+        ``$0.2303`` of the ``$0.25`` hard limit while the durable ledger — the
+        reconciled truth — read ``$0.011515`` of its ``$0.20`` cap. The account
+        was refused after spending 5.8% of its budget AND shown "Cumulative
+        spend for this account is 0.2303 USD", a money figure 20x the truth, in
+        the very change whose other half exists to stop false money figures.
+
+        Returns the number of ring entries corrected, so a caller can assert
+        cardinality rather than trusting the call happened.
+        """
+        with self._lock:
+            corrected = 0
+            for i, e in enumerate(self._events):
+                if e.query_run_id == query_run_id and e.event_type == "cost_guardrail_accepted":
+                    self._events[i] = dataclass_replace(e, estimated_cost_usd=actual_cost_usd)
+                    corrected += 1
+            return corrected
 
     def list_events(self) -> list[CostGuardrailEvent]:
         with self._lock:
@@ -560,6 +652,11 @@ class CostEstimationService:
                         ),
                     ],
                 )
+        # Set by the bypass branch below when the ledger cannot be metered, and
+        # carried onto the returned estimate so the run degrades to simulation
+        # (ADR-0016). Initialised HERE, outside the ``account_id is not None``
+        # block, because the field is on every estimate this method returns.
+        spend_metering_unavailable = False
         # Daily-cap guard. Defense-in-depth: even if a user stays
         # under the per-call thresholds AND under the in-memory
         # cumulative check, a patient attacker could trickle out one
@@ -660,14 +757,25 @@ class CostEstimationService:
             # money decision a pure function of the handle rather than of a
             # process-global flag written by two thread classes.
             if not feedback_ledger_may_be_metered(store):
-                # LOUD ONLY (issue #101's original decision): the request is
-                # NOT denied and ``threshold_action`` is NOT changed. Failing
-                # closed here is what ``daily_cap_fail_closed`` above turns on,
-                # deliberately off by default — see its comment in config.py.
-                # What matters is that we no longer PRETEND to meter: an
-                # untrustworthy ledger produces a loud bypass, not a
-                # confident-looking wrong number.
+                # LOUD, AND SPENDING NOTHING (ADR-0016, superseding ADR-0004).
+                # The request is still NOT denied and ``threshold_action`` is
+                # NOT changed — ``daily_cap_fail_closed`` above still selects
+                # the refuse-everyone posture and is still off by default. What
+                # changed is what an ALLOWED run then DOES: it is degraded to
+                # local simulation, so an unmeasurable window costs $0 instead
+                # of an unmetered amount bounded only by the in-memory rail.
+                #
+                # ADR-0004 weighed refuse-everyone against serve-and-log on
+                # this question, and described the first as refusing "every
+                # priced request from every account for the duration of the
+                # fault". This is a third: serve, but spend nothing. It also
+                # removes the incoherence ADR-0004 itself named — the 25x-larger
+                # global rail fails open on the identical fault — because the
+                # SAME degrade now covers both.
+                #
+                # We still no longer PRETEND to meter: the bypass stays loud.
                 self._log_daily_cap_bypassed()
+                spend_metering_unavailable = True
             else:
                 # ``ledger_is_trustworthy`` is False for ``store is None``, so
                 # reaching here proves ``store`` is not None. Spelled out for
@@ -675,9 +783,12 @@ class CostEstimationService:
                 # boolean.
                 assert store is not None
                 already_spent = store.daily_spend_for(account_id)
-                # Same unit rule as the cumulative rail above: ``daily_spend_for``
-                # sums ``estimated_cost_usd``, so the addend is the point
-                # estimate. With ``bound`` here the cap admitted
+                # Same unit rule as the cumulative rail above. ``daily_spend_for``
+                # books each run at ``estimated_cost_usd`` and then CORRECTS it
+                # to the measured actual once the run ends (#255/ADR-0016), so
+                # the meter is a ledger of real spend and the addend for a run
+                # that has not happened yet is still the point estimate — the
+                # only figure that exists before the run does. With ``bound`` here the cap admitted
                 # ``floor((CAP - bound) / unit) + 1`` runs instead of
                 # ``floor(CAP / unit)`` — one run of headroom permanently
                 # unusable — and any run whose BOUND alone exceeded the cap was
@@ -691,9 +802,15 @@ class CostEstimationService:
                         confirmation_token=None,
                         breakdown=breakdown,
                         reasons=[
+                            # Says what it MEASURES. The comparison two lines
+                            # above is ``already_spent + estimated``, both
+                            # point estimates against a ledger of measured
+                            # actuals (#255) — it is not a worst-case figure,
+                            # and calling it one told the operator the rail
+                            # was stricter than it is.
                             (
-                                f"Worst-case cost would exceed the USD "
-                                f"{DAILY_CAP_USD} daily cap for this account."
+                                f"This run would take the account past its USD "
+                                f"{DAILY_CAP_USD} daily cap."
                             ),
                             (
                                 "Account has spent "
@@ -743,14 +860,19 @@ class CostEstimationService:
             reasons=reasons,
             breakdown=breakdown,
             global_ceiling_reached=global_ceiling_reached,
+            spend_metering_unavailable=spend_metering_unavailable,
         )
 
     def _log_daily_cap_bypassed(self) -> None:
         """Announce a skipped daily cap, at most once per window.
 
-        Emits nothing else and returns nothing: the caller's ``CostEstimate``
-        must be identical with and without this call (asserted by
-        ``test_the_bypass_log_does_not_change_the_returned_estimate``).
+        Emits nothing else and returns nothing. THIS CALL still changes no field
+        of the caller's ``CostEstimate`` — but since ADR-0016 the surrounding
+        branch does: it sets ``spend_metering_unavailable``, so the run degrades
+        to simulation rather than spending unmetered. Asserted field-by-field by
+        ``test_a_bypassed_cap_changes_exactly_one_field_on_the_returned_estimate``
+        — renamed from ``…_does_not_change_the_returned_estimate``, which named
+        the superseded ADR-0004 contract.
 
         The window bookkeeping runs under the service lock so two concurrent
         request threads cannot both decide they are the first — the point of a
@@ -949,6 +1071,186 @@ class CostEstimationService:
                 logging.getLogger(__name__).debug(
                     "Sentry capture failed for %s: %s", event_type, exc
                 )
+
+    def try_record_run_charge(
+        self,
+        *,
+        account_id: UUID,
+        query_run_id: UUID,
+        estimated_cost_usd: Decimal,
+        threshold_action: CostThresholdAction,
+        confirmed: bool,
+        global_ceiling_reached: bool,
+        client_ip: str | None = None,
+    ) -> ChargeOutcome:
+        """Open this run's charge, re-testing both rails ATOMICALLY as it does.
+
+        This is the one call that books a run's money, and it is the successor
+        to calling :meth:`record_guardrail_event` directly for the accepted
+        case. The difference is not the row it writes — that is byte-identical —
+        but WHEN the rails are tested: inside the same lock hold as the write,
+        instead of a whole request earlier in :meth:`estimate`.
+
+        MEASURED on the old unsynchronised path, against ``DAILY_CAP_USD`` of
+        $0.20: 8 concurrent runs booked $0.2344 (1.17x over) and 32 booked
+        $0.9376 (**4.69x over**), while the serial control booked $0.1758 and
+        stayed under. ``costs.GLOBAL_DAILY_CEILING_USD``'s docstring accepted
+        that window by design and bounded it at ``_MAX_CONCURRENT_RUNS`` (16) x
+        ``HARD_LIMIT_USD`` ($0.25) = $4.00 of overshoot on a $5.00 rail. The
+        operator's decision on 2026-08-06 was that a cap should mean its number,
+        so the window is closed rather than bounded — see ADR-0016.
+
+        Fails OPEN, exactly like :meth:`estimate`'s daily-cap branch and for the
+        same reason (ADR-0004): if the ledger cannot be trusted, the request is
+        not denied. A storage fault must not turn into "nobody can run".
+        """
+        from product_app.feedback_store import (  # local import to avoid cycles
+            ChargeOutcome,
+            get_store,
+        )
+        from product_app.store_reconnect import feedback_ledger_may_be_metered
+
+        if global_ceiling_reached:
+            # Decided at estimate time and already persisted on the run; the
+            # worker will simulate the whole thing and spend nothing. Record the
+            # degrade (and its Sentry alert) and book NO charge — meter honesty,
+            # see ``FeedbackStore.global_daily_spend``.
+            self.record_guardrail_event(
+                account_id=account_id,
+                query_run_id=query_run_id,
+                estimated_cost_usd=estimated_cost_usd,
+                threshold_action=threshold_action,
+                confirmed=confirmed,
+                global_ceiling_reached=True,
+                client_ip=client_ip,
+            )
+            return ChargeOutcome.OVER_GLOBAL_CEILING
+
+        store = get_store()
+        if not feedback_ledger_may_be_metered(store):
+            # ADR-0016. There is no trustworthy ledger to be atomic against, so
+            # neither rail can be tested — and a rail that cannot be tested must
+            # not be spent through. Degrade to local simulation, which costs $0,
+            # rather than serve an unmetered live run (ADR-0004's old posture)
+            # or refuse every visitor (``daily_cap_fail_closed``).
+            #
+            # No charge is booked, for the same reason a ceiling-degraded run
+            # books none: the run spends nothing. So there is nothing here for
+            # ``lost_billed_writes`` to count either — the bypass ERROR is what
+            # tells the operator, and it still fires.
+            self._log_daily_cap_bypassed()
+            return ChargeOutcome.METERING_UNAVAILABLE
+        assert store is not None  # narrowed by feedback_ledger_may_be_metered
+
+        event = CostGuardrailEvent(
+            event_type="cost_guardrail_accepted",
+            account_id=account_id,
+            query_run_id=query_run_id,
+            estimated_cost_usd=estimated_cost_usd,
+            threshold_action=threshold_action,
+            confirmed=confirmed,
+        )
+        outcome = store.try_record_cost_charge(
+            account_id=account_id,
+            query_run_id=query_run_id,
+            estimated_cost_usd=estimated_cost_usd,
+            payload=asdict(event),
+            daily_cap_usd=DAILY_CAP_USD,
+            global_ceiling_usd=GLOBAL_DAILY_CEILING_USD,
+        )
+        if outcome is ChargeOutcome.RECORDED:
+            # Ring only: the durable row went in under the store's lock above.
+            cost_event_recorder.record(
+                event_type=event.event_type,
+                account_id=account_id,
+                query_run_id=query_run_id,
+                estimated_cost_usd=estimated_cost_usd,
+                threshold_action=threshold_action,
+                confirmed=confirmed,
+                persist=False,
+            )
+        elif outcome is ChargeOutcome.OVER_GLOBAL_CEILING:
+            # The ceiling was crossed between this run's estimate and its
+            # charge. Same treatment as the estimate-time decision above.
+            self.record_guardrail_event(
+                account_id=account_id,
+                query_run_id=query_run_id,
+                estimated_cost_usd=estimated_cost_usd,
+                threshold_action=threshold_action,
+                confirmed=confirmed,
+                global_ceiling_reached=True,
+                client_ip=client_ip,
+            )
+        return outcome
+
+    def reconcile_run_charge(
+        self,
+        *,
+        account_id: UUID,
+        query_run_id: UUID,
+        estimated_cost_usd: Decimal,
+        actual_cost_usd: Decimal,
+    ) -> bool:
+        """Correct this run's charge to its measured cost on BOTH spend rails.
+
+        The durable ledger and the in-process ring are separate meters over the
+        same runs, and correcting one without the other makes them disagree —
+        see :meth:`InMemoryCostEventRecorder.reconcile_charge_for_run` for the
+        measured consequence. Kept in one method for the same reason
+        :meth:`void_run_charge` is.
+
+        The ring is corrected ONLY when the durable write succeeded, so the two
+        rails cannot diverge in the other direction either: the store's guards
+        (no open charge / already reconciled / already voided) decide once, and
+        the ring follows that decision rather than making its own.
+        """
+        from product_app.feedback_store import get_store  # local import to avoid cycles
+
+        store = get_store()
+        if store is None:
+            return False
+        written = store.try_record_cost_reconciliation(
+            account_id=account_id,
+            query_run_id=query_run_id,
+            estimated_cost_usd=estimated_cost_usd,
+            actual_cost_usd=actual_cost_usd,
+        )
+        if written:
+            cost_event_recorder.reconcile_charge_for_run(query_run_id, actual_cost_usd)
+        return written
+
+    def void_run_charge(
+        self,
+        *,
+        account_id: UUID,
+        query_run_id: UUID,
+        reason: str,
+    ) -> None:
+        """Take back a charge on BOTH spend rails (F-01).
+
+        The two rails undo a charge differently and neither is optional:
+
+        * the durable ledger is append-only, so it gets a compensating
+          ``cost_charge_voided`` event keyed on the run;
+        * the in-process ring is a bounded buffer, so the charge is REMOVED.
+
+        Kept in one method on purpose. The first version of this fix voided the
+        ledger from ``query_runs`` and reached for ``cost_event_recorder``,
+        which is not imported there; the ``contextlib.suppress(Exception)`` that
+        makes the caller best-effort swallowed the ``NameError`` whole, and the
+        ring silently kept the charge. The test caught it, and the shape that
+        allowed it is what this method removes.
+        """
+        cost_event_recorder.discard_charge_for_run(query_run_id)
+        from product_app.feedback_store import get_store  # local import to avoid cycles
+
+        store = get_store()
+        if store is not None:
+            store.void_cost_charge(
+                account_id=account_id,
+                query_run_id=query_run_id,
+                reason=reason,
+            )
 
     # -- internals --------------------------------------------------------
 
