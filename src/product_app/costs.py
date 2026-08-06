@@ -221,6 +221,15 @@ _DEFAULT_PRICE_PER_1K_OUTPUT = max(
 #: token count (the industry ~4-chars/token rule of thumb).
 CHARS_PER_TOKEN = Decimal(4)
 
+#: Section count in the Layer-B judge's evidence bundle. A LITERAL, pinned
+#: against ``evaluation.build_judge_evidence``, which hard-codes exactly five
+#: sections (consensus, disagreement, source_support, uncertainty,
+#: recommendation). Deliberately NOT ``settings.cost_synthesis_sections`` — that
+#: is an env-overridable PRICING knob and cannot bound anything. Same rule
+#: ``query_runs`` and ``synthesis`` already apply to their own bounds.
+#: Pinned by ``tests/unit/test_bound_covers_the_judge.py``.
+_JUDGE_EVIDENCE_SECTIONS = Decimal(5)
+
 #: issue #16: the estimate is a realistic per-call token model. The old
 #: ``QUERY_COST_PER_1K_CHARS_USD`` / ``PER_CHAR_PROCESSING_USD`` synthetic
 #: per-character charges (and the flat ``DEBATE_FIXED_COST_USD`` /
@@ -294,9 +303,17 @@ class CostEstimate(BaseModel):
     confirmation_token: str | None
     reasons: list[str]
     #: Fail-safe upper bound — the "up to $Y" figure. Prices the initial-answer
-    #: output at the enforced ``settings.initial_answer_max_tokens`` cap, so
-    #: (because the live initial calls are capped at that value) real cost never
-    #: exceeds it. The cost guardrail (BLOCK / REQUIRE_CONFIRMATION / daily cap)
+    #: output at the enforced ``settings.initial_answer_max_tokens`` cap, and —
+    #: since #265 — the Layer-B judge when one is configured, so every billable
+    #: call is represented. It bounds the OUTPUT side of every call from an
+    #: enforced cap. It does NOT bound the input side: the per-call system
+    #: prompt and web-search context are priced from
+    #: ``cost_system_prompt_tokens`` / ``cost_web_search_context_tokens``, which
+    #: are ASSUMPTIONS no code enforces (the search context is injected upstream
+    #: by the provider). So "real cost never exceeds it" is not a guarantee this
+    #: figure can make, and the shipped UI copy deliberately says "the worst
+    #: case this run is priced at" instead. The cost guardrail (BLOCK /
+    #: REQUIRE_CONFIRMATION / daily cap)
     #: is evaluated against THIS value, not the point estimate, so the rail
     #: fails safe (issue #16 rec #2/#3). Optional with a ``None`` default so
     #: pre-existing ``CostEstimate(...)`` constructions keep working; always >=
@@ -1395,6 +1412,7 @@ class CostEstimationService:
         debate_output_override: Decimal | None = None,
         context_tokens: Decimal = Decimal(0),
         price_round_two_prior_critique: bool = False,
+        price_judge: bool = False,
     ) -> tuple[list[Decimal], Decimal, Decimal, Decimal, Decimal]:
         """The shared per-call token model, parameterised by the initial-answer
         output token count and the synthesis section count.
@@ -1551,11 +1569,82 @@ class CostEstimationService:
             if price_round_two_prior_critique
             else Decimal(0)
         )
+        # Issue #265: the Layer-B judge is a FIFTH billable call, and until this
+        # term existed ``max_cost_usd`` priced only four stages while a fired
+        # judge's cost WAS added to ``actual_cost_usd``. So ``actual > max`` —
+        # actual cost above the figure the user approved — was reachable the
+        # moment a judge was configured. The judge is intended to be ON in
+        # production, so this was not a latent gap for long.
+        #
+        # BOUND-ONLY, exactly like ``price_round_two_prior_critique`` above and
+        # for the recorded reason: a term that belongs to no single displayed
+        # stage breaks the ``by_stage``/``by_model`` reconciliation when added
+        # to the point path. ``_estimate_bound_usd`` is the only caller that
+        # sets this, and it returns a scalar with no partition to reconcile.
+        #
+        # WHAT THIS TERM DOES AND DOES NOT BOUND. An earlier draft called it
+        # "a TRUE ceiling, not a guess". Adversarial review refuted that with a
+        # measurement, so the honest statement is here instead:
+        #
+        # BOUNDED, from caps this codebase enforces:
+        #   * output — ``quorum_eval_judge_max_tokens``, which
+        #     ``EvalJudgeService.evaluate`` passes as ``max_tokens``;
+        #   * the answers — ``initial_answer_max_tokens`` per slot;
+        #   * the synthesis sections — ``SYNTHESIS_SECTION_MAX_TOKENS`` each;
+        #   * the judge's own system prompt — a module constant;
+        #   * the query.
+        #
+        # NOT BOUNDED: ``JudgeEvidence.source_lines``. ``_parse_tavily_results``
+        # truncates titles to ``_MAX_SOURCE_TITLE_LEN``, but ``_extract_citations``
+        # (the OpenRouter ``:online`` annotations path) applies NO title
+        # truncation and NO count cap — measured, 50 refs at 5000-char titles
+        # survive it, against 5 at 300 on the Tavily path. So a hostile or merely
+        # verbose annotation set can push the real judge prompt past this
+        # reserve. Sub-cent in normal operation; unbounded in the tail.
+        # ``synthesis.py`` defends its own prompt with exactly that truncation
+        # and the judge does not. Tracked separately — do NOT restore the
+        # "true ceiling" wording until ``build_judge_evidence`` bounds its
+        # source lines.
+        #
+        # SECTION COUNT IS THE LITERAL 5, matching ``build_judge_evidence``,
+        # which hard-codes five sections. It is deliberately NOT
+        # ``settings.cost_synthesis_sections``: that is an env-overridable
+        # PRICING knob, and this repo already rejected that exact coupling for a
+        # bound twice (``query_runs.py``, ``synthesis.py``). Measured with
+        # ``COST_SYNTHESIS_SECTIONS=1`` the old form reserved 11,000 input
+        # tokens against a real 23,000 — 48% of the worst case — and the test
+        # still passed, because it recomputed this formula instead of pinning it.
+        #
+        # ``_price`` falls back to the DEFAULT per-1k rate for a model id absent
+        # from the catalog. That is better than reserving zero, but it is NOT
+        # always an over-reserve: measured, 102 of the 335 live catalog models
+        # cost MORE as a judge than the fallback rate reserves (``openai/o1-pro``
+        # by 147x). An operator pinning an expensive judge outside the catalog
+        # gets an under-reserve.
+        judge_cost = Decimal(0)
+        if price_judge:
+            # local imports to avoid cycles: synthesis and evaluation both
+            # import costs.
+            from product_app.evaluation import _JUDGE_SYSTEM_PROMPT
+            from product_app.synthesis import SYNTHESIS_SECTION_MAX_TOKENS
+
+            judge_input_tokens = (
+                Decimal(settings.initial_answer_max_tokens) * Decimal(len(model_slots))
+                + _JUDGE_EVIDENCE_SECTIONS * Decimal(SYNTHESIS_SECTION_MAX_TOKENS)
+                + Decimal(len(_JUDGE_SYSTEM_PROMPT)) / CHARS_PER_TOKEN
+                + query_tokens
+            )
+            judge_cost = _cost(
+                settings.quorum_eval_judge_model_id,
+                judge_input_tokens,
+                Decimal(settings.quorum_eval_judge_max_tokens),
+            )
         raw_total = (
             initial_total
             + Decimal(2) * debate_round_cost
             + prior_critique_input_cost
             + synthesis_cost
+            + judge_cost
         )
         return initial_per_model, initial_total, debate_round_cost, synthesis_cost, raw_total
 
@@ -1594,6 +1683,13 @@ class CostEstimationService:
             if prior_s:
                 context_tokens += Decimal(len(prior_s)) / CHARS_PER_TOKEN
         init_output_tokens = Decimal(settings.initial_answer_max_tokens)
+        # Issue #265. ``judge_configured()`` is THE predicate — the same one
+        # ``query_runs._request_path_judge`` gates the paid call on and
+        # ``/status.judge_enabled`` reports — so the figure the user approves
+        # cannot drift from whether the call actually happens. Local import to
+        # avoid a cycle (evaluation -> debate -> costs).
+        from product_app.evaluation import judge_configured
+
         *_, raw_total = self._cost_components(
             query_text=query_text,
             model_slots=model_slots,
@@ -1604,6 +1700,7 @@ class CostEstimationService:
             # The bound is the only caller that must be a true CEILING, and the
             # only one with no breakdown to reconcile.
             price_round_two_prior_critique=True,
+            price_judge=judge_configured(),
         )
         return raw_total.quantize(COST_DISPLAY_QUANTUM, rounding=ROUND_HALF_UP)
 

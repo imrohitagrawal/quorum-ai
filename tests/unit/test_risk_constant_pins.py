@@ -134,6 +134,13 @@ BUCKET_A_LITERAL_PIN = (
 #: Pin the BEHAVIOUR, not the literal — these legitimately change, and a literal
 #: pin would teach people to edit the test alongside the code.
 BUCKET_B_PIN_BEHAVIOUR = {
+    # --- Added 2026-08-06 with the #265 judge cap term ---
+    "costs._JUDGE_EVIDENCE_SECTIONS": (
+        "assert the judge reserve does NOT track settings.cost_synthesis_sections and "
+        "that build_judge_evidence really emits this many sections -- the number must "
+        "equal what the evidence builder emits, and a literal pin alone would not "
+        "catch the two drifting apart"
+    ),
     # --- Added 2026-08-03 with feedback_store / query_runs / readiness ---
     "query_runs._MAX_CONCURRENT_RUNS": (
         "assert the (N+1)th concurrent run is refused, not the number 16 -- the "

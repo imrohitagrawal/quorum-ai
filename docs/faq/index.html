@@ -635,7 +635,7 @@ pre code {
           <li><strong>REQUIRE CONFIRMATION</strong> — $0.15 &lt; estimated cost ≤ $0.25. You must click "Confirm" to proceed. A confirmation token (bound to your account, valid 5 minutes) is required.</li>
           <li><strong>BLOCK</strong> — estimated cost &gt; $0.25. Cannot run, regardless of confirmation. There is also a per-account daily cap of $0.20 in any rolling 24-hour window.</li>
         </ul>
-        <p>The estimate is a <em>realistic</em> point figure — it models each of the seven billed calls (4 initial answers + 2 debate rounds + 1 synthesis × 5 sections) using actual token counts and cached per-model prices. The guardrail keys off a <em>fail-safe upper bound</em> (pricing initial-answer output at the enforced 2000-token cap), so real cost can never exceed a limit the run was waved through under.</p>
+        <p>The estimate is a <em>realistic</em> point figure — it models each of the seven billed calls (4 initial answers + 2 debate rounds + 1 synthesis × 5 sections) using actual token counts and cached per-model prices. The guardrail keys off a <em>fail-safe upper bound</em> (pricing initial-answer output at the enforced 2000-token cap), so a run's output cost is bounded by the figure it was waved through under. The bound also prices the Layer-B judge when one is configured (#265). It does not bound the INPUT side — the system-prompt and web-search context sizes are assumptions, not enforced caps — so the figure is the worst case the run is <em>priced at</em>, not a guarantee it cannot be exceeded.</p>
         <p>A <strong>token</strong> is the billing unit LLMs use. Roughly 4 characters of English text ≈ 1 token. A 500-word query is ~375 tokens; a 500-word model answer is ~375 tokens of output. Providers charge per 1,000 tokens (e.g. $0.00015 per 1K input tokens for gpt-4o-mini).</p>
         <span class="honesty built">● Built</span>
         <div class="example project">
@@ -1080,7 +1080,7 @@ pre code {
         <ul style="margin:8px 0 8px 20px;">
           <li><strong>Deploy verification:</strong> Do not trust <code>/health</code> 200. Check <code>/status</code> <code>build_sha</code> against the merged commit SHA. A green health check only confirms the old process is still running.</li>
           <li><strong>Test results:</strong> A green test on clean sim data is not proof the feature works on real LLM output. Render against the golden messy fixture and look at it as a user would.</li>
-          <li><strong>Cost estimates:</strong> The guardrail keys off the fail-safe upper bound (<code>max_cost_usd</code>), not the point estimate. Real cost can never exceed a limit the run was waved through under.</li>
+          <li><strong>Cost estimates:</strong> The guardrail keys off the fail-safe upper bound (<code>max_cost_usd</code>), not the point estimate. That bound prices every billable call's output at its enforced cap, including the Layer-B judge when one is configured (#265). Input sizes are modelled, not enforced, so treat it as the worst case the run is priced at rather than an absolute ceiling.</li>
           <li><strong>OpenAPI contract:</strong> Do not trust the hand-written spec. The drift guard byte-compares <code>app.openapi()</code> against the committed <code>openapi.yaml</code>. A mutated schema is caught.</li>
           <li><strong>Redaction:</strong> Do not trust "we strip secrets." The redaction tests assert it with static-analysis-style checks against real secret-shaped patterns.</li>
         </ul>
