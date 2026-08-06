@@ -68,11 +68,23 @@ def test_the_served_result_schema_has_no_judge_or_rationale_anywhere() -> None:
 #: object key, destructuring shorthand). Deliberately-obfuscated reads
 #: (computed keys built from fragments) are not greppable and remain a
 #: review-time concern, which is honest about what a lexical guard can do.
+#: #258 note. `judge_status` is the FIRST judge-bearing field the served
+#: projection has ever carried, and it defeated every pattern below: `_` is a
+#: word character, so `\.judge\b` never matches `.judge_status`. Review
+#: demonstrated that by appending `const leaked = ev.judge_status;` to a copy
+#: of `app.js` and watching this file stay green — in the very file whose
+#: stated purpose is that "no judge-reading code path can be added by habit".
+#: The patterns therefore cover an optional `_status` suffix, and this guard
+#: FAILS CLOSED: `app.js` reads no judge field today and may not start reading
+#: one by accident. #267 is expected to give the frontend an honest line for a
+#: judge that ran and produced nothing, and when it does it must DELETE the
+#: `(?:_status)?` group here deliberately, with its own justification — which
+#: is the whole point of a guard that has to be opened on purpose.
 _JUDGE_READ_PATTERNS = (
-    r"\.judge\b",
-    r"\[\s*[\"'`]judge[\"'`]\s*\]",
-    r"\bjudge\s*[:=]",
-    r"[{,]\s*judge\s*[,}]",
+    r"\.judge(?:_status)?\b",
+    r"\[\s*[\"'`]judge(?:_status)?[\"'`]\s*\]",
+    r"\bjudge(?:_status)?\s*[:=]",
+    r"[{,]\s*judge(?:_status)?\s*[,}]",
 )
 
 
@@ -101,8 +113,36 @@ def test_the_ban_still_catches_a_judge_reading_path() -> None:
         "const { judge } = payload.evaluation;",
         "const { signals, judge } = ev;",
         "const { judge, signals } = ev;",
+        # #258: the same shapes against the new judge-bearing field. Each of
+        # these passed the pre-#258 patterns; review proved the first one live.
+        "const v = ev.judge_status;",
+        "const v = ev?.judge_status;",
+        'const v = result.evaluation["judge_status"];',
+        "const v = trust[ 'judge_status' ];",
+        "const v = trust[`judge_status`];",
+        "let judge_status = payload.evaluation;",
+        "const cfg = { judge_status: verdict };",
+        "const { judge_status } = payload.evaluation;",
+        "const { signals, judge_status } = ev;",
     )
     for snippet in offenders:
         assert any(re.search(p, snippet) for p in _JUDGE_READ_PATTERNS), (
             f"loosened D-5 check no longer catches: {snippet!r}"
+        )
+
+
+def test_the_ban_does_not_fire_on_app_authored_prose() -> None:
+    """POSITIVE PARTNER (rule 7): the patterns must still be narrow enough to
+    let the app NAME the judge in its own disclosure copy, which is the
+    loosening P1 deliberately made. Without this, tightening the patterns for
+    #258 could have quietly re-banned honest attribution and nothing would
+    have said so."""
+    allowed = (
+        'const D = "Citation support was checked by an independent judge model.";',
+        "// the judge is advisory and never enters the composite",
+        "// judge_status is served but deliberately not read here",
+    )
+    for snippet in allowed:
+        assert not any(re.search(p, snippet) for p in _JUDGE_READ_PATTERNS), (
+            f"D-5 check now fires on app-authored prose: {snippet!r}"
         )
