@@ -717,6 +717,15 @@ components:
       - latency_ms
       - citation_coverage
       title: InitialModelAnswer
+    JudgeCallOutcome:
+      type: string
+      enum:
+      - verdict
+      - no_verdict_dispatched
+      - no_verdict_unbilled
+      - no_verdict_error
+      title: JudgeCallOutcome
+      description: "What ONE Layer-B judge call actually did (issue #258).\n\nBefore this existed, a judge that ran and produced nothing was\nbyte-identical, in every served trust field, to a run where no judge was\nconfigured at all — measured in production 2026-08-05, where a judge billed\n$0.0109 and changed nothing a user could see. The member is the\ndiscriminator; it carries no provider prose, only an app-authored token.\n\nThe three verdict-less members are NOT interchangeable, and the difference\nis money:\n\n* :attr:`NO_VERDICT_UNBILLED` — ``call_with_prompt`` returned ``None``,\n  which its own F-06 contract defines as \"no charge is possible\" (the\n  provider refused before inference: a bad key, an unknown model id, a\n  connection that never landed). The run's receipt must stay ``measured``;\n  demoting it would charge the user's honesty budget for $0 of spend.\n* :attr:`NO_VERDICT_DISPATCHED` — a request reached the model. It may have\n  been billed even with a blank or non-conforming body, so if no usage came\n  back the receipt must fall to ``estimated``.\n* :attr:`NO_VERDICT_ERROR` — the seam raised. Billing is genuinely unknown,\n  so this takes the same conservative posture as ``DISPATCHED``."
     LayerASignals:
       properties:
         citation_coverage_ratio:
@@ -1059,6 +1068,10 @@ components:
           title: Label Confidence
         trust:
           $ref: '#/components/schemas/TrustScore'
+        judge_status:
+          anyOf:
+          - $ref: '#/components/schemas/JudgeCallOutcome'
+          - type: 'null'
       type: object
       required:
       - schema_version

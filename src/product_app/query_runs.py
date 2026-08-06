@@ -67,6 +67,7 @@ from product_app.evaluation import (
     EvalJudgeVerdict,
     FaithfulnessLabel,
     HallucinationRisk,
+    JudgeCallOutcome,
     JudgeEvidence,
     LayerASignals,
     PresentationConfidence,
@@ -441,6 +442,16 @@ class QueryRunEvaluationProjection(BaseModel):
     #: unverifiable off-run URL marker whose labels sit at the confident end.
     label_confidence: PresentationConfidence
     trust: TrustScore
+    #: Issue #258: WHAT the Layer-B judge did on this run, or ``None`` when no
+    #: judge was configured or the run was never eligible for one. Without it
+    #: a paid judge that produced no verdict served a payload byte-identical
+    #: to a run that never had a judge — measured in production 2026-08-05,
+    #: where $0.0109 bought a page that still said nothing was verified.
+    #:
+    #: D-5 safe by construction: a CLOSED enum of app-authored tokens, never a
+    #: free-text field, so no provider prose can ride out on it. The judge's
+    #: rationale remains dropped, and this is not a ``judge`` key.
+    judge_status: JudgeCallOutcome | None = None
 
 
 class QueryRunResultResponse(BaseModel):
@@ -2514,6 +2525,11 @@ def _persist_run_evaluation(*, query_run: QueryRun, agreement: AgreementSummary)
                 "hallucination_risk": result.evaluation.hallucination_risk,
                 "trust_band": result.trust.band,
                 "support_verified": result.trust.support_verified,
+                # Issue #258: so "are the judges I pay for returning
+                # anything?" is answerable from the durable event stream
+                # rather than by re-running a query. A closed enum token or
+                # ``None``; never prose.
+                "judge_status": _judge_status_for(query_run.query_run_id),
                 "layer_a_composite_unverified": (
                     result.trust.diagnostics.layer_a_composite_unverified
                 ),
@@ -2630,6 +2646,22 @@ class _JudgeOutcome:
     verdict: EvalJudgeVerdict | None
     usage: TokenUsage | None
     model_id: str
+    #: WHAT the call did (issue #258). ``usage`` cannot answer this: it is
+    #: ``None`` both for a refusal that was provably free and for a dispatch
+    #: that may have been billed, and pricing those two the same way is what
+    #: let a bad judge key downgrade to ``estimated`` the receipt of every run
+    #: that would otherwise have been ``measured``, while spending nothing.
+    #:
+    #: ``None`` means the service never reached the point of classifying the
+    #: call. On the request path that is narrow but NOT unreachable — an
+    #: earlier draft of this comment claimed it was, and review refuted it by
+    #: forcing ``parse_judge_verdict`` to raise: ``_MemoisedRunJudge``'s
+    #: ``finally`` memoises the outcome unconditionally, so anything escaping
+    #: ``EvalJudgeService.evaluate`` lands here as ``None``. The service now
+    #: claims ``NO_VERDICT_DISPATCHED`` BEFORE it parses, which closes the one
+    #: demonstrated route; a reader must still treat ``None`` as "the service
+    #: did not say", never as "no judge ran".
+    status: JudgeCallOutcome | None = None
 
 
 _judge_verdict_memo: OrderedDict[str, _JudgeOutcome] = OrderedDict()
@@ -2641,6 +2673,38 @@ def _judge_verdict_memo_clear_for_tests() -> None:
     with _judge_memo_lock:
         _judge_verdict_memo.clear()
         _judge_inflight.clear()
+
+
+def _judge_status_for(query_run_id: UUID) -> JudgeCallOutcome | None:
+    """What the Layer-B judge did for this run, or ``None`` if it never ran.
+
+    Read from the memo rather than threaded back out of ``evaluate_run``,
+    because the judge is deliberately invisible to the evaluation engine: the
+    engine sees an ``EvalJudge`` protocol and a verdict, and neither says
+    whether a call was dispatched, refused, or billed. The memo is the one
+    place that knows, and it is the same entry ``billing_snapshot`` prices —
+    so the receipt and this field agree, UNLESS the entry is evicted between
+    the two reads.
+
+    That caveat is not decoration. An earlier draft said the two "can never
+    disagree" and review refuted it by demonstration: these are two separate
+    acquisitions of ``_judge_memo_lock`` at two different moments, and
+    ``_judge_verdict_memo`` is an LRU bounded at ``_JUDGE_VERDICT_MEMO_MAX``.
+    Evict between them and one served body can carry a judge status alongside
+    a total that was priced as if no judge existed. The same review confirmed
+    the underlying eviction window predates this function — it is visible now
+    rather than new — so it is documented here and tracked as #216, not
+    defended against with a lock this module does not otherwise take.
+
+    Two callers, and both run after the judge has already dispatched for this
+    run: ``_evaluation_projection`` (which CALLS ``_evaluate_terminal_run`` ->
+    ``evaluate_run``, where the dispatch happens, and reads this afterwards)
+    and ``_persist_run_evaluation``, which runs later still in
+    ``_persist_terminal_run`` and by then is served the memo.
+    """
+    with _judge_memo_lock:
+        outcome = _judge_verdict_memo.get(str(query_run_id))
+    return None if outcome is None else outcome.status
 
 
 class _MemoisedRunJudge:
@@ -2699,6 +2763,10 @@ class _MemoisedRunJudge:
                 verdict=verdict,
                 usage=service.last_usage,
                 model_id=settings.quorum_eval_judge_model_id,
+                # Read off the SAME instance that just ran, in the same
+                # ``finally`` that captures its usage, so the two can never
+                # describe different calls.
+                status=service.last_outcome,
             )
             with _judge_memo_lock:
                 _judge_verdict_memo[run_id] = outcome
@@ -2823,6 +2891,7 @@ def _evaluation_projection(
             hallucination_risk=evaluation.hallucination_risk,
         ),
         trust=result.trust,
+        judge_status=_judge_status_for(query_run.query_run_id),
     )
 
 
@@ -3067,7 +3136,25 @@ def _actual_cost(
         all(usage is not None for usage in snapshot.synthesis_call_usages),
     )
     judge_outcome = snapshot.judge_outcome
-    judge_captured = judge_outcome is None or judge_outcome.usage is not None
+    # Issue #258. Three ways this is True, and the middle one is the fix:
+    #   * no judge fired at all;
+    #   * a judge fired and the provider REFUSED it before inference, which
+    #     ``call_with_prompt``'s F-06 contract defines as $0 — the same
+    #     treatment debate and synthesis already get, where an unbilled call
+    #     records no usage entry and so never reaches this gate. Reading that
+    #     as "billed, unpriceable" meant a bad judge key or an unknown judge
+    #     model id downgraded EVERY run's receipt to ``estimated`` while
+    #     spending nothing;
+    #   * a judge fired and reported its usage, so it can be priced below.
+    # A DISPATCHED-but-unmeasured call and a call whose seam RAISED both stay
+    # uncaptured on purpose: those may really have been billed, and hiding a
+    # possible charge behind a "measured" label is the failure this gate
+    # exists to prevent.
+    judge_captured = (
+        judge_outcome is None
+        or judge_outcome.usage is not None
+        or judge_outcome.status is JudgeCallOutcome.NO_VERDICT_UNBILLED
+    )
     if not (initial_fully_captured and debate_captured and synthesis_captured and judge_captured):
         return estimate.estimated_cost_usd, estimate.breakdown, "estimated"
 

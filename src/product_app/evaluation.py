@@ -39,6 +39,7 @@ from __future__ import annotations
 import json
 import re
 from dataclasses import dataclass
+from enum import StrEnum
 from typing import Literal, Protocol
 from urllib.parse import urlparse
 
@@ -79,6 +80,40 @@ TrustBand = Literal["unverified", "low", "moderate", "high"]
 #: Whether a run's ADVISORY labels may be presented as a confident claim
 #: at all (DEBT-012). Derived by :func:`presentation_confidence`.
 PresentationConfidence = Literal["reportable", "indeterminate"]
+
+
+class JudgeCallOutcome(StrEnum):
+    """What ONE Layer-B judge call actually did (issue #258).
+
+    Before this existed, a judge that ran and produced nothing was
+    byte-identical, in every served trust field, to a run where no judge was
+    configured at all — measured in production 2026-08-05, where a judge billed
+    $0.0109 and changed nothing a user could see. The member is the
+    discriminator; it carries no provider prose, only an app-authored token.
+
+    The three verdict-less members are NOT interchangeable, and the difference
+    is money:
+
+    * :attr:`NO_VERDICT_UNBILLED` — ``call_with_prompt`` returned ``None``,
+      which its own F-06 contract defines as "no charge is possible" (the
+      provider refused before inference: a bad key, an unknown model id, a
+      connection that never landed). The run's receipt must stay ``measured``;
+      demoting it would charge the user's honesty budget for $0 of spend.
+    * :attr:`NO_VERDICT_DISPATCHED` — a request reached the model. It may have
+      been billed even with a blank or non-conforming body, so if no usage came
+      back the receipt must fall to ``estimated``.
+    * :attr:`NO_VERDICT_ERROR` — the seam raised. Billing is genuinely unknown,
+      so this takes the same conservative posture as ``DISPATCHED``.
+    """
+
+    #: A response came back and parsed as the strict verdict schema.
+    VERDICT = "verdict"
+    #: A request reached the model; nothing usable came back. Possibly billed.
+    NO_VERDICT_DISPATCHED = "no_verdict_dispatched"
+    #: Refused before inference. Provably $0 (F-06).
+    NO_VERDICT_UNBILLED = "no_verdict_unbilled"
+    #: The provider seam raised. Billing unknown; treated as possibly billed.
+    NO_VERDICT_ERROR = "no_verdict_error"
 
 
 # ---------------------------------------------------------------------------
@@ -1380,9 +1415,17 @@ class EvalJudgeService:
         #: Reset at the top of every ``evaluate()`` call so a caller can never
         #: read a PRIOR call's usage as if it belonged to the current one.
         self.last_usage: TokenUsage | None = None
+        #: What the MOST RECENT ``evaluate()`` call on this instance did, or
+        #: ``None`` if it never got as far as attempting one (issue #258).
+        #: ``last_usage`` alone cannot answer this: it is ``None`` both for a
+        #: refusal that was provably free and for a dispatch that may have
+        #: been billed, and those two must not be priced the same way. Reset
+        #: at the top of every call, for the same reason ``last_usage`` is.
+        self.last_outcome: JudgeCallOutcome | None = None
 
     def evaluate(self, evidence: JudgeEvidence) -> EvalJudgeVerdict | None:
         self.last_usage = None
+        self.last_outcome = None
         # The SAME predicate as the request-path gate and /status.judge_enabled.
         # This site used to re-implement the two-value rule inline; adversarial
         # review deleted its model-id half and NO test in the repo went red, so
@@ -1400,11 +1443,36 @@ class EvalJudgeService:
                 max_tokens=settings.quorum_eval_judge_max_tokens,
             )
         except Exception:  # noqa: BLE001 - the judge is advisory; it never breaks a run
+            # Billing is UNKNOWN here, not zero: the seam raising tells us
+            # nothing about whether a request left the process.
+            self.last_outcome = JudgeCallOutcome.NO_VERDICT_ERROR
             return None
         if result is None:
+            # F-06, verbatim from ``call_with_prompt``'s own contract: "no
+            # charge is possible ... The caller must record NO usage entry, so
+            # a run whose only failure was an unbilled 404 stays honestly
+            # measured." This branch used to leave ``last_usage`` at ``None``
+            # and say nothing else, which the billing gate read as "billed,
+            # unpriceable" — so a bad judge key silently downgraded the receipt
+            # of every run that would otherwise have been ``measured``, while
+            # spending nothing.
+            self.last_outcome = JudgeCallOutcome.NO_VERDICT_UNBILLED
             return None
+        # ORDER IS LOAD-BEARING: claim the possibly-billed outcome BEFORE
+        # parsing, then upgrade only on success. Written the other way round —
+        # parse first, then assign — a raise out of ``parse_judge_verdict``
+        # would leave ``last_outcome`` at ``None`` on a call that really was
+        # dispatched and priced, and ``_MemoisedRunJudge``'s ``finally`` would
+        # memoise that: a served ``judge_status: null``, which reads as "no
+        # judge was configured", for a judge that ran. Review demonstrated it
+        # by forcing the parser to raise. The parser is not supposed to raise;
+        # this costs one statement and does not depend on that holding.
         self.last_usage = result.usage
-        return parse_judge_verdict(result.answer_text)
+        self.last_outcome = JudgeCallOutcome.NO_VERDICT_DISPATCHED
+        verdict = parse_judge_verdict(result.answer_text)
+        if verdict is not None:
+            self.last_outcome = JudgeCallOutcome.VERDICT
+        return verdict
 
 
 class StubEvalJudge:
@@ -1682,6 +1750,7 @@ __all__ = [
     "EvalJudge",
     "EvalJudgeService",
     "EvalJudgeVerdict",
+    "JudgeCallOutcome",
     "JudgeEvidence",
     "LayerASignals",
     "MarkerCensus",
