@@ -917,6 +917,19 @@ def status_snapshot() -> dict[str, object]:
         # judge is off, because a judge call fired on a GET never reaches the
         # daily spend ledger.
         #
+        # Precision added 2026-08-06, because a sibling comment in
+        # ``query_runs.py`` got the adjacent claim BACKWARDS. The sentence above
+        # is about the GET path specifically, and it is correct:
+        # ``_persist_terminal_run`` — the only caller that reconciles — runs on
+        # the POST/worker path, so no GET reaches a ledger writer. What is NOT
+        # true is the wider reading that a judge cost never reaches the ledger
+        # at all: a run's FIRST judge dispatch happens inside
+        # ``_persist_terminal_run`` -> ``_result_response``, ahead of
+        # ``_reconcile_run_billing``, and on a ``measured`` run it IS booked.
+        # (The ``measured`` qualifier is load-bearing — an ``estimated`` run
+        # books nothing, judge or no judge.) #216 is the re-dispatch after the
+        # verdict memo is evicted or the process restarts.
+        #
         # STATE, never the values. Same discipline as ``error_tracking``: the
         # key is a credential and the pinned model id is free recon on an
         # unauthenticated endpoint. ``judge_configured`` is the SAME predicate

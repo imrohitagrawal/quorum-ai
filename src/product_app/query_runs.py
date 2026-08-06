@@ -2405,20 +2405,37 @@ def _persist_terminal_run(query_run_id: UUID) -> None:
         # the two are best-effort for different reasons and must not share a
         # fate. Values come from the SAME ``_result_response`` the user sees.
         #
-        # WHAT THIS ORDER COSTS, and why #216 stays OPEN. ``_persist_run_evaluation``
-        # below is where ``_request_path_judge`` dispatches a Layer-B judge call,
-        # so a judge cost realized THERE lands after this line and is not in the
-        # actual we book — and ``try_record_cost_reconciliation`` refuses a second
-        # correction for the same run, by design. Reconciling after the judge
-        # instead would capture it, but would put the money correction downstream
-        # of a best-effort evaluation write, so an evaluation failure would lose
-        # the correction entirely. That is a worse failure than the one it fixes:
-        # this way the ledger is short by a judge call, that way it keeps the raw
-        # estimate. #216 asks for the judge cost specifically and needs the
-        # ordering question decided on its own terms — its own issue text asks
-        # whether the judge should even be ALLOWED to push an account past its cap
-        # retroactively, or should instead be gated pre-flight. That decision is
-        # not this PR's to make. $0/day today: ``judge_enabled`` is false.
+        # WHERE THE JUDGE'S DOLLAR IS, measured — this said the opposite until
+        # 2026-08-06, here and in ADR-0016, which agreed with each other and
+        # neither with the code. The claim was that ``_persist_run_evaluation``
+        # below is where ``_request_path_judge`` dispatches, so a judge cost
+        # lands AFTER this line and is never booked. A runtime stack capture
+        # refutes it: the FIRST dispatch is inside ``_result_response`` on the
+        # line above, via ``_evaluation_projection`` ->
+        # ``_evaluate_terminal_run``. ``_result_response`` then reads
+        # ``_actual_cost`` LAST, so the judge's usage is already in the billing
+        # snapshot and already priced. By the time ``_persist_run_evaluation``
+        # runs, ``_MemoisedRunJudge`` serves the memo and dispatches nothing.
+        #
+        # So on a ``measured`` run the judge IS inside the figure booked here.
+        # An ``estimated`` run books nothing at all — ``_reconcile_run_billing``
+        # returns early — so "is booked" is a claim about measured runs only.
+        # Pinned in tests/integration/test_judge_request_path_wiring.py by
+        # ``test_the_paid_judge_call_precedes_the_ledger_reconciliation`` (the
+        # ORDER) and ``test_the_judge_dollar_is_inside_the_figure_the_ledger_books``
+        # (the MONEY, on a measured run). Both go red if the serving projection
+        # stops dispatching a judge; the money one also reds if ``_actual_cost``
+        # is read before ``_evaluation_projection``. Each test names its own
+        # mutation — they are not interchangeable, which a first draft of this
+        # comment got wrong.
+        #
+        # WHAT REMAINS OPEN (#216) is narrower: ``_judge_verdict_memo`` is a
+        # process global bounded at ``_JUDGE_VERDICT_MEMO_MAX``, so on LRU
+        # eviction — or a process restart — a later GET refires a real paid
+        # judge call, and ``try_record_cost_reconciliation`` refuses a second
+        # correction for the same run by design. That second call's cost
+        # reaches no ledger. Note this is NOT $0/day: the judge is intended to
+        # be ON in production.
         _reconcile_run_billing(query_run=query_run, response=response)
         agreement = response.result.agreement
         citation_ratio = None
