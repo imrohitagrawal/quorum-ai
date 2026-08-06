@@ -186,6 +186,7 @@ jobs:
           tests/invariants/readiness-no-flash.spec.ts
           tests/invariants/source-support-denominator.spec.ts
           tests/invariants/markdown-corpus.spec.ts
+          tests/invariants/landing-cta-reachable.spec.ts
           --project=chromium
           --retries=0
 

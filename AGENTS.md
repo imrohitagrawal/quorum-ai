@@ -502,18 +502,18 @@ this file. But when you touch the workspace UI (`src/product_app/static/app.js`,
   ordered lists, blockquotes, long multi-paragraph answers, an empty-citation
   slot — and look at it as a user would (screenshot at 1440px).
 - **The below-the-line gate is `e2e/tests/invariants/`** — driven in CI by
-  `.github/workflows/e2e.yml`. That directory holds **16** specs, not the
+  `.github/workflows/e2e.yml`. That directory holds **17** specs, not the
   three described below: `answer-completeness`, `export-and-expanders`,
-  `markdown-corpus`, `provider-notice-coverage`, `readiness-banner`,
-  `readiness-no-flash`, `real-integration-smoke`, `rendering-invariants`,
-  `session-trail`, `source-expander`, `source-support-denominator`,
-  `theme-toggle`, `trust-score-invariants`, `trust-score-visual`,
-  `verdict-band`, `visual-snapshots`. All 16 are named in a `playwright test`
-  command in `e2e.yml` — 13 in the first blocking lane, `real-integration-smoke`
-  in the second, and `trust-score-visual` + `visual-snapshots` in the
-  visual-baseline lane. Three are detailed below because they have contracts
-  worth stating; the other thirteen bind just as hard. Enumerate the directory
-  rather than trusting this list.
+  `landing-cta-reachable`, `markdown-corpus`, `provider-notice-coverage`,
+  `readiness-banner`, `readiness-no-flash`, `real-integration-smoke`,
+  `rendering-invariants`, `session-trail`, `source-expander`,
+  `source-support-denominator`, `theme-toggle`, `trust-score-invariants`,
+  `trust-score-visual`, `verdict-band`, `visual-snapshots`. All 17 are named in
+  a `playwright test` command in `e2e.yml` — 14 in the first blocking lane,
+  `real-integration-smoke` in the second, and `trust-score-visual` +
+  `visual-snapshots` in the visual-baseline lane. Three are detailed below
+  because they have contracts worth stating; the other fourteen bind just as
+  hard. Enumerate the directory rather than trusting this list.
   **This count said "twelve" until 2026-08-04**, and the error is instructive:
   the FIRST blocking lane runs exactly 12 invariant specs, so a number that was
   right about the LANE got written down about the DIRECTORY, and three more

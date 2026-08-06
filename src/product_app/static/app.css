@@ -5633,6 +5633,59 @@ html[data-theme="dark"] .landing-preview { background: var(--accent-soft); }
 @media (max-width: 600px) {
   .landing-runbar-foot { flex-direction: column; align-items: stretch; }
   .landing-runbar-actions { justify-content: space-between; }
+
+  /* #222 — landing density on a phone. MEASURED on this branch, chromium,
+     with the readiness banner present (a local boot has no provider key, so
+     it renders `offline_by_no_key`): `#landing-run` sat at y=990-1034 against
+     a 664px fold — 370px below it — on a page 1848px tall, 2.78x the
+     viewport. Identical CTA geometry at 375x667 (+367) and 360x640 (+394),
+     because the overflow is the hero's, not the viewport's.
+
+     A deliberate design trade-off scoped to narrow viewports only: nothing
+     above 600px changes, so the heading keeps its comp-01 52px on every
+     screen that can afford it. Below 600px the h1 is 36px — within a pixel of
+     what the ORIGINAL `clamp(2.2rem, 5vw, 3.25rem)` produced at this width
+     before it was fixed to 52px, so this is closer to restoring that
+     behaviour at phone widths than to inventing a new one. (The clamp scaled
+     continuously and so also shrank the heading at intermediate widths; these
+     rules do not.) */
+  .landing-column { padding: 12px 0 32px; gap: var(--space-4); }
+  .landing-hero { gap: var(--space-3); }
+  .landing .landing-h1 {
+    font-size: 2.25rem; /* 36px */
+    line-height: 1.1;
+    max-width: 18ch; /* fewer, longer lines at the smaller size */
+  }
+  .landing-subhead { font-size: 1rem; line-height: 1.5; }
+  .landing-runbar-prompt { padding: 14px var(--space-4) var(--space-1); }
+  .landing-runbar-foot { padding: var(--space-3) 14px 14px; margin-top: var(--space-2); }
+
+  /* #222, and the reason density alone is not the fix. The session trail is
+     `position: fixed; bottom: 0; z-index: 100` at this width (the block
+     directly below). MEASURED on this branch before any change: it occupies
+     y=610-664 at 390x664 — the full strip above the fold — while showing 28
+     characters of text and no session, because a visitor on the landing view
+     has not run anything yet.
+
+     So moving the CTAs up with the density rules above lands them UNDERNEATH
+     an opaque fixed panel: `document.elementFromPoint` over the CTA centre
+     returns `div.session-trail-head`, and a real click does nothing. That is
+     not an improvement on "below the fold", and it is worse for honesty,
+     because a fold assertion would have called it a success.
+
+     `toBeInViewport` cannot see this — it is an IntersectionObserver against
+     the viewport and is structurally blind to paint order. The gate for this
+     fix is therefore a HIT TEST, not a visibility check.
+
+     The trail is a workspace affordance; on the landing view there is nothing
+     for it to show. The selector matches the pattern already used at
+     `[data-active-view="landing"] .theme-toggle-floating` and is stamped on
+     `#main-content` by `setView()`. NOTE it is NOT `html[data-first-visit]`:
+     that attribute is a pre-paint anti-flash flag which `app.js` CLEARS once
+     it has re-applied the decision, so measured at rest it is `null` and a
+     rule keyed on it would never match. */
+  [data-active-view="landing"] .session-trail-panel { display: none; }
+
   /* PR8: the session trail collapses into a bottom bar on small screens. */
   .session-trail-panel {
     position: fixed;
