@@ -571,6 +571,7 @@
           ? seed.catalog_drift_ids.slice()
           : [],
         global_spend_ceiling_reached: Boolean(seed.global_spend_ceiling_reached),
+        spend_metering_unavailable: Boolean(seed.spend_metering_unavailable),
       };
     }
     if (Array.isArray(window.STALE_MODEL_IDS)) {
@@ -764,6 +765,7 @@
             ? live.catalog_drift_ids.slice()
             : [],
           global_spend_ceiling_reached: Boolean(live.global_spend_ceiling_reached),
+          spend_metering_unavailable: Boolean(live.spend_metering_unavailable),
         };
       }
     } catch (error) {
@@ -1958,31 +1960,73 @@
     host.hidden = false;
   }
 
-  // Approved-cap panel. Shows the APPROVED CAP (estimated_cost_usd) labelled as
-  // a cap, the REAL auto-stop guarantee, and the receipt reconciliation note.
+  // Spend-cap panel. Shows the figure that ACTUALLY bounds this run
+  // (``max_cost_usd``), the real guarantee behind it, the point estimate
+  // labelled as an estimate, and the receipt reconciliation note.
   // NO spend bar, NO accruing "so far" figure — none exists.
+  //
+  // Issue #256. This used to show ``estimated_cost_usd`` under the label
+  // "Approved cap" and promise "The run stops itself if spend would pass the
+  // approved figure". Both were false. The guardrail gates on ``max_cost_usd``
+  // (costs.py `_threshold_for(bound)`), MEASURED at 2.23x-2.44x the point
+  // estimate across realistic query sizes — so the user approved one number
+  // while the system authorised another, over twice as large. (Measured with
+  // `default_model_slots()`, i.e. `search=True`, which is what the composer
+  // actually sends; an earlier revision of this comment quoted 2.34x-2.57x,
+  // taken with `search=False` — a configuration the product never uses.) And nothing
+  // stops a run mid-flight: grepping src/ finds no runtime spend abort at all.
+  // The only real ceiling is ``max_cost_usd``, and it holds because the initial
+  // answers are capped at ``settings.initial_answer_max_tokens``, which is
+  // exactly what that figure prices.
   function renderLiveCap(result) {
     const host = el("live-cap");
     if (!host) return;
-    const cap =
-      result.cost_estimate && result.cost_estimate.estimated_cost_usd;
+    const ce = result.cost_estimate;
+    const estimate = ce && ce.estimated_cost_usd;
+    // Fall back to the estimate only when an (older) response omits
+    // ``max_cost_usd`` — never as a preference.
+    const cap = ce && ce.max_cost_usd != null ? ce.max_cost_usd : estimate;
     const head = document.createElement("div");
     head.className = "live-cap-head";
     const label = document.createElement("span");
     label.className = "live-cap-label";
-    label.textContent = "Approved cap";
+    label.textContent = "Spend cap";
     const value = document.createElement("span");
     value.className = "live-cap-value mono";
     value.textContent = cap != null ? formatUsd(cap, { suffix: false }) : "—";
     head.append(label, value);
     const guarantee = document.createElement("p");
     guarantee.className = "live-cap-note";
+    // HEDGED DELIBERATELY, and the hedge is the point of #256.
+    //
+    // The first version of this line said "This run cannot cost more than the
+    // cap". Adversarial review refused it, correctly: replacing one absolute
+    // guarantee with another is the same defect this change exists to fix.
+    // `max_cost_usd` prices FOUR stages — verified `by_stage` is
+    // `initial_answers, debate_round_1, debate_round_2, synthesis`, with no
+    // judge term — while the judge is a real paid call whose cost IS added to
+    // `actual_cost_usd`. So "cannot" is false the moment a judge is
+    // configured. It is $0/day today because `judge_enabled` is false, but a
+    // guarantee that holds only because a feature is switched off is not a
+    // guarantee, and nothing in the code ties the bound to the set of billable
+    // calls (that is #216). Say what is actually true: this is the priced
+    // worst case, and the mechanism that holds it.
     guarantee.textContent =
-      "The run stops itself if spend would pass the approved figure.";
+      "This is the worst case this run is priced at — each model's answer is " +
+      "length-limited to hold it.";
+    // NO "typical cost is lower" line. An earlier version added one, showing
+    // `estimated_cost_usd`. Review killed it and it stays dead: #256's single
+    // live observation had the actual at $0.0767 against a $0.0329 estimate —
+    // 2.33x — landing at 99% of the BOUND, not near the estimate. ADR-0016
+    // records "does real cost track the estimate or the bound?" as UNVERIFIED,
+    // so a claim about the typical case is exactly the sentence we cannot
+    // support. The receipt reports the measured number instead.
+    const nodes = [head, guarantee];
     const reconcile = document.createElement("p");
     reconcile.className = "live-cap-note muted";
     reconcile.textContent = "Final cost reconciles on the receipt.";
-    host.replaceChildren(head, guarantee, reconcile);
+    nodes.push(reconcile);
+    host.replaceChildren(...nodes);
   }
 
   // Fix 1: surface failure notices inside the live-run card. While the live
@@ -2419,6 +2463,7 @@
     readinessState,
     hasFinalSynthesis,
     globalSpendCeilingReached,
+    spendMeteringUnavailable,
   }) {
     if (liveCount != null && total != null && liveCount === total) {
       return { bannerState: "all-live", title: "", message: "" };
@@ -2439,6 +2484,22 @@
           title: "Demo mode is active — today's shared budget is used up",
           message:
             "This application limits total live AI usage across all visitors combined to one shared daily budget, which has already been used today. That's why every model answer and the synthesis below come from Quorum's local simulation helpers instead of a real AI model provider. This resets automatically within 24 hours — check back later to see live results.",
+        };
+      }
+      // ADR-0016. A DIFFERENT cause with the same effect, and it needs its own
+      // copy for the reason the comment above this block already gives: the
+      // default clause below says "live execution is turned off", which is
+      // FALSE here — live execution is on and a key is configured. What failed
+      // is the spend ledger, so the app cannot tell what today's usage is and
+      // refuses to spend rather than spend unmetered. Checked AFTER the
+      // ceiling: a run that trips both is honestly described by either, and the
+      // ceiling is the more specific statement.
+      if (spendMeteringUnavailable) {
+        return {
+          bannerState: "all-local",
+          title: "Demo mode is active — usage tracking is temporarily unavailable",
+          message:
+            "Quorum could not read its own record of today's AI usage, so it cannot tell how much of the shared daily budget is left. Rather than spend without being able to track it, every model answer and the synthesis below come from Quorum's local simulation helpers instead of a real AI model provider. This is a temporary fault on our side, not a limit you have reached — please try again shortly.",
         };
       }
       // The CAUSE matters, not just the effect. This banner used to say
@@ -5044,6 +5105,7 @@
           state.lastReadiness && state.lastReadiness.state ? state.lastReadiness.state : null;
         const hasFinalSynthesis = Boolean(result.result && result.result.final_synthesis);
         const globalSpendCeilingReached = Boolean(result.global_spend_ceiling_reached);
+        const spendMeteringUnavailable = Boolean(result.spend_metering_unavailable);
         const { bannerState, title, message } = computeDemoModeBannerCopy({
           liveCount,
           localCount,
@@ -5052,6 +5114,7 @@
           readinessState,
           hasFinalSynthesis,
           globalSpendCeilingReached,
+          spendMeteringUnavailable,
         });
         // #115 (adversarial review): the cache key used to be the coarse
         // 3-value ``bannerState`` bucket alone, so two DIFFERENT "mixed"
