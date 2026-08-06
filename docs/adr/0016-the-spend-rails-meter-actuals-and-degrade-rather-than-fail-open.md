@@ -148,25 +148,42 @@ and setting one to mean the other would put a false reason on screen. A separate
 - **The reconciliation is the measurement instrument for the UNVERIFIED row
   above.** Once real runs land, `cost_reconciled` rows carry estimate and actual
   side by side, so the ratio becomes a query instead of a guess.
-- **The judge is absent from the estimate AND from the reconciled actual, and
-  #216 stays open.** Two separate gaps, both `$0`/day while `judge_enabled:
-  false`, and it is worth being exact about which is which:
+- **The judge is absent from the estimate, and #216 stays open — but for a
+  narrower reason than this ADR first gave.**
   - `max_cost_usd` prices four stages and has no judge term, so the figure this
     ADR now puts on screen as the cap can be exceeded once a judge runs. That is
     a gap this change introduces by making the bound the headline number.
-  - `_persist_terminal_run` runs the reconciliation BEFORE
-    `_persist_run_evaluation`, which is where `_request_path_judge` dispatches.
-    So a judge cost realized there lands after the correction, and the
-    idempotency guard refuses a second one. Reconciling after the judge would
-    capture it but would put the money correction downstream of a best-effort
-    evaluation write — an evaluation failure would then lose the correction
-    entirely, which is worse than being short by a judge call.
+    Tracked as #265.
+  - **CORRECTED 2026-08-06.** This bullet originally read: *"`_persist_terminal_run`
+    runs the reconciliation BEFORE `_persist_run_evaluation`, which is where
+    `_request_path_judge` dispatches. So a judge cost realized there lands after
+    the correction."* **That is false, and was reasoned from the two call sites
+    rather than executed.** A runtime stack capture shows the FIRST judge
+    dispatch is inside `_result_response` — called on the line *above*
+    `_reconcile_run_billing` — via `_evaluation_projection` →
+    `_evaluate_terminal_run`. `_result_response` reads `_actual_cost` last, so
+    the judge's usage is already priced into the response the reconciliation is
+    handed. On a `measured` run the judge's dollar **is** in the booked figure,
+    and the judge-OFF control books strictly less. By the time
+    `_persist_run_evaluation` runs, the memo serves the verdict and dispatches
+    nothing.
+  - What #216 actually covers is a **second** dispatch: `_judge_verdict_memo` is
+    a process global bounded at `_JUDGE_VERDICT_MEMO_MAX` (512), so on LRU
+    eviction or a process restart a later `GET` fires a fresh paid call, and
+    `try_record_cost_reconciliation` refuses a second correction for the same
+    run. That call's cost reaches no ledger.
 
-  **#216 is therefore NOT closed by this PR**, and an earlier draft of this ADR
-  wrongly implied the ledger half was done. #216's own text asks whether a judge
-  should be allowed to push an account past its cap retroactively at all, or be
-  gated pre-flight instead — a design question this change does not answer.
-  Both gaps must close before the judge is ever switched on, alongside #258.
+  **#216 is therefore NOT closed by this PR.** Neither is #265. Both must close
+  before the judge is switched on, alongside #258 — and the judge is intended to
+  be ON in production, so neither stays `$0`/day.
+  Recorded rather than smoothed over: two surfaces (this ADR and the comment in
+  `query_runs._persist_terminal_run`) asserted the same false ordering, agreed
+  with each other, and neither had ever been executed. A citation is not a
+  check. The near-miss is worth recording too — the first attempt at this
+  correction also "fixed" `main.py` and `.env.example`, whose claims are scoped
+  to the **GET** path and are *true* (`_persist_terminal_run` runs on the
+  POST/worker path, so no GET reaches a ledger writer). Correcting a false
+  claim is itself a claim; check the replacement before writing it.
 - Two defects were introduced by this change and caught before merge, both
   recorded because the shapes recur: a best-effort `contextlib.suppress`
   swallowed a `NameError` whole and silently no-opped one rail; and a

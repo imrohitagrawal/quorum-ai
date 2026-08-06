@@ -258,6 +258,266 @@ def test_judge_outcome_reaches_the_billing_snapshot_under_the_real_run_id(
 
 
 # ---------------------------------------------------------------------------
+# Ordering: the paid judge call happens BEFORE the ledger is reconciled
+# ---------------------------------------------------------------------------
+
+
+def _reconcile_spy(monkeypatch: pytest.MonkeyPatch, judge_calls: list[Any]) -> dict[str, Any]:
+    """Record what was true at the MOMENT ``_reconcile_run_billing`` was entered."""
+    observed: dict[str, Any] = {}
+    real = qr._reconcile_run_billing
+
+    def _spy(*, query_run: Any, response: Any) -> None:
+        observed["judge_calls_at_reconcile"] = len(judge_calls)
+        snapshot = query_run_repository.billing_snapshot(query_run)
+        observed["snapshot_judge_outcome"] = snapshot.judge_outcome
+        observed["cost_source"] = response.cost_source
+        observed["actual_cost_usd"] = response.actual_cost_usd
+        breakdown = response.actual_breakdown
+        observed["stages"] = [] if breakdown is None else [ln.stage for ln in breakdown.by_stage]
+        # LAST. ``_persist_terminal_run`` wraps its whole body in
+        # ``except Exception`` and logs at debug, so a spy that raises is
+        # SWALLOWED and leaves a partially-filled dict that reads like a
+        # result. Every test below asserts on this key first.
+        observed["spy_completed"] = True
+        return real(query_run=query_run, response=response)
+
+    monkeypatch.setattr(qr, "_reconcile_run_billing", _spy)
+    return observed
+
+
+def test_the_paid_judge_call_precedes_the_ledger_reconciliation(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """ORDERING ONLY: the paid judge call completes before the money correction.
+
+    ``_persist_terminal_run`` calls ``_result_response`` FIRST, and that is
+    where ``_request_path_judge`` dispatches (via ``_evaluation_projection``).
+    ``_reconcile_run_billing`` is called further down the SAME function, so by
+    the time the money correction runs, the judge's usage is already in the
+    billing snapshot. (No line-distance is quoted here on purpose: an earlier
+    draft said "21 lines later" and its own comment rewrite made that 32.)
+
+    Scope, stated because the docstring overreached in review: this run is a
+    local simulation, so ``cost_source`` is ``"estimated"`` and
+    ``_reconcile_run_billing`` books NOTHING. What is proven here is the order
+    and the snapshot contents — nothing about dollars. The money claim is
+    ``test_the_judge_dollar_is_inside_the_figure_the_ledger_books``, which
+    drives a genuinely ``measured`` run.
+
+    This pins a claim the tree asserted backwards in TWO places —
+    ``query_runs._persist_terminal_run``'s comment and ADR-0016 — both saying
+    the judge fires in ``_persist_run_evaluation``, AFTER reconciliation. A
+    runtime stack capture refutes it. (``main.py`` and ``.env.example`` say
+    something different and TRUE, about the GET path; they are not part of this
+    correction.)
+
+    WHAT TURNS THIS RED: make the serving projection dispatch no judge — in
+    ``_evaluation_projection``, call ``evaluate_run`` directly without a judge
+    instead of ``_evaluate_terminal_run``. The first dispatch then moves to
+    ``_persist_run_evaluation``, after reconciliation, and
+    ``judge_calls_at_reconcile`` is 0.
+    (Do NOT use "move ``_result_response`` below ``_reconcile_run_billing``":
+    ``response`` is an ARGUMENT to that call, so the literal edit raises
+    ``UnboundLocalError``, which ``_persist_terminal_run``'s catch-all
+    swallows. The test still reds, but on the ``spy_completed`` guard rather
+    than on the assertion under study — which proves nothing about ordering.)
+    """
+    _enable_judge(monkeypatch)
+    usage = TokenUsage(prompt_tokens=4000, completion_tokens=512, total_tokens=4512)
+    judge_calls = _judge_seam(monkeypatch, usage=usage)
+    observed = _reconcile_spy(monkeypatch, judge_calls)
+
+    with run_history_store.configure_for_tests():
+        client = TestClient(app)
+        _create_terminal_run(client, uuid4())
+
+    assert observed.get("spy_completed"), (
+        "_reconcile_run_billing never ran, or the spy raised and was swallowed "
+        f"by _persist_terminal_run's catch-all; observed={observed}"
+    )
+    # POSITIVE PARTNER (rule 7): the judge really did fire on this run, so the
+    # assertions below are about a call that happened, not about an empty set.
+    assert judge_calls, "the judge seam was never called; this run exercised no judge"
+    assert observed["judge_calls_at_reconcile"] >= 1, (
+        "the ledger was reconciled BEFORE the judge was dispatched — the judge's "
+        "cost cannot be in the booked figure, and the one-shot reconciliation "
+        "guard means it can never be added later (#216)"
+    )
+    outcome = observed["snapshot_judge_outcome"]
+    assert outcome is not None, "reconciliation saw no judge outcome in the billing snapshot"
+    assert outcome.usage == usage
+
+
+def test_no_judge_outcome_is_memoised_when_the_judge_is_unconfigured(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Judge OFF makes no call and memoises no outcome, on the endpoint path.
+
+    Deliberately NOT asserting on cost stages. Review caught that: this run is
+    a local simulation, so ``cost_source`` is ``"estimated"`` and the stage
+    names come from a hard-coded 4-tuple in ``costs.py``. A ``"judge" not in
+    stages`` assertion here is blind to EVERY implementation of the measured
+    path — the only path that can emit a judge stage — so it looked like a
+    control while controlling nothing. Mutating ``costs.py`` to stamp a judge
+    stage on every measured run left it green.
+
+    The working control for the judge stage is ``stages_off`` inside
+    ``test_the_judge_dollar_is_inside_the_figure_the_ledger_books``, which runs
+    ``measured``.
+
+    WHAT TURNS THIS RED: making ``_request_path_judge`` return a judge when
+    ``judge_configured()`` is false — the seam is armed here, so an
+    unconfigured judge that dispatches is caught immediately.
+    """
+    judge_calls = _judge_seam(monkeypatch)  # seam armed but judge NOT enabled
+    observed = _reconcile_spy(monkeypatch, judge_calls)
+
+    with run_history_store.configure_for_tests():
+        client = TestClient(app)
+        _create_terminal_run(client, uuid4())
+
+    assert observed.get("spy_completed"), (
+        "_reconcile_run_billing never ran, or the spy raised and was swallowed "
+        f"by _persist_terminal_run's catch-all; observed={observed}"
+    )
+    assert not judge_calls, "the judge fired with no key configured"
+    assert observed["snapshot_judge_outcome"] is None
+
+
+def _measured_run(account_id: Any) -> Any:
+    """A terminal run whose every entered stage has captured usage.
+
+    ``_reconcile_run_billing`` books nothing unless ``cost_source`` is
+    ``"measured"``, and a local-simulation run is always ``"estimated"`` (the
+    stub answers carry no ``token_usage``). So the money half of the ordering
+    claim can only be tested on a run built with real usage attached. Debate
+    and synthesis are never ENTERED here, which ``_stage_captured`` treats as
+    trivially captured.
+    """
+    from decimal import Decimal
+
+    from product_app.costs import CostEstimate, CostThresholdAction, cost_estimation_service
+    from product_app.model_slots import validate_model_slots_with_search
+    from product_app.providers import (
+        CitationCoverage,
+        InitialAnswerStatus,
+        InitialModelAnswer,
+        ProviderPath,
+    )
+    from product_app.query_runs import QueryRunStatus
+
+    run = query_run_repository.create(
+        account_id=account_id,
+        query_text=QUERY_TEXT,
+        model_slots=validate_model_slots_with_search(list(DEFAULT_MODEL_IDS)),
+        cost_estimate=CostEstimate(
+            estimated_cost_usd=Decimal("0.0200"),
+            threshold_action=CostThresholdAction.ALLOW,
+            confirmation_token=None,
+            reasons=[],
+        ),
+    )
+    cost_estimation_service.try_record_run_charge(
+        account_id=account_id,
+        query_run_id=run.query_run_id,
+        estimated_cost_usd=Decimal("0.0200"),
+        threshold_action=CostThresholdAction.ALLOW,
+        confirmed=False,
+        global_ceiling_reached=False,
+    )
+    for slot, model_id in enumerate(DEFAULT_MODEL_IDS, 1):
+        query_run_repository.record_initial_answer(
+            run.query_run_id,
+            InitialModelAnswer(
+                slot_number=slot,
+                model_id=model_id,
+                display_name=model_id,
+                answer_text="An answer.",
+                sources=[],
+                provider_attempt_order=[ProviderPath.OPENROUTER_SEARCH],
+                provider_path=ProviderPath.OPENROUTER_SEARCH,
+                fallback_used=False,
+                status=InitialAnswerStatus.COMPLETED,
+                latency_ms=10,
+                citation_coverage=CitationCoverage(
+                    answer_count=1,
+                    sourced_answer_count=1,
+                    sourced_answer_ratio=Decimal(1),
+                    target_met=True,
+                ),
+                token_usage=TokenUsage(
+                    prompt_tokens=1000, completion_tokens=200, total_tokens=1200
+                ),
+            ),
+        )
+    query_run_repository.update_status(run.query_run_id, status_value=QueryRunStatus.COMPLETED)
+    return run
+
+
+def test_the_judge_dollar_is_inside_the_figure_the_ledger_books(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The money half of the ordering claim, on a genuinely ``measured`` run.
+
+    Because the judge dispatches before ``_reconcile_run_billing``, the
+    reconciled figure carries a ``judge`` cost stage and the daily spend the
+    ledger reports is strictly HIGHER than the same run with no judge. The
+    tree claimed the opposite: that a judge cost "is not in the actual we
+    book".
+
+    This test carries its OWN control: the same run booked with the judge off
+    (``stages_off``). That in-test control is what actually catches a judge
+    stage stamped unconditionally — verified in review by mutating ``costs.py``
+    to emit one on every measured run, which reds this test and nothing else.
+
+    WHAT TURNS THIS RED — two independent mutations, both performed:
+    * In ``_result_response``, read ``_actual_cost`` BEFORE
+      ``_evaluation_projection``. The cost is then priced before the judge has
+      dispatched: "reconciled breakdown has no judge stage".
+    * In ``_evaluation_projection``, call ``evaluate_run`` without a judge so
+      the first dispatch moves after reconciliation. Same failure.
+    Either way the judge-ON total collapses onto the judge-OFF control.
+    """
+    from product_app.feedback_store import get_store
+
+    usage = TokenUsage(prompt_tokens=4000, completion_tokens=512, total_tokens=4512)
+
+    def _book(*, enable: bool) -> tuple[Any, list[str]]:
+        with monkeypatch.context() as mp:
+            if enable:
+                _enable_judge(mp)
+            judge_calls = _judge_seam(mp, usage=usage)
+            observed = _reconcile_spy(mp, judge_calls)
+            account_id = uuid4()
+            run = _measured_run(account_id)
+            with run_history_store.configure_for_tests():
+                qr._persist_terminal_run(run.query_run_id)
+            assert observed.get("spy_completed"), f"spy did not complete: {observed}"
+            assert observed["cost_source"] == "measured", (
+                f"the run was not measured, so nothing was booked: {observed}"
+            )
+            assert bool(judge_calls) is enable
+            store = get_store()
+            assert store is not None, "the feedback store is not configured"
+            return store.daily_spend_for(account_id), observed["stages"]
+
+    with_judge, stages_on = _book(enable=True)
+    qr._judge_verdict_memo_clear_for_tests()
+    without_judge, stages_off = _book(enable=False)
+
+    assert "judge" in stages_on, f"reconciled breakdown has no judge stage: {stages_on}"
+    assert "judge" not in stages_off, f"a judge stage appeared with no judge: {stages_off}"
+    # POSITIVE PARTNER: both runs booked a real, non-zero figure, so the
+    # comparison is between two measurements and not between two zeroes.
+    assert without_judge > 0, "the control run booked nothing; the comparison is vacuous"
+    assert with_judge > without_judge, (
+        f"the judge's dollar did not reach the ledger: judge-on booked {with_judge}, "
+        f"judge-off booked {without_judge}"
+    )
+
+
+# ---------------------------------------------------------------------------
 # OFF stays OFF — no key, or key without a pinned model
 # ---------------------------------------------------------------------------
 
