@@ -148,10 +148,25 @@ and setting one to mean the other would put a false reason on screen. A separate
 - **The reconciliation is the measurement instrument for the UNVERIFIED row
   above.** Once real runs land, `cost_reconciled` rows carry estimate and actual
   side by side, so the ratio becomes a query instead of a guess.
-- **The judge is still absent from the estimate** (#216). It is `$0`/day while
-  `judge_enabled: false`, and pricing it is a separate change. With the judge
-  on, every run would exceed its estimate by construction — so **#216 must land
-  before the judge is switched on**, alongside #258.
+- **The judge is absent from the estimate AND from the reconciled actual, and
+  #216 stays open.** Two separate gaps, both `$0`/day while `judge_enabled:
+  false`, and it is worth being exact about which is which:
+  - `max_cost_usd` prices four stages and has no judge term, so the figure this
+    ADR now puts on screen as the cap can be exceeded once a judge runs. That is
+    a gap this change introduces by making the bound the headline number.
+  - `_persist_terminal_run` runs the reconciliation BEFORE
+    `_persist_run_evaluation`, which is where `_request_path_judge` dispatches.
+    So a judge cost realized there lands after the correction, and the
+    idempotency guard refuses a second one. Reconciling after the judge would
+    capture it but would put the money correction downstream of a best-effort
+    evaluation write — an evaluation failure would then lose the correction
+    entirely, which is worse than being short by a judge call.
+
+  **#216 is therefore NOT closed by this PR**, and an earlier draft of this ADR
+  wrongly implied the ledger half was done. #216's own text asks whether a judge
+  should be allowed to push an account past its cap retroactively at all, or be
+  gated pre-flight instead — a design question this change does not answer.
+  Both gaps must close before the judge is ever switched on, alongside #258.
 - Two defects were introduced by this change and caught before merge, both
   recorded because the shapes recur: a best-effort `contextlib.suppress`
   swallowed a `NameError` whole and silently no-opped one rail; and a

@@ -2404,6 +2404,21 @@ def _persist_terminal_run(query_run_id: UUID) -> None:
         # a run-history write that fails cannot also lose the money correction —
         # the two are best-effort for different reasons and must not share a
         # fate. Values come from the SAME ``_result_response`` the user sees.
+        #
+        # WHAT THIS ORDER COSTS, and why #216 stays OPEN. ``_persist_run_evaluation``
+        # below is where ``_request_path_judge`` dispatches a Layer-B judge call,
+        # so a judge cost realized THERE lands after this line and is not in the
+        # actual we book — and ``try_record_cost_reconciliation`` refuses a second
+        # correction for the same run, by design. Reconciling after the judge
+        # instead would capture it, but would put the money correction downstream
+        # of a best-effort evaluation write, so an evaluation failure would lose
+        # the correction entirely. That is a worse failure than the one it fixes:
+        # this way the ledger is short by a judge call, that way it keeps the raw
+        # estimate. #216 asks for the judge cost specifically and needs the
+        # ordering question decided on its own terms — its own issue text asks
+        # whether the judge should even be ALLOWED to push an account past its cap
+        # retroactively, or should instead be gated pre-flight. That decision is
+        # not this PR's to make. $0/day today: ``judge_enabled`` is false.
         _reconcile_run_billing(query_run=query_run, response=response)
         agreement = response.result.agreement
         citation_ratio = None
