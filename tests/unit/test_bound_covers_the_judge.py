@@ -42,7 +42,9 @@ def _enable_judge(monkeypatch: pytest.MonkeyPatch, model_id: str = JUDGE_MODEL) 
 #: PROCESS GLOBAL (AGENTS.md rule 16a): run alone this file sees the 12-entry
 #: fallback and prices the judge at $0.001/$0.005; run after a module that warms
 #: the live catalog it sees gpt-5-mini's real $0.00025/$0.002, and every literal
-#: below moves (measured: judge term 0.0259 -> 0.0069, bound 0.1323 -> 0.1133).
+#: below moves (measured at cap 1024: judge term 0.0285 -> 0.0079,
+#: bound 0.1349 -> 0.1143; at the pre-2026-08-07 cap of 512 it was
+#: 0.0259 -> 0.0069 / 0.1323 -> 0.1133).
 #: Pinning the index makes the literals deterministic in any test order.
 #: Only the JUDGE model's price is overridden. The four slot models are
 #: ``vendor/model-N``, absent from every catalog, so the four-stage bound is
@@ -133,8 +135,16 @@ def test_the_judge_term_is_pinned_to_exact_literals(
         query 33 chars              =     8.25
                                       --------
         input                         23352.25  @ $0.001/1k = $0.02335225
-        output 512 (enforced cap)               @ $0.005/1k = $0.00256
-                                                   total    = $0.02591225
+        output 1024 (enforced cap)              @ $0.005/1k = $0.00512
+                                                   total    = $0.02847225
+
+    The output cap was 512 until 2026-08-07, giving $0.00256 and a $0.02591225
+    total. It moved because ``openai/gpt-5-mini`` is a reasoning model whose
+    thinking is billed as completion tokens and counts against the cap — at 512
+    it returned empty content, billed, every time (ADR-0021). Review caught
+    this derivation still teaching the old figure while the assertion below had
+    already been updated; a worked example that disagrees with its own
+    assertion is worse than none.
 
     WHAT TURNS THIS RED: any change to the reserved token counts, the section
     literal, the output cap, or the fallback price — including the ones review
@@ -144,10 +154,10 @@ def test_the_judge_term_is_pinned_to_exact_literals(
     off = _bound(monkeypatch, judge=False)
     on = _bound(monkeypatch, judge=True)
     assert off == Decimal("0.1064")
-    assert on == Decimal("0.1323"), (
-        f"the judge-on bound moved to {on}; expected 0.1064 + 0.0259 = 0.1323"
+    assert on == Decimal("0.1349"), (
+        f"the judge-on bound moved to {on}; expected 0.1064 + 0.0285 = 0.1349"
     )
-    assert on - off == Decimal("0.0259")
+    assert on - off == Decimal("0.0285")
 
 
 def test_the_reserve_ignores_the_synthesis_sections_pricing_knob(
@@ -180,7 +190,7 @@ def test_the_reserve_ignores_the_synthesis_sections_pricing_knob(
         "cost_synthesis_sections did not move the four-stage bound at all; "
         "this test would prove nothing about the judge term"
     )
-    assert at_five - off_at_five == at_one - off_at_one == Decimal("0.0259"), (
+    assert at_five - off_at_five == at_one - off_at_one == Decimal("0.0285"), (
         f"the judge reserve tracked the pricing knob: {at_five - off_at_five} at 5 "
         f"sections vs {at_one - off_at_one} at 1. It must stay at the literal 5 "
         "that build_judge_evidence actually emits."

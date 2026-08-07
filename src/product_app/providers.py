@@ -1082,6 +1082,8 @@ class ProviderExecutionService:
         system_prompt: str | None = None,
         max_tokens: int | None = None,
         context: dict[str, Any] | None = None,
+        response_format: dict[str, object] | None = None,
+        reasoning: dict[str, object] | None = None,
     ) -> LiveProviderResult | _SearchRejected | _DispatchedUnmeasured | None:
         # ``_post_openrouter`` accepts a custom system prompt and
         # ``max_tokens`` cap. The debate and synthesis services pass their
@@ -1127,11 +1129,24 @@ class ProviderExecutionService:
             {"role": "system", "content": system_message},
             {"role": "user", "content": query_text},
         ]
+        # Forwarded ONLY when set. Passing ``response_format=None`` explicitly
+        # would be semantically identical for the real implementation, but it
+        # changes the CALL, and ``_post_messages`` is doubled in several
+        # pre-existing tests whose fakes take a fixed signature. Keeping the
+        # call byte-identical for every non-judge caller is the strongest form
+        # of "debate and synthesis are untouched" — it holds for their test
+        # doubles too, not just for the wire payload.
+        extra: dict[str, Any] = {}
+        if response_format is not None:
+            extra["response_format"] = response_format
+        if reasoning is not None:
+            extra["reasoning"] = reasoning
         return self._post_messages(
             openrouter_key=openrouter_key,
             model_id=model_id,
             messages=messages,
             max_tokens=max_tokens,
+            **extra,
         )
 
     def _post_messages(
@@ -1141,13 +1156,35 @@ class ProviderExecutionService:
         model_id: str,
         messages: list[dict[str, str]],
         max_tokens: int | None = None,
+        response_format: dict[str, object] | None = None,
+        reasoning: dict[str, object] | None = None,
     ) -> LiveProviderResult | _SearchRejected | _DispatchedUnmeasured | None:
+        # ``response_format`` and ``reasoning`` are EXPLICIT named parameters
+        # rather than a ``**extra`` passthrough, and both default to ``None``.
+        # Two reasons, both deliberate:
+        #
+        #   * a dict passthrough would let any caller put anything on the wire,
+        #     which is a poor property for the one function that talks to a paid
+        #     upstream. Note the ``**extra`` splat in ``_post_openrouter`` is
+        #     itself untyped at that one boundary — review demonstrated that
+        #     misspelling a key there passes ``mypy`` and is caught only by the
+        #     tests. Two literal keys, so the blast radius is small, but the
+        #     named parameters do not buy STATIC safety all the way down; and
+        #   * defaulting to ``None`` keeps the debate and synthesis payloads
+        #     BYTE-IDENTICAL. Those stages feed the visual-baseline lane, whose
+        #     Linux snapshots can only be re-seeded in CI (AGENTS 13d/13e), so a
+        #     payload change there is expensive in a way a judge change is not.
+        #     Pinned by ``test_a_non_judge_call_sends_neither_parameter``.
         payload: dict[str, object] = {
             "model": model_id,
             "messages": messages,
         }
         if max_tokens is not None:
             payload["max_tokens"] = max_tokens
+        if response_format is not None:
+            payload["response_format"] = response_format
+        if reasoning is not None:
+            payload["reasoning"] = reasoning
         request = Request(
             url=f"{settings.openrouter_api_base_url}/chat/completions",
             data=json.dumps(payload).encode(),
@@ -1333,6 +1370,8 @@ class ProviderExecutionService:
         user_prompt: str,
         max_tokens: int | None = None,
         context: dict[str, Any] | None = None,
+        response_format: dict[str, object] | None = None,
+        reasoning: dict[str, object] | None = None,
     ) -> LiveProviderResult | None:
         """Public entry point for internal callers (debate, synthesis)
         that need to call a specific model with a custom system prompt
@@ -1369,6 +1408,8 @@ class ProviderExecutionService:
             system_prompt=system_prompt,
             max_tokens=max_tokens,
             context=context,
+            response_format=response_format,
+            reasoning=reasoning,
         )
         if isinstance(result, _DispatchedUnmeasured):
             return LiveProviderResult(answer_text="", sources=[], usage=None)

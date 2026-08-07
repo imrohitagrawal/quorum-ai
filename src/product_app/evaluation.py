@@ -1490,11 +1490,15 @@ class EvalJudgeService:
     Reuses ``providers.call_with_prompt`` — no new HTTP client, no new
     provider adapter, and the same seam the rest of the suite monkeypatches.
 
-    Honesty note about determinism: ``call_with_prompt`` exposes no
-    temperature parameter, so "temperature 0" is REQUESTED in the prompt
-    text and is not enforced at the API level. Judge runs are therefore not
-    claimed to be reproducible, which is one reason Layer B is excluded
-    from the deterministic composite.
+    Honesty note about determinism: the prompt REQUESTS "temperature 0" in
+    its text, which enforces nothing. Sending the parameter would not help
+    either — measured 2026-08-07 against the live model catalogue, the whole
+    ``openai/gpt-5`` family (including the pinned ``gpt-5-mini``) does NOT
+    list ``temperature`` among its supported parameters, though 289 of the 340
+    live models do. ``seed`` IS supported and is deliberately not sent: it
+    would buy best-effort reproducibility while implying more than the upstream
+    guarantees. Judge runs are therefore still not claimed to be reproducible,
+    which is one reason Layer B is excluded from the deterministic composite.
     """
 
     verifies_support = True
@@ -1535,6 +1539,29 @@ class EvalJudgeService:
                 system_prompt=system_prompt,
                 user_prompt=user_prompt,
                 max_tokens=settings.quorum_eval_judge_max_tokens,
+                # MEASURED 2026-08-07 against the live API with the pinned
+                # ``openai/gpt-5-mini`` over real golden-case evidence.
+                #
+                # ``response_format`` — ``parse_judge_verdict`` does no repair,
+                # so asking the API to enforce strict JSON is free reliability.
+                # OpenRouter honours it: 10/10 replies came back as bare JSON,
+                # no markdown fence.
+                #
+                # ``reasoning`` — WITHOUT THIS THE JUDGE CANNOT ANSWER AT ALL.
+                # A reasoning model bills its thinking as completion tokens and
+                # they count against ``max_tokens``. At the old 512 cap, on
+                # three real golden cases: 512 reasoning tokens, ZERO content,
+                # ``finish_reason: length``, $0.003931 billed for nothing. That
+                # is almost certainly what #258 recorded as "the judge cost
+                # $0.0109 and changed nothing a user can see". With
+                # ``effort: low`` the same ten cases were 10/10 conforming and
+                # CHEAPER ($0.0009 vs $0.0013 a call).
+                #
+                # Safe for a non-reasoning judge model too — measured,
+                # ``openai/gpt-4o-mini`` accepts ``reasoning`` with HTTP 200 and
+                # returns content normally, so no per-model gating is needed.
+                response_format={"type": "json_object"},
+                reasoning={"effort": "low"},
             )
         except Exception:  # noqa: BLE001 - the judge is advisory; it never breaks a run
             # Billing is UNKNOWN here, not zero: the seam raising tells us

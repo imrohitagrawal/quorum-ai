@@ -5,6 +5,12 @@
 Accepted — 2026-08-06 (issue #265; operator decision the same day that the
 Layer-B judge will be **permanently ON** in production).
 
+**Superseded on the judge TOKEN CAP by
+[ADR-0021](0021-the-judge-must-ask-for-output-it-can-parse.md)** — the reserve
+here was computed at a 512-token output cap, which was measured on 2026-08-07
+to make the pinned judge structurally unable to answer. The cap is now 1024 and
+the judge term is $0.0285, not $0.0259. Everything else in this ADR stands.
+
 Follows [ADR-0016](0016-the-spend-rails-meter-actuals-and-degrade-rather-than-fail-open.md)
 ("a cap means its number"), whose own change created this gap.
 
@@ -93,7 +99,9 @@ cap-before is $0.1064, not $0.0771.
 3. **A close bound built from enforced caps — but NOT a strict ceiling, and the
    ADR says so.** An earlier draft claimed "a true ceiling, not a guess";
    adversarial review refuted it with a measurement and the claim is withdrawn.
-   Reserved: output `quorum_eval_judge_max_tokens` (512, passed as `max_tokens`);
+   Reserved: output `quorum_eval_judge_max_tokens` (**1024 since 2026-08-07 —
+   see ADR-0021; this section and the table above were computed at the
+   original 512**, passed as `max_tokens`);
    the answers (`initial_answer_max_tokens` × slots); the synthesis sections
    (`SYNTHESIS_SECTION_MAX_TOKENS` × **the literal 5**); the judge's own system
    prompt (1,376 chars / 344 tokens); the query.
