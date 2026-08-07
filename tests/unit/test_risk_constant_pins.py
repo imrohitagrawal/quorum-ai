@@ -134,6 +134,17 @@ BUCKET_A_LITERAL_PIN = (
 #: Pin the BEHAVIOUR, not the literal — these legitimately change, and a literal
 #: pin would teach people to edit the test alongside the code.
 BUCKET_B_PIN_BEHAVIOUR = {
+    # --- Added 2026-08-07 with the Sentry redaction fix (ADR-0023) ---
+    "main._USER_TEXT_FIELDS": (
+        "assert that a payload carrying any of these fields comes back with the user's "
+        "prose GONE, not that the tuple has a particular membership -- the set grows as "
+        "the domain model grows, so a literal pin would go red on every legitimate "
+        "addition while still not proving anything was actually redacted; "
+        "tests/unit/test_sentry_redaction.py drives real event AND transaction payloads "
+        "through both hooks and sweeps the whole serialised body for the query, and "
+        "additionally pins every entry to a real occurrence in src/ so a rename cannot "
+        "silently shrink the redaction set"
+    ),
     # --- Added 2026-08-06 with the #265 judge cap term ---
     "costs._JUDGE_EVIDENCE_SECTIONS": (
         "assert the judge reserve does NOT track settings.cost_synthesis_sections and "
