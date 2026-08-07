@@ -32,7 +32,26 @@ name: Deploy to Fly.io
 # absent deliberately.
 on:
   workflow_run:
-    workflows: ["CI", "Tests", "E2E (axe + parity)"]
+    # These are FILTER PATTERNS, not literal names. `+ * ? [ ]` are
+    # metacharacters, and an unescaped one silently matches nothing — the
+    # pattern still compiles, so there is no error and no warning.
+    #
+    # `"E2E (axe + parity)"` was therefore `E2E (axe` + one-or-more SPACES +
+    # ` parity)`, which matches `E2E (axe  parity)` and can never match its own
+    # workflow. Measured 2026-08-03..08-07: CI fired 27/27, Tests 27/27,
+    # E2E 0/26. `CI` and `Tests` have no metacharacters, so they matched
+    # literally and carried the whole trigger for the life of the repo.
+    #
+    # Proven in a throwaway repo (imrohitagrawal/wfrun-glob-probe), one upstream
+    # named `E2E (axe + parity)` and two listeners, over two pushes:
+    # escaped `'E2E (axe \+ parity)'` fired 2/2 (+14s); literal
+    # `"E2E (axe + parity)"` fired 0/2. See actions/runner#3763.
+    #
+    # SINGLE quotes are required: `\+` is an invalid escape inside a
+    # DOUBLE-quoted YAML scalar and makes this whole file unparseable, which
+    # would stop every deploy rather than one trigger.
+    # Pinned by tests/unit/test_workflow_run_trigger_names_match.py.
+    workflows: ["CI", "Tests", 'E2E (axe \+ parity)']
     types: [completed]
   workflow_dispatch:
 

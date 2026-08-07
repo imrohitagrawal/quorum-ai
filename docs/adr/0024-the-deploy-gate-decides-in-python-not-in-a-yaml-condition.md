@@ -186,16 +186,23 @@ that goes red when it used to go quiet — which is the entire point.
   | `Tests` | 27 / 27 |
   | **`E2E (axe + parity)`** | **0 / 26** |
 
-  The name matches byte-for-byte (`e2e.yml:1` is `name: E2E (axe + parity)`,
-  and `deploy.yml` lists exactly that string), so the **cause remains
-  UNVERIFIED**. The redundancy this design assumes is three triggers; it is
-  really two. It does not currently block a deploy, because the gate WAITS for
-  all three to conclude, so a CI/Tests trigger covers E2E. It does mean one
-  third of the intended redundancy is absent.
+  **SUPERSEDED by ADR-0025, the same day — this is now fixed.** The paragraph
+  below said the cause was UNVERIFIED, reasoning that `e2e.yml:1` is
+  `name: E2E (axe + parity)` and `deploy.yml` listed exactly that string. The
+  error was assuming the entry is a *string*: `on.workflow_run.workflows`
+  entries are **filter patterns**, and `+` means "one or more of the preceding
+  character", so `"E2E (axe + parity)"` matches `E2E (axe  parity)` and can
+  never match its own workflow. Escaping it as `'E2E (axe \+ parity)'` fixes
+  it; ADR-0025 has the measurement that proves it.
 
-  The diagnostic step added here **cannot** close this: it reports the trigger
-  of a Deploy run that *exists*, and the whole point is that no run is created.
-  Counting is the instrument, and the table above is it.
+  It never blocked a deploy, because the gate WAITS for all three to conclude,
+  so a CI/Tests trigger covered E2E. What was absent was one third of the
+  intended redundancy.
+
+  Note for the reader: the diagnostic step added here could **never** have
+  closed this. It reports the trigger of a Deploy run that *exists*, and the
+  whole point was that no run is created. Counting was the instrument, and the
+  table above is it.
 
 - **A merge that produces no workflow run at all** (#245's third failure mode,
   witnessed 2026-08-07). If nothing runs, there is no `workflow_run` event, so
