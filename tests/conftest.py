@@ -61,6 +61,74 @@ os.environ.setdefault("FEEDBACK_DB_PATH", ":memory:")
 # The socket-level guard below is the belt to this suspenders.
 os.environ["OPENROUTER_LIVE_EXECUTION_ENABLED"] = "false"
 
+# Credential guard (2026-08-07 incident). The same mechanism and the same
+# reason as the line above: an explicit ``os.environ`` value beats the ``.env``
+# file in pydantic-settings, so this covers BOTH sources — which a scrubbing
+# hook cannot, because it would have to parse ``.env`` to know what to hide.
+#
+# WHY: a real key in ``.env`` reached ``Settings``, a test compared it against
+# "", and pytest's assertion rewriting printed it in full — to the terminal, to
+# the session transcript, and via ``make test-report`` into
+# ``build/test-results/pytest.xml``, whose CI sibling is an uploaded artifact.
+# CI never saw it because CI has no ``.env``; the defect could only fire on a
+# developer's machine.
+#
+# The fix is to remove the secret from the process rather than to hide it at
+# one print site. Kept in sync with ``config.py`` mechanically by
+# ``tests/unit/test_no_credential_reaches_a_test_run.py`` — every field marked
+# ``repr=False`` there must appear here.
+# Written as individual assignments, not a loop: ruff's E402 tolerates the
+# simple subscript assignment above before the imports, but a compound
+# statement ends that allowance and reds `make lint`.
+#
+# ESCAPE HATCH. ``tests/integration/test_tavily_live.py`` is an opt-in, PAID,
+# operator-run verification that reads ``TAVILY_API_KEY`` and skips when it is
+# absent. Blanking unconditionally made that test skip ALWAYS — it silently
+# removed a documented capability, which is the failure mode the "prove both
+# directions" rule exists to catch. So the blanking is skipped, loudly and
+# explicitly, when the operator opts in:
+#
+#     QUORUM_TEST_LIVE_CREDENTIALS=1 TAVILY_API_KEY=tvly-... uv run pytest ...
+#
+# Default OFF. Named after the existing ``OPENROUTER_LIVE_EXECUTION_ENABLED``
+# idiom. It is visible in the command line, so an accidental leak is traceable
+# to a deliberate opt-in rather than to an invisible default.
+# Spelled as ``os.environ[...] = <conditional expression>`` throughout, and the
+# opt-in is re-read inline rather than hoisted into a local. Measured: ruff's
+# E402 allowance for pre-import code covers ``os.environ`` mutation but NOT a
+# plain module-level assignment (`_KEEP = ...` produced 8 E402 errors on this
+# file), and an ``if`` block ends the allowance too.
+os.environ["OPENROUTER_API_KEY"] = (
+    os.environ.get("OPENROUTER_API_KEY", "")
+    if os.environ.get("QUORUM_TEST_LIVE_CREDENTIALS", "") == "1"
+    else ""
+)
+os.environ["TAVILY_API_KEY"] = (
+    os.environ.get("TAVILY_API_KEY", "")
+    if os.environ.get("QUORUM_TEST_LIVE_CREDENTIALS", "") == "1"
+    else ""
+)
+os.environ["QUORUM_EVAL_JUDGE_API_KEY"] = (
+    os.environ.get("QUORUM_EVAL_JUDGE_API_KEY", "")
+    if os.environ.get("QUORUM_TEST_LIVE_CREDENTIALS", "") == "1"
+    else ""
+)
+os.environ["QUORUM_TOKEN_SECRET"] = (
+    os.environ.get("QUORUM_TOKEN_SECRET", "")
+    if os.environ.get("QUORUM_TEST_LIVE_CREDENTIALS", "") == "1"
+    else ""
+)
+os.environ["SENTRY_DSN"] = (
+    os.environ.get("SENTRY_DSN", "")
+    if os.environ.get("QUORUM_TEST_LIVE_CREDENTIALS", "") == "1"
+    else ""
+)
+# Not a credential, but the OTHER half of the two-value judge gate. Leaving it
+# set makes the local config differ from CI's, and since #269 priced the judge
+# into ``max_cost_usd`` that divergence moves the SPEND RAILS — CI would
+# validate them in a shape production never runs.
+os.environ["QUORUM_EVAL_JUDGE_MODEL_ID"] = ""
+
 import ipaddress
 import socket
 from collections.abc import Iterator
