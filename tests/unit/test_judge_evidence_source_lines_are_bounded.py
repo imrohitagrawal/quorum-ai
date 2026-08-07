@@ -1,5 +1,10 @@
-"""Issue #268 (the untracked half): ``JudgeEvidence.source_lines`` is an
-UNBOUNDED input on a paid call.
+"""Issue #268 (the untracked half): ``JudgeEvidence.source_lines`` WAS an
+unbounded, unpriced input to a paid call. This file pins the caps that closed
+it — the tense matters, because a reader who greps this file must not conclude
+the bound does not exist.
+
+On ``b904ce6``, 4 answers x 25 verbose citations produced a 1,003,263-character
+judge prompt, and ``costs.py`` reserved nothing for it.
 
 ``providers._parse_tavily_results`` truncates titles to
 ``_MAX_SOURCE_TITLE_LEN`` (300) and asks Tavily for at most
@@ -9,9 +14,9 @@ title truncation, NO url truncation and NO count cap, and
 ``_sanitize_source_url`` bounds length not at all. So a verbose or hostile
 annotation set walks straight into the judge prompt.
 
-``costs.py`` reserves nothing for these lines, so they are unbounded AND
-unpriced: the "up to $Y" figure the user approves, and the figure the $0.25
-per-account rail and the $5/24h ceiling are tested against, do not cover them.
+``costs.py`` reserved nothing for these lines, so they were unbounded AND
+unpriced: the "up to $Y" figure the user approves did not cover them at all.
+It now carries a ``judge_source_tokens`` term derived from the same three caps.
 
 Turns red if: the count cap, the title truncation or the url truncation is
 removed from ``build_judge_evidence``, or the source-block reserve is dropped
@@ -151,10 +156,15 @@ def test_an_ordinary_source_set_passes_through_completely_unchanged() -> None:
 def test_the_bound_never_drops_what_the_tavily_path_would_have_kept() -> None:
     """The app runs exactly four slots (``model_slots``: "Exactly four model
     slots are required"), and the Tavily path asks for at most
-    ``settings.tavily_max_results`` = 5 per answer. So the worst case that
-    already ships in production is 4 x 5 = 20 lines, and the cap must strictly
-    dominate it -- otherwise this change would DROP citations a live run
-    currently shows the judge.
+    ``settings.tavily_max_results`` = 5 per answer. So THAT path's worst case is
+    4 x 5 = 20 lines and the cap must strictly dominate it.
+
+    Scope, stated exactly: this proves nothing about the DEFAULT OpenRouter
+    ``:online`` path, which has no upstream count cap -- there, a run returning
+    more than 32 citations across its four answers genuinely does show the judge
+    fewer than before. That is the trade, not an accident.
+
+    Turns red if: the line cap drops to or below 20.
     """
     answers = [_answer(sources=[_source(title=f"S{i}") for i in range(5)]) for _ in range(4)]
 
@@ -182,6 +192,67 @@ def test_numbering_stays_contiguous_after_truncation() -> None:
     ], "truncation left a hole in the citation numbering"
 
 
+def test_the_cap_is_spent_fairly_across_slots_not_first_come() -> None:
+    """Review finding, 2026-08-07. A flat ``[:32]`` over the concatenated
+    sources spends the whole budget on the earliest slots: at 12 citations each,
+    slots 1-2 keep all 12, slot 3 keeps 8 and slot 4 keeps NONE — while
+    ``MODEL_ANSWER_4`` is still in the prompt and still scored for grounding, so
+    the judge marks one model down for citations it was never shown.
+
+    Only the COUNT was pinned before this test, so that policy — and its
+    inversion, ``[-32:]``, which hides slot 1 instead — was invisible to the
+    whole suite.
+
+    Turns red if: the round-robin allocation is replaced by a flat slice in
+    either direction, or any slot's share drops to zero while others keep more
+    than one.
+    """
+    answers = [
+        _answer(sources=[_source(title=f"slot{slot}-src{i}") for i in range(12)])
+        for slot in range(1, 5)
+    ]
+
+    evidence = build_judge_evidence(
+        query_text="A question", initial_answers=answers, final_synthesis=None
+    )
+
+    kept_per_slot = [
+        sum(1 for line in evidence.source_lines if f"slot{slot}-" in line) for slot in range(1, 5)
+    ]
+    assert sum(kept_per_slot) == 32, "the count cap stopped holding"
+    # 32 budget over 4 answers of 12: exactly 8 each.
+    assert kept_per_slot == [8, 8, 8, 8], (
+        f"the cap was not spent fairly across slots: {kept_per_slot}. A slot with "
+        "zero sources is still scored for grounding against a list it is absent from"
+    )
+    # POSITIVE PARTNER: the survivors are the FIRST of each slot, in order — the
+    # fair share must not silently reorder or reverse what it keeps.
+    assert evidence.source_lines[0].endswith(f"slot1-src0 :: {REAL_URL}")
+    assert "slot1-src8" not in " ".join(evidence.source_lines)
+
+
+def test_an_uneven_split_gives_the_short_slot_everything_it_has() -> None:
+    """Round-robin must not waste budget on a slot that has run out.
+
+    Turns red if: the allocation hands each answer a flat ``cap // len(answers)``
+    share, which would drop 5 sources here that comfortably fit.
+    """
+    answers = [
+        _answer(sources=[_source(title=f"big-{i}") for i in range(40)]),
+        _answer(sources=[_source(title="small-0")]),
+    ]
+
+    evidence = build_judge_evidence(
+        query_text="A question", initial_answers=answers, final_synthesis=None
+    )
+
+    assert len(evidence.source_lines) == 32, "the cap stopped holding on an uneven split"
+    assert sum(1 for line in evidence.source_lines if "small-0" in line) == 1, (
+        "the one-source slot was evicted even though the budget had room"
+    )
+    assert sum(1 for line in evidence.source_lines if "big-" in line) == 31
+
+
 # --------------------------------------------------------------------------
 # The wire: the observable artefact the paid call actually sends.
 # A bound enforced on the dataclass but not reaching the prompt is not a bound.
@@ -204,7 +275,9 @@ def test_the_prompt_the_judge_is_actually_sent_is_bounded() -> None:
     )
     _system, user_prompt = build_judge_prompt(evidence)
 
-    # 32 lines x (300 title + 300 url + "[NN] " + " :: ") <= 32 * 620 = 19840.
+    # Worst case, measured: the block is 19,510 chars joined with newlines
+    # (19,479 without) — 9 single-digit lines at 608 and 23 two-digit ones at
+    # 609, against the reserve's 32 x 610 = 19,520 budget.
     assert len(user_prompt) < 25_000, (
         "the user prompt sent to the paid judge call is not bounded by the source "
         f"caps: {len(user_prompt)} chars"

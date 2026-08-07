@@ -1616,11 +1616,20 @@ class CostEstimationService:
         # 1,003,263-character judge user prompt, roughly 250,000 unpriced input
         # tokens on a paid call.
         #
-        # STILL NOT A TRUE CEILING, for one remaining reason — see the ``_price``
-        # note at the end of this comment: a judge model absent from the catalog
-        # is reserved at the DEFAULT per-1k rate, which under-reserves for 102 of
-        # the 335 live catalog models. Do not restore an unqualified "true
-        # ceiling" wording while that holds.
+        # STILL NOT A TRUE CEILING, for TWO remaining reasons — neither of them
+        # the source block, and neither introduced by #268:
+        #   1. see the ``_price`` note at the end of this comment: a judge model
+        #      absent from the catalog is reserved at the DEFAULT per-1k rate,
+        #      which under-reserves for 102 of the 335 live catalog models.
+        #   2. ``build_judge_prompt``'s own scaffolding has no term here — the
+        #      two ``<<<UNTRUSTED_EVIDENCE_*>>>`` delimiters, ``QUESTION: ``,
+        #      ``SOURCES:``, the ``MODEL_ANSWER_N:`` / ``SYNTHESIS_X:`` headers
+        #      and the blank lines. Measured by building a prompt with every
+        #      field empty: 290 chars at four slots (~73 tokens, $0.00007 at the
+        #      fallback rate), +18 per extra slot. Sub-cent, but it IS an
+        #      under-reserve, and writing "one reason" here would be the same
+        #      class of false claim this comment exists to correct.
+        # Do not restore an unqualified "true ceiling" wording while these hold.
         #
         # SECTION COUNT IS THE LITERAL 5, matching ``build_judge_evidence``,
         # which hard-codes five sections. It is deliberately NOT

@@ -1337,15 +1337,24 @@ JUDGE_EVIDENCE_END = UNTRUSTED_END
 #: THESE VALUES ARE NOT MEASURED FROM PRODUCTION TRAFFIC, and nothing in this
 #: repository retains the data that would measure them: ``run_history_store``
 #: keeps no per-source or per-token columns, and the Fly log ring holds ~100
-#: lines. They are instead chosen to STRICTLY DOMINATE the bound this codebase
-#: already enforces in production on the other search path, so that turning
-#: them on cannot drop a citation a live run currently shows the judge:
+#: lines. They are instead chosen to STRICTLY DOMINATE the only count bound
+#: this codebase already enforces — the Tavily path's:
 #:
 #:   * the app runs exactly four slots (``model_slots``: "Exactly four model
 #:     slots are required") and ``_parse_tavily_results`` asks for at most
-#:     ``settings.tavily_max_results`` = 5 per answer, so the shipped worst
+#:     ``settings.tavily_max_results`` = 5 per answer, so that path's worst
 #:     case is 4 x 5 = 20 lines. 32 > 20.
 #:   * ``_MAX_SOURCE_TITLE_LEN`` is 300 on that path. 300 == 300.
+#:
+#: SO NO TAVILY-PATH SOURCE LINE IS DROPPED — and that is the WHOLE of the
+#: claim. An earlier draft said the caps "cannot drop a citation a live run
+#: currently shows the judge", which is FALSE: the DEFAULT path is OpenRouter
+#: ``:online`` (every slot ships ``search=True``) and it has no upstream count
+#: cap, so a run returning more than 32 citations across its four answers now
+#: shows the judge fewer than before. That is the trade this bound exists to
+#: make. Below 32 total the output is byte-identical to the pre-#268 behaviour,
+#: order included — measured over 400 random slot/citation shapes, 391 at or
+#: under the cap, 0 differing from ``origin/main``.
 #:
 #: They are deliberately literals rather than reads of ``tavily_max_results``:
 #: that is an env-overridable knob, and this repo has twice rejected keying a
@@ -1387,16 +1396,42 @@ def build_judge_evidence(
             ("uncertainty", final_synthesis.uncertainty),
             ("recommendation", final_synthesis.recommendation),
         )
-    kept_sources = [
-        s
+    per_answer = [
+        [
+            s
+            for s in answer.sources
+            # Exclude only the app's own placeholder stubs, keyed on the
+            # reserved HOST — NOT on is_fallback (a REAL Tavily page carries
+            # is_fallback=True since #31/#32, and dropping it would hide a
+            # live run's real sources from the judge). See _is_placeholder_source.
+            if not _is_placeholder_source(s)
+        ]
         for answer in initial_answers
-        for s in answer.sources
-        # Exclude only the app's own placeholder stubs, keyed on the
-        # reserved HOST — NOT on is_fallback (a REAL Tavily page carries
-        # is_fallback=True since #31/#32, and dropping it would hide a
-        # live run's real sources from the judge). See _is_placeholder_source.
-        if not _is_placeholder_source(s)
-    ][:JUDGE_MAX_SOURCE_LINES]
+    ]
+    # Issue #268. When the cap BINDS, spend it round-robin across the answers
+    # rather than first-come. A flat ``[:32]`` over the concatenation spends the
+    # whole budget on the earliest slots: at 12 citations each, slots 1-2 keep
+    # all 12, slot 3 keeps 8 and slot 4 keeps NONE — while ``MODEL_ANSWER_4`` is
+    # still in the prompt and still scored for grounding, i.e. the judge is
+    # asked to check one model's citations against a SOURCES list its sources
+    # were entirely evicted from. Round-robin gives every answer a fair share,
+    # so no slot is silently unrepresented.
+    #
+    # Below the cap this is a no-op: quotas fill to len(group) for every group
+    # and the output is byte-identical to the pre-#268 concatenation, ORDER
+    # INCLUDED (grouped by slot, original order within a slot).
+    quotas = [0] * len(per_answer)
+    budget = JUDGE_MAX_SOURCE_LINES
+    while budget > 0 and any(q < len(g) for q, g in zip(quotas, per_answer, strict=True)):
+        for i, group in enumerate(per_answer):
+            if budget == 0:
+                break
+            if quotas[i] < len(group):
+                quotas[i] += 1
+                budget -= 1
+    kept_sources = [
+        s for quota, group in zip(quotas, per_answer, strict=True) for s in group[:quota]
+    ]
     # Issue #268. Truncate the fields BEFORE formatting, and number AFTER the
     # count cap, so the ordinals the judge reads stay contiguous — a hole in
     # the numbering would point the prose's "[7]" at a line that is not there.
