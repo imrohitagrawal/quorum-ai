@@ -1467,3 +1467,104 @@ def test_the_dead_knob_guard_requires_a_real_environment_read() -> None:
         "gate no longer recognises it"
     )
     assert _env_names_read_in_src(src), "no os.environ reads found in src/ at all"
+
+
+# --------------------------------------------------------------------------
+# Part F — a doc claim about WHAT A SECRET PROTECTS, pinned to the code.
+#
+# Measured 2026-08-07. `DEPLOY.md` said `QUORUM_TOKEN_SECRET` was "used to sign
+# session tokens", and that rotating it meant "all existing sessions are
+# invalidated (users get logged out)". Both were false. The secret is the HMAC
+# key for COST-CONFIRMATION tokens (`CostEstimationService`, `costs.py`), and
+# sessions do not use a signing key at all — `auth.py` mints opaque random IDs
+# with `secrets.token_urlsafe(24)` and stores them server-side.
+#
+# The second error was the costly one. It told an operator that rotating a
+# leaked secret would log every user out, when the real blast radius is the
+# outstanding confirmation tokens inside a 5-minute TTL. A doc that overstates
+# the cost of a security action discourages that action.
+#
+# Per rule 1a this gets a gate rather than a corrected sentence: the fact is
+# derivable from the tree OFFLINE, so nothing needs to re-read the prose.
+
+_DEPLOY_MD = REPO_ROOT / "DEPLOY.md"
+#: `auth` is a MODULE, not a package. Spelling this as a directory is not a
+#: hypothetical slip: while preparing this gate,
+#: `git grep -- src/product_app/auth/` returned nothing and was briefly read as
+#: "auth does not sign anything". It returned nothing because THE PATH DOES NOT
+#: EXIST — the same shape as AGENTS.md rule 1's "the location was recalled, not
+#: grepped". The positive partner below is what caught it, which is the whole
+#: argument for requiring one.
+_AUTH_PY = REPO_ROOT / "src" / "product_app" / "auth.py"
+_COSTS_PY = REPO_ROOT / "src" / "product_app" / "costs.py"
+
+
+def test_the_token_secret_is_still_a_cost_token_key_not_a_session_key() -> None:
+    """RED IF: `auth.py` starts using `QUORUM_TOKEN_SECRET`.
+
+    Pins the CODE side of the claim `DEPLOY.md` now makes. If auth ever does
+    start using it, this fires and the doc must be corrected — the fix is to
+    update the prose, not to delete the gate.
+    """
+    auth_src = _AUTH_PY.read_text(encoding="utf-8")
+    assert "QUORUM_TOKEN_SECRET" not in auth_src, (
+        "auth.py now reads QUORUM_TOKEN_SECRET, so DEPLOY.md's statement that "
+        "the secret is 'not sessions' is no longer true. Correct DEPLOY.md."
+    )
+    assert "hmac" not in auth_src, (
+        "auth.py now uses hmac, so sessions may no longer be opaque random "
+        "IDs. DEPLOY.md's rotation guidance ('does NOT log anyone out') turns "
+        "on sessions carrying no signature — re-verify it before shipping."
+    )
+
+
+def test_the_token_secret_guard_is_not_vacuous() -> None:
+    """POSITIVE PARTNER (rule 7) for the check above.
+
+    Two absence checks over one file are trivially true if the file were empty,
+    renamed, or unreadable. This proves `auth.py` was really read and really is
+    the session module, and that the secret genuinely IS consumed where the doc
+    says it is.
+    """
+    auth_src = _AUTH_PY.read_text(encoding="utf-8")
+    assert "secrets.token_urlsafe(24)" in auth_src, (
+        "auth.py no longer mints opaque random session ids with "
+        "secrets.token_urlsafe(24) — the absence checks above would pass over "
+        "a file that is no longer the session module"
+    )
+    assert "csrf_token" in auth_src, "auth.py does not look like the session module any more"
+
+    costs_src = _COSTS_PY.read_text(encoding="utf-8")
+    assert "QUORUM_TOKEN_SECRET" in costs_src, (
+        "costs.py no longer reads QUORUM_TOKEN_SECRET, so DEPLOY.md's claim "
+        "that it is the cost-confirmation HMAC key is now wrong"
+    )
+    assert "hmac.new(self._binding_secret" in costs_src, (
+        "costs.py no longer HMACs with the binding secret — DEPLOY.md calls it "
+        "an HMAC key, and that is the sentence this gate exists to protect"
+    )
+
+
+def test_deploy_md_does_not_claim_rotation_logs_users_out() -> None:
+    """RED IF: the refuted 'users get logged out' sentence comes back.
+
+    Kept as a distinct check from the code-side gate above because this one
+    guards the OPERATIONAL advice, which is what actually misleads a human
+    deciding whether to rotate a leaked secret.
+    """
+    text = _DEPLOY_MD.read_text(encoding="utf-8")
+    assert "users get logged out" not in text, (
+        "DEPLOY.md again claims rotating QUORUM_TOKEN_SECRET logs users out. "
+        "Measured 2026-08-07: it signs cost-confirmation tokens with a "
+        "5-minute TTL and sessions do not use it, so rotation is nearly free. "
+        "Overstating the cost of rotating a leaked secret discourages doing it."
+    )
+    assert "Used to sign session tokens" not in text, (
+        "DEPLOY.md again describes QUORUM_TOKEN_SECRET as signing session "
+        "tokens. It is the cost-confirmation HMAC key (costs.py)."
+    )
+    # Positive partner: prove the file really is DEPLOY.md and was read.
+    assert "QUORUM_TOKEN_SECRET" in text, (
+        "DEPLOY.md no longer mentions QUORUM_TOKEN_SECRET at all — the two "
+        "absence checks above would pass vacuously"
+    )

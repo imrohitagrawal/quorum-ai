@@ -131,11 +131,20 @@ fly scale vm shared-cpu-2x
 
 ### Rotate the token secret
 
+**Rotating this is cheap — it does NOT log anyone out.** `QUORUM_TOKEN_SECRET`
+signs cost-confirmation tokens, which live for `CONFIRMATION_TOKEN_TTL`
+(5 minutes, `src/product_app/costs.py`). Rotating invalidates only the
+confirmation tokens outstanding in that window; the worst a user sees is that
+one cost-confirmation click needs repeating. Sessions are unaffected — they do
+not use this secret (see the table below).
+
 ```bash
 # Generate a new secret
 NEW_SECRET="$(openssl rand -hex 32)"
 
-# Set it. All existing sessions are invalidated (users get logged out).
+# Set it. `fly secrets set` redeploys on its own.
+# Both lines keep the secret out of shell history: the value is only ever
+# a command substitution and a variable, never typed as a literal.
 fly secrets set QUORUM_TOKEN_SECRET="$NEW_SECRET"
 
 # Watch logs for the "Production environment validated" line
@@ -158,7 +167,7 @@ fly releases rollback <version>
 
 | Variable | Required in prod? | Source | Notes |
 |----------|-------------------|--------|-------|
-| `QUORUM_TOKEN_SECRET` | **Yes** | `fly secrets set` | Random 32+ byte hex. Used to sign session tokens. App refuses to start if missing. |
+| `QUORUM_TOKEN_SECRET` | **Yes** | `fly secrets set` | Random 32+ byte hex. HMAC key for **cost-confirmation** tokens (`CostEstimationService`, `src/product_app/costs.py`) — **not** sessions. App refuses to start if missing. |
 | `RUNTIME_ENVIRONMENT` | **Yes** | `fly.toml` (env) | Set to `production`. Triggers stricter validation. |
 | `SESSION_COOKIE_SECURE` | **Yes** | `fly.toml` (env) | `true` in production. App refuses to start if `false` in prod. |
 | `ACCOUNT_LEGACY_HEADER_ENABLED` | No | `fly.toml` (env) | `false` (default). Allows old clients to send `X-Account-Id` header. Disabled by default for security. |

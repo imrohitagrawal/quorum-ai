@@ -153,6 +153,14 @@ also_copy = [
   # caught the omission and named this fix in its failure message — the guard
   # doing exactly the job it was built for.
   "AGENTS.md",
+  # ``DEPLOY.md`` is read from ``REPO_ROOT`` by
+  # tests/test_doc_gate_consistency.py Part F, which pins what
+  # ``QUORUM_TOKEN_SECRET`` actually protects against the code that uses it.
+  # Added the same hour that test was written, for the same reason AGENTS.md
+  # above was: ``test_mutation_copy_completeness`` caught the omission and
+  # named this exact fix in its failure message. Twice now, that guard has
+  # paid for itself on a doc gate someone had just added.
+  "DEPLOY.md",
   # ``.env.example`` is read from ``REPO_ROOT`` by
   # tests/test_doc_gate_consistency.py Part E/E2, which pin it against
   # ``Settings.model_fields`` in BOTH directions (no undocumented field, no
