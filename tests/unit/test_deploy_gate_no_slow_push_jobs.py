@@ -31,6 +31,7 @@ These are structural checks on the workflow YAML, in the default blocking suite.
 from __future__ import annotations
 
 import pathlib
+import re
 from typing import Any
 
 import pytest
@@ -61,10 +62,26 @@ def _triggers_on_push_to_main(wf: dict[Any, Any]) -> bool:
     return "main" in branches or not branches
 
 
+def _unescape_filter_pattern(pattern: str) -> str:
+    """Turn an ``on.workflow_run.workflows`` PATTERN into the literal name.
+
+    Those entries are filter patterns, so a workflow whose name contains a
+    metacharacter is written escaped — ``'E2E (axe \\+ parity)'``. The name on
+    disk, and the name the Actions API reports for a run, are unescaped. See
+    ``tests/unit/test_workflow_run_trigger_names_match.py`` for why (#245).
+    """
+    return re.sub(r"\\(.)", r"\1", pattern)
+
+
 def _deploy_gate() -> tuple[tuple[str, ...], int]:
-    """Return (required workflow names, gate timeout seconds) parsed from deploy.yml."""
+    """Return (required workflow names, gate timeout seconds) parsed from deploy.yml.
+
+    Names are returned UNESCAPED, so they can be matched against workflow files.
+    """
     wf = _load(_WORKFLOWS / "deploy.yml")
-    required = tuple(_on_block(wf)["workflow_run"]["workflows"])
+    required = tuple(
+        _unescape_filter_pattern(p) for p in _on_block(wf)["workflow_run"]["workflows"]
+    )
     gate_env = wf["jobs"]["gate"]["steps"]
     timeout = None
     for step in gate_env:
