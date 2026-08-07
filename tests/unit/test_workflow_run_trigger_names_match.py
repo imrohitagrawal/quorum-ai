@@ -69,7 +69,8 @@ _METACHARACTERS = "+*?[]"
 
 def _load(path: pathlib.Path) -> dict[Any, Any]:
     # ``on:`` parses to the YAML boolean key True, not the string "on".
-    return yaml.safe_load(path.read_text(encoding="utf-8"))
+    data: dict[Any, Any] = yaml.safe_load(path.read_text(encoding="utf-8"))
+    return data
 
 
 def _on_block(wf: dict[Any, Any]) -> dict[Any, Any]:
