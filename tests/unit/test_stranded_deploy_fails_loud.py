@@ -72,9 +72,7 @@ _OUR_REPO = "imrohitagrawal/quorum-ai"
 # absent context field (e.g. ``workflow_run`` on a manual dispatch).
 # --------------------------------------------------------------------------
 
-_TOKEN = re.compile(
-    r"\s*(\(|\)|\|\||&&|==|!=|'[^']*'|[A-Za-z_][A-Za-z0-9_.]*)"
-)
+_TOKEN = re.compile(r"\s*(\(|\)|\|\||&&|==|!=|'[^']*'|[A-Za-z_][A-Za-z0-9_.]*)")
 
 
 def _tokenize(expr: str) -> list[str]:
@@ -85,7 +83,7 @@ def _tokenize(expr: str) -> list[str]:
         if match is None:
             if expr[pos:].strip() == "":
                 break
-            raise ValueError(f"cannot tokenize at {expr[pos:pos + 40]!r}")
+            raise ValueError(f"cannot tokenize at {expr[pos : pos + 40]!r}")
         tokens.append(match.group(1))
         pos = match.end()
     return tokens
@@ -169,7 +167,7 @@ def evaluate(expr: str, ctx: dict[str, Any]) -> bool:
     # (`grep -rn "actionlint\|yamllint" Makefile .github/ scripts/` is empty),
     # so this file is the only thing that reads the expression at all.
     assert parser.pos == len(tokens), (
-        f"unconsumed tokens {tokens[parser.pos:]!r} — the condition has "
+        f"unconsumed tokens {tokens[parser.pos :]!r} — the condition has "
         "structure this evaluator does not model, so the assertions below "
         "would silently ignore it"
     )
@@ -399,9 +397,7 @@ def test_the_gate_records_which_workflow_triggered_it() -> None:
     Tests 27/27 — see ADR-0024).
     """
     reads_trigger_name = [
-        step
-        for step in _gate_steps()
-        if "github.event.workflow_run.name" in yaml.safe_dump(step)
+        step for step in _gate_steps() if "github.event.workflow_run.name" in yaml.safe_dump(step)
     ]
     assert reads_trigger_name, (
         "no gate step reads github.event.workflow_run.name, so a Deploy run "
