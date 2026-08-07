@@ -23,6 +23,13 @@ name: Deploy to Fly.io
 # skipped `deploy` job (issue #62). A SHA that has since been superseded by a
 # newer main commit stays a quiet (exit 0) skip: the newer commit's own Deploy
 # run is the one that verifies deployment.
+#
+# That paragraph described a contract this file did not have until #245: the
+# `gate` job's own `if:` required the trigger's conclusion to be `success`, so
+# on a red main the job SKIPPED and the stranding check never ran. Since that
+# check landed (`d671c6f`, 2026-08-01) not one of 238 Deploy runs has reported
+# failure. See ADR-0024 and the note above the `if:` — the conclusion term is
+# absent deliberately.
 on:
   workflow_run:
     workflows: ["CI", "Tests", "E2E (axe + parity)"]
@@ -43,23 +50,73 @@ jobs:
   gate:
     name: Gate — require CI + Tests + E2E green for the SHA
     runs-on: ubuntu-latest
-    # Only consider deploying on a manual dispatch, or when a required workflow
-    # finished with success for a GENUINE push to our repo's main. The
-    # ``event == 'push'`` + ``head_repository.full_name == github.repository``
-    # conditions are security-critical: ``head_branch == 'main'`` alone is
-    # spoofable by a fork PR whose source branch is literally named ``main``
-    # (that run would carry attacker code + an attacker commit). Requiring a
-    # push from our own repo defeats that (a fork PR run is ``pull_request`` on
-    # the fork). ``scripts/deploy_gate.py`` re-applies the same filter per run.
+    # Only consider deploying on a manual dispatch, or for a GENUINE push to our
+    # repo's main. The ``event == 'push'`` +
+    # ``head_repository.full_name == github.repository`` conditions are
+    # security-critical: ``head_branch == 'main'`` alone is spoofable by a fork
+    # PR whose source branch is literally named ``main`` (that run would carry
+    # attacker code + an attacker commit). Requiring a push from our own repo
+    # defeats that (a fork PR run is ``pull_request`` on the fork).
+    # ``scripts/deploy_gate.py`` re-applies the same filter per run.
+    #
+    # NOTE the absence of a ``workflow_run.conclusion == 'success'`` term, and
+    # do NOT restore it (issues #62, #245). It made this job SKIP whenever a
+    # required workflow was red — that is, precisely when a merge can be
+    # stranded — so the stranding detection at ``deploy_gate.py:310-321`` sat
+    # downstream of the very condition it exists to detect and has never once
+    # run since it was written (238 Deploy runs since `d671c6f`, zero failed).
+    #
+    # It bit rarely, and the honest figure matters more than a big one: over
+    # 2026-08-03..08-07 there were 80 genuine main-push completions of a
+    # required workflow, of which exactly TWO were non-success (`CI` and
+    # `Tests` on `3444961`). Those two are all this term ever suppressed. The
+    # ~130 skipped Deploy runs are overwhelmingly pull-request-branch triggers
+    # rejected by `event == 'push'`, which is KEPT — they still skip.
+    #
+    # Admitting a non-success trigger cannot cause a deploy: the gate proceeds
+    # on an allow-LIST (every required workflow must read ``success`` —
+    # ``deploy_gate.py``'s ``_SUCCESS`` check), and the ``deploy`` job
+    # additionally requires ``needs.gate.outputs.proceed == 'true'``. It only
+    # lets the gate CLASSIFY the outcome: still main's tip → stranded → exit 1
+    # → this run reports failure; superseded by a newer commit → quiet exit 0.
+    # Pinned by tests/unit/test_stranded_deploy_fails_loud.py.
     if: >-
       github.event_name == 'workflow_dispatch' ||
-      (github.event.workflow_run.conclusion == 'success' &&
-       github.event.workflow_run.event == 'push' &&
+      (github.event.workflow_run.event == 'push' &&
        github.event.workflow_run.head_branch == 'main' &&
        github.event.workflow_run.head_repository.full_name == github.repository)
     outputs:
       proceed: ${{ steps.check.outputs.proceed }}
     steps:
+      # Records WHICH workflow fired this run. The Actions API does not expose a
+      # Deploy run's triggering workflow, so today the attribution has to be
+      # reconstructed from a 2-4s trigger->creation lag, which is easy to get
+      # wrong: a `workflow_run` run is stamped with the DEFAULT BRANCH's tip as
+      # its own head_sha, so pull-request-branch triggers masquerade as main's
+      # SHA. That is what made `21cb499d` look like it had four push triggers.
+      #
+      # It does NOT settle #245's claim 1 — "E2E never fires this workflow" is
+      # about a Deploy run that is never CREATED, and a run that does not exist
+      # has no log. That claim is settled by counting instead (see ADR-0024:
+      # E2E 0/26, CI 27/27, Tests 27/27). This step makes the attribution of the
+      # runs that DO exist readable without timestamp archaeology.
+      # DIAGNOSTIC ONLY — nothing branches on these values.
+      #
+      # The context values go through `env:` rather than into the `run:` body:
+      # a workflow NAME is arbitrary text, and interpolating it directly into a
+      # shell script is the standard Actions script-injection sink.
+      - name: Record which workflow triggered this run
+        env:
+          TRIGGER_NAME: ${{ github.event.workflow_run.name }}
+          TRIGGER_CONCLUSION: ${{ github.event.workflow_run.conclusion }}
+          TRIGGER_EVENT: ${{ github.event.workflow_run.event }}
+          TRIGGER_SHA: ${{ github.event.workflow_run.head_sha }}
+          DISPATCH_SHA: ${{ github.sha }}
+        run: |
+          echo "triggering_workflow=${TRIGGER_NAME:-(manual dispatch)}"
+          echo "triggering_conclusion=${TRIGGER_CONCLUSION:-(none)}"
+          echo "triggering_event=${TRIGGER_EVENT:-(none)}"
+          echo "head_sha=${TRIGGER_SHA:-$DISPATCH_SHA}"
       - uses: actions/checkout@v4
         with:
           # Same pin as the deploy job's checkout: for a dispatch, github.sha
