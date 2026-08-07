@@ -153,3 +153,79 @@ def test_the_tree_is_clean_once_the_planted_key_is_gone() -> None:
         "removing the tests/ exemption introduced false positives: "
         + ", ".join(f"{f.path}:{f.line}" for f in raw_key_hits)
     )
+
+
+def test_the_scanner_skips_mutmuts_own_generated_stats_file() -> None:
+    """REGRESSION, 2026-08-07: #276 left the mutation gate producing no score.
+
+    ``EXCLUDED_DIRS`` contains ``mutants``, which is correct when the scan runs
+    from the real repo root. But ``mutmut`` runs the suite INSIDE ``./mutants/``,
+    where that copy IS the root — so ``mutmut-stats.json`` sits at the top level
+    with no ``mutants/`` path component, and the directory exclusion cannot
+    match it.
+
+    That file contains mutmut's rendering of the mutated source, in which the
+    concatenated ``_REAL_KEY`` above appears JOINED into a single 73-character
+    literal. So it matches ``raw_openrouter_key_pattern``, and the
+    ``tests/``-exemption removal shipped in #276 stopped skipping it.
+
+    Consequence, measured in CI on 2026-08-07: the clean-tree check above
+    failed with 27 findings in ``mutmut-stats.json``, mutmut reported
+    "Failed to run clean test", and **no mutation score was produced at all**.
+    The gate went red without measuring anything — exactly the shape AGENTS.md
+    warns about.
+
+    WHAT TURNS THIS RED: remove ``mutmut-stats.json`` from ``EXCLUDED_FILES``.
+    """
+    assert "mutmut-stats.json" in scanner.EXCLUDED_FILES, (
+        "the scanner no longer skips mutmut's generated stats file, so any "
+        "mutation run whose mutated source contains a key-shaped literal will "
+        "fail the clean-tree check and produce NO mutation score"
+    )
+
+    planted = Path(scanner.ROOT) / "mutmut-stats.json"
+    existed = planted.exists()
+    original = planted.read_text(encoding="utf-8") if existed else None
+    planted.write_text(
+        '{"k": "sk-or-v1-' + "a1b2c3d4e5f6a7b8c9d0e1f2a3b4c5d6" * 2 + '"}\n', encoding="utf-8"
+    )
+    try:
+        findings, scanned = scanner._run_checks()
+    finally:
+        if original is not None:
+            planted.write_text(original, encoding="utf-8")
+        else:
+            planted.unlink(missing_ok=True)
+
+    assert scanned > 0, "the scanner measured nothing — this assertion would be vacuous"
+    hits = [f for f in findings if "mutmut-stats.json" in f.path]
+    assert not hits, "mutmut's generated stats file was scanned and flagged: " + ", ".join(
+        f"{f.path}:{f.line}" for f in hits
+    )
+
+
+def test_the_stats_exclusion_is_narrow() -> None:
+    """POSITIVE PARTNER (rule 7): the exclusion must not be a blanket .json skip.
+
+    An over-broad fix — skipping every ``.json``, or every generated-looking
+    name — would stop the scanner finding a real key committed in a config or
+    fixture file. This proves an ordinary ``.json`` at the same level is still
+    read and still flagged.
+
+    WHAT TURNS THIS RED: widen ``EXCLUDED_FILES`` to a suffix or glob rule.
+    """
+    planted = Path(scanner.ROOT) / "_zz_ordinary_probe.json"
+    planted.write_text(
+        '{"k": "sk-or-v1-' + "a1b2c3d4e5f6a7b8c9d0e1f2a3b4c5d6" * 2 + '"}\n', encoding="utf-8"
+    )
+    try:
+        findings, scanned = scanner._run_checks()
+    finally:
+        planted.unlink(missing_ok=True)
+
+    assert scanned > 0, "the scanner measured nothing"
+    hits = [f for f in findings if "_zz_ordinary_probe.json" in f.path]
+    assert hits, (
+        "an ordinary .json carrying a real-shaped key was NOT flagged — the "
+        "mutmut-stats exclusion has been widened into a blind spot"
+    )
