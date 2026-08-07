@@ -7,7 +7,7 @@ Accepted — 2026-08-08
 ## Context
 
 #245's third failure mode, witnessed 2026-08-07: a squash-merge to `main`
-produced **zero** workflow runs.
+produced **zero `push`-event runs**.
 
 ```
 $ gh api "repos/:owner/:repo/actions/runs?head_sha=bd7c46b..." \
@@ -15,9 +15,12 @@ $ gh api "repos/:owner/:repo/actions/runs?head_sha=bd7c46b..." \
 0
 ```
 
-`deploy.yml` is `on.workflow_run`, so with no upstream run there is no
-`workflow_run` event, no Deploy run, and nothing to turn red. Not a skipped job,
-not a cancelled job — nothing. Production served the previous build for
+`deploy.yml` is `on.workflow_run` off CI/Tests/E2E, so with no `push`-event run
+of any of the three, that merge fired nothing. (Two `Deploy to Fly.io` runs DO
+exist for the SHA, both `skipped`, fired by `pull_request` runs on another
+branch — an earlier draft of this ADR said "nothing at all", which was wrong.
+What was zero is `push`-event runs, which is what the command above measures.)
+Production served the previous build for
 **34m31s** (merged 08:16:16Z; the first build containing that commit finished
 deploying at 08:50:47Z), and it was caught only because a human happened to be
 watching for a specific SHA.
@@ -35,12 +38,9 @@ whatever build is running rather than from the build that *should* be running:
 
 Nothing in CI compared `main`'s tip to what production actually serves:
 
-```
-$ grep -rn build_sha .github/workflows/ scripts/
-.github/workflows/deploy.yml:107:  # ... diverge from the GIT_SHA stamped into /status.build_sha below.
-.github/workflows/deploy.yml:151:  # ... /status serves it as ``build_sha`` —
-.github/workflows/deploy.yml:153:  #   curl -s .../status | jq -r .build_sha
-```
+`grep -rn build_sha .github/workflows/ scripts/` returns three comment lines in
+`deploy.yml` and nothing else. (Line numbers are not quoted: an earlier draft
+pinned them at 107/151/153 and they had already moved by the next commit.)
 
 Three comment lines, no check. AGENTS.md rule 18 instructs a *human* to make
 that comparison after every merge. No machine did.
@@ -78,33 +78,55 @@ fail-loud contract stayed false for weeks.
 
 ### The decision table
 
-| `main` tip | `build_sha` | tip age | decision | exit |
+| `main` tip | `build_sha` | drift age | decision | exit |
 |---|---|---|---|---|
 | X | X | any | `IN_SYNC` | 0 |
 | X | Y | < grace | `DEPLOY_IN_FLIGHT` | 0 |
 | X | Y | ≥ grace | `DRIFTED` | 1 |
 | X | Y | unknown | `UNKNOWN` | 1 |
+| X | Y | **negative** | `UNKNOWN` | 1 |
 | unreadable | any | any | `UNKNOWN` | 1 |
 | X | unreadable | any | `UNKNOWN` | 1 |
+
+**"Drift age" is the age of the oldest commit on `main` that production does not
+have — not the age of the tip.** Review caught this: with a tip clock, a fresh
+merge launders an old outage. Measured merge gaps on `main` for 2026-08-07 were
+21, 148, 119, 20 and 256 minutes, so two of five fall inside the grace period; a
+run of close merges would have kept the check quiet through an arbitrarily long
+outage. Verified after the fix — if production were pinned to `21cb499d`, the
+drift clock reads **5.95 h** while `main`'s tip is only **1.69 h** old.
+
+**A negative age is `UNKNOWN`, not "fresh".** `age < grace` is true for every
+negative number, so a commit dated in the future (clock skew) would have read
+`DEPLOY_IN_FLIGHT` for as long as the date stayed ahead — silently healthy,
+the one outcome this must never produce.
 
 **`UNKNOWN` alerts.** "I could not tell" is a failure of the check, and a check
 that cannot tell must never read as healthy — printing a blank and exiting 0 is
 the silent wrong-number failure this exists to prevent. AGENTS.md: *every gate
 must report what it counted, and refuse to pass on an empty input.*
 
-### The grace period is measured, not chosen
+### The grace period is measured, and calibrated against the LEGITIMATE path
 
-45 minutes (`DEFAULT_GRACE_SECONDS = 2700`). Measured 2026-08-07:
+30 minutes (`DEFAULT_GRACE_SECONDS = 1800`). Merge (`.commit.committer.date`) to
+the deploy job's `completed_at`, last nine successful deploys on 2026-08-07:
 
-| case | merge → deployed |
-|---|---|
-| typical (`2931c8c`) | 13m11s (791s) — mostly the gate waiting for E2E |
-| worst (`bd7c46b`) | **34m31s (2071s)** — its own merge triggered nothing, so it rode the next merge's deploy |
+```
+795s 758s 734s 753s 792s 803s 734s 737s 744s   -> max 803s, median 753s
+```
 
-2700s clears the measured worst case by ~10 minutes. Larger would hide a real
-drift for longer than the incident it exists to catch; smaller would alert on an
-ordinary slow deploy. The boundary is pinned with literals on **both** sides
-(rule 7a) rather than against the constant that defines it.
+The structural ceiling is `GATE_TIMEOUT_SECONDS = 1500` in `deploy.yml` plus a
+~60s deploy job — about 1560s even if the gate waits its entire budget. 1800s
+clears that with headroom, and no realistic slow deploy approaches it.
+
+**An earlier draft used 2700s, sized against the 2071s of the incident itself.**
+That was the wrong calibration and review caught it: sizing the grace to
+tolerate the failure means a repeat of 2026-08-07 reads `DEPLOY_IN_FLIGHT` for
+its entire duration. Size against the legitimate path; the incident is the thing
+being detected, not the thing being accommodated.
+
+The boundary is pinned with literals on **both** sides (rule 7a) rather than
+against the constant that defines it.
 
 ## Consequences
 
@@ -121,6 +143,20 @@ ordinary slow deploy. The boundary is pinned with literals on **both** sides
   which.
 - The watchdog job now checks out the repository and sets up Python, which it
   did not before. Marginal cost on a free public runner.
+- **A crash cannot leave the job green.** The check step is
+  `continue-on-error: true` so the alert step still runs, which means an
+  uncaught traceback would exit non-zero *without* writing `$GITHUB_OUTPUT`,
+  skip both later steps, and report success. Measured in review against a
+  `/status` body that was valid JSON but not an object. Closed on both sides:
+  the fetchers swallow everything and a last-resort handler writes an `UNKNOWN`
+  verdict, and the alert/fail steps also fire on
+  `steps.buildsha.outcome == 'failure'`.
+- **A cold machine does not cry wolf.** `fly.toml` sets
+  `min_machines_running = 0` with `auto_stop_machines = "stop"`, so the app can
+  be cold when the watchdog probes and a cold start can blow a 10s budget. The
+  probe retries three times with a 5s backoff before declaring `UNKNOWN`.
+  (Warm latency measured 0.38-0.86s over 8 samples; **cold-start latency is
+  UNVERIFIED** — it cannot be forced read-only.)
 - **A third copy of the required-workflow names is now pinned.** `deploy.yml`
   holds filter patterns (escaped, ADR-0025), `deploy_gate.py` holds literal
   names, and this workflow holds `"<name>:<file>"` dispatch pairs. Three

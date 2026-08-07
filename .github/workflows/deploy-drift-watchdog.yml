@@ -137,6 +137,9 @@ jobs:
       # failed explicitly at the end, so drift is RED and not merely noted.
       - name: Assert production serves main's tip
         id: buildsha
+        # `always()` so a failure in the legacy step above does not skip the
+        # positive check — the API being flaky is exactly when it matters.
+        if: always()
         continue-on-error: true
         env:
           GH_TOKEN: ${{ github.token }}
@@ -144,7 +147,13 @@ jobs:
         run: python3 scripts/deploy_drift_check.py --repo "$REPO"
 
       - name: Alert on build_sha drift
-        if: steps.buildsha.outputs.should_alert == 'true'
+        # `outcome == 'failure'` covers the case where the script died before
+        # writing its verdict: outputs are then EMPTY, so branching on
+        # should_alert alone would skip this step and — the step being
+        # continue-on-error — leave the job green while production is stale.
+        if: >-
+          always() && (steps.buildsha.outputs.should_alert == 'true' ||
+          steps.buildsha.outcome == 'failure')
         env:
           GH_TOKEN: ${{ github.token }}
           REPO: ${{ github.repository }}
@@ -152,7 +161,7 @@ jobs:
         run: |
           set -euo pipefail
           BODY=$(printf '%s\n' \
-            "Automated **build_sha drift** alert (decision: \`$DECISION\`)." \
+            "Automated **build_sha drift** alert (decision: \`${DECISION:-crashed-before-reporting}\`)." \
             "" \
             "Production is not serving \`main\`'s tip, or one of the two could not be read." \
             "See the \`Assert production serves main's tip\` step for both SHAs." \
@@ -170,7 +179,12 @@ jobs:
       # Fail LOUD. Without this the workflow reports success having found drift,
       # which is the exact failure mode #245 is about.
       - name: Fail the job if production has drifted
-        if: steps.buildsha.outputs.should_alert == 'true'
+        if: >-
+          always() && (steps.buildsha.outputs.should_alert == 'true' ||
+          steps.buildsha.outcome == 'failure')
+        env:
+          DECISION: ${{ steps.buildsha.outputs.decision }}
+          OUTCOME: ${{ steps.buildsha.outcome }}
         run: |
-          echo "build_sha drift detected (${{ steps.buildsha.outputs.decision }}) — failing the watchdog."
+          echo "build_sha drift detected (decision=${DECISION:-<none>}, step=${OUTCOME}) — failing the watchdog."
           exit 1

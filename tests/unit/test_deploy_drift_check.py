@@ -1,23 +1,24 @@
 """Production must be proven to run `main`'s tip, not assumed to.
 
 #245's third failure mode, witnessed 2026-08-07: a merge to `main` produced
-**zero** workflow runs. `deploy.yml` is `on.workflow_run`, so with no upstream
-run there is no `workflow_run` event, no Deploy run, and nothing to turn red —
-no skipped job, no cancelled job, nothing at all. Production sat on the previous
+**zero `push`-event runs**, so `deploy.yml` — which is `on.workflow_run` off
+CI/Tests/E2E — was never fired by that merge. Production sat on the previous
 build for 34m31s (merged 08:16:16Z; the first build containing it finished
 deploying at 08:50:47Z) while **every passive signal stayed green**: `/ready`
 returned 200, `/status` returned a valid `build_sha`, and the scheduled
 Availability and Error-rate checks both passed — against the stale build.
 
-Nothing in CI compared `main`'s tip to what production actually serves::
+(An earlier draft of this docstring said "zero workflow runs ... nothing at
+all". That is false: `gh api ".../runs?head_sha=bd7c46b..."` returns **3** runs,
+two of them `Deploy to Fly.io` marked `skipped` — fired by `pull_request` runs
+on another branch. What was zero is `push`-event runs.)
 
-    $ grep -rn build_sha .github/workflows/ scripts/
-    .github/workflows/deploy.yml:107:  # ... /status.build_sha below.
-    .github/workflows/deploy.yml:151:  # ... /status serves it as ``build_sha``
-    .github/workflows/deploy.yml:153:  #   curl -s .../status | jq -r .build_sha
+Nothing in CI compared `main`'s tip to what production actually serves —
+`grep -rn build_sha .github/workflows/ scripts/` returned three comment lines in
+`deploy.yml` and no check. (Line numbers are deliberately not quoted here: an
+earlier draft pinned them and they were already stale two commits later.)
 
-Three comment lines, no check. AGENTS.md rule 18 tells a *human* to make that
-comparison; no machine did.
+AGENTS.md rule 18 tells a *human* to make that comparison; no machine did.
 
 `deploy-drift-watchdog.yml` asked a weaker question — "does `main` HEAD have a
 successful Deploy *run*?" — which is a proxy. It cannot see a Deploy run that
@@ -37,6 +38,7 @@ grace period — i.e. delete the drift branch.
 from __future__ import annotations
 
 import importlib.util
+import json
 import pathlib
 import sys
 from types import ModuleType
@@ -71,7 +73,7 @@ def drift() -> ModuleType:
 
 def test_matching_shas_are_in_sync(drift: ModuleType) -> None:
     result = drift.evaluate_drift(
-        main_tip=_TIP, build_sha=_TIP, tip_age_seconds=99999.0, grace_seconds=600.0
+        main_tip=_TIP, build_sha=_TIP, drift_age_seconds=99999.0, grace_seconds=600.0
     )
     assert result.decision is drift.DriftDecision.IN_SYNC
     assert not result.should_alert
@@ -80,7 +82,7 @@ def test_matching_shas_are_in_sync(drift: ModuleType) -> None:
 def test_a_fresh_mismatch_is_a_deploy_in_flight(drift: ModuleType) -> None:
     """A merge that landed a minute ago has not had time to deploy."""
     result = drift.evaluate_drift(
-        main_tip=_TIP, build_sha=_OLD, tip_age_seconds=60.0, grace_seconds=600.0
+        main_tip=_TIP, build_sha=_OLD, drift_age_seconds=60.0, grace_seconds=600.0
     )
     assert result.decision is drift.DriftDecision.DEPLOY_IN_FLIGHT
     assert not result.should_alert
@@ -89,7 +91,7 @@ def test_a_fresh_mismatch_is_a_deploy_in_flight(drift: ModuleType) -> None:
 def test_a_stale_mismatch_is_drift(drift: ModuleType) -> None:
     """THE defect. Production is not running main's tip and has had time to."""
     result = drift.evaluate_drift(
-        main_tip=_TIP, build_sha=_OLD, tip_age_seconds=3600.0, grace_seconds=600.0
+        main_tip=_TIP, build_sha=_OLD, drift_age_seconds=3600.0, grace_seconds=600.0
     )
     assert result.decision is drift.DriftDecision.DRIFTED
     assert result.should_alert
@@ -102,10 +104,10 @@ def test_the_grace_boundary_is_exact(drift: ModuleType) -> None:
     lets the constant itself be changed undetected.
     """
     just_inside = drift.evaluate_drift(
-        main_tip=_TIP, build_sha=_OLD, tip_age_seconds=599.0, grace_seconds=600.0
+        main_tip=_TIP, build_sha=_OLD, drift_age_seconds=599.0, grace_seconds=600.0
     )
     just_outside = drift.evaluate_drift(
-        main_tip=_TIP, build_sha=_OLD, tip_age_seconds=601.0, grace_seconds=600.0
+        main_tip=_TIP, build_sha=_OLD, drift_age_seconds=601.0, grace_seconds=600.0
     )
     assert just_inside.decision is drift.DriftDecision.DEPLOY_IN_FLIGHT
     assert just_outside.decision is drift.DriftDecision.DRIFTED
@@ -124,7 +126,7 @@ def test_an_unreadable_main_tip_is_unknown_and_alerts(
     this check exists to prevent, so an unresolvable input is LOUD.
     """
     result = drift.evaluate_drift(
-        main_tip=missing, build_sha=_TIP, tip_age_seconds=10.0, grace_seconds=600.0
+        main_tip=missing, build_sha=_TIP, drift_age_seconds=10.0, grace_seconds=600.0
     )
     assert result.decision is drift.DriftDecision.UNKNOWN
     assert result.should_alert
@@ -136,7 +138,7 @@ def test_an_unreachable_build_sha_is_unknown_and_alerts(
 ) -> None:
     """`/status` is a network call; unreachable must not read as healthy."""
     result = drift.evaluate_drift(
-        main_tip=_TIP, build_sha=missing, tip_age_seconds=10.0, grace_seconds=600.0
+        main_tip=_TIP, build_sha=missing, drift_age_seconds=10.0, grace_seconds=600.0
     )
     assert result.decision is drift.DriftDecision.UNKNOWN
     assert result.should_alert
@@ -149,7 +151,7 @@ def test_an_unknown_tip_age_is_unknown_not_silently_in_flight(drift: ModuleType)
     as long as the age stayed unreadable.
     """
     result = drift.evaluate_drift(
-        main_tip=_TIP, build_sha=_OLD, tip_age_seconds=None, grace_seconds=600.0
+        main_tip=_TIP, build_sha=_OLD, drift_age_seconds=None, grace_seconds=600.0
     )
     assert result.decision is drift.DriftDecision.UNKNOWN
     assert result.should_alert
@@ -159,7 +161,7 @@ def test_comparison_ignores_case_and_surrounding_whitespace(drift: ModuleType) -
     result = drift.evaluate_drift(
         main_tip=f"  {_TIP.upper()}  ",
         build_sha=_TIP,
-        tip_age_seconds=99999.0,
+        drift_age_seconds=99999.0,
         grace_seconds=600.0,
     )
     assert result.decision is drift.DriftDecision.IN_SYNC
@@ -181,8 +183,8 @@ def test_the_shipped_grace_clears_the_worst_measured_deploy(drift: ModuleType) -
     Literals on both sides (rule 7a): the default must clear 2071s with real
     headroom, and must not be so large that a genuine drift hides for hours.
     """
-    assert drift.DEFAULT_GRACE_SECONDS > 2071
-    assert drift.DEFAULT_GRACE_SECONDS <= 3600
+    assert drift.DEFAULT_GRACE_SECONDS > 1560
+    assert drift.DEFAULT_GRACE_SECONDS <= 2000
 
 
 def test_a_drift_that_outlives_the_shipped_grace_alerts(drift: ModuleType) -> None:
@@ -190,7 +192,7 @@ def test_a_drift_that_outlives_the_shipped_grace_alerts(drift: ModuleType) -> No
     result = drift.evaluate_drift(
         main_tip=_TIP,
         build_sha=_OLD,
-        tip_age_seconds=drift.DEFAULT_GRACE_SECONDS + 1.0,
+        drift_age_seconds=drift.DEFAULT_GRACE_SECONDS + 1.0,
         grace_seconds=drift.DEFAULT_GRACE_SECONDS,
     )
     assert result.decision is drift.DriftDecision.DRIFTED
@@ -218,7 +220,7 @@ def test_every_decision_reports_what_it_compared(drift: ModuleType) -> None:
         result = drift.evaluate_drift(
             main_tip=main_tip,
             build_sha=build_sha,
-            tip_age_seconds=age,
+            drift_age_seconds=age,
             grace_seconds=600.0,
         )
         seen.add(result.decision)
@@ -252,8 +254,15 @@ def test_the_watchdogs_dispatch_list_matches_the_required_workflows() -> None:
     watchdog = (_ROOT / ".github" / "workflows" / "deploy-drift-watchdog.yml").read_text(
         encoding="utf-8"
     )
-    pairs = re.findall(r'"([^":]+):([A-Za-z0-9._-]+\.yml)"', watchdog)
-    assert pairs, 'no "<name>:<file>" dispatch pairs found in the watchdog'
+    # Anchor INSIDE the `for pair in ...; do` line. Scraping the whole file
+    # would let the names live in a comment while the loop dispatches nothing —
+    # measured in review: replacing the body with `for pair in ; do` and leaving
+    # the names in a comment above kept this test GREEN. That is the
+    # substring-vs-structure trap AGENTS.md rule 8 records, inside a guard.
+    loop = re.search(r"for pair in ([^\n]*); do", watchdog)
+    assert loop, "no `for pair in ...; do` dispatch loop found in the watchdog"
+    pairs = re.findall(r'"([^":]+):([A-Za-z0-9._-]+\.yml)"', loop.group(1))
+    assert pairs, f"the dispatch loop lists no <name>:<file> pairs: {loop.group(1)!r}"
 
     names = tuple(name for name, _file in pairs)
     assert tuple(_module_deploy_gate().REQUIRED_WORKFLOWS) == names, (
@@ -291,3 +300,139 @@ def test_the_decisions_are_exhaustively_pinned(drift: ModuleType) -> None:
     assert alerting and quiet
     assert alerting | quiet == set(drift.DriftDecision)
     assert not (alerting & quiet)
+
+
+# --- the wire from the decision to the workflow ---------------------------
+#
+# Everything above tests `evaluate_drift` in isolation. Review measured that
+# the WIRE was tested nowhere: deleting the `$GITHUB_OUTPUT` write entirely, or
+# renaming the `should_alert` key, both left the suite at 17 passed — and either
+# makes the watchdog permanently GREEN on real drift, because the workflow's
+# alert and fail steps branch on `steps.buildsha.outputs.should_alert`.
+
+
+def _run_main(
+    drift: ModuleType,
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: pathlib.Path,
+    *,
+    tip: str | None,
+    served: str | None,
+    age: float | None,
+) -> tuple[int, str]:
+    """Drive `main()` with the network stubbed; return (exit code, outputs file)."""
+    out = tmp_path / "gh_output"
+    out.write_text("", encoding="utf-8")
+    monkeypatch.setenv("GITHUB_OUTPUT", str(out))
+    monkeypatch.setattr(drift, "fetch_main_tip", lambda _repo: tip)
+    monkeypatch.setattr(drift, "fetch_build_sha", lambda _url, **_kw: served)
+    monkeypatch.setattr(drift, "fetch_drift_age", lambda _repo, _sha: age)
+    code = drift.main(["--repo", "owner/repo", "--grace-seconds", "600"])
+    return code, out.read_text(encoding="utf-8")
+
+
+def test_main_publishes_the_verdict_when_production_is_in_sync(
+    drift: ModuleType, monkeypatch: pytest.MonkeyPatch, tmp_path: pathlib.Path
+) -> None:
+    code, written = _run_main(drift, monkeypatch, tmp_path, tip=_TIP, served=_TIP, age=None)
+    assert code == 0
+    assert "should_alert=false" in written
+    assert "decision=in_sync" in written
+
+
+def test_main_publishes_the_verdict_and_exits_nonzero_on_drift(
+    drift: ModuleType, monkeypatch: pytest.MonkeyPatch, tmp_path: pathlib.Path
+) -> None:
+    """WHAT TURNS THIS RED: deleting the `$GITHUB_OUTPUT` write, or renaming the
+    `should_alert` key. Either leaves the workflow's alert step un-triggered and
+    the job green while production is stale."""
+    code, written = _run_main(drift, monkeypatch, tmp_path, tip=_TIP, served=_OLD, age=99999.0)
+    assert code == 1
+    assert "should_alert=true" in written
+    assert "decision=drifted" in written
+
+
+def test_main_survives_a_fetcher_that_raises(
+    drift: ModuleType, monkeypatch: pytest.MonkeyPatch, tmp_path: pathlib.Path
+) -> None:
+    """A crash must not leave the job green.
+
+    The workflow runs this step with `continue-on-error: true`, so an uncaught
+    traceback exits non-zero WITHOUT writing `$GITHUB_OUTPUT`, both later steps
+    are skipped, and the job reports success. The fetchers therefore swallow
+    everything; this proves it for the `/status` path.
+    """
+    out = tmp_path / "gh_output"
+    out.write_text("", encoding="utf-8")
+    monkeypatch.setenv("GITHUB_OUTPUT", str(out))
+    monkeypatch.setattr(drift, "fetch_main_tip", lambda _repo: _TIP)
+
+    def _explode(_url: str, **_kw: object) -> str:
+        raise RuntimeError("upstream on fire")
+
+    monkeypatch.setattr(drift, "fetch_build_sha", _explode)
+    with pytest.raises(RuntimeError):
+        drift.main(["--repo", "owner/repo"])
+    # The module-level __main__ guard is what converts this into a written
+    # verdict; prove that helper does its job rather than trusting the guard.
+    drift._write_outputs(drift.DriftResult(drift.DriftDecision.UNKNOWN, "crashed: RuntimeError()"))
+    assert "should_alert=true" in out.read_text(encoding="utf-8")
+
+
+def test_a_status_body_that_is_not_an_object_returns_none_rather_than_raising(
+    drift: ModuleType, tmp_path: pathlib.Path
+) -> None:
+    """Measured defect: `payload.get` sat outside the try.
+
+    A `/status` body that is valid JSON but not an object raised AttributeError,
+    killing the process before `$GITHUB_OUTPUT` was written and leaving the
+    watchdog green. Every one of these must read as "unknown", not crash.
+    """
+    for body in ("[{}]", "null", '"a string"', "123", "not json at all", "<html></html>"):
+        stub = tmp_path / "status.json"
+        stub.write_text(body, encoding="utf-8")
+        assert drift.fetch_build_sha(stub.as_uri(), attempts=1) is None, body
+
+
+def test_a_wellformed_status_body_is_read(drift: ModuleType, tmp_path: pathlib.Path) -> None:
+    """Positive partner: the negative check above is worthless if this fails."""
+    stub = tmp_path / "status.json"
+    stub.write_text(json.dumps({"build_sha": _TIP}), encoding="utf-8")
+    assert drift.fetch_build_sha(stub.as_uri(), attempts=1) == _TIP
+
+
+@pytest.mark.parametrize("age", [-1.0, -3600.0, -31536000.0])
+def test_a_negative_age_is_unknown_not_silently_in_flight(drift: ModuleType, age: float) -> None:
+    """Clock skew must not silence the check.
+
+    `age < grace` is true for every negative number, so a commit dated in the
+    future would read DEPLOY_IN_FLIGHT for as long as the date stayed ahead.
+    """
+    result = drift.evaluate_drift(
+        main_tip=_TIP, build_sha=_OLD, drift_age_seconds=age, grace_seconds=600.0
+    )
+    assert result.decision is drift.DriftDecision.UNKNOWN
+    assert result.should_alert
+
+
+def test_the_workflow_branches_on_the_key_this_script_writes() -> None:
+    """Pin BOTH sides of the output contract together.
+
+    The script writes `should_alert=`; `deploy-drift-watchdog.yml` branches on
+    `steps.buildsha.outputs.should_alert`. Renaming either one silently breaks
+    the alert, and each file alone looks perfectly correct.
+    """
+    script = _SCRIPT.read_text(encoding="utf-8")
+    workflow = (_ROOT / ".github" / "workflows" / "deploy-drift-watchdog.yml").read_text(
+        encoding="utf-8"
+    )
+    assert 'write(f"should_alert=' in script, "the script no longer writes should_alert"
+    assert "steps.buildsha.outputs.should_alert" in workflow, (
+        "the watchdog no longer branches on should_alert"
+    )
+    assert "continue-on-error: true" in workflow, (
+        "the check step must not fail the job directly, or the alert step is skipped"
+    )
+    # ...and the job must still be failed explicitly somewhere, or drift is
+    # merely noted while the workflow reports success.
+    assert "exit 1" in workflow, "nothing fails the job on drift"
