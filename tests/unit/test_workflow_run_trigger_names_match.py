@@ -5,19 +5,31 @@ strings** — GitHub's filter-pattern language, where ``+``, ``*``, ``?``, ``[``
 and ``]`` are metacharacters. A name containing one of them silently matches
 nothing, because the pattern still compiles; there is no error and no warning.
 
-Measured in this repository, 2026-08-03..08-07, counting a "Deploy to Fly.io"
-run created within 20s of a required workflow's completion on a genuine push to
-main (the observed trigger→creation lag is 2-4s):
+Measured in this repository. Counting a "Deploy to Fly.io" run created within
+20s of a required workflow's completion on a genuine push to main (the observed
+trigger→creation lag is 2-4s), over every run the Actions API still retained on
+**2026-08-07** (window 2026-08-01..08-07, 249 Deploy runs):
 
-    CI                    27 / 27 fired a Deploy run
-    Tests                 27 / 27 fired a Deploy run
-    E2E (axe + parity)     0 / 26
+    CI                    47 / 47 fired a Deploy run
+    Tests                 47 / 47 fired a Deploy run
+    E2E (axe + parity)     0 / 46
+
+These are a DATED SNAPSHOT, not constants: the API retains a rolling window, so
+re-running the count later gives different totals (the ratio does not change).
+Do not treat the digits as reproducible without the date.
 
 ``deploy.yml`` listed ``"E2E (axe + parity)"``. As a pattern that is
 ``E2E (axe`` + one-or-more **spaces** + `` parity)``, which matches the string
 ``E2E (axe  parity)`` and can never match the workflow's real name. ``CI`` and
 ``Tests`` contain no metacharacters, so they match literally and fire every
-time. One third of the intended redundancy was absent for the life of the repo.
+time, so one third of the intended redundancy was absent.
+
+**Not "for the life of the repo"** — an earlier draft of this file said that and
+it is false. ``deploy.yml`` was created 2026-06-22 (``bca4ba6``) with
+``on: push``, no ``workflow_run`` at all; a ``workflow_run`` trigger first
+appears 2026-07-16 (``2a218de``) listing only ``["CI"]``, and the three-name
+list lands 2026-07-17 (``cb4010a``). The redundancy could only be absent from
+the day it was written.
 
 **Proven, not inferred.** A throwaway public repo
 (``imrohitagrawal/wfrun-glob-probe``) with one upstream workflow named
@@ -64,7 +76,10 @@ _WORKFLOWS = _ROOT / ".github" / "workflows"
 #: The metacharacters GitHub's filter-pattern language gives meaning to. A
 #: workflow name containing any of these must be escaped with a backslash in an
 #: ``on.workflow_run.workflows`` entry, or it matches something else entirely.
-_METACHARACTERS = "+*?[]"
+#: The set is the cheat sheet's: ``*``, ``**``, ``?``, ``+``, ``[]``, ``!``.
+#: ``(`` and ``)`` are deliberately ABSENT — they are not listed, and the probe
+#: matched with both parens unescaped, so they are literal.
+_METACHARACTERS = "+*?[]!"
 
 
 def _load(path: pathlib.Path) -> dict[Any, Any]:
@@ -223,10 +238,18 @@ def test_the_scripts_required_list_matches_the_workflows_unescaped() -> None:
     sys.modules[spec.name] = module
     spec.loader.exec_module(module)
 
+    # Scoped to deploy.yml ONLY. An earlier version compared against every
+    # workflow_run reference in the whole directory, so adding an unrelated
+    # listener (say a notifier on ["CI"]) turned this red with a message naming
+    # deploy.yml — and the cheapest way to green would have been to edit
+    # REQUIRED_WORKFLOWS, which strands merges. deploy.yml is the list the gate
+    # actually waits on; it is the only one this invariant is about.
     from_yaml = tuple(
-        re.sub(r"\\(.)", r"\1", pattern) for _path, pattern in _workflow_run_references()
+        re.sub(r"\\(.)", r"\1", pattern)
+        for path, pattern in _workflow_run_references()
+        if path.name == "deploy.yml"
     )
-    assert from_yaml, "no workflow_run references found — nothing compared"
+    assert from_yaml, "deploy.yml declares no on.workflow_run.workflows — nothing compared"
     assert tuple(module.REQUIRED_WORKFLOWS) == from_yaml, (
         f"scripts/deploy_gate.py REQUIRED_WORKFLOWS={module.REQUIRED_WORKFLOWS} "
         f"but deploy.yml (unescaped) lists {from_yaml}"

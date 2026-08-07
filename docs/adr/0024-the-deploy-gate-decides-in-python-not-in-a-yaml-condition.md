@@ -182,12 +182,15 @@ that goes red when it used to go quiet — which is the entire point.
 
   | required workflow, genuine main push | fired a Deploy run |
   |---|---|
-  | `CI` | 27 / 27 |
-  | `Tests` | 27 / 27 |
-  | **`E2E (axe + parity)`** | **0 / 26** |
+  | `CI` | 47 / 47 |
+  | `Tests` | 47 / 47 |
+  | **`E2E (axe + parity)`** | **0 / 46** |
 
-  **SUPERSEDED by ADR-0025, the same day — this is now fixed.** The paragraph
-  below said the cause was UNVERIFIED, reasoning that `e2e.yml:1` is
+  (Dated snapshot, 2026-08-07, over the API's retained window. An earlier draft
+  said `27/27, 27/27, 0/26` from a narrower slice.)
+
+  **SUPERSEDED by ADR-0025, the same day — this is now fixed.** The text this
+  replaces said the cause was UNVERIFIED, reasoning that `e2e.yml:1` is
   `name: E2E (axe + parity)` and `deploy.yml` listed exactly that string. The
   error was assuming the entry is a *string*: `on.workflow_run.workflows`
   entries are **filter patterns**, and `+` means "one or more of the preceding

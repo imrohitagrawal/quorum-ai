@@ -32,15 +32,18 @@ name: Deploy to Fly.io
 # absent deliberately.
 on:
   workflow_run:
-    # These are FILTER PATTERNS, not literal names. `+ * ? [ ]` are
+    # These are FILTER PATTERNS, not literal names. `+ * ? [ ] !` are
     # metacharacters, and an unescaped one silently matches nothing — the
     # pattern still compiles, so there is no error and no warning.
     #
     # `"E2E (axe + parity)"` was therefore `E2E (axe` + one-or-more SPACES +
     # ` parity)`, which matches `E2E (axe  parity)` and can never match its own
-    # workflow. Measured 2026-08-03..08-07: CI fired 27/27, Tests 27/27,
-    # E2E 0/26. `CI` and `Tests` have no metacharacters, so they matched
-    # literally and carried the whole trigger for the life of the repo.
+    # workflow. Measured 2026-08-07 over the API's retained window (a dated
+    # snapshot, not a constant): CI fired 47/47, Tests 47/47, E2E 0/46.
+    #
+    # `CI` and `Tests` have no metacharacters, so they matched literally and
+    # have carried the whole trigger since the three-name list was written on
+    # 2026-07-17 (`cb4010a`); before that there was no workflow_run trigger.
     #
     # Proven in a throwaway repo (imrohitagrawal/wfrun-glob-probe), one upstream
     # named `E2E (axe + parity)` and two listeners, over two pushes:
@@ -114,11 +117,11 @@ jobs:
       # its own head_sha, so pull-request-branch triggers masquerade as main's
       # SHA. That is what made `21cb499d` look like it had four push triggers.
       #
-      # It does NOT settle #245's claim 1 — "E2E never fires this workflow" is
+      # It did NOT settle #245's claim 1 — "E2E never fires this workflow" is
       # about a Deploy run that is never CREATED, and a run that does not exist
-      # has no log. That claim is settled by counting instead (see ADR-0024:
-      # E2E 0/26, CI 27/27, Tests 27/27). This step makes the attribution of the
-      # runs that DO exist readable without timestamp archaeology.
+      # has no log. That was settled by counting, and then ROOT-CAUSED: the
+      # trigger name was a glob pattern whose `+` could never match. See
+      # ADR-0025 and the note on the `workflows:` list above.
       # DIAGNOSTIC ONLY — nothing branches on these values.
       #
       # The context values go through `env:` rather than into the `run:` body:
