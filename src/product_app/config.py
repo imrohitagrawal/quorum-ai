@@ -141,7 +141,7 @@ class Settings(BaseSettings):
     #: Token cap for a judge response. The output contract is a small
     #: strict-JSON object; a response longer than this is malformed by
     #: definition and yields no verdict.
-    quorum_eval_judge_max_tokens: int = 512
+    quorum_eval_judge_max_tokens: int = 1024
 
     # --- Run-level wall-clock deadline (NFR-004 / NFR-001, P3) -----------
     #: Total wall-clock budget for ONE query run, in seconds. docs/11 pins
