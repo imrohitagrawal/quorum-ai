@@ -1327,6 +1327,37 @@ JUDGE_EVIDENCE_START = UNTRUSTED_BEGIN
 JUDGE_EVIDENCE_END = UNTRUSTED_END
 
 
+#: Issue #268. The three caps that make ``JudgeEvidence.source_lines`` a
+#: bounded input to a PAID call. ``providers._extract_citations`` (the
+#: OpenRouter ``:online`` annotations path) applies no title truncation, no url
+#: truncation and no count cap, and ``_sanitize_source_url`` does not bound
+#: length either — so without these the judge prompt grows with whatever a
+#: provider chooses to emit, and ``costs.py`` cannot reserve for it.
+#:
+#: THESE VALUES ARE NOT MEASURED FROM PRODUCTION TRAFFIC, and nothing in this
+#: repository retains the data that would measure them: ``run_history_store``
+#: keeps no per-source or per-token columns, and the Fly log ring holds ~100
+#: lines. They are instead chosen to STRICTLY DOMINATE the bound this codebase
+#: already enforces in production on the other search path, so that turning
+#: them on cannot drop a citation a live run currently shows the judge:
+#:
+#:   * the app runs exactly four slots (``model_slots``: "Exactly four model
+#:     slots are required") and ``_parse_tavily_results`` asks for at most
+#:     ``settings.tavily_max_results`` = 5 per answer, so the shipped worst
+#:     case is 4 x 5 = 20 lines. 32 > 20.
+#:   * ``_MAX_SOURCE_TITLE_LEN`` is 300 on that path. 300 == 300.
+#:
+#: They are deliberately literals rather than reads of ``tavily_max_results``:
+#: that is an env-overridable knob, and this repo has twice rejected keying a
+#: BOUND off a runtime-tunable value (see ``costs.py`` on
+#: ``cost_synthesis_sections``). ``costs.py`` imports these to size its judge
+#: input reserve, so raising one without revisiting that reserve re-opens the
+#: unpriced-input half of #268.
+JUDGE_MAX_SOURCE_LINES = 32
+JUDGE_MAX_SOURCE_TITLE_LEN = 300
+JUDGE_MAX_SOURCE_URL_LEN = 300
+
+
 @dataclass(frozen=True)
 class JudgeEvidence:
     """The untrusted material handed to the judge.
@@ -1356,21 +1387,23 @@ def build_judge_evidence(
             ("uncertainty", final_synthesis.uncertainty),
             ("recommendation", final_synthesis.recommendation),
         )
+    kept_sources = [
+        s
+        for answer in initial_answers
+        for s in answer.sources
+        # Exclude only the app's own placeholder stubs, keyed on the
+        # reserved HOST — NOT on is_fallback (a REAL Tavily page carries
+        # is_fallback=True since #31/#32, and dropping it would hide a
+        # live run's real sources from the judge). See _is_placeholder_source.
+        if not _is_placeholder_source(s)
+    ][:JUDGE_MAX_SOURCE_LINES]
+    # Issue #268. Truncate the fields BEFORE formatting, and number AFTER the
+    # count cap, so the ordinals the judge reads stay contiguous — a hole in
+    # the numbering would point the prose's "[7]" at a line that is not there.
     source_lines = tuple(
-        f"[{index}] {source.title} :: {source.url}"
-        for index, source in enumerate(
-            (
-                s
-                for answer in initial_answers
-                for s in answer.sources
-                # Exclude only the app's own placeholder stubs, keyed on the
-                # reserved HOST — NOT on is_fallback (a REAL Tavily page carries
-                # is_fallback=True since #31/#32, and dropping it would hide a
-                # live run's real sources from the judge). See _is_placeholder_source.
-                if not _is_placeholder_source(s)
-            ),
-            start=1,
-        )
+        f"[{index}] {source.title[:JUDGE_MAX_SOURCE_TITLE_LEN]}"
+        f" :: {source.url[:JUDGE_MAX_SOURCE_URL_LEN]}"
+        for index, source in enumerate(kept_sources, start=1)
     )
     return JudgeEvidence(
         query_text=query_text,

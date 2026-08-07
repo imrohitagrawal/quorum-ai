@@ -132,11 +132,12 @@ def test_the_judge_term_is_pinned_to_exact_literals(
         4 answers x 2000 tok        =  8000.00
         5 sections x 3000 tok       = 15000.00
         judge system prompt 1376ch  =   344.00
+        32 source lines x 610 chars =  4880.00
         query 33 chars              =     8.25
                                       --------
-        input                         23352.25  @ $0.001/1k = $0.02335225
+        input                         28232.25  @ $0.001/1k = $0.02823225
         output 1024 (enforced cap)              @ $0.005/1k = $0.00512
-                                                   total    = $0.02847225
+                                                   total    = $0.03335225
 
     The output cap was 512 until 2026-08-07, giving $0.00256 and a $0.02591225
     total. It moved because ``openai/gpt-5-mini`` is a reasoning model whose
@@ -146,18 +147,27 @@ def test_the_judge_term_is_pinned_to_exact_literals(
     already been updated; a worked example that disagrees with its own
     assertion is worse than none.
 
+    The source-line row is #268 and did not exist before 2026-08-07: the judge's
+    evidence carried an UNBOUNDED and UNPRICED source block (measured on the
+    tree before the fix: 100 verbose citations produced a 1,003,263-character
+    user prompt). ``build_judge_evidence`` now caps it at
+    ``JUDGE_MAX_SOURCE_LINES`` x (title 300 + url 300 + 10 chars of ``"[NN] "``
+    / ``" :: "`` / newline scaffolding) = 32 x 610 chars, and this row reserves
+    exactly that. Verified by execution, not by reading:
+    ``32 * 610 / 4 = 4880`` tokens, moving the term $0.0285 -> $0.0334.
+
     WHAT TURNS THIS RED: any change to the reserved token counts, the section
-    literal, the output cap, or the fallback price — including the ones review
-    caught (dropping the system prompt; deriving sections from
+    literal, the output cap, the source caps, or the fallback price — including
+    the ones review caught (dropping the system prompt; deriving sections from
     ``settings.cost_synthesis_sections``).
     """
     off = _bound(monkeypatch, judge=False)
     on = _bound(monkeypatch, judge=True)
     assert off == Decimal("0.1064")
-    assert on == Decimal("0.1349"), (
-        f"the judge-on bound moved to {on}; expected 0.1064 + 0.0285 = 0.1349"
+    assert on == Decimal("0.1398"), (
+        f"the judge-on bound moved to {on}; expected 0.1064 + 0.0334 = 0.1398"
     )
-    assert on - off == Decimal("0.0285")
+    assert on - off == Decimal("0.0334")
 
 
 def test_the_reserve_ignores_the_synthesis_sections_pricing_knob(
@@ -190,7 +200,7 @@ def test_the_reserve_ignores_the_synthesis_sections_pricing_knob(
         "cost_synthesis_sections did not move the four-stage bound at all; "
         "this test would prove nothing about the judge term"
     )
-    assert at_five - off_at_five == at_one - off_at_one == Decimal("0.0285"), (
+    assert at_five - off_at_five == at_one - off_at_one == Decimal("0.0334"), (
         f"the judge reserve tracked the pricing knob: {at_five - off_at_five} at 5 "
         f"sections vs {at_one - off_at_one} at 1. It must stay at the literal 5 "
         "that build_judge_evidence actually emits."

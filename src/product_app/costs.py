@@ -230,6 +230,14 @@ CHARS_PER_TOKEN = Decimal(4)
 #: Pinned by ``tests/unit/test_bound_covers_the_judge.py``.
 _JUDGE_EVIDENCE_SECTIONS = Decimal(5)
 
+#: Issue #268. Per-source-line scaffolding that ``build_judge_evidence`` adds
+#: around the truncated title and url: ``"[NN] "`` (5) + ``" :: "`` (4) + the
+#: newline ``build_judge_prompt`` joins on (1). A LITERAL for the same reason
+#: as the section count above, and pinned against the real emitted line by
+#: ``tests/unit/test_judge_evidence_source_lines_are_bounded.py`` so it cannot
+#: drift from the format string it models.
+_JUDGE_SOURCE_LINE_OVERHEAD_CHARS = Decimal(10)
+
 #: issue #16: the estimate is a realistic per-call token model. The old
 #: ``QUERY_COST_PER_1K_CHARS_USD`` / ``PER_CHAR_PROCESSING_USD`` synthetic
 #: per-character charges (and the flat ``DEBATE_FIXED_COST_USD`` /
@@ -1594,17 +1602,25 @@ class CostEstimationService:
         #   * the judge's own system prompt — a module constant;
         #   * the query.
         #
-        # NOT BOUNDED: ``JudgeEvidence.source_lines``. ``_parse_tavily_results``
-        # truncates titles to ``_MAX_SOURCE_TITLE_LEN``, but ``_extract_citations``
-        # (the OpenRouter ``:online`` annotations path) applies NO title
-        # truncation and NO count cap — measured, 50 refs at 5000-char titles
-        # survive it, against 5 at 300 on the Tavily path. So a hostile or merely
-        # verbose annotation set can push the real judge prompt past this
-        # reserve. Sub-cent in normal operation; unbounded in the tail.
-        # ``synthesis.py`` defends its own prompt with exactly that truncation
-        # and the judge does not. Tracked separately — do NOT restore the
-        # "true ceiling" wording until ``build_judge_evidence`` bounds its
-        # source lines.
+        #   * the source block — ``JUDGE_MAX_SOURCE_LINES`` lines of
+        #     ``JUDGE_MAX_SOURCE_TITLE_LEN`` + ``JUDGE_MAX_SOURCE_URL_LEN``
+        #     characters, enforced by ``build_judge_evidence`` and reserved
+        #     below as ``judge_source_tokens``.
+        #
+        # THE SOURCE BLOCK WAS THE HOLE, AND #268 CLOSED IT. Until 2026-08-07
+        # ``_extract_citations`` (the OpenRouter ``:online`` annotations path)
+        # applied NO title truncation, NO url truncation and NO count cap,
+        # against 5 results at 300 chars on the Tavily path — and this reserve
+        # had no term for it at all, so the block was unbounded AND unpriced.
+        # Measured on the tree before the fix: 100 verbose citations produced a
+        # 1,003,263-character judge user prompt, roughly 250,000 unpriced input
+        # tokens on a paid call.
+        #
+        # STILL NOT A TRUE CEILING, for one remaining reason — see the ``_price``
+        # note at the end of this comment: a judge model absent from the catalog
+        # is reserved at the DEFAULT per-1k rate, which under-reserves for 102 of
+        # the 335 live catalog models. Do not restore an unqualified "true
+        # ceiling" wording while that holds.
         #
         # SECTION COUNT IS THE LITERAL 5, matching ``build_judge_evidence``,
         # which hard-codes five sections. It is deliberately NOT
@@ -1625,13 +1641,32 @@ class CostEstimationService:
         if price_judge:
             # local imports to avoid cycles: synthesis and evaluation both
             # import costs.
-            from product_app.evaluation import _JUDGE_SYSTEM_PROMPT
+            from product_app.evaluation import (
+                _JUDGE_SYSTEM_PROMPT,
+                JUDGE_MAX_SOURCE_LINES,
+                JUDGE_MAX_SOURCE_TITLE_LEN,
+                JUDGE_MAX_SOURCE_URL_LEN,
+            )
             from product_app.synthesis import SYNTHESIS_SECTION_MAX_TOKENS
 
+            # Issue #268. The source block, priced from the caps
+            # ``build_judge_evidence`` now enforces. DERIVED from those three
+            # constants rather than chosen, so the reserve and the bound cannot
+            # drift apart: raising a cap raises the reserve in the same edit.
+            judge_source_tokens = (
+                Decimal(JUDGE_MAX_SOURCE_LINES)
+                * (
+                    Decimal(JUDGE_MAX_SOURCE_TITLE_LEN)
+                    + Decimal(JUDGE_MAX_SOURCE_URL_LEN)
+                    + _JUDGE_SOURCE_LINE_OVERHEAD_CHARS
+                )
+                / CHARS_PER_TOKEN
+            )
             judge_input_tokens = (
                 Decimal(settings.initial_answer_max_tokens) * Decimal(len(model_slots))
                 + _JUDGE_EVIDENCE_SECTIONS * Decimal(SYNTHESIS_SECTION_MAX_TOKENS)
                 + Decimal(len(_JUDGE_SYSTEM_PROMPT)) / CHARS_PER_TOKEN
+                + judge_source_tokens
                 + query_tokens
             )
             judge_cost = _cost(

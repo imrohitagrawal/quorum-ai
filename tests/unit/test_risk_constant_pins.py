@@ -152,6 +152,15 @@ BUCKET_B_PIN_BEHAVIOUR = {
         "equal what the evidence builder emits, and a literal pin alone would not "
         "catch the two drifting apart"
     ),
+    # --- Added 2026-08-07 with the #268 judge source-block bound ---
+    "costs._JUDGE_SOURCE_LINE_OVERHEAD_CHARS": (
+        "assert the widest line build_judge_evidence can actually emit still fits the "
+        "budget this constant reserves -- it models the '[NN] ', ' :: ' and newline "
+        "scaffolding around the two truncated fields, so a literal pin alone would not "
+        "catch the format string growing a separator and silently outgrowing the "
+        "reserve; tests/unit/test_judge_evidence_source_lines_are_bounded.py measures "
+        "the real emitted lines against it in both directions"
+    ),
     # --- Added 2026-08-03 with feedback_store / query_runs / readiness ---
     "query_runs._MAX_CONCURRENT_RUNS": (
         "assert the (N+1)th concurrent run is refused, not the number 16 -- the "
