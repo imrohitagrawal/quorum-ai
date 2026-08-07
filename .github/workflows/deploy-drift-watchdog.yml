@@ -5,11 +5,27 @@ name: Deploy drift watchdog
 # but no deploy fired (a dropped Actions event / skipped-or-failed deploy gate /
 # a flake), leaving prod stale with no one watching.
 #
-# WHAT IT CHECKS (honest scope): whether main HEAD has a SUCCESSFUL
-# "Deploy to Fly.io" run — the deploy JOB, not a `/health` 200 (per the
-# deploy-job-skip-vs-health lesson). It does NOT track an out-of-band local
-# `flyctl deploy`; if one happened, the watchdog will re-trigger a pipeline that
-# just redeploys the same code (idempotent, harmless).
+# WHAT IT CHECKS (honest scope), two independent questions:
+#
+#   1. Does main HEAD have a SUCCESSFUL "Deploy to Fly.io" run — the deploy JOB,
+#      not a `/health` 200 (per the deploy-job-skip-vs-health lesson)? This is a
+#      PROXY: it cannot see a Deploy run that reported success while production
+#      did not actually roll, and it does not track an out-of-band local
+#      `flyctl deploy` (if one happened it re-triggers a pipeline that just
+#      redeploys the same code — idempotent, harmless).
+#
+#   2. Does `/status.build_sha` actually EQUAL main's tip? Added for #245's
+#      third failure mode. This is the direct question, and the only one that
+#      catches a merge which triggered no workflow at all — on 2026-08-07 that
+#      left production 34m31s behind while every passive probe stayed green.
+#      Decision logic lives in `scripts/deploy_drift_check.py` (tested Python,
+#      per ADR-0024), and drift FAILS this job rather than merely noting it.
+#
+# CADENCE IS NOT WHAT IT SAYS. The cron below declares `*/30`, but GitHub
+# throttles scheduled workflows: measured 2026-08-07, ten runs between 00:43Z
+# and 15:00Z (14.29h) — median gap 92.9 min, max 191.2. A 92.9-minute gap
+# (07:34->09:07) contained the whole 2026-08-07 incident, which is why this
+# watchdog did not catch it. Treat detection latency as ~90 min, not 30.
 #
 # WHAT IT DOES on drift: re-dispatches only the CI/Tests/E2E workflows that lack
 # a success for main HEAD (they re-fire the workflow_run deploy gate); if all
@@ -35,6 +51,11 @@ jobs:
   watchdog:
     runs-on: ubuntu-latest
     steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
       - name: Detect deploy drift on main HEAD and self-heal
         env:
           GH_TOKEN: ${{ github.token }}
@@ -100,3 +121,70 @@ jobs:
             gh label create deploy-drift --repo "$REPO" --color B60205 --description "Automated deploy-drift alerts" 2>/dev/null || true
             gh issue create --repo "$REPO" --title "Deploy drift: main HEAD not deployed" --label deploy-drift --body "$BODY"
           fi
+
+      # The POSITIVE check (#245 third failure mode). Everything above asks
+      # "does main HEAD have a successful Deploy RUN?" — a proxy that cannot see
+      # a run which reported success while production did not actually roll, and
+      # that is blind when the merge produced NO run at all (2026-08-07:
+      # production served the previous build for 34m31s while /ready, /status,
+      # the Availability check and the Error-rate check all reported healthy).
+      #
+      # This asks the only question that settles it: does /status.build_sha
+      # equal main's tip? The decision lives in tested Python per ADR-0024, not
+      # in this shell block.
+      #
+      # `continue-on-error` so the alerting step below still runs; the job is
+      # failed explicitly at the end, so drift is RED and not merely noted.
+      - name: Assert production serves main's tip
+        id: buildsha
+        # `always()` so a failure in the legacy step above does not skip the
+        # positive check — the API being flaky is exactly when it matters.
+        if: always()
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+        run: python3 scripts/deploy_drift_check.py --repo "$REPO"
+
+      - name: Alert on build_sha drift
+        # `outcome == 'failure'` covers the case where the script died before
+        # writing its verdict: outputs are then EMPTY, so branching on
+        # should_alert alone would skip this step and — the step being
+        # continue-on-error — leave the job green while production is stale.
+        if: >-
+          always() && (steps.buildsha.outputs.should_alert == 'true' ||
+          steps.buildsha.outcome == 'failure')
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          DECISION: ${{ steps.buildsha.outputs.decision }}
+        run: |
+          set -euo pipefail
+          BODY=$(printf '%s\n' \
+            "Automated **build_sha drift** alert (decision: \`${DECISION:-crashed-before-reporting}\`)." \
+            "" \
+            "Production is not serving \`main\`'s tip, or one of the two could not be read." \
+            "See the \`Assert production serves main's tip\` step for both SHAs." \
+            "" \
+            "Unlike the run-based check above, this compares what production ACTUALLY serves" \
+            "against \`main\`'s tip, so it also catches a merge that triggered no workflow at all.")
+          NUM=$(gh issue list --repo "$REPO" --state open --label deploy-drift --json number -q '.[0].number // ""' 2>/dev/null || true)
+          if [ -n "$NUM" ]; then
+            gh issue comment "$NUM" --repo "$REPO" --body "$BODY"
+          else
+            gh label create deploy-drift --repo "$REPO" --color B60205 --description "Automated deploy-drift alerts" 2>/dev/null || true
+            gh issue create --repo "$REPO" --title "Deploy drift: production is not serving main's tip" --label deploy-drift --body "$BODY"
+          fi
+
+      # Fail LOUD. Without this the workflow reports success having found drift,
+      # which is the exact failure mode #245 is about.
+      - name: Fail the job if production has drifted
+        if: >-
+          always() && (steps.buildsha.outputs.should_alert == 'true' ||
+          steps.buildsha.outcome == 'failure')
+        env:
+          DECISION: ${{ steps.buildsha.outputs.decision }}
+          OUTCOME: ${{ steps.buildsha.outcome }}
+        run: |
+          echo "build_sha drift detected (decision=${DECISION:-<none>}, step=${OUTCOME}) — failing the watchdog."
+          exit 1
