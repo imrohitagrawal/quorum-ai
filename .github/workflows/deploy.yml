@@ -26,9 +26,10 @@ name: Deploy to Fly.io
 #
 # That paragraph described a contract this file did not have until #245: the
 # `gate` job's own `if:` required the trigger's conclusion to be `success`, so
-# on a red main the job SKIPPED and the stranding check never ran. Zero of the
-# previous 200 Deploy runs had ever reported failure. See ADR-0024 and the
-# note above the `if:` below — the conclusion term is absent deliberately.
+# on a red main the job SKIPPED and the stranding check never ran. Since that
+# check landed (`d671c6f`, 2026-08-01) not one of 238 Deploy runs has reported
+# failure. See ADR-0024 and the note above the `if:` — the conclusion term is
+# absent deliberately.
 on:
   workflow_run:
     workflows: ["CI", "Tests", "E2E (axe + parity)"]
@@ -62,9 +63,15 @@ jobs:
     # do NOT restore it (issues #62, #245). It made this job SKIP whenever a
     # required workflow was red — that is, precisely when a merge can be
     # stranded — so the stranding detection at ``deploy_gate.py:310-321`` sat
-    # downstream of the very condition it exists to detect, and had never once
-    # run. Measured 2026-08-07 over the previous 200 Deploy runs:
-    # 130 skipped, 35 cancelled, 35 success, ZERO failures.
+    # downstream of the very condition it exists to detect and has never once
+    # run since it was written (238 Deploy runs since `d671c6f`, zero failed).
+    #
+    # It bit rarely, and the honest figure matters more than a big one: over
+    # 2026-08-03..08-07 there were 80 genuine main-push completions of a
+    # required workflow, of which exactly TWO were non-success (`CI` and
+    # `Tests` on `3444961`). Those two are all this term ever suppressed. The
+    # ~130 skipped Deploy runs are overwhelmingly pull-request-branch triggers
+    # rejected by `event == 'push'`, which is KEPT — they still skip.
     #
     # Admitting a non-success trigger cannot cause a deploy: the gate proceeds
     # on an allow-LIST (every required workflow must read ``success`` —
@@ -82,12 +89,17 @@ jobs:
       proceed: ${{ steps.check.outputs.proceed }}
     steps:
       # Records WHICH workflow fired this run. The Actions API does not expose a
-      # Deploy run's triggering workflow, so #245's claim 1 — "E2E (axe +
-      # parity) never triggers Deploy" — could only be INFERRED from timestamps,
-      # and that inference disagreed with itself: on 79ad02a no Deploy run
-      # followed E2E's conclusion, while on 21cb499d two were created after it.
-      # Neither observation names a trigger. This makes the question answerable
-      # from any future run's log instead of re-derived from correlation.
+      # Deploy run's triggering workflow, so today the attribution has to be
+      # reconstructed from a 2-4s trigger->creation lag, which is easy to get
+      # wrong: a `workflow_run` run is stamped with the DEFAULT BRANCH's tip as
+      # its own head_sha, so pull-request-branch triggers masquerade as main's
+      # SHA. That is what made `21cb499d` look like it had four push triggers.
+      #
+      # It does NOT settle #245's claim 1 — "E2E never fires this workflow" is
+      # about a Deploy run that is never CREATED, and a run that does not exist
+      # has no log. That claim is settled by counting instead (see ADR-0024:
+      # E2E 0/26, CI 27/27, Tests 27/27). This step makes the attribution of the
+      # runs that DO exist readable without timestamp archaeology.
       # DIAGNOSTIC ONLY — nothing branches on these values.
       #
       # The context values go through `env:` rather than into the `run:` body:

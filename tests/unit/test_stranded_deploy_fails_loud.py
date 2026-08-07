@@ -6,21 +6,31 @@ SHA is still ``main``'s tip, nothing else will ever deploy that commit, so the
 gate returns 1 and the Deploy run reports failure. That code is unit-tested and
 correct (``test_deploy_gate.py::test_main_blocked_failure_with_sha_still_tip_exits_nonzero``).
 
-It had never once run. Measured 2026-08-07 over the last 200 Deploy runs::
+It has never once run since it was written. Measured 2026-08-07, scoped to the
+period after the check landed (``d671c6f``, 2026-08-01T16:33:59Z): **238**
+Deploy runs — 150 skipped, 44 success, 44 cancelled — and **not one reported
+failure**. (The repository does hold 27 failed Deploy runs, but every one is
+from 2026-07-11..16, mostly under the older ``push``-triggered design, before
+this check existed. ``--limit 200`` returns the most recent runs, not the
+population; do not read a sample as an absolute.)
 
-    $ gh run list --workflow=deploy.yml --limit 200 --json conclusion \
-        --jq 'group_by(.conclusion)|map({conclusion:.[0].conclusion,n:length})'
-    [{"conclusion":"cancelled","n":35},
-     {"conclusion":"skipped","n":130},
-     {"conclusion":"success","n":35}]
+The reason is the `gate` job's own ``if:``, which required
+``workflow_run.conclusion == 'success'``. A *failing* required workflow
+therefore skipped the gate job **before** ``deploy_gate.py`` could classify the
+stranding — so the detection was gated on the very condition it exists to
+detect. Issue #62's fix was present in the script and unreachable through the
+workflow that guards it; issue #245 is that observation.
 
-Zero failures in 200 runs, and 130 skipped. The reason is the `gate` job's own
-``if:`` condition, which required ``workflow_run.conclusion == 'success'``. A
-*failing* required workflow therefore skipped the gate job **before**
-``deploy_gate.py`` could classify the stranding — so the detection was gated on
-the very condition it exists to detect. Issue #62's fix was present in the
-script and unreachable through the workflow that guards it; issue #245 is that
-observation.
+**How often that actually bit — stated honestly, because the first draft of
+this file overstated it by ~65x.** The 130-150 skipped runs are NOT 130
+suppressed strandings. Over 2026-08-03T09:42Z..2026-08-07T13:29Z there were 80
+genuine main-push completions of a required workflow, of which exactly **2**
+were non-success — ``CI`` and ``Tests``, both on ``3444961``
+(2026-08-03T17:03Z), the merge #245 was filed about. Those two are the only
+occasions this term ever suppressed the gate. Every other skipped Deploy run is
+a pull-request-branch trigger rejected by ``event == 'push'`` — a term this fix
+KEEPS, so they still skip. The defect is real and it is demonstrated on one
+real merge, not on a hundred.
 
 The fix drops the ``conclusion`` term from the ``if:`` and lets
 ``deploy_gate.py`` — real, tested Python rather than an untestable YAML
@@ -137,11 +147,33 @@ class _Parser:
             return value
         if token.startswith("'"):
             return token[1:-1]
+        # GitHub has real boolean literals. Resolving them as context paths
+        # would make them None (falsy) and a wide-open `... || true` condition
+        # would then read as FALSE here while admitting everything on GitHub —
+        # a suite that passes against a condition with no security terms at all.
+        if token == "true":
+            return True
+        if token == "false":
+            return False
         return _lookup(token, self.ctx)
 
 
 def evaluate(expr: str, ctx: dict[str, Any]) -> bool:
-    return bool(_Parser(_tokenize(expr), ctx).parse_or())
+    tokens = _tokenize(expr)
+    parser = _Parser(tokens, ctx)
+    value = parser.parse_or()
+    # Without this the parser returns after the longest prefix it understands
+    # and DISCARDS the rest, so `<valid condition> || <anything>` evaluates as
+    # the valid condition alone. Every assertion in this file would then be
+    # blind to an appended disjunct. There is no workflow linter in this repo
+    # (`grep -rn "actionlint\|yamllint" Makefile .github/ scripts/` is empty),
+    # so this file is the only thing that reads the expression at all.
+    assert parser.pos == len(tokens), (
+        f"unconsumed tokens {tokens[parser.pos:]!r} — the condition has "
+        "structure this evaluator does not model, so the assertions below "
+        "would silently ignore it"
+    )
+    return bool(value)
 
 
 def _gate_if() -> str:
@@ -224,7 +256,8 @@ def test_a_failed_required_workflow_still_reaches_the_gate() -> None:
     assert evaluate(condition, _ctx(conclusion="failure")), (
         "deploy.yml's gate job skips when a required workflow FAILED, so "
         "scripts/deploy_gate.py's stranding detection can never run — which is "
-        "exactly when it is needed. Measured: 0 failures in 200 Deploy runs."
+        "exactly when it is needed. Measured: 0 failed Deploy runs in the 238 "
+        "since the stranding check landed."
     )
 
 
@@ -252,7 +285,7 @@ def test_a_manual_dispatch_still_reaches_the_gate() -> None:
 
 
 def test_a_fork_pr_branch_named_main_never_reaches_the_gate() -> None:
-    """Security-critical (deploy.yml:46-53).
+    """Security-critical — see the comment above the gate's ``if:``.
 
     ``head_branch == 'main'`` alone is spoofable by a fork PR whose source
     branch is literally named ``main`` — that run carries attacker code. It
@@ -272,7 +305,77 @@ def test_a_non_push_event_never_reaches_the_gate() -> None:
     assert not evaluate(_gate_if(), _ctx(conclusion="failure", event="pull_request"))
 
 
-# --- the diagnostic that makes #245's claim 1 answerable ------------------
+# --- the condition may not reach for a field the table does not model -----
+
+#: Every context path the gate condition is allowed to read. Hand-written, so
+#: it is an INDEPENDENT statement of intent rather than a restatement of the
+#: file (AGENTS.md rule 7a). `_ctx()` below models exactly these.
+_MODELLED_PATHS = frozenset(
+    {
+        "github.event_name",
+        "github.repository",
+        "github.event.workflow_run.event",
+        "github.event.workflow_run.head_branch",
+        "github.event.workflow_run.head_repository.full_name",
+    }
+)
+
+_CONTEXT_PATH = re.compile(r"\bgithub\.[A-Za-z0-9_.]+")
+
+
+def test_the_condition_reads_no_context_field_the_test_table_cannot_vary() -> None:
+    """Closes the evasion this suite would otherwise be blind to.
+
+    `_lookup` returns None for any path `_ctx()` does not build, so a NEW
+    disjunct keyed on an unmodelled field is invisible: every assertion still
+    passes while the real condition on GitHub admits more. The concrete case,
+    demonstrated in review — appending
+    ``|| github.event.workflow_run.head_branch == github.event.repository.default_branch``
+    is a plausible "stop hardcoding main" refactor, keeps all 16 tests green,
+    and admits a fork PR whose source branch is named `main`, because
+    `default_branch` is present on every workflow_run payload.
+
+    WHAT TURNS THIS RED: adding any `github.*` path to the gate's `if:` that is
+    not in `_MODELLED_PATHS`. The fix is to model it in `_ctx()` and add the
+    rows that pin its behaviour — not to widen this set.
+    """
+    referenced = set(_CONTEXT_PATH.findall(_gate_if()))
+    assert referenced, "no github.* context path found — the condition is not being read"
+    unmodelled = referenced - _MODELLED_PATHS
+    assert not unmodelled, (
+        f"the gate condition reads {sorted(unmodelled)}, which _ctx() does not "
+        "build. Every assertion in this file treats it as None, so the table "
+        "cannot see what it does. Model it in _ctx() and pin its behaviour."
+    )
+
+
+def test_the_deploy_job_still_requires_the_gate_to_have_proceeded() -> None:
+    """The ADR's SECOND allow-list, which nothing pinned.
+
+    ADR-0024 rests its "a red trigger cannot deploy a red build" argument on
+    two independent allow-lists. The first is `deploy_gate.py` (well tested).
+    The second is this `if:` — and `grep -rn "needs.gate" tests/` was empty
+    before this test, so deleting it would have gone unnoticed. That is the
+    same "a decision expressed as a GitHub `if:` cannot be tested" failure the
+    ADR exists to end.
+
+    WHAT TURNS THIS RED: dropping `needs: gate`, or relaxing the deploy job's
+    `if:` so it no longer requires `proceed == 'true'`.
+    """
+    data: dict[Any, Any] = yaml.safe_load(_DEPLOY_YML.read_text(encoding="utf-8"))
+    deploy = data["jobs"]["deploy"]
+    needs = deploy.get("needs")
+    needs = [needs] if isinstance(needs, str) else list(needs or [])
+    assert "gate" in needs, "the deploy job must depend on the gate job"
+    condition = (deploy.get("if") or "").replace('"', "'")
+    assert "needs.gate.outputs.proceed == 'true'" in condition, (
+        f"the deploy job's if: is {condition!r} — it must require the gate to "
+        "have proceeded, which is the second of the two allow-lists ADR-0024 "
+        "relies on"
+    )
+
+
+# --- the diagnostic that makes the trigger visible ------------------------
 
 
 def _gate_steps() -> list[dict[str, Any]]:
@@ -283,12 +386,17 @@ def _gate_steps() -> list[dict[str, Any]]:
 
 
 def test_the_gate_records_which_workflow_triggered_it() -> None:
-    """#245 AC1 asks WHY the E2E trigger does not fire, measured not guessed.
+    """Makes a Deploy run's trigger readable without timestamp archaeology.
 
-    It could not be measured: the Actions API never exposes a Deploy run's
-    triggering workflow, so the only evidence available was timestamp
-    correlation — which contradicted itself across two SHAs on the same day.
-    A run that prints its own trigger settles it from the log next time.
+    The Actions API never exposes a `workflow_run` run's triggering workflow,
+    so attribution today rests on a 2-4s lag — and that is easy to misread,
+    because such a run is stamped with the DEFAULT BRANCH's tip as its own
+    head_sha, so pull-request-branch triggers masquerade as main's SHA.
+
+    This does NOT settle #245's claim 1. "E2E never fires this workflow" is
+    about a Deploy run that is never CREATED, and a run that does not exist
+    has no log; that claim is settled by counting (E2E 0/26, CI 27/27,
+    Tests 27/27 — see ADR-0024).
     """
     reads_trigger_name = [
         step
