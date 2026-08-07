@@ -19,6 +19,16 @@ not ours):
 
 Verified against `GET /api/v1/key`: $0.010888 before, $0.127732 after.
 
+**Superseded on the MODEL CHOICE by the 2026-08-07 measurement campaign**
+(`tests/evals/golden/measured/judge_behaviour_2026-08-07.json`, pinned by
+`tests/evals/test_measured_judge_behaviour.py`). The "Model choice, measured"
+section below concluded that `gpt-5` "produces identical gate outcomes on all
+ten cases" and therefore buys nothing. **That was one sample per case on a
+process since measured to be NON-DETERMINISTIC**, and a like-for-like re-run at
+a common cap has `gpt-5` condemning two cases rather than one. The rest of this
+ADR — the reasoning-effort fix, the token cap, `response_format` — stands and
+was re-confirmed by the same campaign.
+
 Completes the judge-enablement sequence begun in
 [ADR-0017](0017-the-spend-cap-prices-every-billable-call.md),
 [ADR-0018](0018-a-judge-that-produced-nothing-must-say-so-and-must-not-be-charged-for.md),
@@ -186,7 +196,7 @@ answered with two more arms over the same ten cases, and the answer is **no**.
 | | catches the fabrication | catches `partial-grounding-medium` | false condemnations | cost/call |
 |---|---|---|---|---|
 | `gpt-5-mini` @ `low` *(shipped)* | ✅ | ❌ said `low` | 0 | $0.0009 |
-| `gpt-5-mini` @ `medium` | ✅ | ❌ said `low` | **1** (blew the 1024 cap) | $0.0018 |
+| `gpt-5-mini` @ `medium` | ✅ | ❌ said `low` | **1** — *corrected to 2 on re-run, see banner* | $0.0018 |
 | `gpt-5` @ `low` | ✅ | ✅ **`3,2,medium`** | 0 | $0.0076 |
 
 Two findings, and the second decides it.
@@ -208,9 +218,36 @@ cut is introduced — and note the circularity that keeps both parked: a finer
 threshold is only worth having with a judge that grades, and a grading judge is
 only worth paying for once a finer threshold exists.
 
+> **CORRECTED 2026-08-07.** The "changes nothing" half of that conclusion does
+> not survive measurement. Every figure in the table above is a SINGLE sample
+> per case, and the judge was subsequently measured to be non-deterministic:
+> four identical unseeded calls on one case gave `5,5,low` three times and
+> `4,5,medium` once, and two `gpt-5` runs at identical settings gave
+> `3,2,medium` (passes the gate) and `1,0,high` (condemned). Re-run
+> like-for-like at a common 1024 cap, `gpt-5` condemns **two** cases —
+> including `partial-grounding-medium`, which the golden labels say should be
+> flagged and which the shipped judge misses.
+>
+> The decision to keep `gpt-5-mini` still stands, but on narrower grounds: it
+> is 8.5× cheaper and no comparison run so far has enough repeats per case to
+> establish that the difference is real rather than sampling. The claim that a
+> stronger judge buys *nothing* is withdrawn.
+>
+> The table's COST figures are unaffected — those are not sample-dependent.
+> The truncation result IS: a re-run of the same configuration found two
+> truncated cases where this ADR recorded one, so the rows below saying "one
+> case" are corrected in place.
+>
+> One further correction to the correction: an earlier version of this banner
+> claimed the non-determinism "changes gate outcomes". **That is UNVERIFIED.**
+> All four unseeded trials in the campaign PASS the gate — `low` and `medium`
+> are gate-identical and only `high` flips it — so the repeats measured
+> variation the gate cannot see. The gpt-5 arm difference below is real and is
+> measured like-for-like; it is a MODEL difference, not a sampling one.
+
 The `medium`-effort arm also rules out a confound worth recording: the flat
 `5,5,low` verdicts are **not** an artefact of choosing `effort: low`. Raising
-effort left them flat and additionally exhausted the 1024 cap on one case,
+effort left them flat and additionally exhausted the 1024 cap on one case (TWO on a like-for-like re-run — see the banner),
 returning no verdict at all.
 
 ## Rejected alternatives
@@ -226,6 +263,18 @@ honesty grounds: it buys best-effort determinism while implying a guarantee the
 upstream does not make. Layer B is excluded from the deterministic composite
 precisely because judge runs are not reproducible; sending `seed` would blur
 that without changing it.
+
+> **REOPENED 2026-08-07.** That rejection was reasoned without data, and the
+> data now points the other way: `seed=42` produced **4/4 identical** verdicts
+> where unseeded gave **2 distinct in 4** on the same case.
+>
+> What that does NOT show, and a draft of this paragraph wrongly claimed: that
+> the variation reaches the user. All four unseeded verdicts pass the gate, so
+> the measured variation is gate-invisible. The honest case for `seed` is
+> narrower — reproducibility is worth having for its own sake, and the repo
+> currently excludes Layer B from the deterministic composite on an assumption
+> that is now measured. n=4: a reason to re-open with a proper repeat count,
+> not a reason to ship `seed` on the strength of it.
 
 **A `**extra` passthrough on `call_with_prompt`.** Rejected: it is the one
 function that talks to a paid upstream, and an arbitrary dict there is a
