@@ -1624,9 +1624,13 @@ class CostEstimationService:
         #   2. ``build_judge_prompt``'s own scaffolding has no term here — the
         #      two ``<<<UNTRUSTED_EVIDENCE_*>>>`` delimiters, ``QUESTION: ``,
         #      ``SOURCES:``, the ``MODEL_ANSWER_N:`` / ``SYNTHESIS_X:`` headers
-        #      and the blank lines. Measured by building a prompt with every
-        #      field empty: 290 chars at four slots (~73 tokens, $0.00007 at the
-        #      fallback rate), +18 per extra slot. Sub-cent, but it IS an
+        #      and the blank lines. Measured on ``JudgeEvidence(query_text="",
+        #      answer_texts=("",)*4, source_lines=(), synthesis_sections=<the
+        #      five, empty bodies>)``: 290 chars (~73 tokens, $0.00007 at the
+        #      fallback rate), of which 160 without the sections, +18 per extra
+        #      slot. "Every field empty" gives 160, not 290 — an earlier draft
+        #      said that, and a recipe that does not reproduce its own number is
+        #      exactly what this comment block exists to stop. Sub-cent, but an
         #      under-reserve, and writing "one reason" here would be the same
         #      class of false claim this comment exists to correct.
         # Do not restore an unqualified "true ceiling" wording while these hold.

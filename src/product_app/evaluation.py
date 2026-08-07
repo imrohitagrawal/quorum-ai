@@ -1352,9 +1352,11 @@ JUDGE_EVIDENCE_END = UNTRUSTED_END
 #: ``:online`` (every slot ships ``search=True``) and it has no upstream count
 #: cap, so a run returning more than 32 citations across its four answers now
 #: shows the judge fewer than before. That is the trade this bound exists to
-#: make. Below 32 total the output is byte-identical to the pre-#268 behaviour,
-#: order included — measured over 400 random slot/citation shapes, 391 at or
-#: under the cap, 0 differing from ``origin/main``.
+#: make. Below 32 total sources no source line is DROPPED, and the selection
+#: and its order are unchanged — measured over 400 random slot/citation shapes,
+#: 391 at or under the cap, 0 differing from ``origin/main``. That sample varied
+#: only the source COUNT, so it says nothing about field LENGTH: the 300-char
+#: title and url truncations fire at ANY count, including a one-source run.
 #:
 #: They are deliberately literals rather than reads of ``tavily_max_results``:
 #: that is an env-overridable knob, and this repo has twice rejected keying a
@@ -1417,9 +1419,10 @@ def build_judge_evidence(
     # were entirely evicted from. Round-robin gives every answer a fair share,
     # so no slot is silently unrepresented.
     #
-    # Below the cap this is a no-op: quotas fill to len(group) for every group
-    # and the output is byte-identical to the pre-#268 concatenation, ORDER
-    # INCLUDED (grouped by slot, original order within a slot).
+    # Below the cap this allocation is a no-op: quotas fill to len(group) for
+    # every group, so no source line is dropped and the selection and its order
+    # are unchanged (grouped by slot, original order within a slot). The FIELD
+    # truncations below are separate and apply at every count.
     quotas = [0] * len(per_answer)
     budget = JUDGE_MAX_SOURCE_LINES
     while budget > 0 and any(q < len(g) for q, g in zip(quotas, per_answer, strict=True)):

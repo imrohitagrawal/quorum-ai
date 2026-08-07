@@ -84,8 +84,12 @@ implementation took a flat `[:32]` over the concatenated sources, which spends
 the whole budget on the earliest slots: at 12 citations each, slots 1-2 keep all
 12, slot 3 keeps 8, and **slot 4 keeps none** — while `MODEL_ANSWER_4` is still
 in the prompt and still scored for `grounding` ("do the answer's citation
-markers point at the listed sources?"). That marks a model down for citations
-the judge was never shown. Round-robin gives each answer an equal share, and a
+markers point at the listed sources?"). Its markers cannot point at rows that
+were evicted, so the run's grounding score is depressed by a slot whose sources
+are entirely missing. Note the effect is run-level, not per-model:
+`EvalJudgeVerdict` carries a single `grounding: int` and no per-slot field
+(`model_id` on it is the JUDGE's own id), so there is no per-model score to
+mark down. Round-robin gives each answer an equal share, and a
 slot with fewer sources than its share does not waste the remainder — the
 leftover flows to slots that still have sources.
 
@@ -127,9 +131,19 @@ likewise newly truncated.
 
 What is true, stated narrowly: **no source line the Tavily path can produce is
 dropped** (its worst case is 20 lines of ≤300-char titles, all of which fit),
-and below 32 total sources the output is byte-identical to the previous
-behaviour — measured over 400 random slot/citation shapes, 391 at or under the
-cap, **0 differing** from `origin/main`, order included.
+and below 32 total sources **no source line is dropped and the selection and
+its order are unchanged** — measured over 400 random slot/citation shapes, 391
+at or under the cap, **0 differing** from `origin/main`.
+
+That measurement varied only the source COUNT, so it proves nothing about field
+LENGTH, and an earlier draft over-read it as "byte-identical below the cap".
+**The 300-character title and url truncations fire at any source count**,
+including a one-source run — as this ADR's own "a new floor" row and the
+single-source tests in
+`tests/unit/test_judge_evidence_source_lines_are_bounded.py` both already
+showed. Re-measured with field lengths varied: 400 of 400 under-cap shapes
+differ from `origin/main`, all of them by the 300-char cut alone — 0 differ in
+line count, selection, order or ordinal.
 
 The slot count is not a guess: `model_slots` enforces *"Exactly four model slots
 are required."* The caps are literals rather than reads of `tavily_max_results`,
@@ -207,14 +221,17 @@ retention findings above. Recorded as a known gap rather than faked.
   the default per-1k rate, which under-reserves for 102 of the 335 live catalog
   models (ADR-0017, Decision 4); and `build_judge_prompt`'s own scaffolding —
   the two delimiters, `QUESTION: `, `SOURCES:`, the `MODEL_ANSWER_N:` and
-  `SYNTHESIS_X:` headers and the blank lines — has no reserve term. Measured by
-  building a prompt with every field empty: **290 chars** at four slots (≈73
-  tokens, $0.00007 at the fallback rate), +18 per extra slot.
+  `SYNTHESIS_X:` headers and the blank lines — has no reserve term. Measured on
+  `JudgeEvidence(query_text="", answer_texts=("",)*4, source_lines=(),
+  synthesis_sections=<the five, empty bodies>)`: **290 chars** (≈73 tokens,
+  $0.00007 at the fallback rate), of which 160 without the sections, +18 per
+  extra slot.
 - A run whose four answers return more than 32 citations between them shows the
   judge 32, allocated **round-robin across the slots** so no slot is silently
   unrepresented — a flat first-32 slice would have evicted slot 4 entirely while
   `MODEL_ANSWER_4` stayed in the prompt and stayed scored for grounding. Below
-  32 the output is byte-identical to before, order included.
+  32 sources no line is dropped and the order is unchanged; the 300-char field
+  truncations still apply at every count.
 - No user-facing surface changes: the UI, the citation-coverage metric and the
   trust score read the `SourceReference`s, not `source_lines`.
 - The `app.js` hedge stays, now resting only on `cost_system_prompt_tokens` and

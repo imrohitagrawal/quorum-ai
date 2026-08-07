@@ -196,8 +196,11 @@ def test_the_cap_is_spent_fairly_across_slots_not_first_come() -> None:
     """Review finding, 2026-08-07. A flat ``[:32]`` over the concatenated
     sources spends the whole budget on the earliest slots: at 12 citations each,
     slots 1-2 keep all 12, slot 3 keeps 8 and slot 4 keeps NONE — while
-    ``MODEL_ANSWER_4`` is still in the prompt and still scored for grounding, so
-    the judge marks one model down for citations it was never shown.
+    ``MODEL_ANSWER_4`` is still in the prompt and still scored for grounding —
+    its citation markers cannot point at rows that were evicted, so the run's
+    single ``grounding`` score is depressed by a slot whose sources are missing.
+    (Run-level, not per-model: ``EvalJudgeVerdict`` has one ``grounding: int``
+    and no per-slot field.)
 
     Only the COUNT was pinned before this test, so that policy — and its
     inversion, ``[-32:]``, which hides slot 1 instead — was invisible to the
@@ -235,7 +238,8 @@ def test_an_uneven_split_gives_the_short_slot_everything_it_has() -> None:
     """Round-robin must not waste budget on a slot that has run out.
 
     Turns red if: the allocation hands each answer a flat ``cap // len(answers)``
-    share, which would drop 5 sources here that comfortably fit.
+    share. On this fixture ([40, 1]) that is 32 // 2 = 16 each, keeping 16 + 1 =
+    17 of the 32 the cap allows — 15 sources dropped for no reason.
     """
     answers = [
         _answer(sources=[_source(title=f"big-{i}") for i in range(40)]),
