@@ -205,17 +205,30 @@ def test_every_decision_reports_what_it_compared(drift: ModuleType) -> None:
     Every branch's detail names both SHAs (or says plainly that one was
     unreadable), so the alert is actionable without re-running anything.
     """
-    cases = [
-        dict(main_tip=_TIP, build_sha=_TIP, tip_age_seconds=1.0),
-        dict(main_tip=_TIP, build_sha=_OLD, tip_age_seconds=1.0),
-        dict(main_tip=_TIP, build_sha=_OLD, tip_age_seconds=99999.0),
-        dict(main_tip=None, build_sha=_TIP, tip_age_seconds=1.0),
-        dict(main_tip=_TIP, build_sha=None, tip_age_seconds=1.0),
+    cases: list[tuple[str | None, str | None, float | None]] = [
+        (_TIP, _TIP, 1.0),
+        (_TIP, _OLD, 1.0),
+        (_TIP, _OLD, 99999.0),
+        (None, _TIP, 1.0),
+        (_TIP, None, 1.0),
+        (_TIP, _OLD, None),
     ]
-    for case in cases:
-        result = drift.evaluate_drift(grace_seconds=600.0, **case)
-        assert result.detail.strip(), f"empty detail for {case}"
-        assert len(result.detail) > 20, f"uninformative detail for {case}: {result.detail!r}"
+    seen = set()
+    for main_tip, build_sha, age in cases:
+        result = drift.evaluate_drift(
+            main_tip=main_tip,
+            build_sha=build_sha,
+            tip_age_seconds=age,
+            grace_seconds=600.0,
+        )
+        seen.add(result.decision)
+        assert result.detail.strip(), f"empty detail for {(main_tip, build_sha, age)}"
+        assert len(result.detail) > 20, (
+            f"uninformative detail for {(main_tip, build_sha, age)}: {result.detail!r}"
+        )
+    # Positive partner: prove the loop actually exercised every decision, so
+    # this cannot pass by covering only the easy branches.
+    assert seen == set(drift.DriftDecision)
 
 
 def test_the_watchdogs_dispatch_list_matches_the_required_workflows() -> None:
