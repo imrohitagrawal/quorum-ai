@@ -31,6 +31,7 @@ ways, so the record shows what was believed on a date and what replaced it.
 | [ADR-0023](adr/0023-sentry-payloads-are-scrubbed-on-every-path-and-frame-locals-are-not-collected.md) | Sentry payloads are scrubbed on every path, and frame locals are not collected | Architecture | Accepted — 2026-08-07 |
 | [ADR-0024](adr/0024-the-deploy-gate-decides-in-python-not-in-a-yaml-condition.md) | The deploy gate decides in Python, not in a YAML condition | Architecture | Accepted — 2026-08-07 |
 | [ADR-0025](adr/0025-workflow-run-trigger-names-are-filter-patterns-and-must-be-escaped.md) | `on.workflow_run.workflows` entries are filter patterns, and must be escaped | Architecture | Accepted — 2026-08-07 |
+| [ADR-0026](adr/0026-production-is-proven-to-run-mains-tip-not-assumed-to.md) | Production is proven to run `main`'s tip, not assumed to | Architecture | Accepted — 2026-08-08 |
 
 **This index was itself stale** until 2026-07-30: ADR-0002 had existed since
 2026-07-19 and was never listed here. A hand-maintained index is a derived fact
