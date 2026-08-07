@@ -342,7 +342,15 @@ def test_terminal_run_makes_zero_llm_judge_calls(monkeypatch: pytest.MonkeyPatch
         evidence_builds.append(kwargs)
         raise AssertionError("judge evidence must never be built on the pipeline path")
 
-    assert not settings.quorum_eval_judge_api_key
+    # Reduced to a bool in a SEPARATE statement, deliberately. pytest's
+    # assertion rewriting reports INTERMEDIATE values, so `assert not
+    # settings.<key>` prints the real key on failure — measured 2026-08-07,
+    # the same primitive as that day's leak incident. Wrapping inline does not
+    # help (`assert bool(...) is False` prints it too); only reducing to a
+    # non-secret in its own statement does. Pinned by
+    # tests/unit/test_no_credential_reaches_a_test_run.py.
+    judge_key_present = bool(settings.quorum_eval_judge_api_key)
+    assert judge_key_present is False
     monkeypatch.setattr(provider_execution_service, "call_with_prompt", _spy)
     monkeypatch.setattr(evaluation, "build_judge_evidence", _evidence_spy)
 

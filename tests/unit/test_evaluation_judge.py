@@ -12,7 +12,7 @@ from typing import Any, Literal, TypedDict, cast
 
 import pytest
 
-from product_app.config import settings
+from product_app.config import Settings, settings
 from product_app.debate import AgreementSummary
 from product_app.evaluation import (
     EVAL_SCHEMA_VERSION,
@@ -128,7 +128,12 @@ def _evidence() -> Any:
 
 
 def test_judge_is_off_by_default() -> None:
-    assert settings.quorum_eval_judge_api_key == ""
+    # NEVER compare a credential-bearing setting against a literal: pytest's
+    # assertion rewriting prints the real value on failure, and on 2026-08-07
+    # this exact line printed a live API key. Assert the CODE DEFAULT, which
+    # cannot be a real value whatever sits in `.env`. Pinned by
+    # tests/unit/test_no_credential_reaches_a_test_run.py.
+    assert Settings.model_fields["quorum_eval_judge_api_key"].default == ""
     assert _judge_enabled() is False
 
 

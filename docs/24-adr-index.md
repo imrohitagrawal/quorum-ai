@@ -27,6 +27,7 @@ ways, so the record shows what was believed on a date and what replaced it.
 | [ADR-0019](adr/0019-the-judge-does-not-spend-on-a-run-that-spent-nothing.md) | The judge does not spend on a run that spent nothing | Architecture | Accepted — 2026-08-06 |
 | [ADR-0020](adr/0020-a-verified-badge-must-not-contradict-the-verdict-behind-it.md) | A "verified" badge must not contradict the verdict behind it | Architecture | Accepted — 2026-08-06 (issue #267) |
 | [ADR-0021](adr/0021-the-judge-must-ask-for-output-it-can-parse.md) | The judge must ask for output it can parse | Architecture | Accepted — 2026-08-07 |
+| [ADR-0022](adr/0022-a-credential-is-removed-from-the-test-process-not-hidden-at-the-print-site.md) | A credential is removed from the test process, not hidden at the print site | Architecture | Accepted — 2026-08-07 |
 
 **This index was itself stale** until 2026-07-30: ADR-0002 had existed since
 2026-07-19 and was never listed here. A hand-maintained index is a derived fact
