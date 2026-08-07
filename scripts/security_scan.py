@@ -31,6 +31,29 @@ EXCLUDED_DIRS = {
     "mutants",
 }
 
+#: Generated files excluded by NAME rather than by directory.
+#:
+#: ``EXCLUDED_DIRS`` above handles ``mutants`` correctly when the scan runs from
+#: the real repo root. It cannot help when mutmut runs the suite INSIDE
+#: ``./mutants/``: that copy is then the root, so ``mutmut-stats.json`` sits at
+#: the top level with no ``mutants/`` path component to match on.
+#:
+#: Measured in CI 2026-08-07. ``mutmut-stats.json`` holds mutmut's rendering of
+#: the mutated source, in which the deliberately CONCATENATED ``_REAL_KEY``
+#: fixture in ``tests/unit/test_security_scan.py`` appears JOINED into a single
+#: 73-character literal — so it matches ``raw_openrouter_key_pattern``. Once
+#: #276 removed the ``tests/`` exemption for that pattern, the clean-tree check
+#: failed with 27 findings, mutmut reported "Failed to run clean test", and
+#: **no mutation score was produced at all**. A gate that goes red without
+#: measuring anything is the exact failure mode AGENTS.md warns about.
+#:
+#: Kept deliberately NARROW — one exact filename, not a suffix or glob. A real
+#: key committed in any other ``.json`` must still be caught, and
+#: ``test_the_stats_exclusion_is_narrow`` proves it is.
+EXCLUDED_FILES = {
+    "mutmut-stats.json",
+}
+
 # A bare Python identifier or attribute access on the right-hand side of an
 # assignment is a variable / keyword-argument pass-through (for example
 # ``openrouter_key=openrouter_key`` or ``token=confirmation.confirmation_token``),
@@ -185,6 +208,8 @@ def _iter_text_files() -> list[Path]:
         if not path.is_file() or path.suffix not in TEXT_SUFFIXES:
             continue
         if any(part in EXCLUDED_DIRS for part in path.relative_to(ROOT).parts):
+            continue
+        if path.name in EXCLUDED_FILES:
             continue
         paths.append(path)
     return sorted(paths)
