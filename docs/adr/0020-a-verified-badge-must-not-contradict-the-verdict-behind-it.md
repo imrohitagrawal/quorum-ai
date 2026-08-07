@@ -176,16 +176,43 @@ docstring, and **AC-049**, which stated the now-false *sufficient* condition
   The honest signal is already on the wire (`judge_status`, from ADR-0018), and
   the D-5 guard tightened in #270 forbids the frontend reading it — that PR
   must open it deliberately. This is the second half of #267.
-- **The calibrated cut.** See above. The measurement that would settle it: real
-  judge verdicts over the ten golden cases, following the interval methodology
-  `tests/evals/test_trust_calibration.py` uses for the grounding cut — a value
-  pinned inside a measured separation interval, with cuts above and below
-  proven not to reproduce the labels. One paid run, `< $0.50`. Its second
-  product matters as much: those would be **the first real judge verdicts this
-  repo has ever held**, and they belong in the tree as fixtures.
-  **Honest expectation:** with one `unfaithful` case the separation will be
-  thin. It may support "reject the damning verdict" and nothing finer, in which
-  case the right outcome is to say so and leave the line where it is.
+- **The calibrated cut — RESOLVED 2026-08-07, and the answer is "it cannot be
+  calibrated from this set".** The measurement was made for $0.008739 (summed from the fixture's own rows; an earlier draft carried $0.009045 across from a superseded capture): ten
+  golden cases judged by the pinned `openai/gpt-5-mini`, recorded in
+  `tests/evals/golden/measured/judge_behaviour_2026-08-07.json` and pinned by
+  `tests/evals/test_measured_judge_behaviour.py`.
+
+  **The judge returned the maximum `5,5,low` on NINE of the ten cases.** The
+  only case it scored differently is `fabricated-citation-launder`, built to be
+  caught, which the coherence floor already rejects on two independent grounds.
+  A threshold between 1 and 5 needs cases that land between 1 and 5; there are
+  none. So `JUDGE_SUPPORT_MIN_FAITHFULNESS` stays at 1 **on evidence** rather
+  than on an admission of ignorance.
+
+  The honest expectation recorded above — *"the separation will be thin … it
+  may support 'reject the damning verdict' and nothing finer"* — is exactly
+  what happened. Recorded because a prediction that survives contact with the
+  measurement is worth as much as the measurement.
+
+  **Two further findings, deliberately kept separate — an earlier draft
+  conflated them and overclaimed.**
+
+  *One:* the judge is **non-deterministic**. Four identical unseeded calls on
+  `partial-grounding-medium` returned `5,5,low` three times and `4,5,medium`
+  once; `seed=42` gave 4/4 identical. **Whether that reaches the user is
+  UNVERIFIED** — all four unseeded verdicts PASS the gate, because `low` and
+  `medium` are gate-identical and only `high` flips it. The one experiment with
+  repeats measured variation the gate cannot see. A draft of this bullet
+  claimed the non-determinism "changes gate outcomes"; review refuted it from
+  this repo's own fixture.
+
+  *Two, and independent of the first:* at the shipped cap, `gpt-5` condemns
+  **two** cases where the shipped judge condemns one. That refutes ADR-0021's
+  "identical gate outcomes on all ten cases" on its own terms, whatever the
+  determinism story is.
+
+  Together they say the calibration question needs **repeats per case** before
+  any threshold work — not that a gate flip from sampling has been observed.
 - **The verified e2e lane does not exercise this gate.**
   `e2e/fixtures/evaluation-variants.json`'s `EVAL_VERIFIED_HIGH` sets
   `support_verified: true` directly, and
