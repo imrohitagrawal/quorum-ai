@@ -427,9 +427,15 @@ class QueryRunEvaluationProjection(BaseModel):
     figure and is named so a client cannot mistake it for one. When the
     operator configures BOTH ``QUORUM_EVAL_JUDGE_API_KEY`` and
     ``QUORUM_EVAL_JUDGE_MODEL_ID`` (P1 wiring, ``_request_path_judge``) a
-    conforming real-judge verdict flips ``support_verified`` and the numeric
-    ``score`` + ``low``/``moderate``/``high`` band serve verbatim — still
-    metrics only; the judge rationale remains dropped.
+    conforming real-judge verdict whose CONTENT does not contradict the claim
+    flips ``support_verified`` and the numeric ``score`` +
+    ``low``/``moderate``/``high`` band serve verbatim — still metrics only; the
+    judge rationale remains dropped. A conforming verdict that DOES contradict
+    it — grounding or faithfulness at zero, or ``hallucination_risk: "high"``
+    — serves the suppressed shape (#267,
+    ``evaluation.verdict_supports_verification``). This sentence said
+    "a conforming verdict flips ``support_verified``" full stop until
+    2026-08-06, which #267 made false.
     """
 
     schema_version: str

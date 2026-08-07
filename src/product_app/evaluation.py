@@ -16,8 +16,12 @@ The binding honesty rule (docs/42 OC-2, AC-041)
 -----------------------------------------------
 Citation *count* coverage cannot verify that a citation SUPPORTS its claim.
 Therefore ``TrustScore.support_verified`` is False unless a REAL Layer-B
-judge returned a verdict, and while it is False the numeric score is
-suppressed (``score is None``) and the served band is ``"unverified"``.
+judge returned a verdict WHOSE CONTENT does not contradict the claim (#267 —
+see ``verdict_supports_verification``), and while it is False the numeric score
+is suppressed (``score is None``) and the served band is ``"unverified"``.
+Note the flag therefore means "a check happened AND did not come back
+damning", which is narrower than the "a check happened" reading this paragraph
+carried until 2026-08-06.
 ``StubEvalJudge`` deliberately does not verify support — a stub verifies
 nothing — so judge-OFF and stub-ON are byte-identical and every hermetic CI
 run serves ``"unverified"``.
@@ -1201,6 +1205,96 @@ class EvalJudgeVerdict(BaseModel):
     model_id: str
 
 
+# ---------------------------------------------------------------------------
+# What a verdict must SAY before it may unlock ``support_verified`` (#267)
+# ---------------------------------------------------------------------------
+#
+# This gate REJECTS THE DEGENERATE, and does not attempt to calibrate.
+#
+# Two of the three terms rest on the judge's own definitions of its fields,
+# quoted from ``_JUDGE_SYSTEM_PROMPT`` in this module:
+#
+#   grounding (0-5):    "do the answer's citation markers point at the listed
+#                        sources?"  -> 0 means they point at NOTHING.
+#   faithfulness (0-5): "does the answer assert only what its cited evidence
+#                        supports?" -> 0 means it asserts things the evidence
+#                        does NOT support.
+#
+# ``support_verified`` claims to a user that citation support was checked, and
+# it unlocks a numeric trust score. Either zero contradicts that outright, so
+# rejecting them needs no calibration — it is not a question of where a line
+# sits. WHERE between 1 and 5 the line should sit IS such a question, and this
+# gate deliberately does not answer it (see "not calibrated" below).
+#
+# The THIRD term is different and is labelled honestly. ``hallucination_risk``
+# is the one field the prompt does NOT define — it lists the three values and
+# says nothing about them (verified: the prompt line is
+# ``- hallucination_risk ("low" | "medium" | "high").`` and that is all). So
+# rejecting ``"high"`` is a POLICY DECISION, not a tautology, and an earlier
+# draft of this comment wrongly sold it as one. The policy: this flag does not
+# merely add a "citations checked" badge, it unlocks a NUMERIC TRUST SCORE with
+# a low/moderate/high band. A judge reporting high hallucination risk must not
+# unlock a trust score, whichever part of the answer that risk refers to. The
+# defensible counter-reading — citations that check out under an answer that
+# overreaches, i.e. grounding high and faithfulness low — is real, and it is
+# why the justification is "do not show a trust score" rather than "the
+# citations were not checked".
+#
+# NOT CALIBRATED, deliberately: nothing here decides whether ``faithfulness: 2``
+# is good enough. That cannot be answered from this repository, because there is
+# NO REAL JUDGE VERDICT STORED ANYWHERE IN IT. Measured 2026-08-06: the whole
+# test tree contains three distinct verdict shapes — (4,3,'low'), (5,5,'low'),
+# (3,3,'medium') — every one hand-written. The golden set's ten cases carry
+# Layer-A expectations, not judge expectations, so it is test MATERIAL rather
+# than a calibration set. Choosing a cut from it would be setting a guardrail
+# value from an unmeasured number. ADR-0020 records the measurement that would
+# settle it.
+
+#: Lowest ``grounding`` that may still claim verified citation support.
+#: 1 rejects only the degenerate: 0 means "the markers point at nothing".
+JUDGE_SUPPORT_MIN_GROUNDING = 1
+
+#: Lowest ``faithfulness`` that may still claim verified citation support.
+#: 1 rejects only the degenerate: 0 means "the answer asserts things its cited
+#: evidence does not support". Symmetric with the grounding floor above — an
+#: earlier draft admitted every faithfulness value, which left a judge's
+#: harshest possible verdict on THIS field unlocking the same 92/100 score a
+#: clean verdict unlocks. Review caught the asymmetry.
+JUDGE_SUPPORT_MIN_FAITHFULNESS = 1
+
+#: The one ``hallucination_risk`` that may not unlock a numeric trust score.
+#: A policy decision about an undefined field, not a tautology — see above.
+JUDGE_SUPPORT_UNACCEPTABLE_RISK = "high"
+
+
+def verdict_supports_verification(verdict: EvalJudgeVerdict | None) -> bool:
+    """Whether this verdict's CONTENT supports claiming verified citation support.
+
+    Separate from ``EvalJudge.verifies_support``, which asks whether the JUDGE
+    is the kind of thing that verifies anything (the stub is not). This asks
+    what the judge actually said. Both must hold; neither replaces the other.
+
+    Exported rather than inlined so a later caller — the UI copy that still
+    owes an honest line for a judge that ran and produced nothing — can ask the
+    same question without re-deriving the rule. ``EvalJudgeService`` already
+    recorded what happens when a two-value gate becomes three copies with one
+    of them unguarded.
+
+    WHAT THIS DOES NOT DO: close the equivalence #267 named. A verdict of
+    ``faithfulness: 1, grounding: 1, hallucination_risk: "low"`` still unlocks
+    exactly what ``5, 5, "low"`` unlocks. That is a calibration question and
+    this repo cannot yet answer it; the gate rejects only what contradicts the
+    claim outright.
+    """
+    if verdict is None:
+        return False
+    if verdict.hallucination_risk == JUDGE_SUPPORT_UNACCEPTABLE_RISK:
+        return False
+    if verdict.grounding < JUDGE_SUPPORT_MIN_GROUNDING:
+        return False
+    return verdict.faithfulness >= JUDGE_SUPPORT_MIN_FAITHFULNESS
+
+
 def parse_judge_verdict(raw: str | None) -> EvalJudgeVerdict | None:
     """Parse a judge response. Strict JSON only; anything else is no verdict.
 
@@ -1721,7 +1815,20 @@ def evaluate_run(
             final_synthesis=final_synthesis,
         )
         verdict = judge.evaluate(evidence)
-        support_verified = verdict is not None and judge.verifies_support
+        # THREE conditions, and none replaces another (#267):
+        #   * a verdict came back at all;
+        #   * the JUDGE is the kind of thing that verifies anything — the stub
+        #     is not, and that guard predates this one;
+        #   * the verdict's CONTENT does not contradict the claim.
+        # The third is new. Without it ``support_verified`` was true iff the
+        # response PARSED, so a verdict of faithfulness=1, grounding=1,
+        # hallucination_risk="high" served score=92, band="high" — measured on
+        # 02a2ebe, identically to a 5/5/low verdict.
+        support_verified = (
+            verdict is not None
+            and judge.verifies_support
+            and verdict_supports_verification(verdict)
+        )
 
     evaluation = evaluate_layer_a(
         initial_answers=initial_answers,
@@ -1750,6 +1857,9 @@ __all__ = [
     "EvalJudge",
     "EvalJudgeService",
     "EvalJudgeVerdict",
+    "JUDGE_SUPPORT_MIN_FAITHFULNESS",
+    "JUDGE_SUPPORT_MIN_GROUNDING",
+    "JUDGE_SUPPORT_UNACCEPTABLE_RISK",
     "JudgeCallOutcome",
     "JudgeEvidence",
     "LayerASignals",
@@ -1775,4 +1885,5 @@ __all__ = [
     "evaluate_run",
     "extract_citation_markers",
     "parse_judge_verdict",
+    "verdict_supports_verification",
 ]
