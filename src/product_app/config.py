@@ -427,7 +427,11 @@ class Settings(BaseSettings):
     # block in main.py is gated on a non-empty value so local dev and
     # tests run unaffected. Set via SENTRY_DSN in .env or the deploy
     # environment.
-    sentry_dsn: str = ""
+    #: A DSN embeds a public key and is a credential: a real one in ``.env``
+    #: activates a LIVE Sentry client on every pytest run, and the redaction
+    #: hook does not cover exception or log text. ``repr=False`` also keeps it
+    #: inside the credential set the test-run guard derives from this file.
+    sentry_dsn: str = Field(default="", repr=False)
 
     # --- Durable-store reconnect (issue #123) ---------------------------
     # `configure_feedback_store()` / `configure_run_history_store()` open

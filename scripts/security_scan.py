@@ -124,7 +124,17 @@ def _run_checks() -> tuple[list[SecurityFinding], int]:
         relative = path.relative_to(ROOT).as_posix()
         text = path.read_text(encoding="utf-8", errors="replace")
         for line_number, line in enumerate(text.splitlines(), start=1):
-            if not relative.startswith("tests/") and _contains_raw_openrouter_key(line):
+            # NO ``tests/`` exemption here, deliberately. It used to be exempt
+            # alongside ``env_secret_assignment`` below, but the two need
+            # different treatment: test fixtures legitimately assign FAKE
+            # secrets (``api_key = "sk-not-a-real-key"``), which is why that
+            # exemption exists — but nothing legitimately embeds a string
+            # matching a REAL OpenRouter key, and a real one committed under
+            # ``tests/`` sailed past this blocking gate. Measured 2026-08-07:
+            # the longest fake key in the suite is 17 chars, well under the
+            # 40-char floor of the pattern, so removing the exemption adds no
+            # false positives.
+            if _contains_raw_openrouter_key(line):
                 findings.append(
                     SecurityFinding(
                         check_id="raw_openrouter_key_pattern",

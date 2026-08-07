@@ -33,8 +33,16 @@ scanner: Any = _load_scanner()
 
 
 # A fake, well-formed key (``sk-or-v1-`` + 64 hex chars) for the "real key"
-# cases. This file lives under ``tests/``, which the scanner exempts, so it is
-# never itself flagged.
+# cases.
+#
+# It is built by CONCATENATION, and that is load-bearing, not style. Since
+# 2026-08-07 the scanner NO LONGER EXEMPTS ``tests/`` from
+# ``raw_openrouter_key_pattern``, so it now reads this file like any other.
+# No single SOURCE LINE here holds ``sk-or-v1-`` followed by 40+ characters,
+# so nothing in it matches. Measured: the longest ``sk-or-v1-`` suffix on one
+# line anywhere under ``tests/`` (excluding ``EXCLUDED_DIRS``) is 16 chars,
+# against the pattern's 40-char floor. Writing this key as a single literal
+# would make ``make security-scan`` fail on this very file.
 _REAL_KEY = "sk-or-v1-" + "a1b2c3d4e5f6a7b8c9d0e1f2a3b4c5d6" * 2
 
 
@@ -86,3 +94,62 @@ def test_env_secret_assignment_detection(line: str, is_python: bool, expected: b
 )
 def test_raw_openrouter_key_detection(line: str, expected: bool) -> None:
     assert scanner._contains_raw_openrouter_key(line) is expected
+
+
+def test_a_real_key_committed_under_tests_is_flagged(tmp_path: Path) -> None:
+    """The ``tests/`` exemption removal (2026-08-07), proven end to end.
+
+    Until this change ``_run_checks`` skipped ``raw_openrouter_key_pattern``
+    for every path under ``tests/``, so a REAL key committed there sailed past
+    a BLOCKING gate. The unit test above only exercises the line predicate; it
+    stayed green throughout and could not see the exemption, because the
+    exemption lives in the caller.
+
+    Driven through ``_run_checks()`` — the whole gate, walking the real tree —
+    rather than the predicate, since the caller is what changed.
+
+    WHAT TURNS THIS RED: restore ``if not relative.startswith("tests/")`` in
+    front of the ``_contains_raw_openrouter_key`` call in
+    ``scripts/security_scan.py``.
+    """
+    planted = Path(scanner.ROOT) / "tests" / "unit" / "_zz_planted_key_probe.py"
+    # Single literal on ONE line: this is the shape a leaked key really takes,
+    # and the shape the concatenated ``_REAL_KEY`` above deliberately avoids.
+    body = 'KEY = "sk-or-v1-' + "a1b2c3d4e5f6a7b8c9d0e1f2a3b4c5d6" * 2 + '"\n'
+    planted.write_text(body, encoding="utf-8")
+    try:
+        findings, scanned = scanner._run_checks()
+    finally:
+        planted.unlink(missing_ok=True)
+
+    assert scanned > 0, "the scanner measured nothing — a negative result would be vacuous"
+    hits = [
+        f
+        for f in findings
+        if f.check_id == "raw_openrouter_key_pattern" and "_zz_planted_key_probe" in f.path
+    ]
+    assert hits, (
+        "a real-shaped OpenRouter key planted under tests/ was NOT flagged, so "
+        "the tests/ exemption is back and a committed key would pass the gate"
+    )
+
+
+def test_the_tree_is_clean_once_the_planted_key_is_gone() -> None:
+    """POSITIVE PARTNER (rule 7) for the test above, in the other direction.
+
+    The check above proves the gate FIRES on a planted key. This proves it does
+    not fire on the tree as committed — i.e. removing the ``tests/`` exemption
+    introduced no false positive, which is the half that would break CI for
+    everyone. Both halves are needed: the first alone permits a scanner that
+    flags everything, the second alone permits one that flags nothing.
+
+    WHAT TURNS THIS RED: write ``_REAL_KEY`` above as a single string literal
+    instead of a concatenation.
+    """
+    findings, scanned = scanner._run_checks()
+    assert scanned > 0, "the scanner measured nothing — this assertion would be vacuous"
+    raw_key_hits = [f for f in findings if f.check_id == "raw_openrouter_key_pattern"]
+    assert not raw_key_hits, (
+        "removing the tests/ exemption introduced false positives: "
+        + ", ".join(f"{f.path}:{f.line}" for f in raw_key_hits)
+    )
