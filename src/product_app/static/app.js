@@ -2011,8 +2011,14 @@
     // The hedge STAYS anyway, because "cannot" is still not true: the bound
     // caps every call's OUTPUT from an enforced cap, but nothing enforces the
     // INPUT assumptions (`cost_system_prompt_tokens`,
-    // `cost_web_search_context_tokens` — see #268), and the judge's evidence
-    // `source_lines` are not bounded on the OpenRouter annotations path.
+    // `cost_web_search_context_tokens` — see #268).
+    //
+    // The judge's evidence `source_lines` USED to be named here as a second
+    // unbounded input. That half of #268 is fixed: they are now capped by
+    // `JUDGE_MAX_SOURCE_LINES` / `_TITLE_LEN` / `_URL_LEN` in
+    // `evaluation.build_judge_evidence` and reserved for in `costs.py`. The
+    // remaining hedge is the two settings above, still assumptions rather
+    // than enforced caps.
     // Say what is actually true: this is the priced
     // worst case, and the mechanism that holds it.
     guarantee.textContent =
