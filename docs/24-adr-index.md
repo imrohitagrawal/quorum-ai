@@ -33,6 +33,7 @@ ways, so the record shows what was believed on a date and what replaced it.
 | [ADR-0025](adr/0025-workflow-run-trigger-names-are-filter-patterns-and-must-be-escaped.md) | `on.workflow_run.workflows` entries are filter patterns, and must be escaped | Architecture | Accepted — 2026-08-07 |
 | [ADR-0026](adr/0026-production-is-proven-to-run-mains-tip-not-assumed-to.md) | Production is proven to run `main`'s tip, not assumed to | Architecture | Accepted — 2026-08-08 |
 | [ADR-0027](adr/0027-the-judges-evidence-is-a-bounded-and-priced-input.md) | The judge's evidence is a bounded and priced input | Architecture | Accepted — 2026-08-07 (issue #268, the half the issue body does not name) |
+| [ADR-0028](adr/0028-spend-belongs-on-the-stage-the-user-reads.md) | Spend belongs on the stage the user reads | Architecture | Accepted — 2026-08-08 (operator decision the same day) |
 
 **This index was itself stale** until 2026-07-30: ADR-0002 had existed since
 2026-07-19 and was never listed here. A hand-maintained index is a derived fact
