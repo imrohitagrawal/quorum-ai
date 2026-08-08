@@ -29,7 +29,7 @@ def _default(field: str) -> str:
 
 
 def test_the_debate_runs_on_the_cheap_model_and_synthesis_on_the_better_one() -> None:
-    assert _default("debate_model_id") == "openai/gpt-4o-mini"
+    assert _default("debate_model_id") == "anthropic/claude-haiku-4.5"
     assert _default("synthesis_model_id") == "openai/gpt-5-mini"
 
 

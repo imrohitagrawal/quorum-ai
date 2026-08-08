@@ -431,7 +431,7 @@ class Settings(BaseSettings):
     #
     # NOT a quality measurement. ``tests/evals/golden/cases/`` is the instrument
     # that would settle output quality and has NOT been run for this change.
-    debate_model_id: str = "openai/gpt-4o-mini"
+    debate_model_id: str = "anthropic/claude-haiku-4.5"
     synthesis_model_id: str = "openai/gpt-5-mini"
 
     # --- Catalog fetcher -------------------------------------------------
