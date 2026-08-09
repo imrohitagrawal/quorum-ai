@@ -136,6 +136,24 @@ mostly cost-guardrail band assertions whose fixture queries now land in a
 different band than when they were written — tracked in
 [#286](https://github.com/imrohitagrawal/quorum-ai/issues/286).
 
+**Stronger fact, found during that test triage: `allow` is not just rarer, it
+is unreachable.** The fixed debate + synthesis overhead alone (independent of
+which 4 models the user picks) now bounds every possible 4-slot mix above
+`SOFT_THRESHOLD_USD`. Measured on the four cheapest-priced models in the
+entire fallback catalog (`nvidia/nemotron-3-nano-30b-a3b`,
+`google/gemini-2.5-flash-lite`, `meta-llama/llama-3.1-8b-instruct`,
+`deepseek/deepseek-chat-v3.1`) — cheaper than the shipped default mix, and the
+cheapest combination the product can offer today: bound $0.1772–$0.1779, still
+above $0.15. So there is no run configuration left in the product, of any
+kind, that returns `threshold_action: "allow"`. Every run requires one
+confirmation click, always. **Also accepted** (operator decision,
+2026-08-09): the quality gain is judged worth universal one-click friction,
+and no mitigation (moving `SOFT_THRESHOLD_USD`, capping synthesis output
+further) is made part of this change. Either would be its own decision with
+its own tradeoff — a threshold move weakens the guardrail for every stage, not
+just this one, and a tighter output cap risks truncating the exact synthesis
+behavior this ADR's eval measured as better — and neither is evaluated here.
+
 Not evaluated here: whether `SOFT_THRESHOLD_USD` should move, or whether
 synthesis output caps should tighten, to keep the default mix frictionless.
 Both are separate decisions with their own tradeoffs (a higher threshold

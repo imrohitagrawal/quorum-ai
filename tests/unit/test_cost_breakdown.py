@@ -15,13 +15,15 @@ catalog without depending on the live-catalog network cross-check.
 
 from __future__ import annotations
 
-from collections.abc import Sequence
+from collections.abc import Iterator, Sequence
 from datetime import UTC, datetime
 from decimal import Decimal
+from time import monotonic
 from uuid import UUID, uuid4
 
 import pytest
 
+from product_app.catalog_fetcher import _FALLBACK_CATALOG, openrouter_catalog_fetcher
 from product_app.costs import (
     COST_DISPLAY_QUANTUM,
     HARD_LIMIT_USD,
@@ -35,6 +37,33 @@ from product_app.costs import (
 from product_app.feedback_store import configure_for_tests
 from product_app.model_slots import ModelSlot
 from product_app.query_runs import QueryRunEstimateResponse
+
+
+@pytest.fixture(autouse=True)
+def _stable_catalog_price() -> Iterator[None]:
+    """Pin the catalog to the static fallback for every test in this module.
+
+    This module's own docstring claims the arithmetic runs "against the
+    in-process fallback price catalog" -- but nothing here actually pinned
+    it, so a model absent from the fallback catalog (``openai/gpt-5-mini``,
+    the ADR-0028 synthesis model) resolves however the PROCESS-GLOBAL
+    ``openrouter_catalog_fetcher`` cache happens to be left by whichever
+    other test module pytest collected first. MEASURED: running this file
+    alone gives a different ``synthesis`` line than running it inside the
+    guardrail batch this project's test suite groups it with. Same hazard,
+    same fix, as ``tests/integration/test_query_run_cost_guardrails.py``'s
+    fixture of the same name.
+    """
+    fetcher = openrouter_catalog_fetcher
+    previous_entries = fetcher._cache_entries  # noqa: SLF001
+    previous_expiry = fetcher._cache_expires_at  # noqa: SLF001
+    fetcher._cache_entries = list(_FALLBACK_CATALOG)  # noqa: SLF001
+    fetcher._cache_expires_at = monotonic() + 86_400.0  # noqa: SLF001
+    try:
+        yield
+    finally:
+        fetcher._cache_entries = previous_entries  # noqa: SLF001
+        fetcher._cache_expires_at = previous_expiry  # noqa: SLF001
 
 DEFAULT_MODEL_IDS = [
     "openai/gpt-4o-mini",
@@ -163,10 +192,9 @@ def test_exact_partition_pins_the_split() -> None:
     price across ``DEFAULT_MODEL_IDS``, was a hand-picked 0.0008/0.002)
     under the issue #16 token model (system 350, web-search 2000,
     initial-output floor 700 + 0.5/query-token, debate-output 400,
-    synthesis-output 3000; debate priced on haiku-4.5 0.001/0.005, synthesis
-    on gpt-4o-mini 0.00015/0.0006). The point estimate models ALL
-    ``cost_synthesis_sections``=5 synthesis calls (the real live fan-out),
-    each at the per-section floor:
+    synthesis-output 3000; debate priced on haiku-4.5 0.001/0.005). The point
+    estimate models ALL ``cost_synthesis_sections``=5 synthesis calls (the
+    real live fan-out), each at the per-section floor:
 
       query_tokens   = 1000 / 4 = 250
       init_output    = 700 + 0.5*250 = 825
@@ -178,10 +206,24 @@ def test_exact_partition_pins_the_split() -> None:
       debate_prompt  = 350 + 250 + 3300 = 3900
       debate_round   = 0.001*3900/1000 + 0.005*400/1000 = 0.0039 + 0.002 = 0.0059
       synth_prompt   = 350 + 250 + 3300 + 2*400 = 4700
-      synth_section  = 0.00015*4700/1000 + 0.0006*3000/1000 = 0.000705 + 0.0018
-                     = 0.002505
-      synthesis      = 5 * 0.002505 = 0.012525   (five section calls)
-      raw_total      = 0.0269 + 2*0.0059 + 0.012525 = 0.051425 -> total 0.0512
+
+    ADR-0028 moved synthesis pricing from ``openai/gpt-4o-mini`` to
+    ``openai/gpt-5-mini`` (0.00015/0.0006 -> priced per below). gpt-5-mini is
+    absent from ``_FALLBACK_CATALOG`` -- only the live catalog has it, and
+    this suite blocks outbound sockets (``tests/conftest.py::
+    _block_outbound_sockets``) -- so under test it resolves to
+    ``_DEFAULT_PRICE_PER_1K_INPUT/OUTPUT`` (0.001/0.005), same rate as the
+    ``test/fallback-*`` slot models:
+
+      synth_section  = 0.001*4700/1000 + 0.005*3000/1000 = 0.0047 + 0.015
+                     = 0.0197
+      synthesis      = 5 * 0.0197 = 0.0985   (five section calls)
+      raw_total      = 0.0269 + 2*0.0059 + 0.0985 = 0.1372 -> total 0.1372
+
+    Every number in this block is MEASURED by execution (``uv run pytest``),
+    not hand-rederived -- see rule 8c on why an upstream's actual behaviour
+    (here: a model absent from the offline catalog) is worth exactly what you
+    measured it to be, never what the old formula implied.
 
     NOTE the term that is deliberately ABSENT here. WP-D made ``max_cost_usd``
     a true ceiling by pricing round 2's prompt, which carries round 1's
@@ -198,15 +240,23 @@ def test_exact_partition_pins_the_split() -> None:
     )
     breakdown = estimate.breakdown
     assert breakdown is not None
-    assert breakdown.total == Decimal("0.0512")
+    assert breakdown.total == Decimal("0.1372")
 
     # by_stage — initial_answers; two debate rounds at 0.0059 each;
-    # synthesis (five sections) is 0.012525 -> floors to 0.0125.
+    # synthesis (five sections). ADR-0028 moved the synthesis stage to
+    # ``openai/gpt-5-mini``, which is absent from ``_FALLBACK_CATALOG`` (only
+    # the live catalog prices it, and this suite blocks outbound sockets —
+    # see ``tests/conftest.py::_block_outbound_sockets``), so under test it
+    # falls back to ``_DEFAULT_PRICE_PER_1K_INPUT/OUTPUT`` (0.001/0.005),
+    # same as the ``test/fallback-*`` slot models. MEASURED by execution
+    # (``uv run pytest`` — never hand-rederived, per rule 8c): synth_section
+    # moved 0.002505 -> 0.0197, so the five-section total moved
+    # 0.012525 -> 0.0985.
     assert [(line.stage, line.usd) for line in breakdown.by_stage] == [
         ("initial_answers", Decimal("0.0269")),
         ("debate_round_1", Decimal("0.0059")),
         ("debate_round_2", Decimal("0.0059")),
-        ("synthesis", Decimal("0.0125")),
+        ("synthesis", Decimal("0.0985")),
     ]
 
     # by_model — fallback-a gets the extra quantum (largest remainder tie → lowest index).
@@ -215,7 +265,7 @@ def test_exact_partition_pins_the_split() -> None:
         ("test/fallback-b", Decimal("0.0067")),
         ("test/fallback-c", Decimal("0.0067")),
         ("test/fallback-d", Decimal("0.0067")),
-        ("synthesis", Decimal("0.0243")),
+        ("synthesis", Decimal("0.1103")),
     ]
 
 

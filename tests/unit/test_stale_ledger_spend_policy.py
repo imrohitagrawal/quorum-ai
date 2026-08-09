@@ -29,11 +29,21 @@ from product_app import store_reconnect
 from product_app.costs import CostThresholdAction, cost_estimation_service
 from product_app.model_slots import ModelSlot
 
+#: This module is about the STALE-LEDGER policy, not about cost bands, so the
+#: mix only needs to stay clear of ``HARD_LIMIT_USD`` -- most assertions here
+#: are "not BLOCKed", not "ALLOWed". ADR-0028 (synthesis moved to the pricier
+#: openai/gpt-5-mini) means no 4-slot mix reaches ALLOW any more (MEASURED:
+#: even the catalog's four cheapest-priced models bound at 0.1772-0.1779), and
+#: the old opus-4-containing mix now bounds at 0.2772 -- clear over the $0.25
+#: hard limit, so every "not BLOCK" assertion below broke on cost alone,
+#: nothing to do with the ledger fault this file actually tests. Swapped to
+#: the catalog's four cheapest-priced models so the mix reliably lands in
+#: CONFIRM (not BLOCK) regardless of the ledger scenario.
 _MODEL_IDS = [
-    "anthropic/claude-opus-4",
-    "openai/gpt-4o-mini",
-    "google/gemini-2.5-flash",
     "nvidia/nemotron-3-nano-30b-a3b",
+    "google/gemini-2.5-flash-lite",
+    "meta-llama/llama-3.1-8b-instruct",
+    "deepseek/deepseek-chat-v3.1",
 ]
 
 

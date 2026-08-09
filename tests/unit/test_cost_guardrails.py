@@ -62,16 +62,35 @@ DEFAULT_MODEL_IDS = [
 ]
 
 
-def test_normal_cost_query_is_allowed() -> None:
-    model_slots = validate_model_slots(DEFAULT_MODEL_IDS)
+def test_cheapest_possible_query_still_requires_confirmation() -> None:
+    """ADR-0028: the ALLOW band is unreachable at 4 slots, by any mix.
+
+    Until 2026-08-09 this asserted the DEFAULT mix landed in ALLOW. ADR-0028's
+    pricier synthesis stage means the fixed debate+synthesis overhead alone
+    now bounds EVERY possible 4-slot mix above SOFT_THRESHOLD_USD — MEASURED:
+    even the four cheapest-priced models in the whole fallback catalog
+    (nemotron/gemini-flash-lite/llama-3.1-8b/deepseek-chat-v3.1) bound at
+    0.1772-0.1779. So no 4-slot mix reaches ALLOW today; this pins that a
+    confirmation token is still minted for the cheapest possible query, so a
+    real client can still complete a run (just not frictionlessly).
+    """
+    model_slots = validate_model_slots(
+        [
+            "nvidia/nemotron-3-nano-30b-a3b",
+            "google/gemini-2.5-flash-lite",
+            "meta-llama/llama-3.1-8b-instruct",
+            "deepseek/deepseek-chat-v3.1",
+        ]
+    )
 
     estimate = cost_estimation_service.estimate(
         query_text="Compare vendors",
         model_slots=model_slots,
     )
 
-    assert estimate.estimated_cost_usd <= Decimal("0.15")
-    assert estimate.threshold_action == CostThresholdAction.ALLOW
+    assert estimate.max_cost_usd is not None
+    assert estimate.max_cost_usd > Decimal("0.15")
+    assert estimate.threshold_action == CostThresholdAction.REQUIRE_CONFIRMATION
     assert estimate.confirmation_token is not None
 
 
@@ -79,10 +98,9 @@ def test_high_cost_query_requires_matching_confirmation() -> None:
     # issue #16: the guardrail keys off the fail-safe ``max_cost_usd`` bound
     # (worst-case, initial output priced at the enforced cap), not the point
     # estimate. The CONFIRM band (bound in (0.15, 0.25]) is a narrow window —
-    # cheap mixes bound well under $0.15, and an opus-tier slot now jumps the
-    # bound clear over $0.25. This test needs a genuinely CONFIRM estimate,
-    # because it round-trips the confirmation token and a BLOCK estimate
-    # carries ``confirmation_token=None``.
+    # this test needs a genuinely CONFIRM estimate, because it round-trips the
+    # confirmation token and a BLOCK estimate carries
+    # ``confirmation_token=None``.
     #
     # WP-D re-fixtured this TWICE, and the second reason is the instructive one.
     # An intermediate fixture anchored on ``openai/o3`` had a comfortable
@@ -90,17 +108,23 @@ def test_high_cost_query_requires_matching_confirmation() -> None:
     # bounded at 0.2138 (require_confirmation) offline and 0.0795 (ALLOW) at
     # real prices, i.e. it asserted a band production never sees.
     #
-    # Every price in THIS mix is verified identical in the fallback catalog and
-    # the live one, so it bounds at 0.2474 either way. The 0.0026 margin to
-    # HARD_LIMIT_USD is thinner than the o3 mix's, and that trade is deliberate:
-    # a fixture that moves only when the COST MODEL changes is a real signal;
-    # one that moves when a stale price is corrected is noise.
+    # ADR-0028 (synthesis stage moved gpt-4o-mini -> gpt-5-mini) re-priced
+    # synthesis high enough that the opus-tier mix this test used to use now
+    # bounds at 0.3661 (BLOCK, not CONFIRM) -- and MEASURED, the fixed
+    # synthesis + debate overhead alone puts a floor under every possible
+    # 4-slot mix: even the four CHEAPEST models in the catalog
+    # (nemotron/gemini-flash-lite/llama-3.1-8b/deepseek-chat-v3.1) bound at
+    # 0.1772-0.1779 regardless of query length or web-search opt-in. So the
+    # CONFIRM band is now reached by the cheapest mix the catalog has, not by
+    # picking an expensive one -- the roles inverted. Every price here is the
+    # same in the fallback catalog and the live one (none of the four rows are
+    # WP-D-flagged as stale), so this bounds the same offline and online.
     model_slots = validate_model_slots(
         [
-            "openai/gpt-4o-mini",
-            "anthropic/claude-3-haiku",
-            "anthropic/claude-opus-4",
             "nvidia/nemotron-3-nano-30b-a3b",
+            "google/gemini-2.5-flash-lite",
+            "meta-llama/llama-3.1-8b-instruct",
+            "deepseek/deepseek-chat-v3.1",
         ]
     )
     estimate = cost_estimation_service.estimate(

@@ -40,33 +40,33 @@ DEFAULT_MODEL_IDS = [
 #: tracks the point estimate — so for this mix the per-call confirmation is the
 #: binding constraint, not the daily cap.
 #:
-#: A mix whose POINT estimate sits in ALLOW but whose fail-safe BOUND lands in
-#: the (0.15, 0.25] confirmation band — MEASURED point 0.1127, bound 0.2474.
+#: ADR-0028 (synthesis stage moved ``openai/gpt-4o-mini`` -> ``openai/gpt-5-mini``)
+#: re-priced synthesis high enough to invert this fixture's whole strategy.
+#: MEASURED: the OLD opus-tier mix now bounds at 0.3661 — clear over
+#: ``HARD_LIMIT_USD`` (0.25), so it moved from CONFIRM to BLOCK, not just up a
+#: little. Worse: the fixed synthesis + two debate rounds now put a FLOOR under
+#: every possible 4-slot mix that sits inside the confirmation band on its
+#: own, regardless of which four models are chosen — MEASURED, the four
+#: CHEAPEST-priced models in the whole catalog (nemotron, gemini-2.5-flash-lite,
+#: llama-3.1-8b-instruct, deepseek-chat-v3.1) still bound at 0.1772-0.1779, and
+#: that floor barely moves with query length or the per-slot web-search flag.
+#: So reaching CONFIRM no longer needs an expensive slot — every mix lands
+#: there or above; this fixture is simply the cheapest one available, chosen
+#: so it stays clear of ``HARD_LIMIT_USD`` with the biggest margin the catalog
+#: allows. MEASURED point 0.1065, bound 0.1779 for ``CONFIRM_QUERY`` below.
 #:
-#: EVERY PRICE HERE IS VERIFIED EXACT against the live public catalog
-#: (unauthenticated, $0, 2026-07-27): gpt-4o-mini 0.00015/0.0006,
-#: claude-3-haiku 0.00025/0.00125, claude-opus-4 0.015/0.075, nemotron
-#: 0.00005/0.0002 — each identical to its ``_FALLBACK_CATALOG`` row. That is
-#: the property this fixture is chosen for, and it is not cosmetic:
-#:
-#:   * the previous fixture was anchored on ``openai/o3``, whose fallback price
-#:     is ~650% OVER live. MEASURED: it bounds at 0.2138 (require_confirmation)
-#:     under the offline catalog and 0.0795 (ALLOW) at real prices — so it
-#:     asserted a band that does not exist in production, and the queued
-#:     price-drift PR would have flipped it;
-#:   * this mix bounds at 0.2474 under BOTH catalogs, so the verdict cannot
-#:     depend on whether the catalog fetch succeeded.
-#:
-#: The margin to ``HARD_LIMIT_USD`` is thin (0.0026) and that is accepted
-#: deliberately: reaching the confirmation band REQUIRES an expensive slot, and
-#: ``claude-opus-4`` is the only expensive model in the catalog whose price is
-#: verified. A fixture that moves only when the COST MODEL changes is a real
-#: signal; one that moves when a stale price is corrected is noise.
+#: UNVERIFIED against the live catalog: ``catalog_fetcher.py`` itself flags
+#: gemini-2.5-flash-lite, llama-3.1-8b-instruct and deepseek-chat-v3.1 as
+#: stale fallback rows (nemotron's row is the one verified exact). Those four
+#: are the cheapest the offline catalog has, so this fixture is the best
+#: available proof that CONFIRM is reachable at all post-ADR-0028 — but unlike
+#: the mix it replaces, its exact numbers could move if those rows are ever
+#: corrected. That is an accepted, named tradeoff, not an oversight.
 CONFIRM_MODEL_IDS = [
-    "openai/gpt-4o-mini",
-    "anthropic/claude-3-haiku",
-    "anthropic/claude-opus-4",
     "nvidia/nemotron-3-nano-30b-a3b",
+    "google/gemini-2.5-flash-lite",
+    "meta-llama/llama-3.1-8b-instruct",
+    "deepseek/deepseek-chat-v3.1",
 ]
 CONFIRM_QUERY = "Compare vendors"
 
@@ -97,24 +97,89 @@ def acknowledged_request(
     }
 
 
-def test_normal_cost_query_is_accepted_with_cost_estimate() -> None:
+def confirmed_request(
+    client: TestClient,
+    query_text: str,
+    model_slots: list[str] | None = None,
+    headers: dict[str, str] | None = None,
+) -> dict[str, object]:
+    """Build a create-request body that clears the cost guardrail.
+
+    ADR-0028's pricier synthesis stage means no 4-slot mix reaches the ALLOW
+    band any more (MEASURED: even the cheapest four models in the whole
+    catalog bound at 0.1772-0.1779, still above ``SOFT_THRESHOLD_USD``). Tests
+    below this point are not ABOUT the cost band -- they use a plain create
+    call as a means to reach some other behaviour (billing dedup, capacity
+    rejection, a stubbed charge outcome) -- so this fetches a real preview
+    first and attaches its confirmation token whenever the band requires one,
+    the same round-trip a real client makes for every run today.
+    """
+    headers = dict(headers or {})
+    preview = client.post(
+        "/v1/query-runs/estimate",
+        json={"query_text": query_text, "model_slots": model_slots or DEFAULT_MODEL_IDS},
+        headers=headers,
+    )
+    cost_estimate = preview.json()["cost_estimate"]
+    body = acknowledged_request(query_text, model_slots)
+    if cost_estimate["threshold_action"] == "require_confirmation":
+        body["cost_confirmation"] = {
+            "estimated_cost_usd": cost_estimate["estimated_cost_usd"],
+            "confirmation_token": cost_estimate["confirmation_token"],
+        }
+    return body
+
+
+def test_cheapest_possible_query_still_requires_confirmation() -> None:
+    """ADR-0028: the ALLOW band is unreachable at 4 slots, by any mix.
+
+    Until 2026-08-09 this test asserted the DEFAULT mix returned 202 with
+    threshold_action "allow" (a no-friction create). ADR-0028's pricier
+    synthesis stage means the fixed debate+synthesis overhead alone now bounds
+    EVERY possible 4-slot mix above SOFT_THRESHOLD_USD, regardless of which
+    models are chosen -- MEASURED: even CONFIRM_MODEL_IDS, the four
+    cheapest-priced models in the whole fallback catalog, bound at
+    0.1772-0.1779. So there is no create call, of any model mix, that reaches
+    "allow" today; every run needs one confirmation. This pins that: the
+    cheapest possible query still lands in require_confirmation, and once
+    confirmed, the run is admitted and billed exactly like any other confirmed
+    run. Turns red if a future change (a cheaper catalog price, a lower
+    synthesis cap, a threshold move) makes ALLOW reachable again without
+    anyone updating this test, or if confirmation stops working for the
+    cheapest mix.
+    """
     client = TestClient(app)
     account_id = uuid4()
 
+    preview = client.post(
+        "/v1/query-runs",
+        json=acknowledged_request(CONFIRM_QUERY, CONFIRM_MODEL_IDS),
+        headers={"X-Account-Id": str(account_id)},
+    )
+    assert preview.status_code == 402
+    preview_estimate = preview.json()["detail"]["cost_estimate"]
+    assert preview_estimate["threshold_action"] == "require_confirmation"
+    assert Decimal(preview_estimate["max_cost_usd"]) > Decimal("0.15")
+
     response = client.post(
         "/v1/query-runs",
-        json=acknowledged_request("Compare these answers"),
+        json={
+            **acknowledged_request(CONFIRM_QUERY, CONFIRM_MODEL_IDS),
+            "cost_confirmation": {
+                "estimated_cost_usd": preview_estimate["estimated_cost_usd"],
+                "confirmation_token": preview_estimate["confirmation_token"],
+            },
+        },
         headers={"X-Account-Id": str(account_id)},
     )
 
     assert response.status_code == 202
     body = response.json()
-    assert Decimal(body["cost_estimate"]["estimated_cost_usd"]) <= Decimal("0.15")
-    assert body["cost_estimate"]["threshold_action"] == "allow"
-    event = cost_event_recorder.list_events()[0]
+    assert body["cost_estimate"]["threshold_action"] == "require_confirmation"
+    event = cost_event_recorder.list_events()[-1]
     assert event.event_type == "cost_guardrail_accepted"
     assert event.account_id == account_id
-    assert not event.confirmed
+    assert event.confirmed
     assert not hasattr(event, "query_text")
 
 
@@ -238,7 +303,16 @@ def test_estimate_then_create_records_exactly_one_billing_event() -> None:
     """One logical run (preview the estimate, then start it) must produce
     exactly ONE spend-counted cost event, and it must be the one carrying the
     real ``query_run_id``. The preview must survive in the audit trail under a
-    non-billing event type."""
+    non-billing event type.
+
+    ADR-0028's pricier synthesis stage puts the default mix in the CONFIRM
+    band for this query (MEASURED: point 0.1145, bound 0.1956), so the
+    preview now records ``cost_confirmation_required`` and the create call
+    must round-trip the confirmation token — this is exactly the "preview,
+    then start it" flow the test's own name describes, just with an extra
+    required step. The one-billing-event contract this test proves is
+    unaffected by whether the request went through ALLOW or a confirmed
+    CONFIRM."""
     client = TestClient(app)
     account_id = uuid4()
     headers = {"X-Account-Id": str(account_id)}
@@ -250,12 +324,19 @@ def test_estimate_then_create_records_exactly_one_billing_event() -> None:
             headers=headers,
         )
         assert estimate.status_code == 200
-        assert estimate.json()["cost_estimate"]["threshold_action"] == "allow"
-        unit = Decimal(estimate.json()["cost_estimate"]["estimated_cost_usd"])
+        cost_estimate = estimate.json()["cost_estimate"]
+        assert cost_estimate["threshold_action"] == "require_confirmation"
+        unit = Decimal(cost_estimate["estimated_cost_usd"])
 
         created = client.post(
             "/v1/query-runs",
-            json=acknowledged_request("Compare these answers"),
+            json={
+                **acknowledged_request("Compare these answers"),
+                "cost_confirmation": {
+                    "estimated_cost_usd": cost_estimate["estimated_cost_usd"],
+                    "confirmation_token": cost_estimate["confirmation_token"],
+                },
+            },
             headers=headers,
         )
         assert created.status_code == 202
@@ -272,15 +353,26 @@ def test_estimate_then_create_records_exactly_one_billing_event() -> None:
         # A4: the audit trail still shows that a preview happened — the fix
         # must not be "delete the estimate event".
         types = [e.event_type for e in _events_for(account_id)]
-        assert types == ["cost_estimate_previewed", "cost_guardrail_accepted"]
-        previews = [e for e in _events_for(account_id) if e.event_type == "cost_estimate_previewed"]
+        assert types == ["cost_confirmation_required", "cost_guardrail_accepted"]
+        previews = [
+            e for e in _events_for(account_id) if e.event_type == "cost_confirmation_required"
+        ]
         assert [e.query_run_id for e in previews] == [None]
         assert previews[0].account_id == account_id
         assert previews[0].estimated_cost_usd == unit
 
 
 def test_abandoned_estimate_contributes_no_spend() -> None:
-    """A preview the user walked away from must cost nothing."""
+    """A preview the user walked away from must cost nothing.
+
+    ADR-0028's pricier synthesis stage means the shipped default mix now
+    bounds into the CONFIRM band even for this short query (MEASURED: point
+    0.1145, bound 0.1956) — so the preview records ``cost_confirmation_required``
+    rather than ``cost_estimate_previewed`` (the ALLOW-band preview event, see
+    ``costs.py``'s event-type mapping). Neither event is spend-counted; the
+    "abandoned preview costs nothing" contract this test proves does not
+    depend on which of the two non-billing event types was recorded.
+    """
     client = TestClient(app)
     account_id = uuid4()
 
@@ -295,18 +387,25 @@ def test_abandoned_estimate_contributes_no_spend() -> None:
         assert store.daily_spend_for(account_id) == Decimal("0")
         assert cost_estimation_service._cumulative_spend_for(account_id) == Decimal("0")
         # ...but the operator can still see the preview happened.
-        assert [e.event_type for e in _events_for(account_id)] == ["cost_estimate_previewed"]
+        assert [e.event_type for e in _events_for(account_id)] == ["cost_confirmation_required"]
 
 
 def test_repeated_estimates_bill_only_the_run_that_started() -> None:
     """The multiplier is 1 + N (N = preview round-trips), not just 2x:
-    "Back to edit" then re-preview must not add another charge."""
+    "Back to edit" then re-preview must not add another charge.
+
+    ADR-0028's pricier synthesis stage puts the default mix in the CONFIRM
+    band (MEASURED: point 0.1145, bound 0.1956), so the final create call
+    must carry the confirmation token from the last preview — same round-trip
+    a real client makes. Unaffected: the thing this test proves, that N
+    preview round-trips bill only once.
+    """
     client = TestClient(app)
     account_id = uuid4()
     headers = {"X-Account-Id": str(account_id)}
 
     with configure_for_tests() as store:
-        unit = None
+        cost_estimate = None
         for _ in range(3):
             estimate = client.post(
                 "/v1/query-runs/estimate",
@@ -314,11 +413,19 @@ def test_repeated_estimates_bill_only_the_run_that_started() -> None:
                 headers=headers,
             )
             assert estimate.status_code == 200
-            unit = Decimal(estimate.json()["cost_estimate"]["estimated_cost_usd"])
+            cost_estimate = estimate.json()["cost_estimate"]
+        assert cost_estimate is not None
+        unit = Decimal(cost_estimate["estimated_cost_usd"])
 
         created = client.post(
             "/v1/query-runs",
-            json=acknowledged_request("Compare these answers"),
+            json={
+                **acknowledged_request("Compare these answers"),
+                "cost_confirmation": {
+                    "estimated_cost_usd": cost_estimate["estimated_cost_usd"],
+                    "confirmation_token": cost_estimate["confirmation_token"],
+                },
+            },
             headers=headers,
         )
         assert created.status_code == 202
@@ -329,21 +436,31 @@ def test_repeated_estimates_bill_only_the_run_that_started() -> None:
 
 def test_gate_approval_is_honoured_by_the_create_that_follows() -> None:
     """Split verdict: the preview must not inflate the sum the create
-    re-reads. A user shown "allow" must not then get a 402."""
+    re-reads. A user shown a passable verdict must not then get an
+    unexplained 402.
+
+    ADR-0028's pricier synthesis stage means the default mix's preview is
+    "require_confirmation", not "allow" (MEASURED: point 0.1145, bound
+    0.1956), so the split-verdict story is now: prior spend leaves room under
+    the DAILY CAP for one more run, the preview correctly asks for
+    confirmation (not a cap block), and the create call — carrying that
+    confirmation — must not then be double-counted against the cap and
+    refused anyway.
+    """
     client = TestClient(app)
     account_id = uuid4()
     headers = {"X-Account-Id": str(account_id)}
 
     with configure_for_tests() as store:
         # Prior real spend, close to the $0.20 daily cap but with room for
-        # one more default-mix run (~$0.026).
+        # one more default-mix run (point estimate ~$0.1145).
         store.record(
             recorder="cost",
             event_type="cost_guardrail_accepted",
             account_id=account_id,
             query_run_id=uuid4(),
             recorded_at=datetime.now(UTC),
-            payload={"estimated_cost_usd": "0.16"},
+            payload={"estimated_cost_usd": "0.08"},
         )
 
         estimate = client.post(
@@ -352,11 +469,18 @@ def test_gate_approval_is_honoured_by_the_create_that_follows() -> None:
             headers=headers,
         )
         assert estimate.status_code == 200
-        assert estimate.json()["cost_estimate"]["threshold_action"] == "allow"
+        cost_estimate = estimate.json()["cost_estimate"]
+        assert cost_estimate["threshold_action"] == "require_confirmation"
 
         created = client.post(
             "/v1/query-runs",
-            json=acknowledged_request("Compare these answers"),
+            json={
+                **acknowledged_request("Compare these answers"),
+                "cost_confirmation": {
+                    "estimated_cost_usd": cost_estimate["estimated_cost_usd"],
+                    "confirmation_token": cost_estimate["confirmation_token"],
+                },
+            },
             headers=headers,
         )
         assert created.status_code == 202, created.json()
@@ -397,7 +521,13 @@ def test_estimate_time_block_still_records_blocked_and_pages_sentry() -> None:
 #: mix (slot 4 is nvidia, not the deepseek this module used to name). See the
 #: envelope test's docstring for the attribution — the admitted run count fell
 #: 8 -> 6 BEFORE WP-D, and this constant had been hiding it.
-PINNED_DEFAULT_MIX_UNIT_USD = Decimal("0.0317")
+#:
+#: ADR-0028 (synthesis stage moved ``openai/gpt-4o-mini`` -> ``openai/gpt-5-mini``)
+#: re-priced synthesis high enough to move this again: MEASURED 0.0317 -> 0.1145,
+#: and the admitted run count 6 -> 1. This is the direct, intended consequence
+#: of the ADR (a pricier synthesis stage means real money moves faster per
+#: run), not a side effect of anything in this test file.
+PINNED_DEFAULT_MIX_UNIT_USD = Decimal("0.1145")
 
 
 @contextmanager
@@ -487,9 +617,20 @@ def test_daily_cap_admits_the_number_of_runs_its_dollar_value_pays_for() -> None
       broke the breakdown's reconciliation invariant. The daily meter tracks
       the point estimate, so this constant is unaffected by it.
 
+    ADR-0028 re-measurement (2026-08-09, this task): synthesis moved
+    ``openai/gpt-4o-mini`` -> ``openai/gpt-5-mini``, a deliberate quality
+    decision (see the ADR) with an accepted, measured cost consequence. The
+    unit moved 0.0317 -> 0.1145 and the admitted run count 6 -> 1 — every
+    default-mix run now bounds into the CONFIRM band on its own (MEASURED
+    max_cost_usd 0.1956), so the loop below must round-trip a confirmation
+    token for the one run the cap admits, same as every other create call in
+    this file post-ADR-0028.
+
     The decision stands: ``DAILY_CAP_USD`` stays at 0.20. Raising it to
-    preserve 8 runs would be counter-tuning a safety weight to hold a metric
-    constant — the envelope shrank because the pricing got more honest, not
+    preserve a bigger run count would be counter-tuning a safety weight to
+    hold a metric constant — the envelope shrank because the pricing got more
+    honest (WP-D) and then because a genuinely more capable, more expensive
+    model was deliberately put on the synthesis stage (ADR-0028) — not
     because the policy changed.
 
     This test states the envelope out loud. Change the meter, or change the
@@ -525,7 +666,7 @@ def test_daily_cap_admits_the_number_of_runs_its_dollar_value_pays_for() -> None
         )
         # The cap admits every run its dollar value pays for, and not one more.
         expected_runs = int((DAILY_CAP_USD / unit).to_integral_value(rounding=ROUND_FLOOR))
-        assert expected_runs == 6, f"default-mix unit price moved: {unit}"
+        assert expected_runs == 1, f"default-mix unit price moved: {unit}"
 
         completed = 0
         rejection = None
@@ -538,9 +679,19 @@ def test_daily_cap_admits_the_number_of_runs_its_dollar_value_pays_for() -> None
                 headers=headers,
             )
             assert preview.status_code == 200
+            preview_cost_estimate = preview.json()["cost_estimate"]
+            body = acknowledged_request("Compare these answers")
+            if preview_cost_estimate["threshold_action"] == "require_confirmation":
+                # Post-ADR-0028 every default-mix run bounds into CONFIRM on
+                # its own, so admission is decided by the daily cap alone --
+                # round-trip the token the same way a real client would.
+                body["cost_confirmation"] = {
+                    "estimated_cost_usd": preview_cost_estimate["estimated_cost_usd"],
+                    "confirmation_token": preview_cost_estimate["confirmation_token"],
+                }
             created = client.post(
                 "/v1/query-runs",
-                json=acknowledged_request("Compare these answers"),
+                json=body,
                 headers=headers,
             )
             if created.status_code != 202:
@@ -579,6 +730,11 @@ def test_capacity_rejection_neither_bills_nor_orphans_a_run() -> None:
     thread. Measured, and the shape that made the F-01 permit specs
     non-deterministic in a full-suite run — see
     ``tests/helpers.isolated_run_semaphore``.
+
+    ADR-0028's pricier synthesis stage puts the default mix in the CONFIRM
+    band (MEASURED: point 0.1145, bound 0.1956), so the request must clear
+    the cost guardrail with a confirmation token before it can even reach the
+    capacity check this test is about.
     """
     with isolated_run_semaphore(1) as semaphore:
         # At capacity: the single permit is taken, so the request is refused
@@ -591,7 +747,9 @@ def test_capacity_rejection_neither_bills_nor_orphans_a_run() -> None:
             csrf = session.json()["csrf_token"]
             response = client.post(
                 "/v1/query-runs",
-                json=acknowledged_request("Compare these answers"),
+                json=confirmed_request(
+                    client, "Compare these answers", headers={"x-csrf-token": csrf}
+                ),
                 headers={"x-csrf-token": csrf},
             )
             assert response.status_code == 503, response.json()
@@ -629,6 +787,11 @@ def test_thread_start_failure_neither_bills_nor_orphans_a_run(
       * no spend-counted event (billing happens only after ``start()`` returns);
       * no non-terminal run left behind (``_abandon_unstarted_run``);
       * the capacity permit is returned (the ``except BaseException`` handler).
+
+    ADR-0028's pricier synthesis stage puts the default mix in the CONFIRM
+    band (MEASURED: point 0.1145, bound 0.1956), so the request must clear
+    the cost guardrail with a confirmation token before it can reach the
+    thread-start failure this test is about.
     """
     import product_app.query_runs as qr
 
@@ -654,7 +817,9 @@ def test_thread_start_failure_neither_bills_nor_orphans_a_run(
             csrf = session.json()["csrf_token"]
             response = client.post(
                 "/v1/query-runs",
-                json=acknowledged_request("Compare these answers"),
+                json=confirmed_request(
+                    client, "Compare these answers", headers={"x-csrf-token": csrf}
+                ),
                 headers={"x-csrf-token": csrf},
             )
             assert response.status_code == 500
@@ -702,6 +867,12 @@ def test_a_cap_crossed_between_estimate_and_charge_refuses_the_run(
     would have produced -- and it must NOT be left occupying the account's one
     in-flight slot, or the caller is locked out for 30 minutes by
     ACTIVE_QUERY_EXISTS.
+
+    ADR-0028's pricier synthesis stage puts the default mix in the CONFIRM
+    band (MEASURED: point 0.1145, bound 0.1956), so the request must clear
+    the cost guardrail with a confirmation token to reach the atomic re-check
+    at charge time -- the stub below fires there, not at the estimate-time
+    gate this confirmation clears.
     """
     from product_app.feedback_store import ChargeOutcome
 
@@ -717,7 +888,9 @@ def test_a_cap_crossed_between_estimate_and_charge_refuses_the_run(
             csrf = session.json()["csrf_token"]
             response = client.post(
                 "/v1/query-runs",
-                json=acknowledged_request("Compare these answers"),
+                json=confirmed_request(
+                    client, "Compare these answers", headers={"x-csrf-token": csrf}
+                ),
                 headers={"x-csrf-token": csrf},
             )
 
@@ -741,6 +914,11 @@ def test_a_ceiling_crossed_between_estimate_and_charge_degrades_the_run(
     accepted (202) and marked so the worker simulates it. Distinct from the
     daily cap above, which refuses -- the caller sees a completely different
     outcome and the difference is the point.
+
+    ADR-0028's pricier synthesis stage puts the default mix in the CONFIRM
+    band (MEASURED: point 0.1145, bound 0.1956), so the request must clear
+    the cost guardrail with a confirmation token to reach the atomic re-check
+    at charge time, where the stub below fires.
     """
     from product_app.feedback_store import ChargeOutcome
 
@@ -756,7 +934,9 @@ def test_a_ceiling_crossed_between_estimate_and_charge_degrades_the_run(
             csrf = session.json()["csrf_token"]
             response = client.post(
                 "/v1/query-runs",
-                json=acknowledged_request("Compare these answers"),
+                json=confirmed_request(
+                    client, "Compare these answers", headers={"x-csrf-token": csrf}
+                ),
                 headers={"x-csrf-token": csrf},
             )
 
@@ -775,6 +955,11 @@ def test_a_ledger_that_goes_unmeterable_mid_request_degrades_the_run(
     ADR-0016. Same effect as the ceiling, DIFFERENT cause, and the two must not
     be conflated: the flags drive different user-facing copy, and reporting a
     storage fault as a spend ceiling puts a false reason on screen.
+
+    ADR-0028's pricier synthesis stage puts the default mix in the CONFIRM
+    band (MEASURED: point 0.1145, bound 0.1956), so the request must clear
+    the cost guardrail with a confirmation token to reach the atomic re-check
+    at charge time, where the stub below fires.
     """
     from product_app.feedback_store import ChargeOutcome
 
@@ -790,7 +975,9 @@ def test_a_ledger_that_goes_unmeterable_mid_request_degrades_the_run(
             csrf = session.json()["csrf_token"]
             response = client.post(
                 "/v1/query-runs",
-                json=acknowledged_request("Compare these answers"),
+                json=confirmed_request(
+                    client, "Compare these answers", headers={"x-csrf-token": csrf}
+                ),
                 headers={"x-csrf-token": csrf},
             )
 
@@ -810,6 +997,11 @@ def test_the_legacy_path_refuses_on_a_crossed_cap_exactly_like_production(
     exercise -- so a rail enforced only on the production path would be a rail
     whose tests pass while production overspends, and vice versa. Kept in step
     deliberately.
+
+    ADR-0028's pricier synthesis stage puts the default mix in the CONFIRM
+    band (MEASURED: point 0.1145, bound 0.1956), so the request must clear
+    the cost guardrail with a confirmation token to reach the atomic re-check
+    at charge time, where the stub below fires.
     """
     from product_app.feedback_store import ChargeOutcome
 
@@ -821,10 +1013,11 @@ def test_the_legacy_path_refuses_on_a_crossed_cap_exactly_like_production(
     account_id = uuid4()
     with configure_for_tests() as store:
         client = TestClient(app)
+        headers = {"X-Account-Id": str(account_id)}
         response = client.post(
             "/v1/query-runs",
-            json=acknowledged_request("Compare these answers"),
-            headers={"X-Account-Id": str(account_id)},
+            json=confirmed_request(client, "Compare these answers", headers=headers),
+            headers=headers,
         )
 
         assert response.status_code == 402
