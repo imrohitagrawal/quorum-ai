@@ -52,13 +52,16 @@ from product_app.model_slots import ModelSlot
 #: This module is about the STALE-LEDGER policy, not about cost bands, so the
 #: mix only needs to stay clear of ``HARD_LIMIT_USD`` -- most assertions here
 #: are "not BLOCKed", not "ALLOWed". ADR-0028 (synthesis moved to the pricier
-#: openai/gpt-5-mini) means no 4-slot mix reaches ALLOW any more (MEASURED:
-#: even the catalog's four cheapest-priced models bound at 0.1772-0.1779), and
-#: the old opus-4-containing mix now bounds at 0.2772 -- clear over the $0.25
-#: hard limit, so every "not BLOCK" assertion below broke on cost alone,
-#: nothing to do with the ledger fault this file actually tests. Swapped to
-#: the catalog's four cheapest-priced models so the mix reliably lands in
-#: CONFIRM (not BLOCK) regardless of the ledger scenario.
+#: openai/gpt-5-mini) raised prices enough that the OLD opus-4-containing mix
+#: this module used now bounds at 0.2772 -- clear over the $0.25 hard limit --
+#: so every "not BLOCK" assertion below broke on cost alone, nothing to do
+#: with the ledger fault this file actually tests. Swapped to the catalog's
+#: four cheapest-priced models (MEASURED bound 0.1772-0.1779): above
+#: SOFT_THRESHOLD_USD, so this mix reliably lands in CONFIRM (not BLOCK)
+#: regardless of the ledger scenario. (The SHIPPED default mix,
+#: model_slots.DEFAULT_MODEL_IDS, is cheaper still and stays in ALLOW under
+#: ADR-0028 -- see test_query_run_cost_guardrails.py -- this module
+#: deliberately picks a different, CONFIRM-band mix instead.)
 _MODEL_IDS = [
     "nvidia/nemotron-3-nano-30b-a3b",
     "google/gemini-2.5-flash-lite",

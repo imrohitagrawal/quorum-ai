@@ -100,9 +100,11 @@ def _confirmed_request(
 ) -> dict[str, object]:
     """ADR-0028: attach the confirmation round-trip a plain create now needs.
 
-    No 4-slot mix reaches the ALLOW band any more, so a plain body would 402
-    on every create call below — none of which are testing the cost
-    guardrail itself.
+    The shipped DEFAULT_MODEL_IDS mix stays in ALLOW under ADR-0028 (MEASURED
+    bound 0.1043), but this file's own fixture mix may not, so this
+    defensively round-trips a confirmation whenever the estimate lands in
+    require_confirmation (a no-op otherwise). None of the create calls below
+    are testing the cost guardrail itself.
     """
     preview = client.post(
         "/v1/query-runs/estimate",

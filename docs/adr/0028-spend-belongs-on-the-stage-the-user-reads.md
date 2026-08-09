@@ -103,6 +103,21 @@ that is not in the answers": `gpt-4o-mini` invented two disagreements;
 quoted each answer to show why. Fabricating disagreement between models that
 actually agree is the exact failure mode this product exists to prevent.
 
+**Reproducibility, honestly stated.** This table was a one-off manual
+measurement — there is no committed script or raw output behind the 140 / 238
+/ 24 / 64 figures above, so a reviewer could not previously re-run anything to
+check them. `scripts/synthesis_model_comparison_eval.py` now exists to make
+this a checkable claim going forward: it drives the same production code path
+(`SynthesisOrchestrationService.produce_final_synthesis`) over the same 10
+golden cases, counting quotes and cited URLs the same way. It is NOT run by
+CI or by `make quality`/`make validate` — it makes real, billed OpenRouter
+calls (~$0.10-0.20) — so it is opt-in, on-demand verification, not a gate.
+It will not reproduce these exact numbers byte-for-byte: the golden fixtures
+carry no debate-round text (`debate_outputs=[]`), a narrower input than the
+live four-model-plus-two-debate-rounds run this table's numbers came from.
+What it does let a reader check is the qualitative claim — that gpt-5-mini
+quotes and cites more than gpt-4o-mini on this repo's own golden set, today.
+
 ### Cost consequence, synthesis-only
 
 **Two earlier drafts of this section reported the wrong number, in opposite
@@ -214,3 +229,21 @@ production distribution.** The instrument (`tests/evals/golden/cases/`) is
 small and cheap by design (~$0.14 to run one model). A larger or adversarial
 eval set could still surface cases where `gpt-5-mini` regresses; none were
 found in this run.
+
+**Latency for the new synthesis model is UNMEASURED.** `openrouter_timeout_seconds`
+stays a fixed 8.0s socket timeout (`src/product_app/config.py`, unchanged by
+this change), applied uniformly per OpenRouter call regardless of model
+(`providers.py`'s `urlopen(..., timeout=settings.openrouter_timeout_seconds)`).
+`gpt-5-mini` is a differently-shaped, reasoning-capable model family; whether
+8s remains an adequate budget for its per-section synthesis calls (5 parallel
+calls, up to `SYNTHESIS_SECTION_MAX_TOKENS`=3000 output tokens each) is not
+measured here, and this change does not touch the timeout either way. The
+repo's own perf gate cannot see this: `tests/perf/test_workflow_latency_percentiles.py`
+stubs providers (`force_stubbed_providers`), so it never makes a real call to
+either model and would not detect a timeout regression from this swap. Not
+fixed here because changing a guardrail value (a timeout) without a real
+latency measurement behind it would be tuning a safety weight on an assumption
+— the same mistake this ADR's cost section spent several rounds correcting for
+price. If `gpt-5-mini` proves slower in production (observable via provider
+call duration on `/status` or Sentry timing spans), revisit the timeout with
+that measurement in hand, not blind.

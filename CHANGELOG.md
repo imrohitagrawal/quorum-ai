@@ -4,6 +4,21 @@
 
 ### Changed
 
+- **Synthesis stage moved to `openai/gpt-5-mini` (ADR-0028, PR #287).**
+  The stage the user actually reads (synthesis) previously ran on the
+  cheapest of the three configured stage models
+  (`openai/gpt-4o-mini`); the debate stage, whose text the user never
+  sees, ran on a pricier model. Synthesis now runs on `gpt-5-mini`,
+  backed by a golden-fixture quality eval showing materially better
+  instruction-following (more verbatim quotes, more cited source
+  URLs, and correctly avoiding a fabricated disagreement between
+  models that actually agreed). Real, accepted cost consequence on
+  the shipped default four-slot mix: point estimate $0.0317 ->
+  $0.0547 (+73%), bound $0.0771 -> $0.1043 (+35%) — stays inside the
+  no-friction cost band, so no new confirmation step on the default
+  path. See
+  [docs/adr/0028-spend-belongs-on-the-stage-the-user-reads.md](docs/adr/0028-spend-belongs-on-the-stage-the-user-reads.md)
+  for the full measurement.
 - **PR-1: copy, lede, and product rename decision.** Brand lede is
   now "One question. Four models. One answer you can verify." (was
   "Stop hopping between multiple AI chatbots..."). Workspace lede is

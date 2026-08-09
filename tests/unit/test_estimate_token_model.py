@@ -375,11 +375,14 @@ def test_bound_covers_the_round_two_prompt_that_carries_round_ones_critique() ->
     prices = openrouter_model_catalog_service.price_index()
 
     def _cost(model_id: str, prompt_tokens: Decimal, output_tokens: Decimal) -> Decimal:
-        # ADR-0028: the synthesis model (``openai/gpt-5-mini``) is absent
-        # from the pinned fallback catalog, so mirror ``costs.py``'s own
-        # fallback -- the real implementation never KeyErrors on an unpriced
-        # model, and this hand reconstruction must not either or it silently
-        # tests a different formula than the one it's checking.
+        # Mirror costs.py's own fallback: the real implementation never
+        # KeyErrors on an unpriced model, and this hand reconstruction must
+        # not either or it silently tests a different formula than the one
+        # it's checking. ADR-0028 added a ``_FALLBACK_CATALOG`` row for the
+        # new synthesis model (``openai/gpt-5-mini``), so this fallback is no
+        # longer exercised BY that model specifically -- but it stays as
+        # defense in depth for any model this hand-rolled helper is asked to
+        # price that the catalog doesn't (yet) list.
         pin, pout = prices.get(
             model_id, (_DEFAULT_PRICE_PER_1K_INPUT, _DEFAULT_PRICE_PER_1K_OUTPUT)
         )

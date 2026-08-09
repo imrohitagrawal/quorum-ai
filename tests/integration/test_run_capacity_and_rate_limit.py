@@ -168,9 +168,12 @@ def _run_request() -> dict[str, object]:
 def _confirmed_run_request(client: TestClient, headers: dict[str, str]) -> dict[str, object]:
     """ADR-0028: attach the confirmation round-trip a plain create now needs.
 
-    No 4-slot mix reaches the ALLOW band any more, and the cost-confirmation
-    check runs BEFORE the capacity/active-slot checks these tests are about —
-    so a plain body would 402 before ever reaching them.
+    The shipped DEFAULT_MODEL_IDS mix stays in ALLOW under ADR-0028 (MEASURED
+    bound 0.1043), but this file's own fixture mix may not, and the
+    cost-confirmation check runs BEFORE the capacity/active-slot checks these
+    tests are about — so this defensively round-trips a confirmation whenever
+    the estimate lands in require_confirmation (a no-op otherwise), rather
+    than risk a 402 before ever reaching them.
     """
     preview = client.post(
         "/v1/query-runs/estimate",
