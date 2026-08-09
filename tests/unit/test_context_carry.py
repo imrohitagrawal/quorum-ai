@@ -169,6 +169,41 @@ def _estimated_usd(client: TestClient, body: dict[str, object], headers: dict[st
     return Decimal(response.json()["cost_estimate"]["estimated_cost_usd"])
 
 
+def _confirmed_create_body(
+    client: TestClient, headers: dict[str, str], **overrides: object
+) -> dict[str, object]:
+    """ADR-0028: attach the confirmation round-trip a plain create now needs.
+
+    No 4-slot mix reaches the ALLOW band any more, so a plain create body
+    would 402 on every call below — none of which are testing the cost
+    guardrail itself.
+    """
+    preview = client.post(
+        "/v1/query-runs/estimate", json=_estimate_body(**overrides), headers=headers
+    )
+    cost_estimate = preview.json()["cost_estimate"]
+    body = _create_body(**overrides)
+    if cost_estimate["threshold_action"] == "require_confirmation":
+        body["cost_confirmation"] = {
+            "estimated_cost_usd": cost_estimate["estimated_cost_usd"],
+            "confirmation_token": cost_estimate["confirmation_token"],
+        }
+    return body
+
+
+def _confirmed_body_for(
+    client: TestClient, path: str, headers: dict[str, str], **overrides: object
+) -> dict[str, object]:
+    """The right, confirmation-cleared body for whichever endpoint is under test.
+
+    The estimate endpoint is never itself gated, so only the create body needs
+    the round-trip.
+    """
+    if path.endswith("/estimate"):
+        return _estimate_body(**overrides)
+    return _confirmed_create_body(client, headers, **overrides)
+
+
 # --------------------------------------------------------------------------
 # 1. The two request bodies cannot drift apart again.
 # --------------------------------------------------------------------------
@@ -319,11 +354,12 @@ def test_a_null_context_value_is_still_accepted(path: str) -> None:
     Fixing the 500 (#125) is not a licence to reject what already worked.
     """
     client = TestClient(app)
+    headers = _headers()
 
     response = client.post(
         path,
-        json=_body_for(path, context={"prior_question": None}),
-        headers=_headers(),
+        json=_confirmed_body_for(client, path, headers, context={"prior_question": None}),
+        headers=headers,
     )
 
     assert response.status_code in {200, 202}, response.text
@@ -371,7 +407,7 @@ def test_estimate_and_create_quote_the_same_dollar_figure_for_one_context() -> N
 
     created = client.post(
         "/v1/query-runs",
-        json=_create_body(context=context),
+        json=_confirmed_create_body(client, headers, context=context),
         headers=headers,
     )
     assert created.status_code == 202, created.text
@@ -432,12 +468,13 @@ def test_a_value_at_the_limit_is_accepted(path: str, key: str) -> None:
     RED when: the bound is set below what this application itself can produce.
     """
     client = TestClient(app)
+    headers = _headers()
     at_limit = "x" * _CONTEXT_MAX_LENGTHS[key]
 
     response = client.post(
         path,
-        json=_body_for(path, context={key: at_limit}),
-        headers=_headers(),
+        json=_confirmed_body_for(client, path, headers, context={key: at_limit}),
+        headers=headers,
     )
 
     assert response.status_code in {200, 202}, response.text
@@ -644,12 +681,13 @@ def test_the_run_pipeline_hands_the_stored_context_to_synthesis() -> None:
         return real(**kwargs)  # type: ignore[arg-type]
 
     client = TestClient(app)
+    headers = _headers()
     context = {"prior_question": PRIOR_QUESTION, "prior_synthesis": PRIOR_SYNTHESIS}
     with patch.object(synthesis_stub_service, "produce_final_synthesis", _spy):
         response = client.post(
             "/v1/query-runs",
-            json=_create_body(context=context),
-            headers=_headers(),
+            json=_confirmed_create_body(client, headers, context=context),
+            headers=headers,
         )
 
     assert response.status_code == 202, response.text

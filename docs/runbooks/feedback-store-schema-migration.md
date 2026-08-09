@@ -281,15 +281,18 @@ database — so:
 - **But the larger effect runs the other way: the ledger freezes and the daily
   spend cap stops firing.** `cost_guardrail_accepted` rows are among
   the swallowed writes, so `daily_spend_for` keeps returning the total from
-  before the fault no matter how much is spent during it. MEASURED (re-measured
-  2026-07-28): charges each worth a quarter of `DAILY_CAP_USD` → `daily_spend_for`
+  before the fault no matter how much is spent during it. MEASURED (2026-07-28,
+  before ADR-0028): charges each worth a quarter of `DAILY_CAP_USD` → `daily_spend_for`
   still `0` and `threshold_action` `allow` with a confirmation token minted,
-  where without the fault the **fifth** such charge is the one that `BLOCK`s.
-  (Not the fourth — the guard is a strict `already_spent + estimated >
-  DAILY_CAP_USD`, so four quarter-cap charges land the ledger exactly *on* the
-  cap without exceeding it. An earlier revision of this runbook said "four";
-  the boundary is now pinned by
-  `tests/integration/test_feedback_store_write_failures.py::test_block_lands_on_the_fifth_quarter_cap_charge_not_the_fourth`.)
+  where without the fault the **fifth** such charge was the one that `BLOCK`ed
+  — the guard is a strict `already_spent + estimated > DAILY_CAP_USD`, so four
+  quarter-cap charges landed the ledger exactly *on* the cap without exceeding
+  it.
+  RE-MEASURED 2026-08-09: ADR-0028's pricier synthesis stage raised the real
+  per-run estimate above a quarter of the cap, moving the boundary one step
+  earlier — `BLOCK` now lands on the **fourth** estimate, after only three
+  quarter-cap charges. Pinned by
+  `tests/integration/test_feedback_store_write_failures.py::test_block_lands_on_the_fourth_quarter_cap_charge_not_the_fifth`.
   Case (a)'s loud bypass ERROR still does not fire here — `store is not None` —
   but since issue #109 `record` raises its own rate-limited ERROR naming the
   disarmed cap, and `/status` reports `feedback_db: "degraded"` with
@@ -592,12 +595,13 @@ holding a real `BEGIN EXCLUSIVE` / `BEGIN IMMEDIATE`, in
   the total stays at whatever was on disk when the lock was taken, and every
   charge made during the hold is lost for good. This is **under**-metering (free
   spend), not the over-metering of a skipped migration. MEASURED (reviewer probe
-  reproduced 2026-07-28): charges each worth a quarter of `DAILY_CAP_USD`
-  recorded under a `BEGIN IMMEDIATE` hold → `daily_spend_for` still `0` and
-  `threshold_action` `allow` with a confirmation token minted, where without the
-  lock the **fifth** such charge is the one that `BLOCK`s. (Not the fourth —
-  see the read-only section above for the strict-`>` arithmetic; an earlier
-  revision of this runbook said "four".)
+  reproduced 2026-07-28, before ADR-0028): charges each worth a quarter of
+  `DAILY_CAP_USD` recorded under a `BEGIN IMMEDIATE` hold → `daily_spend_for`
+  still `0` and `threshold_action` `allow` with a confirmation token minted,
+  where without the lock the **fifth** such charge was the one that `BLOCK`ed
+  — see the read-only section above for the strict-`>` arithmetic.
+  RE-MEASURED 2026-08-09: ADR-0028's pricier synthesis stage moved that
+  boundary to the **fourth** charge; see the read-only section above.
 - **Since issue #109 this is no longer silent.** `record` keeps two monotonic
   write-health stamps, counts every lost billed charge, and emits a rate-limited
   (one per 60 s) ERROR — `feedback_store: a BILLED cost event ... was NOT

@@ -39,14 +39,39 @@ def acknowledged_request(query_text: str) -> dict[str, object]:
     }
 
 
+def confirmed_request(
+    client: TestClient, query_text: str, headers: dict[str, str]
+) -> dict[str, object]:
+    """ADR-0028: attach the confirmation round-trip a plain create now needs.
+
+    No 4-slot mix reaches the ALLOW band any more, so a plain body would 402
+    on every create call below — none of which are testing the cost
+    guardrail itself.
+    """
+    preview = client.post(
+        "/v1/query-runs/estimate",
+        json={"query_text": query_text, "model_slots": DEFAULT_MODEL_IDS},
+        headers=headers,
+    )
+    cost_estimate = preview.json()["cost_estimate"]
+    body = acknowledged_request(query_text)
+    if cost_estimate["threshold_action"] == "require_confirmation":
+        body["cost_confirmation"] = {
+            "estimated_cost_usd": cost_estimate["estimated_cost_usd"],
+            "confirmation_token": cost_estimate["confirmation_token"],
+        }
+    return body
+
+
 def test_query_run_response_marks_local_simulation_when_live_execution_is_disabled() -> None:
     client = TestClient(app)
     account_id = uuid4()
+    headers = {"X-Account-Id": str(account_id)}
 
     response = client.post(
         "/v1/query-runs",
-        json=acknowledged_request("Compare source-backed answers"),
-        headers={"X-Account-Id": str(account_id)},
+        json=confirmed_request(client, "Compare source-backed answers", headers),
+        headers=headers,
     )
 
     assert response.status_code == 202
@@ -95,11 +120,14 @@ def test_query_run_response_marks_local_simulation_when_live_execution_is_disabl
 
 def test_query_run_response_records_fallback_search_when_openrouter_has_no_sources() -> None:
     client = TestClient(app)
+    headers = {"X-Account-Id": str(uuid4())}
 
     response = client.post(
         "/v1/query-runs",
-        json=acknowledged_request("Force fallback search for sparse OpenRouter sources"),
-        headers={"X-Account-Id": str(uuid4())},
+        json=confirmed_request(
+            client, "Force fallback search for sparse OpenRouter sources", headers
+        ),
+        headers=headers,
     )
 
     assert response.status_code == 202
@@ -113,10 +141,11 @@ def test_query_run_response_records_fallback_search_when_openrouter_has_no_sourc
 def test_completed_query_run_result_returns_visible_initial_answer_sources() -> None:
     client = TestClient(app)
     account_id = uuid4()
+    headers = {"X-Account-Id": str(account_id)}
     create_response = client.post(
         "/v1/query-runs",
-        json=acknowledged_request("Compare source-backed answers"),
-        headers={"X-Account-Id": str(account_id)},
+        json=confirmed_request(client, "Compare source-backed answers", headers),
+        headers=headers,
     )
 
     result_response = client.get(
@@ -149,14 +178,15 @@ def test_request_with_slot_search_per_slot_flags_reach_provider_layer() -> None:
     """
     client = TestClient(app)
     account_id = uuid4()
+    headers = {"X-Account-Id": str(account_id)}
 
-    body = acknowledged_request("Compare durable options")
+    body = confirmed_request(client, "Compare durable options", headers)
     body["slot_search"] = [True, False, True, False]
 
     response = client.post(
         "/v1/query-runs",
         json=body,
-        headers={"X-Account-Id": str(account_id)},
+        headers=headers,
     )
 
     assert response.status_code == 202
@@ -276,11 +306,12 @@ def test_query_run_live_path_records_all_four_slots_as_openrouter_search(
 
     client = TestClient(app)
     account_id = uuid4()
+    headers = {"X-Account-Id": str(account_id)}
 
     create_response = client.post(
         "/v1/query-runs",
-        json=acknowledged_request("Compare live-backed research options"),
-        headers={"X-Account-Id": str(account_id)},
+        json=confirmed_request(client, "Compare live-backed research options", headers),
+        headers=headers,
     )
     assert create_response.status_code == 202
     query_run_id = create_response.json()["query_run_id"]
@@ -385,14 +416,15 @@ def test_query_run_live_path_records_search_off_slot_as_openrouter_search_too(
 
     client = TestClient(app)
     account_id = uuid4()
+    headers = {"X-Account-Id": str(account_id)}
 
-    body = acknowledged_request("Compare with mixed search")
+    body = confirmed_request(client, "Compare with mixed search", headers)
     body["slot_search"] = [True, False, True, False]
 
     create_response = client.post(
         "/v1/query-runs",
         json=body,
-        headers={"X-Account-Id": str(account_id)},
+        headers=headers,
     )
     assert create_response.status_code == 202
 

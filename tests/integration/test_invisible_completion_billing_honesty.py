@@ -69,6 +69,30 @@ def _acknowledged_request(query_text: str) -> dict[str, object]:
     }
 
 
+def _confirmed_request(
+    client: TestClient, query_text: str, headers: dict[str, str]
+) -> dict[str, object]:
+    """ADR-0028: attach the confirmation round-trip a plain create now needs.
+
+    No 4-slot mix reaches the ALLOW band any more, so a plain body would 402
+    on every create call below — none of which are testing the cost
+    guardrail itself.
+    """
+    preview = client.post(
+        "/v1/query-runs/estimate",
+        json={"query_text": query_text, "model_slots": _MODEL_IDS},
+        headers=headers,
+    )
+    cost_estimate = preview.json()["cost_estimate"]
+    body = _acknowledged_request(query_text)
+    if cost_estimate["threshold_action"] == "require_confirmation":
+        body["cost_confirmation"] = {
+            "estimated_cost_usd": cost_estimate["estimated_cost_usd"],
+            "confirmation_token": cost_estimate["confirmation_token"],
+        }
+    return body
+
+
 def _zwsp_only_result() -> LiveProviderResult:
     """The issue's exact shape: invisible text plus one real citation."""
     return LiveProviderResult(
@@ -112,10 +136,13 @@ def _drive_zwsp_run(monkeypatch: pytest.MonkeyPatch) -> tuple[dict[str, Any], li
 
     client = TestClient(app)
     account_id = uuid4()
+    headers = {"X-Account-Id": str(account_id)}
     create = client.post(
         "/v1/query-runs",
-        json=_acknowledged_request("Compare durable storage options for a small team"),
-        headers={"X-Account-Id": str(account_id)},
+        json=_confirmed_request(
+            client, "Compare durable storage options for a small team", headers
+        ),
+        headers=headers,
     )
     assert create.status_code == 202, create.text
     query_run_id = create.json()["query_run_id"]
@@ -215,10 +242,13 @@ def test_control_visible_text_still_serves_as_a_live_answer(
 
     client = TestClient(app)
     account_id = uuid4()
+    headers = {"X-Account-Id": str(account_id)}
     create = client.post(
         "/v1/query-runs",
-        json=_acknowledged_request("Compare durable storage options for a small team"),
-        headers={"X-Account-Id": str(account_id)},
+        json=_confirmed_request(
+            client, "Compare durable storage options for a small team", headers
+        ),
+        headers=headers,
     )
     assert create.status_code == 202
     body = client.get(

@@ -97,22 +97,36 @@ def test_run_semaphore_returns_503_when_exhausted() -> None:
         # a fresh limiter state — see fixture below).
         session_response = client.get("/v1/session")
         csrf = session_response.json()["csrf_token"]
+        headers = {"x-csrf-token": csrf}
+        model_slots = [
+            "openai/gpt-4o-mini",
+            "anthropic/claude-haiku-4.5",
+            "google/gemini-2.5-flash",
+            "deepseek/deepseek-chat-v3.1",
+        ]
+        preview = client.post(
+            "/v1/query-runs/estimate",
+            json={"query_text": "short question", "model_slots": model_slots},
+            headers=headers,
+        )
+        cost_estimate = preview.json()["cost_estimate"]
+        body: dict[str, object] = {
+            "query_text": "short question",
+            "model_slots": model_slots,
+            "safety_acknowledgements": [
+                {"warning_type": WarningType.SENSITIVE_DATA, "version": WARNING_VERSION},
+                {"warning_type": WarningType.HIGH_STAKES, "version": WARNING_VERSION},
+            ],
+        }
+        if cost_estimate["threshold_action"] == "require_confirmation":
+            body["cost_confirmation"] = {
+                "estimated_cost_usd": cost_estimate["estimated_cost_usd"],
+                "confirmation_token": cost_estimate["confirmation_token"],
+            }
         response = client.post(
             "/v1/query-runs",
-            json={
-                "query_text": "short question",
-                "model_slots": [
-                    "openai/gpt-4o-mini",
-                    "anthropic/claude-haiku-4.5",
-                    "google/gemini-2.5-flash",
-                    "deepseek/deepseek-chat-v3.1",
-                ],
-                "safety_acknowledgements": [
-                    {"warning_type": WarningType.SENSITIVE_DATA, "version": WARNING_VERSION},
-                    {"warning_type": WarningType.HIGH_STAKES, "version": WARNING_VERSION},
-                ],
-            },
-            headers={"x-csrf-token": csrf},
+            json=body,
+            headers=headers,
         )
         assert response.status_code == 503
         assert response.json()["detail"]["code"] == "RUN_CAPACITY_EXCEEDED"
@@ -149,6 +163,28 @@ def _run_request() -> dict[str, object]:
             {"warning_type": WarningType.HIGH_STAKES, "version": WARNING_VERSION},
         ],
     }
+
+
+def _confirmed_run_request(client: TestClient, headers: dict[str, str]) -> dict[str, object]:
+    """ADR-0028: attach the confirmation round-trip a plain create now needs.
+
+    No 4-slot mix reaches the ALLOW band any more, and the cost-confirmation
+    check runs BEFORE the capacity/active-slot checks these tests are about —
+    so a plain body would 402 before ever reaching them.
+    """
+    preview = client.post(
+        "/v1/query-runs/estimate",
+        json={"query_text": "Compare these answers", "model_slots": DEFAULT_MODEL_IDS},
+        headers=headers,
+    )
+    cost_estimate = preview.json()["cost_estimate"]
+    body = _run_request()
+    if cost_estimate["threshold_action"] == "require_confirmation":
+        body["cost_confirmation"] = {
+            "estimated_cost_usd": cost_estimate["estimated_cost_usd"],
+            "confirmation_token": cost_estimate["confirmation_token"],
+        }
+    return body
 
 
 def _occupy_active_slot(account_id: UUID) -> None:
@@ -212,11 +248,14 @@ def test_409_after_the_permit_is_reserved_releases_it_instead_of_leaking_it() ->
         assert session_row is not None
         account_id = session_row.account_id
 
+        csrf_headers = {"x-csrf-token": csrf}
         _occupy_active_slot(account_id)
         assert semaphore._value == 1  # noqa: SLF001
 
         conflict = client.post(
-            "/v1/query-runs", json=_run_request(), headers={"x-csrf-token": csrf}
+            "/v1/query-runs",
+            json=_confirmed_run_request(client, csrf_headers),
+            headers=csrf_headers,
         )
         assert conflict.status_code == 409, conflict.json()
         assert conflict.json()["detail"]["code"] == "ACTIVE_QUERY_EXISTS"
@@ -233,7 +272,9 @@ def test_409_after_the_permit_is_reserved_releases_it_instead_of_leaking_it() ->
         # and the same request is a 503 RUN_CAPACITY_EXCEEDED.
         query_run_repository.clear()
         accepted = client.post(
-            "/v1/query-runs", json=_run_request(), headers={"x-csrf-token": csrf}
+            "/v1/query-runs",
+            json=_confirmed_run_request(client, csrf_headers),
+            headers=csrf_headers,
         )
         assert accepted.status_code == 202, accepted.json()
 
@@ -258,10 +299,14 @@ def test_legacy_path_409_does_not_release_a_permit_it_never_reserved() -> None:
 
     with isolated_run_semaphore(1) as semaphore:
         account_id = uuid4()
+        headers = {"X-Account-Id": str(account_id)}
         _occupy_active_slot(account_id)
         try:
-            response = _client().post(
-                "/v1/query-runs", json=_run_request(), headers={"X-Account-Id": str(account_id)}
+            client = _client()
+            response = client.post(
+                "/v1/query-runs",
+                json=_confirmed_run_request(client, headers),
+                headers=headers,
             )
             assert response.status_code == 409, response.json()
             assert response.json()["detail"]["code"] == "ACTIVE_QUERY_EXISTS"

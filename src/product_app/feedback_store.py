@@ -408,19 +408,20 @@ class FeedbackStore:
           every write (``WARNING ... failed to persist event``), so the
           ``cost_guardrail_accepted`` rows that ARE the meter never land and
           ``daily_spend_for`` returns a FROZEN total for as long as the fault
-          lasts. Net direction is UNDER-metering, not over-metering. MEASURED:
-          charges each worth ``DAILY_CAP_USD / 4`` → ``daily_spend_for`` still
-          ``0`` and ``threshold_action`` ``allow`` with a token minted, where
-          the same charges without the fault reach ``BLOCK`` on the FIFTH one.
-          (Not the fourth: the guard is ``already_spent + estimated >
-          DAILY_CAP_USD``, a strict ``>``, so after four quarter-cap charges the
-          ledger reads exactly the cap and it is the fifth estimate that first
-          exceeds it. An earlier revision of this docstring, of
-          ``docs/runbooks/feedback-store-schema-migration.md`` and of the
-          ``/status`` docstring in ``main.py`` all said "four"; re-measured
-          2026-07-28 and pinned by
+          lasts. Net direction is UNDER-metering, not over-metering. MEASURED
+          (2026-07-28, before ADR-0028): charges each worth ``DAILY_CAP_USD /
+          4`` → ``daily_spend_for`` still ``0`` and ``threshold_action``
+          ``allow`` with a token minted, where the same charges without the
+          fault reached ``BLOCK`` on the FIFTH one — the guard is
+          ``already_spent + estimated > DAILY_CAP_USD``, a strict ``>``, so
+          four quarter-cap charges landed the ledger exactly on the cap and it
+          was the fifth estimate that first exceeded it.
+          RE-MEASURED 2026-08-09: ADR-0028's pricier synthesis stage raised
+          the real per-run estimate for this mix above a quarter of the cap,
+          so the boundary moved one step earlier — ``BLOCK`` now lands on the
+          FOURTH estimate, after only three quarter-cap charges. Pinned by
           ``tests/integration/test_feedback_store_write_failures.py::
-          test_block_lands_on_the_fifth_quarter_cap_charge_not_the_fourth``.)
+          test_block_lands_on_the_fourth_quarter_cap_charge_not_the_fifth``.
           ``store is not None``, so ``costs.py`` takes the metered branch and
           the P1 bypass ERROR never fires. What DOES fire, since issue #109, is
           ``record``'s own rate-limited ERROR naming the disarmed cap, and
