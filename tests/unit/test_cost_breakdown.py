@@ -65,6 +65,7 @@ def _stable_catalog_price() -> Iterator[None]:
         fetcher._cache_entries = previous_entries  # noqa: SLF001
         fetcher._cache_expires_at = previous_expiry  # noqa: SLF001
 
+
 DEFAULT_MODEL_IDS = [
     "openai/gpt-4o-mini",
     "anthropic/claude-haiku-4.5",
