@@ -105,61 +105,47 @@ actually agree is the exact failure mode this product exists to prevent.
 
 ### Cost consequence, synthesis-only
 
-**A prior draft of this section carried forward the both-stages-swap
-measurement (§ above) without re-measuring the synthesis-only change against
-the live HTTP endpoint. That number was wrong.** Measured directly by driving
-`POST /v1/query-runs` (the real request path, not the internal estimator
-function) with the shipped `DEFAULT_MODEL_IDS` four-slot mix and a short query
-("Compare these answers"):
+**Two earlier drafts of this section reported the wrong number, in opposite
+directions, both since corrected.** The first carried forward the
+both-stages-swap measurement without re-measuring the synthesis-only change.
+The second measured correctly against the live HTTP endpoint, but against a
+broken environment: `_FALLBACK_CATALOG` (the offline/degraded-mode catalog)
+had no row for `openai/gpt-5-mini`, so every hermetic estimate priced it via
+the conservative `_DEFAULT_PRICE_PER_1K` fallback — 4x/2.5x the real rate —
+and, worse, WHICH price a given run got depended on a collection-time race (did
+`catalog_fetcher.prewarm()`'s background thread reach the live network before
+the test session's socket-blocking fixture armed?). That draft reported the
+default mix crossing into `require_confirmation`, and even claimed `allow` was
+unreachable by any 4-slot mix. Neither is true. The catalog row is now added
+(see `catalog_fetcher.py`), pricing is deterministic, and this is the real
+number, measured by driving `POST /v1/query-runs` (the real request path) with
+the shipped `DEFAULT_MODEL_IDS` four-slot mix and a short query ("Compare
+these answers"):
 
 | | before (`gpt-4o-mini`) | after (`gpt-5-mini`) | change |
 |---|---|---|---|
-| point estimate (`estimated_cost_usd`) | $0.0317 | $0.1145 | **+261%** |
-| bound (`max_cost_usd`) | $0.0771 | $0.1956 | **+154%** |
+| point estimate (`estimated_cost_usd`) | $0.0317 | $0.0547 | **+73%** |
+| bound (`max_cost_usd`) | $0.0771 | $0.1043 | **+35%** |
 
-**This crosses `SOFT_THRESHOLD_USD` ($0.15) on the DEFAULT model mix.** Before
-this change, an ordinary query on the product's out-of-the-box four slots ran
-with zero confirmation friction (`threshold_action: allow`). After, the same
-query returns `402 COST_CONFIRMATION_REQUIRED` and the user must confirm
-before the run starts. This is a real, user-visible UX change on the most
-common path through the product, not an edge case reached only by
-user-selected expensive slots.
+**The DEFAULT model mix stays comfortably inside the no-friction ALLOW band**
+(`SOFT_THRESHOLD_USD` is $0.15; the new bound is $0.1043). An ordinary query on
+the product's out-of-the-box four slots is unaffected: no new confirmation
+step, no behavior change a user would notice. Synthesis alone rose from
+$0.0120 to $0.0359 per run at this query's volume — a real, accepted cost
+increase — but it does not cross any guardrail band on the shipped default.
 
-**This is accepted.** The confirmation step exists precisely to make a user
-approve a run that costs more than the no-friction band, and this run
-genuinely costs more — synthesis alone rose from $0.0120 to $0.0948 per run at
-this query's volume, roughly 8x, because the estimator prices the realistic
-output volume (not just the enforced cap) at `gpt-5-mini`'s per-token rate.
-The quality gain measured above (§ Measured, paid) is judged worth one
-confirmation click on every run. 134 tests needed triage for this change —
-mostly cost-guardrail band assertions whose fixture queries now land in a
-different band than when they were written — tracked in
+**Reaching the CONFIRM band is still possible, just not with the default
+mix.** A single `anthropic/claude-opus-4` slot alone, at any query length,
+bounds over $0.27 — straight to BLOCK, never CONFIRM. Among `price_exact`
+models (verified identical in `_FALLBACK_CATALOG` and the live catalog), the
+CONFIRM band is only reached with a mid-tier model
+(`openai/gpt-4.1`) plus three cheap ones, driven near the 20,000-character
+query length cap: MEASURED point $0.1380, bound $0.1600.
+
+~15 tests needed triage for the ADR-0028 change overall (a mix of the real,
+small default-mix increase and the two broken-environment measurements this
+section now corrects) — tracked in
 [#286](https://github.com/imrohitagrawal/quorum-ai/issues/286).
-
-**Stronger fact, found during that test triage: `allow` is not just rarer, it
-is unreachable.** The fixed debate + synthesis overhead alone (independent of
-which 4 models the user picks) now bounds every possible 4-slot mix above
-`SOFT_THRESHOLD_USD`. Measured on the four cheapest-priced models in the
-entire fallback catalog (`nvidia/nemotron-3-nano-30b-a3b`,
-`google/gemini-2.5-flash-lite`, `meta-llama/llama-3.1-8b-instruct`,
-`deepseek/deepseek-chat-v3.1`) — cheaper than the shipped default mix, and the
-cheapest combination the product can offer today: bound $0.1772–$0.1779, still
-above $0.15. So there is no run configuration left in the product, of any
-kind, that returns `threshold_action: "allow"`. Every run requires one
-confirmation click, always. **Also accepted** (operator decision,
-2026-08-09): the quality gain is judged worth universal one-click friction,
-and no mitigation (moving `SOFT_THRESHOLD_USD`, capping synthesis output
-further) is made part of this change. Either would be its own decision with
-its own tradeoff — a threshold move weakens the guardrail for every stage, not
-just this one, and a tighter output cap risks truncating the exact synthesis
-behavior this ADR's eval measured as better — and neither is evaluated here.
-
-Not evaluated here: whether `SOFT_THRESHOLD_USD` should move, or whether
-synthesis output caps should tighten, to keep the default mix frictionless.
-Both are separate decisions with their own tradeoffs (a higher threshold
-weakens the guardrail for every stage, not just this one; a tighter cap could
-truncate the synthesis this ADR just measured as better). Revisit only with
-its own measurement if the confirmation friction proves costly to adoption.
 
 The judge stays **unconfigured by default** (`quorum_eval_judge_model_id` and
 `quorum_eval_judge_api_key` both ship as `""`). Turning it on is an operator
@@ -194,18 +180,19 @@ actually reads.
 ## Consequences
 
 - The stage the user reads runs on a materially stronger model, at a real,
-  accepted cost increase (+261% point estimate, +154% bound, measured on the
-  shipped default four-slot mix via the live HTTP endpoint).
+  accepted cost increase (+73% point estimate, +35% bound, measured on the
+  shipped default four-slot mix via the live HTTP endpoint) that stays inside
+  the no-friction ALLOW band.
 - The pre-run estimate and `max_cost_usd` move, because synthesis is priced
   from `synthesis_model_id`. The judge-off bound is unaffected in shape, only
   in value.
-- **The DEFAULT model mix now requires confirmation on an ordinary query**,
-  where it previously ran with zero friction (`allow` → `require_confirmation`
-  on `DEFAULT_MODEL_IDS`). This is the most common path through the product,
-  not an edge case. Accepted as the cost of the quality gain; not mitigated in
-  this change (see "Not evaluated here" above).
-- Some previously-`require_confirmation` runs can land in `COST_LIMIT_EXCEEDED`.
-  This is the guardrail doing its job on a genuinely pricier run, not a defect.
+- `_FALLBACK_CATALOG` gained a row for `openai/gpt-5-mini`. Without it,
+  degraded-mode (live catalog fetch failed) and hermetic-test estimates for
+  synthesis silently overestimated cost by 4x/2.5x — a correctness gap this
+  change introduced and fixed in the same PR.
+- Some already-expensive user-selected slot combinations can move bands (e.g.
+  from CONFIRM to BLOCK), the same as any price change. The shipped default
+  is not among them.
 - The workspace tooltip naming the synthesis model was **false the moment the
   model changed** ("currently openai/gpt-4o-mini"). It is corrected, and
   `test_the_workspace_info_text_names_the_model_that_really_writes_synthesis`
