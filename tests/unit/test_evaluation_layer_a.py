@@ -2148,3 +2148,942 @@ def test_missing_uncertainty_or_decision_support_framing_lowers_the_composite() 
     baseline = build_trust_score(full).diagnostics.layer_a_composite_unverified
     assert build_trust_score(no_uncertainty).diagnostics.layer_a_composite_unverified < baseline
     assert build_trust_score(no_framing).diagnostics.layer_a_composite_unverified < baseline
+
+
+# --------------------------------------------------------------------------
+# Code regions are not a bibliography
+#
+# MEASURED on main @8ca6a98, before the fix: an answer whose only brackets
+# were ``arr = [1, 2, 3]``/``arr[1]``/``json.loads(raw)[2]`` inside a
+# ```python fence, plus an inline ``[3]``, extracted six ordinals and scored
+# ``citation_marker_grounding`` 1.0 against three real sources — a PERFECT
+# grounding from ZERO citations. Downstream that is ``faithful``/``low`` and
+# the workspace line "Structural checks passed", instead of the honest
+# "No citation marker on this run could be checked."
+#
+# Every test below names the one mutation that turns it red.
+# --------------------------------------------------------------------------
+
+
+_CODE_ONLY_ANSWER = """Here is how to parse it:
+
+```python
+arr = [1, 2, 3]
+print(arr[1])
+data = json.loads(raw)[2]
+```
+
+Note the shell output was `[3]`. That is all."""
+
+
+def test_a_fenced_code_block_is_not_a_bibliography() -> None:
+    """RED without ``_scan_links(_mask_code(text))`` at the single call site.
+
+    Measured before the fix: ``['1', '2', '3', '1', '2', '3']`` and 1.0.
+    """
+    assert extract_citation_markers(_CODE_ONLY_ANSWER) == []
+    assert (
+        _grounding(
+            texts=[_CODE_ONLY_ANSWER],
+            sources=[_source(REAL_URL), _source(OTHER_URL), _source(THIRD_URL)],
+        )
+        is None
+    )
+
+
+def test_an_inline_code_span_is_not_a_citation_marker() -> None:
+    """RED if code spans are not masked. Positive partner built in: the real
+    ordinal outside the span must survive."""
+    assert extract_citation_markers("Use `arr[1]` as shown [2].") == ["2"]
+
+
+def test_a_code_span_beside_a_bracket_does_not_become_an_ordinal() -> None:
+    """RED if ``_CODE_MASK`` is a SPACE rather than the U+FFFF noncharacter.
+
+    A space is what the ordinal grammar treats as insignificant filler, so
+    blanking code to spaces REPAIRS brackets the backticks currently break —
+    manufacturing citations that do not exist today. Measured with a space
+    mask: ``['1']``, ``['2']`` and ``['1', '2']`` respectively, all absent
+    both before and after the real fix. Also red if the region is deleted
+    rather than blanked in place.
+    """
+    assert extract_citation_markers("[1 `x` ]") == []
+    assert extract_citation_markers("[ `a` 2 ]") == []
+    assert extract_citation_markers("[1,`z`2]") == []
+
+
+def test_a_fence_on_a_list_bullet_line_is_handled_by_the_span_pass() -> None:
+    """The parser decides this, and it agrees with the renderer: the fence
+    body is code and ``[3]`` is prose.
+
+    RED if ``_prose_only`` stops parsing (the guard or the bound made
+    unconditional), or if code-block tokens are kept instead of dropped.
+    """
+    text = "- ```python\n  arr = [1, 2]\n  ```\n- Second point per [3]."
+    assert extract_citation_markers(text) == ["3"]
+
+
+def test_a_one_line_triple_backtick_span_is_not_a_fence_opener() -> None:
+    """RED if the opener guard ``a backtick fence's info string may not
+    contain a backtick`` (CommonMark 4.5) is dropped — the one-line span
+    would read as a fence opener and swallow every later marker."""
+    assert extract_citation_markers("```arr[1]``` is the call, per [2].") == ["2"]
+    # The discriminating case. On a single line the guard is invisible: the
+    # phantom fence finds no closer, so the fail-safe rule masks nothing and
+    # the span pass gives the right answer anyway. It only bites when a real
+    # fence LATER in the answer closes the phantom one, swallowing every
+    # marker in between. Measured without the guard: ``[]``.
+    text = "```arr[7]``` is the call, per [1].\n\nMore detail [2].\n\n```\ncode = [9]\n```\n"
+    assert extract_citation_markers(text) == ["1", "2"]
+
+
+def test_a_closing_fence_may_not_carry_an_info_string() -> None:
+    """A delimiter with trailing text does not close a fence (CommonMark 4.5).
+
+    So the fence never closes and runs to the end — which is what the
+    reader sees. Renderer-verified: no prose ordinal survives in either
+    form. This is the rule a hand-rolled closer test got wrong twice.
+
+    RED if the parse is skipped and the raw text is scanned.
+    """
+    text = "```\narr = [1]\n``` trailing\nPer [2]."
+    assert extract_citation_markers(text) == []
+    tildes = "~~~\narr = [7]\n~~~ trailing\nPer [1]."
+    assert extract_citation_markers(tildes) == []
+
+
+def test_a_short_fence_does_not_close_a_longer_one() -> None:
+    """RED if ``len(fence) >= len(open_fence)`` is dropped from the closer."""
+    text = "````\n[2]\n```\n[3]\n````\n\nPer [1]."
+    assert extract_citation_markers(text) == ["1"]
+
+
+def test_a_backtick_fence_does_not_close_a_tilde_fence() -> None:
+    """RED if ``match.group("fence")[0] == open_fence[0]`` is dropped."""
+    text = "~~~\n[2]\n```\n[3]\n~~~\n\nPer [1]."
+    assert extract_citation_markers(text) == ["1"]
+
+
+def test_a_fence_inside_a_blockquote_is_code() -> None:
+    """Container structure is the parser's job, and it gets it right.
+
+    Two hand-rolled attempts failed exactly here: a line scanner cannot
+    decide where a blockquote's fence ends without modelling the container,
+    and both got it wrong in the direction that DELETES real citations.
+
+    Renderer-verified: the fence body is code, ``[3]`` is prose.
+    Deliberately TILDES — with backticks the span pass would blank the
+    region anyway and the test would pass for the wrong reason.
+
+    RED if the parse is skipped: the answer becomes ``["1", "2", "3"]``.
+    """
+    text = "> ~~~\n> arr = [1, 2]\n> ~~~\n> Per [3]."
+    assert extract_citation_markers(text) == ["3"]
+
+
+def test_an_unclosed_fence_is_code_to_the_end_of_the_answer() -> None:
+    """The renderer treats an unclosed fence as code to the end, so we do too.
+
+    Verified against the UI's own parser: rendering this input and stripping
+    ``<pre>``/``<code>`` leaves NO prose ordinal. The reader sees no
+    citation here, so the score must not count one.
+
+    RED if the parse is skipped and the raw text is scanned — the two code
+    ordinals come back as ``["1", "2"]``.
+    """
+    assert extract_citation_markers("```py\ncode\n\nLater real claim [1] and [2].") == []
+
+
+def test_a_lone_unpaired_backtick_consumes_nothing() -> None:
+    """RED if an unclosed code span masks to end of text (or end of line).
+
+    Per CommonMark an opener with no same-width closer is LITERAL text; one
+    stray backtick must not eat the rest of the answer's real markers.
+    """
+    assert extract_citation_markers("Pass `--foo and per [1] and [2].") == ["1", "2"]
+
+
+def test_a_code_span_closer_must_be_exactly_as_wide_as_its_opener() -> None:
+    """RED if the span closer rule is relaxed from ``==`` width to ``>=``
+    (the FENCE rule wrongly copied onto spans)."""
+    assert extract_citation_markers("`x`` [1] more`") == []
+
+
+def test_a_markdown_link_inside_a_code_span_is_not_a_citation() -> None:
+    """RED if ``_mask_code`` runs AFTER ``_scan_links`` instead of before."""
+    assert extract_citation_markers(f"Per `[1]({REAL_URL})` here.") == []
+
+
+def test_a_code_span_inside_a_links_text_does_not_destroy_the_link() -> None:
+    """The other half of the ordering: masking must not break a real link.
+
+    RED if ``_mask_code`` is moved to run AFTER ``_scan_links``.
+
+    Deleting the region rather than blanking it in place does NOT turn this
+    test red — ``[see  guide](URL)`` still parses as a link. That mutation
+    is caught by ``test_code_masking_preserves_length_and_line_count`` and
+    by ``test_a_code_span_beside_a_bracket_does_not_become_an_ordinal``;
+    this docstring claimed it and was measured wrong in review.
+    """
+    assert extract_citation_markers(f"[see `x` guide]({REAL_URL})") == [REAL_URL]
+
+
+def test_masking_code_did_not_stop_real_markers_resolving() -> None:
+    """Rule-7 positive partner: the thing the negative checks must still catch.
+
+    RED if any 4-space-indent masking rule is added — the second case is an
+    ordinary list continuation paragraph, not code, and its ``[3]`` is real.
+    """
+    text = f"As shown [1, 2] and [the guide]({REAL_URL})."
+    assert extract_citation_markers(text) == [REAL_URL, "1", "2"]
+    continuation = "1. First point\n\n    This continues the point and cites [3].\n"
+    assert extract_citation_markers(continuation) == ["3"]
+
+
+def test_a_code_fence_cannot_launder_a_fabricated_ordinal() -> None:
+    """A fabricated ordinal must stay fabricated when code is present.
+
+    RED on reverting the call site: measured 0.75 before the fix (the three
+    code ordinals resolved and diluted the one fabrication), 0.0 after.
+    """
+    text = "The rate is 41% [9].\n\n```python\narr = [1, 2, 3]\n```"
+    assert _grounding(
+        texts=[text],
+        sources=[_source(REAL_URL), _source(OTHER_URL), _source(THIRD_URL)],
+    ) == pytest.approx(0.0)
+
+
+def test_a_code_only_answer_is_unknown_not_perfectly_grounded() -> None:
+    """The user-visible consequence, both directions.
+
+    RED on reverting the call site. The positive partner proves a genuine
+    citation still scores 1.0, so this cannot pass by returning None always.
+    """
+    three = [_source(REAL_URL), _source(OTHER_URL), _source(THIRD_URL)]
+    assert _grounding(texts=[_CODE_ONLY_ANSWER], sources=three) is None
+    assert _grounding(texts=["Cookies are safer [1]."], sources=three) == pytest.approx(1.0)
+    # Measured 0.0 before the fix even against a wholly fabricated
+    # bibliography, because the code ordinals were "resolvable-as-false".
+    placeholder = [_source("https://example.test/stub-1")]
+    assert _grounding(texts=[_CODE_ONLY_ANSWER], sources=placeholder) is None
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "A span `arr[1]` here.",
+        "Two `a[1]` spans `b[2]` here.",
+        "Unpaired `tick and [1].",
+        "Escaped \\` tick and [1].",
+        "``wide `nested` span`` then [1].",
+        "No code at all, just [1].",
+    ],
+)
+def test_code_span_masking_preserves_length(text: str) -> None:
+    """RED if a code span is deleted instead of blanked in place.
+
+    Length preservation is what keeps every offset meaningful for
+    :func:`_scan_links`, which runs on the result. Deleting instead would
+    also rejoin the characters on either side — the bug that let
+    ``[see `x` guide](URL)`` change shape.
+    """
+    from product_app.evaluation import _MARKDOWN, _mask_code_spans
+
+    for token in _MARKDOWN.parse(text):
+        if token.type == "inline":
+            assert len(_mask_code_spans(token.content, token.children)) == len(token.content)
+
+
+def test_marker_extraction_stays_linear_in_backtick_runs() -> None:
+    """RED if the span closer lookup is a forward scan rather than indexed.
+
+    Measured on this payload: shipped 36.1 ms, a forward-scanning closer
+    lookup 41,574.7 ms (1151x). The builder must NOT be ``unit * n`` — a
+    repetition-built payload is paired in one pass and so passes against the
+    very implementation this test exists to reject. The adversary is
+    stragglers of UNIQUE widths interleaved with width-1 pairs, and the
+    width RANGE is what makes it bite: at ``range(2, 152)`` a weaker
+    forward-scan mutant measured only 21.4 ms and survived (adversarial
+    review, 2026-08-09), which is why the range is 1000.
+    """
+    payload = "".join("`" * width + "q" + "`x` " * 40 for width in range(2, 1000))
+    assert len(payload) > 600_000
+    started = time.perf_counter()
+    extract_citation_markers(payload)
+    assert time.perf_counter() - started < 0.5
+
+
+# --------------------------------------------------------------------------
+# The fail-safe direction
+#
+# Adversarial review of the first version of `_mask_code` proved it made the
+# product WORSE on the axis it exists to protect. It masked confidently in
+# cases it could not actually decide, and each over-reach DELETED real
+# citations — which both destroys an honest answer's score and lets a
+# fabricated ordinal hide behind the deletion. Measured, three separate
+# laundering channels reported grounding 1.0 where the unmasked baseline
+# reported 0.286, 0.5 and 0.667.
+#
+# The rule these tests pin: when the masker cannot decide, it does NOT mask.
+# The residual error then stays an over-count — the pre-existing behaviour —
+# and can never become a lost citation. See ADR-0029.
+# --------------------------------------------------------------------------
+
+
+def _three_real_sources() -> list[SourceReference]:
+    return [_source(REAL_URL), _source(OTHER_URL), _source(THIRD_URL)]
+
+
+def test_a_stray_backtick_does_not_blank_a_later_paragraph() -> None:
+    """Code spans pair WITHIN a block, because they cannot cross a blank line.
+
+    RED if span pairing runs over the whole answer: measured ``['3']`` —
+    two of three real citations deleted from an answer whose renderer output
+    contains exactly one ``<code>`` element.
+    """
+    text = (
+        "Passwords must not contain the ` character.\n\n"
+        "NIST requires a minimum of eight characters [1], and screening [2].\n\n"
+        "Validate with `check(pw)` before storing [3].\n"
+    )
+    assert extract_citation_markers(text) == ["1", "2", "3"]
+
+
+def test_a_stray_backtick_cannot_launder_a_fabricated_ordinal() -> None:
+    """The same defect in its dangerous direction, priced in grounding.
+
+    A model could hide any fabrication by emitting one backtick in the
+    paragraph before it and one in the paragraph after.
+
+    RED if span pairing runs over the whole answer — measured 1.0, i.e. the
+    fabricated ``[99]`` deleted from the denominator entirely.
+    """
+    text = (
+        "Minimum eight [1].\n\n"
+        "The ` character is allowed.\n\n"
+        "Rotate every 90 days [99].\n\n"
+        "Escaping the ` is rare.\n"
+    )
+    assert extract_citation_markers(text) == ["1", "99"]
+    assert _grounding(texts=[text], sources=_three_real_sources()) == pytest.approx(0.5)
+
+
+def test_an_unclosed_container_fence_cannot_launder_fabrications() -> None:
+    """A fence opened inside a blockquote must not swallow to end of answer.
+
+    RED if ``_prose_only`` stops parsing, or if code-block tokens are kept.
+    Measured under the rejected hand-rolled scanner: ``['1', '2']`` and
+    grounding 1.0 — five fabricated ordinals hidden, reported as perfectly
+    grounded.
+    """
+    text = "Real cites [1] and [2].\n\n> ```\n> x\n\nFabricated [40], [41], [42], [43], [44].\n"
+    assert extract_citation_markers(text) == ["1", "2", "40", "41", "42", "43", "44"]
+    assert _grounding(texts=[text], sources=_three_real_sources()) == pytest.approx(2 / 7)
+
+
+def test_a_four_space_indented_fence_marker_is_not_a_fence_opener() -> None:
+    """CommonMark caps a fence's indent at three spaces; at four it is an
+    indented code block and the ``` is literal text.
+
+    RED if ``_prose_only`` stops parsing. Under the rejected hand-rolled
+    scanner an unbounded indent made the phantom fence never close and
+    destroyed the real ``[1]``.
+    """
+    text = "To open a fence, write:\n\n    ```python\n\nThen close it. Minimum is eight [1].\n"
+    assert extract_citation_markers(text) == ["1"]
+    # ...and with a CLOSER present, which is the only case where the bound
+    # changes the answer. Tildes, so the inline-span pass cannot mask the
+    # region for an unrelated reason and hide the mutation.
+    closed = "Example:\n\n    ~~~\n    arr = [7]\n    ~~~\n\nPer [1]."
+    assert extract_citation_markers(closed) == ["1"]
+
+
+def test_an_indented_fence_marker_cannot_launder_fabrications() -> None:
+    """The same bound, in the laundering direction.
+
+    RED if the indent bound is widened — measured ``['1', '2']`` and
+    grounding 1.0, hiding both fabrications.
+    """
+    text = "Real [1] and [2].\n\n    ```\n\nFabricated [99], [98].\n"
+    assert extract_citation_markers(text) == ["1", "2", "99", "98"]
+    assert _grounding(texts=[text], sources=_three_real_sources()) == pytest.approx(0.5)
+
+
+def test_a_backslash_escaped_backtick_is_not_a_code_delimiter() -> None:
+    """``\\``` is a literal backtick in CommonMark and opens no span.
+
+    RED if ``_prose_only`` stops parsing. The parser decides which runs are
+    delimiters; under the rejected hand-rolled scanner the two escaped
+    backticks paired and deleted the real ``[1]`` between them.
+    """
+    assert extract_citation_markers("Write \\` around it. Minimum is eight [1].") == ["1"]
+    # The discriminating case: TWO escaped backticks straddling a marker. If
+    # the escape is ignored they pair into a span and delete ``[7]``.
+    assert extract_citation_markers("Write \\` here [7] and \\` there. Per [1].") == [
+        "7",
+        "1",
+    ]
+    # A run preceded by an EVEN number of backslashes is a real delimiter:
+    # the backslash is literal and the backtick still opens a span.
+    assert extract_citation_markers("Path C:\\\\ then `arr[7]` and cite [2].") == ["2"]
+
+
+def test_fence_matching_stays_linear_in_leading_whitespace() -> None:
+    """The fence regex must not backtrack on a run of leading whitespace.
+
+    A rejected hand-rolled fence regex placed two unbounded quantifiers next
+    to each other and was MEASURED quadratic: 28.8 ms at 2 KB, 114.7 at
+    4 KB, 439.4 at 8 KB, 1770.3 at 16 KB — x4 per doubling — reachable
+    through this very function, which ``query_runs.get_query_run_result``
+    calls on every GET of a run while holding the GIL.
+
+    RED if the parse bound is removed, so this payload is parsed instead of
+    skipped.
+    """
+    payload = "`\n" + " " * (32 * 1024) + "x"
+    started = time.perf_counter()
+    extract_citation_markers(payload)
+    assert time.perf_counter() - started < 0.25
+
+
+#: Answers paired with the ordinals a CommonMark renderer shows as PROSE.
+#: Every ``expected`` here was read off the UI's own parser configuration,
+#: not chosen to match the implementation. That is the whole contract: the
+#: score counts the citations the reader can see, and nothing else.
+_RENDERER_PARITY_CORPUS: list[tuple[str, list[str]]] = [
+    ("Answer.\n\n```python\narr = [1, 2, 3]\n```\n\nPer [1].", ["1"]),
+    ("Call `arr[9]` first, then see [1].", ["1"]),
+    # An unclosed fence runs to the end of the document — as rendered.
+    ("```py\narr = [7]\n\nPer [1].", []),
+    # Container structure: the blockquote's fence closes inside it.
+    ("> ~~~\n> arr = [7]\n> ~~~\n\nPer [1].", ["1"]),
+    # A 4-space indented code block is code.
+    ("Example:\n\n    arr = [7]\n\nPer [1].", ["1"]),
+    # An escaped backtick is literal, so it opens no span.
+    ("Write \\` here. Per [1].", ["1"]),
+    # A lone unpaired backtick is literal text; nothing after it is lost.
+    ("Pass `--foo and per [1] and [2].", ["1", "2"]),
+    # Real markers of both kinds survive untouched.
+    (f"As shown [1, 2] and [the guide]({REAL_URL}).", [REAL_URL, "1", "2"]),
+    # Block boundaries the parser knows and a line scanner does not: a list
+    # item, a heading and a table row all end an inline block without a
+    # blank line. Each of these deleted a real citation before ADR-0029.
+    ("- Pass the `--strict flag\n- The manual documents this [1]\n- Run `npm test`\n", ["1"]),
+    ("# Head with ` tick\n\nBody cites [1].\n\n## Another ` tick\n", ["1"]),
+    ("| col ` a | col b |\n|---|---|\n| sees [1] | x |\n", ["1"]),
+    # CRLF is a line ending, and the parser knows that too.
+    (
+        "A ` tick.\r\n\r\nEmissions fell [1].\r\n\r\nThe WHO agrees [2].\r\n\r\nA ` rise.",
+        ["1", "2"],
+    ),
+]
+
+
+@pytest.mark.parametrize(("text", "expected"), _RENDERER_PARITY_CORPUS)
+def test_the_score_counts_exactly_the_markers_the_reader_can_see(
+    text: str, expected: list[str]
+) -> None:
+    """Parity with the renderer, case by case — the contract of ADR-0029.
+
+    RED if the parse is skipped, if the parser preset stops matching
+    ``app.js`` (the ``"default"`` preset with ``html=False``, ``breaks=True``;
+    switching to markdown-it-py's ``"commonmark"`` default turns the table
+    row into a paragraph), or if inline blocks stop being joined so brackets
+    pair across them.
+    """
+    assert extract_citation_markers(text) == expected
+
+
+def test_no_corpus_case_ever_gains_a_marker_masking_should_have_removed() -> None:
+    """Rule-7 partner: prove the corpus above actually exercises masking.
+
+    Without it, ``test_the_masker_never_loses_a_marker_it_cannot_prove_is_code``
+    would pass against a masker that does nothing at all.
+
+    RED if ``_mask_code`` stops masking: the two masked cases gain the code
+    ordinals ``7``/``2``/``3``/``9``.
+    """
+    masked_cases = [text for text, _ in _RENDERER_PARITY_CORPUS[:2]]
+    for text in masked_cases:
+        assert extract_citation_markers(text) == ["1"], text
+    # ...and the same text with the code fence removed is unchanged, proving
+    # the masking is what did it rather than the brackets being absent.
+    assert extract_citation_markers("Answer.\n\nPer [1].") == ["1"]
+
+
+def _prose_ordinals_per_the_renderer(text: str) -> list[str]:
+    """The ordinals a reader actually sees, read off a rendered document.
+
+    Deliberately an INDEPENDENT path from the implementation: this renders
+    to HTML and deletes the code subtrees, where ``_prose_only`` walks
+    tokens. Both use the parser, but a bug in the token walk does not
+    reproduce itself here.
+    """
+    import re as _re
+
+    from markdown_it import MarkdownIt
+
+    renderer = MarkdownIt(
+        "default",
+        {"html": False, "breaks": True, "linkify": False, "typographer": False},
+    ).disable(["image", "reference"])
+    html = renderer.render(text)
+    html = _re.sub(r"<pre>.*?</pre>", "", html, flags=_re.S)
+    html = _re.sub(r"<code>.*?</code>", "", html, flags=_re.S)
+    ordinals: list[str] = []
+    for group in _re.findall(r"\[\s*(\d{1,3}(?:\s*[,;]\s*\d{1,3})*)\s*\]", html):
+        ordinals.extend(part.strip() for part in _re.split(r"[,;]", group) if part.strip())
+    return ordinals
+
+
+#: Every shape that broke a hand-rolled scanner, plus ordinary answers.
+_PARITY_SHAPES: list[str] = [
+    "Plain prose citing [1] and [2].",
+    "Answer.\n\n```python\narr = [1, 2, 3]\nprint(arr[1])\n```\n\nPer [1].",
+    "Note the output was `[3]`. Per [1].",
+    "```py\narr = [7]\n\nPer [1].",
+    "```\narr = [1]\n``` trailing\nPer [2].",
+    "````\n[2]\n```\n[3]\n````\n\nPer [1].",
+    "~~~\n[2]\n```\n[3]\n~~~\n\nPer [1].",
+    "> ~~~\n> arr = [7]\n> ~~~\n\nPer [1].",
+    "> ```\n> x = [9]\n\nFabricated [40] and [41].\n",
+    "- ```python\n  arr = [1, 2]\n  ```\n- Second point per [3].",
+    "- Pass the `--strict flag\n- The manual documents this [1]\n- Run `npm test`\n",
+    "1. First point\n\n    This continues the point and cites [3].\n",
+    "Example:\n\n    arr = [7]\n\nPer [1].",
+    "To open a fence, write:\n\n    ```python\n\nThen close it, minimum eight [1].\n",
+    "# Head with ` tick\n\nBody cites [1].\n\n## Another ` tick\n",
+    "| col ` a | col b |\n|---|---|\n| sees [1] | x |\n",
+    "A ` tick.\r\n\r\nEmissions fell [1].\r\n\r\nThe WHO agrees [2].\r\n\r\nA ` rise.",
+    "CRLF fence\r\n```py\r\narr = [1]\r\n```\r\n\r\nPer [2].",
+    "Write \\` here [7] and \\` there. Per [1].",
+    "Pass `--foo and per [1] and [2].",
+    "`x`` [1] more`",
+    "```arr[7]``` is the call, per [1].\n\nMore detail [2].\n\n```\ncode = [9]\n```\n",
+    "Minimum eight [1].\n\nThe ` character is allowed.\n\nRotate [99].\n\nEscaping it.\n",
+    "Real cites [1] and [2].\n\n> ```\n> x\n\nFabricated [40], [41], [42].\n",
+    "A ~~struck~~ claim [1].",
+    "See [the appendix `[99]` for the raw numbers, and press ` to quote. Per [1].",
+    "The range [0, 10) is inclusive; `x[1]` and ` is literal. Emissions fell [7].",
+    "A `span\nacross [1] lines` then [2].",
+    # Shapes that a hand-written corpus missed and adversarial review found.
+    # Each one deleted a real citation or counted a code bracket.
+    "Set `C:\\Users\\` then [1], [2] and [3]. Run `npm test`.",
+    "`x[100]\\` y [1]",
+    "Here is the code:\n\n>     arr = [1, 2, 3]\n>     print(arr[1])\n",
+    "- item\n\n      arr = [1, 2, 3]\n\nPer [1].",
+    "Per [1,\n\n```\ncode\n```\n\n2] more.",
+    "Indented with a tab:\n\n\tarr = [1, 2]\n\nPer [3].",
+    "Trailing unclosed span `oops\n\nMinimum eight [1].\n\nEscape a \\` backtick and cite [9].\n",
+]
+
+
+@pytest.mark.parametrize("text", _PARITY_SHAPES)
+def test_marker_extraction_agrees_with_the_renderer(text: str) -> None:
+    """The gate that would have caught both rejected attempts immediately.
+
+    The score must count exactly the ordinals the reader sees as prose. Two
+    hand-rolled scanners each passed every hand-written test and still
+    disagreed with the renderer on ordinary answers — a bullet list with one
+    forgotten backtick, a CRLF document, a table row — deleting real
+    citations and hiding fabricated ones. A hand-written expectation cannot
+    find that class; only an oracle can.
+
+    RED if ``_prose_only`` stops parsing, if its preset drifts from
+    ``app.js``, or if any future shortcut re-introduces a boundary the
+    renderer does not have.
+    """
+    ordinals = [marker for marker in extract_citation_markers(text) if marker.isdigit()]
+    assert ordinals == _prose_ordinals_per_the_renderer(text), text
+
+
+def test_the_renderer_oracle_actually_disagrees_with_the_unmasked_scan() -> None:
+    """Rule-7 partner: prove the oracle above is not vacuously satisfied.
+
+    If code brackets were already absent from these shapes, the parity test
+    would pass against an implementation that never parsed anything. This
+    pins that the corpus really does contain code ordinals that a raw scan
+    would wrongly count.
+    """
+    raw_scan_extra = 0
+    for text in _PARITY_SHAPES:
+        raw = _ORDINALS_IN_RAW_TEXT(text)
+        seen = [m for m in extract_citation_markers(text) if m.isdigit()]
+        raw_scan_extra += len(raw) - len(seen)
+    assert raw_scan_extra >= 20, raw_scan_extra
+
+
+def _ORDINALS_IN_RAW_TEXT(text: str) -> list[str]:
+    """Every ordinal in the raw text, i.e. what the defect used to count."""
+    import re as _re
+
+    out: list[str] = []
+    for group in _re.findall(r"\[\s*(\d{1,3}(?:\s*[,;]\s*\d{1,3})*)\s*\]", text):
+        out.extend(part.strip() for part in _re.split(r"[,;]", group) if part.strip())
+    return out
+
+
+def test_the_parser_preset_matches_the_one_the_workspace_renders_with() -> None:
+    """Tables are the difference between the two presets, and it is visible.
+
+    ``markdown-it-py`` defaults to ``"commonmark"`` (tables OFF); the
+    browser's ``new MarkdownIt(MD_OPTIONS)`` uses ``"default"`` (tables ON).
+    With tables off, this table collapses to ONE paragraph, the two
+    backticks in different cells pair into a code span, and the real ``[1]``
+    between them is deleted.
+
+    RED if ``_MARKDOWN`` is built as ``MarkdownIt()`` — measured ``[]``.
+    """
+    text = "| a ` b | c |\n|---|---|\n| sees [1] | d ` e |\n"
+    assert extract_citation_markers(text) == ["1"]
+
+
+def test_reference_definitions_are_not_consumed() -> None:
+    """``app.js:5636`` disables ``reference`` because consuming it LOSES text.
+
+    A ``[1]: https://…`` line stays visible to the reader, so its bracket is
+    on screen and must be counted like any other. This is parity with the
+    UI, not a judgement about whether counting it is ideal — main counts it
+    too.
+
+    RED if ``.disable(["image", "reference"])`` is dropped: markdown-it
+    swallows the definition line and the answer becomes ``["1"]``.
+
+    The ``` `x` ``` is load-bearing — without a code delimiter anywhere in
+    the text the early exit returns before the parser ever runs, and this
+    test passes against every parser configuration.
+    """
+    text = "Per [1] and `x`.\n\n[1]: https://ref.example/a\n"
+    assert extract_citation_markers(text) == ["1", "1"]
+
+
+def test_inline_blocks_are_joined_so_a_bracket_cannot_pair_across_them() -> None:
+    """Two blocks must not be concatenated into one scannable run.
+
+    RED if the blocks are joined with ``""`` instead of a newline — the
+    ``[1`` of one paragraph then meets the ``2]`` of the next and the scan
+    invents the ordinal ``12``, which appears nowhere on screen.
+
+    The ``` `code` ``` is load-bearing — without a code delimiter the early
+    exit returns the raw text and the join is never reached, so the test
+    would pass against either join.
+    """
+    assert extract_citation_markers("Prefix [1\n\n2] and `code` here.") == []
+
+
+def test_an_escaped_backtick_can_still_close_a_code_span() -> None:
+    """A backslash stops a run OPENING a span; it does not stop it CLOSING one.
+
+    Verified against both markdown-it implementations: ``` `x\\` y [1] ```
+    renders ``<code>x\\</code> y [1]``. Treating an escaped run as no
+    delimiter at all moves the closing boundary and deletes every citation
+    after it.
+
+    RED if ``_prose_only`` stops parsing, or if code spans are re-derived by
+    pairing backtick runs instead of read from the parser's ``code_inline``
+    children — measured ``[]`` for the first case, i.e. three real citations
+    erased, and ``["100", "1"]`` for the second, a code bracket counted.
+    """
+    assert extract_citation_markers(r"Set `C:\Users\` then [1], [2] and [3].") == [
+        "1",
+        "2",
+        "3",
+    ]
+    assert extract_citation_markers(r"`x[100]\` y [1]") == ["1"]
+
+
+@pytest.mark.parametrize(
+    ("text", "expected"),
+    [
+        # The indent follows a blockquote marker, not the line start.
+        ("Code:\n\n>     arr = [1, 2, 3]\n>     print(arr[1])\n", []),
+        # ...or a list marker.
+        ("- item\n\n      arr = [1, 2, 3]\n\nPer [1].", ["1"]),
+        # ...or the line ends with a lone CR, which Python's ``^`` ignores
+        # and markdown-it treats as a line break.
+        ("Code:\r\r    arr = [1, 2, 3]\r", []),
+        # ...or the indent is a tab.
+        ("Indented:\n\n\tarr = [1, 2]\n\nPer [3].", ["3"]),
+    ],
+)
+def test_indented_code_is_found_however_the_line_is_introduced(
+    text: str, expected: list[str]
+) -> None:
+    """The early exit must not miss a code block it cannot see.
+
+    The first version of this guard anchored to line starts
+    (``(?m)^(?: {4}|\\t)``) and missed every case here, leaving the ORIGINAL
+    defect fully alive: the first case scored grounding 1.0 from zero
+    citations, unchanged from before the fix.
+
+    RED if the guard goes back to a line-anchored regex, or drops either the
+    ``"    "`` or the ``"\\t"`` substring test.
+    """
+    assert extract_citation_markers(text) == expected
+
+
+def test_a_code_block_between_two_paragraphs_cannot_manufacture_an_ordinal() -> None:
+    """Blocks are joined with a NONCHARACTER, not a newline.
+
+    ``_ORDINAL_MARKER_RE`` allows whitespace inside a marker, so joining with
+    a newline lets ``Per [1,`` and ``2] more`` meet across an intervening
+    code block and read as the pair ``["1", "2"]`` — two citations that
+    appear nowhere on screen.
+
+    RED if ``_BLOCK_SEPARATOR`` becomes ``"\\n"`` or any whitespace.
+    """
+    assert extract_citation_markers("Per [1,\n\n```\ncode\n```\n\n2] more.") == []
+
+
+def test_an_oversized_answer_reports_nothing_rather_than_the_old_grammar() -> None:
+    """The parse is bounded, and above the bound behaviour equals ``main``.
+
+    A parser is not free on hostile input and this runs on every GET of a
+    run while holding the GIL. Measured on the shape the pre-existing
+    linearity gate uses, one backtick was enough to defeat a
+    delimiter-only guard and take a 488,000-character answer to 10.127 s
+    against that gate's 0.5 s bound.
+
+    Above the bound this module says NOTHING, rather than falling back to
+    the grammar it exists to replace. MEASURED on the raw-scan fallback an
+    earlier draft used: the same code-heavy answer scored grounding None at
+    16,000 characters and 1.0 at 16,385, from 546 markers that were every
+    one of them ``arr = [1]`` inside a fence.
+
+    RED if the oversized path returns the raw text again, or if the bound is
+    removed (the payload then parses and blows the time budget).
+    """
+    oversized = "Answer.\n\n```python\narr = [1]\nprint(arr[1])\n```\n\nSpan `arr[1]`.\n\n" * 400
+    assert len(oversized) > 16_384, "payload must exceed the bound"
+    started = time.perf_counter()
+    assert extract_citation_markers(oversized) == []
+    assert time.perf_counter() - started < 0.5
+    # ...and it reads as UNKNOWN downstream, not as a perfect score.
+    assert _grounding(texts=[oversized], sources=_three_real_sources()) is None
+
+    # An answer just under the bound is still parsed, so the bound is not
+    # silently disabling the fix at ordinary sizes.
+    under = "Per [1].\n\n```\narr = [7]\n```\n" + ("filler prose. " * 100)
+    assert len(under) < 16_384
+    assert extract_citation_markers(under) == ["1"]
+
+
+def test_an_unclosed_bracket_does_not_turn_prose_into_a_code_span() -> None:
+    """The parser decides every code span; this module never pairs backticks.
+
+    markdown-it keeps a per-width backtick scan cache, so an unclosed ``[``
+    earlier in the same inline block can stop a later run from ever closing
+    a span. Hand-rolled width pairing does not know that and masks anyway.
+
+    MEASURED before the parser took over: the fabricated ``[99]`` — which
+    the browser's own renderer shows as PROSE, inside no ``<code>`` element
+    — was deleted from the denominator and grounding went 0.667 to 1.0.
+    That is laundering, the harm this whole work exists to remove.
+
+    RED if code spans are re-derived by pairing backtick runs instead of
+    read from the parser's ``code_inline`` children.
+    """
+    answer = (
+        "Screening against breach corpora is required [1], and the eight-character "
+        "minimum is unchanged [2].\n\n"
+        "See [the appendix `[99]` for the raw numbers, and press ` to quote."
+    )
+    assert extract_citation_markers(answer) == ["1", "2", "99"]
+    assert _grounding(texts=[answer], sources=_three_real_sources()) == pytest.approx(2 / 3)
+
+
+def test_an_unclosed_bracket_does_not_delete_a_real_citation() -> None:
+    """The same defect in the other direction, on ordinary prose.
+
+    RED under the same mutation: measured ``["7"]``, losing the real ``[1]``
+    that the renderer shows outside any code element.
+    """
+    text = "The range [0, 10) is inclusive; `x[1]` and ` is literal. Emissions fell [7]."
+    assert extract_citation_markers(text) == ["1", "7"]
+
+
+def test_a_bracketed_url_still_resolves_through_the_parser_path() -> None:
+    """Rebuilding text from tokens would have broken this, so we do not.
+
+    markdown-it NORMALISES an href: ``?filter[status]=open`` becomes
+    ``?filter%5Bstatus%5D=open``, which no longer matches the run's own
+    source list. Masking spans inside the RAW source keeps ``_scan_links``
+    seeing the answer's bytes.
+
+    RED if ``_prose_only`` is changed to reconstruct prose from token
+    children rather than mask within ``token.content``.
+    """
+    on_run = "https://a.test/r?filter[status]=open"
+    text = f"A claim [1]({on_run}) and `code[2]` here."
+    assert extract_citation_markers(text) == [on_run]
+    assert _grounding(texts=[text], sources=[_source(on_run)]) == pytest.approx(1.0)
+
+
+def test_a_code_span_folded_across_a_line_ending_is_still_masked() -> None:
+    """CommonMark folds a line ending inside a code span into a space, so the
+    parser's ``content`` does not appear literally in the source.
+
+    RED if ``_span_pattern`` stops treating a space in ``content`` as any
+    whitespace run — the span is then not found, and its ``[1]`` is counted.
+    """
+    assert extract_citation_markers("A `span\nacross [1] lines` then [2].") == ["2"]
+
+
+def test_parsing_cost_stays_linear_up_to_the_parse_bound() -> None:
+    """The parse must not blow up superlinearly on hostile input.
+
+    This asserts a RATIO, not a wall-clock budget, and that is a correction.
+    The first version asserted ``< 0.5 s`` on the adversarial payload and
+    passed locally at 0.28 s — then failed on CI at **2.31 s**, because the
+    runner is roughly 8x slower than the development machine and much closer
+    to the 512 MB production box. An absolute budget on shared hardware
+    measures the runner, not the code.
+
+    What actually matters is that cost grows LINEARLY, so the size bound is
+    what bounds the work. Measured locally on this shape: 4 KB 67.3 ms,
+    8 KB 136.3, 16 KB 274.3 — about 2x per doubling.
+
+    The ABSOLUTE cost of a worst-case parse is a real concern and is NOT
+    addressed here: 2.3 s of GIL-held CPU on CI-class hardware. It is
+    tolerable once per run and intolerable per page view, and the reason it
+    is currently per page view — evaluation is recomputed on every READ of a
+    run rather than served from the row already stored — is pre-existing and
+    filed as its own issue. ADR-0029 records both.
+
+    RED if the parse becomes superlinear (the ratio exceeds 3), or if
+    ``_PARSE_LIMIT_CHARS`` moves, which changes what work the bound bounds.
+    """
+    from product_app.evaluation import _PARSE_LIMIT_CHARS
+
+    assert _PARSE_LIMIT_CHARS == 16_384
+
+    def elapsed(size: int) -> float:
+        payload = ("[[[[1" * (size // 5 + 1))[: size - 1] + "`"
+        best = float("inf")
+        for _ in range(3):
+            started = time.perf_counter()
+            extract_citation_markers(payload)
+            best = min(best, time.perf_counter() - started)
+        return best
+
+    half, full = elapsed(8_192), elapsed(16_384)
+    assert half > 0, "timer resolution too coarse to draw a conclusion"
+    assert full / half < 3.0, f"superlinear: {half:.4f}s at 8KB, {full:.4f}s at 16KB"
+
+    # The boundary itself: 16,384 is parsed, 16,385 is not. Both carry a REAL
+    # marker, so each side distinguishes the two paths rather than passing on
+    # empty input. Literals on both sides, never against the constant that
+    # defines the bound (AGENTS.md rule 7a).
+    assert extract_citation_markers("x" * 16_375 + " Per [1].") == ["1"]
+    assert extract_citation_markers("x" * 16_376 + " Per [1].") == []
+
+
+def test_an_inline_block_with_no_children_is_passed_through() -> None:
+    """Not defensive padding — measured reachable.
+
+    An empty ATX heading (``"# \\n"``) and an empty table cell both produce
+    an ``inline`` token whose ``children`` is empty, and indexing into it
+    would raise on a perfectly ordinary answer.
+
+    RED if the ``if not children`` guard is removed and the loop is entered
+    with ``None`` — the parse raises instead of returning the content.
+    """
+    from product_app.evaluation import _MARKDOWN, _mask_code_spans
+
+    assert _mask_code_spans("anything", None) == "anything"
+    assert _mask_code_spans("", []) == ""
+
+    childless = [
+        token
+        for source in ("# \n", "|a|\n|-|\n| |\n")
+        for token in _MARKDOWN.parse(source)
+        if token.type == "inline" and not token.children
+    ]
+    assert childless, "the shapes this guard exists for must still produce childless tokens"
+    assert extract_citation_markers("# \n\nBody cites [1].\n") == ["1"]
+
+
+def test_a_span_the_source_search_cannot_find_is_left_alone() -> None:
+    """The failure direction, pinned: an unlocatable span is NOT masked.
+
+    Spans are located by searching the raw source, because the token API
+    carries no offsets. If that search ever fails — a parser change, a
+    folding rule this pattern does not model — the span must be left in
+    place. That is an over-count, which is what this module has always done
+    when unsure, and never a deleted citation.
+
+    RED if the ``found is None`` branch raises, or masks a guessed region
+    instead of continuing.
+    """
+    from product_app.evaluation import _mask_code_spans
+
+    class _Unlocatable:
+        type = "code_inline"
+        markup = "`"
+        content = "text that does not appear in the source at all"
+
+    content = "Prose citing [1] with no code span here."
+    assert _mask_code_spans(content, [_Unlocatable()]) == content
+
+
+def test_a_code_span_padded_with_two_spaces_is_still_masked() -> None:
+    """CommonMark strips only ONE padding space, so the source keeps the rest.
+
+    An earlier pattern allowed exactly one optional space each side, so a
+    span written with two could never be located: `_span_pattern` returned
+    no match, the miss was swallowed silently, and the bracket inside was
+    counted. MEASURED before the fix: ``["9"]``. On a two-source answer
+    ordinal 9 is out of range, so grounding fell to 0.0 and an honest answer
+    quoting an array index was labelled unfaithful/high-risk.
+
+    RED if the padding tolerance goes back to ``\\s?`` from ``\\s*``.
+    """
+    for text in ("Run `arr[9]` now.", "Run ` arr[9] ` now.", "Run `  arr[9]  ` now."):
+        assert extract_citation_markers(text) == [], text
+
+
+def test_a_long_code_span_is_not_retained_in_the_pattern_cache() -> None:
+    """The cache key is provider-controlled text, so it is bounded by BYTES.
+
+    ``lru_cache`` bounds entry COUNT only. MEASURED with tracemalloc, 2048
+    entries of 4,000 characters retain 83.4 MB, and a span may run to the
+    parse limit; production has 512 MB and holds sessions and in-flight runs
+    in memory, so an OOM kill destroys them.
+
+    RED if the size check in ``_span_pattern`` is removed — the long span
+    below then takes a cache slot.
+    """
+    from product_app.evaluation import (
+        _SPAN_CACHE_MAX_CONTENT,
+        _cached_span_pattern,
+        _span_pattern,
+    )
+
+    _cached_span_pattern.cache_clear()
+    long_content = "x" * (_SPAN_CACHE_MAX_CONTENT + 1)
+    _span_pattern("`", long_content)
+    assert _cached_span_pattern.cache_info().currsize == 0, "long spans must not be cached"
+
+    # ...and the partner: a short span IS cached, so this cannot pass against
+    # an implementation that simply never caches anything.
+    _span_pattern("`", "short")
+    assert _cached_span_pattern.cache_info().currsize == 1
+
+
+def test_the_eval_schema_version_records_this_grammar_change() -> None:
+    """`citation_marker_grounding` changed MEANING, so the stamp had to move.
+
+    Evaluations are written once when a run turns terminal and RECOMPUTED on
+    every read. Without a bump, a run completed before this deploy keeps a
+    stored grounding computed by the old grammar while its own result page
+    serves the new value — two numbers for one run under an identical
+    version stamp, with nothing to tell an operator which is which.
+
+    A literal on purpose (the repo's doc-gate pattern): the next change to
+    what a marker MEANS has to edit this line, which is the reminder.
+
+    RED if `EVAL_SCHEMA_VERSION` is reverted to "s3-eval-v3".
+    """
+    from product_app.evaluation import EVAL_SCHEMA_VERSION
+
+    assert EVAL_SCHEMA_VERSION == "s3-eval-v4"

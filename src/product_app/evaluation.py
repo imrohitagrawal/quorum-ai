@@ -42,11 +42,14 @@ from __future__ import annotations
 
 import json
 import re
+from collections.abc import Sequence
 from dataclasses import dataclass
 from enum import StrEnum
-from typing import Literal, Protocol
+from functools import lru_cache
+from typing import Any, Literal, Protocol
 from urllib.parse import urlparse
 
+from markdown_it import MarkdownIt
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
 from product_app.config import settings
@@ -72,7 +75,7 @@ from product_app.visible_text import is_visible
 
 #: Bumped whenever the persisted shape or the meaning of a signal changes.
 #: Stored payloads from different versions are not comparable.
-EVAL_SCHEMA_VERSION = "s3-eval-v3"
+EVAL_SCHEMA_VERSION = "s3-eval-v4"
 
 #: Prompt registry id (docs/46). The version is part of the id because
 #: verdicts from different prompt versions are not comparable.
@@ -175,6 +178,203 @@ _ORDINAL_MARKER_RE = re.compile(r"\[\s*(\d{1,3}(?:\s*[,;]\s*\d{1,3})*)\s*\]")
 # corpus before it could be claimed to work.
 
 
+#: The markdown parser, configured to match EXACTLY what the workspace UI
+#: renders provider text with (``app.js:5589`` ``MD_OPTIONS`` and
+#: ``app.js:5636`` ``md.disable([...])``). Parity is the entire point: the
+#: grounding score answers "which brackets in this answer are citations",
+#: and the only defensible answer is "the ones the reader sees as prose".
+#: Two different grammars deciding that question is the defect this replaces.
+#:
+#: The preset name is load-bearing and was measured. ``markdown-it-py``
+#: defaults to ``"commonmark"`` (``html=True``, tables OFF); the browser's
+#: ``new MarkdownIt(MD_OPTIONS)`` uses the ``"default"`` preset
+#: (``html=False``, tables ON). Taking the Python default would have scored
+#: a markdown table's cells as one paragraph while the reader sees a table.
+#:
+#: Of the options carried over, only the PRESET and ``.disable([...])``
+#: can change what this module extracts; ``breaks``, ``linkify`` and
+#: ``typographer`` are renderer-side. MEASURED over 11 shapes including
+#: soft, hard and CRLF breaks: flipping ``breaks`` changes ZERO inline
+#: token contents, so no test here can bite on it. They are set anyway so
+#: the configuration reads as one object with ``app.js``, and so a future
+#: reader diffing the two files finds them the same.
+_MARKDOWN = MarkdownIt(
+    "default",
+    {"html": False, "breaks": True, "linkify": False, "typographer": False},
+).disable(["image", "reference"])
+
+#: The largest answer this module will PARSE. Above it the text is scanned
+#: raw — exactly what ``main`` does today, so never worse, and the residual
+#: over-count is recorded in ADR-0029.
+#:
+#: A parser is not free on hostile input and this runs on every GET of a run
+#: while holding the GIL, so the bound is set from the WORST shape found,
+#: not a typical one. MEASURED (parse only, min of 3) on ``[[[[1`` repeated,
+#: which is the most expensive input adversarial review could build:
+#: 67.3 ms at 4 KB, 136.3 at 8 KB, 274.3 at 16 KB, 557.6 at 32 KB — linear,
+#: about 2x per doubling.
+#:
+#: The app requests ``initial_answer_max_tokens`` (2000) x 4 chars/token =
+#: 8000 characters per answer, so 16,384 leaves 2x headroom over anything
+#: real while keeping the worst case at ~0.27 s — inside the 0.5 s budget
+#: this repo's own linearity gates use. An earlier value of 32,768 was
+#: chosen from a GENTLER shape and measured 557.6 ms, i.e. over that budget.
+_PARSE_LIMIT_CHARS = 16_384
+
+#: The separator between inline blocks. A Unicode NONCHARACTER, so a bracket
+#: opened in one block cannot pair with one in another. A NEWLINE is not
+#: enough, and that was measured: :data:`_ORDINAL_MARKER_RE` allows
+#: whitespace inside a marker, so ``Per [1,`` + a code block + ``2] more``
+#: joined with a newline reads as the ordinal pair ``['1', '2']`` — two
+#: citations that appear nowhere on screen, manufactured by the join.
+_BLOCK_SEPARATOR = "\n\uffff\n"
+
+#: Anything but a newline, for blanking a code span without changing the
+#: line structure of the inline block it sits in.
+_NOT_NEWLINE_RE = re.compile(r"[^\n]")
+
+#: The character a code span is rewritten to. A Unicode NONCHARACTER
+#: (U+FFFF): permanently reserved, never assigned, never emitted as prose.
+#: Chosen over a SPACE, and that choice is load-bearing: a space is what
+#: :data:`_ORDINAL_MARKER_RE` treats as insignificant filler, so blanking
+#: code to spaces MANUFACTURES ordinals that are absent today. MEASURED:
+#: ``[1 `x` ]`` gives ``[]`` both before this change and with this mask, but
+#: ``['1']`` with a space mask — a new false positive in the SAME direction
+#: as the defect under repair.
+_CODE_MASK = "\uffff"
+
+
+def _prose_only(text: str) -> str:
+    """Every region of ``text`` a reader sees as PROSE, one block per line.
+
+    Code never reaches the marker scan, because a bracket inside code is
+    source code and not a citation. MEASURED on ``8ca6a98``: an answer whose
+    only brackets were ``arr = [1, 2, 3]``, ``arr[1]`` and
+    ``json.loads(raw)[2]`` inside a fence, plus an inline ``` `[3]` ```,
+    extracted SIX ordinals and scored :func:`citation_marker_grounding` 1.0
+    against three real sources — a PERFECT grounding from ZERO citations.
+
+    **The block structure is decided by the same parser the UI renders
+    with, never by this module.** Two hand-rolled attempts at that decision
+    were rejected by adversarial review, each for the same reason: they got
+    a boundary wrong and DELETED a real citation, which both destroys an
+    honest answer's score and hides a fabricated ordinal behind the
+    deletion. The failures were never in recognising code — they were in
+    knowing where a block ends. A parser knows; a line scanner guesses. See
+    ADR-0029.
+
+    Only fenced and indented code BLOCKS are dropped wholesale (they emit no
+    ``inline`` token at all). Inside each inline block, code SPANS are
+    blanked in place, preserving length so an offset never shifts under
+    :func:`_scan_links`.
+
+    Blocks are joined with :data:`_BLOCK_SEPARATOR`, a NONCHARACTER, so a
+    bracket opened in one block can never pair with one in another. A
+    newline is not enough — :data:`_ORDINAL_MARKER_RE` treats whitespace as
+    insignificant filler, so ``Per [1,`` and ``2] more`` across a paragraph
+    break read as the pair ``['1', '2']``, two citations on no screen.
+
+    There is no "looks like it has no code, skip the parse" fast path. One
+    was tried and removed: it returned the RAW text, which skipped the
+    separator above and left that same manufactured-ordinal defect live for
+    any answer that happened to contain no backtick — so whether an answer
+    got the protection depended on unrelated punctuation. Parsing
+    unconditionally under the size bound costs about 3 ms on a 16 KB answer
+    and removes the whole question.
+    """
+    if len(text) > _PARSE_LIMIT_CHARS:
+        # Too big to parse safely, so this module says NOTHING about it.
+        #
+        # Returning the raw text instead — which an earlier draft did — hands
+        # the original defect straight back: MEASURED, the same code-heavy
+        # answer scored grounding None at 16,000 characters and 1.0 at 16,385,
+        # from 546 markers that were all `arr = [1]` inside a fence. Falling
+        # back to a grammar known to be wrong, to save CPU, is not a trade a
+        # trust surface may make. An empty result makes the census resolvable
+        # count zero, which surfaces as "No citation marker on this run could
+        # be checked" — the honest state. ADR-0029 decision 6.
+        return ""
+    return _BLOCK_SEPARATOR.join(
+        _mask_code_spans(token.content, token.children)
+        for token in _MARKDOWN.parse(text)
+        if token.type == "inline"
+    )
+
+
+def _mask_code_spans(content: str, children: Sequence[Any] | None) -> str:
+    """Blank exactly the code spans THE PARSER found, in the raw source.
+
+    The raw ``content`` is kept and only the parser's spans are blanked, so
+    everything downstream — above all :func:`_scan_links` — still sees the
+    answer's own link syntax byte for byte. Rebuilding the text from tokens
+    instead would hand ``_scan_links`` markdown-it's NORMALISED href, and
+    that is lossy: ``https://a.test/r?filter[status]=open`` comes back as
+    ``...filter%5Bstatus%5D=open`` and stops matching the run's own sources.
+
+    Locating each span by search rather than by offset is forced by the
+    token API, which carries no source positions for inline children. The
+    pattern tolerates a stripped padding space, and treats a space in
+    ``content`` as any whitespace run, because CommonMark folds a line
+    ending inside a code span into a space.
+
+    This function used to re-derive the spans itself by pairing backtick
+    runs of equal width. That was the LAST hand-rolled markdown logic here,
+    and it was wrong in the laundering direction: markdown-it keeps a
+    per-width scan cache, so an unclosed ``[`` earlier in the block can stop
+    a later run from ever closing a span. MEASURED on ``See [the appendix
+    `[99]` for the raw numbers, and press ` to quote.`` — the reader sees
+    ``[99]`` as prose, the hand-rolled pass masked it away, and grounding
+    went 0.667 -> 1.0 with a fabricated ordinal deleted from the
+    denominator. There is now no markdown pairing logic in this module.
+    """
+    if not children:
+        return content
+    masked = content
+    cursor = 0
+    for child in children:
+        if getattr(child, "type", None) != "code_inline":
+            continue
+        found = _span_pattern(child.markup, child.content).search(masked, cursor)
+        if found is None:
+            # Should not happen. If it ever does, leave the span alone: that
+            # is an over-count, the direction this module always fails in.
+            continue
+        masked = (
+            masked[: found.start()]
+            + _NOT_NEWLINE_RE.sub(_CODE_MASK, found.group())
+            + masked[found.end() :]
+        )
+        cursor = found.end()
+    return masked
+
+
+#: Longest code-span text worth caching a compiled pattern for. The cache key
+#: is PROVIDER-CONTROLLED text, and ``lru_cache`` bounds entries, not bytes:
+#: MEASURED with tracemalloc, 2048 entries of 4,000 characters retain 83.4 MB,
+#: and a span may run to the parse limit. fly.toml gives production 512 MB and
+#: holds sessions and in-flight runs in memory, so an OOM kill destroys them.
+#: Long spans are rare and cheap to recompile, so they simply are not cached.
+_SPAN_CACHE_MAX_CONTENT = 256
+
+
+def _span_pattern(markup: str, content: str) -> re.Pattern[str]:
+    """The source shape of one code span, tolerant of CommonMark's folding."""
+    if len(content) > _SPAN_CACHE_MAX_CONTENT:
+        return _compile_span_pattern(markup, content)
+    return _cached_span_pattern(markup, content)
+
+
+@lru_cache(maxsize=2048)
+def _cached_span_pattern(markup: str, content: str) -> re.Pattern[str]:
+    """The memoised arm, entered only for spans short enough to be worth it."""
+    return _compile_span_pattern(markup, content)
+
+
+def _compile_span_pattern(markup: str, content: str) -> re.Pattern[str]:
+    inner = r"\s+".join(re.escape(part) for part in content.split())
+    return re.compile(re.escape(markup) + r"\s*" + inner + r"\s*" + re.escape(markup))
+
+
 def _scan_links(text: str) -> tuple[list[str], str]:
     """Split ``text`` into (link URLs, prose with every link SHAPE removed).
 
@@ -254,10 +454,17 @@ def extract_citation_markers(text: str) -> list[str]:
     never be misread as an ordinal — a link whose URL this module declines
     to read as a marker must still have its TEXT removed, or that text
     becomes a false ordinal.
+
+    CODE regions are consumed first of all (:func:`_prose_only`), for the
+    same reason and by the same mechanism: a bracket inside a code fence or
+    a code span is source code, never a citation. The order is load-bearing
+    in both directions — masking AFTER the link scan would let a markdown
+    link inside a code span count as a citation, and masking by DELETION
+    rather than in place would break a link whose text contains a code span.
     """
     if not text:
         return []
-    urls, remainder = _scan_links(text)
+    urls, remainder = _scan_links(_prose_only(text))
     ordinals: list[str] = []
     for group in _ORDINAL_MARKER_RE.findall(remainder):
         ordinals.extend(part.strip() for part in re.split(r"[,;]", group) if part.strip())

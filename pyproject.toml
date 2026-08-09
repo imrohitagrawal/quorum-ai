@@ -20,6 +20,23 @@ dependencies = [
   # the Sentry project configured for this deployment.
   "sentry-sdk[fastapi]>=2.0.0,<3.0",
   "prometheus-fastapi-instrumentator>=8.0.2",
+  # CommonMark parsing for the Layer-A citation-marker scan
+  # (`evaluation._prose_only`). A RUNTIME dependency deliberately, not a
+  # test-only one: the grounding score must decide "is this bracket a
+  # citation or is it code" with the SAME grammar the workspace renders
+  # provider text with (`static/vendor/markdown-it.min.js`). Two hand-rolled
+  # attempts at that decision were rejected by adversarial review for
+  # deleting real citations at block boundaries they got wrong. ADR-0029.
+  #
+  # PINNED EXACTLY, deliberately breaking the range convention above. The
+  # production image is built with `uv pip install .` (Dockerfile:10), which
+  # resolves from THIS range and ignores uv.lock, while every CI lane uses
+  # `uv sync` and honours the lock. A grounding score is a pure function of
+  # this parser's tokenisation, so a range would let the first rebuild after
+  # any upstream release change 0.30 of the served trust score for identical
+  # answers, with no code change and no failing test. A version bump here
+  # must be a reviewed decision, not a side effect of a rebuild.
+  "markdown-it-py==4.2.0",
 ]
 
 [project.optional-dependencies]
