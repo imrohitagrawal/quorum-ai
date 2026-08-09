@@ -67,19 +67,23 @@ def test_cheapest_possible_query_still_requires_confirmation() -> None:
 
     Until 2026-08-09 this asserted the DEFAULT mix landed in ALLOW. ADR-0028's
     pricier synthesis stage means the fixed debate+synthesis overhead alone
-    now bounds EVERY possible 4-slot mix above SOFT_THRESHOLD_USD — MEASURED:
-    even the four cheapest-priced models in the whole fallback catalog
-    (nemotron/gemini-flash-lite/llama-3.1-8b/deepseek-chat-v3.1) bound at
-    0.1772-0.1779. So no 4-slot mix reaches ALLOW today; this pins that a
-    confirmation token is still minted for the cheapest possible query, so a
-    real client can still complete a run (just not frictionlessly).
+    now bounds EVERY possible 4-slot mix above SOFT_THRESHOLD_USD — MEASURED,
+    on the cheapest PRICE-EXACT combination the catalog has (this fixture,
+    verified identical offline and live): bound 0.1863. Even the cheapest mix
+    in the whole catalog, including price-drifting rows, only goes as low as
+    0.1772-0.1779 — still above 0.15. So no 4-slot mix reaches ALLOW today;
+    this pins that a confirmation token is still minted for the cheapest
+    possible query, so a real client can still complete a run (just not
+    frictionlessly). Uses only ``price_exact`` models (see
+    ``test_catalog_fetcher.py::test_cost_band_fixtures_are_built_from_price_exact_models``)
+    so the band it asserts cannot evaporate if a drifting row is corrected.
     """
     model_slots = validate_model_slots(
         [
             "nvidia/nemotron-3-nano-30b-a3b",
-            "google/gemini-2.5-flash-lite",
-            "meta-llama/llama-3.1-8b-instruct",
-            "deepseek/deepseek-chat-v3.1",
+            "openai/gpt-4o-mini",
+            "anthropic/claude-3-haiku",
+            "google/gemini-2.5-flash",
         ]
     )
 
@@ -112,19 +116,19 @@ def test_high_cost_query_requires_matching_confirmation() -> None:
     # synthesis high enough that the opus-tier mix this test used to use now
     # bounds at 0.3661 (BLOCK, not CONFIRM) -- and MEASURED, the fixed
     # synthesis + debate overhead alone puts a floor under every possible
-    # 4-slot mix: even the four CHEAPEST models in the catalog
-    # (nemotron/gemini-flash-lite/llama-3.1-8b/deepseek-chat-v3.1) bound at
-    # 0.1772-0.1779 regardless of query length or web-search opt-in. So the
-    # CONFIRM band is now reached by the cheapest mix the catalog has, not by
-    # picking an expensive one -- the roles inverted. Every price here is the
-    # same in the fallback catalog and the live one (none of the four rows are
-    # WP-D-flagged as stale), so this bounds the same offline and online.
+    # 4-slot mix: even the cheapest PRICE-EXACT combination the catalog has
+    # bounds at 0.1863. So the CONFIRM band is now reached by a cheap mix, not
+    # by picking an expensive one -- the roles inverted. This mix uses only
+    # ``price_exact`` models (see test_catalog_fetcher.py::
+    # test_cost_band_fixtures_are_built_from_price_exact_models), unlike the
+    # cheaper-still price-drifting combination measured above, so the band it
+    # asserts cannot evaporate if a drifting row's price is corrected.
     model_slots = validate_model_slots(
         [
             "nvidia/nemotron-3-nano-30b-a3b",
-            "google/gemini-2.5-flash-lite",
-            "meta-llama/llama-3.1-8b-instruct",
-            "deepseek/deepseek-chat-v3.1",
+            "openai/gpt-4o-mini",
+            "anthropic/claude-3-haiku",
+            "google/gemini-2.5-flash",
         ]
     )
     estimate = cost_estimation_service.estimate(

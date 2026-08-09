@@ -46,27 +46,25 @@ DEFAULT_MODEL_IDS = [
 #: ``HARD_LIMIT_USD`` (0.25), so it moved from CONFIRM to BLOCK, not just up a
 #: little. Worse: the fixed synthesis + two debate rounds now put a FLOOR under
 #: every possible 4-slot mix that sits inside the confirmation band on its
-#: own, regardless of which four models are chosen — MEASURED, the four
-#: CHEAPEST-priced models in the whole catalog (nemotron, gemini-2.5-flash-lite,
-#: llama-3.1-8b-instruct, deepseek-chat-v3.1) still bound at 0.1772-0.1779, and
-#: that floor barely moves with query length or the per-slot web-search flag.
-#: So reaching CONFIRM no longer needs an expensive slot — every mix lands
-#: there or above; this fixture is simply the cheapest one available, chosen
-#: so it stays clear of ``HARD_LIMIT_USD`` with the biggest margin the catalog
-#: allows. MEASURED point 0.1065, bound 0.1779 for ``CONFIRM_QUERY`` below.
+#: own, regardless of which four models are chosen. So reaching CONFIRM no
+#: longer needs an expensive slot — every mix lands there or above; this
+#: fixture is a cheap one, chosen so it stays clear of ``HARD_LIMIT_USD`` with
+#: a comfortable margin. MEASURED point 0.1101, bound 0.1863 for
+#: ``CONFIRM_QUERY`` below.
 #:
-#: UNVERIFIED against the live catalog: ``catalog_fetcher.py`` itself flags
-#: gemini-2.5-flash-lite, llama-3.1-8b-instruct and deepseek-chat-v3.1 as
-#: stale fallback rows (nemotron's row is the one verified exact). Those four
-#: are the cheapest the offline catalog has, so this fixture is the best
-#: available proof that CONFIRM is reachable at all post-ADR-0028 — but unlike
-#: the mix it replaces, its exact numbers could move if those rows are ever
-#: corrected. That is an accepted, named tradeoff, not an oversight.
+#: Uses ONLY ``price_exact`` models (verified identical in
+#: ``_FALLBACK_CATALOG`` and the live public catalog) — see
+#: ``test_catalog_fetcher.py::test_cost_band_fixtures_are_built_from_price_exact_models``,
+#: which asserts this fixture draws from that set and fails with a named
+#: reason otherwise. An EVEN cheaper mix exists using price-drifting rows
+#: (nemotron, gemini-2.5-flash-lite, llama-3.1-8b-instruct, deepseek-chat-v3.1;
+#: bound 0.1772-0.1779) but that gate deliberately forbids band fixtures from
+#: resting on unverified prices, so this fixture does not use it.
 CONFIRM_MODEL_IDS = [
     "nvidia/nemotron-3-nano-30b-a3b",
-    "google/gemini-2.5-flash-lite",
-    "meta-llama/llama-3.1-8b-instruct",
-    "deepseek/deepseek-chat-v3.1",
+    "openai/gpt-4o-mini",
+    "anthropic/claude-3-haiku",
+    "google/gemini-2.5-flash",
 ]
 CONFIRM_QUERY = "Compare vendors"
 
