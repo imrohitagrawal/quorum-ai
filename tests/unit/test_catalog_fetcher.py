@@ -369,6 +369,7 @@ def test_cost_band_fixtures_are_built_from_price_exact_models() -> None:
     price_exact = {
         "openai/gpt-4o-mini",
         "openai/gpt-4.1",
+        "openai/gpt-5-mini",
         "anthropic/claude-haiku-4.5",
         "anthropic/claude-3-haiku",
         "anthropic/claude-opus-4",

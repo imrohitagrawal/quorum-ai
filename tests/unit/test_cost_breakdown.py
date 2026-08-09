@@ -208,22 +208,26 @@ def test_exact_partition_pins_the_split() -> None:
       synth_prompt   = 350 + 250 + 3300 + 2*400 = 4700
 
     ADR-0028 moved synthesis pricing from ``openai/gpt-4o-mini`` to
-    ``openai/gpt-5-mini`` (0.00015/0.0006 -> priced per below). gpt-5-mini is
-    absent from ``_FALLBACK_CATALOG`` -- only the live catalog has it, and
-    this suite blocks outbound sockets (``tests/conftest.py::
-    _block_outbound_sockets``) -- so under test it resolves to
-    ``_DEFAULT_PRICE_PER_1K_INPUT/OUTPUT`` (0.001/0.005), same rate as the
-    ``test/fallback-*`` slot models:
+    ``openai/gpt-5-mini`` (0.00015/0.0006 -> 0.00025/0.002 per 1K, added to
+    ``_FALLBACK_CATALOG`` by this same change -- see ``catalog_fetcher.py``):
 
-      synth_section  = 0.001*4700/1000 + 0.005*3000/1000 = 0.0047 + 0.015
-                     = 0.0197
-      synthesis      = 5 * 0.0197 = 0.0985   (five section calls)
-      raw_total      = 0.0269 + 2*0.0059 + 0.0985 = 0.1372 -> total 0.1372
+      synth_section  = 0.00025*4700/1000 + 0.002*3000/1000 = 0.001175 + 0.006
+                     = 0.007175
+      synthesis      = 5 * 0.007175 = 0.035875 -> 0.0359 (five section calls)
+      raw_total      = 0.0269 + 2*0.0059 + 0.0359 = 0.0746 -> total 0.0746
 
     Every number in this block is MEASURED by execution (``uv run pytest``),
-    not hand-rederived -- see rule 8c on why an upstream's actual behaviour
-    (here: a model absent from the offline catalog) is worth exactly what you
-    measured it to be, never what the old formula implied.
+    not hand-rederived -- see rule 8c on why an upstream's actual behaviour is
+    worth exactly what you measured it to be, never what the old formula
+    implied.
+
+    An intermediate version of this test (2026-08-09) computed synthesis via
+    ``_DEFAULT_PRICE_PER_1K_INPUT/OUTPUT`` (0.001/0.005), reasoning that
+    ``openai/gpt-5-mini`` was absent from ``_FALLBACK_CATALOG`` and this suite
+    blocks outbound sockets. That was true at the time and is the reason this
+    change adds the catalog row above -- gpt-5-mini is the shipped synthesis
+    default, so degraded-mode and hermetic-test pricing for it should not
+    silently be 4x/2.5x too high.
 
     NOTE the term that is deliberately ABSENT here. WP-D made ``max_cost_usd``
     a true ceiling by pricing round 2's prompt, which carries round 1's
@@ -240,23 +244,18 @@ def test_exact_partition_pins_the_split() -> None:
     )
     breakdown = estimate.breakdown
     assert breakdown is not None
-    assert breakdown.total == Decimal("0.1372")
+    assert breakdown.total == Decimal("0.0746")
 
     # by_stage — initial_answers; two debate rounds at 0.0059 each;
-    # synthesis (five sections). ADR-0028 moved the synthesis stage to
-    # ``openai/gpt-5-mini``, which is absent from ``_FALLBACK_CATALOG`` (only
-    # the live catalog prices it, and this suite blocks outbound sockets —
-    # see ``tests/conftest.py::_block_outbound_sockets``), so under test it
-    # falls back to ``_DEFAULT_PRICE_PER_1K_INPUT/OUTPUT`` (0.001/0.005),
-    # same as the ``test/fallback-*`` slot models. MEASURED by execution
+    # synthesis (five sections), now priced from ``openai/gpt-5-mini``'s own
+    # ``_FALLBACK_CATALOG`` row (0.00025/0.002 per 1K). MEASURED by execution
     # (``uv run pytest`` — never hand-rederived, per rule 8c): synth_section
-    # moved 0.002505 -> 0.0197, so the five-section total moved
-    # 0.012525 -> 0.0985.
+    # is 0.007175, so the five-section total is 0.035875 -> 0.0359.
     assert [(line.stage, line.usd) for line in breakdown.by_stage] == [
         ("initial_answers", Decimal("0.0269")),
         ("debate_round_1", Decimal("0.0059")),
         ("debate_round_2", Decimal("0.0059")),
-        ("synthesis", Decimal("0.0985")),
+        ("synthesis", Decimal("0.0359")),
     ]
 
     # by_model — fallback-a gets the extra quantum (largest remainder tie → lowest index).
@@ -265,7 +264,7 @@ def test_exact_partition_pins_the_split() -> None:
         ("test/fallback-b", Decimal("0.0067")),
         ("test/fallback-c", Decimal("0.0067")),
         ("test/fallback-d", Decimal("0.0067")),
-        ("synthesis", Decimal("0.1103")),
+        ("synthesis", Decimal("0.0477")),
     ]
 
 

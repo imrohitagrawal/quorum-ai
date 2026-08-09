@@ -183,22 +183,27 @@ def test_guardrail_keys_off_the_bound_not_the_point_estimate() -> None:
     crosses the soft threshold, and that the run was consequently NOT allowed.
     That is the whole fail-safe, and it survives the band moving.
 
-    ADR-0028 (synthesis moved to the pricier ``openai/gpt-5-mini``) raised the
-    synthesis floor enough that the old opus-tier mix no longer has a point
-    estimate under ``SOFT_THRESHOLD_USD`` at all (MEASURED: 0.1970, already
-    past 0.15 on the point path alone) -- the fixture stopped proving the
-    fail-safe and started just proving BLOCK. Swapped opus-4 for the
-    cheaper-but-not-cheapest gpt-4.1, which MEASURED still clears the
-    invariant this test is about: point 0.1191 (ALLOW-eligible on its own),
-    bound 0.2040 (crosses the soft threshold, still short of the hard limit).
+    ADR-0028 (synthesis moved to the pricier ``openai/gpt-5-mini``) initially
+    seemed to raise the synthesis floor enough that no price-exact mix could
+    keep the point estimate under ``SOFT_THRESHOLD_USD`` at all -- that
+    measurement (2026-08-09) turned out to be against a broken environment:
+    `_FALLBACK_CATALOG` had no row for ``openai/gpt-5-mini``, so it priced
+    synthesis via the conservative `_DEFAULT_PRICE_PER_1K` fallback, 4x/2.5x
+    too high. With that catalog row added (see ``catalog_fetcher.py``), the
+    fail-safe gap re-opens, but only near the query length cap: a mid-tier
+    price-exact model (``openai/gpt-4.1``) plus three cheap ones, at 20,000
+    chars (the max), MEASURED point 0.1380 (ALLOW-eligible on its own), bound
+    0.1600 (crosses the soft threshold). This is the same fixture
+    ``test_query_run_cost_guardrails.py::CONFIRM_MODEL_IDS`` /
+    ``CONFIRM_QUERY`` uses for the same reason.
     """
     est = cost_estimation_service.estimate(
-        query_text="Compare frontier model safety features.",
+        query_text="x" * 20_000,
         model_slots=_slots(
             [
                 "openai/gpt-4.1",
-                "openai/gpt-4o-mini",
-                "nvidia/nemotron-3-nano-30b-a3b",
+                "anthropic/claude-haiku-4.5",
+                "anthropic/claude-3-haiku",
                 "google/gemini-2.5-flash",
             ]
         ),

@@ -69,7 +69,6 @@ def test_completed_query_run_releases_active_slot_for_same_account() -> None:
         json=confirmed_request(client, "Compare another answer", headers),
         headers=headers,
     )
-
     assert first_response.status_code == 202
     assert second_response.status_code == 202
     assert UUID(second_response.json()["query_run_id"]) != UUID(
