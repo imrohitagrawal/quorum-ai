@@ -66,18 +66,23 @@ def test_high_stakes_query_requires_high_stakes_acknowledgement() -> None:
 def test_query_run_accepts_all_required_warning_acknowledgements() -> None:
     client = TestClient(app)
     account_id = uuid4()
+    headers = {"X-Account-Id": str(account_id)}
 
     response = client.post(
         "/v1/query-runs",
-        json={
-            "query_text": "Compare legal contract risk",
-            "model_slots": DEFAULT_MODEL_IDS,
-            "safety_acknowledgements": [
-                {"warning_type": WarningType.SENSITIVE_DATA, "version": WARNING_VERSION},
-                {"warning_type": WarningType.HIGH_STAKES, "version": WARNING_VERSION},
-            ],
-        },
-        headers={"X-Account-Id": str(account_id)},
+        json=_confirmed(
+            client,
+            {
+                "query_text": "Compare legal contract risk",
+                "model_slots": DEFAULT_MODEL_IDS,
+                "safety_acknowledgements": [
+                    {"warning_type": WarningType.SENSITIVE_DATA, "version": WARNING_VERSION},
+                    {"warning_type": WarningType.HIGH_STAKES, "version": WARNING_VERSION},
+                ],
+            },
+            headers,
+        ),
+        headers=headers,
     )
 
     assert response.status_code == 202
@@ -101,6 +106,37 @@ _OWN_CAVEAT = (
 
 def _sensitive_only() -> list[dict[str, str]]:
     return [{"warning_type": WarningType.SENSITIVE_DATA, "version": WARNING_VERSION}]
+
+
+def _confirmed(
+    client: TestClient, body: dict[str, object], headers: dict[str, str]
+) -> dict[str, object]:
+    """ADR-0028: attach the confirmation round-trip a plain create now needs.
+
+    The shipped DEFAULT_MODEL_IDS mix stays in ALLOW under ADR-0028 (MEASURED
+    bound 0.1043), but this file's own fixture mix may not, so this
+    defensively round-trips a confirmation whenever the estimate lands in
+    require_confirmation (a no-op otherwise). None of the create calls below
+    are testing the cost guardrail itself. Returns a COPY of ``body`` with ``cost_confirmation``
+    attached when the band requires it.
+    """
+    preview = client.post(
+        "/v1/query-runs/estimate",
+        json={
+            "query_text": body["query_text"],
+            "model_slots": body["model_slots"],
+            **({"context": body["context"]} if "context" in body else {}),
+        },
+        headers=headers,
+    )
+    cost_estimate = preview.json()["cost_estimate"]
+    confirmed = dict(body)
+    if cost_estimate["threshold_action"] == "require_confirmation":
+        confirmed["cost_confirmation"] = {
+            "estimated_cost_usd": cost_estimate["estimated_cost_usd"],
+            "confirmation_token": cost_estimate["confirmation_token"],
+        }
+    return confirmed
 
 
 def test_high_stakes_wording_in_context_is_refused_without_the_acknowledgement() -> None:
@@ -135,15 +171,20 @@ def test_a_follow_up_carrying_this_apps_own_synthesis_is_still_accepted() -> Non
     caveat first.
     """
     client = TestClient(app)
+    headers = {"X-Account-Id": str(uuid4())}
     response = client.post(
         "/v1/query-runs",
-        json={
-            "query_text": _BENIGN_FOLLOW_UP,
-            "model_slots": DEFAULT_MODEL_IDS,
-            "context": {"prior_synthesis": f"The rollout succeeded. {_OWN_CAVEAT}"},
-            "safety_acknowledgements": _sensitive_only(),
-        },
-        headers={"X-Account-Id": str(uuid4())},
+        json=_confirmed(
+            client,
+            {
+                "query_text": _BENIGN_FOLLOW_UP,
+                "model_slots": DEFAULT_MODEL_IDS,
+                "context": {"prior_synthesis": f"The rollout succeeded. {_OWN_CAVEAT}"},
+                "safety_acknowledgements": _sensitive_only(),
+            },
+            headers,
+        ),
+        headers=headers,
     )
 
     assert response.status_code == 202, response.text
@@ -174,16 +215,21 @@ def test_the_warnings_probe_and_the_create_route_agree_about_context() -> None:
     )
 
     # Acknowledge exactly what the probe advertised -- nothing more.
+    headers = {"X-Account-Id": str(account_id)}
     created = client.post(
         "/v1/query-runs",
-        json={
-            **body,
-            "model_slots": DEFAULT_MODEL_IDS,
-            "safety_acknowledgements": [
-                {"warning_type": w, "version": WARNING_VERSION} for w in advertised
-            ],
-        },
-        headers={"X-Account-Id": str(account_id)},
+        json=_confirmed(
+            client,
+            {
+                **body,
+                "model_slots": DEFAULT_MODEL_IDS,
+                "safety_acknowledgements": [
+                    {"warning_type": w, "version": WARNING_VERSION} for w in advertised
+                ],
+            },
+            headers,
+        ),
+        headers=headers,
     )
     assert created.status_code == 202, created.text
 
@@ -228,14 +274,19 @@ def test_the_probe_accepts_a_query_as_long_as_the_create_route_does() -> None:
     )
     assert probe.status_code == 200, probe.text
 
+    create_headers = {"X-Account-Id": str(uuid4())}
     created = client.post(
         "/v1/query-runs",
-        json={
-            "query_text": long_but_legal,
-            "model_slots": DEFAULT_MODEL_IDS,
-            "safety_acknowledgements": _sensitive_only(),
-        },
-        headers={"X-Account-Id": str(uuid4())},
+        json=_confirmed(
+            client,
+            {
+                "query_text": long_but_legal,
+                "model_slots": DEFAULT_MODEL_IDS,
+                "safety_acknowledgements": _sensitive_only(),
+            },
+            create_headers,
+        ),
+        headers=create_headers,
     )
     assert created.status_code == 202, created.text
 
@@ -288,14 +339,19 @@ def test_a_truncated_recommendation_does_not_demand_a_spurious_acknowledgement()
     )
 
     client = TestClient(app)
+    headers = {"X-Account-Id": str(uuid4())}
     response = client.post(
         "/v1/query-runs",
-        json={
-            "query_text": _BENIGN_FOLLOW_UP,
-            "model_slots": DEFAULT_MODEL_IDS,
-            "context": {"prior_synthesis": emitted},
-            "safety_acknowledgements": _sensitive_only(),
-        },
-        headers={"X-Account-Id": str(uuid4())},
+        json=_confirmed(
+            client,
+            {
+                "query_text": _BENIGN_FOLLOW_UP,
+                "model_slots": DEFAULT_MODEL_IDS,
+                "context": {"prior_synthesis": emitted},
+                "safety_acknowledgements": _sensitive_only(),
+            },
+            headers,
+        ),
+        headers=headers,
     )
     assert response.status_code == 202, response.text

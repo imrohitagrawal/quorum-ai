@@ -401,12 +401,38 @@ class Settings(BaseSettings):
     initial_answer_max_tokens: int = 2000
 
     # --- LLM-driven debate + synthesis ----------------------------------
-    # Both stages now call a live model. Defaults: Haiku 4.5 for the
-    # debate rounds (cheap, fast, good at critique) and gpt-4o-mini for
-    # synthesis (cheap, reliable, structured-output friendly).
-    # Operators can override via DEBATE_MODEL_ID and SYNTHESIS_MODEL_ID.
+    # Both stages call a live model. Operators override via DEBATE_MODEL_ID
+    # and SYNTHESIS_MODEL_ID.
+    #
+    # SWAPPED 2026-08-08 (ADR-0028). The previous pairing had it backwards on
+    # both counts: the debate ran on the MOST expensive of the three stage
+    # models to produce text the user never sees ("The output is for a human
+    # reviewer, not the user" — both debate system prompts), while the
+    # synthesis — the ONLY stage rendered to the user — ran on the cheapest.
+    #
+    # Measured per run against live OpenRouter prices, at the enforced caps
+    # (debate 2 calls x 2000 output, synthesis 5 calls x 3000 output):
+    #
+    #   stage      claude-haiku-4.5   gpt-4o-mini   gpt-5-mini
+    #   debate         $0.0260          $0.0033       $0.0095
+    #   synthesis      $0.0900          $0.0112       $0.0338
+    #
+    # so at the CAPS debate -$0.0227 and synthesis +$0.0226. That near-zero net
+    # is the BOUND's arithmetic and NOT what the user is shown. Measured on
+    # ``cost_estimation_service.estimate``, four default slots:
+    #
+    #   point estimate  $0.0511 -> $0.0652   (+27.6%)
+    #   bound           $0.1187 -> $0.1124   (-5.3%)
+    #
+    # The point estimate rises because five synthesis calls are priced at
+    # gpt-5-mini's output rate (3.3x gpt-4o-mini) at TYPICAL volume, where the
+    # debate saving is smaller than at the cap. This crosses the CONFIRM/BLOCK
+    # bands — see ADR-0028.
+    #
+    # NOT a quality measurement. ``tests/evals/golden/cases/`` is the instrument
+    # that would settle output quality and has NOT been run for this change.
     debate_model_id: str = "anthropic/claude-haiku-4.5"
-    synthesis_model_id: str = "openai/gpt-4o-mini"
+    synthesis_model_id: str = "openai/gpt-5-mini"
 
     # --- Catalog fetcher -------------------------------------------------
     # The  model catalog is fetched from a public, unauthenticated

@@ -36,12 +36,40 @@ def acknowledged_request(query_text: str) -> dict[str, object]:
     }
 
 
+def confirmed_request(
+    client: TestClient, query_text: str, headers: dict[str, str]
+) -> dict[str, object]:
+    """ADR-0028: attach the confirmation round-trip a plain create now needs.
+
+    The shipped DEFAULT_MODEL_IDS mix stays in ALLOW under ADR-0028 (MEASURED
+    bound 0.1043), but this file's own fixture mix may not, so this
+    defensively round-trips a confirmation whenever the estimate lands in
+    require_confirmation (a no-op otherwise). None of the create calls below
+    are testing the cost guardrail itself.
+    """
+    preview = client.post(
+        "/v1/query-runs/estimate",
+        json={"query_text": query_text, "model_slots": DEFAULT_MODEL_IDS},
+        headers=headers,
+    )
+    cost_estimate = preview.json()["cost_estimate"]
+    body = acknowledged_request(query_text)
+    if cost_estimate["threshold_action"] == "require_confirmation":
+        body["cost_confirmation"] = {
+            "estimated_cost_usd": cost_estimate["estimated_cost_usd"],
+            "confirmation_token": cost_estimate["confirmation_token"],
+        }
+    return body
+
+
 def test_result_endpoint_projects_model_answers_debate_cost_elapsed_and_synthesis() -> None:
     client = TestClient(app)
     account_id = uuid4()
     create_response = client.post(
         "/v1/query-runs",
-        json=acknowledged_request("Compare transparent model answers"),
+        json=confirmed_request(
+            client, "Compare transparent model answers", {"X-Account-Id": str(account_id)}
+        ),
         headers={"X-Account-Id": str(account_id)},
     )
     query_run_id = UUID(create_response.json()["query_run_id"])
@@ -135,7 +163,9 @@ def test_result_endpoint_hides_other_account_query_run() -> None:
     other_account_id = uuid4()
     create_response = client.post(
         "/v1/query-runs",
-        json=acknowledged_request("Compare transparent model answers"),
+        json=confirmed_request(
+            client, "Compare transparent model answers", {"X-Account-Id": str(account_id)}
+        ),
         headers={"X-Account-Id": str(account_id)},
     )
 
@@ -153,7 +183,9 @@ def test_result_endpoint_projects_provider_failure_notice_without_secrets() -> N
     account_id = uuid4()
     create_response = client.post(
         "/v1/query-runs",
-        json=acknowledged_request("Force provider failure for one model"),
+        json=confirmed_request(
+            client, "Force provider failure for one model", {"X-Account-Id": str(account_id)}
+        ),
         headers={"X-Account-Id": str(account_id)},
     )
 
@@ -186,7 +218,9 @@ def test_result_endpoint_projects_debate_timeout_as_recoverable_partial() -> Non
     account_id = uuid4()
     create_response = client.post(
         "/v1/query-runs",
-        json=acknowledged_request("Force debate timeout before round two"),
+        json=confirmed_request(
+            client, "Force debate timeout before round two", {"X-Account-Id": str(account_id)}
+        ),
         headers={"X-Account-Id": str(account_id)},
     )
 
@@ -220,7 +254,9 @@ def test_result_endpoint_projects_material_claim_count_and_live_counts() -> None
     account_id = uuid4()
     create_response = client.post(
         "/v1/query-runs",
-        json=acknowledged_request("Compare source-backed options"),
+        json=confirmed_request(
+            client, "Compare source-backed options", {"X-Account-Id": str(account_id)}
+        ),
         headers={"X-Account-Id": str(account_id)},
     )
 

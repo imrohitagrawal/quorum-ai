@@ -417,24 +417,33 @@ def _drive(
 # ---------------------------------------------------------------------------
 
 
-def test_block_lands_on_the_fifth_quarter_cap_charge_not_the_fourth(
+def test_block_lands_on_the_fourth_quarter_cap_charge_not_the_fifth(
     tmp_path: Path, restore_store: None
 ) -> None:
     """Pins the boundary the corrected docstring states, from both sides.
 
-    The guard is ``already_spent + estimated > DAILY_CAP_USD``. After four
-    charges of ``DAILY_CAP_USD / 4`` the ledger reads exactly the cap, and the
-    fifth estimate is the first one that exceeds it — the docstring on
-    ``_backfill_f01_preview_rows``, the schema-migration runbook and the
-    ``/status`` docstring all said "four" before this change.
+    The guard is ``already_spent + estimated > DAILY_CAP_USD``. ``_drive()``
+    charges a FIXED ``_QUARTER_CAP`` per accepted step (not the real
+    estimate), so the walk is: estimate, and if it is not BLOCK, charge
+    another quarter-cap.
+
+    Until ADR-0028 the real per-run estimate for this mix (no web search) was
+    ~$0.0244 — under a quarter of the cap — so four quarter-cap charges landed
+    the ledger exactly on the cap ($0.20), and the FIFTH estimate
+    (already_spent $0.20 + estimated ~$0.024) was the first to exceed it.
+    ADR-0028's pricier synthesis stage raised that estimate to $0.0557 —
+    now OVER a quarter of the cap — so after only THREE quarter-cap charges
+    ($0.15 spent), the FOURTH estimate (already_spent $0.15 + estimated
+    $0.0557 = $0.2057) already exceeds $0.20. The walk now blocks one step
+    earlier than the docstrings this test originally pinned described.
 
     The charge sequence alone does NOT pin the comparator: MEASURED, flipping
-    ``>`` to ``>=`` leaves the BLOCK on charge five, because the real per-run
-    estimate is ~$0.026 rather than exactly a quarter of the cap, so no step of
-    that walk ever lands on equality. The second half of this test constructs
-    the equality case directly — a ledger of exactly ``DAILY_CAP_USD - unit`` —
-    which is the only input that tells the two comparators apart, and asserts
-    the strict one admits it.
+    ``>`` to ``>=`` still leaves the BLOCK on the fourth estimate here (the
+    margin over the cap, $0.0057, is not small enough for the comparator
+    choice to matter on this walk). The second half of this test constructs
+    the equality case directly — a ledger of exactly ``DAILY_CAP_USD - unit``
+    — which is the only input that tells the two comparators apart, and
+    asserts the strict one admits it.
     """
     db = tmp_path / "feedback_events.sqlite3"
     store = FeedbackStore(str(db))
@@ -442,12 +451,22 @@ def test_block_lands_on_the_fifth_quarter_cap_charge_not_the_fourth(
     service = CostEstimationService(binding_secret="x" * 32)
     try:
         configure(store)
-        # Precondition the boundary depends on: the real estimate must be small
-        # enough that three quarter-cap charges still fit, and non-zero.
+        # Precondition the boundary depends on: the real estimate must be
+        # positive and small relative to the daily cap, so DAILY_CAP_USD -
+        # unit stays positive for the on/over-the-line checks below. It does
+        # NOT need to fit under _QUARTER_CAP any more (see docstring above) --
+        # _drive() charges a FIXED _QUARTER_CAP per step, independent of
+        # unit's exact size.
         unit = service.estimate(
             query_text=_QUERY, model_slots=_SLOTS, account_id=None
         ).estimated_cost_usd
-        assert Decimal("0") < unit <= _QUARTER_CAP, unit
+        assert Decimal("0") < unit < DAILY_CAP_USD, unit
+        assert unit > _QUARTER_CAP, (
+            "this test pins the case where the real estimate exceeds a "
+            "quarter of the cap, moving BLOCK to the fourth step; if a "
+            "future price change drops unit back under _QUARTER_CAP, this "
+            "test's expected action sequence must move back to five"
+        )
 
         actions = _drive(store, service, account_id, 8)
 
@@ -455,11 +474,10 @@ def test_block_lands_on_the_fifth_quarter_cap_charge_not_the_fourth(
             CostThresholdAction.ALLOW,
             CostThresholdAction.ALLOW,
             CostThresholdAction.ALLOW,
-            CostThresholdAction.ALLOW,
             CostThresholdAction.BLOCK,
         ], actions
-        assert store.daily_spend_for(account_id) == DAILY_CAP_USD
-        assert _rows(db) == 4
+        assert store.daily_spend_for(account_id) == _QUARTER_CAP * 3
+        assert _rows(db) == 3
 
         # Exactly ON the cap once this estimate is added: strict ``>`` admits it.
         on_the_line = uuid4()
@@ -816,10 +834,14 @@ def test_every_fault_shape_disarms_the_cap_and_says_so(
 ) -> None:
     """The whole defect, end to end, for each confirmed shape.
 
-    Control (``test_block_lands_on_the_fifth_quarter_cap_charge_not_the_fourth``):
-    five estimates give ALLOW x4 then BLOCK. Under any of these faults every
-    charge is swallowed, ``daily_spend_for`` never leaves zero, and the same five
-    estimates all ALLOW with a confirmation token minted — free spend. That is
+    Control (``test_block_lands_on_the_fourth_quarter_cap_charge_not_the_fifth``):
+    since ADR-0028, four estimates give ALLOW x3 then BLOCK against a healthy
+    ledger. Under any of these faults every charge is swallowed,
+    ``daily_spend_for`` never leaves zero, so unlike the control this test still
+    drives five estimates that all ALLOW with a confirmation token minted — free
+    spend, independent of the block-timing shift (the fault keeps
+    ``daily_spend_for`` at zero throughout, so the boundary the control pins
+    never comes into play here). That is
     the fail-open the operator decision leaves in place (issue #122's own
     confirmed policy: staleness alone must not block, only a reopen that was
     tried and failed); what this change adds is that it is no longer silent.

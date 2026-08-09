@@ -112,18 +112,46 @@ def _install(monkeypatch: pytest.MonkeyPatch, seam: _Seam) -> list[dict[str, Any
     return calls
 
 
+_QUERY_TEXT = "Compare durable storage options for a small team"
+
+
+def _confirmed_request(client: TestClient, headers: dict[str, str]) -> dict[str, object]:
+    """ADR-0028: attach the confirmation round-trip a plain create now needs.
+
+    The shipped DEFAULT_MODEL_IDS mix stays in ALLOW under ADR-0028 (MEASURED
+    bound 0.1043), but this file's own fixture mix may not, so this
+    defensively round-trips a confirmation whenever the estimate lands in
+    require_confirmation (a no-op otherwise). None of the create calls below
+    are testing the cost guardrail itself.
+    """
+    preview = client.post(
+        "/v1/query-runs/estimate",
+        json={"query_text": _QUERY_TEXT, "model_slots": MODEL_IDS},
+        headers=headers,
+    )
+    cost_estimate = preview.json()["cost_estimate"]
+    body: dict[str, object] = {
+        "query_text": _QUERY_TEXT,
+        "model_slots": MODEL_IDS,
+        "safety_acknowledgements": [
+            {"warning_type": WarningType.SENSITIVE_DATA, "version": WARNING_VERSION},
+        ],
+    }
+    if cost_estimate["threshold_action"] == "require_confirmation":
+        body["cost_confirmation"] = {
+            "estimated_cost_usd": cost_estimate["estimated_cost_usd"],
+            "confirmation_token": cost_estimate["confirmation_token"],
+        }
+    return body
+
+
 def _drive(client: TestClient) -> dict[str, Any]:
     account_id = uuid4()
+    headers = {"X-Account-Id": str(account_id)}
     create = client.post(
         "/v1/query-runs",
-        json={
-            "query_text": "Compare durable storage options for a small team",
-            "model_slots": MODEL_IDS,
-            "safety_acknowledgements": [
-                {"warning_type": WarningType.SENSITIVE_DATA, "version": WARNING_VERSION},
-            ],
-        },
-        headers={"X-Account-Id": str(account_id)},
+        json=_confirmed_request(client, headers),
+        headers=headers,
     )
     assert create.status_code in (200, 201, 202), create.text[:400]
     run_id = UUID(create.json()["query_run_id"])

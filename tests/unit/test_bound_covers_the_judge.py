@@ -48,7 +48,9 @@ def _enable_judge(monkeypatch: pytest.MonkeyPatch, model_id: str = JUDGE_MODEL) 
 #: Pinning the index makes the literals deterministic in any test order.
 #: Only the JUDGE model's price is overridden. The four slot models are
 #: ``vendor/model-N``, absent from every catalog, so the four-stage bound is
-#: already deterministic at $0.1064 — replacing the whole index would move it.
+#: already deterministic at $0.2249 (ADR-0028: synthesis moved to the pricier
+#: openai/gpt-5-mini, MEASURED 0.1064 -> 0.2249) — replacing the whole index
+#: would move it.
 _JUDGE_PRICE = (Decimal("0.001"), Decimal("0.005"))
 
 
@@ -108,7 +110,7 @@ def test_judge_off_leaves_the_bound_byte_identical(monkeypatch: pytest.MonkeyPat
     # on both sides (rule 7a: never assert a bound against the constant that
     # defines it), so raising a price constant or adding an unconditional term
     # is caught rather than absorbed.
-    assert first == Decimal("0.1064"), (
+    assert first == Decimal("0.2249"), (
         f"the judge-OFF bound moved to {first}; it must stay byte-identical to the "
         "pre-#265 figure, or this change altered runs that have no judge"
     )
@@ -160,12 +162,17 @@ def test_the_judge_term_is_pinned_to_exact_literals(
     literal, the output cap, the source caps, or the fallback price — including
     the ones review caught (dropping the system prompt; deriving sections from
     ``settings.cost_synthesis_sections``).
+
+    The ``off`` baseline below is the FOUR-STAGE bound, not the judge math
+    worked out above — it moved 0.1064 -> 0.2249 when ADR-0028 repriced the
+    synthesis stage onto ``openai/gpt-5-mini``. The judge term itself
+    (``on - off``) is untouched by that change and stays 0.0334.
     """
     off = _bound(monkeypatch, judge=False)
     on = _bound(monkeypatch, judge=True)
-    assert off == Decimal("0.1064")
-    assert on == Decimal("0.1398"), (
-        f"the judge-on bound moved to {on}; expected 0.1064 + 0.0334 = 0.1398"
+    assert off == Decimal("0.2249")
+    assert on == Decimal("0.2583"), (
+        f"the judge-on bound moved to {on}; expected 0.2249 + 0.0334 = 0.2583"
     )
     assert on - off == Decimal("0.0334")
 

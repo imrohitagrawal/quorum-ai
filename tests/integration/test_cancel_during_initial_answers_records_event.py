@@ -97,6 +97,32 @@ def _acknowledged_request(query_text: str) -> dict[str, object]:
     }
 
 
+def _confirmed_request(
+    client: TestClient, query_text: str, headers: dict[str, str]
+) -> dict[str, object]:
+    """ADR-0028: attach the confirmation round-trip a plain create now needs.
+
+    The shipped DEFAULT_MODEL_IDS mix stays in ALLOW under ADR-0028 (MEASURED
+    bound 0.1043), but this file's own fixture mix may not, so this
+    defensively round-trips a confirmation whenever the estimate lands in
+    require_confirmation (a no-op otherwise). None of the create calls below
+    are testing the cost guardrail itself.
+    """
+    preview = client.post(
+        "/v1/query-runs/estimate",
+        json={"query_text": query_text, "model_slots": DEFAULT_MODEL_IDS},
+        headers=headers,
+    )
+    cost_estimate = preview.json()["cost_estimate"]
+    body = _acknowledged_request(query_text)
+    if cost_estimate["threshold_action"] == "require_confirmation":
+        body["cost_confirmation"] = {
+            "estimated_cost_usd": cost_estimate["estimated_cost_usd"],
+            "confirmation_token": cost_estimate["confirmation_token"],
+        }
+    return body
+
+
 def test_a_cancel_landing_during_initial_answers_is_recorded_as_a_cancelled_provider_event(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -125,10 +151,11 @@ def test_a_cancel_landing_during_initial_answers_is_recorded_as_a_cancelled_prov
     with isolated_run_semaphore(1) as semaphore:
         client = TestClient(app)
         csrf = client.get("/v1/session").json()["csrf_token"]
+        headers = {"x-csrf-token": csrf}
         created = client.post(
             "/v1/query-runs",
-            json=_acknowledged_request("compare managed database options"),
-            headers={"x-csrf-token": csrf},
+            json=_confirmed_request(client, "compare managed database options", headers),
+            headers=headers,
         )
         assert created.status_code == 202, created.text
         query_run_id = created.json()["query_run_id"]

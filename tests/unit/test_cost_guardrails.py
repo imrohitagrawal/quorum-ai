@@ -62,16 +62,35 @@ DEFAULT_MODEL_IDS = [
 ]
 
 
-def test_normal_cost_query_is_allowed() -> None:
-    model_slots = validate_model_slots(DEFAULT_MODEL_IDS)
+def test_a_confirm_band_query_mints_a_confirmation_token() -> None:
+    """A query genuinely in the CONFIRM band still mints a token so a real
+    client can complete the run once confirmed.
+
+    Uses the same CONFIRM fixture as ``test_high_cost_query_requires_matching_confirmation``
+    below (see that test's comment for the full measurement): a mid-tier
+    price-exact model plus three cheap ones, at the max query length. The
+    shipped DEFAULT mix itself stays in ALLOW under ADR-0028 (MEASURED:
+    point 0.0547, bound 0.1043) -- see ``test_cost_estimate_includes_output_tokens_in_band``
+    -- so this test needs a deliberately pricier mix/query to reach CONFIRM
+    at all.
+    """
+    model_slots = validate_model_slots(
+        [
+            "openai/gpt-4.1",
+            "anthropic/claude-haiku-4.5",
+            "anthropic/claude-3-haiku",
+            "google/gemini-2.5-flash",
+        ]
+    )
 
     estimate = cost_estimation_service.estimate(
-        query_text="Compare vendors",
+        query_text="x" * 20_000,
         model_slots=model_slots,
     )
 
-    assert estimate.estimated_cost_usd <= Decimal("0.15")
-    assert estimate.threshold_action == CostThresholdAction.ALLOW
+    assert estimate.max_cost_usd is not None
+    assert estimate.max_cost_usd > Decimal("0.15")
+    assert estimate.threshold_action == CostThresholdAction.REQUIRE_CONFIRMATION
     assert estimate.confirmation_token is not None
 
 
@@ -79,10 +98,9 @@ def test_high_cost_query_requires_matching_confirmation() -> None:
     # issue #16: the guardrail keys off the fail-safe ``max_cost_usd`` bound
     # (worst-case, initial output priced at the enforced cap), not the point
     # estimate. The CONFIRM band (bound in (0.15, 0.25]) is a narrow window —
-    # cheap mixes bound well under $0.15, and an opus-tier slot now jumps the
-    # bound clear over $0.25. This test needs a genuinely CONFIRM estimate,
-    # because it round-trips the confirmation token and a BLOCK estimate
-    # carries ``confirmation_token=None``.
+    # this test needs a genuinely CONFIRM estimate, because it round-trips the
+    # confirmation token and a BLOCK estimate carries
+    # ``confirmation_token=None``.
     #
     # WP-D re-fixtured this TWICE, and the second reason is the instructive one.
     # An intermediate fixture anchored on ``openai/o3`` had a comfortable
@@ -90,21 +108,36 @@ def test_high_cost_query_requires_matching_confirmation() -> None:
     # bounded at 0.2138 (require_confirmation) offline and 0.0795 (ALLOW) at
     # real prices, i.e. it asserted a band production never sees.
     #
-    # Every price in THIS mix is verified identical in the fallback catalog and
-    # the live one, so it bounds at 0.2474 either way. The 0.0026 margin to
-    # HARD_LIMIT_USD is thinner than the o3 mix's, and that trade is deliberate:
-    # a fixture that moves only when the COST MODEL changes is a real signal;
-    # one that moves when a stale price is corrected is noise.
+    # ADR-0028 (synthesis stage moved gpt-4o-mini -> gpt-5-mini) re-priced
+    # synthesis: MEASURED, the shipped DEFAULT mix stays in ALLOW (point
+    # 0.0547, bound 0.1043), and a single opus-tier slot alone bounds over
+    # 0.27 -- straight to BLOCK, never CONFIRM. So a price-exact mid-tier
+    # model (openai/gpt-4.1) plus three cheap ones, driven near the query
+    # length cap (20,000 chars), is what reaches CONFIRM today: MEASURED
+    # point 0.1380, bound 0.1600. This mix uses only ``price_exact`` models
+    # (see test_catalog_fetcher.py::
+    # test_cost_band_fixtures_are_built_from_price_exact_models), so the band
+    # it asserts cannot evaporate if a drifting row's price is corrected.
+    #
+    # An intermediate re-measurement (2026-08-09, same day as the ADR)
+    # anchored this fixture on the cheapest PRICE-EXACT combination instead
+    # (bound 0.1863), reasoning that the pricier synthesis stage put a floor
+    # under EVERY 4-slot mix. That was measured against a broken environment:
+    # `_FALLBACK_CATALOG` had no row for ``openai/gpt-5-mini`` (the new
+    # synthesis default), so it priced synthesis via the conservative
+    # `_DEFAULT_PRICE_PER_1K` fallback, 4x/2.5x too high. With that catalog
+    # row added (see ``catalog_fetcher.py``), the numbers above are the real,
+    # deterministic ones.
     model_slots = validate_model_slots(
         [
-            "openai/gpt-4o-mini",
+            "openai/gpt-4.1",
+            "anthropic/claude-haiku-4.5",
             "anthropic/claude-3-haiku",
-            "anthropic/claude-opus-4",
-            "nvidia/nemotron-3-nano-30b-a3b",
+            "google/gemini-2.5-flash",
         ]
     )
     estimate = cost_estimation_service.estimate(
-        query_text="Compare frontier model safety features.",
+        query_text="x" * 20_000,
         model_slots=model_slots,
     )
     assert estimate.max_cost_usd is not None

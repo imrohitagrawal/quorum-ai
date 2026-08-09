@@ -8,12 +8,14 @@ records a single ``SynthesisEvent`` per query run, scoped to
 provider secret.
 
 Starting in L4, each of the five sections is produced by a live LLM
-call against the configured ``synthesis_model_id`` (gpt-4o-mini by
-default) when a key is configured; otherwise the templated text is
-used. The fallback path is also used when the live call fails for any
-reason, with a single ``provider_notice`` in the response level
-explaining the fallback. The five sections remain independent LLM
-calls so a single failure does not poison the rest of the synthesis.
+call against the configured ``synthesis_model_id`` (``openai/gpt-5-mini``
+by default as of ADR-0028; see
+``docs/adr/0028-spend-belongs-on-the-stage-the-user-reads.md``) when a key
+is configured; otherwise the templated text is used. The fallback path
+is also used when the live call fails for any reason, with a single
+``provider_notice`` in the response level explaining the fallback. The
+five sections remain independent LLM calls so a single failure does not
+poison the rest of the synthesis.
 """
 
 from __future__ import annotations

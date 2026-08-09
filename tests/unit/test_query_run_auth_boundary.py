@@ -20,6 +20,37 @@ def clear_query_runs() -> None:
     query_run_repository.clear()
 
 
+def _confirmed(
+    client: TestClient, body: dict[str, object], headers: dict[str, str]
+) -> dict[str, object]:
+    """ADR-0028: attach the confirmation round-trip a plain create now needs.
+
+    The shipped DEFAULT_MODEL_IDS mix stays in ALLOW under ADR-0028 (MEASURED
+    bound 0.1043), but this file's own fixture mix may not, so this
+    defensively round-trips a confirmation whenever the estimate lands in
+    require_confirmation (a no-op otherwise). None of the create calls below
+    are testing the cost guardrail itself. Returns a COPY of ``body`` with ``cost_confirmation``
+    attached when the band requires it.
+    """
+    preview = client.post(
+        "/v1/query-runs/estimate",
+        json={
+            "query_text": body["query_text"],
+            "model_slots": body["model_slots"],
+            **({"context": body["context"]} if "context" in body else {}),
+        },
+        headers=headers,
+    )
+    cost_estimate = preview.json()["cost_estimate"]
+    confirmed = dict(body)
+    if cost_estimate["threshold_action"] == "require_confirmation":
+        confirmed["cost_confirmation"] = {
+            "estimated_cost_usd": cost_estimate["estimated_cost_usd"],
+            "confirmation_token": cost_estimate["confirmation_token"],
+        }
+    return confirmed
+
+
 def test_query_run_requires_authentication() -> None:
     client = TestClient(app)
 
@@ -32,17 +63,22 @@ def test_query_run_requires_authentication() -> None:
 def test_query_run_accepts_authenticated_account_boundary() -> None:
     client = TestClient(app)
     account_id = uuid4()
+    headers = {"X-Account-Id": str(account_id)}
 
     response = client.post(
         "/v1/query-runs",
-        json={
-            "query_text": "Compare these answers",
-            "model_slots": DEFAULT_MODEL_IDS,
-            "safety_acknowledgements": [
-                {"warning_type": WarningType.SENSITIVE_DATA, "version": WARNING_VERSION},
-            ],
-        },
-        headers={"X-Account-Id": str(account_id)},
+        json=_confirmed(
+            client,
+            {
+                "query_text": "Compare these answers",
+                "model_slots": DEFAULT_MODEL_IDS,
+                "safety_acknowledgements": [
+                    {"warning_type": WarningType.SENSITIVE_DATA, "version": WARNING_VERSION},
+                ],
+            },
+            headers,
+        ),
+        headers=headers,
     )
 
     assert response.status_code == 202
@@ -74,21 +110,26 @@ def test_query_run_rejects_invalid_account_identity() -> None:
 def test_query_run_accepts_context_field() -> None:
     client = TestClient(app)
     account_id = uuid4()
+    headers = {"X-Account-Id": str(account_id)}
 
     response = client.post(
         "/v1/query-runs",
-        json={
-            "query_text": "Follow-up question",
-            "model_slots": DEFAULT_MODEL_IDS,
-            "safety_acknowledgements": [
-                {"warning_type": WarningType.SENSITIVE_DATA, "version": WARNING_VERSION},
-            ],
-            "context": {
-                "prior_question": "What is the capital of France?",
-                "prior_synthesis": "The models agreed Paris is the capital.",
+        json=_confirmed(
+            client,
+            {
+                "query_text": "Follow-up question",
+                "model_slots": DEFAULT_MODEL_IDS,
+                "safety_acknowledgements": [
+                    {"warning_type": WarningType.SENSITIVE_DATA, "version": WARNING_VERSION},
+                ],
+                "context": {
+                    "prior_question": "What is the capital of France?",
+                    "prior_synthesis": "The models agreed Paris is the capital.",
+                },
             },
-        },
-        headers={"X-Account-Id": str(account_id)},
+            headers,
+        ),
+        headers=headers,
     )
 
     assert response.status_code == 202
@@ -100,18 +141,23 @@ def test_query_run_accepts_context_field() -> None:
 def test_query_run_accepts_empty_context() -> None:
     client = TestClient(app)
     account_id = uuid4()
+    headers = {"X-Account-Id": str(account_id)}
 
     response = client.post(
         "/v1/query-runs",
-        json={
-            "query_text": "A fresh question",
-            "model_slots": DEFAULT_MODEL_IDS,
-            "safety_acknowledgements": [
-                {"warning_type": WarningType.SENSITIVE_DATA, "version": WARNING_VERSION},
-            ],
-            "context": {},
-        },
-        headers={"X-Account-Id": str(account_id)},
+        json=_confirmed(
+            client,
+            {
+                "query_text": "A fresh question",
+                "model_slots": DEFAULT_MODEL_IDS,
+                "safety_acknowledgements": [
+                    {"warning_type": WarningType.SENSITIVE_DATA, "version": WARNING_VERSION},
+                ],
+                "context": {},
+            },
+            headers,
+        ),
+        headers=headers,
     )
 
     assert response.status_code == 202
@@ -123,17 +169,22 @@ def test_query_run_accepts_empty_context() -> None:
 def test_query_run_omits_context_defaults_to_none() -> None:
     client = TestClient(app)
     account_id = uuid4()
+    headers = {"X-Account-Id": str(account_id)}
 
     response = client.post(
         "/v1/query-runs",
-        json={
-            "query_text": "No context provided",
-            "model_slots": DEFAULT_MODEL_IDS,
-            "safety_acknowledgements": [
-                {"warning_type": WarningType.SENSITIVE_DATA, "version": WARNING_VERSION},
-            ],
-        },
-        headers={"X-Account-Id": str(account_id)},
+        json=_confirmed(
+            client,
+            {
+                "query_text": "No context provided",
+                "model_slots": DEFAULT_MODEL_IDS,
+                "safety_acknowledgements": [
+                    {"warning_type": WarningType.SENSITIVE_DATA, "version": WARNING_VERSION},
+                ],
+            },
+            headers,
+        ),
+        headers=headers,
     )
 
     assert response.status_code == 202

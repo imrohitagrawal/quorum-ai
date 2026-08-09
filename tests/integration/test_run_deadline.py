@@ -80,12 +80,37 @@ def _acknowledged_request() -> dict[str, object]:
     }
 
 
+def _confirmed_request(client: TestClient, headers: dict[str, str]) -> dict[str, object]:
+    """ADR-0028: attach the confirmation round-trip a plain create now needs.
+
+    The shipped DEFAULT_MODEL_IDS mix stays in ALLOW under ADR-0028 (MEASURED
+    bound 0.1043), but this file's own fixture mix may not, so this
+    defensively round-trips a confirmation whenever the estimate lands in
+    require_confirmation (a no-op otherwise). None of the create calls below
+    are testing the cost guardrail itself.
+    """
+    preview = client.post(
+        "/v1/query-runs/estimate",
+        json={"query_text": QUERY_TEXT, "model_slots": DEFAULT_MODEL_IDS},
+        headers=headers,
+    )
+    cost_estimate = preview.json()["cost_estimate"]
+    body = _acknowledged_request()
+    if cost_estimate["threshold_action"] == "require_confirmation":
+        body["cost_confirmation"] = {
+            "estimated_cost_usd": cost_estimate["estimated_cost_usd"],
+            "confirmation_token": cost_estimate["confirmation_token"],
+        }
+    return body
+
+
 def _run(client: TestClient, account_id: Any) -> dict[str, Any]:
     """Create a run (synchronous inline path) and return the served result."""
+    headers = {"X-Account-Id": str(account_id)}
     response = client.post(
         "/v1/query-runs",
-        json=_acknowledged_request(),
-        headers={"X-Account-Id": str(account_id)},
+        json=_confirmed_request(client, headers),
+        headers=headers,
     )
     assert response.status_code == 202, response.text
     created: dict[str, Any] = response.json()

@@ -209,6 +209,27 @@ _FALLBACK_CATALOG: tuple[ModelCatalogEntry, ...] = (
         input_price_per_1k=Decimal("0.00005"),
         output_price_per_1k=Decimal("0.00005"),
     ),
+    ModelCatalogEntry(
+        # ADR-0028: this is now settings.synthesis_model_id's shipped default.
+        # MEASURED against the live public catalog
+        # (https://openrouter.ai/api/v1/models, unauthenticated, $0),
+        # 2026-08-09: prompt 0.00000025/token, completion 0.000002/token ->
+        # 0.00025 / 0.002 per 1K.
+        #
+        # This row must exist BEFORE a model becomes the shipped synthesis
+        # default: without it, every degraded-mode (live catalog fetch
+        # failed) or hermetic-test estimate for synthesis fell back to
+        # _DEFAULT_PRICE_PER_1K (0.001/0.005 per 1K) -- 4x/2.5x the real
+        # rate -- overestimating the cost users are shown and, in tests,
+        # making threshold_action non-deterministic depending on whether a
+        # collection-time prewarm() race won against the live catalog fetch.
+        model_id="openai/gpt-5-mini",
+        name="OpenAI: GPT-5 mini",
+        vendor="openai",
+        short_name="GPT-5 mini",
+        input_price_per_1k=Decimal("0.00025"),
+        output_price_per_1k=Decimal("0.002"),
+    ),
 )
 
 

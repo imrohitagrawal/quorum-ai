@@ -25,6 +25,32 @@ def acknowledged_request(model_slots: list[str]) -> dict[str, object]:
     }
 
 
+def confirmed_request(
+    client: TestClient, model_slots: list[str], headers: dict[str, str]
+) -> dict[str, object]:
+    """ADR-0028: attach the confirmation round-trip a plain create now needs.
+
+    The shipped DEFAULT_MODEL_IDS mix stays in ALLOW under ADR-0028 (MEASURED
+    bound 0.1043), but this file's own fixture mix may not, so this
+    defensively round-trips a confirmation whenever the estimate lands in
+    require_confirmation (a no-op otherwise). None of the create calls below
+    are testing the cost guardrail itself.
+    """
+    preview = client.post(
+        "/v1/query-runs/estimate",
+        json={"query_text": "Compare these answers", "model_slots": model_slots},
+        headers=headers,
+    )
+    cost_estimate = preview.json()["cost_estimate"]
+    body = acknowledged_request(model_slots)
+    if cost_estimate["threshold_action"] == "require_confirmation":
+        body["cost_confirmation"] = {
+            "estimated_cost_usd": cost_estimate["estimated_cost_usd"],
+            "confirmation_token": cost_estimate["confirmation_token"],
+        }
+    return body
+
+
 def test_model_defaults_endpoint_returns_four_authenticated_defaults() -> None:
     client = TestClient(app)
 
@@ -67,14 +93,15 @@ def test_replacement_model_slots_are_persisted_with_query_run() -> None:
         "meta-llama/llama-3.1-8b-instruct",
     ]
 
+    headers = {"X-Account-Id": str(account_id)}
     response = client.post(
         "/v1/query-runs",
-        json=acknowledged_request(selected_models),
-        headers={"X-Account-Id": str(account_id)},
+        json=confirmed_request(client, selected_models, headers),
+        headers=headers,
     )
     result_response = client.get(
         f"/v1/query-runs/{response.json()['query_run_id']}",
-        headers={"X-Account-Id": str(account_id)},
+        headers=headers,
     )
 
     assert response.status_code == 202
@@ -169,13 +196,14 @@ def test_slot_search_all_false_creates_search_disabled_slots() -> None:
         "google/gemini-2.5-flash",
         "deepseek/deepseek-chat-v3.1",
     ]
-    body = acknowledged_request(selected_models)
+    headers = {"X-Account-Id": str(account_id)}
+    body = confirmed_request(client, selected_models, headers)
     body["slot_search"] = [False, False, False, False]
 
     response = client.post(
         "/v1/query-runs",
         json=body,
-        headers={"X-Account-Id": str(account_id)},
+        headers=headers,
     )
 
     assert response.status_code == 202
