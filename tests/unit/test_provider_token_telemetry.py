@@ -123,25 +123,42 @@ def test_injected_tokens_is_computed_from_the_messages_actually_sent(
     prompt tokens charged, so 1000 tokens estimated sent and 2000 injected.
     Asserting against ``costs.CHARS_PER_TOKEN`` or against either config
     constant would survive that constant being changed to anything at all.
+
+    TWO payloads of DIFFERENT sizes, and that is not decoration. Measured while
+    building this: with only the 4000-character call, replacing the whole
+    computation with ``sent_chars = 4000`` left all seven tests in this file
+    GREEN — the mutant and the fixture agreed on one number. No single constant
+    satisfies both arms below.
     """
-    _install(monkeypatch, _response_body(prompt_tokens=3000))
-    result = provider_execution_service._post_messages(
-        openrouter_key="sk-or-test",
-        model_id=_MODEL_ID,
-        messages=[
-            {"role": "system", "content": "S" * 1500},
-            {"role": "user", "content": "U" * 2500},
-        ],
-    )
-    assert result is not None
-    record = _only(token_records)
-    assert record["sent_chars"] == 4000
-    assert record["sent_tokens_est"] == 1000
-    assert record["prompt_tokens"] == 3000
-    assert record["injected_tokens_est"] == 2000
-    assert record["system_prompt_chars"] == 1500
-    assert record["completion_tokens"] == 120
-    assert record["usage_absent"] is False
+
+    def _drive(*, system_len: int, user_len: int, prompt_tokens: int) -> dict[str, Any]:
+        token_records.records.clear()
+        _install(monkeypatch, _response_body(prompt_tokens=prompt_tokens))
+        result = provider_execution_service._post_messages(
+            openrouter_key="sk-or-test",
+            model_id=_MODEL_ID,
+            messages=[
+                {"role": "system", "content": "S" * system_len},
+                {"role": "user", "content": "U" * user_len},
+            ],
+        )
+        assert result is not None
+        return _only(token_records)
+
+    big = _drive(system_len=1500, user_len=2500, prompt_tokens=3000)
+    assert big["sent_chars"] == 4000
+    assert big["sent_tokens_est"] == 1000
+    assert big["prompt_tokens"] == 3000
+    assert big["injected_tokens_est"] == 2000
+    assert big["system_prompt_chars"] == 1500
+    assert big["completion_tokens"] == 120
+    assert big["usage_absent"] is False
+
+    small = _drive(system_len=200, user_len=600, prompt_tokens=1000)
+    assert small["sent_chars"] == 800
+    assert small["sent_tokens_est"] == 200
+    assert small["injected_tokens_est"] == 800
+    assert small["system_prompt_chars"] == 200
 
 
 def test_the_telemetry_divisor_matches_the_cost_estimators_divisor() -> None:
