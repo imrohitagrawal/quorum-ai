@@ -149,3 +149,45 @@ def test_cancel_button_hidden_when_no_run_in_progress() -> None:
         "rule so the cancel container actually hides when the HTML "
         "hidden attribute is set."
     )
+
+
+# --- ADR-0032: the served API description must not claim peer critique -------
+#
+# `main.py`'s OpenAPI `info.description` said "has them debate", served at
+# /openapi.json and /docs to every API consumer. It is a module-level string
+# constant, so NO coverage or mutation gate can see it change — diff-cover's
+# own floor said exactly that when this line was edited ("the 95% you are about
+# to see is over an empty denominator"). This is the pinned literal assertion
+# that blind spot calls for.
+#
+# The four answer models are called once each and never read each other; one
+# separate moderator call (`settings.debate_model_id`) reads all four. See
+# ADR-0032 and issue #290.
+
+
+def test_api_description_does_not_claim_the_models_debate_each_other() -> None:
+    """RED IF: the OpenAPI description returns to claiming mutual critique.
+
+    Mutation that reddens this: restore "has them debate," in the
+    ``description=`` block of ``build_app`` in ``src/product_app/main.py``.
+    """
+    description = app.openapi()["info"]["description"].lower()
+
+    # POSITIVE PARTNER FIRST (rule 7). Without these, every negative below is
+    # trivially true over an empty or missing description.
+    assert len(description) > 200, (
+        "description is missing or truncated; the negatives below would pass vacuously"
+    )
+    assert "moderator model" in description
+    assert "synthesis model" in description
+
+    for banned in (
+        "has them debate",
+        "critique each other",
+        "critique one another",
+        "debate each other",
+    ):
+        assert banned not in description, (
+            f"the served API description claims {banned!r}; the four answer "
+            "models are called once each and never read each other (ADR-0032)"
+        )
