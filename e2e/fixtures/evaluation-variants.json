@@ -1,7 +1,7 @@
 {
   "_comment": "FR-016 (S3) shared evaluation fixtures — the SINGLE source of truth for both the e2e fixture (e2e/fixtures/golden-run.ts imports this) and the Python contract test (tests/contract/test_golden_fixture_matches_served_schema.py validates each against the real QueryRunEvaluationProjection). Each block is the served projection shape: metrics only, never prose. The six unverified variants keep support_verified false (every hermetic run), so score is null and band is 'unverified' — an impossible shape (e.g. score on an unverified band) fails the Python validation rather than greening a mocked e2e run. EVAL_VERIFIED_HIGH (P1 / FR-015 judge wiring) is the ONE verified variant: its trust object is derived from the REAL engine (build_trust_score with support_verified=True over EVAL_CLEAN's signals) and the contract test RECOMPUTES it, so a fabricated score or band cannot ride in. The distinctive 73.4 / 21.5 numbers in the unverified variants exist so the no-digit invariant has a concrete target to search for; they must NEVER reach the surface innerText.",
   "EVAL_CLEAN": {
-    "schema_version": "s3-eval-v4",
+    "schema_version": "s3-eval-v5",
     "signals": {
       "citation_coverage_ratio": 0.85,
       "citation_marker_grounding": 0.8,
@@ -42,7 +42,7 @@
     }
   },
   "EVAL_VERIFIED_HIGH": {
-    "schema_version": "s3-eval-v4",
+    "schema_version": "s3-eval-v5",
     "signals": {
       "citation_coverage_ratio": 0.85,
       "citation_marker_grounding": 0.8,
@@ -83,7 +83,7 @@
     }
   },
   "EVAL_NON_CONSENSUS": {
-    "schema_version": "s3-eval-v4",
+    "schema_version": "s3-eval-v5",
     "signals": {
       "citation_coverage_ratio": 0.85,
       "citation_marker_grounding": 0.8,
@@ -124,7 +124,7 @@
     }
   },
   "EVAL_UNKNOWN_GROUNDING_REFUSAL": {
-    "schema_version": "s3-eval-v4",
+    "schema_version": "s3-eval-v5",
     "signals": {
       "citation_coverage_ratio": 0.0,
       "citation_marker_grounding": null,
@@ -164,7 +164,7 @@
     }
   },
   "EVAL_LAUNDERED": {
-    "schema_version": "s3-eval-v4",
+    "schema_version": "s3-eval-v5",
     "signals": {
       "citation_coverage_ratio": 1.0,
       "citation_marker_grounding": 1.0,
@@ -205,7 +205,7 @@
     }
   },
   "EVAL_MISSING_HIGH_STAKES": {
-    "schema_version": "s3-eval-v4",
+    "schema_version": "s3-eval-v5",
     "signals": {
       "citation_coverage_ratio": 0.85,
       "citation_marker_grounding": 0.8,
@@ -246,7 +246,7 @@
     }
   },
   "EVAL_SUPPRESSED_DISAGREEMENT": {
-    "schema_version": "s3-eval-v4",
+    "schema_version": "s3-eval-v5",
     "signals": {
       "citation_coverage_ratio": 0.85,
       "citation_marker_grounding": 0.8,

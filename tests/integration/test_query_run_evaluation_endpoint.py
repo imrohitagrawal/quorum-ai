@@ -40,6 +40,7 @@ from product_app.evaluation import (
     LayerASignals,
     TrustDiagnostics,
     TrustScore,
+    evaluate_run,
 )
 from product_app.main import app
 from product_app.model_slots import validate_model_slots_with_search
@@ -566,3 +567,182 @@ def test_a_non_terminal_run_writes_nothing_and_logs_no_warning(
     assert not any(
         "run evaluation persistence failed" in record.getMessage() for record in caplog.records
     )
+
+
+# --------------------------------------------------------------------------
+# Issue #284 — the evaluation is recomputed on every read.
+#
+# ``_evaluate_terminal_run`` is the ONE site both the persist path and the
+# served projection go through. A terminal run cannot change its evaluation
+# unless the run body itself changes, so recomputing it per GET is pure
+# waste — and the waste lands on a plain ``def`` route, i.e. in the
+# threadpool holding the GIL.
+#
+# These tests assert CARDINALITY (rule 6b): how many times the engine ran,
+# never merely that the answer came back right. A clean-path value assertion
+# passes for every implementation, including the wasteful one.
+# --------------------------------------------------------------------------
+
+
+def _counting_evaluate_run(monkeypatch: pytest.MonkeyPatch) -> list[int]:
+    """Wrap ``query_runs.evaluate_run`` with a call counter.
+
+    Counts the ENGINE call, not the memo wrapper, so the number is the real
+    work done rather than the number of times a cache was consulted.
+    """
+    calls = [0]
+    # ``query_runs`` imported this by value, so this IS the object it calls.
+    real = evaluate_run
+
+    def counted(**kwargs: Any) -> Any:
+        calls[0] += 1
+        return real(**kwargs)
+
+    monkeypatch.setattr(qr, "evaluate_run", counted)
+    return calls
+
+
+def test_the_persist_path_evaluates_a_run_exactly_once(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Creating a run runs the evaluation engine ONCE, not twice.
+
+    ``_persist_terminal_run`` builds its response through
+    ``_result_response`` -> ``_evaluation_projection`` and then calls
+    ``_persist_run_evaluation``; both reach ``_evaluate_terminal_run``.
+
+    RED if the memo lookup is removed from ``_evaluate_terminal_run``:
+    measured before the fix, this counted 2.
+    """
+    with run_history_store.configure_for_tests():
+        client = TestClient(app)
+        calls = _counting_evaluate_run(monkeypatch)
+
+        _create_terminal_run(client, uuid4())
+
+        assert calls[0] == 1
+
+
+def test_three_reads_of_one_terminal_run_evaluate_it_exactly_once(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """N reads of a terminal run cost ZERO extra evaluations.
+
+    The counter is installed AFTER the run is created, so it measures the
+    READS alone. RED if the memo lookup is removed from
+    ``_evaluate_terminal_run``: measured before the fix, this counted 3 —
+    one full engine run per GET.
+    """
+    with run_history_store.configure_for_tests():
+        client = TestClient(app)
+        account_id = uuid4()
+        created = _create_terminal_run(client, account_id)
+        headers = {"X-Account-Id": str(account_id)}
+
+        calls = _counting_evaluate_run(monkeypatch)
+
+        bodies = []
+        for _ in range(3):
+            response = client.get(f"/v1/query-runs/{created['query_run_id']}", headers=headers)
+            assert response.status_code == 200
+            bodies.append(response.json()["evaluation"])
+
+        assert calls[0] == 0, "a terminal run that has not changed must not be re-evaluated"
+        assert bodies[0] is not None
+        assert bodies[0] == bodies[1] == bodies[2]
+
+
+def test_an_answer_landing_after_the_run_turned_terminal_is_re_evaluated(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The memo tracks the run; it does not freeze it.
+
+    ``record_initial_answer`` has NO terminal guard (unlike ``update_status``,
+    which refuses a terminal write), so a late answer CAN change the inputs
+    of an already-terminal run. Today's per-read recompute self-corrects;
+    a memo keyed on the run id alone would serve the stale evaluation
+    forever. The key therefore carries ``updated_at``, which every mutator
+    bumps.
+
+    RED if the memo key is reduced to the run id alone: the second GET then
+    serves the first GET's signals and the inequality below fails.
+
+    HONEST LIMIT, measured: dropping ONLY ``updated_at`` from the key leaves
+    this green, because a replaced answer also moves the agreement summary
+    and the agreement is in the key too. The sibling test below isolates
+    ``updated_at`` by holding the agreement fixed. This one is the
+    end-to-end statement — what the READER is served after a late answer.
+    """
+    with run_history_store.configure_for_tests():
+        client = TestClient(app)
+        account_id = uuid4()
+        created = _create_terminal_run(client, account_id)
+        headers = {"X-Account-Id": str(account_id)}
+        run_id = UUID(created["query_run_id"])
+
+        first = client.get(f"/v1/query-runs/{run_id}", headers=headers)
+        assert first.status_code == 200
+        before = first.json()["evaluation"]["signals"]
+
+        query_run_repository.record_initial_answer(
+            run_id,
+            _answer(
+                slot=1,
+                text="A late claim ([elsewhere](https://off-run.test/page)) and [7].",
+                sources=[_source(REAL_URL)],
+            ),
+        )
+
+        calls = _counting_evaluate_run(monkeypatch)
+        second = client.get(f"/v1/query-runs/{run_id}", headers=headers)
+        assert second.status_code == 200
+        after = second.json()["evaluation"]["signals"]
+
+        assert calls[0] == 1, "a changed run must be re-evaluated exactly once"
+        assert after != before
+
+
+def test_a_late_answer_re_evaluates_even_when_the_agreement_is_unchanged(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """``updated_at`` alone must invalidate the memo.
+
+    The end-to-end test above cannot prove this: replacing an answer through
+    the HTTP path also moves the agreement summary, which is in the key for
+    its own reason, so the key changes either way. Here the SAME
+    ``AgreementSummary`` object is passed both times, so ``updated_at`` is
+    the only part of the key the mutation can move.
+
+    RED if ``query_run.updated_at`` is dropped from the memo key (measured:
+    ``calls[0] == 1`` and ``second == first``). Verified by mutation that
+    this is the only one of the two tests that catches it.
+    """
+    with run_history_store.configure_for_tests():
+        client = TestClient(app)
+        account_id = uuid4()
+        created = _create_terminal_run(client, account_id)
+        run_id = UUID(created["query_run_id"])
+        run = query_run_repository.get_for_account(query_run_id=run_id, account_id=account_id)
+        assert run is not None and run.is_terminal
+        agreement = AgreementSummary(aligned=1, total=len(run.initial_answers))
+
+        calls = _counting_evaluate_run(monkeypatch)
+        first = qr._evaluate_terminal_run(run, agreement=agreement)
+        # Same run, same agreement, nothing changed: no second engine run.
+        assert qr._evaluate_terminal_run(run, agreement=agreement) is first
+        assert calls[0] == 1
+
+        query_run_repository.record_initial_answer(
+            run_id,
+            _answer(
+                slot=1,
+                text="A late claim ([elsewhere](https://off-run.test/page)) and [7].",
+                sources=[_source(REAL_URL)],
+            ),
+        )
+
+        second = qr._evaluate_terminal_run(run, agreement=agreement)
+
+        assert calls[0] == 2, "a run whose body changed must be evaluated again"
+        assert second is not None and first is not None
+        assert second.evaluation.signals != first.evaluation.signals

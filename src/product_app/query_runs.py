@@ -2681,6 +2681,34 @@ def _judge_verdict_memo_clear_for_tests() -> None:
         _judge_inflight.clear()
 
 
+def _judge_memo_touch(query_run_id: str) -> None:
+    """Move this run's judge entry to the MRU end, if it has one.
+
+    REORDERS ONLY — it must never insert. A ``_judge_verdict_memo`` entry is
+    the sole record that a paid judge call happened for a run, so inventing
+    one would make ``_actual_cost`` price a judge that never ran.
+
+    Exists because of the #284 evaluation memo. Every served read used to
+    re-enter :meth:`_MemoisedRunJudge.evaluate`, whose ``move_to_end`` kept a
+    polled run's judge entry hot as a side effect. ``_evaluate_terminal_run``
+    now returns from its own memo BEFORE the judge is constructed, so that
+    refresh stopped happening: a run being polled sat at the LRU's cold end
+    and was the first casualty of pressure from other judged runs.
+    ``_judge_status_for`` and ``billing_snapshot`` both read with a bare
+    ``.get``, and a miss there reads as "no judge ever ran" — measured on the
+    first draft of #284, a served receipt dropped a real billed judge line
+    and fell from $0.0101 to $0.0035 while still labelled ``measured``.
+
+    Called from ``_evaluate_terminal_run``'s memo-hit branch, deliberately
+    OUTSIDE ``_evaluation_memo_lock``: that keeps ``_judge_memo_lock`` from
+    ever being acquired while the evaluation lock is held, so no new
+    lock-ordering edge is created between the two.
+    """
+    with _judge_memo_lock:
+        if query_run_id in _judge_verdict_memo:
+            _judge_verdict_memo.move_to_end(query_run_id)
+
+
 def _judge_status_for(query_run_id: UUID) -> JudgeCallOutcome | None:
     """What the Layer-B judge did for this run, or ``None`` if it never ran.
 
@@ -2729,6 +2757,17 @@ class _MemoisedRunJudge:
 
     def __init__(self, query_run_id: str) -> None:
         self._query_run_id = query_run_id
+        #: True once this instance served the suppressed, verdict-less shape
+        #: because the OWNER's in-flight call outlived the wait — i.e. this
+        #: read is knowingly worse than the verdict the run will end up with.
+        #: ``_evaluate_terminal_run`` reads it and declines to memoise such a
+        #: result. Without that, whichever thread stored LAST won a key that
+        #: never changes again for a terminal run, so a timed-out reader
+        #: could freeze ``band="unverified", score=None`` over a run the
+        #: judge really verified, for the entry's whole life. Per-instance,
+        #: and ``_request_path_judge`` mints a fresh instance per evaluation,
+        #: so one read's timeout can never mark another's.
+        self.served_without_verdict = False
 
     def evaluate(self, evidence: JudgeEvidence) -> EvalJudgeVerdict | None:
         run_id = self._query_run_id
@@ -2747,15 +2786,19 @@ class _MemoisedRunJudge:
             # timeout), re-check the memo once — the owner may have finished
             # between the wait expiring and now — then serve suppressed for
             # THIS read: never a second call, never a fabricated verdict.
-            # (One read can therefore diverge from the eventual memo; the
-            # docstring's same-verdict guarantee holds for every memo-served
-            # read, which is all of them once the owner resolves.)
+            # (One read can therefore diverge from the eventual memo. That
+            # divergence used to be self-limiting because every later read
+            # recomputed; since #284 an EVALUATION memo sits in front, and a
+            # diverged result stored there would be permanent for a terminal
+            # run. ``served_without_verdict`` is set here so
+            # ``_evaluate_terminal_run`` declines to store this one.)
             try:
                 return future.result(timeout=_JUDGE_INFLIGHT_WAIT_SECONDS).verdict
             except FuturesTimeoutError:
                 with _judge_memo_lock:
                     if run_id in _judge_verdict_memo:
                         return _judge_verdict_memo[run_id].verdict
+                self.served_without_verdict = True
                 return None
         service = EvalJudgeService()
         verdict: EvalJudgeVerdict | None = None
@@ -2875,6 +2918,58 @@ def _request_path_judge(query_run: QueryRun) -> _MemoisedRunJudge | None:
     return _MemoisedRunJudge(str(query_run.query_run_id))
 
 
+#: Per-run memo of the whole terminal evaluation (issue #284). Every result
+#: READ used to run the Layer-A engine again from scratch, on a plain ``def``
+#: route — i.e. in the threadpool, holding the GIL. Measured on this repo's
+#: own hostile shape (an answer at the 8000-char cap made entirely of ``[``):
+#: roughly HALF A SECOND per evaluation, and about a second just under
+#: ``_PARSE_LIMIT_CHARS``, all of it repeated on every poll of a run whose
+#: answer cannot change. Deliberately stated to one significant figure: three
+#: best-of-3 runs of the same bench on the same Mac gave 530.2 / 563.4 /
+#: 575.8 ms at 8000 chars and 1115.5 / 1155.8 / 1182.4 ms at 16383, and two
+#: earlier drafts of this file and ADR-0030 quoted two DIFFERENT points from
+#: that spread as if each were the measurement. The order of magnitude is the
+#: fact; the third digit is noise. ADR-0030 carries the full table.
+#:
+#: KEYED ON ``(query_run_id, updated_at)``, not on the run id alone, and that
+#: is load-bearing. ``record_initial_answer`` and ``record_final_synthesis``
+#: carry NO terminal guard (unlike ``update_status``, which refuses a terminal
+#: write), so a late-landing answer after a deadline degrade or a cancel can
+#: still change the inputs of an already-terminal run. The per-read recompute
+#: self-corrected for that; a run-id-only memo would freeze the evaluation
+#: while the body kept moving. Every mutator bumps ``updated_at``, so the key
+#: invalidates exactly when the run changes, and it fails in the safe
+#: direction — an unexpected bump costs one extra evaluation, never a stale
+#: answer. ``agreement`` is in the key too: it is computed by the CALLER, so
+#: the memo must not assume it is a function of the run.
+#:
+#: In-process only, matching the single-worker deploy (``Dockerfile`` runs
+#: uvicorn with ``--workers 1``); bounded LRU so it can never grow with run
+#: history. Sibling of ``_judge_verdict_memo`` and deliberately separate: that
+#: one exists to stop PAID calls repeating, this one to stop CPU repeating.
+_EVALUATION_MEMO_MAX = 512
+_EvaluationMemoKey = tuple[str, datetime, int, int]
+_evaluation_memo: OrderedDict[_EvaluationMemoKey, RunEvaluationResult | None] = OrderedDict()
+_evaluation_memo_lock = RLock()
+
+
+def _evaluation_memo_clear_for_tests() -> None:
+    with _evaluation_memo_lock:
+        _evaluation_memo.clear()
+
+
+def _evaluation_memo_store(
+    key: _EvaluationMemoKey,
+    result: RunEvaluationResult | None,
+) -> None:
+    """Write one entry and evict the oldest while over the cap."""
+    with _evaluation_memo_lock:
+        _evaluation_memo[key] = result
+        _evaluation_memo.move_to_end(key)
+        while len(_evaluation_memo) > _EVALUATION_MEMO_MAX:
+            _evaluation_memo.popitem(last=False)
+
+
 def _evaluate_terminal_run(
     query_run: QueryRun,
     *,
@@ -2893,23 +2988,72 @@ def _evaluate_terminal_run(
     derived from the SAME value the endpoint serves and the S1 row persists.
     ``query_text`` is threaded only alongside a judge — it is only ever used
     to build judge evidence.
+
+    Memoised per ``(run, revision)`` — see ``_evaluation_memo``. This is the
+    ONE site both readers reach (``_evaluation_projection`` for the served
+    body, ``_persist_run_evaluation`` for the durable row), so memoising here
+    also makes the served projection and the persisted row identical BY
+    CONSTRUCTION rather than by two runs of a pure function agreeing.
     """
     if not query_run.is_terminal:
         return None
+    key: _EvaluationMemoKey = (
+        str(query_run.query_run_id),
+        query_run.updated_at,
+        agreement.aligned,
+        agreement.total,
+    )
+    with _evaluation_memo_lock:
+        hit = key in _evaluation_memo
+        if hit:
+            _evaluation_memo.move_to_end(key)
+            cached = _evaluation_memo[key]
+    if hit:
+        # Serving from this memo skips ``_MemoisedRunJudge.evaluate``, which
+        # is the ONLY thing that used to keep a polled run's judge entry hot.
+        # Done after releasing the lock above — see ``_judge_memo_touch``.
+        _judge_memo_touch(key[0])
+        return cached
+    # Computed OUTSIDE the lock: with a judge configured this makes an HTTP
+    # call, and holding a process-wide lock across it would serialise every
+    # result read in the process. A concurrent second computation costs no
+    # extra spend — the judge's own in-flight claim (``_judge_verdict_memo``)
+    # already stops a second PAID call.
+    #
+    # It is NOT unconditionally harmless, and an earlier draft of this
+    # comment said it was ("Layer A is pure"). Review refuted that by forcing
+    # the schedule: two computations of one run CAN disagree, because one of
+    # them may have timed out waiting on the other's judge and been served
+    # the suppressed shape. Layer A being pure says nothing about Layer B.
+    # For a terminal run the key never changes, so whichever thread stores
+    # last wins for the entry's whole life — which is why the timed-out
+    # reader below declines to store at all.
     judge = _request_path_judge(query_run)
     if judge is None:
-        return evaluate_run(
+        result = evaluate_run(
             initial_answers=query_run.initial_answers,
             final_synthesis=query_run.final_synthesis,
             agreement=agreement,
         )
-    return evaluate_run(
-        initial_answers=query_run.initial_answers,
-        final_synthesis=query_run.final_synthesis,
-        agreement=agreement,
-        judge=judge,
-        query_text=query_run.query_text,
-    )
+    else:
+        result = evaluate_run(
+            initial_answers=query_run.initial_answers,
+            final_synthesis=query_run.final_synthesis,
+            agreement=agreement,
+            judge=judge,
+            query_text=query_run.query_text,
+        )
+        if judge.served_without_verdict:
+            # This read gave up waiting on ANOTHER thread's in-flight judge
+            # call and was served the suppressed shape on purpose. Memoising
+            # it would be permanent: for a terminal run the key never changes,
+            # so whichever thread stored last wins forever, and this result is
+            # knowingly the worse of the two. Serve it, do not freeze it. The
+            # cost is that a run whose judge never answers recomputes Layer A
+            # per read — bounded to that run, and only until the owner stores.
+            return result
+    _evaluation_memo_store(key, result)
+    return result
 
 
 def _evaluation_projection(

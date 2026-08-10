@@ -35,6 +35,7 @@ ways, so the record shows what was believed on a date and what replaced it.
 | [ADR-0027](adr/0027-the-judges-evidence-is-a-bounded-and-priced-input.md) | The judge's evidence is a bounded and priced input | Architecture | Accepted — 2026-08-07 (issue #268, the half the issue body does not name) |
 | [ADR-0028](adr/0028-spend-belongs-on-the-stage-the-user-reads.md) | Spend belongs on the stage the user reads | Architecture | Accepted — 2026-08-09 (operator decision) |
 | [ADR-0029](adr/0029-code-is-consumed-before-the-citation-scan-not-parsed-by-it.md) | The grounding score counts the citations the reader can see | Architecture | Accepted — 2026-08-09 |
+| [ADR-0030](adr/0030-a-citation-marker-is-compared-in-the-shape-the-source-store-keeps.md) | A citation marker is compared in the shape the source store keeps, and a terminal run is evaluated once | Architecture | Accepted — 2026-08-10 (issues #285 then #284, in that order) |
 
 **This index was itself stale** until 2026-07-30: ADR-0002 had existed since
 2026-07-19 and was never listed here. A hand-maintained index is a derived fact

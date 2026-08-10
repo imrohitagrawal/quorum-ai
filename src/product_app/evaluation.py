@@ -75,7 +75,7 @@ from product_app.visible_text import is_visible
 
 #: Bumped whenever the persisted shape or the meaning of a signal changes.
 #: Stored payloads from different versions are not comparable.
-EVAL_SCHEMA_VERSION = "s3-eval-v4"
+EVAL_SCHEMA_VERSION = "s3-eval-v5"
 
 #: Prompt registry id (docs/46). The version is part of the id because
 #: verdicts from different prompt versions are not comparable.
@@ -483,6 +483,71 @@ def _normalize_url(url: str) -> str:
     return url.strip().rstrip(".,;:").rstrip("/").lower()
 
 
+def _canonical_marker_key(url: str) -> str:
+    """The shape a URL is COMPARED in by :func:`citation_marker_census`.
+
+    Issue #285. ``providers._sanitize_source_url`` cuts everything from the
+    first ``#`` off every URL it stores on a source row, and this side did
+    not. A model that cited its own retrieved page WITH an anchor —
+    ``https://a.test/doc#section`` against the stored ``https://a.test/doc``
+    — therefore matched nothing and landed in ``unverifiable``: the off-run
+    bucket, which is EXCLUDED from the grounding denominator. So the run's
+    grounding moved in whichever direction the exclusion happened to favour,
+    and ``unverifiable_marker_count`` was inflated every time. That count is
+    not inert — :func:`presentation_confidence` withholds the advisory
+    labels whenever it is above zero and the labels sit at the confident
+    end, so a run that cited its own real sources correctly had its labels
+    suppressed for doing so.
+
+    This is a COMPARISON key, not a URL: nothing here is ever shown to a
+    user or opened in a browser. Applied to BOTH sides — the stored source
+    rows and the markers — so a future source row that does carry a
+    fragment (none can today; every construction site goes through
+    ``_sanitize_source_url`` or the local stub prefix) still compares
+    correctly.
+
+    NO EXCEPTIONS — and the first draft of this fix had one, which review
+    refuted by measurement. That draft declined to fold a fragment beginning
+    ``/`` or ``!``, on the theory that a client-side route
+    (``https://a.test/#/route``) is a different document from
+    ``https://a.test/``. The theory is right about the WEB and wrong about
+    this STORE: ``_sanitize_source_url`` has already thrown the route away,
+    so the source row minted from a hash-route citation IS the base page and
+    there is no information left to tell the two apart. Measured on the real
+    ``providers._extract_citations`` -> :func:`citation_marker_census` path,
+    where the inline-markdown fallback mints the row from the very same
+    ``[text](url)`` the census reads as a marker, so marker and row are the
+    identical string by construction:
+
+    ==========================================  ==================
+    marker (row minted from it)                 with the guard
+    ==========================================  ==================
+    ``https://petstore.swagger.io/#/pet/addPet``  unverifiable
+    ``https://twitter.com/#!/someuser``           unverifiable
+    ``https://a.test/doc#section``                resolved
+    ==========================================  ==================
+
+    The first two are #285 unfixed, on an ordinary docs shape. Worse, the
+    guard was a SPELLING filter rather than a category one — against one
+    stored ``https://docs.example.com/``, ``#/api/tokens`` and
+    ``#!/api/tokens`` were declined while ``#doc/12345``, ``#page=3``,
+    ``#about`` and even ``#%2Fapi%2Ftokens`` (the percent-encoded form of the
+    shape it blocked) all resolved. An inconsistency that arbitrary is worse
+    than either consistent choice.
+
+    The cost of folding unconditionally, stated plainly: a citation of
+    ``https://a.test/#/route`` is now credited against a stored
+    ``https://a.test/``, so grounding rises for hash-route citations. That
+    is the price of the store keeping only the base page. To stop crediting
+    them, the fix belongs in ``_sanitize_source_url`` — KEEP the route on the
+    stored row — not in a second, differently-shaped cut on this side.
+    """
+    fragment_idx = url.find("#")
+    if fragment_idx != -1:
+        url = url[:fragment_idx]
+    return _normalize_url(url)
+
+
 #: The reserved host every fabricated stub this app mints lives under
 #: (``providers.LOCAL_SIMULATION_URL_PREFIX``). ``.test`` is IANA-reserved
 #: (RFC 6761), so a source row pointing there CANNOT be a real page —
@@ -548,7 +613,7 @@ def citation_marker_census(*, scopes: list[CitationScope]) -> MarkerCensus:
     :func:`citation_marker_grounding`. Pure: no I/O, no network, no clock.
     """
     run_urls = {
-        _normalize_url(source.url)
+        _canonical_marker_key(source.url)
         for _text, sources in scopes
         for source in sources
         if not _is_placeholder_source(source)
@@ -559,7 +624,7 @@ def citation_marker_census(*, scopes: list[CitationScope]) -> MarkerCensus:
     # URL. It therefore counts toward the denominator (unresolved), not as
     # unverifiable.
     placeholder_urls = {
-        _normalize_url(source.url)
+        _canonical_marker_key(source.url)
         for _text, sources in scopes
         for source in sources
         if _is_placeholder_source(source)
@@ -580,9 +645,9 @@ def citation_marker_census(*, scopes: list[CitationScope]) -> MarkerCensus:
                     # An out-of-range ordinal, or one pointing at a
                     # placeholder row: resolvable-as-FALSE, no I/O needed.
                     unresolved += 1
-            elif _normalize_url(marker) in run_urls:
+            elif _canonical_marker_key(marker) in run_urls:
                 resolved += 1
-            elif _normalize_url(marker) in placeholder_urls:
+            elif _canonical_marker_key(marker) in placeholder_urls:
                 # A stub URL the run holds: resolvable-as-FALSE (D-4).
                 unresolved += 1
             else:

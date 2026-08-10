@@ -17,7 +17,7 @@ from pathlib import Path
 
 import pytest
 
-from product_app.evaluation import RunEvaluation, build_trust_score
+from product_app.evaluation import EVAL_SCHEMA_VERSION, RunEvaluation, build_trust_score
 from product_app.query_runs import QueryRunEvaluationProjection
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
@@ -97,6 +97,35 @@ def test_the_verified_variant_is_exactly_what_the_engine_emits(name: str) -> Non
     )
     assert projection.trust.model_dump(mode="json") == recomputed.model_dump(mode="json")
     assert recomputed.score is not None and recomputed.band in {"low", "moderate", "high"}
+
+
+@pytest.mark.parametrize("name", sorted(EXPECTED_VARIANTS))
+def test_each_variant_is_stamped_with_the_schema_version_the_server_emits(name: str) -> None:
+    """The fixture's ``schema_version`` must EQUAL the constant, not merely be
+    a string.
+
+    ``RunEvaluation.schema_version`` is a bare ``str``, so every other test in
+    this file validates the SHAPE and never the VALUE. Measured 2026-08-10:
+    reverting all seven stamps from ``s3-eval-v5`` to ``s3-eval-v4`` and
+    running ``pytest tests/contract`` gave **43 passed** — in a change whose
+    entire premise was a grammar-version bump, the seven edits carrying it
+    were the ones no gate could see. AGENTS.md rule 1a: pin it, do not correct
+    it.
+
+    RED if a fixture variant keeps an old stamp while
+    ``evaluation.EVAL_SCHEMA_VERSION`` moves on, or vice versa.
+    """
+    assert _load()[name]["schema_version"] == EVAL_SCHEMA_VERSION
+
+
+def test_the_stamped_population_is_not_empty() -> None:
+    """The floor for the check above (rule 7).
+
+    ``EXPECTED_VARIANTS`` is a hand-written set; were it ever to empty, the
+    parametrized test would report success over nothing.
+    """
+    assert len(EXPECTED_VARIANTS) == 7
+    assert EVAL_SCHEMA_VERSION.startswith("s3-eval-v")
 
 
 def test_the_laundered_variant_is_indeterminate_and_the_clean_one_reportable() -> None:
