@@ -32,6 +32,7 @@ previously run for days on an unfunded key).
 from __future__ import annotations
 
 import contextlib
+import json
 import logging
 import threading
 import time as _time_module
@@ -46,6 +47,17 @@ from product_app.config import settings
 from product_app.model_slots import (
     DEFAULT_MODEL_IDS,
     openrouter_model_catalog_service,
+)
+
+# Issue #203 reuses the bounded, time-capped error-body read that issue #105
+# already shipped and tested, rather than growing a second one. Imported by
+# their private names deliberately: renaming them would touch 45 existing tests
+# on a paid error path for no behavioural gain. ``providers`` does not import
+# this module, so there is no cycle.
+from product_app.providers import (
+    _ERROR_BODY_SNIFF_LIMIT_BYTES,
+    _ERROR_BODY_SNIFF_TIMEOUT_SECONDS,
+    _read_within_budget,
 )
 
 _log = logging.getLogger(__name__)
@@ -70,6 +82,125 @@ KeyAuthState = Literal["unknown", "ok", "unauthorized"]
 #: Statuses that mean "the provider refused this credential", as opposed
 #: to "the provider could not answer right now".
 _CREDENTIAL_REFUSED_STATUSES = frozenset({401, 403})
+
+#: Issue #203. Header NAMES worth recording when a credential is refused —
+#: never their values. A WAF denial page routinely echoes the request headers
+#: back, and one of ours is ``Authorization``, so the rule for this whole
+#: package is: shapes, counts, enumerations and header names, nothing else.
+#: Frozen rather than "whatever arrived" for the same reason.
+_REFUSAL_HEADER_ALLOWLIST: frozenset[str] = frozenset(
+    {
+        "cf-ray",
+        "www-authenticate",
+        "access-control-expose-headers",
+        "x-provider-name",
+        "retry-after",
+        "x-generation-id",
+    }
+)
+
+#: The two header names OpenRouter exposes via CORS, measured against the live
+#: API on 2026-08-10 (``access-control-expose-headers:
+#: X-Generation-Id,X-Provider-Name,cf-ray``). Their PRESENCE in that list is
+#: recorded; the header's value is not.
+_OPENROUTER_EXPOSED_HEADER_NAMES = ("x-generation-id", "x-provider-name")
+
+#: The only content types recorded verbatim. Anything else becomes ``"other"``,
+#: so a hostile upstream cannot put an arbitrary string of its choosing into
+#: our log by setting a long ``Content-Type``.
+_KNOWN_CONTENT_TYPES = ("application/json", "text/html")
+
+
+def _log_credential_refusal_shape(exc: HTTPError) -> None:
+    """Record the SHAPE of a 401/403 on this deployment's egress path (#203).
+
+    ``DEPLOY.md`` and ``docs/architecture/50-failure-modes.md`` both already
+    record the same open question in the same words: *a network proxy or WAF
+    answering 403 on the app's behalf is indistinguishable from the provider
+    doing so.* Whether anything sits between the Fly runtime and the internet
+    is a question about infrastructure, not about code — ``fly.toml``
+    configures inbound services, a volume and a VM, and nothing in the repo
+    describes an outbound path. So this function ships the CAPTURE and
+    **deliberately no classifier**: nothing reads these fields, and
+    ``_CREDENTIAL_REFUSED_STATUSES`` and the readiness verdict are untouched
+    (pinned by
+    ``test_capturing_the_403_shape_does_not_change_the_readiness_verdict``).
+
+    Two live facts already rule out the obvious signals, so nobody re-derives
+    them: ``server: cloudflare`` and ``cf-ray`` do NOT discriminate, because
+    OpenRouter is itself behind Cloudflare; and its genuine 401 is
+    ``application/json``, about 50 bytes, with no ``error.metadata`` and no
+    ``Content-Length``. Whether a genuine OpenRouter **403** looks the same is
+    UNVERIFIED — the available key answers 401, and that is exactly what this
+    capture exists to find out.
+
+    Never raises, never blocks for long: the body read is the same bounded,
+    time-capped one issue #105 already ships, so a WAF holding the socket open
+    cannot stall the readiness probe.
+    """
+    fields: dict[str, object] = {
+        "status_code": exc.code,
+        "body_shape": "unreadable",
+        "body_bytes": 0,
+        "content_type_main": "absent",
+        "error_code_in_body": None,
+        "server_class": "absent",
+        "header_names_present": [],
+        "expose_headers_names_openrouter": None,
+    }
+    headers = getattr(exc, "headers", None)
+    if headers is not None:
+        fields["header_names_present"] = sorted(
+            {str(name).lower() for name in headers} & _REFUSAL_HEADER_ALLOWLIST
+        )
+        server = headers.get("Server")
+        if server is not None:
+            is_cloudflare = "cloudflare" in str(server).lower()
+            fields["server_class"] = "cloudflare" if is_cloudflare else "other"
+        content_type = headers.get("Content-Type")
+        if content_type is not None:
+            main = str(content_type).split(";")[0].strip().lower()
+            fields["content_type_main"] = main if main in _KNOWN_CONTENT_TYPES else "other"
+        exposed = headers.get("Access-Control-Expose-Headers")
+        if exposed is not None:
+            lowered = str(exposed).lower()
+            fields["expose_headers_names_openrouter"] = all(
+                name in lowered for name in _OPENROUTER_EXPOSED_HEADER_NAMES
+            )
+    try:
+        raw, _bounded = _read_within_budget(
+            exc, _ERROR_BODY_SNIFF_LIMIT_BYTES, _ERROR_BODY_SNIFF_TIMEOUT_SECONDS
+        )
+        over = len(raw) > _ERROR_BODY_SNIFF_LIMIT_BYTES
+        raw = raw[:_ERROR_BODY_SNIFF_LIMIT_BYTES]
+        fields["body_bytes"] = len(raw)
+    except Exception:
+        # "unreadable" and nothing more. ``len`` sits inside the try for the
+        # same reason it does in ``providers._billing_evidence_shape``: a body
+        # object returning something that is not bytes must not raise through
+        # a function whose contract is that it never does.
+        _log.warning("key_probe_credential_refused", extra=fields)
+        return
+    if not raw:
+        fields["body_shape"] = "empty"
+    elif over:
+        fields["body_shape"] = "too_large"
+    else:
+        try:
+            parsed = json.loads(raw)
+        except Exception:
+            fields["body_shape"] = "not_json"
+        else:
+            fields["body_shape"] = "json"
+            if isinstance(parsed, dict) and isinstance(parsed.get("error"), dict):
+                code = parsed["error"].get("code")
+                # ``isinstance(True, int)`` is True, so bools are excluded
+                # explicitly — a ``"code": true`` would otherwise be recorded
+                # as the integer 1.
+                if isinstance(code, int) and not isinstance(code, bool):
+                    fields["error_code_in_body"] = code
+    _log.warning("key_probe_credential_refused", extra=fields)
+
 
 _key_auth_lock = threading.RLock()
 _key_auth_state: KeyAuthState = "unknown"
@@ -323,6 +454,13 @@ def probe_key_auth(*, transport: KeyAuthTransport | None = None) -> KeyAuthState
                 "live-execution probe: provider rejected the API key (HTTP %s)",
                 exc.code,
             )
+            # Issue #203: record the response's SHAPE so a proxy/WAF 403 can
+            # eventually be told apart from a provider 403. Suppressed at the
+            # call site, not only inside the helper — a readiness probe that
+            # could be broken by its own instrumentation would be worse than no
+            # instrumentation. Nothing below reads it; the verdict is unchanged.
+            with contextlib.suppress(Exception):
+                _log_credential_refusal_shape(exc)
             return "unauthorized"
         # 429/500/502/503 — the provider could not answer, which says
         # nothing about the key.

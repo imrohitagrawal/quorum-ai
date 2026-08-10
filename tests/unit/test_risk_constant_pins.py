@@ -200,6 +200,26 @@ BUCKET_B_PIN_BEHAVIOUR = {
     "readiness._CREDENTIAL_REFUSED_STATUSES": (
         "assert 401/403 map to offline_by_bad_key; the set may grow"
     ),
+    # Added with issue #203's capture. All three shape what gets LOGGED and
+    # nothing else — no verdict, no classification and no money reads them,
+    # which `test_capturing_the_403_shape_does_not_change_the_readiness_verdict`
+    # pins. They are bucket B rather than C because a wrong value here is not
+    # harmless: it is how a header VALUE would escape into a log record.
+    "readiness._REFUSAL_HEADER_ALLOWLIST": (
+        "assert an allowlisted header NAME is recorded, a non-allowlisted one "
+        "(Server) is not, and no header VALUE ever reaches a record; the list "
+        "grows as #203's reading finds signals worth keeping"
+    ),
+    "readiness._OPENROUTER_EXPOSED_HEADER_NAMES": (
+        "assert a live-shaped Access-Control-Expose-Headers reports True and an "
+        "absent one reports None rather than False; the names track OpenRouter's "
+        "own CORS list, which is theirs to change"
+    ),
+    "readiness._KNOWN_CONTENT_TYPES": (
+        "assert application/json and text/html are reported verbatim and anything "
+        "else collapses to 'other', so a hostile Content-Type cannot put a string "
+        "of its choosing into our log; the known set grows"
+    ),
     "feedback_store._METERED_WRITES": (
         "assert lost_billed_writes counts exactly the pairs daily_spend_for sums "
         "-- ADR-0004 depends on those two agreeing; the SET grows (it gained "
