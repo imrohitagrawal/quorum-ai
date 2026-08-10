@@ -1591,7 +1591,7 @@
 
   const LIVE_ROUND_PLACEHOLDER_BODY = {
     running:
-      "Models are exchanging critiques for this round. The round-level critique appears here once it completes.",
+      "The moderator model is critiquing the four answers for this round. The round-level critique appears here once it completes.",
     pending: "This round has not started yet.",
     failed: "This round did not complete.",
     skipped: "This round was skipped.",
@@ -5186,7 +5186,7 @@
       modelCardInfo.type = "button";
       modelCardInfo.className = "info-icon";
       modelCardInfo.setAttribute("data-info-icon", "");
-      modelCardInfo.setAttribute("data-info-text", "This shows one model's initial answer. After all four models respond, each model is asked to revise its answer after reading the others — the refined version replaces this card.");
+      modelCardInfo.setAttribute("data-info-text", "This shows one model's answer. It is the model's only answer — it is not revised. Once all four respond, a separate moderator model reads all four and writes the debate critique.");
       modelCardInfo.setAttribute("aria-label", "What is this card?");
       modelCardInfo.innerHTML = "&#9432;";
       heading.append(modelCardInfo);

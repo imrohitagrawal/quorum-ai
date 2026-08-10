@@ -175,8 +175,46 @@ test.describe("landing CTA is reachable on a phone (#222)", () => {
  * adding a file to `e2e/tests/invariants/` moves the count AGENTS.md pins
  * (17), which `tests/test_doc_gate_consistency.py` turns red.
  */
+/**
+ * The subhead is pinned WHOLE, not by forbidden substrings.
+ *
+ * The first draft of this test listed three banned phrasings. Adversarial
+ * review broke it in one line: appending "The models review one another's
+ * answers and sharpen them." to the subhead contains none of the three, and
+ * the test stayed GREEN on a hero that states the exact falsehood the whole
+ * change exists to remove. A blacklist over open-ended English cannot work.
+ *
+ * Pinning the sentence makes any rewrite RED BY DEFAULT, so a future editor
+ * has to come back here, read ADR-0032, and re-approve the claim deliberately.
+ * That is the point — this is a claim about the system, not decoration.
+ */
+const EXPECTED_SUBHEAD =
+  "Four frontier AI models answer. A moderator model audits them over two rounds. " +
+  "A synthesis model writes the one answer — where they agree, where they don't, " +
+  "and exactly what to trust.";
+
 test.describe("landing copy describes the real pipeline (ADR-0032)", () => {
-  test("the hero names the moderator and synthesis stages, not mutual critique", async ({
+  test("the subhead is exactly the approved sentence", async ({ page }) => {
+    await stubReadinessLive(page);
+    await page.goto("/ui");
+    await expect(page.locator(".landing-subhead")).toBeAttached();
+
+    const actual = (
+      (await page.locator(".landing-subhead").textContent()) ?? ""
+    ).replace(/\s+/g, " ").trim();
+
+    // RED IF: the subhead is reworded AT ALL. Deliberate: the previous version
+    // of this assertion was a three-phrase blacklist and review walked a false
+    // claim straight past it.
+    expect(actual).toBe(EXPECTED_SUBHEAD);
+
+    // Belt and braces on the two claims that matter, so a failure message
+    // says WHICH property broke rather than just diffing a long string.
+    expect(actual.toLowerCase()).toContain("moderator model");
+    expect(actual.toLowerCase()).toContain("synthesis model");
+  });
+
+  test("no landing surface claims the four answer models critique each other", async ({
     page,
   }) => {
     await stubReadinessLive(page);
@@ -184,22 +222,31 @@ test.describe("landing copy describes the real pipeline (ADR-0032)", () => {
     await expect(page.locator(".landing-hero")).toBeAttached();
 
     const text = (
-      (await page.locator(".landing-hero").textContent()) ?? ""
+      (await page.locator("[data-view='landing']").textContent()) ?? ""
     ).toLowerCase();
 
-    // POSITIVE PARTNER FIRST (rule 7). Without these three, every negative
-    // below is trivially true over an empty or unrendered hero.
-    expect(text.length).toBeGreaterThan(120);
+    // POSITIVE PARTNER FIRST (rule 7). Without this the negatives below are
+    // trivially true over an unrendered view — which is not hypothetical: with
+    // the per-IP mint cap unraised, /ui serves a 429 page and this locator is
+    // empty. That is exactly how a vacuous pass would look.
+    expect(text.length).toBeGreaterThan(400);
     expect(text).toContain("moderator model");
-    expect(text).toContain("synthesis model");
 
-    // RED IF: any wording returns that has the four ANSWER models critiquing
-    // one another. This is the mechanism claim, not the slogan — the h1
-    // "Let four minds argue it out" is deliberately retained (ADR-0032 §5),
-    // which is why these match on the specific verbs and not on "argue".
-    expect(text).not.toContain("critique each other");
-    expect(text).not.toContain("critique one another");
-    expect(text).not.toContain("reads the others");
+    // RED IF: these specific phrasings return. NOT a completeness claim — the
+    // subhead test above is what actually pins the wording. The h1 "Let four
+    // minds argue it out" is deliberately retained (ADR-0032 §5), so "argue"
+    // is not among these.
+    for (const banned of [
+      "critique each other",
+      "critique one another",
+      "critique the others",
+      "reads the others",
+      "review one another",
+      "revise its answer",
+      "exchanging critiques",
+    ]) {
+      expect(text).not.toContain(banned);
+    }
   });
 
   test("the roadmap chip keeps peer critique in the future tense", async ({
@@ -213,14 +260,17 @@ test.describe("landing copy describes the real pipeline (ADR-0032)", () => {
       (await page.locator(".landing-disclaimers").textContent()) ?? ""
     ).toLowerCase();
 
-    // POSITIVE PARTNER: the row rendered and still carries its other chips,
-    // so a missing "in development" below means the chip changed rather than
-    // the whole row vanishing.
+    // POSITIVE PARTNER: the row rendered and still carries a sibling chip, so
+    // a missing phrase below means this chip changed rather than the whole row
+    // vanishing.
     expect(text).toContain("decision support");
 
     // RED IF: the chip is dropped, or reworded into the present tense so it
     // reads as a shipped feature — the exact defect ADR-0032 exists to fix.
+    // "planned, not yet built" rather than "in development": issue #290 is
+    // filed, but nothing is being built yet, and review caught the stronger
+    // wording as an unbacked claim.
     expect(text).toContain("peer critique");
-    expect(text).toContain("in development");
+    expect(text).toContain("planned, not yet built");
   });
 });
