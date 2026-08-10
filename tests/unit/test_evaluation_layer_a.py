@@ -31,6 +31,7 @@ from product_app.providers import (
     InitialModelAnswer,
     ProviderPath,
     SourceReference,
+    _extract_citations,
     _sanitize_source_url,
 )
 from product_app.synthesis import (
@@ -1909,27 +1910,66 @@ def test_an_off_run_url_is_still_unverifiable_after_the_fragment_fold(
 
 @pytest.mark.parametrize(
     "marker_url",
-    ["https://a.test/#/route", "https://a.test/#!/route"],
+    [
+        "https://a.test/#/route",
+        "https://a.test/#!/route",
+        "https://petstore.swagger.io/#/pet/addPet",
+        "https://twitter.com/#!/someuser",
+    ],
 )
-def test_a_client_side_hash_route_is_not_folded_into_the_page_it_routes_from(
+def test_a_hash_route_citation_resolves_against_the_row_minted_from_it(
     marker_url: str,
 ) -> None:
-    """A ``#/`` or ``#!`` fragment is a CLIENT-SIDE ROUTE, not an anchor.
+    """A ``#/`` or ``#!`` fragment folds too — because the STORE folded it.
 
-    ``https://a.test/#/route`` and ``https://a.test/`` are different
-    documents to the reader, so folding them would CREDIT a citation that
-    resolves to nothing. Today both land in ``unverifiable``; the fix must
-    leave them there rather than turning an anti-over-credit change into a
-    new over-credit.
+    The first draft of #285 kept a route guard here, on the theory that
+    ``https://a.test/#/route`` is a different document from
+    ``https://a.test/``. It is, on the web. It is not in this store: the
+    source row is built by ``_sanitize_source_url``, which already cut the
+    route off, so the row minted FROM this marker is the base page. Keeping
+    the guard left the two rows below — an ordinary Swagger UI docs link and
+    a hash-bang profile link — in ``unverifiable``, which is #285 unfixed.
 
-    RED if the ``not in ("/", "!")`` route guard is dropped from
-    ``_canonical_marker_key``: measured, ``resolved=1`` and grounding 1.0.
+    The row is derived from the marker by calling the real producer, not
+    hand-typed: that is what makes this the identity case. The guard's own
+    test wrote ``https://a.test/`` as a literal and so never showed the
+    marker failing against its own source row.
+
+    RED if a fragment guard of any shape returns to
+    ``_canonical_marker_key``: measured with the ``not in ("/", "!")``
+    guard, all four rows read ``resolved=0 unresolved=0 unverifiable=1``.
     """
-    sources = [_source("https://a.test/")]
+    stored = _sanitize_source_url(marker_url)
+    assert stored is not None
+    assert "#" not in stored, "the producer must have cut the route already"
+    sources = [_source(stored)]
     texts = [f"See [a route]({marker_url})."]
 
     census = _census(texts=texts, sources=sources)
-    assert (census.resolved, census.unresolved, census.unverifiable) == (0, 0, 1)
+    assert (census.resolved, census.unresolved, census.unverifiable) == (1, 0, 0)
+
+
+def test_a_hash_route_citation_resolves_against_the_row_the_extractor_built_from_it() -> None:
+    """The same case again, but with NOTHING hand-built (#285's own shape).
+
+    ``providers._extract_citations``' inline-markdown fallback mints the
+    source row from the very same ``[text](url)`` the census later reads as
+    a marker, so on this path marker and row are the identical string by
+    construction — and were still scored as an off-run URL. Driving the real
+    extractor is what proves the two sides agree end to end rather than
+    agreeing about a literal a test author chose.
+
+    RED if a fragment guard of any shape returns to
+    ``_canonical_marker_key``: measured, ``(0, 0, 1)``.
+    """
+    marker = "https://petstore.swagger.io/#/pet/addPet"
+    text = f"The add-pet operation is documented at [Swagger UI]({marker})."
+    sources = _extract_citations({"choices": [{"message": {"content": text}}]}, content=text)
+
+    assert [source.url for source in sources] == ["https://petstore.swagger.io/"]
+
+    census = _census(texts=[text], sources=sources)
+    assert (census.resolved, census.unresolved, census.unverifiable) == (1, 0, 0)
 
 
 def test_a_correctly_anchored_citation_does_not_suppress_the_advisory_labels() -> None:

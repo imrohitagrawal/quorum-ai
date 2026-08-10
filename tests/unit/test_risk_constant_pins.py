@@ -167,7 +167,12 @@ BUCKET_B_PIN_BEHAVIOUR = {
         "newest, not that the cap is 512 -- the size is tunable (a wrong value "
         "costs memory or one extra evaluation, never a wrong answer), the "
         "unbounded growth is not; "
-        "tests/unit/test_query_run_evaluation_memo.py drives the real memo"
+        "tests/unit/test_query_run_evaluation_memo.py drives six real runs "
+        "through query_runs._evaluate_terminal_run with the cap monkeypatched "
+        "to 5, so the eviction it asserts is the one the production write path "
+        "performs -- an earlier version of this sentence said 'drives the real "
+        "memo' while the test called the _evaluation_memo_store helper, and a "
+        "direct dict write inside _evaluate_terminal_run survived it"
     ),
     # --- Added 2026-08-03 with feedback_store / query_runs / readiness ---
     "query_runs._MAX_CONCURRENT_RUNS": (

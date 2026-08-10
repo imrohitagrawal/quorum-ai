@@ -94,9 +94,55 @@ def test_query_string_preserved() -> None:
 # ``_sanitize_source_url`` decides the shape a source row is STORED in;
 # ``evaluation._canonical_marker_key`` decides the shape a citation marker
 # is COMPARED in. Two independent implementations of "cut the fragment" is
-# exactly what produced #285, so this pins them to the same answer over the
-# URLs a source row can actually hold.
+# exactly what produced #285, so this pins the comparison key to LITERALS
+# (so a constant function cannot satisfy it) and then pins the two sides to
+# each other over the URLs a source row can actually hold.
 # --------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    ("url", "expected_key"),
+    [
+        ("https://example.com/article#section-2", "https://example.com/article"),
+        ("https://example.com/article#", "https://example.com/article"),
+        ("https://example.com/article#x#y", "https://example.com/article"),
+        ("https://example.com/search?q=foo#frag", "https://example.com/search?q=foo"),
+        ("https://example.com/article", "https://example.com/article"),
+        (
+            "https://example.com/search?q=foo&page=2",
+            "https://example.com/search?q=foo&page=2",
+        ),
+        # Client-side routes fold too, since #285's second round: the store
+        # threw the route away, so the row minted from the marker IS the base
+        # page (``evaluation._canonical_marker_key``'s docstring measures it).
+        ("https://example.com/article#/route", "https://example.com/article"),
+        ("https://example.com/article#!/bang", "https://example.com/article"),
+        # The non-fragment folds ``_normalize_url`` also performs, pinned so
+        # this corpus cannot be satisfied by cutting at ``#`` alone.
+        ("https://EXAMPLE.com/Article/#/route", "https://example.com/article"),
+        ("https://example.com/article.", "https://example.com/article"),
+    ],
+)
+def test_the_marker_key_folds_a_stored_source_url_to_this_exact_key(
+    url: str,
+    expected_key: str,
+) -> None:
+    """The marker key of each URL, written out as a literal.
+
+    This assertion used to read ``_canonical_marker_key(url) ==
+    _canonical_marker_key(stored)`` — one function applied to two inputs,
+    anchored to no expected value. Measured: replacing the whole body of
+    ``_canonical_marker_key`` with ``return ""`` left all six rows GREEN,
+    and so did breaking the PRODUCER (``_sanitize_source_url``'s
+    ``url.find("#")`` forced to ``-1``), because the comparison side then
+    performed the cut on both operands. It could not see either drift its
+    section header claims to catch.
+
+    RED if ``_canonical_marker_key`` returns anything but these strings:
+    the constant function ``return ""`` fails all ten rows; ``rfind`` for
+    ``find`` fails row 3; dropping ``_normalize_url`` fails rows 9 and 10.
+    """
+    assert _canonical_marker_key(url) == expected_key
 
 
 @pytest.mark.parametrize(
@@ -108,21 +154,25 @@ def test_query_string_preserved() -> None:
         "https://example.com/search?q=foo#frag",
         "https://example.com/article",
         "https://example.com/search?q=foo&page=2",
+        "https://example.com/article#/route",
+        "https://example.com/article#!/bang",
     ],
 )
-def test_the_marker_key_agrees_with_the_sanitiser_on_a_stored_source_url(url: str) -> None:
-    """Keying the raw URL and keying the STORED URL must give one answer.
+def test_the_stored_url_keys_the_same_way_the_raw_one_does(url: str) -> None:
+    """The PRODUCER half: storing a URL must not change its marker key.
 
-    Deliberately excludes client-side ROUTE fragments (``#/``, ``#!``):
-    the marker key leaves those alone on purpose — see
-    ``test_a_client_side_hash_route_is_not_folded_into_the_page_it_routes_from``
-    — so the two sides differ there BY DESIGN, and this corpus would be
-    asserting the opposite of the intended behaviour if it included them.
+    Kept as a separate test because the table above pins the key and this
+    pins the agreement; the one test that tried to be both was neither.
 
-    RED if ``_canonical_marker_key`` cuts at the LAST ``#`` instead of the
-    first (``rfind`` for ``find``): row 3 then keys to
-    ``https://example.com/article#x`` on the marker side and
-    ``https://example.com/article`` on the stored side.
+    RED if ``providers._sanitize_source_url`` folds something
+    ``_canonical_marker_key`` does not — e.g. cutting at ``?`` as well:
+    row 4 then stores ``https://example.com/search`` while the raw marker
+    still keys to ``https://example.com/search?q=foo``.
+
+    What it CANNOT see, stated so nobody trusts it for this: the producer
+    dropping its fragment cut. Both sides would then cut and still agree.
+    That direction is covered by ``test_fragment_stripped`` above and by
+    the literal table's rows 1-3.
     """
     stored = _sanitize_source_url(url)
     assert stored is not None

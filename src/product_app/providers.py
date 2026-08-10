@@ -2072,8 +2072,10 @@ def _sanitize_source_url(url: str) -> str | None:
     The two reasons this docstring gave until #285 were both wrong, and
     are recorded here so nobody re-derives them: this app has no hash
     router (``grep -c "location.hash\\|hashchange\\|pushState"
-    static/app.js`` -> 0) and no iframe at all (``grep -rn iframe
-    static/app.js templates/`` -> no hits); and a fragment cannot smuggle a
+    static/app.js`` -> 0) and mounts no iframe in the workspace it authors
+    (``grep -rn iframe static/app.js templates/`` -> no hits; hedged
+    deliberately, because ``grep -rl iframe src/`` DOES hit the two vendored
+    bundles under ``static/vendor/``); and a fragment cannot smuggle a
     scheme past the check below, because the ``startswith(("http://",
     "https://"))`` gate runs BEFORE the cut. The two reasons that hold:
 
@@ -2113,12 +2115,16 @@ def _sanitize_source_url(url: str) -> str | None:
         return None
     # A URL is a single token. One carrying a line break — or any other
     # whitespace/control character — is not a URL, it is a payload: inlined
-    # into a prompt it forges its own line, and every downstream consumer
-    # (debate, synthesis, the evaluation judge) inlines sources this way.
+    # into a prompt it forges its own line, and TWO downstream consumers
+    # inline sources this way: the synthesis prompt (``synthesis.py:763-764``)
+    # and the judge's evidence block (``evaluation.py:1714-1715``).
+    # This said "every downstream consumer (debate, synthesis, the evaluation
+    # judge)" until 2026-08-10; ``grep -c "\.url" src/product_app/debate.py``
+    # prints 0 — debate only counts ``answer.sources``, it never inlines one.
     # ``urlparse`` strips these for its own host check and then hands the
     # ORIGINAL string back, so the host check passing says nothing about what
     # the rest of the string will do. Reject here, at the producer, rather
-    # than flattening at each consumer — three consumers means the next one
+    # than flattening at each consumer — two consumers means the next one
     # forgets. Unicode line separators (U+2028/U+2029/U+0085) count too.
     if any(ch.isspace() or ord(ch) < 0x20 or ch in "  " for ch in url):
         return None

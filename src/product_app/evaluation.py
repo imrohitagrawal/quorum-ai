@@ -506,17 +506,44 @@ def _canonical_marker_key(url: str) -> str:
     ``_sanitize_source_url`` or the local stub prefix) still compares
     correctly.
 
-    ONE deliberate exception. A fragment beginning ``/`` or ``!`` is a
-    CLIENT-SIDE ROUTE, not an anchor into the page: ``https://a.test/#/route``
-    is a different document from ``https://a.test/`` to the reader. Folding
-    it would CREDIT a citation that resolves to nothing — measured, a plain
-    fold turns exactly that pair into ``resolved``, grounding 1.0. The guard
-    is strictly conservative: every case it declines to fold keys the same
-    way today's code does, so it can never move a marker that is currently
-    counted.
+    NO EXCEPTIONS — and the first draft of this fix had one, which review
+    refuted by measurement. That draft declined to fold a fragment beginning
+    ``/`` or ``!``, on the theory that a client-side route
+    (``https://a.test/#/route``) is a different document from
+    ``https://a.test/``. The theory is right about the WEB and wrong about
+    this STORE: ``_sanitize_source_url`` has already thrown the route away,
+    so the source row minted from a hash-route citation IS the base page and
+    there is no information left to tell the two apart. Measured on the real
+    ``providers._extract_citations`` -> :func:`citation_marker_census` path,
+    where the inline-markdown fallback mints the row from the very same
+    ``[text](url)`` the census reads as a marker, so marker and row are the
+    identical string by construction:
+
+    ==========================================  ==================
+    marker (row minted from it)                 with the guard
+    ==========================================  ==================
+    ``https://petstore.swagger.io/#/pet/addPet``  unverifiable
+    ``https://twitter.com/#!/someuser``           unverifiable
+    ``https://a.test/doc#section``                resolved
+    ==========================================  ==================
+
+    The first two are #285 unfixed, on an ordinary docs shape. Worse, the
+    guard was a SPELLING filter rather than a category one — against one
+    stored ``https://docs.example.com/``, ``#/api/tokens`` and
+    ``#!/api/tokens`` were declined while ``#doc/12345``, ``#page=3``,
+    ``#about`` and even ``#%2Fapi%2Ftokens`` (the percent-encoded form of the
+    shape it blocked) all resolved. An inconsistency that arbitrary is worse
+    than either consistent choice.
+
+    The cost of folding unconditionally, stated plainly: a citation of
+    ``https://a.test/#/route`` is now credited against a stored
+    ``https://a.test/``, so grounding rises for hash-route citations. That
+    is the price of the store keeping only the base page. To stop crediting
+    them, the fix belongs in ``_sanitize_source_url`` — KEEP the route on the
+    stored row — not in a second, differently-shaped cut on this side.
     """
     fragment_idx = url.find("#")
-    if fragment_idx != -1 and url[fragment_idx + 1 : fragment_idx + 2] not in ("/", "!"):
+    if fragment_idx != -1:
         url = url[:fragment_idx]
     return _normalize_url(url)
 
