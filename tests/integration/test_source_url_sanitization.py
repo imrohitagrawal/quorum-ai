@@ -8,14 +8,22 @@ URL pointing at a metadata service (e.g. ``169.254.169.254``) or
 the loopback interface. The sanitizer must drop those URLs before
 they reach the response.
 
-Fragments (``#...``) must be stripped because they collide with
-the SPA's own hash routing and can be used to smuggle javascript:
-into a previously-validated URL when the URL is opened in a new
-tab by a downstream consumer.
+Fragments (``#...``) are stripped. The reason this file gave until #285 —
+that they collide with the SPA's own hash routing and can smuggle
+``javascript:`` into a previously-validated URL — was wrong on both
+counts: this app has no hash router and no iframe, and the scheme gate
+runs BEFORE the fragment cut. The reasons that do hold are recorded on
+``providers._sanitize_source_url``. What matters for these tests is that
+the stripped shape is a CONTRACT, and that the evaluation engine compares
+citation markers in that same shape (``evaluation._canonical_marker_key``)
+— which it did not until #285.
 """
 
 from __future__ import annotations
 
+import pytest
+
+from product_app.evaluation import _canonical_marker_key
 from product_app.providers import _sanitize_source_url
 
 
@@ -78,3 +86,44 @@ def test_query_string_preserved() -> None:
         _sanitize_source_url("https://example.com/search?q=foo&page=2")
         == "https://example.com/search?q=foo&page=2"
     )
+
+
+# --------------------------------------------------------------------------
+# Issue #285 — the producer and the comparison must not drift apart.
+#
+# ``_sanitize_source_url`` decides the shape a source row is STORED in;
+# ``evaluation._canonical_marker_key`` decides the shape a citation marker
+# is COMPARED in. Two independent implementations of "cut the fragment" is
+# exactly what produced #285, so this pins them to the same answer over the
+# URLs a source row can actually hold.
+# --------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    "url",
+    [
+        "https://example.com/article#section-2",
+        "https://example.com/article#",
+        "https://example.com/article#x#y",
+        "https://example.com/search?q=foo#frag",
+        "https://example.com/article",
+        "https://example.com/search?q=foo&page=2",
+    ],
+)
+def test_the_marker_key_agrees_with_the_sanitiser_on_a_stored_source_url(url: str) -> None:
+    """Keying the raw URL and keying the STORED URL must give one answer.
+
+    Deliberately excludes client-side ROUTE fragments (``#/``, ``#!``):
+    the marker key leaves those alone on purpose — see
+    ``test_a_client_side_hash_route_is_not_folded_into_the_page_it_routes_from``
+    — so the two sides differ there BY DESIGN, and this corpus would be
+    asserting the opposite of the intended behaviour if it included them.
+
+    RED if ``_canonical_marker_key`` cuts at the LAST ``#`` instead of the
+    first (``rfind`` for ``find``): row 3 then keys to
+    ``https://example.com/article#x`` on the marker side and
+    ``https://example.com/article`` on the stored side.
+    """
+    stored = _sanitize_source_url(url)
+    assert stored is not None
+    assert _canonical_marker_key(url) == _canonical_marker_key(stored)

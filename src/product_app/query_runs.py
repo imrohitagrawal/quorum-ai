@@ -2875,6 +2875,52 @@ def _request_path_judge(query_run: QueryRun) -> _MemoisedRunJudge | None:
     return _MemoisedRunJudge(str(query_run.query_run_id))
 
 
+#: Per-run memo of the whole terminal evaluation (issue #284). Every result
+#: READ used to run the Layer-A engine again from scratch, on a plain ``def``
+#: route — i.e. in the threadpool, holding the GIL. Measured on this repo's
+#: own hostile shape (an answer at the 8000-char cap made entirely of ``[``):
+#: 575.8 ms per evaluation, 1182.4 ms just under ``_PARSE_LIMIT_CHARS``, all of
+#: it repeated on every poll of a run whose answer cannot change.
+#:
+#: KEYED ON ``(query_run_id, updated_at)``, not on the run id alone, and that
+#: is load-bearing. ``record_initial_answer`` and ``record_final_synthesis``
+#: carry NO terminal guard (unlike ``update_status``, which refuses a terminal
+#: write), so a late-landing answer after a deadline degrade or a cancel can
+#: still change the inputs of an already-terminal run. The per-read recompute
+#: self-corrected for that; a run-id-only memo would freeze the evaluation
+#: while the body kept moving. Every mutator bumps ``updated_at``, so the key
+#: invalidates exactly when the run changes, and it fails in the safe
+#: direction — an unexpected bump costs one extra evaluation, never a stale
+#: answer. ``agreement`` is in the key too: it is computed by the CALLER, so
+#: the memo must not assume it is a function of the run.
+#:
+#: In-process only, matching the single-worker deploy (``Dockerfile`` runs
+#: uvicorn with ``--workers 1``); bounded LRU so it can never grow with run
+#: history. Sibling of ``_judge_verdict_memo`` and deliberately separate: that
+#: one exists to stop PAID calls repeating, this one to stop CPU repeating.
+_EVALUATION_MEMO_MAX = 512
+_EvaluationMemoKey = tuple[str, datetime, int, int]
+_evaluation_memo: OrderedDict[_EvaluationMemoKey, RunEvaluationResult | None] = OrderedDict()
+_evaluation_memo_lock = RLock()
+
+
+def _evaluation_memo_clear_for_tests() -> None:
+    with _evaluation_memo_lock:
+        _evaluation_memo.clear()
+
+
+def _evaluation_memo_store(
+    key: _EvaluationMemoKey,
+    result: RunEvaluationResult | None,
+) -> None:
+    """Write one entry and evict the oldest while over the cap."""
+    with _evaluation_memo_lock:
+        _evaluation_memo[key] = result
+        _evaluation_memo.move_to_end(key)
+        while len(_evaluation_memo) > _EVALUATION_MEMO_MAX:
+            _evaluation_memo.popitem(last=False)
+
+
 def _evaluate_terminal_run(
     query_run: QueryRun,
     *,
@@ -2893,23 +2939,47 @@ def _evaluate_terminal_run(
     derived from the SAME value the endpoint serves and the S1 row persists.
     ``query_text`` is threaded only alongside a judge — it is only ever used
     to build judge evidence.
+
+    Memoised per ``(run, revision)`` — see ``_evaluation_memo``. This is the
+    ONE site both readers reach (``_evaluation_projection`` for the served
+    body, ``_persist_run_evaluation`` for the durable row), so memoising here
+    also makes the served projection and the persisted row identical BY
+    CONSTRUCTION rather than by two runs of a pure function agreeing.
     """
     if not query_run.is_terminal:
         return None
+    key: _EvaluationMemoKey = (
+        str(query_run.query_run_id),
+        query_run.updated_at,
+        agreement.aligned,
+        agreement.total,
+    )
+    with _evaluation_memo_lock:
+        if key in _evaluation_memo:
+            _evaluation_memo.move_to_end(key)
+            return _evaluation_memo[key]
+    # Computed OUTSIDE the lock: with a judge configured this makes an HTTP
+    # call, and holding a process-wide lock across it would serialise every
+    # result read in the process. A concurrent second computation is harmless
+    # — Layer A is pure, and the judge's own in-flight claim
+    # (``_judge_verdict_memo``) already stops a second PAID call.
     judge = _request_path_judge(query_run)
     if judge is None:
-        return evaluate_run(
+        result = evaluate_run(
             initial_answers=query_run.initial_answers,
             final_synthesis=query_run.final_synthesis,
             agreement=agreement,
         )
-    return evaluate_run(
-        initial_answers=query_run.initial_answers,
-        final_synthesis=query_run.final_synthesis,
-        agreement=agreement,
-        judge=judge,
-        query_text=query_run.query_text,
-    )
+    else:
+        result = evaluate_run(
+            initial_answers=query_run.initial_answers,
+            final_synthesis=query_run.final_synthesis,
+            agreement=agreement,
+            judge=judge,
+            query_text=query_run.query_text,
+        )
+    _evaluation_memo_store(key, result)
+    return result
 
 
 def _evaluation_projection(

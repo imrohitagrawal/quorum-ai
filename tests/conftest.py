@@ -140,6 +140,7 @@ from product_app import feedback_store, store_reconnect
 from product_app.auth import session_repository
 from product_app.query_runs import (
     _account_rate_limiter,
+    _evaluation_memo_clear_for_tests,
     _ip_rate_limiter,
     query_run_repository,
 )
@@ -224,6 +225,12 @@ def _reset_state() -> None:
     session_repository.clear()
     _ip_rate_limiter.clear()
     _account_rate_limiter.clear()
+    # Issue #284. The terminal evaluation is memoised per
+    # ``(query_run_id, updated_at, agreement)``, which is a process global in
+    # exactly the sense rule 16a means. A test that forges a run id another
+    # test also uses would otherwise read the first test's numbers, and the
+    # failure would look like an evaluation bug rather than test bleed.
+    _evaluation_memo_clear_for_tests()
     # Issue #122/#123. The reconnect cooldown stamps and the "a reopen was
     # tried and the store still cannot be shown to write" flag are module
     # globals, and any test whose ``estimate()`` runs against a stale store

@@ -2069,15 +2069,30 @@ def _sanitize_source_url(url: str) -> str | None:
     """Return ``url`` with its fragment stripped and a permissive
     host check applied. Returns ``None`` if the URL must be dropped.
 
-    The fragment strip is for two reasons:
+    The two reasons this docstring gave until #285 were both wrong, and
+    are recorded here so nobody re-derives them: this app has no hash
+    router (``grep -c "location.hash\\|hashchange\\|pushState"
+    static/app.js`` -> 0) and no iframe at all (``grep -rn iframe
+    static/app.js templates/`` -> no hits); and a fragment cannot smuggle a
+    scheme past the check below, because the ``startswith(("http://",
+    "https://"))`` gate runs BEFORE the cut. The two reasons that hold:
 
-    1. ``#`` is the route hash on the SPA; if it leaks into a
-       citation URL the browser will scroll the iframe/page to a
-       non-existent anchor.
-    2. Fragments can be used to smuggle javascript: into a
-       previously-validated URL when the consumer does not expect
-       them (e.g. a downstream tab opens the URL and the fragment
-       is interpreted as a script).
+    1. The sanitized URL is inlined verbatim into PROMPTS — the judge's
+       evidence source lines (``evaluation.build_judge_evidence``) and the
+       synthesis prompt (``synthesis._flatten_for_prompt``, applied to the
+       title and the URL alike). A fragment is provider-chosen text that
+       tells the prompt nothing and costs tokens.
+    2. ``_extract_citations`` dedups on the sanitized string, so keeping
+       fragments would split one page into several bibliography rows and
+       inflate the citation-coverage denominator.
+
+    Whichever reason you prefer, the SHAPE is a contract. Issue #285 was
+    the evaluation engine comparing citation markers WITHOUT this cut, so a
+    marker citing its own source with an anchor matched nothing and was
+    scored as an off-run URL. The comparison side folds the same way now —
+    ``evaluation._canonical_marker_key`` — and
+    ``tests/integration/test_source_url_sanitization.py`` pins the two
+    together over the URLs a source row can hold.
 
     The host denylist is defense-in-depth: a crafted LLM response
     that includes a metadata-service URL would otherwise let a

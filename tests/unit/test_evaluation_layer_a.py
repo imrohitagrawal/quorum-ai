@@ -16,6 +16,7 @@ import pytest
 from product_app.debate import AgreementSummary
 from product_app.evaluation import (
     LAYER_A_WEIGHTS,
+    MarkerCensus,
     citation_marker_census,
     citation_marker_grounding,
     detect_refusal,
@@ -24,11 +25,13 @@ from product_app.evaluation import (
     presentation_confidence,
 )
 from product_app.providers import (
+    LOCAL_SIMULATION_URL_PREFIX,
     CitationCoverage,
     InitialAnswerStatus,
     InitialModelAnswer,
     ProviderPath,
     SourceReference,
+    _sanitize_source_url,
 )
 from product_app.synthesis import (
     FinalSynthesis,
@@ -1809,6 +1812,161 @@ def test_url_markers_are_matched_modulo_trailing_punctuation_and_case() -> None:
     )
 
 
+# --------------------------------------------------------------------------
+# Issue #285 — the fragment asymmetry.
+#
+# ``providers._sanitize_source_url`` cuts everything from the first ``#``
+# off every URL it stores on a source row. The census compared a marker to
+# those rows WITHOUT that cut, so a marker citing its own source by URL
+# plus an anchor matched nothing and fell into ``unverifiable`` — the
+# off-run bucket, which leaves the grounding denominator entirely.
+# --------------------------------------------------------------------------
+
+
+def _census(texts: list[str], sources: list[SourceReference]) -> MarkerCensus:
+    """Run ``citation_marker_census`` with one scope per text."""
+    return citation_marker_census(scopes=[(text, sources) for text in texts])
+
+
+def test_a_marker_citing_its_own_source_with_an_anchor_resolves() -> None:
+    """An anchored citation of a source this run holds is RESOLVED.
+
+    The source row is built by calling the real producer, so the test is
+    pinned to what the store actually keeps, not to a hand-written string.
+
+    RED if the ``url[:index]`` fragment cut is removed from
+    ``evaluation._canonical_marker_key``: measured before the fix,
+    ``resolved=0 unresolved=0 unverifiable=1`` and grounding ``None``.
+    """
+    stored = _sanitize_source_url(f"{REAL_URL}#section")
+    assert stored == REAL_URL, "the producer under test must strip the fragment"
+    sources = [_source(stored)]
+    texts = [f"See [the guideline]({REAL_URL}#section)."]
+
+    census = _census(texts=texts, sources=sources)
+    assert census.resolved == 1
+    assert census.unresolved == 0
+    assert census.unverifiable == 0
+    assert _grounding(texts=texts, sources=sources) == pytest.approx(1.0)
+
+
+def test_a_fragment_citation_of_the_apps_own_stub_is_counted_wrong_not_unknown() -> None:
+    """An anchored citation of one of the app's OWN stubs is UNRESOLVED.
+
+    Resolvable-as-FALSE with no I/O (D-4), exactly like an out-of-range
+    ordinal — so it belongs in the denominator, and grounding must be a
+    number rather than ``None``.
+
+    RED if the fragment cut is removed from ``_canonical_marker_key``:
+    measured before the fix, ``unresolved=0 unverifiable=1``, grounding
+    ``None``.
+    """
+    stub_url = f"{LOCAL_SIMULATION_URL_PREFIX}1#s"
+    stored = _sanitize_source_url(stub_url)
+    assert stored == f"{LOCAL_SIMULATION_URL_PREFIX}1"
+    sources = [_source(stored)]
+    texts = [f"See [the demo]({stub_url})."]
+
+    census = _census(texts=texts, sources=sources)
+    assert census.unresolved == 1
+    assert census.unverifiable == 0
+    assert census.resolvable == 1
+    grounding = _grounding(texts=texts, sources=sources)
+    assert grounding is not None
+    assert grounding == pytest.approx(0.0)
+
+
+@pytest.mark.parametrize(
+    "marker_url",
+    [
+        "https://evil.test/page#s",
+        "https://pages.nist.gov/a-different-page#s",
+        "https://evil.test/page",
+        f"{REAL_URL}?query=1",
+    ],
+)
+def test_an_off_run_url_is_still_unverifiable_after_the_fragment_fold(
+    marker_url: str,
+) -> None:
+    """The POSITIVE PARTNER (rule 7) for the two tests above.
+
+    Folding the fragment must fold NOTHING else. A different host, a
+    different path on the SAME host, and a different query string are all
+    still off-run URLs — unknown, excluded from the denominator.
+
+    RED if ``_canonical_marker_key`` folds more than the fragment — e.g.
+    returning only the hostname (row 2 goes red) or cutting at ``?``
+    (row 4 goes red). Without this test, a key that returned the empty
+    string for every URL would pass the two tests above.
+    """
+    sources = [_source(REAL_URL)]
+    texts = [f"See [a page]({marker_url})."]
+
+    census = _census(texts=texts, sources=sources)
+    assert (census.resolved, census.unresolved, census.unverifiable) == (0, 0, 1)
+    assert _grounding(texts=texts, sources=sources) is None
+
+
+@pytest.mark.parametrize(
+    "marker_url",
+    ["https://a.test/#/route", "https://a.test/#!/route"],
+)
+def test_a_client_side_hash_route_is_not_folded_into_the_page_it_routes_from(
+    marker_url: str,
+) -> None:
+    """A ``#/`` or ``#!`` fragment is a CLIENT-SIDE ROUTE, not an anchor.
+
+    ``https://a.test/#/route`` and ``https://a.test/`` are different
+    documents to the reader, so folding them would CREDIT a citation that
+    resolves to nothing. Today both land in ``unverifiable``; the fix must
+    leave them there rather than turning an anti-over-credit change into a
+    new over-credit.
+
+    RED if the ``not in ("/", "!")`` route guard is dropped from
+    ``_canonical_marker_key``: measured, ``resolved=1`` and grounding 1.0.
+    """
+    sources = [_source("https://a.test/")]
+    texts = [f"See [a route]({marker_url})."]
+
+    census = _census(texts=texts, sources=sources)
+    assert (census.resolved, census.unresolved, census.unverifiable) == (0, 0, 1)
+
+
+def test_a_correctly_anchored_citation_does_not_suppress_the_advisory_labels() -> None:
+    """The user-visible harm behind #285.
+
+    ``presentation_confidence`` returns ``"indeterminate"`` — the labels
+    are withheld from the page — whenever ANY marker is unverifiable and
+    the labels sit at the confident end. Before the fix, a run that cited
+    its own real sources correctly, with anchors, was suppressed for it.
+
+    RED if the fragment cut is removed from ``_canonical_marker_key``:
+    ``unverifiable_marker_count`` returns to 1 and this reads
+    ``"indeterminate"``.
+    """
+    stored = _sanitize_source_url(f"{REAL_URL}#section")
+    assert stored is not None
+    answer = _answer(
+        text=f"The guidance is explicit ([source]({REAL_URL}#section)).",
+        sources=[_source(stored)],
+    )
+    evaluation = evaluate_layer_a(
+        initial_answers=[answer],
+        final_synthesis=None,
+        agreement=AgreementSummary(aligned=1, total=1),
+    )
+
+    assert evaluation.signals.unverifiable_marker_count == 0
+    assert (
+        presentation_confidence(
+            evaluation.signals,
+            faithfulness_label=evaluation.faithfulness_label,
+            hallucination_risk=evaluation.hallucination_risk,
+        )
+        == "reportable"
+    )
+
+
 def test_an_ordinal_beyond_the_real_source_count_does_not_resolve() -> None:
     sources = [_source(REAL_URL), _source(OTHER_URL)]
     assert _grounding(texts=["A claim [2]."], sources=sources) == pytest.approx(1.0)
@@ -3082,8 +3240,8 @@ def test_the_eval_schema_version_records_this_grammar_change() -> None:
     A literal on purpose (the repo's doc-gate pattern): the next change to
     what a marker MEANS has to edit this line, which is the reminder.
 
-    RED if `EVAL_SCHEMA_VERSION` is reverted to "s3-eval-v3".
+    RED if `EVAL_SCHEMA_VERSION` is reverted to "s3-eval-v4".
     """
     from product_app.evaluation import EVAL_SCHEMA_VERSION
 
-    assert EVAL_SCHEMA_VERSION == "s3-eval-v4"
+    assert EVAL_SCHEMA_VERSION == "s3-eval-v5"
