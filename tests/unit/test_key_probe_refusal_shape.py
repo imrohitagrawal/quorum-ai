@@ -243,6 +243,44 @@ def test_an_unfamiliar_content_type_collapses_and_a_foreign_expose_list_reports_
     )
 
 
+def test_an_unreadable_body_still_produces_a_record_with_the_headers_it_had(
+    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    """RED WHEN: a failed body read swallows the whole record, or is reported as
+    ``empty``.
+
+    A dead socket is NOT an empty body, and recording it as one would claim the
+    upstream sent nothing — a different and wrong finding in the very sample
+    #203 is being collected for. The header evidence survives a body that does
+    not, so it must still be written.
+    """
+
+    class _DeadSocket(io.BytesIO):
+        def read1(self, size: int | None = -1, /) -> bytes:
+            raise OSError("connection reset by peer")
+
+    with caplog.at_level(logging.DEBUG, logger="product_app.readiness"):
+        verdict = _probe(
+            monkeypatch,
+            HTTPError(
+                url="https://openrouter.ai/api/v1/key",
+                code=403,
+                msg="refused",
+                hdrs=_headers(Server="cloudflare", cf_ray="deadbeef"),
+                fp=_DeadSocket(b"never read"),
+            ),
+        )
+    assert verdict == "unauthorized"
+    record = _record(caplog)
+    assert record["body_shape"] == "unreadable"
+    assert record["body_bytes"] == 0
+    # POSITIVE PARTNER: the header half of the evidence still arrived, so this
+    # is not passing because the record degraded to nothing at all.
+    assert record["server_class"] == "cloudflare"
+    assert record["header_names_present"] == ["cf-ray"]
+    assert "deadbeef" not in json.dumps(record, default=str)
+
+
 def test_capturing_the_403_shape_does_not_change_the_readiness_verdict(
     monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
 ) -> None:
