@@ -162,3 +162,65 @@ test.describe("landing CTA is reachable on a phone (#222)", () => {
     expect(m.horizontalOverflow).toBe(false);
   });
 });
+
+/**
+ * ADR-0032: the landing must describe the pipeline the code actually runs.
+ *
+ * Until 2026-08-11 the subhead said Quorum "has them critique each other
+ * twice". It does not. The four slot models are called once each, in
+ * parallel, and never read each other's answers; one separate moderator model
+ * (`settings.debate_model_id`) reads all four and writes the critique, twice.
+ *
+ * These assertions live in THIS file rather than a new spec on purpose:
+ * adding a file to `e2e/tests/invariants/` moves the count AGENTS.md pins
+ * (17), which `tests/test_doc_gate_consistency.py` turns red.
+ */
+test.describe("landing copy describes the real pipeline (ADR-0032)", () => {
+  test("the hero names the moderator and synthesis stages, not mutual critique", async ({
+    page,
+  }) => {
+    await stubReadinessLive(page);
+    await page.goto("/ui");
+    await expect(page.locator(".landing-hero")).toBeAttached();
+
+    const text = (
+      (await page.locator(".landing-hero").textContent()) ?? ""
+    ).toLowerCase();
+
+    // POSITIVE PARTNER FIRST (rule 7). Without these three, every negative
+    // below is trivially true over an empty or unrendered hero.
+    expect(text.length).toBeGreaterThan(120);
+    expect(text).toContain("moderator model");
+    expect(text).toContain("synthesis model");
+
+    // RED IF: any wording returns that has the four ANSWER models critiquing
+    // one another. This is the mechanism claim, not the slogan — the h1
+    // "Let four minds argue it out" is deliberately retained (ADR-0032 §5),
+    // which is why these match on the specific verbs and not on "argue".
+    expect(text).not.toContain("critique each other");
+    expect(text).not.toContain("critique one another");
+    expect(text).not.toContain("reads the others");
+  });
+
+  test("the roadmap chip keeps peer critique in the future tense", async ({
+    page,
+  }) => {
+    await stubReadinessLive(page);
+    await page.goto("/ui");
+    await expect(page.locator(".landing-disclaimers")).toBeAttached();
+
+    const text = (
+      (await page.locator(".landing-disclaimers").textContent()) ?? ""
+    ).toLowerCase();
+
+    // POSITIVE PARTNER: the row rendered and still carries its other chips,
+    // so a missing "in development" below means the chip changed rather than
+    // the whole row vanishing.
+    expect(text).toContain("decision support");
+
+    // RED IF: the chip is dropped, or reworded into the present tense so it
+    // reads as a shipped feature — the exact defect ADR-0032 exists to fix.
+    expect(text).toContain("peer critique");
+    expect(text).toContain("in development");
+  });
+});
