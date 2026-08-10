@@ -33,6 +33,15 @@ kill_timeout = "5s"
   # Sibling of the feedback trail; wiped-on-deploy would defeat evaluation and
   # (later) operability trends, so it lives on /data too.
   RUN_HISTORY_DB_PATH = "/data/run_history.sqlite3"
+  # Issues #105 / #268 / #203: bounded JSONL telemetry, same volume, same
+  # reason. Fly's log ring holds ~100 lines (measured 2026-08-10 with
+  # `fly logs --app quorum-ai --no-tail | wc -l`) and no log drain exists, so
+  # stdout alone collects nothing a week-long reading could use. UNSET MEANS
+  # OFF — the test suite and any other deployment write no telemetry files at
+  # all. Ceiling is 25 MiB across both files. See
+  # docs/adr/0031-three-blocked-issues-get-durable-telemetry-not-a-guessed-fix.md,
+  # which also records the condition for deleting each stream.
+  TELEMETRY_LOG_DIR = "/data"
 
 [experimental]
   # Required for single-instance state to be stable across deploys.

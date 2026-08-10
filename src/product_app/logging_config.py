@@ -91,11 +91,18 @@ def setup_json_logging(log_level: str = "INFO") -> None:
     """
     root = logging.getLogger()
     formatter = JsonFormatter()
-    # Remove only the handlers we previously added (marked with our
-    # formatter class) so we don't trample handlers a third-party
-    # library might have installed.
+    # Remove only the handlers we previously added so we don't trample
+    # handlers a third-party library might have installed.
+    #
+    # The type check is EXACT (``type(...) is``), not ``isinstance``, and that
+    # matters: ``telemetry_sink`` puts ``RotatingFileHandler``s on the root
+    # logger wearing this very formatter — deliberately, so the on-disk shape
+    # equals the stdout shape — and a ``RotatingFileHandler`` IS a
+    # ``StreamHandler``. An ``isinstance`` test here would silently tear the
+    # durable #105 sink down on any later call to this function, and the only
+    # symptom would be an empty file in production.
     for handler in list(root.handlers):
-        if isinstance(handler.formatter, JsonFormatter):
+        if type(handler) is logging.StreamHandler and isinstance(handler.formatter, JsonFormatter):
             root.removeHandler(handler)
     handler = logging.StreamHandler()
     handler.setFormatter(formatter)

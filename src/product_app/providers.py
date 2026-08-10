@@ -28,6 +28,7 @@ text, or any model output that the user did not consent to expose.
 
 from __future__ import annotations
 
+import contextlib
 import json
 import logging
 import re
@@ -51,6 +52,7 @@ from product_app.config import RuntimeEnvironment, settings
 from product_app.feedback_store import record_event as _record_feedback_event
 from product_app.model_slots import ModelSlot, openrouter_model_catalog_service
 from product_app.provider_keys import ProviderCredentialSource
+from product_app.telemetry_sink import TOKEN_TELEMETRY_LOGGER
 from product_app.untrusted_text import fence
 from product_app.visible_text import is_visible
 
@@ -1354,6 +1356,21 @@ class ProviderExecutionService:
                 expected=_EXPECTED_BODY_ERRORS,
             )
             return _DISPATCH_UNMEASURED
+        # Issue #268's measurement. Emitted OUTSIDE the parsing ``try`` above
+        # on purpose: that clause returns ``_DISPATCH_UNMEASURED`` for anything
+        # it catches, so an exception raised by instrumentation inside it would
+        # silently downgrade a perfectly measurable, already-billed call to
+        # ``estimated``. Instrumentation must never be able to move money, so
+        # it is suppressed HERE, at the call site, rather than only inside the
+        # helper — pinned by
+        # ``test_a_telemetry_failure_cannot_change_what_the_provider_call_returns``.
+        with contextlib.suppress(Exception):
+            _log_call_token_shape(
+                model_id=model_id,
+                messages=messages,
+                max_tokens=max_tokens,
+                usage=usage,
+            )
         return LiveProviderResult(
             answer_text=content,
             sources=citations,
@@ -1895,6 +1912,81 @@ def _log_post_dispatch_failure(
         event,
         extra={"error_type": type(exc).__name__, "model_id": model_id},
     )
+
+
+#: The character-to-token divisor the telemetry estimate uses. Deliberately a
+#: local integer rather than an import of ``costs.CHARS_PER_TOKEN``: providers
+#: sits on the paid path and does not import ``costs`` today, and adding that
+#: edge for one constant is a poor trade. The two are pinned equal by
+#: ``test_the_telemetry_divisor_matches_the_cost_estimators_divisor`` — and
+#: they MUST stay equal, because ``injected_tokens_est`` is only meaningful as
+#: a comparison against the estimate that constant feeds.
+_CHARS_PER_TOKEN_ESTIMATE: int = 4
+
+#: File-only stream for issue #268 (see ``telemetry_sink``). Not ``_LOGGER``:
+#: one of these per provider call on the root logger would evict Fly's
+#: ~100-line ring. Staying off the root logger does NOT keep them out of
+#: Sentry — ``telemetry_sink._configure_token_logger`` calls ``ignore_logger``
+#: for that, and its docstring records the measurement.
+_TOKEN_LOGGER = logging.getLogger(TOKEN_TELEMETRY_LOGGER)
+
+
+def _log_call_token_shape(
+    *,
+    model_id: str,
+    messages: list[dict[str, str]],
+    max_tokens: int | None,
+    usage: TokenUsage | None,
+) -> None:
+    """Record how many INPUT tokens this call carried (issue #268).
+
+    ``config.py`` prices every billed call with two constants —
+    ``cost_system_prompt_tokens = 350`` and
+    ``cost_web_search_context_tokens = 2000`` — and the comment above them
+    grounds BOTH on a single live run (``d7785cd8``). One sample. Issue #268
+    already measured that our system prompts are comfortably under 350, so that
+    is not the exposure. The exposure is the web-search context: OpenRouter's
+    ``:online`` suffix injects retrieved passages upstream, bills them to us as
+    input tokens, and nothing of ours bounds or measures them. The cost
+    guardrail keys off the estimate, so an under-estimate there is a fail-safe
+    hole.
+
+    ``injected_tokens_est`` is the number that settles it: what the provider
+    charged as input, minus what we actually sent.
+
+    COUNTS ONLY, NEVER CONTENT. ``messages`` carries the user's question and
+    the models' prior answers; only its length ever leaves this frame. Nothing
+    here is read by any decision — no classification, default or constant moves
+    on account of it. The reading that would justify moving one, and the
+    condition for deleting this stream, are in
+    ``docs/adr/0031-three-blocked-issues-get-durable-telemetry-not-a-guessed-fix.md``.
+
+    ``usage_absent`` is reported rather than a fabricated ``prompt_tokens: 0``.
+    A zero would sit in the distribution and drag every percentile taken from
+    it, which is the same reason :func:`_extract_usage` refuses to invent one.
+    """
+    sent_chars = sum(len(str(message.get("content", ""))) for message in messages)
+    system_chars = sum(
+        len(str(message.get("content", "")))
+        for message in messages
+        if message.get("role") == "system"
+    )
+    sent_tokens_est = sent_chars // _CHARS_PER_TOKEN_ESTIMATE
+    fields: dict[str, object] = {
+        "model_id": model_id,
+        # The suffix IS the search flag, as it goes on the wire.
+        "search_enabled": model_id.endswith(":online"),
+        "max_tokens": max_tokens,
+        "system_prompt_chars": system_chars,
+        "sent_chars": sent_chars,
+        "sent_tokens_est": sent_tokens_est,
+        "usage_absent": usage is None,
+    }
+    if usage is not None:
+        fields["prompt_tokens"] = usage.prompt_tokens
+        fields["completion_tokens"] = usage.completion_tokens
+        fields["injected_tokens_est"] = usage.prompt_tokens - sent_tokens_est
+    _TOKEN_LOGGER.info("provider_call_tokens", extra=fields)
 
 
 def _finish_reason_indicates_truncation(payload: object) -> bool:

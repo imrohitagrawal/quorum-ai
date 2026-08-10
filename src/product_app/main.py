@@ -72,11 +72,19 @@ from product_app.readiness import (
 from product_app.request_id import RequestIdMiddleware
 from product_app.run_history_store import RunHistoryStore
 from product_app.run_history_store import configure as configure_run_history_store
+from product_app.telemetry_sink import install_telemetry_sinks
 
 # Structured JSON logging for production log aggregators.
 # Called once at module load so every subsequent log line (including
 # the feedback-store fallback below) is emitted as a single JSON object.
 setup_json_logging(settings.log_level)
+
+# Durable sinks for the #105 / #268 / #203 telemetry, on the Fly volume.
+# AFTER the call above, which replaces the root logger's handlers. A no-op
+# unless TELEMETRY_LOG_DIR is set (fly.toml sets it to the mounted volume),
+# and it never raises. See
+# docs/adr/0031-three-blocked-issues-get-durable-telemetry-not-a-guessed-fix.md.
+install_telemetry_sinks()
 
 TEMPLATES_DIR = Path(__file__).parent / "templates"
 STATIC_DIR = Path(__file__).parent / "static"
