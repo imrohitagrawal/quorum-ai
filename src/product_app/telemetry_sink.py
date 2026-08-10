@@ -33,8 +33,8 @@ The two streams have different volumes and different value.
 
 * ``telemetry-billing.jsonl`` — #105 and #203. Rare and precious; production
   spend is ``"0"`` today, so a provider 5xx is a once-in-a-long-while event.
-* ``telemetry-tokens.jsonl`` — #268. Fires on every successful provider call,
-  roughly a dozen per run.
+* ``telemetry-tokens.jsonl`` — #268. Fires once on every successful provider
+  call, so many times per run.
 
 Sharing one file would let the token stream rotate the rare billing records out
 of existence within a single busy hour. Two files, two lifetimes.
@@ -59,6 +59,8 @@ import os
 from logging.handlers import RotatingFileHandler
 from pathlib import Path
 
+from sentry_sdk.integrations.logging import ignore_logger
+
 from product_app.logging_config import JsonFormatter
 
 _LOGGER = logging.getLogger(__name__)
@@ -74,11 +76,11 @@ TELEMETRY_DIR_ENV_VAR = "TELEMETRY_LOG_DIR"
 BILLING_FILE_NAME = "telemetry-billing.jsonl"
 TOKENS_FILE_NAME = "telemetry-tokens.jsonl"
 
-#: The high-volume token stream gets its OWN logger with ``propagate=False``,
-#: so it is file-only. On the root logger its ~12 records per run would evict
-#: Fly's ~100-line ring in seconds AND become Sentry breadcrumbs — Sentry's
-#: ``LoggingIntegration`` is on by default and ``main.py`` passes no
-#: ``integrations=`` to override it.
+#: The high-volume token stream gets its OWN logger, kept off stdout by
+#: ``propagate=False`` and off Sentry by ``ignore_logger`` — two separate
+#: switches, because they close two different doors. See
+#: :func:`_configure_token_logger` for the measurement that proves the second
+#: one is not implied by the first.
 TOKEN_TELEMETRY_LOGGER = "product_app.telemetry"
 
 #: The exact log events routed to the durable billing file. An ALLOWLIST, not
@@ -164,7 +166,23 @@ class _EventAllowlist(logging.Filter):
         self._events = events
 
     def filter(self, record: logging.LogRecord) -> bool:
-        return record.msg in self._events
+        try:
+            return record.msg in self._events
+        except TypeError:
+            # ``record.msg`` is whatever the caller passed, and a ``dict`` or a
+            # ``list`` is unhashable — ``x in frozenset`` raises for those.
+            # Handler FILTERS run inside ``Handler.handle`` BEFORE ``emit``, so
+            # ``handleError`` never sees this and the exception would propagate
+            # straight out of somebody else's ``logger.warning(...)``. This
+            # handler sits on the ROOT logger, so "somebody else" is every
+            # logging call in the process. Measured on CPython 3.12.13: a
+            # ``dict`` or ``list`` message raised ``TypeError: unhashable
+            # type``; ``str``, ``int``, ``tuple`` and a plain object did not.
+            # No such call site exists in ``src/``, ``scripts/`` or the
+            # installed packages today, so this is a latent hole rather than a
+            # live bug — but ``install_telemetry_sinks``'s contract is that it
+            # NEVER raises, and a latent hole in that contract is still a hole.
+            return False
 
 
 _INSTALLED: tuple[_TelemetryFileHandler, _TelemetryFileHandler] | None = None
@@ -263,16 +281,38 @@ def install_telemetry_sinks(directory: str | None = None) -> bool:
 def _configure_token_logger() -> None:
     """Make the token stream file-only from import, not from installation.
 
-    ``propagate=False`` is set here rather than inside
-    :func:`install_telemetry_sinks` so a deployment with no sink configured
-    DROPS these records instead of pushing a dozen per run through stdout and
-    into Sentry's breadcrumb buffer. The ``NullHandler`` is what stops
-    ``logging.lastResort`` printing them to stderr once propagation is off.
+    TWO switches, because they close two different doors and neither implies
+    the other.
+
+    * ``propagate=False`` keeps the records off the root logger's stdout
+      handler, so a deployment with no sink configured drops them instead of
+      pushing one per provider call through Fly's ~100-line ring. The
+      ``NullHandler`` is what stops ``logging.lastResort`` printing them to
+      stderr once propagation is off.
+    * ``ignore_logger`` keeps them out of Sentry. **Propagation does not do
+      this**, and an earlier version of this docstring claimed it did.
+      Sentry's ``LoggingIntegration`` is on by default (``main.py`` passes no
+      ``integrations=``) and it patches ``Logger.callHandlers``, which runs on
+      the ORIGINATING logger — propagation never enters into it. Measured
+      2026-08-10 on sentry-sdk 2.63.0, with ``propagate=False`` already set:
+      **one breadcrumb per record**, carrying ``sent_chars`` — the character
+      count of the user's question plus the models' prior answers — to a third
+      party, and the redaction hooks cannot help because ``before_send`` never
+      sees a breadcrumb. Zero breadcrumbs after this call. Pinned by
+      ``test_the_token_record_never_becomes_a_sentry_breadcrumb``.
+
+    ``ignore_logger`` only appends to a module-global set, so the order does
+    not matter: ``main.py`` imports this module before it calls
+    ``sentry_sdk.init``, and both orders were measured giving zero breadcrumbs.
+    It is deliberately NOT gated on ``SENTRY_DSN`` — with no DSN the call is a
+    harmless set insertion, and gating it would make the guard depend on the
+    single variable that decides whether the leak is live.
     """
     logger = logging.getLogger(TOKEN_TELEMETRY_LOGGER)
     logger.propagate = False
     if not any(isinstance(h, logging.NullHandler) for h in logger.handlers):
         logger.addHandler(logging.NullHandler())
+    ignore_logger(TOKEN_TELEMETRY_LOGGER)
 
 
 _configure_token_logger()

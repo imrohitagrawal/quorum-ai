@@ -30,7 +30,7 @@ Four facts, each re-measured in this worktree on 2026-08-10:
 |---|---|---|
 | Fly keeps a small log ring | `fly logs --app quorum-ai --no-tail \| wc -l` | **100 lines** |
 | no log drain is configured | `grep -in drain DEPLOY.md` | **0 hits**; the absence is recorded in ADR-0018 |
-| the `runs` table has no per-token columns | read `run_history_store.py:116-140` | 23 columns, none about tokens |
+| the `runs` table has no per-token columns | read `run_history_store.py:117-140` | 22 columns, none about tokens |
 | one uvicorn worker, so a file sink needs no cross-process locking | `grep -n workers Dockerfile` | `:72 "--workers", "1"` |
 | production runs the base of this branch | `curl -s https://quorum.stackclimb.com/status` | `build_sha` = `f7128b1…` |
 
@@ -72,7 +72,7 @@ types to **two** bounded JSONL files on the Fly volume already mounted at
 | File | Feeds | maxBytes × backups | Ceiling |
 |---|---|---|---|
 | `/data/telemetry-billing.jsonl` | #105, #203 — rare, precious | 1 MiB × 4 | 5 MiB |
-| `/data/telemetry-tokens.jsonl` | #268 — ~12 records per run | 4 MiB × 4 | 20 MiB |
+| `/data/telemetry-tokens.jsonl` | #268 — one record per successful provider call | 4 MiB × 4 | 20 MiB |
 
 **Two files, not one.** The token stream fires on every successful provider
 call; the billing stream fires on a provider 5xx, which at today's spend
@@ -104,11 +104,28 @@ measurable call to `estimated`. Instrumentation must never move money.
 **Routing differs per stream, deliberately.** The billing records stay on the
 root logger and gain the file through a `logging.Filter` holding an allowlist of
 event names — so operators keep seeing them on stdout and #105's already-shipped
-records simply become durable. The token stream gets its own logger with
-`propagate=False`, set at import rather than at installation: on the root logger
-its dozen records per run would evict Fly's 100-line ring in seconds *and*
-become Sentry breadcrumbs (`LoggingIntegration` is on by default and `main.py`
-passes no `integrations=`).
+records simply become durable. The token stream gets its own logger, configured at
+import rather than at installation, with TWO independent switches:
+
+* `propagate=False`, because on the root logger one record per provider call
+  would evict Fly's 100-line ring in seconds;
+* `ignore_logger(...)`, because that is what keeps them out of Sentry.
+  **Propagation does not.** This ADR, and three comments in the code, claimed it
+  did until a reviewer measured it: `LoggingIntegration` is on by default
+  (`main.py` passes no `integrations=`) and patches `Logger.callHandlers`, which
+  runs on the ORIGINATING logger, so propagation never enters into it. Measured
+  2026-08-10 on sentry-sdk 2.63.0 with `propagate=False` already set: **one
+  breadcrumb per record**, carrying `sent_chars` — the character count of the
+  user's question plus the models' prior answers — to a third party, and
+  `before_send`/`_scrub_user_text` cannot help because neither ever sees a
+  breadcrumb (`grep -n breadcrumb src/product_app/main.py` → no hits). Zero
+  after the `ignore_logger` call. Pinned by
+  `test_the_token_record_never_becomes_a_sentry_breadcrumb`.
+
+  This was **live, not latent**: `curl -s https://quorum-ai.fly.dev/status`
+  (free, 2026-08-10) returns `"error_tracking":"active"`, i.e. production runs
+  with a real Sentry DSN. Without `ignore_logger` this package would have begun
+  shipping one breadcrumb per provider call the moment it deployed.
 
 ### #105 — nothing new is instrumented
 
@@ -189,15 +206,36 @@ content, never a header VALUE, never an exception message.**
 | `repr(exc)`, `exc.args`, `exc.object`, `exc_info=True` | measured above: `repr` carries the bearer token in full |
 | the `messages` list, or any element of it | `sent_chars` is a count; the content never leaves the frame |
 | a new HTTP route serving the files | a new authentication surface serving upstream-controlled bytes. `fly ssh console` is free |
+| an unbounded `error.code` integer | Python integers have no width and the body sniff allows 8192 bytes, so `{"error": {"code": <4000 nines>}}` fits. Measured before the bound existed: a 4450-byte record carrying 4000 upstream-chosen digits verbatim. Signed 32-bit is accepted; anything wider records the string `out_of_range`, which is deliberately distinct from `None` so an absent code and a hostile one stay different findings |
 
 `scripts/security_scan.py` **cannot see any of this** — it is four static
 line-oriented regex checks with no notion of a logger, an `extra=` dict or
 dataflow, so `_LOGGER.warning("x", extra={"body": raw})` produces zero findings.
 And `tests/security/test_release_security_redaction.py` asserts absence from
-HTTP responses and in-memory recorders only. **No test in this repo asserted
-that a credential is absent from a LOG RECORD before this one.**
-`test_no_credential_reaches_any_log_record_or_sink_file` is that missing gate,
-and it is the highest-value test in the package.
+HTTP responses and in-memory recorders only.
+
+An earlier version of this paragraph said **no test in this repo asserted that a
+credential is absent from a LOG RECORD before this one**. That was FALSE, and it
+is corrected here rather than deleted, because it is the same class of error
+rule 11a exists for — a superlative in prose that nobody ran a command against.
+`git show origin/main:tests/unit/test_provider_billing_evidence.py` line 503
+(`test_opener_failure_never_logs_the_exception_message`) already asserted
+absence from `caplog.text` **and** walked `record.__dict__.values()`, with a
+second instance at `test_provider_billing_classification.py:379`. What
+`test_no_credential_reaches_any_log_record_or_sink_file` genuinely adds is the
+sweep of the **durable sink files**, which nothing covered.
+
+**Telemetry must not be able to raise into somebody else's logging call.** The
+billing handler sits on the ROOT logger and its allowlist filter tests
+`record.msg in frozenset(...)`. `record.msg` is whatever the caller passed, and
+a `dict` or `list` message is unhashable, so that raises `TypeError` — inside
+`Handler.handle`, BEFORE `emit`, which means `handleError` never sees it and the
+exception surfaces from an unrelated `logger.warning(...)` anywhere in the
+process. No such call site exists today (AST-scanned across `src/`, `scripts/`
+and site-packages: 295 non-literal logging call sites, none passing an
+unhashable literal), so this is a latent hole rather than a live bug — but
+`install_telemetry_sinks` states that it NEVER raises, and the filter now
+returns `False` on `TypeError` to keep that true.
 
 ## The reading that settles each issue
 
@@ -271,8 +309,12 @@ only then is designing a signal a real task.
 is stated rather than guessed around.**
 
 `grep -rniE "https?_proxy|no_proxy|egress|wireguard|flycast|nat gateway|static.?ip|outbound"`
-across `*.toml`, `*.md`, `*.yml`, `*.yaml` and `Dockerfile` returns nothing
-about egress. `fly.toml` configures inbound services, a volume and a VM. The
+across `*.toml`, `*.md`, `*.yml`, `*.yaml` and `Dockerfile` returns **185**
+matching lines, **31** of them once `regress*` is excluded — and **not one
+describes this deployment's production egress topology**. (The hits are things
+like the test suite's own egress guard and `DEPLOY.md:186` on outbound transfer
+volume.) This sentence said the grep "returns nothing about egress" until a
+reviewer ran it; the conclusion survives, the count did not. `fly.toml` configures inbound services, a volume and a VM. The
 Dockerfile sets no proxy variable. The repo does not merely fail to answer the
 question — it has already written it down twice as unresolved, in `DEPLOY.md`
 and in `docs/architecture/50-failure-modes.md`, in the same words.
@@ -340,7 +382,7 @@ its own reading.
 | **a `provider_calls` child table** | correct granularity, still needs the machinery | right shape, wrong moment. JSONL is deletable; a table is forever. Revisit if #268's data justifies a permanent per-call ledger |
 | **Fly Log Shipper (Vector sidecar)** | a second Fly machine plus a sink credential | not $0 (rule 17f), and needs an operator |
 | **a third-party free tier** | claimed-free — UNVERIFIED | needs an operator and a third party, and exports the very records whose leak surface this design minimises |
-| **`/metrics` counters** | $0 | `main.py:349` does wire `Instrumentator(...).expose(app)`, so `fly.toml`'s "no /metrics endpoint" comment is stale — but nothing scrapes it, and a counter cannot carry a distribution. (That stale comment is a separate one-line fix and is **not** in this PR, per rule 17) |
+| **`/metrics` counters** | $0 | `main.py` does wire `Instrumentator(...).expose(app)` (line 357 on this branch; 349 on `origin/main` — this PR moves it, which is why the line number is not quoted as a fact), so `fly.toml`'s "no /metrics endpoint" comment is stale — but nothing scrapes it, and a counter cannot carry a distribution. (That stale comment is a separate one-line fix and is **not** in this PR, per rule 17) |
 | **a `/ops/telemetry` read endpoint** | small | a new authentication surface serving upstream-controlled material |
 | **one shared JSONL file** | $0 | the token stream rotates the rare 5xx records out of existence |
 | **gating any read on `Content-Length`** | — | rule 8c, already measured fatal: OpenRouter answers errors chunked. Do not reintroduce |
@@ -353,8 +395,18 @@ its own reading.
   reading, and each has a written decision rule with an explicit "not enough
   data" arm.
 - The #105 evidence that already existed stops evaporating in twenty minutes.
-- The repo gains its first test asserting a credential is absent from a **log
-  record** — a gap `security_scan.py` structurally cannot see.
+- A credential-absence assertion covers the **sink files** as well as the log
+  records, over both leak sources measured here (an error body echoing an
+  `Authorization` header, and `repr(UnicodeEncodeError)`). An earlier draft of
+  this line, and of the commit body, called it the repo's **FIRST** test
+  asserting a credential is absent from a log record. That was FALSE and is
+  left on the record rather than quietly deleted:
+  `git show origin/main:tests/unit/test_provider_billing_evidence.py` line 503,
+  `test_opener_failure_never_logs_the_exception_message`, already asserts
+  `"REALKEYMATERIAL" not in caplog.text` **and** walks `record.__dict__.values()`
+  — the exact `extra=`-dict technique the claim called new — with a second
+  instance at `test_provider_billing_classification.py:379`. What is new here is
+  only the coverage of the durable files.
 - `setup_json_logging` no longer removes handlers it did not add.
 
 **Bad, and accepted.**

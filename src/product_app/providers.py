@@ -1924,8 +1924,10 @@ def _log_post_dispatch_failure(
 _CHARS_PER_TOKEN_ESTIMATE: int = 4
 
 #: File-only stream for issue #268 (see ``telemetry_sink``). Not ``_LOGGER``:
-#: a dozen of these per run on the root logger would evict Fly's ~100-line ring
-#: and become Sentry breadcrumbs.
+#: one of these per provider call on the root logger would evict Fly's
+#: ~100-line ring. Staying off the root logger does NOT keep them out of
+#: Sentry — ``telemetry_sink._configure_token_logger`` calls ``ignore_logger``
+#: for that, and its docstring records the measurement.
 _TOKEN_LOGGER = logging.getLogger(TOKEN_TELEMETRY_LOGGER)
 
 

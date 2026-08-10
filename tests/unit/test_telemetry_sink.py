@@ -34,6 +34,10 @@ from __future__ import annotations
 import io
 import json
 import logging
+import os
+import subprocess
+import sys
+import tomllib
 from collections.abc import Iterator
 from email.message import Message
 from pathlib import Path
@@ -42,6 +46,7 @@ from unittest.mock import MagicMock
 from urllib.error import HTTPError, URLError
 
 import pytest
+import sentry_sdk
 
 from product_app import config, readiness, telemetry_sink
 from product_app.logging_config import JsonFormatter
@@ -267,7 +272,7 @@ def test_every_field_the_three_streams_actually_emit_is_declared(
     by DRIVING all four record types rather than by reading a second list —
     a hand-written list would agree with itself forever.
     """
-    seen: set[str] = set()
+    billing_seen: set[str] = set()
     with caplog.at_level(logging.DEBUG):
         _drive_provider_error(monkeypatch, _http_error(503, _ROUTER_REFUSAL_BODY))
         _drive_provider_error(monkeypatch, URLError(reason=TimeoutError()))
@@ -275,19 +280,42 @@ def test_every_field_the_three_streams_actually_emit_is_declared(
         _drive_key_probe(monkeypatch, _http_error(403, b"<html>denied</html>"))
         for record in caplog.records:
             if record.msg in telemetry_sink.BILLING_EVENTS:
-                seen |= _custom_fields(record)
+                billing_seen |= _custom_fields(record)
+
+    # The token drive gets its own LEVEL, not just its own handler, and that is
+    # load-bearing. It used to sit outside the ``caplog.at_level`` block above,
+    # so the token logger was back at its ambient level and the record was
+    # DROPPED before reaching ``_Collector``. Measured 2026-08-10 running this
+    # file alone: ``PROBE token effective=30 enabled=False`` — zero #268 fields
+    # collected, and the single ``>= 15`` floor was satisfied by the billing
+    # names on their own, so the gap was invisible. Both mutations it exists to
+    # catch (dropping ``search_enabled`` from the registry; adding an undeclared
+    # field to the token record) survived when the file ran alone and went red
+    # only on ambient state left by earlier tests.
     token_logger = logging.getLogger(telemetry_sink.TOKEN_TELEMETRY_LOGGER)
     captured: list[logging.LogRecord] = []
+    previous_level = token_logger.level
+    token_logger.setLevel(logging.DEBUG)
     token_logger.addHandler(_Collector(captured))
     try:
         _drive_successful_call(monkeypatch, model_id=f"{_MODEL_ID}:online")
     finally:
         token_logger.handlers = [h for h in token_logger.handlers if not isinstance(h, _Collector)]
+        token_logger.setLevel(previous_level)
+    token_seen: set[str] = set()
     for record in captured:
-        seen |= _custom_fields(record)
+        token_seen |= _custom_fields(record)
 
-    assert len(seen) >= 15, f"only {len(seen)} field names were collected; the drivers went quiet"
-    undeclared = sorted(seen - telemetry_sink.TELEMETRY_FIELD_NAMES)
+    # TWO floors, not one. A single total let the billing stream cover for a
+    # token stream that emitted nothing at all.
+    assert len(billing_seen) >= 15, (
+        f"only {len(billing_seen)} billing field names were collected; the drivers went quiet"
+    )
+    assert len(token_seen) >= 9, (
+        f"only {len(token_seen)} token field names were collected; the #268 "
+        f"driver emitted nothing, so this check is measuring the billing stream twice"
+    )
+    undeclared = sorted((billing_seen | token_seen) - telemetry_sink.TELEMETRY_FIELD_NAMES)
     assert not undeclared, (
         f"field(s) emitted by a telemetry record but not declared in "
         f"TELEMETRY_FIELD_NAMES: {', '.join(undeclared)}"
@@ -354,15 +382,245 @@ def test_an_unrelated_warning_does_not_reach_the_billing_file(sink_dir: Path) ->
     assert _billing_lines(sink_dir) == []
 
 
+def test_the_connect_timeout_evidence_record_reaches_the_durable_billing_file(
+    monkeypatch: pytest.MonkeyPatch, sink_dir: Path
+) -> None:
+    """RED WHEN: ``upstream_provider_opener_error`` leaves the sink's allowlist.
+
+    The third event in ``BILLING_EVENTS`` and the only one nothing covered:
+    measured 2026-08-10, deleting it from the allowlist left the whole suite
+    green at ``2801 passed``. It is the ``URLError(reason=TimeoutError())``
+    branch, which #105 cannot be decided without — a connect timeout
+    demonstrably never reached the model, yet ``providers`` classifies it
+    ``possibly_billed`` on purpose (the opener does not say which phase timed
+    out, and misreading a post-generation timeout as unbilled would understate
+    a charge). That conservative call is EXACTLY the premise #105 exists to
+    test against production data, so the record has to be durable.
+
+    NO CLASSIFICATION IS ASSERTED AS CORRECT HERE, only recorded as it stands.
+    The first draft of this test asserted ``not_billed`` from my own reading of
+    the branch and went red against the code — kept as a reminder that the
+    conservative call is deliberate, not accidental.
+
+    Both arms are driven so the field cannot be a constant: a connect timeout
+    reads ``possibly_billed`` and a refused connection reads ``not_billed``.
+    """
+    _drive_provider_error(monkeypatch, URLError(reason=TimeoutError()))
+    _drive_provider_error(monkeypatch, URLError(reason=ConnectionRefusedError()))
+    lines = _billing_lines(sink_dir)
+    assert len(lines) == 2, f"expected exactly 2 billing records, got {len(lines)}"
+    assert [line["message"] for line in lines] == ["upstream_provider_opener_error"] * 2
+    assert [line["error_type"] for line in lines] == ["TimeoutError", "ConnectionRefusedError"]
+    assert [line["billing_class"] for line in lines] == ["possibly_billed", "not_billed"]
+
+
+def test_an_unreadable_403_body_still_reaches_the_durable_file_at_production_level(
+    monkeypatch: pytest.MonkeyPatch, sink_dir: Path
+) -> None:
+    """RED WHEN: the unreadable-body branch is demoted below WARNING.
+
+    ``fly.toml`` sets ``LOG_LEVEL = "INFO"``, and every test in
+    ``test_key_probe_refusal_shape.py`` runs inside
+    ``caplog.at_level(logging.DEBUG)`` — so none of them can tell
+    ``_log.warning`` from ``_log.debug`` on that branch. Measured 2026-08-10:
+    changing it to ``debug`` left the whole suite green at ``2801 passed``,
+    while production would have collected nothing. A dead socket on a WAF is a
+    likely #203 case, so this drives the real level rather than a raised one.
+    """
+
+    class _DeadSocket(io.BytesIO):
+        def read1(self, size: int | None = -1, /) -> bytes:
+            raise OSError("connection reset by peer")
+
+    readiness_logger = logging.getLogger("product_app.readiness")
+    previous = readiness_logger.level
+    readiness_logger.setLevel(logging.INFO)  # what fly.toml sets in production
+    try:
+        verdict = _drive_key_probe(
+            monkeypatch,
+            HTTPError(
+                url="https://openrouter.ai/api/v1/key",
+                code=403,
+                msg="refused",
+                hdrs=_headers(Server="cloudflare"),
+                fp=_DeadSocket(b"never read"),
+            ),
+        )
+    finally:
+        readiness_logger.setLevel(previous)
+    assert verdict == "unauthorized"
+    lines = _billing_lines(sink_dir)
+    assert len(lines) == 1, f"expected exactly 1 billing record, got {len(lines)}"
+    assert lines[0]["body_shape"] == "unreadable"
+    # POSITIVE PARTNER: the header half of the evidence arrived too, so this is
+    # not passing on a record that degraded to nothing.
+    assert lines[0]["server_class"] == "cloudflare"
+
+
+def test_the_token_stream_survives_an_operator_setting_log_level_warning(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """RED WHEN: ``token_logger.setLevel(logging.INFO)`` is deleted from
+    ``install_telemetry_sinks``.
+
+    The token record is emitted at INFO on a logger whose own level is NOTSET,
+    so without that line ``getEffectiveLevel`` walks to the root and an
+    operator setting ``LOG_LEVEL=WARNING`` silently ends #268's collection —
+    with a healthy-looking empty file as the only symptom. Latent today
+    (``fly.toml`` sets INFO) and untested until now: measured 2026-08-10,
+    deleting the line left the whole suite green at ``2801 passed``.
+
+    The token logger's level is reset to NOTSET first ON PURPOSE. A previous
+    ``install_telemetry_sinks`` anywhere in the session leaves it at INFO and
+    nothing ever puts it back, so without this reset the test would pass under
+    the mutation whenever it ran second (AGENTS.md rule 16a).
+    """
+    token_logger = logging.getLogger(telemetry_sink.TOKEN_TELEMETRY_LOGGER)
+    root = logging.getLogger()
+    previous_token_level, previous_root_level = token_logger.level, root.level
+    token_logger.setLevel(logging.NOTSET)
+    root.setLevel(logging.WARNING)
+    monkeypatch.setenv(telemetry_sink.TELEMETRY_DIR_ENV_VAR, str(tmp_path))
+    try:
+        assert telemetry_sink.install_telemetry_sinks() is True
+        _drive_successful_call(monkeypatch)
+        lines = _token_lines(tmp_path)
+    finally:
+        token_logger.setLevel(previous_token_level)
+        root.setLevel(previous_root_level)
+        monkeypatch.delenv(telemetry_sink.TELEMETRY_DIR_ENV_VAR, raising=False)
+        telemetry_sink.install_telemetry_sinks()
+    assert len(lines) == 1, (
+        "the #268 stream went quiet because the root logger was set to WARNING; "
+        "the token logger must carry its own level"
+    )
+    assert lines[0]["message"] == "provider_call_tokens"
+
+
+def test_an_unhashable_log_message_cannot_break_somebody_elses_logging_call(
+    sink_dir: Path,
+) -> None:
+    """RED WHEN: the allowlist filter stops guarding against ``TypeError``.
+
+    ``_EventAllowlist.filter`` does ``record.msg in frozenset``, and
+    ``record.msg`` is whatever the caller passed. A ``dict`` or ``list``
+    message is unhashable, so that raises. Handler FILTERS run inside
+    ``Handler.handle`` BEFORE ``emit``, so ``handleError`` never sees it and
+    the exception comes straight back out of the caller's ``logger.warning``.
+    This handler sits on the ROOT logger, which makes "the caller" every
+    logging call in the process — and ``install_telemetry_sinks``'s contract
+    is that telemetry NEVER reaches a request path.
+
+    No such call site exists in ``src/``, ``scripts/`` or site-packages today
+    (AST-scanned), so this is a latent hole, not a live bug. It is still a hole
+    in a stated contract.
+    """
+    caller = logging.getLogger("product_app.somewhere_else")
+    caller.setLevel(logging.WARNING)
+    for message in ({"a": 1}, ["b"], ("c",), 7):
+        caller.warning(message)
+    assert _billing_lines(sink_dir) == [], "an unallowlisted message reached the billing file"
+
+    # POSITIVE PARTNER: the filter still ADMITS the real event, so the empty
+    # file above is the allowlist working rather than the handler being dead.
+    caller.warning("upstream_provider_http_error", extra={"status_code": 503})
+    assert [line["message"] for line in _billing_lines(sink_dir)] == [
+        "upstream_provider_http_error"
+    ]
+
+
+def test_installing_the_sink_twice_leaves_one_handler_per_stream(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """RED WHEN: ``_remove_installed()`` stops removing anything.
+
+    The module docstring advertises the function as idempotent, and nothing
+    installed it twice against the same directory. Two handlers on one stream
+    would write every record twice — and #268's whole deliverable is a
+    distribution, so a silently doubled sample would be read as fact
+    (AGENTS.md rule 6b: cardinality, not presence).
+    """
+    monkeypatch.setenv(telemetry_sink.TELEMETRY_DIR_ENV_VAR, str(tmp_path))
+    try:
+        assert telemetry_sink.install_telemetry_sinks() is True
+        assert telemetry_sink.install_telemetry_sinks() is True
+        root_sinks = [
+            h
+            for h in logging.getLogger().handlers
+            if isinstance(h, telemetry_sink._TelemetryFileHandler)
+        ]
+        token_sinks = [
+            h
+            for h in logging.getLogger(telemetry_sink.TOKEN_TELEMETRY_LOGGER).handlers
+            if isinstance(h, telemetry_sink._TelemetryFileHandler)
+        ]
+        assert (len(root_sinks), len(token_sinks)) == (1, 1)
+        _drive_successful_call(monkeypatch, model_id=_MODEL_ID)
+        logging.getLogger("product_app.providers").warning(
+            "upstream_provider_http_error", extra={"status_code": 503}
+        )
+        assert len(_token_lines(tmp_path)) == 1, "the token record was written twice"
+        assert len(_billing_lines(tmp_path)) == 1, "the billing record was written twice"
+    finally:
+        monkeypatch.delenv(telemetry_sink.TELEMETRY_DIR_ENV_VAR, raising=False)
+        telemetry_sink.install_telemetry_sinks()
+
+
+def test_the_token_record_never_becomes_a_sentry_breadcrumb(
+    monkeypatch: pytest.MonkeyPatch, sink_dir: Path
+) -> None:
+    """RED WHEN: ``ignore_logger(TOKEN_TELEMETRY_LOGGER)`` is removed.
+
+    ``propagate=False`` does NOT keep these records out of Sentry, and three
+    comments in this package claimed it did until this test was written.
+    Sentry's ``LoggingIntegration`` is on by default (``main.py`` passes no
+    ``integrations=``) and patches ``Logger.callHandlers``, which runs on the
+    ORIGINATING logger — propagation never enters into it. Measured 2026-08-10
+    on sentry-sdk 2.63.0 with ``propagate=False`` already set: one breadcrumb
+    per record, carrying ``sent_chars`` — the character count of the user's
+    question plus the models' prior answers — off to a third party. The
+    redaction hooks cannot help: ``before_send`` never sees a breadcrumb, and
+    ``grep -n breadcrumb src/product_app/main.py`` returns no hits.
+    """
+    crumbs: list[dict[str, Any]] = []
+
+    def _record_crumb(crumb: dict[str, Any], _hint: object) -> dict[str, Any]:
+        crumbs.append(crumb)
+        return crumb
+
+    previous_client = sentry_sdk.get_client()
+    try:
+        sentry_sdk.init(
+            dsn="https://public@example.invalid/1",
+            before_breadcrumb=_record_crumb,
+            traces_sample_rate=0.0,
+        )
+        _drive_successful_call(monkeypatch, model_id=f"{_MODEL_ID}:online")
+        assert len(_token_lines(sink_dir)) == 1, "the record never reached the sink at all"
+        token_crumbs = [
+            c for c in crumbs if c.get("category") == telemetry_sink.TOKEN_TELEMETRY_LOGGER
+        ]
+        assert token_crumbs == [], "a #268 token record became a Sentry breadcrumb"
+
+        # POSITIVE PARTNER: an ordinary logger on this very client DOES produce
+        # a breadcrumb, so "zero" above is the ignore-list working and not a
+        # capture that was switched off.
+        logging.getLogger("product_app.somewhere").warning("an_unrelated_event")
+        assert [c["category"] for c in crumbs] == ["product_app.somewhere"]
+    finally:
+        sentry_sdk.get_global_scope().set_client(previous_client)
+
+
 def test_the_token_record_reaches_the_tokens_file_and_not_the_root_logger(
     monkeypatch: pytest.MonkeyPatch, sink_dir: Path, caplog: pytest.LogCaptureFixture
 ) -> None:
     """RED WHEN: ``propagate=False`` is dropped, or the record is re-routed.
 
-    ~12 token records per run on the root logger would evict Fly's ~100-line
-    ring in seconds AND become Sentry breadcrumbs (``LoggingIntegration`` is
-    default-on; ``main.py`` passes no ``integrations=``). The tokens stream is
-    file-only for both reasons.
+    One token record per provider call on the root logger would evict Fly's
+    ~100-line ring in seconds. Keeping them off the root logger does NOT keep
+    them out of Sentry — that needs ``ignore_logger``, and
+    ``test_the_token_record_never_becomes_a_sentry_breadcrumb`` is what pins
+    it. This docstring claimed otherwise until that test was written.
     """
     with caplog.at_level(logging.DEBUG):
         _drive_successful_call(monkeypatch, model_id=f"{_MODEL_ID}:online")
@@ -530,20 +788,87 @@ def test_no_sink_is_installed_when_the_directory_is_not_configured(
 
 
 def test_fly_toml_points_the_telemetry_sink_at_the_persistent_volume() -> None:
-    """RED WHEN: the env var is renamed, or aimed off the mounted volume.
+    """RED WHEN: the env var is renamed, aimed off the mounted volume, OR
+    commented out.
 
     Without this the sink is wired, tested and switched OFF in the one
     deployment whose data the three issues are waiting for. ``/data`` is the
     Fly volume ``fly.toml``'s ``[[mounts]]`` block mounts; the ephemeral rootfs
     is wiped on every deploy (issue #27 learned that the expensive way).
+
+    PARSED, not grepped, and that is the whole point of this revision. This
+    test asserted ``f'{VAR} = "/data"' in text`` until a reviewer prefixed the
+    line with ``#``: the substring survives a comment intact, so the check
+    stayed green over EXACTLY the state its own docstring says it exists to
+    prevent (measured: ``tomllib`` then parses the value as ``None`` while the
+    substring assertion still passes). Same defect on ``destination``.
+    ``tomllib`` is stdlib on 3.12.
     """
     fly_toml = Path(__file__).resolve().parents[2] / "fly.toml"
-    text = fly_toml.read_text(encoding="utf-8")
-    assert 'destination = "/data"' in text, "the mount this sink depends on moved"
-    assert f'{telemetry_sink.TELEMETRY_DIR_ENV_VAR} = "/data"' in text, (
+    parsed = tomllib.loads(fly_toml.read_text(encoding="utf-8"))
+    mounts = parsed.get("mounts", [])
+    assert [m.get("destination") for m in mounts] == ["/data"], (
+        "the mount this sink depends on moved, or there is no longer exactly one"
+    )
+    assert parsed.get("env", {}).get(telemetry_sink.TELEMETRY_DIR_ENV_VAR) == "/data", (
         f"fly.toml does not set {telemetry_sink.TELEMETRY_DIR_ENV_VAR} to the "
         f"mounted volume, so production collects nothing"
     )
+
+
+def test_importing_the_app_installs_the_sink_at_boot(tmp_path: Path) -> None:
+    """RED WHEN: the ``install_telemetry_sinks()`` call is deleted from main.py.
+
+    That single line is what turns this whole package on in production, and it
+    was covered by NOTHING. Measured 2026-08-10: commenting it out left the
+    entire suite byte-identical at ``2801 passed, 55 skipped``. The fly.toml
+    test above proves the variable is SET; nothing proved anything READS it at
+    boot, so every gate could stay green while production collected zero bytes
+    for all three issues.
+
+    A SUBPROCESS, because ``product_app.main`` is already imported by the time
+    this test runs and a plain import would be a silent no-op. Hermetic: the
+    child makes no network call, and its only side effect is the
+    live-execution-probe warning it prints on stderr.
+    """
+    repo_root = Path(__file__).resolve().parents[2]
+    probe = (
+        "import product_app.main\n"
+        "from product_app import telemetry_sink\n"
+        "print('INSTALLED', telemetry_sink.installed_handlers() is not None)\n"
+    )
+
+    def _boot(directory: str | None) -> str:
+        env = dict(os.environ)
+        env["PYTHONPATH"] = str(repo_root / "src")
+        if directory is None:
+            env.pop(telemetry_sink.TELEMETRY_DIR_ENV_VAR, None)
+        else:
+            env[telemetry_sink.TELEMETRY_DIR_ENV_VAR] = directory
+        completed = subprocess.run(
+            [sys.executable, "-c", probe],
+            capture_output=True,
+            text=True,
+            env=env,
+            cwd=str(repo_root),
+            timeout=180,
+        )
+        assert completed.returncode == 0, f"the app failed to import:\n{completed.stderr}"
+        return completed.stdout
+
+    configured = tmp_path / "boot"
+    assert "INSTALLED True" in _boot(str(configured))
+    # Not just the handler object: the files the sink probes for writability
+    # exist on disk, so importing the app really did reach the filesystem.
+    assert sorted(p.name for p in configured.iterdir()) == [
+        telemetry_sink.BILLING_FILE_NAME,
+        telemetry_sink.TOKENS_FILE_NAME,
+    ]
+
+    # NEGATIVE PARTNER: with the variable unset the same boot installs nothing,
+    # so "INSTALLED True" above is a property of the wiring reading the
+    # environment and not of a sink that installs itself unconditionally.
+    assert "INSTALLED False" in _boot(None)
 
 
 # --- no credential may reach any record --------------------------------------
@@ -565,9 +890,16 @@ def test_no_credential_reaches_any_log_record_or_sink_file(
       in the message" is true of ``repr``/``args``/``.object`` and false of
       ``str``.
 
-    No test anywhere else in this repo asserts that a credential is absent from
-    a LOG RECORD: ``tests/security/test_release_security_redaction.py`` covers
-    HTTP responses and in-memory recorders only.
+    What is new here is the SINK FILES, not the log records. An earlier version
+    of this docstring claimed no test anywhere else in the repo asserted a
+    credential is absent from a log record. That was FALSE — measured with
+    ``git show origin/main:tests/unit/test_provider_billing_evidence.py``, line
+    503's ``test_opener_failure_never_logs_the_exception_message`` already walks
+    ``record.__dict__.values()`` for exactly this, and
+    ``test_provider_billing_classification.py:379`` is a second instance. It is
+    still true that ``tests/security/test_release_security_redaction.py`` covers
+    HTTP responses and in-memory recorders only, and that nothing swept a
+    durable telemetry file, which is what the last assertion below adds.
     """
     assert b"sk-or-v1-" in _LEAKY_BODY, "the canary is not in the body; this would prove nothing"
     rendered = ""

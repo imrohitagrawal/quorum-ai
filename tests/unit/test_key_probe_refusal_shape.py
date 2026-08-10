@@ -43,6 +43,7 @@ from urllib.error import HTTPError
 import pytest
 
 from product_app import config, readiness
+from product_app.providers import _read_within_budget
 
 #: The real OpenRouter refusal envelope, captured from the live API.
 _OPENROUTER_401_BODY = json.dumps({"error": {"message": "User not found.", "code": 401}}).encode()
@@ -327,3 +328,146 @@ def test_the_probe_shape_read_is_bounded_by_the_argument_it_passes(
     # And it stopped: an unbounded read would have consumed all 200_000 bytes.
     assert sum(body.read_sizes) <= 8193
     assert _record(caplog)["body_shape"] == "too_large"
+
+
+def test_the_probe_shape_read_is_bounded_in_TIME_as_well_as_in_bytes(
+    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    """RED WHEN: this call site stops passing a time budget, or passes a bigger
+    one.
+
+    A BYTE bound is not a TIME bound (AGENTS.md rule 8b). ``exc.read()`` on an
+    ``HTTPError`` is a SOCKET read, and a WAF that answers 403 and then holds
+    the socket open costs the full connection timeout — measured on the #105
+    path at 8.009s against 0.008-0.013s for the normal case. This probe runs on
+    the ``start_key_auth_probe`` daemon thread rather than a request path, so
+    the severity is low; the bound is still the difference between a readiness
+    probe that finishes and one that does not.
+
+    Asserts on the ARGUMENT this call site passes, with LITERALS on both sides.
+    Asserting ``budget == providers._ERROR_BODY_SNIFF_TIMEOUT_SECONDS`` would
+    survive that constant being raised to 600.0, which is exactly the mutation
+    this exists to catch.
+    """
+    seen: list[tuple[int, float]] = []
+
+    def _recording(exc: HTTPError, limit: int, budget: float) -> tuple[bytes, bool]:
+        seen.append((limit, budget))
+        # The real implementation, imported from where it is DEFINED rather
+        # than read off ``readiness`` — the name being monkeypatched here is
+        # the one on ``readiness``, so reading it back would capture the
+        # recorder and recurse.
+        return _read_within_budget(exc, limit, budget)
+
+    monkeypatch.setattr(readiness, "_read_within_budget", _recording)
+    with caplog.at_level(logging.DEBUG, logger="product_app.readiness"):
+        _probe(monkeypatch, _http_error(403, _PROXY_HTML_BODY))
+    assert len(seen) == 1, f"expected exactly 1 bounded read, got {len(seen)}"
+    limit, budget = seen[0]
+    assert 0.0 < budget <= 2.0, f"the body read was given a {budget}s budget"
+    assert 0 < limit <= 8192, f"the body read was given a {limit}-byte limit"
+    # POSITIVE PARTNER: the recorded call really was the one that produced the
+    # record, so this is not measuring a read nobody used.
+    assert _record(caplog)["body_bytes"] == len(_PROXY_HTML_BODY)
+
+
+def test_an_upstream_cannot_write_thousands_of_digits_into_the_record(
+    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    """RED WHEN: ``error_code_in_body`` stops bounding the integer it accepts.
+
+    Python integers have no width and the body sniff allows 8192 bytes, so
+    ``{"error": {"code": <4000 nines>}}`` fits comfortably. Measured before the
+    bound existed: a record 4450 bytes long carrying 4000 upstream-chosen
+    digits VERBATIM — content, against this package's one rule of shapes and
+    counts only. It is log noise rather than a denial of service (rotation
+    still bounds the file), but it evicts the rare #105 records faster and it
+    is upstream text in our log.
+
+    Out of range records the STRING ``out_of_range``, not ``None``: an absent
+    code and a hostile one are different findings and #203's reading has to
+    tell them apart.
+
+    Both sides of the boundary are driven with LITERALS, because a bound
+    asserted against the constant that defines it survives that constant being
+    widened (AGENTS.md rules 7a/8b).
+    """
+
+    def _code(value: str) -> object:
+        caplog.clear()
+        body = ('{"error": {"message": "no", "code": ' + value + "}}").encode()
+        assert len(body) <= 8192, "the probe body must fit inside the sniff limit"
+        with caplog.at_level(logging.DEBUG, logger="product_app.readiness"):
+            _probe(monkeypatch, _http_error(403, body, Content_Type="application/json"))
+        record = _record(caplog)
+        assert record["body_shape"] == "json", "the body was not parsed, so this proves nothing"
+        return record["error_code_in_body"]
+
+    assert _code("9" * 4000) == "out_of_range"
+    assert _code("-" + "9" * 4000) == "out_of_range"
+    # The exact boundary, literals on both sides: signed 32-bit.
+    assert _code("2147483647") == 2147483647
+    assert _code("2147483648") == "out_of_range"
+    assert _code("-2147483648") == -2147483648
+    assert _code("-2147483649") == "out_of_range"
+    # POSITIVE PARTNER: a real provider code still lands as a number, so the
+    # bound did not turn the field off.
+    assert _code("403") == 403
+
+
+def test_a_layer_exposing_only_one_of_openrouters_header_names_reports_false(
+    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    """RED WHEN: the ``all(...)`` over the exposed names becomes ``any(...)``.
+
+    This is the discriminating input, and nothing drove it: the existing tests
+    cover both names present (True), neither present (False) and the header
+    absent (None), and ``all`` and ``any`` agree on every one of those.
+    Measured 2026-08-10, flipping ``all`` to ``any`` left the whole suite green
+    at ``2801 passed``.
+
+    It matters more than its size. A middlebox that terminates the connection
+    itself but copies through part of the upstream's CORS list is precisely the
+    shape a future #203 classifier would key off, and a field that silently
+    reads ``True`` for a partial match would send that classifier the wrong
+    way — the guessed-fix failure this whole package exists to avoid.
+    """
+    with caplog.at_level(logging.DEBUG, logger="product_app.readiness"):
+        _probe(
+            monkeypatch,
+            _http_error(
+                403,
+                _PROXY_HTML_BODY,
+                Access_Control_Expose_Headers="X-Generation-Id, X-Corp-Trace",
+            ),
+        )
+    assert _record(caplog)["expose_headers_names_openrouter"] is False, (
+        "a list carrying only ONE of OpenRouter's exposed header names was "
+        "reported as if it carried both"
+    )
+
+
+def test_a_broken_shape_capture_cannot_break_the_readiness_probe(
+    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    """RED WHEN: the ``contextlib.suppress`` around the capture is removed.
+
+    The equivalent guard on #268's emission has a test
+    (``test_a_telemetry_failure_cannot_change_what_the_provider_call_returns``)
+    and this one did not, though it guards the same class of accident on a
+    probe that decides whether the whole app reports itself ready. A readiness
+    verdict that could be broken by its own instrumentation would be worse than
+    no instrumentation.
+    """
+
+    def explode(_exc: HTTPError) -> None:
+        raise RuntimeError("the capture is broken")
+
+    monkeypatch.setattr(readiness, "_log_credential_refusal_shape", explode)
+    with caplog.at_level(logging.DEBUG, logger="product_app.readiness"):
+        assert _probe(monkeypatch, _http_error(403, _PROXY_HTML_BODY)) == "unauthorized"
+        assert _probe(monkeypatch, _http_error(401, _OPENROUTER_401_BODY)) == "unauthorized"
+        assert _probe(monkeypatch, _http_error(500, b"oops")) == "unknown"
+    # POSITIVE PARTNER: the capture really was reached and really did raise, so
+    # the verdicts above are not passing over a branch that never ran.
+    assert [r.msg for r in caplog.records if r.msg == "key_probe_credential_refused"] == []

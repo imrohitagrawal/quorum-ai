@@ -99,16 +99,32 @@ _REFUSAL_HEADER_ALLOWLIST: frozenset[str] = frozenset(
     }
 )
 
-#: The two header names OpenRouter exposes via CORS, measured against the live
-#: API on 2026-08-10 (``access-control-expose-headers:
-#: X-Generation-Id,X-Provider-Name,cf-ray``). Their PRESENCE in that list is
-#: recorded; the header's value is not.
+#: TWO OF THE THREE header names OpenRouter exposes via CORS, measured against
+#: the live API on 2026-08-10 (``access-control-expose-headers:
+#: X-Generation-Id,X-Provider-Name,cf-ray`` — three names, not two; this
+#: comment said "the two header names" until a reviewer counted them).
+#: ``cf-ray`` is left out on purpose: OpenRouter is itself behind Cloudflare,
+#: so any Cloudflare layer in front of us would expose it too and it
+#: discriminates nothing. Their PRESENCE in the list is recorded; the header's
+#: value is not.
 _OPENROUTER_EXPOSED_HEADER_NAMES = ("x-generation-id", "x-provider-name")
 
 #: The only content types recorded verbatim. Anything else becomes ``"other"``,
 #: so a hostile upstream cannot put an arbitrary string of its choosing into
 #: our log by setting a long ``Content-Type``.
 _KNOWN_CONTENT_TYPES = ("application/json", "text/html")
+
+#: The widest ``error.code`` recorded as a number. Python integers have no
+#: width, so ``{"error": {"code": <4000 nines>}}`` — comfortably inside the
+#: 8192-byte body sniff — put 4000 upstream-chosen digits verbatim into a
+#: record measured at 4450 bytes on disk. That is content, and this package's
+#: one rule is shapes and counts, never content. Anything outside the range
+#: is recorded as the string ``"out_of_range"`` rather than as ``None``: an
+#: absent code and a hostile one are different findings and #203's reading
+#: must be able to tell them apart. Signed 32-bit, which is far wider than any
+#: real provider or HTTP code and still caps the field at 11 characters.
+_ERROR_CODE_MIN = -2_147_483_648
+_ERROR_CODE_MAX = 2_147_483_647
 
 
 def _log_credential_refusal_shape(exc: HTTPError) -> None:
@@ -198,7 +214,8 @@ def _log_credential_refusal_shape(exc: HTTPError) -> None:
                 # explicitly — a ``"code": true`` would otherwise be recorded
                 # as the integer 1.
                 if isinstance(code, int) and not isinstance(code, bool):
-                    fields["error_code_in_body"] = code
+                    in_range = _ERROR_CODE_MIN <= code <= _ERROR_CODE_MAX
+                    fields["error_code_in_body"] = code if in_range else "out_of_range"
     _log.warning("key_probe_credential_refused", extra=fields)
 
 

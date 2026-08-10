@@ -161,6 +161,41 @@ def test_injected_tokens_is_computed_from_the_messages_actually_sent(
     assert small["system_prompt_chars"] == 200
 
 
+def test_the_output_ceiling_recorded_is_the_one_the_call_actually_asked_for(
+    monkeypatch: pytest.MonkeyPatch, token_records: _Collector
+) -> None:
+    """RED WHEN: ``max_tokens`` is hardcoded, dropped, or read from settings
+    instead of from the call.
+
+    A declared, shipped field with no value assertion anywhere: measured
+    2026-08-10, replacing ``"max_tokens": max_tokens`` with ``0`` left the
+    whole suite green at ``2801 passed``. It is the only field separating the
+    synthesis and judge calls from the rest of the population (ADR-0031 records
+    that ``initial_answer_max_tokens`` and ``DEBATE_ROUND_MAX_TOKENS`` are both
+    2000, so it does not separate those two), and #268's reading groups by it.
+
+    THREE values, one of them ``None``: two would let a single constant satisfy
+    both arms, and ``None`` is the real default on ``_post_messages`` — a
+    fabricated ``0`` there would read as "asked for no output at all".
+    """
+
+    def _drive(max_tokens: int | None) -> Any:
+        token_records.records.clear()
+        _install(monkeypatch, _response_body())
+        result = provider_execution_service._post_messages(
+            openrouter_key="sk-or-test",
+            model_id=_MODEL_ID,
+            messages=[{"role": "user", "content": "u"}],
+            max_tokens=max_tokens,
+        )
+        assert result is not None
+        return _only(token_records)["max_tokens"]
+
+    assert _drive(3000) == 3000
+    assert _drive(1024) == 1024
+    assert _drive(None) is None
+
+
 def test_the_telemetry_divisor_matches_the_cost_estimators_divisor() -> None:
     """RED WHEN: the two drift apart.
 

@@ -215,6 +215,31 @@ BUCKET_B_PIN_BEHAVIOUR = {
         "absent one reports None rather than False; the names track OpenRouter's "
         "own CORS list, which is theirs to change"
     ),
+    # Added with issue #203's capture. These two bound how many UPSTREAM-CHOSEN
+    # digits can enter a log record: Python integers have no width, and
+    # `{"error": {"code": <4000 nines>}}` fits inside the 8192-byte body sniff.
+    # Measured before the bound existed: a 4450-byte record carrying 4000 digits
+    # verbatim, against this package's one rule of shapes and counts only.
+    #
+    # Bucket B rather than A, and that was measured rather than assumed. A
+    # literal pin was written first, on the theory that a behaviour test cannot
+    # see the range being widened -- then the widening was actually run
+    # (`_ERROR_CODE_MAX = 10**100`) and the behaviour test went RED on its own,
+    # because a 4000-digit code is larger still. Any widening big enough to
+    # matter is a widening the behaviour test sees. The literal pin was deleted
+    # rather than kept with a rationale the mutation had refuted.
+    "readiness._ERROR_CODE_MIN": (
+        "assert a 4000-digit error.code is recorded as the string 'out_of_range' and a "
+        "real one (403, and the exact signed-32-bit boundary either side) is recorded as "
+        "a number -- with literals on both sides, so neither widening nor narrowing the "
+        "range survives; tests/unit/test_key_probe_refusal_shape.py::"
+        "test_an_upstream_cannot_write_thousands_of_digits_into_the_record drives it"
+    ),
+    "readiness._ERROR_CODE_MAX": (
+        "assert a 4000-digit error.code is recorded as the string 'out_of_range' and a "
+        "real one (403, and the exact signed-32-bit boundary either side) is recorded as "
+        "a number -- same test as _ERROR_CODE_MIN, both boundaries driven"
+    ),
     "readiness._KNOWN_CONTENT_TYPES": (
         "assert application/json and text/html are reported verbatim and anything "
         "else collapses to 'other', so a hostile Content-Type cannot put a string "
