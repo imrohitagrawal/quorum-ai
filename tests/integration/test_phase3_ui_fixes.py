@@ -1,6 +1,6 @@
 """Phase 3: Color contrast, semantic tokens, and form validation fixes.
 
-Scope: UI_UX_Audit_Report.md Phase 3 items:
+Scope: docs/archive/2026-08/UI_UX_Audit_Report.md Phase 3 items:
   6.1  Color contrast audit — WCAG AA minimums enforced via token choices.
   6.2  Semantic tokens — raw hex values replaced with CSS custom properties.
   8.1  Form validation — aria-invalid + red border on the textarea.

@@ -287,7 +287,7 @@ def _run_pipeline_with_cancel_at(
 # (#106) closes that gap: ``should_stop`` is threaded into the single
 # provider-call seam each stage uses (``debate._call_debate_model`` /
 # ``synthesis._call_synthesis_model``), so a call not yet dispatched when the
-# cancel commits is never dispatched at all — see FOLLOWUP-F05-LAYER2.md.
+# cancel commits is never dispatched at all — see docs/archive/2026-08/FOLLOWUP-F05-LAYER2.md.
 @pytest.mark.parametrize(
     ("window", "max_calls_after_cancel", "exact_calls_after_cancel"),
     [
@@ -339,7 +339,7 @@ def test_a_cancel_with_nothing_billed_skips_the_record_call_entirely(
 
     ``record_debate_outputs`` / ``record_final_synthesis`` are NOT guarded by
     the F-05 terminal-write refusal (deliberately — see
-    FOLLOWUP-F05-LAYER2.md, "guarding record_* masks a symptom whose cause is
+    docs/archive/2026-08/FOLLOWUP-F05-LAYER2.md, "guarding record_* masks a symptom whose cause is
     that the stage service was already entered"). So the fix has to stop the
     ORCHESTRATOR from calling them at all once it knows nothing new was
     billed, rather than making the repository swallow the write. Proven here

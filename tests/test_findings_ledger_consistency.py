@@ -2,7 +2,7 @@
 
 `docs/analysis/R2-plan-review-findings.md` is the durable per-item status record
 the reconciling session verifies Phase-0 completion against
-(`PHASE-0-BUILD-PROMPT.md` §0/§4.4). Its whole value is that it is *below the
+(`docs/archive/2026-08/PHASE-0-BUILD-PROMPT.md` §0/§4.4). Its whole value is that it is *below the
 line*: if it drifts from the repo, the reconciler falls back to chat text — the
 exact above-the-line evidence the ledger exists to replace.
 
