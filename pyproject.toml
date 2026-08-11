@@ -224,14 +224,14 @@ also_copy = [
 #   state (registry membership, _closed, a lock double's recorded timeout).
 # --no-cov: the global --cov-fail-under=88 would fail every per-mutant partial
 #   run, scoring every mutant "killed" and making the number meaningless.
-# --ignore tests/perf tests/performance: latency/percentile specs are timing
-#   gates, not behavioural oracles; including them pushed per-mutant runtime
-#   past mutmut's timeout on every mutant of _persist_terminal_run (measured).
+# --ignore tests/perf: latency/percentile specs are timing gates, not
+#   behavioural oracles; including them pushed per-mutant runtime past
+#   mutmut's timeout on every mutant of _persist_terminal_run (measured).
+#   tests/performance/ was merged into tests/perf/ (housekeeping PR 5).
 pytest_add_cli_args = [
   "-p", "no:randomly",
   "--no-cov",
   "-q",
   "-m", "not env_oracle and not repo_introspection",
   "--ignore", "tests/perf",
-  "--ignore", "tests/performance",
 ]

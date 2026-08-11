@@ -186,9 +186,11 @@ decide. Deleting them locally is safe and affects nobody else.
    more** `docs/...` references, and `factory-gates.json`'s `required_docs` are existence-checked.
 4. **`AGENTS.md` states the invariant-spec count (17)**, compared against the filesystem by
    `tests/test_doc_gate_consistency.py`. Keep it a digit — the gate cannot read "seventeen".
-5. **`validate_tests.py` hard-fails if `tests/performance/` or `tests/e2e/` is missing**, so
-   merging the duplicate perf directories is a four-file change (`validate_tests.py`, `Makefile`
-   `PERF_TEST_PATHS` and `PERF_MIN_TESTS`, `pyproject.toml`).
+5. **`validate_tests.py` hard-failed if `tests/performance/` or `tests/e2e/` was missing** (true
+   when this prompt was written; housekeeping PR 5 merged `tests/performance/` into `tests/perf/`
+   and the gate now names `tests/perf`), so merging the duplicate perf directories was a
+   four-file change (`validate_tests.py`, `Makefile` `PERF_TEST_PATHS` and `PERF_MIN_TESTS`,
+   `pyproject.toml`) — confirmed exactly that size once actually done.
 
 ---
 

@@ -208,7 +208,7 @@ This task gives an independent software testing team a complete testing charter 
 - `tests/e2e/`
 - `tests/accessibility/`
 - `tests/security/`
-- `tests/performance/`
+- `tests/perf/`
 - `tests/evals/`
 
 ### Jira Status
