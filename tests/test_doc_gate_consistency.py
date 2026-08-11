@@ -120,7 +120,18 @@ def _normalise(text: str) -> str:
 
 
 def _doc_lines() -> Iterator[tuple[Path, int, str]]:
+    """Yield lines from live docs, skipping ``docs/archive/``.
+
+    Archived files are historical session output, not current guidance — a
+    past proof narrative can legitimately quote an old or deliberately-wrong
+    number (e.g. "re-prove it BITES with --cov-fail-under=95 -> must fail")
+    without that being a live claim this gate should hold to today's
+    enforced value.
+    """
+    archive_dir = _docs_dir() / "archive"
     for path in sorted(_docs_dir().rglob("*.md")):
+        if archive_dir in path.parents:
+            continue
         for number, line in enumerate(path.read_text(encoding="utf-8").splitlines(), 1):
             yield path, number, _normalise(line)
 
