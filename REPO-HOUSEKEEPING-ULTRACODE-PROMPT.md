@@ -25,8 +25,10 @@ These are not advice. Violating one is a stop-and-report event.
 
 ## 0.1 Forbidden without stopping and asking the human
 
-- **Deleting anything untracked.** 55 root files have no git history. Section 3 gives the only
-  sanctioned route (commit first, delete second).
+- **Deleting anything untracked.** **19** root `.md` files have no git history — see 1.2.
+  (An earlier draft of this line said 55. It was wrong; the corrected split is in 1.2.)
+  PR 1 gives the only sanctioned route: commit first, delete second.
+- **Deleting or moving anything named in 0.1a.** Read that list first.
 - **Moving or renaming a top-level directory**, and in particular any of
   `docs` `src` `tests` `scripts` `e2e` `profiles` — `tests/unit/test_cited_paths_resolve.py`
   pins those six names in a regex.
@@ -34,6 +36,30 @@ These are not advice. Violating one is a stop-and-report event.
 - **Touching `.env`.** It is gitignored, mode 600, and was never committed. Leave it alone.
 - **Lowering any threshold, adding `# pragma: no cover`, or deleting a test** to go green.
 - **Any change under `src/product_app/`.** See 0.2.
+
+## 0.1a Never delete or move these — they carry state you cannot rebuild
+
+| File | Why it survives |
+|---|---|
+| `docs/analysis/2026-08-11-session-handoff.md` | **The continuation plan.** Names the next work package (#290), what is blocked and why, and the traps a prior session paid for. Losing it loses the thread. |
+| `R2-S2-S4-ULTRACODE-PROMPT.md` | Pinned by three tests; its docstring calls it the executable a future session pastes. |
+| `REPO-HOUSEKEEPING-ULTRACODE-PROMPT.md` | This file. |
+| Anything `validate_*.py`, `configs/*.json` `required_docs`, or `pyproject.toml also_copy` names by path | A gate hard-fails on its absence. |
+
+**Before moving or deleting ANY file, check it is not load-bearing:**
+
+```bash
+grep -rn "<filename>" scripts/ tests/ configs/ pyproject.toml .github/ Makefile
+```
+
+A hit means something asserts that path. Update it in the same commit or leave the file alone.
+
+**A trap that already caught this repo once:** the continuation handoff used to live at root as
+`HANDOFF-2026-08-11-NEXT-SESSION.md`, where `.gitignore:31` (`HANDOFF-*.md`) kept it out of git
+— unrecoverable, absent from a fresh clone, and sitting in the group this prompt marks as safe
+to delete locally. It was moved to `docs/analysis/` and committed for exactly that reason.
+**The ignore pattern has no directory anchor**, so restoring a `HANDOFF-*` name silently
+un-tracks the file again at any path, `docs/` included.
 
 ## 0.2 `src/` is out of scope, entirely
 
@@ -177,9 +203,10 @@ the work? Module boundaries, coupling, what a change to one concern forces you t
 `src/` in the *analysis* — it is excluded from action, not from observation.
 
 **A2 — Engineering manager.** Onboarding and discoverability. A new contributor lands here: what
-can they not find? Which of the 100 root files would they read first, and is it the right one?
+can they not find? Which of the 101 root files would they read first, and is it the right one?
 Is `docs/00-start-here.md` accurate? Where would they waste a day? Read `README.md`,
-`docs/00-start-here.md`, `AGENTS.md` and `HANDOFF-2026-08-11-NEXT-SESSION.md` as a newcomer would.
+`docs/00-start-here.md`, `AGENTS.md` and `docs/analysis/2026-08-11-session-handoff.md` as a
+newcomer would.
 
 **A3 — Repo-hygiene auditor.** Mechanical and exhaustive: duplicates by **md5** (not by name),
 dead and orphaned files, `.gitignore` gaps, numbering collisions, tracked-but-generated
@@ -405,7 +432,7 @@ are portable. Do not copy their shape.
   Docker: **~14 GB reclaimable** against 405 MB here. Report it; do not act.
 - **Any git-history rewrite.**
 - **The open product backlog** — #290 (peer critique), #180 (false consensus), #105, #268, #203.
-  `HANDOFF-2026-08-11-NEXT-SESSION.md` covers those and is a different session's work.
+  `docs/analysis/2026-08-11-session-handoff.md` covers those and is a different session's work.
 
 ---
 
