@@ -258,12 +258,39 @@ jobs:
           FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
         run: |
           # /ready returns 200 always; the body shows live_readiness state.
-          # We assert state == "live" or "live" with drift (catalog mismatch)
-          # but NOT "offline_by_*" - that means the deploy is misconfigured.
+          #
+          # Three offline states exist (readiness.py:68-70), and they do NOT
+          # mean the same thing:
+          #
+          #   offline_by_config  - the operator turned live execution OFF on
+          #                        purpose. fly.toml commits exactly this
+          #                        ("false", operator must enable). DELIBERATE.
+          #   offline_by_no_key  - live execution is ON but no key is set.
+          #   offline_by_bad_key - a key IS set and the provider rejected it.
+          #
+          # The last two are misconfigurations and must fail the deploy. The
+          # first is a supported operating mode and must NOT.
+          #
+          # This gate used to `grep -q '"offline_by_'` and fail on all three.
+          # That was correct only while live execution was always on; the
+          # moment it was switched off deliberately, EVERY deploy went red and
+          # the signal rule 18 depends on ("did the deploy job succeed?") became
+          # useless - a genuinely broken deploy looked identical to a healthy
+          # one. Measured 2026-08-11: run 31481627499, deploy step succeeded,
+          # app healthy on the right SHA, job red.
           RESPONSE=$(curl -sf https://quorum-ai.fly.dev/ready)
           echo "Ready response: $RESPONSE"
-          if echo "$RESPONSE" | grep -q '"offline_by_'; then
-            echo "ERROR: App booted in offline mode - check OPENROUTER_API_KEY"
+          if echo "$RESPONSE" | grep -q '"offline_by_no_key"\|"offline_by_bad_key"'; then
+            echo "ERROR: app booted offline because of a KEY problem - check OPENROUTER_API_KEY"
+            exit 1
+          fi
+          if echo "$RESPONSE" | grep -q '"offline_by_config"'; then
+            echo "NOTE: live execution is deliberately OFF (offline_by_config)."
+            echo "Every query falls back to local simulation. This is a supported"
+            echo "mode and does not fail the deploy. Set OPENROUTER_LIVE_EXECUTION_ENABLED=true"
+            echo "to go live."
+          elif echo "$RESPONSE" | grep -q '"offline_by_'; then
+            echo "ERROR: app booted in an UNRECOGNISED offline state - fail closed"
             exit 1
           fi
           echo "Ready check passed"
