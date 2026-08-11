@@ -90,11 +90,18 @@ collisions this ADR is cleaning up after happened in the first place.
 
 ### Rejected alternative: renumber everything into clean, gapless ranges
 
-Rejected. It would touch every one of the ~60 validator literals and ~149
-config references AGENTS.md documents (see rule 1.1), for a purely
-cosmetic gain (closing gaps that don't cause any functional problem — a
-gap is not a collision). The actual defect is collisions, not gaps; fixing
-only the actual defect is the smaller, safer, equally-effective diff.
+Rejected. `REPO-HOUSEKEEPING-ULTRACODE-PROMPT.md` §1.1 (not AGENTS.md —
+corrected here after review caught the miscitation) puts the pre-work
+estimate for fixing just the 14 collisions at ~60 validator literals + 149
+config references; housekeeping PR 4's actual diff came in well under that
+(58 files touched, per its own commit). A full renumber touches every one
+of the ~111 numbered docs, not 14 — genuinely larger in scope, though the
+exact multiple is not separately measured here and should not be quoted as
+a precise figure. Whatever the true size, the gain would be purely
+cosmetic (closing gaps that don't cause any functional problem — a gap is
+not a collision). The actual defect is collisions, not gaps; fixing only
+the actual defect is the smaller, safer, equally-effective diff regardless
+of exactly how much smaller.
 
 ### Rejected alternative: leave the scheme undocumented, rely on review
 

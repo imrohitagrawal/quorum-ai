@@ -646,7 +646,12 @@ correctly kept at root — and a rule that forbids the thing you're holding
 gets ignored rather than followed. If you're not sure which kind a file
 is, ask: would a future session **run** this, or does it only **read**
 this to see what a past session did? Running → procedure → root/skills.
-Reading-only → output → `docs/archive/`.
+Reading-only → output → `docs/archive/`. **A handoff doc that is half
+state-record and half next-steps-to-execute is genuinely both** — several
+existing `docs/archive/2026-08/*-ULTRACODE-PROMPT.md` files are exactly
+this shape, correctly archived despite the naming heuristic above pointing
+at "procedure." When a file is a real hybrid, judge by what it mostly is
+today, not by its filename suffix alone.
 
 For `docs/NN-*.md` numbering specifically (a separate but related form of
 this same problem — 14 numbers collided before nothing checked a new
