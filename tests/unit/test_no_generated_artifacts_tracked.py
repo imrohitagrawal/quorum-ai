@@ -46,11 +46,7 @@ def test_the_scan_sees_a_nonzero_number_of_tracked_files() -> None:
 
 
 def test_no_tracked_path_has_an_unset_template_variable_component() -> None:
-    problems = [
-        path
-        for path in _tracked_files()
-        if set(Path(path).parts) & _BAD_PATH_COMPONENTS
-    ]
+    problems = [path for path in _tracked_files() if set(Path(path).parts) & _BAD_PATH_COMPONENTS]
     assert not problems, (
         "tracked path(s) contain a literal 'undefined'/'null' directory "
         f"component — an unset template variable almost certainly generated "
