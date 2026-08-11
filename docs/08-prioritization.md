@@ -6,11 +6,11 @@
 - `docs/01-product-brief.md`
 - `docs/02-stakeholder-map.md`
 - `docs/04-problem-statement.md`
-- `docs/04-success-metrics.md`
+- `docs/114-success-metrics.md`
 - `docs/07-open-questions.md`
 - `docs/33-content-design.md`
 - `docs/43-privacy-data-governance.md`
-- `docs/70-performance-model.md`
+- `docs/119-performance-model.md`
 
 ## Method
 
@@ -70,7 +70,7 @@ Scoring:
 - Final synthesis with consensus, disagreement, and recommendation.
 - High-stakes decision-support warning.
 - Sensitive/private data warning.
-- Latency and cost guardrails from `docs/04-success-metrics.md` and `docs/70-performance-model.md`.
+- Latency and cost guardrails from `docs/114-success-metrics.md` and `docs/119-performance-model.md`.
 
 ## Tradeoffs
 

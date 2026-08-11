@@ -694,7 +694,7 @@ the exact dishonesty the rule is trying to prevent.
 ## 4b. Session handoff — carry state without carrying rot
 
 **Ship a session-handoff template in the first commit, and use it from session
-one.** Template and full rationale: `docs/91-session-handoff-template.md`.
+one.** Template and full rationale: `docs/123-session-handoff-template.md`.
 
 Handoff is close to a solved problem outside software, and the evidence is far
 better than anything in our field. **I-PASS** (Starmer et al., *NEJM*

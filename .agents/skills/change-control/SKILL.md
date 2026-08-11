@@ -24,7 +24,7 @@ Use this skill when the lifecycle phase needs its owned artifact, when a source-
 ## Required outputs
 
 - `docs/19-change-control-log.md`
-- `docs/19-signoff-record.md`
+- `docs/116-signoff-record.md`
 
 ## Procedure
 

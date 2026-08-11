@@ -14,7 +14,7 @@ description: Translate product roadmap and release scope into Jira epics/release
 ## Inputs
 - `docs/08-prioritization.md`
 - `docs/09-roadmap.md`
-- `docs/09-release-scope.md`
+- `docs/115-release-scope.md`
 - `docs/34-jira-issue-authoring.md`
 
 ## Owned outputs

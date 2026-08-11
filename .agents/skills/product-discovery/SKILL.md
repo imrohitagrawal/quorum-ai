@@ -25,9 +25,9 @@ description: Turn PRODUCT_IDEA.md into product brief, personas, journeys, MVP sc
 
 ## Outputs
 - `docs/01-product-brief.md`
-- `docs/02-personas.md`
-- `docs/03-user-journeys.md`
-- `docs/04-success-metrics.md`
+- `docs/112-personas.md`
+- `docs/113-user-journeys.md`
+- `docs/114-success-metrics.md`
 - `docs/05-non-goals.md`
 - `docs/06-assumptions.md`
 - `docs/07-open-questions.md`

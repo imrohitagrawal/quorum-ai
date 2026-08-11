@@ -26,7 +26,7 @@ Use this skill when the lifecycle phase needs its owned artifact, when a source-
 - `docs/21-domain-model.md`
 - `docs/28-business-rules.md`
 - `docs/29-state-machines.md`
-- `docs/29-event-catalog.md`
+- `docs/117-event-catalog.md`
 
 ## Procedure
 

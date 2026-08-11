@@ -5,7 +5,7 @@
 - `PRODUCT_IDEA.md`
 - `docs/01-product-brief.md`
 - `docs/04-problem-statement.md`
-- `docs/04-success-metrics.md`
+- `docs/114-success-metrics.md`
 - `docs/07-open-questions.md`
 
 ## Primary Users

@@ -17,10 +17,10 @@ description: Define and validate latency, throughput, concurrency, capacity, loa
 8. Add performance smoke gate.
 
 ## Outputs
-- `docs/70-performance-model.md`
-- `docs/71-load-test-plan.md`
-- `docs/72-capacity-plan.md`
-- `docs/73-bottleneck-analysis.md`
+- `docs/119-performance-model.md`
+- `docs/120-load-test-plan.md`
+- `docs/121-capacity-plan.md`
+- `docs/122-bottleneck-analysis.md`
 
 ## Validation gate
 No release without performance smoke strategy for critical paths.

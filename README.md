@@ -84,7 +84,7 @@ The `make test` target is also wired into GitHub Actions (see `.github/workflows
 
 Live signals, SLOs, the ops dashboard, the scheduled availability alert, the
 incident runbook, and a 60–90 s demo click-path — each claim tied to a real
-PR/SHA/run-id — are collected in **[`docs/95-demo-evidence.md`](docs/95-demo-evidence.md)**.
+PR/SHA/run-id — are collected in **[`docs/124-demo-evidence.md`](docs/124-demo-evidence.md)**.
 Observability details live in [`docs/80-observability.md`](docs/80-observability.md).
 
 ---
