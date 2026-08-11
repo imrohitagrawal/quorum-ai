@@ -20,7 +20,7 @@ description: Finds the smallest valuable outcome before requirements, build, stu
 
 ## Owned outputs
 - `docs/08-prioritization.md`
-- `docs/09-release-scope.md`
+- `docs/115-release-scope.md`
 - `docs/96-study-artifact-publishing.md`
 - `docs/study/M1-problem-and-mvp.md`
 

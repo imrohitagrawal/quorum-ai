@@ -25,7 +25,7 @@ Use this skill when the lifecycle phase needs its owned artifact, when a source-
 
 - `docs/08-prioritization.md`
 - `docs/09-roadmap.md`
-- `docs/09-release-scope.md`
+- `docs/115-release-scope.md`
 
 ## Procedure
 

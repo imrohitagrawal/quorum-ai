@@ -1,7 +1,7 @@
 # Product Naming
 
 ## Requirements freeze status
-Pending explicit signoff in `docs/19-signoff-record.md`. The following are placeholder examples to be replaced after requirements freeze.
+Pending explicit signoff in `docs/116-signoff-record.md`. The following are placeholder examples to be replaced after requirements freeze.
 
 ## Name Option 1
 

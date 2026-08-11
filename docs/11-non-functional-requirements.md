@@ -16,7 +16,7 @@ These NFRs apply to the Release 1 MVP query workflow and supporting browser-sess
 - Tests: TEST-NFR-001.
 - Dashboard: Query workflow latency percentiles.
 - Alert: Page or ticket when P95 exceeds 120 seconds for 3 consecutive 15-minute windows after launch.
-- Source: `docs/04-success-metrics.md`.
+- Source: `docs/114-success-metrics.md`.
 
 ## NFR-002 Cost per completed query
 
@@ -30,7 +30,7 @@ These NFRs apply to the Release 1 MVP query workflow and supporting browser-sess
 - Tests: TEST-NFR-002.
 - Dashboard: Cost per query average, percentile, and model-slot breakdown.
 - Alert: Ticket when daily average cost exceeds USD 0.05 or any unconfirmed query exceeds USD 0.15.
-- Source: `docs/04-success-metrics.md`.
+- Source: `docs/114-success-metrics.md`.
 
 ## NFR-003 Citation coverage
 
@@ -46,7 +46,7 @@ These NFRs apply to the Release 1 MVP query workflow and supporting browser-sess
 - Tests: TEST-NFR-003.
 - Dashboard: Source coverage (share of answers carrying a primary source) by query sample and provider path.
 - Alert: Ticket when sampled source coverage falls below 80 percent for two consecutive review batches. Note the series steps UP at the WP-C changeover; compare like-for-like across that boundary.
-- Source: `docs/04-success-metrics.md`.
+- Source: `docs/114-success-metrics.md`.
 
 ## NFR-004 Dependency resilience
 
@@ -60,7 +60,7 @@ These NFRs apply to the Release 1 MVP query workflow and supporting browser-sess
 - Tests: TEST-NFR-004.
 - Dashboard: Query status rate by completed, partial, failed, timed out, and provider error.
 - Alert: Ticket when failed-without-partial-result rate exceeds 5 percent over 1 hour after launch.
-- Source: `docs/09-release-scope.md`.
+- Source: `docs/115-release-scope.md`.
 
 ## NFR-005 Session ownership, CSRF, and authorization
 
@@ -74,7 +74,7 @@ These NFRs apply to the Release 1 MVP query workflow and supporting browser-sess
 - Tests: TEST-NFR-005.
 - Dashboard: Authentication failure counts and authorization denial counts.
 - Alert: Security ticket for any permission regression in CI or production monitoring.
-- Source: `docs/01-product-brief.md`, `docs/09-release-scope.md`.
+- Source: `docs/01-product-brief.md`, `docs/115-release-scope.md`.
 
 ## NFR-006 Provider secret protection
 
@@ -88,7 +88,7 @@ These NFRs apply to the Release 1 MVP query workflow and supporting browser-sess
 - Tests: TEST-NFR-006.
 - Dashboard: Secret scanning status and redaction test status.
 - Alert: Immediate security incident for any detected provider-key exposure.
-- Source: `docs/09-release-scope.md`.
+- Source: `docs/115-release-scope.md`.
 
 ## NFR-007 Sensitive data minimization
 
@@ -102,7 +102,7 @@ These NFRs apply to the Release 1 MVP query workflow and supporting browser-sess
 - Tests: TEST-NFR-007.
 - Dashboard: Warning impression and acknowledgement events without storing query content.
 - Alert: Privacy review ticket if the warning is removed, bypassed, or contradicted by product copy.
-- Source: `docs/13-open-questions.md`, `docs/09-release-scope.md`.
+- Source: `docs/13-open-questions.md`, `docs/115-release-scope.md`.
 
 ## NFR-008 High-stakes decision-support boundary
 
@@ -130,7 +130,7 @@ These NFRs apply to the Release 1 MVP query workflow and supporting browser-sess
 - Tests: TEST-NFR-009.
 - Dashboard: Accessibility test status in CI.
 - Alert: Release blocker for critical or serious accessibility violations on the core workflow.
-- Source: `docs/09-release-scope.md`.
+- Source: `docs/115-release-scope.md`.
 
 ## NFR-010 Observability for MVP workflow
 
@@ -144,7 +144,7 @@ These NFRs apply to the Release 1 MVP query workflow and supporting browser-sess
 - Tests: TEST-NFR-010.
 - Dashboard: Query funnel, provider failures, fallback usage, latency, and cost panels.
 - Alert: Ticket when event completeness falls below 99 percent for accepted queries after launch.
-- Source: `docs/04-success-metrics.md`, `docs/09-release-scope.md`.
+- Source: `docs/114-success-metrics.md`, `docs/115-release-scope.md`.
 
 ## Release 2: Trust & Evaluation (Non-Functional)
 

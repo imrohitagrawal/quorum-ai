@@ -13,7 +13,7 @@ description: Map desired outcome to opportunities, solution ideas, experiments, 
 - Do not override local policy, source-of-truth artifacts, security gates, or explicit user instructions.
 
 ## Inputs
-- `docs/04-success-metrics.md`
+- `docs/114-success-metrics.md`
 - `docs/08-prioritization.md`
 
 ## Owned outputs

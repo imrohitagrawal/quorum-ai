@@ -39,8 +39,8 @@ risk_tier: high-ai-security-privacy-cost
 ai_capability: multi-model cross-validation with search-backed answers, critique rounds, and synthesis
 source_docs:
   - docs/01-product-brief.md
-  - docs/04-success-metrics.md
-  - docs/09-release-scope.md
+  - docs/114-success-metrics.md
+  - docs/115-release-scope.md
   - docs/10-functional-requirements.md
   - docs/11-non-functional-requirements.md
   - docs/12-acceptance-criteria.md
@@ -184,7 +184,7 @@ QA test charter: validate Quorum AI Release 1 MVP end to end.
 
 ### Full Jira Payload
 
-See `docs/34-qa-test-charter-jira.md`.
+See `docs/118-qa-test-charter-jira.md`.
 
 ### Purpose
 
@@ -197,7 +197,7 @@ This task gives an independent software testing team a complete testing charter 
 
 ### Acceptance Criteria
 
-- QA-AC-001 through QA-AC-030 in `docs/34-qa-test-charter-jira.md`.
+- QA-AC-001 through QA-AC-030 in `docs/118-qa-test-charter-jira.md`.
 
 ### Test Mapping
 

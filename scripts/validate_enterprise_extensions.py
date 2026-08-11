@@ -34,7 +34,7 @@ def require_text(path: str, required: list[str]) -> str:
 
 def main() -> int:
     require_text(
-        "docs/00-start-here.md",
+        "docs/111-start-here.md",
         ["# Start Here", "PRODUCT_IDEA.md", "make next", "docs/00-factory-console.md"],
     )
     require_text(

@@ -2,7 +2,7 @@
 
 ## Scope
 
-These requirements cover Release 1 MVP for the public AI cross-validation workflow described in `docs/01-product-brief.md` and `docs/09-release-scope.md`. They do not authorize implementation yet.
+These requirements cover Release 1 MVP for the public AI cross-validation workflow described in `docs/01-product-brief.md` and `docs/115-release-scope.md`. They do not authorize implementation yet.
 
 ## FR-001 Session-scoped query execution
 
@@ -10,7 +10,7 @@ These requirements cover Release 1 MVP for the public AI cross-validation workfl
 - Trigger: The user attempts to run a query.
 - Behavior: The system requires a valid server-issued browser session and server-configured provider access before accepting the query for model execution.
 - Outcome: Visitors can inspect the workspace UI, but execution is blocked until a session exists and provider access is configured on the server.
-- Source: `docs/01-product-brief.md`, `docs/09-release-scope.md`.
+- Source: `docs/01-product-brief.md`, `docs/115-release-scope.md`.
 - Owner: Product owner.
 - Priority: Must.
 - Rationale: The slice defers durable identity while still requiring an ownership boundary for secrets, cost controls, and result access.
@@ -24,7 +24,7 @@ These requirements cover Release 1 MVP for the public AI cross-validation workfl
 - Trigger: The user submits a query while another query for the same account is still running.
 - Behavior: The system prevents the second active execution and explains that one query can run at a time for that browser session.
 - Outcome: Provider cost and orchestration load stay bounded for the MVP.
-- Source: `docs/01-product-brief.md`, `docs/09-release-scope.md`.
+- Source: `docs/01-product-brief.md`, `docs/115-release-scope.md`.
 - Owner: Product owner.
 - Priority: Must.
 - Rationale: The MVP needs a simple concurrency guard before richer quota and billing rules exist.
@@ -38,7 +38,7 @@ These requirements cover Release 1 MVP for the public AI cross-validation workfl
 - Trigger: The user prepares to submit a query.
 - Behavior: The system displays decision-support-only warnings for medical, legal, financial, safety, and regulated topics and warns users not to submit sensitive or private data.
 - Outcome: Users see scope and privacy limitations before provider processing starts.
-- Source: `docs/01-product-brief.md`, `docs/09-release-scope.md`, `docs/13-open-questions.md`.
+- Source: `docs/01-product-brief.md`, `docs/115-release-scope.md`, `docs/13-open-questions.md`.
 - Owner: Product owner.
 - Priority: Must.
 - Rationale: The MVP is not approved for automated high-stakes decisions or sensitive/private-data handling.
@@ -52,7 +52,7 @@ These requirements cover Release 1 MVP for the public AI cross-validation workfl
 - Trigger: The user opens or configures the query workflow.
 - Behavior: The system provides four model slots defaulting to `openai/gpt-4o-mini`, `anthropic/claude-haiku-4.5`, `google/gemini-2.5-flash`, and `deepseek/deepseek-chat-v3.1`, and allows the user to replace each slot with an OpenRouter-supported model identifier from the live catalog when available.
 - Outcome: The user can compare four selected models while starting from known defaults.
-- Source: `docs/01-product-brief.md`, `docs/09-release-scope.md`, `docs/13-open-questions.md`.
+- Source: `docs/01-product-brief.md`, `docs/115-release-scope.md`, `docs/13-open-questions.md`.
 - Owner: Product owner.
 - Priority: Must.
 - Rationale: Configurable model slots are central to cross-validation and user control.
@@ -66,7 +66,7 @@ These requirements cover Release 1 MVP for the public AI cross-validation workfl
 - Trigger: The user submits a query with selected models.
 - Behavior: The system estimates query cost before execution, allows normal execution within the approved budget, requires explicit confirmation above USD 0.15 estimated cost, and blocks or requires a product-approved path above USD 0.25 estimated cost.
 - Outcome: Users and operators avoid surprise provider spend.
-- Source: `docs/04-success-metrics.md`, `docs/09-release-scope.md`.
+- Source: `docs/114-success-metrics.md`, `docs/115-release-scope.md`.
 - Owner: Product owner.
 - Priority: Must.
 - Rationale: The two-round debate workflow can be expensive, especially with user-selected models.
@@ -80,7 +80,7 @@ These requirements cover Release 1 MVP for the public AI cross-validation workfl
 - Trigger: An accepted query starts execution.
 - Behavior: The system attempts OpenRouter search-backed answering first for each model, then falls back to Tavily or the approved free-search provider when OpenRouter search fails or does not return usable sources.
 - Outcome: Initial model answers include visible source links where source-backed answering is available.
-- Source: `docs/01-product-brief.md`, `docs/04-success-metrics.md`, `docs/09-release-scope.md`.
+- Source: `docs/01-product-brief.md`, `docs/114-success-metrics.md`, `docs/115-release-scope.md`.
 - Owner: Engineering lead.
 - Priority: Must.
 - Rationale: Source visibility is required to support credibility and citation coverage.
@@ -94,7 +94,7 @@ These requirements cover Release 1 MVP for the public AI cross-validation workfl
 - Trigger: Each selected model returns an initial answer or fails.
 - Behavior: The system records each model's answer, model identifier, source links, completion status, latency, and error state without exposing server-side provider secrets.
 - Outcome: The user can inspect each model output and the system can synthesize from complete or partial results.
-- Source: `docs/01-product-brief.md`, `docs/09-release-scope.md`.
+- Source: `docs/01-product-brief.md`, `docs/115-release-scope.md`.
 - Owner: Engineering lead.
 - Priority: Must.
 - Rationale: The product value depends on transparent comparison rather than hiding model-level differences.
@@ -117,7 +117,7 @@ These requirements cover Release 1 MVP for the public AI cross-validation workfl
   requirement rather than rewritten to match the build; peer critique between the
   four models is the follow-on work. Public copy was corrected to describe the
   moderator design in the same change that added this line.
-- Source: `docs/01-product-brief.md`, `docs/09-release-scope.md`, `docs/13-open-questions.md`.
+- Source: `docs/01-product-brief.md`, `docs/115-release-scope.md`, `docs/13-open-questions.md`.
 - Owner: Product owner.
 - Priority: Must.
 - Rationale: Two rounds are an explicit MVP decision and a core differentiator from simple parallel prompting.
@@ -131,7 +131,7 @@ These requirements cover Release 1 MVP for the public AI cross-validation workfl
 - Trigger: Debate rounds finish or the workflow reaches a recoverable timeout with partial results.
 - Behavior: The system produces a final synthesis that separates consensus, disagreement, source support, uncertainty, and final recommendation.
 - Outcome: The user receives a decision-support answer that preserves important contradictions instead of collapsing them into a single unsupported response.
-- Source: `docs/01-product-brief.md`, `docs/04-success-metrics.md`, `docs/09-release-scope.md`.
+- Source: `docs/01-product-brief.md`, `docs/114-success-metrics.md`, `docs/115-release-scope.md`.
 - Owner: Product owner.
 - Priority: Must.
 - Rationale: Synthesis is the primary user-facing value of multi-model cross-validation.
@@ -145,7 +145,7 @@ These requirements cover Release 1 MVP for the public AI cross-validation workfl
 - Trigger: One or more providers exceed timeout or return errors during search, answer, debate, or synthesis.
 - Behavior: The system marks failed steps, continues with available results when quality rules allow, and returns a partial-result explanation when the hard timeout is reached.
 - Outcome: Users receive an honest recoverable result instead of a silent failure or indefinite wait.
-- Source: `docs/04-success-metrics.md`, `docs/09-release-scope.md`.
+- Source: `docs/114-success-metrics.md`, `docs/115-release-scope.md`.
 - Owner: Engineering lead.
 - Priority: Must.
 - Rationale: External model and search dependencies will fail or slow down; the MVP must degrade clearly.
@@ -159,7 +159,7 @@ These requirements cover Release 1 MVP for the public AI cross-validation workfl
 - Trigger: The system calls OpenRouter, Tavily, or the approved search fallback.
 - Behavior: The system uses app-owned provider keys only on the server side and never returns those secrets to the browser, logs, model prompts, or user-visible errors.
 - Outcome: Default provider capacity remains protected.
-- Source: `docs/01-product-brief.md`, `docs/09-release-scope.md`.
+- Source: `docs/01-product-brief.md`, `docs/115-release-scope.md`.
 - Owner: Engineering lead.
 - Priority: Must.
 - Rationale: Provider secrets are high-impact credentials and must not leak through the public workflow.
@@ -173,7 +173,7 @@ These requirements cover Release 1 MVP for the public AI cross-validation workfl
 - Trigger: The user opens the workspace and wants to enable execution.
 - Behavior: The system uses server-configured provider keys from environment variables and does not expose a user-facing provider-key input for the first cut.
 - Outcome: The core workflow runs without user-entered provider secrets in the UI.
-- Source: `docs/01-product-brief.md`, `docs/09-release-scope.md`.
+- Source: `docs/01-product-brief.md`, `docs/115-release-scope.md`.
 - Owner: Product owner.
 - Priority: Should.
 - Rationale: This slice moves all execution cost responsibility behind explicit BYO credentials while durable accounts remain deferred.
@@ -187,7 +187,7 @@ These requirements cover Release 1 MVP for the public AI cross-validation workfl
 - Trigger: A query reaches completed or partial-result status.
 - Behavior: The system presents the four initial answers, source links, stage progress, debate outputs, final synthesis, cost estimate or actual cost, current time context, elapsed time, and any provider failure notices.
 - Outcome: Users can audit how the final recommendation was produced.
-- Source: `docs/01-product-brief.md`, `docs/04-success-metrics.md`, `docs/09-release-scope.md`.
+- Source: `docs/01-product-brief.md`, `docs/114-success-metrics.md`, `docs/115-release-scope.md`.
 - Owner: Product owner.
 - Priority: Must.
 - Rationale: Transparency is needed for trust, confidence calibration, and hallucination-risk reduction.

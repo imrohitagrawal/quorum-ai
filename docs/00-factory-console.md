@@ -34,7 +34,7 @@ dispatch proof run `29964680225`), OD-6 incident runbook (#82 `7002f8a`), OD-7
 evidence page + demo script (#83 `77d82cc`, Deploy JOB run `29968918666`
 success). Full ledger, review findings, and
 deferred items: `OBSERVABILITY-DEMO-RESULT.md`; demo evidence:
-`docs/95-demo-evidence.md`.
+`docs/124-demo-evidence.md`.
 
 **Demo-readiness P1–P3 is COMPLETE and deploy-verified (2026-07-22).** P1 #72
 `b2848e5` (real Layer-B judge, OFF by default), P3 #73 `c663ad5` (NFR-004
