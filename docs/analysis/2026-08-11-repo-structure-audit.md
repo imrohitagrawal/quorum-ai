@@ -117,8 +117,8 @@ is out of scope for *this* run (see §5, §6).
 `query_runs.py` specifically merges 3 of `docs/20-architecture.md`'s declared
 components (`query_api`, `orchestration`, `persistence`) into one file and
 fans in 13 other modules. This is a real architectural finding. Per prompt
-§0.2 it is **not actioned** in this run; it is filed as a GitHub issue in
-Phase D instead.
+§0.2 it is **not actioned** in this run; filed as
+[issue #303](https://github.com/imrohitagrawal/quorum-ai/issues/303).
 
 ## PR 1 manifest — root files moved/removed 2026-08-11
 
@@ -199,4 +199,158 @@ no position on which, since it wasn't the decision-maker who excluded them.
 
 ## What generalises
 
-See the end of this document, appended after Phase C/D/E complete.
+Written after all 6 PRs merged (#297–#302) and deploy-verified. This section
+is Phase E's output — input for a future, portable skill, not the skill
+itself.
+
+### 1. Which phases earned their cost
+
+- **Three analysis lenses (architect/EM/hygiene) beat two.** Each surfaced
+  something the others didn't: the architect found the `src/` boundary
+  violation (out of this run's action scope, but real and now filed as
+  issue #303); the EM found the stale mandated-handoff trap (F12); the
+  hygiene lens found the skill-package and profiles/orbi duplication (F9,
+  F10, deliberately deferred) *and* did the exhaustive md5 re-verification
+  the other two lenses didn't attempt. No lens was redundant with another.
+- **The synthesiser changed real conclusions, not just concatenated.** It
+  narrowed 2 of 10 measured claims (root-file split drift, `e2e/undefined/`
+  size), and — critically — caught a premise that was flatly wrong before
+  any PR executed: the excalidraw "4-way duplicate" turned out to be a
+  gate requiring all 4 distinct files (F3). Reading the gate's own source,
+  not just grepping for the filename, is what caught it. A synthesiser that
+  only merged the three reports' text would have shipped the deletion.
+- **Two-lens adversarial review per PR earned its cost 3 times out of 6.**
+  PR 1: caught a real regression (docs/archive/ tripping a doc-consistency
+  gate) the pre-flight blast-radius grep couldn't see, because it was
+  content-scanning, not path-referencing. PR 3: caught 4 dangling
+  references to a deleted path that a naive "grep the deleted filename"
+  check would have caught too, but the review is what actually ran it. PR
+  6: caught a wrong citation inside the very ADR meant to prevent future
+  citation drift. The other 3 PRs' reviews found nothing — but a phase that
+  is cheap and fires 50% of the time is worth keeping; the cost was two
+  parallel agent calls (~15-20k tokens) per PR against a real, gate-passing
+  defect caught 3 times.
+- **The phase to cut, if any: Phase A's engineering-manager lens overlapped
+  partially with the hygiene lens's root-file counting.** Both independently
+  ran the same `git ls-files` split commands and got numbers within 1 of
+  each other. Not wasted — the EM lens's framing ("what would a newcomer
+  read first") is what surfaced F12, which the count alone wouldn't have —
+  but a future version could give the EM lens the hygiene lens's raw counts
+  as input instead of re-deriving them, saving one redundant measurement.
+
+### 2. Which guardrails actually fired
+
+- **§0.1's "STOP if a forbidden action looks necessary"** fired once: PR 3's
+  excalidraw finding (F3) was the closest thing to "delete 3 files" this
+  run got, and the guardrail's spirit (verify by executing, not by trusting
+  the prompt's framing) is what caught that the files weren't actually
+  redundant.
+- **§7's "a gate goes red for a reason you cannot explain — read the log"**
+  fired twice, both times correctly identifying a flaky, unrelated visual
+  e2e test (PR 3 and PR 5's post-merge deploy gates) rather than a real
+  regression. Both times the fix was "read the actual Playwright failure
+  output, confirm it's the known-flaky `trust-score-visual.spec.ts`
+  dark@1440 case with a diff pattern matching AGENTS.md's own documented
+  precedent, re-run the CI job" — never "assume it's flaky and re-run
+  blind." The guardrail did real work: an assume-flaky-without-reading
+  policy would have masked a real regression exactly as easily as reading
+  the log confirmed this wasn't one.
+- **§7's "an item is bigger than it looked — stop, don't file-and-continue"**
+  fired once, substantively: PR 5's loose-file categorization. Discovered
+  mid-execution (not in the audit) that several of the 23 files were cited
+  by literal path inside other tests' own assertions and one CI workflow's
+  explicit `pytest <path>` invocation. Reverted cleanly rather than push a
+  wider diff through. This is the single most valuable guardrail firing in
+  the whole run — it is exactly the failure mode "audit measured X, real
+  blast radius was much bigger" that this document's F6/PR4 section is a
+  worked *counter*-example of (there it turned out fine), but caught
+  *during* execution rather than after in PR5's case.
+- **A guardrail that never fired, and is probably right not to have:** the
+  "report to human before self-merging if diff exceeds what a reviewer can
+  hold" instruction on PR 4 (widest blast radius). The actual diff (43
+  files, pure mechanical rename+substitution) was well within one
+  reviewer's reach, and two adversarial lenses confirmed it. A guardrail
+  that never fires in a run this size and this messy is worth keeping
+  anyway — it's cheap to check and expensive to skip on the one PR where
+  it matters.
+
+### 3. Which Phase-A findings evaporated on verification (most valuable output)
+
+- **F3 (excalidraw 4-way duplicate) — refuted outright**, not narrowed. The
+  prompt's own §1 table said "keep one, verify by md5 which" — executable
+  as written, it would have broken `make validate`. This evaporated not
+  because a number was wrong but because the *framing* ("these are 3
+  redundant copies") was backwards: they're 3 undrawn diagrams, not 3
+  copies of one drawn diagram.
+- **Root `.md` split (45/19/37 vs. measured-live 46/18/37)** — narrowed by
+  one file each way, net zero on the total. Caused by natural drift between
+  the prompt's snapshot commit and the run's actual starting commit, not an
+  error in the original measurement.
+- **`e2e/undefined/` size ("~500 KB" vs. measured 400 KB)** — narrowed, a
+  rounding estimate corrected by measurement, not a wrong claim about file
+  identity.
+- **What did NOT evaporate, worth noting because it's the surprising part:**
+  every *count*-shaped claim in the original prompt (14 collisions, 28
+  files, 6 identical/2 diverged docs/factory pairs, 4-way excalidraw
+  identity by md5, `.hypothesis/` ungitignored) survived exactly. Only
+  *framing* claims (what the duplication means, whether it's actionable)
+  and *snapshot-drift* claims (numbers that move because time passed) were
+  wrong. A future discovery phase should trust raw counts from a careful
+  prior pass more than it trusts that pass's interpretation of what those
+  counts imply is safe to do.
+
+### 4. Repo-specific versus universal
+
+| Step | Universal | Repo-specific |
+|---|---|---|
+| Three-lens read-only audit (architect/EM/hygiene) | Yes — the lens framing generalises to any codebase | The specific things each lens reads (`docs/20-architecture.md`, `docs/111-start-here.md`) are this repo's paths |
+| Synthesis phase re-verifies every claim before accepting it | Yes | The verification *commands* (grep patterns, md5, git log) are universal; what counts as "in scope to verify" depends on what the audit found |
+| One-concern-per-PR, worktree-isolated execution | Yes | — |
+| Two-lens adversarial review with a dedicated `git archive` copy per reviewer | Yes | — |
+| `~60 validator literals / 149 config references` blast-radius warning | No | This repo's specific gate density. A future repo needs its own measurement, not this number |
+| The 6-PR ordering (root → junk → dedupe → renumber → tests/ → gate-it) | Partially — risk-ascending ordering generalises; the specific 6 items are this repo's specific debt | — |
+| Required-CI-context re-derivation via `gh api .../protection` | Yes, the *command*; the actual context names are repo-specific | — |
+| "Session output vs. executable procedure" convention (AGENTS.md addition) | Yes, the distinction generalises to any repo with agent-run session artifacts | The specific examples (`*-ULTRACODE-PROMPT.md`) are this repo's naming convention |
+| `docs/NN-*.md` numbering ranges (ADR-0034) | No — this is entirely repo-specific content | — |
+
+### 5. What the discovery phase must measure (as commands, not assumptions)
+
+A portable version of this procedure cannot be handed this run's numbers.
+It must derive them fresh, with commands like:
+
+```bash
+# Root file inventory, split by git status
+git ls-files --full-name | grep -cE '^[^/]+\.md$'
+git ls-files --others --exclude-standard | grep -cE '^[^/]+\.md$'
+git ls-files --others --ignored --exclude-standard | grep -cE '^[^/]+\.md$'
+
+# Duplicate-content detection by md5, not by name
+git ls-files -z | xargs -0 -I{} md5 -q {} 2>/dev/null | sort | uniq -d
+
+# Numbering-scheme collisions, if the repo uses one
+git ls-files 'docs/*.md' | grep -E '^docs/[0-9]' \
+  | sed -E 's#^docs/([0-9]+)-.*#\1#' | sort | uniq -c | sort -rn | awk '$1>1'
+
+# Blast radius for ANY file before moving it -- not just grep for the name,
+# but read what the matching gate actually asserts (F3's lesson: a hit is
+# not automatically "redundant", read the code before believing the framing)
+grep -rn "<filename>" scripts/ tests/ configs/ pyproject.toml .github/ Makefile
+
+# Required merge contexts -- re-derive, never trust an inherited table
+gh api repos/:owner/:repo/branches/main/protection \
+  --jq '.required_status_checks.contexts[]'
+```
+
+None of these commands are repo-specific; what's repo-specific is which
+ones apply (a repo with no numbering convention skips the collision check
+entirely) and what the results mean once measured.
+
+### Skill contract note
+
+This run deliberately did not author `.agents/skills/repo-housekeeping/`.
+Per the prompt's own instruction, Phase E produces input for that skill,
+not the skill. The vendored-skill pattern (portable body + a fenced,
+clearly-marked "Factory skill contract" block naming the 13 required H2
+headings) is the shape a future author should use — see
+`REPO-HOUSEKEEPING-ULTRACODE-PROMPT.md` §5a for the full contract
+requirements this document does not repeat.
