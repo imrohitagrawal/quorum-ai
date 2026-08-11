@@ -30,8 +30,29 @@ draft of this change**, because its cluster grep covered only `README.md`,
   model is asked to revise its answer after reading the others — the refined
   version replaces this card."* Doubly false: no model reads the others, and no
   card is ever replaced.
-- `main.py`'s API description — served at `/openapi.json` and `/docs` to every
-  API consumer — said *"has them debate"*.
+- `main.py`'s OpenAPI `info.description` said *"has them debate"*. It reaches
+  readers two ways: the committed `openapi.yaml` in this public repository, and
+  the `/openapi.json` and `/docs` routes **wherever `Settings.api_docs_enabled`
+  is true** — local, dev and CI.
+
+  **Correction, 2026-08-11.** The first version of this line said "served at
+  `/openapi.json` and `/docs` to every API consumer". That overstates the
+  reach. Both routes are gated by `api_docs_enabled` — `_openapi_url` in
+  `main.py` returns `None` when it is off, which removes the route — and
+  **production has them off**:
+
+  ```
+  $ curl -s -o /dev/null -w "%{http_code}" https://quorum-ai.fly.dev/openapi.json
+  404
+  ```
+
+  The claim was written without running that command, inside a change whose
+  entire subject is prose asserting more than the code does. It is corrected
+  here rather than quietly rewritten, because it is the same defect class this
+  ADR exists to close, committed by the same author in the same hour — and
+  because rule 4 says a correction must itself be verified before it is
+  written. The underlying fix was still right: the description was wrong in the
+  repository and in every environment that does serve it.
 
 That miss is the reason the grep published below includes `src/product_app/`
 whole rather than just `templates/`, and the reason this ADR says the grep is a
