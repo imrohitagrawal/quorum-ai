@@ -11,7 +11,10 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 
-_NARRATIVE_HANDOFF_RE = re.compile(r"^\d{4}-\d{2}-\d{2}-session-handoff\.md$")
+# Optional `-N` suffix disambiguates a second same-day narrative handoff
+# (review finding: without it, a second session on the same date would
+# silently overwrite the first session's file at the exact same path).
+_NARRATIVE_HANDOFF_RE = re.compile(r"^(\d{4}-\d{2}-\d{2})-session-handoff(?:-(\d+))?\.md$")
 
 
 def run(cmd: list[str]) -> str:
@@ -21,30 +24,55 @@ def run(cmd: list[str]) -> str:
         return f"unavailable: {e}"
 
 
+def _handoff_sort_key(path: Path) -> tuple[str, int]:
+    match = _NARRATIVE_HANDOFF_RE.match(path.name)
+    assert match is not None
+    date_str, suffix = match.group(1), match.group(2)
+    return (date_str, int(suffix) if suffix else 0)
+
+
 def _latest_narrative_handoff(analysis_dir: Path) -> Path | None:
-    """The newest hand-authored `docs/analysis/<YYYY-MM-DD>-session-handoff.md`.
+    """The newest hand-authored `docs/analysis/<YYYY-MM-DD>-session-handoff[-N].md`.
 
     This file (`docs/session-handoff.md`) is purely mechanical -- it never
     knew a narrative handoff existed, which is how it went 17 days stale
     (still naming a merged-and-deleted branch) without anyone noticing,
     because AGENTS.md points every new session here first. Sorting by
-    filename works because the date prefix is zero-padded ISO (YYYY-MM-DD),
-    so lexicographic order equals chronological order.
+    (date, suffix) works because the date prefix is zero-padded ISO
+    (YYYY-MM-DD), so lexicographic order equals chronological order, and the
+    optional numeric suffix breaks ties within a single date correctly only
+    because it's compared as an int, not a string (avoiding "-9" > "-10").
     """
     if not analysis_dir.is_dir():
         return None
     candidates = [
-        p for p in analysis_dir.glob("*-session-handoff.md") if _NARRATIVE_HANDOFF_RE.match(p.name)
+        p for p in analysis_dir.glob("*-session-handoff*.md") if _NARRATIVE_HANDOFF_RE.match(p.name)
     ]
     if not candidates:
         return None
-    return max(candidates, key=lambda p: p.name)
+    return max(candidates, key=_handoff_sort_key)
 
 
-def _narrative_pointer_line(latest: Path | None) -> str:
+def _narrative_pointer_line(latest: Path | None, today: datetime.date | None = None) -> str:
     if latest is None:
         return "None found — no `docs/analysis/<YYYY-MM-DD>-session-handoff.md` exists yet."
-    return f"`docs/analysis/{latest.name}` — read this for full context before editing."
+    base = f"`docs/analysis/{latest.name}` — read this for full context before editing."
+    match = _NARRATIVE_HANDOFF_RE.match(latest.name)
+    if match is None:
+        return base
+    try:
+        handoff_date = datetime.date.fromisoformat(match.group(1))
+    except ValueError:
+        return base
+    age_days = ((today or datetime.date.today()) - handoff_date).days
+    if age_days <= 0:
+        return f"{base} (today)"
+    plural = "s" if age_days != 1 else ""
+    return (
+        f"{base} **({age_days} day{plural} old** — if a newer session ran since "
+        "then and its narrative handoff was archived without a replacement "
+        "being written, this may be stale; check `docs/archive/` for a newer one.)"
+    )
 
 
 def load_route():

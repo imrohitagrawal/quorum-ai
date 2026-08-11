@@ -16,6 +16,7 @@ newest `docs/analysis/*-session-handoff.md` file stops being surfaced.
 
 from __future__ import annotations
 
+import datetime
 import importlib.util
 import sys
 from pathlib import Path
@@ -86,3 +87,68 @@ def test_generated_text_says_none_found_when_no_narrative_handoff_exists() -> No
     pointer_line = session_handoff._narrative_pointer_line(None)
 
     assert "none found" in pointer_line.lower()
+
+
+def test_a_second_same_day_handoff_gets_a_suffix_not_a_silent_overwrite(
+    tmp_path: Path,
+) -> None:
+    """Two sessions on the same date must not clobber each other's narrative.
+
+    Review finding on this feature's own PR: the original regex only matched
+    the bare `<date>-session-handoff.md` name, so a second same-day session
+    writing that exact path would silently overwrite the first session's
+    content with no collision signal at all. A `-2`/`-3` suffix is a real
+    second file the glob/sort must also find and correctly order after the
+    unsuffixed one.
+    """
+    analysis_dir = tmp_path / "docs" / "analysis"
+    analysis_dir.mkdir(parents=True)
+    (analysis_dir / "2026-08-11-session-handoff.md").write_text("first", encoding="utf-8")
+    (analysis_dir / "2026-08-11-session-handoff-2.md").write_text("second", encoding="utf-8")
+
+    latest = session_handoff._latest_narrative_handoff(analysis_dir)
+
+    assert latest is not None
+    assert latest.name == "2026-08-11-session-handoff-2.md"
+
+
+def test_suffix_only_breaks_ties_within_the_same_date_not_across_dates(
+    tmp_path: Path,
+) -> None:
+    analysis_dir = tmp_path / "docs" / "analysis"
+    analysis_dir.mkdir(parents=True)
+    (analysis_dir / "2026-08-11-session-handoff-9.md").write_text("older date", encoding="utf-8")
+    (analysis_dir / "2026-08-12-session-handoff.md").write_text("newer date", encoding="utf-8")
+
+    latest = session_handoff._latest_narrative_handoff(analysis_dir)
+
+    assert latest is not None
+    assert latest.name == "2026-08-12-session-handoff.md"
+
+
+def test_pointer_line_flags_age_when_the_latest_handoff_is_not_from_today(
+    tmp_path: Path,
+) -> None:
+    """A stale fallback (e.g. the current latest got archived before a
+    replacement was written) must say it's stale, not present an old doc
+    with the same unqualified confidence as a fresh one -- otherwise this
+    mechanism reintroduces the exact silent-staleness failure it exists to
+    fix, just with a one-session lag.
+    """
+    old_path = tmp_path / "docs" / "analysis" / "2026-07-20-session-handoff.md"
+
+    pointer_line = session_handoff._narrative_pointer_line(
+        old_path, today=datetime.date(2026, 8, 11)
+    )
+
+    assert "22 day" in pointer_line
+
+
+def test_pointer_line_does_not_flag_age_for_a_same_day_handoff(tmp_path: Path) -> None:
+    fresh_path = tmp_path / "docs" / "analysis" / "2026-08-11-session-handoff.md"
+
+    pointer_line = session_handoff._narrative_pointer_line(
+        fresh_path, today=datetime.date(2026, 8, 11)
+    )
+
+    assert "day" not in pointer_line.lower() or "today" in pointer_line.lower()

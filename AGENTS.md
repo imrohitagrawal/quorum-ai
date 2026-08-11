@@ -677,8 +677,18 @@ cannot hold narrative content. Write the actual "what happened, what's next,
 the traps" narrative to `docs/analysis/<YYYY-MM-DD>-session-handoff.md`;
 `scripts/session_handoff.py` finds the newest one by filename and links it
 at the top of the regenerated mechanical file, so the next session always has
-a live pointer to the real context instead of a stale one. Archive a
-narrative handoff to `docs/archive/` once it's superseded by a newer one.
+a live pointer to the real context instead of a stale one — and flags the
+link's age in days if it isn't from today, so a stale fallback (e.g. the
+latest got archived before a replacement existed) is visible rather than
+silently presented as current.
+
+**If a narrative handoff for today already exists** (a second session the
+same date), update it in place, or add it as
+`docs/analysis/<YYYY-MM-DD>-session-handoff-2.md` (the pointer sorts a
+numeric suffix correctly within a date) — never silently overwrite the
+first session's file at the same path. **Archive the current narrative
+handoff only after its replacement exists**, not before — archiving first
+leaves the pointer falling back to an older, staler doc in the gap.
 
 ## User-guided start
 

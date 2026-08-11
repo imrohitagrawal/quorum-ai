@@ -1,10 +1,10 @@
 # Session Handoff
 
 ## Date/time
-2026-08-12T03:49:09+05:30
+2026-08-12T04:00:02+05:30
 
 ## Latest narrative handoff
-`docs/analysis/2026-08-11-session-handoff.md` — read this for full context before editing.
+`docs/analysis/2026-08-11-session-handoff.md` — read this for full context before editing. **(1 day old** — if a newer session ran since then and its narrative handoff was archived without a replacement being written, this may be stale; check `docs/archive/` for a newer one.)
 
 This file is a mechanical snapshot (branch/git-status/skill-route) —
 regenerated fresh every `make handoff`. The narrative above (what happened,
@@ -70,14 +70,15 @@ Operate, learn, and improve
 ```text
 M AGENTS.md
  M scripts/session_handoff.py
-?? tests/unit/test_session_handoff_narrative_pointer.py
+ M tests/unit/test_session_handoff_narrative_pointer.py
 ```
 
 ## Diff stat
 ```text
-AGENTS.md                  |  9 +++++++++
- scripts/session_handoff.py | 41 +++++++++++++++++++++++++++++++++++++++++
- 2 files changed, 50 insertions(+)
+AGENTS.md                                          | 14 ++++-
+ scripts/session_handoff.py                         | 44 ++++++++++++---
+ .../unit/test_session_handoff_narrative_pointer.py | 66 ++++++++++++++++++++++
+ 3 files changed, 114 insertions(+), 10 deletions(-)
 ```
 
 ## Completed in this session
