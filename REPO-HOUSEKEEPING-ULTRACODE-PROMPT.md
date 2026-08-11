@@ -204,8 +204,8 @@ the work? Module boundaries, coupling, what a change to one concern forces you t
 
 **A2 — Engineering manager.** Onboarding and discoverability. A new contributor lands here: what
 can they not find? Which of the 101 root files would they read first, and is it the right one?
-Is `docs/00-start-here.md` accurate? Where would they waste a day? Read `README.md`,
-`docs/00-start-here.md`, `AGENTS.md` and `docs/analysis/2026-08-11-session-handoff.md` as a
+Is `docs/111-start-here.md` accurate? Where would they waste a day? Read `README.md`,
+`docs/111-start-here.md`, `AGENTS.md` and `docs/analysis/2026-08-11-session-handoff.md` as a
 newcomer would.
 
 **A3 — Repo-hygiene auditor.** Mechanical and exhaustive: duplicates by **md5** (not by name),
