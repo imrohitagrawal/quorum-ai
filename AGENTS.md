@@ -671,6 +671,25 @@ make handoff
 
 A new session must read `AGENTS.md`, `docs/00-factory-console.md`, and `docs/session-handoff.md` before editing. Use git worktrees for parallel sessions and keep one owner per artifact family.
 
+`docs/session-handoff.md` is a mechanical snapshot only (branch, `git
+status`, skill-route) — `make handoff` regenerates it from live state and it
+cannot hold narrative content. Write the actual "what happened, what's next,
+the traps" narrative to `docs/analysis/<YYYY-MM-DD>-session-handoff.md`;
+`scripts/session_handoff.py` finds the newest one by filename and links it
+at the top of the regenerated mechanical file, so the next session always has
+a live pointer to the real context instead of a stale one — and flags the
+link's age in days if it isn't from today, so a stale fallback (e.g. the
+latest got archived before a replacement existed) is visible rather than
+silently presented as current.
+
+**If a narrative handoff for today already exists** (a second session the
+same date), update it in place, or add it as
+`docs/analysis/<YYYY-MM-DD>-session-handoff-2.md` (the pointer sorts a
+numeric suffix correctly within a date) — never silently overwrite the
+first session's file at the same path. **Archive the current narrative
+handoff only after its replacement exists**, not before — archiving first
+leaves the pointer falling back to an older, staler doc in the gap.
+
 ## User-guided start
 
 If `PRODUCT_IDEA.md` is empty, placeholder-only, or the user gives the idea in chat, ask for the problem in plain language first. Then suggest the next best action. The user should not have to guess which skill or file to use.
