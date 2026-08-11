@@ -324,7 +324,9 @@ def _build_fastapi(active_settings: Settings) -> FastAPI:
         version="0.2.0",
         description=(
             "Quorum-AI runs your question against four LLMs in parallel, "
-            "has them debate, and returns a single answer with explicit "
+            "has a separate moderator model critique their answers, and "
+            "returns a single answer — written by a separate synthesis "
+            "model — with explicit "
             "consensus, disagreement, source support, uncertainty, and "
             "recommendation. Cost is shown before the run starts; nothing "
             "executes without confirmation. Results are ephemeral. "

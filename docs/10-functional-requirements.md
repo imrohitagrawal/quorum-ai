@@ -108,6 +108,15 @@ These requirements cover Release 1 MVP for the public AI cross-validation workfl
 - Trigger: Initial model answers are available or recoverable partial results exist.
 - Behavior: The system runs two critique/debate rounds where selected models evaluate disagreement, weak support, and missing reasoning in the other model answers.
 - Outcome: The workflow exposes material contradictions and quality gaps before final synthesis.
+- Implementation status: **PARTIALLY MET.** Two critique rounds run, but they are
+  performed by a single separate moderator model (`settings.debate_model_id`),
+  not by the four answer models evaluating each other. The four answer models are
+  called once each, in parallel, and never read each other's answers
+  (`query_runs.py` initial-answer fan-out; `debate.py` `_call_debate_model` is the
+  only debate dispatch site). The Behavior line above is retained as the
+  requirement rather than rewritten to match the build; peer critique between the
+  four models is the follow-on work. Public copy was corrected to describe the
+  moderator design in the same change that added this line.
 - Source: `docs/01-product-brief.md`, `docs/09-release-scope.md`, `docs/13-open-questions.md`.
 - Owner: Product owner.
 - Priority: Must.

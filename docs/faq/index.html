@@ -495,7 +495,7 @@ pre code {
     <div class="qa-block">
       <div class="qa-question" onclick="toggleQA(this)"><span class="q-mark">?</span> What is Quorum AI?</div>
       <div class="qa-answer">
-        <p>Quorum AI is a research-synthesis tool. You type one question, it runs that question against four large language models (LLMs) in parallel, has the models critique each other across two debate rounds, and produces a single answer split into five sections: <strong>consensus</strong> (what all models agree on), <strong>disagreement</strong> (where they diverge), <strong>source support</strong> (what backs each claim), <strong>uncertainty</strong> (what is not settled), and <strong>recommendation</strong> (a practical takeaway).</p>
+        <p>Quorum AI is a research-synthesis tool. You type one question, it runs that question against four large language models (LLMs) in parallel, has a separate moderator model critique those answers across two debate rounds, and produces a single answer split into five sections: <strong>consensus</strong> (what all models agree on), <strong>disagreement</strong> (where they diverge), <strong>source support</strong> (what backs each claim), <strong>uncertainty</strong> (what is not settled), and <strong>recommendation</strong> (a practical takeaway).</p>
         <p>A <strong>repo</strong> (short for <em>repository</em>) is a project's complete file history stored on GitHub — think of it as a version-controlled folder that every collaborator can read and contribute to. The Quorum AI repo is at <code>github.com/imrohitagrawal/quorum-ai</code>.</p>
         <p>The product is designed for decision support, not for automated decisions. The output is meant to help you think more clearly, not to replace your judgment on high-stakes matters like medical, legal, or financial questions.</p>
         <span class="honesty built">● Built</span>
@@ -518,7 +518,7 @@ pre code {
         <span class="honesty built">● Built</span>
         <div class="example project">
           <div class="example-label">In your project</div>
-          <p>The four model slots (<code>model_slots.py</code>) are the constant source of truth. Each slot selects a different vendor — OpenAI, Anthropic, Google, or DeepSeek — so a single run covers four independent training runs and four independent safety fine-tuning passes. The debate module (<code>debate.py</code>) explicitly asks each model to critique the others, which catches the "all models confidently saying the same wrong thing" failure mode.</p>
+          <p>The four model slots (<code>model_slots.py</code>) are the constant source of truth. Each slot selects a different vendor — OpenAI, Anthropic, Google, or NVIDIA — so a single run covers four independent training runs and four independent safety fine-tuning passes. The debate module (<code>debate.py</code>) then asks a separate moderator model to critique all four answers, which catches the "all models confidently saying the same wrong thing" failure mode.</p>
         </div>
         <div class="example real-life">
           <div class="example-label">Picture it in real life</div>
@@ -530,13 +530,13 @@ pre code {
     <div class="qa-block">
       <div class="qa-question" onclick="toggleQA(this)"><span class="q-mark">?</span> How does the AI design work? Why four models?</div>
       <div class="qa-answer">
-        <p>The four models are selected from four different vendors by design. Different vendors train on different data, apply different safety fine-tuning, and have different failure modes. Running one model per vendor gives you four independent perspectives on the same question. Two debate rounds are then used to surface the disagreements — the first round asks each model to critique the others; the second round gives models a chance to revise their positions in light of the critiques.</p>
+        <p>The four models are selected from four different vendors by design. Different vendors train on different data, apply different safety fine-tuning, and have different failure modes. Running one model per vendor gives you four independent perspectives on the same question. Two debate rounds are then used to surface the disagreements: a separate moderator call reads all four answers and writes a critique, then refines it in a second round. Note the moderator is a distinct <em>role</em>, not a fifth vendor — by default it runs on <code>anthropic/claude-haiku-4.5</code>, the same model id as slot 2. The four answer models are each called once and do not read each other; peer critique between them is planned, not built.</p>
         <p>A <strong>model</strong> is a specific AI system identified by a string like <code>openai/gpt-4o-mini</code>. The string has two parts: the <em>vendor</em> (who trained and hosts it) and the <em>version</em> (which training run). A <strong>token</strong> is the unit LLMs bill on — roughly ¾ of a word for English text. Providers charge per 1,000 tokens of input and output.</p>
         <p>An <strong>API key</strong> is a secret string that authenticates your application to an external service (like ). In Quorum AI, the operator's API keys are stored server-side in Fly secrets — they never leave the server boundary and never appear in browser code, logs, or error responses.</p>
         <span class="honesty built">● Built</span>
         <div class="example project">
           <div class="example-label">In your project</div>
-          <p>The default model IDs are defined in <code>model_slots.py</code> (lines 36–41) as the canonical source of truth. The live  catalog is consulted as a drift check, not as the source — if the catalog is unreachable, the static defaults are used. The debate model defaults to <code>anthropic/claude-haiku-4.5</code> (cheap, fast, good at critique) and the synthesis model to <code>openai/gpt-4o-mini</code> (cheap, reliable, structured-output friendly). Both are configurable via environment variables in <code>config.py</code>.</p>
+          <p>The default model IDs are defined in <code>model_slots.py</code> (lines 36–41) as the canonical source of truth. The live  catalog is consulted as a drift check, not as the source — if the catalog is unreachable, the static defaults are used. The debate model defaults to <code>anthropic/claude-haiku-4.5</code> (cheap, fast, good at critique) and the synthesis model to <code>openai/gpt-5-mini</code> (see ADR-0028 — spend belongs on the stage the user reads). Both are configurable via environment variables in <code>config.py</code>.</p>
         </div>
         <div class="example real-life">
           <div class="example-label">Picture it in real life</div>
@@ -573,7 +573,7 @@ pre code {
         <dt>Token</dt><dd>The unit LLMs bill on — roughly ¾ of an English word. Costs are quoted per 1,000 tokens.</dd>
         <dt>Repo</dt><dd>Short for <em>repository</em> — the project's file history on GitHub. URL: <code>github.com/imrohitagrawal/quorum-ai</code>.</dd>
         <dt>Synthesis</dt><dd>The final output section that combines all four model answers into consensus, disagreement, source support, uncertainty, and recommendation.</dd>
-        <dt>Debate round</dt><dd>One cycle where each model reads the others' answers and writes a critique. Two rounds are run per query.</dd>
+        <dt>Debate round</dt><dd>One cycle where a separate moderator model reads all four answers and writes a critique. Two rounds are run per query.</dd>
         <dt>Query run</dt><dd>A single execution of the full workflow: estimate → four initial answers → two debate rounds → synthesis. Identified by a <code>query_run_id</code>.</dd>
         <dt>Source</dt><dd>A web page or document that a model cites to support a claim. Shown next to the model's answer.</dd>
         <dt>FastAPI</dt><dd>A Python web framework used to build Quorum AI's backend. It generates API docs, validates input with Pydantic, and serves async endpoints.</dd>
@@ -611,7 +611,7 @@ pre code {
           <li><code>openai/gpt-4o-mini</code> — fast, cheap, good general-purpose model</li>
           <li><code>anthropic/claude-haiku-4.5</code> — fast, strong at analysis and critique (also the default debate writer)</li>
           <li><code>google/gemini-2.5-flash</code> — fast, Google's lightweight frontier-class model</li>
-          <li><code>deepseek/deepseek-chat-v3.1</code> — open-weight, cost-efficient, strong reasoning</li>
+          <li><code>nvidia/nemotron-3-nano-30b-a3b</code> — open-weight, cost-efficient, strong reasoning</li>
         </ul>
         <p>If you want to customise, the model catalog endpoint <code>GET /v1/models/defaults</code> lists every available option with pricing. The <strong>cost estimate</strong> screen updates live as you change slots, so you can see the dollar impact before committing.</p>
         <span class="honesty built">● Built</span>
@@ -756,8 +756,8 @@ pre code {
         <p>The query workflow has seven stages:</p>
         <ol style="margin:8px 0 8px 20px;">
           <li><strong>Initial answers</strong> — four models called in parallel, each with optional web search. Each call is bounded by a per-call timeout (default 8 seconds) and a hard 2000-token output cap.</li>
-          <li><strong>Debate round 1</strong> — each model reads the four initial answers and writes a critique focused on disagreement, weak support, and missing reasoning.</li>
-          <li><strong>Debate round 2</strong> — a second critique round, giving models a chance to revise their positions.</li>
+          <li><strong>Debate round 1</strong> — a separate moderator model reads all four initial answers and writes a critique focused on disagreement, weak support, and missing reasoning.</li>
+          <li><strong>Debate round 2</strong> — the same moderator refines that critique, focusing on the strongest residual disagreements. The four answer models are not called again.</li>
           <li><strong>Synthesis</strong> — five independent calls (one per section: consensus, disagreement, source support, uncertainty, recommendation), each re-sending the full context.</li>
         </ol>
         <p>The full pipeline has a 180-second hard wall-clock deadline. If it expires, the run terminal state is <code>timed_out</code> and every completed stage's output is returned with a visible missing-step explanation. A run that partially completed is never presented as fully successful.</p>

@@ -2,7 +2,7 @@
 
 > One question. Four models. One answer you can verify.
 
-Quorum-AI runs your question against four LLMs in parallel, has them critique one another, and returns a single answer with explicit consensus, disagreement, source support, uncertainty, and recommendation. Cost is estimated before execution; higher-cost runs require confirmation. Results are ephemeral.
+Quorum-AI runs your question against four LLMs in parallel, has a separate moderator model critique their answers, and returns a single answer — written by a separate synthesis model — with explicit consensus, disagreement, source support, uncertainty, and recommendation. Cost is estimated before execution; higher-cost runs require confirmation. Results are ephemeral.
 
 **Live workspace:** [quorum.stackclimb.com](https://quorum.stackclimb.com) —
 [`/ready`](https://quorum.stackclimb.com/ready) reports whether execution is live
@@ -28,7 +28,7 @@ A user types a research question. The app:
 
 1. **Estimates** the cost across the four model slots (one vendor per slot, picked from a static default set in `src/product_app/model_slots.py:36-41`).
 2. **Runs** the four models in parallel against the real provider (`src/product_app/providers.py:160-320`). Falls back to search-only and finally to local simulation if the model call fails.
-3. **Debates** — each model reads the others' answers and writes a critique. Two rounds. (`src/product_app/debate.py:130-470`)
+3. **Debates** — a separate moderator model (`settings.debate_model_id`) reads all four answers and writes a critique. Two rounds. The four answer models do not read each other; peer critique between them is planned, not built (#290). (`src/product_app/debate.py:263-604`)
 4. **Synthesizes** a final 5-field response: consensus, disagreement, source support, uncertainty, recommendation. (`src/product_app/synthesis.py:131-470`)
 5. **Surfaces drift** — if the live  model catalog has dropped any of the four static defaults, the workspace shows a banner and the `/v1/models/defaults` endpoint exposes `stale_model_ids` so an operator can see what's drifted without re-reading the catalog.
 
