@@ -38,6 +38,7 @@ ways, so the record shows what was believed on a date and what replaced it.
 | [ADR-0030](adr/0030-a-citation-marker-is-compared-in-the-shape-the-source-store-keeps.md) | A citation marker is compared in the shape the source store keeps, and a terminal run is evaluated once | Architecture | Accepted — 2026-08-10 (issues #285 then #284, in that order) |
 | [ADR-0031](adr/0031-three-blocked-issues-get-durable-telemetry-not-a-guessed-fix.md) | Three blocked issues get durable telemetry, not a guessed fix | Architecture | Accepted — 2026-08-10 |
 | [ADR-0032](adr/0032-the-copy-describes-the-moderator-the-requirement-keeps-peer-critique.md) | The copy describes the moderator; the requirement keeps peer critique | Architecture | Accepted — 2026-08-11 |
+| [ADR-0033](adr/0033-docs-factory-mirror-drops-its-8-duplicate-numbered-files.md) | `docs/factory/` drops its 8 duplicate-numbered files; `docs/` root is canonical | Architecture | Accepted — 2026-08-11 (repo-housekeeping PR 3) |
 
 **This index was itself stale** until 2026-07-30: ADR-0002 had existed since
 2026-07-19 and was never listed here. A hand-maintained index is a derived fact

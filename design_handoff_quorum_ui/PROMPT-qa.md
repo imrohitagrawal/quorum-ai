@@ -2,7 +2,7 @@
 
 ---
 
-Build the complete QA layer for the approved Quorum Release 1 UI. The UI itself is specified in `design_handoff_quorum_ui/README.md` + `Quorum Final Review.dc.html` (screens 01–08); requirements are FR-001…013 (`docs/10-functional-requirements.md`), acceptance criteria AC-001…036 (`docs/12-acceptance-criteria.md`), API contract `docs/22-api-contract.md` + `openapi.yaml`, states `docs/29-state-machines.md`, copy `docs/33-content-design.md`, a11y `docs/31-accessibility-plan.md`, edge cases `docs/16-edge-case-catalog.md`. Follow `policies/testing-policy.md` and `docs/50-test-strategy.md`.
+Build the complete QA layer for the approved Quorum Release 1 UI. The UI itself is specified in `docs/design-handoff/README.md` + `Quorum Final Review.dc.html` (screens 01–08); requirements are FR-001…013 (`docs/10-functional-requirements.md`), acceptance criteria AC-001…036 (`docs/12-acceptance-criteria.md`), API contract `docs/22-api-contract.md` + `openapi.yaml`, states `docs/29-state-machines.md`, copy `docs/33-content-design.md`, a11y `docs/31-accessibility-plan.md`, edge cases `docs/16-edge-case-catalog.md`. Follow `policies/testing-policy.md` and `docs/50-test-strategy.md`.
 
 **Do not build a new framework from scratch.** Extend the existing `/e2e` Playwright workspace (page objects in `e2e/pages/`, fixtures in `e2e/fixtures/`, suites in `e2e/tests/`). Delete or fold in the stray `e2e/simple_workspace_tests.py` and root `test_phase1_ui.py` so there is exactly one UI test entry point.
 
