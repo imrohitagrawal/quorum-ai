@@ -10,7 +10,7 @@ The repo has `AGENTS.md` (factory lifecycle) but no `CLAUDE.md`. Create one at t
 Read `AGENTS.md` for the factory lifecycle and Jira workflow. This file adds standing rules for UI, UX, and QA work.
 
 ## Source of truth (in order)
-1. `design_handoff_quorum_ui/README.md` + `Quorum Final Review.dc.html` — approved R1 UI (pixels, tokens, copy placement, states). The `.dc.html` is a design reference; never ship it or `support.js`.
+1. `docs/design-handoff/README.md` + `Quorum Final Review.dc.html` — approved R1 UI (pixels, tokens, copy placement, states). The `.dc.html` is a design reference; never ship it or `support.js`.
 2. `docs/22-api-contract.md` + `openapi.yaml` — API shapes. `docs/29-state-machines.md` — state names, 1:1, never renamed.
 3. `docs/12-acceptance-criteria.md` (AC-001…036) — behavior. `docs/33-content-design.md` (COPY-001…006) — all warning/notice copy, verbatim.
 4. Known conflict: FR-012 title vs AC-026 (BYO OpenRouter key). Follow AC-026 (server-configured keys, no user key field) until docs are reconciled.
