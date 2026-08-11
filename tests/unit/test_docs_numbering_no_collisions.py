@@ -2,10 +2,11 @@
 tree before it was committed — 14 numbers collided (28 files) before
 housekeeping PR 4 resolved them. This test is the check that was missing.
 
-What turns it red: `git mv docs/24-adr-index.md docs/17-adr-index.md`
-(or any other rename that makes two tracked `docs/NN-*.md` files share a
-leading number) and run this suite. Restore with `cp`-aside/restore, never
-`git checkout`, per this repo's own mutation-proof convention.
+What turns it red: renaming `docs/24-adr-index.md` to share a leading
+number with `docs/17-requirement-registry.md` (or any other rename that
+makes two tracked `docs/NN-*.md` files collide) and running this suite.
+Restore with `cp`-aside/restore, never `git checkout`, per this repo's own
+mutation-proof convention.
 """
 
 from __future__ import annotations
