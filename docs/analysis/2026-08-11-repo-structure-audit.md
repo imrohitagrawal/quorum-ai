@@ -303,7 +303,7 @@ itself.
 
 | Step | Universal | Repo-specific |
 |---|---|---|
-| Three-lens read-only audit (architect/EM/hygiene) | Yes — the lens framing generalises to any codebase | The specific things each lens reads (`docs/20-architecture.md`, `docs/00-start-here.md`) are this repo's paths |
+| Three-lens read-only audit (architect/EM/hygiene) | Yes — the lens framing generalises to any codebase | The specific things each lens reads (`docs/20-architecture.md`, `docs/111-start-here.md`) are this repo's paths |
 | Synthesis phase re-verifies every claim before accepting it | Yes | The verification *commands* (grep patterns, md5, git log) are universal; what counts as "in scope to verify" depends on what the audit found |
 | One-concern-per-PR, worktree-isolated execution | Yes | — |
 | Two-lens adversarial review with a dedicated `git archive` copy per reviewer | Yes | — |
