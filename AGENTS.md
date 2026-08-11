@@ -627,6 +627,33 @@ python scripts/audit_external_skill.py <skill-folder>
 python scripts/onboard_external_skill.py --name <name> --source-url <url>
 ```
 
+## Where files live: session output vs. executable procedure
+
+Root-level clutter (101 `.md` files before repo-housekeeping PR 1 cleaned
+it to ~8) accumulated because this distinction was never written down.
+Two different kinds of file get created by a working session, and they go
+to different places:
+
+| Kind | Example | Home |
+|---|---|---|
+| Session **output** — a record of what happened | `HANDOFF-*`, `*-RESULT.md`, dated triage/analysis docs | `docs/archive/` (or `docs/analysis/` if it stays actively referenced) |
+| Executable **procedure** — text a future session runs | `*-ULTRACODE-PROMPT.md` | root, or `.agents/skills/` once generalised |
+
+**The rule is "session output never accumulates at root," not "session
+artifacts never at root."** The blunt version would forbid
+`REPO-HOUSEKEEPING-ULTRACODE-PROMPT.md` itself — an executable procedure
+correctly kept at root — and a rule that forbids the thing you're holding
+gets ignored rather than followed. If you're not sure which kind a file
+is, ask: would a future session **run** this, or does it only **read**
+this to see what a past session did? Running → procedure → root/skills.
+Reading-only → output → `docs/archive/`.
+
+For `docs/NN-*.md` numbering specifically (a separate but related form of
+this same problem — 14 numbers collided before nothing checked a new
+doc's number against the tree), see ADR-0034
+(`docs/adr/0034-docs-numbering-scheme-and-ranges.md`) for the range table
+and `tests/unit/test_docs_numbering_no_collisions.py` for the gate.
+
 ## Session continuity
 
 Before ending or handing off a session:
