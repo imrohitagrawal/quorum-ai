@@ -13,6 +13,7 @@ __pycache__/
 #     these (no space), so every run left dozens of untracked files behind.
 .coverage *
 .coverage.*
+.hypothesis/
 htmlcov/
 .env
 .env.*
