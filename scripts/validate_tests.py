@@ -77,7 +77,7 @@ def main() -> int:
         "tests/integration",
         "tests/contract",
         "tests/e2e",
-        "tests/performance",
+        "tests/perf",
         "tests/security",
     ]:
         if not (ROOT / d).exists():

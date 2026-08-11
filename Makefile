@@ -6,17 +6,21 @@ RELOAD ?= 0
 
 
 # --- R2 Phase-0 gate configuration -------------------------------------
-# Perf specs live under both tests/perf and tests/performance. These are
-# HARDCODED, never $(wildcard ...): a glob over a deleted or renamed directory
-# expands to nothing, the recipe degrades to a bare `pytest -q --no-cov`, and
-# pytest falls back to `testpaths = ["tests"]` — so a "blocking" gate passes the
+# Perf specs live under tests/perf (tests/performance/ was a duplicate
+# top-level directory covering the same concern; merged into tests/perf/ by
+# housekeeping PR 5 -- its one spec, test_query_run_performance_evidence.py,
+# moved over with no behaviour change). This is HARDCODED, never
+# $(wildcard ...): a glob over a deleted or renamed directory expands to
+# nothing, the recipe degrades to a bare `pytest -q --no-cov`, and pytest
+# falls back to `testpaths = ["tests"]` — so a "blocking" gate passes the
 # ordinary suite while measuring nothing. A hardcoded missing path makes pytest
 # exit 4 instead. See gate-min-collected below for the emptied-directory case.
-PERF_TEST_PATHS ?= tests/perf tests/performance
+PERF_TEST_PATHS ?= tests/perf
 CONTRACT_TEST_PATHS ?= tests/contract
 # Collection floors, MEASURED on the R2 Phase-0 tree that adds tests/perf (no
 # earlier commit contains that directory, so there is no revision to cite):
-# perf collects 12 (tests/perf 11 + tests/performance 1), contract collects 23.
+# perf collects 12 (all under tests/perf as of housekeeping PR 5; previously
+# 11 in tests/perf + 1 in tests/performance/), contract collects 23.
 # (S4/FR-017 added tests/perf/test_eval_batch_baseline.py, +1.)
 # Perf is floored at its exact count (hand-authored specs) — tests/unit/
 # test_perf_gate_collection_floor.py re-measures it and fails on any drift, so

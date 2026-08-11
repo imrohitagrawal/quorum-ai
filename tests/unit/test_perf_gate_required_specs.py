@@ -9,7 +9,8 @@ are all still green. Measured on this tree, with the probe's six cases removed:
 
     $ make gate-min-collected GATE_NAME=perf-nohermeticity \
         GATE_PATHS="tests/perf/test_workflow_latency_percentiles.py \
-                    tests/perf/test_perf_baseline_is_honest.py tests/performance" \
+                    tests/perf/test_perf_baseline_is_honest.py \
+                    tests/perf/test_query_run_performance_evidence.py" \
         GATE_MIN=5
     perf-nohermeticity: 5 tests collected from '...' (floor 5).
     exit=0

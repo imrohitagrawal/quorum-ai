@@ -89,6 +89,25 @@ is out of scope for *this* run (see §5, §6).
   separately-scoped run.
 - F12 (stale `docs/session-handoff.md`): recorded, not regenerated — see
   table above for why.
+- **F7, second half — categorising the 28 loose files at `tests/` root
+  (PR 5).** The `tests/perf`/`tests/performance` merge (first half of F7)
+  shipped. The loose-file categorization did not: attempting it (4
+  `test_store_*.py` → `tests/unit/`, 19 self-referential gate/ledger tests →
+  a new `tests/meta/`) surfaced blast radius this audit never measured —
+  several of the 19 are cited by literal path inside OTHER test files'
+  assertions (`tests/unit/test_mutation_copy_completeness.py`,
+  `test_gate_liveness_wp166.py`, `test_mutation_gate_blocking.py`,
+  `test_no_orphaned_e2e_specs.py`, `test_mutation_test_set_integrity.py`,
+  and several of the 19 cite each other), inside
+  `.github/workflows/{ci,eval,test,csp-smoke,e2e}.yml` (one of them,
+  `ci.yml:350`, runs `pytest tests/test_mutation_baseline_doc.py` as an
+  explicit path, not testpaths discovery), inside
+  `src/product_app/static/app.js` and
+  `e2e/tests/invariants/landing-cta-reachable.spec.ts`, and inside several
+  ADRs and `docs/63-technical-debt-register.md`. Reverted cleanly rather
+  than push a wider diff through than one PR/reviewer should hold. Left
+  for a dedicated future PR that budgets time to trace and update every one
+  of those cross-references, not a bundled line item.
 
 ## 6. `src/` finding (F11) — recorded per §0.2, not actioned
 
