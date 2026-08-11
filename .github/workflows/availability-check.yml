@@ -74,9 +74,26 @@ jobs:
             # guard keeps the diagnostic honest AND keeps the runner's
             # default `bash -e` from aborting the loop mid-way.
             STATE=$(printf '%s' "$JSON" | jq -r '.live_readiness.state // "MISSING"' 2>/dev/null) || STATE="UNPARSEABLE"
-            if [ "$STATE" != "live" ]; then
+            # ``offline_by_config`` is the operator's DELIBERATE choice, and it
+            # is the state fly.toml commits. It cannot arise from an outage —
+            # only from an explicit config change — so it is not an
+            # availability event and must not alert. Every other non-live state
+            # IS unplanned: offline_by_no_key and offline_by_bad_key are the
+            # funded-key outage this workflow was written for, and MISSING /
+            # UNPARSEABLE mean the body stopped being what we parse.
+            #
+            # This mirrors the deploy smoke test in deploy.yml. Both encoded
+            # "live or bust" while live execution was always on; the moment it
+            # was switched off deliberately (2026-08-11), both went red on
+            # every run. A monitor that is permanently red is not a monitor —
+            # a real outage becomes indistinguishable from the expected state,
+            # and the failure email that IS the alert stops meaning anything.
+            if [ "$STATE" = "offline_by_config" ]; then
+              echo "NOTE: $URL is deliberately offline (offline_by_config)."
+              echo "      Serving local simulation by operator choice — not an availability event."
+            elif [ "$STATE" != "live" ]; then
               REASONS=$(printf '%s' "$JSON" | jq -c '.live_readiness.reasons // []' 2>/dev/null) || REASONS="[unparseable body]"
-              echo "FAIL: $URL state=$STATE (expected \"live\"), reasons=$REASONS"; FAILED=1;
+              echo "FAIL: $URL state=$STATE (expected \"live\" or \"offline_by_config\"), reasons=$REASONS"; FAILED=1;
             fi
           done
           if [ "$FAILED" -ne 0 ]; then
