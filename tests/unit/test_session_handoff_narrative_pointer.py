@@ -25,8 +25,8 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 _spec = importlib.util.spec_from_file_location(
     "session_handoff", REPO_ROOT / "scripts" / "session_handoff.py"
 )
+assert _spec is not None and _spec.loader is not None
 session_handoff = importlib.util.module_from_spec(_spec)
-assert _spec and _spec.loader
 sys.modules["session_handoff"] = session_handoff
 _spec.loader.exec_module(session_handoff)
 
