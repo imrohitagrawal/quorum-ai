@@ -33,11 +33,32 @@ the answer is **subject-matter correct** (medically, legally, financially, or
 against the self-harm safety policy) is a judgement only a qualified human may
 make. That label is **never authored in the fixture**: the loader
 (`loader.py`) and the gate (`../test_golden_set_gate.py`) both reject a fixture
-that carries a `correctness` field. The deferred labels live in
-`docs/metrics/operator-label-queue.md`, which the gate keeps in sync with these
-files. A fabricated subject-matter label is indistinguishable from a real one
-and would corrupt the eval forever — so it is documented, optional calibration
-debt, no deadline, safety case first.
+that carries a `correctness` field. A fabricated subject-matter label is
+indistinguishable from a real one and would corrupt the eval forever — so it
+is kept structurally separate from the fixture by design.
+
+**All four labels are complete.** `docs/metrics/operator-label-queue.md`
+records a genuine human subject-matter review for all four domains, each
+dated, sourced, and attributed — completed 2026-07-23.
+`docs/metrics/accuracy-pilot.md` independently corroborates this: an n=10
+comparison of the engine's structural verdict against these same operator
+labels measured 10/10 agreement. This is real, completed human verification
+of the four highest-stakes cases — separate from, and not to be confused
+with, the threshold-calibration status below, which remains open.
+
+## Calibration status (separate from the D5 labels above)
+
+The advisory thresholds in `src/product_app/evaluation.py`
+(`GROUNDING_FABRICATION_THRESHOLD`, `GROUNDING_GOOD_THRESHOLD`, the trust
+bands, `LAYER_A_WEIGHTS`) **have not yet been calibrated against a measured
+run.** `docs/evidence/s4-golden-calibration/CALIBRATION-NOTES.md` maps each
+threshold to the specific golden cases that bound it — real methodology for
+*how* to calibrate — but its own text is explicit that "no new threshold
+values are proposed here — that requires the measurement run," and it ends
+without a results section. `docs/metrics/quality-ledger.md` independently
+confirms the thresholds "remain ADVISORY and uncalibrated." This is
+documented, optional calibration debt, no deadline, safety case first — and
+a distinct fact from the D5 labeling above, which is done.
 
 ## What the set is for
 
