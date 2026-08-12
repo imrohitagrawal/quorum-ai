@@ -50,7 +50,7 @@ for c in cases:
 # --- balance matrix ---
 by_cat = collections.Counter(c["category"] for c in cases)
 by_dom = collections.Counter(c["domain"] for c in cases)
-cat_dom = collections.defaultdict(lambda: collections.Counter())
+cat_dom: dict[str, collections.Counter[str]] = collections.defaultdict(collections.Counter)
 for c in cases:
     cat_dom[c["category"]][c["domain"]] += 1
 
