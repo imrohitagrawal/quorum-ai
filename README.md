@@ -116,6 +116,20 @@ The full architecture document is at [docs/20-architecture.md](docs/20-architect
    (2 rounds)       (live  catalog)
 ```
 
+The same shape as a real Mermaid diagram (see [diagrams/00-hero-diagram.md](diagrams/00-hero-diagram.md) for the source, and [diagrams/02-c4-container.md](diagrams/02-c4-container.md) for the full 7-container view):
+
+```mermaid
+flowchart LR
+    User[User via browser] -->|"POST /v1/query-runs"| API[FastAPI app<br/>main.py]
+    API --> Cost[Cost estimate<br/>costs.py]
+    Cost -->|confirmed| Run[QueryRun orchestration<br/>query_runs.py]
+    Run --> Providers["4 model slots, parallel<br/>providers.py"]
+    Providers --> Debate["2 debate rounds<br/>debate.py"]
+    Debate --> Synth["5-section synthesis<br/>synthesis.py"]
+    Synth --> Eval["Trust-score evaluation<br/>evaluation.py"]
+    Eval --> Result[Result shown to user]
+```
+
 Key design points, with file:line citations:
 
 - **Cost guardrail**: hard $0.25 cap at [costs.py:35-36](src/product_app/costs.py#L35). The estimate must succeed before a run; the run is blocked if the estimate exceeds the cap.

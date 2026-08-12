@@ -2,7 +2,12 @@
 
 ## Status
 
-Draft
+Superseded (in part) — implemented and refined piece-by-piece by later ADRs. The
+modular-monolith decision itself still holds (no rewrite); this status update replaces
+a stale `Draft` label that survived 34 later ADRs unnoticed until the 2026-08-12 doc
+audit. Refinements: ADR-0002 (SQLite single-writer specifics), the cost-control group
+(ADR-0004/0016/0017/0018/0019/0027/0028), the evaluation/trust group
+(ADR-0020/0021/0029/0030/0032). See `docs/24-adr-index.md` for the full, current list.
 
 ## Context
 
