@@ -15,10 +15,11 @@ already the source of 4 skills vendored in this repo — see `configs/external-s
 includes `project-faq`, built for exactly this kind of page.
 
 Rather than assume the skill's output would be better, a trial was run: `project-faq` was
-vendored, and a full rewrite was generated to a second file
-(`docs/faq/index-v2.html`, not committed) sourced from the same ground truth as the
-original (README, architecture/domain docs, all 34 ADRs, direct code citations). Both
-pages were then run through the skill's own `verify.py` for an objective comparison.
+vendored, and a full rewrite was generated to a second, uncommitted file (a sibling of
+`index.html` inside `docs/faq/`, deleted once the trial concluded) sourced from the same
+ground truth as the original (README, architecture/domain docs, all 34 ADRs, direct code
+citations). Both pages were then run through the skill's own `verify.py` for an objective
+comparison.
 
 ## Measurements
 
@@ -65,8 +66,8 @@ reading-grade target.
   disclosed rather than hidden.
 - `project-faq` is available in-tree for the next real gap, without having established it
   can safely replace the whole page yet.
-- A stray `docs/faq/index-v2.html` trial artifact was deleted rather than left in the tree
-  — nothing else references it.
+- The stray trial-rewrite file was deleted rather than left in the tree — nothing else
+  references it.
 - The verifier's `&copy;`-entity blind spot is now on record here; fixing it is a
   `project-doc-skills` change, out of this repository's scope.
 

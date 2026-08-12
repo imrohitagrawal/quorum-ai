@@ -93,6 +93,17 @@ _CITATION_ROOTS = ("", "e2e")
 #: Scoped to exactly one file so the exemption cannot quietly widen.
 _EXEMPT = ("tests/unit/test_cited_paths_resolve.py",)
 
+#: Vendored skill bundles (see `configs/external-skill-registry.json`): a new
+#: upstream version REPLACES the folder wholesale (same reasoning as ruff's
+#: `.agents/skills/*/scripts` + `*/assets` exclude in pyproject.toml). Their
+#: internal docs legitimately cite paths relative to the bundle itself
+#: (`scripts/verify.py` meaning the bundle's own script) or generic example
+#: paths for a hypothetical consumer project (`docs/confluence/page-map.yaml`
+#: in a template) -- neither is a claim about THIS repository. Prefix-scoped,
+#: not file-scoped, because a bundle has many files; still narrow (one
+#: directory tree, not a wildcard).
+_EXEMPT_PREFIXES = (".agents/skills/",)
+
 
 def _merge_base() -> str:
     """The base this gate diffs against, or skip if origin/main is absent."""
@@ -223,7 +234,7 @@ def test_every_repo_path_cited_on_an_added_line_exists() -> None:
     # where they are actually read.
     broken: list[str] = []
     for path, line in added:
-        if path in _EXEMPT:
+        if path in _EXEMPT or path.startswith(_EXEMPT_PREFIXES):
             continue
         for cited in _CITATION.findall(line):
             # Strip trailing punctuation prose leaves behind.
