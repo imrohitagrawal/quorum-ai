@@ -156,6 +156,19 @@ def main() -> int:
     require_text(
         "docs/94-demo-video-storyboard.md", ["# Demo Video Storyboard", "Scene 1", "Scene 6"]
     )
+    # PLACEHOLDER_SCAFFOLD_STRINGS: the exact generic node names the factory scaffold
+    # ships with (diagrams/README.md's "Do not invent architecture" scaffold). Until
+    # 2026-08-12 every one of the 9 files below still had these, verbatim and
+    # identical, months after the real architecture existed -- the two require_text()
+    # checks below (```mermaid``` + an FR-0NN reference) both still matched the
+    # unfilled scaffold, so this gate had been silently passing over placeholder
+    # content the whole time. This is the fix: assert the scaffold strings are GONE,
+    # not just that some mermaid fence and some FR number are present.
+    PLACEHOLDER_SCAFFOLD_STRINGS = (
+        "Product Capability",
+        "Application Service",
+        "User / Actor",
+    )
     for path in [
         "diagrams/00-hero-diagram.md",
         "diagrams/01-c4-context.md",
@@ -167,7 +180,15 @@ def main() -> int:
         "diagrams/12-mermaid-module-level.md",
         "diagrams/13-mermaid-sub-module-level.md",
     ]:
-        require_text(path, ["```mermaid", "FR-001"])
+        text = require_text(path, ["```mermaid"])
+        if not re.search(r"FR-0\d\d", text):
+            fail(f"{path} cites no FR-0NN requirement")
+        for scaffold in PLACEHOLDER_SCAFFOLD_STRINGS:
+            if scaffold in text:
+                fail(
+                    f"{path} still contains the unfilled scaffold string {scaffold!r} "
+                    "-- replace with real architecture, see diagrams/README.md"
+                )
     for path in [
         "diagrams/excalidraw/10-high-level.excalidraw",
         "diagrams/excalidraw/11-low-level.excalidraw",

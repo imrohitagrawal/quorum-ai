@@ -6,7 +6,7 @@ ways, so the record shows what was believed on a date and what replaced it.
 
 | ADR | Title | Kind | Status |
 |---|---|---|---|
-| [ADR-0001](adr/0001-initial-architecture.md) | Initial Architecture | Architecture | Draft |
+| [ADR-0001](adr/0001-initial-architecture.md) | Initial Architecture | Architecture | Superseded (in part) — implemented and refined piece-by-piece by later ADRs |
 | [ADR-0002](adr/0002-sqlite-single-writer-ceiling.md) | SQLite stores stay single-writer (one connection, one lock, no WAL) | Architecture | Accepted — 2026-07-19 (R2 Phase 0, ledger RB-3) |
 | [ADR-0003](adr/0003-measure-review-yield-before-setting-a-review-budget.md) | Measure review yield before setting a review budget | Method | Accepted — 2026-07-30 |
 | [ADR-0004](adr/0004-spend-cap-fails-open-on-an-untrustworthy-ledger.md) | The per-account spend cap fails OPEN on an untrustworthy ledger | Architecture | Accepted — 2026-08-03 (major-issues batch, issues #101 / #109 / #122 / #123) |
