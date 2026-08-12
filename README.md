@@ -116,7 +116,12 @@ The full architecture document is at [docs/20-architecture.md](docs/20-architect
    (2 rounds)       (live  catalog)
 ```
 
-The same shape as a real Mermaid diagram (see [diagrams/00-hero-diagram.md](diagrams/00-hero-diagram.md) for the source, and [diagrams/02-c4-container.md](diagrams/02-c4-container.md) for the full 7-container view):
+The ASCII sketch above shows module structure; the Mermaid diagram below shows the
+actual request pipeline (linear: cost estimate → 4 parallel models → debate → synthesis
+→ evaluation) — the two are complementary, not identical (see
+[diagrams/00-hero-diagram.md](diagrams/00-hero-diagram.md) for the source, and
+[diagrams/02-c4-container.md](diagrams/02-c4-container.md) for the full 7-container
+view):
 
 ```mermaid
 flowchart LR

@@ -37,6 +37,6 @@ sequenceDiagram
 Function names verified against `src/product_app/query_runs.py`
 (`_execute_query_run`, `_evaluate_terminal_run`), `providers.py`
 (`ProviderExecutionService.produce_initial_answer`), `debate.py`
-(`DebateOrchestrator.run_debate_rounds`), `synthesis.py`
-(`SynthesisOrchestrator.produce_final_synthesis`), `evaluation.py`
+(`DebateOrchestrationService.run_debate_rounds`), `synthesis.py`
+(`SynthesisOrchestrationService.produce_final_synthesis`), `evaluation.py`
 (`evaluate_layer_a`, `build_trust_score`).
