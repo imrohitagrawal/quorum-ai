@@ -34,7 +34,8 @@ comparison.
 The full rewrite was **not** a strict improvement: it dropped a tab and used denser prose
 than the original despite the skill's own grade-8 target. It did close the confirmed ADR
 gap convincingly. Separately, the verifier's `has_copyright = "©" in raw` check
-(`.agents/skills/project-faq/scripts/verify.py:469`) is a **false positive on the original page** — it checks for
+(line 469 of the vendored bundle's `verify.py`, under
+`.agents/skills/project-faq/scripts/`) is a **false positive on the original page** — it checks for
 the literal Unicode `©` character and misses the `&copy;` HTML entity the original page
 already uses (confirmed by reading `docs/faq/index.html:1240` directly). The original
 was never actually missing a copyright notice; the verifier's check was wrong. That bug is
