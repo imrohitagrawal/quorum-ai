@@ -27,32 +27,6 @@ gitignored scratch Playwright specs (`git check-ignore e2e/tests/review`
 confirms they're untracked) that exist on disk but run in no CI workflow. The
 gate walks the filesystem, finds them, and fails outside CI. Not a regression.
 
-## The log-redaction gap
-
-Five modules log a Python exception object directly with `%s` formatting
-(`logger.warning("...: %s", exc)`), which calls `str(exc)` with no filtering:
-`feedback_store.py`, `query_runs.py`, `run_history_store.py`,
-`store_reconnect.py`, `feedback_audit.py`. Reproduced directly:
-```python
-from product_app.logging_config import JsonFormatter
-# a LogRecord built with a fabricated secret in its message
-JsonFormatter().format(record)
-# -> the secret string appears verbatim in the JSON output
-```
-`providers.py`'s HTTP-error paths, by contrast, are careful: they log
-structured fields (status code, model id, error class name) and never pass
-the exception itself. `tests/security/test_release_security_redaction.py`
-doesn't cover this gap — it only asserts against HTTP responses and in-memory
-event recorders, never logger output.
-
-**Practical risk today:** low. The exceptions those five call sites actually
-catch are `sqlite3.Error`, `TimeoutError`, JSON parse errors, and one
-`HTTPError`/`URLError` pair from an outbound API call — `str(HTTPError)`
-doesn't normally include the request's own Authorization header (verified:
-`HTTP Error 401: Unauthorized`, no headers). None of these currently carry a
-real secret. But there's no filter enforcing that — only the shape of what
-each exception type happens to stringify to, which could change.
-
 ## `cheapest_per_vendor` is unwired
 
 ```
