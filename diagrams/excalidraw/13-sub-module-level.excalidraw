@@ -1,1 +1,436 @@
-{"type": "excalidraw", "version": 2, "source": "mcp-excalidraw-server", "elements": [{"type": "text", "x": 100, "y": 20, "width": 700, "height": 24, "strokeColor": "#1e1e1e", "text": "Evaluation Subsystem (evaluation.py, Release 2)", "fontSize": 20, "id": "13-sub-module-level-el-1"}, {"id": "ev-terminal", "type": "rectangle", "x": 400, "y": 80, "width": 280, "height": 60, "backgroundColor": "#e9ecef", "strokeColor": "#868e96", "fillStyle": "solid"}, {"type": "text", "x": 420, "y": 98, "width": 240, "height": 24, "strokeColor": "#1e1e1e", "text": "QueryRun reaches terminal state", "fontSize": 14, "id": "13-sub-module-level-el-2"}, {"id": "ev-layera", "type": "rectangle", "x": 200, "y": 220, "width": 280, "height": 80, "backgroundColor": "#a5d8ff", "strokeColor": "#1971c2", "fillStyle": "solid"}, {"type": "text", "x": 220, "y": 240, "width": 240, "height": 20, "strokeColor": "#1e1e1e", "text": "Layer A", "fontSize": 16, "id": "13-sub-module-level-el-3"}, {"type": "text", "x": 220, "y": 262, "width": 240, "height": 30, "strokeColor": "#1e1e1e", "text": "deterministic, always runs\nevaluate_layer_a()", "fontSize": 12, "id": "13-sub-module-level-el-4"}, {"id": "ev-layerb", "type": "rectangle", "x": 620, "y": 220, "width": 280, "height": 80, "backgroundColor": "#ffd8a8", "strokeColor": "#e8590c", "strokeStyle": "dashed", "fillStyle": "solid"}, {"type": "text", "x": 640, "y": 240, "width": 240, "height": 20, "strokeColor": "#1e1e1e", "text": "Layer B (optional judge)", "fontSize": 15, "id": "13-sub-module-level-el-5"}, {"type": "text", "x": 640, "y": 262, "width": 240, "height": 30, "strokeColor": "#1e1e1e", "text": "advisory, off in every current\ndeployment - EvalJudgeService", "fontSize": 11, "id": "13-sub-module-level-el-6"}, {"id": "ev-trustscore", "type": "rectangle", "x": 400, "y": 380, "width": 280, "height": 70, "backgroundColor": "#b2f2bb", "strokeColor": "#2f9e44", "fillStyle": "solid"}, {"type": "text", "x": 420, "y": 398, "width": 240, "height": 20, "strokeColor": "#1e1e1e", "text": "TrustScore", "fontSize": 16, "id": "13-sub-module-level-el-7"}, {"type": "text", "x": 420, "y": 420, "width": 240, "height": 20, "strokeColor": "#1e1e1e", "text": "what was checked / not checked", "fontSize": 12, "id": "13-sub-module-level-el-8"}, {"id": "ev-ui", "type": "rectangle", "x": 400, "y": 520, "width": 280, "height": 70, "backgroundColor": "#a5d8ff", "strokeColor": "#1971c2", "fillStyle": "solid"}, {"type": "text", "x": 420, "y": 538, "width": 240, "height": 20, "strokeColor": "#1e1e1e", "text": "#result-trust-score", "fontSize": 15, "id": "13-sub-module-level-el-9"}, {"type": "text", "x": 420, "y": 560, "width": 240, "height": 20, "strokeColor": "#1e1e1e", "text": "sibling of #result-trust (workspace.html)", "fontSize": 11, "id": "13-sub-module-level-el-10"}, {"id": "ev-hidden", "type": "rectangle", "x": 780, "y": 520, "width": 220, "height": 70, "backgroundColor": "#ffc9c9", "strokeColor": "#e03131", "strokeStyle": "dashed", "fillStyle": "solid"}, {"type": "text", "x": 800, "y": 540, "width": 180, "height": 34, "strokeColor": "#1e1e1e", "text": "hidden entirely if\nabsent/null/malformed", "fontSize": 12, "id": "13-sub-module-level-el-11"}, {"type": "arrow", "x": 493.6, "y": 144.8, "width": -160, "height": 80, "strokeColor": "#1e1e1e", "points": [[0, 0], [-93.9, 70.4]], "start": {"id": "ev-terminal"}, "end": {"id": "ev-layera"}, "endArrowhead": "triangle", "id": "13-sub-module-level-el-12"}, {"type": "arrow", "x": 488, "y": 260, "width": 140, "height": 0, "strokeColor": "#e8590c", "strokeStyle": "dashed", "label": {"text": "judge on (dormant)"}, "points": [[0, 0], [124, 0]], "start": {"id": "ev-layera"}, "end": {"id": "ev-layerb"}, "endArrowhead": "triangle", "id": "13-sub-module-level-el-13"}, {"type": "arrow", "x": 397.9, "y": 304.9, "width": 100, "height": 80, "strokeColor": "#1e1e1e", "points": [[0, 0], [90.6, 70.2]], "start": {"id": "ev-layera"}, "end": {"id": "ev-trustscore"}, "endArrowhead": "triangle", "id": "13-sub-module-level-el-14"}, {"type": "arrow", "x": 696.7, "y": 304.6, "width": -160, "height": 80, "strokeColor": "#e8590c", "strokeStyle": "dashed", "label": {"text": "advisory only, never changes score"}, "points": [[0, 0], [-100.5, 70.8]], "start": {"id": "ev-layerb"}, "end": {"id": "ev-trustscore"}, "endArrowhead": "triangle", "id": "13-sub-module-level-el-15"}, {"type": "arrow", "x": 540, "y": 458, "width": 0, "height": 70, "strokeColor": "#1e1e1e", "points": [[0, 0], [0, 54]], "start": {"id": "ev-trustscore"}, "end": {"id": "ev-ui"}, "endArrowhead": "triangle", "id": "13-sub-module-level-el-16"}, {"type": "arrow", "x": 634.9, "y": 453.0, "width": 210, "height": 105, "strokeColor": "#e03131", "label": {"text": "hidden if absent"}, "points": [[0, 0], [160.1, 64.1]], "start": {"id": "ev-trustscore"}, "end": {"id": "ev-hidden"}, "endArrowhead": "triangle", "id": "13-sub-module-level-el-17"}], "appState": {"viewBackgroundColor": "#ffffff", "gridSize": null}}
+{
+  "type": "excalidraw",
+  "version": 2,
+  "source": "mcp-excalidraw-server",
+  "elements": [
+    {
+      "id": "msqd0dof8lddj0fnthv",
+      "type": "text",
+      "x": 100,
+      "y": 20,
+      "width": 700,
+      "height": 24,
+      "strokeColor": "#1e1e1e",
+      "text": "Evaluation Subsystem (evaluation.py, Release 2)",
+      "fontSize": 20,
+      "createdAt": "2026-08-12T17:24:48.839Z",
+      "updatedAt": "2026-08-12T17:24:48.839Z",
+      "version": 1
+    },
+    {
+      "id": "ev-terminal",
+      "type": "rectangle",
+      "x": 460,
+      "y": 80,
+      "width": 280,
+      "height": 60,
+      "backgroundColor": "#e9ecef",
+      "strokeColor": "#868e96",
+      "fillStyle": "solid",
+      "createdAt": "2026-08-12T17:24:48.839Z",
+      "updatedAt": "2026-08-12T17:24:48.839Z",
+      "version": 1
+    },
+    {
+      "id": "msqd0dofkzmvdvsar8",
+      "type": "text",
+      "x": 480,
+      "y": 98,
+      "width": 240,
+      "height": 24,
+      "strokeColor": "#1e1e1e",
+      "text": "QueryRun reaches terminal state",
+      "fontSize": 14,
+      "createdAt": "2026-08-12T17:24:48.839Z",
+      "updatedAt": "2026-08-12T17:24:48.839Z",
+      "version": 1
+    },
+    {
+      "id": "ev-layera",
+      "type": "rectangle",
+      "x": 200,
+      "y": 230,
+      "width": 280,
+      "height": 80,
+      "backgroundColor": "#a5d8ff",
+      "strokeColor": "#1971c2",
+      "fillStyle": "solid",
+      "createdAt": "2026-08-12T17:24:48.839Z",
+      "updatedAt": "2026-08-12T17:24:48.839Z",
+      "version": 1
+    },
+    {
+      "id": "msqd0dofbmq5254zqg",
+      "type": "text",
+      "x": 220,
+      "y": 250,
+      "width": 240,
+      "height": 20,
+      "strokeColor": "#1e1e1e",
+      "text": "Layer A",
+      "fontSize": 16,
+      "createdAt": "2026-08-12T17:24:48.839Z",
+      "updatedAt": "2026-08-12T17:24:48.839Z",
+      "version": 1
+    },
+    {
+      "id": "msqd0dofp3q0sa79lof",
+      "type": "text",
+      "x": 220,
+      "y": 272,
+      "width": 240,
+      "height": 30,
+      "strokeColor": "#1e1e1e",
+      "text": "deterministic, always runs\nevaluate_layer_a()",
+      "fontSize": 12,
+      "createdAt": "2026-08-12T17:24:48.839Z",
+      "updatedAt": "2026-08-12T17:24:48.839Z",
+      "version": 1
+    },
+    {
+      "id": "ev-layerb",
+      "type": "rectangle",
+      "x": 780,
+      "y": 230,
+      "width": 300,
+      "height": 80,
+      "backgroundColor": "#ffd8a8",
+      "strokeColor": "#e8590c",
+      "strokeStyle": "dashed",
+      "fillStyle": "solid",
+      "createdAt": "2026-08-12T17:24:48.839Z",
+      "updatedAt": "2026-08-12T17:24:48.839Z",
+      "version": 1
+    },
+    {
+      "id": "msqd0dofopi08tw7o7m",
+      "type": "text",
+      "x": 800,
+      "y": 250,
+      "width": 260,
+      "height": 20,
+      "strokeColor": "#1e1e1e",
+      "text": "Layer B (optional judge)",
+      "fontSize": 15,
+      "createdAt": "2026-08-12T17:24:48.839Z",
+      "updatedAt": "2026-08-12T17:24:48.839Z",
+      "version": 1
+    },
+    {
+      "id": "msqd0dofazglxze0an",
+      "type": "text",
+      "x": 800,
+      "y": 272,
+      "width": 260,
+      "height": 30,
+      "strokeColor": "#1e1e1e",
+      "text": "advisory, off in every current\ndeployment - EvalJudgeService",
+      "fontSize": 11,
+      "createdAt": "2026-08-12T17:24:48.839Z",
+      "updatedAt": "2026-08-12T17:24:48.839Z",
+      "version": 1
+    },
+    {
+      "id": "ev-trustscore",
+      "type": "rectangle",
+      "x": 460,
+      "y": 460,
+      "width": 280,
+      "height": 70,
+      "backgroundColor": "#b2f2bb",
+      "strokeColor": "#2f9e44",
+      "fillStyle": "solid",
+      "createdAt": "2026-08-12T17:24:48.839Z",
+      "updatedAt": "2026-08-12T17:24:48.839Z",
+      "version": 1
+    },
+    {
+      "id": "msqd0dofn6g1jwhilio",
+      "type": "text",
+      "x": 480,
+      "y": 478,
+      "width": 240,
+      "height": 20,
+      "strokeColor": "#1e1e1e",
+      "text": "TrustScore",
+      "fontSize": 16,
+      "createdAt": "2026-08-12T17:24:48.839Z",
+      "updatedAt": "2026-08-12T17:24:48.839Z",
+      "version": 1
+    },
+    {
+      "id": "msqd0dofurcfqgttoe",
+      "type": "text",
+      "x": 480,
+      "y": 500,
+      "width": 240,
+      "height": 20,
+      "strokeColor": "#1e1e1e",
+      "text": "what was checked / not checked",
+      "fontSize": 12,
+      "createdAt": "2026-08-12T17:24:48.839Z",
+      "updatedAt": "2026-08-12T17:24:48.839Z",
+      "version": 1
+    },
+    {
+      "id": "ev-ui",
+      "type": "rectangle",
+      "x": 460,
+      "y": 620,
+      "width": 280,
+      "height": 70,
+      "backgroundColor": "#a5d8ff",
+      "strokeColor": "#1971c2",
+      "fillStyle": "solid",
+      "createdAt": "2026-08-12T17:24:48.839Z",
+      "updatedAt": "2026-08-12T17:24:48.839Z",
+      "version": 1
+    },
+    {
+      "id": "msqd0dofbfglyrfbmho",
+      "type": "text",
+      "x": 480,
+      "y": 638,
+      "width": 240,
+      "height": 20,
+      "strokeColor": "#1e1e1e",
+      "text": "#result-trust-score",
+      "fontSize": 15,
+      "createdAt": "2026-08-12T17:24:48.839Z",
+      "updatedAt": "2026-08-12T17:24:48.839Z",
+      "version": 1
+    },
+    {
+      "id": "msqd0dof37801j5skiw",
+      "type": "text",
+      "x": 480,
+      "y": 660,
+      "width": 240,
+      "height": 20,
+      "strokeColor": "#1e1e1e",
+      "text": "sibling of #result-trust (workspace.html)",
+      "fontSize": 11,
+      "createdAt": "2026-08-12T17:24:48.839Z",
+      "updatedAt": "2026-08-12T17:24:48.839Z",
+      "version": 1
+    },
+    {
+      "id": "ev-hidden",
+      "type": "rectangle",
+      "x": 900,
+      "y": 620,
+      "width": 240,
+      "height": 70,
+      "backgroundColor": "#ffc9c9",
+      "strokeColor": "#e03131",
+      "strokeStyle": "dashed",
+      "fillStyle": "solid",
+      "createdAt": "2026-08-12T17:24:48.839Z",
+      "updatedAt": "2026-08-12T17:24:48.839Z",
+      "version": 1
+    },
+    {
+      "id": "msqd0dofu4le6x431mk",
+      "type": "text",
+      "x": 920,
+      "y": 640,
+      "width": 200,
+      "height": 34,
+      "strokeColor": "#1e1e1e",
+      "text": "hidden entirely if\nabsent/null/malformed",
+      "fontSize": 12,
+      "createdAt": "2026-08-12T17:24:48.839Z",
+      "updatedAt": "2026-08-12T17:24:48.839Z",
+      "version": 1
+    },
+    {
+      "id": "msqd0dof5fxpjbzyt3n",
+      "type": "arrow",
+      "x": 544.4367334663636,
+      "y": 144.19277940531467,
+      "width": -220,
+      "height": 90,
+      "strokeColor": "#1e1e1e",
+      "points": [
+        [
+          0,
+          0
+        ],
+        [
+          -132.6234669327273,
+          81.61444118937067
+        ]
+      ],
+      "start": {
+        "id": "ev-terminal"
+      },
+      "end": {
+        "id": "ev-layera"
+      },
+      "endArrowhead": "triangle",
+      "createdAt": "2026-08-12T17:24:48.839Z",
+      "updatedAt": "2026-08-12T17:24:48.839Z",
+      "version": 1
+    },
+    {
+      "id": "msqd0dofgamrtb4rp5l",
+      "type": "arrow",
+      "x": 488,
+      "y": 270,
+      "width": 300,
+      "height": 0,
+      "strokeColor": "#e8590c",
+      "strokeStyle": "dashed",
+      "label": {
+        "text": "judge on (dormant)"
+      },
+      "points": [
+        [
+          0,
+          0
+        ],
+        [
+          284,
+          0
+        ]
+      ],
+      "start": {
+        "id": "ev-layera"
+      },
+      "end": {
+        "id": "ev-layerb"
+      },
+      "endArrowhead": "triangle",
+      "createdAt": "2026-08-12T17:24:48.839Z",
+      "updatedAt": "2026-08-12T17:24:48.839Z",
+      "version": 1
+    },
+    {
+      "id": "msqd0dofj8ta92naw0p",
+      "type": "arrow",
+      "x": 392.27157168192446,
+      "y": 315.23501395551153,
+      "width": 130,
+      "height": 150,
+      "strokeColor": "#1e1e1e",
+      "points": [
+        [
+          0,
+          0
+        ],
+        [
+          161.23463441392892,
+          139.52997208897693
+        ]
+      ],
+      "start": {
+        "id": "ev-layera"
+      },
+      "end": {
+        "id": "ev-trustscore"
+      },
+      "endArrowhead": "triangle",
+      "createdAt": "2026-08-12T17:24:48.839Z",
+      "updatedAt": "2026-08-12T17:24:48.839Z",
+      "version": 1
+    },
+    {
+      "id": "msqd0dof9k4ryqy88h",
+      "type": "arrow",
+      "x": 864.723514590873,
+      "y": 314.5066945971321,
+      "width": -230,
+      "height": 150,
+      "strokeColor": "#e8590c",
+      "strokeStyle": "dashed",
+      "label": {
+        "text": "advisory only, never changes score"
+      },
+      "points": [
+        [
+          0,
+          0
+        ],
+        [
+          -206.78036251507933,
+          140.98661080573584
+        ]
+      ],
+      "start": {
+        "id": "ev-layerb"
+      },
+      "end": {
+        "id": "ev-trustscore"
+      },
+      "endArrowhead": "triangle",
+      "createdAt": "2026-08-12T17:24:48.839Z",
+      "updatedAt": "2026-08-12T17:24:48.839Z",
+      "version": 1
+    },
+    {
+      "id": "msqd0dofq64k4tpmfne",
+      "type": "arrow",
+      "x": 600,
+      "y": 538,
+      "width": 0,
+      "height": 90,
+      "strokeColor": "#1e1e1e",
+      "points": [
+        [
+          0,
+          0
+        ],
+        [
+          0,
+          74
+        ]
+      ],
+      "start": {
+        "id": "ev-trustscore"
+      },
+      "end": {
+        "id": "ev-ui"
+      },
+      "endArrowhead": "triangle",
+      "createdAt": "2026-08-12T17:24:48.839Z",
+      "updatedAt": "2026-08-12T17:24:48.839Z",
+      "version": 1
+    },
+    {
+      "id": "msqd0dofzomw3f8llzh",
+      "type": "arrow",
+      "x": 699.3509018794317,
+      "y": 532.8479626207359,
+      "width": 280,
+      "height": 120,
+      "strokeColor": "#e03131",
+      "label": {
+        "text": "hidden if absent"
+      },
+      "points": [
+        [
+          0,
+          0
+        ],
+        [
+          221.29819624113657,
+          84.30407475852826
+        ]
+      ],
+      "start": {
+        "id": "ev-trustscore"
+      },
+      "end": {
+        "id": "ev-hidden"
+      },
+      "endArrowhead": "triangle",
+      "createdAt": "2026-08-12T17:24:48.839Z",
+      "updatedAt": "2026-08-12T17:24:48.839Z",
+      "version": 1
+    }
+  ],
+  "appState": {
+    "viewBackgroundColor": "#ffffff",
+    "gridSize": null
+  }
+}
