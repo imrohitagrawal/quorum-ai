@@ -136,13 +136,19 @@ commands, and each must be run with its output captured in the slice report:
 
 - **Prerequisite still holds** — re-run it; do not carry a stale claim.
 - **TDD proven**: each behavioural change has a captured RED then GREEN;
-  timing-sensitive tests run enough times to establish a real flake rate.
+  timing-sensitive tests run **N≥10×** (adjust the number for your project,
+  but pick a real one — "enough times" is not a bar anyone can check) to
+  establish a real flake rate.
 - **Full suite green**, linter/type-checker clean, and every named gate
   command exits 0.
 - **Hermetic proof**: a spy test shows zero paid/external calls on the
   every-PR path.
 - **Neutrality proof** (if applicable): a gated feature OFF produces an
   identical result to before it existed, with zero calls to its own seam.
+- **UI/end-to-end verification** (if this feature touches a UI): `<name your
+  project's blocking e2e/rendering-invariant/visual-regression/accessibility
+  suites>`; every new surface is covered by the same fixture the rest of the
+  UI is tested against, not a bespoke one-off.
 - **Adversarial review clean**: findings fixed test-first, not waved away.
 - **Docs complete** in the established formats.
 - **Security/access boundary intact — proven, not asserted**: the explicit
@@ -164,8 +170,12 @@ current one. Interleave doc-writing per slice — don't batch to the end.
    findings + how each was fixed.
 2. Full-suite / linter / type-checker / gate results.
 3. Confirmation of the hermetic ($0) proof and any neutrality proof.
-4. Anything deferred, with a pointer to where it's tracked.
-5. The exact commands to run any opt-in/gated path locally, so the operator
+4. **Anything requiring explicit human sign-off, clearly flagged and listed**
+   — not buried in a diff. If this feature touches safety-critical output,
+   high-stakes content, or anything else a human must review before it's
+   trusted, that list is a required deliverable, not an afterthought.
+5. Anything deferred, with a pointer to where it's tracked.
+6. The exact commands to run any opt-in/gated path locally, so the operator
    can reproduce it.
 
 **Do not** activate any paid path, rotate any secret, or deploy without

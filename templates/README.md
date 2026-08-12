@@ -7,12 +7,17 @@ specific branch names, commit SHAs, file paths, and feature IDs.
 
 ## Why this is separate from `.agents/skills/`
 
-`.agents/skills/` holds executable skill bundles vendored wholesale from a
-separate private skills repository (see `configs/external-skill-registry.json`
-— each entry there is independently versioned and gets replaced as a complete
-folder on sync). Files here are plain reference documents, not runnable skill
-bundles: nothing in `templates/` is loaded, executed, or synced by any script
-in this repo. Copy what you need by hand.
+`.agents/skills/` holds executable skill bundles vendored from a registry
+(`configs/external-skill-registry.json`) — but that registry's own
+`auditor_caveat` and per-entry `version_or_commit`/`trust_tier` fields show
+this isn't uniform: 6 of its 13 entries are `UNKNOWN`/unpinned
+(`vendored-unpinned` or `provenance-unknown` trust tier), 2 more are marked
+"NOT VENDORED — no commit pinned," and only the 4 first-party entries plus
+`schemathesis` carry a real pinned version. Whatever its provenance state,
+each bundle still gets replaced as a complete folder on sync, and is still
+executable. Files here are the opposite on both counts: plain reference
+documents, not runnable skill bundles — nothing in `templates/` is loaded,
+executed, or synced by any script in this repo. Copy what you need by hand.
 
 ## What's here
 
