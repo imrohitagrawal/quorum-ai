@@ -198,6 +198,18 @@ def main() -> int:
         data = json.loads(read(path))
         if data.get("type") != "excalidraw":
             fail(f"{path} is not an Excalidraw file")
+        # Same class of gap as the markdown scaffold above: a near-empty canvas (the
+        # factory default, 2 elements) passed this check for months because nothing
+        # counted elements. 2 is the exact count every one of these 4 files shipped
+        # with before 2026-08-12 -- floor set just above it, not at some larger
+        # "real diagram" guess, so this is a floor on emptiness, not a content-quality
+        # judgment this script has no way to make.
+        element_count = len(data.get("elements", []))
+        if element_count <= 2:
+            fail(
+                f"{path} has only {element_count} element(s) -- looks like the "
+                "unfilled factory default, not a real diagram"
+            )
     print("enterprise extensions validation passed")
     return 0
 
