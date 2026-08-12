@@ -44,13 +44,24 @@
       "version_or_commit": "4.10.2 (resolved by uv into the `quality` extra; verified from .venv dist-info METADATA)",
       "license": "MIT (License-Expression in schemathesis-4.10.2.dist-info/METADATA)",
       "install_method": "uv sync --extra quality  (dev-only; NOT in runtime dependencies, so it never ships in the Docker image)",
-      "supported_agents": ["n/a - library invoked by CI, not an agent skill"],
+      "supported_agents": [
+        "n/a - library invoked by CI, not an agent skill"
+      ],
       "activation_mode": "reviewer-only",
       "trust_tier": "provenance-verified-license-verified",
       "risk_rating": "low",
       "kind": "tool/library",
-      "allowed_operations": ["read_repo", "shell (test runner only)"],
-      "forbidden_operations": ["external_write", "secrets", "deployment", "destructive_git", "network (must run against the in-process ASGI app, never a live host)"],
+      "allowed_operations": [
+        "read_repo",
+        "shell (test runner only)"
+      ],
+      "forbidden_operations": [
+        "external_write",
+        "secrets",
+        "deployment",
+        "destructive_git",
+        "network (must run against the in-process ASGI app, never a live host)"
+      ],
       "review_owner": "R2 Phase-0 (P0-I)",
       "review_date": "2026-07-19",
       "validation_command": "make api-contract",
@@ -85,12 +96,22 @@
       "version_or_commit": "NOT VENDORED - no commit pinned",
       "license": "MIT (repository LICENSE, read from the GitHub repo page on 2026-07-19)",
       "install_method": "not installed; would need vendoring into .agents/skills/ + a symlink from .claude/skills/",
-      "supported_agents": ["claude-code"],
+      "supported_agents": [
+        "claude-code"
+      ],
       "activation_mode": "reviewer-only",
       "trust_tier": "provenance-verified-content-unaudited",
       "risk_rating": "unrated - content not on disk",
-      "allowed_operations": ["reviewer_input_only"],
-      "forbidden_operations": ["external_write", "secrets", "deployment", "destructive_git", "write_repo"],
+      "allowed_operations": [
+        "reviewer_input_only"
+      ],
+      "forbidden_operations": [
+        "external_write",
+        "secrets",
+        "deployment",
+        "destructive_git",
+        "write_repo"
+      ],
       "review_owner": "R2 Phase-0 (P0-I)",
       "review_date": "2026-07-19",
       "validation_command": "python3 scripts/audit_external_skill.py .agents/skills/doubt-driven-development  # CANNOT RUN - folder does not exist",
@@ -125,12 +146,22 @@
       "version_or_commit": "NOT VENDORED - no commit pinned",
       "license": "MIT (repository LICENSE, read from the GitHub repo page on 2026-07-19)",
       "install_method": "not installed; would need vendoring into .agents/skills/ + a symlink from .claude/skills/",
-      "supported_agents": ["claude-code"],
+      "supported_agents": [
+        "claude-code"
+      ],
       "activation_mode": "reviewer-only",
       "trust_tier": "provenance-verified-content-unaudited",
       "risk_rating": "unrated - content not on disk",
-      "allowed_operations": ["reviewer_input_only"],
-      "forbidden_operations": ["external_write", "secrets", "deployment", "destructive_git", "write_repo"],
+      "allowed_operations": [
+        "reviewer_input_only"
+      ],
+      "forbidden_operations": [
+        "external_write",
+        "secrets",
+        "deployment",
+        "destructive_git",
+        "write_repo"
+      ],
       "review_owner": "R2 Phase-0 (P0-I)",
       "review_date": "2026-07-19",
       "validation_command": "python3 scripts/audit_external_skill.py .agents/skills/spec-driven-development  # CANNOT RUN - folder does not exist",
@@ -165,16 +196,34 @@
       "version_or_commit": "UNKNOWN - the vendored copy carries no upstream commit, version or license in its frontmatter",
       "license": "upstream repo is MIT (obra/superpowers LICENSE, read from the GitHub repo page 2026-07-19). The VENDORED COPY contains no license file or license frontmatter - provenance is inferred from body text, not proven.",
       "install_method": "already vendored in-tree",
-      "supported_agents": ["claude-code"],
+      "supported_agents": [
+        "claude-code"
+      ],
       "activation_mode": "reviewer-only",
       "trust_tier": "vendored-unpinned",
       "risk_rating": "medium",
-      "allowed_operations": ["reviewer_input_only"],
-      "forbidden_operations": ["external_write", "secrets", "deployment", "destructive_git", "write_repo"],
+      "allowed_operations": [
+        "reviewer_input_only"
+      ],
+      "forbidden_operations": [
+        "external_write",
+        "secrets",
+        "deployment",
+        "destructive_git",
+        "write_repo"
+      ],
       "review_owner": "R2 Phase-0 (P0-I)",
       "review_date": "2026-07-19",
       "validation_command": "python3 scripts/audit_external_skill.py .agents/skills/subagent-driven-development",
-      "audit_result": {"score": 85, "recommended_mode": "reviewer-only", "flags": ["destructive_git", "secrets", "shell"]},
+      "audit_result": {
+        "score": 85,
+        "recommended_mode": "reviewer-only",
+        "flags": [
+          "destructive_git",
+          "secrets",
+          "shell"
+        ]
+      },
       "depth_rubric": {
         "trigger": "present",
         "what": "present",
@@ -206,16 +255,35 @@
       "version_or_commit": "1.0 (frontmatter metadata.version) - no upstream commit pinned",
       "license": "MIT (declared in the vendored SKILL.md frontmatter `license: MIT`; no LICENSE file accompanies the copy)",
       "install_method": "already vendored in-tree",
-      "supported_agents": ["claude-code"],
+      "supported_agents": [
+        "claude-code"
+      ],
       "activation_mode": "reviewer-only",
       "trust_tier": "vendored-unpinned",
       "risk_rating": "medium",
-      "allowed_operations": ["reviewer_input_only"],
-      "forbidden_operations": ["external_write", "secrets", "deployment", "destructive_git", "write_repo", "network"],
+      "allowed_operations": [
+        "reviewer_input_only"
+      ],
+      "forbidden_operations": [
+        "external_write",
+        "secrets",
+        "deployment",
+        "destructive_git",
+        "write_repo",
+        "network"
+      ],
       "review_owner": "R2 Phase-0 (P0-I)",
       "review_date": "2026-07-19",
       "validation_command": "python3 scripts/audit_external_skill.py .agents/skills/deploy-checklist",
-      "audit_result": {"score": 85, "recommended_mode": "reviewer-only", "flags": ["network", "shell", "external_write"]},
+      "audit_result": {
+        "score": 85,
+        "recommended_mode": "reviewer-only",
+        "flags": [
+          "network",
+          "shell",
+          "external_write"
+        ]
+      },
       "depth_rubric": {
         "trigger": "present",
         "what": "present",
@@ -262,16 +330,34 @@
       "version_or_commit": "UNKNOWN - unpinned",
       "license": "upstream MIT (verified on the GitHub repo page 2026-07-19); vendored copy carries no license file",
       "install_method": "already vendored in-tree",
-      "supported_agents": ["claude-code"],
+      "supported_agents": [
+        "claude-code"
+      ],
       "activation_mode": "reviewer-only",
       "trust_tier": "vendored-unpinned",
       "risk_rating": "low",
-      "allowed_operations": ["reviewer_input_only"],
-      "forbidden_operations": ["external_write", "secrets", "deployment", "destructive_git", "write_repo"],
+      "allowed_operations": [
+        "reviewer_input_only"
+      ],
+      "forbidden_operations": [
+        "external_write",
+        "secrets",
+        "deployment",
+        "destructive_git",
+        "write_repo"
+      ],
       "review_owner": "R2 Phase-0 (P0-I)",
       "review_date": "2026-07-19",
       "validation_command": "python3 scripts/audit_external_skill.py .agents/skills/systematic-debugging",
-      "audit_result": {"score": 85, "recommended_mode": "reviewer-only", "flags": ["secrets", "shell", "external_write"]},
+      "audit_result": {
+        "score": 85,
+        "recommended_mode": "reviewer-only",
+        "flags": [
+          "secrets",
+          "shell",
+          "external_write"
+        ]
+      },
       "depth_rubric": {
         "trigger": "boilerplate",
         "what": "present",
@@ -286,7 +372,9 @@
         "note": "Rich real content (Iron Law, Four Phases, Common Rationalizations) but its '## When to use' section is the auto-injected placeholder ('When the user asks about ') - the trigger criterion is literally blank."
       },
       "verdict": "ADOPT reviewer-only. Already in the tree and consistent with repo doctrine; fix the blank trigger.",
-      "blocking_conditions": ["Replace the placeholder '## When to use' bullets with a real trigger before the rubric can be called satisfied."],
+      "blocking_conditions": [
+        "Replace the placeholder '## When to use' bullets with a real trigger before the rubric can be called satisfied."
+      ],
       "reason": "Registering an already-vendored, already-used skill that was never in the registry - closing a governance gap found during this audit.",
       "status": "proposed"
     },
@@ -300,16 +388,35 @@
       "version_or_commit": "UNKNOWN - unpinned",
       "license": "UNKNOWN - no license file, no license frontmatter, no provenance. Policy hard-reject rule `unclear_license_for_vendoring` applies.",
       "install_method": "already vendored in-tree (provenance lost)",
-      "supported_agents": ["claude-code"],
+      "supported_agents": [
+        "claude-code"
+      ],
       "activation_mode": "reviewer-only",
       "trust_tier": "provenance-unknown",
       "risk_rating": "medium",
-      "allowed_operations": ["reviewer_input_only"],
-      "forbidden_operations": ["external_write", "secrets", "deployment", "destructive_git", "write_repo"],
+      "allowed_operations": [
+        "reviewer_input_only"
+      ],
+      "forbidden_operations": [
+        "external_write",
+        "secrets",
+        "deployment",
+        "destructive_git",
+        "write_repo"
+      ],
       "review_owner": "R2 Phase-0 (P0-I)",
       "review_date": "2026-07-19",
       "validation_command": "python3 scripts/audit_external_skill.py .agents/skills/e2e-testing-patterns",
-      "audit_result": {"score": 80, "recommended_mode": "reviewer-only", "flags": ["secrets", "network", "shell", "external_write"]},
+      "audit_result": {
+        "score": 80,
+        "recommended_mode": "reviewer-only",
+        "flags": [
+          "secrets",
+          "network",
+          "shell",
+          "external_write"
+        ]
+      },
       "depth_rubric": {
         "trigger": "boilerplate",
         "what": "present",
@@ -341,16 +448,34 @@
       "version_or_commit": "UNKNOWN - unpinned (content verified identical to the local marketplace copy)",
       "license": "Apache-2.0 (LICENSE.txt shipped with the vendored copy)",
       "install_method": "already vendored in-tree",
-      "supported_agents": ["claude-code"],
+      "supported_agents": [
+        "claude-code"
+      ],
       "activation_mode": "reviewer-only",
       "trust_tier": "provenance-verified-license-verified",
       "risk_rating": "medium",
-      "allowed_operations": ["reviewer_input_only"],
-      "forbidden_operations": ["external_write", "secrets", "deployment", "destructive_git", "write_repo"],
+      "allowed_operations": [
+        "reviewer_input_only"
+      ],
+      "forbidden_operations": [
+        "external_write",
+        "secrets",
+        "deployment",
+        "destructive_git",
+        "write_repo"
+      ],
       "review_owner": "R2 Phase-0 (P0-I)",
       "review_date": "2026-07-19",
       "validation_command": "python3 scripts/audit_external_skill.py .agents/skills/webapp-testing",
-      "audit_result": {"score": 85, "recommended_mode": "reviewer-only", "flags": ["secrets", "network", "shell"]},
+      "audit_result": {
+        "score": 85,
+        "recommended_mode": "reviewer-only",
+        "flags": [
+          "secrets",
+          "network",
+          "shell"
+        ]
+      },
       "depth_rubric": {
         "trigger": "boilerplate",
         "what": "present",
@@ -365,7 +490,9 @@
         "note": "Best provenance in the roster. It launches a local server and a browser - side-effecting on localhost only; must stay off any deployed URL under reviewer-only."
       },
       "verdict": "ADOPT reviewer-only.",
-      "blocking_conditions": ["Local-only: never point it at a deployed environment. It is an investigation aid, not a gate - the binding UI gate is e2e/tests/invariants/ in CI."],
+      "blocking_conditions": [
+        "Local-only: never point it at a deployed environment. It is an investigation aid, not a gate - the binding UI gate is e2e/tests/invariants/ in CI."
+      ],
       "reason": "Already vendored, official Anthropic source, license present; registering closes the governance gap.",
       "status": "proposed"
     },
@@ -379,16 +506,33 @@
       "version_or_commit": "UNKNOWN - unpinned",
       "license": "UNKNOWN - no license file and no license frontmatter in the vendored copy.",
       "install_method": "already vendored in-tree",
-      "supported_agents": ["claude-code"],
+      "supported_agents": [
+        "claude-code"
+      ],
       "activation_mode": "reviewer-only",
       "trust_tier": "provenance-inferred",
       "risk_rating": "medium",
-      "allowed_operations": ["reviewer_input_only"],
-      "forbidden_operations": ["external_write", "secrets", "deployment", "destructive_git", "write_repo"],
+      "allowed_operations": [
+        "reviewer_input_only"
+      ],
+      "forbidden_operations": [
+        "external_write",
+        "secrets",
+        "deployment",
+        "destructive_git",
+        "write_repo"
+      ],
       "review_owner": "R2 Phase-0 (P0-I)",
       "review_date": "2026-07-19",
       "validation_command": "python3 scripts/audit_external_skill.py .agents/skills/codebase-intel",
-      "audit_result": {"score": 90, "recommended_mode": "reviewer-only", "flags": ["secrets", "shell"]},
+      "audit_result": {
+        "score": 90,
+        "recommended_mode": "reviewer-only",
+        "flags": [
+          "secrets",
+          "shell"
+        ]
+      },
       "depth_rubric": {
         "trigger": "present",
         "what": "present",
@@ -568,6 +712,57 @@
         "Bundle scripts are excluded from ruff (pyproject.toml extend-exclude) - do NOT reformat them in place."
       ],
       "reason": "AGENTS.md V5.2 provenance requirement; see the architecture-and-decisions entry.",
+      "status": "registered"
+    },
+    {
+      "name": "project-faq",
+      "description": "Create a detailed, self-contained FAQ or question-and-answer wiki for a software project as a single tabbed HTML page with a grouped sidebar, deep links, and keyboard navigation. Every answer is multi-paragraph and carries two worked examples (one real from the project, one everyday analogy).",
+      "source_url": "https://github.com/imrohitagrawal/project-doc-skills (public, confirmed via `gh repo view` 2026-08-12)",
+      "owner": "Rohit Agrawal",
+      "repo": "imrohitagrawal/project-doc-skills",
+      "path": ".agents/skills/project-faq",
+      "version_or_commit": "1.2.1 (2026-06-22, from .agents/skills/project-faq/CHANGELOG.md)",
+      "license": "MIT + Attribution, Copyright (c) 2026 Rohit Agrawal, SPDX-License-Identifier: LicenseRef-stackclimb-source-v1 (verified by reading the source repo's LICENSE directly, 2026-08-12) - same author/family as this repo's own LICENSE.",
+      "install_method": "copied in from the owner's skills repo; a new upstream version REPLACES the folder wholesale",
+      "supported_agents": [
+        "claude-code",
+        "codex"
+      ],
+      "activation_mode": "workspace-approved",
+      "trust_tier": "first-party-operator-authored",
+      "risk_rating": "low",
+      "kind": "documentation-authoring skill",
+      "allowed_operations": [
+        "read_repo",
+        "write_repo (docs only)",
+        "shell (verify.py / generator script)"
+      ],
+      "forbidden_operations": [
+        "external_write",
+        "secrets",
+        "deployment",
+        "destructive_git",
+        "source-code edits"
+      ],
+      "review_owner": "doc-skills trial round (2026-08-12 session)",
+      "review_date": "2026-08-12",
+      "validation_command": "python3 scripts/audit_external_skill.py .agents/skills/project-faq",
+      "audit_result": {
+        "score": 35,
+        "recommended_mode": "sandbox-or-reject",
+        "flags": [
+          "secrets",
+          "network",
+          "shell",
+          "external_write"
+        ],
+        "note": "Score is not trustworthy here: audit_external_skill.py checks for literal '## When to use'/'## Procedure'/'## Quality bar' headings, but this skill's real SKILL.md uses equivalent-but-differently-named sections ('When to use', 'Procedure' ARE present verbatim; 'Quality bar' is called 'Self-evaluation checklist'). Same class of gap already on record for codebase-intel in this file: 'the audit script scores shape, not depth.' The 'review'-severity flags (secrets/network/shell/external_write regex hits) are expected for any skill that includes a generator script and CI docs - not a specific finding against this skill."
+      },
+      "verdict": "ADOPT (partial). Trial round (2026-08-12) generated a full rewrite side-by-side with the existing hand-authored docs/faq/index.html and compared them with the skill's own verify.py. Result: the full rewrite was NOT a strict improvement (missing a whole tab, fewer questions, denser prose above the grade-8 target) so it was not shipped as-is. What WAS kept: the skill's exact fix for a confirmed real gap - the existing FAQ's architectural-decisions answer named only 2 of 34 ADRs - hand-merged into the original page along with ADR-0001's stale-Draft-status disclosure. The skill itself is adopted for targeted content generation and gap-closing; a future full-page regeneration would need a more complete pass (all 6 tabs, tighter grade-8 prose) before it could replace the hand-authored page outright.",
+      "blocking_conditions": [
+        "A future full-page regeneration attempt must match or exceed the original's 6-tab coverage and its grade-8 reading target before being considered a replacement, not a trial."
+      ],
+      "reason": "User-directed evaluation: does project-faq's output improve on the existing hand-authored FAQ? Trial done, decision made - see verdict.",
       "status": "registered"
     }
   ]

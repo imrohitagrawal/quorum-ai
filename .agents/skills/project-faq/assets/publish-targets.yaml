@@ -1,0 +1,80 @@
+# publish-targets.yaml — the ONE place that holds every publish destination's coordinates.
+#
+# Precedent: this generalises docs/confluence/page-map.yaml (which mapped a source file to a
+# single Confluence pageId) into a multi-target manifest. Copy this file into the repo as
+# docs/publish-targets.yaml and fill the values.
+#
+# THREE non-negotiable rules:
+#   1. No value in two places. A space key, a pageId, a base URL, a parent — each lives HERE and
+#      nowhere else. Skills READ this file; they never hard-code a coordinate. (Same single-source
+#      discipline as the ADR files and quality-gates.yaml.)
+#   2. Secrets are referenced, never written. Put the NAME of an env var or a secret-manager key —
+#      never a token, password, or key. Secrets never go in this file, a URL, or a query string.
+#   3. The stable id is what prevents duplicates. A re-publish is an UPDATE only because the binding
+#      below names the artifact's id at that target. Bind it explicitly; never infer it by matching
+#      page content (two pages can share a title — a match is ambiguous, the same reason the
+#      design-token binding is declared, not inferred).
+#
+# Placeholder convention: {{key}} is a slot an agent fills (same as project-profile.md). Replace
+# each {{...}} with the real value once; everything reads it from here.
+
+defaults:
+  source_root: "docs/"            # where the repo-first Markdown source lives
+  human_gate: true                # every create / update / delete waits for explicit approval
+  reviewer: "publish-reviewer"    # the post-write critic that must PASS before a write counts
+
+targets:
+
+  # --- A real, built target: a Confluence wiki -------------------------------------------------
+  confluence:
+    adapter: confluence                       # which render-contract.md adapter renders this target
+    cloud_id:   "{{confluence_cloud_id}}"     # e.g. 11111111-2222-3333-4444-555555555555
+    space_key:  "{{confluence_space_key}}"    # e.g. SD
+    parent_id:  "{{confluence_parent_id}}"    # the page new child pages are created under
+    content_format: html                      # html for pages with status lozenges (markdown corrupts them)
+    identity_ref: "env:CONFLUENCE_TOKEN"       # NAME of the secret, resolved at runtime — never the token
+    record_before_edit:                        # the governance gate for editing a PUBLISHED page
+      system: jira
+      project_key: "{{jira_project_key}}"      # e.g. AEG
+      rule: "comment the change and the reason on the page's tracking issue BEFORE you edit it"
+    closure: "page-tracker issues stay open until the owner approves closure"
+
+  # --- A second target, defined now, built when it is real ------------------------------------
+  portal:
+    adapter: html-portal                      # the generic HTML adapter in render-contract.md
+    base_url:   "{{portal_base_url}}"         # the portal's root URL
+    collection: "{{portal_collection_id}}"    # the course / section the pages belong to
+    content_format: html
+    identity_ref: "env:PORTAL_API_KEY"
+    record_before_edit:                        # no Jira here -> the record is a git commit
+      system: git
+      rule: "commit the change and the reason to docs/publish-log.md BEFORE you push an update"
+    status: "designed, not yet built"          # honesty marker: the seam exists; build the adapter when the portal does
+
+# bindings: one row per source page -> its STABLE id at each target.
+# The publisher fills an id it gets back on first create; you add a row when a page is created.
+#
+# source_format (optional): markdown | html. Leave it out and the publisher infers it from the file
+# extension (.md -> markdown, .html -> html). Set it only to FORCE a path. A finished HTML page (the
+# FAQ; an HTML usage guide) is published via the HTML-source path in render-contract.md Section 1a:
+# faithful on a portal that hosts HTML; degraded to native structure on a wiki (interactivity is
+# lost there — state that on the page).
+bindings:
+
+  - source: "docs/learning/M0-read-this-first.md"
+    title:  "Aegis Learning Companion — Read this first"        # plain-text: a literal &, never &amp;
+    # source_format omitted -> inferred 'markdown' from the .md extension
+    confluence: { page_id: "{{page_id}}", parent_id: "{{confluence_parent_id}}" }
+    portal:     { slug: "read-this-first", section: "orientation" }
+
+  - source: "docs/architecture/00-overview.md"
+    title:  "Aegis — Architecture overview"
+    confluence: { page_id: "{{page_id}}", parent_id: "{{confluence_parent_id}}" }
+    # portal binding omitted until the portal adapter is built
+
+  - source: "docs/faq/index.html"
+    title:  "Aegis — FAQ"
+    source_format: html                 # a finished, interactive HTML page
+    portal:     { slug: "aegis-faq", section: "reference" }    # the faithful target for an interactive page
+    confluence: { page_id: "{{page_id}}", parent_id: "{{confluence_parent_id}}" }   # allowed, but degrades to static structure
+

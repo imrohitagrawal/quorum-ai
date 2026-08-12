@@ -86,7 +86,7 @@ src = ["src", "tests"]
 # reformatting we apply here is undone on the next update. Exclude them rather
 # than conform them; their provenance is tracked in
 # ``configs/external-skill-registry.json`` instead.
-extend-exclude = ["mutants", ".agents/skills/*/scripts"]
+extend-exclude = ["mutants", ".agents/skills/*/scripts", ".agents/skills/*/assets"]
 
 [tool.ruff.lint]
 select = ["E", "F", "I", "B", "UP", "SIM"]
