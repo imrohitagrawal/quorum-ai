@@ -250,7 +250,9 @@ def test_every_repo_path_cited_on_an_added_line_exists() -> None:
         if path in _EXEMPT:
             continue
         bundle_match = _SKILL_BUNDLE_RE.match(path)
-        roots = _CITATION_ROOTS + ((f".agents/skills/{bundle_match.group(1)}",) if bundle_match else ())
+        roots = _CITATION_ROOTS + (
+            (f".agents/skills/{bundle_match.group(1)}",) if bundle_match else ()
+        )
         for cited in _CITATION.findall(line):
             # Strip trailing punctuation prose leaves behind.
             cited = cited.rstrip(".,;:)")
