@@ -18,11 +18,19 @@ Slice 4b `e520824` · Slice 5 `e762a79` · Slice 6 `bcee421` · Slice 7
 `fe254b4` · S4 (golden-set harness) `6a412f8`.
 
 **AC-037** (`Web-search plugin fee is an accepted cost-accounting
-exclusion`) is deliberately **not** in the table below: it's a backend
-cost-accounting decision with no UI surface by design — the fee is never
-surfaced to the user (its own text: "the fee is never surfaced to the user
-or on the UI"). Verified by the existing #18 mechanism tests, unrelated to
-this crosswalk's UI-coverage purpose.
+exclusion`) has no row of its own in the table below — but it is not
+UI-invisible, and the note below states that precisely rather than
+implying zero effect. AC-037's own text: the fee "is never surfaced to
+the user or on the UI **(at 0.0 it folds invisibly into the total
+estimate — no separate line item)**." That parenthetical means the
+decision *does* affect what the user sees: the total cost figure
+rendered on the cost-gate/estimate views (AC-009/010/027, already in
+this table) is ~$0.02 lower than it would be if the fee were priced in.
+There is no dedicated UI element for the fee itself — nothing to point a
+crosswalk row at — so it stays excluded from the row count, but the
+correct framing is "folded into an existing total, not a separate
+surface," not "no UI effect." Verified by the existing #18 mechanism
+tests.
 
 Note: only 8 AC ids carry an `AC-0NN` marker in `app.js` (AC-001/003/008/010/
 015/019/022/032 — the edge states + the consensus gate). The rest are satisfied
@@ -81,9 +89,9 @@ are cited explicitly below rather than by an in-code `AC` marker.
 | 049 | Real judge wired in, unlocks a score only when configured, OFF by default | 🔬 | R2 S3/S4 — verified branch in screen **05b** above; memoised per run, fails closed on any tamper/near-miss; byte-identical to judge-off when unconfigured | `tests/integration/test_judge_request_path_wiring.py`; `tests/contract/test_golden_fixture_matches_served_schema.py`; `e2e/tests/invariants/trust-score-invariants.spec.ts` |
 
 ## Coverage summary
-- **48 / 48 UI-relevant criteria mapped** (AC-001…036 + AC-038…049; AC-037 excluded — no UI surface, see the note above the table). **37 ✅ fully met** (33 from R1 + 4 from R2: AC-043/044/045/046), **3 ◑ partial** (all R1, unchanged from the original crosswalk), **8 🔬-only** verification/telemetry rows with no dedicated UI surface (all from R2: AC-038/039/040/041/042/047/048/049) — all noted, none a merge blocker:
+- **48 / 48 UI-relevant criteria mapped** (AC-001…036 + AC-038…049; AC-037 excluded — no dedicated UI surface, see the note above the table). Re-counted directly against the table rather than carried forward: **37 ✅ fully met** (33 from R1 + 4 from R2: AC-043/044/045/046), **2 ◑ partial** (AC-013, AC-029, both R1), **9 🔬-only** verification/telemetry rows with no dedicated UI surface (AC-030 from R1, plus 8 from R2: AC-038/039/040/041/042/047/048/049) — all noted, none a merge blocker. **This corrects the original crosswalk's own summary**, which said "33 ✅, 3 ◑ partial" (36 total) — AC-030 was always 🔬-only in the table itself (never carried a ✅), so the true original R1 split was 33 ✅ / 2 ◑ / 1 🔬-only, not 33/3/0. `SLICE_STATE.md`'s separate historical note ("34 met, 2 partial") is a different, also-uncorrected count from the same period — left as the frozen historical record it is, not reconciled here.
   - **AC-013** — source *links* are surfaced as honest per-model source **counts** + the available link list; per-material-claim link anchoring is bounded by the R1 backend projection (documented, not fabricated).
   - **AC-029** — the latency NFR target is **not measured at scale**: the only automated evidence is a stubbed `<2s` smoke test (no P50/P95, no load). Honestly disclosed (`docs/55-performance-baseline.md` = "not available"); a load/percentile harness is follow-up work, not a UI-branch blocker.
-  - Every other AC is met; 🔬-tagged rows are verification/telemetry criteria satisfied by tests + evidence rather than a dedicated UI surface.
+  - Every other AC is met; 🔬-tagged rows (including AC-030) are verification/telemetry criteria satisfied by tests + evidence rather than a dedicated UI surface.
 - **AC-035** was upgraded from an ephemeral manual drive to a **committed, reproducible** `@axe-core/playwright` spec (see `AXE-EVIDENCE.md`) after the PR-review gate flagged the evidence as non-auditable.
 - **Honesty invariant held:** no AC is "met" by fabricated UI. Where the backend does not supply a signal (per-model debate transcript, per-stage cost/timing, Tavily provider, correlation_id on some envelopes), the UI drops or degrades honestly rather than inventing it.
