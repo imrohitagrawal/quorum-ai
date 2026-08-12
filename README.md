@@ -85,7 +85,7 @@ make test
 - **2,885 tests passing, 11 skipped, 95% line coverage** (measured 2026-08-12, `uv run pytest -q`). Coverage requirement is 88%; actual is 95.05%.
 - On a local checkout you'll likely also see 7 failures under `tests/unit/test_no_orphaned_e2e_specs.py`. These are expected locally: `e2e/tests/review/` is gitignored scratch-review Playwright specs that exist on disk but run in no CI workflow, and the gate finds them by walking the filesystem. `git check-ignore e2e/tests/review` confirms they're untracked; they do not fail in CI.
 - `make test` runs `uv run pytest` only — that covers `tests/unit`, `tests/integration`, `tests/contract`, `tests/resilience`, `tests/accessibility`, `tests/perf`, and `tests/e2e` (Python-based end-to-end pytest specs, 3 files). It does **not** run the Playwright suite.
-- The Playwright suite lives in the separate top-level [`e2e/`](e2e/) directory (35 `.spec.ts` files, not `tests/e2e/`) and runs via its own CI workflow (`.github/workflows/e2e.yml`), not via `make test`. It's timing-sensitive — see the local-run flags in `AGENTS.md` (rule 13) before running it directly.
+- The Playwright suite lives in the separate top-level [`e2e/`](e2e/) directory (28 `.spec.ts` files, not `tests/e2e/`) and runs via its own CI workflow (`.github/workflows/e2e.yml`), not via `make test`. It's timing-sensitive — see the local-run flags in `AGENTS.md` (rule 13) before running it directly.
 - Security redaction tests live in `tests/security/test_release_security_redaction.py` and are pinned in CI. They pass.
 
 The `make test` target is also wired into GitHub Actions (see `.github/workflows/test.yml`).
@@ -171,8 +171,8 @@ A few non-obvious properties that are worth a closer look:
 - **Live-readiness smoke-probe as a multi-state machine.** Most apps do a single boolean "is the key set?" check. This one logs at WARNING whenever a degraded state is detected and exposes a JSON envelope on `/ready` so an external monitor can observe the same state.
 - **Drift detection over a static source-of-truth.** The architecture is deliberate: the four model ids in `DEFAULT_MODEL_IDS` are the *what we ship*; the live catalog is the *what's available now*. The drift check surfaces the gap, it doesn't auto-correct.
 - **Trust score is deliberately two-tier, and the calibrated tier does not exist yet.** Layer A (deterministic, always on) is the only input to the numeric score. Layer B (LLM-as-judge) is advisory metadata that can suppress the score but never raise it, and every weight in the module is documented as chosen to match five hand-written test cases, not measured against real data.
-- **Redaction is discipline, not a filter.** No log call in this codebase passes a raw exception or response header to the logger — because either could carry key material — but that's enforced by review convention at each call site, not by a scrubbing formatter. `tests/security/test_release_security_redaction.py` pins a narrower, adjacent guarantee: secrets never leak into HTTP responses or in-memory event recorders.
-- **A "nightly" audit job that nothing schedules.** `feedback_audit.py`'s own docstring calls it a nightly runner, but no GitHub Actions workflow invokes it — it only runs today via the manual `make feedback-audit` target. The durable write it reads from is synchronous and best-effort (failures are caught and logged, never raised), so it doesn't block a run — it just isn't "nightly" in practice yet.
+- **Redaction is discipline, not a filter** — see the "Redaction" point above for what that means in practice.
+- **A "nightly" audit job that nothing schedules** — see the "Durable feedback trail" point above.
 
 ---
 
@@ -218,7 +218,7 @@ A few non-obvious properties that are worth a closer look:
 │   ├── resilience/               # Failure-injection / chaos-style tests
 │   ├── accessibility/            # a11y checks
 │   └── perf/                     # Load / throughput tests
-├── e2e/                           # Playwright suite (35 .spec.ts), invariant specs, own CI workflow
+├── e2e/                           # Playwright suite (28 .spec.ts), invariant specs, own CI workflow
 ├── docs/                         # Product, architecture, ops docs (141 top-level entries, incl. docs/adr/ with 35 more)
 ├── diagrams/                     # C4, Mermaid, and Excalidraw diagrams
 ├── configs/, policies/, schemas/, scripts/  # Factory-generated governance config + dev tooling (Makefile targets call into scripts/)
