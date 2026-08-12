@@ -5,7 +5,7 @@ the proof. This file exists so the README reads fast without hiding *how* each
 claim was checked — every command below was actually run against this repo,
 not inferred from a comment or docstring.
 
-## Test counts (the "2,896 total tests" line)
+## Test counts (the "~2,900 tests" line)
 
 `uv run pytest -q` on a clean checkout with no `.env`:
 ```
@@ -37,10 +37,14 @@ src/product_app/model_slots.py:378:def _is_unauthenticated_variant(model_id: str
 ```
 Both only return their own definition — no caller anywhere in `src/`. Both
 are fully unit-tested in isolation. `catalog_fetcher.py`'s own module
-docstring describes this pair as feeding "the four families the UI [...]
-uses," but nothing wires them together today; `DEFAULT_MODEL_IDS` is the
-actual default, confirmed live by `tests/integration/test_model_slot_configuration.py::test_replacement_model_slots_are_persisted_with_query_run`,
-which submits a fifth, non-default model id and gets it back unchanged.
+docstring describes `cheapest_per_vendor` (not the pair — the docstring
+doesn't mention `_is_unauthenticated_variant` at all) as feeding "the four
+families the UI [...] uses," but nothing wires it in today. `DEFAULT_MODEL_IDS`
+is only the default: `tests/integration/test_model_slot_configuration.py::test_replacement_model_slots_are_persisted_with_query_run`
+submits 4 model ids with slot 4 swapped to a non-default
+(`meta-llama/llama-3.1-8b-instruct`, replacing `nvidia/nemotron-3-nano-30b-a3b`)
+and gets that exact list back, proving the API accepts and persists a
+caller-supplied override rather than always falling back to the static list.
 
 ## Why the per-slot-failure behavior changed
 
