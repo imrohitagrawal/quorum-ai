@@ -91,7 +91,31 @@ _CITATION_ROOTS = ("", "e2e")
 #: paths that do NOT resolve -- regex fixtures, and the phantom ADR that
 #: motivated the gate. A linter's test data is not a claim about the repo.
 #: Scoped to exactly one file so the exemption cannot quietly widen.
-_EXEMPT = ("tests/unit/test_cited_paths_resolve.py",)
+_EXEMPT = (
+    "tests/unit/test_cited_paths_resolve.py",
+    # Pure vendored template content (see `.agents/skills/project-faq/CHANGELOG.md`):
+    # these 3 files cite generic EXAMPLE paths for a hypothetical consumer project
+    # (`docs/confluence/page-map.yaml`, `docs/runbook.md`, ...) -- illustrative
+    # placeholders in an upstream template, not a claim about THIS repository, and
+    # not bundle-relative self-references either (the `_SKILL_BUNDLE_RE` root above
+    # doesn't help here). Exact-file-scoped, same convention as this file's own
+    # exemption above, so it cannot quietly widen to cover real prose.
+    ".agents/skills/project-faq/assets/project-profile.md",
+    ".agents/skills/project-faq/assets/publish-targets.yaml",
+    ".agents/skills/project-faq/ci/README.md",
+)
+
+#: A vendored skill bundle's own files (see `configs/external-skill-registry.json`) cite
+#: paths relative to the bundle itself (`scripts/verify.py` meaning ITS OWN script), not
+#: only relative to the repo root. A blanket `.agents/skills/` exemption was tried first
+#: and rejected on review: it would silently stop checking genuine repo-root citations
+#: that already exist inside other bundles' SKILL.md files (e.g.
+#: `architecture-and-decisions/SKILL.md` cites real `docs/...` paths that SHOULD stay
+#: checked). Instead, a citation found in a file under `.agents/skills/<name>/...` is
+#: resolved against BOTH the normal roots below AND `.agents/skills/<name>` -- so a
+#: bundle-relative self-reference resolves, while a genuinely broken citation (bundle-
+#: relative or repo-root) still fails, and a real repo-root citation is still checked.
+_SKILL_BUNDLE_RE = re.compile(r"^\.agents/skills/([^/]+)/")
 
 
 def _merge_base() -> str:
@@ -225,10 +249,14 @@ def test_every_repo_path_cited_on_an_added_line_exists() -> None:
     for path, line in added:
         if path in _EXEMPT:
             continue
+        bundle_match = _SKILL_BUNDLE_RE.match(path)
+        roots = _CITATION_ROOTS + (
+            (f".agents/skills/{bundle_match.group(1)}",) if bundle_match else ()
+        )
         for cited in _CITATION.findall(line):
             # Strip trailing punctuation prose leaves behind.
             cited = cited.rstrip(".,;:)")
-            if not any((ROOT / prefix / cited).exists() for prefix in _CITATION_ROOTS):
+            if not any((ROOT / prefix / cited).exists() for prefix in roots):
                 broken.append(f"{path}: {cited}")
 
     assert not broken, (

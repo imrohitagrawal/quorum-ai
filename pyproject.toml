@@ -86,7 +86,7 @@ src = ["src", "tests"]
 # reformatting we apply here is undone on the next update. Exclude them rather
 # than conform them; their provenance is tracked in
 # ``configs/external-skill-registry.json`` instead.
-extend-exclude = ["mutants", ".agents/skills/*/scripts"]
+extend-exclude = ["mutants", ".agents/skills/*/scripts", ".agents/skills/*/assets"]
 
 [tool.ruff.lint]
 select = ["E", "F", "I", "B", "UP", "SIM"]
@@ -209,6 +209,12 @@ also_copy = [
   # Found by the first BLOCKING run of the gate (#130): while it was advisory
   # the abort was a green job, so nothing surfaced it.
   "e2e/fixtures",
+  # ``.agents`` holds the vendored skill bundles (``.agents/skills/*``).
+  # tests/unit/test_cited_paths_resolve.py resolves citations against
+  # ``REPO_ROOT / ".agents/skills/..."`` (its ``_EXEMPT_PREFIXES`` check) and
+  # would abort stats collection inside ./mutants/ without this — the same
+  # failure mode as the other entries above, caught by this same guard.
+  ".agents",
 ]
 # -m "not env_oracle": environmental oracles — GC/ResourceWarning finalisation,
 #   wall-clock thread timing, a child interpreter's exit status — do not survive

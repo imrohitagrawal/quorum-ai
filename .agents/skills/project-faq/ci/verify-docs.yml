@@ -1,0 +1,23 @@
+# Copy to .github/workflows/verify-docs.yml
+# Replace <DOCS_PATH>, <FORMAT>, and <SKILL_NAME> per the table in this folder's README.
+name: verify-docs
+on:
+  push:
+    paths: ["docs/**", "outputs/**", "docs/project-profile.md", "scripts/verify.py"]
+  pull_request:
+    paths: ["docs/**", "outputs/**", "docs/project-profile.md", "scripts/verify.py"]
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install PyYAML (so the profile is read)
+        run: pip install pyyaml
+      - name: Run the documentation verifier
+        run: |
+          python3 scripts/verify.py <DOCS_PATH> \
+            --format <FORMAT> --skill <SKILL_NAME> --profile docs/project-profile.md \
+            --license LICENSE
