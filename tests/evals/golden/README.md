@@ -51,7 +51,8 @@ with, the threshold-calibration status below, which remains open.
 The advisory thresholds in `src/product_app/evaluation.py`
 (`GROUNDING_FABRICATION_THRESHOLD`, `GROUNDING_GOOD_THRESHOLD`, the trust
 bands, `LAYER_A_WEIGHTS`) **have not yet been calibrated against a measured
-run.** `docs/evidence/s4-golden-calibration/CALIBRATION-NOTES.md` maps each
+run.** `calibration-source/CALIBRATION-NOTES.md` (sibling of `cases/` in
+this directory — the superset of cases the shipped 10 were curated from) maps each
 threshold to the specific golden cases that bound it — real methodology for
 *how* to calibrate — but its own text is explicit that "no new threshold
 values are proposed here — that requires the measurement run," and it ends
