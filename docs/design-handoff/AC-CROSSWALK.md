@@ -1,15 +1,36 @@
-# AC-001…036 Crosswalk (Quorum R1)
+# AC-001…049 Crosswalk (Quorum R1 + R2)
 
 Maps every acceptance criterion in `docs/12-acceptance-criteria.md` to the
 slice + element/id (UI) or module/test (backend) that satisfies it, with a
-coverage verdict. This is the traceability evidence for the Slice V PR gate.
+coverage verdict. This is the traceability evidence for the Slice V PR gate
+(R1) and, for AC-038 onward, the Release-2 reconciliation that closed a
+real staleness gap in this document (see `README.md`'s "Known repo
+follow-ups").
 
 **Legend:** ✅ met · ◑ partial (noted) · 🔬 verification/telemetry criterion
-(satisfied by evidence & tests, not a UI surface).
+(satisfied by evidence & tests, not a UI surface) · N/A (no UI surface exists
+for this criterion by design).
 
-Slice SHAs: Slice 0 `3132548` · B1 `d46cb42` · B2 `5a5b9e8` · Slice 1 `15d4636`
-· Slice 2 `054669a` · Slice 3 `2aa50b5` · Slice 4a `afbe0ea` · Slice 4b
-`e520824` · Slice 5 `e762a79` · Slice 6 `bcee421` · Slice 7 `a367579`.
+Slice SHAs: R1 — Slice 0 `3132548` · B1 `d46cb42` · B2 `5a5b9e8` · Slice 1
+`15d4636` · Slice 2 `054669a` · Slice 3 `2aa50b5` · Slice 4a `afbe0ea` ·
+Slice 4b `e520824` · Slice 5 `e762a79` · Slice 6 `bcee421` · Slice 7
+`a367579`. R2 — S2 (evaluation engine) `a1cf546` · S3 (trust-score UI)
+`fe254b4` · S4 (golden-set harness) `6a412f8`.
+
+**AC-037** (`Web-search plugin fee is an accepted cost-accounting
+exclusion`) has no row of its own in the table below — but it is not
+UI-invisible, and the note below states that precisely rather than
+implying zero effect. AC-037's own text: the fee "is never surfaced to
+the user or on the UI **(at 0.0 it folds invisibly into the total
+estimate — no separate line item)**." That parenthetical means the
+decision *does* affect what the user sees: the total cost figure
+rendered on the cost-gate/estimate views (AC-009/010/027, already in
+this table) is ~$0.02 lower than it would be if the fee were priced in.
+There is no dedicated UI element for the fee itself — nothing to point a
+crosswalk row at — so it stays excluded from the row count, but the
+correct framing is "folded into an existing total, not a separate
+surface," not "no UI effect." Verified by the existing #18 mechanism
+tests.
 
 Note: only 8 AC ids carry an `AC-0NN` marker in `app.js` (AC-001/003/008/010/
 015/019/022/032 — the edge states + the consensus gate). The rest are satisfied
@@ -54,11 +75,23 @@ are cited explicitly below rather than by an in-code `AC` marker.
 | 034 | High-stakes coverage tested | ✅ 🔬 | Regression covers medical/legal/financial/safety/regulated → decision-support language | `test_high_stakes_query_requires_high_stakes_acknowledgement`, `test_high_stakes_synthesis_includes_decision_support_notice` |
 | 035 | Accessibility baseline verified | ✅ | **Committed axe drive** (`e2e/tests/accessibility/axe-all-views.spec.ts`, `@axe-core/playwright`, every view × light+dark) — 0 critical/serious violations; found+fixed 3 real bugs (dark theming, `aria-valid-attr-value`, dark muted contrast). Reproducible via `webServer`. Static a11y contract also asserts labels/landmarks/skip-link. | `e2e/tests/accessibility/axe-all-views.spec.ts`; `docs/design-handoff/AXE-EVIDENCE.md`; `tests/accessibility/test_browser_ui_accessibility_contract.py` |
 | 036 | Observability events emitted | ✅ 🔬 | Non-secret structured events per stage (submission→providers→fallback→debate→synthesis→terminal) | `test_provider_events_are_non_secret_and_record_source_count`, perf/observability contract |
+| 038 | Terminal run persisted with verbatim cost provenance | 🔬 | R2 S1 — `run_history_store`; row's cost fields identical to the served projection | `tests/integration/test_query_run_history_persist.py::test_completed_run_persisted_with_verbatim_cost_and_survives_eviction` |
+| 039 | Run-history row is PII-minimised | 🔬 | R2 S1 — query text/answer prose never persisted, metrics only | `tests/unit/test_run_history_store.py` |
+| 040 | Persistence is durable, idempotent, non-blocking | 🔬 | R2 S1 — `INSERT OR REPLACE`; persistence failure swallowed, run state unaffected | `tests/unit/test_run_history_store.py` (idempotency + best-effort); integration survives-eviction assertion |
+| 041 | Layer-A evaluation computed, honest, persisted | 🔬 | R2 S2 `a1cf546` — `evaluation.py`, zero-I/O deterministic scoring, `support_verified` suppression | `tests/unit/test_evaluation_layer_a.py`; `tests/evals/test_output_correctness_gate.py` (OC-2 honesty rule); `tests/integration/test_query_run_evaluation_endpoint.py` |
+| 042 | Judge OFF is a proven no-op vs. stub | 🔬 | R2 S2 `a1cf546` — zero seam calls when key unset; score identical judge-off vs. stub-on | `tests/unit/test_evaluation_neutrality.py` (seam spy + score equality); `tests/unit/test_evaluation_judge.py` |
+| 043 | Evaluation inherits the run's account boundary | ✅ 🔬 | R2 S2 `a1cf546` — 401 unauthenticated / 404 cross-account, no `evaluation` payload leaked either way | `tests/unit/test_evaluation_auth_boundary.py`; `tests/integration/test_query_run_evaluation_endpoint.py` |
+| 044 | Trust surface renders no number, no confident label | ✅ | R2 S3 `fe254b4` — screen **05b** `#result-trust-score`; disclosure + one state line + ≤3 "why" lines, zero digits/label-words, `role="group"` not a value widget, hidden when absent | `e2e/tests/invariants/trust-score-invariants.spec.ts`; `e2e/tests/invariants/real-integration-smoke.spec.ts` |
+| 045 | A run whose citations couldn't be checked never presents a confident verdict | ✅ | R2 S3 `fe254b4` — screen **05b** indeterminate state fails closed; missing-caveat amber row independent of the state line | `e2e/tests/degraded/degraded-banner.spec.ts`; `tests/unit/test_evaluation_presentation_confidence.py`; `tests/integration/test_query_run_evaluation_endpoint.py` |
+| 046 | Trust surface is never green, is accessible, does not clip/overlap | ✅ | R2 S3 `fe254b4` — screen **05b**, GREEN RULE extended (see `README.md` Design Tokens); token-source-computed style check, no overlap/clip, 3 viewports × 2 themes | `e2e/tests/invariants/trust-score-invariants.spec.ts`; `e2e/tests/accessibility/axe-all-views.spec.ts` (scoped `#result-trust-score` scan, see `AXE-EVIDENCE.md`); `e2e/tests/invariants/trust-score-visual.spec.ts` |
+| 047 | Golden set pins the engine's structural verdicts hermetically | 🔬 | R2 S4 `6a412f8` — `tests/evals/golden/cases/`, zero-I/O parametrised gate | `tests/evals/test_golden_set_gate.py`; `tests/evals/golden/loader.py` |
+| 048 | Subject-matter labels deferred, never fabricated | 🔬 | R2 S4 `6a412f8` — 4 `needs_human_label` cases, loader/gate reject a `correctness` field in the fixture; operator queue tracks separately | `tests/evals/test_golden_set_gate.py::test_human_label_cases_defer_subject_matter_correctness_and_carry_no_label`, `::test_the_operator_queue_names_every_human_label_case` |
+| 049 | Real judge wired in, unlocks a score only when configured, OFF by default | 🔬 | R2 S3/S4 — verified branch in screen **05b** above; memoised per run, fails closed on any tamper/near-miss; byte-identical to judge-off when unconfigured | `tests/integration/test_judge_request_path_wiring.py`; `tests/contract/test_golden_fixture_matches_served_schema.py`; `e2e/tests/invariants/trust-score-invariants.spec.ts` |
 
 ## Coverage summary
-- **36 / 36** criteria mapped. **33 ✅ fully met**, **3 ◑ partial** — all noted, none a merge blocker:
+- **48 / 48 UI-relevant criteria mapped** (AC-001…036 + AC-038…049; AC-037 excluded — no dedicated UI surface, see the note above the table). Re-counted directly against the table rather than carried forward: **37 ✅ fully met** (33 from R1 + 4 from R2: AC-043/044/045/046), **2 ◑ partial** (AC-013, AC-029, both R1), **9 🔬-only** verification/telemetry rows with no dedicated UI surface (AC-030 from R1, plus 8 from R2: AC-038/039/040/041/042/047/048/049) — all noted, none a merge blocker. **This corrects the original crosswalk's own summary**, which said "33 ✅, 3 ◑ partial" (36 total) — AC-030 was always 🔬-only in the table itself (never carried a ✅), so the true original R1 split was 33 ✅ / 2 ◑ / 1 🔬-only, not 33/3/0. `SLICE_STATE.md`'s separate historical note ("34 met, 2 partial") is a different, also-uncorrected count from the same period — left as the frozen historical record it is, not reconciled here.
   - **AC-013** — source *links* are surfaced as honest per-model source **counts** + the available link list; per-material-claim link anchoring is bounded by the R1 backend projection (documented, not fabricated).
   - **AC-029** — the latency NFR target is **not measured at scale**: the only automated evidence is a stubbed `<2s` smoke test (no P50/P95, no load). Honestly disclosed (`docs/55-performance-baseline.md` = "not available"); a load/percentile harness is follow-up work, not a UI-branch blocker.
-  - Every other AC is met; 🔬-tagged rows are verification/telemetry criteria satisfied by tests + evidence rather than a dedicated UI surface.
+  - Every other AC is met; 🔬-tagged rows (including AC-030) are verification/telemetry criteria satisfied by tests + evidence rather than a dedicated UI surface.
 - **AC-035** was upgraded from an ephemeral manual drive to a **committed, reproducible** `@axe-core/playwright` spec (see `AXE-EVIDENCE.md`) after the PR-review gate flagged the evidence as non-auditable.
 - **Honesty invariant held:** no AC is "met" by fabricated UI. Where the backend does not supply a signal (per-model debate transcript, per-stage cost/timing, Tavily provider, correlation_id on some envelopes), the UI drops or degrades honestly rather than inventing it.

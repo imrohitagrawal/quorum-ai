@@ -1,5 +1,12 @@
 # Quorum R1 UI — Slice State & Integrity Anchor
 
+> **R1-frozen — do not extend this file for Release 2 work.** This tracks
+> slices 0-7 + V of the R1 UI build only, and is intentionally left as the
+> historical record of that build. Release 2's own slice tracking lives in
+> `docs/analysis/R2-S2-handback.md` and `docs/analysis/R2-S3-build-plan.md`;
+> Release 2's UI coverage lives in `AC-CROSSWALK.md`'s AC-038…049 rows and
+> `README.md`'s section 05b, both in this same directory.
+
 > **Every fresh context (chat or subagent) reads this FIRST**, before touching code.
 > It is the single source of truth for what's done, what's next, and the
 > invariants no slice may violate. Update it at every slice boundary.

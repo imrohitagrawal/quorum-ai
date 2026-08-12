@@ -32,9 +32,24 @@ reference engine; the spec skips the other projects.
 | transcript | ✅ 0 | ✅ 0 |
 | result — divided (amber) | ✅ 0 | ✅ 0 |
 | error-region — 500 / 409 / 422 / 404 | ✅ 0 | ✅ 0 |
+| result — trust-score surface, `#result-trust-score` (Release 2, AC-046) | ✅ 0 | ✅ 0 |
 
 Latest run: **11 test cases passed** (≈13 view-states × 2 themes = 26 axe scans),
 0 violations.
+
+### Trust-score surface (Release 2) — scoped scan, composited-alpha contrast
+
+Added by the same spec, a dedicated test (`result — trust-score surface
+(scoped, both themes, contrast composited)`): the surface reuses
+alpha-tinted `--warning-soft`/`--info-soft` tokens, and axe reports
+body-text contrast over an alpha layer as `incomplete` ("could not tell"),
+not a violation — a violations-only filter would silently read that as a
+pass. This test fails on a critical/serious violation **and** on any
+incomplete `color-contrast` entry, then additionally composites the alpha
+layers itself in-spec and asserts ≥4.5:1 (≥3:1 for large bold text) — real
+computed contrast, not an axe "couldn't tell." Driven with the
+missing-high-stakes evaluation shape so the caveat row, why-lines, and
+state line are all present during the scan.
 
 ## Real defects this drive found and fixed (Slice V, commit 578d537)
 These were **not** caught by the pre-existing static-string a11y tests — the

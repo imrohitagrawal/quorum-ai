@@ -1,9 +1,9 @@
-# Handoff: Quorum — Release 1 UI
+# Handoff: Quorum — Release 1 + 2 UI
 
 ## Overview
 Quorum is a public web app that sends one question to four configurable frontier AI models (via OpenRouter), runs two structured critique/debate rounds, and returns a synthesized answer that separates consensus, disagreement, source support, uncertainty, and recommendation — with an explicit estimate → confirm → block cost workflow before any provider spend.
 
-This package hands off the approved Release 1 UI. It was designed against, and cross-checked with, the `quorum-ai` repo specs: `docs/01-product-brief.md`, `docs/10-functional-requirements.md` (FR-001…013), `docs/12-acceptance-criteria.md` (AC-001…036), `docs/22-api-contract.md`, `docs/29-state-machines.md`, `docs/30-ux-design.md` (incl. the 2026-06-17 correction), `docs/31-accessibility-plan.md`, `docs/33-content-design.md` (COPY-001…006), `docs/11-non-functional-requirements.md`.
+This package hands off the approved Release 1 UI (screens 01-08 below) plus a **Release 2 addendum** (section 05b) documenting the trust/evaluation surface shipped after this bundle was originally written. It was designed against, and cross-checked with, the `quorum-ai` repo specs: `docs/01-product-brief.md`, `docs/10-functional-requirements.md` (FR-001…013, FR-014…017), `docs/12-acceptance-criteria.md` (AC-001…049), `docs/22-api-contract.md`, `docs/29-state-machines.md`, `docs/30-ux-design.md` (incl. the 2026-06-17 correction), `docs/31-accessibility-plan.md`, `docs/33-content-design.md` (COPY-001…006), `docs/11-non-functional-requirements.md`. **Section 05b has no `.dc.html` mock — see that section for why.**
 
 ## About the Design Files
 The files in this bundle are **design references created in HTML** — high-fidelity prototypes showing intended look and behavior, **not production code to copy directly**. The task is to **recreate these designs in the quorum-ai codebase's existing environment and patterns** (the `/ui` workspace, its templating/framework, and its already-implemented accessibility scaffolding — skip link, `fieldset`/`legend` model grouping, polite live regions). `support.js` is the preview runtime for the `.dc.html` file only — never ship it.
@@ -53,6 +53,72 @@ Open `Quorum Final Review.dc.html` in a browser. It contains all screens at 1440
 - Next-question composer: "Follow up on this" (carries context, ≈ +$0.03) vs "Start fresh"; estimate line + hard-cap reminder.
 - Footer: ephemerality + decision-support lines.
 
+### 05b Result: trust & evaluation surface (Release 2, FR-016)
+
+**Unlike screens 01-08, this surface has no `.dc.html` mockup — it was built
+directly in code** (`renderTrustScore` in `app.js`, `.result-trust-score` in
+`app.css`, `#result-trust-score` in `workspace.html`) per the R2-S3 build plan
+(`docs/analysis/R2-S3-build-plan.md`), not translated from an approved mock.
+This section documents the as-shipped design retroactively — code is the
+source of truth for this surface, not a prior visual spec.
+
+**Placement.** A sibling `<section>` immediately after the existing
+`#result-trust` triangle (Agreement / Source support / Uncertainty, screen 05
+above) — not a fourth card inside that triangle's 3-up grid. `role="group"`,
+`aria-label="What was and was not checked"`. `hidden` by default; the app
+never renders an empty bordered box.
+
+**Hidden entirely** when the result payload has no `evaluation`, a `null`
+one, or a malformed one — no placeholder, no dash, nothing rendered. An
+em-dash would read as "nothing wrong found"; silence is the honest choice
+here.
+
+**Unverified branch** (default — judge is OFF in every current deployment).
+A standing disclosure line is always present: *"Not verified — these are
+automated structural checks, not a fact-check."* Below it, exactly one state
+line, first match wins, in priority order:
+
+| State | Line |
+|---|---|
+| indeterminate | "Some citations on this run point to pages that were never retrieved here, so the structural checks could not be applied." |
+| no-marker | "No citation marker on this run could be checked." |
+| refused | "The panel declined. Nothing was asserted, and nothing was verified." |
+| caution | "The structural checks did not clear this run — treat its answer with added caution." |
+| passed | "Structural checks passed — citations were not verified against their sources." |
+
+Zero digits, and none of the words `faithful`, `partial`, `unfaithful`,
+`low risk`, `medium risk`, `high risk`, `confidence`, `accuracy`,
+`trustworthy`, `reliable`, `score` or `grade` appear anywhere in the surface
+— caution is signalled without naming the label that produced it.
+
+**Verified branch** (judge on + a real Layer-B verdict confirmed citation
+support + `support_verified===true` + an integer 0-100 score + a known band
++ `reportable` + the structural "passed" state). Renders a numeric score and
+a band label (low/moderate/high trust) with a different disclosure: *"Citation
+support was checked by an independent judge model — an automated review, not
+a human fact-check."* Fails closed to the unverified treatment on any
+tamper or near-miss. **This branch is real, shipped code — and dormant in
+every current deployment**, since the judge key is unset everywhere. Do not
+present it as an active state when demoing or documenting current behaviour.
+
+**"Why" list.** Up to 3 lines, the lowest-value contributing signals, sorted
+ascending, app-authored fixed strings keyed on the signal name — never
+provider prose. E.g. "Some citation markers did not point at a source on
+this run.", "Not every model slot produced a usable answer."
+
+**Missing-caveat row.** An independent, always-checked amber row: *"This
+question needed a safety caveat and the synthesis did not include one."* —
+rendered whenever a required high-stakes caveat wasn't present in the
+synthesis, regardless of the state line above.
+
+**GREEN RULE, extended.** This surface never uses `--c-green`/`--success`/
+`--success-soft`/`--success-border` in any state, in either theme — the
+verdict band (screen 05) stays the app's only large green surface. Accent is
+amber (`--warning`/`--warning-soft`, for indeterminate/no-marker/caution),
+blue-info (`--info`/`--info-soft`, for passed/verified — low band still
+renders amber, not blue), or ink (refused). No new palette; existing tokens
+reused. Enforced by `e2e/tests/invariants/trust-score-invariants.spec.ts`.
+
 ### 06 Transcript — FR-007/008; AC-014/016/017
 - The only drill-down. Chronological: opening positions (4 model cards with per-model sources), round-1 challenges, round-2 concessions (green chips), hand-off to synthesis. Capture per-model latency + status in data (AC-014) even where not displayed.
 
@@ -85,12 +151,12 @@ Session (`GET /v1/session`, CSRF token) · active run (`GET /v1/query-runs/activ
 **Semantic (both themes by role):** green #0E6B50 = brand mark + agreement/consensus/completed ONLY · blue #47689E = sources + running · amber #8A5F16 = caution/uncertainty · red #A83A2A = error/decision-support boundary. Dark variants: #4EC28C / #9FB6DF / #D9A954 / #DB8070.
 **Dark:** bg #101215 · header #15181D · card #191C22 · inset #22262D · text #E8EAEE · body #C3C7CE · secondary #9AA0AA · muted #737A85 · borders rgba(232,234,238,.07–.14).
 **Warm paper (appearance option):** paper #F2EEE7 · ink #23201B · body #3A342C · secondary #4E483F · muted #8A8275 · borders rgba(38,32,26,…).
-**The green rule (non-negotiable):** one large green surface per journey — the verdict band. Small green only for agreement semantics. Never buttons, links, or decoration.
+**The green rule (non-negotiable):** one large green surface per journey — the verdict band. Small green only for agreement semantics. Never buttons, links, or decoration. **This includes the trust/evaluation surface (05b, AC-046)** — its amber/blue-info accents reuse the existing `--warning`/`--info` tokens, no new palette, and it never uses a green token in any state, in either theme.
 **Type:** Newsreader (serif, 500) for display/verdicts/wordmark Q; Geist for UI (600–650 buttons/labels); Geist Mono for money, IDs, timings, counters. Landing H1 52/1.06; result H1 29/1.28; verdict 25/1.3; body 13.5–17.5; uppercase labels 11–12.5 w/ 0.05–0.14em tracking.
 **Radii:** pills 999 · buttons 8–11 · cards/panels 10–18. **Shadows:** screens 0 24px 60px rgba(20,23,28,.12); cards 0 12–16px 32–40px .08; verdict band 0 16px 40px rgba(14,107,80,.30).
 
 ## Accessibility (NFR-009, WCAG 2.2 AA)
-Keep the repo's implemented scaffolding: skip link → `#main-content`, focusable main, `fieldset`/`legend` for model slots, polite live regions for run state/results/notices. All status colors pass AA on their papers (green on cream 5.7:1; white on green 6.5:1). Never color-alone: every state pairs color + label/icon. Warnings adjacent to the actions they gate.
+Keep the repo's implemented scaffolding: skip link → `#main-content`, focusable main, `fieldset`/`legend` for model slots, polite live regions for run state/results/notices. All status colors pass AA on their papers (green on cream 5.7:1; white on green 6.5:1). Never color-alone: every state pairs color + label/icon. Warnings adjacent to the actions they gate. **The trust/evaluation surface (05b) is `role="group"`, never a `meter`/`progressbar`/`slider` role, and never carries `aria-valuenow`** (AC-044) — it communicates state through the disclosure and state-line text, not an ARIA value widget.
 
 ## Copy
 All warning/notice copy in the mocks follows `docs/33-content-design.md` (COPY-001…006) — treat that file as the copy source of truth. Product name: **Quorum** (no "-AI" suffix; `quorum-ai` for domains/repos). Tagline: "Four AI models, one sourced answer." Record in `docs/116-signoff-record.md`; `docs/91-product-naming.md` still holds placeholder names.
@@ -107,3 +173,4 @@ No image assets. Logo is typographic: green rounded square + serif "Q" (Newsread
 - `docs/32-ui-state-matrix.md` is a TBD stub — this package's screens/states can fill it.
 - `docs/10-functional-requirements.md` FR-012: title says "Required bring-your-own OpenRouter key" but behavior/ACs (AC-026) specify server-configured keys with **no** user key field. The UI follows the behavior + AC-026. Reconcile the FR title.
 - `docs/91-product-naming.md` contains placeholder names pending sign-off; record "Quorum".
+- **This section (05b) closes a real staleness gap**: this package was R1-only for three weeks after Release 2 shipped a trust/evaluation surface (FR-016) that wasn't documented here, and `AC-CROSSWALK.md`'s coverage claim was inaccurate as a result (see that file's own note). Checked `docs/10-functional-requirements.md` FR-016's title/scope against the as-shipped surface while writing this — consistent, no reconciliation needed there.
