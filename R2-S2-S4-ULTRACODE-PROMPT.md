@@ -1,7 +1,20 @@
 # Ultracode Prompt — Quorum-AI Release 2 (Trust & Evaluation): continue S2 → S3 → S4
 
-> **How to run:** paste this whole file as the task and include the keyword
-> **`ultracode`** so the multi-agent workflow engages.
+> **STATUS: COMPLETED (2026-07-21/22).** S2 (`src/product_app/evaluation.py`,
+> commit `a1cf546`), S3 (trust-score UI, commit `fe254b4`), and S4 (golden-set
+> harness, commit `6a412f8`) all shipped. **This file is kept as the reference
+> exemplar `tests/test_ultracode_prompt_enforcement_contract.py` validates its
+> prompt-contract checker against — it is not a live to-do.** Re-pasting it
+> would attempt to redo finished work. The paragraph below ("How to run...")
+> describes how this prompt was originally executed; it is historical, not an
+> instruction to a reader today. A generic, project-agnostic version of this
+> prompt's methodology (the prime directives and Definition-of-Done structure,
+> without quorum-ai's specifics) lives at
+> `templates/feature-slice-ultracode-prompt-template.md`.
+
+> **How to run (historical — this is what was pasted to execute the work
+> above, not a live instruction):** paste this whole file as the task and
+> include the keyword **`ultracode`** so the multi-agent workflow engages.
 >
 > **Starting point (IMPORTANT — S1 is committed, not on `main` yet):** base ALL
 > work on the branch **`feat/r2-s1-run-history-persistence`** (commit `d7469ce`),
