@@ -18,7 +18,62 @@ from __future__ import annotations
 
 import json
 import logging
+import re
 from datetime import UTC, datetime
+
+#: Patterns for secret-shaped substrings (issue #313). Applied to the
+#: FINAL rendered JSON line, not to individual fields, so it covers the
+#: ``message``, the ``exception`` traceback text, and any ``extra={...}``
+#: value uniformly — whichever field a future call site happens to log
+#: a credential through.
+#:
+#: This is defense in depth, not a fix to any specific call site: the 9
+#: confirmed raw-exception call sites (feedback_store.py:521,
+#: run_history_store.py:416, feedback_audit.py:685/691/995,
+#: store_reconnect.py:325/366, query_runs.py:2358/2492) log
+#: ``str(exception)`` with no scrubbing today. None of those exception
+#: types currently carry a real secret (see issue #313 — LATENT, not
+#: LIVE), but nothing enforced that property before this filter, and nothing
+#: stops a future call site from reusing one of those ``except`` blocks for
+#: something that does carry a credential.
+#:
+#: Order matters: the ``Bearer``/assignment patterns run first because they
+#: also match plain-hex or short values that the bare-key-shape pattern
+#: below would otherwise miss; the bare-key-shape pattern then catches
+#: prefixed keys (``sk-...``, ``AKIA...``) that appear with no label at all.
+_REDACTION_PATTERNS: tuple[re.Pattern[str], ...] = (
+    # "Bearer <token>" — the exact shape of an Authorization header value,
+    # per providers.py/feedback_audit.py/readiness.py's `f"Bearer {key}"`.
+    re.compile(r"(?i)\bBearer\s+[A-Za-z0-9._~+/=-]{8,}"),
+    # "api_key=...", "access_token: ...", "password=...", etc. — a labeled
+    # credential assignment, quoted or bare, in either query-string (``=``)
+    # or structured-log (``: ``) shape.
+    re.compile(
+        r"(?i)\b(api[_-]?key|access[_-]?token|auth[_-]?token|secret[_-]?key|"
+        r"client[_-]?secret|password|authorization)\b\s*[:=]\s*"
+        r"[A-Za-z0-9._~+/=-]{6,}"
+    ),
+    # Bare key-shaped tokens with no label: OpenRouter/OpenAI-style
+    # ``sk-...`` keys (the exact shape asserted secret in
+    # tests/security/test_release_security_redaction.py) and AWS-style
+    # ``AKIA...`` access-key IDs.
+    re.compile(r"\bsk-[A-Za-z0-9_-]{10,}\b"),
+    re.compile(r"\bAKIA[0-9A-Z]{16}\b"),
+)
+
+_REDACTED = "[REDACTED]"
+
+
+def _redact_secrets(text: str) -> str:
+    """Scrub secret-shaped substrings from a formatted log line.
+
+    Applied to the fully-rendered JSON string (see ``JsonFormatter.format``),
+    so it sees the same text an aggregator would — after ``%s``
+    interpolation and after the traceback has been flattened to one line.
+    """
+    for pattern in _REDACTION_PATTERNS:
+        text = pattern.sub(_REDACTED, text)
+    return text
 
 
 class JsonFormatter(logging.Formatter):
@@ -76,7 +131,7 @@ class JsonFormatter(logging.Formatter):
             if key in self._RESERVED or key in payload or key.startswith("_"):
                 continue
             payload[key] = value
-        return json.dumps(payload, default=str)
+        return _redact_secrets(json.dumps(payload, default=str))
 
 
 def setup_json_logging(log_level: str = "INFO") -> None:
