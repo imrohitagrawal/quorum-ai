@@ -19,6 +19,7 @@ from __future__ import annotations
 import json
 import logging
 import re
+import threading
 from datetime import UTC, datetime
 
 #: Patterns for secret-shaped substrings (issue #313). Applied to the
@@ -62,6 +63,10 @@ _REDACTION_PATTERNS: tuple[re.Pattern[str], ...] = (
 )
 
 _REDACTED = "[REDACTED]"
+
+#: Module-level, not "does the CURRENT factory carry a marker attribute"
+#: (see the docstring's "Idempotency" section for why the latter is unsafe).
+_redaction_factory_installed = False
 
 
 def _redact_secrets(text: str) -> str:
@@ -120,30 +125,96 @@ def install_redaction_record_factory() -> None:
     final-string scrub; the Sentry path does not, and that gap is unfixed —
     tracked in ADR-0036's follow-up, not silently repaired here.
 
-    Idempotent: re-installing over an already-wrapped factory is a no-op,
-    same contract as ``install_request_id_record_factory``.
+    Idempotent: re-installing is a no-op — but see the "Idempotency" note
+    below for why this is a MODULE-level flag rather than the
+    marker-attribute-on-``current`` pattern ``install_request_id_record_factory``
+    uses, which this function used originally too and which has a real gap.
+
+    REENTRANCY AND UNBOUNDED CHAIN GROWTH (PR #315 round-2 review
+    follow-up, both closed by the same fix): two separate but related
+    defects, both measured 2026-08-14 against this exact function.
+
+    1. **Chain growth.** The original idempotency check read
+       ``getattr(logging.getLogRecordFactory(), "_i313_redaction_factory", False)``
+       — true only when THIS function's own factory is the OUTERMOST one
+       currently installed. ``setup_json_logging`` calls this function and
+       THEN ``install_request_id_record_factory()``, which wraps its own
+       factory on top — so after one call, the outermost factory carries
+       the request-id marker, not this one. A second call to
+       ``setup_json_logging`` (documented as safe to do, and done by both
+       the app and the audit script) therefore finds no marker, wraps a
+       SECOND redaction factory on top of the existing chain, and the
+       following ``install_request_id_record_factory()`` call does the same
+       for a second request-id factory. Measured: 3 layers after the first
+       ``setup_json_logging()``, 5 after the second, 7 after the third —
+       growing by 2 on every re-call, forever, with no bound. Every later
+       log call in the process pays for the whole chain: N redundant
+       ``getMessage()`` + regex passes per record instead of 1.
+    2. **Reentrancy interacting with that growth.** With two redaction
+       layers chained (one wrapping the other, with the request-id factory
+       in between), a message argument whose ``__str__`` logs — the same
+       shape as the reentrancy case above — recurses through BOTH layers,
+       each with its own independent ``in_progress`` state, because the
+       original guard checked ``in_progress`` only AFTER already calling
+       ``current(*args, **kwargs)``: the outer layer's own reentrant
+       invocation could occur DURING that inner call, before the outer
+       layer had set its own flag. Measured: a single level of
+       ``__str__``-that-logs recursed to depth 2 instead of the intended 1
+       once a second layer was chained on. A single call to
+       ``install_redaction_record_factory()`` (this module's own test
+       fixtures, or two ``setup_json_logging()`` calls in a real process)
+       does not reproduce this alone; it needs the chain-growth defect
+       above to produce a second layer first — which is why the same fix
+       (never installing a second layer, and checking the guard before
+       ``current()`` runs) closes both.
+
+    The fix: track installation with a plain module-level boolean, checked
+    and set BEFORE anything about ``current`` is inspected, so a second
+    call — from anywhere, at any point in the ``setup_json_logging``
+    sequence — is a true no-op rather than depending on which factory
+    happens to be outermost right now. And the per-thread reentrancy guard
+    is checked and set BEFORE ``current(*args, **kwargs)`` runs, not after,
+    so a reentrant call arriving from inside that inner call is caught by
+    THIS layer's own flag rather than slipping through the gap.
     """
-    current = logging.getLogRecordFactory()
-    if getattr(current, "_i313_redaction_factory", False):
+    global _redaction_factory_installed
+    if _redaction_factory_installed:
         return
+    _redaction_factory_installed = True
+
+    current = logging.getLogRecordFactory()
+    in_progress = threading.local()
 
     def factory(*args: object, **kwargs: object) -> logging.LogRecord:
-        record = current(*args, **kwargs)
+        if getattr(in_progress, "active", False):
+            # Reentrant call on this thread — a message argument's string
+            # conversion logged something while THIS record's message was
+            # being redacted. Skip redaction here rather than recursing;
+            # see the reentrancy note in this function's docstring. The
+            # guard is checked and set BEFORE calling ``current`` so a
+            # reentrant call triggered from inside ``current`` itself
+            # (e.g. a chained factory further down) is caught too.
+            return current(*args, **kwargs)
+        in_progress.active = True
         try:
-            rendered = record.getMessage()
-        except Exception:  # noqa: BLE001 - never let a bad %-format crash logging
+            record = current(*args, **kwargs)
+            try:
+                rendered = record.getMessage()
+            except Exception:  # noqa: BLE001 - never let a bad %-format crash logging
+                return record
+            redacted = _redact_secrets(rendered)
+            if redacted != rendered:
+                # Replace msg/args with the already-interpolated,
+                # already-redacted text so every later call to getMessage()
+                # (JsonFormatter, Sentry's BreadcrumbHandler, caplog) sees
+                # the redacted string and does not re-apply %-formatting
+                # against the original args.
+                record.msg = redacted
+                record.args = None
             return record
-        redacted = _redact_secrets(rendered)
-        if redacted != rendered:
-            # Replace msg/args with the already-interpolated, already-redacted
-            # text so every later call to getMessage() (JsonFormatter, Sentry's
-            # BreadcrumbHandler, caplog) sees the redacted string and does not
-            # re-apply %-formatting against the original args.
-            record.msg = redacted
-            record.args = None
-        return record
+        finally:
+            in_progress.active = False
 
-    factory._i313_redaction_factory = True  # type: ignore[attr-defined]
     logging.setLogRecordFactory(factory)
 
 

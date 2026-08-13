@@ -43,6 +43,7 @@ ways, so the record shows what was believed on a date and what replaced it.
 | [ADR-0035](adr/0035-vendor-project-faq-for-targeted-gap-closing-not-full-regeneration.md) | Vendor `project-faq` for targeted gap-closing, not full-page regeneration | Architecture | Accepted |
 | [ADR-0036](adr/0036-global-log-redaction-filter-over-per-call-site-fixes.md) | A global log-redaction step in `JsonFormatter`, not per-call-site fixes | Architecture | Accepted — 2026-08-14 (issue #313) |
 | [ADR-0037](adr/0037-record-factory-redaction-closes-the-sentry-bypass.md) | Redact at the log-record factory, not only in `JsonFormatter` | Architecture | Accepted — 2026-08-14 (issue #313, PR #315 review follow-up) |
+| [ADR-0038](adr/0038-module-level-idempotency-flag-for-chained-record-factories.md) | A module-level flag governs `install_redaction_record_factory` idempotency, not a marker on the current factory | Architecture | Accepted — 2026-08-14 (issue #313, PR #315 round-2 review follow-up) |
 
 **This index was itself stale** until 2026-07-30: ADR-0002 had existed since
 2026-07-19 and was never listed here. A hand-maintained index is a derived fact
