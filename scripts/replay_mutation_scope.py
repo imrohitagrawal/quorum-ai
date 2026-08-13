@@ -9,7 +9,12 @@ Usage:  python3 scripts/replay_mutation_scope.py [limit]
 
 Mirrors MUTMUT_SCOPE_PY exactly, except it reads file content with
 `git show <rev>:<path>` instead of the working tree, so no checkout is needed
-and the tree is never touched.
+and the tree is never touched. That equivalence is pinned by a differential
+test — `tests/unit/test_replay_scope_matches_makefile_scope.py` (#143) — which
+extracts the real Makefile block and runs both over real commit history,
+asserting identical glob sets. It is not just prose anymore: before that test
+existed, this script had no `unmutatable()` exclusion at all and could name a
+glob for a decorated function mutmut never builds a mutant for.
 
 For every commit that changed Python under src/, classify it:
 
@@ -56,6 +61,29 @@ def changed_lines(base: str, head: str) -> dict[str, set[int]]:
     return ranges
 
 
+def unmutatable(node: ast.AST) -> bool:
+    """True when mutmut will not generate mutants for this function.
+
+    Byte-for-byte port of `unmutatable()` in the Makefile's `MUTMUT_SCOPE_PY`
+    (mirrors mutmut/mutation/file_mutation.py:230-235): decorated functions
+    are skipped because the trampoline copy re-runs decorators, EXCEPT a lone
+    bare @staticmethod/@classmethod, which mutmut handles.
+
+    #143: this function did not exist here before, so the replay script
+    named globs for decorated functions the Makefile's real gate excludes —
+    a real drift the differential test in
+    tests/unit/test_replay_scope_matches_makefile_scope.py caught.
+    """
+    decorators = getattr(node, "decorator_list", [])
+    if not decorators:
+        return False
+    if len(decorators) == 1:
+        only = decorators[0]
+        if isinstance(only, ast.Name) and only.id in ("staticmethod", "classmethod"):
+            return False
+    return True
+
+
 def scope(base: str, head: str) -> tuple[list[str], dict[str, int]]:
     """Return (globs, reason counts) for the diff base...head."""
     globs: list[str] = []
@@ -78,6 +106,7 @@ def scope(base: str, head: str) -> tuple[list[str], dict[str, int]]:
 
         module = path.removeprefix("src/").removesuffix(".py").replace("/", ".")
         matched = 0
+        skipped_count = 0
         covered: set[int] = set()
 
         def walk(
@@ -86,25 +115,36 @@ def scope(base: str, head: str) -> tuple[list[str], dict[str, int]]:
             seen: set[int],
             mod: str,
             cls: str | None = None,
+            frozen: bool = False,
         ) -> int:
             """Return how many functions overlapped `changed`.
 
             `changed`/`seen` are passed explicitly rather than closed over: a
             closure here binds the loop variable, so every file would be walked
             against the LAST file's changed lines (ruff B023).
+
+            `frozen` mirrors the Makefile: a DECORATED CLASS is skipped by
+            mutmut together with its whole subtree, so every method inside it
+            is unmutatable, decorated or not (e.g. every @dataclass).
             """
+            nonlocal skipped_count
             hits = 0
             for child in ast.iter_child_nodes(node):
                 if isinstance(child, ast.ClassDef):
-                    hits += walk(child, changed, seen, mod, child.name)
+                    hits += walk(
+                        child, changed, seen, mod, child.name, frozen or bool(child.decorator_list)
+                    )
                 elif isinstance(child, ast.FunctionDef | ast.AsyncFunctionDef):
                     span = set(range(child.lineno, (child.end_lineno or child.lineno) + 1))
                     seen.update(span)
                     if changed & span:
-                        name = f"xǁ{cls}ǁ{child.name}" if cls else f"x_{child.name}"
-                        globs.append(f"{mod}.{name}__mutmut_*")
                         hits += 1
-                    hits += walk(child, changed, seen, mod, cls)
+                        if frozen or unmutatable(child):
+                            skipped_count += 1
+                        else:
+                            name = f"xǁ{cls}ǁ{child.name}" if cls else f"x_{child.name}"
+                            globs.append(f"{mod}.{name}__mutmut_*")
+                    hits += walk(child, changed, seen, mod, cls, frozen)
             return hits
 
         matched = walk(tree, lines, covered, module)
@@ -114,6 +154,13 @@ def scope(base: str, head: str) -> tuple[list[str], dict[str, int]]:
                 reasons["changed lines outside any def (module/class level)"] += 1
             else:
                 reasons["other"] += 1
+        elif skipped_count and skipped_count == matched:
+            # Every matched function is decorated/unmutatable: mutmut builds
+            # no mutants for any of them, so this file globs nothing -- the
+            # same blind spot as "outside any def", just reached a different
+            # way. Reported so it is never silent (#136's "38% carry one
+            # silently" applies here too).
+            reasons["changed lines only in unmutatable (decorated) functions"] += 1
 
     return sorted(set(globs)), dict(reasons)
 
