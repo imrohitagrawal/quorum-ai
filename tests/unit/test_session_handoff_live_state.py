@@ -89,17 +89,15 @@ def test_build_sha_drift_line_handles_both_missing() -> None:
 
 
 def test_parse_pytest_collected_count_basic_summary_line() -> None:
-    raw = (
-        "tests/unit/test_foo.py::test_a\n"
-        "tests/unit/test_foo.py::test_b\n"
-        "\n"
-        "2913 tests collected in 2.78s\n"
-    )
+    # Deliberately not a real repo path (would trip
+    # tests/unit/test_cited_paths_resolve.py's citation-existence check) --
+    # this is sample pytest collection output, not a claim about the tree.
+    raw = "test_example_module.py::test_a\ntest_example_module.py::test_b\n\n2913 tests collected in 2.78s\n"
     assert session_handoff._parse_pytest_collected_count(raw) == "2913"
 
 
 def test_parse_pytest_collected_count_reports_errors_too() -> None:
-    raw = "tests/unit/test_foo.py::test_a\n\n10 tests collected, 2 errors in 1.02s\n"
+    raw = "test_example_module.py::test_a\n\n10 tests collected, 2 errors in 1.02s\n"
     result = session_handoff._parse_pytest_collected_count(raw)
     assert "10" in result
     assert "2 error" in result
