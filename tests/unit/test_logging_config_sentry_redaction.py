@@ -156,3 +156,31 @@ def test_an_ordinary_breadcrumb_message_survives_untouched(
     assert own_crumbs, "the log call produced no breadcrumb at all — fixture is broken"
     assert own_crumbs[0]["message"] == "run 4f2c9c reopened after 3 retries, status=ok"
     assert "[REDACTED]" not in own_crumbs[0]["message"]
+
+
+def test_a_bad_percent_format_does_not_crash_logging() -> None:
+    """A malformed ``%`` call must not take down logging entirely.
+
+    ``record.getMessage()`` raises (e.g. ``TypeError: not enough arguments
+    for format string``) when a call site's ``%s`` placeholders and args
+    don't line up — a call-site bug this factory did not introduce and must
+    not turn into a crash on every subsequent log call.
+
+    WHAT TURNS THIS RED: remove the ``try/except`` around
+    ``record.getMessage()`` in the factory — this exact record raises
+    ``TypeError`` from stdlib's ``%`` formatting, which would propagate out
+    of every ``logging.info``/``.warning``/etc. call in the process.
+    """
+    install_redaction_record_factory()
+    factory = logging.getLogRecordFactory()
+    record = factory(
+        "test.badformat",
+        logging.WARNING,
+        __file__,
+        1,
+        "%s %s",  # two placeholders
+        ("only-one-arg",),  # one arg — mismatched, raises in getMessage()
+        None,
+    )
+    # Must not raise, and must return SOME record rather than crash the caller.
+    assert record.name == "test.badformat"
