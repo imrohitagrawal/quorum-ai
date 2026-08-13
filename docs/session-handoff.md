@@ -1,7 +1,7 @@
 # Session Handoff
 
 ## Date/time
-2026-08-14T02:34:49+05:30
+2026-08-14T02:47:28+05:30
 
 ## Latest narrative handoff
 `docs/analysis/2026-08-11-session-handoff.md` — read this for full context before editing. **(3 days old** — if a newer session ran since then and its narrative handoff was archived without a replacement being written, this may be stale; check `docs/archive/` for a newer one.)
@@ -88,19 +88,12 @@ Operate, learn, and improve
 
 ## Git status
 ```text
-M docs/24-adr-index.md
- M docs/session-handoff.md
- M scripts/session_handoff.py
-?? docs/adr/0036-session-handoff-live-state-degrades-per-value-not-all-or-nothing.md
-?? tests/unit/test_session_handoff_live_state.py
+clean
 ```
 
 ## Diff stat
 ```text
-docs/24-adr-index.md       |   1 +
- docs/session-handoff.md    |  35 +++++---
- scripts/session_handoff.py | 197 ++++++++++++++++++++++++++++++++++++++++++++-
- 3 files changed, 222 insertions(+), 11 deletions(-)
+no unstaged diff
 ```
 
 ## Completed in this session
