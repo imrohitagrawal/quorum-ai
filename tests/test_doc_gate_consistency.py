@@ -379,6 +379,19 @@ def _window(line: str, end: int) -> str:
     RUN of consecutive skippable asides is passed over, not just the first;
     it already refuses to advance past a real clause-break comma, so this
     still stops at the first non-skippable one.
+
+    PR #317 review: the fix above only rebased the COMMA boundary's search
+    start on `i`; the ";" and ". " boundary scans still searched from index
+    0 of the whole chunk unconditionally. `_skip_leading_parenthetical`
+    treats a balanced ``(...)`` as opaque while deciding whether to skip
+    it, so a ";" or ". " *inside* an otherwise-skippable aside does not
+    stop the skip — but it was still there, at a position before `i`, for
+    the old unconditional scan to re-find and cut on, discarding the status
+    word the skip had just protected. Confirmed by execution:
+    ``the `mutation-baseline` job (see #130; still pending), blocking``
+    returned ``[]``, not ``["blocking"]``. All three boundaries now search
+    from `i` (the position after any skip), not from 0; a real clause-break
+    ";" or ". " outside any skipped aside still cuts there, same as before.
     """
     chunk = line[end : end + _WINDOW]
     i = 0
@@ -389,8 +402,8 @@ def _window(line: str, end: int) -> str:
         if skipped == i:
             break
         i = skipped
-    comma_search_start = i + 1 if i < len(chunk) and chunk[i] == "," else 0
-    for boundary, start in ((",", comma_search_start), (";", 0), (". ", 0)):
+    comma_search_start = i + 1 if i < len(chunk) and chunk[i] == "," else i
+    for boundary, start in ((",", comma_search_start), (";", i), (". ", i)):
         cut = chunk.find(boundary, start)
         if cut != -1:
             chunk = chunk[:cut]
@@ -693,6 +706,94 @@ def test_a_real_clause_break_between_two_consecutive_asides_still_cuts() -> None
         f"clause's status attach to perf-gate: "
         f"{_window(line, line.index('perf-gate`') + len('perf-gate'))!r}"
     )
+
+
+# --------------------------------------------------------------------------
+# Part A5 — PR #317 review: a ";" or ". " sitting INSIDE an otherwise
+# skippable parenthetical still truncates the window before the status word.
+# --------------------------------------------------------------------------
+#
+# `_skip_leading_parenthetical` correctly treats the whole balanced ``(...)``
+# as opaque when deciding whether to skip it — a ";" or ". " *inside* the
+# parens does not stop the balance scan, so `i` ends up past the aside, right
+# where #224/#317 intend. But `_window`'s own boundary scan for ";" and ". "
+# unconditionally searched the chunk from index 0, not from `i`, so it found
+# that same internal ";"/". " again — a position BEFORE the skip — and cut
+# the window there, discarding everything the skip had just protected,
+# including the status word after it. The comma boundary already used
+# `comma_search_start` keyed off `i`; ";" and ". " did not. Confirmed by
+# direct execution against the real `_window`/`_claims` functions before this
+# fix:
+#
+#     "the `mutation-baseline` job (see #130; still pending), blocking" -> []
+#     "the `mutation-baseline` job (see notes. more detail), blocking"  -> []
+
+
+def test_a_semicolon_inside_a_skipped_parenthetical_does_not_hide_the_status() -> None:
+    """The exact shape from the #317 review finding: a ";" inside an
+    otherwise-skippable ``(...)`` aside must not truncate the window before
+    the status word that follows the aside.
+
+    Turns red if: the ";" boundary scan in `_window()` reverts to searching
+    from index 0 of the chunk instead of from the position after the skip.
+    """
+    line = "the `mutation-baseline` job (see #130; still pending), blocking"
+    assert _claims(_gate("mutation-baseline"), line) == ["blocking"], (
+        "a semicolon inside a skipped parenthetical aside hid a real "
+        f"blocking claim: "
+        f"{_window(line, line.index('baseline`') + len('baseline'))!r}"
+    )
+
+
+def test_a_sentence_break_inside_a_skipped_parenthetical_does_not_hide_the_status() -> None:
+    """The same finding's second shape: a ". " sentence break inside the
+    aside, rather than a ";".
+
+    Turns red if: the ". " boundary scan in `_window()` reverts to searching
+    from index 0 of the chunk instead of from the position after the skip.
+    """
+    line = "the `mutation-baseline` job (see notes. more detail), blocking"
+    assert _claims(_gate("mutation-baseline"), line) == ["blocking"], (
+        "a sentence break inside a skipped parenthetical aside hid a real "
+        f"blocking claim: "
+        f"{_window(line, line.index('baseline`') + len('baseline'))!r}"
+    )
+
+
+def test_an_explicit_status_claim_inside_a_skipped_parenthetical_shape_is_also_seen() -> None:
+    """The finding's third shape: the vanishing claim is an explicit
+    "advisory", not just "blocking" — confirms the fix is not accidentally
+    specific to one status word.
+    """
+    line = "the `mutation-baseline` job (rationale; deprecated), advisory"
+    assert _claims(_gate("mutation-baseline"), line) == ["advisory"], (
+        "a semicolon inside a skipped parenthetical aside hid a real "
+        f"advisory claim: "
+        f"{_window(line, line.index('baseline`') + len('baseline'))!r}"
+    )
+
+
+def test_a_real_semicolon_clause_break_outside_any_aside_still_cuts() -> None:
+    """Counter-example: a semicolon that is a genuine clause break — not
+    inside any parenthetical — must still end the window there, mirroring
+    the existing comma counter-examples one boundary character over.
+
+    Turns red if: the ";" boundary is widened to skip past `i` blindly,
+    losing the clause-break protection it exists to provide.
+    """
+    line = "the `perf-gate` job; unrelated commentary; blocking since June"
+    assert _claims(_gate("perf-gate"), line) == []
+
+
+def test_a_real_sentence_break_outside_any_aside_still_cuts() -> None:
+    """Counter-example for ". ": a genuine sentence break outside any
+    parenthetical must still end the window there.
+
+    Turns red if: the ". " boundary is widened to skip past `i` blindly,
+    losing the clause-break protection it exists to provide.
+    """
+    line = "the `perf-gate` job. Unrelated sentence. blocking since June"
+    assert _claims(_gate("perf-gate"), line) == []
 
 
 # --------------------------------------------------------------------------
