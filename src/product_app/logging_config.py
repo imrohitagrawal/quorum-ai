@@ -76,6 +76,77 @@ def _redact_secrets(text: str) -> str:
     return text
 
 
+def install_redaction_record_factory() -> None:
+    """Scrub secret-shaped substrings from every log record at CREATION time.
+
+    ADR-0036 scrubs the fully-rendered JSON string inside
+    ``JsonFormatter.format()`` — which is correct for the stdout sink, but
+    that is the only place it runs. ``sentry_sdk``'s ``LoggingIntegration``
+    is on by default (``main.py`` passes no ``integrations=``) and captures
+    breadcrumbs/events by patching ``logging.Logger.callHandlers``, which
+    runs on the ORIGINATING logger. It never reaches ``JsonFormatter`` at
+    all — that class is only wired to a ``StreamHandler`` on the ROOT
+    logger, and ``callHandlers`` calls Sentry's patched hook directly against
+    the record, independent of which handlers exist. Measured 2026-08-14 with
+    a real ``sentry_sdk`` client on an in-memory ``before_breadcrumb`` hook:
+    a secret logged via ``logger.warning("...: %s", exc)`` at any of the 9
+    call sites named in ADR-0036 reached the breadcrumb in full plaintext —
+    see ``tests/unit/test_logging_config_sentry_redaction.py``. This is the
+    exact bypass ``telemetry_sink.py``'s ``_configure_token_logger`` docstring
+    already documents for a different logger (the token stream), which is why
+    that one needs ``ignore_logger`` instead: it wants those records kept out
+    of Sentry ENTIRELY. This logger's records should still reach Sentry —
+    just with secrets scrubbed first — so ``ignore_logger`` is the wrong tool
+    here.
+
+    A :func:`logging.setLogRecordFactory` hook is the only stage that runs
+    BEFORE ``Logger.handle()`` calls ``callHandlers`` at all: the record is
+    built by the factory inside ``Logger.makeRecord()``, prior to any
+    filter, handler, or Sentry's patched dispatch. Mutating the record here
+    — not in a ``logging.Filter`` — is what makes every consumer (stdout via
+    ``JsonFormatter``, Sentry breadcrumbs/events, pytest's ``caplog``, any
+    future handler) see the same redacted text. This mirrors
+    ``request_id.install_request_id_record_factory``'s use of the same hook
+    for the same reason (visible to every handler, not just one).
+
+    Scope: this redacts ``record.getMessage()`` — the ``msg %% args``
+    interpolated text, which is exactly how the 9 named call sites and any
+    future ``logger.warning("...: %%s", exc)`` call leak a secret. It does
+    NOT touch ``record.exc_info`` (a full traceback passed via
+    ``exc_info=True``) — none of the 9 call sites use that form today, and
+    scrubbing a traceback string would require rendering it here (duplicating
+    ``Formatter.formatException``) for a case with no current call site. The
+    stdout path still catches that case via ``JsonFormatter``'s existing
+    final-string scrub; the Sentry path does not, and that gap is unfixed —
+    tracked in ADR-0036's follow-up, not silently repaired here.
+
+    Idempotent: re-installing over an already-wrapped factory is a no-op,
+    same contract as ``install_request_id_record_factory``.
+    """
+    current = logging.getLogRecordFactory()
+    if getattr(current, "_i313_redaction_factory", False):
+        return
+
+    def factory(*args: object, **kwargs: object) -> logging.LogRecord:
+        record = current(*args, **kwargs)
+        try:
+            rendered = record.getMessage()
+        except Exception:  # noqa: BLE001 - never let a bad %-format crash logging
+            return record
+        redacted = _redact_secrets(rendered)
+        if redacted != rendered:
+            # Replace msg/args with the already-interpolated, already-redacted
+            # text so every later call to getMessage() (JsonFormatter, Sentry's
+            # BreadcrumbHandler, caplog) sees the redacted string and does not
+            # re-apply %-formatting against the original args.
+            record.msg = redacted
+            record.args = None
+        return record
+
+    factory._i313_redaction_factory = True  # type: ignore[attr-defined]
+    logging.setLogRecordFactory(factory)
+
+
 class JsonFormatter(logging.Formatter):
     """Emit each :class:`logging.LogRecord` as a single-line JSON object.
 
@@ -144,6 +215,13 @@ def setup_json_logging(log_level: str = "INFO") -> None:
     logger — uvicorn installs its own loggers, which is the right
     place for them.
     """
+    # Issue #313 (Sentry-bypass follow-up): must run before any log call, and
+    # is independent of the JsonFormatter/StreamHandler wiring below — this
+    # is what closes the gap for Sentry breadcrumbs/events, which never go
+    # through JsonFormatter at all. See install_redaction_record_factory's
+    # docstring for why this needs a record factory and not a Filter.
+    install_redaction_record_factory()
+
     root = logging.getLogger()
     formatter = JsonFormatter()
     # Remove only the handlers we previously added so we don't trample

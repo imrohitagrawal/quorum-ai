@@ -92,6 +92,14 @@ separate, larger, and lower-urgency concern once the filter exists.
 - Every current and future call site logging through the root logger's
   `JsonFormatter` gets secret-shaped substrings scrubbed automatically. No
   call-site change is required to get this protection.
+  **Correction (2026-08-14, ADR-0037):** this was true for the stdout sink
+  only. Sentry's `LoggingIntegration` reads the log record directly — it
+  never goes through `JsonFormatter` — so a secret logged at any of the 9
+  named call sites reached a Sentry breadcrumb unredacted whenever
+  `SENTRY_DSN` was configured. ADR-0037 adds a second redaction stage at
+  record-creation time (`logging.setLogRecordFactory`) that closes this for
+  breadcrumbs and events; see that ADR for the measured reproduction and
+  what remains an open gap (`exc_info`-based tracebacks).
 - The regex set is necessarily a **shape** match (`Bearer ...`, `sk-...`,
   `key=...`), not a value match against a known-secret list — it cannot
   catch a credential whose shape does not resemble any pattern here (e.g. a
