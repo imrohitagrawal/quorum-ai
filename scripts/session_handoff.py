@@ -238,7 +238,15 @@ def _gather_live_state() -> dict:
     # warning on stdout/stderr that corrupts the captured SHA rather than
     # failing loud. The fully-qualified ref path can't collide.
     main_tip = run(["git", "rev-parse", "--verify", "refs/remotes/origin/main"])
-    last_src_commit = run(["git", "log", "-1", "--format=%H", "--", "src/"])
+    # Scoped to `refs/remotes/origin/main`, not the current checkout's HEAD
+    # (#134 residual gap): rule 17a mandates every session work from a
+    # dedicated branch/worktree, so HEAD routinely differs from
+    # `origin/main` -- an unmerged branch, or a local `main` that hasn't
+    # been fast-forwarded yet. Walking from bare HEAD reported whichever of
+    # those the current process happened to be sitting in, silently.
+    last_src_commit = run(
+        ["git", "log", "-1", "--format=%H", "refs/remotes/origin/main", "--", "src/"]
+    )
     prod_build_sha = _fetch_prod_build_sha()
     pytest_raw = run(["uv", "run", "pytest", "--collect-only", "-q", "--no-cov"])
     open_issues_raw = run(

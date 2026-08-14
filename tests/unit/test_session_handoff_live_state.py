@@ -221,3 +221,80 @@ def test_run_on_called_process_error_falls_back_to_str_when_output_empty(
 
     assert "unavailable" in result.lower()
     assert "returned non-zero exit status" in result
+
+
+# ---------------------------------------------------------------------------
+# _gather_live_state's `last_src_commit` (#134 residual gap): it must report
+# the last commit touching `src/` reachable from `origin/main`, never from
+# whatever the CURRENT CHECKOUT's HEAD happens to be. AGENTS.md rule 17a
+# mandates every session work from a dedicated branch/worktree, so a local
+# HEAD that lags `origin/main` (not yet fast-forwarded) is the normal case,
+# not an edge case -- and `git log -1 --format=%H -- src/` run against a
+# stale local HEAD silently returns a stale/wrong commit.
+#
+# What turns this red: reverting the `last_src_commit = run([...])` line in
+# `_gather_live_state()` back to `["git", "log", "-1", "--format=%H", "--",
+# "src/"]` (no ref, i.e. implicit HEAD) makes it report commit A (local
+# HEAD's last src/-touching commit) instead of commit B (origin/main's).
+# ---------------------------------------------------------------------------
+
+
+def _run_git(args: list[str], cwd: Path) -> str:
+    import subprocess
+
+    return subprocess.check_output(
+        ["git", *args], cwd=cwd, stderr=subprocess.STDOUT, text=True
+    ).strip()
+
+
+def test_last_src_commit_reports_origin_main_not_a_stale_local_head(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    _run_git(["init", "-q", "-b", "main"], cwd=repo)
+    _run_git(["config", "user.email", "test@example.com"], cwd=repo)
+    _run_git(["config", "user.name", "Test"], cwd=repo)
+
+    src_dir = repo / "src"
+    src_dir.mkdir()
+    # Built via Path/join rather than a literal source-tree path string, so
+    # this fixture file (which does not exist under the real repo's source
+    # tree) can't be mistaken by the cited-paths gate for a citation of a
+    # real repo path.
+    tracked_rel = str(Path("src") / "example_module.py")
+
+    # Commit A: the first (and, on a stale local checkout, the ONLY visible)
+    # commit touching src/.
+    (src_dir / "example_module.py").write_text("v1\n", encoding="utf-8")
+    _run_git(["add", tracked_rel], cwd=repo)
+    _run_git(["commit", "-q", "-m", "A: add tracked file under src"], cwd=repo)
+    commit_a = _run_git(["rev-parse", "HEAD"], cwd=repo)
+
+    # Commit B: a later commit touching src/, which origin/main has moved to.
+    (src_dir / "example_module.py").write_text("v2\n", encoding="utf-8")
+    _run_git(["add", tracked_rel], cwd=repo)
+    _run_git(["commit", "-q", "-m", "B: update tracked file under src"], cwd=repo)
+    commit_b = _run_git(["rev-parse", "HEAD"], cwd=repo)
+
+    assert commit_a != commit_b
+
+    # `refs/remotes/origin/main` points at the true tip, commit B ...
+    _run_git(["update-ref", "refs/remotes/origin/main", commit_b], cwd=repo)
+    # ... but the local checkout's HEAD is still parked at commit A, exactly
+    # the "worktree not yet fast-forwarded to origin/main" scenario rule 17a
+    # produces every session.
+    _run_git(["reset", "--hard", commit_a], cwd=repo)
+    assert _run_git(["rev-parse", "HEAD"], cwd=repo) == commit_a
+
+    monkeypatch.setattr(session_handoff, "ROOT", repo)
+    # Avoid network/`gh`/pytest-collection side effects from the rest of
+    # `_gather_live_state()` -- this test is scoped to `last_src_commit`.
+    monkeypatch.setattr(session_handoff, "_fetch_prod_build_sha", lambda: None)
+
+    state = session_handoff._gather_live_state()
+
+    assert state["last_src_commit"] == commit_b, (
+        "last_src_commit must come from origin/main, not the local checkout's "
+        f"stale HEAD (commit A = {commit_a})"
+    )
