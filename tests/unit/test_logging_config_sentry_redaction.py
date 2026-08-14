@@ -307,10 +307,16 @@ def test_a_secret_in_a_set_valued_extra_never_reaches_sentry(
     assert own_crumbs, "the log call produced no breadcrumb at all — fixture is broken"
     for crumb in own_crumbs:
         data = crumb.get("data", {})
-        assert secret not in json.dumps(data), (
+        # A raw ``set`` is not JSON-serializable — the breadcrumb's ``data``
+        # dict carries the actual redacted Python set object (this is a
+        # direct, un-serialized capture hook per ``sentry_client``, not the
+        # JSON wire payload Sentry would eventually send), so assert on the
+        # set's membership directly rather than via ``json.dumps(data)``,
+        # which would raise ``TypeError`` before the assertion ever ran.
+        seen = data.get("seen_tokens", set())
+        assert secret not in seen, (
             f"the secret reached a Sentry breadcrumb's set-valued extra in plaintext: {data}"
         )
-        seen = data.get("seen_tokens", set())
         assert "[REDACTED]" in seen
         # POSITIVE PARTNER (rule 7): a non-secret sibling element survives.
         assert "ok-token" in seen

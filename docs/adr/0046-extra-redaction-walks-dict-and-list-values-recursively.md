@@ -1,4 +1,4 @@
-# ADR-0046: `extra={...}` redaction walks dict/list values recursively, not just top-level strings
+# ADR-0046: `extra={...}` redaction walks dict/list/tuple/set values recursively, bounded by a depth/cycle guard
 
 ## Status
 
@@ -69,27 +69,77 @@ Walking exactly one level (the dict's direct values, the list's direct
 elements) would have caught the exact reproduction shape above but not a
 secret nested two levels down (a dict inside a list inside a dict — a
 realistic shape for e.g. `extra={"context": {"attempts": [{"detail":
-secret}]}}`). The recursive walk has no depth limit, so it is not vulnerable
-to the next call site nesting one level deeper than whatever a
-one-level-deep fix happened to cover. Proven by
+secret}]}}`). An unbounded recursive walk is not vulnerable to the next call
+site nesting one level deeper than whatever a one-level-deep fix happened to
+cover. Proven by
 `test_a_secret_doubly_nested_dict_in_list_in_dict_never_reaches_sentry`,
 which fails under a one-level-deep implementation and passes under the
 recursive one.
 
+### Review finding: an unbounded recursive walk is itself a crash risk
+
+A same-day adversarial review of this change (before merge) found that an
+*unbounded* recursive walk trades one bug for another. Two real triggers,
+both confirmed live by actually calling `logger.warning()`:
+
+1. **A self-referential container.** `d = {}; d["self"] = d;
+   logger.warning("x", extra=d)` recurses forever and raises
+   `RecursionError` straight out of the logging call — a single malformed
+   `extra={}` would take down every log call that reaches it, which is worse
+   than the plaintext-secret bug this change exists to fix.
+2. **A merely very deep, non-cyclic container** (~2000 levels) exhausts
+   CPython's default recursion limit the same way, with no `id()` ever
+   repeating — so a cycle guard alone does not stop it; an explicit depth
+   cap is needed too.
+
+The same review also found that a secret sitting inside a `tuple` nested in
+an otherwise-redacted dict/list — a realistic shape,
+`extra={"tokens": (secret,)}` — reached a real Sentry breadcrumb in
+plaintext, because the walk originally recognised only `dict`/`list` and
+returned any other value, tuple included, unchanged.
+
+**Decision, revised:** `_redact_extra_value` now takes an `_ancestors:
+frozenset[int]` parameter tracking the `id()` of every container on the
+current recursion PATH (not every container ever seen — two sibling
+branches legitimately referencing the same object is normal aliasing, not a
+cycle, and both must still be walked). A container whose `id()` is already
+on that path is a genuine cycle and is returned unchanged rather than
+recursed into again. A module-level `_MAX_EXTRA_REDACTION_DEPTH = 25` caps
+recursion depth independently of the cycle guard, catching the deep
+non-cyclic case; #313's own reproduction shapes are 2-3 levels deep, so 25
+is generous headroom for any real call site while bounding a pathological
+one. Past either limit, the remaining sub-value is returned as-is
+(unredacted below that point) rather than raising — a stalled/crashed log
+call is worse than an edge case no real call site will hit.
+
+`_EXTRA_CONTAINER_TYPES` widens from `(dict, list)` to
+`(dict, list, tuple, set, frozenset)`, closing the tuple gap and the same
+gap for `set`/`frozenset` by construction. Each recursion level passes a new
+frozenset (`_ancestors | {id(value)}`) to its own children rather than
+mutating a shared set, so sibling branches never see each other's ancestry.
+
+Proven by 4 new tests: a self-referential dict and a 2000-level-deep dict
+each log successfully instead of raising `RecursionError`; a secret inside
+a tuple and inside a set are each redacted before reaching the breadcrumb,
+with a non-secret sibling element surviving as the positive partner.
+
 ## Consequences
 
-- Every genuine dict/list-nested secret in an `extra={...}` field is now
-  redacted before it reaches a Sentry breadcrumb or event, at any nesting
-  depth, matching the guarantee ADR-0041 already gave top-level string
-  extras.
-- A caller's own `extra={...}` dict/list object is never mutated as a side
-  effect of logging it — the redacted value only ever replaces
+- Every genuine dict/list/tuple/set-nested secret in an `extra={...}` field
+  is now redacted before it reaches a Sentry breadcrumb or event, up to 25
+  levels deep, matching the guarantee ADR-0041 already gave top-level
+  string extras.
+- A caller's own `extra={...}` container is never mutated as a side effect
+  of logging it — the redacted value only ever replaces
   `record.__dict__[key]`, never the caller's original object.
-- `tuple`-valued extras are still left untouched, same as before this
-  change — no observed call site uses one, and a tuple is not the JSON-like
-  shape this redaction targets. If a future call site logs a
-  tuple-of-strings extra, it would need the same treatment `dict`/`list` got
-  here.
+- A self-referential or pathologically deep `extra={...}` container can no
+  longer crash a log call; the walk degrades to "leave the excess depth
+  unredacted" rather than raising `RecursionError`.
+- `_MAX_EXTRA_REDACTION_DEPTH = 25` is a deliberately generous, unmeasured
+  bound — no real call site is known to nest anywhere near that deep. If a
+  genuine call site is ever found nesting close to the cap, the right fix is
+  raising the constant with evidence of the real shape, not silently
+  swallowing more.
 
 ## Related
 
