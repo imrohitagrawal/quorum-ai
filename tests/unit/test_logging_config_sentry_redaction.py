@@ -648,3 +648,43 @@ def test_calling_setup_json_logging_repeatedly_does_not_grow_the_factory_chain()
         f"factory chain grew across repeated setup calls: {counts} "
         "(expected the same layer count every time)"
     )
+
+
+def test_a_secret_reachable_only_via_a_cycle_is_still_redacted() -> None:
+    """A cyclic extra value must not leak a secret through the cycle-guard's short-circuit.
+
+    Turns it red: reverting the cycle-guard branch to ``return value`` (the
+    raw unredacted object) instead of a safe placeholder reproduces the
+    leak this test exists to catch.
+    """
+    from product_app.logging_config import _redact_extra_value
+
+    secret = "sk-or-v1-CYCLEBACKEDGESECRET1234567890"
+    cyclic: dict[str, object] = {"secret": secret}
+    cyclic["self"] = cyclic
+
+    result = _redact_extra_value(cyclic)
+
+    assert secret not in str(result), (
+        "a secret reachable via the cyclic branch of a self-referential "
+        f"dict leaked unredacted: {result!r}"
+    )
+
+
+def test_a_secret_past_the_depth_cap_is_still_redacted_not_returned_raw() -> None:
+    """Once the recursion depth cap is hit, the remaining subtree must be
+    a safe placeholder, not the raw (unredacted) original object.
+    """
+    from product_app.logging_config import (
+        _MAX_EXTRA_REDACTION_DEPTH,
+        _redact_extra_value,
+    )
+
+    secret = "sk-or-v1-BEYONDDEPTHCAPSECRET1234567890"
+    deep: dict[str, object] = {"leaf": secret}
+    for _ in range(_MAX_EXTRA_REDACTION_DEPTH + 5):
+        deep = {"inner": deep}
+
+    result = _redact_extra_value(deep)
+
+    assert secret not in str(result), f"a secret past the depth cap leaked unredacted: {result!r}"

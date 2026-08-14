@@ -202,13 +202,19 @@ def _redact_extra_value(value: object, _ancestors: frozenset[int] = frozenset())
     if not isinstance(value, _EXTRA_CONTAINER_TYPES):
         return value
     if len(_ancestors) >= _MAX_EXTRA_REDACTION_DEPTH:
-        return value
+        # Do NOT return `value` here: it is the raw, unredacted subtree,
+        # and a secret past the depth cap would leak through untouched.
+        # Stringify-then-redact so any secret shape still gets caught.
+        return _redact_secrets(str(value))
     obj_id = id(value)
     if obj_id in _ancestors:
         # Genuine cycle (this container is its own ancestor on this path,
         # directly or indirectly) — stop descending rather than recurse
-        # forever.
-        return value
+        # forever. As above, must not return `value` unchanged: a sibling
+        # key elsewhere in the same cyclic object can hold a secret that
+        # is only reachable by walking through this back-edge, so the raw
+        # object would leak it. Stringify-then-redact instead.
+        return _redact_secrets(str(value))
     ancestors = _ancestors | {obj_id}
     if isinstance(value, dict):
         return {key: _redact_extra_value(item, ancestors) for key, item in value.items()}
