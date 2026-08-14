@@ -276,6 +276,12 @@ def _strip_decorator_mirroring(source: str) -> str:
         "                        hits += 1\n"
         "                        if frozen or unmutatable(child):\n"
         "                            skipped_count += 1\n"
+        "                        elif no_mutable_content(child, source):\n"
+        "                            # #146: genuinely nothing for any mutmut operator\n"
+        "                            # to touch anywhere in this function (own body or\n"
+        "                            # a nested def inside it) - same dead-glob cause\n"
+        "                            # the Makefile's scope() excludes.\n"
+        "                            skipped_count += 1\n"
         "                        else:\n"
         '                            name = f"xǁ{cls}ǁ{child.name}" if cls else f"x_{child.name}"\n'
         '                            globs.append(f"{mod}.{name}__mutmut_*")\n'
