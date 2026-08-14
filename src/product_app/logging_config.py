@@ -84,7 +84,7 @@ def _redact_secrets(text: str) -> str:
 def install_redaction_record_factory() -> None:
     """Scrub secret-shaped substrings from every log record at CREATION time.
 
-    ADR-0036 scrubs the fully-rendered JSON string inside
+    ADR-0040 scrubs the fully-rendered JSON string inside
     ``JsonFormatter.format()`` — which is correct for the stdout sink, but
     that is the only place it runs. ``sentry_sdk``'s ``LoggingIntegration``
     is on by default (``main.py`` passes no ``integrations=``) and captures
@@ -95,7 +95,7 @@ def install_redaction_record_factory() -> None:
     the record, independent of which handlers exist. Measured 2026-08-14 with
     a real ``sentry_sdk`` client on an in-memory ``before_breadcrumb`` hook:
     a secret logged via ``logger.warning("...: %s", exc)`` at any of the 9
-    call sites named in ADR-0036 reached the breadcrumb in full plaintext —
+    call sites named in ADR-0040 reached the breadcrumb in full plaintext —
     see ``tests/unit/test_logging_config_sentry_redaction.py``. This is the
     exact bypass ``telemetry_sink.py``'s ``_configure_token_logger`` docstring
     already documents for a different logger (the token stream), which is why
@@ -123,7 +123,7 @@ def install_redaction_record_factory() -> None:
     ``Formatter.formatException``) for a case with no current call site. The
     stdout path still catches that case via ``JsonFormatter``'s existing
     final-string scrub; the Sentry path does not, and that gap is unfixed —
-    tracked in ADR-0036's follow-up, not silently repaired here.
+    tracked in ADR-0040's follow-up, not silently repaired here.
 
     Idempotent: re-installing is a no-op — but see the "Idempotency" note
     below for why this is a MODULE-level flag rather than the

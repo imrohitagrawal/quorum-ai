@@ -1,4 +1,4 @@
-"""The formatter-level redaction in ADR-0036 never sees a Sentry breadcrumb.
+"""The formatter-level redaction in ADR-0040 never sees a Sentry breadcrumb.
 
 PR #315 review finding (blocking, both copies say the same thing): Sentry's
 ``LoggingIntegration`` is on by default (``main.py`` passes no
@@ -6,7 +6,7 @@ PR #315 review finding (blocking, both copies say the same thing): Sentry's
 the ORIGINATING logger. Propagation, handlers, and per-handler filters never
 enter into it — and neither does ``JsonFormatter.format()``, which only runs
 inside the root logger's own ``StreamHandler``. So a secret logged through any
-of the 9 raw-exception call sites named in ADR-0036 (e.g.
+of the 9 raw-exception call sites named in ADR-0040 (e.g.
 ``feedback_store.py:521``: ``_log.warning("...: %s", exc)``) reached Sentry as
 a breadcrumb in full plaintext whenever ``SENTRY_DSN`` is configured —
 production, per ``main.py``'s own comment that ``sentry_sdk.init`` "is a
@@ -69,7 +69,7 @@ def test_a_bearer_token_never_reaches_a_sentry_breadcrumb(
 
     Reproduces feedback_audit.py:685's exact call shape:
     ``_log.warning("feedback_audit: audit model call failed: %s", exc)``
-    where ``str(exc)`` carries a Bearer token, the shape ADR-0036 already
+    where ``str(exc)`` carries a Bearer token, the shape ADR-0040 already
     scrubs from stdout.
     """
     secret = "sk-or-v1-1234567890abcdef1234567890abcdefSECRET"
@@ -93,7 +93,7 @@ def test_an_openrouter_style_key_never_reaches_a_sentry_breadcrumb(
     """RED WHEN: the redaction record factory only strips ``Bearer`` tokens.
 
     Same call shape, a bare ``sk-...`` key with no ``Bearer`` label —
-    the second pattern class ADR-0036 already scrubs from stdout.
+    the second pattern class ADR-0040 already scrubs from stdout.
     """
     secret = "sk-or-v1-anothersecretvaluethatmustneverleak"
     logger = logging.getLogger("product_app.store_reconnect")

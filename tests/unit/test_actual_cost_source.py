@@ -282,6 +282,72 @@ def test_measured_total_is_exact_from_captured_tokens(monkeypatch: pytest.Monkey
 # --- issue #110: a billed Layer-B judge call must never be invisible -------
 
 
+def test_debate_usage_is_priced_by_its_own_model_not_the_moderator_rate(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """#290: each debate usage record must be priced at the model that was
+    actually billed, not blanket-priced at ``settings.debate_model_id``.
+
+    Two debate rounds are tagged with two DIFFERENT real catalog models
+    (``openai/gpt-4o-mini`` and ``google/gemini-2.5-flash``), while
+    ``settings.debate_model_id`` is forced to a THIRD, differently-priced
+    model (``anthropic/claude-haiku-4.5``). If pricing still used the
+    moderator rate for every entry (the pre-fix behaviour), the measured
+    debate total would equal ``2 * measured_call_cost_usd(haiku, ...)``.
+    Pricing each entry by its own tagged model must NOT equal that figure,
+    and must equal the sum of the two entries priced individually.
+    """
+    from product_app import config
+    from product_app.costs import measured_call_cost_usd
+
+    monkeypatch.setattr(
+        config.settings, "debate_model_id", "anthropic/claude-haiku-4.5", raising=False
+    )
+    usage_a = TokenUsage(
+        prompt_tokens=1000, completion_tokens=500, total_tokens=1500, model_id="openai/gpt-4o-mini"
+    )
+    usage_b = TokenUsage(
+        prompt_tokens=1000,
+        completion_tokens=500,
+        total_tokens=1500,
+        model_id="google/gemini-2.5-flash",
+    )
+    run = _run(
+        initial_answers=_fully_live_answers(),
+        debate_call_usages=[(1, usage_a), (2, usage_b)],
+        synthesis_call_usages=[_usage() for _ in range(5)],
+        estimate=_estimate("0.0400"),
+    )
+    actual, breakdown, source = _actual_cost(run)  # type: ignore[arg-type]
+    assert source == "measured"
+    assert breakdown is not None
+
+    wrong_if_priced_at_moderator_rate = 2 * measured_call_cost_usd(
+        model_id="anthropic/claude-haiku-4.5", prompt_tokens=1000, completion_tokens=500
+    )
+    expected_debate_total = measured_call_cost_usd(
+        model_id="openai/gpt-4o-mini", prompt_tokens=1000, completion_tokens=500
+    ) + measured_call_cost_usd(
+        model_id="google/gemini-2.5-flash", prompt_tokens=1000, completion_tokens=500
+    )
+    # The two catalog models really do price differently from the moderator
+    # model — otherwise this test could pass for the wrong reason.
+    assert expected_debate_total != wrong_if_priced_at_moderator_rate
+
+    synthesis_total = 5 * measured_call_cost_usd(
+        model_id=config.settings.synthesis_model_id,
+        prompt_tokens=1000,
+        completion_tokens=500,
+    )
+    initial_total = sum(
+        measured_call_cost_usd(model_id=mid, prompt_tokens=1000, completion_tokens=500)
+        for mid in DEFAULT_MODEL_IDS
+    )
+    assert actual == (initial_total + expected_debate_total + synthesis_total).quantize(
+        Decimal("0.0001")
+    )
+
+
 def test_judge_call_with_captured_usage_is_priced_into_the_measured_total() -> None:
     """A judge that fired and reported usage is NOT dropped from the
     receipt: it prices into the total and gets its own by_model/by_stage row,

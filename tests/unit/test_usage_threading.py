@@ -34,6 +34,13 @@ from product_app.providers import (
 from product_app.synthesis import _RECOMMENDATION_PROMPT, synthesis_stub_service
 
 _USAGE = TokenUsage(prompt_tokens=100, completion_tokens=40, total_tokens=140)
+#: #290: a debate usage that went through the real ``_call_debate_model``
+#: seam comes back stamped with the model that was actually dispatched
+#: (``settings.debate_model_id``, unmocked and untouched by this file).
+#: ``_USAGE`` above stands in for the raw provider payload (used for the
+#: initial-answer fixtures too, where the stamp does not apply); this is
+#: what ``run_debate_rounds`` is expected to record.
+_DEBATE_USAGE = _USAGE.model_copy(update={"model_id": config.settings.debate_model_id})
 
 
 def _answer(slot: int) -> InitialModelAnswer:
@@ -88,8 +95,9 @@ def test_debate_collects_usage_from_live_rounds(monkeypatch: pytest.MonkeyPatch)
         initial_answers=_answers(),
         openrouter_key="sk-or-test-live",
     )
-    # Both rounds went live → two usage entries, each tagged with its round.
-    assert result.live_call_usages == [(1, _USAGE), (2, _USAGE)]
+    # Both rounds went live → two usage entries, each tagged with its round
+    # (and, per #290, with the model that was actually dispatched).
+    assert result.live_call_usages == [(1, _DEBATE_USAGE), (2, _DEBATE_USAGE)]
 
 
 def test_debate_records_none_when_provider_omits_usage(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -131,7 +139,7 @@ def test_debate_round2_only_is_attributed_to_round2(monkeypatch: pytest.MonkeyPa
         initial_answers=_answers(),
         openrouter_key="sk-or-test-live",
     )
-    assert result.live_call_usages == [(2, _USAGE)]
+    assert result.live_call_usages == [(2, _DEBATE_USAGE)]
 
 
 def test_debate_round1_billed_but_unusable_is_recorded_against_round1(
@@ -158,7 +166,7 @@ def test_debate_round1_billed_but_unusable_is_recorded_against_round1(
         initial_answers=_answers(),
         openrouter_key="sk-or-test-live",
     )
-    assert result.live_call_usages == [(1, None), (2, _USAGE)]
+    assert result.live_call_usages == [(1, None), (2, _DEBATE_USAGE)]
 
 
 def test_debate_templated_run_records_no_usage(monkeypatch: pytest.MonkeyPatch) -> None:

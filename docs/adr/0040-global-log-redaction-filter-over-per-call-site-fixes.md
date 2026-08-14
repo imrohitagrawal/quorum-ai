@@ -1,4 +1,4 @@
-# ADR-0036: A global log-redaction step in `JsonFormatter`, not per-call-site fixes
+# ADR-0040: A global log-redaction step in `JsonFormatter`, not per-call-site fixes
 
 ## Status
 
@@ -92,11 +92,11 @@ separate, larger, and lower-urgency concern once the filter exists.
 - Every current and future call site logging through the root logger's
   `JsonFormatter` gets secret-shaped substrings scrubbed automatically. No
   call-site change is required to get this protection.
-  **Correction (2026-08-14, ADR-0037):** this was true for the stdout sink
+  **Correction (2026-08-14, ADR-0041):** this was true for the stdout sink
   only. Sentry's `LoggingIntegration` reads the log record directly — it
   never goes through `JsonFormatter` — so a secret logged at any of the 9
   named call sites reached a Sentry breadcrumb unredacted whenever
-  `SENTRY_DSN` was configured. ADR-0037 adds a second redaction stage at
+  `SENTRY_DSN` was configured. ADR-0041 adds a second redaction stage at
   record-creation time (`logging.setLogRecordFactory`) that closes this for
   breadcrumbs and events; see that ADR for the measured reproduction and
   what remains an open gap (`exc_info`-based tracebacks).

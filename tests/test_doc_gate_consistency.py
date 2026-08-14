@@ -295,6 +295,60 @@ _PENDING_PROMOTION_RE = re.compile(
 _WINDOW = 90
 
 
+def _skip_leading_parenthetical(chunk: str, i: int) -> int:
+    """Advance past a balanced ``(...)`` aside that opens before any clause
+    break, so the comma right after it (e.g. ``job (see #130), blocking``)
+    is treated the same as one right after the identifier's own closing
+    punctuation.
+
+    #224: #141 only exempted a comma immediately after the identifier's
+    closing markdown punctuation. It left a real gap where a short
+    parenthetical cross-reference sits between the identifier and the
+    status comma — ``the `mutation-baseline` job (see #130), blocking`` was
+    still cut before "blocking". Confirmed by execution.
+
+    A naive "skip a comma within N characters" fix breaks the counter-example
+    ``the `perf-gate` job, unrelated commentary, blocking since June`` (#224),
+    where a real clause-break comma sits at a similarly short distance and
+    must still cut. Parenthesis balance, not distance, is what tells the two
+    apart: a "(" is only treated as a skippable aside if it opens BEFORE any
+    comma/semicolon/". " boundary — i.e. before any text that would otherwise
+    have cut the window anyway. An unbalanced "(" (no matching ")" in the
+    chunk) is left alone; the caller's existing clause-break scan then
+    applies unchanged.
+
+    A second counter-example, found reasoning about the diff-cover doc row
+    itself: ``changed-lines coverage (`diff-cover` >=95%), advisory mutation
+    baseline`` has the identical shape — identifier, balanced parenthetical,
+    comma, adjective — but here the comma DOES start a new clause about a
+    different gate, and skipping it would wrongly attribute "advisory" to
+    diff-cover. What tells the two apart is content, not position: the
+    diff-cover parenthetical itself quotes another backtick-wrapped
+    identifier (its own threshold detail); a plain cross-reference aside like
+    ``(see #130)`` or ``(in passing)`` never does. So a parenthetical
+    containing a backtick is treated as a second, self-contained claim
+    (leave it to the normal clause-break scan) rather than a skippable aside.
+    """
+    paren_start = chunk.find("(", i)
+    if paren_start == -1:
+        return i
+    for boundary in (",", ";", ". "):
+        cut = chunk.find(boundary, i)
+        if cut != -1 and cut < paren_start:
+            return i  # a real clause break precedes the parenthetical
+    depth = 0
+    for j in range(paren_start, len(chunk)):
+        if chunk[j] == "(":
+            depth += 1
+        elif chunk[j] == ")":
+            depth -= 1
+            if depth == 0:
+                if "`" in chunk[paren_start:j]:
+                    return i  # quotes another identifier: a claim, not an aside
+                return j + 1
+    return i  # unbalanced parenthesis: leave the window untouched
+
+
 def _window(line: str, end: int) -> str:
     """Text after an identifier that still talks about it.
 
@@ -309,13 +363,47 @@ def _window(line: str, end: int) -> str:
     Skip past a short run of closing punctuation first, and only exempt the
     comma immediately following it; any LATER comma in the window still
     cuts, which is what protects the diff-cover list-item case above.
+
+    #224: the same exemption applies when a short balanced parenthetical
+    aside — not just a punctuation run — sits between the identifier and
+    the status comma. See `_skip_leading_parenthetical`.
+
+    #317: `_skip_leading_parenthetical` only advances past ONE aside. A
+    second consecutive aside (``job (a) (b), blocking``) left `i` sitting
+    right after the first ``)`` — not a comma — so the exemption above never
+    applied, and the comma search fell back to scanning the WHOLE chunk from
+    index 0, finding the comma after the second aside and cutting the window
+    there, before the status word. Confirmed by execution: `_claims` on
+    ``the `mutation-baseline` job (a) (b), blocking`` returned ``[]``, not
+    ``["blocking"]``. Call `_skip_leading_parenthetical` in a loop so any
+    RUN of consecutive skippable asides is passed over, not just the first;
+    it already refuses to advance past a real clause-break comma, so this
+    still stops at the first non-skippable one.
+
+    PR #317 review: the fix above only rebased the COMMA boundary's search
+    start on `i`; the ";" and ". " boundary scans still searched from index
+    0 of the whole chunk unconditionally. `_skip_leading_parenthetical`
+    treats a balanced ``(...)`` as opaque while deciding whether to skip
+    it, so a ";" or ". " *inside* an otherwise-skippable aside does not
+    stop the skip — but it was still there, at a position before `i`, for
+    the old unconditional scan to re-find and cut on, discarding the status
+    word the skip had just protected. Confirmed by execution:
+    ``the `mutation-baseline` job (see #130; still pending), blocking``
+    returned ``[]``, not ``["blocking"]``. All three boundaries now search
+    from `i` (the position after any skip), not from 0; a real clause-break
+    ";" or ". " outside any skipped aside still cuts there, same as before.
     """
     chunk = line[end : end + _WINDOW]
     i = 0
     while i < len(chunk) and chunk[i] in "`)]\"'":
         i += 1
-    comma_search_start = i + 1 if i < len(chunk) and chunk[i] == "," else 0
-    for boundary, start in ((",", comma_search_start), (";", 0), (". ", 0)):
+    while True:
+        skipped = _skip_leading_parenthetical(chunk, i)
+        if skipped == i:
+            break
+        i = skipped
+    comma_search_start = i + 1 if i < len(chunk) and chunk[i] == "," else i
+    for boundary, start in ((",", comma_search_start), (";", i), (". ", i)):
         cut = chunk.find(boundary, start)
         if cut != -1:
             chunk = chunk[:cut]
@@ -495,6 +583,252 @@ def test_the_verb_blocks_is_recognised_same_as_the_adjective_blocking() -> None:
 def test_the_verb_blocked_past_tense_is_also_recognised() -> None:
     line = "The mutation-baseline gate blocked this PR until the score improved."
     assert _claims(_gate("mutation-baseline"), line) == ["blocking"]
+
+
+# --------------------------------------------------------------------------
+# Part A3 — #224: a parenthetical aside between the identifier and the
+# status comma still hides the claim.
+# --------------------------------------------------------------------------
+#
+# #141 only exempted a comma that sits immediately after the identifier's own
+# closing markdown punctuation. It does not help when a short parenthetical
+# aside — e.g. a cross-reference to another issue — sits between the
+# identifier and the status comma: `_window()` still cuts at that comma,
+# because it is not the FIRST character after the punctuation-run skip.
+# Confirmed by direct execution against the real `_window`/`_claims`
+# functions before this fix:
+#
+#     "the `mutation-baseline` job (see #130), blocking" -> []
+
+
+def test_a_parenthetical_aside_before_the_status_comma_does_not_hide_it() -> None:
+    """The exact shape from #224: a short ``(...)`` aside between the
+    identifier and the status comma must not cut the window early.
+
+    Turns red if: `_window()` reverts to cutting at the first comma
+    regardless of an intervening balanced parenthetical.
+    """
+    line = "the `mutation-baseline` job (see #130), blocking"
+    assert _claims(_gate("mutation-baseline"), line) == ["blocking"], (
+        "a parenthetical aside between the identifier and the status comma "
+        f"hid a real blocking claim: {_window(line, line.index('baseline`') + len('baseline'))!r}"
+    )
+
+
+def test_a_real_clause_break_before_a_later_parenthetical_still_cuts() -> None:
+    """The counter-example from #224 that a naive distance-based skip would
+    break: a real clause-break comma that happens to precede an unrelated
+    parenthetical must still cut the window there, not skip past it.
+
+    Turns red if: the parenthetical-skip is applied even when a real,
+    independent-clause comma appears BEFORE the parenthetical.
+    """
+    line = "the `perf-gate` job, mentioned (in passing), blocking since June"
+    end = line.index("perf-gate`") + len("perf-gate")
+    assert _claims(_gate("perf-gate"), line) == [], (
+        "a comma before an unrelated parenthetical wrongly let a later "
+        f"clause's status attach to perf-gate: {_window(line, end)!r}"
+    )
+
+
+def test_the_original_141_no_leak_case_still_holds_with_the_224_fix() -> None:
+    """The #141 regression test's own counter-example, restated here so the
+    #224 fix cannot silently regress it: no parenthetical at all, and the
+    first comma still ends an unrelated clause.
+    """
+    line = "the `perf-gate` job, unrelated commentary, blocking since June"
+    assert _claims(_gate("perf-gate"), line) == []
+
+
+# --------------------------------------------------------------------------
+# Part A4 — #317: a SECOND consecutive parenthetical aside before the status
+# comma still hides the claim.
+# --------------------------------------------------------------------------
+#
+# `_skip_leading_parenthetical` only advances past one aside. After that, `i`
+# points right after the first aside's closing ``)`` — not a comma — so the
+# #141 same-comma exemption never applies, and the comma search restarts from
+# index 0 of the whole chunk, finding the comma after the SECOND aside and
+# cutting the window there, before the status word ever appears. Confirmed by
+# direct execution against the real `_window`/`_claims` functions before this
+# fix:
+#
+#     "the `mutation-baseline` job (a) (b), blocking" -> []
+
+
+def test_two_consecutive_parenthetical_asides_before_the_status_comma_do_not_hide_it() -> None:
+    """The exact shape from #317: two short ``(...)`` asides back to back,
+    both before the status comma, must not cut the window early.
+
+    Turns red if: `_window()` reverts to skipping only the first
+    parenthetical aside.
+    """
+    line = "the `mutation-baseline` job (a) (b), blocking"
+    assert _claims(_gate("mutation-baseline"), line) == ["blocking"], (
+        "a second parenthetical aside between the identifier and the status "
+        f"comma hid a real blocking claim: "
+        f"{_window(line, line.index('baseline`') + len('baseline'))!r}"
+    )
+
+
+def test_two_consecutive_cross_reference_asides_are_also_skipped() -> None:
+    """The finding's own reproduction: two ``(see #N)`` cross-references."""
+    line = "the `mutation-baseline` job (see #1) (see #2), advisory"
+    assert _claims(_gate("mutation-baseline"), line) == ["advisory"], (
+        "two consecutive cross-reference asides hid a real advisory claim: "
+        f"{_window(line, line.index('baseline`') + len('baseline'))!r}"
+    )
+
+
+def test_three_consecutive_parenthetical_asides_are_also_skipped() -> None:
+    """A run longer than two must be skipped in full, not just the first two.
+
+    Turns red if: the loop in `_window()` is replaced by a single fixed
+    number of skip attempts instead of running until no more asides skip.
+    """
+    line = "the `mutation-baseline` job (x) (y) (z), blocking"
+    assert _claims(_gate("mutation-baseline"), line) == ["blocking"]
+
+
+def test_a_real_clause_break_between_two_consecutive_asides_still_cuts() -> None:
+    """Counter-example for the #317 fix: a real clause-break comma sitting
+    BETWEEN two asides must still stop the window at the later status word
+    the clause break protects, mirroring
+    `test_a_real_clause_break_before_a_later_parenthetical_still_cuts` one
+    level deeper.
+
+    Turns red if: the loop is widened to skip a second aside even when a
+    real, independent-clause comma separates it from the first.
+    """
+    line = "the `perf-gate` job (see #1), unrelated (see #2), blocking since June"
+    assert _claims(_gate("perf-gate"), line) == [], (
+        "a real clause break between two asides wrongly let a later "
+        f"clause's status attach to perf-gate: "
+        f"{_window(line, line.index('perf-gate`') + len('perf-gate'))!r}"
+    )
+
+
+# --------------------------------------------------------------------------
+# Part A5 — PR #317 review: a ";" or ". " sitting INSIDE an otherwise
+# skippable parenthetical still truncates the window before the status word.
+# --------------------------------------------------------------------------
+#
+# `_skip_leading_parenthetical` correctly treats the whole balanced ``(...)``
+# as opaque when deciding whether to skip it — a ";" or ". " *inside* the
+# parens does not stop the balance scan, so `i` ends up past the aside, right
+# where #224/#317 intend. But `_window`'s own boundary scan for ";" and ". "
+# unconditionally searched the chunk from index 0, not from `i`, so it found
+# that same internal ";"/". " again — a position BEFORE the skip — and cut
+# the window there, discarding everything the skip had just protected,
+# including the status word after it. The comma boundary already used
+# `comma_search_start` keyed off `i`; ";" and ". " did not. Confirmed by
+# direct execution against the real `_window`/`_claims` functions before this
+# fix:
+#
+#     "the `mutation-baseline` job (see #130; still pending), blocking" -> []
+#     "the `mutation-baseline` job (see notes. more detail), blocking"  -> []
+
+
+def test_a_semicolon_inside_a_skipped_parenthetical_does_not_hide_the_status() -> None:
+    """The exact shape from the #317 review finding: a ";" inside an
+    otherwise-skippable ``(...)`` aside must not truncate the window before
+    the status word that follows the aside.
+
+    Turns red if: the ";" boundary scan in `_window()` reverts to searching
+    from index 0 of the chunk instead of from the position after the skip.
+    """
+    line = "the `mutation-baseline` job (see #130; still pending), blocking"
+    assert _claims(_gate("mutation-baseline"), line) == ["blocking"], (
+        "a semicolon inside a skipped parenthetical aside hid a real "
+        f"blocking claim: "
+        f"{_window(line, line.index('baseline`') + len('baseline'))!r}"
+    )
+
+
+def test_a_sentence_break_inside_a_skipped_parenthetical_does_not_hide_the_status() -> None:
+    """The same finding's second shape: a ". " sentence break inside the
+    aside, rather than a ";".
+
+    Turns red if: the ". " boundary scan in `_window()` reverts to searching
+    from index 0 of the chunk instead of from the position after the skip.
+    """
+    line = "the `mutation-baseline` job (see notes. more detail), blocking"
+    assert _claims(_gate("mutation-baseline"), line) == ["blocking"], (
+        "a sentence break inside a skipped parenthetical aside hid a real "
+        f"blocking claim: "
+        f"{_window(line, line.index('baseline`') + len('baseline'))!r}"
+    )
+
+
+def test_an_explicit_status_claim_inside_a_skipped_parenthetical_shape_is_also_seen() -> None:
+    """The finding's third shape: the vanishing claim is an explicit
+    "advisory", not just "blocking" — confirms the fix is not accidentally
+    specific to one status word.
+    """
+    line = "the `mutation-baseline` job (rationale; deprecated), advisory"
+    assert _claims(_gate("mutation-baseline"), line) == ["advisory"], (
+        "a semicolon inside a skipped parenthetical aside hid a real "
+        f"advisory claim: "
+        f"{_window(line, line.index('baseline`') + len('baseline'))!r}"
+    )
+
+
+def test_a_real_semicolon_clause_break_outside_any_aside_still_cuts() -> None:
+    """Counter-example: a semicolon that is a genuine clause break — not
+    inside any parenthetical — must still end the window there, mirroring
+    the existing comma counter-examples one boundary character over.
+
+    Turns red if: the ";" boundary is widened to skip past `i` blindly,
+    losing the clause-break protection it exists to provide.
+    """
+    line = "the `perf-gate` job; unrelated commentary; blocking since June"
+    assert _claims(_gate("perf-gate"), line) == []
+
+
+def test_a_real_sentence_break_outside_any_aside_still_cuts() -> None:
+    """Counter-example for ". ": a genuine sentence break outside any
+    parenthetical must still end the window there.
+
+    Turns red if: the ". " boundary is widened to skip past `i` blindly,
+    losing the clause-break protection it exists to provide.
+    """
+    line = "the `perf-gate` job. Unrelated sentence. blocking since June"
+    assert _claims(_gate("perf-gate"), line) == []
+
+
+def test_a_comma_inside_a_skipped_parenthetical_does_not_hide_the_status() -> None:
+    """PR #317 rebase review: a "," inside an otherwise-skippable ``(...)``
+    aside must not truncate the window before the status word that follows
+    the aside — the same shape as the ";"/". " findings above, one boundary
+    character over.
+
+    Before this class of fix, `comma_search_start` defaulted to 0 whenever
+    `chunk[i]` was not itself a comma, so the comma-search fallback re-scanned
+    the WHOLE chunk from index 0 and re-found the comma sitting INSIDE the
+    just-skipped aside — cutting the window there, before the status word.
+
+    Turns red if: the comma boundary's search-start reverts to 0 instead of
+    `i` (the position after any skip).
+    """
+    line = "the `mutation-baseline` job (see #130, #131) is blocking"
+    assert _claims(_gate("mutation-baseline"), line) == ["blocking"], (
+        "a comma inside a skipped parenthetical aside hid a real "
+        f"blocking claim: "
+        f"{_window(line, line.index('baseline`') + len('baseline'))!r}"
+    )
+
+
+def test_a_second_comma_inside_a_skipped_parenthetical_is_also_no_problem() -> None:
+    """The finding's second shape: a plain adjective pair (no cross-reference
+    numbers) inside the aside, confirming the fix is not accidentally
+    specific to ``#N, #N`` content.
+    """
+    line = "the `mutation-baseline` job (flaky, retrying) blocking"
+    assert _claims(_gate("mutation-baseline"), line) == ["blocking"], (
+        "a comma inside a skipped parenthetical aside hid a real "
+        f"blocking claim: "
+        f"{_window(line, line.index('baseline`') + len('baseline'))!r}"
+    )
 
 
 # --------------------------------------------------------------------------

@@ -363,7 +363,7 @@ def test_a_cancel_before_the_debate_stage_stays_measured(
         cancels.append("cancelled")
         query_run_repository.transition(query_run_id, QueryRunStatus.CANCELLED)
 
-    monkeypatch.setattr("product_app.query_runs.sleep", _cancel_in_the_gap)
+    monkeypatch.setattr("product_app.query_run_orchestration.sleep", _cancel_in_the_gap)
 
     _execute_query_run_safely(query_run_id, account_id)
     run = query_run_repository.get(query_run_id)
@@ -409,7 +409,7 @@ def test_a_deadline_degrade_before_the_debate_stage_stays_measured(
     def _burn_the_budget(_seconds: float) -> None:
         time.sleep(0.5)
 
-    monkeypatch.setattr("product_app.query_runs.sleep", _burn_the_budget)
+    monkeypatch.setattr("product_app.query_run_orchestration.sleep", _burn_the_budget)
 
     run = _drive()
 

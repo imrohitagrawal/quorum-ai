@@ -29,7 +29,7 @@ import pytest
 from fastapi.testclient import TestClient
 from tests.helpers import isolated_run_semaphore, wait_for_free_permits
 
-from product_app import config, query_runs
+from product_app import config, query_run_orchestration
 from product_app.main import app
 from product_app.providers import provider_event_recorder
 from product_app.safety import WARNING_VERSION, WarningType
@@ -138,7 +138,7 @@ def test_a_cancel_landing_during_initial_answers_is_recorded_as_a_cancelled_prov
     monkeypatch.setattr(config.settings, "openrouter_api_key", "sk-or-test-188-initial")
     monkeypatch.setattr(config.settings, "stage_delay_ms", 0)
 
-    real_should_stop = query_runs._should_stop
+    real_should_stop = query_run_orchestration._should_stop
 
     def wrapped_should_stop(query_run_id: UUID) -> bool:
         if not triggered.is_set():
@@ -146,7 +146,7 @@ def test_a_cancel_landing_during_initial_answers_is_recorded_as_a_cancelled_prov
             rendezvous.arrive()
         return real_should_stop(query_run_id)
 
-    monkeypatch.setattr(query_runs, "_should_stop", wrapped_should_stop)
+    monkeypatch.setattr(query_run_orchestration, "_should_stop", wrapped_should_stop)
 
     with isolated_run_semaphore(1) as semaphore:
         client = TestClient(app)

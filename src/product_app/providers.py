@@ -304,6 +304,16 @@ class TokenUsage(BaseModel):
     prompt_tokens: int = Field(ge=0)
     completion_tokens: int = Field(ge=0)
     total_tokens: int = Field(ge=0)
+    #: The model this usage was actually billed against, when the caller
+    #: knows it at capture time (issue #290). ``None`` for a record built
+    #: before this field existed, or wherever the caller has not been
+    #: updated to stamp it — the pricing layer falls back to its own
+    #: default (the moderator/writer model id) in that case, so an absent
+    #: value never changes existing behaviour. Not populated by
+    #: ``_extract_usage`` itself, which only sees the response body, not
+    #: which model the request targeted; callers that know the model
+    #: (``debate.py``, ``synthesis.py``) stamp it after the call returns.
+    model_id: str | None = None
 
 
 class InitialModelAnswer(BaseModel):

@@ -157,7 +157,7 @@ def _park_the_first_pricing_call(
         # The REAL pricing function — the figures below are real money.
         return measured_call_cost_usd(**kwargs)
 
-    monkeypatch.setattr("product_app.query_runs.measured_call_cost_usd", _parked_price)
+    monkeypatch.setattr("product_app.query_run_orchestration.measured_call_cost_usd", _parked_price)
     return reader_in_window, writer_done
 
 

@@ -1,4 +1,4 @@
-# ADR-0038: A module-level flag governs `install_redaction_record_factory` idempotency, not a marker on the current factory
+# ADR-0042: A module-level flag governs `install_redaction_record_factory` idempotency, not a marker on the current factory
 
 ## Status
 
@@ -6,7 +6,7 @@ Accepted — 2026-08-14 (issue #313, PR #315 round-2 review follow-up)
 
 ## Context
 
-ADR-0037 added `install_redaction_record_factory`, guarded by:
+ADR-0041 added `install_redaction_record_factory`, guarded by:
 
 ```python
 current = logging.getLogRecordFactory()
@@ -105,7 +105,7 @@ gap between "record built" and "guard set."
   including future ones this module has never heard of, exposing its
   `current` cell the same way), and solves a problem a simple flag solves
   without the introspection.
-- **Leave it as a "known gap, unfixed"** the way ADR-0037 left the
+- **Leave it as a "known gap, unfixed"** the way ADR-0041 left the
   `exc_info` gap. Rejected: unlike that gap (no current call site triggers
   it), this one is triggered by `setup_json_logging`'s own documented
   contract — "safe to call from both the app and the audit script" — which
@@ -115,7 +115,7 @@ gap between "record built" and "guard set."
 ## Related
 
 - Issue #313.
-- ADR-0037 — introduces `install_redaction_record_factory`; this ADR fixes
+- ADR-0041 — introduces `install_redaction_record_factory`; this ADR fixes
   a defect in that function's idempotency and reentrancy handling.
 - `request_id.py`'s `install_request_id_record_factory` — shares the exact
   same marker-on-current pattern and the same latent defect, deliberately
