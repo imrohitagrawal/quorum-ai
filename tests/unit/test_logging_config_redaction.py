@@ -76,6 +76,41 @@ def test_key_value_assignment_secret_is_redacted() -> None:
     assert "abcdef0123456789ZZZtopsecret" not in serialized
 
 
+def test_double_quoted_value_credential_is_redacted() -> None:
+    """PR #315 review finding: ``password="..."`` (quoted VALUE) is scrubbed.
+
+    The module docstring for ``_REDACTION_PATTERNS`` already claimed "quoted
+    or bare" values were covered, but the regex's value character class had
+    no ``"``/``'`` in it, so a quoted value slipped through entirely.
+
+    WHAT TURNS THIS RED: drop the ``[\"']?`` wrapping the value group back
+    to the bare ``[A-Za-z0-9._~+/=-]{6,}`` this pattern shipped with.
+    """
+    payload = _formatted('config error: password="hunter2topsecretvalue"')
+    serialized = json.dumps(payload)
+    assert "hunter2topsecretvalue" not in serialized
+    assert "[REDACTED]" in payload["message"]
+
+
+def test_quoted_label_and_value_dict_style_credential_is_redacted() -> None:
+    """PR #315 review finding: ``'password': 'value'`` (dict/JSON-ish shape).
+
+    This is exactly the shape ``str({"password": "..."})`` or
+    ``json.dumps({"password": "..."})`` produces — the form a call site
+    logging a ``dict`` via ``%s`` would emit, and the quoted LABEL
+    (``'password'``) also broke the old regex's ``\\b(password)\\b\\s*[:=]``
+    match, since the label's own trailing quote sat directly between the
+    label and the separator with no whitespace to swallow it.
+
+    WHAT TURNS THIS RED: drop the ``[\"']?`` wrapping the label back to the
+    bare ``\\b(...)\\b\\s*[:=]`` this pattern shipped with.
+    """
+    payload = _formatted("config dump: {'password': 'anothertopsecretvalue'}")
+    serialized = json.dumps(payload)
+    assert "anothertopsecretvalue" not in serialized
+    assert "[REDACTED]" in payload["message"]
+
+
 def test_normal_message_is_not_touched() -> None:
     """Negative control: an ordinary message survives the filter in full."""
     payload = _formatted("run 4f2c9c reopened after 3 retries, status=ok")

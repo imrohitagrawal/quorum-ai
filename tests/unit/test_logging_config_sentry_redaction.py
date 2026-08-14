@@ -22,6 +22,7 @@ WHAT TURNS EACH TEST RED is stated on the test.
 
 from __future__ import annotations
 
+import json
 import logging
 from collections.abc import Iterator
 from typing import Any
@@ -108,6 +109,44 @@ def test_an_openrouter_style_key_never_reaches_a_sentry_breadcrumb(
     assert all(secret not in c.get("message", "") for c in own_crumbs), (
         "the sk-... key reached a Sentry breadcrumb in plaintext"
     )
+
+
+def test_a_secret_in_an_extra_field_never_reaches_a_sentry_breadcrumb(
+    sentry_client: None, crumbs: list[dict[str, Any]]
+) -> None:
+    """PR #315 round-2 review finding: ``extra={...}`` values were never redacted.
+
+    Reproduces ``synthesis.py:1462``'s exact call shape:
+    ``logger.error("synthesis_section_failed", extra={"error": str(exc), ...})``.
+    The record-factory hook alone cannot see this: ``Logger.makeRecord``
+    calls the record factory FIRST and only attaches ``extra`` to
+    ``record.__dict__`` afterwards (stdlib ``logging.Logger.makeRecord``), so
+    a hook installed only via ``setLogRecordFactory`` never sees the extra
+    dict at all — it has to be redacted at ``Logger.makeRecord`` itself, or
+    at the Sentry-visible edge.
+
+    RED WHEN: the record factory only redacts ``record.getMessage()`` and
+    never touches ``record.__dict__``'s ``extra`` fields — the bug this test
+    was written to catch.
+    """
+    secret = "Bearer sk-or-v1-abcdef0123456789fakeSecretTokenValue"
+    logger = logging.getLogger("product_app.synthesis")
+    logger.error(
+        "synthesis_section_failed",
+        extra={"section": "Executive Summary", "error": secret, "error_type": "RuntimeError"},
+    )
+
+    own_crumbs = [c for c in crumbs if c.get("category") == "product_app.synthesis"]
+    assert own_crumbs, "the log call produced no breadcrumb at all — fixture is broken"
+    for crumb in own_crumbs:
+        data = crumb.get("data", {})
+        assert secret not in json.dumps(data), (
+            f"the secret reached a Sentry breadcrumb's extra data in plaintext: {data}"
+        )
+        assert data.get("error") == "[REDACTED]"
+        # POSITIVE PARTNER (rule 7): a non-secret extra field is untouched.
+        assert data.get("section") == "Executive Summary"
+        assert data.get("error_type") == "RuntimeError"
 
 
 def test_setup_json_logging_wires_the_redaction_factory() -> None:

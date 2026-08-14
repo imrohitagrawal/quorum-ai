@@ -47,12 +47,41 @@ _REDACTION_PATTERNS: tuple[re.Pattern[str], ...] = (
     # per providers.py/feedback_audit.py/readiness.py's `f"Bearer {key}"`.
     re.compile(r"(?i)\bBearer\s+[A-Za-z0-9._~+/=-]{8,}"),
     # "api_key=...", "access_token: ...", "password=...", etc. — a labeled
-    # credential assignment, quoted or bare, in either query-string (``=``)
-    # or structured-log (``: ``) shape.
+    # credential assignment, in either query-string (``=``) or
+    # structured-log (``: ``) shape, bare OR quoted on either side of the
+    # separator: ``password=hunter2``, ``password="hunter2"`` (quoted
+    # VALUE), and ``'password': 'hunter2'`` (quoted LABEL and value — the
+    # Python-repr/JSON-ish shape a dict's ``__str__`` produces).
+    #
+    # This pattern is applied both to raw text (the record-factory path,
+    # where a literal ``"`` is a single character) AND to the
+    # ``json.dumps``-ed final string (``JsonFormatter.format``, where a
+    # literal ``"`` from the original text has been escaped to ``\"``) —
+    # ``QUOTE`` matches either form. Every quote is captured and its CLOSE
+    # is matched via a BACKREFERENCE to the same alternative
+    # (``\1``/``\2``), never an independent optional quote on each side.
+    # An earlier version used two independent ``["']?`` (unpaired,
+    # optional on each side) and it corrupted the output: for an unquoted
+    # value sitting at the end of the JSON string (``..."message":
+    # "...api_key=abcdef0123456789ZZZtopsecret"``), the optional trailing
+    # quote matched the JSON field's own STRUCTURAL closing ``"`` — which
+    # is a real ``"`` character at that position, no different from a
+    # quote that was genuinely part of the value — and replaced it with
+    # ``[REDACTED]``, producing invalid JSON
+    # (``tests/unit/test_logging_config_redaction.py::test_key_value_assignment_secret_is_redacted``
+    # went from green to a ``JSONDecodeError`` under that version). Pairing
+    # every open quote with a same-type close via backreference means an
+    # unquoted value never has ANY trailing quote consumed — it falls to
+    # the bare (no-quote) alternative instead, which cannot eat a
+    # neighbouring structural character because it has no trailing group
+    # at all.
     re.compile(
-        r"(?i)\b(api[_-]?key|access[_-]?token|auth[_-]?token|secret[_-]?key|"
-        r"client[_-]?secret|password|authorization)\b\s*[:=]\s*"
-        r"[A-Za-z0-9._~+/=-]{6,}"
+        r"(?i)(?:(\\\"|\"|')\b(api[_-]?key|access[_-]?token|auth[_-]?token|"
+        r"secret[_-]?key|client[_-]?secret|password|authorization)\b\1|"
+        r"\b(?:api[_-]?key|access[_-]?token|auth[_-]?token|secret[_-]?key|"
+        r"client[_-]?secret|password|authorization)\b)"
+        r"\s*[:=]\s*"
+        r"(?:(\\\"|\"|')[A-Za-z0-9._~+/=-]{6,}\3|[A-Za-z0-9._~+/=-]{6,})"
     ),
     # Bare key-shaped tokens with no label: OpenRouter/OpenAI-style
     # ``sk-...`` keys (the exact shape asserted secret in
@@ -63,6 +92,36 @@ _REDACTION_PATTERNS: tuple[re.Pattern[str], ...] = (
 )
 
 _REDACTED = "[REDACTED]"
+
+#: Standard ``logging.LogRecord`` attributes — everything else in
+#: ``record.__dict__`` came from a call site's ``extra={...}``. Shared by
+#: ``JsonFormatter.format`` (which folds extras into the JSON payload) and
+#: ``install_redaction_record_factory``'s ``factory`` (which must redact
+#: those same extra values before Sentry's breadcrumb/event capture ever
+#: sees them — see that function's docstring, "Scope: extra fields" note).
+_RESERVED_RECORD_ATTRS = {
+    "name",
+    "msg",
+    "args",
+    "levelname",
+    "levelno",
+    "pathname",
+    "filename",
+    "module",
+    "exc_info",
+    "exc_text",
+    "stack_info",
+    "lineno",
+    "funcName",
+    "created",
+    "msecs",
+    "relativeCreated",
+    "thread",
+    "threadName",
+    "processName",
+    "process",
+    "taskName",
+}
 
 #: Module-level, not "does the CURRENT factory carry a marker attribute"
 #: (see the docstring's "Idempotency" section for why the latter is unsafe).
@@ -116,9 +175,28 @@ def install_redaction_record_factory() -> None:
 
     Scope: this redacts ``record.getMessage()`` — the ``msg %% args``
     interpolated text, which is exactly how the 9 named call sites and any
-    future ``logger.warning("...: %%s", exc)`` call leak a secret. It does
-    NOT touch ``record.exc_info`` (a full traceback passed via
-    ``exc_info=True``) — none of the 9 call sites use that form today, and
+    future ``logger.warning("...: %%s", exc)`` call leak a secret — AND every
+    string-valued ``extra={...}`` field on the record (PR #315 review
+    follow-up). ``synthesis.py:1462`` logs
+    ``logger.error("synthesis_section_failed", extra={"error": str(exc), ...})``
+    — a real call site, not a hypothetical one — and a record factory that
+    only touched ``getMessage()`` would leave that ``error`` value (which can
+    carry the same secret-shaped text a raw exception does) sitting in
+    ``record.__dict__["error"]`` in plaintext: ``JsonFormatter`` folds it into
+    the stdout JSON where the final-string scrub would still catch it, but
+    Sentry's breadcrumb/event capture reads ``record.__dict__`` directly and
+    never goes through ``JsonFormatter`` at all — the same bypass this
+    function exists to close for the message. Each extra value is redacted
+    independently with ``_redact_secrets``, matching ``JsonFormatter``'s own
+    reserved-attribute set (``_RESERVED_RECORD_ATTRS``) so the standard
+    ``LogRecord`` fields (``name``, ``pathname``, ``thread``, ...) are never
+    mistaken for call-site extras. Non-string extra values (ints, the
+    ``error_type`` class name via ``str(exc_type)``, etc.) are left alone —
+    redaction operates on text, and a non-string value cannot carry a
+    secret-shaped substring the way ``str()``-of-something can.
+
+    This still does NOT touch ``record.exc_info`` (a full traceback passed
+    via ``exc_info=True``) — none of the 9 call sites use that form today, and
     scrubbing a traceback string would require rendering it here (duplicating
     ``Formatter.formatException``) for a case with no current call site. The
     stdout path still catches that case via ``JsonFormatter``'s existing
@@ -217,6 +295,37 @@ def install_redaction_record_factory() -> None:
 
     logging.setLogRecordFactory(factory)
 
+    # Also redact string-valued extra={...} fields (PR #315 review
+    # follow-up) — see this function's docstring, "Scope" paragraph. These
+    # CANNOT be handled by the record factory above: ``Logger.makeRecord``
+    # calls the record factory first and only attaches ``extra`` to
+    # ``record.__dict__`` AFTER the factory returns (stdlib
+    # ``logging.Logger.makeRecord``), so a record-factory hook never sees
+    # them. ``Logger.makeRecord`` itself runs before ``Logger.handle()``
+    # calls ``callHandlers`` — the same stage Sentry's patched dispatch
+    # reads from — so wrapping ``makeRecord`` closes the gap the record
+    # factory cannot reach. Guarded by the same idempotency flag as the
+    # record factory above so this also installs at most once.
+    original_make_record = logging.Logger.makeRecord
+
+    def make_record_with_extra_redaction(
+        self: logging.Logger, *args: object, **kwargs: object
+    ) -> logging.LogRecord:
+        record = original_make_record(self, *args, **kwargs)
+        for key, value in list(record.__dict__.items()):
+            if (
+                key in _RESERVED_RECORD_ATTRS
+                or key.startswith("_")
+                or not isinstance(value, str)
+            ):
+                continue
+            redacted_value = _redact_secrets(value)
+            if redacted_value != value:
+                setattr(record, key, redacted_value)
+        return record
+
+    logging.Logger.makeRecord = make_record_with_extra_redaction  # type: ignore[method-assign]
+
 
 class JsonFormatter(logging.Formatter):
     """Emit each :class:`logging.LogRecord` as a single-line JSON object.
@@ -229,29 +338,7 @@ class JsonFormatter(logging.Formatter):
     single line.
     """
 
-    _RESERVED = {
-        "name",
-        "msg",
-        "args",
-        "levelname",
-        "levelno",
-        "pathname",
-        "filename",
-        "module",
-        "exc_info",
-        "exc_text",
-        "stack_info",
-        "lineno",
-        "funcName",
-        "created",
-        "msecs",
-        "relativeCreated",
-        "thread",
-        "threadName",
-        "processName",
-        "process",
-        "taskName",
-    }
+    _RESERVED = _RESERVED_RECORD_ATTRS
 
     def format(self, record: logging.LogRecord) -> str:
         timestamp = datetime.fromtimestamp(record.created, tz=UTC).isoformat()
