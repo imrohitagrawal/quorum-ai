@@ -49,13 +49,21 @@ from product_app.query_run_orchestration import (
     _SYNTHESIS_POOL_SIZE as _SYNTHESIS_POOL_SIZE,
 )
 
-# Everything below this line is a PURE re-export: not referenced anywhere in
-# this module's own code, kept only so every pre-existing
-# ``from product_app.query_runs import <name>`` / ``query_runs.<name>``
-# (51 files at the time of the #303 orchestration/persistence split) keeps
-# resolving without an import-path change. The ``import NAME as NAME`` form
-# is the PEP 484 explicit re-export idiom ruff/pyright treat as intentional,
-# so these are never flagged F401 despite having no local reference.
+# NOTE ON THE BLOCK BELOW (#303): every name is imported from
+# ``query_run_orchestration`` using the ``import NAME as NAME`` form — the
+# explicit PEP 484 re-export idiom ruff's F401 and mypy's
+# ``--no-implicit-reexport`` both treat as intentional. Some of these ARE
+# called directly by the route handlers further down this file (e.g.
+# ``query_run_repository``, ``_result_response``, ``_run_semaphore``); most
+# are NOT referenced anywhere in this module's own code and exist purely so
+# every pre-existing ``from product_app.query_runs import <name>`` /
+# ``query_runs.<name>`` (55 files at the time of the split) keeps resolving
+# without an import-path change. Deliberately not split into two commented
+# sub-blocks by usage: ``ruff --fix`` (isort) re-merges same-module imports
+# into one alphabetical group on every run regardless of blank lines or
+# comments between them, so a positional split does not survive `make
+# format` — an earlier version of this file tried exactly that and the next
+# format run silently interleaved the two groups.
 from product_app.query_run_orchestration import ALLOWED_TRANSITIONS as ALLOWED_TRANSITIONS
 from product_app.query_run_orchestration import (
     QUERY_RUN_ACTIVE_TTL as QUERY_RUN_ACTIVE_TTL,

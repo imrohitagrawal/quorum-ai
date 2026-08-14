@@ -41,13 +41,13 @@ directly by tests, not only through the public HTTP surface.
 Split into two modules along the `query_api` / `orchestration`+`persistence`
 boundary, not three:
 
-- **`query_run_orchestration.py`** (new, ~2,650 lines) owns the run state
+- **`query_run_orchestration.py`** (new, 2,648 lines) owns the run state
   machine (`QueryRunStatus`, `StageState`, `ALLOWED_TRANSITIONS`),
   `InMemoryQueryRunRepository` and the `query_run_repository` singleton, and
   the whole pipeline (`_execute_query_run` and everything it calls: judge
   memoisation, evaluation memoisation, billing reconciliation, progress
   tracking). It has no FastAPI import and no route.
-- **`query_runs.py`** (thin, ~930 lines) keeps the `APIRouter`, the six
+- **`query_runs.py`** (thin, 1,063 lines) keeps the `APIRouter`, the six
   route handlers, the request/response Pydantic schemas, and the two
   in-process rate limiters (`_InMemoryIpRateLimiter`,
   `_InMemoryAccountRateLimiter`) — these are HTTP-shaped (`main.py` imports
@@ -68,9 +68,16 @@ pulling in the whole pipeline.
 **`query_runs.py` is a re-export shim, not a broken import path.** Every
 name findable by `from product_app.query_runs import <name>` or
 `query_runs.<name>` before this change resolves identically after it — the
-`import NAME as NAME` idiom is used for the ~45 names that moved but are
-referenced nowhere in `query_runs.py`'s own code (so ruff's F401 does not
-flag them as unused; this is the standard PEP 484 explicit re-export form).
+`import NAME as NAME` idiom is used for all 68 names imported from
+`query_run_orchestration.py` — 48 referenced nowhere else in
+`query_runs.py`'s own code, plus 20 the module's own routes/schemas also
+use locally (e.g. `query_run_repository`, `_result_response`,
+`_run_semaphore`) — so ruff's F401 and mypy's `--no-implicit-reexport`
+both accept every one of them (this is the standard PEP 484 explicit
+re-export form). Verified by AST: parse `query_runs.py`, collect every
+name in its `ImportFrom(module="product_app.query_run_orchestration")`
+nodes (68, no duplicates), then walk the rest of the module body for
+`Name` references to each (20 hit; the other 48 don't).
 **Zero of the 55 importers needed an import-path change.**
 
 ## Rejected alternative: monkeypatch-driven module choice per test file
