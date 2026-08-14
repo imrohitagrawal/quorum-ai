@@ -2529,10 +2529,19 @@ def _actual_cost(
         for round_number, debate_usage in snapshot.debate_call_usages:
             if debate_usage is None:
                 continue
+            # Issue #290: price each usage record at the model it was
+            # actually billed against (``TokenUsage.model_id``, stamped by
+            # ``DebateOrchestrationService._call_debate_model``), falling
+            # back to the moderator setting only for a record captured
+            # before that field existed. Pricing every entry at
+            # ``settings.debate_model_id`` unconditionally is the bug: the
+            # moment a debate call dispatches a different model, it prices
+            # that call at the wrong rate while the receipt still reports
+            # ``measured``.
             debate_by_round[round_number] = debate_by_round.get(
                 round_number, Decimal("0")
             ) + measured_call_cost_usd(
-                model_id=settings.debate_model_id,
+                model_id=debate_usage.model_id or settings.debate_model_id,
                 prompt_tokens=debate_usage.prompt_tokens,
                 completion_tokens=debate_usage.completion_tokens,
             )

@@ -22,7 +22,7 @@ from __future__ import annotations
 
 import re
 from collections.abc import Callable
-from dataclasses import asdict, dataclass, field
+from dataclasses import asdict, dataclass, field, replace
 from enum import StrEnum
 from threading import RLock
 from time import perf_counter
@@ -538,7 +538,7 @@ class DebateOrchestrationService:
         # No post-processing: the provider seam already encodes "not billed"
         # (``None``) versus "dispatched, maybe billed, unusable" (blank text).
         # Collapsing the two here is precisely the F-06 defect.
-        return provider_execution_service.call_with_prompt(
+        result = provider_execution_service.call_with_prompt(
             openrouter_key=openrouter_key,
             model_id=settings.debate_model_id,
             system_prompt=system_prompt,
@@ -546,6 +546,23 @@ class DebateOrchestrationService:
             max_tokens=DEBATE_ROUND_MAX_TOKENS,
             context=context,
         )
+        # Issue #290: stamp the model actually dispatched onto the usage
+        # record, at the one seam that knows both. Today ``model_id`` above
+        # is always ``settings.debate_model_id`` (there is only ever one
+        # debate caller), so this carries no visible change in production
+        # yet. The billing layer (``query_run_orchestration._actual_cost``)
+        # now prices each debate usage record from THIS field, falling back
+        # to ``settings.debate_model_id`` only when it is absent (a record
+        # from before this field existed). That is the fix: pricing no
+        # longer blanket-assumes every debate call in a run was billed at
+        # one model id, which is false the moment a debate call dispatches
+        # a model other than the configured moderator (peer critique, #290's
+        # own follow-on work, is exactly that case).
+        if result is not None and result.usage is not None:
+            result = replace(
+                result, usage=result.usage.model_copy(update={"model_id": settings.debate_model_id})
+            )
+        return result
 
     def _debate_user_prompt(
         self,

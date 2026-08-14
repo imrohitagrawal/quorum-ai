@@ -1452,6 +1452,11 @@ components:
           type: integer
           minimum: 0.0
           title: Total Tokens
+        model_id:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Model Id
       type: object
       required:
       - prompt_tokens
