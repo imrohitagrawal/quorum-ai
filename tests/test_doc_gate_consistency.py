@@ -796,6 +796,41 @@ def test_a_real_sentence_break_outside_any_aside_still_cuts() -> None:
     assert _claims(_gate("perf-gate"), line) == []
 
 
+def test_a_comma_inside_a_skipped_parenthetical_does_not_hide_the_status() -> None:
+    """PR #317 rebase review: a "," inside an otherwise-skippable ``(...)``
+    aside must not truncate the window before the status word that follows
+    the aside — the same shape as the ";"/". " findings above, one boundary
+    character over.
+
+    Before this class of fix, `comma_search_start` defaulted to 0 whenever
+    `chunk[i]` was not itself a comma, so the comma-search fallback re-scanned
+    the WHOLE chunk from index 0 and re-found the comma sitting INSIDE the
+    just-skipped aside — cutting the window there, before the status word.
+
+    Turns red if: the comma boundary's search-start reverts to 0 instead of
+    `i` (the position after any skip).
+    """
+    line = "the `mutation-baseline` job (see #130, #131) is blocking"
+    assert _claims(_gate("mutation-baseline"), line) == ["blocking"], (
+        "a comma inside a skipped parenthetical aside hid a real "
+        f"blocking claim: "
+        f"{_window(line, line.index('baseline`') + len('baseline'))!r}"
+    )
+
+
+def test_a_second_comma_inside_a_skipped_parenthetical_is_also_no_problem() -> None:
+    """The finding's second shape: a plain adjective pair (no cross-reference
+    numbers) inside the aside, confirming the fix is not accidentally
+    specific to ``#N, #N`` content.
+    """
+    line = "the `mutation-baseline` job (flaky, retrying) blocking"
+    assert _claims(_gate("mutation-baseline"), line) == ["blocking"], (
+        "a comma inside a skipped parenthetical aside hid a real "
+        f"blocking claim: "
+        f"{_window(line, line.index('baseline`') + len('baseline'))!r}"
+    )
+
+
 # --------------------------------------------------------------------------
 # Part B — numbers quoted in prose vs the numbers actually enforced
 # --------------------------------------------------------------------------
