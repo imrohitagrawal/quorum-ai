@@ -23,6 +23,8 @@ import importlib.util
 import sys
 from pathlib import Path
 
+import pytest
+
 REPO_ROOT = Path(__file__).resolve().parents[2]
 
 _spec = importlib.util.spec_from_file_location(
@@ -185,7 +187,9 @@ def test_parse_unmerged_branches_unavailable_marker_passes_through() -> None:
 # ---------------------------------------------------------------------------
 
 
-def test_run_on_called_process_error_surfaces_the_real_output() -> None:
+def test_run_on_called_process_error_surfaces_the_real_output(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     import subprocess
 
     real_pytest_output = (
@@ -198,28 +202,22 @@ def test_run_on_called_process_error_surfaces_the_real_output() -> None:
             returncode=2, cmd=["uv", "run", "pytest"], output=real_pytest_output
         )
 
-    original = subprocess.check_output
-    subprocess.check_output = _fake_check_output  # type: ignore[assignment]
-    try:
-        result = session_handoff.run(["uv", "run", "pytest"])
-    finally:
-        subprocess.check_output = original  # type: ignore[assignment]
+    monkeypatch.setattr(subprocess, "check_output", _fake_check_output)
+    result = session_handoff.run(["uv", "run", "pytest"])
 
     assert "5 tests collected, 1 error in 0.42s" in result
 
 
-def test_run_on_called_process_error_falls_back_to_str_when_output_empty() -> None:
+def test_run_on_called_process_error_falls_back_to_str_when_output_empty(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     import subprocess
 
     def _fake_check_output(*_args: object, **_kwargs: object) -> str:
         raise subprocess.CalledProcessError(returncode=2, cmd=["git", "status"], output="")
 
-    original = subprocess.check_output
-    subprocess.check_output = _fake_check_output  # type: ignore[assignment]
-    try:
-        result = session_handoff.run(["git", "status"])
-    finally:
-        subprocess.check_output = original  # type: ignore[assignment]
+    monkeypatch.setattr(subprocess, "check_output", _fake_check_output)
+    result = session_handoff.run(["git", "status"])
 
     assert "unavailable" in result.lower()
     assert "returned non-zero exit status" in result
