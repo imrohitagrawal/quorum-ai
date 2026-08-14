@@ -65,6 +65,24 @@ rejected, mirroring the existing zero-arg-call guard for `Decimal`/
 `frozenset`/etc: `all([])` is vacuously `True`, so `assert X == ()` must not
 read as a pin of `X` to "some tuple."
 
+That closed the direct-literal shape, but not the shape the issue calls out
+by name: "the natural way to write 13 pins" is
+`@pytest.mark.parametrize('expected', [0.001])` /
+`assert CONST == expected`, where the literal lives in the decorator and
+`expected` is an `ast.Name` at the assert site — nothing `_is_literal` can
+see on its own, since the value it would need to inspect is not in the
+comparison at all. A first version of this ADR and the surrounding
+docstrings claimed gap 2 was "fully closed" without this case; it was not —
+`_pins_in_file` resolved a parametrize-bound argument the same as any other
+`ast.Name`, i.e. symbolic, never a pin. `_parametrize_literal_params` closes
+it: for each collected test, it reads its `@pytest.mark.parametrize`
+decorators (single- and multi-argname forms) and binds a parameter name to
+"literal" only when **every** case in that parametrize list supplies a
+literal for it — one symbolic case (e.g. a value computed from another
+module constant) means the assert does not prove the constant against a
+literal on every run, so the name stays unpinned
+(`test_a_parametrized_non_literal_does_not_pin_the_constant`).
+
 ### #145 gap 3 — class-level constants
 
 `_class_constants` walks each risk module's class bodies for ALL-CAPS

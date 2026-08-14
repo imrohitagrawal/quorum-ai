@@ -56,7 +56,13 @@ and friends, `test_is_literal_accepts_pytest_approx` and friends,
   written that way already).
 * `_is_literal` now accepts `pytest.approx(...)` (and the bare `approx(...)`
   form) over literal arguments, and `Tuple`/`List`/`Set`/`Dict` literals whose
-  elements are themselves literal.
+  elements are themselves literal. It also resolves the parametrize form the
+  issue names as "the natural way to write 13 pins" —
+  `@pytest.mark.parametrize('expected', [0.001])` /
+  `assert CONST == expected` — via `_parametrize_literal_params`, which binds
+  a parameter name to "literal" only when every parametrize case supplies a
+  literal for it (`test_a_parametrized_literal_pins_the_constant` and its
+  negative and multi-argname partners).
 * Discovery now also walks class bodies for ALL-CAPS attributes
   (`_class_constants`), explicitly excluding `StrEnum`/`Enum`/`IntEnum`/
   `IntFlag`/`Flag` subclasses — enum membership is issue #160's surface, not
@@ -752,6 +758,78 @@ def _reachable_asserts(stmts: list[ast.stmt]) -> list[ast.Assert]:
     return found
 
 
+def _parametrize_names(node: ast.expr) -> list[str] | None:
+    """The argument-name list of a `@pytest.mark.parametrize(names, ...)`
+    call, from either spelling pytest accepts: a comma-separated string
+    (`"label,expected"`) or a list/tuple of name strings. `None` if `node`
+    isn't a recognisable name spec."""
+    if isinstance(node, ast.Constant) and isinstance(node.value, str):
+        return [part.strip() for part in node.value.split(",")]
+    if isinstance(node, (ast.List, ast.Tuple)):
+        names: list[str] = []
+        for elt in node.elts:
+            if not (isinstance(elt, ast.Constant) and isinstance(elt.value, str)):
+                return None
+            names.append(elt.value)
+        return names
+    return None
+
+
+def _parametrize_literal_params(func: ast.FunctionDef | ast.AsyncFunctionDef) -> set[str]:
+    """Parameter names that `@pytest.mark.parametrize` binds to a LITERAL
+    value on every case, for `func`.
+
+    #145 gap 2, the parametrize form the issue names as "the natural way to
+    write 13 pins": `@pytest.mark.parametrize('expected', [0.001])` /
+    `assert CONST == expected`. `expected` is an `ast.Name` at the assert
+    site — `_is_literal` alone can never see it, since the literal value
+    lives in the decorator, not the comparison. A name only counts if EVERY
+    parametrize case supplies a literal for it — one symbolic case (e.g. a
+    value computed from another constant) means the assert does not prove
+    the constant against a literal on every run, so it must not count as a
+    pin (the negative partner in
+    `test_a_parametrized_non_literal_does_not_pin_the_constant`).
+    """
+    literal_params: set[str] = set()
+    for deco in func.decorator_list:
+        if not isinstance(deco, ast.Call):
+            continue
+        target = deco.func
+        if not (
+            isinstance(target, ast.Attribute)
+            and target.attr == "parametrize"
+            and isinstance(target.value, ast.Attribute)
+            and target.value.attr == "mark"
+        ):
+            continue
+        if len(deco.args) < 2:
+            continue
+        names = _parametrize_names(deco.args[0])
+        values_node = deco.args[1]
+        if names is None or not isinstance(values_node, (ast.List, ast.Tuple)):
+            continue
+        cases = values_node.elts
+        if not cases:
+            continue
+        literal_for_name = dict.fromkeys(names, True)
+        for case in cases:
+            if len(names) == 1:
+                case_values: list[ast.expr] | None = [case]
+            elif isinstance(case, (ast.List, ast.Tuple)) and len(case.elts) == len(names):
+                case_values = case.elts
+            else:
+                case_values = None
+            if case_values is None:
+                for name in names:
+                    literal_for_name[name] = False
+                continue
+            for name, value in zip(names, case_values, strict=True):
+                if not _is_literal(value):
+                    literal_for_name[name] = False
+        literal_params.update(name for name, ok in literal_for_name.items() if ok)
+    return literal_params
+
+
 def _pins_in_file(path: pathlib.Path) -> set[str]:
     """Constants compared with `==` to a LITERAL inside a REACHABLE assert of
     a COLLECTED test in `path`.
@@ -772,6 +850,7 @@ def _pins_in_file(path: pathlib.Path) -> set[str]:
     origins = _imported_from(tree)
     pinned: set[str] = set()
     for func in _collected_test_functions(tree):
+        literal_params = _parametrize_literal_params(func)
         for assert_node in _reachable_asserts(func.body):
             for cmp_node in ast.walk(assert_node.test):
                 if not isinstance(cmp_node, ast.Compare):
@@ -784,7 +863,11 @@ def _pins_in_file(path: pathlib.Path) -> set[str]:
                     if not qualified:
                         continue
                     others = [s for j, s in enumerate(sides) if j != index]
-                    if any(_is_literal(other) for other in others):
+                    if any(
+                        _is_literal(other)
+                        or (isinstance(other, ast.Name) and other.id in literal_params)
+                        for other in others
+                    ):
                         pinned.add(qualified)
     return pinned
 
@@ -1100,6 +1183,63 @@ def test_a_reachable_assert_in_a_collected_test_is_still_a_pin(
         "from product_app import costs\n\n"
         "def test_real_pin() -> None:\n"
         "    assert costs._DEFAULT_PRICE_PER_1K_INPUT == 0.001\n"
+    )
+    assert "costs._DEFAULT_PRICE_PER_1K_INPUT" in _pins_in_file(synthetic)
+
+
+def test_a_parametrized_literal_pins_the_constant(tmp_path: pathlib.Path) -> None:
+    """#145 gap 2, the parametrize form: the issue names
+    `@pytest.mark.parametrize('expected', [0.001])` /
+    `assert CONST == expected` as "the natural way to write 13 pins", and it
+    was not handled — `_is_literal` only resolves the argument as an
+    `ast.Name` with no branch for a parametrize-bound value, so `expected`
+    read as symbolic and the assert did not count as a pin.
+
+    Turns red if `_pins_in_file` (or the parametrize resolution inside it)
+    regresses to ignoring parametrize-bound values again.
+    """
+    synthetic = tmp_path / "test_synthetic.py"
+    synthetic.write_text(
+        "import pytest\n"
+        "from product_app import costs\n\n"
+        "@pytest.mark.parametrize('expected', [0.001])\n"
+        "def test_fake_pin(expected) -> None:\n"
+        "    assert costs._DEFAULT_PRICE_PER_1K_INPUT == expected\n"
+    )
+    assert "costs._DEFAULT_PRICE_PER_1K_INPUT" in _pins_in_file(synthetic)
+
+
+def test_a_parametrized_non_literal_does_not_pin_the_constant(
+    tmp_path: pathlib.Path,
+) -> None:
+    """Negative partner: if even one case in the parametrize list is not a
+    literal (e.g. computed from another symbol), the bound name must not be
+    treated as a pin — it does not prove the constant against a literal on
+    every call."""
+    synthetic = tmp_path / "test_synthetic.py"
+    synthetic.write_text(
+        "import pytest\n"
+        "from product_app import costs\n\n"
+        "_OTHER = costs._DEFAULT_PRICE_PER_1K_INPUT\n\n"
+        "@pytest.mark.parametrize('expected', [_OTHER])\n"
+        "def test_fake_pin(expected) -> None:\n"
+        "    assert costs._DEFAULT_PRICE_PER_1K_INPUT == expected\n"
+    )
+    assert "costs._DEFAULT_PRICE_PER_1K_INPUT" not in _pins_in_file(synthetic)
+
+
+def test_a_parametrized_multi_arg_literal_pins_the_constant(
+    tmp_path: pathlib.Path,
+) -> None:
+    """The multi-argname `parametrize("name,expected", [(...), ...])` shape,
+    matched positionally against each tuple case."""
+    synthetic = tmp_path / "test_synthetic.py"
+    synthetic.write_text(
+        "import pytest\n"
+        "from product_app import costs\n\n"
+        "@pytest.mark.parametrize('label,expected', [('a', 0.001), ('b', 0.002)])\n"
+        "def test_fake_pin(label, expected) -> None:\n"
+        "    assert costs._DEFAULT_PRICE_PER_1K_INPUT == expected\n"
     )
     assert "costs._DEFAULT_PRICE_PER_1K_INPUT" in _pins_in_file(synthetic)
 

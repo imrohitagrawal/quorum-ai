@@ -11,14 +11,24 @@ assertions are single-member comparisons, which a new member would not touch.
 Re-measured here with `grep -rn "class.*StrEnum" src/product_app/`: **17**
 `StrEnum` classes exist, not 14 — three more than either prior count, found
 because this file counts them itself rather than trusting the issue text
-(rule 1). Of the 17: `query_runs.BillableStage` and `query_runs.
-StageBillingState` are exhaustively pinned via the whole-dict equality in
-`tests/unit/test_stage_billing_gate.py:267` (proven by execution there —
-adding a third `BillableStage` member turns 6 tests red), and
-`providers.ProviderPath` is exhaustively pinned via the `set(ProviderPath) ==
-NOT_INVOKED_PATHS | INVOKED_PATHS` partition in
+(rule 1). Of the 17: `query_run_orchestration.BillableStage` and
+`query_run_orchestration.StageBillingState` are exhaustively pinned via the
+whole-dict equality in `tests/unit/test_stage_billing_gate.py:267` (proven by
+execution there — adding a third `BillableStage` member turns 6 tests red),
+and `providers.ProviderPath` is exhaustively pinned via the
+`set(ProviderPath) == NOT_INVOKED_PATHS | INVOKED_PATHS` partition in
 `tests/unit/test_not_invoked_is_not_evidence.py`. The other 14, including
 `WarningType`, have no exhaustive pin anywhere before this file.
+
+(`BillableStage` and its three siblings originally lived in `query_runs.py`
+and are named that way above and in `tests/unit/test_stage_billing_gate.py`,
+since that history is what the numbers describe. They moved to
+`query_run_orchestration.py` in the `query_runs.py` module split (ADR-0036,
+#303), which merged to `main` after this file was first written; `query_runs`
+still re-exports all four names for backward compatibility, but the AST walk
+below finds a class only where it is actually DEFINED, so `ENUM_MODULES` and
+`ENUM_MEMBER_PINS` key off `query_run_orchestration` now — rebasing this
+branch onto that merge is what surfaced the mismatch.)
 
 **Why membership matters, proven both directions (issue #160):**
 
@@ -55,7 +65,7 @@ from product_app import (
     feedback_store,
     provider_keys,
     providers,
-    query_runs,
+    query_run_orchestration,
     safety,
     synthesis,
 )
@@ -78,7 +88,7 @@ ENUM_MODULES = (
     "feedback_store.py",
     "provider_keys.py",
     "providers.py",
-    "query_runs.py",
+    "query_run_orchestration.py",
     "safety.py",
     "synthesis.py",
 )
@@ -95,10 +105,10 @@ _CLASSES_BY_QUALIFIED_NAME = {
     "provider_keys.ProviderCredentialSource": provider_keys.ProviderCredentialSource,
     "providers.InitialAnswerStatus": providers.InitialAnswerStatus,
     "providers.ProviderPath": providers.ProviderPath,
-    "query_runs.QueryRunStatus": query_runs.QueryRunStatus,
-    "query_runs.StageState": query_runs.StageState,
-    "query_runs.BillableStage": query_runs.BillableStage,
-    "query_runs.StageBillingState": query_runs.StageBillingState,
+    "query_run_orchestration.QueryRunStatus": query_run_orchestration.QueryRunStatus,
+    "query_run_orchestration.StageState": query_run_orchestration.StageState,
+    "query_run_orchestration.BillableStage": query_run_orchestration.BillableStage,
+    "query_run_orchestration.StageBillingState": query_run_orchestration.StageBillingState,
     "safety.WarningType": safety.WarningType,
     "synthesis.SynthesisStatus": synthesis.SynthesisStatus,
 }
@@ -135,11 +145,12 @@ def _production_enum_classes() -> dict[str, int]:
 #: member add/remove/rename in `src/` actually changes what this compares
 #: against — the same reasoning bucket A uses in `test_risk_constant_pins.py`.
 #:
-#: `providers.ProviderPath`, `query_runs.BillableStage` and `query_runs.
-#: StageBillingState` are ALSO pinned exhaustively elsewhere (see module
-#: docstring) — included here too so this file is a complete, single-purpose
-#: record of every production enum's membership, not just the previously-gap
-#: ones. Redundancy here is cheap and costs nothing but a few lines.
+#: `providers.ProviderPath`, `query_run_orchestration.BillableStage` and
+#: `query_run_orchestration.StageBillingState` are ALSO pinned exhaustively
+#: elsewhere (see module docstring) — included here too so this file is a
+#: complete, single-purpose record of every production enum's membership,
+#: not just the previously-gap ones. Redundancy here is cheap and costs
+#: nothing but a few lines.
 ENUM_MEMBER_PINS: dict[str, frozenset[str]] = {
     "auth.AuthError": frozenset({"AUTH_REQUIRED", "SESSION_EXPIRED", "CSRF_INVALID"}),
     "config.RuntimeEnvironment": frozenset({"local", "staging", "production"}),
@@ -173,7 +184,7 @@ ENUM_MEMBER_PINS: dict[str, frozenset[str]] = {
     "providers.ProviderPath": frozenset(
         {"local_simulation", "openrouter_search", "fallback_search"}
     ),
-    "query_runs.QueryRunStatus": frozenset(
+    "query_run_orchestration.QueryRunStatus": frozenset(
         {
             "draft",
             "cost_review",
@@ -190,9 +201,11 @@ ENUM_MEMBER_PINS: dict[str, frozenset[str]] = {
             "cancelled",
         }
     ),
-    "query_runs.StageState": frozenset({"pending", "running", "completed", "failed", "skipped"}),
-    "query_runs.BillableStage": frozenset({"debate", "synthesis"}),
-    "query_runs.StageBillingState": frozenset({"not_entered", "entered", "recorded"}),
+    "query_run_orchestration.StageState": frozenset(
+        {"pending", "running", "completed", "failed", "skipped"}
+    ),
+    "query_run_orchestration.BillableStage": frozenset({"debate", "synthesis"}),
+    "query_run_orchestration.StageBillingState": frozenset({"not_entered", "entered", "recorded"}),
     "safety.WarningType": frozenset({"sensitive_data", "high_stakes"}),
     "synthesis.SynthesisStatus": frozenset({"completed", "failed"}),
 }
@@ -235,8 +248,8 @@ def test_every_registered_enum_membership_matches_its_pin() -> None:
     Turns red if: ANY production `StrEnum` gains, loses, or renames a member
     — because `ENUM_MEMBER_PINS` is typed independently of the enum's own
     source, not derived from it. Proven by execution: adding an 18th member
-    to `query_runs.QueryRunStatus` (`ABANDONED = "abandoned"`) reds this
-    test's `query_runs.QueryRunStatus` assertion; the mutation is reverted
+    to `query_run_orchestration.QueryRunStatus` (`ABANDONED = "abandoned"`) reds this
+    test's `query_run_orchestration.QueryRunStatus` assertion; the mutation is reverted
     immediately after, per rule 6.
     """
     for qualified, expected in ENUM_MEMBER_PINS.items():
