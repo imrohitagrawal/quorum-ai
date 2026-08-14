@@ -1030,6 +1030,39 @@ def test_a_call_with_an_argument_is_not_excluded(scope_script: Path, tmp_path: P
     )
 
 
+DEEPCOPY_BARE_CALL_BEFORE = """\
+from copy import deepcopy
+
+
+def snapshot():
+    return deepcopy()
+"""
+DEEPCOPY_BARE_CALL_AFTER = DEEPCOPY_BARE_CALL_BEFORE.replace(
+    "return deepcopy()", "return deepcopy()  # c"
+)
+
+
+def test_a_bare_call_to_deepcopy_is_not_excluded(scope_script: Path, tmp_path: Path) -> None:
+    """Positive partner for the zero-arg-call tests above: `deepcopy()` has
+    zero positional/keyword args, but mutmut's real `operator_name` table
+    (`mutmut/mutation/mutators.py`'s `name_mappings`) rewrites the bare
+    identifier `deepcopy` -> `copy` wherever it appears as a `Name` node --
+    independent of whether it is called with arguments. So this IS a real
+    mutant (#146 false-exclusion regression: `_safe_expr`'s zero-arg-call
+    fast path treated `_safe_expr(node.func, source)` as sufficient, which
+    is true for `operator_arg_removal`/`operator_dict_arguments` but blind
+    to `operator_name`).
+
+    Turns red if: `no_mutable_content()`/`_safe_expr()` treats every
+    zero-arg call as inert regardless of the callee's name.
+    """
+    repo = _repo_with(tmp_path, DEEPCOPY_BARE_CALL_BEFORE, DEEPCOPY_BARE_CALL_AFTER)
+    result = _run(scope_script, repo, "scope", "HEAD", "80")
+    assert "pkg.thing.x_snapshot__mutmut_*" in result.stdout, (
+        f"a bare no-arg deepcopy() call was wrongly excluded:\n{result.stdout}{result.stderr}"
+    )
+
+
 IFEXP_WITH_LITERAL_BEFORE = """\
 def maybe(cond):
     return 1 if cond else 2

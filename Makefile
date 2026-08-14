@@ -360,6 +360,41 @@ def _safe_comprehension(generators, source):
     return True
 
 
+# mutmut's `operator_name` (mutators.py's `name_mappings`) rewrites a bare
+# `Name` node with this exact identifier, REGARDLESS of whether it sits in a
+# call with arguments, without arguments, or isn't called at all. `_safe_expr`
+# must never call a `Call`'s callee (or any bare `Name`) safe when it is one
+# of these (#146 false-exclusion bug: a zero-arg `deepcopy()` was wrongly
+# excluded because the args-only fast path never looked at the callee name).
+_MUTMUT_RENAMED_NAMES = frozenset({"deepcopy"})
+
+# mutmut's `operator_symmetric_string_methods_swap` /
+# `operator_unsymmetrical_string_methods_swap` rewrite a method `Call` to its
+# opposite purely by matching the ATTRIBUTE NAME on `node.func` -- neither
+# checks argument count first, so a zero-arg `x.lower()` is still a real
+# mutant (`x.upper()`).
+_MUTMUT_SWAPPABLE_METHOD_NAMES = frozenset(
+    {
+        "lower",
+        "upper",
+        "lstrip",
+        "rstrip",
+        "find",
+        "rfind",
+        "ljust",
+        "rjust",
+        "index",
+        "rindex",
+        "removeprefix",
+        "removesuffix",
+        "partition",
+        "rpartition",
+        "split",
+        "rsplit",
+    }
+)
+
+
 def _safe_expr(node, source):
     """True when mutmut has NO operator that can touch this expression.
 
@@ -374,7 +409,11 @@ def _safe_expr(node, source):
     cst.SimpleString)` and yields nothing for a `cst.FormattedString`, but
     DOES mutate a plain literal glued on next to it), and a comprehension
     over safe sub-expressions (no operator targets a comprehension's
-    `for`/`if` clauses).
+    `for`/`if` clauses). A bare `Name`/callee is safe UNLESS it is a name
+    `operator_name` rewrites, and a method `Call` is safe UNLESS its
+    attribute name is one `operator_symmetric_string_methods_swap` /
+    `operator_unsymmetrical_string_methods_swap` swap regardless of args
+    (#146 false-exclusion bug).
 
     FAILS CLOSED: any expression shape not explicitly listed here returns
     False, so this can under-detect (leaving a truly-dead function scoped,
@@ -383,12 +422,17 @@ def _safe_expr(node, source):
     if node is None:
         return True
     if isinstance(node, ast.Name):
-        return True
+        return node.id not in _MUTMUT_RENAMED_NAMES
     if isinstance(node, ast.Attribute):
         return _safe_expr(node.value, source)
     if isinstance(node, ast.Constant):
         return node.value is None or node.value is Ellipsis
     if isinstance(node, ast.Call):
+        if (
+            isinstance(node.func, ast.Attribute)
+            and node.func.attr in _MUTMUT_SWAPPABLE_METHOD_NAMES
+        ):
+            return False
         if node.args or node.keywords:
             return False
         return _safe_expr(node.func, source)
