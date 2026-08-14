@@ -29,6 +29,7 @@ from uuid import uuid4
 import pytest
 from tests.unit.test_evaluation_layer_a import _answer
 
+from product_app import query_run_orchestration as qro
 from product_app import query_runs as qr
 from product_app.config import settings
 from product_app.costs import cost_estimation_service
@@ -60,7 +61,7 @@ def _bounded_memo(monkeypatch: pytest.MonkeyPatch) -> Iterator[None]:
     a fixture that restores it or every later test inherits a 5-entry cache.
     """
     monkeypatch.setattr(settings, "quorum_eval_judge_api_key", "")
-    monkeypatch.setattr(qr, "_EVALUATION_MEMO_MAX", TEST_CAP)
+    monkeypatch.setattr(qro, "_EVALUATION_MEMO_MAX", TEST_CAP)
     qr._evaluation_memo_clear_for_tests()
     yield
     qr._evaluation_memo_clear_for_tests()

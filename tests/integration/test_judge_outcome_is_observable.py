@@ -41,6 +41,7 @@ from tests.integration.test_judge_request_path_wiring import (
 )
 
 from product_app import evaluation as evaluation_module
+from product_app import query_run_orchestration as qro
 from product_app import query_runs as qr
 from product_app import run_history_store
 from product_app.config import settings
@@ -366,14 +367,14 @@ def test_the_persisted_evaluation_event_carries_the_judge_status(
     _refusing_seam(monkeypatch)
 
     payloads: list[dict[str, Any]] = []
-    real_record = qr._record_feedback_event  # type: ignore[attr-defined]
+    real_record = qro._record_feedback_event  # type: ignore[attr-defined]
 
     def _spy(**kwargs: Any) -> Any:
         if kwargs.get("event_type") == "run_evaluated":
             payloads.append(kwargs.get("payload", {}))
         return real_record(**kwargs)
 
-    monkeypatch.setattr(qr, "_record_feedback_event", _spy)
+    monkeypatch.setattr(qro, "_record_feedback_event", _spy)
 
     account_id = uuid4()
     run = _measured_run(account_id)

@@ -59,7 +59,7 @@ import pytest
 from fastapi.testclient import TestClient
 from tests.helpers import isolated_run_semaphore, wait_for_free_permits
 
-from product_app import config, query_runs
+from product_app import config, query_run_orchestration, query_runs
 from product_app.costs import CostEstimate, CostThresholdAction
 from product_app.debate import DebateResult, debate_stub_service
 from product_app.main import app
@@ -545,7 +545,7 @@ def test_backstop_never_relabels_an_already_terminal_run(
         boom_calls += 1
         raise RuntimeError("injected unhandled pipeline error")
 
-    monkeypatch.setattr(query_runs, "_execute_query_run", boom)
+    monkeypatch.setattr(query_run_orchestration, "_execute_query_run", boom)
 
     rewrites = 0
     corruptions: list[str] = []
@@ -628,7 +628,7 @@ def test_the_backstop_leaves_a_user_cancelled_run_entirely_untouched(
     def boom(*, query_run_id: UUID, account_id: UUID) -> None:
         raise RuntimeError("injected unhandled pipeline error")
 
-    monkeypatch.setattr(query_runs, "_execute_query_run", boom)
+    monkeypatch.setattr(query_run_orchestration, "_execute_query_run", boom)
     query_runs._execute_query_run_safely(  # noqa: SLF001
         query_run_id=run.query_run_id,
         account_id=account_id,

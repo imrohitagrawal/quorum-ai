@@ -31,6 +31,7 @@ from pydantic import ValidationError
 from tests.unit.test_evaluation_layer_a import REAL_URL, _answer, _source
 
 from product_app import evaluation, run_history_store
+from product_app import query_run_orchestration as qro
 from product_app import query_runs as qr
 from product_app.config import settings
 from product_app.costs import cost_estimation_service
@@ -279,7 +280,7 @@ def test_evaluation_persistence_is_idempotent(monkeypatch: pytest.MonkeyPatch) -
             repersists.append(kwargs)
             real_persist_evaluation(**kwargs)
 
-        monkeypatch.setattr(qr, "_persist_run_evaluation", _spy)
+        monkeypatch.setattr(qro, "_persist_run_evaluation", _spy)
 
         qr._persist_terminal_run(UUID(created["query_run_id"]))
 
@@ -328,7 +329,7 @@ def test_a_raising_evaluation_cannot_fail_a_user_run(monkeypatch: pytest.MonkeyP
     def _boom(**kwargs: Any) -> object:
         raise RuntimeError("evaluation engine exploded")
 
-    monkeypatch.setattr(qr, "evaluate_run", _boom)
+    monkeypatch.setattr(qro, "evaluate_run", _boom)
 
     with run_history_store.configure_for_tests() as store:
         client = TestClient(app)
@@ -554,8 +555,12 @@ def test_a_non_terminal_run_writes_nothing_and_logs_no_warning(
 
     update_calls: list[Any] = []
     feedback_calls: list[Any] = []
-    monkeypatch.setattr(qr, "_update_run_evaluation", lambda *a, **k: update_calls.append((a, k)))
-    monkeypatch.setattr(qr, "_record_feedback_event", lambda *a, **k: feedback_calls.append((a, k)))
+    monkeypatch.setattr(
+        qro, "_update_run_evaluation", lambda *a, **k: update_calls.append((a, k))
+    )
+    monkeypatch.setattr(
+        qro, "_record_feedback_event", lambda *a, **k: feedback_calls.append((a, k))
+    )
 
     with caplog.at_level(logging.WARNING):
         qr._persist_run_evaluation(query_run=run, agreement=AgreementSummary(aligned=0, total=0))
@@ -598,7 +603,7 @@ def _counting_evaluate_run(monkeypatch: pytest.MonkeyPatch) -> list[int]:
         calls[0] += 1
         return real(**kwargs)
 
-    monkeypatch.setattr(qr, "evaluate_run", counted)
+    monkeypatch.setattr(qro, "evaluate_run", counted)
     return calls
 
 

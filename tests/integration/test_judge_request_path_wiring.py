@@ -32,6 +32,7 @@ import pytest
 from fastapi.testclient import TestClient
 from tests.unit.test_evaluation_judge import VALID_VERDICT, _answer, _evidence, _synthesis
 
+from product_app import query_run_orchestration as qro
 from product_app import query_runs as qr
 from product_app import run_history_store
 from product_app.config import settings
@@ -298,7 +299,7 @@ def test_judge_outcome_reaches_the_billing_snapshot_under_the_real_run_id(
 def _reconcile_spy(monkeypatch: pytest.MonkeyPatch, judge_calls: list[Any]) -> dict[str, Any]:
     """Record what was true at the MOMENT ``_reconcile_run_billing`` was entered."""
     observed: dict[str, Any] = {}
-    real = qr._reconcile_run_billing
+    real = qro._reconcile_run_billing
 
     def _spy(*, query_run: Any, response: Any) -> None:
         observed["judge_calls_at_reconcile"] = len(judge_calls)
@@ -315,7 +316,7 @@ def _reconcile_spy(monkeypatch: pytest.MonkeyPatch, judge_calls: list[Any]) -> d
         observed["spy_completed"] = True
         return real(query_run=query_run, response=response)
 
-    monkeypatch.setattr(qr, "_reconcile_run_billing", _spy)
+    monkeypatch.setattr(qro, "_reconcile_run_billing", _spy)
     return observed
 
 
@@ -884,7 +885,7 @@ def test_a_reader_waiting_on_a_stuck_inflight_call_serves_suppressed_once(
     from concurrent.futures import Future
     from concurrent.futures import TimeoutError as FuturesTimeoutError
 
-    monkeypatch.setattr(qr, "_JUDGE_INFLIGHT_WAIT_SECONDS", 0.05)
+    monkeypatch.setattr(qro, "_JUDGE_INFLIGHT_WAIT_SECONDS", 0.05)
     _enable_judge(monkeypatch)
     calls = _judge_seam(monkeypatch)
 
@@ -936,7 +937,7 @@ def test_the_verdict_memo_is_bounded_lru(monkeypatch: pytest.MonkeyPatch) -> Non
     """The per-run memo can never grow with run history: oldest entries evict."""
     _enable_judge(monkeypatch)
     _judge_seam(monkeypatch)
-    monkeypatch.setattr(qr, "_JUDGE_VERDICT_MEMO_MAX", 2)
+    monkeypatch.setattr(qro, "_JUDGE_VERDICT_MEMO_MAX", 2)
 
     evidence = _evidence()
     for run_id in ("run-1", "run-2", "run-3"):
