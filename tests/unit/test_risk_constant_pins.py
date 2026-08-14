@@ -505,26 +505,52 @@ def _module_constants() -> dict[str, int]:
     return found
 
 
-#: Enum base names. A class subclassing any of these is excluded from
-#: `_class_constants` — its ALL-CAPS members are enum membership, issue #160's
-#: surface, not this file's (#145 gap 3's own docstring: "most are enum
-#: members, but these are not").
+#: Names of the stdlib `enum` module's base classes. A class whose base
+#: resolves (via `_enum_import_names`, i.e. an actual `from enum import ...`
+#: in the same file) to one of these is excluded from `_class_constants` —
+#: its ALL-CAPS members are enum membership, issue #160's surface, not this
+#: file's (#145 gap 3's own docstring: "most are enum members, but these are
+#: not"). This is a set of names to import-match against, NOT a set of bare
+#: identifiers to match a class base against directly — see
+#: `_enum_import_names`.
 _ENUM_BASE_NAMES = frozenset({"Enum", "StrEnum", "IntEnum", "IntFlag", "Flag"})
+
+
+def _enum_import_names(tree: ast.Module) -> frozenset[str]:
+    """Local names in `tree` that are actually bound to a `from enum import
+    ...` of one of `_ENUM_BASE_NAMES`, aliases included.
+
+    Matching a class base by bare `ast.Name.id` text (the previous approach)
+    let an unrelated local class named or aliased `Enum` swallow an entire
+    risk-tier class's constants — no relation to python's `enum` module
+    required. This resolves by PROVENANCE instead: a name only counts if this
+    file actually imports it from `enum` (rule 8's substring-vs-structure
+    trap, this time inside the detector itself).
+    """
+    names: set[str] = set()
+    for node in ast.walk(tree):
+        if isinstance(node, ast.ImportFrom) and node.module == "enum":
+            for alias in node.names:
+                if alias.name in _ENUM_BASE_NAMES:
+                    names.add(alias.asname or alias.name)
+    return frozenset(names)
 
 
 def _class_constants_in(path: pathlib.Path, module: str) -> dict[str, int]:
     """`module.Class.NAME` -> line, for ALL-CAPS class attributes in `path`.
 
-    Non-enum classes only (see `_ENUM_BASE_NAMES`). Split from `_class_constants`
-    so it can be unit-tested against a synthetic file instead of only the real
-    risk-tier modules.
+    Non-enum classes only (see `_ENUM_BASE_NAMES` / `_enum_import_names`).
+    Split from `_class_constants` so it can be unit-tested against a
+    synthetic file instead of only the real risk-tier modules.
     """
     found: dict[str, int] = {}
-    for node in ast.walk(ast.parse(path.read_text(encoding="utf-8"))):
+    tree = ast.parse(path.read_text(encoding="utf-8"))
+    enum_names = _enum_import_names(tree)
+    for node in ast.walk(tree):
         if not isinstance(node, ast.ClassDef):
             continue
         base_names = {b.id for b in node.bases if isinstance(b, ast.Name)}
-        if base_names & _ENUM_BASE_NAMES:
+        if base_names & enum_names:
             continue
         for stmt in node.body:
             if isinstance(stmt, ast.Assign):
@@ -1129,3 +1155,54 @@ def test_class_constants_are_discovered_but_enum_members_are_not(
     )
     found = _class_constants_in(synthetic, "fake_module")
     assert set(found) == {"fake_module.Settings.RUN_DEADLINE_MAX_SECONDS"}
+
+
+def test_class_constants_not_hidden_by_a_locally_named_enum_lookalike(
+    tmp_path: pathlib.Path,
+) -> None:
+    """Adversarial-review finding on this PR: `_ENUM_BASE_NAMES` used to match
+    by BARE IDENTIFIER TEXT (`base_names & _ENUM_BASE_NAMES`), not by actual
+    provenance. A risk-tier class could be made fully invisible to the pin
+    detector just by naming an unrelated local class `Enum` and inheriting
+    from it — no relation to python's stdlib `enum` module at all.
+
+    Turns red if `_class_constants_in` goes back to matching a base by its
+    bare `ast.Name.id` instead of checking it resolves to a real
+    `from enum import ...` binding: the fake `Enum` base would once again
+    swallow `_InMemoryIpRateLimiter`'s three constants, and `found` would come
+    back empty instead of holding all three.
+    """
+    synthetic = tmp_path / "fake_risk_module.py"
+    synthetic.write_text(
+        "class Enum:\n"
+        "    pass\n\n"
+        "class _InMemoryIpRateLimiter(Enum):\n"
+        "    CAPACITY = 10\n"
+        "    REFILL_PER_MINUTE = 5\n"
+        "    STALE_BUCKET_SECONDS = 300.0\n"
+    )
+    found = _class_constants_in(synthetic, "fake_risk_module")
+    assert set(found) == {
+        "fake_risk_module._InMemoryIpRateLimiter.CAPACITY",
+        "fake_risk_module._InMemoryIpRateLimiter.REFILL_PER_MINUTE",
+        "fake_risk_module._InMemoryIpRateLimiter.STALE_BUCKET_SECONDS",
+    }
+
+
+def test_class_constants_still_hidden_for_a_real_enum_alias(
+    tmp_path: pathlib.Path,
+) -> None:
+    """Positive partner (rule 7): the provenance check must still recognise a
+    genuine `from enum import StrEnum as SE` alias as an enum base, not just
+    the unaliased name — otherwise the fix above would over-correct and start
+    pinning real enum members (issue #160's surface, not this file's)."""
+    synthetic = tmp_path / "fake_module_alias.py"
+    synthetic.write_text(
+        "from enum import StrEnum as SE\n\n"
+        "class RealEnum(SE):\n"
+        "    ONE = 'one'\n\n"
+        "class Settings:\n"
+        "    TIMEOUT_SECONDS = 30\n"
+    )
+    found = _class_constants_in(synthetic, "fake_module_alias")
+    assert set(found) == {"fake_module_alias.Settings.TIMEOUT_SECONDS"}
