@@ -98,7 +98,7 @@ def _joined_str_has_a_real_string_literal(node: ast.JoinedStr, source: str) -> b
     try:
         tokens = tokenize.generate_tokens(io.StringIO(segment).readline)
         return any(tok.type == tokenize.STRING for tok in tokens)
-    except (tokenize.TokenizeError, IndentationError, SyntaxError):
+    except (tokenize.TokenError, IndentationError, SyntaxError):
         return True
 
 
@@ -247,14 +247,16 @@ def scope(base: str, head: str) -> tuple[list[str], dict[str, int]]:
             changed: set[int],
             seen: set[int],
             mod: str,
+            src: str,
             cls: str | None = None,
             frozen: bool = False,
         ) -> int:
             """Return how many functions overlapped `changed`.
 
-            `changed`/`seen` are passed explicitly rather than closed over: a
-            closure here binds the loop variable, so every file would be walked
-            against the LAST file's changed lines (ruff B023).
+            `changed`/`seen`/`src` are passed explicitly rather than closed
+            over: a closure here binds the loop variable, so every file would
+            be walked against the LAST file's changed lines/source (ruff
+            B023).
 
             `frozen` mirrors the Makefile: a DECORATED CLASS is skipped by
             mutmut together with its whole subtree, so every method inside it
@@ -265,7 +267,13 @@ def scope(base: str, head: str) -> tuple[list[str], dict[str, int]]:
             for child in ast.iter_child_nodes(node):
                 if isinstance(child, ast.ClassDef):
                     hits += walk(
-                        child, changed, seen, mod, child.name, frozen or bool(child.decorator_list)
+                        child,
+                        changed,
+                        seen,
+                        mod,
+                        src,
+                        child.name,
+                        frozen or bool(child.decorator_list),
                     )
                 elif isinstance(child, ast.FunctionDef | ast.AsyncFunctionDef):
                     span = set(range(child.lineno, (child.end_lineno or child.lineno) + 1))
@@ -274,7 +282,7 @@ def scope(base: str, head: str) -> tuple[list[str], dict[str, int]]:
                         hits += 1
                         if frozen or unmutatable(child):
                             skipped_count += 1
-                        elif no_mutable_content(child, source):
+                        elif no_mutable_content(child, src):
                             # #146: genuinely nothing for any mutmut operator
                             # to touch anywhere in this function (own body or
                             # a nested def inside it) - same dead-glob cause
@@ -290,7 +298,7 @@ def scope(base: str, head: str) -> tuple[list[str], dict[str, int]]:
                     # nested def's own name (#146, mirrors the Makefile).
             return hits
 
-        matched = walk(tree, lines, covered, module)
+        matched = walk(tree, lines, covered, module, source)
         if not matched:
             # Why did nothing match? Distinguish the real causes.
             if lines - covered:

@@ -12,6 +12,7 @@ would make the test move with unrelated history.
 
 from __future__ import annotations
 
+import ast
 import importlib.util
 import os
 import subprocess
@@ -149,3 +150,36 @@ def test_the_classifier_distinguishes_the_two_empty_scope_causes(repo: Path) -> 
     assert set(constant) != set(deletion), (
         f"both empty-scope causes report the same reason: {constant} vs {deletion}"
     )
+
+
+def test_a_tokenize_failure_fails_closed_instead_of_crashing(
+    repo: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """`_joined_str_has_a_real_string_literal()` (#146) catches a real
+    tokenize failure on the node's own source segment and fails closed
+    (returns True — "can't prove it safe"), mirroring the Makefile's
+    `MUTMUT_SCOPE_PY` copy of the same helper.
+
+    Before this test existed, the except clause named an exception class
+    that does not exist on this Python (`tokenize.TokenizeError` — the real
+    name is `tokenize.TokenError`). Because Python evaluates an
+    `except (...)` tuple only when an exception actually needs matching,
+    this was silent for every JoinedStr that tokenizes cleanly, and only
+    broke — with an `AttributeError` masking the real tokenize error — the
+    one time a segment genuinely failed to tokenize (a single unterminated
+    string literal genuinely raises `tokenize.TokenError`, confirmed
+    directly against CPython 3.14's `tokenize` module).
+
+    Turns red if: `tokenize.TokenError` reverts to the nonexistent
+    `tokenize.TokenizeError` name (an `AttributeError` propagates instead of
+    the function returning `True`).
+    """
+    module = _load(repo)
+    monkeypatch.setattr(module.ast, "get_source_segment", lambda *_a, **_k: '"')
+
+    expr_stmt = ast.parse('f"x"').body[0]
+    assert isinstance(expr_stmt, ast.Expr)
+    node = expr_stmt.value
+    assert isinstance(node, ast.JoinedStr)
+
+    assert module._joined_str_has_a_real_string_literal(node, 'f"x"') is True

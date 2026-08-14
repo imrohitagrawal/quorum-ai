@@ -341,7 +341,7 @@ def _joined_str_has_a_real_string_literal(node, source):
     try:
         tokens = tokenize.generate_tokens(io.StringIO(segment).readline)
         return any(tok.type == tokenize.STRING for tok in tokens)
-    except (tokenize.TokenizeError, IndentationError, SyntaxError):
+    except (tokenize.TokenError, IndentationError, SyntaxError):
         return True
 
 

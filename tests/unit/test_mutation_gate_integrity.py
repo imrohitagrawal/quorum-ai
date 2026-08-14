@@ -19,12 +19,15 @@ so a regression in the real recipe fails here rather than in a prose assertion.
 
 from __future__ import annotations
 
+import ast
+import importlib.util
 import json
 import os
 import re
 import subprocess
 import sys
 from pathlib import Path
+from typing import Any
 
 import pytest
 
@@ -1321,3 +1324,53 @@ def test_the_abort_message_names_the_copied_tree_cause(mutation_recipe: str) -> 
         "rather than the change — which is what made a red gate read as a "
         "verdict on the diff in #158"
     )
+
+
+def _load_scope_module(scope_script: Path, monkeypatch: pytest.MonkeyPatch) -> Any:
+    """Import the extracted `MUTMUT_SCOPE_PY` block as a real module.
+
+    The block reads `mode, base, threshold` off `sys.argv` at MODULE level
+    (it is normally invoked as `python - scope <base> <threshold>`, never
+    imported), so `sys.argv` needs three harmless placeholder args or the
+    import itself raises before any test code runs.
+
+    Typed `Any` deliberately: dynamically loaded module, no mypy stub.
+    """
+    monkeypatch.setattr(sys, "argv", ["mutscope.py", "scope", "HEAD", "80"])
+    spec = importlib.util.spec_from_file_location("mutscope_under_test", scope_script)
+    assert spec and spec.loader
+    module: Any = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+def test_a_tokenize_failure_fails_closed_instead_of_crashing(
+    scope_script: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """`_joined_str_has_a_real_string_literal()` catches a real tokenize
+    failure on the node's own source segment and fails closed (returns
+    True — "can't prove it safe").
+
+    Before this test existed, the except clause named a exception class that
+    does not exist on this Python (`tokenize.TokenizeError` — the real name
+    is `tokenize.TokenError`). Because Python evaluates an `except (...)`
+    tuple only when an exception actually needs matching, this was silent
+    for every JoinedStr that tokenizes cleanly, and only broke — with an
+    `AttributeError` masking the real tokenize error — the one time a segment
+    genuinely failed to tokenize (a single unterminated string literal
+    genuinely raises `tokenize.TokenError`, confirmed directly against
+    CPython 3.14's `tokenize` module).
+
+    Turns red if: `tokenize.TokenError` reverts to the nonexistent
+    `tokenize.TokenizeError` name (an `AttributeError` propagates instead of
+    the function returning `True`).
+    """
+    module = _load_scope_module(scope_script, monkeypatch)
+    monkeypatch.setattr(module.ast, "get_source_segment", lambda *_a, **_k: '"')
+
+    expr_stmt = ast.parse('f"x"').body[0]
+    assert isinstance(expr_stmt, ast.Expr)
+    node = expr_stmt.value
+    assert isinstance(node, ast.JoinedStr)
+
+    assert module._joined_str_has_a_real_string_literal(node, 'f"x"') is True

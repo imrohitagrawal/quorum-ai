@@ -276,7 +276,7 @@ def _strip_decorator_mirroring(source: str) -> str:
         "                        hits += 1\n"
         "                        if frozen or unmutatable(child):\n"
         "                            skipped_count += 1\n"
-        "                        elif no_mutable_content(child, source):\n"
+        "                        elif no_mutable_content(child, src):\n"
         "                            # #146: genuinely nothing for any mutmut operator\n"
         "                            # to touch anywhere in this function (own body or\n"
         "                            # a nested def inside it) - same dead-glob cause\n"
