@@ -134,7 +134,7 @@ def test_partial_run_is_persisted(monkeypatch: pytest.MonkeyPatch) -> None:
     """A run that ends PARTIAL (no usable initial answers) still persists."""
     import product_app.query_runs as qr
 
-    service = qr.provider_execution_service  # type: ignore[attr-defined]
+    service = qr.provider_execution_service
 
     # Force every initial slot to fail so the run terminates PARTIAL early.
     def _all_fail(*args: Any, **kwargs: Any) -> object:

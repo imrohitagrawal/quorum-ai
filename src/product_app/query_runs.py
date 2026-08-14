@@ -65,26 +65,7 @@ from product_app.query_run_orchestration import (
 )
 from product_app.query_run_orchestration import TERMINAL_STATUSES as TERMINAL_STATUSES
 from product_app.query_run_orchestration import (
-    ActiveQueryRunExistsError,
-    InvalidQueryRunTransitionError,
-    QueryRun,
-    QueryRunProgress,
-    QueryRunResultResponse,
-    QueryRunStatus,
-    StageState,
-    _abandon_unstarted_run,
-    _estimate_reasons,
-    _execute_query_run,
-    _execute_query_run_with_semaphore_release,
-    _persist_terminal_run,
-    _progress_model,
-    _record_run_billing,
-    _result_response,
-    _run_semaphore,
-    _running_stage_name,
-    _validated_model_slots,
-    _void_run_billing,
-    query_run_repository,
+    ActiveQueryRunExistsError as ActiveQueryRunExistsError,
 )
 from product_app.query_run_orchestration import BillableStage as BillableStage
 from product_app.query_run_orchestration import BillingSnapshot as BillingSnapshot
@@ -92,13 +73,26 @@ from product_app.query_run_orchestration import (
     InMemoryQueryRunRepository as InMemoryQueryRunRepository,
 )
 from product_app.query_run_orchestration import (
+    InvalidQueryRunTransitionError as InvalidQueryRunTransitionError,
+)
+from product_app.query_run_orchestration import QueryRun as QueryRun
+from product_app.query_run_orchestration import (
     QueryRunEvaluationProjection as QueryRunEvaluationProjection,
+)
+from product_app.query_run_orchestration import QueryRunProgress as QueryRunProgress
+from product_app.query_run_orchestration import (
+    QueryRunResultResponse as QueryRunResultResponse,
 )
 from product_app.query_run_orchestration import (
     QueryRunStageProgress as QueryRunStageProgress,
 )
+from product_app.query_run_orchestration import QueryRunStatus as QueryRunStatus
 from product_app.query_run_orchestration import ResultProjection as ResultProjection
 from product_app.query_run_orchestration import StageBillingState as StageBillingState
+from product_app.query_run_orchestration import StageState as StageState
+from product_app.query_run_orchestration import (
+    _abandon_unstarted_run as _abandon_unstarted_run,
+)
 from product_app.query_run_orchestration import _actual_cost as _actual_cost
 from product_app.query_run_orchestration import (
     _degrade_run_for_deadline as _degrade_run_for_deadline,
@@ -106,6 +100,7 @@ from product_app.query_run_orchestration import (
 from product_app.query_run_orchestration import (
     _elapsed_time_ms as _elapsed_time_ms,
 )
+from product_app.query_run_orchestration import _estimate_reasons as _estimate_reasons
 from product_app.query_run_orchestration import (
     _evaluate_terminal_run as _evaluate_terminal_run,
 )
@@ -125,8 +120,12 @@ from product_app.query_run_orchestration import (
 from product_app.query_run_orchestration import (
     _EvaluationMemoKey as _EvaluationMemoKey,
 )
+from product_app.query_run_orchestration import _execute_query_run as _execute_query_run
 from product_app.query_run_orchestration import (
     _execute_query_run_safely as _execute_query_run_safely,
+)
+from product_app.query_run_orchestration import (
+    _execute_query_run_with_semaphore_release as _execute_query_run_with_semaphore_release,
 )
 from product_app.query_run_orchestration import (
     _initial_answer_pool as _initial_answer_pool,
@@ -158,10 +157,20 @@ from product_app.query_run_orchestration import (
     _persist_run_evaluation as _persist_run_evaluation,
 )
 from product_app.query_run_orchestration import (
+    _persist_terminal_run as _persist_terminal_run,
+)
+from product_app.query_run_orchestration import _progress_model as _progress_model
+from product_app.query_run_orchestration import (
     _reconcile_run_billing as _reconcile_run_billing,
 )
+from product_app.query_run_orchestration import _record_run_billing as _record_run_billing
 from product_app.query_run_orchestration import (
     _request_path_judge as _request_path_judge,
+)
+from product_app.query_run_orchestration import _result_response as _result_response
+from product_app.query_run_orchestration import _run_semaphore as _run_semaphore
+from product_app.query_run_orchestration import (
+    _running_stage_name as _running_stage_name,
 )
 from product_app.query_run_orchestration import (
     _set_stage_state as _set_stage_state,
@@ -174,7 +183,14 @@ from product_app.query_run_orchestration import (
     _synthesis_pool as _synthesis_pool,
 )
 from product_app.query_run_orchestration import (
+    _validated_model_slots as _validated_model_slots,
+)
+from product_app.query_run_orchestration import _void_run_billing as _void_run_billing
+from product_app.query_run_orchestration import (
     provider_execution_service as provider_execution_service,
+)
+from product_app.query_run_orchestration import (
+    query_run_repository as query_run_repository,
 )
 from product_app.safety import SafetyAcknowledgement, SafetyWarning, safety_warning_policy
 from product_app.synthesis import FINAL_SYNTHESIS_MAX_CHARS
@@ -315,8 +331,6 @@ class ActiveQueryRunResponse(BaseModel):
     initial_answers: list[InitialModelAnswer]
 
 
-
-
 class QueryRunWarningsRequest(BaseModel):
     """The probe half of the documented probe-then-create flow.
 
@@ -353,13 +367,6 @@ class QueryRunWarningsRequest(BaseModel):
 
 class QueryRunWarningsResponse(BaseModel):
     warnings: list[SafetyWarning]
-
-
-
-
-
-
-
 
 
 # C9: per-IP rate limiter on ``/v1/session``. Each new session mints a
@@ -1046,5 +1053,3 @@ def cancel_query_run(
 
 
 # -- pipeline ----------------------------------------------------------------
-
-

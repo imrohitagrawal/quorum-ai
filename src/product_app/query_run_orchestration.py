@@ -96,8 +96,8 @@ from product_app.providers import (
     ProviderPath,
     TokenUsage,
     estimate_material_claim_count,
-    provider_execution_service,
 )
+from product_app.providers import provider_execution_service as provider_execution_service
 from product_app.run_history_store import RunHistoryRow
 from product_app.run_history_store import record_terminal_run as _record_run_history
 from product_app.run_history_store import update_evaluation as _update_run_evaluation
@@ -117,6 +117,7 @@ logger = logging.getLogger(__name__)
 #: to make the contract observable in tests and dev.
 QUERY_RUN_TERMINAL_TTL = timedelta(hours=1)
 QUERY_RUN_ACTIVE_TTL = timedelta(minutes=30)
+
 
 class QueryRunStatus(StrEnum):
     DRAFT = "draft"
@@ -252,6 +253,7 @@ ALLOWED_TRANSITIONS: dict[QueryRunStatus, frozenset[QueryRunStatus]] = {
     QueryRunStatus.CANCELLED: frozenset(),
 }
 
+
 class QueryRunStageProgress(BaseModel):
     stage: str
     state: StageState
@@ -271,6 +273,7 @@ class ResultProjection(BaseModel):
     agreement: AgreementSummary
     #: One row per model, in slot order, for the "how positions moved" table.
     position_movements: list[PositionMovement]
+
 
 class QueryRunEvaluationProjection(BaseModel):
     """The served S2 per-run evaluation (FR-015). Metrics only — never prose.
@@ -429,6 +432,7 @@ class QueryRunResultResponse(BaseModel):
     #: optional: a pre-S2 client that ignores this field is unaffected.
     evaluation: QueryRunEvaluationProjection | None = None
 
+
 class ActiveQueryRunExistsError(Exception):
     pass
 
@@ -527,6 +531,7 @@ class BillingSnapshot:
     #: snapshot — so the honesty gate and the measured computation below it
     #: decide from one consistent view, matching every other field here.
     judge_outcome: _JudgeOutcome | None
+
 
 class InMemoryQueryRunRepository:
     """In-memory repository, account-scoped.
@@ -914,6 +919,7 @@ _synthesis_pool = ThreadPoolExecutor(
     max_workers=_SYNTHESIS_POOL_SIZE, thread_name_prefix="synthesis"
 )
 
+
 def _record_run_billing(
     *,
     session: SessionContext,
@@ -991,7 +997,6 @@ def _abandon_unstarted_run(query_run_id: UUID) -> None:
     """
     with contextlib.suppress(Exception):
         query_run_repository.transition(query_run_id, QueryRunStatus.FAILED)
-
 
 
 def _execute_query_run_safely(query_run_id: UUID, account_id: UUID) -> None:
@@ -2641,4 +2646,3 @@ def _elapsed_time_ms(query_run: QueryRun) -> int:
         return 0
     elapsed = query_run.updated_at - query_run.started_at
     return max(0, round(elapsed.total_seconds() * 1000))
-

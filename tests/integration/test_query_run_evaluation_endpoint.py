@@ -555,9 +555,7 @@ def test_a_non_terminal_run_writes_nothing_and_logs_no_warning(
 
     update_calls: list[Any] = []
     feedback_calls: list[Any] = []
-    monkeypatch.setattr(
-        qro, "_update_run_evaluation", lambda *a, **k: update_calls.append((a, k))
-    )
+    monkeypatch.setattr(qro, "_update_run_evaluation", lambda *a, **k: update_calls.append((a, k)))
     monkeypatch.setattr(
         qro, "_record_feedback_event", lambda *a, **k: feedback_calls.append((a, k))
     )
