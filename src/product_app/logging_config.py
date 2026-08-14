@@ -142,23 +142,56 @@ def _redact_secrets(text: str) -> str:
     return text
 
 
-def _redact_extra_value(value: object) -> object:
+#: Bounds the recursive walk in ``_redact_extra_value``. Without this, two
+#: real ways to crash a log call exist: a SELF-REFERENTIAL container
+#: (``d = {}; d["self"] = d; logger.warning("x", extra=d)``) recurses
+#: forever, and a merely deep non-cyclic container (~2000 levels) exhausts
+#: CPython's recursion limit — both measured live via
+#: ``install_redaction_record_factory()`` raising ``RecursionError`` out of
+#: ``logger.warning()`` itself (2026-08-14 review finding). #313's own
+#: reproduction shapes are 2-3 levels deep; 25 is generous headroom for any
+#: real call site while keeping a pathological one bounded rather than
+#: fatal. Past the cap, the remaining sub-value is returned AS-IS (unredacted
+#: below that point) rather than raising — a stalled log call is worse than
+#: an edge case a normal call site will never hit.
+_MAX_EXTRA_REDACTION_DEPTH = 25
+
+#: Container types ``_redact_extra_value`` walks into. ``tuple``/``set``/
+#: ``frozenset`` were added after a 2026-08-14 review finding: a secret
+#: sitting in a tuple nested inside an otherwise-redacted dict/list (e.g.
+#: ``extra={"tokens": (secret,)}``) reached a real Sentry breadcrumb in
+#: plaintext, because the walk originally only recognised ``dict``/``list``
+#: and returned any other value — including a nested tuple — unchanged.
+_EXTRA_CONTAINER_TYPES = (dict, list, tuple, set, frozenset)
+
+
+def _redact_extra_value(value: object, _ancestors: frozenset[int] = frozenset()) -> object:
     """Recursively redact an ``extra={...}`` value (issue #313 residual gap).
 
     ``make_record_with_extra_redaction`` originally only redacted a
     top-level extra whose value was itself a ``str`` — a real call shape,
     ``logger.warning(..., extra={"error": {"api_key": "sk-..."}})``, skipped
     the whole value because ``isinstance(value, str)`` is ``False`` for a
-    dict, so the raw key reached the Sentry breadcrumb untouched. Dicts and
-    lists are walked recursively (to any depth) so a secret nested inside a
-    dict-in-list-in-dict shape is caught too; every other value (int, bool,
-    None, or a value not itself worth walking) is returned unchanged, same
-    as the top-level ``isinstance(value, str)`` skip already did — this
-    function only widens WHICH containers get walked, not what counts as
-    redactable text inside them.
+    dict, so the raw key reached the Sentry breadcrumb untouched. Containers
+    (``dict``, ``list``, ``tuple``, ``set``, ``frozenset`` — see
+    ``_EXTRA_CONTAINER_TYPES``) are walked recursively, up to
+    ``_MAX_EXTRA_REDACTION_DEPTH`` levels, so a secret nested inside a
+    dict-in-list-in-dict (or a tuple sitting inside either) is caught too;
+    every other value (int, bool, None, or a scalar not itself worth
+    walking) is returned unchanged.
+
+    ``_ancestors`` tracks the ``id()`` of every container currently on the
+    recursion PATH (not every container ever seen — two sibling branches
+    legitimately referencing the same object is normal aliasing, not a
+    cycle, and must still be walked twice). A container whose id is already
+    on that path is a genuine cycle; it is returned unchanged rather than
+    recursed into again, which is what makes a self-referential dict safe
+    instead of an infinite recursion. Each level passes a NEW frozenset
+    (``_ancestors | {id(value)}``) to its children rather than mutating a
+    shared set, so sibling branches never see each other's ancestry.
 
     Always returns a NEW value rather than mutating ``value`` in place —
-    the incoming dict/list came from the call site's own ``extra={...}``
+    the incoming container came from the call site's own ``extra={...}``
     literal (or a variable the caller may reuse/log again later), and
     mutating it would leak the redaction into whatever the caller does with
     that object next. Rebuilding new containers is what keeps this a pure
@@ -166,11 +199,29 @@ def _redact_extra_value(value: object) -> object:
     """
     if isinstance(value, str):
         return _redact_secrets(value)
+    if not isinstance(value, _EXTRA_CONTAINER_TYPES):
+        return value
+    if len(_ancestors) >= _MAX_EXTRA_REDACTION_DEPTH:
+        return value
+    obj_id = id(value)
+    if obj_id in _ancestors:
+        # Genuine cycle (this container is its own ancestor on this path,
+        # directly or indirectly) — stop descending rather than recurse
+        # forever.
+        return value
+    ancestors = _ancestors | {obj_id}
     if isinstance(value, dict):
-        return {key: _redact_extra_value(item) for key, item in value.items()}
+        return {key: _redact_extra_value(item, ancestors) for key, item in value.items()}
     if isinstance(value, list):
-        return [_redact_extra_value(item) for item in value]
-    return value
+        return [_redact_extra_value(item, ancestors) for item in value]
+    if isinstance(value, tuple):
+        return tuple(_redact_extra_value(item, ancestors) for item in value)
+    # set / frozenset — elements of a set are necessarily hashable already
+    # (str, int, tuple-of-hashables, frozenset), and redaction preserves
+    # that: a redacted str is still a str, a redacted tuple/frozenset is
+    # still built from redacted (still-hashable) elements.
+    redacted_items = {_redact_extra_value(item, ancestors) for item in value}
+    return redacted_items if isinstance(value, set) else frozenset(redacted_items)
 
 
 def install_redaction_record_factory() -> None:
@@ -370,7 +421,7 @@ def install_redaction_record_factory() -> None:
         for key, value in list(record.__dict__.items()):
             if key in _RESERVED_RECORD_ATTRS or key.startswith("_"):
                 continue
-            if not isinstance(value, (str, dict, list)):
+            if not isinstance(value, (str,) + _EXTRA_CONTAINER_TYPES):
                 continue
             redacted_value = _redact_extra_value(value)
             if redacted_value != value:

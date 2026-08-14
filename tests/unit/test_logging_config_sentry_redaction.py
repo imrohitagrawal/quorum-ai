@@ -259,6 +259,118 @@ def test_a_secret_doubly_nested_dict_in_list_in_dict_never_reaches_sentry(
         assert attempts[1]["provider"] == "anthropic"
 
 
+def test_a_secret_in_a_tuple_nested_inside_a_dict_never_reaches_sentry(
+    sentry_client: None, crumbs: list[dict[str, Any]]
+) -> None:
+    """2026-08-14 review finding: a tuple nested inside a dict/list extra leaked.
+
+    ``_redact_extra_value`` originally only recognised ``dict``/``list`` as
+    containers worth walking; any other container — including a ``tuple``
+    sitting inside an otherwise-redacted dict — fell through to
+    ``return value`` unchanged. Reproduced live against a real ``sentry_sdk``
+    client: ``extra={"tokens": (secret,)}`` reached the breadcrumb with the
+    secret fully intact.
+
+    RED WHEN: ``_EXTRA_CONTAINER_TYPES`` (or the walk itself) does not cover
+    ``tuple``.
+    """
+    secret = "sk-or-v1-tuplenestedsecretthatmustneverleak2233"
+    logger = logging.getLogger("product_app.tuple_extra")
+    logger.warning("batch call failed", extra={"tokens": (secret, "ok-token")})
+
+    own_crumbs = [c for c in crumbs if c.get("category") == "product_app.tuple_extra"]
+    assert own_crumbs, "the log call produced no breadcrumb at all — fixture is broken"
+    for crumb in own_crumbs:
+        data = crumb.get("data", {})
+        assert secret not in json.dumps(data), (
+            f"the secret reached a Sentry breadcrumb's tuple-nested extra in plaintext: {data}"
+        )
+        tokens = data.get("tokens", ())
+        assert "[REDACTED]" in tokens
+        # POSITIVE PARTNER (rule 7): a non-secret sibling tuple element survives.
+        assert "ok-token" in tokens
+
+
+def test_a_secret_in_a_set_valued_extra_never_reaches_sentry(
+    sentry_client: None, crumbs: list[dict[str, Any]]
+) -> None:
+    """Same gap class as the tuple finding, for a top-level ``set`` extra.
+
+    RED WHEN: ``_EXTRA_CONTAINER_TYPES`` (or the walk itself) does not cover
+    ``set``/``frozenset``.
+    """
+    secret = "sk-or-v1-setvaluedsecretthatmustneverleak4455"
+    logger = logging.getLogger("product_app.set_extra")
+    logger.warning("batch call failed", extra={"seen_tokens": {secret, "ok-token"}})
+
+    own_crumbs = [c for c in crumbs if c.get("category") == "product_app.set_extra"]
+    assert own_crumbs, "the log call produced no breadcrumb at all — fixture is broken"
+    for crumb in own_crumbs:
+        data = crumb.get("data", {})
+        assert secret not in json.dumps(data), (
+            f"the secret reached a Sentry breadcrumb's set-valued extra in plaintext: {data}"
+        )
+        seen = data.get("seen_tokens", set())
+        assert "[REDACTED]" in seen
+        # POSITIVE PARTNER (rule 7): a non-secret sibling element survives.
+        assert "ok-token" in seen
+
+
+def test_a_self_referential_extra_dict_does_not_crash_the_log_call() -> None:
+    """2026-08-14 review finding: a cyclic extra crashed the whole log call.
+
+    Verified live before this guard existed:
+    ``d = {}; d["self"] = d; logger.warning("x", extra=d)`` raised
+    ``RecursionError`` out of ``logger.warning()`` itself — a real bug a
+    future call site could trigger by accident (e.g. ``extra=vars(obj)`` on
+    an object with a back-reference), taking down whatever request/handler
+    logged it.
+
+    RED WHEN: the ancestor-tracking cycle guard is removed from
+    ``_redact_extra_value`` (or replaced with something that does not stop
+    recursion into an object already on the current path).
+    """
+    install_redaction_record_factory()
+    logger = logging.getLogger("test.cyclic_extra")
+    logger.setLevel(logging.WARNING)
+    logger.propagate = False
+    logger.handlers = [logging.NullHandler()]
+
+    cyclic: dict[str, Any] = {}
+    cyclic["self"] = cyclic
+
+    # Must not raise RecursionError (or anything else).
+    logger.warning("x", extra=cyclic)
+
+
+def test_a_very_deeply_nested_extra_does_not_crash_the_log_call() -> None:
+    """POSITIVE PARTNER shape for the depth guard: no cycle, just very deep.
+
+    A non-cyclic dict nested ~2000 levels deep also raised ``RecursionError``
+    before the depth cap existed (measured in the same review finding as the
+    cyclic case above) — a distinct trigger (no id() ever repeats) that the
+    cycle guard alone does not stop; only the explicit depth cap does.
+
+    RED WHEN: ``_MAX_EXTRA_REDACTION_DEPTH`` enforcement is removed from
+    ``_redact_extra_value``.
+    """
+    install_redaction_record_factory()
+    logger = logging.getLogger("test.deep_extra")
+    logger.setLevel(logging.WARNING)
+    logger.propagate = False
+    logger.handlers = [logging.NullHandler()]
+
+    deep: dict[str, Any] = {}
+    cursor = deep
+    for _ in range(2000):
+        cursor["next"] = {}
+        cursor = cursor["next"]
+    cursor["leaf"] = "sk-or-v1-toodeeptomatterbutmustnotcrashthelogger"
+
+    # Must not raise RecursionError (or anything else).
+    logger.warning("x", extra=deep)
+
+
 def test_a_dict_valued_extra_is_not_mutated_in_place() -> None:
     """The caller's own dict/list objects must survive a log call unchanged.
 
