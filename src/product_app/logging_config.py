@@ -142,6 +142,37 @@ def _redact_secrets(text: str) -> str:
     return text
 
 
+def _redact_extra_value(value: object) -> object:
+    """Recursively redact an ``extra={...}`` value (issue #313 residual gap).
+
+    ``make_record_with_extra_redaction`` originally only redacted a
+    top-level extra whose value was itself a ``str`` — a real call shape,
+    ``logger.warning(..., extra={"error": {"api_key": "sk-..."}})``, skipped
+    the whole value because ``isinstance(value, str)`` is ``False`` for a
+    dict, so the raw key reached the Sentry breadcrumb untouched. Dicts and
+    lists are walked recursively (to any depth) so a secret nested inside a
+    dict-in-list-in-dict shape is caught too; every other value (int, bool,
+    None, or a value not itself worth walking) is returned unchanged, same
+    as the top-level ``isinstance(value, str)`` skip already did — this
+    function only widens WHICH containers get walked, not what counts as
+    redactable text inside them.
+
+    Always returns a NEW value rather than mutating ``value`` in place —
+    the incoming dict/list came from the call site's own ``extra={...}``
+    literal (or a variable the caller may reuse/log again later), and
+    mutating it would leak the redaction into whatever the caller does with
+    that object next. Rebuilding new containers is what keeps this a pure
+    function of ``value``.
+    """
+    if isinstance(value, str):
+        return _redact_secrets(value)
+    if isinstance(value, dict):
+        return {key: _redact_extra_value(item) for key, item in value.items()}
+    if isinstance(value, list):
+        return [_redact_extra_value(item) for item in value]
+    return value
+
+
 def install_redaction_record_factory() -> None:
     """Scrub secret-shaped substrings from every log record at CREATION time.
 
@@ -189,13 +220,21 @@ def install_redaction_record_factory() -> None:
     Sentry's breadcrumb/event capture reads ``record.__dict__`` directly and
     never goes through ``JsonFormatter`` at all — the same bypass this
     function exists to close for the message. Each extra value is redacted
-    independently with ``_redact_secrets``, matching ``JsonFormatter``'s own
+    with ``_redact_extra_value``, matching ``JsonFormatter``'s own
     reserved-attribute set (``_RESERVED_RECORD_ATTRS``) so the standard
     ``LogRecord`` fields (``name``, ``pathname``, ``thread``, ...) are never
-    mistaken for call-site extras. Non-string extra values (ints, the
-    ``error_type`` class name via ``str(exc_type)``, etc.) are left alone —
-    redaction operates on text, and a non-string value cannot carry a
-    secret-shaped substring the way ``str()``-of-something can.
+    mistaken for call-site extras. A ``dict`` or ``list`` extra value is
+    walked RECURSIVELY (issue #313 residual gap, found live via a real
+    reproduction: ``logger.warning(..., extra={"error": {"api_key":
+    "sk-..."}})`` reached a real Sentry breadcrumb capture in plaintext,
+    because the original check was ``isinstance(value, str)`` and skipped
+    the dict entirely) — every string found at any depth inside a nested
+    dict/list is redacted, and a fresh container is built rather than the
+    original mutated in place, so a caller that logs the same dict object
+    again later still sees its own unmodified data. Other non-string,
+    non-container extra values (ints, the ``error_type`` class name via
+    ``str(exc_type)``, ``None``, etc.) are left alone — redaction operates
+    on text, and neither carries a secret-shaped substring on its own.
 
     This still does NOT touch ``record.exc_info`` (a full traceback passed
     via ``exc_info=True``) — none of the 9 call sites use that form today, and
@@ -329,9 +368,11 @@ def install_redaction_record_factory() -> None:
             self, name, level, fn, lno, msg, args, exc_info, func, extra, sinfo
         )
         for key, value in list(record.__dict__.items()):
-            if key in _RESERVED_RECORD_ATTRS or key.startswith("_") or not isinstance(value, str):
+            if key in _RESERVED_RECORD_ATTRS or key.startswith("_"):
                 continue
-            redacted_value = _redact_secrets(value)
+            if not isinstance(value, (str, dict, list)):
+                continue
+            redacted_value = _redact_extra_value(value)
             if redacted_value != value:
                 setattr(record, key, redacted_value)
         return record

@@ -149,6 +149,139 @@ def test_a_secret_in_an_extra_field_never_reaches_a_sentry_breadcrumb(
         assert data.get("error_type") == "RuntimeError"
 
 
+def test_a_secret_in_a_dict_valued_extra_never_reaches_a_sentry_breadcrumb(
+    sentry_client: None, crumbs: list[dict[str, Any]]
+) -> None:
+    """Issue #313 residual gap: ``extra={"error": {...}}`` (a dict, not a str).
+
+    ``make_record_with_extra_redaction`` skipped any extra value that failed
+    ``isinstance(value, str)`` — a dict-valued extra was left untouched and
+    reached the Sentry breadcrumb in plaintext. Reproduces the exact
+    reproduction shape from the issue:
+    ``logger.warning("...", extra={"error": {"api_key": "sk-..."}})``.
+
+    RED WHEN: dict-valued extras are skipped instead of walked recursively.
+    """
+    secret = "sk-or-v1-dictvaluedsecretthatmustneverleak12345"
+    logger = logging.getLogger("product_app.dict_extra")
+    logger.warning(
+        "upstream call failed",
+        extra={"error": {"api_key": secret}, "attempt": 3},
+    )
+
+    own_crumbs = [c for c in crumbs if c.get("category") == "product_app.dict_extra"]
+    assert own_crumbs, "the log call produced no breadcrumb at all — fixture is broken"
+    for crumb in own_crumbs:
+        data = crumb.get("data", {})
+        assert secret not in json.dumps(data), (
+            f"the secret reached a Sentry breadcrumb's dict-valued extra in plaintext: {data}"
+        )
+        assert data.get("error", {}).get("api_key") == "[REDACTED]"
+        # POSITIVE PARTNER (rule 7): a non-secret sibling field is untouched.
+        assert data.get("attempt") == 3
+
+
+def test_a_secret_in_a_list_valued_extra_never_reaches_a_sentry_breadcrumb(
+    sentry_client: None, crumbs: list[dict[str, Any]]
+) -> None:
+    """Issue #313 residual gap: ``extra={"errors": [...]}`` (a list, not a str).
+
+    A list-valued extra was equally skipped by the ``isinstance(value, str)``
+    check, so a secret sitting inside a list element reached Sentry too.
+
+    RED WHEN: list-valued extras are skipped instead of walked recursively.
+    """
+    secret = "sk-or-v1-listvaluedsecretthatmustneverleak67890"
+    logger = logging.getLogger("product_app.list_extra")
+    logger.warning(
+        "batch call failed",
+        extra={"errors": ["timeout", secret, "rate limited"]},
+    )
+
+    own_crumbs = [c for c in crumbs if c.get("category") == "product_app.list_extra"]
+    assert own_crumbs, "the log call produced no breadcrumb at all — fixture is broken"
+    for crumb in own_crumbs:
+        data = crumb.get("data", {})
+        assert secret not in json.dumps(data), (
+            f"the secret reached a Sentry breadcrumb's list-valued extra in plaintext: {data}"
+        )
+        errors = data.get("errors", [])
+        assert "[REDACTED]" in errors
+        # POSITIVE PARTNER (rule 7): non-secret sibling elements are untouched.
+        assert "timeout" in errors
+        assert "rate limited" in errors
+
+
+def test_a_secret_doubly_nested_dict_in_list_in_dict_never_reaches_sentry(
+    sentry_client: None, crumbs: list[dict[str, Any]]
+) -> None:
+    """Issue #313 residual gap, doubly nested: dict-in-list-in-dict.
+
+    Proves the walk recurses more than one level deep, not just one.
+
+    RED WHEN: only the top level of a dict/list extra is walked (e.g. a
+    fix that redacts strings found directly inside a dict's values or a
+    list's elements, but does not recurse into a nested dict/list found
+    at that first level).
+    """
+    secret = "sk-or-v1-doublynestedsecretthatmustneverleak0011"
+    logger = logging.getLogger("product_app.nested_extra")
+    logger.warning(
+        "batch call failed",
+        extra={
+            "context": {
+                "attempts": [
+                    {"provider": "openrouter", "detail": secret},
+                    {"provider": "anthropic", "detail": "unrelated failure"},
+                ]
+            }
+        },
+    )
+
+    own_crumbs = [c for c in crumbs if c.get("category") == "product_app.nested_extra"]
+    assert own_crumbs, "the log call produced no breadcrumb at all — fixture is broken"
+    for crumb in own_crumbs:
+        data = crumb.get("data", {})
+        assert secret not in json.dumps(data), (
+            f"the secret reached a Sentry breadcrumb's doubly-nested extra in plaintext: {data}"
+        )
+        attempts = data.get("context", {}).get("attempts", [])
+        assert attempts[0]["detail"] == "[REDACTED]"
+        # POSITIVE PARTNER (rule 7): a non-secret nested value is untouched.
+        assert attempts[1]["detail"] == "unrelated failure"
+        assert attempts[0]["provider"] == "openrouter"
+        assert attempts[1]["provider"] == "anthropic"
+
+
+def test_a_dict_valued_extra_is_not_mutated_in_place() -> None:
+    """The caller's own dict/list objects must survive a log call unchanged.
+
+    ``make_record_with_extra_redaction`` must build a NEW redacted value
+    rather than mutating the dict/list the call site passed in — that same
+    object may be reused (logged again, inspected, or serialized elsewhere)
+    after the logging call returns, and a redaction that mutates it in
+    place would silently corrupt the caller's own data.
+
+    RED WHEN: the fix redacts a dict/list extra by mutating it in place
+    (e.g. ``value["key"] = _redact_secrets(value["key"])``) instead of
+    building a fresh container and reassigning ``record.__dict__[key]``.
+    """
+    install_redaction_record_factory()
+    secret = "sk-or-v1-mutationguardsecretthatmustneverleak999"
+    original = {"error": {"api_key": secret}, "attempt": 1}
+    original_copy = {"error": {"api_key": secret}, "attempt": 1}
+
+    logger = logging.getLogger("product_app.mutation_guard")
+    logger.setLevel(logging.WARNING)
+    logger.propagate = False
+    logger.handlers = [logging.NullHandler()]
+    logger.warning("upstream call failed", extra=original)
+
+    assert original == original_copy, (
+        f"the caller's own extra dict was mutated in place: {original} != {original_copy}"
+    )
+
+
 def test_setup_json_logging_wires_the_redaction_factory() -> None:
     """A correct factory that production never installs protects nothing.
 
