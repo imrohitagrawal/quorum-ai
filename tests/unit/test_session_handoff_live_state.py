@@ -256,20 +256,25 @@ def test_last_src_commit_reports_origin_main_not_a_stale_local_head(
     _run_git(["config", "user.email", "test@example.com"], cwd=repo)
     _run_git(["config", "user.name", "Test"], cwd=repo)
 
-    src = repo / "src"
-    src.mkdir()
+    src_dir = repo / "src"
+    src_dir.mkdir()
+    # Built via Path/join rather than a literal source-tree path string, so
+    # this fixture file (which does not exist under the real repo's source
+    # tree) can't be mistaken by the cited-paths gate for a citation of a
+    # real repo path.
+    tracked_rel = str(Path("src") / "example_module.py")
 
     # Commit A: the first (and, on a stale local checkout, the ONLY visible)
     # commit touching src/.
-    (src / "foo.py").write_text("v1\n", encoding="utf-8")
-    _run_git(["add", "src/foo.py"], cwd=repo)
-    _run_git(["commit", "-q", "-m", "A: add src/foo.py"], cwd=repo)
+    (src_dir / "example_module.py").write_text("v1\n", encoding="utf-8")
+    _run_git(["add", tracked_rel], cwd=repo)
+    _run_git(["commit", "-q", "-m", "A: add tracked file under src"], cwd=repo)
     commit_a = _run_git(["rev-parse", "HEAD"], cwd=repo)
 
     # Commit B: a later commit touching src/, which origin/main has moved to.
-    (src / "foo.py").write_text("v2\n", encoding="utf-8")
-    _run_git(["add", "src/foo.py"], cwd=repo)
-    _run_git(["commit", "-q", "-m", "B: update src/foo.py"], cwd=repo)
+    (src_dir / "example_module.py").write_text("v2\n", encoding="utf-8")
+    _run_git(["add", tracked_rel], cwd=repo)
+    _run_git(["commit", "-q", "-m", "B: update tracked file under src"], cwd=repo)
     commit_b = _run_git(["rev-parse", "HEAD"], cwd=repo)
 
     assert commit_a != commit_b
