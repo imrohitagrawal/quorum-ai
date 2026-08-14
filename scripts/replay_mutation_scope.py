@@ -197,7 +197,9 @@ def no_mutable_content(func: ast.FunctionDef | ast.AsyncFunctionDef, source: str
                 for item in stmt.items:
                     if not _safe_expr(item.context_expr, source):
                         return False
-                    if item.optional_vars is not None and not isinstance(item.optional_vars, ast.Name):
+                    if item.optional_vars is not None and not isinstance(
+                        item.optional_vars, ast.Name
+                    ):
                         return False
                 if not safe_stmts(stmt.body):
                     return False
