@@ -166,7 +166,11 @@ def test_a_secret_in_a_dict_valued_extra_never_reaches_a_sentry_breadcrumb(
     logger = logging.getLogger("product_app.dict_extra")
     logger.warning(
         "upstream call failed",
-        extra={"error": {"api_key": secret}, "attempt": 3},
+        # ``retry_count`` is a nested INT sibling of the secret — exercises
+        # ``_redact_extra_value``'s fallthrough for a non-str/dict/list value
+        # found while walking a dict, not just the top-level int skip that
+        # ``make_record_with_extra_redaction`` already does on its own.
+        extra={"error": {"api_key": secret, "retry_count": 3}, "attempt": 3},
     )
 
     own_crumbs = [c for c in crumbs if c.get("category") == "product_app.dict_extra"]
@@ -177,8 +181,10 @@ def test_a_secret_in_a_dict_valued_extra_never_reaches_a_sentry_breadcrumb(
             f"the secret reached a Sentry breadcrumb's dict-valued extra in plaintext: {data}"
         )
         assert data.get("error", {}).get("api_key") == "[REDACTED]"
-        # POSITIVE PARTNER (rule 7): a non-secret sibling field is untouched.
+        # POSITIVE PARTNER (rule 7): non-secret sibling fields, including the
+        # nested int, are untouched.
         assert data.get("attempt") == 3
+        assert data.get("error", {}).get("retry_count") == 3
 
 
 def test_a_secret_in_a_list_valued_extra_never_reaches_a_sentry_breadcrumb(
