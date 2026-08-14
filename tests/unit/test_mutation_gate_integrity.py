@@ -770,6 +770,482 @@ def test_the_decorator_edge_cases_match_mutmut(scope_script: Path, tmp_path: Pat
     )
 
 
+NESTED_FUNC_BEFORE = """\
+def outer(x):
+    def inner(y):
+        return y + 1
+    return inner(x)
+"""
+NESTED_FUNC_AFTER = NESTED_FUNC_BEFORE.replace("return y + 1", "return y + 2")
+
+
+def test_a_nested_function_change_is_attributed_to_the_outer_function(
+    scope_script: Path, tmp_path: Path
+) -> None:
+    """#146: mutmut names every mutant of `inner` `x_outer__mutmut_*`, never
+    `x_inner__mutmut_*` — measured directly (mutmut 3.x,
+    `mutmut/mutation/file_mutation.py::OuterFunctionProvider`): it links every
+    node to the nearest ENCLOSING TOP-LEVEL function or method, and a def
+    nested inside another def is not itself a top-level unit. Naming the
+    inner function produces a glob that matches nothing, so a PR touching
+    only `inner` used to abort with "nothing matches" or, worse, silently
+    measure nothing while reporting a clean scope.
+
+    Turns red if: `walk()` goes back to minting a separate glob for a
+    FunctionDef nested inside another FunctionDef.
+    """
+    repo = _repo_with(tmp_path, NESTED_FUNC_BEFORE, NESTED_FUNC_AFTER)
+    result = _run(scope_script, repo, "scope", "HEAD", "80")
+
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert "x_outer__mutmut_*" in result.stdout, (
+        f"the outer function was not scoped:\n{result.stdout}{result.stderr}"
+    )
+    assert "x_inner" not in result.stdout, (
+        f"the nested function got its own (dead) glob: {result.stdout!r}"
+    )
+
+
+DOUBLY_NESTED_BEFORE = """\
+def a(x):
+    def b(y):
+        def c(z):
+            return z + 1
+        return c(y) + 1
+    return b(x) + 1
+"""
+DOUBLY_NESTED_AFTER = DOUBLY_NESTED_BEFORE.replace("return z + 1", "return z + 2")
+
+
+def test_a_doubly_nested_function_change_is_attributed_to_the_outermost_function(
+    scope_script: Path, tmp_path: Path
+) -> None:
+    """Measured directly: mutmut attributes `c`'s mutants to `a`, not `b` — the
+    OUTERMOST top-level def, regardless of nesting depth.
+
+    Turns red if: nesting depth > 1 attributes to the immediate parent (`b`)
+    instead of the outermost top-level function (`a`).
+    """
+    repo = _repo_with(tmp_path, DOUBLY_NESTED_BEFORE, DOUBLY_NESTED_AFTER)
+    result = _run(scope_script, repo, "scope", "HEAD", "80")
+
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert "x_a__mutmut_*" in result.stdout, (
+        f"the outermost function was not scoped:\n{result.stdout}{result.stderr}"
+    )
+    assert "x_b" not in result.stdout and "x_c" not in result.stdout, (
+        f"an intermediate or innermost nested function got its own (dead) glob: {result.stdout!r}"
+    )
+
+
+NESTED_IN_METHOD_BEFORE = """\
+class C:
+    def method(self, x):
+        def inner(y):
+            return y + 1
+        return inner(x) + 1
+"""
+NESTED_IN_METHOD_AFTER = NESTED_IN_METHOD_BEFORE.replace("return y + 1", "return y + 2")
+
+
+def test_a_function_nested_inside_a_method_is_attributed_to_the_method(
+    scope_script: Path, tmp_path: Path
+) -> None:
+    """Measured directly: nested inside a method, mutmut attributes to the
+    method's mangled name (`xǁCǁmethod__mutmut_*`), never the inner def's name.
+
+    Turns red if: a function nested inside a method mints its own glob instead
+    of the enclosing method's.
+    """
+    repo = _repo_with(tmp_path, NESTED_IN_METHOD_BEFORE, NESTED_IN_METHOD_AFTER)
+    result = _run(scope_script, repo, "scope", "HEAD", "80")
+
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert "xǁCǁmethod__mutmut_*" in result.stdout, (
+        f"the enclosing method was not scoped:\n{result.stdout}{result.stderr}"
+    )
+    assert "inner" not in result.stdout, (
+        f"the nested function got its own (dead) glob: {result.stdout!r}"
+    )
+
+
+NO_MUTABLE_RETURN_NAME_BEFORE = """\
+_store = None
+
+
+def get_store(x):
+    return _store
+"""
+NO_MUTABLE_RETURN_NAME_AFTER = NO_MUTABLE_RETURN_NAME_BEFORE.replace(
+    "return _store", "return _store  # c"
+)
+
+
+def test_a_bare_return_of_a_name_has_no_mutable_content(scope_script: Path, tmp_path: Path) -> None:
+    """#146: `return _store` has no number, string, call-with-args, operator or
+    assignment for any mutmut operator to touch — measured directly (mutmut
+    3.x): 0 mutants generated. Naming it produces a glob matching nothing.
+
+    Turns red if: `no_mutable_content()` stops recognising a bare-name return.
+    """
+    repo = _repo_with(tmp_path, NO_MUTABLE_RETURN_NAME_BEFORE, NO_MUTABLE_RETURN_NAME_AFTER)
+    result = _run(scope_script, repo, "scope", "HEAD", "80")
+
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert result.stdout == "", (
+        f"a no-mutable-content function was scoped; mutmut generates nothing: {result.stdout!r}"
+    )
+    assert "no mutable content" in result.stderr, (
+        f"the exclusion must say why, distinctly from the decorated case:\n{result.stderr}"
+    )
+    assert "pkg.thing.get_store" in result.stderr, (
+        f"the report must name the function:\n{result.stderr}"
+    )
+
+
+ELLIPSIS_STUB_BEFORE = """\
+def clear_it(self):
+    ...
+"""
+ELLIPSIS_STUB_AFTER = ELLIPSIS_STUB_BEFORE.replace("    ...", "    ...  # c")
+
+
+def test_an_ellipsis_stub_body_has_no_mutable_content(scope_script: Path, tmp_path: Path) -> None:
+    """A bare `...` stub body: measured directly, 0 mutants.
+
+    Turns red if: `no_mutable_content()` stops recognising an Ellipsis body.
+    """
+    repo = _repo_with(tmp_path, ELLIPSIS_STUB_BEFORE, ELLIPSIS_STUB_AFTER)
+    result = _run(scope_script, repo, "scope", "HEAD", "80")
+    assert result.stdout == "", (
+        f"an ellipsis-only function was scoped; mutmut generates nothing for it: {result.stdout!r}"
+    )
+    assert "pkg.thing.clear_it" in result.stderr
+
+
+IFEXP_BEFORE = """\
+class T:
+    def served_confidence(self):
+        return self.score if self.support_verified else None
+"""
+IFEXP_AFTER = IFEXP_BEFORE.replace(
+    "return self.score if self.support_verified else None",
+    "return self.score if self.support_verified else None  # c",
+)
+
+
+def test_a_bare_ifexp_over_names_has_no_mutable_content(scope_script: Path, tmp_path: Path) -> None:
+    """#146's literal example: `return a if b else None`, all three of a/b/None
+    bare names — no mutmut operator targets `ast.IfExp` itself. Measured
+    directly: 0 mutants.
+
+    Turns red if: `no_mutable_content()` stops recognising a bare IfExp.
+    """
+    repo = _repo_with(tmp_path, IFEXP_BEFORE, IFEXP_AFTER)
+    result = _run(scope_script, repo, "scope", "HEAD", "80")
+    assert result.stdout == "", (
+        f"a bare-IfExp function was scoped; mutmut generates nothing for it: {result.stdout!r}"
+    )
+    assert "pkg.thing.served_confidence" in result.stderr
+
+
+ZERO_ARG_CALL_BEFORE = """\
+class Svc:
+    def default_slots(self, catalog):
+        return catalog.default_slots()
+"""
+ZERO_ARG_CALL_AFTER = ZERO_ARG_CALL_BEFORE.replace(
+    "return catalog.default_slots()", "return catalog.default_slots()  # c"
+)
+
+
+def test_a_zero_arg_call_chain_has_no_mutable_content(scope_script: Path, tmp_path: Path) -> None:
+    """`return x.y()` with no positional or keyword args: `operator_arg_removal`
+    needs at least one arg to remove or None-replace, so this is 0 mutants
+    (measured directly on `model_slots.default_model_slots`'s real shape).
+
+    Turns red if: `no_mutable_content()` stops recognising a zero-arg call.
+    """
+    repo = _repo_with(tmp_path, ZERO_ARG_CALL_BEFORE, ZERO_ARG_CALL_AFTER)
+    result = _run(scope_script, repo, "scope", "HEAD", "80")
+    assert result.stdout == "", (
+        f"a zero-arg-call function was scoped; mutmut generates nothing for it: {result.stdout!r}"
+    )
+    assert "pkg.thing.default_slots" in result.stderr
+
+
+WITH_CLEAR_BEFORE = """\
+class Recorder:
+    def clear(self):
+        with self._lock:
+            self._events.clear()
+"""
+WITH_CLEAR_AFTER = WITH_CLEAR_BEFORE.replace("self._events.clear()", "self._events.clear()  # c")
+
+
+def test_a_with_block_wrapping_a_zero_arg_call_has_no_mutable_content(
+    scope_script: Path, tmp_path: Path
+) -> None:
+    """#146's literal example: every `InMemory*Recorder.clear` — `with
+    self._lock: self._events.clear()`. `with` itself has no mutmut operator;
+    the call inside has no args. Measured directly: 0 mutants.
+
+    Turns red if: `no_mutable_content()` stops recognising a `with` wrapper.
+    """
+    repo = _repo_with(tmp_path, WITH_CLEAR_BEFORE, WITH_CLEAR_AFTER)
+    result = _run(scope_script, repo, "scope", "HEAD", "80")
+    assert result.stdout == "", (
+        f"a with-block zero-arg-call fn was scoped; mutmut generates nothing: {result.stdout!r}"
+    )
+    assert "pkg.thing.clear" in result.stderr
+
+
+# --- Positive partners: real mutable content must NOT be excluded. ---
+
+CALL_WITH_ARG_BEFORE = """\
+def build(x):
+    return dict(a=x)
+"""
+CALL_WITH_ARG_AFTER = CALL_WITH_ARG_BEFORE.replace("dict(a=x)", "dict(a=x, b=1)")
+
+
+def test_a_call_with_an_argument_is_not_excluded(scope_script: Path, tmp_path: Path) -> None:
+    """Positive partner for the zero-arg-call and with-block tests above: a
+    call carrying an argument IS mutable (`operator_arg_removal` /
+    `operator_dict_arguments`), so it must stay in scope.
+
+    Without this, the two tests above are equally satisfied by a
+    `no_mutable_content()` that excludes every function containing any Call.
+
+    Turns red if: `no_mutable_content()` is widened to treat any Call as inert
+    regardless of its arguments.
+    """
+    repo = _repo_with(tmp_path, CALL_WITH_ARG_BEFORE, CALL_WITH_ARG_AFTER)
+    result = _run(scope_script, repo, "scope", "HEAD", "80")
+    assert "x_build__mutmut_*" in result.stdout, (
+        f"a function calling with arguments was wrongly excluded:\n{result.stdout}{result.stderr}"
+    )
+
+
+IFEXP_WITH_LITERAL_BEFORE = """\
+def maybe(cond):
+    return 1 if cond else 2
+"""
+IFEXP_WITH_LITERAL_AFTER = IFEXP_WITH_LITERAL_BEFORE.replace(
+    "return 1 if cond else 2", "return 3 if cond else 2"
+)
+
+
+def test_an_ifexp_with_a_number_literal_branch_is_not_excluded(
+    scope_script: Path, tmp_path: Path
+) -> None:
+    """Positive partner for the bare-IfExp test: `1`/`2` ARE mutable numbers
+    (`operator_number`), so an IfExp whose branches carry literals must stay
+    in scope even though the IfExp node itself is never targeted.
+
+    Turns red if: `no_mutable_content()` is widened to treat any IfExp as
+    inert regardless of its branches.
+    """
+    repo = _repo_with(tmp_path, IFEXP_WITH_LITERAL_BEFORE, IFEXP_WITH_LITERAL_AFTER)
+    result = _run(scope_script, repo, "scope", "HEAD", "80")
+    assert "x_maybe__mutmut_*" in result.stdout, (
+        f"a function with number-literal IfExp branches was wrongly excluded:\n"
+        f"{result.stdout}{result.stderr}"
+    )
+
+
+NESTED_WITH_REAL_CONTENT_BEFORE = """\
+def outer(x):
+    def inner(y):
+        return y + 1
+    return inner(x)
+"""
+# Change the OUTER's own trivial wrapping line, not inner -- still must scope
+# to x_outer because inner's own body has a real mutable `+ 1`.
+NESTED_WITH_REAL_CONTENT_AFTER = (
+    "def outer(x):\n    def inner(y):\n        return y + 1\n    return inner(x)  # c\n"
+)
+
+
+def test_a_changed_outer_whose_nested_function_has_real_content_is_not_excluded(
+    scope_script: Path, tmp_path: Path
+) -> None:
+    """Positive partner: `no_mutable_content()` must inspect a nested def's
+    OWN body too, since mutmut attributes its mutations to the same outer
+    glob. `inner`'s `y + 1` is mutable, so `outer` must stay in scope even
+    though `outer`'s own directly-owned statements are trivial wrappers.
+
+    Turns red if: `no_mutable_content()` only inspects the outer function's
+    own body and ignores nested defs, wrongly excluding a function whose real
+    mutable content lives one level down.
+    """
+    repo = _repo_with(tmp_path, NESTED_WITH_REAL_CONTENT_BEFORE, NESTED_WITH_REAL_CONTENT_AFTER)
+    result = _run(scope_script, repo, "scope", "HEAD", "80")
+    assert "x_outer__mutmut_*" in result.stdout, (
+        f"a function whose nested def has real mutable content was wrongly "
+        f"excluded:\n{result.stdout}{result.stderr}"
+    )
+
+
+FSTRING_BEFORE = """\
+def notice(round_number):
+    return (
+        f"Debate round {round_number} used a local heuristic because the "
+        f"live moderator call failed or was not configured."
+    )
+"""
+FSTRING_AFTER = FSTRING_BEFORE.replace("Debate round", "Debate round ")
+
+
+def test_a_pure_fstring_return_has_no_mutable_content(scope_script: Path, tmp_path: Path) -> None:
+    """#146's real dead glob: `debate._debate_fallback_notice` and
+    `synthesis._synthesis_fallback_notice`/`_section_prompt` all return an
+    f-string. Measured directly against mutmut's own `create_mutations()`
+    (mutmut 3.x, `mutmut/mutation/mutators.py::operator_string`): it
+    type-checks `isinstance(node, cst.SimpleString)` and yields nothing for
+    a `cst.FormattedString` (an f-string), so a pure f-string built only from
+    safe placeholders (bare names here) is 0 real mutants.
+
+    Turns red if: `_safe_expr()` stops recognising `ast.JoinedStr`.
+    """
+    repo = _repo_with(tmp_path, FSTRING_BEFORE, FSTRING_AFTER)
+    result = _run(scope_script, repo, "scope", "HEAD", "80")
+    assert result.stdout == "", (
+        f"a pure-fstring-return function was scoped; mutmut generates nothing: {result.stdout!r}"
+    )
+    assert "pkg.thing.notice" in result.stderr
+
+
+FSTRING_WITH_LITERAL_PLACEHOLDER_BEFORE = """\
+def notice(round_number):
+    return f"round {1}"
+"""
+FSTRING_WITH_LITERAL_PLACEHOLDER_AFTER = FSTRING_WITH_LITERAL_PLACEHOLDER_BEFORE.replace(
+    'f"round {1}"', 'f"round {1} "'
+)
+
+
+def test_an_fstring_with_a_number_placeholder_is_not_excluded(
+    scope_script: Path, tmp_path: Path
+) -> None:
+    """Positive partner: mutmut's visitor still recurses into an f-string's
+    embedded `{...}` expressions as ordinary CST nodes, so a number literal
+    INSIDE the placeholder (`{1}`) IS mutable (`operator_number`) even though
+    the f-string's own literal text is not.
+
+    Turns red if: `_safe_expr()` is widened to treat any JoinedStr as inert
+    regardless of its embedded placeholder expressions.
+    """
+    repo = _repo_with(
+        tmp_path, FSTRING_WITH_LITERAL_PLACEHOLDER_BEFORE, FSTRING_WITH_LITERAL_PLACEHOLDER_AFTER
+    )
+    result = _run(scope_script, repo, "scope", "HEAD", "80")
+    assert "x_notice__mutmut_*" in result.stdout, (
+        f"an f-string with a mutable number placeholder was wrongly excluded:\n"
+        f"{result.stdout}{result.stderr}"
+    )
+
+
+DICTCOMP_BEFORE = """\
+class Svc:
+    def price_index(self):
+        return {
+            entry.model_id: (entry.input_price, entry.output_price)
+            for entry in self._entries()
+        }
+"""
+DICTCOMP_AFTER = DICTCOMP_BEFORE.replace("entry.model_id", "entry.model_id ")
+
+
+def test_a_dict_comprehension_over_safe_subexprs_has_no_mutable_content(
+    scope_script: Path, tmp_path: Path
+) -> None:
+    """#146's real dead glob: `model_slots.OpenRouterModelCatalogService.price_index`
+    — a dict comprehension whose key/value/generator are all bare
+    attribute/zero-arg-call chains. Measured directly: no mutmut operator
+    targets `cst.DictComp`/`cst.CompFor` at all, so with only safe
+    sub-expressions this is 0 real mutants.
+
+    Turns red if: `_safe_expr()` stops recognising a comprehension with safe
+    key/value/generator sub-expressions.
+    """
+    repo = _repo_with(tmp_path, DICTCOMP_BEFORE, DICTCOMP_AFTER)
+    result = _run(scope_script, repo, "scope", "HEAD", "80")
+    assert result.stdout == "", (
+        f"a safe-subexpr dict comprehension was scoped; mutmut generates nothing: {result.stdout!r}"
+    )
+    assert "pkg.thing.price_index" in result.stderr
+
+
+DICTCOMP_WITH_NUMBER_BEFORE = """\
+class Svc:
+    def price_index(self):
+        return {entry.model_id: 1 for entry in self._entries()}
+"""
+DICTCOMP_WITH_NUMBER_AFTER = DICTCOMP_WITH_NUMBER_BEFORE.replace(
+    "entry.model_id: 1", "entry.model_id: 2"
+)
+
+
+def test_a_dict_comprehension_with_a_number_literal_value_is_not_excluded(
+    scope_script: Path, tmp_path: Path
+) -> None:
+    """Positive partner: a number literal anywhere inside the comprehension
+    (here the dict value) IS mutable (`operator_number`), so the whole
+    function must stay in scope.
+
+    Turns red if: `_safe_expr()` is widened to treat any comprehension as
+    inert regardless of its key/value/generator sub-expressions.
+    """
+    repo = _repo_with(tmp_path, DICTCOMP_WITH_NUMBER_BEFORE, DICTCOMP_WITH_NUMBER_AFTER)
+    result = _run(scope_script, repo, "scope", "HEAD", "80")
+    assert "xǁSvcǁprice_index__mutmut_*" in result.stdout, (
+        f"a dict comprehension with a mutable number literal was wrongly excluded:\n"
+        f"{result.stdout}{result.stderr}"
+    )
+
+
+IMPLICIT_CONCAT_BEFORE = """\
+class Svc:
+    def notice(self, x):
+        return (
+            f"Cross-check summary for {x}: compare the cited evidence, "
+            "preserve disagreement, and verify important claims before acting."
+        )
+"""
+IMPLICIT_CONCAT_AFTER = IMPLICIT_CONCAT_BEFORE.replace(
+    "preserve disagreement", "Preserve disagreement"
+)
+
+
+def test_an_fstring_implicitly_concatenated_with_a_plain_string_is_not_excluded(
+    scope_script: Path, tmp_path: Path
+) -> None:
+    """#146 residual, found by cross-checking this fix against mutmut's own
+    `create_mutations()` on the real tree: `providers._local_simulation_text`
+    is an f-string immediately followed by a plain string literal (Python's
+    implicit adjacent-literal concatenation).
+
+    Stdlib `ast` MERGES both into a single `JoinedStr`, with the plain
+    literal's text becoming an ordinary `Constant` sub-part indistinguishable
+    from true f-string text — but libcst does NOT merge them: it keeps the
+    plain segment as its own `cst.SimpleString`, which `operator_string`
+    DOES mutate. Measured directly against `create_mutations()`: this shape
+    has 3 real mutants (the plain segment's string mutations), all from a
+    `_safe_expr()` that trusted the merged `ast.JoinedStr` structure.
+
+    Turns red if: `_safe_expr()` treats every `Constant(str)` inside a
+    `JoinedStr` as inert without checking for a literal `STRING` token (a
+    plain, non-f segment) in the node's own source text.
+    """
+    repo = _repo_with(tmp_path, IMPLICIT_CONCAT_BEFORE, IMPLICIT_CONCAT_AFTER)
+    result = _run(scope_script, repo, "scope", "HEAD", "80")
+    assert "xǁSvcǁnotice__mutmut_*" in result.stdout, (
+        "an f-string implicitly concatenated with a mutable plain string was "
+        f"wrongly excluded:\n{result.stdout}{result.stderr}"
+    )
+
+
 def test_scope_fails_loudly_on_a_bad_base_ref(scope_script: Path) -> None:
     """A base ref git cannot resolve must be a hard error, not an empty scope."""
     result = _run(scope_script, REPO_ROOT, "scope", "origin/does-not-exist-xyz", "90")

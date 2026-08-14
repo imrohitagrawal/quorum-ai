@@ -272,7 +272,7 @@ MUTMUT_MAX_CHILDREN ?= 8
 MUTATION_RUN_DEADLINE_SECONDS ?= 1440
 
 define MUTMUT_SCOPE_PY
-import ast, collections, glob, json, os, re, subprocess, sys
+import ast, collections, glob, io, json, os, re, subprocess, sys, tokenize
 
 mode, base, threshold = sys.argv[1], sys.argv[2], float(sys.argv[3])
 
@@ -319,6 +319,168 @@ def unmutatable(node):
     return True
 
 
+def _joined_str_has_a_real_string_literal(node, source):
+    """True when a `JoinedStr` contains a PLAIN (non-f) string token.
+
+    stdlib `ast` merges Python's implicit adjacent-literal concatenation
+    (``f"a {x}" "b"``) into ONE `JoinedStr`, with the plain literal's text
+    folded into an ordinary `Constant` sub-part indistinguishable from real
+    f-string text. libcst does NOT merge them: it keeps the plain segment as
+    its own `cst.SimpleString`, which `operator_string` DOES mutate.
+    Measured directly (`providers._local_simulation_text`, #146): 3 real
+    mutants, all from the plain segment stdlib `ast` had hidden.
+
+    Tokenizing the node's own source segment tells the two apart: Python
+    3.12+'s tokenizer emits FSTRING_START/MIDDLE/END for an f-string's own
+    text, so a `tokenize.STRING` token appearing in that segment can only be
+    a separate, plain literal glued on by implicit concatenation.
+    """
+    segment = ast.get_source_segment(source, node)
+    if segment is None:
+        return True  # can't prove it safe -- caller fails closed on this
+    try:
+        tokens = tokenize.generate_tokens(io.StringIO(segment).readline)
+        return any(tok.type == tokenize.STRING for tok in tokens)
+    except (tokenize.TokenizeError, IndentationError, SyntaxError):
+        return True
+
+
+def _safe_comprehension(generators, source):
+    """True when every `for ... in ...` clause of a comprehension is safe.
+
+    No mutmut operator targets a comprehension's `for`/`if` clauses
+    structurally (there is no `cst.CompFor` entry in `mutation_operators`),
+    so only the ITER and IFS sub-expressions can carry real content.
+    """
+    for gen in generators:
+        if not _safe_expr(gen.iter, source):
+            return False
+        if any(not _safe_expr(cond, source) for cond in gen.ifs):
+            return False
+    return True
+
+
+def _safe_expr(node, source):
+    """True when mutmut has NO operator that can touch this expression.
+
+    Mirrors mutmut/mutation/mutators.py's `mutation_operators` table exactly
+    for the shapes this repo's dead functions actually use (#146): a bare
+    name/attribute chain, `None`/`...`, a call with NO positional or keyword
+    args (operator_arg_removal needs >=1 to remove or None-replace,
+    operator_dict_arguments needs a keyword arg to `dict(...)`), an IfExp
+    over such sub-expressions (no operator targets ast.IfExp itself), an
+    f-string built only from safe placeholders and NO implicitly-concatenated
+    plain string (operator_string type-checks `isinstance(node,
+    cst.SimpleString)` and yields nothing for a `cst.FormattedString`, but
+    DOES mutate a plain literal glued on next to it), and a comprehension
+    over safe sub-expressions (no operator targets a comprehension's
+    `for`/`if` clauses).
+
+    FAILS CLOSED: any expression shape not explicitly listed here returns
+    False, so this can under-detect (leaving a truly-dead function scoped,
+    today's status quo) but can never wrongly call a mutable expression safe.
+    """
+    if node is None:
+        return True
+    if isinstance(node, ast.Name):
+        return True
+    if isinstance(node, ast.Attribute):
+        return _safe_expr(node.value, source)
+    if isinstance(node, ast.Constant):
+        return node.value is None or node.value is Ellipsis
+    if isinstance(node, ast.Call):
+        if node.args or node.keywords:
+            return False
+        return _safe_expr(node.func, source)
+    if isinstance(node, ast.IfExp):
+        return (
+            _safe_expr(node.test, source)
+            and _safe_expr(node.body, source)
+            and _safe_expr(node.orelse, source)
+        )
+    if isinstance(node, ast.Tuple | ast.List):
+        return all(_safe_expr(elt, source) for elt in node.elts)
+    if isinstance(node, ast.JoinedStr):
+        if _joined_str_has_a_real_string_literal(node, source):
+            return False
+        for part in node.values:
+            if isinstance(part, ast.Constant):
+                continue  # literal text: operator_string ignores FormattedString entirely
+            if isinstance(part, ast.FormattedValue):
+                if part.format_spec is not None or not _safe_expr(part.value, source):
+                    return False
+                continue
+            return False
+        return True
+    if isinstance(node, ast.DictComp):
+        return (
+            _safe_expr(node.key, source)
+            and _safe_expr(node.value, source)
+            and _safe_comprehension(node.generators, source)
+        )
+    if isinstance(node, ast.ListComp | ast.SetComp | ast.GeneratorExp):
+        return _safe_expr(node.elt, source) and _safe_comprehension(node.generators, source)
+    return False
+
+
+def no_mutable_content(func, source):
+    """True when NOTHING mutmut can mutate lives anywhere in `func`.
+
+    Recurses into a nested `def` inside `func` too (skipping it only if it is
+    itself `unmutatable()`), because mutmut attributes every mutation inside a
+    nested function to the SAME enclosing top-level name
+    (OuterFunctionProvider) - see `walk()`. A changed line whose enclosing
+    function is entirely inert this way still names a glob mutmut generates
+    zero mutants for, the same abort/silent-gap #136 already covers for
+    decorated functions.
+
+    FAILS CLOSED like `_safe_expr`: an unrecognised statement shape (If, For,
+    Assign, ...) makes the whole function ineligible for exclusion.
+    """
+    body = list(func.body)
+    if (
+        body
+        and isinstance(body[0], ast.Expr)
+        and isinstance(body[0].value, ast.Constant)
+        and isinstance(body[0].value.value, str)
+    ):
+        # A leading docstring never counts against a function: mutmut's own
+        # operator_string explicitly excuses triple-quoted strings ("we
+        # assume triple-quoted stuff are docs").
+        body = body[1:]
+    if not body:
+        return True
+
+    def safe_stmts(stmts):
+        for stmt in stmts:
+            if isinstance(stmt, ast.Pass):
+                continue
+            if isinstance(stmt, ast.Return | ast.Expr):
+                if not _safe_expr(stmt.value, source):
+                    return False
+                continue
+            if isinstance(stmt, ast.With | ast.AsyncWith):
+                for item in stmt.items:
+                    if not _safe_expr(item.context_expr, source):
+                        return False
+                    if item.optional_vars is not None and not isinstance(item.optional_vars, ast.Name):
+                        return False
+                if not safe_stmts(stmt.body):
+                    return False
+                continue
+            if isinstance(stmt, ast.FunctionDef | ast.AsyncFunctionDef):
+                if unmutatable(stmt):
+                    continue
+                if not no_mutable_content(stmt, source):
+                    return False
+                continue
+            # If/For/While/Try/Assign/Raise/... are not provably inert.
+            return False
+        return True
+
+    return safe_stmts(body)
+
+
 def scope():
     """Changed functions -> mutmut mutant-name globs (xǁClassǁmethod / x_function)."""
     globs = []
@@ -326,7 +488,8 @@ def scope():
     for path, lines in sorted(changed_lines().items()):
         module = path.removeprefix("src/").removesuffix(".py").replace("/", ".")
         with open(path) as handle:
-            tree = ast.parse(handle.read())
+            source = handle.read()
+        tree = ast.parse(source)
 
         def walk(node, cls=None, frozen=False):
             for child in ast.iter_child_nodes(node):
@@ -338,7 +501,7 @@ def scope():
                     # - e.g. every @dataclass. Missing this left #136 reachable
                     # from _Session.is_expired and three others.
                     walk(child, child.name, frozen or bool(child.decorator_list))
-                elif isinstance(child, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                elif isinstance(child, ast.FunctionDef | ast.AsyncFunctionDef):
                     span = range(child.lineno, (child.end_lineno or child.lineno) + 1)
                     if lines & set(span):
                         if frozen or unmutatable(child):
@@ -349,11 +512,24 @@ def scope():
                             # and the recipe blames also_copy - the wrong cause.
                             # Measured over history: 7% of changes abort this way,
                             # 38% carry one silently. Excluded and REPORTED (#136).
-                            skipped.append("%s.%s" % (module, child.name))
+                            skipped.append("%s.%s [decorated]" % (module, child.name))
+                        elif no_mutable_content(child, source):
+                            # #146: genuinely nothing for any mutmut operator to
+                            # touch anywhere in this function (own body or a
+                            # nested def inside it) - same dead-glob abort as
+                            # the decorated case, different cause.
+                            skipped.append("%s.%s [no mutable content]" % (module, child.name))
                         else:
                             name = "xǁ%sǁ%s" % (cls, child.name) if cls else "x_%s" % child.name
                             globs.append("%s.%s__mutmut_*" % (module, name))
-                    walk(child, cls, frozen)
+                    # Do NOT recurse into a FunctionDef's body looking for
+                    # further FunctionDefs: mutmut attributes EVERY mutation
+                    # inside a nested `def` - at any depth - to this SAME
+                    # enclosing name (OuterFunctionProvider), never to the
+                    # nested def's own name. A nested def's lines are already
+                    # inside `span` above, so the overlap check already
+                    # caught it; minting a second, separate glob for the
+                    # nested name produces one mutmut matches nothing (#146).
 
         walk(tree)
     # Only write anything when the scope is non-empty. `print("".join([]))`
@@ -368,7 +544,7 @@ def scope():
         # there would be read by `mutmut run` as a mutant name.
         sys.stderr.write(
             "mutation scope: %d changed function(s) cannot be mutated by mutmut "
-            "(decorated - see #136); excluded so the run does not abort:\n%s\n"
+            "(excluded so the run does not abort; reason per function below):\n%s\n"
             % (len(skipped), "\n".join("  " + n for n in sorted(set(skipped))))
         )
     if globs:
