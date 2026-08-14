@@ -44,6 +44,7 @@ ways, so the record shows what was believed on a date and what replaced it.
 | [ADR-0036](adr/0036-query-runs-splits-into-api-and-orchestration-modules.md) | `query_runs.py` splits into a thin `query_api` layer and a new `query_run_orchestration` module | Architecture | Accepted — 2026-08-14 (#303) |
 | [ADR-0037](adr/0037-debate-usage-prices-by-actual-model-timeout-unchanged.md) | Debate usage prices by the model actually billed; the debate timeout stays 8.0s, unproven either way | Architecture | Accepted — 2026-08-14 |
 | [ADR-0038](adr/0038-guard-tests-prove-they-bite-via-artifact-mutation-not-tests-mutation.md) | A guard test proves it bites by mutating the artifact it asserts about, not by mutating `tests/` | Architecture | Accepted — 2026-08-14 (#143, #167) |
+| [ADR-0039](adr/0039-constant-and-enum-pin-detectors-close-known-gaps.md) | The constant-pin and enum-pin detectors close their stated gaps, with a deliberately conservative reachability rule | Architecture | Accepted — 2026-08-14 (#145, #160) |
 
 **This index was itself stale** until 2026-07-30: ADR-0002 had existed since
 2026-07-19 and was never listed here. A hand-maintained index is a derived fact
