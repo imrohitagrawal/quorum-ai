@@ -152,6 +152,50 @@ def test_the_classifier_distinguishes_the_two_empty_scope_causes(repo: Path) -> 
     )
 
 
+def test_a_bare_call_to_deepcopy_is_not_excluded_from_scope(tmp_path: Path) -> None:
+    """`deepcopy()` has zero positional/keyword args, but mutmut's real
+    `operator_name` table (`mutmut/mutation/mutators.py`'s `name_mappings`)
+    rewrites the bare identifier `deepcopy` -> `copy` wherever it appears as
+    a `Name` node -- independent of whether the call carries arguments. So
+    `deepcopy()` IS a real mutant and must stay in scope (#146
+    false-exclusion regression: `_safe_expr`'s zero-arg `ast.Call` fast path
+    fell through to `_safe_expr(node.func, source)`, which is blind to
+    `operator_name` and wrongly deemed any bare-name callee safe).
+
+    Turns red if: `_safe_expr()`'s zero-arg-call handling is widened back to
+    trust any callee name, silently shrinking the real mutation surface.
+    """
+    root = tmp_path / "repo"
+    (root / "src" / "pkg").mkdir(parents=True)
+    env = {
+        **os.environ,
+        "GIT_AUTHOR_NAME": "t",
+        "GIT_AUTHOR_EMAIL": "t@t",
+        "GIT_COMMITTER_NAME": "t",
+        "GIT_COMMITTER_EMAIL": "t@t",
+    }
+
+    def git(*args: str) -> None:
+        subprocess.run(["git", *args], cwd=root, check=True, capture_output=True, env=env)
+
+    module = root / "src" / "pkg" / "thing.py"
+    before = "from copy import deepcopy\n\n\ndef snapshot():\n    return deepcopy()\n"
+    after = "from copy import deepcopy\n\n\ndef snapshot():\n    return deepcopy()  # c\n"
+    git("init", "-q", "-b", "main")
+    module.write_text(before, encoding="utf-8")
+    git("add", "-A")
+    git("commit", "-qm", "base")
+    module.write_text(after, encoding="utf-8")
+    git("add", "-A")
+    git("commit", "-qm", "add comment")
+
+    mod = _load(root)
+    globs, _reasons = mod.scope("HEAD^", "HEAD")
+    assert globs == ["pkg.thing.x_snapshot__mutmut_*"], (
+        f"a bare no-arg deepcopy() call was wrongly excluded from scope: {globs}"
+    )
+
+
 def test_a_tokenize_failure_fails_closed_instead_of_crashing(
     repo: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

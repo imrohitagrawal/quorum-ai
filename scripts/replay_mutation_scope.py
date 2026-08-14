@@ -116,6 +116,41 @@ def _safe_comprehension(generators: list[ast.comprehension], source: str) -> boo
     return True
 
 
+# mutmut's `operator_name` (mutators.py's `name_mappings`) rewrites a bare
+# `Name` node with this exact identifier, REGARDLESS of whether it sits in a
+# call with arguments, without arguments, or isn't called at all. `_safe_expr`
+# must never call a `Call`'s callee (or any bare `Name`) safe when it is one
+# of these (#146 false-exclusion bug: a zero-arg `deepcopy()` was wrongly
+# excluded because the args-only fast path never looked at the callee name).
+_MUTMUT_RENAMED_NAMES = frozenset({"deepcopy"})
+
+# mutmut's `operator_symmetric_string_methods_swap` /
+# `operator_unsymmetrical_string_methods_swap` rewrite a method `Call` to its
+# opposite purely by matching the ATTRIBUTE NAME on `node.func` — neither
+# checks argument count first, so a zero-arg `x.lower()` is still a real
+# mutant (`x.upper()`).
+_MUTMUT_SWAPPABLE_METHOD_NAMES = frozenset(
+    {
+        "lower",
+        "upper",
+        "lstrip",
+        "rstrip",
+        "find",
+        "rfind",
+        "ljust",
+        "rjust",
+        "index",
+        "rindex",
+        "removeprefix",
+        "removesuffix",
+        "partition",
+        "rpartition",
+        "split",
+        "rsplit",
+    }
+)
+
+
 def _safe_expr(node: ast.AST | None, source: str) -> bool:
     """True when mutmut has NO operator that can touch this expression.
 
@@ -125,12 +160,17 @@ def _safe_expr(node: ast.AST | None, source: str) -> bool:
     if node is None:
         return True
     if isinstance(node, ast.Name):
-        return True
+        return node.id not in _MUTMUT_RENAMED_NAMES
     if isinstance(node, ast.Attribute):
         return _safe_expr(node.value, source)
     if isinstance(node, ast.Constant):
         return node.value is None or node.value is Ellipsis
     if isinstance(node, ast.Call):
+        if (
+            isinstance(node.func, ast.Attribute)
+            and node.func.attr in _MUTMUT_SWAPPABLE_METHOD_NAMES
+        ):
+            return False
         if node.args or node.keywords:
             return False
         return _safe_expr(node.func, source)
