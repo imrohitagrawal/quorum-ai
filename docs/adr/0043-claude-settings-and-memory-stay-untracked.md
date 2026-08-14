@@ -88,13 +88,13 @@ dotfile that either exists or does not.
 
 - **The team needs a shared baseline permission set.** If more than one
   contributor needs the same enforcement, the answer is not "track the live
-  file" — it is to **export** the settings that should be shared into a plain
-  file under `docs/` (e.g. `docs/90-agent-permission-baseline.md` or similar),
-  written and reviewed as prose describing the allowlist and each hook's
-  purpose, the same way ADRs are reviewed. A setup script or onboarding step
-  then materializes `.claude/settings.json` from that reviewed document,
-  keeping the live file itself out of history while making its *content*
-  durable and diffable-as-prose.
+  file" — it is to **export** the settings that should be shared into a new,
+  plain prose document under `docs/` (following the numbering convention in
+  ADR-0034), written and reviewed like any other doc describing the allowlist
+  and each hook's purpose, the same way ADRs are reviewed. A setup script or
+  onboarding step then materializes `.claude/settings.json` from that
+  reviewed document, keeping the live file itself out of history while making
+  its *content* durable and diffable-as-prose.
 - **The hooks stop containing anything sensitive or environment-specific by
   construction** (e.g. every path is resolved at runtime from
   `CLAUDE_PROJECT_DIR` rather than hardcoded, as `tests/unit/test_claim_gate_hooks.py`

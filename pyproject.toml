@@ -111,6 +111,7 @@ module = [
     "validate_openapi_contract",
     "evals_summary",
     "synthesis_model_comparison_eval",
+    "validate_claude_settings",
 ]
 ignore_missing_imports = true
 

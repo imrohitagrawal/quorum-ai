@@ -34,10 +34,9 @@ sys.path.insert(0, str(REPO_ROOT / "scripts"))
 
 from validate_claude_settings import find_absolute_home_paths  # noqa: E402
 
-
 # --- synthetic fixtures — never the real, untracked settings file ----------
 
-PORTABLE_SETTINGS: dict = {
+PORTABLE_SETTINGS: dict[str, object] = {
     "permissions": {
         "allow": [
             "Bash(make test)",
@@ -65,22 +64,26 @@ PORTABLE_SETTINGS: dict = {
 # /Users/<name>/... that is also stale (Documents/Projects, not the repo's
 # actual location) — but staleness isn't what makes it invalid; the absolute
 # home path is.
-SETTINGS_WITH_MAC_HOME_PATH: dict = {
+_STALE_STATIC_PATH = (
+    "/Users/rohitagrawal/Documents/Projects/quorum-ai/src/product_app/static/app.js"
+)
+
+SETTINGS_WITH_MAC_HOME_PATH: dict[str, object] = {
     "permissions": {
         "allow": [
             "Bash(make test)",
-            "Bash(node --check /Users/rohitagrawal/Documents/Projects/quorum-ai/src/product_app/static/app.js)",
+            f"Bash(node --check {_STALE_STATIC_PATH})",
         ]
     },
     "hooks": {},
 }
 
-SETTINGS_WITH_LINUX_HOME_PATH: dict = {
+SETTINGS_WITH_LINUX_HOME_PATH: dict[str, object] = {
     "permissions": {"allow": ["Bash(cat /home/ci-runner/workspace/notes.txt)"]},
     "hooks": {},
 }
 
-SETTINGS_WITH_NESTED_HOME_PATH: dict = {
+SETTINGS_WITH_NESTED_HOME_PATH: dict[str, object] = {
     "hooks": {
         "Stop": [
             {
@@ -130,7 +133,9 @@ def test_does_not_flag_a_relative_or_env_relative_path() -> None:
                 {
                     "hooks": [
                         {
-                            "command": '"$CLAUDE_PROJECT_DIR"/.claude/hooks/guard.sh --path src/app.js'
+                            "command": (
+                                '"$CLAUDE_PROJECT_DIR"/.claude/hooks/guard.sh --path src/app.js'
+                            )
                         }
                     ]
                 }
@@ -155,7 +160,7 @@ def test_multiple_offending_values_all_reported() -> None:
 # --- CLI behaviour: exit code is the enforceable contract -------------------
 
 
-def _run_cli(fixture: dict, tmp_path: Path) -> subprocess.CompletedProcess[str]:
+def _run_cli(fixture: dict[str, object], tmp_path: Path) -> subprocess.CompletedProcess[str]:
     settings_path = tmp_path / "settings.json"
     settings_path.write_text(json.dumps(fixture), encoding="utf-8")
     return subprocess.run(
