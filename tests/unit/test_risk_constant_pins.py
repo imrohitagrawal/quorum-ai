@@ -38,17 +38,42 @@ detector that counted `== CONSTANT` as a pin regardless of what the other side
 was — the very flaw `test_every_bucket_a_constant_really_has_a_literal_pin` now
 exists to prevent. Recorded rather than quietly corrected.)
 
-**Known limitations, stated rather than implied** (round-2 review, all measured):
+**#145, closed.** Three gaps were stated rather than implied here (round-2
+review, all measured). All three are now closed, each with its own detector
+self-test proving both directions (`test_an_assert_inside_if_false_is_not_a_pin`
+and friends, `test_is_literal_accepts_pytest_approx` and friends,
+`test_class_constants_are_discovered_but_enum_members_are_not`):
 
-* The pin detector does **not** check reachability. An assertion inside
-  `if False:`, a `@pytest.mark.skip`ped test, or an uncalled nested function
-  still counts as a pin. Tracked as #145.
-* It rejects `pytest.approx(...)` and container literals, so a float or a
-  collection constant cannot currently be promoted to bucket A. Tracked as #145.
-* Discovery covers module-level names only. Sixteen ALL-CAPS **class**
-  attributes in the risk modules are invisible, including
-  `config.Settings.RUN_DEADLINE_MAX_SECONDS` and
-  `config.Settings.SESSION_RATE_LIMIT_MAX`. Tracked as #145.
+* The pin detector now checks reachability. `_pins_in_file` only counts
+  asserts inside a COLLECTED test (a top-level or class-method `test_*`
+  function, not `@pytest.mark.skip`ped) that are structurally reachable —
+  `_reachable_asserts` stops at dead code after an unconditional
+  `return`/`raise`/`continue`/`break`, resolves a literal `if True:`/`if False:`
+  to the taken branch only, and never descends into a nested `def` (called or
+  not — conservative by design: requiring the assert directly in the
+  collected test's own body is simpler to reason about than tracking whether
+  a nested helper is actually invoked, and every real pin in this repo is
+  written that way already).
+* `_is_literal` now accepts `pytest.approx(...)` (and the bare `approx(...)`
+  form) over literal arguments, and `Tuple`/`List`/`Set`/`Dict` literals whose
+  elements are themselves literal.
+* Discovery now also walks class bodies for ALL-CAPS attributes
+  (`_class_constants`), explicitly excluding `StrEnum`/`Enum`/`IntEnum`/
+  `IntFlag`/`Flag` subclasses — enum membership is issue #160's surface, not
+  this one. This found **17** class constants in the 10 risk-tier modules (not
+  sixteen — the original count was itself unmeasured against the fixed
+  detector), all now triaged below: six in the two `query_runs` rate-limiter
+  classes were already pinned by existing tests once `_qualify` learned to
+  resolve a class import to its module (previously
+  `_InMemoryIpRateLimiter.CAPACITY` matched with no module prefix and was
+  invisible as a *triage* entry even though the assertion existed); the two
+  `config.Settings` bounds are pinned behaviourally by existing tests in
+  `test_run_deadline.py` / `test_session_rate_limit_override.py` /
+  `test_session_mint_cap.py`; the `feedback_store.FeedbackStore` SQL/marker
+  attributes split between bucket B (the F-01 migration name and its SELECT,
+  both proven idempotent by `test_f01_preview_billing_backfill.py`) and
+  bucket C (schema/index DDL, exercised by every store test); the three
+  `MAX_EVENTS` ring-buffer caps are bucket C (memory, not correctness).
 
 **Why not pin all 38.** A literal pin on a regex, a filesystem path or a CSP
 policy is churn: the value legitimately changes, so the reflex becomes "edit the
@@ -66,7 +91,7 @@ import re
 from datetime import timedelta
 from decimal import Decimal
 
-from product_app import auth, catalog_fetcher, costs, main, model_slots
+from product_app import auth, catalog_fetcher, costs, main, model_slots, query_runs
 
 REPO_ROOT = pathlib.Path(__file__).resolve().parents[2]
 SRC = REPO_ROOT / "src" / "product_app"
@@ -134,6 +159,21 @@ BUCKET_A_LITERAL_PIN = (
     "feedback_store.COST_ACCEPTED_EVENT",
     "feedback_store.COST_RECONCILED_EVENT",
     "feedback_store.COST_CHARGE_VOIDED_EVENT",
+    # --- Added with #145/#160: class-level constants the fixed detector
+    # can now see. Already pinned by `test_session_rate_limit_override.py`
+    # (`_InMemoryIpRateLimiter.CAPACITY == 10` etc, `test_production_default_is_ten`
+    # / `test_account_limiter_is_pinned_at_thirty`) -- invisible as a TRIAGE
+    # entry before `_qualify` learned to resolve a class import to its
+    # module. `STALE_BUCKET_SECONDS` had no existing pin (SEC-H3: it bounds
+    # the memory a /16 scan can pin in the rate-limiter's bucket dict; a
+    # wrong value is silently harmful and nothing else constrains it), so
+    # `test_the_rate_limiter_eviction_windows_are_pinned` below adds one.
+    "query_runs._InMemoryIpRateLimiter.CAPACITY",
+    "query_runs._InMemoryIpRateLimiter.REFILL_PER_MINUTE",
+    "query_runs._InMemoryIpRateLimiter.STALE_BUCKET_SECONDS",
+    "query_runs._InMemoryAccountRateLimiter.CAPACITY",
+    "query_runs._InMemoryAccountRateLimiter.REFILL_PER_MINUTE",
+    "query_runs._InMemoryAccountRateLimiter.STALE_BUCKET_SECONDS",
 )
 
 #: Pin the BEHAVIOUR, not the literal — these legitimately change, and a literal
@@ -314,6 +354,38 @@ BUCKET_B_PIN_BEHAVIOUR = {
     "safety.WARNING_COPY": (
         "assert the mandatory caveat is present; the wording is edited deliberately"
     ),
+    # --- Added with #145/#160: class-level constants the fixed detector
+    # can now see (previously invisible to discovery entirely). ---
+    "config.Settings.RUN_DEADLINE_MAX_SECONDS": (
+        "assert a deadline one second over the bound is refused and the bound "
+        "itself is accepted, with literals on both sides -- "
+        "tests/integration/test_run_deadline.py::"
+        "test_a_non_positive_or_non_finite_deadline_is_rejected drives 3_601 "
+        "(rejected) and 3_600 (accepted)"
+    ),
+    "config.Settings.SESSION_RATE_LIMIT_MAX": (
+        "assert an override one over the bound is refused and the bound itself "
+        "is accepted -- tests/unit/test_session_rate_limit_override.py"
+    ),
+    "config.Settings.SESSION_MINT_CAP_OVERRIDE_MAX": (
+        "assert an override one over the bound is refused and the bound itself "
+        "is accepted -- tests/unit/test_session_mint_cap.py"
+    ),
+    "feedback_store.FeedbackStore._F01_MIGRATION": (
+        "assert the F-01 relabel runs at most once across repeated opens of "
+        "the same database, not the marker string -- "
+        "tests/integration/test_f01_preview_billing_backfill.py proves "
+        "idempotency directly against the DB (a wrong/renamed marker would "
+        "silently re-run the relabel, over-zeroing legitimate rows, on every "
+        "restart)"
+    ),
+    "feedback_store.FeedbackStore._F01_PREVIEW_SELECT": (
+        "assert only rows shaped recorder=cost, event_type=cost_guardrail_"
+        "accepted, query_run_id IS NULL are relabeled and every other row is "
+        "untouched -- tests/integration/test_f01_preview_billing_backfill.py::"
+        "test_backfill_leaves_every_other_cost_row_alone and "
+        "test_backfill_never_relabels_a_row_written_after_it_ran"
+    ),
 }
 
 #: No pin. A literal here restates the implementation and catches nothing.
@@ -368,6 +440,32 @@ BUCKET_C_NO_PIN = {
     "costs.DAILY_CAP_BYPASS_LOG_INTERVAL_S": (
         "log throttle; a wrong value costs log volume, not money"
     ),
+    # --- Added with #145/#160: class-level constants the fixed detector
+    # can now see (previously invisible to discovery entirely). ---
+    "costs.InMemoryCostEventRecorder.MAX_EVENTS": (
+        "in-memory event ring size; a wrong value costs memory or telemetry "
+        "recall, not correctness (the durable feedback_store row is the real "
+        "record)"
+    ),
+    "model_slots.InMemoryModelSlotEventRecorder.MAX_EVENTS": (
+        "in-memory event ring size; a wrong value costs memory or telemetry recall, not correctness"
+    ),
+    "safety.InMemoryWarningEventRecorder.MAX_EVENTS": (
+        "in-memory event ring size; a wrong value costs memory or telemetry recall, not correctness"
+    ),
+    "feedback_store.FeedbackStore._SCHEMA": (
+        "SQL DDL, not a value; malformed SQL fails loudly at the first CREATE "
+        "TABLE and every FeedbackStore test opens a real database with it"
+    ),
+    "feedback_store.FeedbackStore._MIGRATIONS_DDL": (
+        "SQL DDL, not a value; malformed SQL fails loudly at open, exercised "
+        "by every migration test"
+    ),
+    "feedback_store.FeedbackStore._SPEND_RAIL_INDEX": (
+        "best-effort covering index; its own docstring measures the cost of "
+        "losing it as latency (2.13ms -> 96.40ms over 300 days of history), "
+        "never correctness -- losing it must never cost availability"
+    ),
 }
 
 
@@ -407,16 +505,85 @@ def _module_constants() -> dict[str, int]:
     return found
 
 
+#: Enum base names. A class subclassing any of these is excluded from
+#: `_class_constants` — its ALL-CAPS members are enum membership, issue #160's
+#: surface, not this file's (#145 gap 3's own docstring: "most are enum
+#: members, but these are not").
+_ENUM_BASE_NAMES = frozenset({"Enum", "StrEnum", "IntEnum", "IntFlag", "Flag"})
+
+
+def _class_constants_in(path: pathlib.Path, module: str) -> dict[str, int]:
+    """`module.Class.NAME` -> line, for ALL-CAPS class attributes in `path`.
+
+    Non-enum classes only (see `_ENUM_BASE_NAMES`). Split from `_class_constants`
+    so it can be unit-tested against a synthetic file instead of only the real
+    risk-tier modules.
+    """
+    found: dict[str, int] = {}
+    for node in ast.walk(ast.parse(path.read_text(encoding="utf-8"))):
+        if not isinstance(node, ast.ClassDef):
+            continue
+        base_names = {b.id for b in node.bases if isinstance(b, ast.Name)}
+        if base_names & _ENUM_BASE_NAMES:
+            continue
+        for stmt in node.body:
+            if isinstance(stmt, ast.Assign):
+                targets: list[ast.expr] = list(stmt.targets)
+            elif isinstance(stmt, ast.AnnAssign):
+                targets = [stmt.target]
+            else:
+                continue
+            for target in targets:
+                if isinstance(target, ast.Name) and _CONST_NAME.fullmatch(target.id):
+                    found[f"{module}.{node.name}.{target.id}"] = stmt.lineno
+    return found
+
+
+def _class_constants() -> dict[str, int]:
+    """`module.Class.NAME` -> line, for every ALL-CAPS class attribute in a
+    risk module's non-enum classes.
+
+    #145 gap 3: sixteen (measured here: seventeen) such attributes were
+    invisible to discovery entirely, including `config.Settings.
+    RUN_DEADLINE_MAX_SECONDS` and `config.Settings.SESSION_RATE_LIMIT_MAX`.
+    """
+    found: dict[str, int] = {}
+    for name in RISK_TIER_MODULES:
+        path = SRC / name
+        if not path.is_file():
+            continue
+        found.update(_class_constants_in(path, path.stem))
+    return found
+
+
 def _qualify(node: ast.expr, origins: dict[str, str]) -> str | None:
-    """`module.NAME` for a reference that really is OUR constant, else None.
+    """`module.NAME` or `module.Class.NAME` for a reference that really is OUR
+    constant, else None.
 
     Keying on the bare attribute name was a hole: `fake._HSTS_HEADER == "wrong"`
     pinned `main._HSTS_HEADER`, and so did any same-named local, mock attribute
     or loop variable. 122 distinct bare names in tests/ satisfied the old
     predicate — a namespace ~9x the set being guarded.
+
+    #145 gap 3 extends this to class attributes, two import shapes:
+    `config.Settings.RUN_DEADLINE_MAX_SECONDS` (module imported, then two
+    attribute hops) and `Settings.RUN_DEADLINE_MAX_SECONDS` (the class
+    imported directly via `from product_app.config import Settings`, one
+    attribute hop but resolved through `origins` to the same three-part name).
+    A single attribute hop whose base is NOT a class import (e.g.
+    `costs.DAILY_CAP_USD`, where `costs` is the module itself) still qualifies
+    as the plain two-part module-level form.
     """
+    if isinstance(node, ast.Attribute) and isinstance(node.value, ast.Attribute):
+        inner = node.value
+        if isinstance(inner.value, ast.Name):
+            return f"{inner.value.id}.{inner.attr}.{node.attr}"
+        return None
     if isinstance(node, ast.Attribute) and isinstance(node.value, ast.Name):
-        return f"{node.value.id}.{node.attr}"
+        base = node.value.id
+        if base in origins:
+            return f"{origins[base]}.{base}.{node.attr}"
+        return f"{base}.{node.attr}"
     if isinstance(node, ast.Name):
         module = origins.get(node.id)
         return f"{module}.{node.id}" if module else None
@@ -424,15 +591,29 @@ def _qualify(node: ast.expr, origins: dict[str, str]) -> str | None:
 
 
 def _is_literal(node: ast.expr) -> bool:
-    """A literal value, or `Decimal("…")`/`timedelta(…)` over literals."""
+    """A literal value, `Decimal("…")`/`timedelta(…)`/`pytest.approx(…)` over
+    literals, or a `Tuple`/`List`/`Set`/`Dict` literal built entirely from
+    literals.
+
+    #145 gap 2: `pytest.approx` (the repo's own correct way to pin a float,
+    used 74 times) and container literals were rejected outright.
+    """
     if isinstance(node, ast.Constant):
         return True
     if isinstance(node, ast.UnaryOp) and isinstance(node.op, ast.USub):
         return _is_literal(node.operand)
+    if isinstance(node, (ast.Tuple, ast.List, ast.Set)):
+        return bool(node.elts) and all(_is_literal(e) for e in node.elts)
+    if isinstance(node, ast.Dict):
+        if not node.keys:
+            return False
+        return all(k is not None and _is_literal(k) for k in node.keys) and all(
+            _is_literal(v) for v in node.values
+        )
     if isinstance(node, ast.Call):
         func = node.func
         name = func.attr if isinstance(func, ast.Attribute) else getattr(func, "id", "")
-        if name in ("Decimal", "timedelta", "frozenset", "Path"):
+        if name in ("Decimal", "timedelta", "frozenset", "Path", "approx"):
             # `all([])` is True, so a ZERO-ARG call would qualify:
             # `assert EXPECTED_SLOT_COUNT == frozenset()` would read as a pin.
             if not (node.args or node.keywords):
@@ -444,11 +625,18 @@ def _is_literal(node: ast.expr) -> bool:
 
 
 def _imported_from(tree: ast.Module) -> dict[str, str]:
-    """Bare name -> product_app module it was imported from, for this test file."""
+    """Bare name -> product_app module it was imported FROM, for this test file.
+
+    Only `from product_app.<module> import <Symbol>` populates this — a bare
+    `from product_app import <module>` (used throughout this file itself,
+    e.g. `costs`) imports the MODULE, not a symbol inside it, so `costs` must
+    stay resolvable as a module prefix in `_qualify` rather than being
+    rewritten to `product_app.costs.…`.
+    """
     origins: dict[str, str] = {}
     for node in ast.walk(tree):
         if isinstance(node, ast.ImportFrom) and node.module:
-            if not node.module.startswith("product_app"):
+            if node.module == "product_app" or not node.module.startswith("product_app"):
                 continue
             tail = node.module.split(".")[-1]
             for alias in node.names:
@@ -456,27 +644,110 @@ def _imported_from(tree: ast.Module) -> dict[str, str]:
     return origins
 
 
-def _literally_pinned_constants() -> set[str]:
-    """Constants compared with `==` to a LITERAL inside a real `assert`.
+def _is_skipped(func: ast.FunctionDef | ast.AsyncFunctionDef) -> bool:
+    """True if a `@pytest.mark.skip`/`skipif` decorator means pytest never
+    collects/runs this test. #145 gap 1.
 
-    Parsed with `ast`, per file — NOT a grep over concatenated sources. A grep
-    was the first implementation and it accepted, all measured:
+    Structural, not textual (rule 8): matches the decorator's AST shape —
+    `Attribute(attr="skip"|"skipif", value=Attribute(attr="mark", ...))`,
+    called or bare — rather than a substring of `ast.dump`, which would never
+    contain the literal text "mark.skip" for a real `pytest.mark.skip(...)`
+    decorator (`ast.dump` separates `attr='mark'` and `attr='skip'`).
+    """
+    for deco in func.decorator_list:
+        target = deco.func if isinstance(deco, ast.Call) else deco
+        if (
+            isinstance(target, ast.Attribute)
+            and target.attr in ("skip", "skipif")
+            and isinstance(target.value, ast.Attribute)
+            and target.value.attr == "mark"
+        ):
+            return True
+    return False
+
+
+def _collected_test_functions(
+    tree: ast.Module,
+) -> list[ast.FunctionDef | ast.AsyncFunctionDef]:
+    """Module-level `test_*` functions, and `test_*` methods one level inside
+    a class — the shapes pytest actually collects — excluding skipped ones."""
+    funcs: list[ast.FunctionDef | ast.AsyncFunctionDef] = []
+    for node in tree.body:
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+            if node.name.startswith("test_") and not _is_skipped(node):
+                funcs.append(node)
+        elif isinstance(node, ast.ClassDef):
+            for sub in node.body:
+                if (
+                    isinstance(sub, (ast.FunctionDef, ast.AsyncFunctionDef))
+                    and sub.name.startswith("test_")
+                    and not _is_skipped(sub)
+                ):
+                    funcs.append(sub)
+    return funcs
+
+
+def _reachable_asserts(stmts: list[ast.stmt]) -> list[ast.Assert]:
+    """Asserts in `stmts` that execute UNCONDITIONALLY on a normal run.
+
+    #145 gap 1: stops at dead code after an unconditional
+    `return`/`raise`/`continue`/`break`; resolves a literal `if True:`/
+    `if False:` to only the taken branch; and never descends into a nested
+    `def`/`async def` — conservative by design (an uncalled nested function
+    must not count, and every real pin in this repo already writes its
+    assert directly in the collected test's own body, so this costs nothing
+    real while closing the gap).
+    """
+    found: list[ast.Assert] = []
+    for stmt in stmts:
+        if isinstance(stmt, ast.Assert):
+            found.append(stmt)
+        elif isinstance(stmt, ast.If):
+            test = stmt.test
+            if isinstance(test, ast.Constant):
+                branch = stmt.body if test.value else stmt.orelse
+                found.extend(_reachable_asserts(branch))
+            else:
+                found.extend(_reachable_asserts(stmt.body))
+                found.extend(_reachable_asserts(stmt.orelse))
+        elif isinstance(stmt, (ast.For, ast.AsyncFor, ast.While)):
+            found.extend(_reachable_asserts(stmt.body))
+            found.extend(_reachable_asserts(stmt.orelse))
+        elif isinstance(stmt, ast.Try):
+            found.extend(_reachable_asserts(stmt.body))
+            for handler in stmt.handlers:
+                found.extend(_reachable_asserts(handler.body))
+            found.extend(_reachable_asserts(stmt.orelse))
+            found.extend(_reachable_asserts(stmt.finalbody))
+        elif isinstance(stmt, (ast.With, ast.AsyncWith)):
+            found.extend(_reachable_asserts(stmt.body))
+        if isinstance(stmt, (ast.Return, ast.Raise, ast.Continue, ast.Break)):
+            break  # everything after is dead code
+    return found
+
+
+def _pins_in_file(path: pathlib.Path) -> set[str]:
+    """Constants compared with `==` to a LITERAL inside a REACHABLE assert of
+    a COLLECTED test in `path`.
+
+    Split from `_literally_pinned_constants` so it can be unit-tested against
+    a synthetic file. Parsed with `ast`, per file — NOT a grep over
+    concatenated sources. A grep was the first implementation and it
+    accepted, all measured:
       * `assert costs.DAILY_CAP_USD == costs.HARD_LIMIT_USD` (purely symbolic),
       * a commented-out assertion,
       * an assertion inside a string literal in an unrelated file.
     Each satisfied "bucket A is pinned" while pinning nothing.
     """
+    try:
+        tree = ast.parse(path.read_text(encoding="utf-8"))
+    except SyntaxError:  # pragma: no cover - a broken test file fails elsewhere
+        return set()
+    origins = _imported_from(tree)
     pinned: set[str] = set()
-    for path in TESTS.rglob("test_*.py"):
-        try:
-            tree = ast.parse(path.read_text(encoding="utf-8"))
-        except SyntaxError:  # pragma: no cover - a broken test file fails elsewhere
-            continue
-        origins = _imported_from(tree)
-        for node in ast.walk(tree):
-            if not isinstance(node, ast.Assert):
-                continue
-            for cmp_node in ast.walk(node.test):
+    for func in _collected_test_functions(tree):
+        for assert_node in _reachable_asserts(func.body):
+            for cmp_node in ast.walk(assert_node.test):
                 if not isinstance(cmp_node, ast.Compare):
                     continue
                 if not all(isinstance(op, ast.Eq) for op in cmp_node.ops):
@@ -489,6 +760,14 @@ def _literally_pinned_constants() -> set[str]:
                     others = [s for j, s in enumerate(sides) if j != index]
                     if any(_is_literal(other) for other in others):
                         pinned.add(qualified)
+    return pinned
+
+
+def _literally_pinned_constants() -> set[str]:
+    """`_pins_in_file`, unioned over every test file in the repo."""
+    pinned: set[str] = set()
+    for path in TESTS.rglob("test_*.py"):
+        pinned |= _pins_in_file(path)
     return pinned
 
 
@@ -579,6 +858,19 @@ def test_auth_and_transport_constants_are_pinned() -> None:
     assert main._HSTS_HEADER == "max-age=31536000; includeSubDomains"
 
 
+def test_the_rate_limiter_eviction_windows_are_pinned() -> None:
+    """Turns red if: either rate limiter's stale-bucket eviction window moves.
+
+    SEC-H3: a scripted /16 IPv4 scan adds one bucket per source IP; without
+    eviction that dict grows unbounded. `CAPACITY`/`REFILL_PER_MINUTE` are
+    already pinned in `test_session_rate_limit_override.py`
+    (`test_production_default_is_ten` / `test_account_limiter_is_pinned_at_thirty`)
+    — `STALE_BUCKET_SECONDS` had no pin anywhere before this.
+    """
+    assert query_runs._InMemoryIpRateLimiter.STALE_BUCKET_SECONDS == 300.0
+    assert query_runs._InMemoryAccountRateLimiter.STALE_BUCKET_SECONDS == 300.0
+
+
 def test_the_slot_count_is_pinned() -> None:
     """Turns red if: EXPECTED_SLOT_COUNT moves.
 
@@ -624,33 +916,44 @@ def test_there_are_exactly_as_many_default_ids_as_slots() -> None:
 # ---------------------------------------------------------------------------
 
 
+def _all_risk_constants() -> dict[str, int]:
+    """Module-level AND class-level (#145 gap 3) risk constants, combined."""
+    return _module_constants() | _class_constants()
+
+
 def test_the_registry_is_not_empty() -> None:
     """A guard over an empty collection proves nothing.
 
     Turns red if: the discovery regex or RISK_TIER_MODULES stops matching.
     """
-    discovered = _module_constants()
+    discovered = _all_risk_constants()
     assert len(discovered) >= 25, f"only {len(discovered)} constants discovered — glob is wrong"
+    class_only = _class_constants()
+    assert len(class_only) >= 15, (
+        f"only {len(class_only)} class-level constants discovered (#145 gap 3) — glob is wrong"
+    )
     assert BUCKET_A_LITERAL_PIN and BUCKET_B_PIN_BEHAVIOUR and BUCKET_C_NO_PIN
 
 
 def test_every_risk_constant_is_triaged() -> None:
-    """A new module-level constant in risk code must be put in a bucket.
+    """A new module- or class-level constant in risk code must be put in a
+    bucket.
 
     This is the load-bearing test. Without it, a new spend rail or auth value
     lands with no pin and nothing notices — which is exactly the state measured
     before this file existed (3 of 30 pinned).
 
-    Turns red if: a constant is added to a risk-tier module and not classified.
+    Turns red if: a constant is added to a risk-tier module (or a non-enum
+    class inside one) and not classified.
     """
-    discovered = set(_module_constants())
+    discovered = set(_all_risk_constants())
     triaged = set(BUCKET_A_LITERAL_PIN) | set(BUCKET_B_PIN_BEHAVIOUR) | set(BUCKET_C_NO_PIN)
 
     untriaged = sorted(discovered - triaged)
     assert not untriaged, (
-        f"module-level constants in risk-tier code with no bucket: {untriaged}. "
-        "Decide: A (literal pin - a wrong value is silently harmful), "
-        "B (pin the behaviour - the value legitimately changes), or "
+        f"module- or class-level constants in risk-tier code with no bucket: "
+        f"{untriaged}. Decide: A (literal pin - a wrong value is silently "
+        "harmful), B (pin the behaviour - the value legitimately changes), or "
         "C (no pin - with a one-line reason). Nothing defaults."
     )
 
@@ -661,7 +964,7 @@ def test_the_registry_names_no_constant_that_has_been_deleted() -> None:
     Turns red if: a triaged constant is renamed or deleted without updating
     this file.
     """
-    discovered = set(_module_constants())
+    discovered = set(_all_risk_constants())
     triaged = set(BUCKET_A_LITERAL_PIN) | set(BUCKET_B_PIN_BEHAVIOUR) | set(BUCKET_C_NO_PIN)
     stale = sorted(triaged - discovered)
     assert not stale, f"triaged constants that no longer exist: {stale}"
@@ -693,3 +996,136 @@ def test_bucket_c_entries_each_carry_a_reason() -> None:
     """
     thin = sorted(k for k, v in BUCKET_C_NO_PIN.items() if len(v.strip()) < 20)
     assert not thin, f"bucket C entries with no real reason: {thin}"
+
+
+# ---------------------------------------------------------------------------
+# Detector self-tests (#145): the three known gaps, each closed and proven in
+# both directions on a synthetic file/expression — never the real risk
+# modules or tests/, so these do not depend on anything else in this repo.
+# ---------------------------------------------------------------------------
+
+
+def test_an_assert_inside_if_false_is_not_a_pin(tmp_path: pathlib.Path) -> None:
+    """#145 gap 1, the exact repro from the issue.
+
+    Turns red if: the reachability filter in `_pins_in_file` regresses and
+    unreachable code counts as a pin again.
+    """
+    synthetic = tmp_path / "test_synthetic.py"
+    synthetic.write_text(
+        "from product_app import costs\n\n"
+        "def test_fake_pin() -> None:\n"
+        "    if False:\n"
+        "        assert costs._DEFAULT_PRICE_PER_1K_INPUT == 999999\n"
+    )
+    assert "costs._DEFAULT_PRICE_PER_1K_INPUT" not in _pins_in_file(synthetic)
+
+
+def test_an_assert_in_a_skipped_test_is_not_a_pin(tmp_path: pathlib.Path) -> None:
+    """#145 gap 1."""
+    synthetic = tmp_path / "test_synthetic.py"
+    synthetic.write_text(
+        "import pytest\n"
+        "from product_app import costs\n\n"
+        "@pytest.mark.skip(reason='wip')\n"
+        "def test_fake_pin() -> None:\n"
+        "    assert costs._DEFAULT_PRICE_PER_1K_INPUT == 999999\n"
+    )
+    assert "costs._DEFAULT_PRICE_PER_1K_INPUT" not in _pins_in_file(synthetic)
+
+
+def test_an_assert_in_an_uncalled_nested_function_is_not_a_pin(
+    tmp_path: pathlib.Path,
+) -> None:
+    """#145 gap 1."""
+    synthetic = tmp_path / "test_synthetic.py"
+    synthetic.write_text(
+        "from product_app import costs\n\n"
+        "def test_fake_pin() -> None:\n"
+        "    def _never_called() -> None:\n"
+        "        assert costs._DEFAULT_PRICE_PER_1K_INPUT == 999999\n"
+    )
+    assert "costs._DEFAULT_PRICE_PER_1K_INPUT" not in _pins_in_file(synthetic)
+
+
+def test_an_assert_after_an_unconditional_return_is_dead_code(
+    tmp_path: pathlib.Path,
+) -> None:
+    """#145 gap 1: dead code after `return` is a fourth unreachability shape
+    the issue names alongside `if False:`, skip, and uncalled nested defs."""
+    synthetic = tmp_path / "test_synthetic.py"
+    synthetic.write_text(
+        "from product_app import costs\n\n"
+        "def test_fake_pin() -> None:\n"
+        "    return\n"
+        "    assert costs._DEFAULT_PRICE_PER_1K_INPUT == 999999\n"
+    )
+    assert "costs._DEFAULT_PRICE_PER_1K_INPUT" not in _pins_in_file(synthetic)
+
+
+def test_a_reachable_assert_in_a_collected_test_is_still_a_pin(
+    tmp_path: pathlib.Path,
+) -> None:
+    """Positive partner (rule 7) for the four negative checks above: the
+    detector must still catch the ordinary case, or the four checks above
+    would be trivially true over a detector that finds nothing at all."""
+    synthetic = tmp_path / "test_synthetic.py"
+    synthetic.write_text(
+        "from product_app import costs\n\n"
+        "def test_real_pin() -> None:\n"
+        "    assert costs._DEFAULT_PRICE_PER_1K_INPUT == 0.001\n"
+    )
+    assert "costs._DEFAULT_PRICE_PER_1K_INPUT" in _pins_in_file(synthetic)
+
+
+def test_is_literal_accepts_pytest_approx_over_a_literal() -> None:
+    """#145 gap 2."""
+    node = ast.parse("pytest.approx(0.0008)", mode="eval").body
+    assert _is_literal(node)
+
+
+def test_is_literal_accepts_the_bare_approx_import_form() -> None:
+    """#145 gap 2: `from pytest import approx` is the other spelling in use."""
+    node = ast.parse("approx(0.0008, rel=0.01)", mode="eval").body
+    assert _is_literal(node)
+
+
+def test_is_literal_rejects_approx_over_a_non_literal() -> None:
+    """Negative partner: `pytest.approx(some_var)` is symbolic, not a pin."""
+    node = ast.parse("pytest.approx(some_var)", mode="eval").body
+    assert not _is_literal(node)
+
+
+def test_is_literal_accepts_tuple_list_set_and_dict_literals() -> None:
+    """#145 gap 2: container literals, rejected before, now accepted."""
+    assert _is_literal(ast.parse("(1, 2, 3)", mode="eval").body)
+    assert _is_literal(ast.parse("[1, 2, 'x']", mode="eval").body)
+    assert _is_literal(ast.parse("{1, 2, 3}", mode="eval").body)
+    assert _is_literal(ast.parse("{'a': 1, 'b': 2}", mode="eval").body)
+
+
+def test_is_literal_rejects_a_container_holding_a_name() -> None:
+    """Negative partner: one non-literal element taints the whole container,
+    same reasoning as the existing zero-arg-call guard below it."""
+    assert not _is_literal(ast.parse("(1, some_var)", mode="eval").body)
+    assert not _is_literal(ast.parse("{'a': some_var}", mode="eval").body)
+
+
+def test_class_constants_are_discovered_but_enum_members_are_not(
+    tmp_path: pathlib.Path,
+) -> None:
+    """#145 gap 3, and the reason `_ENUM_BASE_NAMES` exists: enum membership
+    is issue #160's surface, not this file's, so an enum's ALL-CAPS members
+    must stay invisible here even though they satisfy `_CONST_NAME`."""
+    synthetic = tmp_path / "fake_module.py"
+    synthetic.write_text(
+        "from enum import StrEnum\n\n"
+        "class RealEnum(StrEnum):\n"
+        "    ONE = 'one'\n"
+        "    TWO = 'two'\n\n"
+        "class Settings:\n"
+        "    RUN_DEADLINE_MAX_SECONDS = 3600.0\n"
+        "    lowercase_field: int = 1\n"
+    )
+    found = _class_constants_in(synthetic, "fake_module")
+    assert set(found) == {"fake_module.Settings.RUN_DEADLINE_MAX_SECONDS"}
