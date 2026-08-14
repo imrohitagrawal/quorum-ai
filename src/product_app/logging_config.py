@@ -142,6 +142,88 @@ def _redact_secrets(text: str) -> str:
     return text
 
 
+#: Bounds the recursive walk in ``_redact_extra_value``. Without this, two
+#: real ways to crash a log call exist: a SELF-REFERENTIAL container
+#: (``d = {}; d["self"] = d; logger.warning("x", extra=d)``) recurses
+#: forever, and a merely deep non-cyclic container (~2000 levels) exhausts
+#: CPython's recursion limit — both measured live via
+#: ``install_redaction_record_factory()`` raising ``RecursionError`` out of
+#: ``logger.warning()`` itself (2026-08-14 review finding). #313's own
+#: reproduction shapes are 2-3 levels deep; 25 is generous headroom for any
+#: real call site while keeping a pathological one bounded rather than
+#: fatal. Past the cap, the remaining sub-value is returned AS-IS (unredacted
+#: below that point) rather than raising — a stalled log call is worse than
+#: an edge case a normal call site will never hit.
+_MAX_EXTRA_REDACTION_DEPTH = 25
+
+#: Container types ``_redact_extra_value`` walks into. ``tuple``/``set``/
+#: ``frozenset`` were added after a 2026-08-14 review finding: a secret
+#: sitting in a tuple nested inside an otherwise-redacted dict/list (e.g.
+#: ``extra={"tokens": (secret,)}``) reached a real Sentry breadcrumb in
+#: plaintext, because the walk originally only recognised ``dict``/``list``
+#: and returned any other value — including a nested tuple — unchanged.
+_EXTRA_CONTAINER_TYPES = (dict, list, tuple, set, frozenset)
+
+
+def _redact_extra_value(value: object, _ancestors: frozenset[int] = frozenset()) -> object:
+    """Recursively redact an ``extra={...}`` value (issue #313 residual gap).
+
+    ``make_record_with_extra_redaction`` originally only redacted a
+    top-level extra whose value was itself a ``str`` — a real call shape,
+    ``logger.warning(..., extra={"error": {"api_key": "sk-..."}})``, skipped
+    the whole value because ``isinstance(value, str)`` is ``False`` for a
+    dict, so the raw key reached the Sentry breadcrumb untouched. Containers
+    (``dict``, ``list``, ``tuple``, ``set``, ``frozenset`` — see
+    ``_EXTRA_CONTAINER_TYPES``) are walked recursively, up to
+    ``_MAX_EXTRA_REDACTION_DEPTH`` levels, so a secret nested inside a
+    dict-in-list-in-dict (or a tuple sitting inside either) is caught too;
+    every other value (int, bool, None, or a scalar not itself worth
+    walking) is returned unchanged.
+
+    ``_ancestors`` tracks the ``id()`` of every container currently on the
+    recursion PATH (not every container ever seen — two sibling branches
+    legitimately referencing the same object is normal aliasing, not a
+    cycle, and must still be walked twice). A container whose id is already
+    on that path is a genuine cycle; it is returned unchanged rather than
+    recursed into again, which is what makes a self-referential dict safe
+    instead of an infinite recursion. Each level passes a NEW frozenset
+    (``_ancestors | {id(value)}``) to its children rather than mutating a
+    shared set, so sibling branches never see each other's ancestry.
+
+    Always returns a NEW value rather than mutating ``value`` in place —
+    the incoming container came from the call site's own ``extra={...}``
+    literal (or a variable the caller may reuse/log again later), and
+    mutating it would leak the redaction into whatever the caller does with
+    that object next. Rebuilding new containers is what keeps this a pure
+    function of ``value``.
+    """
+    if isinstance(value, str):
+        return _redact_secrets(value)
+    if not isinstance(value, _EXTRA_CONTAINER_TYPES):
+        return value
+    if len(_ancestors) >= _MAX_EXTRA_REDACTION_DEPTH:
+        return value
+    obj_id = id(value)
+    if obj_id in _ancestors:
+        # Genuine cycle (this container is its own ancestor on this path,
+        # directly or indirectly) — stop descending rather than recurse
+        # forever.
+        return value
+    ancestors = _ancestors | {obj_id}
+    if isinstance(value, dict):
+        return {key: _redact_extra_value(item, ancestors) for key, item in value.items()}
+    if isinstance(value, list):
+        return [_redact_extra_value(item, ancestors) for item in value]
+    if isinstance(value, tuple):
+        return tuple(_redact_extra_value(item, ancestors) for item in value)
+    # set / frozenset — elements of a set are necessarily hashable already
+    # (str, int, tuple-of-hashables, frozenset), and redaction preserves
+    # that: a redacted str is still a str, a redacted tuple/frozenset is
+    # still built from redacted (still-hashable) elements.
+    redacted_items = {_redact_extra_value(item, ancestors) for item in value}
+    return redacted_items if isinstance(value, set) else frozenset(redacted_items)
+
+
 def install_redaction_record_factory() -> None:
     """Scrub secret-shaped substrings from every log record at CREATION time.
 
@@ -189,13 +271,25 @@ def install_redaction_record_factory() -> None:
     Sentry's breadcrumb/event capture reads ``record.__dict__`` directly and
     never goes through ``JsonFormatter`` at all — the same bypass this
     function exists to close for the message. Each extra value is redacted
-    independently with ``_redact_secrets``, matching ``JsonFormatter``'s own
+    with ``_redact_extra_value``, matching ``JsonFormatter``'s own
     reserved-attribute set (``_RESERVED_RECORD_ATTRS``) so the standard
     ``LogRecord`` fields (``name``, ``pathname``, ``thread``, ...) are never
-    mistaken for call-site extras. Non-string extra values (ints, the
-    ``error_type`` class name via ``str(exc_type)``, etc.) are left alone —
-    redaction operates on text, and a non-string value cannot carry a
-    secret-shaped substring the way ``str()``-of-something can.
+    mistaken for call-site extras. A container-valued extra (``dict``,
+    ``list``, ``tuple``, ``set``, ``frozenset`` — see
+    ``_EXTRA_CONTAINER_TYPES``) is walked RECURSIVELY, bounded by
+    ``_MAX_EXTRA_REDACTION_DEPTH`` and a cycle guard (issue #313 residual
+    gap, found live via a real reproduction: ``logger.warning(...,
+    extra={"error": {"api_key": "sk-..."}})`` reached a real Sentry
+    breadcrumb capture in plaintext, because the original check was
+    ``isinstance(value, str)`` and skipped the dict entirely) — every string
+    found at any depth inside a nested container is redacted, and a fresh
+    container is built rather than the original mutated in place, so a
+    caller that logs the same object again later still sees its own
+    unmodified data. Other non-string, non-container extra values (ints,
+    the ``error_type`` class name via ``str(exc_type)``, ``None``, etc.) are
+    left alone — redaction operates on text, and neither carries a
+    secret-shaped substring on its own. See ``_redact_extra_value``'s own
+    docstring for the depth cap and cycle-guard details.
 
     This still does NOT touch ``record.exc_info`` (a full traceback passed
     via ``exc_info=True``) — none of the 9 call sites use that form today, and
@@ -329,9 +423,11 @@ def install_redaction_record_factory() -> None:
             self, name, level, fn, lno, msg, args, exc_info, func, extra, sinfo
         )
         for key, value in list(record.__dict__.items()):
-            if key in _RESERVED_RECORD_ATTRS or key.startswith("_") or not isinstance(value, str):
+            if key in _RESERVED_RECORD_ATTRS or key.startswith("_"):
                 continue
-            redacted_value = _redact_secrets(value)
+            if not isinstance(value, (str,) + _EXTRA_CONTAINER_TYPES):
+                continue
+            redacted_value = _redact_extra_value(value)
             if redacted_value != value:
                 setattr(record, key, redacted_value)
         return record
