@@ -175,3 +175,51 @@ def test_parse_unmerged_branches_empty_output_is_empty_list() -> None:
 def test_parse_unmerged_branches_unavailable_marker_passes_through() -> None:
     result = session_handoff._parse_unmerged_branches("unavailable: git error")
     assert result == []
+
+
+# ---------------------------------------------------------------------------
+# run(): on a failing subprocess (e.g. pytest --collect-only hitting a
+# collection error, which exits non-zero), the caller still needs the real
+# output pytest already printed -- not a generic "returned non-zero exit
+# status" message that throws away the collected-count summary line.
+# ---------------------------------------------------------------------------
+
+
+def test_run_on_called_process_error_surfaces_the_real_output() -> None:
+    import subprocess
+
+    real_pytest_output = (
+        "ERRORS\ntest_broken.py - ImportError: cannot import name 'x'\n"
+        "5 tests collected, 1 error in 0.42s\n"
+    )
+
+    def _fake_check_output(*_args: object, **_kwargs: object) -> str:
+        raise subprocess.CalledProcessError(
+            returncode=2, cmd=["uv", "run", "pytest"], output=real_pytest_output
+        )
+
+    original = subprocess.check_output
+    subprocess.check_output = _fake_check_output  # type: ignore[assignment]
+    try:
+        result = session_handoff.run(["uv", "run", "pytest"])
+    finally:
+        subprocess.check_output = original  # type: ignore[assignment]
+
+    assert "5 tests collected, 1 error in 0.42s" in result
+
+
+def test_run_on_called_process_error_falls_back_to_str_when_output_empty() -> None:
+    import subprocess
+
+    def _fake_check_output(*_args: object, **_kwargs: object) -> str:
+        raise subprocess.CalledProcessError(returncode=2, cmd=["git", "status"], output="")
+
+    original = subprocess.check_output
+    subprocess.check_output = _fake_check_output  # type: ignore[assignment]
+    try:
+        result = session_handoff.run(["git", "status"])
+    finally:
+        subprocess.check_output = original  # type: ignore[assignment]
+
+    assert "unavailable" in result.lower()
+    assert "returned non-zero exit status" in result

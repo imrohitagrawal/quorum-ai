@@ -34,6 +34,14 @@ _PYTEST_COLLECTED_RE = re.compile(
 def run(cmd: list[str]) -> str:
     try:
         return subprocess.check_output(cmd, cwd=ROOT, stderr=subprocess.STDOUT, text=True).strip()
+    except subprocess.CalledProcessError as e:
+        # `e.output` holds whatever the command already printed before it
+        # exited non-zero -- for `pytest --collect-only`, that includes the
+        # real "N tests collected" summary line even on a collection error.
+        # `str(e)` alone throws that away for a generic "returned non-zero
+        # exit status" message. Fall back to `str(e)` only when there was no
+        # output to begin with.
+        return f"unavailable: {e.output.strip() if e.output else e}"
     except Exception as e:
         return f"unavailable: {e}"
 
