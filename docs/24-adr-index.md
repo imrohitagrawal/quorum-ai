@@ -42,6 +42,7 @@ ways, so the record shows what was believed on a date and what replaced it.
 | [ADR-0034](adr/0034-docs-numbering-scheme-and-ranges.md) | `docs/NN-*.md` numbering ranges are documented and gated | Architecture | Accepted — 2026-08-11 (repo-housekeeping PR 6) |
 | [ADR-0035](adr/0035-vendor-project-faq-for-targeted-gap-closing-not-full-regeneration.md) | Vendor `project-faq` for targeted gap-closing, not full-page regeneration | Architecture | Accepted |
 | [ADR-0036](adr/0036-query-runs-splits-into-api-and-orchestration-modules.md) | `query_runs.py` splits into a thin `query_api` layer and a new `query_run_orchestration` module | Architecture | Accepted — 2026-08-14 (#303) |
+| [ADR-0037](adr/0037-debate-usage-prices-by-actual-model-timeout-unchanged.md) | Debate usage prices by the model actually billed; the debate timeout stays 8.0s, unproven either way | Architecture | Accepted — 2026-08-14 |
 
 **This index was itself stale** until 2026-07-30: ADR-0002 had existed since
 2026-07-19 and was never listed here. A hand-maintained index is a derived fact

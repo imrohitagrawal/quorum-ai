@@ -38,6 +38,10 @@ from product_app.synthesis import (
 )
 
 _USAGE = TokenUsage(prompt_tokens=4000, completion_tokens=700, total_tokens=4700)
+#: #290: usage that went through the real ``_call_debate_model`` seam comes
+#: back stamped with the model actually dispatched (unmocked here, so it's
+#: ``settings.debate_model_id``).
+_DEBATE_USAGE = _USAGE.model_copy(update={"model_id": config.settings.debate_model_id})
 
 #: Whitespace-only, truly-empty, and invisible-only all have to be caught: the
 #: first is what a model that emitted only a newline before hitting the token
@@ -140,7 +144,7 @@ def test_both_debate_rounds_serve_the_templated_critique_on_blank_live_text(
     assert "Refined disagreement:" in critiques[1]
     # ...and the billed calls are still recorded, which is the whole point of
     # returning the result instead of ``None``.
-    assert result.live_call_usages == [(1, _USAGE), (2, _USAGE)]
+    assert result.live_call_usages == [(1, _DEBATE_USAGE), (2, _DEBATE_USAGE)]
 
 
 # --- the 5 synthesis-section guards ------------------------------------------
