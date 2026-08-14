@@ -29,9 +29,11 @@ decides whether option 3 is free or a tax.
 from __future__ import annotations
 
 import ast
+import io
 import re
 import subprocess
 import sys
+import tokenize
 from collections import Counter
 
 
@@ -84,6 +86,137 @@ def unmutatable(node: ast.AST) -> bool:
     return True
 
 
+def _joined_str_has_a_real_string_literal(node: ast.JoinedStr, source: str) -> bool:
+    """True when a `JoinedStr` contains a PLAIN (non-f) string token.
+
+    Byte-for-byte port of the Makefile's `MUTMUT_SCOPE_PY` helper of the same
+    name (#146) — see there for the full rationale.
+    """
+    segment = ast.get_source_segment(source, node)
+    if segment is None:
+        return True  # can't prove it safe -- caller fails closed on this
+    try:
+        tokens = tokenize.generate_tokens(io.StringIO(segment).readline)
+        return any(tok.type == tokenize.STRING for tok in tokens)
+    except (tokenize.TokenError, IndentationError, SyntaxError):
+        return True
+
+
+def _safe_comprehension(generators: list[ast.comprehension], source: str) -> bool:
+    """True when every `for ... in ...` clause of a comprehension is safe.
+
+    Byte-for-byte port of the Makefile's `MUTMUT_SCOPE_PY` helper of the same
+    name (#146).
+    """
+    for gen in generators:
+        if not _safe_expr(gen.iter, source):
+            return False
+        if any(not _safe_expr(cond, source) for cond in gen.ifs):
+            return False
+    return True
+
+
+def _safe_expr(node: ast.AST | None, source: str) -> bool:
+    """True when mutmut has NO operator that can touch this expression.
+
+    Byte-for-byte port of the Makefile's `MUTMUT_SCOPE_PY` `_safe_expr` (#146)
+    — see there for the full rationale and the FAILS CLOSED contract.
+    """
+    if node is None:
+        return True
+    if isinstance(node, ast.Name):
+        return True
+    if isinstance(node, ast.Attribute):
+        return _safe_expr(node.value, source)
+    if isinstance(node, ast.Constant):
+        return node.value is None or node.value is Ellipsis
+    if isinstance(node, ast.Call):
+        if node.args or node.keywords:
+            return False
+        return _safe_expr(node.func, source)
+    if isinstance(node, ast.IfExp):
+        return (
+            _safe_expr(node.test, source)
+            and _safe_expr(node.body, source)
+            and _safe_expr(node.orelse, source)
+        )
+    if isinstance(node, ast.Tuple | ast.List):
+        return all(_safe_expr(elt, source) for elt in node.elts)
+    if isinstance(node, ast.JoinedStr):
+        if _joined_str_has_a_real_string_literal(node, source):
+            return False
+        for part in node.values:
+            if isinstance(part, ast.Constant):
+                continue  # literal text: operator_string ignores FormattedString entirely
+            if isinstance(part, ast.FormattedValue):
+                if part.format_spec is not None or not _safe_expr(part.value, source):
+                    return False
+                continue
+            return False
+        return True
+    if isinstance(node, ast.DictComp):
+        return (
+            _safe_expr(node.key, source)
+            and _safe_expr(node.value, source)
+            and _safe_comprehension(node.generators, source)
+        )
+    if isinstance(node, ast.ListComp | ast.SetComp | ast.GeneratorExp):
+        return _safe_expr(node.elt, source) and _safe_comprehension(node.generators, source)
+    return False
+
+
+def no_mutable_content(func: ast.FunctionDef | ast.AsyncFunctionDef, source: str) -> bool:
+    """True when NOTHING mutmut can mutate lives anywhere in `func`.
+
+    Byte-for-byte port of the Makefile's `MUTMUT_SCOPE_PY` `no_mutable_content`
+    (#146) — see there for the full rationale and the FAILS CLOSED contract.
+    """
+    body = list(func.body)
+    if (
+        body
+        and isinstance(body[0], ast.Expr)
+        and isinstance(body[0].value, ast.Constant)
+        and isinstance(body[0].value.value, str)
+    ):
+        # A leading docstring never counts against a function: mutmut's own
+        # operator_string explicitly excuses triple-quoted strings ("we
+        # assume triple-quoted stuff are docs").
+        body = body[1:]
+    if not body:
+        return True
+
+    def safe_stmts(stmts: list[ast.stmt]) -> bool:
+        for stmt in stmts:
+            if isinstance(stmt, ast.Pass):
+                continue
+            if isinstance(stmt, ast.Return | ast.Expr):
+                if not _safe_expr(stmt.value, source):
+                    return False
+                continue
+            if isinstance(stmt, ast.With | ast.AsyncWith):
+                for item in stmt.items:
+                    if not _safe_expr(item.context_expr, source):
+                        return False
+                    if item.optional_vars is not None and not isinstance(
+                        item.optional_vars, ast.Name
+                    ):
+                        return False
+                if not safe_stmts(stmt.body):
+                    return False
+                continue
+            if isinstance(stmt, ast.FunctionDef | ast.AsyncFunctionDef):
+                if unmutatable(stmt):
+                    continue
+                if not no_mutable_content(stmt, source):
+                    return False
+                continue
+            # If/For/While/Try/Assign/Raise/... are not provably inert.
+            return False
+        return True
+
+    return safe_stmts(body)
+
+
 def scope(base: str, head: str) -> tuple[list[str], dict[str, int]]:
     """Return (globs, reason counts) for the diff base...head."""
     globs: list[str] = []
@@ -114,14 +247,16 @@ def scope(base: str, head: str) -> tuple[list[str], dict[str, int]]:
             changed: set[int],
             seen: set[int],
             mod: str,
+            src: str,
             cls: str | None = None,
             frozen: bool = False,
         ) -> int:
             """Return how many functions overlapped `changed`.
 
-            `changed`/`seen` are passed explicitly rather than closed over: a
-            closure here binds the loop variable, so every file would be walked
-            against the LAST file's changed lines (ruff B023).
+            `changed`/`seen`/`src` are passed explicitly rather than closed
+            over: a closure here binds the loop variable, so every file would
+            be walked against the LAST file's changed lines/source (ruff
+            B023).
 
             `frozen` mirrors the Makefile: a DECORATED CLASS is skipped by
             mutmut together with its whole subtree, so every method inside it
@@ -132,7 +267,13 @@ def scope(base: str, head: str) -> tuple[list[str], dict[str, int]]:
             for child in ast.iter_child_nodes(node):
                 if isinstance(child, ast.ClassDef):
                     hits += walk(
-                        child, changed, seen, mod, child.name, frozen or bool(child.decorator_list)
+                        child,
+                        changed,
+                        seen,
+                        mod,
+                        src,
+                        child.name,
+                        frozen or bool(child.decorator_list),
                     )
                 elif isinstance(child, ast.FunctionDef | ast.AsyncFunctionDef):
                     span = set(range(child.lineno, (child.end_lineno or child.lineno) + 1))
@@ -141,13 +282,23 @@ def scope(base: str, head: str) -> tuple[list[str], dict[str, int]]:
                         hits += 1
                         if frozen or unmutatable(child):
                             skipped_count += 1
+                        elif no_mutable_content(child, src):
+                            # #146: genuinely nothing for any mutmut operator
+                            # to touch anywhere in this function (own body or
+                            # a nested def inside it) - same dead-glob cause
+                            # the Makefile's scope() excludes.
+                            skipped_count += 1
                         else:
                             name = f"xǁ{cls}ǁ{child.name}" if cls else f"x_{child.name}"
                             globs.append(f"{mod}.{name}__mutmut_*")
-                    hits += walk(child, changed, seen, mod, cls, frozen)
+                    # Do NOT recurse into a FunctionDef's body looking for
+                    # further FunctionDefs: mutmut attributes EVERY mutation
+                    # inside a nested `def` - at any depth - to this SAME
+                    # enclosing name (OuterFunctionProvider), never to the
+                    # nested def's own name (#146, mirrors the Makefile).
             return hits
 
-        matched = walk(tree, lines, covered, module)
+        matched = walk(tree, lines, covered, module, source)
         if not matched:
             # Why did nothing match? Distinguish the real causes.
             if lines - covered:
