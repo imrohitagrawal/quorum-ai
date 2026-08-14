@@ -1,17 +1,37 @@
 # Session Handoff
 
 ## Date/time
-2026-08-12T04:00:02+05:30
+2026-08-14T02:47:28+05:30
 
 ## Latest narrative handoff
-`docs/analysis/2026-08-11-session-handoff.md` — read this for full context before editing. **(1 day old** — if a newer session ran since then and its narrative handoff was archived without a replacement being written, this may be stale; check `docs/archive/` for a newer one.)
+`docs/analysis/2026-08-11-session-handoff.md` — read this for full context before editing. **(3 days old** — if a newer session ran since then and its narrative handoff was archived without a replacement being written, this may be stale; check `docs/archive/` for a newer one.)
 
-This file is a mechanical snapshot (branch/git-status/skill-route) —
+This file is a mechanical snapshot (branch/git-status/skill-route/live state) —
 regenerated fresh every `make handoff`. The narrative above (what happened,
 what's next, the traps) lives in the dated doc it points to, not here.
 
 ## Current branch/worktree
-feat/session-handoff-narrative-pointer
+fix/p8-134
+
+## Live state (measured fresh by this run, not hand-carried)
+Run `make handoff` again for current numbers instead of trusting this file
+once it ages -- every value below is read from git/gh/`/status` at
+generation time, per #134.
+
+- **`origin/main` tip:** `a316992bb9f6`
+- **Last commit touching `src/`:** `fa3541a7c113`
+- **Production vs. last `src/` commit:** unavailable: could not reach https://quorum-ai.fly.dev/status (last src/ commit is fa3541a)
+- **pytest collected (no execution):** 2928
+- **e2e lane spec counts:** invariants: 17, ops: 2, degraded: 1
+- **Open issues:** 17
+- **Changed-lines coverage:** not computed here -- `make diff-cover` shares
+  coverage data with every pytest-invoking target and races with them if run
+  concurrently (AGENTS.md rule 15), so this file does not run it. Run
+  `make quality && make diff-cover DIFF_BASE=origin/main` for a current number.
+- **Remote branches not merged into `origin/main`:**
+- `fix/p1-313-log-redaction`
+- `fix/p8-224`
+- `fix/p8-224-check`
 
 ## Current phase
 Operate, learn, and improve
@@ -68,17 +88,12 @@ Operate, learn, and improve
 
 ## Git status
 ```text
-M AGENTS.md
- M scripts/session_handoff.py
- M tests/unit/test_session_handoff_narrative_pointer.py
+clean
 ```
 
 ## Diff stat
 ```text
-AGENTS.md                                          | 14 ++++-
- scripts/session_handoff.py                         | 44 ++++++++++++---
- .../unit/test_session_handoff_narrative_pointer.py | 66 ++++++++++++++++++++++
- 3 files changed, 114 insertions(+), 10 deletions(-)
+no unstaged diff
 ```
 
 ## Completed in this session
