@@ -20,7 +20,9 @@ import json
 import logging
 import re
 import threading
+from collections.abc import Mapping
 from datetime import UTC, datetime
+from types import TracebackType
 
 #: Patterns for secret-shaped substrings (issue #313). Applied to the
 #: FINAL rendered JSON line, not to individual fields, so it covers the
@@ -309,15 +311,25 @@ def install_redaction_record_factory() -> None:
     original_make_record = logging.Logger.makeRecord
 
     def make_record_with_extra_redaction(
-        self: logging.Logger, *args: object, **kwargs: object
+        self: logging.Logger,
+        name: str,
+        level: int,
+        fn: str,
+        lno: int,
+        msg: object,
+        args: tuple[object, ...] | Mapping[str, object],
+        exc_info: tuple[type[BaseException], BaseException, TracebackType | None]
+        | tuple[None, None, None]
+        | None,
+        func: str | None = None,
+        extra: Mapping[str, object] | None = None,
+        sinfo: str | None = None,
     ) -> logging.LogRecord:
-        record = original_make_record(self, *args, **kwargs)
+        record = original_make_record(
+            self, name, level, fn, lno, msg, args, exc_info, func, extra, sinfo
+        )
         for key, value in list(record.__dict__.items()):
-            if (
-                key in _RESERVED_RECORD_ATTRS
-                or key.startswith("_")
-                or not isinstance(value, str)
-            ):
+            if key in _RESERVED_RECORD_ATTRS or key.startswith("_") or not isinstance(value, str):
                 continue
             redacted_value = _redact_secrets(value)
             if redacted_value != value:
