@@ -55,6 +55,14 @@ This keeps the MVP deployable as one service while preserving seams for later ex
 | `persistence` | Query, output, source, cost, event, and BYO key storage repositories. | Logging full secrets or bypassing authorization filters. |
 | `observability` | Non-secret events, metrics, trace IDs, redaction helpers, dashboard contracts. | Full prompt/output analytics without privacy approval. |
 
+`query_api` is `src/product_app/query_runs.py` (FastAPI routes, request/response
+schemas, rate limiters). `orchestration` and `persistence` are both implemented
+in `src/product_app/query_run_orchestration.py` (the run state machine, the
+in-memory repository, and the pipeline) — see ADR-0036 for why those two stayed
+in one file rather than three. Before ADR-0036 (#303) all three lived in one
+3,509-line `query_runs.py`, which is what this doc's earlier component table
+was originally checked against without a matching module boundary in the code.
+
 ## Query Workflow
 
 1. User authenticates before execution. Anonymous users cannot start provider-consuming work. Trace: FR-001, NFR-005.

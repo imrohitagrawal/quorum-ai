@@ -27,6 +27,7 @@ import pytest
 from tests.unit.test_evaluation_judge import VALID_VERDICT
 from tests.unit.test_evaluation_layer_a import _answer
 
+from product_app import query_run_orchestration as qro
 from product_app import query_runs as qr
 from product_app.config import settings
 from product_app.costs import cost_estimation_service
@@ -148,7 +149,7 @@ def test_a_polled_run_keeps_its_billed_judge_line_under_memo_pressure(
     measured on the first draft of #284, ``judge_outcome`` came back ``None``
     for a run whose judge had really fired and billed.
     """
-    monkeypatch.setattr(qr, "_JUDGE_VERDICT_MEMO_MAX", 3)
+    monkeypatch.setattr(qro, "_JUDGE_VERDICT_MEMO_MAX", 3)
 
     victim = _terminal_run()
     qr._evaluate_terminal_run(victim, agreement=AGREEMENT)
@@ -230,7 +231,7 @@ def test_a_judge_timeout_read_is_served_but_never_memoised(
     ``support_verified=False, band='unverified', score=None`` though the
     judge had verified it.
     """
-    monkeypatch.setattr(qr, "_JUDGE_INFLIGHT_WAIT_SECONDS", 0.01)
+    monkeypatch.setattr(qro, "_JUDGE_INFLIGHT_WAIT_SECONDS", 0.01)
     owner_may_finish = threading.Event()
     owner_has_stored = threading.Event()
     reader_ident = threading.get_ident()
@@ -257,7 +258,7 @@ def test_a_judge_timeout_read_is_served_but_never_memoised(
             assert owner_has_stored.wait(timeout=10.0), "the owner never stored"
         return result
 
-    monkeypatch.setattr(qr, "evaluate_run", _park_the_reader_until_the_owner_has_stored)
+    monkeypatch.setattr(qro, "evaluate_run", _park_the_reader_until_the_owner_has_stored)
 
     run = _terminal_run()
     owner_result: list[Any] = []

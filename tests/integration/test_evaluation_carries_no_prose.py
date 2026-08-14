@@ -22,6 +22,7 @@ import pytest
 from fastapi.testclient import TestClient
 from tests.unit.test_evaluation_layer_a import _answer, _source
 
+from product_app import query_run_orchestration as qro
 from product_app import query_runs as qr
 from product_app import run_history_store
 from product_app.config import settings
@@ -126,13 +127,13 @@ def test_the_evaluation_surface_leaks_no_prose_anywhere(
 
         # (c) capture the run_evaluated feedback payload as it is emitted.
         feedback_payloads: list[dict[str, Any]] = []
-        real_record = qr._record_feedback_event  # type: ignore[attr-defined]
+        real_record = qro._record_feedback_event  # type: ignore[attr-defined]
 
         def _spy(**kwargs: Any) -> Any:
             feedback_payloads.append(kwargs.get("payload", {}))
             return real_record(**kwargs)
 
-        monkeypatch.setattr(qr, "_record_feedback_event", _spy)
+        monkeypatch.setattr(qro, "_record_feedback_event", _spy)
 
         # Persist the durable row + evaluation + feedback event.
         qr._persist_terminal_run(run.query_run_id)

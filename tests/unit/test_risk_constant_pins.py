@@ -99,6 +99,11 @@ RISK_TIER_MODULES = (
     "feedback_store.py",
     "readiness.py",
     "query_runs.py",
+    # #303: the run state machine, repository and pipeline constants that used
+    # to live in `query_runs.py` moved to their own module (ADR-0036). Listed
+    # separately rather than folded into the `query_runs.py` comment above
+    # because it is now a distinct file, not a rename of the same one.
+    "query_run_orchestration.py",
     "store_reconnect.py",
 )
 
@@ -162,20 +167,23 @@ BUCKET_B_PIN_BEHAVIOUR = {
         "the real emitted lines against it in both directions"
     ),
     # --- Added 2026-08-10 with the #284 evaluation memo ---
-    "query_runs._EVALUATION_MEMO_MAX": (
+    # #303: moved from query_runs.py to query_run_orchestration.py (ADR-0036).
+    "query_run_orchestration._EVALUATION_MEMO_MAX": (
         "assert that the entry ONE over the cap evicts the oldest and keeps the "
         "newest, not that the cap is 512 -- the size is tunable (a wrong value "
         "costs memory or one extra evaluation, never a wrong answer), the "
         "unbounded growth is not; "
         "tests/unit/test_query_run_evaluation_memo.py drives six real runs "
-        "through query_runs._evaluate_terminal_run with the cap monkeypatched "
-        "to 5, so the eviction it asserts is the one the production write path "
-        "performs -- an earlier version of this sentence said 'drives the real "
-        "memo' while the test called the _evaluation_memo_store helper, and a "
-        "direct dict write inside _evaluate_terminal_run survived it"
+        "through query_run_orchestration._evaluate_terminal_run with the cap "
+        "monkeypatched to 5, so the eviction it asserts is the one the "
+        "production write path performs -- an earlier version of this sentence "
+        "said 'drives the real memo' while the test called the "
+        "_evaluation_memo_store helper, and a direct dict write inside "
+        "_evaluate_terminal_run survived it"
     ),
     # --- Added 2026-08-03 with feedback_store / query_runs / readiness ---
-    "query_runs._MAX_CONCURRENT_RUNS": (
+    # #303: moved from query_runs.py to query_run_orchestration.py (ADR-0036).
+    "query_run_orchestration._MAX_CONCURRENT_RUNS": (
         "assert the (N+1)th concurrent run is refused, not the number 16 -- the "
         "capacity is tunable, the refusal is not"
     ),
@@ -183,11 +191,12 @@ BUCKET_B_PIN_BEHAVIOUR = {
         "assert over-length is refused and that /warnings uses the SAME bound; "
         "they diverged once (8000 vs 20000) and broke the probe-then-create flow"
     ),
-    "query_runs.ALLOWED_TRANSITIONS": (
+    # #303: moved from query_runs.py to query_run_orchestration.py (ADR-0036).
+    "query_run_orchestration.ALLOWED_TRANSITIONS": (
         "assert the legal moves and that a terminal status has no successor; "
         "the map grows when a status is added"
     ),
-    "query_runs.TERMINAL_STATUSES": (
+    "query_run_orchestration.TERMINAL_STATUSES": (
         "assert membership of completed/failed/cancelled, not the literal set"
     ),
     "query_runs._CONTEXT_MAX_LENGTHS": (
@@ -319,20 +328,31 @@ BUCKET_C_NO_PIN = {
     "feedback_store._CLOSE_LOCK_TIMEOUT_S": (
         "teardown-only bound; a wrong value delays process exit, nothing else"
     ),
-    "query_runs.QUERY_RUN_ACTIVE_TTL": "cache lifetime; exercised by the resume tests",
-    "query_runs.QUERY_RUN_TERMINAL_TTL": "cache lifetime; exercised by the result-fetch tests",
+    # #303: the four TTL/pool/wait constants below moved from query_runs.py to
+    # query_run_orchestration.py (ADR-0036); the two _CONTEXT_PRIOR_* lengths
+    # stayed in query_runs.py (they belong to the request-schema validator).
+    "query_run_orchestration.QUERY_RUN_ACTIVE_TTL": (
+        "cache lifetime; exercised by the resume tests"
+    ),
+    "query_run_orchestration.QUERY_RUN_TERMINAL_TTL": (
+        "cache lifetime; exercised by the result-fetch tests"
+    ),
     "query_runs._CONTEXT_PRIOR_QUESTION_MAX_LENGTH": "derived from _QUERY_TEXT_MAX_LENGTH",
     "query_runs._CONTEXT_PRIOR_SYNTHESIS_MAX_LENGTH": (
         "derived; the pair is pinned via _CONTEXT_MAX_LENGTHS"
     ),
-    "query_runs._INITIAL_ANSWER_POOL_SIZE": (
+    "query_run_orchestration._INITIAL_ANSWER_POOL_SIZE": (
         "thread-pool width; a wrong value costs latency, not correctness"
     ),
-    "query_runs._SYNTHESIS_POOL_SIZE": (
+    "query_run_orchestration._SYNTHESIS_POOL_SIZE": (
         "thread-pool width; a wrong value costs latency, not correctness"
     ),
-    "query_runs._JUDGE_INFLIGHT_WAIT_SECONDS": "coalescing wait; a wrong value costs latency",
-    "query_runs._JUDGE_VERDICT_MEMO_MAX": "memo bound; a wrong value costs memory, not correctness",
+    "query_run_orchestration._JUDGE_INFLIGHT_WAIT_SECONDS": (
+        "coalescing wait; a wrong value costs latency"
+    ),
+    "query_run_orchestration._JUDGE_VERDICT_MEMO_MAX": (
+        "memo bound; a wrong value costs memory, not correctness"
+    ),
     "readiness.REASON_BAD_KEY": "reason string; pinned as a set via APPROVED_REASON_PREFIXES",
     "readiness.REASON_NO_KEY": "reason string; pinned as a set via APPROVED_REASON_PREFIXES",
     "readiness.REASON_OFFLINE_BY_CONFIG": "reason string; pinned via APPROVED_REASON_PREFIXES",
