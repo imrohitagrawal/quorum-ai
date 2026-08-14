@@ -274,18 +274,22 @@ def install_redaction_record_factory() -> None:
     with ``_redact_extra_value``, matching ``JsonFormatter``'s own
     reserved-attribute set (``_RESERVED_RECORD_ATTRS``) so the standard
     ``LogRecord`` fields (``name``, ``pathname``, ``thread``, ...) are never
-    mistaken for call-site extras. A ``dict`` or ``list`` extra value is
-    walked RECURSIVELY (issue #313 residual gap, found live via a real
-    reproduction: ``logger.warning(..., extra={"error": {"api_key":
-    "sk-..."}})`` reached a real Sentry breadcrumb capture in plaintext,
-    because the original check was ``isinstance(value, str)`` and skipped
-    the dict entirely) — every string found at any depth inside a nested
-    dict/list is redacted, and a fresh container is built rather than the
-    original mutated in place, so a caller that logs the same dict object
-    again later still sees its own unmodified data. Other non-string,
-    non-container extra values (ints, the ``error_type`` class name via
-    ``str(exc_type)``, ``None``, etc.) are left alone — redaction operates
-    on text, and neither carries a secret-shaped substring on its own.
+    mistaken for call-site extras. A container-valued extra (``dict``,
+    ``list``, ``tuple``, ``set``, ``frozenset`` — see
+    ``_EXTRA_CONTAINER_TYPES``) is walked RECURSIVELY, bounded by
+    ``_MAX_EXTRA_REDACTION_DEPTH`` and a cycle guard (issue #313 residual
+    gap, found live via a real reproduction: ``logger.warning(...,
+    extra={"error": {"api_key": "sk-..."}})`` reached a real Sentry
+    breadcrumb capture in plaintext, because the original check was
+    ``isinstance(value, str)`` and skipped the dict entirely) — every string
+    found at any depth inside a nested container is redacted, and a fresh
+    container is built rather than the original mutated in place, so a
+    caller that logs the same object again later still sees its own
+    unmodified data. Other non-string, non-container extra values (ints,
+    the ``error_type`` class name via ``str(exc_type)``, ``None``, etc.) are
+    left alone — redaction operates on text, and neither carries a
+    secret-shaped substring on its own. See ``_redact_extra_value``'s own
+    docstring for the depth cap and cycle-guard details.
 
     This still does NOT touch ``record.exc_info`` (a full traceback passed
     via ``exc_info=True``) — none of the 9 call sites use that form today, and
