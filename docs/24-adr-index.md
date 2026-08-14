@@ -48,6 +48,7 @@ ways, so the record shows what was believed on a date and what replaced it.
 | [ADR-0040](adr/0040-global-log-redaction-filter-over-per-call-site-fixes.md) | A global log-redaction step in `JsonFormatter`, not per-call-site fixes | Architecture | Accepted — 2026-08-14 (issue #313) |
 | [ADR-0041](adr/0041-record-factory-redaction-closes-the-sentry-bypass.md) | Redact at the log-record factory, not only in `JsonFormatter` | Architecture | Accepted — 2026-08-14 (issue #313, PR #315 review follow-up) |
 | [ADR-0042](adr/0042-module-level-idempotency-flag-for-chained-record-factories.md) | A module-level flag governs `install_redaction_record_factory` idempotency, not a marker on the current factory | Architecture | Accepted — 2026-08-14 (issue #313, PR #315 round-2 review follow-up) |
+| [ADR-0043](adr/0043-claude-settings-and-memory-stay-untracked.md) | `.claude/` (agent hooks, permissions, and memory) stays untracked, local-only | Architecture | Accepted — 2026-08-14 (issue #242) |
 
 **This index was itself stale** until 2026-07-30: ADR-0002 had existed since
 2026-07-19 and was never listed here. A hand-maintained index is a derived fact
