@@ -775,6 +775,62 @@ def _parametrize_names(node: ast.expr) -> list[str] | None:
     return None
 
 
+def _indirect_params(deco: ast.Call, names: list[str]) -> set[str] | None:
+    """The parameter names this `@pytest.mark.parametrize` call routes
+    through a FIXTURE rather than passing to the test directly.
+
+    #325. Under `indirect`, pytest hands each value to a fixture of the same
+    name and passes the FIXTURE'S return value to the test. The fixture may
+    transform, clamp or ignore the value, so a literal in the decorator does
+    not prove what the assert compares against — such a case must not count
+    as a literal pin.
+
+    `indirect` takes two static VALUE shapes: a bool (all names, or none) and
+    a list/tuple of the names to route. It also has two ARRIVAL paths, and
+    #325's first fix read only one of them. pytest's signature is
+    ``parametrize(argnames, argvalues, indirect=False, ids=None, scope=None)``,
+    so ``@pytest.mark.parametrize("expected", [0.001], True)`` is a real,
+    working indirect parametrize with no ``indirect=`` text anywhere in it.
+    Measured on pytest 8.4.2: the test receives the fixture's return value,
+    not `0.001`. The positional third argument is therefore resolved FIRST,
+    before the keyword scan.
+
+    Returns `None` when `indirect` is present but cannot be resolved
+    statically — a bare name, a call, or a `**kwargs` splat that could be
+    hiding `indirect=True`. The caller must treat `None` as "assume indirect
+    and count nothing": a detector that OVER-counts pins is the failure this
+    file exists to prevent, so the unknown case fails closed. That posture is
+    identical on both arrival paths.
+    """
+
+    def _resolve(node: ast.expr) -> set[str] | None:
+        if isinstance(node, ast.Constant) and isinstance(node.value, bool):
+            return set(names) if node.value else set()
+        if isinstance(node, (ast.List, ast.Tuple)):
+            listed: set[str] = set()
+            for elt in node.elts:
+                if not (isinstance(elt, ast.Constant) and isinstance(elt.value, str)):
+                    return None
+                listed.add(elt.value)
+            return listed
+        return None
+
+    if len(deco.args) > 2:
+        # pytest: parametrize(argnames, argvalues, indirect, ids, scope).
+        # A positional `indirect` and an `indirect=` keyword cannot both be
+        # present (Python raises TypeError), so there is no precedence
+        # question. An `*args` splat here is an `ast.Starred`, which
+        # `_resolve` cannot read and so fails closed.
+        return _resolve(deco.args[2])
+    for keyword in deco.keywords:
+        if keyword.arg is None:
+            return None  # **kwargs splat: `indirect` may be in there
+        if keyword.arg != "indirect":
+            continue
+        return _resolve(keyword.value)
+    return set()
+
+
 def _parametrize_literal_params(func: ast.FunctionDef | ast.AsyncFunctionDef) -> set[str]:
     """Parameter names that `@pytest.mark.parametrize` binds to a LITERAL
     value on every case, for `func`.
@@ -789,6 +845,10 @@ def _parametrize_literal_params(func: ast.FunctionDef | ast.AsyncFunctionDef) ->
     the constant against a literal on every run, so it must not count as a
     pin (the negative partner in
     `test_a_parametrized_non_literal_does_not_pin_the_constant`).
+
+    #325: a name routed through a fixture by `indirect` is not bound to the
+    decorator's literal at all — see `_indirect_params`, whose unresolvable
+    case is treated as indirect so the detector never over-counts pins.
     """
     literal_params: set[str] = set()
     for deco in func.decorator_list:
@@ -808,6 +868,9 @@ def _parametrize_literal_params(func: ast.FunctionDef | ast.AsyncFunctionDef) ->
         values_node = deco.args[1]
         if names is None or not isinstance(values_node, (ast.List, ast.Tuple)):
             continue
+        indirect = _indirect_params(deco, names)
+        if indirect is None:
+            continue  # #325: cannot resolve `indirect` -> assume all of them are
         cases = values_node.elts
         if not cases:
             continue
@@ -826,7 +889,9 @@ def _parametrize_literal_params(func: ast.FunctionDef | ast.AsyncFunctionDef) ->
             for name, value in zip(names, case_values, strict=True):
                 if not _is_literal(value):
                     literal_for_name[name] = False
-        literal_params.update(name for name, ok in literal_for_name.items() if ok)
+        literal_params.update(
+            name for name, ok in literal_for_name.items() if ok and name not in indirect
+        )
     return literal_params
 
 
@@ -1242,6 +1307,251 @@ def test_a_parametrized_multi_arg_literal_pins_the_constant(
         "    assert costs._DEFAULT_PRICE_PER_1K_INPUT == expected\n"
     )
     assert "costs._DEFAULT_PRICE_PER_1K_INPUT" in _pins_in_file(synthetic)
+
+
+def test_an_indirect_parametrize_does_not_pin_the_constant(
+    tmp_path: pathlib.Path,
+) -> None:
+    """#325: `indirect=True` routes every parametrize value through a FIXTURE
+    of the same name before the test ever sees it. The fixture can transform
+    the value, clamp it, or ignore it entirely, so the literal in the
+    decorator proves nothing about what the assert compares against — the
+    constant is NOT pinned to that literal.
+
+    Turns red if: `_parametrize_literal_params` stops reading `indirect=` and
+    counts an indirect case as a literal pin again.
+    """
+    synthetic = tmp_path / "test_synthetic.py"
+    synthetic.write_text(
+        "import pytest\n"
+        "from product_app import costs\n\n"
+        "@pytest.mark.parametrize('expected', [0.001], indirect=True)\n"
+        "def test_fake_pin(expected) -> None:\n"
+        "    assert costs._DEFAULT_PRICE_PER_1K_INPUT == expected\n"
+    )
+    assert "costs._DEFAULT_PRICE_PER_1K_INPUT" not in _pins_in_file(synthetic)
+
+
+def test_an_indirect_list_naming_the_param_does_not_pin_the_constant(
+    tmp_path: pathlib.Path,
+) -> None:
+    """#325, the other spelling: `indirect` may be a LIST of argument names
+    rather than `True`, making only those names fixture-routed. A name in
+    that list is exactly as unpinned as under `indirect=True`.
+
+    Turns red if: only the `indirect=True` form is handled and the list form
+    still counts as a literal pin.
+    """
+    synthetic = tmp_path / "test_synthetic.py"
+    synthetic.write_text(
+        "import pytest\n"
+        "from product_app import costs\n\n"
+        "@pytest.mark.parametrize('expected', [0.001], indirect=['expected'])\n"
+        "def test_fake_pin(expected) -> None:\n"
+        "    assert costs._DEFAULT_PRICE_PER_1K_INPUT == expected\n"
+    )
+    assert "costs._DEFAULT_PRICE_PER_1K_INPUT" not in _pins_in_file(synthetic)
+
+
+def test_an_unresolvable_indirect_value_is_treated_as_indirect(
+    tmp_path: pathlib.Path,
+) -> None:
+    """#325, the conservative direction. When `indirect=` is a name, a call
+    or anything else this AST pass cannot resolve, the detector cannot know
+    which parameters are fixture-routed. Over-counting pins is the failure
+    mode this whole file exists to prevent, so an unresolvable `indirect`
+    counts NOTHING from that decorator.
+
+    Turns red if: an unrecognised `indirect` value falls through to "direct"
+    and the literal is counted as a pin.
+    """
+    synthetic = tmp_path / "test_synthetic.py"
+    synthetic.write_text(
+        "import pytest\n"
+        "from product_app import costs\n\n"
+        "_ROUTE = True\n\n"
+        "@pytest.mark.parametrize('expected', [0.001], indirect=_ROUTE)\n"
+        "def test_fake_pin(expected) -> None:\n"
+        "    assert costs._DEFAULT_PRICE_PER_1K_INPUT == expected\n"
+    )
+    assert "costs._DEFAULT_PRICE_PER_1K_INPUT" not in _pins_in_file(synthetic)
+
+
+def test_a_splatted_keyword_on_parametrize_is_treated_as_indirect(
+    tmp_path: pathlib.Path,
+) -> None:
+    """#325, the second unresolvable shape: `**kwargs` on the decorator call
+    could carry `indirect=True` and is invisible to a static read of
+    `deco.keywords[*].arg`, which is `None` for a splat.
+
+    Turns red if: a `**kwargs` splat is ignored rather than treated as
+    possibly-indirect, letting the literal count as a pin.
+    """
+    synthetic = tmp_path / "test_synthetic.py"
+    synthetic.write_text(
+        "import pytest\n"
+        "from product_app import costs\n\n"
+        "_OPTS = {'indirect': True}\n\n"
+        "@pytest.mark.parametrize('expected', [0.001], **_OPTS)\n"
+        "def test_fake_pin(expected) -> None:\n"
+        "    assert costs._DEFAULT_PRICE_PER_1K_INPUT == expected\n"
+    )
+    assert "costs._DEFAULT_PRICE_PER_1K_INPUT" not in _pins_in_file(synthetic)
+
+
+def test_an_indirect_list_naming_another_param_still_pins_this_one(
+    tmp_path: pathlib.Path,
+) -> None:
+    """POSITIVE PARTNER for #325 (rule 7). `indirect=['label']` routes only
+    `label` through a fixture; `expected` is still passed directly, so its
+    literal still pins the constant. Without this partner the four negative
+    checks above would be satisfied by a detector that simply refused every
+    parametrize carrying an `indirect` keyword at all.
+
+    Turns red if: any `indirect=` keyword disqualifies the whole decorator
+    instead of only the names it actually lists.
+    """
+    synthetic = tmp_path / "test_synthetic.py"
+    synthetic.write_text(
+        "import pytest\n"
+        "from product_app import costs\n\n"
+        "@pytest.mark.parametrize("
+        "'label,expected', [('a', 0.001)], indirect=['label'])\n"
+        "def test_fake_pin(label, expected) -> None:\n"
+        "    assert costs._DEFAULT_PRICE_PER_1K_INPUT == expected\n"
+    )
+    assert "costs._DEFAULT_PRICE_PER_1K_INPUT" in _pins_in_file(synthetic)
+
+
+def test_an_explicit_indirect_false_still_pins_the_constant(
+    tmp_path: pathlib.Path,
+) -> None:
+    """POSITIVE PARTNER for #325. `indirect=False` is pytest's default spelt
+    out; it must behave exactly like omitting the keyword.
+
+    Turns red if: the presence of the `indirect` keyword, rather than its
+    value, is what disqualifies the pin.
+    """
+    synthetic = tmp_path / "test_synthetic.py"
+    synthetic.write_text(
+        "import pytest\n"
+        "from product_app import costs\n\n"
+        "@pytest.mark.parametrize('expected', [0.001], indirect=False)\n"
+        "def test_fake_pin(expected) -> None:\n"
+        "    assert costs._DEFAULT_PRICE_PER_1K_INPUT == expected\n"
+    )
+    assert "costs._DEFAULT_PRICE_PER_1K_INPUT" in _pins_in_file(synthetic)
+
+
+def test_a_positional_indirect_true_does_not_pin_the_constant(
+    tmp_path: pathlib.Path,
+) -> None:
+    """#325 review round. `indirect` is pytest's THIRD POSITIONAL parameter
+    (`parametrize(argnames, argvalues, indirect=False, ids=None, scope=None)`),
+    so `@pytest.mark.parametrize('expected', [0.001], True)` is genuinely
+    indirect while containing no `indirect=` text at all. Measured on pytest
+    8.4.2 with a fixture that multiplies by 1000: the test received `1.0`,
+    not `0.001`. The first #325 fix read `deco.keywords` only and counted
+    this as a literal pin.
+
+    Turns red if: `_indirect_params` stops reading `deco.args[2]`.
+    """
+    synthetic = tmp_path / "test_synthetic.py"
+    synthetic.write_text(
+        "import pytest\n"
+        "from product_app import costs\n\n"
+        "@pytest.mark.parametrize('expected', [0.001], True)\n"
+        "def test_fake_pin(expected) -> None:\n"
+        "    assert costs._DEFAULT_PRICE_PER_1K_INPUT == expected\n"
+    )
+    assert "costs._DEFAULT_PRICE_PER_1K_INPUT" not in _pins_in_file(synthetic)
+
+
+def test_a_positional_indirect_list_does_not_pin_the_constant(
+    tmp_path: pathlib.Path,
+) -> None:
+    """#325 review round, the list spelling of the positional argument.
+    Verified to run under pytest 8.4.2 the same way `True` does.
+
+    Turns red if: the positional slot is read but only the bool shape is
+    resolved, letting the list form fall through to "direct".
+    """
+    synthetic = tmp_path / "test_synthetic.py"
+    synthetic.write_text(
+        "import pytest\n"
+        "from product_app import costs\n\n"
+        "@pytest.mark.parametrize('expected', [0.001], ['expected'])\n"
+        "def test_fake_pin(expected) -> None:\n"
+        "    assert costs._DEFAULT_PRICE_PER_1K_INPUT == expected\n"
+    )
+    assert "costs._DEFAULT_PRICE_PER_1K_INPUT" not in _pins_in_file(synthetic)
+
+
+def test_a_positional_indirect_false_still_pins_the_constant(
+    tmp_path: pathlib.Path,
+) -> None:
+    """POSITIVE PARTNER for the positional read (rule 7). Without it, the two
+    negatives above are satisfied by a detector that simply disqualifies any
+    decorator carrying a third positional argument. `indirect=False` written
+    positionally is pytest's default spelt out and must still pin.
+
+    Turns red if: the positional branch returns "all names are indirect"
+    (or `None`) regardless of the argument's value.
+    """
+    synthetic = tmp_path / "test_synthetic.py"
+    synthetic.write_text(
+        "import pytest\n"
+        "from product_app import costs\n\n"
+        "@pytest.mark.parametrize('expected', [0.001], False)\n"
+        "def test_fake_pin(expected) -> None:\n"
+        "    assert costs._DEFAULT_PRICE_PER_1K_INPUT == expected\n"
+    )
+    assert "costs._DEFAULT_PRICE_PER_1K_INPUT" in _pins_in_file(synthetic)
+
+
+def test_a_positional_indirect_list_naming_another_param_still_pins_this_one(
+    tmp_path: pathlib.Path,
+) -> None:
+    """SECOND POSITIVE PARTNER for the positional read. A positional list
+    that names only `label` leaves `expected` passed directly, exactly as the
+    keyword spelling does, so the literal still pins the constant.
+
+    Turns red if: the positional branch treats a list as "all names are
+    indirect" instead of resolving which names it actually contains.
+    """
+    synthetic = tmp_path / "test_synthetic.py"
+    synthetic.write_text(
+        "import pytest\n"
+        "from product_app import costs\n\n"
+        "@pytest.mark.parametrize('label,expected', [('a', 0.001)], ['label'])\n"
+        "def test_fake_pin(label, expected) -> None:\n"
+        "    assert costs._DEFAULT_PRICE_PER_1K_INPUT == expected\n"
+    )
+    assert "costs._DEFAULT_PRICE_PER_1K_INPUT" in _pins_in_file(synthetic)
+
+
+def test_an_unresolvable_positional_indirect_is_treated_as_indirect(
+    tmp_path: pathlib.Path,
+) -> None:
+    """#325 review round, the conservative direction on the positional path.
+    A name in the third slot cannot be resolved statically, so the detector
+    must assume it routes everything through a fixture and count no pin —
+    the same posture the keyword path already takes.
+
+    Turns red if: the positional branch resolves only bool/list and then
+    falls through to the keyword scan (which finds no `indirect=` and returns
+    "nothing is indirect") instead of returning `None`.
+    """
+    synthetic = tmp_path / "test_synthetic.py"
+    synthetic.write_text(
+        "import pytest\n"
+        "from product_app import costs\n\n"
+        "_ROUTE = True\n\n"
+        "@pytest.mark.parametrize('expected', [0.001], _ROUTE)\n"
+        "def test_fake_pin(expected) -> None:\n"
+        "    assert costs._DEFAULT_PRICE_PER_1K_INPUT == expected\n"
+    )
+    assert "costs._DEFAULT_PRICE_PER_1K_INPUT" not in _pins_in_file(synthetic)
 
 
 def test_is_literal_accepts_pytest_approx_over_a_literal() -> None:
