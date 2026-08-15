@@ -3,6 +3,7 @@ from typing import cast, get_args
 from uuid import uuid4
 
 import pytest
+from tests.helpers import scoped_events
 
 from product_app.debate import DebateOutput, debate_stub_service
 from product_app.model_slots import validate_model_slots
@@ -111,7 +112,9 @@ def test_synthesis_stub_returns_required_sections_and_quality_checks() -> None:
     # as correct. The audit does not prescribe False here.
     assert synthesis.quality_checks.false_consensus_preserved
     assert synthesis.quality_checks.decision_support_framing_present
-    event = synthesis_event_recorder.list_events()[0]
+    # #209: index reads on a process-global recorder pick up whatever a
+    # background worker from an earlier test appended after the clear above.
+    event = scoped_events(synthesis_event_recorder, query_run_id=query_run_id)[0]
     assert event.account_id == account_id
     assert event.query_run_id == query_run_id
     assert event.status is SynthesisStatus.COMPLETED

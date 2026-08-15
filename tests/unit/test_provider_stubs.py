@@ -5,6 +5,7 @@ from typing import Any
 from uuid import uuid4
 
 import pytest
+from tests.helpers import scoped_events
 
 from product_app.model_slots import ModelSlot, validate_model_slots
 from product_app.provider_keys import ProviderCredentialSource
@@ -94,7 +95,10 @@ def test_provider_events_are_non_secret_and_record_source_count() -> None:
         model_slots=validate_model_slots(DEFAULT_MODEL_IDS),
     )
 
-    events = provider_event_recorder.list_events()
+    # #209: scoped to this run's account. ``provider_event_recorder`` is a
+    # process-global buffer and ``setup_function``'s clear does not stop a
+    # background worker from an earlier test appending after it.
+    events = scoped_events(provider_event_recorder, account_id=account_id)
     assert len(events) == 4
     assert events[0].account_id == account_id
     assert events[0].query_run_id == query_run_id
@@ -723,7 +727,7 @@ def test_cancelled_answer_records_a_provider_event() -> None:
     miscounted, the way a failed live call was before #177.
 
     What turns it red: remove the ``provider_event_recorder.record(...)``
-    call from ``cancelled_answer`` — ``list_events()`` then returns empty
+    call from ``cancelled_answer`` — the scoped read then returns empty
     and this assertion fails on the length check.
     """
     account_id = uuid4()
@@ -737,7 +741,7 @@ def test_cancelled_answer_records_a_provider_event() -> None:
         credential_source=ProviderCredentialSource.APP_OWNED,
     )
 
-    events = provider_event_recorder.list_events()
+    events = scoped_events(provider_event_recorder, query_run_id=query_run_id)
     assert len(events) == 1
     assert events[0].event_type == "provider_initial_answer_cancelled"
     assert events[0].account_id == account_id
@@ -760,7 +764,7 @@ def test_deadline_exceeded_answer_records_a_provider_event() -> None:
         credential_source=ProviderCredentialSource.APP_OWNED,
     )
 
-    events = provider_event_recorder.list_events()
+    events = scoped_events(provider_event_recorder, query_run_id=query_run_id)
     assert len(events) == 1
     assert events[0].event_type == "provider_initial_answer_deadline_exceeded"
     assert events[0].account_id == account_id

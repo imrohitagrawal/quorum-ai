@@ -2,6 +2,7 @@ from decimal import Decimal
 from uuid import uuid4
 
 import pytest
+from tests.helpers import scoped_events
 
 from product_app.debate import (
     DEBATE_HARD_TIMEOUT_MS,
@@ -79,7 +80,9 @@ def test_debate_stub_runs_two_structured_critique_rounds() -> None:
         output.focus_areas == ["disagreement", "weak_support", "missing_reasoning"]
         for output in result.debate_outputs
     )
-    assert len(debate_event_recorder.list_events()) == 2
+    # #209: counted per-run, so a late append by an unrelated test's worker
+    # cannot inflate it.
+    assert len(scoped_events(debate_event_recorder, query_run_id=query_run_id)) == 2
 
 
 def test_debate_stub_returns_partial_plan_when_second_round_exceeds_budget() -> None:

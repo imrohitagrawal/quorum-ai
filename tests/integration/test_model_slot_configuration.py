@@ -2,6 +2,7 @@ from uuid import UUID, uuid4
 
 import pytest
 from fastapi.testclient import TestClient
+from tests.helpers import scoped_events
 
 from product_app.main import app
 from product_app.model_slots import model_slot_event_recorder
@@ -112,7 +113,10 @@ def test_replacement_model_slots_are_persisted_with_query_run() -> None:
     assert [
         model_slot["model_id"] for model_slot in result_response.json()["model_slots"]
     ] == selected_models
-    event = model_slot_event_recorder.list_events()[0]
+    # #209: scoped to this account. The index read was previously over the
+    # whole process-global buffer, so an event appended by an earlier test's
+    # in-flight worker could land at position 0.
+    event = scoped_events(model_slot_event_recorder, account_id=account_id)[0]
     assert event.event_type == "model_slot_selection_recorded"
     assert event.account_id == account_id
     assert event.query_run_id == query_run_id
@@ -211,7 +215,7 @@ def test_slot_search_all_false_creates_search_disabled_slots() -> None:
     assert [slot["search"] for slot in slots] == [False, False, False, False]
 
     # The event recorder gets the new 3-tuple shape.
-    event = model_slot_event_recorder.list_events()[-1]
+    event = scoped_events(model_slot_event_recorder, account_id=account_id)[-1]
     assert event.event_type == "model_slot_selection_recorded"
     assert event.model_slots == tuple(
         (i, mid, False) for i, mid in enumerate(selected_models, start=1)

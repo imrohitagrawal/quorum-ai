@@ -4,14 +4,15 @@ from uuid import UUID, uuid4
 
 import pytest
 from fastapi.testclient import TestClient
+from tests.helpers import scoped_events
 
-from product_app.debate import debate_event_recorder
+from product_app.debate import DebateRoundStatus, debate_event_recorder
 from product_app.main import app
 from product_app.provider_keys import ProviderCredentialSource
 from product_app.providers import ProviderPath, provider_event_recorder
 from product_app.query_runs import query_run_repository
 from product_app.safety import WARNING_VERSION, WarningType, warning_event_recorder
-from product_app.synthesis import synthesis_event_recorder
+from product_app.synthesis import SynthesisStatus, synthesis_event_recorder
 
 
 def start_session(client: TestClient) -> dict[str, str]:
@@ -121,14 +122,23 @@ def test_core_query_workflow_with_env_configured_access(
     #
     # Simulate exactly that leak: a background worker from an unrelated run
     # finishing late and appending to the same process-global list, after
-    # this test's own four real calls. What turns this red: reading
-    # ``provider_event_recorder.list_events()`` directly (unfiltered) instead
-    # of filtering by ``run_account_id`` below — the assertion would then see
-    # 5 events, not 4.
+    # this test's own four real calls. The planted event is the positive
+    # partner for ALL FOUR scoped reads below: it is written to every one of
+    # the four recorders, so any read that stopped filtering would see it.
+    # What turns this red: replace a ``scoped_events(...)`` call below with a
+    # bare ``list_events()`` — the provider assertion would then see 5 events,
+    # not 4, the debate rounds would read ``[1, 2, 99]``, the synthesis count
+    # would be 2, and the warning event-type set would gain "foreign_leak".
+    #
+    # #209 replaced the hand-rolled comprehension this comment used to
+    # describe with ``tests.helpers.scoped_events``, and extended the same
+    # scoping to the three reads that were still unfiltered.
+    foreign_account_id = uuid4()
+    foreign_query_run_id = uuid4()
     provider_event_recorder.record(
         event_type="initial_answer_recorded",
-        account_id=uuid4(),
-        query_run_id=uuid4(),
+        account_id=foreign_account_id,
+        query_run_id=foreign_query_run_id,
         model_id="foreign/leaked-event",
         provider_path=ProviderPath.LOCAL_SIMULATION,
         duration_ms=1,
@@ -136,17 +146,47 @@ def test_core_query_workflow_with_env_configured_access(
         source_count=0,
         credential_source=ProviderCredentialSource.APP_OWNED,
     )
+    debate_event_recorder.record(
+        event_type="debate_round_recorded",
+        account_id=foreign_account_id,
+        query_run_id=foreign_query_run_id,
+        round_number=99,
+        focus_areas=("foreign",),
+        duration_ms=1,
+        status=DebateRoundStatus.COMPLETED,
+        timed_out=False,
+    )
+    synthesis_event_recorder.record(
+        event_type="synthesis_recorded",
+        account_id=foreign_account_id,
+        query_run_id=foreign_query_run_id,
+        status=SynthesisStatus.COMPLETED,
+        duration_ms=1,
+        citation_coverage_ratio="0.00",
+        false_consensus_preserved=False,
+        high_stakes_warning_required=False,
+    )
+    warning_event_recorder.record(
+        event_type="foreign_leak",
+        account_id=foreign_account_id,
+        query_run_id=foreign_query_run_id,
+        warning_type=WarningType.SENSITIVE_DATA,
+        warning_version=WARNING_VERSION,
+        acknowledged=False,
+    )
     run_account_id = query_run_repository.get(query_run_id).account_id
-    provider_events = [
-        event
-        for event in provider_event_recorder.list_events()
-        if event.account_id == run_account_id
-    ]
+    provider_events = scoped_events(provider_event_recorder, account_id=run_account_id)
     assert len(provider_events) == 4
     assert {event.credential_source for event in provider_events} == {"app_owned"}
-    assert [event.round_number for event in debate_event_recorder.list_events()] == [1, 2]
-    assert len(synthesis_event_recorder.list_events()) == 1
-    assert {event.event_type for event in warning_event_recorder.list_events()} == {
+    assert [
+        event.round_number
+        for event in scoped_events(debate_event_recorder, account_id=run_account_id)
+    ] == [1, 2]
+    assert len(scoped_events(synthesis_event_recorder, account_id=run_account_id)) == 1
+    assert {
+        event.event_type
+        for event in scoped_events(warning_event_recorder, account_id=run_account_id)
+    } == {
         "safety_warning_impression",
         "safety_acknowledgement_recorded",
     }

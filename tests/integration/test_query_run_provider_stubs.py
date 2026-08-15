@@ -2,6 +2,7 @@ from uuid import UUID, uuid4
 
 import pytest
 from fastapi.testclient import TestClient
+from tests.helpers import scoped_events
 
 from product_app.main import app
 from product_app.providers import (
@@ -113,7 +114,9 @@ def test_query_run_response_marks_local_simulation_when_live_execution_is_disabl
     # honesty phrase, so a substring check cannot tell "live is off" from
     # "the model answered with nothing".
     assert all(answer["provider_notice"] == NOTICE_DEMO_MODE for answer in body["initial_answers"])
-    event = provider_event_recorder.list_events()[0]
+    # #209: scoped to this account, so an event a background worker from an
+    # earlier test appends after ``clear_state`` cannot land at position 0.
+    event = scoped_events(provider_event_recorder, account_id=account_id)[0]
     assert event.account_id == account_id
     assert event.source_count == 1
     assert not hasattr(event, "query_text")
@@ -122,7 +125,8 @@ def test_query_run_response_marks_local_simulation_when_live_execution_is_disabl
 
 def test_query_run_response_records_fallback_search_when_openrouter_has_no_sources() -> None:
     client = TestClient(app)
-    headers = {"X-Account-Id": str(uuid4())}
+    account_id = uuid4()
+    headers = {"X-Account-Id": str(account_id)}
 
     response = client.post(
         "/v1/query-runs",
@@ -137,7 +141,13 @@ def test_query_run_response_records_fallback_search_when_openrouter_has_no_sourc
     assert all(answer["fallback_used"] for answer in answers)
     assert all(answer["provider_path"] == "fallback_search" for answer in answers)
     assert all(answer["sources"][0]["provider"] == "fallback_search" for answer in answers)
-    assert all(event.fallback_used for event in provider_event_recorder.list_events())
+    # #209: scoped to this account. ``all(...)`` over an unfiltered
+    # process-global buffer both admits a foreign event (which would turn this
+    # red for the wrong reason) and is trivially true over an empty list — so
+    # the count is asserted alongside it as the positive partner.
+    events = scoped_events(provider_event_recorder, account_id=account_id)
+    assert len(events) == 4
+    assert all(event.fallback_used for event in events)
 
 
 def test_completed_query_run_result_returns_visible_initial_answer_sources() -> None:

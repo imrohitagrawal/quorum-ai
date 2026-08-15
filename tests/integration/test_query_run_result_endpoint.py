@@ -2,6 +2,7 @@ from uuid import UUID, uuid4
 
 import pytest
 from fastapi.testclient import TestClient
+from tests.helpers import scoped_events
 
 from product_app.debate import debate_event_recorder
 from product_app.main import app
@@ -151,8 +152,12 @@ def test_result_endpoint_projects_model_answers_debate_cost_elapsed_and_synthesi
     # render the demo-mode banner and render stub sources as in-app
     # placeholders rather than clickable anchors.
     assert body["demo_mode"] is True
-    assert [event.round_number for event in debate_event_recorder.list_events()] == [1, 2]
-    synthesis_event = synthesis_event_recorder.list_events()[0]
+    # #209: both reads scoped to this account. The round-number list and the
+    # index read were previously over the whole process-global buffer.
+    assert [
+        event.round_number for event in scoped_events(debate_event_recorder, account_id=account_id)
+    ] == [1, 2]
+    synthesis_event = scoped_events(synthesis_event_recorder, account_id=account_id)[0]
     assert synthesis_event.account_id == account_id
     assert not hasattr(synthesis_event, "query_text")
 

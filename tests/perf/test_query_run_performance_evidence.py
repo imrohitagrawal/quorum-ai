@@ -3,6 +3,7 @@ from uuid import uuid4
 
 import pytest
 from fastapi.testclient import TestClient
+from tests.helpers import scoped_events
 
 from product_app.costs import cost_event_recorder
 from product_app.debate import debate_event_recorder
@@ -70,12 +71,16 @@ def test_stubbed_workflow_meets_local_performance_and_observability_contract() -
     assert elapsed_ms < 2000
     assert result_response.json()["elapsed_time_ms"] >= 0
 
-    provider_events = provider_event_recorder.list_events()
-    debate_events = debate_event_recorder.list_events()
-    synthesis_events = synthesis_event_recorder.list_events()
-    cost_events = cost_event_recorder.list_events()
-    slot_events = model_slot_event_recorder.list_events()
-    warning_events = warning_event_recorder.list_events()
+    # #209: every one of these six recorders is a process-global buffer, and
+    # every assertion below is a CARDINALITY assertion — exactly the shape a
+    # single leaked event from another test's in-flight worker breaks. Scoped
+    # to this run's account, which is a fresh ``uuid4()``.
+    provider_events = scoped_events(provider_event_recorder, account_id=account_id)
+    debate_events = scoped_events(debate_event_recorder, account_id=account_id)
+    synthesis_events = scoped_events(synthesis_event_recorder, account_id=account_id)
+    cost_events = scoped_events(cost_event_recorder, account_id=account_id)
+    slot_events = scoped_events(model_slot_event_recorder, account_id=account_id)
+    warning_events = scoped_events(warning_event_recorder, account_id=account_id)
 
     assert len(provider_events) == 4
     assert len(debate_events) == 2
