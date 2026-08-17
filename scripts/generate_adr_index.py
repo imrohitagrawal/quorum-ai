@@ -87,10 +87,12 @@ def _duplicate_numbers(records: list[Path]) -> dict[str, list[str]]:
     """Map every ADR number claimed by more than one file to those filenames.
 
     A GAP in the sequence is not a defect and is not reported: on 2026-08-17
-    ``git ls-files "docs/adr/*.md"`` listed 48 records numbered 0001..0047 and
-    0049, with 0048 held by the unmerged branch
-    ``origin/fix/226-vacuous-e2e-negative-assertions``. Only a number claimed
-    twice is a defect.
+    ``git ls-files "docs/adr/*.md"`` listed 48 records on ``origin/main`` at
+    7688528, numbered 0001..0047 and 0049 (49 here, since this branch adds
+    ADR-0050). 0048 is held by the unmerged branch
+    ``origin/fix/226-vacuous-e2e-negative-assertions`` — verified with
+    ``git ls-tree -r --name-only origin/fix/226-vacuous-e2e-negative-assertions
+    docs/adr/``. Only a number claimed twice is a defect.
 
     Grouping is by the CANONICAL number (see ``_number_key``), not the raw digit
     string, so ``0047-x.md`` and ``47-y.md`` land in one bucket. The values stay

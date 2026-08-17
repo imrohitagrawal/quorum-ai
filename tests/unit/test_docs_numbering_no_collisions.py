@@ -14,10 +14,12 @@ TWO POPULATIONS, ONE CONCERN (#332)
 break the same way when two files claim one number. The `docs/adr/` half was
 NOT covered until 2026-08-17: `_NUMBER_PREFIX` is anchored `^docs/(\\d+)-`, and
 `git ls-files "docs/*.md"` DOES list the ADRs (the glob crosses the slash), so
-all 48 of them were fed to this gate and silently dropped by the pattern.
-Measured on 2026-08-17:
+all of them were fed to this gate and silently dropped by the pattern.
+Measured on 2026-08-17 against `origin/main` at 7688528. The count is pinned to
+that ref deliberately: this branch itself adds ADR-0050, so the same command run
+HERE prints 49, not 48, and a bare "48" would be false of the tree it ships in.
 
-    $ git ls-files "docs/*.md" | grep -c "^docs/adr/"
+    $ git ls-tree --name-only origin/main docs/adr/ | grep -c '[0-9]\\{4\\}-'
     48
     $ ... | python3 -c "...count matches of ^docs/(\\d+)-..."
     matched by existing regex: 0
@@ -135,9 +137,10 @@ def test_the_scan_sees_the_real_population_of_adrs() -> None:
     collision check below trivially true.
 
     The floor is deliberately loose. Measured 2026-08-17,
-    `git ls-files "docs/adr/*.md" | wc -l` printed 48, and the population only
-    grows, so 40 cannot be tripped by adding an ADR — while a regex that
-    matched nothing (0) or only a handful still trips it.
+    `git ls-files "docs/adr/*.md" | wc -l` printed 49 on this branch (48 on
+    `origin/main`; this branch adds ADR-0050), and the population only grows, so
+    40 cannot be tripped by adding an ADR — while a regex that matched nothing
+    (0) or only a handful still trips it.
 
     A COUNT ALONE IS NOT ENOUGH, measured: reverting `_ADR_NUMBER_PREFIX` to the
     original buggy `^docs/(\\d+)-` left this test GREEN, because that pattern
