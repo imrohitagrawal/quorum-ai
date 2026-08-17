@@ -855,7 +855,7 @@ def test_concurrent_first_reads_make_exactly_one_judge_call(
 
     monkeypatch.setattr(provider_execution_service, "call_with_prompt", _slow)
 
-    judge = qr._MemoisedRunJudge("run-concurrent")
+    judge = qr._MemoisedRunJudge("run-concurrent", uuid4())
     evidence = _evidence()
     results: list[Any] = []
 
@@ -892,7 +892,7 @@ def test_a_reader_waiting_on_a_stuck_inflight_call_serves_suppressed_once(
     stuck: Future[Any] = Future()  # never resolves: the owner is still paying
     qr._judge_inflight["run-stuck"] = stuck
     try:
-        verdict = qr._MemoisedRunJudge("run-stuck").evaluate(_evidence())
+        verdict = qr._MemoisedRunJudge("run-stuck", uuid4()).evaluate(_evidence())
     finally:
         qr._judge_inflight.pop("run-stuck", None)
 
@@ -914,7 +914,7 @@ def test_a_reader_waiting_on_a_stuck_inflight_call_serves_suppressed_once(
 
     qr._judge_inflight["run-landed"] = _TimesOutAsTheOwnerLands()
     try:
-        verdict = qr._MemoisedRunJudge("run-landed").evaluate(_evidence())
+        verdict = qr._MemoisedRunJudge("run-landed", uuid4()).evaluate(_evidence())
     finally:
         qr._judge_inflight.pop("run-landed", None)
     assert verdict == landed
@@ -927,7 +927,7 @@ def test_memo_judge_mirrors_the_service_flag_at_call_time(
     """Review minor: ``verifies_support`` must READ the real service's flag,
     not carry a definition-time copy — a substituted or downgraded service
     must never leave the memo wrapper advertising verification it lost."""
-    judge = qr._MemoisedRunJudge("run-mirror")
+    judge = qr._MemoisedRunJudge("run-mirror", uuid4())
     assert judge.verifies_support is True
     monkeypatch.setattr(EvalJudgeService, "verifies_support", False)
     assert judge.verifies_support is False
@@ -941,7 +941,7 @@ def test_the_verdict_memo_is_bounded_lru(monkeypatch: pytest.MonkeyPatch) -> Non
 
     evidence = _evidence()
     for run_id in ("run-1", "run-2", "run-3"):
-        qr._MemoisedRunJudge(run_id).evaluate(evidence)
+        qr._MemoisedRunJudge(run_id, uuid4()).evaluate(evidence)
 
     assert len(qr._judge_verdict_memo) == 2
     assert "run-1" not in qr._judge_verdict_memo  # oldest evicted
