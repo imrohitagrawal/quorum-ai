@@ -22,8 +22,12 @@ Measured on 2026-08-17:
     $ ... | python3 -c "...count matches of ^docs/(\\d+)-..."
     matched by existing regex: 0
 
-Three branches each created a `docs/adr/0047-*.md`; `make validate` exited 0
-and the index carried two ADR-0047 rows. `_ADR_NUMBER_PREFIX` below closes it.
+Two records were both written as `docs/adr/0047-*.md` — the one on `origin/main`
+and the one that became ADR-0049; `make validate` exited 0 and the index carried
+two ADR-0047 rows. (Three branches were editing `docs/adr/` at the time, which
+is what made a collision likely; it is not the same as three files claiming
+0047. ADR-0049's Consequences section is the source for both facts.)
+`_ADR_NUMBER_PREFIX` below closes it.
 
 NOTE FOR ANYONE ADDING AN ADR: discovery here is `git ls-files`, so a NEW,
 UNCOMMITTED `docs/adr/*.md` is invisible to this gate until it is `git add`ed.
@@ -67,19 +71,39 @@ def _adr_path(filename: str) -> str:
     return "docs/adr/" + filename
 
 
-def _collisions(paths: list[str], pattern: re.Pattern[str]) -> dict[str, list[str]]:
-    """Numbers claimed by more than one path, as {number: [paths]}.
+def _number_key(raw_digits: str, *, digits: int) -> str:
+    """Canonical form of the number a filename prefix claims.
+
+    PADDING IS NOT IDENTITY. Grouping by the raw digit string files
+    `docs/adr/0047-x.md` and `docs/adr/47-y.md` under two different keys, so one
+    ADR number written two ways evades a gate whose entire job is finding two
+    files that claim one number. `int()` collapses the padding.
+
+    The key is rendered BACK to `digits` places — the width each population's
+    filenames actually use — so the failure message names something a reader can
+    grep for (`0047`) rather than a bare integer (`47`) that appears in no
+    filename. The paths beside it are the real filenames to go and rename.
+    """
+    return f"{int(raw_digits):0{digits}d}"
+
+
+def _collisions(paths: list[str], pattern: re.Pattern[str], *, digits: int) -> dict[str, list[str]]:
+    """Numbers claimed by more than one path, as {canonical number: [paths]}.
 
     Takes the path list as an ARGUMENT so the duplicate and gap cases can be
     driven from synthetic input without writing anything into the real tree.
     A gap in the sequence is not a collision and is not reported.
+
+    `digits` is the canonical width of the population being scanned: 2 for
+    `docs/NN-*.md`, 4 for `docs/adr/NNNN-*.md`. It only shapes the reported key;
+    grouping is by numeric value, so it cannot change which paths collide.
     """
     by_number: dict[str, list[str]] = defaultdict(list)
     for path in paths:
         match = pattern.match(path)
         if match is None:
             continue
-        by_number[match.group(1)].append(path)
+        by_number[_number_key(match.group(1), digits=digits)].append(path)
     return {number: paths for number, paths in by_number.items() if len(paths) > 1}
 
 
@@ -91,7 +115,7 @@ def test_the_scan_sees_a_nonzero_number_of_numbered_docs() -> None:
 
 def test_no_two_docs_share_a_leading_number() -> None:
     """Turns red if: two tracked `docs/NN-*.md` files are given the same NN."""
-    collisions = _collisions(_tracked_docs_files(), _NUMBER_PREFIX)
+    collisions = _collisions(_tracked_docs_files(), _NUMBER_PREFIX, digits=2)
     assert not collisions, (
         "two or more docs/NN-*.md files share a leading number -- pick a free "
         "slot in the matching theme range instead (see ADR-0034, "
@@ -130,13 +154,13 @@ def test_the_scan_sees_the_real_population_of_adrs() -> None:
 
 
 def test_no_two_adrs_share_a_leading_number() -> None:
-    """#332: three branches each created a `docs/adr/0047-*.md`, `make validate`
-    exited 0, and the index carried two ADR-0047 rows.
+    """#332: two records were both written as `docs/adr/0047-*.md`,
+    `make validate` exited 0, and the index carried two ADR-0047 rows.
 
     Turns red if: a second `docs/adr/0047-*.md` (or any repeated ADR number) is
     committed.
     """
-    collisions = _collisions(_tracked_docs_files(), _ADR_NUMBER_PREFIX)
+    collisions = _collisions(_tracked_docs_files(), _ADR_NUMBER_PREFIX, digits=4)
     assert not collisions, (
         "two or more docs/adr/NNNN-*.md files claim the same ADR number -- "
         "renumber the newer record to a free slot. Find the highest in use "
@@ -162,12 +186,73 @@ def test_a_repeated_adr_number_is_actually_detected() -> None:
             _adr_path("0049-unique-one.md"),
         ],
         _ADR_NUMBER_PREFIX,
+        digits=4,
     )
 
     assert collisions == {
         "0047": [
             _adr_path("0047-first-claimant.md"),
             _adr_path("0047-second-claimant.md"),
+        ]
+    }
+
+
+def test_a_padding_variant_of_the_same_number_is_still_a_collision() -> None:
+    """Padding is not identity. `0047-x.md` and `47-y.md` claim ONE ADR number
+    written two ways, and grouping by the raw digit string files them under two
+    different keys — so the duplicate walks straight through a gate whose entire
+    job is catching duplicates.
+
+    Verified against the unfixed helper on 2026-08-17: it returned `{}` for the
+    pair below, and `scripts/generate_adr_index.py::_duplicate_numbers` returned
+    `{}` for the same pair.
+
+    The reported key is the canonical zero-padded form, so the message names
+    something a reader can grep for (`0047`) rather than a bare integer (`47`)
+    that appears in no filename.
+
+    Turns red if: `_number_key` stops collapsing the padding (e.g. it returns
+    the raw digits unchanged).
+    """
+    collisions = _collisions(
+        [
+            _adr_path("0047-padded-claimant.md"),
+            _adr_path("47-unpadded-claimant.md"),
+        ],
+        _ADR_NUMBER_PREFIX,
+        digits=4,
+    )
+
+    assert collisions == {
+        "0047": [
+            _adr_path("0047-padded-claimant.md"),
+            _adr_path("47-unpadded-claimant.md"),
+        ]
+    }
+
+
+def test_padding_normalisation_does_not_merge_two_genuinely_different_numbers() -> None:
+    """The positive partner's opposite: collapsing padding must not collapse
+    DISTINCT numbers into one bucket. `0047` and `0470` differ by more than
+    leading zeros and must stay separate.
+
+    Turns red if: `_number_key` normalises by stripping every zero, or by
+    truncating, rather than by reading the digits as a number.
+    """
+    collisions = _collisions(
+        [
+            _adr_path("0047-forty-seven.md"),
+            _adr_path("0470-four-hundred-and-seventy.md"),
+            _adr_path("470-also-four-hundred-and-seventy.md"),
+        ],
+        _ADR_NUMBER_PREFIX,
+        digits=4,
+    )
+
+    assert collisions == {
+        "0470": [
+            _adr_path("0470-four-hundred-and-seventy.md"),
+            _adr_path("470-also-four-hundred-and-seventy.md"),
         ]
     }
 
@@ -190,6 +275,7 @@ def test_a_gap_in_the_adr_sequence_is_not_a_collision() -> None:
             _adr_path("0004-fourth.md"),  # 0003 deliberately absent
         ],
         _ADR_NUMBER_PREFIX,
+        digits=4,
     )
 
     assert collisions == {}

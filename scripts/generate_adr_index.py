@@ -27,21 +27,57 @@ _HEADER = "| ADR | Title | Kind | Status |\n|---|---|---|---|\n"
 _METHOD_MARKERS = ("review-yield", "review budget", "method")
 
 
+def _number_key(name: str) -> str:
+    """Canonical, zero-padded form of the ADR number a filename claims.
+
+    PADDING IS NOT IDENTITY. Grouping by the raw digit string files `0047-x.md`
+    and `47-y.md` under two different keys, so one ADR number written two ways
+    would evade the duplicate refusal below entirely. `int()` collapses the
+    padding; the four-digit rendering is the form every filename in `docs/adr/`
+    uses, so the refusal message names something a reader can grep for.
+
+    Total by construction: a name with no leading digits is returned unchanged
+    rather than raising, so the refusal message keeps working on a stray file
+    the caller's glob happened to admit.
+    """
+    digits = re.match(r"\d+", name)
+    if digits is None:
+        return name
+    return f"{int(digits.group()):04d}"
+
+
 def _row(path: Path) -> str:
     text = path.read_text(encoding="utf-8")
-    title_match = re.search(r"^# ADR-\d+:\s*(.+)$", text, re.M)
+    title_match = re.search(r"^# ADR-(\d+):\s*(.+)$", text, re.M)
     status_match = re.search(r"^## Status\s*\n+([^\n]+)", text, re.M)
     if not title_match or not status_match:
         raise SystemExit(
             f"{path.name}: needs an '# ADR-NNNN: title' heading and a '## Status' line"
         )
-    title = title_match.group(1).strip()
+    heading_number = _number_key(title_match.group(1))
+    filename_number = _number_key(path.name)
+    if heading_number != filename_number:
+        # #332 follow-up: the number a human CITES is the heading; the numbering
+        # gates compare FILENAMES. Left unchecked, two records can both
+        # self-identify as ADR-0050 while their filenames differ, and neither
+        # duplicate refusal sees a thing.
+        raise SystemExit(
+            f"{path.name}: the heading says ADR-{title_match.group(1)} but the "
+            f"filename claims {filename_number}. Readers cite the heading and "
+            "the duplicate-number gates compare filenames, so the two must "
+            "agree — fix whichever is wrong."
+        )
+    title = title_match.group(2).strip()
     # First SENTENCE of the Status line. Some records continue with rationale
     # on the same wrapped line (ADR-0003 does), and a table cell that stops
     # mid-sentence is exactly the sloppy derived fact this generator exists to
     # stop. Split on ". " so a trailing "(R2 Phase 0, ledger RB-3)" survives.
     status = status_match.group(1).strip().split(". ")[0].rstrip(".")
-    number = path.name.split("-", 1)[0]
+    # The canonical form, so the index cites every record the same width no
+    # matter how its filename was padded. Byte-identical for the tree as it
+    # stands: every `docs/adr/*.md` filename is already four digits, verified by
+    # `python3 scripts/generate_adr_index.py --check` passing across this change.
+    number = filename_number
     haystack = f"{path.name} {title}".lower()
     kind = "Method" if any(m in haystack for m in _METHOD_MARKERS) else "Architecture"
     return f"| [ADR-{number}](adr/{path.name}) | {title} | {kind} | {status} |"
@@ -55,10 +91,14 @@ def _duplicate_numbers(records: list[Path]) -> dict[str, list[str]]:
     0049, with 0048 held by the unmerged branch
     ``origin/fix/226-vacuous-e2e-negative-assertions``. Only a number claimed
     twice is a defect.
+
+    Grouping is by the CANONICAL number (see ``_number_key``), not the raw digit
+    string, so ``0047-x.md`` and ``47-y.md`` land in one bucket. The values stay
+    the real filenames, which are what a reader has to go and rename.
     """
     by_number: dict[str, list[str]] = {}
     for path in records:
-        by_number.setdefault(path.name.split("-", 1)[0], []).append(path.name)
+        by_number.setdefault(_number_key(path.name), []).append(path.name)
     return {number: names for number, names in by_number.items() if len(names) > 1}
 
 

@@ -10,12 +10,17 @@ Accepted — 2026-08-17 (issue #332)
 compared those numbers to each other, so two files could claim one number and
 every gate stayed green.
 
-That is not hypothetical. ADR-0049 records it happening: three branches each
-created a `docs/adr/0047-*.md`, `make validate` exited 0, and the index carried
-two ADR-0047 rows. ADR-0049 §"Nothing checks `docs/adr/` for duplicate numbers"
-diagnosed the cause and deliberately deferred the fix to its own issue, because
-three branches were racing on the same directory at the time. This ADR is that
-fix.
+That is not hypothetical. ADR-0049 records it happening, and its words are worth
+quoting rather than paraphrasing: two records were both written as
+`docs/adr/0047-*.md` — the one already on `origin/main` and the one that became
+ADR-0049 — so `make validate` exited 0 while the index carried two ADR-0047
+rows. Separately, and this is a different fact, ADR-0049 records that **three
+branches were racing on `docs/adr/` at the time**; that is why a collision was
+likely and why it deferred the fix, not a count of files claiming 0047. An
+earlier draft of this paragraph fused the two into "three branches each created a
+`docs/adr/0047-*.md`", which ADR-0049 does not say. ADR-0049 §"Nothing checks
+`docs/adr/` for duplicate numbers" diagnosed the cause and deferred the fix to
+its own issue. This ADR is that fix.
 
 There were two independent places a duplicate could have been caught, and both
 were blind — for different reasons:
@@ -59,6 +64,18 @@ normal.**
    message names the number and every file claiming it.
 3. **Only a repeated number is a defect. A gap is not reported**, and no gate
    asserts contiguity.
+4. **Both halves group by the number's VALUE, not its digit string.** `0047-x.md`
+   and `47-y.md` claim one ADR number written two ways. A `_number_key` helper on
+   each side runs the digits through `int()` and renders them back to the
+   canonical four places, so the two land in one bucket. The refusal message
+   still names the real FILENAMES, because a normalised `0047` is what a reader
+   greps for but `47-y.md` is what they have to go and rename.
+5. **The `# ADR-NNNN:` heading must agree with the filename number.** The number
+   a human cites is the heading; both duplicate checks compare filenames. Nothing
+   compared the two, so two records could each self-identify as ADR-0050 with
+   different filenames and every gate stayed green. `_row` now refuses on a
+   mismatch. A padding-only difference is not a mismatch — both sides go through
+   `_number_key`.
 
 Both halves are kept deliberately, rather than picking one, because they catch
 the fault at different moments — see the table below.
