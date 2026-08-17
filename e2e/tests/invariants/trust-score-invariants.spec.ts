@@ -156,6 +156,31 @@ test.describe("trust-score invariants (FR-016)", () => {
         await page.setViewportSize({ width, height: 1200 });
         await driveWithEval(page, EVAL_CLEAN);
         await setTheme(page, theme);
+
+        // #226 — the two scans below are "no X found" checks, and an EMPTY
+        // surface satisfies both. A missing SELECTOR is already caught, because
+        // `scanSubtreeForGreen` returns a violation string in that case
+        // (`fixtures/tokens.ts:37`, "GREEN-RULE: no element matched"). An
+        // EMPTIED surface is not. Measured 2026-08-17 by adding
+        // `box.textContent = ""` immediately before `box.hidden = false` in
+        // app.js's `renderTrustScore`: the pre-#226 forms of the green scan,
+        // the structural scan, the ARIA scan and the absent-evaluation test all
+        // stayed GREEN — 9 executed tests, 9 passed — while every one of them
+        // goes RED with the partners added here. That is the exact
+        // `box.textContent = "—"` mutation this file's own header claims to
+        // defend against, and it was defended only by OTHER tests.
+        // Baseline for contrast, measured on EVAL_CLEAN at 1440px:
+        // 5 descendants, 270 characters.
+        const surface = page.locator(SURFACE);
+        await expect(
+          surface,
+          "the surface must render before it is scanned for paint",
+        ).toBeVisible();
+        expect(
+          (await surface.innerText()).trim().length,
+          "an empty surface makes every scan below trivially clean",
+        ).toBeGreaterThan(0);
+
         const violations = await scanSubtreeForGreen(page, SURFACE);
         expect(violations, `green paint found:\n${violations.join("\n")}`).toEqual([]);
 
@@ -179,6 +204,18 @@ test.describe("trust-score invariants (FR-016)", () => {
   test("no ARIA value-widget lie", async ({ page }) => {
     await page.setViewportSize({ width: 1440, height: 1200 });
     await driveWithEval(page, EVAL_CLEAN);
+
+    // #226 — same emptiness hole as the GREEN RULE tests above: an empty
+    // surface claims no value-widget role because it claims nothing at all.
+    // Measured 2026-08-17 under the same `box.textContent = ""` mutation
+    // described above: the ARIA scan below returned [] and this test passed.
+    const surface = page.locator(SURFACE);
+    await expect(surface, "the surface must render before its ARIA is scanned").toBeVisible();
+    expect(
+      (await surface.innerText()).trim().length,
+      "an empty surface cannot demonstrate the absence of a value-widget lie",
+    ).toBeGreaterThan(0);
+
     const bad = await page.locator(SURFACE).evaluate((root) => {
       const out: string[] = [];
       const all = [root, ...Array.from(root.querySelectorAll("*"))];
@@ -256,6 +293,33 @@ test.describe("trust-score invariants (FR-016)", () => {
   // ---- R10: an absent / null / malformed evaluation renders NOTHING ----
   test("an absent evaluation renders nothing", async ({ page }) => {
     await page.setViewportSize({ width: 1440, height: 1200 });
+
+    // POSITIVE CONTROL (#226), in THIS test, through the SAME driver. Every
+    // assertion in the loop below is an absence claim: `toBeHidden()` counts
+    // "not in the DOM" as hidden, `toEqual("")` is satisfied by an element
+    // that renders nothing at all, and `not.toContain(DISCLOSURE)` searched a
+    // haystack this test never showed able to hold the needle. Measured
+    // 2026-08-17 under the `box.textContent = ""` mutation of app.js's
+    // `renderTrustScore` (the trust surface visible but rendering nothing):
+    // this test in its pre-#226 form PASSED, and it goes RED with the control
+    // below. With a reportable evaluation the same driver yields a visible,
+    // populated surface and puts DISCLOSURE into #main-content.
+    //
+    // NOT claimed here: what happens if the surface is removed from
+    // workspace.html outright. That mutation was tried and DISCARDED as
+    // uninformative — it stalls `driveWithEval` and the test dies on the 60s
+    // harness timeout rather than on an assertion, so it measures nothing.
+    //
+    // Cost, one run each on one laptop (chromium, `--workers=1`), an order of
+    // magnitude rather than a benchmark: 1.84s -> 2.40s.
+    await driveWithEval(page, EVAL_CLEAN);
+    await expect(page.locator(SURFACE), "control: a reportable evaluation renders").toBeVisible();
+    expect((await page.locator(SURFACE).innerText()).trim().length).toBeGreaterThan(0);
+    expect(
+      await page.locator("#main-content").innerText(),
+      "control: DISCLOSURE must be reachable in #main-content, or the not.toContain below is trivially true",
+    ).toContain(DISCLOSURE);
+
     for (const ev of ["__omit__", null, {}]) {
       await driveWithEval(page, ev);
       await expect(page.locator(SURFACE), `evaluation=${JSON.stringify(ev)}`).toBeHidden();
@@ -378,6 +442,19 @@ test.describe("trust-score invariants (FR-016)", () => {
   test("GREEN RULE holds on the verified surface too", async ({ page }) => {
     await page.setViewportSize({ width: 1440, height: 1200 });
     await driveWithEval(page, EVAL_VERIFIED_HIGH);
+
+    // #226 — the emptiness partner, same reasoning as the GREEN RULE tests
+    // above and measured in the same 2026-08-17 run: under the
+    // `box.textContent = ""` mutation of `renderTrustScore`, this test in its
+    // pre-#226 form stayed GREEN on EVAL_VERIFIED_HIGH exactly as it did on
+    // EVAL_CLEAN, and goes RED with the two lines below.
+    const surface = page.locator(SURFACE);
+    await expect(surface, "the verified surface must render before it is scanned").toBeVisible();
+    expect(
+      (await surface.innerText()).trim().length,
+      "an empty surface makes the green scan below trivially clean",
+    ).toBeGreaterThan(0);
+
     const violations = await scanSubtreeForGreen(page, SURFACE);
     expect(violations, "no green paint on a verified surface (green = consensus only)").toEqual(
       [],

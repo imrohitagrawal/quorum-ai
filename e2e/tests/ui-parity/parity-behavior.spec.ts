@@ -521,6 +521,19 @@ test.describe("UI parity — behaviour", () => {
     await boot(page);
     const runNow = page.locator("#run-now");
     await expect(runNow).toHaveClass(/button-secondary/);
+    // This is a GUARD FALSE POSITIVE, not a vacuous test (#226). The positive
+    // partner is the line directly above: `toHaveClass(/button-secondary/)` on
+    // this same locator. Measured 2026-08-17 by changing this button's class in
+    // workspace.html from `button-secondary` to `button-ghost` — the literal
+    // defect this test's own title names — line 523 went RED with
+    // `Expected pattern: /button-secondary/ / Received string: "button
+    // button-ghost composer-cta"`. So it does bite, and it is a real partner. #148
+    // taught the guard `toHaveClass` only under `.not` and never the plain
+    // direction, so `classify()` does not see that partner. Teaching it the
+    // plain direction changes the guard's ACCEPTANCE predicate, which is the
+    // adversarial half of #226 and is deferred to its own pull request — not
+    // bolted on here, and not papered over with a decorative assertion.
+    // no-positive-partner: partner is line above; guard FP, fix deferred to the #226 classifier PR
     await expect(runNow).not.toHaveClass(/button-ghost/);
   });
 
