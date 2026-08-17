@@ -29,9 +29,11 @@ owns it. Not before: the failure it guards has recurred once already.
 
 from __future__ import annotations
 
+import importlib.util
 import subprocess
 import sys
 from pathlib import Path
+from typing import Any
 
 ROOT = Path(__file__).resolve().parents[2]
 GENERATOR = ROOT / "scripts" / "generate_adr_index.py"
@@ -68,17 +70,32 @@ def test_every_adr_on_disk_is_actually_referenced() -> None:
     assert not missing, f"ADRs on disk but absent from the index: {missing}"
 
 
-def test_the_generator_refuses_to_write_an_empty_index(tmp_path: Path) -> None:
-    """A generator that emits an empty table on a bad path would silently
-    erase the record. Asserted rather than assumed."""
-    import importlib.util
-    from typing import Any
-
+def _load_generator() -> Any:
+    """Import the generator as a module so ``ADR_DIR`` can be pointed at a
+    temporary directory, leaving the real tree untouched."""
     spec = importlib.util.spec_from_file_location("gen", GENERATOR)
     assert spec and spec.loader
     module: Any = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
+    return module
 
+
+def _write_adr(directory: Path, filename: str, title: str) -> None:
+    """Write the minimum an ADR needs for ``_row`` to parse it."""
+    number = filename.split("-", 1)[0]
+    directory.joinpath(filename).write_text(
+        f"# ADR-{number}: {title}\n\n## Status\n\nAccepted.\n",
+        encoding="utf-8",
+    )
+
+
+def test_the_generator_refuses_to_write_an_empty_index(tmp_path: Path) -> None:
+    """A generator that emits an empty table on a bad path would silently
+    erase the record. Asserted rather than assumed.
+
+    Turns red if: ``build_table``'s ``if not records`` guard is deleted.
+    """
+    module = _load_generator()
     module.ADR_DIR = tmp_path  # empty directory
     try:
         module.build_table()
@@ -86,3 +103,63 @@ def test_the_generator_refuses_to_write_an_empty_index(tmp_path: Path) -> None:
         assert "refusing to write an empty index" in str(exc)
     else:  # pragma: no cover - the assertion above is the contract
         raise AssertionError("an empty ADR directory must not produce an index")
+
+
+def test_the_generator_refuses_to_write_an_index_with_duplicate_numbers(
+    tmp_path: Path,
+) -> None:
+    """#332: three branches each created a ``docs/adr/0047-*.md`` and the index
+    carried two ADR-0047 rows while ``make validate`` exited 0.
+
+    Reproduced 2026-08-17 on a ``git archive HEAD`` copy: adding a second
+    ``0047-*.md`` printed ``wrote docs/24-adr-index.md (49 records)`` at exit 0,
+    ``grep -c "ADR-0047"`` returned 2, and ``--check`` printed
+    ``adr-index: up to date (49 records)`` at exit 0.
+
+    Turns red if: the duplicate-number guard in ``build_table`` is deleted.
+    """
+    module = _load_generator()
+    module.ADR_DIR = tmp_path
+    _write_adr(tmp_path, "0047-first-claimant.md", "First claimant")
+    _write_adr(tmp_path, "0047-second-claimant.md", "Second claimant")
+    _write_adr(tmp_path, "0049-unique-one.md", "Unique one")
+
+    try:
+        module.build_table()
+    except SystemExit as exc:
+        message = str(exc)
+        # Structure, not substring of the prose: the message must name the
+        # duplicated number AND both files that claim it.
+        assert "0047" in message
+        assert "0047-first-claimant.md" in message
+        assert "0047-second-claimant.md" in message
+        # The unique record is not accused.
+        assert "0049-unique-one.md" not in message
+    else:  # pragma: no cover - the assertion above is the contract
+        raise AssertionError("two ADRs sharing a number must not produce an index")
+
+
+def test_the_generator_still_writes_an_index_when_numbers_are_unique_but_gappy(
+    tmp_path: Path,
+) -> None:
+    """The positive partner for the duplicate refusal, and the guard against
+    over-reach: the real tree has an unused gap (0048 is held by the unmerged
+    branch ``origin/fix/226-vacuous-e2e-negative-assertions``), so a gate that
+    demanded a contiguous run would go red on clean ``main``.
+
+    The synthetic sequence below is deliberately NOT the real gap value, so
+    this test survives 0048 later being filled.
+
+    Turns red if: the duplicate guard is widened into a contiguity check.
+    """
+    module = _load_generator()
+    module.ADR_DIR = tmp_path
+    _write_adr(tmp_path, "0001-first.md", "First")
+    _write_adr(tmp_path, "0002-second.md", "Second")
+    _write_adr(tmp_path, "0004-fourth.md", "Fourth")  # 0003 deliberately absent
+
+    table = module.build_table()
+
+    assert "ADR-0001" in table
+    assert "ADR-0002" in table
+    assert "ADR-0004" in table

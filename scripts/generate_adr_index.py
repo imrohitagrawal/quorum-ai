@@ -47,10 +47,38 @@ def _row(path: Path) -> str:
     return f"| [ADR-{number}](adr/{path.name}) | {title} | {kind} | {status} |"
 
 
+def _duplicate_numbers(records: list[Path]) -> dict[str, list[str]]:
+    """Map every ADR number claimed by more than one file to those filenames.
+
+    A GAP in the sequence is not a defect and is not reported: on 2026-08-17
+    ``git ls-files "docs/adr/*.md"`` listed 48 records numbered 0001..0047 and
+    0049, with 0048 held by the unmerged branch
+    ``origin/fix/226-vacuous-e2e-negative-assertions``. Only a number claimed
+    twice is a defect.
+    """
+    by_number: dict[str, list[str]] = {}
+    for path in records:
+        by_number.setdefault(path.name.split("-", 1)[0], []).append(path.name)
+    return {number: names for number, names in by_number.items() if len(names) > 1}
+
+
 def build_table() -> str:
     records = sorted(ADR_DIR.glob("[0-9]*.md"))
     if not records:
         raise SystemExit("docs/adr/ contains no ADRs — refusing to write an empty index")
+    duplicates = _duplicate_numbers(records)
+    if duplicates:
+        # #332: without this the index silently carried two ADR-0047 rows and
+        # `--check` still exited 0, so `make validate` reported the tree clean.
+        detail = "\n".join(
+            f"  {number}: {', '.join(sorted(names))}"
+            for number, names in sorted(duplicates.items())
+        )
+        raise SystemExit(
+            "docs/adr/ has ADR numbers claimed by more than one file — refusing "
+            "to write an index that lists the same number twice. Renumber the "
+            "newer record to a free slot (see docs/adr/0050-*.md):\n" + detail
+        )
     return _HEADER + "\n".join(_row(p) for p in records)
 
 
