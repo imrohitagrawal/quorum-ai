@@ -67,7 +67,14 @@ def test_scoped_events_returns_the_matching_account_and_drops_a_foreign_one() ->
         # would delete the evidence the assertion below rests on.
         provider_event_recorder.list_events()
     )
-    assert len(whole_buffer) == 2
+    # NOT ``len(whole_buffer) == 2``: a fixed count over a shared buffer is the
+    # exact defect shape #209 removes at 30 other sites, and it would have
+    # shipped here inside its own fix. A late worker thread from an earlier
+    # test appending one event after ``setup_function``'s clear turns that
+    # assertion red without any defect being present. Membership is monotone —
+    # it proves the buffer really held the foreign event, and no number of
+    # extra foreign events can break it.
+    assert "foreign/model" in [event.model_id for event in whole_buffer]
     assert "foreign/model" not in [event.model_id for event in events]
 
 

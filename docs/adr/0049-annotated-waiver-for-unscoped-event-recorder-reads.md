@@ -32,8 +32,9 @@ Measured on `origin/main` at `dd154ee` with the AST scanner added in this PR:
 **35** `list_events()` call sites under `tests/`. Two were already filtered by
 hand (`tests/e2e/test_release_hardening_workflow.py`, the #104 fix; and
 `tests/integration/test_query_run_cost_guardrails.py`'s `_events_for`), and
-three belong to one security sweep that must not be filtered. The other
-**30** were counts, indexes or `all(...)` reads over the whole shared buffer.
+three belonged to one security sweep that must not be filtered (that sweep is
+six reads now — it was missing three of the six recorders). The other **30**
+were counts, indexes or `all(...)` reads over the whole shared buffer.
 
 The decision this ADR records is not "scope the reads" — that part is
 uncontested. It is **how the fix is kept applied**, given that one read in the
@@ -48,8 +49,9 @@ suite is correct *because* it is unscoped.
    given scope, and **raises `ValueError` when neither key is supplied** — a
    no-key call would be an unfiltered read wearing the helper's name. All six
    recorders' event types carry `account_id` and `query_run_id`, so one
-   `Protocol`-typed helper covers all of them. 34 call sites now use it — 28
-   in real assertions plus 6 in the helper's own tests.
+   `Protocol`-typed helper covers all of them. 37 call sites now use it — 31
+   in real assertions plus 6 in the helper's own tests
+   (`_scan_test_suite()` → `scoped 37`).
 
 2. **An AST guard with an in-place annotated waiver.**
    `tests/unit/test_event_recorder_reads_are_scoped.py` parses every file under
@@ -60,14 +62,20 @@ suite is correct *because* it is unscoped.
    and a waiver cannot be added without writing down why.
 
    The guard refuses to pass having measured nothing: it asserts it parsed
-   ≥ 200 files, found ≥ 4 call sites, found ≥ 2 waivers naming the two files
-   that legitimately hold them, and found ≥ 20 `scoped_events` call sites — so
-   a future change that deletes the fix, or that stops the scanner seeing
-   anything, goes red rather than green.
+   ≥ 200 files, found at least as many call sites as the known waived ones,
+   found ≥ 20 `scoped_events` call sites, and that the **exact** per-file map
+   of waived reads matches `_KNOWN_WAIVED_READS` — so a future change that
+   deletes the fix, adds a waiver in a new file, or stops the scanner seeing
+   anything, goes red rather than green. The map is compared for equality
+   rather than as a floor: a floor set one below the real count lets a read be
+   deleted unnoticed, which is what the first version of this guard did.
+
+3. **One whole-buffer cardinality assertion, kept on purpose.** See
+   "What scoping costs" below.
 
 **Why a waiver rather than a ban.**
 `tests/security/test_release_security_redaction.py` proves the OpenRouter key
-never reaches ANY recorded event. Its three reads are `repr()`-then-substring-
+never reaches ANY recorded event. Its reads are `repr()`-then-substring-
 absence checks over the whole buffer. Narrowing them to one account would make
 a leak into any *other* account's event invisible — it would delete exactly the
 coverage the test exists for. A blanket ban would have forced that test to be
@@ -76,18 +84,55 @@ shape is also why the waiver is safe here: a foreign event can only make a
 substring-absence assertion stricter, never falsely green — the opposite of the
 count/index reads that #209 scoped.
 
+That sweep now reads **all six** recorders, not three. Until this PR's review
+it read only `provider`, `debate` and `synthesis`, while the prose around it
+claimed the secret "reaches NO recorded event" — false by measurement: the
+OpenRouter key planted verbatim as a `warning_event_recorder` event type left
+the file at `2 passed`. The three missing recorders are now in the sweep and
+each was shown to turn it red.
+
+## What scoping costs
+
+Scoping a read by `account_id` deletes the suite's ability to see an event
+written under an account nobody asked about. That is not hypothetical:
+
+| | planted defect | result |
+|---|---|---|
+| `origin/main` (all reads unscoped) | a duplicate `synthesis_event_recorder.record(...)` with `account_id=uuid4()` beside the real one in `src/product_app/synthesis.py` | **4 failed**, 24 passed |
+| this branch, every read scoped | same plant | **28 passed** — invisible |
+| this branch, with the kept whole-buffer assertion | same plant | **1 failed**, 27 passed: `assert [4, 2, 2, 1, 1, 1] == [4, 2, 1, 1, 1, 1]` |
+
+Command for all three rows: `pytest tests/e2e/test_release_hardening_workflow.py
+tests/integration/test_query_run_result_endpoint.py
+tests/perf/test_query_run_performance_evidence.py tests/unit/test_synthesis.py
+tests/security/test_release_security_redaction.py -q --no-cov` (the `main` row
+against a `git archive origin/main` copy).
+
+So exactly one whole-buffer cardinality assertion is kept, in
+`tests/perf/test_query_run_performance_evidence.py`. That module is the right
+home: its fixture clears **all six** recorders and it makes exactly one query
+run, on the legacy inline `X-Account-Id` path. Its exposure to the #104 race is
+strictly *less* than the same file carried on `origin/main`, where all six of
+its reads were unscoped. Detection redundancy still drops — 4 tests catch the
+plant on `main`, 1 here — and that is a real, accepted cost, not a wash.
+
 ## Measured
 
 | Question | Command | Result |
 |---|---|---|
 | `list_events()` call sites under `tests/` on `origin/main` | the PR's `_scan_test_suite()` against `dd154ee` | 35 |
 | of those, unfiltered count/index/`all` reads | same scan, minus 3 security-sweep and 2 hand-filtered | 30 |
-| call sites after the fix | `_scan_test_suite()` | 5, all waived; 0 unwaived |
-| `scoped_events()` call sites after the fix | same | 34 (28 in assertions, 6 in the helper's own tests) |
+| call sites after the fix | `_scan_test_suite()` | 14, all waived; 0 unwaived |
+| `scoped_events()` call sites after the fix | same | 37 (31 in assertions, 6 in the helper's own tests) |
 | test files parsed by the guard | same | 254 |
 | guard bites on a planted unfiltered read | reverted one read in `tests/unit/test_debate_orchestration.py:85` | RED, naming the file and line |
 | guard bites on a one-word waiver | added `# unscoped-ok: meh` to that read | RED: *"waiver reason is too short: 'meh'"* |
-| helper bites | `scoped_events` mutated to return `recorder.list_events()` | 4 of 5 helper tests RED |
+| helper bites | `scoped_events` mutated to return `recorder.list_events()` | 4 of 5 helper tests RED (re-measured 2026-08-17) |
+| the security sweep saw only 3 of 6 recorders | planted the OpenRouter key verbatim as a `warning_event_recorder` event type | **2 passed** — the leak was invisible |
+| the sweep, extended to all six, bites | same plant into `warning`, then `cost`, then `model_slot`, each count-neutral (`clear()` then one record) | RED all three times, on the substring-absence assertion itself |
+| a compound statement's header inherits a stale waiver from its body | a read in a `for` header, waiver 4 lines down in the body | was waived; now unwaived after `_statement_end` trims to the header |
+| `_statement_end` bites | `if body_starts:` → `if False:` | RED: `assert True is False` on `test_a_waiver_in_a_loop_body_...` |
+| the waiver-length bound's exact boundary | 19- and 20-character reasons through `find_recorder_reads` | 19 rejected, 20 accepted |
 | recorder buffers really are shared across tests | instrumented probe stamping each event with the pytest nodeid that recorded it, 3 full-suite runs | 384,255 / 383,833 / 385,032 observations of a test seeing another test's event |
 | a foreign event arriving AFTER the reading test's own clear (the #104 race) | same probe, narrowed to recorders the reading test itself cleared, 5 full-suite runs | **0, 0, 0, 0, 0 — NOT reproduced** |
 | the affected files flaking | 14 sequential runs of `tests/integration tests/e2e tests/perf tests/security` plus the three vulnerable unit modules | 14/14 green — no flake observed |
@@ -100,10 +145,21 @@ count/index reads that #209 scoped.
   that it is not narrowed, or to route around the ban some other way. A rule
   that forbids a correct piece of code gets worked around rather than followed.
 - **A path-based allowlist inside the guard** (a `set` of exempt files).
-  Rejected: it drifts silently — a file can be renamed, or a second unrelated
-  read added to an already-exempt file, with nothing noticing. The in-place
-  annotation is attached to the read itself and cannot be inherited by a
-  neighbouring one.
+  Rejected: it drifts silently — a file can be renamed with nothing noticing,
+  and the reason for the exemption lives somewhere other than the code it
+  exempts. The in-place annotation keeps the argument next to the read.
+  **It is per-STATEMENT, not per-call, and the shipped code relies on that**:
+  one comment waives the six reads of the security sweep's list literal, and
+  another waives the six of the perf module's. So a seventh read added to
+  either list would inherit a reason that may not be true of it — a smaller
+  hole than a path allowlist, but a real one, and review is what closes it.
+  What *was* fixed here is the worse version: a read in a `for`/`while`/`if`/
+  `with`/`try` **header** used to inherit the span of the whole block, so an
+  unrelated comment an arbitrary distance down in the body waived it.
+  `_statement_end` now trims a compound statement to its header lines, pinned
+  by `test_a_waiver_in_a_loop_body_does_not_waive_the_read_in_its_header`.
+  This ADR asserted the opposite ("cannot be inherited by a neighbouring one")
+  until review measured it; the sentence was false when written.
 - **Clearing all six recorders in `tests/conftest.py::_reset_state`.** This
   would close the common, deterministic case (a module with no clearing
   fixture reading events from earlier tests) but NOT the case #104 measured: a
@@ -147,8 +203,11 @@ count/index reads that #209 scoped.
   test (`test_mutation_copy_completeness.py::test_the_real_copy_runs_the_root_reading_specs`,
   whose failure text is about nested-pytest temp-dir collection). Two different
   single failures in two runs of one order is non-determinism, not an order
-  dependency this diff created: neither file is touched here, neither reads an
-  event recorder, and the first asserts `run_count() == 1` over
+  dependency this diff created: neither file is touched here, neither READS an
+  event recorder (`test_query_run_evaluation_endpoint.py` imports and clears
+  three of them at lines 85-87 but calls `list_events` zero times —
+  `grep -c list_events` on it returns `0`), and the first asserts
+  `run_count() == 1` over
   `run_history_store` — a different global. The order CI actually uses
   (alphabetical, no path arguments) is green in `make quality`, in
   `make diff-cover`'s run, and in the shuffle. NOT chased further and NOT
@@ -161,9 +220,32 @@ count/index reads that #209 scoped.
 - Two assertions gained a positive partner while being scoped, because
   scoping made their vacuity visible: `all(event.fallback_used for ...)` in
   `test_query_run_provider_stubs.py` (trivially true over an empty list — now
-  paired with `len(events) == 4`), and the three absence checks in
-  `test_release_security_redaction.py` (now paired with 4/2/1 event-count
+  paired with `len(events) == 4`), and the absence checks in
+  `test_release_security_redaction.py` (now paired with 4/2/1/1/1/1 event-count
   assertions for the run under test). Neither assertion was weakened.
+- **About fourteen assertions are now tautologies** — `assert
+  events[0].account_id == account_id` after `scoped_events(..., account_id=
+  account_id)` restates the filter key and cannot fail for any
+  implementation. They are kept as readable statements of intent, not removed,
+  because the count or index assertion beside each one does bite. Where the
+  pairing is meaningful the keys differ: `tests/unit/test_synthesis.py` scopes
+  by `query_run_id` and asserts the `account_id`, which is a real check. The
+  comment in `test_cancel_during_initial_answers_records_event.py` that
+  claimed its trailing `query_run_id` assertion would catch a foreign event
+  was corrected — after scoping by that same key, a foreign event never
+  reaches it.
+- **Nothing checks `docs/adr/` for duplicate numbers**, which is how this ADR
+  and `origin/main`'s ADR-0047 both got written as 0047 and why this one is
+  0049 (`0048` is claimed by the open #226 branch). `scripts/generate_adr_index.py`
+  emits one row per file and never compares numbers; `--check` only diffs the
+  rendered text, so two identically-numbered rows are "up to date"; and
+  `tests/unit/test_docs_numbering_no_collisions.py` matches `^docs/(\d+)-`,
+  which `docs/adr/NNNN-*.md` never hits. Verified: with both 0047 files
+  present, `make validate` exited 0 and printed
+  `adr-index: up to date (48 records)`. **Deliberately NOT fixed here** —
+  it is a different concern (AGENTS.md rule 17) and three branches are racing
+  on this same directory right now, so a fourth simultaneous edit to the
+  generator would collide again. It needs its own issue.
 
 ## Related
 

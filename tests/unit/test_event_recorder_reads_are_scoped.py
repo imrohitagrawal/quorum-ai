@@ -29,6 +29,15 @@ WHAT THIS CANNOT SEE — read before citing it as proof
       inside that same statement would satisfy it. That is the one way to fool
       the guard without writing a real waiver, and it is not accidental-looking
       code.
+    - A waiver is per-STATEMENT, not per-call. Several reads in one statement
+      (the six-element lists in the security sweep and the perf module) all
+      share one comment — that is deliberate, they share one argument — but it
+      does mean a SEVENTH read added to such a list inherits a reason that may
+      not be true of it. For a compound statement (``for``/``while``/``if``/
+      ``with``/``try``) only the HEADER lines are searched, so a stale comment
+      buried in a long loop body can no longer waive the read in its header;
+      ``test_a_waiver_in_a_loop_body_does_not_waive_the_read_in_its_header``
+      pins that.
     - It says nothing about whether a scoped read is scoped to the RIGHT id.
       ``scoped_events(recorder, account_id=someone_elses_id)`` passes here.
 
@@ -44,11 +53,29 @@ from pathlib import Path
 
 TESTS_ROOT = Path(__file__).resolve().parents[1]
 
-#: A waiver must name a reason, and a reason must be long enough to be a
-#: sentence rather than a shrug. Pinned with literals on both sides in the
-#: assertions below so raising this constant cannot silently pass a
-#: one-word waiver (AGENTS.md rule 7a).
+#: The shape of a waiver: ``# unscoped-ok: <reason>``.
 _ANNOTATION = re.compile(r"#\s*unscoped-ok:\s*(?P<reason>\S.*?)\s*$")
+
+#: Minimum length of a waiver reason. This is a SPEED BUMP, not a quality bar:
+#: 20 arbitrary characters pass it. Whether a waiver's argument is sound is a
+#: review responsibility and no mechanical check can be it. The boundary is
+#: pinned in both directions (19 rejected, 20 accepted) by
+#: ``test_the_waiver_length_bound_bites_at_exactly_twenty_characters``, over
+#: source that test controls — so raising this constant turns that test red
+#: rather than silently admitting shorter waivers (AGENTS.md rule 7a).
+_MIN_REASON_CHARS = 20
+
+#: Every waived ``list_events()`` read in the suite, by file, with how many
+#: that file holds. Compared for EXACT equality, not as a floor: a floor one
+#: below the real count lets a read be deleted unnoticed, and a new waiver in
+#: a new file must be a deliberate edit here rather than a silent addition.
+#: Re-derive with ``_scan_test_suite()``.
+_KNOWN_WAIVED_READS = {
+    "tests/helpers.py": 1,
+    "tests/perf/test_query_run_performance_evidence.py": 6,
+    "tests/security/test_release_security_redaction.py": 6,
+    "tests/unit/test_scoped_events_helper.py": 1,
+}
 
 #: Every event recorder exposes exactly this read method.
 _READ_METHOD = "list_events"
@@ -71,18 +98,44 @@ class RecorderRead:
         return self.waiver_reason is not None
 
 
+_BODY_FIELDS = ("body", "handlers", "orelse", "finalbody")
+
+
+def _statement_end(node: ast.stmt) -> int:
+    """The last line a waiver for THIS statement may legibly sit on.
+
+    For a simple statement that is ``end_lineno``. For a COMPOUND statement
+    (``for``/``while``/``if``/``with``/``try``) it is the line before the
+    statement's first nested statement — the header only. Without that, a read
+    in a ``for`` header inherited the span of the whole block, so an unrelated
+    ``# unscoped-ok:`` comment an arbitrary distance down in the body waived
+    it. Nested statements are visited in their own right, so they keep their
+    own spans.
+    """
+    end = node.end_lineno if node.end_lineno is not None else node.lineno
+    body_starts = [
+        child.lineno
+        for field in _BODY_FIELDS
+        for child in getattr(node, field, []) or []
+        if isinstance(child, ast.stmt)
+    ]
+    if body_starts:
+        end = min(end, min(body_starts) - 1)
+    return max(end, node.lineno)
+
+
 def _statement_span(tree: ast.AST) -> dict[int, tuple[int, int]]:
     """Map every node's ``id()`` to the line span of its enclosing statement.
 
-    The waiver comment is searched over the WHOLE statement that performs the
+    The waiver comment is searched over the whole statement that performs the
     read, not just the call's own line: a read inside a multi-line list
     literal or comprehension would otherwise have nowhere legible to put it.
     """
     spans: dict[int, tuple[int, int]] = {}
 
     def walk(node: ast.AST, current: tuple[int, int] | None) -> None:
-        if isinstance(node, ast.stmt) and node.end_lineno is not None:
-            current = (node.lineno, node.end_lineno)
+        if isinstance(node, ast.stmt):
+            current = (node.lineno, _statement_end(node))
         if current is not None:
             spans[id(node)] = current
         for child in ast.iter_child_nodes(node):
@@ -212,9 +265,9 @@ def test_no_test_reads_a_process_global_recorder_unscoped_without_a_waiver() -> 
 
     # Floors: refuse to pass having measured nothing (AGENTS.md).
     assert files >= 200, f"only parsed {files} files under {TESTS_ROOT}"
-    assert len(reads) >= 4, (
+    assert len(reads) >= sum(_KNOWN_WAIVED_READS.values()), (
         f"the scanner found {len(reads)} list_events() calls under {TESTS_ROOT}; "
-        "expected at least the shared helper plus the security-redaction sweep"
+        f"the known waived reads alone are {sum(_KNOWN_WAIVED_READS.values())}"
     )
 
     unwaived = [read for read in reads if not read.is_waived]
@@ -223,26 +276,90 @@ def test_no_test_reads_a_process_global_recorder_unscoped_without_a_waiver() -> 
     )
 
 
-def test_every_waiver_names_a_real_reason_and_the_known_one_is_the_security_sweep() -> None:
+def test_every_waiver_names_a_real_reason_and_they_are_exactly_the_known_ones() -> None:
     """A waiver is a written argument, not an escape hatch.
 
-    What turns it red: shorten any ``# unscoped-ok:`` reason to a word, or
-    scope the security-redaction sweep to one account (which would delete the
-    coverage that proves no secret reaches ANY event).
+    What turns it red: shorten any ``# unscoped-ok:`` reason to a word, add a
+    waived read in any file not in ``_KNOWN_WAIVED_READS``, or scope the
+    security-redaction sweep to one account (which would delete the coverage
+    that proves no secret reaches ANY event).
     """
     reads, _, _ = _scan_test_suite()
     waived = [read for read in reads if read.is_waived]
 
-    assert len(waived) >= 2, f"expected the helper plus the security sweep, found {len(waived)}"
     for read in waived:
         reason = read.waiver_reason or ""
-        assert len(reason) >= 20, (
+        assert len(reason) >= _MIN_REASON_CHARS, (
             f"{read.path}:{read.lineno} waiver reason is too short: {reason!r}"
         )
 
-    waived_files = {read.path for read in waived}
-    assert "tests/security/test_release_security_redaction.py" in waived_files
-    assert "tests/helpers.py" in waived_files
+    measured: dict[str, int] = {}
+    for read in waived:
+        measured[read.path] = measured.get(read.path, 0) + 1
+    assert measured == _KNOWN_WAIVED_READS, (
+        "the set of waived unscoped reads changed; each one is an argument that "
+        f"has to be made in review, so update _KNOWN_WAIVED_READS deliberately: {measured}"
+    )
+
+
+def test_the_waiver_length_bound_bites_at_exactly_twenty_characters() -> None:
+    """The boundary the comment on ``_MIN_REASON_CHARS`` promises, in both
+    directions, over source this test controls.
+
+    Literals on both sides (19 and 20) rather than arithmetic on the constant,
+    so raising ``_MIN_REASON_CHARS`` turns this red instead of quietly
+    admitting shorter waivers (AGENTS.md rule 7a).
+
+    What turns it red: change ``_MIN_REASON_CHARS`` away from 20, or drop the
+    length check from the waiver test above.
+    """
+    template = "def t():\n    x = provider_event_recorder.list_events()  # unscoped-ok: {reason}\n"
+
+    too_short = find_recorder_reads(template.format(reason="x" * 19), "a.py")
+    long_enough = find_recorder_reads(template.format(reason="y" * 20), "a.py")
+
+    assert [len(read.waiver_reason or "") for read in too_short] == [19]
+    assert [len(read.waiver_reason or "") for read in long_enough] == [20]
+    assert _MIN_REASON_CHARS > 19
+    assert _MIN_REASON_CHARS <= 20
+
+
+def test_a_waiver_in_a_loop_body_does_not_waive_the_read_in_its_header() -> None:
+    """A stale comment far down a block must not silence the block's header.
+
+    The read is in the ``for`` header; the only ``# unscoped-ok:`` comment is
+    three statements into the body and says something else entirely. Before
+    ``_statement_end`` trimmed a compound statement to its header, the header's
+    span was the WHOLE loop and that comment waived the read.
+
+    What turns it red: make ``_statement_end`` return ``node.end_lineno``
+    unconditionally — the read comes back waived.
+    """
+    planted = (
+        "def t():\n"
+        "    for event in provider_event_recorder.list_events():\n"
+        "        a = 1\n"
+        "        b = 2\n"
+        "        # unscoped-ok: left over from a read that was deleted months ago\n"
+        "        print(event, a, b)\n"
+    )
+
+    reads = find_recorder_reads(planted, "planted.py")
+
+    assert [read.lineno for read in reads] == [2]
+    assert reads[0].is_waived is False
+    assert reads[0].waiver_reason is None
+
+    # Positive partner: the same read IS waived by a comment on its own line,
+    # so this is not "the matcher stopped working".
+    on_its_own_line = find_recorder_reads(
+        "def t():\n"
+        "    for event in provider_event_recorder.list_events():  "
+        "# unscoped-ok: a reason long enough to count\n"
+        "        print(event)\n",
+        "planted.py",
+    )
+    assert [read.is_waived for read in on_its_own_line] == [True]
 
 
 def test_the_suite_actually_routes_its_recorder_reads_through_the_shared_helper() -> None:

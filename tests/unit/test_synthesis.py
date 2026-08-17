@@ -455,7 +455,7 @@ def test_extract_citations_skips_inline_fallback_when_annotations_produced_citat
 
 
 def test_extract_citations_inline_link_truncates_at_first_paren_in_url() -> None:
-    """Pinned behaviour: the inline-link regex captures the URL up to
+    r"""Pinned behaviour: the inline-link regex captures the URL up to
     the first ``)`` so the markdown-link closing paren matches literally.
     This mirrors most markdown renderers. A Wikipedia-style URL with an
     unbalanced ``)`` will be truncated; if a model emits that, the

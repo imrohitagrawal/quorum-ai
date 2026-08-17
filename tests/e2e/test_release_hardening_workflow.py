@@ -1,3 +1,4 @@
+from collections.abc import Iterator
 from time import sleep
 from typing import Any
 from uuid import UUID, uuid4
@@ -39,12 +40,21 @@ def wait_for_terminal_result(client: TestClient, query_run_id: UUID) -> dict[str
 
 
 @pytest.fixture(autouse=True)
-def clear_state() -> None:
-    query_run_repository.clear()
-    provider_event_recorder.clear()
-    debate_event_recorder.clear()
-    synthesis_event_recorder.clear()
-    warning_event_recorder.clear()
+def clear_state() -> Iterator[None]:
+    # #209: this module deliberately PLANTS foreign-account events into four
+    # process-global recorders to prove the scoped reads below ignore them.
+    # It therefore clears on the way OUT as well as on the way in — a plant
+    # that outlived its own test would be the very pollution this PR removes.
+    def _clear() -> None:
+        query_run_repository.clear()
+        provider_event_recorder.clear()
+        debate_event_recorder.clear()
+        synthesis_event_recorder.clear()
+        warning_event_recorder.clear()
+
+    _clear()
+    yield
+    _clear()
 
 
 def test_core_query_workflow_with_env_configured_access(

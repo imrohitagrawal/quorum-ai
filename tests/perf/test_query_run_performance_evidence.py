@@ -97,3 +97,40 @@ def test_stubbed_workflow_meets_local_performance_and_observability_contract() -
     assert not hasattr(provider_events[0], "query_text")
     assert not hasattr(debate_events[0], "query_text")
     assert not hasattr(synthesis_events[0], "query_text")
+
+    # #209 kept ONE whole-buffer cardinality assertion, and this is it.
+    #
+    # Scoping every read by ``account_id`` costs something, and the cost is not
+    # theoretical: a product defect that emits a SPURIOUS event under a
+    # fabricated account or run id is invisible to an account-scoped read.
+    # Measured 2026-08-17 by planting a duplicate
+    # ``synthesis_event_recorder.record(...)`` with ``account_id=uuid4()`` next
+    # to the real one in ``src/product_app/synthesis.py``: with every read
+    # scoped, ``pytest tests/e2e/test_release_hardening_workflow.py
+    # tests/integration/test_query_run_result_endpoint.py
+    # tests/perf/test_query_run_performance_evidence.py tests/unit/test_synthesis.py
+    # tests/security/test_release_security_redaction.py -q --no-cov`` printed
+    # ``28 passed``; the same five files on ``origin/main`` printed ``4 failed``.
+    #
+    # This module is where the assertion belongs: its ``clear_state`` fixture
+    # clears ALL SIX recorders (lines above), and it makes exactly one query
+    # run, on the legacy inline ``X-Account-Id`` path — so the whole buffer
+    # should hold precisely what that one run produced. Its only exposure is
+    # the narrow post-clear window #209 is about, which is strictly LESS than
+    # this file carried on ``origin/main``, where all six reads were unscoped.
+    total_counts = [
+        # unscoped-ok: a spurious event written under a fabricated account or
+        # run id is invisible to every account-scoped read in the suite; this
+        # module clears all six recorders and makes exactly one run, so the
+        # whole-buffer totals are the one place that defect is still detectable.
+        len(provider_event_recorder.list_events()),
+        len(debate_event_recorder.list_events()),
+        len(synthesis_event_recorder.list_events()),
+        len(cost_event_recorder.list_events()),
+        len(model_slot_event_recorder.list_events()),
+        len(warning_event_recorder.list_events()),
+    ]
+    assert total_counts == [4, 2, 1, 1, 1, 1], (
+        "the whole process-global buffers hold more (or fewer) events than this "
+        f"module's single query run produced: {total_counts}"
+    )
