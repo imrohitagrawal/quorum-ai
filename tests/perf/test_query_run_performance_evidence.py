@@ -104,8 +104,11 @@ def test_stubbed_workflow_meets_local_performance_and_observability_contract() -
     # theoretical: a product defect that emits a SPURIOUS event under a
     # fabricated account or run id is invisible to an account-scoped read.
     # Measured 2026-08-17 by planting a duplicate
-    # ``synthesis_event_recorder.record(...)`` with ``account_id=uuid4()`` next
-    # to the real one in ``src/product_app/synthesis.py``: with every read
+    # ``synthesis_event_recorder.record(...)`` IMMEDIATELY BEFORE the real one
+    # in ``src/product_app/synthesis.py``, with BOTH ``account_id=uuid4()`` and
+    # ``query_run_id=uuid4()`` fabricated. Both details are load-bearing:
+    # placing it after the real call, or leaving ``query_run_id`` real, gives a
+    # smaller gap and different numbers. With every read
     # scoped, ``pytest tests/e2e/test_release_hardening_workflow.py
     # tests/integration/test_query_run_result_endpoint.py
     # tests/perf/test_query_run_performance_evidence.py tests/unit/test_synthesis.py
@@ -115,9 +118,17 @@ def test_stubbed_workflow_meets_local_performance_and_observability_contract() -
     # This module is where the assertion belongs: its ``clear_state`` fixture
     # clears ALL SIX recorders (lines above), and it makes exactly one query
     # run, on the legacy inline ``X-Account-Id`` path — so the whole buffer
-    # should hold precisely what that one run produced. Its only exposure is
-    # the narrow post-clear window #209 is about, which is strictly LESS than
-    # this file carried on ``origin/main``, where all six reads were unscoped.
+    # should hold precisely what that one run produced.
+    #
+    # An earlier draft claimed this file's exposure to the #104 race is
+    # "strictly LESS" than on ``origin/main``. Review refuted that by
+    # execution. This file still carries the SAME SIX unscoped reads as
+    # ``main`` and still reddens on a single foreign event in any of the six
+    # buffers (measured: ``main`` -> ``assert 8 == 4``; here ->
+    # ``assert [8, 2, 1, 1, 1, 1] == [4, 2, 1, 1, 1, 1]``). The module's
+    # exposure to the race is UNCHANGED. What the fix removed here is the
+    # three unscoped INDEX reads, whose failure would have named the wrong
+    # field on someone else's event.
     total_counts = [
         # unscoped-ok: a spurious event written under a fabricated account or
         # run id is invisible to every account-scoped read in the suite; this

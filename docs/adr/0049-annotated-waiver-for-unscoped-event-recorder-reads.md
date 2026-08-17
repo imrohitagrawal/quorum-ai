@@ -96,9 +96,16 @@ each was shown to turn it red.
 Scoping a read by `account_id` deletes the suite's ability to see an event
 written under an account nobody asked about. That is not hypothetical:
 
+The plant must be reproduced **exactly**, because two details are load-bearing:
+the duplicate goes **immediately before** the real call, and **both** ids are
+fabricated. Placing it after the real call, or leaving `query_run_id` real,
+gives a smaller gap (2/28/1 and 4/1/2 respectively) and the same conclusion —
+but a reader following a looser recipe will get different numbers and conclude
+this table is wrong. Measured across all four combinations, 2026-08-17.
+
 | | planted defect | result |
 |---|---|---|
-| `origin/main` (all reads unscoped) | a duplicate `synthesis_event_recorder.record(...)` with `account_id=uuid4()` beside the real one in `src/product_app/synthesis.py` | **4 failed**, 24 passed |
+| `origin/main` (all reads unscoped) | a duplicate `synthesis_event_recorder.record(...)` inserted IMMEDIATELY BEFORE the real call in `src/product_app/synthesis.py`, with both `account_id=uuid4()` and `query_run_id=uuid4()` | **4 failed**, 24 passed |
 | this branch, every read scoped | same plant | **28 passed** — invisible |
 | this branch, with the kept whole-buffer assertion | same plant | **1 failed**, 27 passed: `assert [4, 2, 2, 1, 1, 1] == [4, 2, 1, 1, 1, 1]` |
 
@@ -111,10 +118,21 @@ against a `git archive origin/main` copy).
 So exactly one whole-buffer cardinality assertion is kept, in
 `tests/perf/test_query_run_performance_evidence.py`. That module is the right
 home: its fixture clears **all six** recorders and it makes exactly one query
-run, on the legacy inline `X-Account-Id` path. Its exposure to the #104 race is
-strictly *less* than the same file carried on `origin/main`, where all six of
-its reads were unscoped. Detection redundancy still drops — 4 tests catch the
-plant on `main`, 1 here — and that is a real, accepted cost, not a wash.
+run, on the legacy inline `X-Account-Id` path.
+
+An earlier draft of this paragraph claimed the module's exposure to the #104
+race is "strictly less" than on `origin/main`. **That was false, and review
+refuted it by execution.** This file still carries six unscoped reads — the
+same six as `main` — and still reddens on a single foreign event in any of the
+six buffers: planting one foreign provider event reddens `main`
+(`assert 8 == 4`) and this branch (`assert [8, 2, 1, 1, 1, 1] == [4, 2, 1, 1, 1, 1]`)
+alike. The module's probability of flaking under #104 is **unchanged**. What the
+fix removes here is narrower and worth stating exactly: the three unscoped
+*index* reads, whose failure would otherwise have named the wrong field on
+someone else's event.
+
+Detection redundancy still drops — 4 tests catch the plant on `main`, 1 here —
+and that is a real, accepted cost, not a wash.
 
 ## Measured
 
