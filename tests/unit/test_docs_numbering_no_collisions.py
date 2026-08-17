@@ -54,6 +54,18 @@ def _tracked_docs_files() -> list[str]:
     return [line for line in result.stdout.splitlines() if line]
 
 
+def _adr_path(filename: str) -> str:
+    """Build a synthetic `docs/adr/` path for the fixture cases below.
+
+    Assembled from a prefix instead of written as a literal on purpose: these
+    filenames deliberately do NOT exist, and
+    `tests/unit/test_cited_paths_resolve.py` scans added lines for
+    `docs/...md`-shaped strings and fails on any that does not resolve. Keeping
+    the prefix separate stops a test fixture from reading as a repo citation.
+    """
+    return "docs/adr/" + filename
+
+
 def _collisions(paths: list[str], pattern: re.Pattern[str]) -> dict[str, list[str]]:
     """Numbers claimed by more than one path, as {number: [paths]}.
 
@@ -144,17 +156,17 @@ def test_a_repeated_adr_number_is_actually_detected() -> None:
     """
     collisions = _collisions(
         [
-            "docs/adr/0047-first-claimant.md",
-            "docs/adr/0047-second-claimant.md",
-            "docs/adr/0049-unique-one.md",
+            _adr_path("0047-first-claimant.md"),
+            _adr_path("0047-second-claimant.md"),
+            _adr_path("0049-unique-one.md"),
         ],
         _ADR_NUMBER_PREFIX,
     )
 
     assert collisions == {
         "0047": [
-            "docs/adr/0047-first-claimant.md",
-            "docs/adr/0047-second-claimant.md",
+            _adr_path("0047-first-claimant.md"),
+            _adr_path("0047-second-claimant.md"),
         ]
     }
 
@@ -172,9 +184,9 @@ def test_a_gap_in_the_adr_sequence_is_not_a_collision() -> None:
     """
     collisions = _collisions(
         [
-            "docs/adr/0001-first.md",
-            "docs/adr/0002-second.md",
-            "docs/adr/0004-fourth.md",  # 0003 deliberately absent
+            _adr_path("0001-first.md"),
+            _adr_path("0002-second.md"),
+            _adr_path("0004-fourth.md"),  # 0003 deliberately absent
         ],
         _ADR_NUMBER_PREFIX,
     )
@@ -189,6 +201,6 @@ def test_the_adr_pattern_does_not_swallow_the_top_level_docs_population() -> Non
 
     Turns red if: `_ADR_NUMBER_PREFIX` loses its `adr/` segment.
     """
-    assert _ADR_NUMBER_PREFIX.match("docs/adr/0049-a-record.md") is not None
+    assert _ADR_NUMBER_PREFIX.match(_adr_path("0049-a-record.md")) is not None
     assert _ADR_NUMBER_PREFIX.match("docs/24-adr-index.md") is None
-    assert _NUMBER_PREFIX.match("docs/adr/0049-a-record.md") is None
+    assert _NUMBER_PREFIX.match(_adr_path("0049-a-record.md")) is None
