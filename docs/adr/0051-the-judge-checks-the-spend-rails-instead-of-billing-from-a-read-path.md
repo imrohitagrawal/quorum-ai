@@ -216,6 +216,15 @@ dispatch.
   machine would hold its own memo and its own view, and none of this argument
   survives that.
 
+**Wider than the eviction case, deliberately.** `_request_path_judge` is also
+reached on the persist path, so the clause gates the FIRST dispatch too: an
+account already at its cap gets no judge at all, not merely no second one.
+`test_the_judge_does_not_dispatch_when_the_ledger_cannot_be_metered` drives that
+case with no eviction and asserts zero dispatches. This is the intended reading
+of "an account at its cap must not spend", but it is a behaviour change beyond
+the defect issue #216 named, and it is recorded here rather than left to be
+discovered.
+
 **Operational.** No configuration change, no schema change, no new constant. With
 `judge_enabled: false` in production the new clauses are unreachable today; they
 arm with the judge.
