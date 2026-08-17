@@ -1,4 +1,4 @@
-# ADR-0047: Unscoped event-recorder reads are gated by an annotated waiver, not a blanket ban
+# ADR-0049: Unscoped event-recorder reads are gated by an annotated waiver, not a blanket ban
 
 ## Status
 

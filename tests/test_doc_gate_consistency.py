@@ -349,6 +349,29 @@ def _skip_leading_parenthetical(chunk: str, i: int) -> int:
     return i  # unbalanced parenthesis: leave the window untouched
 
 
+def _boundary_search_start(chunk: str, i: int, boundary: str) -> int:
+    """Where `_window` starts looking for `boundary` when a boundary sitting
+    EXACTLY at `i` is exempt.
+
+    Such a boundary belongs to the identifier's own phrase, not to a
+    following clause, so it is stepped over. Anything later is a genuine
+    clause break and still cuts the window.
+
+    #141 established this for "," alone (``(`gate`, blocking)``). #326
+    extends the identical rule to ";" and ". ", which had no exemption and so
+    lost the status word in ``job (see #130); blocking``. The step is
+    ``len(boundary)`` so the two-character ". " boundary is stepped over in
+    full rather than leaving the trailing space to re-match.
+
+    **Which boundaries get the exemption is the caller's decision, not this
+    function's** — see `_window`. "," gets it unconditionally (that is #141's
+    pre-existing rule); ";" and ". " get it only when a parenthetical aside
+    was actually skipped, because a bare ";" or "." straight after an
+    identifier is ordinary sentence punctuation and a real clause break.
+    """
+    return i + len(boundary) if chunk.startswith(boundary, i) else i
+
+
 def _window(line: str, end: int) -> str:
     """Text after an identifier that still talks about it.
 
@@ -392,18 +415,50 @@ def _window(line: str, end: int) -> str:
     returned ``[]``, not ``["blocking"]``. All three boundaries now search
     from `i` (the position after any skip), not from 0; a real clause-break
     ";" or ". " outside any skipped aside still cuts there, same as before.
+
+    #326: searching from `i` is INCLUSIVE of `i`, so a boundary character
+    sitting exactly at `i` — the first character after the skip — still cut.
+    Only the comma carried an exemption for that position (the #141
+    ``comma_search_start``); ";" and ". " did not, so
+    ``the `mutation-baseline` job (see #130); blocking`` returned ``[]``
+    while the comma spelling of the same sentence returned
+    ``["blocking"]``. Confirmed by direct execution. ";" and ". " now get the
+    same step-over-a-boundary-at-`i` treatment via `_boundary_search_start`.
+
+    #326 review round: that exemption must be gated on an ASIDE actually
+    having been skipped, not merely on the character sitting at `i`. `i` is
+    also `0` when the line has no closing punctuation at all, and `1` when it
+    only stepped over the identifier's own closing backtick — in both of
+    those a ";" or ". " at `i` is ordinary sentence punctuation and a real
+    clause break. Exempting it there attributed the NEXT clause's status word
+    to this gate. Confirmed by direct execution against the ungated version:
+
+        "the `perf-gate`; blocking since June"                    -> ['blocking']
+        "run make fr-completeness. It is blocking."               -> ['blocking']
+        "Two advisory jobs: mutation-baseline; the diff-cover
+         gate is blocking."                                       -> ['blocking']
+
+    all three of which `origin/main` correctly returned ``[]`` for. So
+    `skipped_an_aside` gates the ";"/". " exemption. The "," exemption is
+    left exactly as #141 wrote it — unconditional at `i` — because
+    ``(`gate`, blocking)`` needs it after a bare punctuation run and that
+    shape has carried the same exposure since #141 without misfiring.
+    ADR-0047 records the decision and its cost.
     """
     chunk = line[end : end + _WINDOW]
     i = 0
     while i < len(chunk) and chunk[i] in "`)]\"'":
         i += 1
+    after_punct = i
     while True:
         skipped = _skip_leading_parenthetical(chunk, i)
         if skipped == i:
             break
         i = skipped
-    comma_search_start = i + 1 if i < len(chunk) and chunk[i] == "," else i
-    for boundary, start in ((",", comma_search_start), (";", i), (". ", i)):
+    skipped_an_aside = i != after_punct
+    for boundary in (",", ";", ". "):
+        exempt_at_i = boundary == "," or skipped_an_aside
+        start = _boundary_search_start(chunk, i, boundary) if exempt_at_i else i
         cut = chunk.find(boundary, start)
         if cut != -1:
             chunk = chunk[:cut]
@@ -828,6 +883,199 @@ def test_a_second_comma_inside_a_skipped_parenthetical_is_also_no_problem() -> N
         "a comma inside a skipped parenthetical aside hid a real "
         f"blocking claim: "
         f"{_window(line, line.index('baseline`') + len('baseline'))!r}"
+    )
+
+
+# --------------------------------------------------------------------------
+# Part A6 — #326: a ";" or ". " sitting EXACTLY where a skip ended still
+# truncates the window before the status word.
+# --------------------------------------------------------------------------
+#
+# Part A5 rebased all three boundary scans on `i`, the position after the
+# leading punctuation run and any skipped parenthetical asides. That fixed a
+# boundary character sitting INSIDE a skipped aside (a position before `i`).
+# It did not fix a boundary character sitting AT `i` — the first character
+# after the skip — because `str.find(boundary, i)` is inclusive of `i`. The
+# comma has carried an explicit exemption for exactly that position since
+# #141 (`comma_search_start = i + 1 if chunk[i] == ","`); ";" and ". " did
+# not, so the idiomatic ``job (see #130); blocking`` shape lost its status
+# word. Confirmed by direct execution against the real `_window`/`_claims`
+# functions before this fix:
+#
+#     "the `mutation-baseline` job (a b), blocking" -> ["blocking"]
+#     "the `mutation-baseline` job (a b); blocking" -> []
+#     "the `mutation-baseline` job (a b). blocking" -> []
+#
+# The exemption is deliberately NARROW — position `i` only. A ";" or ". "
+# anywhere later in the chunk is still a clause break and still cuts, which
+# is what keeps a status word belonging to a *different* clause from being
+# attributed to this gate. See ADR-0047.
+
+
+def test_a_semicolon_immediately_after_a_skipped_aside_does_not_hide_the_status() -> None:
+    """The exact shape from #326: a ";" as the very first character after a
+    skipped parenthetical aside must be exempt, the same as a "," there.
+
+    Turns red if: the ";" boundary scan in `_window()` reverts to searching
+    from `i` inclusive instead of skipping a ";" that sits at `i`.
+    """
+    line = "the `mutation-baseline` job (see #130); blocking"
+    assert _claims(_gate("mutation-baseline"), line) == ["blocking"], (
+        "a semicolon immediately after a skipped aside hid a real blocking "
+        f"claim: {_window(line, line.index('baseline`') + len('baseline'))!r}"
+    )
+
+
+def test_a_sentence_break_immediately_after_a_skipped_aside_does_not_hide_the_status() -> None:
+    """#326's second boundary: a ". " as the very first characters after a
+    skipped parenthetical aside must be exempt too.
+
+    Turns red if: the ". " boundary scan in `_window()` reverts to searching
+    from `i` inclusive instead of skipping a ". " that sits at `i`.
+    """
+    line = "the `mutation-baseline` job (see #130). blocking"
+    assert _claims(_gate("mutation-baseline"), line) == ["blocking"], (
+        "a sentence break immediately after a skipped aside hid a real "
+        f"blocking claim: {_window(line, line.index('baseline`') + len('baseline'))!r}"
+    )
+
+
+def test_a_semicolon_after_a_run_of_asides_does_not_hide_the_status() -> None:
+    """The #317 multi-aside run and the #326 boundary exemption compose: `i`
+    lands after the LAST aside, and the ";" sitting there must be exempt.
+
+    Turns red if: the ";" exemption is keyed off the first aside's end rather
+    than the loop's final `i`.
+    """
+    line = "the `mutation-baseline` job (a) (b); advisory"
+    assert _claims(_gate("mutation-baseline"), line) == ["advisory"], (
+        "a semicolon after a run of skipped asides hid a real advisory "
+        f"claim: {_window(line, line.index('baseline`') + len('baseline'))!r}"
+    )
+
+
+def test_a_bare_semicolon_clause_break_with_no_aside_still_cuts() -> None:
+    """NEGATIVE PARTNER for #326 (rule 7). With no aside to skip, `i` sits on
+    the space after the identifier's closing backtick, so a later ";" is a
+    genuine clause break and MUST still cut. Without this partner the two
+    positive tests above would pass over a `_window()` that had simply
+    stopped treating ";" as a boundary at all.
+
+    Turns red if: the ";" exemption is widened beyond position `i` — e.g. to
+    "skip the first ";" anywhere in the chunk".
+    """
+    line = "the `perf-gate` job; blocking since June"
+    assert _claims(_gate("perf-gate"), line) == [], (
+        "a bare semicolon clause break stopped cutting the window: "
+        f"{_window(line, line.index('perf-gate`') + len('perf-gate'))!r}"
+    )
+
+
+def test_a_bare_sentence_break_with_no_aside_still_cuts() -> None:
+    """NEGATIVE PARTNER for #326, ". " boundary (rule 7).
+
+    Turns red if: the ". " exemption is widened beyond position `i`.
+    """
+    line = "the `perf-gate` job. blocking since June"
+    assert _claims(_gate("perf-gate"), line) == [], (
+        "a bare sentence break stopped cutting the window: "
+        f"{_window(line, line.index('perf-gate`') + len('perf-gate'))!r}"
+    )
+
+
+def test_a_semicolon_after_an_aside_that_quotes_an_identifier_still_cuts() -> None:
+    """NEGATIVE PARTNER for #326: the `_skip_leading_parenthetical` guard
+    that refuses to skip an aside quoting ANOTHER backtick identifier must
+    still hold on the ";" path. Nothing is skipped, so `i` never reaches the
+    ";" and the exemption must not fire.
+
+    Turns red if: the ";" exemption is applied before, or independently of,
+    the skip that establishes `i`.
+    """
+    line = "the `mutation-baseline` job (`diff-cover` >=95%); advisory elsewhere"
+    assert _claims(_gate("mutation-baseline"), line) == [], (
+        "a semicolon after a self-contained second claim stopped cutting: "
+        f"{_window(line, line.index('baseline`') + len('baseline'))!r}"
+    )
+
+
+# --------------------------------------------------------------------------
+# Part A6b — #326 review round: the exemption must require a SKIPPED ASIDE,
+# not merely a boundary character sitting at `i`.
+# --------------------------------------------------------------------------
+#
+# The three negative partners above all put the word "job" between the
+# identifier and the boundary, so `i` lands on the space after the closing
+# backtick and the boundary is never AT `i`. They therefore stay green under
+# an exemption that fires whenever the boundary happens to sit at `i` —
+# including when `i` is 0 (no punctuation at all) or 1 (only the identifier's
+# own closing backtick was stepped over). Those are exactly the shapes below.
+# Measured against the ungated version: all three returned ["blocking"],
+# while `origin/main` returned [] for all three.
+#
+# Every one of these is ordinary English punctuation, not a parenthetical
+# aside, so the status word belongs to the NEXT clause and must not be
+# attributed to this gate.
+
+
+def test_a_semicolon_straight_after_the_identifier_backtick_still_cuts() -> None:
+    """NEGATIVE PARTNER for #326 with NO spacer word: `i` sits at 1, having
+    only stepped over the identifier's own closing backtick. No aside was
+    skipped, so the ";" there is a real clause break and must still cut.
+
+    Turns red if: the ";"/". " exemption stops requiring `skipped_an_aside`
+    and fires on any boundary sitting at `i`.
+    """
+    line = "the `perf-gate`; blocking since June"
+    assert _claims(_gate("perf-gate"), line) == [], (
+        "a semicolon straight after the identifier's backtick stopped "
+        f"cutting: {_window(line, line.index('perf-gate`') + len('perf-gate'))!r}"
+    )
+
+
+def test_a_full_stop_straight_after_the_identifier_backtick_still_cuts() -> None:
+    """NEGATIVE PARTNER for #326, ". " boundary, NO spacer word.
+
+    Turns red if: the ";"/". " exemption stops requiring `skipped_an_aside`
+    and fires on any boundary sitting at `i`.
+    """
+    line = "the `perf-gate`. blocking since June"
+    assert _claims(_gate("perf-gate"), line) == [], (
+        "a full stop straight after the identifier's backtick stopped "
+        f"cutting: {_window(line, line.index('perf-gate`') + len('perf-gate'))!r}"
+    )
+
+
+def test_a_semicolon_straight_after_a_bare_identifier_still_cuts() -> None:
+    """NEGATIVE PARTNER for #326 at `i == 0`: an identifier written WITHOUT
+    backticks has no closing punctuation to step over, so `i` is 0 and the
+    ";" is the very first character of the chunk. It is a sentence's clause
+    break and the following clause is about a DIFFERENT gate.
+
+    Turns red if: the ";"/". " exemption stops requiring `skipped_an_aside`
+    and fires on any boundary sitting at `i`.
+    """
+    line = "Two advisory jobs: mutation-baseline; the diff-cover gate is blocking."
+    assert _claims(_gate("mutation-baseline"), line) == [], (
+        "a semicolon at position 0 stopped cutting, attributing the next "
+        "clause's status to mutation-baseline: "
+        f"{_window(line, line.index('mutation-baseline') + len('mutation-baseline'))!r}"
+    )
+
+
+def test_a_full_stop_straight_after_a_bare_identifier_still_cuts() -> None:
+    """NEGATIVE PARTNER for #326 at `i == 0`, ". " boundary. The idiomatic
+    ``run make fr-completeness. It is blocking.`` shape, where the status
+    word is in the next SENTENCE and says nothing about this gate.
+
+    Turns red if: the ";"/". " exemption stops requiring `skipped_an_aside`
+    and fires on any boundary sitting at `i`.
+    """
+    line = "run make fr-completeness. It is blocking."
+    assert _claims(_gate("fr-completeness"), line) == [], (
+        "a full stop at position 0 stopped cutting, pulling the next "
+        "sentence into the window: "
+        f"{_window(line, line.index('fr-completeness') + len('fr-completeness'))!r}"
     )
 
 

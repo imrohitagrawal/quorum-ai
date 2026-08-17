@@ -17,7 +17,7 @@ The waiver is deliberate rather than a hard ban. One read in this suite MUST
 span every writer — ``tests/security/test_release_security_redaction.py``
 proves no provider secret reaches ANY recorded event, and narrowing it to one
 account would delete exactly the coverage it exists for. See
-``docs/adr/0047-annotated-waiver-for-unscoped-event-recorder-reads.md``.
+``docs/adr/0049-annotated-waiver-for-unscoped-event-recorder-reads.md``.
 
 WHAT THIS CANNOT SEE — read before citing it as proof
     - It matches on the CALL ``<x>.list_events()``. An aliased read
