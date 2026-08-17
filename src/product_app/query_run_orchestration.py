@@ -52,6 +52,8 @@ from pydantic import BaseModel, Field
 from product_app.auth import SessionContext
 from product_app.config import settings
 from product_app.costs import (
+    DAILY_CAP_USD,
+    GLOBAL_DAILY_CEILING_USD,
     CostBreakdown,
     CostEstimate,
     CostGuardrailDecision,
@@ -1587,11 +1589,21 @@ def _persist_terminal_run(query_run_id: UUID) -> None:
         #
         # WHAT REMAINS OPEN (#216) is narrower: ``_judge_verdict_memo`` is a
         # process global bounded at ``_JUDGE_VERDICT_MEMO_MAX``, so on LRU
-        # eviction — or a process restart — a later GET refires a real paid
-        # judge call, and ``try_record_cost_reconciliation`` refuses a second
-        # correction for the same run by design. That second call's cost
-        # reaches no ledger. Note this is NOT $0/day: the judge is intended to
-        # be ON in production.
+        # eviction a later GET refires a real paid judge call, and
+        # ``try_record_cost_reconciliation`` refuses a second correction for
+        # the same run by design. That second call's cost reaches no ledger.
+        # ``_request_path_judge`` now BOUNDS that repeat by re-reading the
+        # spend rails live (#216, ADR-0051); below the rails it is still
+        # unbooked.
+        #
+        # This comment said "on LRU eviction — or a process restart" until
+        # 2026-08-17. The restart half is FALSE: ``query_run_repository`` is
+        # an ``InMemoryQueryRunRepository`` process global too, so a restart
+        # that empties this memo empties the runs in the same breath and the
+        # GET answers ``QUERY_RUN_NOT_FOUND`` instead of judging anything.
+        # Measured by clearing both globals and re-reading the run:
+        # ``get_for_account`` returned ``None``. LRU eviction is the reachable
+        # path; a restart is not.
         _reconcile_run_billing(query_run=query_run, response=response)
         agreement = response.result.agreement
         citation_ratio = None
@@ -1965,6 +1977,59 @@ class _MemoisedRunJudge:
         return verdict
 
 
+def _judge_money_rails_allow_dispatch(query_run: QueryRun) -> bool:
+    """May a judge call be paid for right now, for this run's account? (#216)
+
+    A LIVE re-read of the two spend rails, at the instant a dispatch would
+    happen — which is NOT the same instant the run was created. The clause
+    above this one in :func:`_request_path_judge` reads
+    ``query_run.cost_estimate``, the snapshot taken at CREATE time; a run
+    served an hour later can be judged against rails that have since moved.
+
+    Why this exists (issue #216). ``_judge_verdict_memo`` is a bounded LRU. On
+    eviction a later ``GET /v1/query-runs/{id}`` fires a fresh paid judge call,
+    and ``FeedbackStore.try_record_cost_reconciliation`` refuses a second
+    correction for the same run (the ``COST_RECONCILED_EVENT in seen`` guard),
+    so that call's dollars reach no ledger. Measured on a hermetic fixture,
+    2026-08-17: two evictions took the judge to 3 dispatches while the booked
+    figure stayed at its first value. Nothing bounded the repeat.
+
+    This bounds it WITHOUT writing the ledger from a read path — see ADR-0051
+    for the rejected alternative that did, and for what this does NOT fix: a
+    second dispatch below both rails still happens and still books nothing.
+
+    FAILS CLOSED on an unreadable or untrustworthy ledger, deliberately, and
+    the opposite way from ``costs.CostEstimationService.estimate``, which fails
+    OPEN at the same question. The asymmetry is the point: a storage fault must
+    not turn every user's run into a simulation, but the judge is advisory, so
+    refusing it costs a trust badge rather than an answer. ADR-0016's posture —
+    on an untrustworthy ledger, degrade rather than fail open — is what this
+    follows.
+    """
+    # Local imports: ``costs`` already resolves ``get_store`` this way to avoid
+    # an import cycle, and reading the module attribute at call time is also
+    # what lets tests substitute the store.
+    from product_app.feedback_store import get_store
+    from product_app.store_reconnect import feedback_ledger_may_be_metered
+
+    try:
+        store = get_store()
+        if not feedback_ledger_may_be_metered(store):
+            return False
+        assert store is not None  # narrowed by feedback_ledger_may_be_metered
+        if store.global_daily_spend() >= GLOBAL_DAILY_CEILING_USD:
+            return False
+        if store.daily_spend_for(query_run.account_id) >= DAILY_CAP_USD:
+            return False
+    except Exception as exc:  # noqa: BLE001 - a rail that cannot answer must not spend
+        # This route performed NO ledger read before #216, so a store fault
+        # reaching it would be a new way for a result read to fail. Refuse the
+        # judge instead, and say so where an operator can see it.
+        logger.warning("judge spend-rail pre-flight failed; not dispatching: %s", exc)
+        return False
+    return True
+
+
 def _request_path_judge(query_run: QueryRun) -> _MemoisedRunJudge | None:
     """The judge for the request/serving path, or ``None`` (the default).
 
@@ -2024,6 +2089,12 @@ def _request_path_judge(query_run: QueryRun) -> _MemoisedRunJudge | None:
       for; demanding every slot be live would silently turn the judge off for
       most real runs.
 
+    * **An account or a deployment that has reached a live spend rail**
+      (issue #216). The clauses above read the run's CREATE-TIME estimate; this
+      one re-reads the ledger at dispatch time, which is what a judge fired
+      from a ``GET`` an hour later actually needs. See
+      :func:`_judge_money_rails_allow_dispatch` and ADR-0051.
+
     DELIBERATE (P3 interaction): a ``PARTIAL`` or ``TIMED_OUT`` run WITH
     completed answers IS judged — including a deadline-cut run whose
     synthesis never ran (``build_judge_evidence`` then carries empty
@@ -2053,6 +2124,12 @@ def _request_path_judge(query_run: QueryRun) -> _MemoisedRunJudge | None:
         and answer.provider_path not in NOT_INVOKED_PATHS
         for answer in query_run.initial_answers
     ):
+        return None
+    # LIVE (issue #216), and last because it is the only clause that touches
+    # the store. Costs one read of the shared ``FeedbackStore`` lock, and only
+    # on an evaluation-memo MISS for a terminal run — a poll answered from
+    # ``_evaluation_memo`` never reaches here.
+    if not _judge_money_rails_allow_dispatch(query_run):
         return None
     return _MemoisedRunJudge(str(query_run.query_run_id))
 
