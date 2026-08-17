@@ -74,10 +74,14 @@ def _adr_path(filename: str) -> str:
 def _number_key(raw_digits: str, *, digits: int) -> str:
     """Canonical form of the number a filename prefix claims.
 
-    PADDING IS NOT IDENTITY. Grouping by the raw digit string files
-    `docs/adr/0047-x.md` and `docs/adr/47-y.md` under two different keys, so one
-    ADR number written two ways evades a gate whose entire job is finding two
-    files that claim one number. `int()` collapses the padding.
+    PADDING IS NOT IDENTITY. Grouping by the raw digit string files `0047-x.md`
+    and `47-y.md` (both under `docs/adr/`) under two different keys, so one ADR
+    number written two ways evades a gate whose entire job is finding two files
+    that claim one number. `int()` collapses the padding.
+
+    The filenames above are written WITHOUT their directory on purpose — see
+    `_adr_path` below for why a non-existent path spelled out in full turns
+    `tests/unit/test_cited_paths_resolve.py` red.
 
     The key is rendered BACK to `digits` places — the width each population's
     filenames actually use — so the failure message names something a reader can
