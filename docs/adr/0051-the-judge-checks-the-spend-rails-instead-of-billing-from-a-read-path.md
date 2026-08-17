@@ -16,11 +16,24 @@ ADR-0019 put its clauses in.
 ### The defect
 
 `_judge_verdict_memo` (`query_run_orchestration.py`) is a process-global LRU
-bounded at `_JUDGE_VERDICT_MEMO_MAX = 512`. It is the only record that a paid
-Layer-B judge call happened for a run. When a run's entry is evicted, a later
-`GET /v1/query-runs/{id}` fires a fresh paid judge call — and
-`FeedbackStore.try_record_cost_reconciliation` permits at most one correction
-per run, so the second call's dollars reach no ledger.
+bounded at `_JUDGE_VERDICT_MEMO_MAX = 512`. It is the only record the code
+*consults* to decide whether a paid Layer-B judge call already happened for a
+run. When a run's entry is evicted, a later `GET /v1/query-runs/{id}` fires a
+fresh paid judge call — and `FeedbackStore.try_record_cost_reconciliation`
+permits at most one correction per run, so the second call's dollars reach no
+ledger.
+
+**This paragraph said "the only record that a paid Layer-B judge call happened"
+until review refuted it.** A durable one exists: `_persist_run_evaluation`
+(`query_run_orchestration.py:1689`) writes a `run_evaluated` feedback event
+carrying `"judge_status": _judge_status_for(query_run.query_run_id)`, added by
+issue #258 so "are the judges I pay for returning anything?" is answerable from
+the event stream. Verified by `grep -n "judge_status" src/product_app/*.py`.
+The narrower claim is what actually matters here and is what is now written:
+that durable event is written **once**, at persist time, and nothing reads it
+back — so it records the *first* judge call and can neither see a later
+re-dispatch nor stop one. The memo is still the only thing standing between an
+evicted run and a second paid call.
 
 Measured on this branch by the RED run of
 `tests/integration/test_judge_preflight_respects_the_spend_rails.py` against
@@ -78,24 +91,73 @@ So this defect arms the day two Fly secrets are set. "Latent" undersells it;
 
 ## Decision
 
-**Refuse the dispatch. Never write the ledger from a read path.**
+**Refuse the DISPATCH. Never write the ledger from a read path.**
 
-`_request_path_judge` gains a final clause,
-`_judge_money_rails_allow_dispatch(query_run)`, which re-reads both spend rails
-LIVE at the moment a dispatch would happen and returns `None` — no judge object,
-no I/O, no spend — when either rail says this deployment or this account must
-not spend:
+`_judge_money_rails_allow_dispatch(account_id)` re-reads both spend rails LIVE
+at the moment a dispatch would happen, and refuses when either rail says this
+deployment or this account must not spend:
 
 1. the ledger cannot be metered (`feedback_ledger_may_be_metered` is false, or
    `get_store()` is `None`, or the read raises) → no judge;
 2. `global_daily_spend() >= GLOBAL_DAILY_CEILING_USD` → no judge;
-3. `daily_spend_for(run.account_id) >= DAILY_CAP_USD` → no judge.
+3. `daily_spend_for(account_id) >= DAILY_CAP_USD` → no judge.
 
-The clauses already in that function read `query_run.cost_estimate` — the
-snapshot taken at CREATE time. That is the right source for "what was this run
-told to do", and the wrong source for "may we spend right now", because a run
-served an hour later is judged against rails that have since moved. Both are
-kept.
+The clauses already in `_request_path_judge` read `query_run.cost_estimate` —
+the snapshot taken at CREATE time. That is the right source for "what was this
+run told to do", and the wrong source for "may we spend right now", because a
+run served an hour later is judged against rails that have since moved. Both
+are kept.
+
+### Where the gate sits, and why not one level up
+
+**Inside `_MemoisedRunJudge.evaluate`, on the branch that issues a fresh paid
+call — NOT as a clause in `_request_path_judge`.** The first version of this
+change put it in `_request_path_judge`, and review found the defect that
+placement creates. That function decides three things at once, and only one of
+them costs money:
+
+| how the judge answers | cost | must a rail be able to refuse it? |
+|---|---|---|
+| `_judge_verdict_memo` hit | $0 — already paid, already booked | **no** |
+| share another thread's in-flight call | $0 — someone else is paying | **no** |
+| fresh dispatch | the judge's price | **yes** |
+
+Returning `None` from `_request_path_judge` suppresses all three. Measured on
+`6ecf4da` with a hermetic seam, a run whose verdict was still sitting in the
+memo came back `('unverified', None, False)` on the next read against a first
+read of `('high', 90, True)`, with the dispatch count unchanged at 1 — **zero
+dollars saved, one trust badge destroyed.** And because rail 2 is
+deployment-wide, one account exhausting the $5 ceiling did that to *every other
+account's* cached verdicts. Both cases are now tests
+(`test_a_memoised_verdict_is_still_served_when_the_account_is_at_its_cap`,
+`test_a_memoised_verdict_survives_another_account_exhausting_the_deployment_ceiling`),
+and moving the gate back up turns exactly those two red.
+
+**A refusal is scoped to the read that got it, not to the run.** The refused
+result sets `_MemoisedRunJudge.served_without_verdict`, which makes
+`_evaluate_terminal_run` decline to store it in `_evaluation_memo`. That memo is
+keyed on `(run, updated_at, aligned, total)`, which never changes again for a
+terminal run — so a stored refusal would freeze `band="unverified"` past the
+24-hour rail reset. Pinned by
+`test_a_run_refused_for_money_is_not_frozen_unverified_once_the_rail_clears`.
+
+### The boundary: `>=` here, `>` at run creation
+
+Deliberate, and recorded because the two read differently. Run creation blocks
+on `already_spent + estimated > DAILY_CAP_USD` (`costs.py:822`, strict), which
+answers **"would this run take you past the cap?"** — strict is correct there,
+or a run whose bound alone exceeds the cap would be blocked on an account that
+had spent nothing. This rail answers a different question, **"are you already at
+or past the cap?"**, and uses `>=` — the same comparison `costs.py:861` already
+uses for the global ceiling.
+
+The visible consequence: a run that lands on exactly $0.2000 is accepted, and
+then its own first judge is refused. That is the conservative reading and it is
+chosen on purpose — the judge is an *additional*, currently unbookable dollar,
+and the account has exactly zero headroom. Pinned with literals on both sides
+(`$0.20` refused, `$0.19` allowed) by
+`test_the_boundary_refuses_at_exactly_the_cap_and_allows_one_cent_under`, never
+against `DAILY_CAP_USD` itself (rule 7a).
 
 **Fail CLOSED on an unreadable ledger, and deliberately the opposite way from
 `costs.CostEstimationService.estimate`**, which fails OPEN at the same question
@@ -117,33 +179,60 @@ Mac, Python 3.12.13:
 | `global_daily_spend()` | 1.005 ms | 1.317 ms |
 | `daily_spend_for(account)` | 0.096 ms | 0.290 ms |
 
-Against the judge's own 8-second HTTP timeout this is noise. Two caveats, both
+Against the judge's own 8-second HTTP timeout this is noise. Three caveats, all
 real:
 
-- It is a NEW acquisition of the process-wide `FeedbackStore` RLock from a route
-  that previously took it zero times, and under ADR-0002 that one lock and one
-  connection serialise every read and every write in the process.
-- It fires only on an evaluation-memo MISS for a terminal run. A poll answered
-  from `_evaluation_memo` returns before `_request_path_judge` is reached.
+- **The pre-flight is four store calls, not one, and all four take the lock.**
+  A code comment in the first version of this change said it "costs one read of
+  the shared `FeedbackStore` lock"; review refuted that and a counting double
+  measured it. Per pre-flight, in order: `write_health`, `lost_billed_writes`
+  (both inside `feedback_ledger_may_be_metered`), `global_daily_spend`,
+  `daily_spend_for` — four separate acquisitions of the process-wide
+  `FeedbackStore` RLock, **two of which run a SQL aggregate**
+  (`global_daily_spend`, `daily_spend_for`; the other two read in-memory
+  stamps). Verified by `inspect.getsource` over each method plus a call-counting
+  double; the comment is corrected in this PR. Under ADR-0002 that one lock and
+  one connection serialise every read and every write in the process, and this
+  route previously took the lock zero times.
+- It fires only when the judge is about to PAY: an evaluation-memo miss, then a
+  judge-memo miss, then no in-flight call to share. A poll answered from
+  `_evaluation_memo`, and a read answered from `_judge_verdict_memo`, both
+  return before any rail is read — which is the point of the placement above.
 - The figures are from an in-memory SQLite on a Mac, not from production's Fly
   volume at its real row count. The order of magnitude is the fact; the digits
   are not.
 
 ### Reachability of the defect this bounds
 
-Arithmetic over one measured datapoint, so treat the input as n=1. Evicting a
-run's entry needs 512 judge-memo insertions after its own, while the victim is
-still inside `QUERY_RUN_TERMINAL_TTL` (1 hour). A memo entry is inserted only
-when a judge really fires. `GLOBAL_DAILY_CEILING_USD` is $5.00/24h (`/status`
-confirmed `"5.00"` on 2026-08-17), and at the ceiling `global_ceiling_reached`
-already stops the judge. The one live judged run ever measured cost $0.0767
-(ADR-0013), so the ceiling admits roughly 65 judged runs per 24 hours against
-the 512 needed inside one hour: a run would have to cost under $5.00/512 ≈
-$0.0098 for 512 to fit under the ceiling at all, about 8× cheaper than that
-single measurement. **Under today's ceiling and model mix this leak looks
-arithmetically unreachable**, which is why this ships as preventive rather than
-urgent. It becomes reachable if the $5 ceiling is raised, if run cost falls
-below roughly $0.01, or if the deployment stops being single-instance.
+**Two different memos, two very different reachabilities.** The first version of
+this section conflated them, and review caught it. Both are LRUs of 512
+(`_JUDGE_VERDICT_MEMO_MAX`, `_EVALUATION_MEMO_MAX`, verified by `grep -n
+"_EVALUATION_MEMO_MAX\s*=\|_JUDGE_VERDICT_MEMO_MAX\s*=" src/product_app/query_run_orchestration.py`),
+but they fill at wildly different rates.
+
+- **Unbilled re-dispatch** (the leak issue #216 named) needs the **judge** memo
+  to evict, and that memo takes an entry only when a judge really fires.
+  Arithmetic over one measured datapoint, so treat the input as n=1: evicting a
+  run's entry needs 512 judge-memo insertions after its own, while the victim is
+  still inside `QUERY_RUN_TERMINAL_TTL` (1 hour). `GLOBAL_DAILY_CEILING_USD` is
+  $5.00/24h (`/status` confirmed `"5.00"` on 2026-08-17), and at the ceiling
+  `global_ceiling_reached` already stops the judge. The one live judged run ever
+  measured cost $0.0767 (ADR-0013), so the ceiling admits roughly 65 judged runs
+  per 24 hours against the 512 needed inside one hour: a run would have to cost
+  under $5.00/512 ≈ $0.0098 for 512 to fit under the ceiling at all, about 8×
+  cheaper than that single measurement. **Under today's ceiling and model mix
+  this leak looks arithmetically unreachable**, which is why the *money* half of
+  this ships as preventive rather than urgent. It becomes reachable if the $5
+  ceiling is raised, if run cost falls below roughly $0.01, or if the deployment
+  stops being single-instance.
+- **The downgrade this ADR's placement rule prevents** needed only the
+  **evaluation** memo to evict, and that memo takes an entry for *every terminal
+  run read*, judged or not — a strict superset, filling at the rate of ordinary
+  traffic rather than of paid judge calls. So it was reachable at ordinary
+  volumes, with no eviction of the judge memo at all and nothing unbilled
+  happening. That asymmetry is why "arithmetically unreachable" was the wrong
+  frame to apply to the whole change: it was true of the leak and false of the
+  regression the first placement introduced.
 
 ## Rejected alternatives
 
@@ -205,6 +294,13 @@ dispatch.
   call; it does not bound reads of different runs. UNVERIFIED here: this branch
   did not drive that concurrency, and the check that would settle it is a
   barrier-released N-thread read of N distinct runs counting seam calls.
+- **Nothing here is asserted only as a dollar total.** The read path's promise is
+  that it writes the ledger zero times, and a correction booked from a `GET`
+  would add a `cost_reconciled` row while leaving `daily_spend_for` unchanged —
+  invisible to a dollar assertion. Every refusal test and the allowed-dispatch
+  test now assert `FeedbackStore.event_count()` delta **exactly 0** across the
+  read (AGENTS.md rule 6b), with a positive partner proving `event_count` does
+  move for a real write on that same handle (rule 7).
 - **A refused judge is silent to the user.** `support_verified` stays false,
   `score` stays null, `band` stays `"unverified"` — the same shape as a judge
   that ran and failed (ADR-0018's Defect 2). The new clause logs a warning only
@@ -216,14 +312,20 @@ dispatch.
   machine would hold its own memo and its own view, and none of this argument
   survives that.
 
-**Wider than the eviction case, deliberately.** `_request_path_judge` is also
-reached on the persist path, so the clause gates the FIRST dispatch too: an
-account already at its cap gets no judge at all, not merely no second one.
-`test_the_judge_does_not_dispatch_when_the_ledger_cannot_be_metered` drives that
-case with no eviction and asserts zero dispatches. This is the intended reading
-of "an account at its cap must not spend", but it is a behaviour change beyond
-the defect issue #216 named, and it is recorded here rather than left to be
-discovered.
+**Wider than the eviction case, deliberately.** `_MemoisedRunJudge.evaluate` is
+also reached on the persist path, so the rails gate the FIRST dispatch too: an
+account already at its cap gets no judge at all, not merely no second one. This
+is the intended reading of "an account at its cap must not spend", but it is a
+behaviour change beyond the defect issue #216 named, and it is recorded here
+rather than left to be discovered.
+
+The test that drives it is
+`test_the_boundary_refuses_at_exactly_the_cap_and_allows_one_cent_under` — first
+dispatch, no eviction, account at its cap, zero dispatches, plus the one-cent-
+under partner proving the judge still fires. **This paragraph previously cited
+`test_the_judge_does_not_dispatch_when_the_ledger_cannot_be_metered`, which
+drives an unreadable ledger and not a cap at all**; review caught it and the
+correct test was written rather than the sentence patched.
 
 **Operational.** No configuration change, no schema change, no new constant. With
 `judge_enabled: false` in production the new clauses are unreachable today; they

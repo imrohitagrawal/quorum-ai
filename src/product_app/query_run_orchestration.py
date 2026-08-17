@@ -1592,9 +1592,9 @@ def _persist_terminal_run(query_run_id: UUID) -> None:
         # eviction a later GET refires a real paid judge call, and
         # ``try_record_cost_reconciliation`` refuses a second correction for
         # the same run by design. That second call's cost reaches no ledger.
-        # ``_request_path_judge`` now BOUNDS that repeat by re-reading the
-        # spend rails live (#216, ADR-0051); below the rails it is still
-        # unbooked.
+        # ``_MemoisedRunJudge.evaluate`` now BOUNDS that repeat by re-reading
+        # the spend rails live before it pays (#216, ADR-0051); below the rails
+        # it is still unbooked.
         #
         # This comment said "on LRU eviction — or a process restart" until
         # 2026-08-17. The restart half is FALSE: ``query_run_repository`` is
@@ -1906,28 +1906,68 @@ class _MemoisedRunJudge:
     def verifies_support(self) -> bool:
         return EvalJudgeService.verifies_support
 
-    def __init__(self, query_run_id: str) -> None:
+    def __init__(self, query_run_id: str, account_id: UUID) -> None:
         self._query_run_id = query_run_id
+        #: Whose per-account spend rail applies to a PAID dispatch from this
+        #: instance (#216). Read only in :meth:`evaluate`, and only on the
+        #: branch that would actually pay.
+        self._account_id = account_id
         #: True once this instance served the suppressed, verdict-less shape
-        #: because the OWNER's in-flight call outlived the wait — i.e. this
-        #: read is knowingly worse than the verdict the run will end up with.
+        #: for a reason that a LATER read may not share — i.e. this read is
+        #: knowingly worse than the verdict the run may end up with. Two
+        #: causes today: the OWNER's in-flight call outlived the wait, and
+        #: (since #216) the money rails refused to pay for a fresh dispatch.
         #: ``_evaluate_terminal_run`` reads it and declines to memoise such a
         #: result. Without that, whichever thread stored LAST won a key that
         #: never changes again for a terminal run, so a timed-out reader
         #: could freeze ``band="unverified", score=None`` over a run the
-        #: judge really verified, for the entry's whole life. Per-instance,
-        #: and ``_request_path_judge`` mints a fresh instance per evaluation,
-        #: so one read's timeout can never mark another's.
+        #: judge really verified, for the entry's whole life. The money case
+        #: needs the same treatment for the same reason: a rail resets at the
+        #: 24h boundary, and a run refused at 23:59 must not be frozen
+        #: unverified for the rest of its TTL. Per-instance, and
+        #: ``_request_path_judge`` mints a fresh instance per evaluation, so
+        #: one read's suppression can never mark another's.
         self.served_without_verdict = False
 
     def evaluate(self, evidence: JudgeEvidence) -> EvalJudgeVerdict | None:
         run_id = self._query_run_id
+        # THE MONEY SEAM (#216, ADR-0051). Three ways this method can answer,
+        # and only ONE of them spends:
+        #   * memo hit          — free, already paid for, already booked;
+        #   * share an in-flight call — free, another thread is paying;
+        #   * a fresh dispatch  — PAID.
+        # The spend rails gate the third only. Gating the first two saves no
+        # money and silently downgrades a verdict the account already bought:
+        # measured 2026-08-17 on ``6ecf4da``, where the rails sat in
+        # ``_request_path_judge`` instead, a memoised ``('high', 90, True)``
+        # came back ``('unverified', None, False)`` on the next GET, with
+        # ``judge_calls`` unchanged — and because one of the rails is the
+        # DEPLOYMENT-wide ceiling, one account exhausting it did that to every
+        # other account's cached verdicts.
+        with _judge_memo_lock:
+            if run_id in _judge_verdict_memo:
+                _judge_verdict_memo.move_to_end(run_id)
+                return _judge_verdict_memo[run_id].verdict
+            sharing = run_id in _judge_inflight
+        if not sharing and not _judge_money_rails_allow_dispatch(self._account_id):
+            # No memoised verdict and nobody else paying: serving a verdict
+            # here means BUYING one, and a rail says no.
+            self.served_without_verdict = True
+            return None
         with _judge_memo_lock:
             if run_id in _judge_verdict_memo:
                 _judge_verdict_memo.move_to_end(run_id)
                 return _judge_verdict_memo[run_id].verdict
             future = _judge_inflight.get(run_id)
             owner = future is None
+            if owner and sharing:
+                # The call we were going to ride on ended between the two
+                # blocks without leaving a memo entry. Becoming the owner now
+                # would PAY, and no rail read authorised that — the check
+                # above was skipped precisely because someone else was paying.
+                # Serve suppressed; the next read re-reads the rails.
+                self.served_without_verdict = True
+                return None
             if future is None:
                 future = Future()
                 _judge_inflight[run_id] = future
@@ -1977,14 +2017,21 @@ class _MemoisedRunJudge:
         return verdict
 
 
-def _judge_money_rails_allow_dispatch(query_run: QueryRun) -> bool:
-    """May a judge call be paid for right now, for this run's account? (#216)
+def _judge_money_rails_allow_dispatch(account_id: UUID) -> bool:
+    """May a NEW judge call be paid for right now, for this account? (#216)
+
+    Called from exactly one place — :meth:`_MemoisedRunJudge.evaluate`, on the
+    branch that would issue a fresh PAID call. It is deliberately NOT a clause
+    in :func:`_request_path_judge`: that function also decides whether a
+    zero-cost memo hit is served, and refusing there downgraded a verdict the
+    account had already bought while saving nothing (ADR-0051, "Where the gate
+    sits").
 
     A LIVE re-read of the two spend rails, at the instant a dispatch would
-    happen — which is NOT the same instant the run was created. The clause
-    above this one in :func:`_request_path_judge` reads
-    ``query_run.cost_estimate``, the snapshot taken at CREATE time; a run
-    served an hour later can be judged against rails that have since moved.
+    happen — which is NOT the same instant the run was created. The clauses in
+    :func:`_request_path_judge` read ``query_run.cost_estimate``, the snapshot
+    taken at CREATE time; a run served an hour later can be judged against
+    rails that have since moved.
 
     Why this exists (issue #216). ``_judge_verdict_memo`` is a bounded LRU. On
     eviction a later ``GET /v1/query-runs/{id}`` fires a fresh paid judge call,
@@ -2014,12 +2061,21 @@ def _judge_money_rails_allow_dispatch(query_run: QueryRun) -> bool:
 
     try:
         store = get_store()
+        # NOT redundant with the two rail reads below, and a test that only
+        # drives ``get_store() is None`` cannot show that: on a missing store
+        # the reads raise and the ``except`` refuses anyway, so deleting this
+        # clause stayed green across 921 money/judge/eval tests (measured
+        # 2026-08-17 by ``cp``-aside mutation). What this clause and ONLY this
+        # clause catches is a store that answers both reads cheerfully with
+        # numbers that are too low because billed rows were dropped —
+        # ``write_health() == "failing"`` or ``lost_billed_writes() > 0``.
+        # Pinned by ``test_a_ledger_missing_billed_writes_refuses_the_judge``.
         if not feedback_ledger_may_be_metered(store):
             return False
         assert store is not None  # narrowed by feedback_ledger_may_be_metered
         if store.global_daily_spend() >= GLOBAL_DAILY_CEILING_USD:
             return False
-        if store.daily_spend_for(query_run.account_id) >= DAILY_CAP_USD:
+        if store.daily_spend_for(account_id) >= DAILY_CAP_USD:
             return False
     except Exception as exc:  # noqa: BLE001 - a rail that cannot answer must not spend
         # This route performed NO ledger read before #216, so a store fault
@@ -2089,11 +2145,12 @@ def _request_path_judge(query_run: QueryRun) -> _MemoisedRunJudge | None:
       for; demanding every slot be live would silently turn the judge off for
       most real runs.
 
-    * **An account or a deployment that has reached a live spend rail**
-      (issue #216). The clauses above read the run's CREATE-TIME estimate; this
-      one re-reads the ledger at dispatch time, which is what a judge fired
-      from a ``GET`` an hour later actually needs. See
-      :func:`_judge_money_rails_allow_dispatch` and ADR-0051.
+    NOT a clause here: the LIVE spend rails (issue #216). Returning ``None``
+    from this function does not only skip a paid call, it also skips the
+    zero-cost ``_judge_verdict_memo`` hit, so a money clause here downgraded a
+    verdict the account had already bought and booked. The rails live one level
+    down, in :meth:`_MemoisedRunJudge.evaluate`, on the branch that actually
+    spends. See :func:`_judge_money_rails_allow_dispatch` and ADR-0051.
 
     DELIBERATE (P3 interaction): a ``PARTIAL`` or ``TIMED_OUT`` run WITH
     completed answers IS judged — including a deadline-cut run whose
@@ -2125,13 +2182,9 @@ def _request_path_judge(query_run: QueryRun) -> _MemoisedRunJudge | None:
         for answer in query_run.initial_answers
     ):
         return None
-    # LIVE (issue #216), and last because it is the only clause that touches
-    # the store. Costs one read of the shared ``FeedbackStore`` lock, and only
-    # on an evaluation-memo MISS for a terminal run — a poll answered from
-    # ``_evaluation_memo`` never reaches here.
-    if not _judge_money_rails_allow_dispatch(query_run):
-        return None
-    return _MemoisedRunJudge(str(query_run.query_run_id))
+    # Zero I/O to here. The money rails are read inside ``evaluate``, and only
+    # when it is about to pay — never to decide whether a memo hit is served.
+    return _MemoisedRunJudge(str(query_run.query_run_id), query_run.account_id)
 
 
 #: Per-run memo of the whole terminal evaluation (issue #284). Every result
