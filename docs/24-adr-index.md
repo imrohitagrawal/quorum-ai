@@ -56,6 +56,7 @@ ways, so the record shows what was believed on a date and what replaced it.
 | [ADR-0048](adr/0048-a-positive-partner-must-survive-the-defect-class-the-file-exists-for.md) | A positive partner must survive the defect class its file exists for | Architecture | Accepted — 2026-08-17 (issue #226) |
 | [ADR-0049](adr/0049-annotated-waiver-for-unscoped-event-recorder-reads.md) | Unscoped event-recorder reads are gated by an annotated waiver, not a blanket ban | Architecture | Accepted — 2026-08-15 (#209, follow-up to #104 item 1) |
 | [ADR-0050](adr/0050-duplicate-adr-numbers-are-refused-at-both-discovery-points.md) | Duplicate ADR numbers are refused at both discovery points, and a gap is not a defect | Architecture | Accepted — 2026-08-17 (issue #332) |
+| [ADR-0051](adr/0051-the-judge-checks-the-spend-rails-instead-of-billing-from-a-read-path.md) | The judge checks the spend rails instead of billing from a read path | Architecture | Accepted — 2026-08-17 |
 
 **This index was itself stale** until 2026-07-30: ADR-0002 had existed since
 2026-07-19 and was never listed here. A hand-maintained index is a derived fact
