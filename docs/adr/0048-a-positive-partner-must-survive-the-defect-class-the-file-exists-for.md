@@ -39,14 +39,22 @@ The issue says these sites "rely on matchers/shapes #148 newly recognizes". That
 is a claim about what a tool used to do, and it was never run. Extract each
 guard version and point both at the same 28 files:
 
+Both scratch copies below live outside the repository on purpose; nothing here
+adds a file to the tree.
+
+The two extracted guards are deliberately kept in a `guards/` directory OUTSIDE
+the copied `e2e/` tree, so nothing here reads as a path in this repository:
+
 ```bash
-mkdir -p /tmp/corpus && git archive origin/main | tar -x -C /tmp/corpus
-ln -s "$PWD/e2e/node_modules" /tmp/corpus/e2e/node_modules
-git show bfae77c:e2e/tools/check-negative-assertions.mjs > /tmp/corpus/e2e/tools/_pre148.mjs
-git show 3032282:e2e/tools/check-negative-assertions.mjs > /tmp/corpus/e2e/tools/_post148.mjs
-SPECS=$(find /tmp/corpus/e2e/tests -name '*.spec.ts' | sort)   # 28 files
-cd /tmp/corpus/e2e && node tools/_pre148.mjs  $SPECS   # 8 sites across 3 files
-                      node tools/_post148.mjs $SPECS   # 13 sites across 5 files
+C=/tmp/corpus                                  # scratch, not part of the repo
+mkdir -p "$C/guards" && git archive origin/main | tar -x -C "$C"
+ln -s "$PWD/e2e/node_modules" "$C/node_modules"
+git show bfae77c:e2e/tools/check-negative-assertions.mjs > "$C/guards/pre.mjs"
+git show 3032282:e2e/tools/check-negative-assertions.mjs > "$C/guards/post.mjs"
+SPECS=$(find "$C/e2e/tests" -name '*.spec.ts' | sort)   # 28 files
+cd "$C"
+node "$C/guards/pre.mjs"  $SPECS   #  8 negative assertion(s) with no partner
+node "$C/guards/post.mjs" $SPECS   # 13 negative assertion(s) with no partner
 ```
 
 Re-run 2026-08-17, and the two site lists compared:
