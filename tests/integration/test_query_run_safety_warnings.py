@@ -2,6 +2,7 @@ from uuid import uuid4
 
 import pytest
 from fastapi.testclient import TestClient
+from tests.helpers import scoped_events
 
 from product_app.main import app
 from product_app.query_runs import query_run_repository
@@ -37,8 +38,12 @@ def test_warnings_endpoint_returns_privacy_warning_without_raw_prompt_event() ->
     body = response.json()
     assert body["warnings"][0]["warning_type"] == WarningType.SENSITIVE_DATA
     assert body["warnings"][0]["acknowledgement_required"] is True
-    assert warning_event_recorder.list_events()[0].event_type == "safety_warning_impression"
-    assert not hasattr(warning_event_recorder.list_events()[0], "query_text")
+    # #209: scoped to this account. ``warning_event_recorder`` is a
+    # process-global buffer, so an index read over it can return an event
+    # another test's in-flight worker appended after ``clear_state``.
+    events = scoped_events(warning_event_recorder, account_id=account_id)
+    assert events[0].event_type == "safety_warning_impression"
+    assert not hasattr(events[0], "query_text")
 
 
 def test_high_stakes_query_requires_high_stakes_acknowledgement() -> None:
@@ -86,7 +91,7 @@ def test_query_run_accepts_all_required_warning_acknowledgements() -> None:
     )
 
     assert response.status_code == 202
-    event = warning_event_recorder.list_events()[0]
+    event = scoped_events(warning_event_recorder, account_id=account_id)[0]
     assert event.event_type == "safety_acknowledgement_recorded"
     assert set(event.warning_types) == {WarningType.SENSITIVE_DATA, WarningType.HIGH_STAKES}
     assert not hasattr(event, "query_text")

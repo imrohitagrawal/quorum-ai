@@ -27,7 +27,7 @@ from uuid import UUID
 
 import pytest
 from fastapi.testclient import TestClient
-from tests.helpers import isolated_run_semaphore, wait_for_free_permits
+from tests.helpers import isolated_run_semaphore, scoped_events, wait_for_free_permits
 
 from product_app import config, query_run_orchestration
 from product_app.main import app
@@ -175,7 +175,14 @@ def test_a_cancel_landing_during_initial_answers_is_recorded_as_a_cancelled_prov
         # reaches a terminal state, so a restored permit is the join point.
         assert wait_for_free_permits(semaphore, 1, timeout_s=HANDSHAKE_TIMEOUT_S) == 1
 
-    events = provider_event_recorder.list_events()
+    # #209: scoped to THIS run. Filtering by ``event_type`` alone is not
+    # enough — a ``provider_initial_answer_cancelled`` event from another
+    # test's run satisfies that filter, and the count below would then be
+    # measuring someone else's cancellation. Note the ``query_run_id``
+    # assertion at the end is a restatement of the filter key, kept only as a
+    # readable statement of intent: it cannot fail once the read is scoped by
+    # that same key. What actually bites is the count.
+    events = scoped_events(provider_event_recorder, query_run_id=UUID(query_run_id))
     cancelled_events = [e for e in events if e.event_type == "provider_initial_answer_cancelled"]
     assert len(cancelled_events) >= 1, (
         f"expected at least one provider_initial_answer_cancelled event, got "

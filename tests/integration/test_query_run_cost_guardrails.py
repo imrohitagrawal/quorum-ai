@@ -8,7 +8,7 @@ from uuid import UUID, uuid4
 
 import pytest
 from fastapi.testclient import TestClient
-from tests.helpers import isolated_run_semaphore
+from tests.helpers import isolated_run_semaphore, scoped_events
 
 from product_app.auth import get_session_cookie_name, session_repository
 from product_app.catalog_fetcher import _FALLBACK_CATALOG, openrouter_catalog_fetcher
@@ -135,6 +135,24 @@ def confirmed_request(
     return body
 
 
+def _events_for(account_id: UUID) -> list[CostGuardrailEvent]:
+    """Cost events for ONE account.
+
+    ``cost_event_recorder`` is a process-global ring buffer. The module's
+    ``clear_state`` fixture empties it per test, but an assertion over the
+    whole buffer is still coupled to every other writer in the process — and
+    these tests are the ones that pin an EXACT event sequence, so they are
+    the most sensitive to that coupling. Every ``account_id`` here is a fresh
+    ``uuid4()``, so scoping by account keeps the assertions exact while
+    making them independent of anything else the suite records.
+
+    #209 moved the filtering itself into ``tests.helpers.scoped_events`` so
+    every recorder in the suite is read the same way; this wrapper stays
+    because it also carries the reason above and shortens the call sites.
+    """
+    return scoped_events(cost_event_recorder, account_id=account_id)
+
+
 def test_normal_cost_query_is_accepted_with_cost_estimate() -> None:
     """The product's shipped default mix stays in ALLOW under ADR-0028.
 
@@ -162,7 +180,7 @@ def test_normal_cost_query_is_accepted_with_cost_estimate() -> None:
     body = response.json()
     assert Decimal(body["cost_estimate"]["estimated_cost_usd"]) <= Decimal("0.15")
     assert body["cost_estimate"]["threshold_action"] == "allow"
-    event = cost_event_recorder.list_events()[0]
+    event = _events_for(account_id)[0]
     assert event.event_type == "cost_guardrail_accepted"
     assert event.account_id == account_id
     assert not event.confirmed
@@ -204,7 +222,7 @@ def test_a_confirm_band_query_is_admitted_once_confirmed() -> None:
     assert response.status_code == 202
     body = response.json()
     assert body["cost_estimate"]["threshold_action"] == "require_confirmation"
-    event = cost_event_recorder.list_events()[-1]
+    event = _events_for(account_id)[-1]
     assert event.event_type == "cost_guardrail_accepted"
     assert event.account_id == account_id
     assert event.confirmed
@@ -235,7 +253,7 @@ def test_high_cost_query_requires_confirmation_before_creation() -> None:
     assert Decimal(cost_estimate["max_cost_usd"]) > Decimal("0.15")
     assert Decimal(cost_estimate["estimated_cost_usd"]) < Decimal("0.15")
     assert query_run_repository.get_active_for_account(account_id) is None
-    assert cost_event_recorder.list_events()[0].event_type == "cost_confirmation_required"
+    assert _events_for(account_id)[0].event_type == "cost_confirmation_required"
 
 
 def test_high_cost_query_accepts_matching_confirmation_token() -> None:
@@ -263,8 +281,8 @@ def test_high_cost_query_accepts_matching_confirmation_token() -> None:
 
     assert accepted_response.status_code == 202
     assert accepted_response.json()["cost_estimate"]["threshold_action"] == "require_confirmation"
-    assert cost_event_recorder.list_events()[-1].event_type == "cost_guardrail_accepted"
-    assert cost_event_recorder.list_events()[-1].confirmed
+    assert _events_for(account_id)[-1].event_type == "cost_guardrail_accepted"
+    assert _events_for(account_id)[-1].confirmed
 
 
 def test_over_limit_query_is_blocked_even_with_confirmation_shape() -> None:
@@ -293,7 +311,7 @@ def test_over_limit_query_is_blocked_even_with_confirmation_shape() -> None:
     assert response.json()["detail"]["code"] == "COST_LIMIT_EXCEEDED"
     assert response.json()["detail"]["cost_estimate"]["threshold_action"] == "block"
     assert query_run_repository.get_active_for_account(account_id) is None
-    assert cost_event_recorder.list_events()[0].event_type == "cost_guardrail_blocked"
+    assert _events_for(account_id)[0].event_type == "cost_guardrail_blocked"
 
 
 # ---------------------------------------------------------------------------
@@ -307,20 +325,6 @@ def test_over_limit_query_is_blocked_even_with_confirmation_shape() -> None:
 # ``cost_guardrail_accepted``, so a preview that records that type bills the
 # user for a run that has not happened.
 # ---------------------------------------------------------------------------
-
-
-def _events_for(account_id: UUID) -> list[CostGuardrailEvent]:
-    """Cost events for ONE account.
-
-    ``cost_event_recorder`` is a process-global ring buffer. The module's
-    ``clear_state`` fixture empties it per test, but an assertion over the
-    whole buffer is still coupled to every other writer in the process — and
-    these tests are the ones that pin an EXACT event sequence, so they are
-    the most sensitive to that coupling. Every ``account_id`` here is a fresh
-    ``uuid4()``, so scoping by account keeps the assertions exact while
-    making them independent of anything else the suite records.
-    """
-    return [e for e in cost_event_recorder.list_events() if e.account_id == account_id]
 
 
 def _billing_events(account_id: UUID) -> list[CostGuardrailEvent]:

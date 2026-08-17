@@ -3,6 +3,7 @@ from uuid import uuid4
 
 import pytest
 from fastapi.testclient import TestClient
+from tests.helpers import scoped_events
 
 from product_app.costs import cost_event_recorder
 from product_app.debate import debate_event_recorder
@@ -70,12 +71,16 @@ def test_stubbed_workflow_meets_local_performance_and_observability_contract() -
     assert elapsed_ms < 2000
     assert result_response.json()["elapsed_time_ms"] >= 0
 
-    provider_events = provider_event_recorder.list_events()
-    debate_events = debate_event_recorder.list_events()
-    synthesis_events = synthesis_event_recorder.list_events()
-    cost_events = cost_event_recorder.list_events()
-    slot_events = model_slot_event_recorder.list_events()
-    warning_events = warning_event_recorder.list_events()
+    # #209: every one of these six recorders is a process-global buffer, and
+    # every assertion below is a CARDINALITY assertion — exactly the shape a
+    # single leaked event from another test's in-flight worker breaks. Scoped
+    # to this run's account, which is a fresh ``uuid4()``.
+    provider_events = scoped_events(provider_event_recorder, account_id=account_id)
+    debate_events = scoped_events(debate_event_recorder, account_id=account_id)
+    synthesis_events = scoped_events(synthesis_event_recorder, account_id=account_id)
+    cost_events = scoped_events(cost_event_recorder, account_id=account_id)
+    slot_events = scoped_events(model_slot_event_recorder, account_id=account_id)
+    warning_events = scoped_events(warning_event_recorder, account_id=account_id)
 
     assert len(provider_events) == 4
     assert len(debate_events) == 2
@@ -92,3 +97,51 @@ def test_stubbed_workflow_meets_local_performance_and_observability_contract() -
     assert not hasattr(provider_events[0], "query_text")
     assert not hasattr(debate_events[0], "query_text")
     assert not hasattr(synthesis_events[0], "query_text")
+
+    # #209 kept ONE whole-buffer cardinality assertion, and this is it.
+    #
+    # Scoping every read by ``account_id`` costs something, and the cost is not
+    # theoretical: a product defect that emits a SPURIOUS event under a
+    # fabricated account or run id is invisible to an account-scoped read.
+    # Measured 2026-08-17 by planting a duplicate
+    # ``synthesis_event_recorder.record(...)`` IMMEDIATELY BEFORE the real one
+    # in ``src/product_app/synthesis.py``, with BOTH ``account_id=uuid4()`` and
+    # ``query_run_id=uuid4()`` fabricated. Both details are load-bearing:
+    # placing it after the real call, or leaving ``query_run_id`` real, gives a
+    # smaller gap and different numbers. With every read
+    # scoped, ``pytest tests/e2e/test_release_hardening_workflow.py
+    # tests/integration/test_query_run_result_endpoint.py
+    # tests/perf/test_query_run_performance_evidence.py tests/unit/test_synthesis.py
+    # tests/security/test_release_security_redaction.py -q --no-cov`` printed
+    # ``28 passed``; the same five files on ``origin/main`` printed ``4 failed``.
+    #
+    # This module is where the assertion belongs: its ``clear_state`` fixture
+    # clears ALL SIX recorders (lines above), and it makes exactly one query
+    # run, on the legacy inline ``X-Account-Id`` path — so the whole buffer
+    # should hold precisely what that one run produced.
+    #
+    # An earlier draft claimed this file's exposure to the #104 race is
+    # "strictly LESS" than on ``origin/main``. Review refuted that by
+    # execution. This file still carries the SAME SIX unscoped reads as
+    # ``main`` and still reddens on a single foreign event in any of the six
+    # buffers (measured: ``main`` -> ``assert 8 == 4``; here ->
+    # ``assert [8, 2, 1, 1, 1, 1] == [4, 2, 1, 1, 1, 1]``). The module's
+    # exposure to the race is UNCHANGED. What the fix removed here is the
+    # three unscoped INDEX reads, whose failure would have named the wrong
+    # field on someone else's event.
+    total_counts = [
+        # unscoped-ok: a spurious event written under a fabricated account or
+        # run id is invisible to every account-scoped read in the suite; this
+        # module clears all six recorders and makes exactly one run, so the
+        # whole-buffer totals are the one place that defect is still detectable.
+        len(provider_event_recorder.list_events()),
+        len(debate_event_recorder.list_events()),
+        len(synthesis_event_recorder.list_events()),
+        len(cost_event_recorder.list_events()),
+        len(model_slot_event_recorder.list_events()),
+        len(warning_event_recorder.list_events()),
+    ]
+    assert total_counts == [4, 2, 1, 1, 1, 1], (
+        "the whole process-global buffers hold more (or fewer) events than this "
+        f"module's single query run produced: {total_counts}"
+    )

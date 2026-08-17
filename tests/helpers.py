@@ -4,8 +4,87 @@ import time
 from collections.abc import Iterator
 from contextlib import contextmanager
 from threading import BoundedSemaphore
+from typing import Protocol
+from uuid import UUID
 
 from fastapi.testclient import TestClient
+
+
+class ScopedEvent(Protocol):
+    """The two fields every in-memory recorder event carries.
+
+    Read-only properties on purpose: a recorder whose ``query_run_id`` is a
+    plain ``UUID`` (provider, debate, synthesis, model-slot) still satisfies a
+    protocol declaring ``UUID | None`` (cost, warning), which a mutable
+    attribute would not.
+    """
+
+    @property
+    def account_id(self) -> UUID: ...
+
+    @property
+    def query_run_id(self) -> UUID | None: ...
+
+
+class EventRecorder[E: ScopedEvent](Protocol):
+    """The read side of ``product_app``'s in-memory event recorders."""
+
+    def list_events(self) -> list[E]: ...
+
+
+def scoped_events[E: ScopedEvent](
+    recorder: EventRecorder[E],
+    *,
+    account_id: UUID | None = None,
+    query_run_id: UUID | None = None,
+) -> list[E]:
+    """Return only the events THIS test caused, from a process-global recorder.
+
+    ``provider_event_recorder``, ``debate_event_recorder``,
+    ``synthesis_event_recorder``, ``warning_event_recorder``,
+    ``model_slot_event_recorder`` and ``cost_event_recorder`` are all
+    process-global ring buffers shared with every other test in the session.
+    A per-module ``clear_state`` fixture empties them, but clearing does not
+    make a read safe: a background query-run worker thread from an EARLIER
+    test can still be in flight and append to the same buffer after the
+    clear. #104 measured that concretely — 1 of 14 sequential runs of one test
+    saw ``len(provider_events) == 6`` where the test expected 4.
+
+    So an unfiltered ``list_events()`` used for a count, an index, or an
+    ``all(...)`` is coupled to every other writer in the process. Every event
+    type carries ``account_id`` and ``query_run_id``, and every test mints
+    fresh ``uuid4()`` values, so scoping by either keeps the assertion exact
+    while making it independent of the rest of the suite.
+
+    Passing neither key raises: a no-key call is an unfiltered read wearing
+    this function's name, and that is the bug, not the fix. A read that
+    genuinely must span every writer (the security-redaction sweep, which
+    proves no secret reaches ANY event) calls ``list_events()`` directly with
+    an ``# unscoped-ok: <reason>`` comment — see
+    ``tests/unit/test_event_recorder_reads_are_scoped.py``.
+
+    Args:
+        recorder: the process-global recorder to read.
+        account_id: keep only events for this account.
+        query_run_id: keep only events for this run.
+
+    Both keys together are an AND.
+    """
+    if account_id is None and query_run_id is None:
+        raise ValueError(
+            "scoped_events needs account_id and/or query_run_id: a call with "
+            "neither is an unfiltered process-global read, which is the bug "
+            "this helper exists to prevent (#209)."
+        )
+    return [
+        event
+        # unscoped-ok: this comprehension IS the shared scoping filter that every
+        # other test call site goes through; it is the one place allowed to read
+        # the whole process-global buffer, and it narrows it on the next line.
+        for event in recorder.list_events()
+        if (account_id is None or event.account_id == account_id)
+        and (query_run_id is None or event.query_run_id == query_run_id)
+    ]
 
 
 def start_session(client: TestClient) -> dict[str, str]:
