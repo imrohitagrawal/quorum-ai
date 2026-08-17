@@ -59,9 +59,10 @@ def _adr_path(filename: str) -> str:
 
     Assembled from a prefix instead of written as a literal on purpose: these
     filenames deliberately do NOT exist, and
-    `tests/unit/test_cited_paths_resolve.py` scans added lines for
-    `docs/...md`-shaped strings and fails on any that does not resolve. Keeping
-    the prefix separate stops a test fixture from reading as a repo citation.
+    `tests/unit/test_cited_paths_resolve.py` scans the lines a branch adds for
+    anything shaped like a Markdown path under a known source directory, then
+    fails on any that does not resolve. Keeping the prefix separate stops a
+    test fixture from reading as a repo citation.
     """
     return "docs/adr/" + filename
 
