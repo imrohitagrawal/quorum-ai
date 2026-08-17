@@ -305,10 +305,18 @@ test.describe("trust-score invariants (FR-016)", () => {
     // below. With a reportable evaluation the same driver yields a visible,
     // populated surface and puts DISCLOSURE into #main-content.
     //
-    // NOT claimed here: what happens if the surface is removed from
-    // workspace.html outright. That mutation was tried and DISCARDED as
-    // uninformative — it stalls `driveWithEval` and the test dies on the 60s
-    // harness timeout rather than on an assertion, so it measures nothing.
+    // Two DIFFERENT deletion mutations were tried, and they do not agree —
+    // recorded because the difference is the useful part:
+    //   - Deleting the `#result-trust-score` markup OUTRIGHT: DISCARDED as
+    //     uninformative. It stalls `driveWithEval` and the test dies on the 60s
+    //     harness timeout rather than on an assertion, so it measures nothing.
+    //   - RENAMING the id (`id="result-trust-score-MUTATED-GONE"`), which is the
+    //     same "no such element" condition without breaking the drive path:
+    //     measured 2026-08-18, this test fails on the CONTROL assertion —
+    //     `Error: control: a reportable evaluation renders / Expected: visible /
+    //     Error: element(s) not found` — not on a timeout. So the control does
+    //     bite the deletion class; only the outright-removal FORM of it is
+    //     unmeasurable here.
     //
     // Cost, one run each on one laptop (chromium, `--workers=1`), an order of
     // magnitude rather than a benchmark: 1.84s -> 2.40s.

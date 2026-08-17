@@ -226,12 +226,33 @@ test.describe("#111 — the offline disclosure is visible where a user decides t
     // the same first-visit boot, offline, must SHOW the banner.
     //
     // Cost, one run each on one laptop (chromium, `--workers=1`), an order of
-    // magnitude rather than a benchmark: 0.56s -> 0.60s.
+    // magnitude rather than a benchmark: 0.56s -> 0.60s, and 0.79s once the two
+    // content legs below were added (2026-08-18).
+    //
+    // Review round 2 (#226): `toBeVisible()` ALONE still survived the EMPTIED
+    // defect class. Measured 2026-08-18 by replacing the two
+    // `readinessTitle.textContent = title` / `readinessMessage.textContent =
+    // body` writes at the end of app.js's readiness renderer with `= ""`,
+    // leaving `readinessRegion.hidden = false` untouched: `toBeVisible()`
+    // stayed GREEN. It cannot see this, because `#readiness-banner` also holds
+    // a static `.callout-icon` "!" and a static "Show more" button, so the
+    // banner's own `innerText` is non-empty with the copy gone. The content leg
+    // targets `#readiness-banner-message`, whose markup default is EMPTY
+    // (`workspace.html:192`) — the title's is not, so the title alone would
+    // pass on the server-rendered default without app.js writing anything.
     await bootFirstVisit(page, { state: "offline_by_bad_key", reasons: ["r"] });
     await expect(
       banner(page),
       "control: an offline deployment MUST disclose, or the negative below is vacuous",
     ).toBeVisible();
+    expect(
+      (await page.locator("#readiness-banner-message").innerText()).trim().length,
+      "control: a visible banner with an empty message discloses nothing",
+    ).toBeGreaterThan(0);
+    await expect(
+      page.locator("#readiness-banner-message"),
+      "control: the disclosure must SAY the answers will be simulated",
+    ).toContainText("local simulation helpers");
 
     await bootFirstVisit(page, { state: "live" });
 
@@ -292,7 +313,8 @@ test.describe("#111 — the offline disclosure is visible where a user decides t
     // covered.
     //
     // Cost, one run each on one laptop (chromium, `--workers=1`), an order of
-    // magnitude rather than a benchmark: 0.54s -> 0.63s.
+    // magnitude rather than a benchmark: 0.54s -> 0.63s (0.76s re-measured
+    // 2026-08-18; this test itself was not changed in review round 2).
     await bootFirstVisit(page, { state: "live", global_spend_ceiling_reached: true });
 
     await expect(
