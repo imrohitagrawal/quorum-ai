@@ -131,7 +131,11 @@ deployment-wide, one account exhausting the $5 ceiling did that to *every other
 account's* cached verdicts. Both cases are now tests
 (`test_a_memoised_verdict_is_still_served_when_the_account_is_at_its_cap`,
 `test_a_memoised_verdict_survives_another_account_exhausting_the_deployment_ceiling`),
-and moving the gate back up turns exactly those two red.
+and moving the gate back up turns those tests red. (An earlier draft said
+"exactly those two"; a reviewer measured four of this branch's tests going red
+under that mutation. The count is dropped rather than restated, because the
+claim that matters is that the mutation is caught, and a number nobody re-runs
+goes stale silently.)
 
 **A refusal is scoped to the read that got it, not to the run.** The refused
 result sets `_MemoisedRunJudge.served_without_verdict`, which makes
@@ -191,7 +195,9 @@ real:
   `FeedbackStore` RLock, **two of which run a SQL aggregate**
   (`global_daily_spend`, `daily_spend_for`; the other two read in-memory
   stamps). Verified by `inspect.getsource` over each method plus a call-counting
-  double; the comment is corrected in this PR. Under ADR-0002 that one lock and
+  double. The comment that claimed "one read" was DELETED along with the clause
+  it described, so there is no corrected comment in the tree to go and find —
+  these measured figures are now the only record. Under ADR-0002 that one lock and
   one connection serialise every read and every write in the process, and this
   route previously took the lock zero times.
 - It fires only when the judge is about to PAY: an evaluation-memo miss, then a
@@ -274,11 +280,20 @@ wider change than it looks. Worth its own issue.
 
 ## Consequences
 
-**What this fixes.** Unbilled judge spend from re-dispatch is no longer
-unbounded in the number of evictions. Once either rail is reached, no further
-judge call fires for that account or that deployment, so the ledger's
-under-report cannot grow past the headroom that existed at the moment of
-dispatch.
+**What this fixes.** Once either rail is reached, no further judge call fires for
+that account or that deployment, so an account that is out of money stops
+generating unbilled judge spend entirely. That is the whole of the guarantee.
+
+**Be precise about the bound, because the obvious stronger claim is false.** An
+earlier draft of this section said the under-report "cannot grow past the
+headroom that existed at the moment of dispatch." It cannot: re-dispatch spend
+is never booked, so it never advances `daily_spend_for` or `global_daily_spend`,
+and therefore **cannot trip its own bound**. The rails advance only on spend
+that *is* booked — run creation. So the honest statement is: unbilled
+re-dispatch stops when OTHER, BOOKED spend reaches a rail, and below the rails
+it remains unbounded in the number of evictions. The very next bullet says
+exactly that, and the two sentences contradicted each other until this was
+corrected.
 
 **What this does NOT fix — residual risk, stated plainly.**
 
@@ -308,7 +323,9 @@ dispatch.
   same way; making refusal observable in the payload is a schema change and
   belongs with its own issue.
 - **Single-process reasoning throughout.** Both memos, the run repository and the
-  cost ring are process globals, and ADR-0002 pins `--workers 1`. A second
+  cost ring are process globals, and `Dockerfile:72` pins `--workers 1` (ADR-0002
+  reasons from a single writer but never mentions workers — `grep -in workers
+  docs/adr/0002-*.md` returns nothing). A second
   machine would hold its own memo and its own view, and none of this argument
   survives that.
 
