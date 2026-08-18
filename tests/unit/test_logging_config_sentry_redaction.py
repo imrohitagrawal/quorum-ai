@@ -22,6 +22,7 @@ WHAT TURNS EACH TEST RED is stated on the test.
 
 from __future__ import annotations
 
+import io
 import json
 import logging
 from collections.abc import Iterator
@@ -30,7 +31,7 @@ from typing import Any
 import pytest
 import sentry_sdk
 
-from product_app.logging_config import install_redaction_record_factory
+from product_app.logging_config import JsonFormatter, install_redaction_record_factory
 
 
 @pytest.fixture(autouse=True)
@@ -322,31 +323,65 @@ def test_a_secret_in_a_set_valued_extra_never_reaches_sentry(
         assert "ok-token" in seen
 
 
-def test_a_self_referential_extra_dict_does_not_crash_the_log_call() -> None:
-    """2026-08-14 review finding: a cyclic extra crashed the whole log call.
+def test_a_self_referential_extra_dict_does_not_crash_the_log_call(
+    sentry_client: None, crumbs: list[dict[str, Any]]
+) -> None:
+    """2026-08-14 review finding, STRENGTHENED for issue #341 §2.
 
-    Verified live before this guard existed:
+    Verified live before the cycle guard existed:
     ``d = {}; d["self"] = d; logger.warning("x", extra=d)`` raised
     ``RecursionError`` out of ``logger.warning()`` itself — a real bug a
     future call site could trigger by accident (e.g. ``extra=vars(obj)`` on
     an object with a back-reference), taking down whatever request/handler
     logged it.
 
-    RED WHEN: the ancestor-tracking cycle guard is removed from
-    ``_redact_extra_value`` (or replaced with something that does not stop
-    recursion into an object already on the current path).
+    This test used to install ``logging.NullHandler()`` and assert only
+    "does not raise". PROVEN VACUOUS 2026-08-18: with ``_redact_extra_value``
+    replaced by ``return value`` — extra redaction removed ENTIRELY — it
+    still passed, because a ``NullHandler`` never formats the record and the
+    test never read a breadcrumb. Issue #341 §2 found the two things it was
+    assumed to cover and did not:
+
+    1. the cycle guard returned the ORIGINAL ancestor container, splicing an
+       untouched plaintext subtree into the redacted result, so the secret
+       reached Sentry through the back-edge; and
+    2. the resulting cyclic ``record.__dict__`` made ``JsonFormatter``'s
+       ``json.dumps`` raise ``ValueError: Circular reference detected``,
+       which ``logging.Handler.handleError`` swallows — so the operator's
+       stdout line was DROPPED ENTIRELY, ``len == 0``.
+
+    RED WHEN: the cycle guard is removed (``RecursionError`` again), OR it
+    returns the original container instead of a placeholder (the secret
+    reappears in the breadcrumb and the stdout line goes empty again).
     """
     install_redaction_record_factory()
-    logger = logging.getLogger("test.cyclic_extra")
-    logger.setLevel(logging.WARNING)
-    logger.propagate = False
-    logger.handlers = [logging.NullHandler()]
+    secret = "sk-or-v1-1234567890abcdefCYCLICLEAK"
+    logger = logging.getLogger("product_app.cyclic_extra")
+    stream = _json_handler(logger)
 
     cyclic: dict[str, Any] = {}
-    cyclic["self"] = cyclic
+    cyclic["inner"] = {"api_key": secret, "parent": cyclic}
 
     # Must not raise RecursionError (or anything else).
-    logger.warning("x", extra=cyclic)
+    logger.warning("x", extra={"error": cyclic})
+
+    own = [c for c in crumbs if c.get("category") == "product_app.cyclic_extra"]
+    assert own, "the log call produced no breadcrumb at all — fixture is broken"
+    for crumb in own:
+        # STRUCTURE, not a substring (rule 8): the back-edge is a placeholder
+        # and everything reachable through it is gone, not merely scrubbed.
+        assert crumb["data"]["error"] == {
+            "inner": {"api_key": "[REDACTED]", "parent": "<cycle>"}
+        }, f"the cycle back-edge carried an unredacted subtree to Sentry: {crumb['data']}"
+
+    # Half two of the finding: the line must actually be EMITTED. This is the
+    # positive partner (rule 7) for every "secret not present" assertion above
+    # — an empty stream would satisfy them all vacuously.
+    line = stream.getvalue()
+    assert line, "the stdout log line was dropped entirely (json.dumps raised on the cycle)"
+    payload = json.loads(line)
+    assert payload["error"] == {"inner": {"api_key": "[REDACTED]", "parent": "<cycle>"}}
+    assert payload["message"] == "x"
 
 
 def test_a_very_deeply_nested_extra_does_not_crash_the_log_call() -> None:
@@ -647,4 +682,341 @@ def test_calling_setup_json_logging_repeatedly_does_not_grow_the_factory_chain()
     assert counts == [counts[0]] * 3, (
         f"factory chain grew across repeated setup calls: {counts} "
         "(expected the same layer count every time)"
+    )
+
+
+# ---------------------------------------------------------------------------
+# Issue #341 — the redactor covered VALUE positions only.
+#
+# Four Sentry-only bypasses, all confirmed live against a real ``sentry_sdk``
+# client before the fix. The stdout sink is unaffected by every one of them:
+# ``JsonFormatter``'s final-string scrub runs over the rendered JSON, where a
+# key is just more text. Sentry reads ``record.__dict__`` directly and never
+# reaches that scrub, which is the whole reason
+# ``install_redaction_record_factory`` exists (ADR-0041).
+# ---------------------------------------------------------------------------
+
+
+def _json_handler(logger: logging.Logger) -> io.StringIO:
+    """Give ``logger`` a REAL handler wearing the production formatter.
+
+    Returns the stream it writes to. ``NullHandler`` never formats a record,
+    so a test using one cannot see a formatter that raises — which is exactly
+    how the dropped-line half of issue #341 stayed invisible.
+    """
+    stream = io.StringIO()
+    handler = logging.StreamHandler(stream)
+    handler.setFormatter(JsonFormatter())
+    logger.setLevel(logging.WARNING)
+    logger.propagate = False
+    logger.handlers = [handler]
+    return stream
+
+
+def test_a_secret_shaped_dict_key_never_reaches_a_sentry_breadcrumb(
+    sentry_client: None, crumbs: list[dict[str, Any]]
+) -> None:
+    """Issue #341 §1: the KEY of a nested dict extra was passed through untouched.
+
+    Call shape: a per-key map, ``extra={"error": {api_key: "rate-limited"}}``.
+
+    RED WHEN: ``_redact_extra_value``'s dict branch rebuilds the mapping as
+    ``{key: _redact_extra_value(item, ...)}`` — redacting the value and
+    leaving the key alone.
+    """
+    secret = "sk-or-v1-1234567890abcdefKEYPOSITION"
+    logger = logging.getLogger("product_app.key_position")
+    stream = _json_handler(logger)
+    logger.warning(
+        "upstream rejected some keys",
+        extra={"error": {secret: "rate-limited", "ok-key": "fine"}},
+    )
+
+    own = [c for c in crumbs if c.get("category") == "product_app.key_position"]
+    assert own, "the log call produced no breadcrumb at all — fixture is broken"
+    for crumb in own:
+        # STRUCTURE, not a substring (rule 8): the whole mapping is pinned, so
+        # this cannot pass by the key merely being absent.
+        assert crumb["data"]["error"] == {"[REDACTED]": "rate-limited", "ok-key": "fine"}, (
+            f"the secret-shaped dict KEY reached a Sentry breadcrumb: {crumb['data']}"
+        )
+    # POSITIVE PARTNER (rule 7): the stdout sink was already clean here, and
+    # stays byte-identical — proving this is the Sentry-only position and that
+    # the fix did not disturb the path that already worked.
+    assert json.loads(stream.getvalue())["error"] == {
+        "[REDACTED]": "rate-limited",
+        "ok-key": "fine",
+    }
+
+
+def test_two_distinct_secret_dict_keys_do_not_collapse_into_one_entry(
+    sentry_client: None, crumbs: list[dict[str, Any]]
+) -> None:
+    """Redacting keys must not silently DROP data (failure mode 6).
+
+    Two distinct secret-shaped keys both redact to ``[REDACTED]``; a plain
+    dict comprehension keeps only the last, turning a two-entry map into a
+    one-entry map with no signal. Measured before the fix:
+    ``{S1: "a", S2: "b"}`` -> ``{'[REDACTED]': 'b'}``, len 2 -> 1.
+
+    RED WHEN: the key-redacting dict branch writes straight into the new
+    mapping without checking whether the redacted key is already taken.
+    """
+    first = "sk-or-v1-1111111111111111111111AAAA"
+    second = "sk-or-v1-2222222222222222222222BBBB"
+    logger = logging.getLogger("product_app.key_collision")
+    logger.warning("per-key failures", extra={"error": {first: "a", second: "b"}})
+
+    own = [c for c in crumbs if c.get("category") == "product_app.key_collision"]
+    assert own, "the log call produced no breadcrumb at all — fixture is broken"
+    for crumb in own:
+        data = crumb["data"]["error"]
+        # CARDINALITY first (rule 6b): both entries must still exist.
+        assert len(data) == 2, f"a redacted key overwrote another entry: {data}"
+        assert sorted(data.values()) == ["a", "b"], f"a value was lost: {data}"
+        assert first not in json.dumps(data) and second not in json.dumps(data), (
+            f"a secret-shaped key survived: {data}"
+        )
+
+
+def test_a_secret_shaped_top_level_extra_key_never_reaches_a_sentry_breadcrumb(
+    sentry_client: None, crumbs: list[dict[str, Any]]
+) -> None:
+    """Issue #341 C2: the same key-position gap one level up, on ``record.__dict__``.
+
+    ``make_record_with_extra_redaction`` walked ``record.__dict__`` redacting
+    each VALUE and never touched the attribute NAME, so ``extra={secret: "v"}``
+    put the secret straight onto the record Sentry reads.
+
+    RED WHEN: that loop calls ``_redact_extra_value`` on ``value`` only.
+    """
+    secret = "sk-or-v1-1234567890abcdefTOPKEY"
+    logger = logging.getLogger("product_app.top_key_position")
+    stream = _json_handler(logger)
+    logger.warning("boom", extra={secret: "v", "ok-key": "fine"})
+
+    own = [c for c in crumbs if c.get("category") == "product_app.top_key_position"]
+    assert own, "the log call produced no breadcrumb at all — fixture is broken"
+    for crumb in own:
+        assert secret not in crumb["data"], (
+            f"the secret-shaped top-level extra KEY reached a Sentry breadcrumb: {crumb['data']}"
+        )
+        assert crumb["data"]["[REDACTED]"] == "v"
+        # POSITIVE PARTNER (rule 7): a non-secret sibling extra still arrives
+        # verbatim, so "the secret is absent" is not absent-because-empty.
+        assert crumb["data"]["ok-key"] == "fine"
+    # The stdout sink was already clean here and must stay so.
+    payload = json.loads(stream.getvalue())
+    assert payload["[REDACTED]"] == "v"
+    assert payload["ok-key"] == "fine"
+
+
+def test_a_non_string_object_extra_never_reaches_a_sentry_breadcrumb(
+    sentry_client: None, crumbs: list[dict[str, Any]]
+) -> None:
+    """Issue #341 C3: any object whose text form carries the secret was skipped.
+
+    ``make_record_with_extra_redaction`` skipped every value that was not a
+    ``str`` or a container, so ``extra={"error": exc}`` — passing the
+    exception OBJECT rather than ``str(exc)``, one keystroke away from the
+    real ``synthesis.py`` call site — handed Sentry the live exception with
+    the credential in its ``args``.
+
+    RED WHEN: that loop keeps the
+    ``if not isinstance(value, (str,) + _EXTRA_CONTAINER_TYPES): continue``
+    guard, or ``_redact_extra_value`` returns a non-container, non-str value
+    unchanged.
+    """
+    secret = "sk-or-v1-1234567890abcdefOBJECT"
+    logger = logging.getLogger("product_app.object_extra")
+    stream = _json_handler(logger)
+    logger.warning(
+        "upstream call failed",
+        extra={"error": RuntimeError(f"Bearer {secret}"), "attempt": 2},
+    )
+
+    own = [c for c in crumbs if c.get("category") == "product_app.object_extra"]
+    assert own, "the log call produced no breadcrumb at all — fixture is broken"
+    for crumb in own:
+        assert secret not in str(crumb["data"]["error"]), (
+            f"the secret inside a non-string extra object reached Sentry: {crumb['data']}"
+        )
+        assert str(crumb["data"]["error"]) == "[REDACTED]"
+        # POSITIVE PARTNER (rule 7): a scalar sibling is untouched, so the
+        # redactor is not simply blanking every extra it does not understand.
+        assert crumb["data"]["attempt"] == 2
+    payload = json.loads(stream.getvalue())
+    assert payload["error"] == "[REDACTED]"
+    assert payload["attempt"] == 2
+
+
+def test_a_non_string_extra_key_does_not_crash_the_log_call() -> None:
+    """Failure mode 14: a non-``str`` extra key raised out of ``logger.warning``.
+
+    ``extra={1: "v"}`` is legal for the stdlib (``makeRecord`` copies the
+    mapping into ``record.__dict__`` verbatim), but both the redaction loop
+    and ``JsonFormatter.format`` call ``key.startswith("_")`` on it. Measured
+    before the fix: ``AttributeError: 'int' object has no attribute
+    'startswith'`` raised out of the log call itself.
+
+    RED WHEN: either ``key.startswith("_")`` guard loses its
+    ``isinstance(key, str)`` companion.
+    """
+    logger = logging.getLogger("product_app.non_str_key")
+    stream = _json_handler(logger)
+    logger.warning("boom", extra={1: "v"})  # type: ignore[dict-item]
+
+    line = stream.getvalue()
+    assert line, "the log line was dropped entirely"
+    assert json.loads(line)["1"] == "v"
+
+
+def test_an_object_whose_repr_carries_the_secret_never_reaches_a_sentry_breadcrumb(
+    sentry_client: None, crumbs: list[dict[str, Any]]
+) -> None:
+    """The two sinks disagree about which text form they render.
+
+    ``JsonFormatter`` passes ``default=str``; ``sentry_sdk``'s serializer
+    falls back to a repr. An object with a clean ``__str__`` and a
+    secret-carrying ``__repr__`` is invisible to a check that only looks at
+    ``str(value)``, and it is the repr that Sentry ships.
+
+    RED WHEN: ``_redact_text_form`` inspects only ``str(value)``.
+    """
+    secret = "sk-or-v1-1234567890abcdefREPRONLY"
+
+    class CleanStrDirtyRepr:
+        def __str__(self) -> str:
+            return "upstream call failed"
+
+        def __repr__(self) -> str:
+            return f"CleanStrDirtyRepr(key={secret!r})"
+
+    logger = logging.getLogger("product_app.repr_only")
+    logger.warning("boom", extra={"error": CleanStrDirtyRepr()})
+
+    own = [c for c in crumbs if c.get("category") == "product_app.repr_only"]
+    assert own, "the log call produced no breadcrumb at all — fixture is broken"
+    for crumb in own:
+        rendered = crumb["data"]["error"]
+        assert secret not in str(rendered) and secret not in repr(rendered), (
+            f"the secret in __repr__ reached a Sentry breadcrumb: {rendered!r}"
+        )
+        # POSITIVE PARTNER (rule 7): the clean ``__str__`` text is what
+        # replaced it, so the value was rewritten rather than dropped.
+        assert rendered == "upstream call failed"
+
+
+def test_a_cycle_longer_than_the_depth_cap_still_emits_a_line_and_leaks_nothing(
+    sentry_client: None, crumbs: list[dict[str, Any]]
+) -> None:
+    """The depth cap fires before the cycle guard when the cycle is long.
+
+    A cycle of period 30 never repeats an id within the first 25 levels, so
+    ``_MAX_EXTRA_REDACTION_DEPTH`` is what stops the walk. If that branch
+    returns the ORIGINAL container (the pre-ADR-0056 behaviour), the result
+    is still cyclic, ``json.dumps`` raises ``ValueError: Circular reference
+    detected``, ``handleError`` swallows it and the operator's line vanishes
+    — the same failure as the short cycle, reached through the other guard.
+
+    RED WHEN: the depth-cap branch of ``_redact_extra_value`` returns
+    ``value`` instead of ``_DEPTH_CAP_PLACEHOLDER``. Note the period (30) is
+    a literal chosen to exceed the cap, not read from the constant it tests
+    (rule 7a) — raising the cap above 30 is meant to turn this red.
+    """
+    secret = "sk-or-v1-1234567890abcdefLONGCYCLE"
+    head: dict[str, Any] = {"api_key": secret}
+    cursor = head
+    for _ in range(29):
+        cursor["next"] = {}
+        cursor = cursor["next"]
+    cursor["next"] = head  # closes a 30-link cycle
+
+    logger = logging.getLogger("product_app.long_cycle")
+    stream = _json_handler(logger)
+    logger.warning("boom", extra={"error": head})
+
+    line = stream.getvalue()
+    assert line, "the stdout log line was dropped entirely (json.dumps raised on the long cycle)"
+    assert secret not in line, f"the secret survived past the depth cap: {line}"
+    # POSITIVE PARTNER (rule 7): the line is a real, complete record, not an
+    # empty string that would satisfy the assertion above for free.
+    assert json.loads(line)["message"] == "boom"
+    assert json.loads(line)["error"]["api_key"] == "[REDACTED]"
+
+    own = [c for c in crumbs if c.get("category") == "product_app.long_cycle"]
+    assert own, "the log call produced no breadcrumb at all — fixture is broken"
+    for crumb in own:
+        assert secret not in json.dumps(crumb["data"]), (
+            f"the secret reached a Sentry breadcrumb past the depth cap: {crumb['data']}"
+        )
+
+
+def test_key_redaction_does_not_mutate_the_callers_own_dict() -> None:
+    """Redacting KEYS must obey the same no-mutation contract as values.
+
+    ``_redact_extra_value`` builds a fresh mapping; a key-redacting variant
+    that popped and re-inserted in place would corrupt the caller's object,
+    which may be logged or serialized again after the call returns.
+
+    RED WHEN: the dict branch mutates ``value`` instead of building a new
+    mapping (e.g. ``value[redacted] = value.pop(key)``).
+    """
+    install_redaction_record_factory()
+    secret = "sk-or-v1-keymutationguardsecret1234567890"
+    original = {"error": {secret: "rate-limited"}}
+    expected = {"error": {secret: "rate-limited"}}
+
+    logger = logging.getLogger("product_app.key_mutation_guard")
+    _json_handler(logger)
+    logger.warning("boom", extra=original)
+
+    assert original == expected, (
+        f"the caller's own extra dict had its KEY rewritten in place: {original}"
+    )
+    # POSITIVE PARTNER (rule 7): prove the key really is the secret-shaped
+    # one, so the equality above is not comparing two already-redacted maps.
+    assert secret in original["error"]
+
+
+def test_an_extra_object_whose_str_logs_is_rendered_exactly_once() -> None:
+    """Inspecting an object's text form must not re-enter the redactor.
+
+    ``_redact_text_form`` calls ``str()``/``repr()`` on an arbitrary extra
+    value. An object whose ``__str__`` itself logs (a lazy proxy, a debug
+    helper) re-enters this module from inside that call. Measured 2026-08-18
+    without the ``_text_form_in_progress`` guard, on an object whose
+    ``__str__`` logs ITSELF via ``extra=``: 166 nested ``__str__`` calls and
+    166 emitted records for one ``logger.warning``. It did not raise —
+    CPython's recursion limit stopped it and the ``except Exception`` caught
+    it — so a "does not raise" assertion is blind here. CARDINALITY is the
+    only assertion that sees it (rule 6b).
+
+    RED WHEN: the ``_text_form_in_progress`` thread-local guard is removed
+    from ``_redact_text_form``.
+    """
+    install_redaction_record_factory()
+    logger = logging.getLogger("product_app.selflogging_str")
+    # A REAL handler, but deliberately NOT ``JsonFormatter``: that formatter
+    # calls ``json.dumps(..., default=str)``, which stringifies the object a
+    # SECOND time, outside this module, and recurses on its own. That loop
+    # predates this fix — measured on ``origin/main``, the same shape raises
+    # ``RecursionError`` out of ``logger.warning()`` after 83 renders — and is
+    # not what this test is about. See ADR-0056's Consequences.
+    logger.setLevel(logging.WARNING)
+    logger.propagate = False
+    logger.handlers = [logging.StreamHandler(io.StringIO())]
+    renders = []
+
+    class LogsWhileStringifying:
+        def __str__(self) -> str:
+            renders.append(1)
+            logger.warning("inner", extra={"o": self})
+            return "LogsWhileStringifying()"
+
+    logger.warning("outer", extra={"o": LogsWhileStringifying()})
+
+    assert len(renders) == 1, (
+        f"__str__ was re-entered {len(renders)} times for one log call — "
+        "the reentrancy guard is not holding"
     )

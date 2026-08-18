@@ -23,6 +23,7 @@ import threading
 from collections.abc import Mapping
 from datetime import UTC, datetime
 from types import TracebackType
+from typing import Any
 
 #: Patterns for secret-shaped substrings (issue #313). Applied to the
 #: FINAL rendered JSON line, not to individual fields, so it covers the
@@ -151,9 +152,12 @@ def _redact_secrets(text: str) -> str:
 #: ``logger.warning()`` itself (2026-08-14 review finding). #313's own
 #: reproduction shapes are 2-3 levels deep; 25 is generous headroom for any
 #: real call site while keeping a pathological one bounded rather than
-#: fatal. Past the cap, the remaining sub-value is returned AS-IS (unredacted
-#: below that point) rather than raising — a stalled log call is worse than
-#: an edge case a normal call site will never hit.
+#: fatal. Past the cap the sub-value is replaced by
+#: ``_DEPTH_CAP_PLACEHOLDER`` rather than raising — a stalled log call is
+#: worse than an edge case a normal call site will never hit. It used to be
+#: returned AS-IS, unredacted below that point (ADR-0046); ADR-0056 changed
+#: that, because returning the original container is also what let a cycle
+#: whose period exceeds the cap reach ``json.dumps`` and drop the line.
 _MAX_EXTRA_REDACTION_DEPTH = 25
 
 #: Container types ``_redact_extra_value`` walks into. ``tuple``/``set``/
@@ -163,6 +167,113 @@ _MAX_EXTRA_REDACTION_DEPTH = 25
 #: plaintext, because the walk originally only recognised ``dict``/``list``
 #: and returned any other value — including a nested tuple — unchanged.
 _EXTRA_CONTAINER_TYPES = (dict, list, tuple, set, frozenset)
+
+#: Types whose text form cannot carry a secret-shaped substring: every
+#: redaction pattern needs at least one ASCII letter (``Bearer``, ``sk-``,
+#: ``AKIA``, or a labelled ``api_key=``), and ``str()`` of these produces
+#: digits, ``.``, ``-``, ``+``, ``j``, ``True``/``False``/``None`` only.
+#: Listed so the object fallback below never pays a ``str()`` + four regex
+#: passes for the scalars every real ``extra={...}`` call site actually uses
+#: (issue #341 (e): all 11 call sites in ``src/`` pass ``str``/``int``/``bool``).
+_SECRET_FREE_SCALAR_TYPES = (bool, int, float, complex, type(None))
+
+#: Substituted for a container that is its own ancestor. Issue #341 §2: the
+#: cycle guard used to return the ORIGINAL container, which (a) spliced an
+#: untouched plaintext subtree into the redacted result and (b) left
+#: ``record.__dict__`` cyclic, so ``JsonFormatter``'s ``json.dumps`` raised
+#: ``ValueError: Circular reference detected`` and ``handleError`` swallowed
+#: it — the operator's line was dropped entirely.
+_CYCLE_PLACEHOLDER = "<cycle>"
+
+#: Substituted for a container sitting past ``_MAX_EXTRA_REDACTION_DEPTH``.
+#: Same reasoning as ``_CYCLE_PLACEHOLDER``: returning the original container
+#: is what makes an unredacted subtree reachable, and a cycle whose period
+#: exceeds the depth cap trips the cap before the cycle guard ever sees a
+#: repeated id, so leaving this one as-is would keep the dropped-line failure
+#: alive for that shape. See ADR-0056.
+_DEPTH_CAP_PLACEHOLDER = "<max-depth>"
+
+
+#: Per-thread guard for ``_redact_text_form``. An object whose ``__str__``
+#: logs (a lazy proxy, a debug helper) re-enters this module from inside the
+#: very ``str()`` call that was inspecting it. Measured 2026-08-18 without
+#: this guard, on an object whose ``__str__`` logs ITSELF via ``extra=``:
+#: 166 nested ``__str__`` calls before CPython's recursion limit stopped it —
+#: caught by the ``except Exception`` below and returned cleanly (RecursionError
+#: is a RuntimeError), so ``logger.warning()`` never raised, but 166 spurious
+#: records were emitted for one call. With the guard: 1. Same shape and same
+#: trade-off as the record factory's ``in_progress`` flag above — the inner,
+#: reentrant record loses only this object-text pass; its string and container
+#: extras are still redacted.
+_text_form_in_progress = threading.local()
+
+
+def _redact_text_form(value: object) -> object:
+    """Redact an object that is neither a ``str`` nor a walkable container.
+
+    Issue #341 C3: ``extra={"error": exc}`` — the exception OBJECT rather
+    than ``str(exc)``, one keystroke from ``synthesis.py``'s real call shape
+    — used to be skipped entirely, so Sentry received the live object with
+    the credential in its ``args``. ``bytes`` leaked the same way.
+
+    BOTH ``str`` and ``repr`` are inspected because the two sinks disagree
+    about which one they render: ``JsonFormatter`` passes ``default=str``,
+    while ``sentry_sdk``'s serializer falls back to a repr. An object whose
+    ``__repr__`` carries the secret but whose ``__str__`` does not would
+    otherwise reach Sentry in plaintext.
+
+    When neither form carries a secret the ORIGINAL object is returned
+    untouched — the common case, and what keeps a non-secret extra's type
+    (and any downstream consumer's expectations) intact. When one does, the
+    value is replaced by the redacted ``str`` form, which is byte-identical
+    to what ``JsonFormatter``'s ``default=str`` plus its final-string scrub
+    already produced on the stdout path, so that sink's output does not move.
+
+    ``str``/``repr`` are called defensively: a ``__str__`` that raises must
+    not take down the log call it was only decorating.
+    """
+    if getattr(_text_form_in_progress, "active", False):
+        return value
+    _text_form_in_progress.active = True
+    try:
+        forms: list[str] = []
+        for render in (str, repr):
+            try:
+                forms.append(render(value))
+            except Exception:  # noqa: BLE001 - a bad __str__ must not break logging
+                continue
+        if not forms:
+            return value
+        if all(_redact_secrets(form) == form for form in forms):
+            return value
+        return _redact_secrets(forms[0])
+    finally:
+        _text_form_in_progress.active = False
+
+
+def _disambiguated_key(key: object, taken: Mapping[object, object]) -> object:
+    """Return ``key``, or a free variant of it if ``taken`` already has it.
+
+    Redacting keys introduces a way to LOSE data that redacting values never
+    had: two distinct secret-shaped keys both become ``[REDACTED]``, and a
+    plain dict comprehension keeps only the last. Measured 2026-08-18 with
+    ``python -c`` over ``_redact_secrets``: ``{S1: "a", S2: "b"}`` collapsed
+    from two entries to ``{'[REDACTED]': 'b'}`` — one entry, no signal. A
+    silent overwrite inside a redactor is unacceptable, so a collision gets a
+    numeric discriminator instead.
+
+    Non-``str`` keys (a tuple of strings is a legal, redactable key) are
+    disambiguated through their ``repr``, which turns the colliding entry's
+    key into a ``str``. That only happens on a collision, which already means
+    the original key text is gone; keeping the VALUE is what matters.
+    """
+    if key not in taken:
+        return key
+    base = key if isinstance(key, str) else repr(key)
+    suffix = 2
+    while f"{base}.{suffix}" in taken:
+        suffix += 1
+    return f"{base}.{suffix}"
 
 
 def _redact_extra_value(value: object, _ancestors: frozenset[int] = frozenset()) -> object:
@@ -176,17 +287,25 @@ def _redact_extra_value(value: object, _ancestors: frozenset[int] = frozenset())
     (``dict``, ``list``, ``tuple``, ``set``, ``frozenset`` — see
     ``_EXTRA_CONTAINER_TYPES``) are walked recursively, up to
     ``_MAX_EXTRA_REDACTION_DEPTH`` levels, so a secret nested inside a
-    dict-in-list-in-dict (or a tuple sitting inside either) is caught too;
-    every other value (int, bool, None, or a scalar not itself worth
-    walking) is returned unchanged.
+    dict-in-list-in-dict (or a tuple sitting inside either) is caught too.
+    A dict's KEYS are redacted as well as its values (issue #341 §1), with
+    ``_disambiguated_key`` making sure two keys that redact to the same text
+    do not collapse into one entry. Numbers, booleans and ``None`` are
+    returned unchanged (``_SECRET_FREE_SCALAR_TYPES`` — their text form
+    cannot match any pattern); every OTHER non-container value goes through
+    ``_redact_text_form``, which inspects its ``str`` and ``repr`` (issue
+    #341 C3).
 
     ``_ancestors`` tracks the ``id()`` of every container currently on the
     recursion PATH (not every container ever seen — two sibling branches
     legitimately referencing the same object is normal aliasing, not a
     cycle, and must still be walked twice). A container whose id is already
-    on that path is a genuine cycle; it is returned unchanged rather than
-    recursed into again, which is what makes a self-referential dict safe
-    instead of an infinite recursion. Each level passes a NEW frozenset
+    on that path is a genuine cycle; it is replaced by
+    ``_CYCLE_PLACEHOLDER`` rather than recursed into again, which is what
+    makes a self-referential dict safe instead of an infinite recursion. It
+    used to be returned UNCHANGED, which spliced the original plaintext
+    subtree back into the redacted result and left ``record.__dict__``
+    cyclic — see issue #341 §2 and ADR-0056. Each level passes a NEW frozenset
     (``_ancestors | {id(value)}``) to its children rather than mutating a
     shared set, so sibling branches never see each other's ancestry.
 
@@ -199,19 +318,28 @@ def _redact_extra_value(value: object, _ancestors: frozenset[int] = frozenset())
     """
     if isinstance(value, str):
         return _redact_secrets(value)
+    if isinstance(value, _SECRET_FREE_SCALAR_TYPES):
+        return value
     if not isinstance(value, _EXTRA_CONTAINER_TYPES):
-        return value
+        return _redact_text_form(value)
     if len(_ancestors) >= _MAX_EXTRA_REDACTION_DEPTH:
-        return value
+        return _DEPTH_CAP_PLACEHOLDER
     obj_id = id(value)
     if obj_id in _ancestors:
         # Genuine cycle (this container is its own ancestor on this path,
         # directly or indirectly) — stop descending rather than recurse
         # forever.
-        return value
+        return _CYCLE_PLACEHOLDER
     ancestors = _ancestors | {obj_id}
     if isinstance(value, dict):
-        return {key: _redact_extra_value(item, ancestors) for key, item in value.items()}
+        redacted: dict[object, object] = {}
+        for key, item in value.items():
+            # The KEY is redacted too (issue #341 §1). Disambiguation is
+            # unconditional, not "only when the key changed": an untouched
+            # literal ``"[REDACTED]"`` key can collide with a redacted one.
+            placed = _disambiguated_key(_redact_extra_value(key, ancestors), redacted)
+            redacted[placed] = _redact_extra_value(item, ancestors)
+        return redacted
     if isinstance(value, list):
         return [_redact_extra_value(item, ancestors) for item in value]
     if isinstance(value, tuple):
@@ -285,11 +413,15 @@ def install_redaction_record_factory() -> None:
     found at any depth inside a nested container is redacted, and a fresh
     container is built rather than the original mutated in place, so a
     caller that logs the same object again later still sees its own
-    unmodified data. Other non-string, non-container extra values (ints,
-    the ``error_type`` class name via ``str(exc_type)``, ``None``, etc.) are
-    left alone — redaction operates on text, and neither carries a
-    secret-shaped substring on its own. See ``_redact_extra_value``'s own
-    docstring for the depth cap and cycle-guard details.
+    unmodified data. Numbers, booleans and ``None`` are left alone —
+    redaction operates on text and none of their text forms can match a
+    pattern. Every other non-container value (an exception object, a
+    ``bytes``, any object with a custom ``__str__``/``__repr__``) is checked
+    through ``_redact_text_form`` and replaced only if its text form
+    actually carries a secret (issue #341 C3). Extra KEYS are redacted as
+    well as values, here and at every nested level (issue #341 §1 and C2).
+    See ``_redact_extra_value``'s own docstring for the depth cap and
+    cycle-guard details.
 
     This still does NOT touch ``record.exc_info`` (a full traceback passed
     via ``exc_info=True``) — none of the 9 call sites use that form today, and
@@ -422,14 +554,35 @@ def install_redaction_record_factory() -> None:
         record = original_make_record(
             self, name, level, fn, lno, msg, args, exc_info, func, extra, sinfo
         )
-        for key, value in list(record.__dict__.items()):
-            if key in _RESERVED_RECORD_ATTRS or key.startswith("_"):
+        # ``record.__dict__`` is typed ``dict[str, Any]``, but ``makeRecord``
+        # copies ``extra`` in verbatim and a caller can put a non-``str`` key
+        # there — see the ``isinstance(key, str)`` note below. Bound to a
+        # loosely-typed alias so the key rewrite below type-checks.
+        attrs: dict[Any, Any] = record.__dict__
+        for key, value in list(attrs.items()):
+            if key in _RESERVED_RECORD_ATTRS:
                 continue
-            if not isinstance(value, (str,) + _EXTRA_CONTAINER_TYPES):
+            # ``isinstance(key, str)`` guard: ``extra={1: "v"}`` is legal for
+            # the stdlib (``makeRecord`` copies the mapping into
+            # ``record.__dict__`` verbatim) and a bare ``key.startswith``
+            # raised ``AttributeError: 'int' object has no attribute
+            # 'startswith'`` straight out of ``logger.warning`` — this
+            # redaction hook, not the stdlib, was crashing the log call.
+            if isinstance(key, str) and key.startswith("_"):
                 continue
+            # The KEY is redacted too (issue #341 C2) — the same key-position
+            # gap as the nested dict, one level up. Written through
+            # ``record.__dict__`` rather than ``setattr``/``delattr`` because
+            # a key here is not guaranteed to be a ``str``.
+            redacted_key = _redact_extra_value(key)
+            if redacted_key != key:
+                redacted_key = _disambiguated_key(redacted_key, attrs)
             redacted_value = _redact_extra_value(value)
-            if redacted_value != value:
-                setattr(record, key, redacted_value)
+            if redacted_key != key:
+                del attrs[key]
+                attrs[redacted_key] = redacted_value
+            elif redacted_value != value:
+                attrs[key] = redacted_value
         return record
 
     logging.Logger.makeRecord = make_record_with_extra_redaction  # type: ignore[method-assign]
@@ -465,7 +618,15 @@ class JsonFormatter(logging.Formatter):
         # call sites can attach context (run id, account id, etc.)
         # without touching this formatter.
         for key, value in record.__dict__.items():
-            if key in self._RESERVED or key in payload or key.startswith("_"):
+            # Same non-``str`` key guard as the redaction hook above: an
+            # ``extra={1: "v"}`` key reaching a bare ``key.startswith`` raised
+            # ``AttributeError`` inside ``format()``, which
+            # ``logging.Handler.handleError`` swallows — the line vanished
+            # instead of crashing loudly. Fixing only one of the two call
+            # sites would have converted a loud crash into a silent drop.
+            if key in self._RESERVED or key in payload:
+                continue
+            if isinstance(key, str) and key.startswith("_"):
                 continue
             payload[key] = value
         return _redact_secrets(json.dumps(payload, default=str))
