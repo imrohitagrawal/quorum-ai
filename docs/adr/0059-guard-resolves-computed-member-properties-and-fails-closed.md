@@ -84,9 +84,11 @@ Playwright's own normalizer, copied rather than re-derived, because AGENTS.md
 rule 8c says a mitigation gated on an upstream is worth exactly as much as your
 measurement of that upstream.
 
-Read here, 2026-08-19, from the installed `playwright-core`
-(`e2e/node_modules/playwright-core/package.json` reports `1.61.1`; the same
-version is pinned at `e2e/package-lock.json:1079`), `lib/coreBundle.js`:
+Read here, 2026-08-19, from the `playwright-core` package installed under
+`e2e/node_modules/` — its own manifest reports version `1.61.1`, the same
+version pinned at `e2e/package-lock.json:1078` — in that package's
+`lib/coreBundle.js`. (The installed tree is not tracked in git, so it is named
+here as an install location rather than cited as a repo path.)
 
 ```
 518  function normalizeWhiteSpace(text2) {
