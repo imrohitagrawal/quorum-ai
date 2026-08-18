@@ -75,6 +75,12 @@ DESELECTED_FROM_THE_MUTANT_RUN = (
     "tests/unit/test_e2e_flake_policy.py",
     "tests/unit/test_makefile_gate_integrity.py",
     "tests/unit/test_mutation_copy_completeness.py",
+    # Drives git and pytest against the real repository and copies it twice per
+    # test. It imports nothing from the application, so it can kill no `src/`
+    # mutant; and left selected it would build two full project copies per
+    # mutant against a 1440-second deadline (Makefile MUTATION_RUN_DEADLINE_SECONDS),
+    # which is the "gate produces no number" outcome it exists to prevent.
+    "tests/unit/test_mutation_gate_root_resolution.py",
     "tests/unit/test_perf_gate_collection_floor.py",
     "tests/unit/test_perf_gate_required_specs.py",
     "tests/unit/test_perf_gate_runs_clean.py",
