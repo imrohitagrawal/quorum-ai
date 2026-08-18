@@ -59,24 +59,58 @@ stats collection, and the gate exited non-zero having scored zero mutants.
    The scan is derived, but it is not total, and the difference matters
    because the first draft of it was total-sounding and quietly FAILED OPEN.
    Per [ADR-0047](0047-gate-detectors-resolve-ambiguity-toward-a-red-gate.md)
-   it now resolves an input it cannot classify toward RED. Four shapes that a
-   review demonstrated were silently dropped are now offenders, each with a
-   literal case in `test_the_classifier_never_drops_a_cwd_scoped_git_call`:
-   an annotated or tuple-target root binding, a `cwd=` expression naming no
-   module-level root (`cwd=str(ROOT)`), **no `cwd=` keyword at all** (under
-   `mutmut run` the process working directory already IS `./mutants/`), and a
-   runner imported bare with `from subprocess import run`. Measured on this
-   tree, closing all four adds **zero** new offenders, so the fail-closed
-   posture costs no churn today.
+   it now resolves toward RED **a `cwd=` it cannot classify on a call it has
+   already recognised**. The scan works in two steps, and only the second one
+   fails closed:
 
-   One hole is left open ON PURPOSE and is written on the function: the
-   subcommand must appear as a string literal, so a call that builds its argv
-   dynamically (`["git", *args]`) is not classified. There are **seven** such
-   calls under `tests/` today, all driving throwaway repositories with a local
-   `cwd`; failing closed on them would make the guard red on seven correct
-   calls. The guard's honest contract is therefore "every literal-argv
-   cwd-scoped git call, classified, with unfamiliar shapes treated as
-   offenders" — not "every possible spelling".
+   - **Recognition** — is this call a `subprocess` runner with a literal
+     `git <cwd-scoped-subcommand>` argv? This step is an ENUMERATION of
+     spellings. It fails OPEN on anything not listed.
+   - **Classification** — given such a call, how is its `cwd=` derived? This
+     step fails CLOSED, per ADR-0047.
+
+   Shapes a review demonstrated were silently dropped and are now offenders,
+   each with a literal case in
+   `test_the_classifier_never_drops_a_cwd_scoped_git_call`: an annotated or
+   tuple-target root binding; a `cwd=` expression naming no module-level root
+   (`cwd=str(ROOT)`); **no `cwd=` keyword at all** (under `mutmut run` the
+   process working directory already IS `./mutants/`); a runner imported bare
+   with `from subprocess import run`; and — added in review round 3 — a runner
+   reached through a module alias, `import subprocess as sp` then `sp.run(...)`,
+   including an alias bound inside a function body. Measured on this tree,
+   closing all of them adds **zero** new offenders, so the fail-closed posture
+   costs no churn today.
+
+   **The module-alias hole is why this section no longer says "unfamiliar
+   shapes are treated as offenders".** It said exactly that, and the sentence
+   was false: `import subprocess as sp` binds neither shape the recognition
+   step read, so `sp.run(["git", "ls-files", ...], cwd=ROOT)` was dropped
+   before the fail-closed logic ever ran. Measured 2026-08-19 — that offender
+   dropped into `tests/unit/` gave `11 passed` on the pre-fix guard, a complete
+   miss, while the same file with only the two spelling tokens changed to plain
+   `subprocess` gave `2 failed, 9 passed`. The full table is under
+   *Measurements* below. The idiom is in live use here:
+   `tests/unit/test_run_with_deadline.py:140` is
+   `import subprocess as subprocess_module`. A guarantee stated more broadly
+   than the code delivers is worse than a narrower one, because it stops the
+   next reader looking.
+
+   **Four holes are left open ON PURPOSE**, listed on `_cwd_scoped_git_calls`
+   and each measured returning no offender on 2026-08-19:
+
+   1. The subcommand must be a string literal, so a dynamically built argv
+      (`["git", *args]`) is not classified. **Seven** such calls exist under
+      `tests/` today, all driving throwaway repositories with a local `cwd`;
+      failing closed on them would make the guard red on seven correct calls.
+   2. An indirectly bound runner — `runner = subprocess.run`, then `runner(...)`.
+   3. A star import — `from subprocess import *`, then `run(...)`.
+   4. A wrapper in another module; the scan reads one file's AST.
+
+   Holes 2 and 3 appear nowhere in `tests/` today (both greps exit 1 with no
+   output; the commands are on the function). The guard's honest contract is
+   therefore "every literal-argv cwd-scoped git call reached through one of the
+   enumerated `subprocess` spellings, with any `cwd=` it cannot classify
+   treated as an offender" — not "every possible spelling".
 3. Change nothing about what the gate says when it finishes. The verdict
    wording is a separate concern and stays on its parked branch.
 
@@ -103,11 +137,48 @@ advisory.
 
 **The guard bites, once per file.** Each offender was reverted on its own (`cp`
 aside, mutate, restore from the copy, `diff -q` to confirm), so the record shows
-each fix is load-bearing rather than only their union. Both reverts gave
-`2 failed, 2 passed`, failing
+each fix is load-bearing rather than only their union. **Re-measured 2026-08-19
+in review round 3, and the numbers here changed.** An earlier draft of this
+paragraph said `2 failed, 2 passed` for each revert and `4 passed` clean; those
+totals describe a guard with four tests, and the guard on this branch has never
+had four — it had 11 at `bf26805` and has 15 now that round 3 added four
+classifier cases. The totals were stale prose, not a measurement of the shipped
+tree. What the shipped tree actually gives, from the repo root with
+`.venv/bin/python -m pytest tests/unit/test_mutation_gate_root_resolution.py -q
+--no-cov`:
+
+| Tree state | Result |
+|---|---|
+| neither spec reverted | `15 passed` |
+| `test_docs_numbering_no_collisions.py` reverted to `parents[2]` | `2 failed, 13 passed` |
+| `test_no_generated_artifacts_tracked.py` reverted to `parents[2]` | `2 failed, 13 passed` |
+| both reverted | `2 failed, 13 passed` |
+
+Every red row fails the same two tests,
 `test_every_spec_the_baseline_runs_resolves_the_real_repository_root` and
-`test_the_git_reading_specs_pass_inside_a_mutmut_shaped_copy`. Before either
-fix, the guard was `2 failed, 2 passed`; after both, `4 passed`.
+`test_the_git_reading_specs_pass_inside_a_mutmut_shaped_copy`. The two
+single-revert rows are the point: each fix is independently load-bearing, which
+the both-reverted row alone could not show.
+
+**The module-alias hole, measured the same way.** One offending spec was
+dropped into `tests/unit/` in two spellings that differ only in the import and
+call tokens, and the guard was run against each, before and after the round-3
+fix. The guard held 11 tests before the fix and 15 after, so read the failure
+counts, not the totals:
+
+| Offender spelling | Pre-fix guard (at `bf26805`) | Guard as it now ships |
+|---|---|---|
+| `import subprocess as sp` / `sp.run(...)` | `11 passed` — **complete miss** | `2 failed, 13 passed` |
+| `import subprocess` / `subprocess.run(...)` | `2 failed, 9 passed` | `2 failed, 13 passed` |
+
+The second row is the positive partner: the guard could already catch this
+defect class, and the module alias alone hid it. In both caught cases the
+execution test names the abort itself: `FAILED <the throwaway spec>::
+test_docs_floor - assert 0 > 100`, the same shape as the CI abort quoted at the
+top of the guard module. The throwaway spec's own filename is deliberately not
+written here as a path — it existed only for the duration of the measurement,
+and `test_cited_paths_resolve.py` correctly fails any repo-shaped path on an
+added line that does not resolve. It caught this sentence in an earlier draft.
 
 **Cost of the chosen form.** `find_repo_root` raises rather than guessing, and
 a module-level raise is a pytest *collection* error, which interrupts the whole
@@ -187,6 +258,19 @@ modules to seven; it does not open it.
   first thing issue 337 will need. Verified by feeding `report()` a
   hand-written `.meta` holding three `None` exit codes: `mutants scored: 2
   killed, 0 survived` / `mutation score ... = 100.0%` / exit 0.
+- **The guard is an enumeration, and four spellings still evade it.** They are
+  listed under *Decision* and on `_cwd_scoped_git_calls`: a dynamically built
+  argv, an indirectly bound runner (`runner = subprocess.run`), a star import
+  (`from subprocess import *`), and a wrapper in another module. Each was fed
+  to the classifier on 2026-08-19 and came back with no offender. This bullet
+  exists because the FIFTH such spelling — `import subprocess as sp` — was not
+  listed, was not known, and was described as covered: the record said
+  unfamiliar shapes were treated as offenders while that one was being dropped
+  before the fail-closed step ran. The lesson is narrow and worth keeping: a
+  detector that fails closed *after* recognition is only as wide as
+  recognition, and recognition here is a hand-written list. **State the list,
+  never the guarantee.** If a new spelling appears in `tests/`, its literal
+  goes into `_CLASSIFIER_CASES` before any code changes.
 - **This record does not produce a mutation score, and says so.** The fix
   converts "aborts having done nothing" into "runs until the deadline". That is
   the information issue 337 asks for; it is not issue 337's close condition,

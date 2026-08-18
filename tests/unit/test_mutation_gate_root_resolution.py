@@ -143,9 +143,11 @@ def _is_repo_introspection(tree: ast.Module) -> bool:
 def _subprocess_aliases(tree: ast.Module) -> frozenset[str]:
     """Bare names bound to a `subprocess` runner by `from subprocess import ...`.
 
-    Without this, `from subprocess import run` then `run([...])` is a call the
-    scan never looks at. No module in `tests/` uses that import form today
-    (measured: zero), so this only closes a future hole.
+    Covers both `from subprocess import run` and `from subprocess import run as
+    launch`. Without this, `run([...])` is a call the scan never looks at. No
+    module in `tests/` uses that import form today (measured 2026-08-19 by
+    `grep -rn "^from subprocess import" tests/` — no output), so this only
+    closes a future hole.
     """
     aliases = set()
     for node in ast.walk(tree):
@@ -156,12 +158,54 @@ def _subprocess_aliases(tree: ast.Module) -> frozenset[str]:
     return frozenset(aliases)
 
 
-def _cwd_derivation(cwd: ast.expr | None, roots: dict[str, str]) -> str:
-    """How a git call's ``cwd`` is derived — FAIL CLOSED on anything unfamiliar.
+def _subprocess_module_names(tree: ast.Module) -> frozenset[str]:
+    """Names bound to the `subprocess` MODULE itself by an `import` statement.
 
-    Per ADR-0047, a detector that cannot classify an input resolves toward the
-    answer that makes the gate go RED. Three outcomes are offenders and one is
-    not:
+    `"subprocess"` is always present, so a module that reaches the name some
+    other way (a star import from a helper, a conftest injection) is still
+    matched — this only ever ADDS names, it never removes the plain spelling.
+
+    `import subprocess as sp` is the spelling this exists for. It binds neither
+    shape `_subprocess_aliases` reads, so before this function existed
+    `sp.run(["git", "ls-files", ...], cwd=ROOT)` was not classified at all: the
+    call was dropped before `_cwd_derivation` ever saw it, and the whole
+    fail-closed argument below is downstream of that drop. Measured 2026-08-19
+    on the shape now pinned as the "runner reached through a module alias"
+    classifier case: the scan returned `[]`, and the same spec inside a
+    mutmut-shaped copy failed `assert 0 > 100` — the #338 abort itself. The
+    idiom is in live use here: `tests/unit/test_run_with_deadline.py:140` is
+    `import subprocess as subprocess_module`.
+
+    `ast.walk` deliberately does not respect scope, so an alias bound inside a
+    function body is treated as binding for the whole module. That is
+    over-broad on purpose: it can only make more calls visible to the scan,
+    never fewer, which is the direction ADR-0047 asks for.
+    """
+    names = {"subprocess"}
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Import):
+            for alias in node.names:
+                if alias.name == "subprocess":
+                    names.add(alias.asname or alias.name)
+    return frozenset(names)
+
+
+def _cwd_derivation(cwd: ast.expr | None, roots: dict[str, str]) -> str:
+    """How a git call's ``cwd`` is derived — FAIL CLOSED on any unfamiliar ``cwd``.
+
+    **This function's fail-closed posture applies only to calls that
+    `_cwd_scoped_git_calls` has ALREADY RECOGNISED as a subprocess call.** It
+    is downstream of recognition and never sees a call that was dropped
+    earlier, so it cannot make the guard total. Read
+    `_cwd_scoped_git_calls`'s "KNOWN AND UNCLOSED" list for the spellings that
+    never reach here at all. That distinction is written down because a review
+    on 2026-08-19 found this module's own prose claiming the classifier treated
+    "anything unfamiliar" as an offender, while `import subprocess as sp` was
+    being dropped before this function ran.
+
+    Per ADR-0047, a detector that cannot classify a `cwd` it was handed
+    resolves toward the answer that makes the gate go RED. Three outcomes are
+    offenders and one is not:
 
     * a module-level root bound by `find_repo_root` — the only safe answer.
     * a module-level root bound from `__file__` any other way — `"file_relative"`.
@@ -193,21 +237,55 @@ def _cwd_derivation(cwd: ast.expr | None, roots: dict[str, str]) -> str:
 def _cwd_scoped_git_calls(tree: ast.Module, roots: dict[str, str]) -> list[str]:
     """How each cwd-scoped git call in the module derives its ``cwd``.
 
-    KNOWN AND UNCLOSED: the subcommand must appear as a string literal in the
-    argv. A call that builds its subcommand dynamically — `["git", *args]` —
-    is not classified, and seven such calls exist in `tests/` today, all of
-    them driving throwaway repositories with a local `cwd`. Failing closed on
-    those would make the guard red on seven calls that are correct, so the
-    guard does not claim to cover them. This is the guard's honest boundary,
-    stated rather than implied.
+    A call must be RECOGNISED here before `_cwd_derivation` can fail closed on
+    it. Recognition is an ENUMERATION of spellings, not a catch-all, so the
+    guard is NOT total and must not be described as one. The spellings it
+    reads, each pinned by a literal case in `_CLASSIFIER_CASES`:
+
+    * `subprocess.run([...])`, and the other names in `_SUBPROCESS_CALLS`.
+    * `import subprocess as sp` then `sp.run([...])` — via
+      `_subprocess_module_names`, including an alias bound inside a function.
+    * `from subprocess import run` / `... import run as launch` then
+      `run([...])` / `launch([...])` — via `_subprocess_aliases`.
+
+    KNOWN AND UNCLOSED. Each of these was fed to this function on 2026-08-19
+    and came back `[]` — no offender reported, on the fixed code:
+
+    1. The subcommand must appear as a string literal in the argv. A call that
+       builds its subcommand dynamically — `["git", *args]` — is not
+       classified, and seven such calls exist in `tests/` today, all of them
+       driving throwaway repositories with a local `cwd`. Failing closed on
+       those would make the guard red on seven calls that are correct.
+    2. A runner bound INDIRECTLY: `runner = subprocess.run`, then
+       `runner([...], cwd=ROOT)`. The name is not an import alias, so nothing
+       ties it back to `subprocess`.
+    3. A star import: `from subprocess import *`, then `run([...], cwd=ROOT)`.
+       `ast` records the imported name as `*`, which is in neither
+       `_SUBPROCESS_CALLS` nor any alias set.
+    4. A wrapper living in another module — `helpers.git_ls_files(cwd=ROOT)`.
+       This scan reads one file's AST and does not follow calls across files.
+
+    These are the guard's honest boundary, stated rather than implied. Limits
+    2 and 3 appear nowhere in `tests/` today — measured 2026-08-19, both of
+    `grep -rnE "^\\s*\\w+ = subprocess\\.(run|check_output|check_call|Popen|call)\\s*$" tests/`
+    and `grep -rn "from subprocess import \\*" tests/` exit 1 with no output —
+    so closing them now would only add machinery no spelling in the tree
+    exercises. If one appears, add its literal to `_CLASSIFIER_CASES` first.
     """
     aliases = _subprocess_aliases(tree)
+    modules = _subprocess_module_names(tree)
     derivations: list[str] = []
     for node in ast.walk(tree):
         if not isinstance(node, ast.Call):
             continue
         func = ast.unparse(node.func)
-        qualified = func.startswith("subprocess.") and func.split(".")[-1] in _SUBPROCESS_CALLS
+        prefix, _, attribute = func.rpartition(".")
+        # `prefix in modules` reads `sp.run`; the `startswith` arm is kept so
+        # this stays a strict superset of the older test — it also matched a
+        # deeper `subprocess.a.b.run`, which `rpartition` alone would drop.
+        qualified = (
+            prefix in modules or func.startswith("subprocess.")
+        ) and attribute in _SUBPROCESS_CALLS
         if not (qualified or func in aliases):
             continue
         if not node.args:
@@ -290,11 +368,20 @@ def test_every_spec_the_baseline_runs_resolves_the_real_repository_root() -> Non
     )
 
 
-# Source fed to the classifier, never imported. Each entry is a shape that an
+# Source fed to the classifier, never imported. Most entries are a shape some
 # earlier form of this guard dropped silently, letting the #338 defect back in
-# with all four tests green. Both members of each pair differ only in how the
-# root is derived, so a classifier that stopped reading the shape at all would
-# fail the SAFE half rather than passing the offending one.
+# with the other tests green; the rest are positive partners that pin a branch
+# already working, so a later simplification cannot quietly remove it. (The
+# `from subprocess import run as launch` case is one of those partners: it was
+# already classified correctly on 2026-08-19, measured — it passed in the same
+# run where the two module-alias cases failed.)
+#
+# Where two entries form a pair they differ ONLY in how the root is derived, so
+# a classifier that stopped reading the shape at all would fail the SAFE half
+# rather than passing the offending one.
+#
+# This list is not a claim of totality. `_cwd_scoped_git_calls` carries four
+# KNOWN AND UNCLOSED spellings that no entry here covers.
 _CLASSIFIER_CASES: tuple[tuple[str, str, str], ...] = (
     (
         "annotated assignment",
@@ -337,6 +424,35 @@ _CLASSIFIER_CASES: tuple[tuple[str, str, str], ...] = (
         "ROOT = Path(__file__).resolve().parents[2]\n"
         'run(["git", "ls-files", "docs"], cwd=ROOT)\n',
     ),
+    (
+        "runner imported bare from subprocess under a new name",
+        "file_relative",
+        "from subprocess import run as launch\n"
+        "ROOT = Path(__file__).resolve().parents[2]\n"
+        'launch(["git", "ls-files", "docs"], cwd=ROOT)\n',
+    ),
+    (
+        "runner reached through a module alias",
+        "file_relative",
+        "import subprocess as sp\n"
+        "ROOT = Path(__file__).resolve().parents[2]\n"
+        'sp.run(["git", "ls-files", "docs"], cwd=ROOT)\n',
+    ),
+    (
+        "runner reached through a module alias, resolved properly",
+        "find_repo_root",
+        "import subprocess as sp\n"
+        "ROOT = find_repo_root(Path(__file__))\n"
+        'sp.run(["git", "ls-files", "docs"], cwd=ROOT)\n',
+    ),
+    (
+        "module alias bound inside a function body",
+        "file_relative",
+        "ROOT = Path(__file__).resolve().parents[2]\n"
+        "def test_thing():\n"
+        "    import subprocess as sp\n"
+        '    sp.run(["git", "ls-files", "docs"], cwd=ROOT)\n',
+    ),
 )
 
 
@@ -344,15 +460,23 @@ _CLASSIFIER_CASES: tuple[tuple[str, str, str], ...] = (
 def test_the_classifier_never_drops_a_cwd_scoped_git_call(
     shape: str, expected: str, source: str
 ) -> None:
-    """The scan must classify every shape, and classify an unfamiliar one as an
-    offender (ADR-0047: a detector that cannot decide resolves toward RED).
+    """The scan must classify every shape LISTED HERE, and classify a call
+    whose `cwd=` it cannot decide as an offender (ADR-0047: a detector that
+    cannot decide resolves toward RED).
+
+    This is the guard-of-the-guard, and it is only as wide as this list. It
+    does NOT establish that every possible spelling is classified — see the
+    four KNOWN AND UNCLOSED limits on `_cwd_scoped_git_calls`. The list
+    missing a shape is exactly how `import subprocess as sp` stayed invisible
+    until 2026-08-19 while this module's prose claimed otherwise.
 
     Turns red if: `_module_roots` stops reading annotated or tuple targets,
-    `_subprocess_aliases` stops resolving a bare `run`, or `_cwd_derivation`
-    goes back to DROPPING a call whose `cwd=` is missing or unrecognised —
-    each of which makes a real re-introduction of #338 invisible to the two
-    negative checks and to the execution test, because all three are driven by
-    this same scan.
+    `_subprocess_aliases` stops resolving a bare or renamed `run`,
+    `_subprocess_module_names` stops resolving an `import subprocess as ...`
+    alias, or `_cwd_derivation` goes back to DROPPING a call whose `cwd=` is
+    missing or unrecognised — each of which makes a real re-introduction of
+    #338 invisible to the two negative checks and to the execution test,
+    because all three are driven by this same scan.
 
     Deliberately NOT parametrized over the classifier's own output (rule 7a):
     every expected value is written here as a literal.
