@@ -26,9 +26,10 @@ the 24h rail reset.
 `_persist_terminal_run` also runs the judge, at run COMPLETION, and that path
 wrote the suppressed shape into the durable evaluation row.
 
-Reproduced on clean `origin/main` (`21d8358`) with a `git archive`-copied tree
-and a probe under the real pytest harness
-(`pytest tests/integration/test_probe342.py -s -q --no-cov`), verbatim:
+Reproduced on clean `origin/main` (`21d8358`): `git archive origin/main` into a
+throwaway directory, a printing probe written into its `tests/integration/`
+(a scratch file, deliberately not committed — it prints rather than asserts),
+run under the real pytest harness. Verbatim:
 
 ```
 PERSISTED trust_json band/score/support = unverified None False
@@ -147,7 +148,8 @@ Every row names the command that produced it. Run from
 
 | Question | Command | Measured |
 |---|---|---|
-| Does the durable row diverge from the served body? | `pytest tests/integration/test_probe342.py -s -q --no-cov` inside a `git archive origin/main` copy | persisted `unverified / None / False`; later served `('high', 90, True)`; `update_evaluation` still 1 |
+| Does the durable row diverge from the served body? | the printing probe above, in a `git archive origin/main` copy | persisted `unverified / None / False`; later served `('high', 90, True)`; `update_evaluation` still 1 |
+| The same, re-runnable from a committed file | copy `tests/integration/test_persisted_evaluation_never_asserts_a_verdict_the_run_did_not_get.py` into a `git archive origin/main` copy and run it | `7 failed, 6 passed` — the four durable-write cases and the three event cases |
 | How many src call sites can write the evaluation columns? | `grep -rn "_update_run_evaluation" src/` | one CALL, `query_run_orchestration.py:1689`; the other hits are the import at line 105 and a docstring |
 | How many call sites reach terminal persist? | `grep -rn "_persist_terminal_run(" src/` | `query_runs.py` and `query_run_orchestration.py`, both POST/execution paths — no GET |
 | How many consumers does `run_evaluated` have? | `grep -rn "run_evaluated" src/ scripts/` | one producer (`event_type="run_evaluated"`, `query_run_orchestration.py:1696`); every other hit is a docstring, and no reader anywhere in `src/` or `scripts/` |
