@@ -68,8 +68,12 @@ SKIPPED [1] tests/unit/test_negative_assertion_guard.py:729: node is not install
 
 ## Measured
 
-Every row is a command run on 2026-08-19 in a worktree at `e4c58a2`, except
-where marked UNVERIFIED.
+Every row is a command run on 2026-08-19, except where marked UNVERIFIED.
+Rows describing the state **before** this change were measured at `e4c58a2`
+(`main`); rows describing the state **after** it were measured on this branch
+at `d744b64`. An earlier draft of this table claimed a single worktree at
+`e4c58a2` for every row, which cannot be true of a post-fix row — `main` does
+not contain the fix.
 
 | Question | Command | Result |
 |---|---|---|
@@ -82,8 +86,8 @@ where marked UNVERIFIED.
 | Lane durations before the change | run logs | `pytest (Python 3.12)` 4m51s; `e2e axe + parity (chromium)` 12m19s |
 | Node version the 30 passes were measured on | `node --version` | v26.4.0 locally. CI pins 22 — the result on 22 is **UNVERIFIED until this change's own required run** |
 | Lanes that run the full suite | `Makefile:123,133,795` | three: `test.yml:test`, `ci.yml:validate-and-test`, `ci.yml:diff-cover` |
-| Local behaviour after the fix, node hidden from `PATH` | `PATH=/usr/bin:/bin pytest … -q` | `6 passed, 29 skipped` (was 30 skipped, 0 passed) |
-| Behaviour with the lane flag set and tooling absent | `PATH=/usr/bin:/bin QUORUM_REQUIRE_E2E_NODE_TOOLING=1 pytest … -q` | `6 passed, 1 skipped, 28 errors` — red, as intended |
+| Local behaviour after the fix, node hidden from `PATH` | `PATH=/usr/bin:/bin pytest … -q` | `9 passed, 28 skipped` (was 30 skipped, 0 passed) |
+| Behaviour with the lane flag set and tooling absent | `PATH=/usr/bin:/bin QUORUM_REQUIRE_E2E_NODE_TOOLING=1 pytest … -q` | `9 passed, 28 errors` — red, as intended |
 | Was node itself missing on the runner, or only `node_modules`? | `gh run view 32171719632 --log \| grep test_app_js_fixes` | `tests/integration/test_app_js_fixes.py ..........` — ten `skipif(which("node") is None)` tests RAN. Node was present; only `node_modules` was missing |
 | Does a warm npm cache really avoid the registry? | `npm ci --no-audit --no-fund --registry http://127.0.0.1:1` in `e2e/` | exit 0, `added 88 packages in 772ms`. 88 locally vs 87 in CI: macOS-only `fsevents` |
 
