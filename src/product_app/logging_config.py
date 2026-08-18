@@ -20,10 +20,10 @@ import json
 import logging
 import re
 import threading
-from collections.abc import Mapping
+from collections.abc import Iterable, Mapping
 from datetime import UTC, datetime
 from types import TracebackType
-from typing import Any
+from typing import Any, cast
 
 #: Patterns for secret-shaped substrings (issue #313). Applied to the
 #: FINAL rendered JSON line, not to individual fields, so it covers the
@@ -198,6 +198,20 @@ _TEXT_RENDERERS = (str, repr, _sentry_repr)
 #: the scalars real ``extra={...}`` call sites actually use — issue #341 (e)
 #: found no call site in ``src/`` passing a container or an object, only
 #: strings, numbers, booleans and ``None``.
+#:
+#: **Matched by EXACT type, never ``isinstance``.** The claim above holds for
+#: these types and not for their subclasses, and the difference is a real
+#: leak. ``sentry_sdk.serializer`` renders numbers through
+#: ``isinstance(obj, (bool, int, float))`` — ``complex`` is absent from that
+#: tuple, so a ``complex`` subclass falls through to ``safe_repr`` and its
+#: TEXT form is what Sentry publishes. Measured 2026-08-18 against a real
+#: client, identically on this branch and on ``origin/main``: a ``complex``
+#: subclass with a secret-carrying ``__repr__`` reached the breadcrumb as
+#: ``{"v": "Bearer sk-or-v1-...LEAKME"}`` while stdout showed
+#: ``"[REDACTED]"``. ``int`` and ``float`` subclasses did NOT leak in the
+#: value position (Sentry renders them as the number), but they are matched
+#: by exact type too, because "which subclass does the current SDK take a
+#: numeric branch for" is not a property this module should depend on.
 _SECRET_FREE_SCALAR_TYPES = (bool, int, float, complex, type(None))
 
 #: Substituted for a container that is its own ancestor. Issue #341 §2: the
@@ -215,6 +229,19 @@ _CYCLE_PLACEHOLDER = "<cycle>"
 #: repeated id, so leaving this one as-is would keep the dropped-line failure
 #: alive for that shape. See ADR-0056.
 _DEPTH_CAP_PLACEHOLDER = "<max-depth>"
+
+#: Substituted for a container the walk could not read. Issue #341 round 2,
+#: replacement security breaker: walking ``Mapping`` (rather than only
+#: ``dict``) put caller code — ``__iter__``, ``__getitem__``, ``items`` — on
+#: the redactor's path for the first time. A lazy header bag or a mapping view
+#: over a released connection raises there, and the exception came straight out
+#: of ``logger.warning()`` into the caller with NO line emitted, where
+#: ``origin/main`` had emitted it normally. That is the same dropped-line
+#: failure this branch exists to close, at a new position. The container is
+#: replaced rather than fed to ``_redact_text_form``: a container we could not
+#: finish reading may still hand Sentry — which walks it with its own,
+#: separately-failing traversal — a subtree this module never inspected.
+_UNREADABLE_PLACEHOLDER = "<unreadable>"
 
 
 #: Per-thread set of ``id()``s currently being rendered by
@@ -311,7 +338,9 @@ def _redact_text_form(value: object) -> object:
         rendering.discard(id(value))
 
 
-def _disambiguated_key(key: object, taken: Mapping[object, object]) -> object:
+def _disambiguated_key(
+    key: object, taken: Mapping[object, object], next_suffix: dict[str, int]
+) -> object:
     """Return ``key``, or a free variant of it if ``taken`` already has it.
 
     Redacting keys introduces a way to LOSE data that redacting values never
@@ -326,13 +355,25 @@ def _disambiguated_key(key: object, taken: Mapping[object, object]) -> object:
     disambiguated through their ``repr``, which turns the colliding entry's
     key into a ``str``. That only happens on a collision, which already means
     the original key text is gone; keeping the VALUE is what matters.
+
+    ``next_suffix`` carries the search forward across one mapping's rebuild.
+    Without it, every colliding key rescanned from ``2`` and one
+    ``logger.warning()`` on a per-API-key usage map (every key ``sk-…``, so
+    every key redacts to the same text) went quadratic — measured 2026-08-18
+    with a ``NullHandler``, wall clock around a single call: 0.0122s at 500
+    entries, 0.2176s at 2000, 1.5019s at 5000, against 0.0011s at 5000 on
+    ``origin/main``. The ``while`` loop stays, because a caller can also pass
+    a literal ``"[REDACTED].2"`` key that the memo knows nothing about; the
+    memo only stops it from re-walking ground it already covered, which is
+    what makes the total work linear in the number of entries.
     """
     if key not in taken:
         return key
     base = key if isinstance(key, str) else repr(key)
-    suffix = 2
+    suffix = next_suffix.get(base, 2)
     while f"{base}.{suffix}" in taken:
         suffix += 1
+    next_suffix[base] = suffix + 1
     return f"{base}.{suffix}"
 
 
@@ -357,6 +398,20 @@ def _serializable_key(key: object) -> object:
     Only keys ``json`` cannot take are touched, so no existing line moves.
     ``sentry_sdk``'s serializer already renders such a key as its ``str``, so
     this makes the two sinks agree rather than changing what Sentry shows.
+
+    ``isinstance``, deliberately, not an exact-type test. Round 2's replacement
+    security breaker got a secret to a breadcrumb through a SUBCLASS of an
+    accepted key type — ``{"by_status": {Status.RATE_LIMITED: 3}}``, an
+    ``IntEnum`` with a secret-carrying ``__str__``, which ``sentry_sdk``'s
+    serializer publishes via its own ``str(k)``. That is fixed UPSTREAM of
+    here, by the exact-type scalar test in ``_redact_extra_value``: the key is
+    no longer waved past as a number, so ``_redact_text_form`` sees its text
+    and hands this function an already-redacted exact ``str``. Tightening this
+    function too was tried and reverted — with the upstream fix in place no
+    mutation of this line changes any measured behaviour, so it would be an
+    untested change. (``str`` subclasses never reach that question at all:
+    ``re.sub`` returns an exact ``str`` even when it substitutes nothing, so
+    ``_redact_secrets`` has already normalised them.)
     """
     return key if isinstance(key, _JSON_KEY_TYPES) else str(key)
 
@@ -431,7 +486,7 @@ def _redact_extra_value(value: object, _ancestors: frozenset[int] = frozenset())
     """
     if isinstance(value, str):
         return _redact_secrets(value)
-    if isinstance(value, _SECRET_FREE_SCALAR_TYPES):
+    if type(value) in _SECRET_FREE_SCALAR_TYPES:
         return value
     if not isinstance(value, _EXTRA_CONTAINER_TYPES):
         return _redact_text_form(value)
@@ -444,14 +499,31 @@ def _redact_extra_value(value: object, _ancestors: frozenset[int] = frozenset())
         # forever.
         return _CYCLE_PLACEHOLDER
     ancestors = _ancestors | {obj_id}
+    try:
+        return _rebuild_container(value, ancestors)
+    except Exception:  # noqa: BLE001 - a bad container must not break logging
+        # Caught at the level that failed, so a broken sub-container costs
+        # only its own subtree and its siblings still ride through.
+        return _UNREADABLE_PLACEHOLDER
+
+
+def _rebuild_container(value: object, ancestors: frozenset[int]) -> object:
+    """Rebuild one container level with every key and item redacted.
+
+    Split out of :func:`_redact_extra_value` only so the whole level sits
+    inside one ``try`` there — every traversal here (``items``, ``__iter__``,
+    ``__getitem__``, a key's ``__hash__`` or ``__str__``) is caller code that
+    can raise, and none of it may reach ``logger.warning()``.
+    """
     if isinstance(value, Mapping):
         redacted: dict[object, object] = {}
+        next_suffix: dict[str, int] = {}
         for key, item in value.items():
             # The KEY is redacted too (issue #341 §1). Disambiguation is
             # unconditional, not "only when the key changed": an untouched
             # literal ``"[REDACTED]"`` key can collide with a redacted one.
             placed = _disambiguated_key(
-                _serializable_key(_redact_extra_value(key, ancestors)), redacted
+                _serializable_key(_redact_extra_value(key, ancestors)), redacted, next_suffix
             )
             redacted[placed] = _redact_extra_value(item, ancestors)
         return redacted
@@ -463,7 +535,11 @@ def _redact_extra_value(value: object, _ancestors: frozenset[int] = frozenset())
     # (str, int, tuple-of-hashables, frozenset), and redaction preserves
     # that: a redacted str is still a str, a redacted tuple/frozenset is
     # still built from redacted (still-hashable) elements.
-    redacted_items = {_redact_extra_value(item, ancestors) for item in value}
+    # ``cast``: every caller reached this line through
+    # ``isinstance(value, _EXTRA_CONTAINER_TYPES)`` and past the ``Mapping``,
+    # ``list`` and ``tuple`` branches, so only ``set``/``frozenset`` remain —
+    # a narrowing mypy cannot follow through a plain tuple of types.
+    redacted_items = {_redact_extra_value(item, ancestors) for item in cast(Iterable[Any], value)}
     return redacted_items if isinstance(value, set) else frozenset(redacted_items)
 
 
@@ -674,6 +750,7 @@ def install_redaction_record_factory() -> None:
         # there — see the ``isinstance(key, str)`` note below. Bound to a
         # loosely-typed alias so the key rewrite below type-checks.
         attrs: dict[Any, Any] = record.__dict__
+        next_suffix: dict[str, int] = {}
         for key, value in list(attrs.items()):
             if key in _RESERVED_RECORD_ATTRS:
                 continue
@@ -691,13 +768,23 @@ def install_redaction_record_factory() -> None:
             # a key here is not guaranteed to be a ``str``.
             redacted_key = _serializable_key(_redact_extra_value(key))
             redacted_value = _redact_extra_value(value)
-            if _differs(redacted_key, key):
+            # The TYPE test is not redundant with ``_differs``. Issue #341
+            # round 2, replacement security breaker: a ``str`` SUBCLASS key
+            # whose ``__str__`` carries a secret redacts to an EQUAL plain
+            # ``str`` (``"tag"``), so ``_differs`` said "unchanged" and the
+            # caller's original key object was written straight back — and
+            # ``sentry_sdk``'s serializer calls ``str(k)`` on it, publishing
+            # the secret while stdout stayed clean. Measured
+            # ``{"Bearer sk-or-v1-...LEAKME": "v"}``. ``_serializable_key``
+            # has already normalised any subclass to an exact ``str``, so a
+            # type change here means "the key object must be replaced".
+            if type(redacted_key) is not type(key) or _differs(redacted_key, key):
                 # Same discriminator as the nested dict branch, for the same
                 # reason: two secret-shaped keys both redact to
                 # ``[REDACTED]`` and the second write would drop the first
                 # extra from every sink at once.
                 del attrs[key]
-                attrs[_disambiguated_key(redacted_key, attrs)] = redacted_value
+                attrs[_disambiguated_key(redacted_key, attrs, next_suffix)] = redacted_value
             else:
                 # Written unconditionally rather than behind a
                 # ``redacted_value != value`` test: the comparison bought

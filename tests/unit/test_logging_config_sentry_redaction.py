@@ -928,10 +928,13 @@ def test_a_cycle_longer_than_the_depth_cap_still_emits_a_line_and_leaks_nothing(
     literal chosen to exceed the cap, not read from the constant it tests
     (rule 7a). An earlier version of this line claimed raising the cap above
     30 would also turn it red; that is false, measured — with
-    ``_MAX_EXTRA_REDACTION_DEPTH = 40`` the whole file still reported
-    ``29 passed``, because past 30 levels the CYCLE guard fires instead of
-    the depth cap, substitutes its own placeholder, and the line is emitted
-    with the secret redacted either way.
+    ``_MAX_EXTRA_REDACTION_DEPTH = 40`` every test in this file still passed,
+    because past 30 levels the CYCLE guard fires instead of the depth cap,
+    substitutes its own placeholder, and the line is emitted with the secret
+    redacted either way. (That sentence used to quote a PASS COUNT. The count
+    was stale within days — the subject of the sentence includes the sentence's
+    own file, and six tests were added after it was written — so the claim is
+    now stated in the form that stays true.)
     """
     secret = "sk-or-v1-1234567890abcdefLONGCYCLE"
     head: dict[str, Any] = {"api_key": secret}
@@ -1129,23 +1132,38 @@ def test_three_colliding_secret_keys_all_survive_with_distinct_names(
     Two colliding keys need one alternative name; three need two. A
     disambiguator that tries a single fixed suffix drops the third entry.
 
+    The mapping also carries, FIRST, a LITERAL ``"[REDACTED].2"`` key the
+    caller wrote itself. That is what keeps ``_disambiguated_key``'s ``while``
+    loop load-bearing: the per-base ``next_suffix`` memo added for the
+    quadratic fix proposes ``2`` first, and only the ``while`` loop notices the
+    caller already owns that name. Without the loop the caller's own entry is
+    overwritten. Order matters — placed LAST the literal key is the one that
+    gets a discriminator, which tests nothing about the loop.
+
     RED WHEN: ``_disambiguated_key``'s ``while`` loop is replaced by a single
-    unconditional suffix attempt.
+    unconditional suffix attempt. (Until the memo was added, this test bit that
+    mutation through the third SECRET key alone; the memo now hands out
+    distinct suffixes on its own, so the literal key is what carries the claim
+    and this docstring was corrected to say so.)
     """
     secrets = [
         "sk-or-v1-1111111111111111111111AAAA",
         "sk-or-v1-2222222222222222222222BBBB",
         "sk-or-v1-3333333333333333333333CCCC",
     ]
+    error: dict[str, str] = {"[REDACTED].2": "mine"}
+    error.update(dict(zip(secrets, "abc", strict=True)))
     logger = logging.getLogger("product_app.triple_collision")
-    logger.warning("per-key failures", extra={"error": dict(zip(secrets, "abc", strict=True))})
+    logger.warning("per-key failures", extra={"error": error})
 
     own = [c for c in crumbs if c.get("category") == "product_app.triple_collision"]
     assert own, "the log call produced no breadcrumb at all — fixture is broken"
     for crumb in own:
         data = crumb["data"]["error"]
-        assert len(data) == 3, f"a redacted key overwrote another entry: {data}"
-        assert sorted(data.values()) == ["a", "b", "c"], f"a value was lost: {data}"
+        assert len(data) == 4, f"a redacted key overwrote another entry: {data}"
+        assert sorted(data.values()) == ["a", "b", "c", "mine"], f"a value was lost: {data}"
+        # The caller's own literal key still holds the caller's own value.
+        assert data["[REDACTED].2"] == "mine", f"the caller's literal key was clobbered: {data}"
         for secret in secrets:
             assert secret not in json.dumps(data), f"a secret-shaped key survived: {data}"
 
@@ -1417,3 +1435,265 @@ def test_a_non_string_extra_key_still_emits_the_stdout_line() -> None:
         assert payload["message"] == "boom"
         assert payload["attempt"] == 6
         assert "v" in json.dumps(payload), f"the tuple-keyed value was lost: {payload}"
+
+
+# ---------------------------------------------------------------------------
+# Issue #341, review round 2, replacement security-breaker lens. Four positions
+# a real ``sentry_sdk`` client still reached, or the branch newly broke.
+# ---------------------------------------------------------------------------
+
+
+def test_a_complex_subclass_value_never_reaches_a_sentry_breadcrumb(
+    sentry_client: None, crumbs: list[dict[str, Any]]
+) -> None:
+    """``isinstance`` matched subclasses, and Sentry has no ``complex`` branch.
+
+    ``_SECRET_FREE_SCALAR_TYPES`` claimed no ``str()`` of its members can
+    produce a secret-shaped token. That is true of the types themselves and
+    false of their SUBCLASSES: ``sentry_sdk.serializer`` renders numbers via
+    ``isinstance(obj, (bool, int, float))``, which does NOT include
+    ``complex``, so a ``complex`` subclass falls through to ``safe_repr`` and
+    its TEXT form is published. Measured against a real client, identically on
+    this branch and on ``origin/main`` (so the position is pre-existing, not a
+    regression): ``{"v": "Bearer sk-or-v1-...LEAKME"}`` in the breadcrumb while
+    stdout showed ``"[REDACTED]"``.
+
+    RED WHEN: the scalar shortcut in ``_redact_extra_value`` goes back to
+    ``isinstance(value, _SECRET_FREE_SCALAR_TYPES)`` from the exact-type
+    ``type(value) in _SECRET_FREE_SCALAR_TYPES``.
+    """
+    from sentry_sdk.serializer import serialize
+
+    secret = "sk-or-v1-1234567890abcdefCOMPLEXSUB"
+
+    class Money(complex):
+        def __repr__(self) -> str:
+            return f"Bearer {secret}"
+
+    logger = logging.getLogger("product_app.complex_sub")
+    logger.warning("boom", extra={"v": Money(1, 2), "attempt": 7})
+
+    own = [c for c in crumbs if c.get("category") == "product_app.complex_sub"]
+    assert own, "the log call produced no breadcrumb at all — fixture is broken"
+    for crumb in own:
+        rendered = json.dumps(serialize(crumb["data"]))
+        assert secret not in rendered, (
+            f"the secret in a complex subclass's text form reached Sentry: {rendered}"
+        )
+        # POSITIVE PARTNER (rule 7): the record was rewritten, not abandoned,
+        # and a plain scalar sibling still rides through untouched.
+        assert crumb["data"]["attempt"] == 7
+        assert "[REDACTED]" in json.dumps(crumb["data"]["v"])
+
+
+def test_a_plain_number_extra_still_reaches_sentry_as_a_number(
+    sentry_client: None, crumbs: list[dict[str, Any]]
+) -> None:
+    """The partner to the exact-type shortcut: exact scalars must not change.
+
+    Tightening ``_SECRET_FREE_SCALAR_TYPES`` to an exact-type test is only
+    safe if the types themselves still take the cheap path and keep their JSON
+    shape. A ``bool`` must stay ``true``, not become ``"True"``.
+
+    RED WHEN: the scalar shortcut returns ``str(value)`` instead of ``value``
+    — the over-broad way to "fix" the subclass leak above, which would change
+    the JSON type of every number and boolean any call site logs. Deleting the
+    shortcut outright does NOT turn this red, and the docstring said it did
+    until it was measured: ``_redact_text_form`` finds no secret in ``"5"`` and
+    returns the ORIGINAL object, so the shortcut is a cost optimisation, not a
+    semantic one. This test exists to pin the JSON shape against the wrong fix,
+    not to prove the shortcut is reachable.
+    """
+    logger = logging.getLogger("product_app.plain_scalars")
+    logger.warning("boom", extra={"i": 5, "f": 1.5, "b": True, "n": None, "c": complex(1, 2)})
+
+    own = [c for c in crumbs if c.get("category") == "product_app.plain_scalars"]
+    assert own, "the log call produced no breadcrumb at all — fixture is broken"
+    for crumb in own:
+        assert crumb["data"]["i"] == 5
+        assert crumb["data"]["f"] == 1.5
+        assert crumb["data"]["b"] is True
+        assert crumb["data"]["n"] is None
+        # ``complex`` is not JSON-native; what matters is that the exact type
+        # still renders as its own clean text, not a redaction placeholder.
+        assert "REDACTED" not in json.dumps(crumb["data"], default=str)
+
+
+def test_a_subclassed_scalar_dict_key_never_reaches_a_sentry_breadcrumb(
+    sentry_client: None, crumbs: list[dict[str, Any]]
+) -> None:
+    """A nested key that is an ``IntEnum``/``float`` subclass kept its ``__str__``.
+
+    ``_serializable_key`` used ``isinstance(key, _JSON_KEY_TYPES)``, so an
+    ``IntEnum`` (an ``int`` subclass) was handed to Sentry unchanged and
+    ``sentry_sdk.serializer`` then ran the caller's own ``str(k)``. The shape is
+    ordinary — ``{"by_status": {Status.RATE_LIMITED: 3}}``. Measured
+    identically on this branch and on ``origin/main``:
+    ``{"by_status": {"Bearer sk-or-v1-...LEAKME": 3}}``.
+
+    RED WHEN: the scalar shortcut in ``_redact_extra_value`` goes back to
+    ``isinstance(value, _SECRET_FREE_SCALAR_TYPES)``. That is the same mutation
+    as the ``complex`` test above and it is deliberate: this test pins the KEY
+    position, which is a separate place a caller's ``__str__`` gets published.
+    Tightening ``_serializable_key`` to an exact-type test was tried as the fix
+    and measured NOT to be needed — with the upstream shortcut fixed, reverting
+    ``_serializable_key`` to ``isinstance`` left the whole file green, so that
+    change was reverted rather than shipped untested.
+    """
+    from enum import IntEnum
+
+    from sentry_sdk.serializer import serialize
+
+    secret = "sk-or-v1-1234567890abcdefENUMKEY"
+
+    class Status(IntEnum):
+        RATE_LIMITED = 429
+
+        def __str__(self) -> str:
+            return f"Bearer {secret}"
+
+    logger = logging.getLogger("product_app.enum_key")
+    logger.warning("boom", extra={"by_status": {Status.RATE_LIMITED: 3}, "attempt": 8})
+
+    own = [c for c in crumbs if c.get("category") == "product_app.enum_key"]
+    assert own, "the log call produced no breadcrumb at all — fixture is broken"
+    for crumb in own:
+        rendered = json.dumps(serialize(crumb["data"]))
+        assert secret not in rendered, (
+            f"the secret in a subclassed scalar KEY reached Sentry: {rendered}"
+        )
+        # POSITIVE PARTNER (rule 7): the entry is still there with its value,
+        # so the key was rewritten rather than the mapping dropped.
+        assert crumb["data"]["attempt"] == 8
+        assert list(crumb["data"]["by_status"].values()) == [3]
+
+
+def test_a_subclassed_top_level_extra_key_never_reaches_a_sentry_breadcrumb(
+    sentry_client: None, crumbs: list[dict[str, Any]]
+) -> None:
+    """The same key gap one level up, in ``record.__dict__``.
+
+    A ``str`` subclass whose ``__str__`` carries a secret redacts to an EQUAL
+    plain ``str`` (``"tag"``), so the record factory's ``_differs`` test said
+    "unchanged" and wrote the caller's ORIGINAL key object straight back.
+    ``sentry_sdk.serializer`` then called ``str(k)`` on it. Measured
+    identically on this branch and on ``origin/main``:
+    ``{"Bearer sk-or-v1-...LEAKME": "v"}``.
+
+    RED WHEN: the record factory's key-rewrite condition drops its
+    ``type(redacted_key) is not type(key)`` test and relies on ``_differs``
+    alone.
+    """
+    from sentry_sdk.serializer import serialize
+
+    secret = "sk-or-v1-1234567890abcdefTOPSTRKEY"
+
+    class Tag(str):
+        def __str__(self) -> str:
+            return f"Bearer {secret}"
+
+    logger = logging.getLogger("product_app.top_str_key")
+    # ``dict[Any, Any]``: a ``str`` subclass key is legal at runtime but not in
+    # ``Logger.warning``'s ``Mapping[str, object]`` annotation.
+    extra: dict[Any, Any] = {Tag("tag"): "v", "attempt": 9}
+    logger.warning("boom", extra=extra)
+
+    own = [c for c in crumbs if c.get("category") == "product_app.top_str_key"]
+    assert own, "the log call produced no breadcrumb at all — fixture is broken"
+    for crumb in own:
+        rendered = json.dumps(serialize(crumb["data"]))
+        assert secret not in rendered, (
+            f"the secret in a subclassed top-level extra KEY reached Sentry: {rendered}"
+        )
+        # POSITIVE PARTNER (rule 7): the entry survived under a clean key.
+        assert crumb["data"]["attempt"] == 9
+        assert "v" in json.dumps(crumb["data"])
+
+
+def test_a_mapping_whose_getitem_raises_still_emits_the_log_line() -> None:
+    """Walking ``Mapping`` reintroduced the dropped line this branch exists to fix.
+
+    ``_redact_extra_value``'s ``.items()`` walk was the one walk on this branch
+    with no defensive ``try`` — ``_redact_text_form`` and ``_differs`` beside it
+    are both hardened for exactly this. A lazy header bag or a mapping view over
+    a released connection raises out of ``__getitem__``, and that exception came
+    straight out of ``logger.warning()`` into the caller with no line emitted.
+    ``origin/main`` emitted the line normally, so this was a regression.
+
+    RED WHEN: the ``try``/``except`` around the container rebuild in
+    ``_redact_extra_value`` is removed.
+    """
+
+    class LazyHeaders(Mapping[str, str]):
+        def __getitem__(self, key: str) -> str:
+            raise RuntimeError("connection already released")
+
+        def __iter__(self) -> Iterator[str]:
+            return iter(["authorization"])
+
+        def __len__(self) -> int:
+            return 1
+
+    class AngryList(list[Any]):
+        def __iter__(self) -> Iterator[Any]:
+            raise RuntimeError("iterator invalidated")
+
+    for label, broken in (("mapping", LazyHeaders()), ("sequence", AngryList([1]))):
+        logger = logging.getLogger(f"product_app.broken_{label}")
+        stream = _json_handler(logger)
+        logger.warning("boom", extra={"bag": broken, "attempt": 10})
+        line = stream.getvalue()
+        assert line, f"the {label} log line was dropped entirely"
+        payload = json.loads(line)
+        # POSITIVE PARTNER (rule 7): the unreadable container is replaced by a
+        # placeholder rather than published, and its clean sibling survives.
+        assert payload["bag"] == "<unreadable>"
+        assert payload["attempt"] == 10
+
+
+def test_redacting_many_colliding_keys_does_not_take_quadratic_time() -> None:
+    """One ``logger.warning`` must not block for seconds on a per-key usage map.
+
+    ``_disambiguated_key`` rescanned from ``suffix = 2`` for every colliding
+    key. A per-API-key usage map — every key ``sk-…``, so every key redacts to
+    the same ``[REDACTED]`` — is quadratic. Measured with a ``NullHandler``,
+    wall clock around a single ``logger.warning``: 0.0122s at 500 entries,
+    0.2176s at 2000, 1.5019s at 5000 (3x the entries, ~9x the time), against
+    0.0011s at 5000 on ``origin/main``.
+
+    RED WHEN: the ``next_suffix`` memo is dropped from ``_disambiguated_key``
+    so each collision rescans from 2.
+    """
+    import time
+
+    entries = 5000
+    usage = {f"sk-or-v1-{index:016d}": index for index in range(entries)}
+
+    logger = logging.getLogger("product_app.usage_map")
+    logger.propagate = False
+    logger.handlers = [logging.NullHandler()]
+    logger.setLevel(logging.WARNING)
+
+    started = time.perf_counter()
+    logger.warning("boom", extra={"usage": usage})
+    elapsed = time.perf_counter() - started
+
+    # POSITIVE PARTNER (rule 7): the work actually happened — every one of the
+    # 5000 entries is still present, under disambiguated keys, so the budget is
+    # not being met by skipping the redaction.
+    record_extra = _redacted_usage_map(usage)
+    assert len(record_extra) == entries, (
+        f"disambiguation lost entries: {len(record_extra)} of {entries} survived"
+    )
+    # 0.5s is ~3x below the 1.5s the quadratic form measured at this size and
+    # ~50x above the linear form, so it separates the two without being tight.
+    assert elapsed < 0.5, f"redacting {entries} colliding keys took {elapsed:.3f}s"
+
+
+def _redacted_usage_map(usage: dict[str, int]) -> dict[object, object]:
+    """The redacted form of ``usage``, for the cardinality partner above."""
+    from product_app.logging_config import _redact_extra_value
+
+    result = _redact_extra_value(usage)
+    assert isinstance(result, dict)
+    return result

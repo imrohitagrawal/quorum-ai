@@ -99,7 +99,13 @@ into.
    turn an object into text — and replaces the value only when one of them actually
    carries a secret. Numbers, booleans and `None` (`_SECRET_FREE_SCALAR_TYPES`) skip
    it entirely: every redaction pattern needs a specific ASCII token (`Bearer`,
-   `sk-`, `AKIA`, `api_key=`) and no text form of those types produces one.
+   `sk-`, `AKIA`, `api_key=`) and no text form of those types produces one — **of
+   those types EXACTLY, which is why the test is `type(value) in ...` and not
+   `isinstance`.** An earlier draft of this point said "those types" while the code
+   used `isinstance`, and that is false for a SUBCLASS: `sentry_sdk`'s serializer
+   renders numbers via `isinstance(obj, (bool, int, float))`, a tuple that does not
+   contain `complex`, so a `complex` subclass falls through to `safe_repr` and its
+   TEXT form is what gets published. Measured row below.
    This covers `sentry_sdk`'s object-RENDERING paths. Its `Mapping` and sequence
    branches walk contents instead, which is why point 6 exists.
 4. A cycle back-edge returns `_CYCLE_PLACEHOLDER` (`"<cycle>"`), and a container past
@@ -115,6 +121,23 @@ into.
 7. The redactor never compares a caller's object with a bare `!=`. `_differs`
    answers by identity where it can and treats an `__eq__` it cannot evaluate as
    "changed"; the value position does not compare at all any more.
+8. The record factory replaces a top-level extra key when its redacted form has a
+   different TYPE, not only a different value. A `str` subclass with a
+   secret-carrying `__str__` redacts to an EQUAL plain `str`, so an equality test
+   alone said "unchanged" and wrote the caller's original key object back for
+   `sentry_sdk`'s `str(k)` to publish. Measured row below.
+9. Rebuilding a container is wrapped in a `try`/`except` that degrades to
+   `_UNREADABLE_PLACEHOLDER` (`"<unreadable>"`). Point 6 put caller code
+   (`__iter__`, `__getitem__`, `items`) on the redactor's path for the first time,
+   and a mapping that raises there took `logger.warning()` down with it — the
+   dropped-line failure this ADR exists to close, at a new position. The container
+   is replaced rather than passed to `_redact_text_form`, because a container this
+   module could not finish reading may still hand Sentry — whose own traversal
+   fails separately — a subtree nothing here inspected. Caught at the level that
+   failed, so a broken sub-container costs only its own subtree.
+10. Key disambiguation carries a per-base `next_suffix` memo across one mapping's
+    rebuild. Rescanning from `2` for every collision is quadratic, and a
+    per-API-key usage map collides on every key. Measured row below.
 
 ### What ADR-0046 said and what changed
 
@@ -150,8 +173,13 @@ Every row names the command that produces it. Anchors are greps, not line number
 | A secret inside a non-`dict` `Mapping` reached Sentry | a `collections.abc.Mapping` subclass with no custom `__repr__`, through `sentry_sdk.serializer.serialize` | before: `{"headers": {"authorization": "sk-or-v1-...LEAK"}}`; after: `{"headers": {"authorization": "[REDACTED]"}}` |
 | A secret in `__sentry_repr__` reached Sentry | an object with clean `__str__`/`__repr__`, same serializer | before: `{"o": "authorization: Bearer sk-or-v1-...LEAK"}`; after: `{"o": "clean"}` |
 | A `tuple` extra key cost the operator the stdout line | `logger.warning("boom", extra={("a","b"): "v"})`, and the same key nested | before: stream empty, `TypeError: keys must be str, int, float, bool or None, not tuple` swallowed by `handleError`; after: line emitted with the key as `"('a', 'b')"` |
-| STDOUT is unchanged against `origin/main` | eight extra shapes (scalars, nested dict, list, secret string, object, tuple, frozenset, typical) through a `StringIO` `StreamHandler` wearing `JsonFormatter`, timestamps blanked, `diff` of the two trees' output | no difference |
-| STDOUT for the cyclic shape goes from dropped to emitted | same probe | `len=0` before, `len=235` after |
+| STDOUT is unchanged against `origin/main` **for the eight shapes named here** | scalars, nested dict, list, secret string, object, tuple, frozenset, typical — through a `StringIO` `StreamHandler` wearing `JsonFormatter`, timestamps blanked, `diff` of the two trees' output | no difference. (`frozenset` matches only after normalising element ORDER: that is per-process hash-seed noise on both trees — six runs of one tree printed both orders) |
+| STDOUT DOES change for a `Mapping` that is not a `dict` subclass | the same probe extended to a `Mapping` subclass, `ChainMap`, `MappingProxyType`, `defaultdict`, `OrderedDict`, `Counter` and `bytes` | the first three now render EXPANDED (`{"accept": "json"}`) where `origin/main` printed a repr (`<Bag object at 0x…>`, `ChainMap({'a': 1})`, `{'a': 1}`) — decision point 6 working, and an improvement, but not "unchanged". The other four are byte-identical: `defaultdict`/`OrderedDict`/`Counter` are `dict` subclasses the old walk already covered, and `bytes` was already caught by `JsonFormatter`'s final-string scrub |
+| A `complex` SUBCLASS reached a breadcrumb in plaintext | a `complex` subclass with a secret-carrying `__repr__`, through `sentry_sdk.serializer.serialize` | before (and on `origin/main`, identically — a pre-existing position, not a regression): `{"v": "Bearer sk-or-v1-…LEAKME"}` while stdout showed `"[REDACTED]"`; after: redacted in both. `int` and `float` subclasses did NOT leak in the value position — Sentry renders them as the number — but are matched by exact type too, because "which subclass does the current SDK take a numeric branch for" is not a property to depend on |
+| A subclassed top-level extra KEY reached a breadcrumb in plaintext | a `str` subclass key with a secret-carrying `__str__`, same serializer | before (and on `origin/main`, identically): `{"Bearer sk-or-v1-…LEAKME": "v"}`; after: redacted. The nested form of the same shape (an `IntEnum` key, `{"by_status": {Status.RATE_LIMITED: 3}}`) leaked the same way and is closed by the exact-type scalar test |
+| Walking `Mapping` turned a survivable log call into a dropped line | a `Mapping` whose `__getitem__` raises (a lazy header bag / a view over a released connection), and a `list` subclass whose `__iter__` raises | before: `RuntimeError` out of `logger.warning()` into the caller, stream EMPTY — where `origin/main` emitted the line; after: line emitted, the container replaced by `"<unreadable>"`, its clean sibling extras intact |
+| Key disambiguation was quadratic | a per-API-key usage map (every key `sk-…`, so every key collides), `NullHandler`, wall clock around ONE `logger.warning` | before: 0.0122s at 500 entries, 0.2176s at 2000, 1.5019s at 5000 (3x entries → ~9x time); after: 0.0011s / 0.0040s / 0.0123s (10x entries → ~11x time), against 0.0013s at 5000 on `origin/main`. Absolute times are machine-dependent; the SHAPE of the curve is the finding |
+| STDOUT for the cyclic shape goes from dropped to emitted | same probe | before: the stream is EMPTY; after: one complete JSON line carrying the `message` and every non-cyclic extra. An earlier version of this row quoted an exact byte length — that number moves with the probe's logger name, module, function and line number, and the probe was never in the repo, so no reader could re-derive it |
 | A non-`str` extra key crashed the log call before the fix | `logger.warning("x", extra={1: "v"})` | `AttributeError: 'int' object has no attribute 'startswith'` — raised by this redaction hook, not the stdlib |
 | An object whose `__str__` logs re-entered the redactor | that shape with a `NullHandler`, in a standalone script, guard removed | 166 nested `__str__` calls; 1 with the guard. The count is stack-depth dependent — the same mutation run inside pytest prints 160 — so treat the magnitude, not the digits, as the finding |
 | `extra={...}` call sites in `src/` today | `grep -rn "extra={" src/ \| grep -v logging_config` | 12 lines, 2 of them prose; no real call site passes a container or an object |
@@ -209,15 +237,27 @@ Every row names the command that produces it. Anchors are greps, not line number
   issued from inside an object's own `__str__` still cannot have that same object's
   text redacted — it is being rendered — though since round 2 it no longer affects
   any OTHER object on the inner record.
-- A cyclic `extra` no longer drops the operator's stdout line.
+- A cyclic `extra` no longer drops the operator's stdout line, and neither does a
+  container whose own `__iter__`/`__getitem__`/`items` raises — that one is a
+  failure this branch INTRODUCED by walking `Mapping` (decision point 6) and then
+  closed (point 9). An unreadable container is reported as `"<unreadable>"`.
+- A `Mapping` that is not a `dict` subclass (a header bag, `ChainMap`,
+  `MappingProxyType`) now renders EXPANDED on stdout where `origin/main` printed a
+  repr. Correct — it is the same walk that stops the secret inside it reaching
+  Sentry — but it is a visible stdout change, so the "STDOUT is unchanged" row
+  above is scoped to the eight shapes it measured rather than stated in general.
 - Redacted keys are disambiguated, so entry COUNT is preserved. **Set and frozenset
   elements are not** — two distinct secrets in one set still collapse to a single
   `[REDACTED]` element. That is pre-existing, unchanged here, and unfixable in the
   same way: a set element has no position to disambiguate.
 - Data past `_MAX_EXTRA_REDACTION_DEPTH` is now truncated to `"<max-depth>"` rather
   than passed through unredacted. This supersedes the matching bullet in ADR-0046.
-- `"<cycle>"` and `"<max-depth>"` are literal strings an operator will now see in
-  logs. They are not secret-shaped and survive `json.dumps` unchanged.
+- `"<cycle>"`, `"<max-depth>"` and `"<unreadable>"` are literal strings an operator
+  will now see in logs. None is secret-shaped and all survive `json.dumps`
+  unchanged. `"<unreadable>"` costs the container's whole contents, including
+  entries that were read successfully before the failure — deliberate: a
+  half-walked container is exactly the case where this module cannot say what it
+  did not inspect.
 - **Still broken, pre-existing, deliberately not fixed here:** an object whose
   `__str__` logs while `JsonFormatter` is stringifying it recurses through the
   formatter's own `default=str`, outside this module. Measured on `origin/main`:
@@ -227,13 +267,23 @@ Every row names the command that produces it. Anchors are greps, not line number
   uses fewer stack frames. No call site has such an object. Fixing it means bounding
   `JsonFormatter.format`, which is a different concern.
 - Cost. A dict key now goes through `_redact_secrets`, which is four compiled
-  patterns, not one. Measured at 20,000 records per shape, three repetitions each,
-  branch against `origin/main`: the shapes `src/` actually logs move by a few
-  microseconds per record (typical ~44-48µs against ~44µs; a three-key nested dict
-  ~50-53µs against ~45µs), while an OBJECT-valued extra costs about 15µs more
-  (~58-60µs against ~43µs), which is the `str`/`repr`/`__sentry_repr__` renders plus
-  their regex passes. No call site pays the object cost today; the number is here
-  because the day someone writes `extra={"error": exc}` they will.
+  patterns, not one. Measured at 20,000 records per shape, best of three
+  repetitions, `NullHandler`, branch against `origin/main`, on these three shapes
+  stated so a reader can re-derive them:
+  **A** `extra={"error": "<80-char string>", "attempt": 2}`,
+  **B** `extra={"ctx": {"a": 1, "b": "t", "c": {"d": "u"}}}`,
+  **C** `extra={"error": RuntimeError("<80-char string>"), "attempt": 2}`.
+  The conclusion, which is what to carry away: the shapes `src/` actually logs
+  (A and B) cost a few microseconds more per record, and an OBJECT-valued extra
+  (C) costs noticeably more again — roughly half as much again as A on the same
+  tree, and about triple what C cost on `origin/main` — which is the
+  `str`/`repr`/`__sentry_repr__` renders plus their regex passes.
+  **Absolute microsecond figures are deliberately not quoted.** An earlier version
+  of this bullet gave them (~44-48µs, "+15µs"); re-running the same comparison on
+  a different machine and load produced numbers roughly a fifth of those, with the
+  ordering unchanged. The ordering reproduces; the digits do not.
+  No call site pays the object cost today; this is here because the day someone
+  writes `extra={"error": exc}` they will.
 
 ## Related
 
