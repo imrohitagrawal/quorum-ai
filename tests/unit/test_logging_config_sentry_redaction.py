@@ -1397,10 +1397,15 @@ def test_a_non_string_extra_key_still_emits_the_stdout_line() -> None:
     RED WHEN: ``JsonFormatter.format`` stops coercing a key ``json`` cannot
     serialize into its ``str`` form.
     """
-    for label, extra in (
+    # ``dict[Any, Any]``: a tuple key is legal at runtime (``makeRecord``
+    # copies ``extra`` in verbatim) but not in ``Logger.warning``'s
+    # ``Mapping[str, object]`` annotation — which is precisely why nothing
+    # had exercised the shape.
+    cases: tuple[tuple[str, dict[Any, Any]], ...] = (
         ("top", {("a", "b"): "v", "attempt": 6}),
         ("nested", {"e": {("a", "b"): "v"}, "attempt": 6}),
-    ):
+    )
+    for label, extra in cases:
         logger = logging.getLogger(f"product_app.tuple_key_{label}")
         stream = _json_handler(logger)
         logger.warning("boom", extra=extra)
