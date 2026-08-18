@@ -25,13 +25,17 @@ from __future__ import annotations
 import io
 import json
 import logging
-from collections.abc import Iterator
+from collections.abc import Iterator, Mapping
 from typing import Any
 
 import pytest
 import sentry_sdk
 
-from product_app.logging_config import JsonFormatter, install_redaction_record_factory
+from product_app.logging_config import (
+    JsonFormatter,
+    _differs,
+    install_redaction_record_factory,
+)
 
 
 @pytest.fixture(autouse=True)
@@ -920,9 +924,14 @@ def test_a_cycle_longer_than_the_depth_cap_still_emits_a_line_and_leaks_nothing(
     — the same failure as the short cycle, reached through the other guard.
 
     RED WHEN: the depth-cap branch of ``_redact_extra_value`` returns
-    ``value`` instead of ``_DEPTH_CAP_PLACEHOLDER``. Note the period (30) is
-    a literal chosen to exceed the cap, not read from the constant it tests
-    (rule 7a) — raising the cap above 30 is meant to turn this red.
+    ``value`` instead of ``_DEPTH_CAP_PLACEHOLDER``. The period (30) is a
+    literal chosen to exceed the cap, not read from the constant it tests
+    (rule 7a). An earlier version of this line claimed raising the cap above
+    30 would also turn it red; that is false, measured — with
+    ``_MAX_EXTRA_REDACTION_DEPTH = 40`` the whole file still reported
+    ``29 passed``, because past 30 levels the CYCLE guard fires instead of
+    the depth cap, substitutes its own placeholder, and the line is emitted
+    with the secret redacted either way.
     """
     secret = "sk-or-v1-1234567890abcdefLONGCYCLE"
     head: dict[str, Any] = {"api_key": secret}
@@ -1066,8 +1075,18 @@ def test_an_extra_object_with_no_usable_text_form_is_left_alone(
     The value must be passed through untouched rather than the log call
     failing — the object was only decorating the record.
 
-    RED WHEN: ``_redact_text_form``'s ``if not forms: return value`` guard is
-    removed (``forms[0]`` raises ``IndexError`` out of ``logger.warning``).
+    RED WHEN: the ``all()``-over-``forms`` test in ``_redact_text_form`` is
+    made to index ``forms`` (e.g. ``if forms and all(...)``, which then falls
+    through to ``forms[0]`` and raises ``IndexError`` out of
+    ``logger.warning``). The earlier version of this line named an
+    ``if not forms: return value`` guard — no such guard exists, and the same
+    commit's own comment says so; the empty-``forms`` case is carried by
+    ``all()`` over an empty list being ``True``.
+
+    The dirty SIBLING object below is what stops this test being vacuous: an
+    earlier version asserted only that the unrenderable object was passed
+    through, which stayed green with ``_redact_text_form`` replaced by
+    ``return value`` — i.e. with the whole object-text pass deleted.
     """
 
     class NoTextForm:
@@ -1077,16 +1096,28 @@ def test_an_extra_object_with_no_usable_text_form_is_left_alone(
         def __repr__(self) -> str:
             raise ValueError("no repr")
 
+    secret = "sk-or-v1-1234567890abcdefNOTEXTFORM"
+
+    class DirtySibling:
+        def __str__(self) -> str:
+            return f"upstream said {secret}"
+
+        __repr__ = __str__
+
     sentinel = NoTextForm()
     logger = logging.getLogger("product_app.no_text_form")
-    logger.warning("boom", extra={"error": sentinel, "attempt": 3})
+    logger.warning("boom", extra={"error": sentinel, "other": DirtySibling(), "attempt": 3})
 
     own = [c for c in crumbs if c.get("category") == "product_app.no_text_form"]
     assert own, "the log call produced no breadcrumb at all — fixture is broken"
     for crumb in own:
         assert crumb["data"]["error"] is sentinel
-        # POSITIVE PARTNER (rule 7): a normal sibling extra still arrives, so
-        # the record was built and captured rather than abandoned.
+        # POSITIVE PARTNER (rule 7), and the anti-vacuity partner: the
+        # object-text pass is demonstrably LIVE in this very call — a sibling
+        # object whose text carries a secret was rewritten — so "the
+        # unrenderable one came through untouched" is a real exemption and
+        # not the trivial behaviour of a redactor that does nothing.
+        assert crumb["data"]["other"] == "upstream said [REDACTED]"
         assert crumb["data"]["attempt"] == 3
 
 
@@ -1117,3 +1148,267 @@ def test_three_colliding_secret_keys_all_survive_with_distinct_names(
         assert sorted(data.values()) == ["a", "b", "c"], f"a value was lost: {data}"
         for secret in secrets:
             assert secret not in json.dumps(data), f"a secret-shaped key survived: {data}"
+
+
+def test_an_extra_object_whose_eq_raises_does_not_break_the_log_call() -> None:
+    """The redactor must never compare a caller's object with ``!=``.
+
+    Issue #341 review round 2 (all three lenses, independently): the record
+    factory decided whether to write a redacted value back by evaluating
+    ``redacted_value != value``. ``_redact_text_form`` returns the SAME
+    object when it finds nothing, so that is ``value != value`` on a
+    caller-supplied object. An ``__eq__``/``__ne__`` that raises, or that
+    returns a non-bool (the numpy/pandas elementwise shape), took the log
+    call down with it — measured on this branch before the fix:
+    ``ValueError: ne exploded`` and ``ValueError: truth value of an array is
+    ambiguous`` raised straight out of ``logger.warning``, where
+    ``origin/main`` emitted the line normally. A redactor that crashes the
+    call it was only decorating is the exact failure this issue exists to
+    remove, in the opposite direction.
+
+    RED WHEN (value position): the record factory's unconditional
+    ``attrs[key] = redacted_value`` is put back behind an
+    ``elif redacted_value != value:`` test.
+    RED WHEN (key position): ``_differs`` is replaced by a bare ``!=``, or
+    its ``try``/``except`` is removed.
+    """
+
+    class ExplodingEq:
+        def __eq__(self, other: object) -> bool:
+            raise ValueError("eq exploded")
+
+        def __ne__(self, other: object) -> bool:
+            raise ValueError("ne exploded")
+
+        def __hash__(self) -> int:
+            return 1
+
+        def __str__(self) -> str:
+            return "harmless"
+
+        __repr__ = __str__
+
+    class ArrayLikeEq:
+        def __eq__(self, other: object) -> object:  # type: ignore[override]
+            raise ValueError("truth value of an array is ambiguous")
+
+        __ne__ = __eq__  # type: ignore[assignment]
+
+        def __hash__(self) -> int:
+            return 2
+
+        def __str__(self) -> str:
+            return "arraylike"
+
+        __repr__ = __str__
+
+    for label, obj in (("eq", ExplodingEq()), ("ne", ArrayLikeEq())):
+        logger = logging.getLogger(f"product_app.exploding_{label}")
+        stream = _json_handler(logger)
+        logger.warning("boom", extra={"o": obj, "attempt": 4})
+        line = stream.getvalue()
+        assert line, f"the {label} object's log line was dropped entirely"
+        payload = json.loads(line)
+        # POSITIVE PARTNER (rule 7): the record is complete, not a husk that
+        # would satisfy "did not raise" for free.
+        assert payload["message"] == "boom"
+        assert payload["attempt"] == 4
+        assert payload["o"] == str(obj)
+
+    # The KEY position is guarded by ``_differs`` (exercised directly by
+    # ``test_differs_never_lets_a_bad_eq_escape`` below) rather than here:
+    # the same object used as an ``extra`` KEY never reaches this module at
+    # all. CPython's own ``Logger.makeRecord`` evaluates
+    # ``key in ["message", "asctime"]`` first — ``logging/__init__.py:1655``
+    # on 3.12.13 — so it raises inside the stdlib, with or without this
+    # redaction hook installed. Measured with the factory NOT installed:
+    # ``RAISED ValueError: eq exploded``.
+
+
+def test_differs_never_lets_a_bad_eq_escape() -> None:
+    """``_differs`` is the only comparison the redactor makes against a caller object.
+
+    Driven directly because the reachable crash was in the VALUE position,
+    which no longer compares at all, and the KEY position is intercepted by
+    CPython's own ``makeRecord`` before this module sees it (see
+    ``test_an_extra_object_whose_eq_raises_does_not_break_the_log_call``).
+    The helper still guards the key path, so its contract is pinned here
+    rather than left to a shape that cannot be logged.
+
+    RED WHEN: the ``try``/``except`` in ``_differs`` is removed (the first
+    case raises), or the identity short-circuit is dropped (the second case
+    raises instead of answering ``False``).
+    """
+
+    class ExplodingEq:
+        def __eq__(self, other: object) -> bool:
+            raise ValueError("eq exploded")
+
+        def __ne__(self, other: object) -> bool:
+            raise ValueError("ne exploded")
+
+        def __hash__(self) -> int:
+            return 1
+
+    obj = ExplodingEq()
+    # Two different objects it cannot compare: answer "changed", which writes
+    # the redacted form back — the safe direction for a redactor.
+    assert _differs("redacted", obj) is True
+    # The same object: answered by identity, without ever calling ``__ne__``.
+    assert _differs(obj, obj) is False
+    # POSITIVE PARTNER (rule 7): it still reports a real difference and a
+    # real match for ordinary values, so "True"/"False" above are not what
+    # this helper says about everything.
+    assert _differs("[REDACTED]", "sk-or-v1-x") is True
+    assert _differs("same", "same") is False
+
+
+def test_two_distinct_secret_top_level_extra_keys_do_not_collapse() -> None:
+    """The record-level key rewrite needs the same discriminator as the nested one.
+
+    ``extra={S1: "a", S2: "b"}`` redacts both keys to ``[REDACTED]``; without
+    a discriminator the second write overwrites the first and one extra is
+    gone from every sink at once. The nested dict branch has had this covered
+    since the first commit on this branch; the record-level branch did not,
+    and deleting its ``_disambiguated_key`` call left all 29 tests green.
+
+    RED WHEN: the ``_disambiguated_key`` call in
+    ``make_record_with_extra_redaction`` is removed.
+    """
+    secrets = ["sk-or-v1-4444444444444444444444DDDD", "sk-or-v1-5555555555555555555555EEEE"]
+    logger = logging.getLogger("product_app.top_level_collision")
+    stream = _json_handler(logger)
+    logger.warning("boom", extra=dict(zip(secrets, "ab", strict=True)))
+
+    line = stream.getvalue()
+    assert line, "the log line was dropped entirely"
+    payload = json.loads(line)
+    survivors = {k: v for k, v in payload.items() if v in {"a", "b"}}
+    assert len(survivors) == 2, f"a redacted top-level key overwrote another entry: {payload}"
+    assert sorted(survivors.values()) == ["a", "b"], f"a value was lost: {payload}"
+    for secret in secrets:
+        assert secret not in line, f"a secret-shaped top-level key survived: {line}"
+
+
+def test_a_mapping_that_is_not_a_dict_is_walked_rather_than_stringified(
+    sentry_client: None, crumbs: list[dict[str, Any]]
+) -> None:
+    """Sentry walks any ``Mapping``, so inspecting only its text form is blind.
+
+    Issue #341 review round 2 (security lens): ``_redact_text_form`` decides
+    "is there a secret here?" from ``str``/``repr``. ``sentry_sdk``'s
+    serializer does not render every object that way — it has a dedicated
+    ``Mapping`` branch and walks the CONTENTS. A ``Mapping`` subclass with
+    no custom ``__repr__`` (an HTTP header bag, the common shape) therefore
+    has a clean text form, was returned untouched, and Sentry then serialized
+    the secret inside it in plaintext. Reproduced through ``sentry_sdk``'s own
+    serializer, on this branch before the fix:
+    ``{"headers": {"authorization": "sk-or-v1-...LEAK"}}``.
+
+    RED WHEN: ``Mapping`` is dropped from ``_EXTRA_CONTAINER_TYPES``, or the
+    dict branch of ``_redact_extra_value`` narrows back to ``isinstance(value,
+    dict)``.
+    """
+    from sentry_sdk.serializer import serialize
+
+    secret = "sk-or-v1-1234567890abcdefMAPPINGLEAK"
+
+    class Headers(Mapping[str, str]):
+        def __init__(self, data: dict[str, str]) -> None:
+            self._data = data
+
+        def __getitem__(self, key: str) -> str:
+            return self._data[key]
+
+        def __iter__(self) -> Iterator[str]:
+            return iter(self._data)
+
+        def __len__(self) -> int:
+            return len(self._data)
+
+    logger = logging.getLogger("product_app.header_bag")
+    logger.warning("boom", extra={"headers": Headers({"authorization": secret, "accept": "json"})})
+
+    own = [c for c in crumbs if c.get("category") == "product_app.header_bag"]
+    assert own, "the log call produced no breadcrumb at all — fixture is broken"
+    for crumb in own:
+        rendered = json.dumps(serialize(crumb["data"]))
+        assert secret not in rendered, (
+            f"the secret inside a non-dict Mapping reached Sentry: {rendered}"
+        )
+        # POSITIVE PARTNER (rule 7): the mapping was WALKED, not dropped —
+        # its structure and its clean sibling entry both survive.
+        assert crumb["data"]["headers"]["authorization"] == "[REDACTED]"
+        assert crumb["data"]["headers"]["accept"] == "json"
+
+
+def test_a_sentry_repr_carrying_the_secret_never_reaches_a_breadcrumb(
+    sentry_client: None, crumbs: list[dict[str, Any]]
+) -> None:
+    """``__sentry_repr__`` is a rendering path ``str``/``repr`` cannot see.
+
+    Issue #341 review round 2 (security lens): ``sentry_sdk``'s serializer
+    prefers an object's ``__sentry_repr__`` over its ``repr``. An object with
+    a clean ``__str__`` and ``__repr__`` but a dirty ``__sentry_repr__``
+    therefore looked secret-free to ``_redact_text_form`` and was serialized
+    in plaintext. Reproduced on this branch before the fix:
+    ``{"o": "authorization: Bearer sk-or-v1-...LEAK"}``.
+
+    RED WHEN: ``__sentry_repr__`` is dropped from the renderers
+    ``_redact_text_form`` inspects.
+    """
+    from sentry_sdk.serializer import serialize
+
+    secret = "sk-or-v1-1234567890abcdefSENTRYREPR"
+
+    class QuietRepr:
+        def __str__(self) -> str:
+            return "upstream call failed"
+
+        __repr__ = __str__
+
+        def __sentry_repr__(self) -> str:
+            return f"authorization: Bearer {secret}"
+
+    logger = logging.getLogger("product_app.sentry_repr")
+    logger.warning("boom", extra={"o": QuietRepr(), "attempt": 5})
+
+    own = [c for c in crumbs if c.get("category") == "product_app.sentry_repr"]
+    assert own, "the log call produced no breadcrumb at all — fixture is broken"
+    for crumb in own:
+        rendered = json.dumps(serialize(crumb["data"]))
+        assert secret not in rendered, f"the secret in __sentry_repr__ reached Sentry: {rendered}"
+        # POSITIVE PARTNER (rule 7): the record still carries its other
+        # extras, so the value was rewritten rather than the call abandoned.
+        assert crumb["data"]["attempt"] == 5
+
+
+def test_a_non_string_extra_key_still_emits_the_stdout_line() -> None:
+    """A key ``json.dumps`` cannot take must not cost the operator the line.
+
+    Issue #341 review round 2: the ``isinstance(key, str)`` guards stopped
+    ``AttributeError``, but ``json.dumps`` still refuses a ``tuple`` key
+    (``TypeError: keys must be str, int, float, bool or None, not tuple``),
+    which ``logging.Handler.handleError`` swallows — the line vanished
+    silently, at both the top level and nested inside another extra. The
+    commit that added those guards said in its own body that fixing one crash
+    site alone converts a loud crash into a silent drop; this is that drop.
+
+    RED WHEN: ``JsonFormatter.format`` stops coercing a key ``json`` cannot
+    serialize into its ``str`` form.
+    """
+    for label, extra in (
+        ("top", {("a", "b"): "v", "attempt": 6}),
+        ("nested", {"e": {("a", "b"): "v"}, "attempt": 6}),
+    ):
+        logger = logging.getLogger(f"product_app.tuple_key_{label}")
+        stream = _json_handler(logger)
+        logger.warning("boom", extra=extra)
+        line = stream.getvalue()
+        assert line, f"the {label} tuple-key log line was dropped entirely"
+        payload = json.loads(line)
+        # POSITIVE PARTNER (rule 7): the record is complete and the awkward
+        # key's VALUE survived rather than being discarded to save the line.
+        assert payload["message"] == "boom"
+        assert payload["attempt"] == 6
+        assert "v" in json.dumps(payload), f"the tuple-keyed value was lost: {payload}"

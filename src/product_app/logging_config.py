@@ -166,15 +166,38 @@ _MAX_EXTRA_REDACTION_DEPTH = 25
 #: ``extra={"tokens": (secret,)}``) reached a real Sentry breadcrumb in
 #: plaintext, because the walk originally only recognised ``dict``/``list``
 #: and returned any other value — including a nested tuple — unchanged.
-_EXTRA_CONTAINER_TYPES = (dict, list, tuple, set, frozenset)
+#: ``Mapping`` (not just ``dict``) because ``sentry_sdk``'s serializer has a
+#: dedicated ``Mapping`` branch and walks the CONTENTS of anything that
+#: satisfies it. A ``Mapping`` subclass with no custom ``__repr__`` — an HTTP
+#: header bag, the common shape — therefore has a clean text form, so the
+#: object fallback below saw nothing to redact while Sentry serialized the
+#: secret inside it. Measured through ``sentry_sdk``'s own serializer in
+#: issue #341's round-2 security review:
+#: ``{"headers": {"authorization": "sk-or-v1-...LEAK"}}``. Walking it rebuilds
+#: it as a plain ``dict``, which is what both sinks emit for it anyway.
+_EXTRA_CONTAINER_TYPES = (Mapping, list, tuple, set, frozenset)
 
-#: Types whose text form cannot carry a secret-shaped substring: every
-#: redaction pattern needs at least one ASCII letter (``Bearer``, ``sk-``,
-#: ``AKIA``, or a labelled ``api_key=``), and ``str()`` of these produces
-#: digits, ``.``, ``-``, ``+``, ``j``, ``True``/``False``/``None`` only.
-#: Listed so the object fallback below never pays a ``str()`` + four regex
-#: passes for the scalars every real ``extra={...}`` call site actually uses
-#: (issue #341 (e): all 11 call sites in ``src/`` pass ``str``/``int``/``bool``).
+
+def _sentry_repr(value: object) -> str:
+    """Render ``value`` the way ``sentry_sdk``'s serializer prefers to."""
+    return str(value.__sentry_repr__())  # type: ignore[attr-defined]
+
+
+#: Every way a sink is known to turn an object into text. See
+#: ``_redact_text_form``.
+_TEXT_RENDERERS = (str, repr, _sentry_repr)
+
+#: Types whose text form cannot carry a secret-shaped substring. Every
+#: redaction pattern needs a specific ASCII token — ``Bearer``, ``sk-``,
+#: ``AKIA``, or a labelled ``api_key=`` — and no ``str()`` of these types
+#: produces one: the letters they can produce at all are ``inf``, ``nan``,
+#: ``j``, ``True``, ``False`` and ``None``. (An earlier version of this
+#: comment claimed digits and punctuation ONLY, which
+#: ``str(float("inf"))`` refutes; the conclusion is unaffected.) Listed so
+#: the object fallback below never pays a ``str()`` + four regex passes for
+#: the scalars real ``extra={...}`` call sites actually use — issue #341 (e)
+#: found no call site in ``src/`` passing a container or an object, only
+#: strings, numbers, booleans and ``None``.
 _SECRET_FREE_SCALAR_TYPES = (bool, int, float, complex, type(None))
 
 #: Substituted for a container that is its own ancestor. Issue #341 §2: the
@@ -194,18 +217,36 @@ _CYCLE_PLACEHOLDER = "<cycle>"
 _DEPTH_CAP_PLACEHOLDER = "<max-depth>"
 
 
-#: Per-thread guard for ``_redact_text_form``. An object whose ``__str__``
-#: logs (a lazy proxy, a debug helper) re-enters this module from inside the
-#: very ``str()`` call that was inspecting it. Measured 2026-08-18 without
-#: this guard, on an object whose ``__str__`` logs ITSELF via ``extra=``:
-#: 166 nested ``__str__`` calls before CPython's recursion limit stopped it —
-#: caught by the ``except Exception`` below and returned cleanly (RecursionError
-#: is a RuntimeError), so ``logger.warning()`` never raised, but 166 spurious
-#: records were emitted for one call. With the guard: 1. Same shape and same
-#: trade-off as the record factory's ``in_progress`` flag above — the inner,
-#: reentrant record loses only this object-text pass; its string and container
-#: extras are still redacted.
+#: Per-thread set of ``id()``s currently being rendered by
+#: ``_redact_text_form``. An object whose ``__str__`` logs (a lazy proxy, a
+#: debug helper) re-enters this module from inside the very ``str()`` call
+#: that was inspecting it. Measured 2026-08-18 with no guard at all, on an
+#: object whose ``__str__`` logs ITSELF via ``extra=``, under a
+#: ``NullHandler`` in a standalone script: 166 nested ``__str__`` calls
+#: before CPython's recursion limit stopped it — caught by the
+#: ``except Exception`` below and returned cleanly (``RecursionError`` is a
+#: ``RuntimeError``), so ``logger.warning()`` never raised, but 166 spurious
+#: records were emitted for one call. The exact count is stack-depth
+#: dependent and moves with the harness; inside a pytest test the same
+#: mutation prints 160. With the guard: 1.
+#:
+#: Keyed on the OBJECT, not a single per-thread flag. A flag was the first
+#: form, and issue #341's round-2 security review measured what it cost: it
+#: was held for the whole ``str``/``repr`` window, so a log call made from
+#: inside one object's ``__str__`` skipped object-text redaction for a
+#: DIFFERENT object, and a secret in that object's text form reached a
+#: Sentry breadcrumb in plaintext. An id-keyed set stops only the genuine
+#: self-reference, which is the case that cannot be rendered anyway.
 _text_form_in_progress = threading.local()
+
+
+def _rendering_ids() -> set[int]:
+    """The set of object ids this thread is currently rendering."""
+    ids = getattr(_text_form_in_progress, "ids", None)
+    if ids is None:
+        ids = set()
+        _text_form_in_progress.ids = ids
+    return ids
 
 
 def _redact_text_form(value: object) -> object:
@@ -216,11 +257,19 @@ def _redact_text_form(value: object) -> object:
     — used to be skipped entirely, so Sentry received the live object with
     the credential in its ``args``. ``bytes`` leaked the same way.
 
-    BOTH ``str`` and ``repr`` are inspected because the two sinks disagree
-    about which one they render: ``JsonFormatter`` passes ``default=str``,
-    while ``sentry_sdk``'s serializer falls back to a repr. An object whose
-    ``__repr__`` carries the secret but whose ``__str__`` does not would
-    otherwise reach Sentry in plaintext.
+    ``str``, ``repr`` AND ``__sentry_repr__`` are all inspected, because the
+    sinks disagree about which one they render: ``JsonFormatter`` passes
+    ``default=str``; ``sentry_sdk``'s serializer prefers an object's
+    ``__sentry_repr__`` and otherwise falls back to a ``repr``. An object
+    whose ``__repr__`` (or ``__sentry_repr__``) carries the secret but whose
+    ``__str__`` does not would otherwise reach Sentry in plaintext — the
+    ``__sentry_repr__`` case was measured doing exactly that in issue #341's
+    round-2 security review.
+
+    This covers the serializer's OBJECT rendering paths only. Its
+    ``Mapping`` and sequence branches walk contents instead of rendering
+    text, and are handled upstream by ``_redact_extra_value`` walking those
+    containers rather than reaching this function at all.
 
     When neither form carries a secret the ORIGINAL object is returned
     untouched — the common case, and what keeps a non-secret extra's type
@@ -229,15 +278,16 @@ def _redact_text_form(value: object) -> object:
     to what ``JsonFormatter``'s ``default=str`` plus its final-string scrub
     already produced on the stdout path, so that sink's output does not move.
 
-    ``str``/``repr`` are called defensively: a ``__str__`` that raises must
-    not take down the log call it was only decorating.
+    Every renderer is called defensively: a ``__str__`` that raises must not
+    take down the log call it was only decorating.
     """
-    if getattr(_text_form_in_progress, "active", False):
+    rendering = _rendering_ids()
+    if id(value) in rendering:
         return value
-    _text_form_in_progress.active = True
+    rendering.add(id(value))
     try:
         forms: list[str] = []
-        for render in (str, repr):
+        for render in _TEXT_RENDERERS:
             try:
                 forms.append(render(value))
             except Exception:  # noqa: BLE001 - a bad __str__ must not break logging
@@ -252,7 +302,7 @@ def _redact_text_form(value: object) -> object:
             return value
         return _redact_secrets(forms[0])
     finally:
-        _text_form_in_progress.active = False
+        rendering.discard(id(value))
 
 
 def _disambiguated_key(key: object, taken: Mapping[object, object]) -> object:
@@ -278,6 +328,59 @@ def _disambiguated_key(key: object, taken: Mapping[object, object]) -> object:
     while f"{base}.{suffix}" in taken:
         suffix += 1
     return f"{base}.{suffix}"
+
+
+#: Key types ``json.dumps`` accepts. Anything else raises
+#: ``TypeError: keys must be str, int, float, bool or None, not <type>``.
+_JSON_KEY_TYPES = (str, int, float, type(None))
+
+
+def _serializable_key(key: object) -> object:
+    """Return ``key`` in a form the stdout sink can actually write.
+
+    Issue #341 round 2: the ``isinstance(key, str)`` guards added earlier on
+    this branch stopped an ``AttributeError``, but ``json.dumps`` still
+    refuses a ``tuple`` key, and that ``TypeError`` is raised INSIDE
+    ``JsonFormatter.format`` where ``logging.Handler.handleError`` swallows
+    it — the operator's whole line vanished, at the top level and nested
+    alike. The commit that added those guards said in its own body that
+    fixing one crash site alone converts a loud crash into a silent drop;
+    this is that drop, closed at the one place every mapping is already
+    rebuilt.
+
+    Only keys ``json`` cannot take are touched, so no existing line moves.
+    ``sentry_sdk``'s serializer already renders such a key as its ``str``, so
+    this makes the two sinks agree rather than changing what Sentry shows.
+    """
+    return key if isinstance(key, _JSON_KEY_TYPES) else str(key)
+
+
+def _differs(redacted: object, original: object) -> bool:
+    """Did redaction change this value? Never trusting the caller's ``__eq__``.
+
+    Issue #341 round 2, found independently by all three review lenses: the
+    record factory used a bare ``redacted_value != value``. Since
+    ``_redact_text_form`` returns the SAME object when it finds nothing, that
+    is ``value != value`` on a caller-supplied object — and an ``__eq__`` /
+    ``__ne__`` that raises (or returns a non-bool, the numpy/pandas
+    elementwise shape) took ``logger.warning()`` down with it, where
+    ``origin/main`` had emitted the line normally because it never compared
+    such a value at all. Measured before this helper existed:
+    ``ValueError: ne exploded`` and ``ValueError: truth value of an array is
+    ambiguous`` raised straight out of ``logger.warning``.
+
+    The identity test comes first and carries the common case: every clean
+    path returns the original object itself. ``bool(...)`` forces a non-bool
+    ``__ne__`` result to resolve here, inside the guard, rather than in the
+    caller's ``if``. On any failure the answer is "changed", which writes the
+    redacted form back — the safe direction for a redactor.
+    """
+    if redacted is original:
+        return False
+    try:
+        return bool(redacted != original)
+    except Exception:  # noqa: BLE001 - a bad __eq__ must not break logging
+        return True
 
 
 def _redact_extra_value(value: object, _ancestors: frozenset[int] = frozenset()) -> object:
@@ -335,13 +438,15 @@ def _redact_extra_value(value: object, _ancestors: frozenset[int] = frozenset())
         # forever.
         return _CYCLE_PLACEHOLDER
     ancestors = _ancestors | {obj_id}
-    if isinstance(value, dict):
+    if isinstance(value, Mapping):
         redacted: dict[object, object] = {}
         for key, item in value.items():
             # The KEY is redacted too (issue #341 §1). Disambiguation is
             # unconditional, not "only when the key changed": an untouched
             # literal ``"[REDACTED]"`` key can collide with a redacted one.
-            placed = _disambiguated_key(_redact_extra_value(key, ancestors), redacted)
+            placed = _disambiguated_key(
+                _serializable_key(_redact_extra_value(key, ancestors)), redacted
+            )
             redacted[placed] = _redact_extra_value(item, ancestors)
         return redacted
     if isinstance(value, list):
@@ -578,14 +683,20 @@ def install_redaction_record_factory() -> None:
             # gap as the nested dict, one level up. Written through
             # ``record.__dict__`` rather than ``setattr``/``delattr`` because
             # a key here is not guaranteed to be a ``str``.
-            redacted_key = _redact_extra_value(key)
-            if redacted_key != key:
-                redacted_key = _disambiguated_key(redacted_key, attrs)
+            redacted_key = _serializable_key(_redact_extra_value(key))
             redacted_value = _redact_extra_value(value)
-            if redacted_key != key:
+            if _differs(redacted_key, key):
+                # Same discriminator as the nested dict branch, for the same
+                # reason: two secret-shaped keys both redact to
+                # ``[REDACTED]`` and the second write would drop the first
+                # extra from every sink at once.
                 del attrs[key]
-                attrs[redacted_key] = redacted_value
-            elif redacted_value != value:
+                attrs[_disambiguated_key(redacted_key, attrs)] = redacted_value
+            else:
+                # Written unconditionally rather than behind a
+                # ``redacted_value != value`` test: the comparison bought
+                # nothing (assigning an unchanged value is a no-op) and cost
+                # a crash on any object with an awkward ``__eq__``.
                 attrs[key] = redacted_value
         return record
 
