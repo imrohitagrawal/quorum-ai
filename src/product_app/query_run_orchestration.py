@@ -101,6 +101,9 @@ from product_app.providers import (
 )
 from product_app.providers import provider_execution_service as provider_execution_service
 from product_app.run_history_store import RunHistoryRow
+from product_app.run_history_store import (
+    fill_layer_a_evaluation_if_absent as _fill_run_layer_a_evaluation,
+)
 from product_app.run_history_store import record_terminal_run as _record_run_history
 from product_app.run_history_store import update_evaluation as _update_run_evaluation
 from product_app.synthesis import (
@@ -1671,11 +1674,20 @@ def _persist_run_evaluation(*, query_run: QueryRun, agreement: AgreementSummary)
     for a run the judge was never allowed to look at — and, on a re-persist
     after memo eviction, replaced a verdict that had already been bought.
     The refusal cause goes on the ``run_evaluated`` event instead, so the empty
-    columns are an explained absence rather than a false claim.
+    trust column is an explained absence rather than a false claim.
+
+    THE LAYER-A RECORD IS STILL WRITTEN on that path, through
+    ``fill_layer_a_evaluation_if_absent``. Layer A is deterministic, needs no
+    I/O and no judge, and no spend rail changes what it says, so AC-041 holds
+    for a refused run exactly as for any other; only the trust column is
+    withheld. That narrower statement never touches ``trust_json`` and fills
+    only an absent ``eval_json``, so it can neither replace a bought verdict
+    (the clobber above) nor overwrite a row's real judge block with the
+    ``judge: None`` a suppressed evaluation carries.
 
     This does NOT make the durable row equal the served projection. A run
-    refused at 23:59 is served a real verdict tomorrow while its trust columns
-    stay empty for the rest of its life; nothing re-visits a run
+    refused at 23:59 is served a real verdict tomorrow while its trust column
+    stays empty for the rest of its life; nothing re-visits a run
     (``_update_run_evaluation`` has one caller, this one, reached only from
     terminal persist). ADR-0055 records why that gap is left open.
     """
@@ -1691,6 +1703,11 @@ def _persist_run_evaluation(*, query_run: QueryRun, agreement: AgreementSummary)
                 eval_json=result.eval_json(),
                 trust_json=result.trust_json(),
             )
+        else:
+            _fill_run_layer_a_evaluation(
+                str(query_run.query_run_id),
+                eval_json=result.eval_json(),
+            )
         _record_feedback_event(
             recorder="evaluation",
             event_type="run_evaluated",
@@ -1703,11 +1720,19 @@ def _persist_run_evaluation(*, query_run: QueryRun, agreement: AgreementSummary)
                 # Issue #342: on a suppressed read these two are what the
                 # judge WOULD have decided and did not, so they are nulled
                 # rather than reported as a finding. ``judge_refusal`` below
-                # says why the columns are empty; absence without a cause is
+                # says why they are empty; absence without a cause is
                 # indistinguishable from a crash mid-persist.
-                "trust_band": None if suppression else result.trust.band,
-                "support_verified": (None if suppression else result.trust.support_verified),
-                "judge_refusal": suppression.value if suppression else None,
+                #
+                # ``is not None``, never truthiness, and identically to the
+                # write branch above: an enum member whose value happened to
+                # be falsy would otherwise suppress the ROW while the event
+                # went on asserting the very verdict this exists to withhold,
+                # with no cause recorded.
+                "trust_band": None if suppression is not None else result.trust.band,
+                "support_verified": (
+                    None if suppression is not None else result.trust.support_verified
+                ),
+                "judge_refusal": suppression.value if suppression is not None else None,
                 # Issue #258: so "are the judges I pay for returning
                 # anything?" is answerable from the durable event stream
                 # rather than by re-running a query. A closed enum token or
@@ -2046,8 +2071,9 @@ class _MemoisedRunJudge:
             # divergence used to be self-limiting because every later read
             # recomputed; since #284 an EVALUATION memo sits in front, and a
             # diverged result stored there would be permanent for a terminal
-            # run. ``served_without_verdict`` is set here so
-            # ``_evaluate_terminal_run`` declines to store this one.)
+            # run. ``suppression_reason`` is set here so
+            # ``_evaluate_terminal_run_with_suppression`` declines to store
+            # this one — and, since #342, so the persist path can say WHY.)
             try:
                 return future.result(timeout=_JUDGE_INFLIGHT_WAIT_SECONDS).verdict
             except FuturesTimeoutError:

@@ -82,8 +82,24 @@ _CLOSE_LOCK_TIMEOUT_S = 5.0
 class RunHistoryRow:
     """One durable, PII-minimised record of a terminal query run.
 
-    ``eval_json`` / ``trust_json`` are ``None`` until S2's evaluation engine
-    fills them via :meth:`RunHistoryStore.update_evaluation`.
+    ``eval_json`` is ``None`` until S2's evaluation engine fills it, via
+    :meth:`RunHistoryStore.update_evaluation` on the ordinary path or
+    :meth:`RunHistoryStore.fill_layer_a_evaluation_if_absent` when the Layer-B
+    judge was refused.
+
+    ``trust_json`` is ``None`` in TWO different situations, and a reader cannot
+    tell them apart from this row alone (#342, ADR-0055):
+
+    * the evaluation has not been attached yet, or the process died between
+      the metrics row and the attach; or
+    * the run reached a terminal state and the money rails refused the Layer-B
+      judge a dispatch, so no verdict exists to record. The cause is on that
+      run's ``run_evaluated`` event in the feedback store, under
+      ``judge_refusal`` — a DIFFERENT database, written best-effort.
+
+    A permanently empty ``trust_json`` is therefore an absence, never a
+    finding. It does NOT mean the run scored badly, and it is never rewritten
+    once the rail resets.
     """
 
     query_run_id: str
@@ -249,6 +265,40 @@ class RunHistoryStore:
                 (
                     json.dumps(eval_json) if eval_json is not None else None,
                     json.dumps(trust_json) if trust_json is not None else None,
+                    query_run_id,
+                ),
+            )
+
+    def fill_layer_a_evaluation_if_absent(
+        self,
+        query_run_id: str,
+        *,
+        eval_json: dict[str, Any] | None,
+    ) -> None:
+        """Attach the Layer-A column ONLY, and only to a row that has none.
+
+        For a run the Layer-B judge was never allowed to look at (#342,
+        ADR-0055). Layer A is deterministic, needs no I/O and no judge, and no
+        spend rail changes what it says, so it belongs on the row even when no
+        verdict may be written.
+
+        Two deliberate narrowings, both of which :meth:`update_evaluation`
+        lacks:
+
+        * ``trust_json`` is not in the statement at all, so this can never
+          replace a verdict the account already bought.
+        * ``AND eval_json IS NULL`` — a suppressed ``eval_json`` carries
+          ``judge: None`` because no judge ran, so writing it over a row that
+          already records a judge block would leave the row contradicting
+          itself: a ``high`` trust column beside "no judge ran". Filling only
+          an absence cannot do that, and one atomic UPDATE does it without a
+          read-modify-write (ADR-0002's single-writer constraint).
+        """
+        with self._lock:
+            self._conn.execute(
+                "UPDATE runs SET eval_json = ? WHERE query_run_id = ? AND eval_json IS NULL",
+                (
+                    json.dumps(eval_json) if eval_json is not None else None,
                     query_run_id,
                 ),
             )
@@ -442,6 +492,30 @@ def update_evaluation(
         )
 
 
+def fill_layer_a_evaluation_if_absent(
+    query_run_id: str,
+    *,
+    eval_json: dict[str, Any] | None,
+) -> None:
+    """Best-effort hot-path wrapper for the Layer-A-only attach, never raises.
+
+    Exact parity with :func:`update_evaluation` — see
+    :meth:`RunHistoryStore.fill_layer_a_evaluation_if_absent` for why this is a
+    separate, narrower statement rather than a flag on the other one.
+    """
+    store = get_store()
+    if store is None:
+        return
+    try:
+        store.fill_layer_a_evaluation_if_absent(query_run_id, eval_json=eval_json)
+    except Exception as exc:  # noqa: BLE001 — run-history sink is best-effort
+        _log.warning(
+            "run_history_store: failed to attach Layer-A evaluation for run %s: %s",
+            query_run_id,
+            exc,
+        )
+
+
 @contextmanager
 def configure_for_tests() -> Iterator[RunHistoryStore]:
     """Yield a configured in-memory store; restore ``None`` on exit."""
@@ -460,6 +534,7 @@ __all__ = [
     "RunHistoryStore",
     "configure",
     "configure_for_tests",
+    "fill_layer_a_evaluation_if_absent",
     "get_store",
     "record_terminal_run",
     "update_evaluation",

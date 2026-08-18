@@ -12,13 +12,25 @@ support_verified=False``, and **nothing ever rewrote it**:
 ``_update_run_evaluation`` has exactly one caller, reachable only from terminal
 persist (``grep -rn "_update_run_evaluation" src/`` → one call site,
 ``query_run_orchestration.py``; ``grep -rn "_persist_terminal_run(" src/`` →
-``query_runs.py`` and ``query_run_orchestration.py``, both POST/execution
-paths). Once the 24h rail reset, the served body said ``('high', 90, True)``
-while the durable row still said ``('unverified', None, False)`` for good.
+three lines, of which TWO are call sites — ``query_runs.py:830`` and
+``query_run_orchestration.py:1028``, both POST/execution paths — and the third
+is the definition). Once the 24h rail reset, the served body said
+``('high', 90, True)`` while the durable row still said
+``('unverified', None, False)`` for good.
 
 The fix: on a suppressed evaluation write NO trust verdict at all, and record
 the refusal cause on the durable ``run_evaluated`` event so the empty column is
 an honest, explained absence rather than a false claim.
+
+The Layer-A column is STILL written on that path, through
+``fill_layer_a_evaluation_if_absent``. A run's deterministic Layer-A record
+owes nothing to a judge, and AC-041 requires it on the row. Dropping it — which
+the first draft of this fix did — left a refused row ``eval_json=None,
+trust_json=None``, byte-identical to a run that crashed mid-persist, which is
+the same indistinguishability this file exists to remove. That statement never
+mentions ``trust_json`` and fills only an ABSENT ``eval_json``, so it can
+neither clobber a bought verdict nor overwrite a real judge block with the
+``judge: None`` a suppressed evaluation carries.
 
 **What this does NOT do**, stated so no test here is read as proving it: the
 durable row still does not converge on the served projection. A run refused at
@@ -40,6 +52,7 @@ from __future__ import annotations
 
 import json
 import re
+from concurrent.futures import Future
 from decimal import Decimal
 from typing import Any
 from uuid import UUID, uuid4
@@ -50,6 +63,7 @@ from tests.unit.test_evaluation_layer_a import _answer
 
 from product_app import query_run_orchestration as qro
 from product_app import query_runs as qr
+from product_app import run_history_store
 from product_app.config import settings
 from product_app.costs import (
     DAILY_CAP_USD,
@@ -277,7 +291,6 @@ def test_a_run_below_the_rails_still_writes_its_full_verdict(
 def test_a_later_refusal_cannot_overwrite_a_verdict_already_written(
     judge_calls: list[dict[str, Any]],
     durable_writes: list[_Write],
-    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """ANTI-CLOBBER. ``update_evaluation`` is a blind UPDATE of both columns.
 
@@ -312,7 +325,6 @@ def test_a_later_refusal_cannot_overwrite_a_verdict_already_written(
     assert len(durable_writes) == 1, "a money refusal overwrote a verdict already persisted"
     assert durable_writes[-1].trust_json["band"] == FULL_VERDICT_BAND
     assert len(judge_calls) == 1, "the refused re-persist must not have paid for a dispatch"
-    monkeypatch  # noqa: B018 - fixture kept for symmetry with the suite's style
 
 
 def test_a_reader_that_lost_its_in_flight_owner_also_writes_no_verdict(
@@ -573,3 +585,167 @@ def test_every_refusal_token_is_a_closed_app_authored_slug() -> None:
     assert actual == EXPECTED_REFUSAL_TOKENS
     for token in actual:
         assert TOKEN_SHAPE.match(token), f"refusal token is not a closed slug: {token!r}"
+
+
+# ---------------------------------------------------------------------------
+# What the durable ROW actually holds, read back out of the real store.
+#
+# Every test above watches ``_update_run_evaluation`` through a spy, which
+# cannot see what SQLite ended up with. These drive the real
+# ``RunHistoryStore`` end to end through ``_persist_terminal_run`` and read the
+# row back, so a fix that calls the right function with the right arguments and
+# still leaves the wrong row on disk is caught here.
+# ---------------------------------------------------------------------------
+
+
+def test_a_refused_run_still_records_its_layer_a_evaluation_on_the_durable_row(
+    judge_calls: list[dict[str, Any]],
+) -> None:
+    """A money refusal must cost the run its VERDICT, not its Layer-A record.
+
+    Layer A is deterministic, needs no I/O and no judge, and is unaffected by
+    a spend rail. AC-041 ("Layer-A evaluation is computed, honest, and
+    persisted for every terminal run") requires it on the row.
+
+    RED before the ``eval_json``-only write existed: skipping
+    ``_update_run_evaluation`` wholesale on the suppressed path dropped BOTH
+    columns, so the refused row read ``eval_json=None, trust_json=None`` —
+    byte-identical to a run that crashed between the metrics row and the
+    evaluation attach, which is the very indistinguishability #342 set out to
+    remove.
+    """
+    store = get_store()
+    assert store is not None
+    with run_history_store.configure_for_tests() as history:
+        run = _at_cap_run(store)
+
+        qr._persist_terminal_run(run.query_run_id)
+
+        row = history.get(str(run.query_run_id))
+        assert row is not None, "the metrics row itself was not written"
+        assert row.eval_json is not None, "a refused run lost its Layer-A record entirely"
+        assert row.eval_json["signals"], "the Layer-A signals were dropped with the verdict"
+        assert row.eval_json["judge"] is None, "a refused run must claim no judge output"
+        assert row.trust_json is None, (
+            "the durable trust column asserted a verdict the run never got"
+        )
+        assert len(judge_calls) == 0, "the rail did not refuse; this test proves nothing"
+
+
+def test_a_clean_run_records_both_evaluation_columns_on_the_durable_row(
+    judge_calls: list[dict[str, Any]],
+) -> None:
+    """POSITIVE PARTNER: the assertions above are not satisfied by an empty row.
+
+    Without this, "``trust_json`` is None" is trivially true of a store that
+    never writes anything at all (AGENTS.md rule 7).
+
+    RED if the suppression branch fires for every run rather than only refused
+    ones, or if the row write is lost.
+    """
+    with run_history_store.configure_for_tests() as history:
+        run = _terminal_run()
+
+        qr._persist_terminal_run(run.query_run_id)
+
+        row = history.get(str(run.query_run_id))
+        assert row is not None
+        assert row.eval_json is not None
+        assert row.eval_json["judge"] is not None, "the bought verdict is missing from eval_json"
+        assert row.trust_json is not None, "the clean path stopped persisting its verdict"
+        assert row.trust_json["band"] == FULL_VERDICT_BAND
+        assert row.trust_json["score"] == FULL_VERDICT_SCORE
+        assert row.trust_json["support_verified"] is FULL_VERDICT_SUPPORT
+        assert len(judge_calls) == 1
+
+
+def test_a_refused_re_persist_does_not_erase_the_judge_block_already_bought(
+    judge_calls: list[dict[str, Any]],
+) -> None:
+    """The Layer-A write must never overwrite a richer record on the row.
+
+    ``result.eval_json()["judge"]`` is ``None`` on a suppressed evaluation,
+    because no judge ran. A re-persist after memo eviction with the rail now
+    closed therefore had an obvious wrong repair available: write ``eval_json``
+    unconditionally. That leaves ``trust_json`` saying a judge verified the run
+    while ``eval_json`` says no judge ran — a self-contradicting row, which is
+    the same class of false claim as #342 itself.
+
+    RED if the Layer-A write drops its ``eval_json IS NULL`` guard: measured on
+    that variant, the second persist replaced the bought judge block with
+    ``None`` while the ``high`` band stayed on the row.
+    """
+    store = get_store()
+    assert store is not None
+    with run_history_store.configure_for_tests() as history:
+        account = uuid4()
+        run = _terminal_run(account)
+
+        qr._persist_terminal_run(run.query_run_id)
+        first = history.get(str(run.query_run_id))
+        assert first is not None
+        assert first.eval_json is not None
+        assert first.trust_json is not None
+        assert first.eval_json["judge"] is not None
+        assert first.trust_json["band"] == FULL_VERDICT_BAND
+        assert len(judge_calls) == 1
+
+        # Both memos evicted (the shipped LRUs are bounded), and the rail closes.
+        qr._judge_verdict_memo_clear_for_tests()
+        qr._evaluation_memo_clear_for_tests()
+        _charge(store, account_id=account, amount=Decimal("0.20"))
+        assert store.daily_spend_for(account) >= DAILY_CAP_USD
+
+        qr._persist_terminal_run(run.query_run_id)
+
+        second = history.get(str(run.query_run_id))
+        assert second is not None
+        assert second.eval_json is not None, "the refused re-persist emptied eval_json"
+        assert second.trust_json is not None, "the refused re-persist emptied trust_json"
+        assert second.eval_json["judge"] is not None, (
+            "a refused re-persist erased the judge block the account had already bought"
+        )
+        assert second.trust_json["band"] == FULL_VERDICT_BAND, (
+            "a refused re-persist overwrote a verdict already on the row"
+        )
+        assert len(judge_calls) == 1, "the refused re-persist must not have paid for a dispatch"
+
+
+def test_a_judge_wait_that_times_out_records_the_timeout_token(
+    judge_calls: list[dict[str, Any]],
+    durable_writes: list[_Write],
+    evaluated_events: list[dict[str, Any]],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The third refusal token must be the one an operator actually reads.
+
+    A read that waits on somebody else's in-flight judge call and gives up
+    spent no money, so recording it as ``spend_rail_preflight`` would write a
+    false MONEY attribution into the durable audit stream — exactly the
+    confusion the closed vocabulary exists to prevent.
+
+    An unresolved ``Future`` is parked in ``_judge_inflight`` before the
+    persist, so this read shares rather than owns and its wait expires with no
+    threads and no clock dependence beyond the shortened wait.
+
+    RED if ``INFLIGHT_TIMEOUT`` is renamed, dropped, or swapped for another
+    member: measured, changing that one assignment to
+    ``SPEND_RAIL_PREFLIGHT`` left the whole integration suite plus the enum
+    pins green (428 passed, 1 skipped), so no other test covers this token.
+    """
+    monkeypatch.setattr(qro, "_JUDGE_INFLIGHT_WAIT_SECONDS", 0.01)
+    run = _terminal_run()
+    monkeypatch.setitem(qro._judge_inflight, str(run.query_run_id), Future())
+    monkeypatch.setattr(
+        qro,
+        "_judge_money_rails_allow_dispatch",
+        lambda account_id: pytest.fail("the rails must not be consulted while sharing"),
+    )
+
+    qr._persist_run_evaluation(query_run=run, agreement=AGREEMENT)
+
+    assert len(evaluated_events) == 1
+    assert evaluated_events[0]["judge_refusal"] == "inflight_timeout"
+    assert evaluated_events[0]["trust_band"] is None
+    assert len(durable_writes) == 0, "a timed-out wait persisted a verdict it never got"
+    assert len(judge_calls) == 0, "the shared call was never dispatched by this read"

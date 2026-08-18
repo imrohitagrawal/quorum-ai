@@ -62,9 +62,15 @@ Before #216 the only cause of suppression was a rare in-flight timeout race.
 `build_sha 21d835870165fc4369bfa0db15d860c3b7eaaba9` and `judge_enabled:
 false`, so production runs `main`'s tip with the judge OFF and no such row can
 exist there today. It arms the moment the judge is switched on. The operator's
-stated intent to run the judge permanently ON is **UNVERIFIED by any command** —
-it is an operator statement, and, as ADR-0051 also records, no artefact in the
-tree implies it.
+stated intent to run the judge permanently ON is **UNVERIFIED by any command**.
+Five documents record it in prose — `grep -rn "permanently ON" docs/` returns
+ADR-0017:6, ADR-0018:6, ADR-0019:6, ADR-0027:10 and ADR-0029:50 — but a Status
+header is a written-down operator statement, not a measurement, and no
+EXECUTABLE artefact in the tree implies it: no config default and no deployed
+setting turns the judge on. Only asking the owner settles it. (This paragraph
+said "no artefact in the tree implies it", full stop, which those five files
+contradict; ADR-0051:85-87 carries the same over-broad wording, left alone here
+as pre-existing and outside this issue.)
 
 ## Failure modes enumerated first (AGENTS.md rule 16e)
 
@@ -81,9 +87,13 @@ Written before the fix, from the existing ADRs and from reading the call sites.
   after memo eviction, with the rail now closed, replaced a verdict the
   account had already bought.
 - **F-3 No reconciliation.** `grep -rn "_update_run_evaluation" src/` returns
-  one call site; `grep -rn "_persist_terminal_run(" src/` returns two, both
-  POST/execution paths. Nothing re-visits a run: there is no sweeper and no
-  read-path write.
+  one call site; `grep -rn "_persist_terminal_run(" src/` returns three lines,
+  of which **two are call sites** (`query_runs.py:830`,
+  `query_run_orchestration.py:1028`) and the third is the definition
+  (`query_run_orchestration.py:1541`). Nothing re-visits a run: there is no
+  sweeper and no read-path write. (This row said "returns two"; the command
+  prints three lines. The count of CALL SITES was right, the reported command
+  output was not.)
 - **F-4 Idempotency is narrower than the docstring implies.** The S1 metrics
   row is an upsert; the S2 evaluation attach is a pure function of the memo
   state at call time, and the memo is a bounded LRU.
@@ -113,26 +123,57 @@ Written before the fix, from the existing ADRs and from reading the call sites.
 
 On a SUPPRESSED evaluation, `_persist_run_evaluation`:
 
-1. does not call `_update_run_evaluation` at all — the durable trust columns
-   stay empty rather than recording a verdict the run did not get;
-2. still emits the `run_evaluated` audit event, with `trust_band` and
+1. does not call `_update_run_evaluation` — the durable **trust** column stays
+   empty rather than recording a verdict the run did not get;
+2. **still writes the durable Layer-A column**, through a new, narrower store
+   method `fill_layer_a_evaluation_if_absent`. Layer A is deterministic, needs
+   no I/O and no judge, and no spend rail changes what it says, so **AC-041
+   holds for a refused run exactly as for any other**; only the verdict is
+   withheld. This is not cosmetic: without it a refused row is `eval_json=None,
+   trust_json=None`, which is byte-identical to F-5 (crashed mid-persist) — the
+   exact indistinguishability this ADR exists to remove, re-introduced by the
+   fix. Measured on the first draft of this change, which omitted it:
+   `REFUSED eval_json = None` where `origin/main` printed the full signals
+   payload;
+3. still emits the `run_evaluated` audit event, with `trust_band` and
    `support_verified` set to `null` and the Layer-A telemetry
    (`layer_a_composite_unverified`, `signals`, `faithfulness_label`,
-   `hallucination_risk`) intact, because Layer A is unaffected by a judge
-   refusal;
-3. carries the refusal cause on that event as a new `judge_refusal` key — a
+   `hallucination_risk`) intact, for the same reason;
+4. carries the refusal cause on that event as a new `judge_refusal` key — a
    closed enum token (`JudgeSuppressionReason`) or `null`, never prose.
+
+**Why the Layer-A write needs its own statement rather than a `trust_json=None`
+argument to the existing one.** Two independent hazards, both measured:
+
+* `update_evaluation` is a blind `UPDATE runs SET eval_json = ?, trust_json = ?`
+  (F-2), so passing `trust_json=None` on a refused RE-persist nulls a verdict
+  the account already bought. The new statement does not mention `trust_json`
+  at all, so it cannot.
+* A suppressed `result.eval_json()` carries `judge: null`, because no judge
+  ran. Writing it over a row that already holds a real judge block leaves the
+  row contradicting itself — a `high` trust column beside "no judge ran". The
+  statement is therefore `UPDATE runs SET eval_json = ? WHERE query_run_id = ?
+  AND eval_json IS NULL`: it fills an absence and never replaces a record.
+  One atomic UPDATE, no read-modify-write, so ADR-0002's single-writer
+  constraint is respected.
 
 `_MemoisedRunJudge.served_without_verdict` becomes a property over a new
 `suppression_reason` attribute, so every existing reader of the boolean is
 unchanged while the persist path can see WHY.
 
-Scope kept deliberately narrow: no schema change, no new store method, no
-change to `JudgeCallOutcome`, `TrustScore`, `QueryRunEvaluationProjection` or
+Scope kept deliberately narrow: no schema change, no change to
+`JudgeCallOutcome`, `TrustScore`, `QueryRunEvaluationProjection` or
 `openapi.yaml`. `trust_json` was already `TEXT` nullable and `RunHistoryRow`
 already typed it `dict | None`. The `run_evaluated` payload is a free dict
 (`grep -rn "run_evaluated" src/ scripts/` → one producer, no reader), so the
-new key touches no contract gate.
+new key touches no contract gate. The one addition is the store method above —
+additive, and the only caller is the suppressed branch.
+
+`docs/12-acceptance-criteria.md` AC-041 is amended in this PR, narrowly: it
+required "a deterministic Layer-A evaluation **and a `TrustScore`** … stored on
+that row via `update_evaluation`", which mandates precisely the false claim this
+ADR removes. The Layer-A half is unchanged and still enforced; the `TrustScore`
+half now carries the refusal exception.
 
 `SPEND_RAIL_PREFLIGHT` does not distinguish "at the cap" from "the ledger could
 not be read, so the pre-flight failed closed". `_judge_money_rails_allow_dispatch`
@@ -149,24 +190,40 @@ Every row names the command that produced it. Run from
 | Question | Command | Measured |
 |---|---|---|
 | Does the durable row diverge from the served body? | the printing probe above, in a `git archive origin/main` copy | persisted `unverified / None / False`; later served `('high', 90, True)`; `update_evaluation` still 1 |
-| The same, re-runnable from a committed file | copy `tests/integration/test_persisted_evaluation_never_asserts_a_verdict_the_run_did_not_get.py` into a `git archive origin/main` copy and run it | `7 failed, 6 passed` — the four durable-write cases and the three event cases |
+| The same, re-runnable from a committed file | copy `tests/integration/test_persisted_evaluation_never_asserts_a_verdict_the_run_did_not_get.py` into a `git archive origin/main` copy and run it | the seven cases that assert the fix: three of the four durable-write cases (the clean-path positive partner passes on `main`), three of the four event cases (the clean-path partner likewise), and the enum-vocabulary case. Earlier drafts of this row said "the four durable-write cases and the three event cases", which is not the split the run prints |
+| Does a refused run keep its Layer-A row? | the same printing probe, run once in this worktree and once in a `git archive origin/main` copy | `origin/main`: `REFUSED eval_json = {'schema_version': 's3-eval-v5', 'signals': {...}, 'judge': None}`. The FIRST draft of this fix: `REFUSED eval_json = None` — a regression against AC-041, found in review and closed by decision item 2 |
+| Does the Layer-A write clobber a bought verdict? | `pytest …::test_a_refused_re_persist_does_not_erase_the_judge_block_already_bought` with `AND eval_json IS NULL` deleted from the statement (`cp`-aside, restored, `diff -q` → identical) | `AssertionError: a refused re-persist erased the judge block the account had already bought` — so the guard, not luck, is what prevents it |
 | How many src call sites can write the evaluation columns? | `grep -rn "_update_run_evaluation" src/` | one CALL, `query_run_orchestration.py:1689`; the other hits are the import at line 105 and a docstring |
 | How many call sites reach terminal persist? | `grep -rn "_persist_terminal_run(" src/` | `query_runs.py` and `query_run_orchestration.py`, both POST/execution paths — no GET |
 | How many consumers does `run_evaluated` have? | `grep -rn "run_evaluated" src/ scripts/` | one producer (`event_type="run_evaluated"`, `query_run_orchestration.py:1696`); every other hit is a docstring, and no reader anywhere in `src/` or `scripts/` |
 | Did the new tests fail before the fix? | `pytest tests/integration/test_persisted_evaluation_never_asserts_a_verdict_the_run_did_not_get.py -q --no-cov` on the unfixed tree | `7 failed, 6 passed` |
-| Do they bite after it? | same file, three `cp`-aside mutations, restored and confirmed with `diff -q` | dropping the suppression guard → 4 failed; hard-coding `judge_refusal` to `None` → 2 failed; re-asserting the downgraded trust shape on the event → 3 failed |
+| Do they bite after it? | same file, six `cp`-aside mutations, each restored and confirmed with `diff -q` | dropping the suppression guard → 4 failed; hard-coding `judge_refusal` to `None` → 2 failed; re-asserting the downgraded trust shape on the event → 3 failed; dropping `AND eval_json IS NULL` → 1 failed; mislabelling the timeout token as `SPEND_RAIL_PREFLIGHT` → 1 failed; the naive "write both columns with `trust_json=None`" repair → 6 failed |
+| Was the timeout token covered before this round? | change `INFLIGHT_TIMEOUT` to `SPEND_RAIL_PREFLIGHT` at the one assignment, then `pytest tests/integration/ tests/unit/test_enum_membership_pins.py` | `428 passed, 1 skipped` — **green**. A regression writing a false MONEY attribution into the durable audit stream was invisible to every test. `test_a_judge_wait_that_times_out_records_the_timeout_token` closes it: the same mutation is now `1 failed` |
 | Store-lock cost of the fix | reading the diff | one FEWER durable write on the refusal path; unchanged elsewhere |
 
 ## Rejected alternatives
 
 **Option 1 — write nothing and say nothing** (the issue's "smallest" option).
-Rejected. `run_history_store` documents NULL evaluation columns as "`None`
+Rejected. `run_history_store` documented NULL evaluation columns as "`None`
 until S2's evaluation engine fills them", i.e. *pending*, so on a terminal run a
 silent absence reads as a broken pipeline. It also collides with F-5 (crash
 mid-persist) and with a store outage, and takes the run out of the audit
 denominator entirely (F-8). Its stated purpose — "so a later read can still
 fill it" — rests on a mechanism that does not exist (F-3). The write
-suppression is kept; the silence is not.
+suppression is kept; the silence is not — which is what decision item 2 buys:
+a refused row still carries `eval_json`, so it is not NULL/NULL and the F-5
+collision above does not apply to it. The `RunHistoryRow` docstring quoted here
+is corrected in this PR to describe both ways `trust_json` can be empty; an ADR
+that argues from a docstring must not leave that docstring saying the old thing.
+
+**Option 1b — write both columns, passing `trust_json=None`** (the smallest
+repair for the Layer-A loss). Rejected, and MEASURED as wrong twice: it walks
+straight back into F-2 (a refused re-persist nulls a bought verdict), and it
+overwrites a row's real judge block with the `judge: null` a suppressed
+evaluation carries. Applied as a mutation, six of the file's cases go red,
+including `test_a_later_refusal_cannot_overwrite_a_verdict_already_written`.
+The narrow `fill_layer_a_evaluation_if_absent` statement is the version that
+survives both.
 
 **Option 2a — a new `JudgeCallOutcome` member.** Rejected on two grounds. That
 enum documents what one Layer-B judge CALL did, and on this path there was no
@@ -175,7 +232,7 @@ call. Worse, the only carrier of a `JudgeCallOutcome` is the entry in
 record — writing a refusal into it would permanently suppress the later real
 dispatch, re-creating exactly the freeze ADR-0051 exists to prevent. It is also
 a served-schema change (`judge_status` is in `QueryRunEvaluationProjection` and
-in `openapi.yaml`), which #216 deferred to its own issue.
+in `openapi.yaml`), which #216 left for separate work.
 
 **Option 3 — let terminal persist re-evaluate once the rail clears.** Rejected.
 It is the only option that would make the durable row converge on the served
@@ -189,10 +246,12 @@ that leave the in-memory repository after `QUERY_RUN_TERMINAL_TTL` anyway.
 ## Consequences
 
 **What this fixes.** The durable row stops asserting `band="unverified",
-support_verified=false` for a run that was never judged. The cause is recorded
-and is distinguishable from "no judge configured" and from "the judge ran and
-found nothing". A later refused persist can no longer clobber a verdict that
-was already bought (F-2).
+support_verified=false` for a run that was never judged. The row still carries
+its Layer-A record, so it is not an empty row and does not collide with F-5.
+The cause is recorded and is distinguishable from "no judge configured" and
+from "the judge ran and found nothing". A later refused persist can no longer
+clobber a verdict that was already bought (F-2), nor erase a judge block from
+`eval_json`.
 
 **What this does NOT fix — stated plainly, not buried.** The durable row still
 does not equal the served projection. A run refused at 23:59 is served
@@ -201,10 +260,60 @@ its life. That is F-3, and only option 3 closes it. Do not write "the row and
 the projection now agree"; they do not. This converts a false statement into an
 honest absence with a recorded cause, and claims nothing more.
 
-Also still open: the SERVED payload is silent about a refusal (deferred by #216
-to its own issue); F-1's within-one-persist rail flip is unaffected, since the
-two dispatches still read the rails independently; F-9 is narrowed but not
-closed; and F-10 means none of this reasoning holds on a second instance.
+Also still open, each stated because a reader would otherwise assume otherwise:
+
+* **The SERVED payload is silent about a refusal.** ADR-0051 says this "belongs
+  with its own issue" — an intention, not a filing. Checked on 2026-08-18:
+  `gh issue list --state all --limit 300` returns 115 issues and **none** of
+  them is that one. Do not read "deferred to its own issue" anywhere as
+  "tracked"; it is not filed.
+* **`judge_refusal` has a producer and no reader.** `grep -rn "judge_refusal"
+  src/ scripts/` returns only the one write site. `feedback_audit.py` has
+  aggregators for `provider`/`synthesis`/`cost`/`safety`/`debate` and none for
+  `evaluation`, so the token reaches no report, no `/status` field and no UI.
+  Today it is a JSON key an operator must query by hand:
+  `sqlite3 $FEEDBACK_DB_PATH "select json_extract(payload,'\$.judge_refusal')
+  from events where event_type='run_evaluated'"`. Building a surface for it is
+  its own work; this ADR only guarantees the value is written and durable
+  (`feedback_store.py` records that nothing prunes that table).
+* **The explanation and the row live in different databases.** The empty trust
+  column is in `run_history.sqlite3`; the `judge_refusal` cause is in
+  `feedback_events.sqlite3`, written best-effort — `FeedbackStore.record`
+  swallows write failures, and `("evaluation", "run_evaluated")` is not in
+  `_METERED_WRITES`, so a lost one moves no billed-loss counter (it does stamp
+  `_last_write_failure_at`, which `/status` reads). Worse, the two are
+  CORRELATED: an unreadable feedback ledger is itself one of the things the
+  money pre-flight refuses on (F-9), so the fault that causes the refusal can
+  also lose its explanation. Decision item 2 is what keeps that case from being
+  a total silence — the run-history row still holds Layer A either way.
+* **The row and its own latest event can disagree.** After a clean persist and
+  a later refused re-persist, the row keeps `high` (correct, F-2) while the
+  newest `run_evaluated` event for that run reports `trust_band: null`. An
+  auditor reducing the event stream by "last event per run" would read "no
+  verdict" for a run whose row holds one. The event stream is a trail of what
+  each persist DECIDED, not a projection of current state; read the row for
+  state.
+* **A transient judge failure still downgrades a bought verdict.** Suppression
+  is not the only way `trust_json` goes from `high` to `unverified`: a
+  re-persist whose judge returns unparseable output produces a real (NOT
+  suppressed) `unverified` result, so it takes the ordinary write path and
+  lands on the row. A printing probe — clean persist, both memos cleared, the
+  provider seam then returning `"not json at all"` — printed the same thing in
+  this worktree and in a `git archive origin/main` copy:
+
+  ```
+  AFTER CLEAN  trust band = high
+  AFTER GARBAGE trust band = unverified
+  AFTER GARBAGE eval judge = None
+  dispatches = 2
+  ```
+
+  Pre-existing, unchanged by this fix, and out of scope for #342 — named here
+  so nobody reads this ADR as having closed durable-row integrity generally.
+  Note `dispatches = 2`: the account paid for the second call as well.
+* F-1's within-one-persist rail flip is unaffected, since the two dispatches
+  still read the rails independently; F-9 is narrowed but not closed; and F-10
+  means none of this reasoning holds on a second instance.
 
 **Operational.** No configuration change, no schema change, no new constant, no
 OpenAPI change. Unreachable in production while `judge_enabled: false`; it arms

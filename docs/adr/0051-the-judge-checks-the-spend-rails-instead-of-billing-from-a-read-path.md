@@ -25,7 +25,8 @@ ledger.
 
 **This paragraph said "the only record that a paid Layer-B judge call happened"
 until review refuted it.** A durable one exists: `_persist_run_evaluation`
-(`query_run_orchestration.py:1689`) writes a `run_evaluated` feedback event
+(`query_run_orchestration.py:1714`, moved from 1689 by #342) writes a
+`run_evaluated` feedback event
 carrying `"judge_status": _judge_status_for(query_run.query_run_id)`, added by
 issue #258 so "are the judges I pay for returning anything?" is answerable from
 the event stream. Verified by `grep -n "judge_status" src/product_app/*.py`.
