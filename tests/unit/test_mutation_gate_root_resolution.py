@@ -265,12 +265,22 @@ def _cwd_scoped_git_calls(tree: ast.Module, roots: dict[str, str]) -> list[str]:
     4. A wrapper living in another module — `helpers.git_ls_files(cwd=ROOT)`.
        This scan reads one file's AST and does not follow calls across files.
 
-    These are the guard's honest boundary, stated rather than implied. Limits
-    2 and 3 appear nowhere in `tests/` today — measured 2026-08-19, both of
-    `grep -rnE "^\\s*\\w+ = subprocess\\.(run|check_output|check_call|Popen|call)\\s*$" tests/`
-    and `grep -rn "from subprocess import \\*" tests/` exit 1 with no output —
-    so closing them now would only add machinery no spelling in the tree
-    exercises. If one appears, add its literal to `_CLASSIFIER_CASES` first.
+    These are the guard's honest boundary, stated rather than implied. No test
+    under `tests/` EXECUTES limit 2 or limit 3 today — measured 2026-08-19 by
+    parsing every `tests/**/*.py` with `ast` and looking for an `ImportFrom`
+    of `subprocess` naming `*`, or an `Assign` whose value is an attribute of
+    `subprocess`; both came back empty. So closing them now would only add
+    machinery no spelling in the tree exercises. If one appears, add its
+    literal to `_CLASSIFIER_CASES` first.
+
+    That measurement is deliberately structural rather than a `grep`, and the
+    reason is worth keeping. An earlier draft of this docstring asserted that
+    `grep -rn "from subprocess import \\*" tests/` "exits 1 with no output".
+    It does not: it exits 0 and matches THIS PARAGRAPH, because the sentence
+    naming the spelling contains the spelling. A textual claim about a corpus
+    that includes the claim itself is self-falsifying — the repeated failure
+    AGENTS.md rule 1a warns about. Parsing the AST counts executable code and
+    cannot match prose.
     """
     aliases = _subprocess_aliases(tree)
     modules = _subprocess_module_names(tree)

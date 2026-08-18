@@ -106,8 +106,9 @@ stats collection, and the gate exited non-zero having scored zero mutants.
    3. A star import — `from subprocess import *`, then `run(...)`.
    4. A wrapper in another module; the scan reads one file's AST.
 
-   Holes 2 and 3 appear nowhere in `tests/` today (both greps exit 1 with no
-   output; the commands are on the function). The guard's honest contract is
+   No test under `tests/` executes hole 2 or hole 3 today — measured by
+   parsing every `tests/**/*.py` with `ast`, not by `grep`; the method and why
+   it is structural are on the function. The guard's honest contract is
    therefore "every literal-argv cwd-scoped git call reached through one of the
    enumerated `subprocess` spellings, with any `cwd=` it cannot classify
    treated as an offender" — not "every possible spelling".
