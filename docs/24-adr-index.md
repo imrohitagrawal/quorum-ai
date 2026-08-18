@@ -61,6 +61,7 @@ ways, so the record shows what was believed on a date and what replaced it.
 | [ADR-0055](adr/0055-a-durable-audit-row-never-asserts-a-verdict-the-run-did-not-get.md) | A durable audit row never asserts a verdict the run did not get | Architecture | Accepted — 2026-08-18 |
 | [ADR-0056](adr/0056-extra-redaction-covers-key-object-and-cycle-positions.md) | Extra redaction covers the key, object and cycle positions, and a back-edge becomes a placeholder | Architecture | Accepted — 2026-08-18 |
 | [ADR-0058](adr/0058-guard-tests-run-in-a-required-pytest-lane.md) | The negative-assertion guard's own tests run in a required pytest lane, and refuse to skip there | Architecture | Accepted — 2026-08-19 (part of issue 226; the classifier half is a separate change) |
+| [ADR-0059](adr/0059-guard-resolves-computed-member-properties-and-fails-closed.md) | The negative-assertion guard resolves a member property through both `Identifier.name` and a static literal, and fails closed when it cannot | Architecture | Accepted — 2026-08-19 (issue 226; ADR-0058 was the first half, this is the classifier half) |
 
 **This index was itself stale** until 2026-07-30: ADR-0002 had existed since
 2026-07-19 and was never listed here. A hand-maintained index is a derived fact
