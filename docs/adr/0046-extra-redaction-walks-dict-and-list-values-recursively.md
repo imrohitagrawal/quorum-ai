@@ -4,6 +4,16 @@
 
 Accepted — 2026-08-14 (issue #313 residual gap)
 
+**Superseded on the DEPTH-CAP BEHAVIOUR by
+[ADR-0056](0056-extra-redaction-covers-key-object-and-cycle-positions.md)**
+(2026-08-18, issue #341). This ADR left a container past the cap — and a cycle
+back-edge — returned AS-IS, unredacted. ADR-0056 substitutes `"<max-depth>"` and
+`"<cycle>"` instead, because returning the original container is what let a
+secret below the cap reach Sentry and what left `record.__dict__` cyclic, so
+`json.dumps` raised and the operator's stdout line vanished. ADR-0056 also
+extends the walk to any `Mapping` and to the object text positions. Everything
+else here still stands, in particular why a record factory and not a filter.
+
 ## Context
 
 ADR-0041 added `make_record_with_extra_redaction`, which redacts every
@@ -133,8 +143,13 @@ with a non-secret sibling element surviving as the positive partner.
   of logging it — the redacted value only ever replaces
   `record.__dict__[key]`, never the caller's original object.
 - A self-referential or pathologically deep `extra={...}` container can no
-  longer crash a log call; the walk degrades to "leave the excess depth
-  unredacted" rather than raising `RecursionError`.
+  longer crash a log call by raising `RecursionError`. **The rest of this
+  bullet, "the walk degrades to leave the excess depth unredacted", was
+  superseded by ADR-0056** — the excess depth is now replaced by
+  `"<max-depth>"`, and a cycle back-edge by `"<cycle>"`. As written here it
+  was also incomplete: leaving the excess unredacted still crashed the STDOUT
+  path for a cyclic container, because the result stayed cyclic and
+  `json.dumps` refused it.
 - `_MAX_EXTRA_REDACTION_DEPTH = 25` is a deliberately generous, unmeasured
   bound — no real call site is known to nest anywhere near that deep. If a
   genuine call site is ever found nesting close to the cap, the right fix is
