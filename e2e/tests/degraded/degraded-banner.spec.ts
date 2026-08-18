@@ -311,6 +311,61 @@ test.describe("transcript-view disclosure banner (#115)", () => {
   });
 
   test("a fully-LIVE run does NOT show the transcript disclosure banner", async ({ page }) => {
+    // POSITIVE CONTROL first (#226). This test asserted only `toBeHidden()`,
+    // and Playwright counts "not in the DOM" as hidden. Measured 2026-08-17,
+    // by renaming this element's id in workspace.html so the page no longer
+    // has a #demo-mode-banner at all: this test, in its pre-#226 form, stayed
+    // GREEN. It could not tell a banner that correctly stayed quiet from a
+    // banner that does not exist.
+    //
+    // `toBeAttached()` was the obvious cheaper partner and was REJECTED on
+    // measurement: with `#demo-mode-banner { display: none }` added to app.css
+    // — the actual #111/#115 defect class this file exists for — the control
+    // below PASSED as `toBeAttached()` and went RED as `toBeVisible()`. So the
+    // contrast is what earns its place: the SAME drive path, one answer short,
+    // must SHOW the banner.
+    //
+    // Cost, one run each on one laptop (chromium, `--workers=1`), so treat it
+    // as an order of magnitude and not a benchmark: 1.12s -> 1.91s, and 2.1s
+    // once the two content legs below were added (2026-08-18).
+    // Review round 2 (#226): `toBeVisible()` ALONE still survived the EMPTIED
+    // defect class — a banner that renders and says nothing. Measured
+    // 2026-08-18 by returning `{ title: "", message: "" }` from the mixed-run
+    // branch of `computeDemoModeBannerCopy` in app.js, leaving the element
+    // present and `hidden = false`: `toBeVisible()` stayed GREEN. It could not,
+    // because `#demo-mode-banner` still contains the static `.callout-icon`
+    // "!" glyph, so even the banner's OWN `innerText` is non-empty when the
+    // copy is gone. The content legs therefore target the two nodes app.js
+    // actually writes, not the banner as a whole. Be precise about what each
+    // one can and cannot see, because they are NOT equally strong:
+    //   - `[data-demo-mode-target]` (`workspace.html:691`) ships EMPTY, so the
+    //     `toContainText` leg below goes red both when the renderer writes
+    //     nothing and when it writes the wrong thing.
+    //   - `#demo-mode-banner-title` (`workspace.html:690`) does NOT ship empty
+    //     — its markup default is the hardcoded `Demo mode is active`. So the
+    //     title-length leg catches a renderer that writes an EMPTY title, but
+    //     NOT one that never writes the title at all: the hardcoded default
+    //     would satisfy it. Review round 2 caught this; an earlier version of
+    //     this comment claimed both defaults were empty, which is false.
+    //     The `toContainText` leg is what covers the never-written case.
+    // An empty banner discloses nothing, which is the whole point of this file.
+    const short = { ...goldenCompletedResp(), demo_mode: false, live_count: 3, local_count: 0 };
+    await driveWithCompleted(page, short);
+    await driveToTranscript(page);
+    const shortBanner = page.locator("#demo-mode-banner");
+    await expect(
+      shortBanner,
+      "control: a run one answer short MUST disclose, or the negative below is vacuous",
+    ).toBeVisible();
+    expect(
+      (await page.locator("#demo-mode-banner-title").innerText()).trim().length,
+      "control: a visible banner with an empty title discloses nothing",
+    ).toBeGreaterThan(0);
+    await expect(
+      shortBanner.locator("[data-demo-mode-target]"),
+      "control: the banner must NAME the shortfall — 3 live of 4 slots",
+    ).toContainText("3 of 4 model answers");
+
     const completed = {
       ...goldenCompletedResp(),
       demo_mode: false,
