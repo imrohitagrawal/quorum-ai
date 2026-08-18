@@ -2,7 +2,16 @@
 
 ## Status
 
-Accepted — 2026-08-10
+Accepted — 2026-08-10.
+
+**Partially superseded by
+[ADR-0054](0054-no-network-intermediary-so-the-403-shape-capture-is-removed.md)
+(2026-08-18): #203's `key_probe_credential_refused` stream, its capture in
+`readiness.py` and its section of `scripts/telemetry_classification_report.py`
+were removed.** The infrastructure question that stream existed to answer was
+measured instead — no network intermediary is configured on this deployment —
+so the 403 it watched for cannot arrive. Everything below about #105 and #268
+stands unchanged; read the #203 passages as history.
 
 ## Context
 
@@ -433,7 +442,7 @@ its own reading.
 - ADR-0018 — records that no log drain exists.
 - ADR-0002 — the single-writer store constraint that rules out a casual table.
 - `src/product_app/telemetry_sink.py`, `tests/unit/test_telemetry_sink.py`,
-  `tests/unit/test_provider_token_telemetry.py`,
-  `tests/unit/test_key_probe_refusal_shape.py`.
+  `tests/unit/test_provider_token_telemetry.py` (the #203 refusal-shape test
+  file this line also named was removed with #203's stream — ADR-0054).
 - AGENTS.md rules 8a (empty-body doubles), 8b (bound the argument and the time),
   8c (measure the upstream before gating on it).

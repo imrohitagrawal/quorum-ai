@@ -247,8 +247,9 @@ credential.
 **An unfunded key looks identical to an invalid one here.** Measured against
 the live provider on 2026-07-28: a funded valid key returns `200`, and a
 **valid but unfunded key returns `401`**. So this state means "invalid key
-**or** empty account" — check both. (It can also be a **network proxy**
-answering 403 on the app's behalf.)
+**or** empty account" — check both. (In principle a network proxy or WAF
+answering 403 on the app's behalf would land here too — but no such
+intermediary is configured on this deployment; see the note below.)
 
 ```bash
 # Confirm it yourself — this call costs zero tokens.
@@ -271,8 +272,26 @@ also **re-checks every `KEY_AUTH_REPROBE_INTERVAL_SECONDS` (default 1800s /
   needed — though a restart still clears the state immediately if you don't
   want to wait.
 
-Known gap, not fixed here: a network proxy or WAF answering 403 on the
-app's behalf is indistinguishable from the provider doing so.
+**No network intermediary is configured on this deployment (#203, measured
+2026-08-17/18).** A proxy or WAF answering 403 on the `/key` path would be
+indistinguishable from the provider doing so, and would pin a healthy
+deployment to `offline_by_bad_key`. That was disclosed here as an open gap
+until the infrastructure question behind it was actually answered:
+
+| Check | Command | Result |
+|---|---|---|
+| Proxy env vars on the running production machine | `fly ssh console -a quorum-ai -C env` | no `HTTP_PROXY` / `HTTPS_PROXY` / `NO_PROXY` in the dump |
+| Proxy handling in the app | `grep -rniE "http_proxy\|trust_env\|proxies=" src/` | no matches |
+| Egress configuration | `grep -niE "proxy\|egress\|wireguard" fly.toml` | no matches — only inbound `[[services]]` |
+| Fly org | `fly apps list` | `personal` |
+| WireGuard peers | `fly wireguard list personal` | only `interactive-*` developer/CI tunnels, not an egress policy |
+
+**Read the scope narrowly.** These commands show that nothing sits between
+the Fly runtime and the internet *today, on this app*. They do not show that
+an intermediary could never be introduced. If you put one in front of egress
+— a corporate proxy, an egress gateway, a Fly org policy — this gap comes
+back, and `offline_by_bad_key` becomes a possible lie. ADR-0054 records the
+decision and what to re-add if that day comes.
 
 ### Users get logged out every deploy
 

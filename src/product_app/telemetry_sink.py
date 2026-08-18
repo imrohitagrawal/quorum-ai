@@ -2,8 +2,11 @@
 
 WHY THIS EXISTS
 ---------------
-Issues #105, #268 and #203 are each blocked on production data that does not
-exist yet. None of them can be decided from the repo, and none of them may be
+Issues #105 and #268 are each blocked on production data that does not
+exist yet. (#203 was a third: its credential-refusal stream was removed on
+2026-08-18 once the infrastructure question behind it was measured — no
+network intermediary is configured on this deployment, so the 403 it watched
+for cannot arrive. See ADR-0054.) None of them can be decided from the repo, and none of them may be
 decided from a guess — #180 cost three broken attempts learning that. So this
 module ships the place the data lands, and nothing else. **No classification,
 default or constant is changed anywhere in this package.**
@@ -31,7 +34,7 @@ WHY TWO FILES
 -------------
 The two streams have different volumes and different value.
 
-* ``telemetry-billing.jsonl`` — #105 and #203. Rare and precious; production
+* ``telemetry-billing.jsonl`` — #105. Rare and precious; production
   spend is ``"0"`` today, so a provider 5xx is a once-in-a-long-while event.
 * ``telemetry-tokens.jsonl`` — #268. Fires once on every successful provider
   call, so many times per run.
@@ -48,8 +51,8 @@ list and the measurements behind it.
 REMOVAL
 -------
 This is scaffolding, not a feature. Each stream has its own deletion condition,
-recorded in the ADR. The sink goes when all three streams are gone, or when a
-real log drain exists.
+recorded in the ADR. The sink goes when the remaining streams are gone, or when a
+real log drain exists. #203's stream is already gone.
 """
 
 from __future__ import annotations
@@ -91,11 +94,10 @@ BILLING_EVENTS: frozenset[str] = frozenset(
     {
         "upstream_provider_http_error",
         "upstream_provider_opener_error",
-        "key_probe_credential_refused",
     }
 )
 
-#: Every field name the three streams may put on a record.
+#: Every field name the two streams may put on a record.
 #:
 #: This exists because ``JsonFormatter.format`` builds its payload first and
 #: then folds ``extra`` in with ``if key in self._RESERVED or key in payload:
@@ -129,12 +131,6 @@ TELEMETRY_FIELD_NAMES: frozenset[str] = frozenset(
         "completion_tokens",
         "injected_tokens_est",
         "usage_absent",
-        # issue #203 — credential-refusal response shape
-        "content_type_main",
-        "error_code_in_body",
-        "server_class",
-        "header_names_present",
-        "expose_headers_names_openrouter",
     }
 )
 

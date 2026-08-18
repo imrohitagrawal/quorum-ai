@@ -1,8 +1,9 @@
 """Guard ``scripts/telemetry_classification_report.py``.
 
 That script reads the two durable telemetry JSONL streams shipped by
-commit ab4296c (#105/#268/#203) and prints the decision-support numbers
-ADR-0031 already spells out per issue. **It never decides anything** — it
+commit ab4296c (#105/#268) and prints the decision-support numbers
+ADR-0031 already spells out per issue. (#203's stream and its section were
+removed on 2026-08-18 — ADR-0054.) **It never decides anything** — it
 prints the counts and, once a rule's stated sample floor is met, the verdict
 that rule produces. Below the floor it must say so honestly rather than
 guess from a small N.
@@ -74,18 +75,6 @@ def _token_record(*, search_enabled: bool, injected_tokens_est: int) -> dict[str
         "message": "provider_call_tokens",
         "search_enabled": search_enabled,
         "injected_tokens_est": injected_tokens_est,
-    }
-
-
-def _refusal_record(
-    *, status_code: int, content_type_main: str, server_class: str, expose: object
-) -> dict[str, object]:
-    return {
-        "message": "key_probe_credential_refused",
-        "status_code": status_code,
-        "content_type_main": content_type_main,
-        "server_class": server_class,
-        "expose_headers_names_openrouter": expose,
     }
 
 
@@ -211,64 +200,6 @@ def test_268_reports_injected_max_regardless_of_verdict() -> None:
 
 
 # ---------------------------------------------------------------------------
-# #203 — credential-refusal shape diversity
-# ---------------------------------------------------------------------------
-
-
-def test_203_reports_insufficient_with_zero_403_records() -> None:
-    result = report.classify_credential_refusal_shapes([])
-    assert result["n"] == 0
-    assert result["verdict"] == f"insufficient data (0/{report.MIN_N_203})"
-
-
-def test_203_reports_single_shape_as_no_evidence_of_a_second_answerer() -> None:
-    records = [
-        _refusal_record(
-            status_code=403,
-            content_type_main="application/json",
-            server_class="cloudflare",
-            expose=True,
-        )
-        for _ in range(5)
-    ]
-    result = report.classify_credential_refusal_shapes(records)
-    assert result["distinct_shapes"] == 1
-    assert "no evidence of a second answerer" in result["verdict"]
-
-
-def test_203_flags_two_or_more_distinct_shapes_under_403() -> None:
-    # RED-if: shape grouping keys off status_code alone (dropping the other
-    # three fields) — these two records would then collapse into one shape.
-    records = [
-        _refusal_record(
-            status_code=403,
-            content_type_main="application/json",
-            server_class="cloudflare",
-            expose=True,
-        ),
-        _refusal_record(
-            status_code=403, content_type_main="text/html", server_class="other", expose=False
-        ),
-    ]
-    result = report.classify_credential_refusal_shapes(records)
-    assert result["distinct_shapes"] == 2
-    assert "something to disambiguate" in result["verdict"]
-
-
-def test_203_ignores_non_403_records() -> None:
-    records = [
-        _refusal_record(
-            status_code=401,
-            content_type_main="application/json",
-            server_class="cloudflare",
-            expose=True,
-        )
-    ]
-    result = report.classify_credential_refusal_shapes(records)
-    assert result["n"] == 0
-
-
-# ---------------------------------------------------------------------------
 # JSONL reading + CLI surface
 # ---------------------------------------------------------------------------
 
@@ -278,7 +209,7 @@ def test_read_jsonl_skips_blank_lines_and_parses_each_record(tmp_path: Path) -> 
     path.write_text(
         json.dumps({"message": "upstream_provider_http_error", "status_code": 503})
         + "\n\n"
-        + json.dumps({"message": "key_probe_credential_refused", "status_code": 403})
+        + json.dumps({"message": "upstream_provider_opener_error", "error_type": "TimeoutError"})
         + "\n"
     )
     records = report.read_jsonl(path)
@@ -293,7 +224,7 @@ def test_read_jsonl_returns_empty_list_for_a_missing_file(tmp_path: Path) -> Non
     assert records == []
 
 
-def test_main_prints_a_report_section_for_each_of_the_three_issues(
+def test_main_prints_a_report_section_for_each_of_the_two_issues(
     tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
     billing = tmp_path / "telemetry-billing.jsonl"
@@ -304,5 +235,6 @@ def test_main_prints_a_report_section_for_each_of_the_three_issues(
     out = capsys.readouterr().out
     assert "#105" in out
     assert "#268" in out
-    assert "#203" in out
+    # RED-if: #203's removed section comes back without its stream (ADR-0054).
+    assert "#203" not in out
     assert "insufficient data (0/" in out

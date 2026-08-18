@@ -1,4 +1,4 @@
-"""Decision SUPPORT, not a decision, for #105 / #268 / #203.
+"""Decision SUPPORT, not a decision, for #105 / #268.
 
 Reads the two durable JSONL streams commit ab4296c ships
 (``telemetry-billing.jsonl``, ``telemetry-tokens.jsonl``) and prints, per
@@ -21,6 +21,11 @@ is normally unset, so the report reads two files that do not exist yet and
 truthfully prints zero samples for all three issues — that is the expected
 output until the operator's traffic plan (ADR-0031, "stated blocker") puts
 real records on the volume.
+
+#203 was a third reader here. Its ``key_probe_credential_refused`` stream was
+removed on 2026-08-18 (ADR-0054): no network intermediary is configured on
+this deployment, so the proxy/WAF 403 the stream watched for cannot arrive and
+the reading had nothing to converge on. The section went with the stream.
 """
 
 from __future__ import annotations
@@ -45,11 +50,6 @@ MIN_N_268_SEARCHING = 50
 #: compute a percentile at all, which is a floor this script imposes to
 #: avoid a ZeroDivisionError / empty-sequence crash, not one the ADR states.
 MIN_N_268_NONSEARCHING = 1
-
-#: ADR-0031 -> #203: "does more than one distinct shape appear under status
-#: 403?" No sample floor is stated; one record is the minimum needed to
-#: observe a shape at all.
-MIN_N_203 = 1
 
 #: ADR-0031 -> #268 positive partner: "injected_p95 must be under 500."
 _ESTIMATOR_PARTNER_CEILING = 500
@@ -226,40 +226,6 @@ def classify_token_injection(records: list[dict[str, Any]]) -> dict[str, Any]:
     }
 
 
-def classify_credential_refusal_shapes(records: list[dict[str, Any]]) -> dict[str, Any]:
-    """#203 read: distinct response shapes observed under a 403."""
-    refusals = [
-        r
-        for r in records
-        if r.get("message") == "key_probe_credential_refused" and r.get("status_code") == 403
-    ]
-    n = len(refusals)
-    if n < MIN_N_203:
-        return {"n": n, "distinct_shapes": 0, "verdict": f"insufficient data ({n}/{MIN_N_203})"}
-
-    shapes = {
-        (
-            r.get("status_code"),
-            r.get("content_type_main"),
-            r.get("server_class"),
-            r.get("expose_headers_names_openrouter"),
-        )
-        for r in refusals
-    }
-    distinct = len(shapes)
-    if distinct <= 1:
-        verdict = (
-            "single shape observed — no evidence of a second answerer; "
-            "the known proxy/WAF gap stays open honestly"
-        )
-    else:
-        verdict = (
-            f"{distinct} distinct shapes observed under 403 — there is "
-            "something to disambiguate; only now is designing a signal a real task"
-        )
-    return {"n": n, "distinct_shapes": distinct, "verdict": verdict}
-
-
 def _format_105(result: dict[int, dict[str, Any]]) -> str:
     if not result:
         return f"  no upstream_provider_http_error 5xx records — insufficient data (0/{MIN_N_105})"
@@ -296,11 +262,6 @@ def main(argv: list[str] | None = None) -> int:
     print("#268 — injected input tokens (web-search context)")
     r268 = classify_token_injection(token_records)
     print(f"  -> {r268['verdict']}")
-    print()
-    print("#203 — credential-refusal response shape under 403")
-    r203 = classify_credential_refusal_shapes(billing_records)
-    print(f"  n={r203['n']} distinct_shapes={r203['distinct_shapes']}")
-    print(f"  -> {r203['verdict']}")
     return 0
 
 
