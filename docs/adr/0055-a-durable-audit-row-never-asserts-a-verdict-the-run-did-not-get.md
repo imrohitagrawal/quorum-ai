@@ -63,14 +63,21 @@ Before #216 the only cause of suppression was a rare in-flight timeout race.
 false`, so production runs `main`'s tip with the judge OFF and no such row can
 exist there today. It arms the moment the judge is switched on. The operator's
 stated intent to run the judge permanently ON is **UNVERIFIED by any command**.
-Five documents record it in prose — `grep -rn "permanently ON" docs/` returns
-ADR-0017:6, ADR-0018:6, ADR-0019:6, ADR-0027:10 and ADR-0029:50 — but a Status
+Six ADRs other than this one record it in prose —
+`grep -rn "permanently ON" docs/ | grep -v 0055-` returns six lines, one each in
+ADR-0017, ADR-0018, ADR-0019, ADR-0027, ADR-0029 and ADR-0051 — but a Status
 header is a written-down operator statement, not a measurement, and no
 EXECUTABLE artefact in the tree implies it: no config default and no deployed
 setting turns the judge on. Only asking the owner settles it. (This paragraph
-said "no artefact in the tree implies it", full stop, which those five files
-contradict; ADR-0051:85-87 carries the same over-broad wording, left alone here
-as pre-existing and outside this issue.)
+said "no artefact in the tree implies it", full stop, which those six files
+contradict. It then enumerated only FIVE of them, omitting ADR-0051 two lines
+before naming ADR-0051 as carrying the same over-broad wording — the
+enumeration contradicted its own next sentence. The bare `grep` it quoted in
+fact returns EIGHT lines across SEVEN files, two of them this very paragraph;
+hence the `grep -v` above, which excludes this file so the six stays true
+however often this ADR says the phrase. ADR-0051's copy of the over-broad
+wording is left alone as pre-existing and outside this issue;
+`grep -n "permanently ON" docs/adr/0051-*.md` locates it.)
 
 ## Failure modes enumerated first (AGENTS.md rule 16e)
 
@@ -87,13 +94,16 @@ Written before the fix, from the existing ADRs and from reading the call sites.
   after memo eviction, with the rail now closed, replaced a verdict the
   account had already bought.
 - **F-3 No reconciliation.** `grep -rn "_update_run_evaluation" src/` returns
-  one call site; `grep -rn "_persist_terminal_run(" src/` returns three lines,
-  of which **two are call sites** (`query_runs.py:830`,
-  `query_run_orchestration.py:1028`) and the third is the definition
-  (`query_run_orchestration.py:1541`). Nothing re-visits a run: there is no
-  sweeper and no read-path write. (This row said "returns two"; the command
-  prints three lines. The count of CALL SITES was right, the reported command
-  output was not.)
+  three lines, of which **one is a call**, inside `_persist_run_evaluation`;
+  the other two are the module's import and a docstring.
+  `grep -rn "_persist_terminal_run(" src/` also returns three lines, of which
+  **two are call sites** — one in `query_runs.py`, one in
+  `_execute_query_run_safely` — and the third is the `def`. Nothing re-visits a
+  run: there is no sweeper and no read-path write. (This row said "returns
+  two"; the command prints three lines. It then pinned each hit to a line
+  number, and every one of those numbers went stale inside this same branch —
+  `1028`→`1031`, `1541`→`1544` — so the citation is now the grep itself. Run
+  it; do not trust a number written here.)
 - **F-4 Idempotency is narrower than the docstring implies.** The S1 metrics
   row is an upsert; the S2 evaluation attach is a pure function of the memo
   state at call time, and the memo is a bounded LRU.
@@ -190,15 +200,15 @@ Every row names the command that produced it. Run from
 | Question | Command | Measured |
 |---|---|---|
 | Does the durable row diverge from the served body? | the printing probe above, in a `git archive origin/main` copy | persisted `unverified / None / False`; later served `('high', 90, True)`; `update_evaluation` still 1 |
-| The same, re-runnable from a committed file | copy `tests/integration/test_persisted_evaluation_never_asserts_a_verdict_the_run_did_not_get.py` into a `git archive origin/main` copy and run it | the seven cases that assert the fix: three of the four durable-write cases (the clean-path positive partner passes on `main`), three of the four event cases (the clean-path partner likewise), and the enum-vocabulary case. Earlier drafts of this row said "the four durable-write cases and the three event cases", which is not the split the run prints |
+| The same, re-runnable from a committed file | copy `tests/integration/test_persisted_evaluation_never_asserts_a_verdict_the_run_did_not_get.py` into a `git archive origin/main` copy (`21d8358`) and run it | `10 failed, 7 passed in 0.96s` over the file's 17 cases. Re-derive the split with `--no-cov -v \| grep -E 'PASSED\|FAILED'` rather than trusting a hand-written taxonomy — this row has now been wrong twice. The 7 that pass on `main` are the ones whose assertions do not depend on the fix: `…still_writes_its_full_verdict`, `…event_still_carries_its_layer_a_telemetry`, `…writes_exactly_one_ledger_row`, `…counter_moves_for_a_deliberate_write`, `…is_one_memoised_object`, `…deliberately_not_memoised`, `…records_both_evaluation_columns_on_the_durable_row`. Note `test_a_clean_run_records_no_refusal` is a CLEAN-path case that FAILS on `main`, with `KeyError: 'judge_refusal'` — on `main` the key does not exist at all, so the earlier claim that the clean-path partners "pass on `main`" was false for that one |
 | Does a refused run keep its Layer-A row? | the same printing probe, run once in this worktree and once in a `git archive origin/main` copy | `origin/main`: `REFUSED eval_json = {'schema_version': 's3-eval-v5', 'signals': {...}, 'judge': None}`. The FIRST draft of this fix: `REFUSED eval_json = None` — a regression against AC-041, found in review and closed by decision item 2 |
 | Does the Layer-A write clobber a bought verdict? | `pytest …::test_a_refused_re_persist_does_not_erase_the_judge_block_already_bought` with `AND eval_json IS NULL` deleted from the statement (`cp`-aside, restored, `diff -q` → identical) | `AssertionError: a refused re-persist erased the judge block the account had already bought` — so the guard, not luck, is what prevents it |
-| How many src call sites can write the evaluation columns? | `grep -rn "_update_run_evaluation" src/` | one CALL, `query_run_orchestration.py:1689`; the other hits are the import at line 105 and a docstring |
+| How many src call sites can write the evaluation columns? | `grep -rn "_update_run_evaluation" src/` | three lines, of which exactly one is a CALL, inside `_persist_run_evaluation`; the other two are the module's `from product_app.run_history_store import update_evaluation as _update_run_evaluation` and a docstring. Line numbers are deliberately omitted: this row cited the call as `:1689` and the import as `line 105`, and at this branch's tip they are `1701` and `108` — worse, `105` is now a DIFFERENT import (`fill_layer_a_evaluation_if_absent`), so the stale citation pointed at real code that was not the thing named |
 | How many call sites reach terminal persist? | `grep -rn "_persist_terminal_run(" src/` | `query_runs.py` and `query_run_orchestration.py`, both POST/execution paths — no GET |
-| How many consumers does `run_evaluated` have? | `grep -rn "run_evaluated" src/ scripts/` | one producer (`event_type="run_evaluated"`, `query_run_orchestration.py:1696`); every other hit is a docstring, and no reader anywhere in `src/` or `scripts/` |
-| Did the new tests fail before the fix? | `pytest tests/integration/test_persisted_evaluation_never_asserts_a_verdict_the_run_did_not_get.py -q --no-cov` on the unfixed tree | `7 failed, 6 passed` |
-| Do they bite after it? | same file, six `cp`-aside mutations, each restored and confirmed with `diff -q` | dropping the suppression guard → 4 failed; hard-coding `judge_refusal` to `None` → 2 failed; re-asserting the downgraded trust shape on the event → 3 failed; dropping `AND eval_json IS NULL` → 1 failed; mislabelling the timeout token as `SPEND_RAIL_PREFLIGHT` → 1 failed; the naive "write both columns with `trust_json=None`" repair → 6 failed |
-| Was the timeout token covered before this round? | change `INFLIGHT_TIMEOUT` to `SPEND_RAIL_PREFLIGHT` at the one assignment, then `pytest tests/integration/ tests/unit/test_enum_membership_pins.py` | `428 passed, 1 skipped` — **green**. A regression writing a false MONEY attribution into the durable audit stream was invisible to every test. `test_a_judge_wait_that_times_out_records_the_timeout_token` closes it: the same mutation is now `1 failed` |
+| How many consumers does `run_evaluated` have? | `grep -rn "run_evaluated" src/ scripts/` | one producer — `grep -n 'event_type="run_evaluated"' src/product_app/query_run_orchestration.py` returns a single line, inside `_persist_run_evaluation`; every other hit of the bare string is a docstring, and there is no reader anywhere in `src/` or `scripts/`. (This row cited the producer as `:1696`; it is `1713` on this branch, which is why the anchor is now a grep) |
+| Did the new tests fail before the fix? | `pytest tests/integration/test_persisted_evaluation_never_asserts_a_verdict_the_run_did_not_get.py -q --no-cov` on the unfixed tree | `10 failed, 7 passed in 0.96s` |
+| Do they bite after it? | same file, seven `cp`-aside mutations in a `git archive HEAD` copy, each restored and confirmed with `diff -q` (baseline `17 passed` before and after every one) | dropping the persist-path suppression guard — the `if suppression is None: … else: …` branch in `_persist_run_evaluation`, replaced by an unconditional `_update_run_evaluation(eval_json=…, trust_json=…)` → **7 failed**; dropping the OTHER suppression guard, `if judge.served_without_verdict:` in `_evaluate_terminal_run_with_suppression` → **9 failed**; hard-coding `judge_refusal` to `None` → **3 failed**; re-asserting the downgraded trust shape on the event, i.e. `"trust_band": result.trust.band` and `"support_verified": result.trust.support_verified` → **2 failed**; dropping `AND eval_json IS NULL` → 1 failed; mislabelling the timeout token as `SPEND_RAIL_PREFLIGHT` → 1 failed; the naive "write both columns with `trust_json=None`" repair → 6 failed. **Both suppression guards are named because "the suppression guard" is ambiguous and the two numbers differ** — an earlier draft of this row said "4 failed" for an unspecified one of them, which is neither |
+| Was the timeout token covered before this round? | change `INFLIGHT_TIMEOUT` to `SPEND_RAIL_PREFLIGHT` at the one assignment, then `pytest tests/integration/ tests/unit/test_enum_membership_pins.py --ignore=tests/integration/test_persisted_evaluation_never_asserts_a_verdict_the_run_did_not_get.py` | `415 passed, 1 skipped` — **green**. A regression writing a false MONEY attribution into the durable audit stream was invisible to every test that existed before this round. `test_a_judge_wait_that_times_out_records_the_timeout_token` closes it: drop the `--ignore` and the same mutation is `1 failed, 431 passed, 1 skipped` — exactly one case catches it. (This row said `428 passed, 1 skipped`, measured with this file INCLUDED when it held 13 cases; that figure moves every time the file grows, so the number to trust is the `--ignore` one) |
 | Store-lock cost of the fix | reading the diff | one FEWER durable write on the refusal path; unchanged elsewhere |
 
 ## Rejected alternatives
@@ -268,7 +278,13 @@ Also still open, each stated because a reader would otherwise assume otherwise:
   them is that one. Do not read "deferred to its own issue" anywhere as
   "tracked"; it is not filed.
 * **`judge_refusal` has a producer and no reader.** `grep -rn "judge_refusal"
-  src/ scripts/` returns only the one write site. `feedback_audit.py` has
+  src/ scripts/` returns four lines, of which exactly one is a WRITE — the
+  event payload key in `_persist_run_evaluation` — and the rest are docstring
+  and comment mentions. There is no READ. The load-bearing claim is
+  "one write, no read", not the line count: the count moves whenever prose
+  mentions the key, and it did, in this very correction pass. (This bullet said
+  the command "returns only the one write site"; it never returned one line.)
+  `feedback_audit.py` has
   aggregators for `provider`/`synthesis`/`cost`/`safety`/`debate` and none for
   `evaluation`, so the token reaches no report, no `/status` field and no UI.
   Today it is a JSON key an operator must query by hand:
@@ -284,8 +300,18 @@ Also still open, each stated because a reader would otherwise assume otherwise:
   `_last_write_failure_at`, which `/status` reads). Worse, the two are
   CORRELATED: an unreadable feedback ledger is itself one of the things the
   money pre-flight refuses on (F-9), so the fault that causes the refusal can
-  also lose its explanation. Decision item 2 is what keeps that case from being
-  a total silence — the run-history row still holds Layer A either way.
+  also lose its explanation. **And the ORDER makes that the losing order**: in
+  `_persist_run_evaluation` the row write (`_fill_run_layer_a_evaluation`)
+  runs BEFORE `_record_feedback_event`, both inside the one
+  `except Exception` that logs and swallows — and `FeedbackStore.record` is
+  itself documented "best-effort: a failed write is logged and swallowed",
+  returning a `bool` this call site ignores. So a lost event needs no exception
+  at all: the empty `trust_json` lands durably first and the cause is dropped
+  silently after it. Decision item 2 is what keeps that case from being a total
+  silence — the run-history row still holds Layer A either way, so it is
+  distinguishable from F-5 even when the cause is gone. Reversing the order
+  would not help; it would only trade a cause-less absence for an
+  absence-less cause.
 * **The row and its own latest event can disagree.** After a clean persist and
   a later refused re-persist, the row keeps `high` (correct, F-2) while the
   newest `run_evaluated` event for that run reports `trust_band: null`. An

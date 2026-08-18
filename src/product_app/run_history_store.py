@@ -97,6 +97,14 @@ class RunHistoryRow:
       run's ``run_evaluated`` event in the feedback store, under
       ``judge_refusal`` — a DIFFERENT database, written best-effort.
 
+    "Best-effort" is load-bearing, and the ORDER is the losing one: the persist
+    path writes THIS row before it records that event, and
+    :meth:`FeedbackStore.record` swallows a failed write and returns a ``bool``
+    the caller ignores. So the cause can be lost while the absence persists —
+    an empty ``trust_json`` here with no ``judge_refusal`` anywhere. The
+    ``eval_json`` Layer-A record is what still separates that case from a run
+    that died mid-persist; do not read a missing cause as "there was none".
+
     A permanently empty ``trust_json`` is therefore an absence, never a
     finding. It does NOT mean the run scored badly, and it is never rewritten
     once the rail resets.

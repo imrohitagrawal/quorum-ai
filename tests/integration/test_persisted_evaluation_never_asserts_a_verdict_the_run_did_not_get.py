@@ -12,9 +12,12 @@ support_verified=False``, and **nothing ever rewrote it**:
 ``_update_run_evaluation`` has exactly one caller, reachable only from terminal
 persist (``grep -rn "_update_run_evaluation" src/`` → one call site,
 ``query_run_orchestration.py``; ``grep -rn "_persist_terminal_run(" src/`` →
-three lines, of which TWO are call sites — ``query_runs.py:830`` and
-``query_run_orchestration.py:1028``, both POST/execution paths — and the third
-is the definition). Once the 24h rail reset, the served body said
+three lines, of which TWO are call sites — one in ``query_runs.py`` and one in
+``_execute_query_run_safely``, both POST/execution paths — and the third is the
+``def``. Line numbers are omitted on purpose: this docstring cited
+``query_run_orchestration.py:1028`` and the call had already moved to ``1031``
+within the same branch, so the grep is the citation). Once the 24h rail reset,
+the served body said
 ``('high', 90, True)`` while the durable row still said
 ``('unverified', None, False)`` for good.
 
