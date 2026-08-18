@@ -242,8 +242,12 @@ def _redact_text_form(value: object) -> object:
                 forms.append(render(value))
             except Exception:  # noqa: BLE001 - a bad __str__ must not break logging
                 continue
-        if not forms:
-            return value
+        # An object whose ``__str__`` AND ``__repr__`` both raise leaves
+        # ``forms`` empty; ``all()`` over an empty list is True, so it takes
+        # the "nothing to redact" branch below and the object is returned
+        # untouched. No separate guard — an explicit ``if not forms`` was
+        # proven equivalent and therefore untestable (it survived being
+        # deleted with every test still green).
         if all(_redact_secrets(form) == form for form in forms):
             return value
         return _redact_secrets(forms[0])

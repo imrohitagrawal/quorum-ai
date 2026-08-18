@@ -1020,3 +1020,100 @@ def test_an_extra_object_whose_str_logs_is_rendered_exactly_once() -> None:
         f"__str__ was re-entered {len(renders)} times for one log call — "
         "the reentrancy guard is not holding"
     )
+
+
+def test_an_extra_object_whose_str_raises_is_still_redacted_via_repr(
+    sentry_client: None, crumbs: list[dict[str, Any]]
+) -> None:
+    """A broken ``__str__`` must not become a way through the redactor.
+
+    ``_redact_text_form`` tries ``str`` then ``repr``; if ``str`` raises, the
+    ``repr`` must still be inspected, and the log call must survive.
+
+    RED WHEN: the ``except Exception: continue`` around each renderer is
+    removed (the exception escapes ``logger.warning``), or the loop stops
+    after the first renderer that raises.
+    """
+    secret = "sk-or-v1-1234567890abcdefBROKENSTR"
+
+    class BrokenStr:
+        def __str__(self) -> str:
+            raise ValueError("no string form for you")
+
+        def __repr__(self) -> str:
+            return f"BrokenStr(key={secret!r})"
+
+    logger = logging.getLogger("product_app.broken_str")
+    logger.warning("boom", extra={"error": BrokenStr()})
+
+    own = [c for c in crumbs if c.get("category") == "product_app.broken_str"]
+    assert own, "the log call produced no breadcrumb at all — fixture is broken"
+    for crumb in own:
+        rendered = crumb["data"]["error"]
+        assert secret not in repr(rendered), (
+            f"the secret in __repr__ reached Sentry when __str__ raised: {rendered!r}"
+        )
+        # POSITIVE PARTNER (rule 7): the value really was rewritten — the
+        # redacted repr is what landed, not the original object.
+        assert rendered == "BrokenStr(key='[REDACTED]')"
+
+
+def test_an_extra_object_with_no_usable_text_form_is_left_alone(
+    sentry_client: None, crumbs: list[dict[str, Any]]
+) -> None:
+    """When BOTH renderers raise there is nothing to inspect, and nothing to do.
+
+    The value must be passed through untouched rather than the log call
+    failing — the object was only decorating the record.
+
+    RED WHEN: ``_redact_text_form``'s ``if not forms: return value`` guard is
+    removed (``forms[0]`` raises ``IndexError`` out of ``logger.warning``).
+    """
+
+    class NoTextForm:
+        def __str__(self) -> str:
+            raise ValueError("no str")
+
+        def __repr__(self) -> str:
+            raise ValueError("no repr")
+
+    sentinel = NoTextForm()
+    logger = logging.getLogger("product_app.no_text_form")
+    logger.warning("boom", extra={"error": sentinel, "attempt": 3})
+
+    own = [c for c in crumbs if c.get("category") == "product_app.no_text_form"]
+    assert own, "the log call produced no breadcrumb at all — fixture is broken"
+    for crumb in own:
+        assert crumb["data"]["error"] is sentinel
+        # POSITIVE PARTNER (rule 7): a normal sibling extra still arrives, so
+        # the record was built and captured rather than abandoned.
+        assert crumb["data"]["attempt"] == 3
+
+
+def test_three_colliding_secret_keys_all_survive_with_distinct_names(
+    sentry_client: None, crumbs: list[dict[str, Any]]
+) -> None:
+    """The discriminator must keep counting past the first collision.
+
+    Two colliding keys need one alternative name; three need two. A
+    disambiguator that tries a single fixed suffix drops the third entry.
+
+    RED WHEN: ``_disambiguated_key``'s ``while`` loop is replaced by a single
+    unconditional suffix attempt.
+    """
+    secrets = [
+        "sk-or-v1-1111111111111111111111AAAA",
+        "sk-or-v1-2222222222222222222222BBBB",
+        "sk-or-v1-3333333333333333333333CCCC",
+    ]
+    logger = logging.getLogger("product_app.triple_collision")
+    logger.warning("per-key failures", extra={"error": dict(zip(secrets, "abc", strict=True))})
+
+    own = [c for c in crumbs if c.get("category") == "product_app.triple_collision"]
+    assert own, "the log call produced no breadcrumb at all — fixture is broken"
+    for crumb in own:
+        data = crumb["data"]["error"]
+        assert len(data) == 3, f"a redacted key overwrote another entry: {data}"
+        assert sorted(data.values()) == ["a", "b", "c"], f"a value was lost: {data}"
+        for secret in secrets:
+            assert secret not in json.dumps(data), f"a secret-shaped key survived: {data}"
