@@ -299,10 +299,14 @@ Given a terminal run is persisted, when the in-memory run is later evicted, then
 
 ## AC-041 Layer-A evaluation is computed, honest, and persisted for every terminal run
 
-Given a query run reaches a terminal status, when its durable run-history row has been written, then a deterministic Layer-A evaluation and a `TrustScore` are computed with zero I/O and stored on that row via `update_evaluation`; recomputing over the same run yields byte-identical JSON; the stored payload contains metrics only (no query text, no provider prose); and the OC-2 honesty rule holds — because citation count coverage cannot verify that a citation supports its claim, `TrustScore.support_verified` is False unless a real Layer-B judge returned a citation-support verdict, and while it is False the numeric score is suppressed and the served band is `unverified` rather than any confidence figure.
+Given a query run reaches a terminal status, when its durable run-history row has been written, then a deterministic Layer-A evaluation and a `TrustScore` are computed with zero I/O and stored on that row; recomputing over the same run yields byte-identical JSON; the stored payload contains metrics only (no query text, no provider prose); and the OC-2 honesty rule holds — because citation count coverage cannot verify that a citation supports its claim, `TrustScore.support_verified` is False unless a real Layer-B judge returned a citation-support verdict, and while it is False the numeric score is suppressed and the served band is `unverified` rather than any confidence figure.
+
+The Layer-A half is unconditional: the `eval_json` column is written for every terminal run, whatever the money rails say, because Layer A is deterministic and needs no judge. The ordinary path writes both columns via `update_evaluation`.
+
+**The `TrustScore` half has one exception (#342, ADR-0055).** When the spend rails refuse the Layer-B judge a dispatch, no verdict exists, so `trust_json` is left empty rather than filled with the suppressed `band="unverified", score=null, support_verified=false` shape — persisting that shape would assert a finding about a run nothing ever examined, and nothing rewrites the row once the rail resets. On that path only `eval_json` is written, via `fill_layer_a_evaluation_if_absent`, and the refusal cause is recorded on the run's `run_evaluated` event as `judge_refusal`. An empty `trust_json` is an absence, never a low score. The served band is unaffected and stays `unverified`, so the OC-2 honesty rule above is unchanged.
 
 - Requirement: FR-015, NFR-011
-- Test: TEST-FR-015 (`tests/unit/test_evaluation_layer_a.py` determinism, `citation_marker_grounding`, `detect_refusal`, suppression; `tests/evals/test_output_correctness_gate.py` OC-2 honesty rule; `tests/integration/test_query_run_evaluation_endpoint.py` persistence)
+- Test: TEST-FR-015 (`tests/unit/test_evaluation_layer_a.py` determinism, `citation_marker_grounding`, `detect_refusal`, suppression; `tests/evals/test_output_correctness_gate.py` OC-2 honesty rule; `tests/integration/test_query_run_evaluation_endpoint.py` persistence; `tests/integration/test_persisted_evaluation_never_asserts_a_verdict_the_run_did_not_get.py` the refusal exception, both halves)
 
 ## AC-042 Judge OFF is a proven no-op versus the stub judge
 

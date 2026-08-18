@@ -58,6 +58,7 @@ ways, so the record shows what was believed on a date and what replaced it.
 | [ADR-0050](adr/0050-duplicate-adr-numbers-are-refused-at-both-discovery-points.md) | Duplicate ADR numbers are refused at both discovery points, and a gap is not a defect | Architecture | Accepted — 2026-08-17 (issue #332) |
 | [ADR-0051](adr/0051-the-judge-checks-the-spend-rails-instead-of-billing-from-a-read-path.md) | The judge checks the spend rails instead of billing from a read path | Architecture | Accepted — 2026-08-17 |
 | [ADR-0054](adr/0054-no-network-intermediary-so-the-403-shape-capture-is-removed.md) | No network intermediary is configured, so the 403 shape-capture is removed | Architecture | Accepted — 2026-08-18 |
+| [ADR-0055](adr/0055-a-durable-audit-row-never-asserts-a-verdict-the-run-did-not-get.md) | A durable audit row never asserts a verdict the run did not get | Architecture | Accepted — 2026-08-18 |
 
 **This index was itself stale** until 2026-07-30: ADR-0002 had existed since
 2026-07-19 and was never listed here. A hand-maintained index is a derived fact

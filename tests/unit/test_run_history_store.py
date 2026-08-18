@@ -21,6 +21,7 @@ These tests are network-free and construct rows directly. They pin:
 
 from __future__ import annotations
 
+import logging
 from datetime import UTC, datetime, timedelta, timezone
 from decimal import Decimal
 
@@ -31,6 +32,7 @@ from product_app.run_history_store import (
     RunHistoryStore,
     configure,
     configure_for_tests,
+    fill_layer_a_evaluation_if_absent,
     get_store,
     record_terminal_run,
 )
@@ -319,3 +321,116 @@ def test_from_env_uses_run_history_db_path(monkeypatch: pytest.MonkeyPatch) -> N
     store = RunHistoryStore.from_env()
     assert store.run_count() == 0
     store.close()
+
+
+# ---------------------------------------------------------------------------
+# The Layer-A-only attach (#342, ADR-0055).
+#
+# A run whose Layer-B judge the money rails refused gets no trust verdict, but
+# Layer A is deterministic and owes nothing to a judge, so the ``eval_json``
+# column is still filled — through a statement narrow enough that it can never
+# damage a row that already holds a real evaluation.
+# ---------------------------------------------------------------------------
+
+
+def test_fill_layer_a_evaluation_writes_eval_json_and_leaves_trust_json_alone() -> None:
+    """The refused-run path: Layer A lands, the verdict column stays empty.
+
+    RED if the method writes ``trust_json`` as well, or does not write at all.
+    """
+    store = RunHistoryStore(":memory:")
+    row = _row()
+    store.record_terminal_run(row)
+
+    store.fill_layer_a_evaluation_if_absent(
+        row.query_run_id, eval_json={"faithfulness": 0.9, "judge": None}
+    )
+
+    got = store.get(row.query_run_id)
+    assert got is not None
+    assert got.eval_json == {"faithfulness": 0.9, "judge": None}
+    assert got.trust_json is None, "the Layer-A-only attach invented a trust verdict"
+    store.close()
+
+
+def test_fill_layer_a_evaluation_never_replaces_an_evaluation_already_on_the_row() -> None:
+    """A refused re-persist must not damage a verdict the account already bought.
+
+    A suppressed ``eval_json`` carries ``judge: None`` because no judge ran, so
+    an unguarded write would leave the row saying "band high" beside "no judge
+    ran". The statement is guarded with ``AND eval_json IS NULL``.
+
+    RED if that guard is dropped: ``judge`` comes back ``None`` and
+    ``faithfulness`` reverts to the suppressed value.
+    """
+    store = RunHistoryStore(":memory:")
+    row = _row()
+    store.record_terminal_run(row)
+    store.update_evaluation(
+        row.query_run_id,
+        eval_json={"faithfulness": 0.9, "judge": {"model_id": "vendor/judge"}},
+        trust_json={"score": 82, "band": "high"},
+    )
+
+    store.fill_layer_a_evaluation_if_absent(
+        row.query_run_id, eval_json={"faithfulness": 0.1, "judge": None}
+    )
+
+    got = store.get(row.query_run_id)
+    assert got is not None
+    assert got.eval_json == {"faithfulness": 0.9, "judge": {"model_id": "vendor/judge"}}
+    assert got.trust_json == {"score": 82, "band": "high"}
+    store.close()
+
+
+def test_module_fill_layer_a_evaluation_is_best_effort_and_never_raises(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """Same fire-and-forget contract as the other module wrappers.
+
+    RED if the wrapper drops its ``except`` guard: the closed connection raises
+    ``sqlite3.ProgrammingError`` straight into the caller's thread.
+
+    The log assertion is the POSITIVE PARTNER for the test below, which needs
+    to distinguish "the guard returned early" from "something threw and was
+    swallowed" — the two are indistinguishable by return value, since both are
+    ``None``.
+    """
+    store = RunHistoryStore(":memory:")
+    store.close()  # closed connection => any write would raise inside
+    configure(store)
+    try:
+        with caplog.at_level(logging.WARNING, logger="product_app.run_history_store"):
+            fill_layer_a_evaluation_if_absent("any-run-id", eval_json={"faithfulness": 0.9})
+    finally:
+        configure(None)
+
+    assert [r for r in caplog.records if "Layer-A evaluation" in r.getMessage()], (
+        "a swallowed write failure logged nothing, so the test below cannot tell "
+        "an early return from a swallowed crash"
+    )
+
+
+def test_module_fill_layer_a_evaluation_noop_when_unconfigured(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """With no store configured the wrapper must return WITHOUT attempting a write.
+
+    Asserting only "it did not raise" is vacuous here, and was measured so: the
+    ``except Exception`` below the guard swallows the ``AttributeError`` that
+    ``None.fill_layer_a_evaluation_if_absent`` raises, so deleting the
+    ``store is None`` guard left the first draft of this test green.
+
+    RED if that guard is dropped: the call now reaches the ``None`` store,
+    throws, and the swallow logs the warning this asserts is absent — which the
+    test above proves is a message this logger really does emit.
+    """
+    configure(None)
+
+    with caplog.at_level(logging.WARNING, logger="product_app.run_history_store"):
+        fill_layer_a_evaluation_if_absent("any-run-id", eval_json={"faithfulness": 0.9})
+
+    assert get_store() is None
+    assert caplog.records == [], (
+        "the unconfigured wrapper attempted a write instead of returning early"
+    )

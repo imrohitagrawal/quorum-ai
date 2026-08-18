@@ -109,6 +109,9 @@ _CLASSES_BY_QUALIFIED_NAME = {
     "query_run_orchestration.StageState": query_run_orchestration.StageState,
     "query_run_orchestration.BillableStage": query_run_orchestration.BillableStage,
     "query_run_orchestration.StageBillingState": query_run_orchestration.StageBillingState,
+    "query_run_orchestration.JudgeSuppressionReason": (
+        query_run_orchestration.JudgeSuppressionReason
+    ),
     "safety.WarningType": safety.WarningType,
     "synthesis.SynthesisStatus": synthesis.SynthesisStatus,
 }
@@ -206,6 +209,9 @@ ENUM_MEMBER_PINS: dict[str, frozenset[str]] = {
     ),
     "query_run_orchestration.BillableStage": frozenset({"debate", "synthesis"}),
     "query_run_orchestration.StageBillingState": frozenset({"not_entered", "entered", "recorded"}),
+    "query_run_orchestration.JudgeSuppressionReason": frozenset(
+        {"spend_rail_preflight", "inflight_owner_lost", "inflight_timeout"}
+    ),
     "safety.WarningType": frozenset({"sensitive_data", "high_stakes"}),
     "synthesis.SynthesisStatus": frozenset({"completed", "failed"}),
 }

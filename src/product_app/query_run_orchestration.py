@@ -101,6 +101,9 @@ from product_app.providers import (
 )
 from product_app.providers import provider_execution_service as provider_execution_service
 from product_app.run_history_store import RunHistoryRow
+from product_app.run_history_store import (
+    fill_layer_a_evaluation_if_absent as _fill_run_layer_a_evaluation,
+)
 from product_app.run_history_store import record_terminal_run as _record_run_history
 from product_app.run_history_store import update_evaluation as _update_run_evaluation
 from product_app.synthesis import (
@@ -1659,18 +1662,52 @@ def _persist_run_evaluation(*, query_run: QueryRun, agreement: AgreementSummary)
     The persisted and emitted payloads are METRICS ONLY —
     ``RunEvaluation.to_eval_json`` drops the judge rationale, and nothing here
     touches ``query_run.query_text`` or any answer prose.
+
+    NO TRUST VERDICT IS WRITTEN when the evaluation came back SUPPRESSED —
+    the money rails refused a fresh paid dispatch, or this read lost the
+    in-flight owner it was waiting on (#342, ADR-0055). Such a result is the
+    verdict-less shape and is deliberately not memoised, so a later read can
+    still return a real verdict once the rail resets, while
+    ``update_evaluation`` is a blind ``UPDATE`` of BOTH evaluation columns with
+    no rowcount check: writing the suppressed shape here recorded
+    ``band="unverified", score=None, support_verified=False`` durably, forever,
+    for a run the judge was never allowed to look at — and, on a re-persist
+    after memo eviction, replaced a verdict that had already been bought.
+    The refusal cause goes on the ``run_evaluated`` event instead, so the empty
+    trust column is an explained absence rather than a false claim.
+
+    THE LAYER-A RECORD IS STILL WRITTEN on that path, through
+    ``fill_layer_a_evaluation_if_absent``. Layer A is deterministic, needs no
+    I/O and no judge, and no spend rail changes what it says, so AC-041 holds
+    for a refused run exactly as for any other; only the trust column is
+    withheld. That narrower statement never touches ``trust_json`` and fills
+    only an absent ``eval_json``, so it can neither replace a bought verdict
+    (the clobber above) nor overwrite a row's real judge block with the
+    ``judge: None`` a suppressed evaluation carries.
+
+    This does NOT make the durable row equal the served projection. A run
+    refused at 23:59 is served a real verdict tomorrow while its trust column
+    stays empty for the rest of its life; nothing re-visits a run
+    (``_update_run_evaluation`` has one caller, this one, reached only from
+    terminal persist). ADR-0055 records why that gap is left open.
     """
     try:
-        result = _evaluate_terminal_run(query_run, agreement=agreement)
+        result, suppression = _evaluate_terminal_run_with_suppression(
+            query_run, agreement=agreement
+        )
         if result is None:
             return
-        eval_json = result.eval_json()
-        trust_json = result.trust_json()
-        _update_run_evaluation(
-            str(query_run.query_run_id),
-            eval_json=eval_json,
-            trust_json=trust_json,
-        )
+        if suppression is None:
+            _update_run_evaluation(
+                str(query_run.query_run_id),
+                eval_json=result.eval_json(),
+                trust_json=result.trust_json(),
+            )
+        else:
+            _fill_run_layer_a_evaluation(
+                str(query_run.query_run_id),
+                eval_json=result.eval_json(),
+            )
         _record_feedback_event(
             recorder="evaluation",
             event_type="run_evaluated",
@@ -1680,8 +1717,22 @@ def _persist_run_evaluation(*, query_run: QueryRun, agreement: AgreementSummary)
                 "schema_version": result.evaluation.schema_version,
                 "faithfulness_label": result.evaluation.faithfulness_label,
                 "hallucination_risk": result.evaluation.hallucination_risk,
-                "trust_band": result.trust.band,
-                "support_verified": result.trust.support_verified,
+                # Issue #342: on a suppressed read these two are what the
+                # judge WOULD have decided and did not, so they are nulled
+                # rather than reported as a finding. ``judge_refusal`` below
+                # says why they are empty; absence without a cause is
+                # indistinguishable from a crash mid-persist.
+                #
+                # ``is not None``, never truthiness, and identically to the
+                # write branch above: an enum member whose value happened to
+                # be falsy would otherwise suppress the ROW while the event
+                # went on asserting the very verdict this exists to withhold,
+                # with no cause recorded.
+                "trust_band": None if suppression is not None else result.trust.band,
+                "support_verified": (
+                    None if suppression is not None else result.trust.support_verified
+                ),
+                "judge_refusal": suppression.value if suppression is not None else None,
                 # Issue #258: so "are the judges I pay for returning
                 # anything?" is answerable from the durable event stream
                 # rather than by re-running a query. A closed enum token or
@@ -1892,6 +1943,34 @@ def _judge_status_for(query_run_id: UUID) -> JudgeCallOutcome | None:
     return None if outcome is None else outcome.status
 
 
+class JudgeSuppressionReason(StrEnum):
+    """Why ONE read served the verdict-less shape without buying a verdict (#342).
+
+    A closed vocabulary, never prose: these tokens reach the durable
+    ``run_evaluated`` event, where an operator reads them to tell "the spend
+    rails refused to pay" from "no judge is configured" and from "the judge ran
+    and found nothing" — the distinction ADR-0018 exists to keep.
+
+    This describes a read that did NOT dispatch, which is why it is not a
+    member of ``evaluation.JudgeCallOutcome``: that enum documents what one
+    Layer-B judge CALL did, and here there was no call.
+
+    ``SPEND_RAIL_PREFLIGHT`` deliberately does NOT distinguish "this account is
+    at its cap" from "the ledger could not be read, so the pre-flight failed
+    closed". ``_judge_money_rails_allow_dispatch`` returns a bare ``bool`` and
+    is not changed here; narrowing the cause would change that function's
+    contract, which is #216's surface and out of scope for #342.
+    """
+
+    #: ``_judge_money_rails_allow_dispatch`` said no to a fresh PAID dispatch.
+    SPEND_RAIL_PREFLIGHT = "spend_rail_preflight"
+    #: The in-flight call this read meant to ride on ended between the two lock
+    #: takes without leaving a memo entry; becoming the owner now would pay.
+    INFLIGHT_OWNER_LOST = "inflight_owner_lost"
+    #: The owner's in-flight call outlived ``_JUDGE_INFLIGHT_WAIT_SECONDS``.
+    INFLIGHT_TIMEOUT = "inflight_timeout"
+
+
 class _MemoisedRunJudge:
     """The real ``EvalJudgeService``, memoised per run for the request path.
 
@@ -1927,7 +2006,18 @@ class _MemoisedRunJudge:
         #: unverified for the rest of its TTL. Per-instance, and
         #: ``_request_path_judge`` mints a fresh instance per evaluation, so
         #: one read's suppression can never mark another's.
-        self.served_without_verdict = False
+        #:
+        #: Since #342 this holds WHY rather than merely THAT, because the
+        #: persist path now records the cause on the durable ``run_evaluated``
+        #: event instead of writing a trust verdict the run never got. ``None``
+        #: while nothing has been suppressed, so ``served_without_verdict``
+        #: below stays a plain boolean question for every existing reader.
+        self.suppression_reason: JudgeSuppressionReason | None = None
+
+    @property
+    def served_without_verdict(self) -> bool:
+        """True once this instance served the suppressed, verdict-less shape."""
+        return self.suppression_reason is not None
 
     def evaluate(self, evidence: JudgeEvidence) -> EvalJudgeVerdict | None:
         run_id = self._query_run_id
@@ -1952,7 +2042,7 @@ class _MemoisedRunJudge:
         if not sharing and not _judge_money_rails_allow_dispatch(self._account_id):
             # No memoised verdict and nobody else paying: serving a verdict
             # here means BUYING one, and a rail says no.
-            self.served_without_verdict = True
+            self.suppression_reason = JudgeSuppressionReason.SPEND_RAIL_PREFLIGHT
             return None
         with _judge_memo_lock:
             if run_id in _judge_verdict_memo:
@@ -1966,7 +2056,7 @@ class _MemoisedRunJudge:
                 # would PAY, and no rail read authorised that — the check
                 # above was skipped precisely because someone else was paying.
                 # Serve suppressed; the next read re-reads the rails.
-                self.served_without_verdict = True
+                self.suppression_reason = JudgeSuppressionReason.INFLIGHT_OWNER_LOST
                 return None
             if future is None:
                 future = Future()
@@ -1981,15 +2071,16 @@ class _MemoisedRunJudge:
             # divergence used to be self-limiting because every later read
             # recomputed; since #284 an EVALUATION memo sits in front, and a
             # diverged result stored there would be permanent for a terminal
-            # run. ``served_without_verdict`` is set here so
-            # ``_evaluate_terminal_run`` declines to store this one.)
+            # run. ``suppression_reason`` is set here so
+            # ``_evaluate_terminal_run_with_suppression`` declines to store
+            # this one — and, since #342, so the persist path can say WHY.)
             try:
                 return future.result(timeout=_JUDGE_INFLIGHT_WAIT_SECONDS).verdict
             except FuturesTimeoutError:
                 with _judge_memo_lock:
                     if run_id in _judge_verdict_memo:
                         return _judge_verdict_memo[run_id].verdict
-                self.served_without_verdict = True
+                self.suppression_reason = JudgeSuppressionReason.INFLIGHT_TIMEOUT
                 return None
         service = EvalJudgeService()
         verdict: EvalJudgeVerdict | None = None
@@ -2244,6 +2335,21 @@ def _evaluate_terminal_run(
     *,
     agreement: AgreementSummary,
 ) -> RunEvaluationResult | None:
+    """The evaluation alone — see :func:`_evaluate_terminal_run_with_suppression`.
+
+    Every reader that only needs the result calls this. The persist path calls
+    the two-value form below, because whether the result was SUPPRESSED decides
+    what it may write durably (#342).
+    """
+    result, _reason = _evaluate_terminal_run_with_suppression(query_run, agreement=agreement)
+    return result
+
+
+def _evaluate_terminal_run_with_suppression(
+    query_run: QueryRun,
+    *,
+    agreement: AgreementSummary,
+) -> tuple[RunEvaluationResult | None, JudgeSuppressionReason | None]:
     """Layer-A (+ optionally Layer-B) evaluation for a terminal run.
 
     With the judge unconfigured — the default, and the only configuration in
@@ -2258,14 +2364,29 @@ def _evaluate_terminal_run(
     ``query_text`` is threaded only alongside a judge — it is only ever used
     to build judge evidence.
 
+    Returns the result AND, when this read served the verdict-less shape
+    without buying a verdict, WHY — see :class:`JudgeSuppressionReason`.
+
     Memoised per ``(run, revision)`` — see ``_evaluation_memo``. This is the
     ONE site both readers reach (``_evaluation_projection`` for the served
-    body, ``_persist_run_evaluation`` for the durable row), so memoising here
-    also makes the served projection and the persisted row identical BY
-    CONSTRUCTION rather than by two runs of a pure function agreeing.
+    body, ``_persist_run_evaluation`` for the durable row), so a result that IS
+    memoised is served and persisted from the SAME object rather than from two
+    runs of a pure function agreeing.
+
+    That holds only where the memo holds. This paragraph used to claim the two
+    were "identical BY CONSTRUCTION", full stop, and that was false on the
+    suppressed path below: when the judge sets a suppression reason — the money
+    rails refused a fresh paid dispatch (#216, ADR-0051), or this read lost the
+    in-flight owner it was waiting on — the result is returned WITHOUT being
+    stored, deliberately, so a refusal is never frozen past the 24h rail reset.
+    On that path each reader computes its own result, under rail states that
+    may differ, and they can disagree. Issue #342: ``_persist_run_evaluation``
+    therefore writes no trust verdict at all when a reason comes back, and
+    records the reason on the durable ``run_evaluated`` event instead of
+    asserting a verdict the run did not get.
     """
     if not query_run.is_terminal:
-        return None
+        return None, None
     key: _EvaluationMemoKey = (
         str(query_run.query_run_id),
         query_run.updated_at,
@@ -2282,7 +2403,9 @@ def _evaluate_terminal_run(
         # is the ONLY thing that used to keep a polled run's judge entry hot.
         # Done after releasing the lock above — see ``_judge_memo_touch``.
         _judge_memo_touch(key[0])
-        return cached
+        # A memo hit is by definition a result that was NOT suppressed: the
+        # store below is the only writer and the suppressed branch skips it.
+        return cached, None
     # Computed OUTSIDE the lock: with a judge configured this makes an HTTP
     # call, and holding a process-wide lock across it would serialise every
     # result read in the process. A concurrent second computation costs no
@@ -2320,9 +2443,9 @@ def _evaluate_terminal_run(
             # knowingly the worse of the two. Serve it, do not freeze it. The
             # cost is that a run whose judge never answers recomputes Layer A
             # per read — bounded to that run, and only until the owner stores.
-            return result
+            return result, judge.suppression_reason
     _evaluation_memo_store(key, result)
-    return result
+    return result, None
 
 
 def _evaluation_projection(

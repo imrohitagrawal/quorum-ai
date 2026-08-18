@@ -25,10 +25,16 @@ ledger.
 
 **This paragraph said "the only record that a paid Layer-B judge call happened"
 until review refuted it.** A durable one exists: `_persist_run_evaluation`
-(`query_run_orchestration.py:1689`) writes a `run_evaluated` feedback event
+writes a `run_evaluated` feedback event
 carrying `"judge_status": _judge_status_for(query_run.query_run_id)`, added by
 issue #258 so "are the judges I pay for returning anything?" is answerable from
-the event stream. Verified by `grep -n "judge_status" src/product_app/*.py`.
+the event stream. Located by
+`grep -n '"judge_status": _judge_status_for' src/product_app/query_run_orchestration.py`,
+which returns exactly one line. **This sentence carried a line number twice and
+was wrong both times** — first `:1689`, then "moved to `:1714` by #342", which
+was itself false: `1714` is the line `account_id=query_run.account_id,`, while
+the payload key had moved to `1740` and `_record_feedback_event(` sat at `1711`.
+Hence the grep. Do not put the number back.
 The narrower claim is what actually matters here and is what is now written:
 that durable event is written **once**, at persist time, and nothing reads it
 back — so it records the *first* judge call and can neither see a later
