@@ -1288,7 +1288,8 @@ def test_two_distinct_secret_top_level_extra_keys_do_not_collapse() -> None:
     a discriminator the second write overwrites the first and one extra is
     gone from every sink at once. The nested dict branch has had this covered
     since the first commit on this branch; the record-level branch did not,
-    and deleting its ``_disambiguated_key`` call left all 29 tests green.
+    and deleting its ``_disambiguated_key`` call left every other test in
+    this file green.
 
     RED WHEN: the ``_disambiguated_key`` call in
     ``make_record_with_extra_redaction`` is removed.
