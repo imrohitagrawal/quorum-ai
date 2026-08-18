@@ -59,7 +59,7 @@ capture has recorded nothing.
 
 ## Decision
 
-**Remove `_log_credential_refusal_shape`, its four private constants
+**Remove `_log_credential_refusal_shape`, its five private constants
 (`_REFUSAL_HEADER_ALLOWLIST`, `_OPENROUTER_EXPOSED_HEADER_NAMES`,
 `_KNOWN_CONTENT_TYPES`, `_ERROR_CODE_MIN`/`_ERROR_CODE_MAX`), its call site and
 its test file. Close #203 as not-a-problem on this deployment's egress path.**
@@ -81,11 +81,13 @@ Deliberately kept:
 
 **Keep the capture dormant, in case a proxy appears later.** Rejected. It is
 154 lines removed from `readiness.py` plus a 473-line test file (measured:
-`git diff --stat HEAD`), carrying its own hazards — a
+`git diff --stat origin/main...HEAD`; `git diff --stat HEAD` produces nothing
+on a committed tree and was the wrong command to cite), carrying its own hazards — a
 header allowlist, a content-type allowlist and a 32-bit `error.code` clamp, all
 of which exist purely to stop upstream-chosen bytes reaching a log record. That
 is standing maintenance and standing log-injection surface bought for data that
-cannot arrive: the probe does not dial while live execution is off, and there
+cannot arrive while both of those remain true: the probe does not dial while
+live execution is off, and there
 is no intermediary to produce the 403 it is watching for. If an intermediary is
 ever introduced, the capture is recoverable verbatim from git history along
 with the reasoning here — cheaper than carrying it against a hypothetical.

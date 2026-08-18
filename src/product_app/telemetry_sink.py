@@ -6,7 +6,7 @@ Issues #105 and #268 are each blocked on production data that does not
 exist yet. (#203 was a third: its credential-refusal stream was removed on
 2026-08-18 once the infrastructure question behind it was measured — no
 network intermediary is configured on this deployment, so the 403 it watched
-for cannot arrive. See ADR-0054.) None of them can be decided from the repo, and none of them may be
+for cannot arrive while that remains true. See ADR-0054.) None of them can be decided from the repo, and none of them may be
 decided from a guess — #180 cost three broken attempts learning that. So this
 module ships the place the data lands, and nothing else. **No classification,
 default or constant is changed anywhere in this package.**

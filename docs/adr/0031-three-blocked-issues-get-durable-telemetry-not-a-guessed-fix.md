@@ -10,7 +10,9 @@ Accepted — 2026-08-10.
 `readiness.py` and its section of `scripts/telemetry_classification_report.py`
 were removed.** The infrastructure question that stream existed to answer was
 measured instead — no network intermediary is configured on this deployment —
-so the 403 it watched for cannot arrive. Everything below about #105 and #268
+so the 403 it watched for cannot arrive WHILE THAT REMAINS TRUE (no
+intermediary configured, live execution off). It is a statement about this
+deployment today, not an impossibility. Everything below about #105 and #268
 stands unchanged; read the #203 passages as history.
 
 ## Context

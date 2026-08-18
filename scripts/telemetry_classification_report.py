@@ -24,7 +24,8 @@ real records on the volume.
 
 #203 was a third reader here. Its ``key_probe_credential_refused`` stream was
 removed on 2026-08-18 (ADR-0054): no network intermediary is configured on
-this deployment, so the proxy/WAF 403 the stream watched for cannot arrive and
+this deployment TODAY, so the proxy/WAF 403 the stream watched for cannot
+arrive while that remains true, and
 the reading had nothing to converge on. The section went with the stream.
 """
 

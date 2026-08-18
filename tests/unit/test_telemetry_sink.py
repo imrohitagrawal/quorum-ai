@@ -1,4 +1,7 @@
-"""Durable, bounded sinks for the telemetry that unblocks #105, #268 and #203.
+"""Durable, bounded sinks for the telemetry that unblocks #105 and #268.
+
+(#203 was a third stream until ADR-0054 removed it; the history below still
+mentions it because the two-file design was argued when it existed.)
 
 WHY A FILE AT ALL
 -----------------
@@ -13,7 +16,8 @@ already mounted at ``/data``.
 
 WHY TWO FILES AND NOT ONE
 -------------------------
-The two streams have different volumes and different value. #105/#203 records
+The two streams have different volumes and different value. #105 records
+(and, until ADR-0054, #203's)
 are rare and precious. #268's record fires on every successful provider call,
 roughly a dozen per run. On one shared file the high-volume stream would rotate
 the rare one out of existence — the defect
