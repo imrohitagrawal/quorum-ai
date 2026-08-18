@@ -137,6 +137,7 @@ pythonpath = ["src"]
 markers = [
   "env_oracle: asserts on interpreter/OS behaviour (GC, wall clock, subprocess); deselected under mutmut",
   "repo_introspection: reads the repo itself (git/make/pytest against REPO_ROOT); cannot run inside mutmut's ./mutants/ copy",
+  "no_node_required: exempt from the negative-assertion guard module's node/e2e-node_modules fixture; reads repo text only",
 ]
 
 # R2 P0-D (ledger RB-7): mutation testing. Every value below was set from a
