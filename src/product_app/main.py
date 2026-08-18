@@ -79,7 +79,9 @@ from product_app.telemetry_sink import install_telemetry_sinks
 # the feedback-store fallback below) is emitted as a single JSON object.
 setup_json_logging(settings.log_level)
 
-# Durable sinks for the #105 / #268 / #203 telemetry, on the Fly volume.
+# Durable sinks for the #105 / #268 telemetry, on the Fly volume.
+# (#203's stream was removed by ADR-0054 — no intermediary is configured on
+# this deployment, so the 403 it watched for cannot arrive while that holds.)
 # AFTER the call above, which replaces the root logger's handlers. A no-op
 # unless TELEMETRY_LOG_DIR is set (fly.toml sets it to the mounted volume),
 # and it never raises. See

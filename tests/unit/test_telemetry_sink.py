@@ -1,4 +1,7 @@
-"""Durable, bounded sinks for the telemetry that unblocks #105, #268 and #203.
+"""Durable, bounded sinks for the telemetry that unblocks #105 and #268.
+
+(#203 was a third stream until ADR-0054 removed it; the history below still
+mentions it because the two-file design was argued when it existed.)
 
 WHY A FILE AT ALL
 -----------------
@@ -13,7 +16,8 @@ already mounted at ``/data``.
 
 WHY TWO FILES AND NOT ONE
 -------------------------
-The two streams have different volumes and different value. #105/#203 records
+The two streams have different volumes and different value. #105 records
+(and, until ADR-0054, #203's)
 are rare and precious. #268's record fires on every successful provider call,
 roughly a dozen per run. On one shared file the high-volume stream would rotate
 the rare one out of existence — the defect
@@ -24,9 +28,10 @@ WHAT TURNS EACH TEST RED
 Named in each test's own docstring. The file-level answer: delete
 ``install_telemetry_sinks`` and every test here fails.
 
-NO CLASSIFICATION IS CHANGED BY ANY OF THIS. ``_UNBILLED_HTTP_STATUSES``,
-``_CREDENTIAL_REFUSED_STATUSES`` and the readiness verdict are byte-identical;
-this package ships measurement, not a fix.
+NO CLASSIFICATION IS CHANGED BY ANY OF THIS. ``_UNBILLED_HTTP_STATUSES`` is
+byte-identical; this package ships measurement, not a fix. (#203's
+credential-refusal stream was removed on 2026-08-18 — ADR-0054 — and the
+readiness verdict was byte-identical across that removal too.)
 """
 
 from __future__ import annotations
@@ -48,7 +53,7 @@ from urllib.error import HTTPError, URLError
 import pytest
 import sentry_sdk
 
-from product_app import config, readiness, telemetry_sink
+from product_app import config, telemetry_sink
 from product_app.logging_config import JsonFormatter
 from product_app.providers import provider_execution_service
 
@@ -177,17 +182,6 @@ def _drive_successful_call(monkeypatch: pytest.MonkeyPatch, *, model_id: str = _
     )
 
 
-def _drive_key_probe(monkeypatch: pytest.MonkeyPatch, exc: BaseException) -> str:
-    """Drive the REAL readiness key probe into ``exc`` and return its verdict."""
-    _live(monkeypatch)
-    monkeypatch.setattr(config.settings, "openrouter_api_key", "sk-or-test", raising=False)
-
-    def transport(*, url: str, api_key: str, timeout: float) -> int:
-        raise exc
-
-    return readiness.probe_key_auth(transport=transport)
-
-
 def _custom_fields(record: logging.LogRecord) -> set[str]:
     """The ``extra=`` keys on a record, BEFORE the formatter gets a chance to
     swallow any of them.
@@ -262,14 +256,14 @@ def test_no_telemetry_field_name_is_silently_dropped_by_the_formatter() -> None:
     assert swallowed["message"] == "probe", "extra={'message': …} is no longer swallowed"
 
 
-def test_every_field_the_three_streams_actually_emit_is_declared(
+def test_every_field_the_two_streams_actually_emit_is_declared(
     monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
 ) -> None:
     """RED WHEN: a field is added to a record without declaring it.
 
     The registry the test above reads is only worth something if it matches
     what the code emits. This is the other direction, and it collects the names
-    by DRIVING all four record types rather than by reading a second list —
+    by DRIVING every record type rather than by reading a second list —
     a hand-written list would agree with itself forever.
     """
     billing_seen: set[str] = set()
@@ -277,7 +271,6 @@ def test_every_field_the_three_streams_actually_emit_is_declared(
         _drive_provider_error(monkeypatch, _http_error(503, _ROUTER_REFUSAL_BODY))
         _drive_provider_error(monkeypatch, URLError(reason=TimeoutError()))
         _drive_successful_call(monkeypatch, model_id=f"{_MODEL_ID}:online")
-        _drive_key_probe(monkeypatch, _http_error(403, b"<html>denied</html>"))
         for record in caplog.records:
             if record.msg in telemetry_sink.BILLING_EVENTS:
                 billing_seen |= _custom_fields(record)
@@ -308,7 +301,13 @@ def test_every_field_the_three_streams_actually_emit_is_declared(
 
     # TWO floors, not one. A single total let the billing stream cover for a
     # token stream that emitted nothing at all.
-    assert len(billing_seen) >= 15, (
+    # 11 is the exact number the three billing drivers above emit today,
+    # measured 2026-08-18 by running this test after #203's credential-refusal
+    # driver was removed (ADR-0054): the failure message printed
+    # ``only 11 billing field names were collected``. It was 15 while that
+    # fourth driver existed. Pinned at the measured value, not below it, so
+    # any driver going quiet still trips it.
+    assert len(billing_seen) >= 11, (
         f"only {len(billing_seen)} billing field names were collected; the drivers went quiet"
     )
     assert len(token_seen) >= 9, (
@@ -358,21 +357,11 @@ def test_the_5xx_evidence_record_reaches_the_durable_billing_file(
     assert lines[0]["error_metadata_present"] is False
 
 
-def test_the_403_probe_record_reaches_the_same_durable_billing_file(
-    monkeypatch: pytest.MonkeyPatch, sink_dir: Path
-) -> None:
-    """RED WHEN: ``key_probe_credential_refused`` leaves the sink's allowlist."""
-    _drive_key_probe(monkeypatch, _http_error(403, b"<html>denied</html>"))
-    lines = _billing_lines(sink_dir)
-    assert len(lines) == 1, f"expected exactly 1 billing record, got {len(lines)}"
-    assert lines[0]["message"] == "key_probe_credential_refused"
-    assert lines[0]["status_code"] == 403
-
-
 def test_an_unrelated_warning_does_not_reach_the_billing_file(sink_dir: Path) -> None:
     """RED WHEN: the sink's filter is removed and it takes the whole root logger.
 
-    The positive partner is the test above: the allowlisted event DOES land.
+    The positive partner is ``test_the_5xx_evidence_record_reaches_the_durable_billing_file``:
+    the allowlisted event DOES land.
     Without this one, "the billing file is small" would be satisfied by a sink
     that swallowed everything into a 5 MiB ring nobody could read.
     """
@@ -412,49 +401,6 @@ def test_the_connect_timeout_evidence_record_reaches_the_durable_billing_file(
     assert [line["message"] for line in lines] == ["upstream_provider_opener_error"] * 2
     assert [line["error_type"] for line in lines] == ["TimeoutError", "ConnectionRefusedError"]
     assert [line["billing_class"] for line in lines] == ["possibly_billed", "not_billed"]
-
-
-def test_an_unreadable_403_body_still_reaches_the_durable_file_at_production_level(
-    monkeypatch: pytest.MonkeyPatch, sink_dir: Path
-) -> None:
-    """RED WHEN: the unreadable-body branch is demoted below WARNING.
-
-    ``fly.toml`` sets ``LOG_LEVEL = "INFO"``, and every test in
-    ``test_key_probe_refusal_shape.py`` runs inside
-    ``caplog.at_level(logging.DEBUG)`` — so none of them can tell
-    ``_log.warning`` from ``_log.debug`` on that branch. Measured 2026-08-10:
-    changing it to ``debug`` left the whole suite green at ``2801 passed``,
-    while production would have collected nothing. A dead socket on a WAF is a
-    likely #203 case, so this drives the real level rather than a raised one.
-    """
-
-    class _DeadSocket(io.BytesIO):
-        def read1(self, size: int | None = -1, /) -> bytes:
-            raise OSError("connection reset by peer")
-
-    readiness_logger = logging.getLogger("product_app.readiness")
-    previous = readiness_logger.level
-    readiness_logger.setLevel(logging.INFO)  # what fly.toml sets in production
-    try:
-        verdict = _drive_key_probe(
-            monkeypatch,
-            HTTPError(
-                url="https://openrouter.ai/api/v1/key",
-                code=403,
-                msg="refused",
-                hdrs=_headers(Server="cloudflare"),
-                fp=_DeadSocket(b"never read"),
-            ),
-        )
-    finally:
-        readiness_logger.setLevel(previous)
-    assert verdict == "unauthorized"
-    lines = _billing_lines(sink_dir)
-    assert len(lines) == 1, f"expected exactly 1 billing record, got {len(lines)}"
-    assert lines[0]["body_shape"] == "unreadable"
-    # POSITIVE PARTNER: the header half of the evidence arrived too, so this is
-    # not passing on a record that degraded to nothing.
-    assert lines[0]["server_class"] == "cloudflare"
 
 
 def test_the_token_stream_survives_an_operator_setting_log_level_warning(
