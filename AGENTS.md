@@ -321,6 +321,18 @@ is the rule only.
     (diff-cover included). A clean auto-merge is not a correct merge.
 17e. **After merging, `git branch -f main origin/main`** — the merge lands on the
     remote and the local ref does not follow.
+    **That command FAILS when `main` is the branch you have checked out**, which
+    in this repo's own workflow is the usual case: `fatal: cannot force update
+    the branch 'main' used by worktree at '/Users/.../quorum-ai'` (measured
+    2026-08-17, closing out PR #334). Use `git merge --ff-only origin/main`
+    from the main checkout instead — same result, and it refuses rather than
+    rewrites if the histories have diverged. `git branch -f` is still the right
+    form when you are on some other branch.
+    Related, same close-out: `git branch -D <merged>` also fails while any
+    worktree still has that branch checked out (`error: cannot delete branch
+    ... used by worktree at ...`). Remove the worktrees FIRST, then delete the
+    branch — which is the order step (4) of rule 18a already implies but does
+    not state.
 17f. **Hermetic / $0.** No paid API calls for routine checks. Never fabricate a
     number — flag the gap instead.
 17g. **Before selecting a work package, check whether several open issues are
