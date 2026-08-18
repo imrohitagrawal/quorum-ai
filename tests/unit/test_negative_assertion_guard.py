@@ -11,23 +11,65 @@ The checker is Node (it needs a real TypeScript parser). These tests drive it
 as a subprocess over fixture sources, so its behaviour is pinned by the same
 suite as everything else rather than by a second harness nobody runs.
 
-They SKIP when `e2e/node_modules` is absent — a fresh clone that has not run
-`npm ci` must not go red. `test_the_guard_is_wired_into_ci` does not skip: an
-unregistered gate is not a gate, and that check needs no node.
+On a developer machine without node or `e2e/node_modules` the node-driven tests
+SKIP, so a fresh clone that has not run `npm ci` does not go red. In the
+required `pytest (Python 3.12)` lane the workflow installs both and sets
+`QUORUM_REQUIRE_E2E_NODE_TOOLING=1`; there, absent tooling FAILS instead of
+skipping. That is deliberate — until ADR-0058 every test in this file was
+skipped in that lane, and the lane still reported green.
+
+These need no node tooling — they read repo text, or drive a stub node they
+create themselves — so they are marked `no_node_required` and run everywhere:
+`test_the_guard_is_wired_into_ci`, `test_the_parser_dependency_is_declared`,
+`test_the_required_pytest_lane_installs_the_node_tooling`,
+`test_the_lane_wiring_probe_reports_every_missing_piece`,
+`test_missing_tooling_is_fatal_only_when_the_lane_demands_it`,
+`test_the_two_lanes_pin_the_same_node_version`,
+`test_the_node_version_probe_reports_a_disagreement`,
+`test_a_hung_node_is_killed_by_a_timeout`,
+`test_the_docstring_names_only_tests_that_really_are_node_free`.
+`test_the_docstring_names_only_tests_that_really_are_node_free` compares that
+list against the markers in both directions, so this sentence cannot drift away
+from the code the way its predecessor did.
+
+The gate that this file never goes wholly skipped again lives in a DIFFERENT
+file, `tests/unit/test_guard_suite_is_not_skipped.py`. It was here at first,
+and a review round proved that worthless: a module-level `pytest.mark.skip`,
+or an unguarded skip in the fixture below, silenced the watchdog along with
+everything it was watching, and pytest still exited 0.
 """
 
 from __future__ import annotations
 
+import os
+import re
 import shutil
+import signal
 import subprocess
+import sys
 from pathlib import Path
+from typing import Any
 
 import pytest
+import yaml
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 E2E = REPO_ROOT / "e2e"
 CHECKER = E2E / "tools" / "check-negative-assertions.mjs"
 E2E_WORKFLOW = REPO_ROOT / ".github" / "workflows" / "e2e.yml"
+
+#: Set by the required `pytest (Python 3.12)` lane, which installs node and
+#: `e2e/node_modules` first. Where it is set, absent tooling is a FAILURE: the
+#: lane asked for these tests and a silent skip there is the defect this
+#: module's own gate exists to prevent.
+NODE_TOOLING_REQUIRED_ENV = "QUORUM_REQUIRE_E2E_NODE_TOOLING"
+
+#: Wall-clock ceiling for one checker subprocess. The whole module takes ~17s
+#: on node 22, so this is generous; its job is to turn a wedged `node` into a
+#: NAMED test failure instead of a job that burns to `timeout-minutes: 15` and
+#: reports only "exceeded the maximum execution time". These tests only started
+#: executing in a required lane with ADR-0058, so that risk is new.
+NODE_TIMEOUT_SECONDS = 120
 
 pytestmark = pytest.mark.repo_introspection
 
@@ -40,15 +82,50 @@ def _run(source: str, tmp_path: Path) -> subprocess.CompletedProcess[str]:
         cwd=E2E,
         capture_output=True,
         text=True,
+        timeout=NODE_TIMEOUT_SECONDS,
     )
 
 
-@pytest.fixture(autouse=True)
-def _needs_node() -> None:
+def _tooling_verdict(node_present: bool, parser_present: bool, required: bool) -> str:
+    """What to do about the node tooling: ``run``, ``skip`` or ``fail``.
+
+    Split out as a pure function so the decision can be driven over its whole
+    input table without a subprocess, an environment, or a node install.
+    """
+    if node_present and parser_present:
+        return "run"
+    return "fail" if required else "skip"
+
+
+def _missing_tooling() -> list[str]:
+    """The pieces of the node tooling that are not present, in install order."""
+    missing = []
     if shutil.which("node") is None:
-        pytest.skip("node is not installed")
+        missing.append("node is not installed")
     if not (E2E / "node_modules" / "@typescript-eslint" / "parser").is_dir():
-        pytest.skip("e2e/node_modules is absent — run `npm ci` in e2e/")
+        missing.append("e2e/node_modules is absent — run `npm ci` in e2e/")
+    return missing
+
+
+@pytest.fixture(autouse=True)
+def _needs_node(request: pytest.FixtureRequest) -> None:
+    if request.node.get_closest_marker("no_node_required") is not None:
+        return
+    missing = _missing_tooling()
+    verdict = _tooling_verdict(
+        node_present="node is not installed" not in missing,
+        parser_present=not any(m.startswith("e2e/node_modules") for m in missing),
+        required=os.environ.get(NODE_TOOLING_REQUIRED_ENV) == "1",
+    )
+    if verdict == "run":
+        return
+    reason = "; ".join(missing)
+    if verdict == "fail":
+        pytest.fail(
+            f"{NODE_TOOLING_REQUIRED_ENV}=1 — this lane installs the node "
+            f"tooling and these tests must run, but {reason}"
+        )
+    pytest.skip(reason)
 
 
 VACUOUS = """\
@@ -681,6 +758,7 @@ def test_an_unresolvable_base_ref_fails_closed(tmp_path: Path) -> None:
         cwd=E2E,
         capture_output=True,
         text=True,
+        timeout=NODE_TIMEOUT_SECONDS,
     )
     assert result.returncode != 0, (
         f"an unresolvable base ref reported success:\n{result.stdout}{result.stderr}"
@@ -690,6 +768,7 @@ def test_an_unresolvable_base_ref_fails_closed(tmp_path: Path) -> None:
     )
 
 
+@pytest.mark.no_node_required
 def test_the_guard_is_wired_into_ci() -> None:
     """An unregistered gate is not a gate — the repo's most-repeated lesson.
 
@@ -715,6 +794,7 @@ def test_the_guard_is_wired_into_ci() -> None:
     )
 
 
+@pytest.mark.no_node_required
 def test_the_parser_dependency_is_declared() -> None:
     """The checker imports @typescript-eslint/parser; `npm ci` must install it.
 
@@ -725,4 +805,324 @@ def test_the_parser_dependency_is_declared() -> None:
     package = (E2E / "package.json").read_text(encoding="utf-8")
     assert "@typescript-eslint/parser" in package, (
         "the checker imports @typescript-eslint/parser but it is not declared"
+    )
+
+
+# --- The tests above must actually RUN in a required lane -------------------
+#
+# Until this section existed they did not: every test in this module was
+# skipped in `pytest (Python 3.12)` and in `validate-and-test`, because the
+# autouse fixture needs `e2e/node_modules` and no pytest lane ran `npm ci`.
+# See docs/adr/0058-guard-tests-run-in-a-required-pytest-lane.md.
+
+TEST_WORKFLOW = REPO_ROOT / ".github" / "workflows" / "test.yml"
+REQUIRED_PYTEST_JOB = "pytest (Python 3.12)"
+
+
+def _required_pytest_job() -> dict[str, Any]:
+    """The parsed job behind the required `pytest (Python 3.12)` context."""
+    workflow = yaml.safe_load(TEST_WORKFLOW.read_text(encoding="utf-8"))
+    jobs = workflow["jobs"]
+    for job in jobs.values():
+        if job.get("name") == REQUIRED_PYTEST_JOB:
+            assert isinstance(job, dict)
+            return job
+    raise AssertionError(
+        f"no job named {REQUIRED_PYTEST_JOB!r} in {TEST_WORKFLOW}; "
+        f"found {[j.get('name') for j in jobs.values()]}"
+    )
+
+
+def _runs_npm_ci(step: dict[str, Any]) -> bool:
+    """True when this step's ``run`` invokes ``npm ci`` as a command.
+
+    Tokenised, not substring-matched: a step whose script merely mentions
+    `npm ci` in a comment must not count (AGENTS.md rule 8).
+    """
+    return any(
+        line.strip().split()[:2] == ["npm", "ci"]
+        for line in str(step.get("run") or "").splitlines()
+    )
+
+
+def _runs_make_test(step: dict[str, Any]) -> bool:
+    """True when this step's ``run`` invokes ``make test`` as a command."""
+    return any(
+        line.strip().split()[:2] == ["make", "test"]
+        for line in str(step.get("run") or "").splitlines()
+    )
+
+
+def _node_lane_wiring(job: dict[str, Any]) -> set[str]:
+    """Names of the wiring pieces MISSING from a job, as a set.
+
+    Empty means the job provisions node, installs `e2e/`'s packages before the
+    test step, and tells this module's fixture that missing tooling is fatal
+    rather than skippable. Returning the missing NAMES rather than a bool is
+    what lets the caller say which piece regressed.
+    """
+    steps = [s for s in (job.get("steps") or []) if isinstance(s, dict)]
+    setup_at = npm_at = test_at = None
+    for index, step in enumerate(steps):
+        if setup_at is None and str(step.get("uses") or "").startswith("actions/setup-node@"):
+            setup_at = index
+        if npm_at is None and step.get("working-directory") == "e2e" and _runs_npm_ci(step):
+            npm_at = index
+        if test_at is None and _runs_make_test(step):
+            test_at = index
+
+    missing: set[str] = set()
+    if setup_at is None:
+        missing.add("setup-node")
+    if npm_at is None:
+        missing.add("npm-ci-in-e2e")
+    if test_at is None:
+        missing.add("make-test-step")
+    else:
+        # The VALUE, not just the key. The fixture treats only the exact
+        # string "1" as "required", so `"0"` — or the `${{ steps.npm.outcome
+        # ... }}` expression ADR-0058 rejects by name — silently restores the
+        # all-skipped state while every check in the repo stays green.
+        flag = (steps[test_at].get("env") or {}).get(NODE_TOOLING_REQUIRED_ENV)
+        if flag is None or str(flag) != "1":
+            missing.add("require-flag-on-make-test")
+        if setup_at is not None and npm_at is not None and not setup_at < npm_at < test_at:
+            missing.add("install-before-make-test")
+    return missing
+
+
+@pytest.mark.no_node_required
+def test_the_required_pytest_lane_installs_the_node_tooling() -> None:
+    """The fix, asserted where it lives: on the required lane's own job.
+
+    Turns red if: the setup-node step, the `npm ci` step, the require flag, or
+    the ordering between them is removed from `.github/workflows/test.yml` —
+    each of which silently restores the all-skipped state this module was in.
+    """
+    missing = _node_lane_wiring(_required_pytest_job())
+    assert missing == set(), (
+        f"{REQUIRED_PYTEST_JOB} is missing {sorted(missing)}; without it every "
+        "test in this module skips in a required context"
+    )
+
+
+@pytest.mark.no_node_required
+def test_the_lane_wiring_probe_reports_every_missing_piece() -> None:
+    """Positive/negative partner for the assertion above (AGENTS.md rule 7).
+
+    An `== set()` assertion is trivially satisfied by a probe that always
+    returns an empty set, and would then pass over any workflow at all.
+
+    Turns red if: `_node_lane_wiring` stops detecting any one of the pieces, or
+    is stubbed to return nothing.
+    """
+    bare = {"steps": [{"name": "Run tests", "run": "make test"}]}
+    assert _node_lane_wiring(bare) == {
+        "setup-node",
+        "npm-ci-in-e2e",
+        "require-flag-on-make-test",
+    }
+
+    wired = {
+        "steps": [
+            {"uses": "actions/setup-node@v4", "with": {"node-version": "22"}},
+            {"working-directory": "e2e", "run": "npm ci --no-audit --no-fund"},
+            {"run": "make test", "env": {NODE_TOOLING_REQUIRED_ENV: "1"}},
+        ]
+    }
+    assert _node_lane_wiring(wired) == set()
+
+    out_of_order = {
+        "steps": [
+            {"run": "make test", "env": {NODE_TOOLING_REQUIRED_ENV: "1"}},
+            {"uses": "actions/setup-node@v4"},
+            {"working-directory": "e2e", "run": "npm ci"},
+        ]
+    }
+    assert _node_lane_wiring(out_of_order) == {"install-before-make-test"}
+
+    wrong_directory = {
+        "steps": [
+            {"uses": "actions/setup-node@v4"},
+            {"run": "npm ci"},
+            {"run": "make test", "env": {NODE_TOOLING_REQUIRED_ENV: "1"}},
+        ]
+    }
+    assert _node_lane_wiring(wrong_directory) == {"npm-ci-in-e2e"}
+
+    commented_only = {
+        "steps": [
+            {"uses": "actions/setup-node@v4"},
+            {"working-directory": "e2e", "run": "# npm ci is skipped here\ntrue"},
+            {"run": "make test", "env": {NODE_TOOLING_REQUIRED_ENV: "1"}},
+        ]
+    }
+    assert _node_lane_wiring(commented_only) == {"npm-ci-in-e2e"}
+
+    # The flag's VALUE is load-bearing: the fixture reads only the exact
+    # string "1" as "required". A one-character edit must be caught.
+    for disarmed in ("0", "", "true", "${{ steps.npm.outcome == 'success' }}"):
+        wired_but_disarmed = {
+            "steps": [
+                {"uses": "actions/setup-node@v4"},
+                {"working-directory": "e2e", "run": "npm ci"},
+                {"run": "make test", "env": {NODE_TOOLING_REQUIRED_ENV: disarmed}},
+            ]
+        }
+        assert _node_lane_wiring(wired_but_disarmed) == {"require-flag-on-make-test"}, (
+            f"a require flag of {disarmed!r} disarms the fixture but was accepted"
+        )
+
+
+def _setup_node_versions(workflow: dict[str, Any]) -> set[str]:
+    """Every `node-version` pinned by an `actions/setup-node` step, as strings."""
+    versions: set[str] = set()
+    for job in (workflow.get("jobs") or {}).values():
+        for step in job.get("steps") or []:
+            if not isinstance(step, dict):
+                continue
+            if str(step.get("uses") or "").startswith("actions/setup-node@"):
+                version = (step.get("with") or {}).get("node-version")
+                if version is not None:
+                    versions.add(str(version))
+    return versions
+
+
+@pytest.mark.no_node_required
+def test_the_two_lanes_pin_the_same_node_version() -> None:
+    """The pytest lane and the e2e lane must not disagree about node.
+
+    ADR-0058 says the new setup-node block is "identical to what e2e.yml
+    already does, so the two lanes cannot disagree about the node version".
+    Those are two independent literals in two files; without this check that
+    sentence is a promise, not a property (AGENTS.md rule 1a).
+
+    Turns red if: either file's `node-version` is edited without the other —
+    e.g. the pytest lane is dropped to 18 while e2e stays on 22, so the
+    checker is exercised on a version the blocking lane never runs.
+    """
+    both = _setup_node_versions(
+        yaml.safe_load(TEST_WORKFLOW.read_text(encoding="utf-8"))
+    ) | _setup_node_versions(yaml.safe_load(E2E_WORKFLOW.read_text(encoding="utf-8")))
+    assert both, "neither workflow pins a node-version — the probe is reading the wrong files"
+    assert len(both) == 1, f"the two lanes pin different node versions: {sorted(both)}"
+
+
+@pytest.mark.no_node_required
+def test_the_node_version_probe_reports_a_disagreement() -> None:
+    """Positive/negative partner for the assertion above (AGENTS.md rule 7).
+
+    `len(both) == 1` is trivially satisfied by a probe that reads nothing, and
+    would then pass over any pair of workflows at all.
+
+    Turns red if: `_setup_node_versions` stops finding setup-node steps, or
+    stops distinguishing two different versions.
+    """
+    agreeing = {
+        "jobs": {
+            "a": {"steps": [{"uses": "actions/setup-node@v4", "with": {"node-version": "22"}}]}
+        }
+    }
+    disagreeing = {
+        "jobs": {"b": {"steps": [{"uses": "actions/setup-node@v4", "with": {"node-version": 18}}]}}
+    }
+    assert _setup_node_versions(agreeing) == {"22"}
+    assert _setup_node_versions(disagreeing) == {"18"}
+    assert len(_setup_node_versions(agreeing) | _setup_node_versions(disagreeing)) == 2
+    assert _setup_node_versions({"jobs": {"c": {"steps": [{"run": "make test"}]}}}) == set()
+
+
+@pytest.mark.no_node_required
+def test_a_hung_node_is_killed_by_a_timeout(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A wedged `node` must fail this test by name, not the whole CI job.
+
+    Before ADR-0058 these tests never executed in a required lane, so an
+    unbounded `subprocess.run` cost nothing. Now they do: a `node` that never
+    returns would burn the job to `timeout-minutes: 15`, and GitHub reports
+    only "exceeded the maximum execution time" — no test name, no output.
+
+    Drives a stub `node` that sleeps, so it needs no real node install.
+
+    Turns red if: the `timeout=` argument is dropped from `_run`. The SIGALRM
+    below is what makes that red rather than a hang — measured: with `timeout=`
+    removed and no alarm, this test did not return in 45s (killed, exit 142).
+
+    POSIX only; `signal.alarm` does not exist on Windows, which this repo does
+    not target (CI is ubuntu-latest, development is macOS).
+    """
+    fake_bin = tmp_path / "bin"
+    fake_bin.mkdir()
+    stub = fake_bin / "node"
+    # Absolute path: PATH is emptied below, so a bare `sleep` would not resolve
+    # and the stub would exit immediately instead of hanging.
+    stub.write_text("#!/bin/sh\nexec /bin/sleep 600\n", encoding="utf-8")
+    stub.chmod(0o755)
+    monkeypatch.setenv("PATH", str(fake_bin))
+    monkeypatch.setattr(sys.modules[__name__], "NODE_TIMEOUT_SECONDS", 1)
+
+    def _alarm(_signum: int, _frame: Any) -> None:
+        raise AssertionError(
+            "_run did not return within 15s against a `node` that never exits — "
+            "the `timeout=` argument is missing, so a wedged node would burn the "
+            "whole CI job instead of failing this test by name"
+        )
+
+    previous = signal.signal(signal.SIGALRM, _alarm)
+    signal.alarm(15)
+    try:
+        with pytest.raises(subprocess.TimeoutExpired):
+            _run(VACUOUS, tmp_path)
+    finally:
+        signal.alarm(0)
+        signal.signal(signal.SIGALRM, previous)
+
+
+@pytest.mark.no_node_required
+def test_missing_tooling_is_fatal_only_when_the_lane_demands_it() -> None:
+    """Absent tooling skips on a laptop and fails in the lane that installed it.
+
+    The `skip` row is the partner that proves this change does not simply make
+    every node-less machine red.
+
+    Turns red if: the required branch goes back to `pytest.skip` — the exact
+    regression this work exists to prevent — or if a machine without the
+    tooling starts failing when nothing asked it to run these tests.
+    """
+    assert _tooling_verdict(node_present=True, parser_present=True, required=True) == "run"
+    assert _tooling_verdict(node_present=True, parser_present=True, required=False) == "run"
+    assert _tooling_verdict(node_present=False, parser_present=True, required=True) == "fail"
+    assert _tooling_verdict(node_present=True, parser_present=False, required=True) == "fail"
+    assert _tooling_verdict(node_present=False, parser_present=True, required=False) == "skip"
+    assert _tooling_verdict(node_present=True, parser_present=False, required=False) == "skip"
+
+
+@pytest.mark.no_node_required
+def test_the_docstring_names_only_tests_that_really_are_node_free() -> None:
+    """The prose and the markers are compared, in both directions.
+
+    The predecessor of this module's docstring asserted that
+    `test_the_guard_is_wired_into_ci` "does not skip"; a CI log showed it
+    skipping with every other test in the file. A corrected sentence would
+    have lasted until the next edit (AGENTS.md rule 1a), so it is a check.
+
+    Turns red if: the docstring names a test that has lost the marker, or a
+    marked test is missing from the docstring's list.
+    """
+    module = sys.modules[__name__]
+    named = set(re.findall(r"`(test_[a-z0-9_]+)`", module.__doc__ or ""))
+    assert named, "the module docstring names no node-free test — the parse is wrong"
+
+    marked = {
+        name
+        for name, obj in vars(module).items()
+        if name.startswith("test_")
+        and callable(obj)
+        and any(mark.name == "no_node_required" for mark in getattr(obj, "pytestmark", []))
+    }
+    assert marked, "no test carries the no_node_required marker — the walk is wrong"
+    assert named == marked, (
+        "the docstring and the markers disagree; named-not-marked="
+        f"{sorted(named - marked)}, marked-not-named={sorted(marked - named)}"
     )
