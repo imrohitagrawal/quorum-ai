@@ -72,10 +72,12 @@ setting turns the judge on. Only asking the owner settles it. (This paragraph
 said "no artefact in the tree implies it", full stop, which those six files
 contradict. It then enumerated only FIVE of them, omitting ADR-0051 two lines
 before naming ADR-0051 as carrying the same over-broad wording — the
-enumeration contradicted its own next sentence. The bare `grep` it quoted in
-fact returns EIGHT lines across SEVEN files, two of them this very paragraph;
-hence the `grep -v` above, which excludes this file so the six stays true
-however often this ADR says the phrase. ADR-0051's copy of the over-broad
+enumeration contradicted its own next sentence. The bare `grep` it quoted also
+counts this ADR's own mentions of the phrase, so its answer changes every time
+this paragraph is edited — it was wrong again within one commit of being
+corrected. That is why the `grep -v` above excludes this file: the six stays
+true however often this ADR says the phrase. No bare-grep total is quoted here,
+deliberately. ADR-0051's copy of the over-broad
 wording is left alone as pre-existing and outside this issue;
 `grep -n "permanently ON" docs/adr/0051-*.md` locates it.)
 

@@ -732,9 +732,17 @@ def test_a_judge_wait_that_times_out_records_the_timeout_token(
     threads and no clock dependence beyond the shortened wait.
 
     RED if ``INFLIGHT_TIMEOUT`` is renamed, dropped, or swapped for another
-    member: measured, changing that one assignment to
-    ``SPEND_RAIL_PREFLIGHT`` left the whole integration suite plus the enum
-    pins green (428 passed, 1 skipped), so no other test covers this token.
+    member. This test is the ONLY thing that covers the token: measured by
+    changing that one assignment to ``SPEND_RAIL_PREFLIGHT``, the rest of the
+    integration suite plus the enum pins stay green with this file excluded,
+    and go red only when it is included. Re-derive with::
+
+        pytest tests/integration tests/unit/test_enum_membership_pins.py \
+            --ignore=<this module's own path>   # green
+        pytest tests/integration tests/unit/test_enum_membership_pins.py  # red, here
+
+    A raw pass-count is deliberately not quoted: it moves whenever any test
+    in that set is added or removed, which already falsified it once.
     """
     monkeypatch.setattr(qro, "_JUDGE_INFLIGHT_WAIT_SECONDS", 0.01)
     run = _terminal_run()
