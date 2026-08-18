@@ -179,6 +179,19 @@ reason in reverse: its markup default is the non-empty string
 `"Live execution is unavailable"`, so a title assertion alone would pass on the
 server-rendered default with the renderer doing nothing.
 
+**The same reasoning was NOT applied consistently, and review round 2 caught
+it.** The degraded-mode banner's length leg targets
+`#demo-mode-banner-title` (`workspace.html:690`), whose markup default is the
+hardcoded `"Demo mode is active"` — the very property the readiness title was
+rejected for. Measured 2026-08-18: that leg goes RED when the renderer writes an
+EMPTY title, but a renderer that never writes the title at all is satisfied by
+the hardcoded default. What actually closes the never-written case for this
+banner is the exact-content leg on `[data-demo-mode-target]`
+(`toContainText("3 of 4 model answers")`), whose default IS empty. The leg is
+kept rather than removed — it is strictly additive and it does catch the
+empty-write case — but it is NOT the thing carrying the guarantee, and an
+earlier draft of this ADR and of the spec comment both implied it was.
+
 **The PLACEHOLDER gap, narrowed but not closed.** It now applies to the four
 `trust-score-invariants` sites only — a surface rendering exactly `—` would
 satisfy their `length > 0` leg. The three banner sites carry an exact-content

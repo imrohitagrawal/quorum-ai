@@ -335,9 +335,19 @@ test.describe("transcript-view disclosure banner (#115)", () => {
     // present and `hidden = false`: `toBeVisible()` stayed GREEN. It could not,
     // because `#demo-mode-banner` still contains the static `.callout-icon`
     // "!" glyph, so even the banner's OWN `innerText` is non-empty when the
-    // copy is gone. The content leg therefore targets the two nodes app.js
-    // actually writes — the title and `[data-demo-mode-target]`, whose markup
-    // default is EMPTY (`workspace.html:691`) — not the banner as a whole.
+    // copy is gone. The content legs therefore target the two nodes app.js
+    // actually writes, not the banner as a whole. Be precise about what each
+    // one can and cannot see, because they are NOT equally strong:
+    //   - `[data-demo-mode-target]` (`workspace.html:691`) ships EMPTY, so the
+    //     `toContainText` leg below goes red both when the renderer writes
+    //     nothing and when it writes the wrong thing.
+    //   - `#demo-mode-banner-title` (`workspace.html:690`) does NOT ship empty
+    //     — its markup default is the hardcoded `Demo mode is active`. So the
+    //     title-length leg catches a renderer that writes an EMPTY title, but
+    //     NOT one that never writes the title at all: the hardcoded default
+    //     would satisfy it. Review round 2 caught this; an earlier version of
+    //     this comment claimed both defaults were empty, which is false.
+    //     The `toContainText` leg is what covers the never-written case.
     // An empty banner discloses nothing, which is the whole point of this file.
     const short = { ...goldenCompletedResp(), demo_mode: false, live_count: 3, local_count: 0 };
     await driveWithCompleted(page, short);
