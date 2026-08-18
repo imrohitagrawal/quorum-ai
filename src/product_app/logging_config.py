@@ -292,14 +292,20 @@ def _redact_text_form(value: object) -> object:
                 forms.append(render(value))
             except Exception:  # noqa: BLE001 - a bad __str__ must not break logging
                 continue
-        # An object whose ``__str__`` AND ``__repr__`` both raise leaves
-        # ``forms`` empty; ``all()`` over an empty list is True, so it takes
-        # the "nothing to redact" branch below and the object is returned
-        # untouched. No separate guard — an explicit ``if not forms`` was
-        # proven equivalent and therefore untestable (it survived being
-        # deleted with every test still green).
+        # An object no renderer can turn into text leaves ``forms`` empty;
+        # ``all()`` over an empty list is True, so it takes the "nothing to
+        # redact" branch below and the object is returned untouched. No
+        # separate guard — an explicit ``if not forms`` was proven equivalent
+        # and therefore untestable (it survived being deleted with every test
+        # still green). Note ``_sentry_repr`` raises ``AttributeError`` for
+        # any object without the dunder, which is nearly all of them, so an
+        # absent renderer and a broken one take the same path.
         if all(_redact_secrets(form) == form for form in forms):
             return value
+        # ``forms[0]`` is the FIRST form that rendered, not the one that
+        # carried the secret: whichever renderer leaked it, the value is
+        # replaced by the redacted primary text, so the leaking form is
+        # discarded rather than published.
         return _redact_secrets(forms[0])
     finally:
         rendering.discard(id(value))
