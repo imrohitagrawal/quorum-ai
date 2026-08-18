@@ -214,6 +214,46 @@ test.describe("#111 — the offline disclosure is visible where a user decides t
   test("live: no offline disclosure anywhere", async ({ page }) => {
     // The paired negative. Without it, a banner hardcoded visible would pass
     // every assertion above.
+    //
+    // #226 — this test used to be that one line, and one line cannot tell
+    // "the banner correctly stayed quiet" from "there is no banner".
+    // Measured 2026-08-17 with `#readiness-banner { display: none }` added to
+    // app.css — the literal #111 defect this whole file exists for — this
+    // test in its pre-#226 form stayed GREEN, and so did the ceiling test
+    // below. `toBeAttached()` was tried as the partner under that same
+    // mutation and also stayed GREEN, so it is REJECTED; `toBeVisible()` went
+    // RED. So the control is a real A/B on the ONE input that should drive it:
+    // the same first-visit boot, offline, must SHOW the banner.
+    //
+    // Cost, one run each on one laptop (chromium, `--workers=1`), an order of
+    // magnitude rather than a benchmark: 0.56s -> 0.60s, and 0.79s once the two
+    // content legs below were added (2026-08-18).
+    //
+    // Review round 2 (#226): `toBeVisible()` ALONE still survived the EMPTIED
+    // defect class. Measured 2026-08-18 by replacing the two
+    // `readinessTitle.textContent = title` / `readinessMessage.textContent =
+    // body` writes at the end of app.js's readiness renderer with `= ""`,
+    // leaving `readinessRegion.hidden = false` untouched: `toBeVisible()`
+    // stayed GREEN. It cannot see this, because `#readiness-banner` also holds
+    // a static `.callout-icon` "!" and a static "Show more" button, so the
+    // banner's own `innerText` is non-empty with the copy gone. The content leg
+    // targets `#readiness-banner-message`, whose markup default is EMPTY
+    // (`workspace.html:192`) — the title's is not, so the title alone would
+    // pass on the server-rendered default without app.js writing anything.
+    await bootFirstVisit(page, { state: "offline_by_bad_key", reasons: ["r"] });
+    await expect(
+      banner(page),
+      "control: an offline deployment MUST disclose, or the negative below is vacuous",
+    ).toBeVisible();
+    expect(
+      (await page.locator("#readiness-banner-message").innerText()).trim().length,
+      "control: a visible banner with an empty message discloses nothing",
+    ).toBeGreaterThan(0);
+    await expect(
+      page.locator("#readiness-banner-message"),
+      "control: the disclosure must SAY the answers will be simulated",
+    ).toContainText("local simulation helpers");
+
     await bootFirstVisit(page, { state: "live" });
 
     await expect(banner(page)).toBeHidden();
@@ -259,6 +299,31 @@ test.describe("#111 — the offline disclosure is visible where a user decides t
     await bootFirstVisit(page, { state: "live", global_spend_ceiling_reached: false });
 
     await expect(banner(page)).toBeHidden();
+
+    // #226 — the title of this test makes a CAUSAL claim ("the flag, not the
+    // state alone, drives it") and a single hidden-assertion cannot express
+    // causation: it never observes the flag in its other position. So flip ONLY
+    // the flag, holding state at "live", and require the banner to appear.
+    // This is what makes the title an assertion rather than a hope. Measured
+    // 2026-08-17 by replacing app.js's `if (readiness.global_spend_ceiling_
+    // reached)` with `if (false)` — the flag ignored, the whole ceiling
+    // disclosure gone: this test in its pre-#226 form stayed GREEN, and the
+    // control below goes RED. The `toBeHidden()` line above still catches the
+    // opposite defect, a banner hardcoded visible, so both directions are
+    // covered.
+    //
+    // Cost, one run each on one laptop (chromium, `--workers=1`), an order of
+    // magnitude rather than a benchmark: 0.54s -> 0.63s (0.76s re-measured
+    // 2026-08-18; this test itself was not changed in review round 2).
+    await bootFirstVisit(page, { state: "live", global_spend_ceiling_reached: true });
+
+    await expect(
+      banner(page),
+      "same state, flag flipped: the ceiling flag must be what raises the banner",
+    ).toBeVisible();
+    await expect(page.locator("#readiness-banner-title")).toHaveText(
+      "Today's shared demo budget has been used up",
+    );
   });
 
   test("an unrecognised state still discloses rather than staying silent", async ({

@@ -103,5 +103,63 @@ test.describe("workspace renders + functions under the strict CSP, cross-engine"
     ).toEqual([]);
     const csp = consoleErrors.filter(isCspError);
     expect(csp, `CSP/security console errors on /ui:\n${csp.join("\n")}`).toEqual([]);
+
+    // SELF-CHECK (#226) — in THIS test, on THIS page, AFTER the two clean
+    // claims above. Both channels report "zero" via a `?? []` / an empty array,
+    // so "no violations happened" and "nothing was ever collected" are the
+    // identical value. Measured 2026-08-17 by mutation on this branch: with
+    // the `addInitScript` line above replaced by a no-op, the `toEqual([])` on
+    // line 103 stayed GREEN and only the poll below went red; with
+    // `collectConsoleErrors` replaced by a bare `[]`, the `toEqual([])` on line
+    // 105 stayed GREEN and only the second poll went red. The sibling POSITIVE
+    // CONTROL test cannot close that — it proves the engine can detect, on a
+    // DIFFERENT page, not that this page's collector is live.
+    //
+    // Deliberately violate script-src and require BOTH channels to notice.
+    // Hermetic: CSP blocks the request before it leaves the browser, so no
+    // network call is made and nothing is paid for.
+    //
+    // Side effect worth knowing, NOT separately measured here: if the served
+    // CSP were ever loosened to permit an external script host, this trigger
+    // would stop being blocked and both polls below would go red.
+    await page.evaluate(() => {
+      const s = document.createElement("script");
+      s.src = "https://cdn.jsdelivr.net/npm/rb6-csp-selfcheck.js";
+      document.head.appendChild(s);
+    });
+    // Partners the DOM-event channel asserted at the top of this test.
+    await expect
+      .poll(async () => (await cspViolations(page)).length, {
+        timeout: 5_000,
+        message:
+          "the securitypolicyviolation collector never fired for a deliberately " +
+          "blocked external script — so the empty `violations` asserted above " +
+          "was a dead collector, not a clean page",
+      })
+      .toBeGreaterThan(0);
+    // Partners the CONSOLE channel asserted at the top of this test. Engines
+    // word this differently, which is why `isCspError` is a broad matcher.
+    // Measured 2026-08-17 on this exact trigger, one probe run per engine:
+    //   chromium — "Loading the script '...' violates the following Content
+    //              Security Policy directive: \"script-src 'self' ...\""
+    //   firefox  — "Content-Security-Policy: The page's settings blocked a
+    //              script (script-src-elem) at ... because it violates the
+    //              following directive"
+    //   webkit   — "Refused to load ... because it does not appear in the
+    //              script-src directive of the Content Security Policy."
+    // NO single alternative of `isCspError` covers all three (each alternative
+    // tested against each captured message): `content security policy` matches
+    // chromium and webkit but NOT firefox, which spells the header hyphenated;
+    // `violates the following` matches chromium and firefox but NOT webkit. It
+    // takes at least two, so narrowing the matcher to one silently blinds this
+    // partner on an engine while leaving it green on the other two.
+    await expect
+      .poll(() => consoleErrors.filter(isCspError).length, {
+        timeout: 5_000,
+        message:
+          "no CSP console error was captured for a deliberately blocked " +
+          "external script — so the empty `csp` asserted above proves nothing",
+      })
+      .toBeGreaterThan(0);
   });
 });
