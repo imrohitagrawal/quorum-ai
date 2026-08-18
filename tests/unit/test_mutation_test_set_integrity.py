@@ -79,6 +79,10 @@ DESELECTED_FROM_THE_MUTANT_RUN = (
     "tests/unit/test_perf_gate_required_specs.py",
     "tests/unit/test_perf_gate_runs_clean.py",
     "tests/unit/test_negative_assertion_guard.py",
+    # Runs `test_negative_assertion_guard.py` as a child pytest against the real
+    # REPO_ROOT (ADR-0058). That path does not exist inside mutmut's ./mutants/
+    # copy, and the module touches no `src/` code, so it can kill no mutant.
+    "tests/unit/test_guard_suite_is_not_skipped.py",
     "tests/unit/test_replay_mutation_scope.py",
     "tests/unit/test_replay_scope_matches_makefile_scope.py",
 )

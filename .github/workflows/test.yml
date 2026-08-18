@@ -3,8 +3,11 @@ name: Tests
 # Runs the full pytest suite on every push and pull request. The
 # suite is the same one developers run locally via ``make test``,
 # so a green run here matches a green run on a developer's machine.
-# No external services are required: the tests are hermetic (mocked
-# catalog, in-process FastAPI test client, no live  calls).
+# The pytest run itself is hermetic (mocked catalog, in-process FastAPI
+# test client, no live  calls). The JOB is not fully offline: it fetches
+# e2e/node_modules from npm so the #131 guard's own tests can run — see
+# ADR-0058. On a warm actions/setup-node cache that costs no registry
+# call; on a cold one an npm outage can redden this required context.
 #
 # Concurrency cancels in-flight runs on the same ref so a force-
 # push doesn't pile up redundant CI minutes.

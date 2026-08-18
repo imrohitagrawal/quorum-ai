@@ -18,17 +18,25 @@ required `pytest (Python 3.12)` lane the workflow installs both and sets
 skipping. That is deliberate — until ADR-0058 every test in this file was
 skipped in that lane, and the lane still reported green.
 
-Node-free by construction (they read repo text only), marked
-`no_node_required`, and therefore run everywhere:
+These need no node tooling — they read repo text, or drive a stub node they
+create themselves — so they are marked `no_node_required` and run everywhere:
 `test_the_guard_is_wired_into_ci`, `test_the_parser_dependency_is_declared`,
 `test_the_required_pytest_lane_installs_the_node_tooling`,
 `test_the_lane_wiring_probe_reports_every_missing_piece`,
 `test_missing_tooling_is_fatal_only_when_the_lane_demands_it`,
-`test_the_docstring_names_only_tests_that_really_are_node_free`,
-`test_this_module_reports_no_skips_when_the_tooling_is_present`.
+`test_the_two_lanes_pin_the_same_node_version`,
+`test_the_node_version_probe_reports_a_disagreement`,
+`test_a_hung_node_is_killed_by_a_timeout`,
+`test_the_docstring_names_only_tests_that_really_are_node_free`.
 `test_the_docstring_names_only_tests_that_really_are_node_free` compares that
 list against the markers in both directions, so this sentence cannot drift away
 from the code the way its predecessor did.
+
+The gate that this file never goes wholly skipped again lives in a DIFFERENT
+file, `tests/unit/test_guard_suite_is_not_skipped.py`. It was here at first,
+and a review round proved that worthless: a module-level `pytest.mark.skip`,
+or an unguarded skip in the fixture below, silenced the watchdog along with
+everything it was watching, and pytest still exited 0.
 """
 
 from __future__ import annotations
@@ -36,9 +44,9 @@ from __future__ import annotations
 import os
 import re
 import shutil
+import signal
 import subprocess
 import sys
-import xml.etree.ElementTree as ET
 from pathlib import Path
 from typing import Any
 
@@ -56,6 +64,13 @@ E2E_WORKFLOW = REPO_ROOT / ".github" / "workflows" / "e2e.yml"
 #: module's own gate exists to prevent.
 NODE_TOOLING_REQUIRED_ENV = "QUORUM_REQUIRE_E2E_NODE_TOOLING"
 
+#: Wall-clock ceiling for one checker subprocess. The whole module takes ~17s
+#: on node 22, so this is generous; its job is to turn a wedged `node` into a
+#: NAMED test failure instead of a job that burns to `timeout-minutes: 15` and
+#: reports only "exceeded the maximum execution time". These tests only started
+#: executing in a required lane with ADR-0058, so that risk is new.
+NODE_TIMEOUT_SECONDS = 120
+
 pytestmark = pytest.mark.repo_introspection
 
 
@@ -67,6 +82,7 @@ def _run(source: str, tmp_path: Path) -> subprocess.CompletedProcess[str]:
         cwd=E2E,
         capture_output=True,
         text=True,
+        timeout=NODE_TIMEOUT_SECONDS,
     )
 
 
@@ -742,6 +758,7 @@ def test_an_unresolvable_base_ref_fails_closed(tmp_path: Path) -> None:
         cwd=E2E,
         capture_output=True,
         text=True,
+        timeout=NODE_TIMEOUT_SECONDS,
     )
     assert result.returncode != 0, (
         f"an unresolvable base ref reported success:\n{result.stdout}{result.stderr}"
@@ -862,7 +879,12 @@ def _node_lane_wiring(job: dict[str, Any]) -> set[str]:
     if test_at is None:
         missing.add("make-test-step")
     else:
-        if NODE_TOOLING_REQUIRED_ENV not in (steps[test_at].get("env") or {}):
+        # The VALUE, not just the key. The fixture treats only the exact
+        # string "1" as "required", so `"0"` — or the `${{ steps.npm.outcome
+        # ... }}` expression ADR-0058 rejects by name — silently restores the
+        # all-skipped state while every check in the repo stays green.
+        flag = (steps[test_at].get("env") or {}).get(NODE_TOOLING_REQUIRED_ENV)
+        if flag is None or str(flag) != "1":
             missing.add("require-flag-on-make-test")
         if setup_at is not None and npm_at is not None and not setup_at < npm_at < test_at:
             missing.add("install-before-make-test")
@@ -937,6 +959,125 @@ def test_the_lane_wiring_probe_reports_every_missing_piece() -> None:
     }
     assert _node_lane_wiring(commented_only) == {"npm-ci-in-e2e"}
 
+    # The flag's VALUE is load-bearing: the fixture reads only the exact
+    # string "1" as "required". A one-character edit must be caught.
+    for disarmed in ("0", "", "true", "${{ steps.npm.outcome == 'success' }}"):
+        wired_but_disarmed = {
+            "steps": [
+                {"uses": "actions/setup-node@v4"},
+                {"working-directory": "e2e", "run": "npm ci"},
+                {"run": "make test", "env": {NODE_TOOLING_REQUIRED_ENV: disarmed}},
+            ]
+        }
+        assert _node_lane_wiring(wired_but_disarmed) == {"require-flag-on-make-test"}, (
+            f"a require flag of {disarmed!r} disarms the fixture but was accepted"
+        )
+
+
+def _setup_node_versions(workflow: dict[str, Any]) -> set[str]:
+    """Every `node-version` pinned by an `actions/setup-node` step, as strings."""
+    versions: set[str] = set()
+    for job in (workflow.get("jobs") or {}).values():
+        for step in job.get("steps") or []:
+            if not isinstance(step, dict):
+                continue
+            if str(step.get("uses") or "").startswith("actions/setup-node@"):
+                version = (step.get("with") or {}).get("node-version")
+                if version is not None:
+                    versions.add(str(version))
+    return versions
+
+
+@pytest.mark.no_node_required
+def test_the_two_lanes_pin_the_same_node_version() -> None:
+    """The pytest lane and the e2e lane must not disagree about node.
+
+    ADR-0058 says the new setup-node block is "identical to what e2e.yml
+    already does, so the two lanes cannot disagree about the node version".
+    Those are two independent literals in two files; without this check that
+    sentence is a promise, not a property (AGENTS.md rule 1a).
+
+    Turns red if: either file's `node-version` is edited without the other —
+    e.g. the pytest lane is dropped to 18 while e2e stays on 22, so the
+    checker is exercised on a version the blocking lane never runs.
+    """
+    both = _setup_node_versions(
+        yaml.safe_load(TEST_WORKFLOW.read_text(encoding="utf-8"))
+    ) | _setup_node_versions(yaml.safe_load(E2E_WORKFLOW.read_text(encoding="utf-8")))
+    assert both, "neither workflow pins a node-version — the probe is reading the wrong files"
+    assert len(both) == 1, f"the two lanes pin different node versions: {sorted(both)}"
+
+
+@pytest.mark.no_node_required
+def test_the_node_version_probe_reports_a_disagreement() -> None:
+    """Positive/negative partner for the assertion above (AGENTS.md rule 7).
+
+    `len(both) == 1` is trivially satisfied by a probe that reads nothing, and
+    would then pass over any pair of workflows at all.
+
+    Turns red if: `_setup_node_versions` stops finding setup-node steps, or
+    stops distinguishing two different versions.
+    """
+    agreeing = {
+        "jobs": {
+            "a": {"steps": [{"uses": "actions/setup-node@v4", "with": {"node-version": "22"}}]}
+        }
+    }
+    disagreeing = {
+        "jobs": {"b": {"steps": [{"uses": "actions/setup-node@v4", "with": {"node-version": 18}}]}}
+    }
+    assert _setup_node_versions(agreeing) == {"22"}
+    assert _setup_node_versions(disagreeing) == {"18"}
+    assert len(_setup_node_versions(agreeing) | _setup_node_versions(disagreeing)) == 2
+    assert _setup_node_versions({"jobs": {"c": {"steps": [{"run": "make test"}]}}}) == set()
+
+
+@pytest.mark.no_node_required
+def test_a_hung_node_is_killed_by_a_timeout(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A wedged `node` must fail this test by name, not the whole CI job.
+
+    Before ADR-0058 these tests never executed in a required lane, so an
+    unbounded `subprocess.run` cost nothing. Now they do: a `node` that never
+    returns would burn the job to `timeout-minutes: 15`, and GitHub reports
+    only "exceeded the maximum execution time" — no test name, no output.
+
+    Drives a stub `node` that sleeps, so it needs no real node install.
+
+    Turns red if: the `timeout=` argument is dropped from `_run`. The SIGALRM
+    below is what makes that red rather than a hang — measured: with `timeout=`
+    removed and no alarm, this test did not return in 45s (killed, exit 142).
+
+    POSIX only; `signal.alarm` does not exist on Windows, which this repo does
+    not target (CI is ubuntu-latest, development is macOS).
+    """
+    fake_bin = tmp_path / "bin"
+    fake_bin.mkdir()
+    stub = fake_bin / "node"
+    # Absolute path: PATH is emptied below, so a bare `sleep` would not resolve
+    # and the stub would exit immediately instead of hanging.
+    stub.write_text("#!/bin/sh\nexec /bin/sleep 600\n", encoding="utf-8")
+    stub.chmod(0o755)
+    monkeypatch.setenv("PATH", str(fake_bin))
+    monkeypatch.setattr(sys.modules[__name__], "NODE_TIMEOUT_SECONDS", 1)
+
+    def _alarm(_signum: int, _frame: Any) -> None:
+        raise AssertionError(
+            "_run did not return within 15s against a `node` that never exits — "
+            "the `timeout=` argument is missing, so a wedged node would burn the "
+            "whole CI job instead of failing this test by name"
+        )
+
+    previous = signal.signal(signal.SIGALRM, _alarm)
+    signal.alarm(15)
+    try:
+        with pytest.raises(subprocess.TimeoutExpired):
+            _run(VACUOUS, tmp_path)
+    finally:
+        signal.alarm(0)
+        signal.signal(signal.SIGALRM, previous)
+
 
 @pytest.mark.no_node_required
 def test_missing_tooling_is_fatal_only_when_the_lane_demands_it() -> None:
@@ -984,63 +1125,4 @@ def test_the_docstring_names_only_tests_that_really_are_node_free() -> None:
     assert named == marked, (
         "the docstring and the markers disagree; named-not-marked="
         f"{sorted(named - marked)}, marked-not-named={sorted(marked - named)}"
-    )
-
-
-@pytest.mark.no_node_required
-def test_this_module_reports_no_skips_when_the_tooling_is_present() -> None:
-    """No test in this file may skip once the node tooling is installed.
-
-    Deliberately counts nothing: a floor like "at least N tests ran" goes stale
-    the moment a test is added, and the count in the handoff that opened this
-    work was already wrong. `tests > 0` is the mandatory positive partner —
-    `skipped == 0` alone is trivially true over an empty run.
-
-    Turns red if: an unconditional skip returns to this module by any route —
-    a module-level `pytest.mark.skip`, an unguarded `pytest.skip` in the
-    autouse fixture, or a `skipif` on any test.
-    """
-    if _missing_tooling():
-        pytest.skip("; ".join(_missing_tooling()))
-
-    relative = Path(__file__).resolve().relative_to(REPO_ROOT).as_posix()
-    # Per-pid name: two concurrent pytest processes must not share this file
-    # (AGENTS.md rule 15 records the guard-xml race that taught this).
-    junit = REPO_ROOT / "build" / "gates" / f"guard-no-skips-{os.getpid()}.xml"
-    junit.parent.mkdir(parents=True, exist_ok=True)
-    environment = {
-        **os.environ,
-        NODE_TOOLING_REQUIRED_ENV: "1",
-    }
-    inner = subprocess.run(
-        [
-            sys.executable,
-            "-m",
-            "pytest",
-            relative,
-            "-q",
-            "--no-cov",
-            "-p",
-            "no:cacheprovider",
-            "--deselect",
-            f"{relative}::{test_this_module_reports_no_skips_when_the_tooling_is_present.__name__}",
-            f"--junitxml={junit}",
-        ],
-        cwd=REPO_ROOT,
-        capture_output=True,
-        text=True,
-        env=environment,
-    )
-    suite = ET.parse(junit).getroot().find("testsuite")
-    junit.unlink(missing_ok=True)
-    assert suite is not None, f"no testsuite in the inner report:\n{inner.stdout}{inner.stderr}"
-    counts = {key: int(suite.get(key, "0")) for key in ("tests", "skipped", "failures", "errors")}
-    assert counts["tests"] > 0, f"the inner run collected nothing: {counts}\n{inner.stdout}"
-    assert counts["skipped"] == 0, (
-        f"{counts['skipped']} of {counts['tests']} tests in this file skipped with the "
-        f"node tooling installed; in CI that is a required lane reporting green over a "
-        f"gate it never ran:\n{inner.stdout}"
-    )
-    assert counts["failures"] == 0 and counts["errors"] == 0, (
-        f"the inner run was not clean: {counts}\n{inner.stdout}{inner.stderr}"
     )
