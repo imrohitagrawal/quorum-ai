@@ -98,18 +98,35 @@ def _module_roots(tree: ast.Module) -> dict[str, str]:
     Maps the name to how it was derived: ``"find_repo_root"`` (walks to the
     first `.git` ancestor, so it escapes the copy) or ``"file_relative"``
     (a `parents[n]` hop, which does not).
+
+    Plain assignment, ANNOTATED assignment (``ROOT: Path = ...``) and
+    multi-target or tuple-target assignment are all read. An earlier form of
+    this function read only single-target `ast.Assign`, so the same defect
+    written `ROOT: Path = Path(__file__).resolve().parents[2]` was invisible
+    to the whole guard. Nothing in `tests/` uses the annotated form today
+    (measured: zero modules), so widening it costs no churn and closes the
+    hole before it is used.
     """
     roots: dict[str, str] = {}
-    for node in tree.body:
-        if not isinstance(node, ast.Assign) or len(node.targets) != 1:
-            continue
-        target = node.targets[0]
+
+    def record(target: ast.expr, value: ast.expr) -> None:
+        if isinstance(target, (ast.Tuple, ast.List)):
+            for element in target.elts:
+                record(element, value)
+            return
         if not isinstance(target, ast.Name):
-            continue
-        source = ast.unparse(node.value)
+            return
+        source = ast.unparse(value)
         if "__file__" not in source:
-            continue
+            return
         roots[target.id] = "find_repo_root" if "find_repo_root" in source else "file_relative"
+
+    for node in tree.body:
+        if isinstance(node, ast.Assign):
+            for target in node.targets:
+                record(target, node.value)
+        elif isinstance(node, ast.AnnAssign) and node.value is not None:
+            record(node.target, node.value)
     return roots
 
 
@@ -123,14 +140,75 @@ def _is_repo_introspection(tree: ast.Module) -> bool:
     return False
 
 
+def _subprocess_aliases(tree: ast.Module) -> frozenset[str]:
+    """Bare names bound to a `subprocess` runner by `from subprocess import ...`.
+
+    Without this, `from subprocess import run` then `run([...])` is a call the
+    scan never looks at. No module in `tests/` uses that import form today
+    (measured: zero), so this only closes a future hole.
+    """
+    aliases = set()
+    for node in ast.walk(tree):
+        if isinstance(node, ast.ImportFrom) and node.module == "subprocess":
+            for alias in node.names:
+                if alias.name in _SUBPROCESS_CALLS:
+                    aliases.add(alias.asname or alias.name)
+    return frozenset(aliases)
+
+
+def _cwd_derivation(cwd: ast.expr | None, roots: dict[str, str]) -> str:
+    """How a git call's ``cwd`` is derived — FAIL CLOSED on anything unfamiliar.
+
+    Per ADR-0047, a detector that cannot classify an input resolves toward the
+    answer that makes the gate go RED. Three outcomes are offenders and one is
+    not:
+
+    * a module-level root bound by `find_repo_root` — the only safe answer.
+    * a module-level root bound from `__file__` any other way — `"file_relative"`.
+    * NO `cwd=` keyword at all — `"inherited_cwd"`. Under `mutmut run` the
+      process working directory IS `./mutants/`, so an inherited cwd produces
+      exactly the same silent-empty answer as a `parents[n]` root.
+    * an expression naming no known module root — `"unclassified"`. That covers
+      `cwd=str(REPO_ROOT)`-shaped wrappers and anything else, including a
+      genuinely throwaway directory. A throwaway directory is a legitimate use;
+      the escape hatch is `pytest.mark.repo_introspection`, which takes the
+      module out of mutmut's selection and out of this scan, and which
+      `tests/unit/test_mutation_test_set_integrity.py` already reviews.
+
+    An earlier form dropped every call it could not reduce to a bare root name,
+    so `cwd=str(REPO_ROOT)` and a missing `cwd=` were both silently safe.
+    Measured on this tree: closing both costs zero new offenders.
+    """
+    if cwd is None:
+        return "inherited_cwd"
+    named = {node.id for node in ast.walk(cwd) if isinstance(node, ast.Name)}
+    derivations = {roots[name] for name in named & roots.keys()}
+    if not derivations:
+        return "unclassified"
+    if "file_relative" in derivations:
+        return "file_relative"
+    return "find_repo_root"
+
+
 def _cwd_scoped_git_calls(tree: ast.Module, roots: dict[str, str]) -> list[str]:
-    """How each cwd-scoped git call in the module derives its ``cwd``."""
+    """How each cwd-scoped git call in the module derives its ``cwd``.
+
+    KNOWN AND UNCLOSED: the subcommand must appear as a string literal in the
+    argv. A call that builds its subcommand dynamically — `["git", *args]` —
+    is not classified, and seven such calls exist in `tests/` today, all of
+    them driving throwaway repositories with a local `cwd`. Failing closed on
+    those would make the guard red on seven calls that are correct, so the
+    guard does not claim to cover them. This is the guard's honest boundary,
+    stated rather than implied.
+    """
+    aliases = _subprocess_aliases(tree)
     derivations: list[str] = []
     for node in ast.walk(tree):
         if not isinstance(node, ast.Call):
             continue
         func = ast.unparse(node.func)
-        if not (func.startswith("subprocess.") and func.split(".")[-1] in _SUBPROCESS_CALLS):
+        qualified = func.startswith("subprocess.") and func.split(".")[-1] in _SUBPROCESS_CALLS
+        if not (qualified or func in aliases):
             continue
         if not node.args:
             continue
@@ -143,11 +221,7 @@ def _cwd_scoped_git_calls(tree: ast.Module, roots: dict[str, str]) -> list[str]:
         if not (set(literals[1:]) & _CWD_SCOPED_GIT_SUBCOMMANDS):
             continue
         cwd = next((kw.value for kw in node.keywords if kw.arg == "cwd"), None)
-        if cwd is None:
-            continue
-        head = ast.unparse(cwd).split(".")[0].split("/")[0].split("[")[0].strip()
-        if head in roots:
-            derivations.append(roots[head])
+        derivations.append(_cwd_derivation(cwd, roots))
     return derivations
 
 
@@ -192,23 +266,102 @@ def test_every_spec_the_baseline_runs_resolves_the_real_repository_root() -> Non
     exit status 0.
 
     Turns red if: any spec mutmut runs derives the cwd of a `git ls-files`
-    (or `git status`/`git grep`) from `Path(__file__).resolve().parents[n]`
-    instead of `tests.repo_root.find_repo_root`. Verified by reverting
-    `tests/unit/test_docs_numbering_no_collisions.py` to `parents[2]`.
+    (or `git status`/`git grep`) from anything other than
+    `tests.repo_root.find_repo_root` — a `Path(__file__).resolve().parents[n]`
+    hop, no `cwd=` at all, or an expression this scan cannot classify.
+    Verified by reverting `tests/unit/test_docs_numbering_no_collisions.py`
+    to `parents[2]`.
     """
     offenders = {
         module: derivations
         for module, derivations in _specs_that_ask_git_about_their_own_tree().items()
-        if "file_relative" in derivations
+        if any(derivation != "find_repo_root" for derivation in derivations)
     }
     assert not offenders, (
-        "these specs ask git a cwd-scoped question from a root derived by "
-        "counting `__file__` parents. `mutmut run` runs them from inside "
-        "./mutants/, where that root holds no tracked files and git answers "
-        "EMPTY with exit status 0 — any floor over the result fails, `-x` stops "
-        "stats collection, and the gate exits non-zero having scored nothing "
-        "(the abort on PR #335). Resolve the root with "
-        f"`tests.repo_root.find_repo_root(Path(__file__))`: {offenders}"
+        "these specs ask git a cwd-scoped question from a working directory "
+        "that is not proven to be the real repository root. `mutmut run` runs "
+        "them from inside ./mutants/, where such a root holds no tracked files "
+        "and git answers EMPTY with exit status 0 — any floor over the result "
+        "fails, `-x` stops stats collection, and the gate exits non-zero having "
+        "scored nothing (the abort on PR #335). Resolve the root with "
+        "`tests.repo_root.find_repo_root(Path(__file__))`, or — if the cwd is a "
+        "genuinely throwaway directory — mark the module "
+        f"`pytest.mark.repo_introspection`: {offenders}"
+    )
+
+
+# Source fed to the classifier, never imported. Each entry is a shape that an
+# earlier form of this guard dropped silently, letting the #338 defect back in
+# with all four tests green. Both members of each pair differ only in how the
+# root is derived, so a classifier that stopped reading the shape at all would
+# fail the SAFE half rather than passing the offending one.
+_CLASSIFIER_CASES: tuple[tuple[str, str, str], ...] = (
+    (
+        "annotated assignment",
+        "file_relative",
+        "ROOT: Path = Path(__file__).resolve().parents[2]\n"
+        'subprocess.run(["git", "ls-files", "docs"], cwd=ROOT)\n',
+    ),
+    (
+        "annotated assignment, resolved properly",
+        "find_repo_root",
+        "ROOT: Path = find_repo_root(Path(__file__))\n"
+        'subprocess.run(["git", "ls-files", "docs"], cwd=ROOT)\n',
+    ),
+    (
+        "cwd wrapped in a call",
+        "file_relative",
+        "ROOT = Path(__file__).resolve().parents[2]\n"
+        'subprocess.run(["git", "ls-files", "docs"], cwd=str(ROOT))\n',
+    ),
+    (
+        "no cwd keyword at all",
+        "inherited_cwd",
+        'subprocess.run(["git", "ls-files", "docs"])\n',
+    ),
+    (
+        "cwd naming no module-level root",
+        "unclassified",
+        'subprocess.run(["git", "ls-files", "docs"], cwd=somewhere_else)\n',
+    ),
+    (
+        "tuple-target assignment",
+        "file_relative",
+        "HERE, ROOT = None, Path(__file__).resolve().parents[2]\n"
+        'subprocess.run(["git", "ls-files", "docs"], cwd=ROOT)\n',
+    ),
+    (
+        "runner imported bare from subprocess",
+        "file_relative",
+        "from subprocess import run\n"
+        "ROOT = Path(__file__).resolve().parents[2]\n"
+        'run(["git", "ls-files", "docs"], cwd=ROOT)\n',
+    ),
+)
+
+
+@pytest.mark.parametrize(("shape", "expected", "source"), _CLASSIFIER_CASES)
+def test_the_classifier_never_drops_a_cwd_scoped_git_call(
+    shape: str, expected: str, source: str
+) -> None:
+    """The scan must classify every shape, and classify an unfamiliar one as an
+    offender (ADR-0047: a detector that cannot decide resolves toward RED).
+
+    Turns red if: `_module_roots` stops reading annotated or tuple targets,
+    `_subprocess_aliases` stops resolving a bare `run`, or `_cwd_derivation`
+    goes back to DROPPING a call whose `cwd=` is missing or unrecognised —
+    each of which makes a real re-introduction of #338 invisible to the two
+    negative checks and to the execution test, because all three are driven by
+    this same scan.
+
+    Deliberately NOT parametrized over the classifier's own output (rule 7a):
+    every expected value is written here as a literal.
+    """
+    tree = ast.parse(source)
+    derivations = _cwd_scoped_git_calls(tree, _module_roots(tree))
+    assert derivations == [expected], f"{shape}: {derivations}"
+    assert (expected == "find_repo_root") == (derivations == ["find_repo_root"]), (
+        f"{shape}: only find_repo_root may be treated as safe"
     )
 
 
@@ -317,6 +470,29 @@ def test_the_copy_reproduces_gits_silent_empty_answer(tmp_path: Path) -> None:
     assert real_status == 0 and real_count > 100, (
         "`find_repo_root` does not reach the real tree from inside the copy, so "
         f"this harness cannot tell a fixed spec from a broken one: {measured}"
+    )
+
+    # The throwaway repository is a SUBSET of the real tree — it holds only
+    # `also_copy` + `source_paths` + `_IMPLICIT_COPY`. Measured 2026-08-19:
+    # 1114 tracked files against the real tree's 1202, so the `> 1000` floor
+    # in `test_no_generated_artifacts_tracked.py` is evaluated here with 114 of
+    # margin, not the 202 the real tree has. Without this check, trimming an
+    # `also_copy` entry would take the copy under that floor and the execution
+    # test below would go red saying `make mutation-baseline` aborts — which
+    # would be false, and would name the wrong cause on a blocking context.
+    def tracked(root: Path) -> int:
+        done = subprocess.run(
+            ["git", "ls-files"], cwd=root, capture_output=True, text=True, check=True
+        )
+        return len(done.stdout.splitlines())
+
+    copy_tracked, real_tracked = tracked(mutants.parent), tracked(REPO_ROOT)
+    assert copy_tracked >= 0.85 * real_tracked, (
+        f"the throwaway repository tracks {copy_tracked} files against the real "
+        f"tree's {real_tracked}. This harness no longer models the real tree, so "
+        "a floor the real suite clears can fail INSIDE the copy and be reported "
+        "as a mutation-gate abort. Widen `_copy_project`, or move the floor — "
+        "do not silence this."
     )
 
 
