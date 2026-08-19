@@ -44,7 +44,17 @@ import subprocess
 from collections import defaultdict
 from pathlib import Path
 
-REPO_ROOT = Path(__file__).resolve().parents[2]
+from tests.repo_root import find_repo_root
+
+# `mutmut run` copies the project into ./mutants/ — a directory INSIDE the
+# repository — and runs this suite from in there. A `parents[2]` root then points
+# at the copy, and `git ls-files` with that cwd answers EMPTY with exit status 0:
+# the pathspec is resolved relative to the cwd, and the copy holds no TRACKED
+# files. The floor below then reads 0, mutmut's `-x` stops stats collection, and
+# the gate exits non-zero having scored no mutant at all. `find_repo_root` walks
+# to the first `.git` ancestor, which the copy has not, so it reaches the real
+# tree. Guarded by tests/unit/test_mutation_gate_root_resolution.py.
+REPO_ROOT = find_repo_root(Path(__file__))
 _NUMBER_PREFIX = re.compile(r"^docs/(\d+)-")
 _ADR_NUMBER_PREFIX = re.compile(r"^docs/adr/(\d+)-")
 
