@@ -1,0 +1,78 @@
+name: Bound apt's network waits
+description: >-
+  Give apt a per-request timeout so a stalled mirror transfer cannot hang a job
+  until its timeout, producing an unexplained `cancelled`.
+
+# WHY THIS EXISTS, measured 2026-08-19 on run 32228043232 (main SHA 15d822c).
+#
+# Three attempts of the `E2E (axe + parity)` run were reported `cancelled`
+# after ~20 minutes against a job `timeout-minutes: 20`. NO TEST EVER RAN. The
+# hung step was `npx playwright install --with-deps`, which shells out to apt.
+#
+# THE TIMELINE, from the attempt-1 log — read it before changing anything here,
+# because the obvious reading is wrong:
+#
+#   07:30:16-07:30:23  Ign:2..5 http://azure.archive.ubuntu.com/...  (x12)
+#   07:30:23.826       Hit:2 https://archive.ubuntu.com/ubuntu noble InRelease
+#   07:30:24.490       Get:5 https://archive.ubuntu.com/.../noble-security [126 kB]
+#   07:49:28.482       ##[error]The operation was canceled
+#
+# So: the Azure mirror WAS unresponsive, and the runner's own mirrorlist
+# failover (`/etc/apt/apt-mirrors.txt`, azure priority:1, archive priority:2)
+# DID engage and reach the canonical mirror — in about seven seconds. Then apt
+# went silent for NINETEEN MINUTES AND FOUR SECONDS while talking to
+# archive.ubuntu.com, and the job died on its budget.
+#
+# A healthy run for comparison (run 32222230691): `Hit:2` on azure, ZERO `Ign:`
+# lines, `Fetched 11.4 MB in 1s`, whole step 21s.
+#
+# THE FIX THAT DOES NOT WORK, and why it is not here. An earlier draft of this
+# action rewrote azure.archive.ubuntu.com to the canonical mirror in
+# `/etc/apt/sources.list.d/ubuntu.sources`. Two independent reasons that was
+# wrong, both found by review:
+#   1. It is a NO-OP on ubuntu-24.04. The runner image rewrites that URI to
+#      `mirror+file:/etc/apt/apt-mirrors.txt` and puts azure INSIDE that file,
+#      so the grep matched nothing and the action silently did nothing while
+#      every test stayed green. (`Get:1 file:/etc/apt/apt-mirrors.txt
+#      Mirrorlist [144 B]` is in the failing log.)
+#   2. Even implemented correctly it would have saved the ~7s of failover and
+#      then pointed apt STRAIGHT AT the host that actually stalled. It targets
+#      the wrong hop.
+#
+# What bounds the observed failure is a per-request TIMEOUT: a transfer that
+# stalls is abandoned and retried instead of hanging. That is all this does.
+# Note `Acquire::Retries` alone would NOT be enough — N retries with no
+# per-request timeout still hang forever (AGENTS.md rule 8b).
+#
+# WHAT THIS CANNOT DO: it does not make CI immune to a mirror outage. If every
+# mirror stalls, jobs still fail. They fail in bounded time, saying which step,
+# instead of at the job ceiling saying `cancelled`.
+
+runs:
+  using: composite
+  steps:
+    - name: Give apt a per-request timeout
+      shell: bash
+      run: |
+        set -euo pipefail
+
+        sudo tee /etc/apt/apt.conf.d/99-bounded-waits >/dev/null <<'CONF'
+        Acquire::http::Timeout "20";
+        Acquire::https::Timeout "20";
+        Acquire::ftp::Timeout "20";
+        Acquire::Retries "2";
+        CONF
+
+        # Read the write back (AGENTS.md: never infer a write's result). If the
+        # file is not there, or apt cannot parse it, say so LOUDLY and fail —
+        # unlike the mirror rewrite this replaced, a silent no-op here means the
+        # bound is absent and the next stall hangs the job again.
+        test -s /etc/apt/apt.conf.d/99-bounded-waits
+        echo "--- 99-bounded-waits ---"
+        cat /etc/apt/apt.conf.d/99-bounded-waits
+
+        # Prove apt ITSELF accepts the values, rather than trusting the file.
+        # `apt-config dump` reparses the whole config; a malformed stanza would
+        # be dropped here rather than at the moment it was needed.
+        echo "--- as apt parses it ---"
+        apt-config dump | grep -E '^Acquire::(http|https|ftp)::Timeout|^Acquire::Retries'

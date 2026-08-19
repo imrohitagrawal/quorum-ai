@@ -143,7 +143,14 @@ jobs:
         working-directory: e2e
         run: node tools/check-negative-assertions.mjs --base "origin/${{ github.base_ref }}"
 
+      - name: Bound apt's network waits (a stalled mirror hung 3 attempts, 2026-08-19)
+        uses: ./.github/actions/bound-apt-waits
+
       - name: Install Playwright Chromium (+ system deps)
+        # chromium only; worst of 5 measured installs 132s -> 6 min is ~2.7x.
+        # A hang now fails THIS step by name instead of silently
+        # eating the job budget and reporting an unexplained 'cancelled'.
+        timeout-minutes: 6
         id: install-chromium
         working-directory: e2e
         run: npx playwright install --with-deps chromium

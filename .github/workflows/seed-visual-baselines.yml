@@ -59,7 +59,14 @@ jobs:
         working-directory: e2e
         run: npm ci
 
+      - name: Bound apt's network waits (a stalled mirror hung 3 attempts, 2026-08-19)
+        uses: ./.github/actions/bound-apt-waits
+
       - name: Install Playwright Chromium (+ system deps)
+        # chromium only; same population as e2e.
+        # A hang now fails THIS step by name instead of silently
+        # eating the job budget and reporting an unexplained 'cancelled'.
+        timeout-minutes: 6
         working-directory: e2e
         run: npx playwright install --with-deps chromium
 
