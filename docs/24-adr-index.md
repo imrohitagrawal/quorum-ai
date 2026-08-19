@@ -60,6 +60,7 @@ ways, so the record shows what was believed on a date and what replaced it.
 | [ADR-0054](adr/0054-no-network-intermediary-so-the-403-shape-capture-is-removed.md) | No network intermediary is configured, so the 403 shape-capture is removed | Architecture | Accepted — 2026-08-18 |
 | [ADR-0055](adr/0055-a-durable-audit-row-never-asserts-a-verdict-the-run-did-not-get.md) | A durable audit row never asserts a verdict the run did not get | Architecture | Accepted — 2026-08-18 |
 | [ADR-0056](adr/0056-extra-redaction-covers-key-object-and-cycle-positions.md) | Extra redaction covers the key, object and cycle positions, and a back-edge becomes a placeholder | Architecture | Accepted — 2026-08-18 |
+| [ADR-0057](adr/0057-the-mutation-gate-is-a-regression-detector-and-must-reach-the-real-tree.md) | The mutation gate is kept as a regression detector, and its root resolution must reach the real tree | Architecture | Accepted — 2026-08-19 |
 | [ADR-0058](adr/0058-guard-tests-run-in-a-required-pytest-lane.md) | The negative-assertion guard's own tests run in a required pytest lane, and refuse to skip there | Architecture | Accepted — 2026-08-19 (part of issue 226; the classifier half is a separate change) |
 | [ADR-0059](adr/0059-guard-resolves-computed-member-properties-and-fails-closed.md) | The negative-assertion guard resolves a member property through both `Identifier.name` and a static literal, and fails closed when it cannot | Architecture | Accepted — 2026-08-19 (issue 226; ADR-0058 was the first half, this is the classifier half) |
 
