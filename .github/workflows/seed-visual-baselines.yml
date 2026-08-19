@@ -59,7 +59,14 @@ jobs:
         working-directory: e2e
         run: npm ci
 
+      - name: Harden apt (the Azure mirror hangs; measured 2026-08-19)
+        uses: ./.github/actions/harden-apt
+
       - name: Install Playwright Chromium (+ system deps)
+        # 6 min is ~2.7x the worst of 5 measured runs
+        # (21, 132, 21, 23, 22 s). A hang now fails THIS step by name
+        # instead of silently eating the 20-min job budget.
+        timeout-minutes: 6
         working-directory: e2e
         run: npx playwright install --with-deps chromium
 

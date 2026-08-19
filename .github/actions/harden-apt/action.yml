@@ -1,0 +1,69 @@
+name: Harden apt against the Azure mirror
+description: >-
+  Point apt at the canonical Ubuntu mirror and bound its network waits, so
+  `playwright install --with-deps` cannot hang a job to its timeout.
+
+# WHY THIS EXISTS, measured 2026-08-19.
+#
+# Three consecutive `E2E (axe + parity)` runs on main SHA 15d822c were reported
+# `cancelled` after 20m19s, 20m22s and ~21m, against a job `timeout-minutes: 20`.
+# No test ever ran. The job was stuck in `npx playwright install --with-deps`,
+# whose `--with-deps` shells out to apt-get. The log showed apt looping on:
+#
+#     Ign:2 http://azure.archive.ubuntu.com/ubuntu noble InRelease
+#     Hit:2 https://archive.ubuntu.com/ubuntu noble InRelease
+#
+# — the Azure mirror GitHub runners default to was black-holing requests while
+# the canonical mirror answered fine. At kill time the orphan process was
+# `npm exec playwright install --with-deps chromium`.
+#
+# Two things were wrong, and this action fixes the first while the caller's
+# step-level `timeout-minutes` fixes the second:
+#
+#  1. apt had no bounded wait, so it retried until the JOB budget was gone.
+#  2. A job that dies on its timeout is reported `cancelled`, which is
+#     indistinguishable from a concurrency cancellation. The deploy gate then
+#     correctly calls it a STRANDED merge — but the message names neither the
+#     mirror nor the timeout, so the cause took three runs to find.
+
+runs:
+  using: composite
+  steps:
+    - name: Point apt at the canonical Ubuntu mirror
+      shell: bash
+      run: |
+        set -euo pipefail
+
+        # Ubuntu 24.04 (noble) ships deb822 at
+        # /etc/apt/sources.list.d/ubuntu.sources; older images use
+        # /etc/apt/sources.list. Rewrite whichever exists.
+        changed=0
+        for f in /etc/apt/sources.list.d/ubuntu.sources /etc/apt/sources.list; do
+          [ -f "$f" ] || continue
+          if grep -q 'azure.archive.ubuntu.com' "$f"; then
+            sudo sed -i 's|http://azure.archive.ubuntu.com/ubuntu|https://archive.ubuntu.com/ubuntu|g' "$f"
+            echo "rewrote $f"
+            changed=$((changed + 1))
+          fi
+        done
+
+        # Do NOT fail-open. If the runner image stops using the Azure mirror
+        # this action has become a no-op and should be deleted, not left
+        # silently doing nothing — the same class of defect as a gate that
+        # passes having measured nothing. Report loudly, but do not fail the
+        # build: a no-op here is safe, it is only misleading.
+        if [ "$changed" -eq 0 ]; then
+          echo "::notice::no azure.archive.ubuntu.com entry found — this action may no longer be needed"
+        fi
+
+        # Bound the TIME, not just the retry count. An unbounded retry loop is
+        # what consumed the job budget; three tries against a black hole with
+        # no per-request timeout still hangs forever.
+        sudo tee /etc/apt/apt.conf.d/99-bounded-waits >/dev/null <<'CONF'
+        Acquire::http::Timeout "20";
+        Acquire::https::Timeout "20";
+        Acquire::Retries "2";
+        CONF
+
+        echo "--- effective sources ---"
+        grep -rhE '^(URIs|deb )' /etc/apt/sources.list.d/ubuntu.sources /etc/apt/sources.list 2>/dev/null | head
