@@ -95,14 +95,14 @@ jobs:
         working-directory: e2e
         run: npm ci
 
-      - name: Harden apt (the Azure mirror hangs; measured 2026-08-19)
-        uses: ./.github/actions/harden-apt
+      - name: Bound apt's network waits (a stalled mirror hung 3 attempts, 2026-08-19)
+        uses: ./.github/actions/bound-apt-waits
 
       - name: Install Playwright ${{ matrix.browser }} (+ system deps)
-        # 6 min is ~2.7x the worst of 5 measured runs
-        # (21, 132, 21, 23, 22 s). A hang now fails THIS step by name
-        # instead of silently eating the 20-min job budget.
-        timeout-minutes: 6
+        # MATRIX: webkit measured up to 412s (6m52s) -- a 6-min bound would BREAK this lane.
+        # A hang now fails THIS step by name instead of silently
+        # eating the job budget and reporting an unexplained 'cancelled'.
+        timeout-minutes: 15
         working-directory: e2e
         # Only chromium is installed by the other lanes; this job needs the
         # matrix engine's browser + its system deps.
