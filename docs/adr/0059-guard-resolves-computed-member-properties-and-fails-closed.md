@@ -214,8 +214,11 @@ gate as
 `tests/unit/test_negative_assertion_guard.py::test_no_tracked_spec_is_reported_by_the_classifier`,
 with a floor on the file count and a partner test proving the sweep machinery
 reports a vacuous spec when there is one. It bites: `isLiveSubject` with its
-`MemberExpression` arm returning `false` turns it red with 75 violations across
-17 specs. Its limit is worth stating — a classification change surfaces there
+`MemberExpression` arm returning `false` turns it red across a large share of
+the tracked corpus. No spec-file count is quoted — an earlier draft of this
+paragraph said "17 specs" and the real figure is 15, and a corpus count goes
+stale silently (rule 1a). The test reads the counts at runtime.
+Its limit is worth stating — a classification change surfaces there
 only once it removes a test's LAST partner, which is exactly why the `new Set`
 demotion above had to be caught by hand.
 

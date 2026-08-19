@@ -1947,8 +1947,14 @@ def test_no_tracked_spec_is_reported_by_the_classifier(tmp_path: Path) -> None:
 
     Turns red if: a subject or argument shape a committed spec genuinely uses
     stops being accepted as a positive partner. Measured — `isLiveSubject` with
-    its `MemberExpression` arm changed to `return false` reports 75 assertions
-    across 17 tracked specs.
+    its `MemberExpression` arm changed to `return false` reports assertions
+    across many tracked specs rather than none.
+
+    No spec-file count is quoted here on purpose. An earlier draft said "17
+    tracked specs" and the real figure is 15; a count of the corpus goes stale
+    the moment a spec is added, and nothing compares the sentence to the tree
+    (AGENTS.md rule 1a). The assertion this docstring describes reads the
+    counts at runtime, so the test stays correct as the corpus grows.
 
     NOT red on every stricter change, and the limit is worth stating: dropping
     the `NewExpression` arm demotes
