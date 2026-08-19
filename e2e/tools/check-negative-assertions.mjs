@@ -24,10 +24,10 @@
  * exempt — and it is the "gate on a whole-line substring" antipattern AGENTS.md
  * warns about. Instead, nothing is exempt and the PARTNER definition is honest:
  * a liveness assertion (the surface rendered, the list is non-empty) counts —
- * but NOT one over a subject that cannot reach live application state, which is
- * a tautology and was a real hole. See `isLiveSubject`: that test is
- * DEFAULT-DENY, because the blocklist that preceded it was defeated by
- * `expect("lit" as string)`.
+ * but NOT one over a subject whose SHAPE cannot reach live application state,
+ * which is a tautology and was a real hole. See `isLiveSubject`: that test is
+ * DEFAULT-DENY on the node type, because the blocklist that preceded it was
+ * defeated by `expect("lit" as string)`.
  *
  * KNOWN LIMITS, stated rather than implied. None is closed here.
  *
@@ -39,7 +39,7 @@
  *  2. `toBeTruthy()` over a Locator or Page is accepted as a partner and proves
  *     nothing: those objects are truthy whether or not they match anything.
  *     (Measured on the parked #226 branch in the Playwright runner; INHERITED
- *     here, not re-measured. ADR-0059 lists it among what the guard cannot see.)
+ *     here, not re-measured. Recorded in ADR-0059's Consequences.)
  *
  *  3. `toHaveAttribute` is accepted with no argument inspection at all, so
  *     `toHaveAttribute()` — which names nothing — counts as proof. Tightening
@@ -55,6 +55,25 @@
  *  5. `--all` mode lists files with `git ls-files`, so gitignored scratch specs
  *     (e.g. `e2e/tests/review/`) are outside any count it prints. Read every
  *     such number as tracked-only.
+ *
+ *  6. `isLiveSubject` is default-deny on the NODE TYPE, not on reachability.
+ *     It answers "could an expression of this shape reach live state?", never
+ *     "does THIS expression reach live state?" — that needs the dataflow
+ *     analysis ADR-0059 rejects. So a dead value wrapped in any call, or bound
+ *     to a name, is accepted. MEASURED against a genuinely vacuous negative in
+ *     the same test, each of these silences it and the guard exits 0:
+ *     `expect(String("lit")).toBeTruthy()`, `expect(Boolean(1)).toBeTruthy()`,
+ *     `expect(Object.keys({ a: 1 }).length).toBeGreaterThan(0)`, and
+ *     `const dead = "x"; expect(dead).toBeTruthy()`. This is not a regression —
+ *     the blocklist that preceded it accepted the same shapes — but the
+ *     predicate closes the TSAsExpression family, not the tautology family.
+ *
+ *  7. Only the literal identifier `expect`, and only lexically inside a
+ *     `test()` body. `const e = expect; await e(x).toBeHidden();` is invisible,
+ *     and so is a negative moved into a helper function the test calls. Both
+ *     measured at zero violations. `it.only(...)` / `it.skip(...)` bodies are
+ *     also unwalked: the modifier recogniser requires the object to be `test`,
+ *     and accepts `it` only bare.
  *
  * Usage:  node e2e/tools/check-negative-assertions.mjs [--base <ref>] [--all] [paths...]
  */
@@ -120,8 +139,10 @@ function changedSpecs(base, repoRoot) {
  *
  * Every read of a member property used to be `node.property.name`. For a
  * COMPUTED property (`expect(x)["not"]`) the property node is a `Literal`, so
- * `.name` is `undefined` and the read silently produced nothing — at five
- * separate sites, in both failure directions at once. Measured on the checker
+ * `.name` is `undefined` and the read silently produced nothing — at EVERY
+ * member-property read in the file, in both failure directions at once
+ * (`git show origin/main:$0 | grep -c '\.property\.name'` counts them), and
+ * this function is now the only way any of them is spelled. Measured on the checker
  * before this change: `expect(x)["not"].toBeVisible()` counted as a POSITIVE
  * partner, `expect(b)["toBeHidden"]()` was invisible entirely, and
  * `expect["soft"](b).toBeVisible()` was not recognised as a partner, so an
@@ -216,7 +237,15 @@ const isEmptyStringLiteral = (arg) =>
  * #226: THE ARGUMENT HALF OF THE ACCEPTANCE PREDICATE.
  *
  * An argument counts as proof only if SATISFYING IT REQUIRES THE SUBJECT TO
- * CARRY SOMETHING. The predicate this replaced had three accept clauses, two
+ * CARRY SOMETHING — in the PLAIN direction. Under `.not` the predicate is
+ * weaker and this comment used to overstate it: `.not.toHaveText("placeholder")`
+ * is satisfied by an element that exists and is EMPTY, so it proves PRESENCE,
+ * not content. (It does prove presence: measured in real Chromium on the parked
+ * #226 branch, `.not.toHaveText` FAILS against a locator matching no element.)
+ * Tightening the `.not` branch is a separate widening of the partner
+ * definition, not this concern.
+ *
+ * The predicate this replaced had three accept clauses, two
  * of them unconditional on content: ANY template literal (`` `` `` included)
  * and ANY regex literal (`/(?:)/` included). So several spellings of "this
  * element is empty" were accepted as proof that it is not.
@@ -295,17 +324,26 @@ function provesNonEmptyContent(arg) {
  * The first fix for that was a BLOCKLIST — reject `Literal`, `TemplateLiteral`,
  * `ArrayExpression`, `ObjectExpression`, accept everything else. A blocklist is
  * defeated by any node type nobody thought of, and the exact case its own
- * comment claimed to close was defeated by four characters:
+ * comment claimed to close was defeated by adding ` as string`:
  * `expect("lit" as string).toBeTruthy()` is a `TSAsExpression`, so it was
  * accepted. That is the anti-pattern this issue exists to remove, sitting
  * inside the fix for it.
  *
  * So the question is inverted. Not "is this one of the shapes I know to be
- * dead?" but "can this expression reach live application state AT ALL?" —
- * answered by walking to the root, and answered NO for anything unrecognised.
- * A node type that appears in the future is REJECTED, which costs a
- * conservative false positive a reviewer sees, instead of silently granting an
- * evasion nobody measured. The accept set below came from a census of
+ * dead?" but "could an expression OF THIS SHAPE reach live application state?"
+ * — answered by walking to the root, and answered NO for anything
+ * unrecognised. A node type that appears in the future is REJECTED, which costs
+ * a conservative false positive a reviewer sees, instead of silently granting
+ * an evasion nobody measured.
+ *
+ * WHAT THIS DOES NOT CLOSE, stated because the sentence above invites the
+ * stronger reading: the question is about the SHAPE, never about the value. A
+ * dead literal wrapped in a call (`expect(String("lit"))`) or bound to a name
+ * is a `CallExpression` / `Identifier` and is accepted. Closing that needs
+ * dataflow analysis ADR-0059 rejects; see KNOWN LIMIT 6 at the top of this
+ * file for the measured list.
+ *
+ * The accept set below came from a census of
  * `expect()` subjects across the committed specs, taken on the parked #226
  * branch; it is INHERITED, not re-measured here. Re-derive it rather than
  * trusting it: `node e2e/tools/check-negative-assertions.mjs --all`.
@@ -340,6 +378,16 @@ function isLiveSubject(node, depth = 0) {
     case "LogicalExpression":
     case "BinaryExpression":
       return isLiveSubject(node.left, depth + 1) || isLiveSubject(node.right, depth + 1);
+    // `new Set(liveArray).size` reaches live state through its ARGUMENT, the
+    // same way `items.length + 1` does through an operand — and the plain-call
+    // spelling `Array.from(liveArray)` was already accepted via
+    // `CallExpression`, so rejecting the `new` form was an asymmetry, not a
+    // policy. MEASURED: it demoted one committed assertion,
+    // `e2e/tests/ui-parity/parity-behavior.spec.ts:1412`
+    // (`expect(new Set(bgs).size, ...).toBe(4)`), from partner to non-partner.
+    // Argument-driven, so `new Date()` — no arguments — stays dead.
+    case "NewExpression":
+      return (node.arguments || []).some((argument) => isLiveSubject(argument, depth + 1));
     default:
       return false; // DEFAULT DENY. An unrecognised shape is not a live subject.
   }

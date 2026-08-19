@@ -126,9 +126,14 @@ jobs:
       # cannot fail should be reported before spending 8 minutes running it.
       #
       # Scoped to CHANGED spec files, like diff-cover and the mutation gate.
-      # 21 pre-existing violations across 7 files are NOT fixed here; they
-      # surface when someone next touches those files. Registered (and this
-      # step pinned) by tests/unit/test_negative_assertion_guard.py.
+      # This comment used to claim 21 pre-existing violations across 7 files.
+      # That is no longer true: the tracked corpus sweeps clean. Because this
+      # step only ever sees CHANGED specs, the standing check on the whole
+      # corpus is
+      # tests/unit/test_negative_assertion_guard.py::test_no_tracked_spec_is_reported_by_the_classifier,
+      # which runs in the required `pytest (Python 3.12)` lane. Both are
+      # tracked-only — `git ls-files` cannot see gitignored scratch specs.
+      # Registered (and this step pinned) by the same test module.
       - name: Fetch base branch for the changed-spec diff
         if: github.event_name == 'pull_request'
         run: git fetch --no-tags origin "${{ github.base_ref }}"

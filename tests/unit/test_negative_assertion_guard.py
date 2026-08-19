@@ -1132,8 +1132,11 @@ def test_the_docstring_names_only_tests_that_really_are_node_free() -> None:
 # ---------------------------------------------------------------------------
 # #226 (second half) — COMPUTED MEMBER ACCESS.
 #
-# The checker read a member-expression property as `node.property.name` at five
-# sites. For a COMPUTED property (`expect(x)["not"]`) the AST node is a
+# The checker read a member-expression property as `node.property.name` at
+# every member-property read in the file — count them with
+# `git show origin/main:e2e/tools/check-negative-assertions.mjs |
+#  grep -c '\.property\.name'`, rather than trusting a number written here.
+# For a COMPUTED property (`expect(x)["not"]`) the AST node is a
 # `Literal`, so `.name` is `undefined` and every one of those reads silently
 # produced nothing. One root cause, two opposite failure directions: an evasion
 # (a vacuous test passes) and a false positive (an honest test is reported).
@@ -1213,6 +1216,46 @@ def test_a_computed_not_is_not_a_positive_partner(tmp_path: Path) -> None:
         _HEADER + 'test("computed-not-partnered", async ({ page }) => {\n'
         '  await expect(page.locator("#a")).toBeVisible();\n'
         '  await expect(page.locator("#a"))["not"].toBeVisible();\n'
+        '  await expect(page.locator("#a")).not.toContainText("gone");\n'
+        "});\n",
+        tmp_path,
+    )
+    assert partnered == [], f"a genuinely partnered test was reported: {partnered}"
+
+
+def test_a_parenthesised_optional_chain_is_still_walked(tmp_path: Path) -> None:
+    """`await (expect(x)?.not).toBeVisible()` must still reach `expect`.
+
+    Parenthesising an optional member access wraps the chain in a
+    `ChainExpression` node, which is neither a `MemberExpression` nor a
+    `CallExpression`, so `assertionOf`'s cursor walk falls through to its
+    `return null` and the assertion becomes INVISIBLE to the guard — the same
+    assertion-invisibility class as the computed matcher this change closes.
+
+    Turns red if: the `ChainExpression` arm is removed from `assertionOf`'s
+    cursor walk. Measured before this test existed: mutating that arm to a node
+    type that never occurs left the whole module green at 46 passed, so nothing
+    held it.
+    """
+    found = _violations(
+        _HEADER + 'test("paren-chain", async ({ page }) => {\n'
+        '  await (expect(page.locator("#a"))?.not).toBeVisible();\n'
+        '  await expect(page.locator("#a")).not.toContainText("gone");\n'
+        "});\n",
+        tmp_path,
+    )
+    assert _matchers(found) == ["not.toBeVisible", "not.toContainText"], (
+        "the parenthesised optional chain was not walked back to `expect`, so "
+        f"one of the two negatives went unseen: {found}"
+    )
+
+    # POSITIVE PARTNER (rule 7): the same two negatives beside a real liveness
+    # assertion must report nothing, so the list above cannot come from a
+    # checker that simply reports every assertion.
+    partnered = _violations(
+        _HEADER + 'test("paren-chain-partnered", async ({ page }) => {\n'
+        '  await expect(page.locator("#a")).toBeVisible();\n'
+        '  await (expect(page.locator("#a"))?.not).toBeVisible();\n'
         '  await expect(page.locator("#a")).not.toContainText("gone");\n'
         "});\n",
         tmp_path,
@@ -1689,12 +1732,31 @@ PARTNER_SHAPES: dict[str, tuple[str, bool]] = {
     # Reached FROM a literal, so still nothing about the code under test.
     "taut-plain-member-of-literal": ('await expect("lit".length).toBeGreaterThan(0);', False),
     "taut-plain-call-on-literal": ('await expect("lit".split("")).toHaveLength(3);', False),
-    # THE DEFAULT-DENY PROOF. No node type here is named anywhere in
+    # THE DEFAULT-DENY PROOF. Neither node type here is named anywhere in
     # `isLiveSubject`; each must be rejected BECAUSE it is unrecognised.
-    # Delete the `default: return false` arm and all three turn accepted.
-    "subject-unenumerated-new-expression": ("await expect(new Date()).toBeTruthy();", False),
+    #
+    # MEASURED, and NOT what an earlier draft of this comment claimed: DELETING
+    # the `default: return false` arm changes nothing at all — control falls out
+    # of the `switch` and the function returns `undefined`, which is falsy, so
+    # the suite stays fully green (46 passed). That arm is documentation of a
+    # fall-through that is already safe. The mutation that BITES is flipping it
+    # to `default: return true`, which gives 2 failed: this test and
+    # `test_a_tautological_partner_does_not_count`.
     "subject-unenumerated-sequence": ("await expect((0, flag)).toBeTruthy();", False),
     "subject-unenumerated-conditional": ("await expect(a ? b : c).toBeTruthy();", False),
+    # `NewExpression` IS enumerated, and argument-driven: live only if some
+    # argument can reach live state. Both directions are pinned, because an
+    # arm that returned a bare `true` would accept `new Date()` and an arm
+    # deleted entirely would reject `new Set(live)`.
+    "subject-dead-new-expression-no-args": ("await expect(new Date()).toBeTruthy();", False),
+    "subject-dead-new-expression-literal-arg": (
+        'await expect(new Set(["a"]).size).toBeGreaterThan(0);',
+        False,
+    ),
+    "subject-live-new-expression-live-arg": (
+        "await expect(new Set(backgrounds).size).toBeGreaterThan(0);",
+        True,
+    ),
     # ...and the positive partner for that arm: default-deny must not become
     # "deny everything". Each of these IS a live subject and must still count.
     "subject-live-as-expression": (f"await expect({SUBJ} as Locator).toBeVisible();", True),
@@ -1711,6 +1773,19 @@ PARTNER_SHAPES: dict[str, tuple[str, bool]] = {
     "not-toHaveText-tpl-empty": (f"await expect({SUBJ}).not.toHaveText(``);", False),
     "not-toHaveText-tpl-interp-only": (f"await expect({SUBJ}).not.toHaveText(`${{v}}`);", False),
     "not-toHaveText-regex-empty": (f"await expect({SUBJ}).not.toHaveText(/(?:)/);", False),
+    # `regexRejectsEmptyString` asks the ENGINE, so a pattern the TypeScript
+    # parser accepts but `new RegExp` rejects lands in its `catch`. That arm
+    # fails CLOSED — unevaluable is not proof. Pinned in both directions:
+    # flip the `catch` to `return true` and the first row turns accepted,
+    # delete the whole predicate and the second row turns rejected.
+    "not-toHaveText-regex-uncompilable": (
+        f"await expect({SUBJ}).not.toHaveText(/(?<x>a)(?<x>b)/);",
+        False,
+    ),
+    "not-toHaveText-regex-compilable-nonempty": (
+        f"await expect({SUBJ}).not.toHaveText(/ab/);",
+        True,
+    ),
     # THE FATAL CLASS. `.not.toHaveText(["a"])` PASSES against a locator
     # matching zero elements, so it is vacuous. A rejected earlier `.some()`
     # widening accepted all of these.
@@ -1798,4 +1873,130 @@ def test_no_vacuous_argument_shape_is_accepted_as_a_positive_partner(tmp_path: P
     )
     assert not wrongly_rejected, (
         f"these shapes are genuine liveness proofs yet were rejected: {wrongly_rejected}"
+    )
+
+
+# ---------------------------------------------------------------------------
+# THE STANDING CORPUS SWEEP.
+#
+# Everything above runs on synthetic fixtures. Nothing ran the classifier over
+# the specs the repository actually ships, so a change that made the predicate
+# stricter would flag real specs and no required gate would notice: the e2e
+# workflow runs this guard in `--base` (changed-specs) mode, gated on
+# `github.event_name == 'pull_request'`, so a pull request that edits only the
+# CHECKER checks zero spec files. Measured on this pull request's own CI run:
+# the guard step printed "no changed spec files vs origin/main — nothing to
+# check" and exited 0.
+#
+# This test closes that gap in the required `pytest (Python 3.12)` lane. It is
+# offline and needs only the node tooling that lane already installs.
+# ---------------------------------------------------------------------------
+
+_CORPUS_DRIVER = """
+import {{ readFileSync }} from "node:fs";
+import {{ checkSource }} from "{checker}";
+const files = JSON.parse(readFileSync(process.argv[2], "utf8"));
+const out = [];
+for (const file of files) out.push(...checkSource(readFileSync(file, "utf8"), file));
+process.stdout.write(JSON.stringify(out));
+"""
+
+
+def _tracked_specs() -> list[str]:
+    """Every spec file git tracks under `e2e/`.
+
+    TRACKED-ONLY, deliberately: `git ls-files` cannot see the gitignored scratch
+    specs under `e2e/tests/review/`, exactly as the checker's own `--all` mode
+    cannot. Read every number derived from this list as tracked-only.
+    """
+    listed = subprocess.run(
+        ["git", "-C", str(REPO_ROOT), "ls-files", "e2e/**/*.spec.ts"],
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+    return [line for line in listed.stdout.splitlines() if line.strip()]
+
+
+def _sweep(files: list[str], tmp_path: Path) -> list[dict[str, Any]]:
+    manifest = tmp_path / "files.json"
+    manifest.write_text(
+        json.dumps([str(REPO_ROOT / f) if not Path(f).is_absolute() else f for f in files]),
+        encoding="utf-8",
+    )
+    driver = tmp_path / "corpus_driver.mjs"
+    driver.write_text(_CORPUS_DRIVER.format(checker=CHECKER.as_uri()), encoding="utf-8")
+    result = subprocess.run(
+        ["node", str(driver), str(manifest)],
+        cwd=E2E,
+        capture_output=True,
+        text=True,
+        timeout=NODE_TIMEOUT_SECONDS,
+    )
+    assert result.returncode == 0, f"the corpus driver failed:\n{result.stdout}\n{result.stderr}"
+    swept: list[dict[str, Any]] = json.loads(result.stdout)
+    return swept
+
+
+def test_no_tracked_spec_is_reported_by_the_classifier(tmp_path: Path) -> None:
+    """Every spec this repository ships must still pass its own guard.
+
+    The false-positive direction has no other standing check. A predicate that
+    grew stricter would be caught here on the change that made it strict,
+    rather than months later when somebody happened to edit an affected spec.
+
+    Turns red if: a subject or argument shape a committed spec genuinely uses
+    stops being accepted as a positive partner. Measured — `isLiveSubject` with
+    its `MemberExpression` arm changed to `return false` reports 75 assertions
+    across 17 tracked specs.
+
+    NOT red on every stricter change, and the limit is worth stating: dropping
+    the `NewExpression` arm demotes
+    `e2e/tests/ui-parity/parity-behavior.spec.ts:1412` from partner to
+    non-partner and this test stays GREEN, because that test carries two other
+    partners. A classification change only surfaces here once it removes a
+    test's LAST partner. This sweep is a floor under the false-positive
+    direction, not a proof that classification is unchanged.
+    """
+    specs = _tracked_specs()
+    # FLOOR: a sweep over nothing reports nothing. The repository has held far
+    # more than this for months; the bound is a floor, not the real count, so
+    # adding or removing a spec does not touch this test.
+    assert len(specs) >= 20, f"the tracked-spec sweep found almost nothing to check: {specs}"
+
+    reported = _sweep(specs, tmp_path)
+    assert reported == [], (
+        "the classifier reports a spec this repository ships. Either the spec is "
+        "genuinely vacuous and needs a partner, or the classifier regressed in "
+        f"the false-positive direction: {reported}"
+    )
+
+
+def test_the_corpus_sweep_reports_a_vacuous_spec(tmp_path: Path) -> None:
+    """The positive partner for the sweep above (AGENTS.md rule 7).
+
+    `reported == []` is trivially true for a sweep that parses nothing, opens
+    no file, or classifies every assertion as `other`. This drives the SAME
+    machinery over a real tracked spec with one vacuous test appended, and the
+    appended test must come back.
+
+    Turns red if: `_sweep` stops reading the files it is handed, or the
+    classifier stops recognising `toBeHidden` as a negative.
+    """
+    specs = _tracked_specs()
+    assert specs, "no tracked specs to build the positive partner from"
+
+    real = (REPO_ROOT / specs[0]).read_text(encoding="utf-8")
+    poisoned = tmp_path / "poisoned.spec.ts"
+    poisoned.write_text(
+        real + '\ntest("sweep-floor-probe", async ({ page }) => {\n'
+        '  await expect(page.locator("#definitely-gone")).toBeHidden();\n'
+        "});\n",
+        encoding="utf-8",
+    )
+
+    reported = _sweep([str(poisoned)], tmp_path)
+    assert [v["test"] for v in reported] == ["sweep-floor-probe"], (
+        "the sweep machinery did not report an unmistakably vacuous test, so a "
+        f"clean sweep proves nothing: {reported}"
     )
