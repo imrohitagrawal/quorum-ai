@@ -41,6 +41,7 @@ everything it was watching, and pytest still exited 0.
 
 from __future__ import annotations
 
+import json
 import os
 import re
 import shutil
@@ -1125,4 +1126,883 @@ def test_the_docstring_names_only_tests_that_really_are_node_free() -> None:
     assert named == marked, (
         "the docstring and the markers disagree; named-not-marked="
         f"{sorted(named - marked)}, marked-not-named={sorted(marked - named)}"
+    )
+
+
+# ---------------------------------------------------------------------------
+# #226 (second half) — COMPUTED MEMBER ACCESS.
+#
+# The checker read a member-expression property as `node.property.name` at
+# every member-property read in the file — count them with
+# `git show origin/main:e2e/tools/check-negative-assertions.mjs |
+#  grep -c '\.property\.name'`, rather than trusting a number written here.
+# For a COMPUTED property (`expect(x)["not"]`) the AST node is a
+# `Literal`, so `.name` is `undefined` and every one of those reads silently
+# produced nothing. One root cause, two opposite failure directions: an evasion
+# (a vacuous test passes) and a false positive (an honest test is reported).
+#
+# These tests assert on the STRUCTURED violation list — `{line, matcher, test}`
+# objects — not on the human report's prose, because "is this line reported,
+# and with which matcher" is the structural fact under test (AGENTS.md rule 8).
+# ---------------------------------------------------------------------------
+
+_VIOLATION_DRIVER = """
+import {{ readFileSync }} from "node:fs";
+import {{ checkSource }} from "{checker}";
+const source = readFileSync(process.argv[2], "utf8");
+process.stdout.write(JSON.stringify(checkSource(source, "probe.spec.ts")));
+"""
+
+_HEADER = 'import { test, expect } from "@playwright/test";\n\n'
+
+
+def _violations(source: str, tmp_path: Path) -> list[dict[str, Any]]:
+    """The checker's own violation objects for `source`, via its exported API.
+
+    Shelling the CLI and reading stderr would assert on prose. This drives
+    `checkSource` and returns the objects it actually built.
+    """
+    spec = tmp_path / "probe.spec.ts"
+    spec.write_text(source, encoding="utf-8")
+    driver = tmp_path / "driver.mjs"
+    driver.write_text(_VIOLATION_DRIVER.format(checker=CHECKER.as_uri()), encoding="utf-8")
+    result = subprocess.run(
+        ["node", str(driver), str(spec)],
+        cwd=E2E,
+        capture_output=True,
+        text=True,
+        timeout=NODE_TIMEOUT_SECONDS,
+    )
+    assert result.returncode == 0, f"the checker driver failed:\n{result.stdout}\n{result.stderr}"
+    parsed: list[dict[str, Any]] = json.loads(result.stdout)
+    return parsed
+
+
+def _matchers(violations: list[dict[str, Any]]) -> list[str]:
+    return sorted(v["matcher"] for v in violations)
+
+
+def _titles(violations: list[dict[str, Any]]) -> set[str]:
+    return {v["test"] for v in violations}
+
+
+def test_a_computed_not_is_not_a_positive_partner(tmp_path: Path) -> None:
+    """`expect(x)["not"].toBeVisible()` is a negative, not a liveness proof.
+
+    Measured on the checker as it stood before this change: this source
+    reported ZERO violations. The computed `.not` was not seen, so the first
+    line classified as a PLAIN `toBeVisible` — a positive partner — and
+    silenced the genuine unpartnered negative on the second line.
+
+    Turns red if: `propertyName` loses its string-`Literal` arm, or the `.not`
+    walk goes back to reading `cursor.property.name`.
+    """
+    found = _violations(
+        _HEADER + 'test("computed-not", async ({ page }) => {\n'
+        '  await expect(page.locator("#a"))["not"].toBeVisible();\n'
+        '  await expect(page.locator("#a")).not.toContainText("gone");\n'
+        "});\n",
+        tmp_path,
+    )
+    assert _matchers(found) == ["not.toBeVisible", "not.toContainText"], (
+        "the computed `.not` was not read as a negation, so a vacuous "
+        f"assertion posed as the partner: {found}"
+    )
+
+    # POSITIVE PARTNER (rule 7): the same file with a REAL liveness assertion
+    # must report nothing, so "two violations" above cannot come from a checker
+    # that reports every assertion it sees.
+    partnered = _violations(
+        _HEADER + 'test("computed-not-partnered", async ({ page }) => {\n'
+        '  await expect(page.locator("#a")).toBeVisible();\n'
+        '  await expect(page.locator("#a"))["not"].toBeVisible();\n'
+        '  await expect(page.locator("#a")).not.toContainText("gone");\n'
+        "});\n",
+        tmp_path,
+    )
+    assert partnered == [], f"a genuinely partnered test was reported: {partnered}"
+
+
+def test_a_parenthesised_optional_chain_is_still_walked(tmp_path: Path) -> None:
+    """`await (expect(x)?.not).toBeVisible()` must still reach `expect`.
+
+    Parenthesising an optional member access wraps the chain in a
+    `ChainExpression` node, which is neither a `MemberExpression` nor a
+    `CallExpression`, so `assertionOf`'s cursor walk falls through to its
+    `return null` and the assertion becomes INVISIBLE to the guard — the same
+    assertion-invisibility class as the computed matcher this change closes.
+
+    Turns red if: the `ChainExpression` arm is removed from `assertionOf`'s
+    cursor walk. Measured before this test existed: mutating that arm to a node
+    type that never occurs left the whole module green at 46 passed, so nothing
+    held it.
+    """
+    found = _violations(
+        _HEADER + 'test("paren-chain", async ({ page }) => {\n'
+        '  await (expect(page.locator("#a"))?.not).toBeVisible();\n'
+        '  await expect(page.locator("#a")).not.toContainText("gone");\n'
+        "});\n",
+        tmp_path,
+    )
+    assert _matchers(found) == ["not.toBeVisible", "not.toContainText"], (
+        "the parenthesised optional chain was not walked back to `expect`, so "
+        f"one of the two negatives went unseen: {found}"
+    )
+
+    # POSITIVE PARTNER (rule 7): the same two negatives beside a real liveness
+    # assertion must report nothing, so the list above cannot come from a
+    # checker that simply reports every assertion.
+    partnered = _violations(
+        _HEADER + 'test("paren-chain-partnered", async ({ page }) => {\n'
+        '  await expect(page.locator("#a")).toBeVisible();\n'
+        '  await (expect(page.locator("#a"))?.not).toBeVisible();\n'
+        '  await expect(page.locator("#a")).not.toContainText("gone");\n'
+        "});\n",
+        tmp_path,
+    )
+    assert partnered == [], f"a genuinely partnered test was reported: {partnered}"
+
+
+def test_a_computed_matcher_is_still_classified(tmp_path: Path) -> None:
+    """`expect(b)["toBeHidden"]()` must be seen at all.
+
+    The cleaner evasion of the two: it needs no partner to hide behind, because
+    `assertionOf` read the matcher as `undefined` and returned null, so the
+    assertion was never classified. Measured before this change: ZERO
+    violations for both spellings below.
+
+    Turns red if: `assertionOf` reads the matcher as `node.callee.property.name`
+    again, at either the bare-`expect` or the `expect.soft` root.
+    """
+    plain = _violations(
+        _HEADER + 'test("computed-matcher", async ({ page }) => {\n'
+        '  await expect(page.locator("#b"))["toBeHidden"]();\n'
+        "});\n",
+        tmp_path,
+    )
+    assert _matchers(plain) == ["toBeHidden"], (
+        f"a computed absence matcher was invisible to the guard: {plain}"
+    )
+
+    soft = _violations(
+        _HEADER + 'test("computed-matcher-soft", async ({ page }) => {\n'
+        '  await expect.soft(page.locator("#b"))["toBeHidden"]();\n'
+        "});\n",
+        tmp_path,
+    )
+    assert _matchers(soft) == ["toBeHidden"], (
+        f"a computed absence matcher under expect.soft was invisible: {soft}"
+    )
+
+    # POSITIVE PARTNER (rule 7): partner each and the report must empty out.
+    for candidate in (
+        'await expect(page.locator("#b"))["toBeHidden"]();',
+        'await expect.soft(page.locator("#b"))["toBeHidden"]();',
+    ):
+        partnered = _violations(
+            _HEADER + 'test("computed-matcher-partnered", async ({ page }) => {\n'
+            '  await expect(page.locator("#a")).toBeVisible();\n'
+            f"  {candidate}\n"
+            "});\n",
+            tmp_path,
+        )
+        assert partnered == [], f"a partnered computed absence matcher was reported: {partnered}"
+
+
+def test_a_computed_expect_root_counts_as_a_partner(tmp_path: Path) -> None:
+    """The opposite direction: an honest test must NOT be taxed.
+
+    `expect["soft"](b).toBeVisible()` and `expect(b)["toBeVisible"]()` are
+    genuine liveness proofs. Measured before this change: each reported ONE
+    violation on the real negative beside it, because the computed property hid
+    the partner. A guard that invents work for honest authors is how a gate
+    gets disabled.
+
+    Turns red if: the `expect.soft`/`expect.poll` root check, or the matcher
+    read, stops resolving a computed property.
+    """
+    for label, partner in (
+        ("computed-soft-root", 'await expect["soft"](page.locator("#b")).toBeVisible();'),
+        ("computed-matcher-partner", 'await expect(page.locator("#b"))["toBeVisible"]();'),
+    ):
+        clean = _violations(
+            _HEADER + f'test("{label}", async ({{ page }}) => {{\n'
+            f"  {partner}\n"
+            '  await expect(page.locator("#b")).not.toContainText("gone");\n'
+            "});\n",
+            tmp_path,
+        )
+        assert clean == [], (
+            "a genuine liveness partner written with computed access was not "
+            f"recognised, so an honest test was reported: {clean}"
+        )
+
+        # MANDATORY PARTNER: drop the liveness line and the SAME file must be
+        # reported. Without this, "zero violations" would also be produced by a
+        # checker that reports nothing, and this test would be an inverted gate
+        # that goes red once the defect is fixed.
+        stripped = _violations(
+            _HEADER + f'test("{label}-unpartnered", async ({{ page }}) => {{\n'
+            '  await expect(page.locator("#b")).not.toContainText("gone");\n'
+            "});\n",
+            tmp_path,
+        )
+        assert _matchers(stripped) == ["not.toContainText"], (
+            "the control case is not reported, so the clean result above proves "
+            f"nothing: {stripped}"
+        )
+
+
+def test_a_computed_test_modifier_still_opens_a_test(tmp_path: Path) -> None:
+    """`test["only"](...)` hides EVERY assertion in its body, not just one.
+
+    `isTestCall` read `node.callee.property.name`, so a computed modifier made
+    the whole test body invisible to the walk. Measured before this change:
+    ZERO violations. That is a strictly larger evasion than a single computed
+    matcher.
+
+    Turns red if: `isTestCall` stops resolving a computed property.
+    """
+    found = _violations(
+        _HEADER + 'test["only"]("computed-modifier", async ({ page }) => {\n'
+        '  await expect(page.locator("#b")).toBeHidden();\n'
+        "});\n",
+        tmp_path,
+    )
+    assert _matchers(found) == ["toBeHidden"], (
+        f"the body of a computed-modifier test was never walked: {found}"
+    )
+    assert _titles(found) == {"computed-modifier"}, (
+        f"the violation is not attributed to the test it sits in: {found}"
+    )
+
+    # POSITIVE PARTNER (rule 7): partner it and the same shape reports nothing.
+    partnered = _violations(
+        _HEADER + 'test["only"]("computed-modifier-partnered", async ({ page }) => {\n'
+        '  await expect(page.locator("#a")).toBeVisible();\n'
+        '  await expect(page.locator("#b")).toBeHidden();\n'
+        "});\n",
+        tmp_path,
+    )
+    assert partnered == [], f"a partnered computed-modifier test was reported: {partnered}"
+
+
+def test_a_computed_describe_still_associates_its_before_each(tmp_path: Path) -> None:
+    """False-positive direction, same root cause, at the describe recogniser.
+
+    `test["describe"](...)` was not recognised, so `collectBeforeEachAssertions`
+    never ran and the `beforeEach` partner never reached the tests inside.
+    Measured before this change: ONE violation on an honestly-partnered test.
+
+    Turns red if: `isDescribeCall` or `isBeforeEachCall` stops resolving a
+    computed property.
+    """
+    partnered = (
+        _HEADER + 'test["describe"]("grp", () => {\n'
+        '  test["beforeEach"](async ({ page }) => {\n'
+        '    await expect(page.locator("#root")).toBeVisible();\n'
+        "  });\n"
+        '  test("inner", async ({ page }) => {\n'
+        '    await expect(page.locator("#b")).toBeHidden();\n'
+        "  });\n"
+        "});\n"
+    )
+    assert _violations(partnered, tmp_path) == [], (
+        "a beforeEach partner inside a computed-property describe was lost, so "
+        "an honest test was reported"
+    )
+
+    # MANDATORY PARTNER: remove the beforeEach assertion and the identical
+    # shape must be reported, so the clean result above is not vacuous.
+    unpartnered = (
+        _HEADER + 'test["describe"]("grp", () => {\n'
+        '  test["beforeEach"](async ({ page }) => {\n'
+        '    await page.goto("/");\n'
+        "  });\n"
+        '  test("inner", async ({ page }) => {\n'
+        '    await expect(page.locator("#b")).toBeHidden();\n'
+        "  });\n"
+        "});\n"
+    )
+    assert _matchers(_violations(unpartnered, tmp_path)) == ["toBeHidden"], (
+        "the control case is not reported, so the clean result above proves "
+        "nothing about the beforeEach association"
+    )
+
+
+def test_an_interpolation_free_template_property_is_resolved(tmp_path: Path) -> None:
+    """A template literal with no interpolation is static text and must resolve.
+
+    ``expect(x)[`not`].toBeVisible()`` is exactly as readable at parse time as
+    `expect(x).not.toBeVisible()`. Measured before this change: ZERO violations.
+    It must NOT fall into the undecidable bucket, or the guard would report
+    `<computed>` for a shape it can read perfectly well.
+
+    Turns red if: `propertyName` drops its zero-interpolation `TemplateLiteral`
+    arm.
+    """
+    found = _violations(
+        _HEADER + 'test("template-not", async ({ page }) => {\n'
+        '  await expect(page.locator("#a"))[`not`].toBeVisible();\n'
+        '  await expect(page.locator("#a")).not.toContainText("gone");\n'
+        "});\n",
+        tmp_path,
+    )
+    assert _matchers(found) == ["not.toBeVisible", "not.toContainText"], (
+        f"an interpolation-free template property was not resolved: {found}"
+    )
+
+
+def test_an_unresolvable_computed_property_fails_closed(tmp_path: Path) -> None:
+    """A property the parser cannot read makes the assertion demand a partner.
+
+    `const k = "not"; expect(x)[k].toContainText(...)` needs dataflow analysis
+    this checker does not have and should not grow. ADR-0047 settled the
+    direction for this class of detector: resolve an ambiguous case toward a
+    RED gate. So such an assertion is classified NEGATIVE (it needs a partner)
+    and never counts AS one — both halves lean red.
+
+    Measured before this change: ZERO violations, i.e. it failed OPEN.
+
+    All three directions are asserted here on purpose. Without the second, a
+    future "simplification" back to fail-open would be invisible; without the
+    first, the test would pass against a checker that reports everything.
+
+    Turns red if: `classify` stops returning "negative" for an unresolved
+    assertion, or the fail-closed rule is inverted so an unresolved shape
+    counts as a partner.
+    """
+    unpartnered = _violations(
+        _HEADER + 'test("undecidable", async ({ page }) => {\n'
+        '  const k = "not";\n'
+        '  await expect(page.locator("#a"))[k].toContainText("gone");\n'
+        "});\n",
+        tmp_path,
+    )
+    assert len(unpartnered) == 1, (
+        f"an unreadable assertion shape did not demand a partner: {unpartnered}"
+    )
+    assert unpartnered[0]["matcher"] == "<computed>", (
+        "the report must name the shape it could not read, or the author "
+        f"cannot act on it: {unpartnered}"
+    )
+
+    # The cost of failing closed, measured rather than argued: it only bites
+    # when the surrounding test has NO positive partner at all.
+    partnered = _violations(
+        _HEADER + 'test("undecidable-partnered", async ({ page }) => {\n'
+        '  const k = "not";\n'
+        '  await expect(page.locator("#a")).toBeVisible();\n'
+        '  await expect(page.locator("#a"))[k].toContainText("gone");\n'
+        "});\n",
+        tmp_path,
+    )
+    assert partnered == [], (
+        f"fail-closed must not tax a test that carries a real partner: {partnered}"
+    )
+
+    # ...and an unresolvable shape must never SUPPLY the partner.
+    posing = _violations(
+        _HEADER + 'test("undecidable-posing-as-partner", async ({ page }) => {\n'
+        '  const k = "toBeVisible";\n'
+        '  await expect(page.locator("#a"))[k]();\n'
+        '  await expect(page.locator("#a")).not.toContainText("gone");\n'
+        "});\n",
+        tmp_path,
+    )
+    assert _matchers(posing) == ["<computed>", "not.toContainText"], (
+        f"an unreadable assertion was accepted as a positive partner: {posing}"
+    )
+
+
+# ---------------------------------------------------------------------------
+# #226 — THE ACCEPTANCE PREDICATE. Salvaged from the parked `fix/226-guard-
+# classifier` branch, which measured it and then never merged.
+#
+# THE PROPERTY: an argument shape counts as a positive partner only if
+# satisfying it REQUIRES the subject to carry something; and a subject counts
+# only if it can reach live application state at all. Both are asserted over an
+# enumerated shape space, in BOTH directions, rather than one case per
+# discovered evasion.
+#
+# The runtime verdicts quoted in the comments below were measured in real
+# Chromium ON THAT BRANCH and are INHERITED here, not re-measured. What IS
+# re-measured on every run is the upstream fact the blank-character rule copies
+# — see `test_the_blank_character_rule_is_playwrights_own_normalizer`.
+# ---------------------------------------------------------------------------
+
+PLAYWRIGHT_CORE_BUNDLE = E2E / "node_modules" / "playwright-core" / "lib" / "coreBundle.js"
+
+
+def _require_playwright_core() -> None:
+    """Absent playwright-core FAILS in the required lane, and skips elsewhere.
+
+    A bare skip here would re-open exactly the silent-green hole ADR-0058
+    closed: the `pytest (Python 3.12)` lane runs `npm ci` in `e2e/` and sets
+    `QUORUM_REQUIRE_E2E_NODE_TOOLING=1`, so there an absent package can only
+    mean something is broken.
+    """
+    if PLAYWRIGHT_CORE_BUNDLE.is_file():
+        return
+    reason = f"playwright-core is not installed — run `npm ci` in e2e/ ({PLAYWRIGHT_CORE_BUNDLE})"
+    if os.environ.get(NODE_TOOLING_REQUIRED_ENV) == "1":
+        pytest.fail(f"{NODE_TOOLING_REQUIRED_ENV}=1 but {reason}")
+    pytest.skip(reason)
+
+
+def _codepoints_of_strip_class(pattern_body: str) -> frozenset[str]:
+    """`\\u200b\\u00ad` (any case) -> {"00ad", "200b"}."""
+    return frozenset(m.lower() for m in re.findall(r"\\u([0-9a-fA-F]{4})", pattern_body))
+
+
+def _guard_strip_class() -> frozenset[str]:
+    """The guard's exported `PLAYWRIGHT_STRIPS`, read by RUNNING it.
+
+    Reading the `.mjs` as text would match the header comment that explains the
+    rule as well as the rule itself (AGENTS.md rule 8), and `tests/code_text.py`
+    blanks `#` comments only, so it cannot help on JavaScript.
+    """
+    result = subprocess.run(
+        [
+            "node",
+            "--input-type=module",
+            "-e",
+            f'import {{ PLAYWRIGHT_STRIPS }} from "{CHECKER.as_uri()}";'
+            "process.stdout.write(PLAYWRIGHT_STRIPS.source);",
+        ],
+        cwd=E2E,
+        capture_output=True,
+        text=True,
+        timeout=NODE_TIMEOUT_SECONDS,
+    )
+    assert result.returncode == 0, (
+        f"the guard does not export PLAYWRIGHT_STRIPS:\n{result.stdout}\n{result.stderr}"
+    )
+    return _codepoints_of_strip_class(result.stdout)
+
+
+def test_the_blank_character_rule_is_playwrights_own_normalizer() -> None:
+    """The guard's "which characters are blank" rule is an UPSTREAM fact.
+
+    AGENTS.md rule 8c: a mitigation gated on an upstream's behaviour is worth
+    exactly as much as your measurement of that upstream. An earlier attempt
+    reasoned from Unicode instead and produced `[\\u200B-\\u200D\\uFEFF]`, which
+    accepted U+00AD SOFT HYPHEN as proof that an element carries content.
+
+    Playwright strips exactly two characters before comparing text:
+
+        text.replace(/[\\u200b\\u00ad]/g, "").trim().replace(/\\s+/g, " ")
+
+    This re-reads that expression out of the INSTALLED playwright-core on every
+    run, so an upstream change surfaces as a named failure here rather than as
+    a silently wrong predicate.
+
+    Turns red if: the guard's exported strip class is edited away from
+    Playwright's, or Playwright changes its own.
+    """
+    _require_playwright_core()
+
+    upstream = re.findall(
+        r'replace\(/\[((?:\\u[0-9a-fA-F]{4})+)\]/g, ""\)',
+        PLAYWRIGHT_CORE_BUNDLE.read_text(encoding="utf-8"),
+    )
+    # FLOOR: a regex that matched nothing would make every assertion below
+    # trivially true. The strip call must actually have been found.
+    assert upstream, (
+        f'no `replace(/[...]/g, "")` strip class found in {PLAYWRIGHT_CORE_BUNDLE} — '
+        "this test measured NOTHING and cannot report the guard as correct"
+    )
+    upstream_sets = {_codepoints_of_strip_class(body) for body in upstream}
+    assert len(upstream_sets) == 1, (
+        f"playwright-core spells its strip class more than one way: {upstream_sets}"
+    )
+    upstream_set = upstream_sets.pop()
+    assert upstream_set == {"200b", "00ad"}, (
+        "playwright-core changed the characters it strips before comparing text, "
+        f"from {{200b, 00ad}} to {sorted(upstream_set)}. The guard's blank-character "
+        "rule is a copy of that expression and is now wrong; re-measure in a real "
+        "browser and update both."
+    )
+    assert _guard_strip_class() == upstream_set, (
+        "the guard's blank-character class has drifted from Playwright's own: "
+        f"guard {sorted(_guard_strip_class())} vs playwright-core {sorted(upstream_set)}"
+    )
+
+
+SUBJ = 'page.locator("#a")'
+FIXED_NEGATIVE = 'await expect(page.locator("#missing")).toBeHidden();'
+
+#: label -> the ONE candidate assertion under test, plus whether the guard must
+#: treat it as a positive partner. True means the guard must let the test
+#: through; False means it must still report the fixed negative beside it
+#: because the candidate proved nothing.
+PARTNER_SHAPES: dict[str, tuple[str, bool]] = {
+    # -- plain toHaveText: strings -------------------------------------------
+    "plain-toHaveText-word": (f'await expect({SUBJ}).toHaveText("hello");', True),
+    "plain-toHaveText-empty": (f'await expect({SUBJ}).toHaveText("");', False),
+    # Playwright normalises whitespace, so a blank string is satisfied by an
+    # element holding nothing.
+    "plain-toHaveText-spaces": (f'await expect({SUBJ}).toHaveText("   ");', False),
+    "plain-toHaveText-nbsp": (f'await expect({SUBJ}).toHaveText("\\u00a0");', False),
+    "plain-toHaveText-zwsp": (f'await expect({SUBJ}).toHaveText("\\u200b");', False),
+    "plain-toHaveText-tab-newline": (f'await expect({SUBJ}).toHaveText("\\t\\n");', False),
+    # -- plain toHaveText: the blank-character boundary ----------------------
+    # NOT reasoned about: Playwright strips exactly U+200B and U+00AD and then
+    # trims/collapses JavaScript `\s`. U+00AD is the one a hand-derived
+    # zero-width set got wrong, accepting it as proof of content.
+    "plain-toHaveText-soft-hyphen": (f'await expect({SUBJ}).toHaveText("\\u00ad");', False),
+    "plain-toHaveText-ideographic-space": (
+        f'await expect({SUBJ}).toHaveText("\\u3000");',
+        False,
+    ),
+    "plain-toHaveText-bom": (f'await expect({SUBJ}).toHaveText("\\ufeff");', False),
+    "plain-toHaveText-line-separator": (f'await expect({SUBJ}).toHaveText("\\u2028");', False),
+    # ...and the other side of the same boundary: neither stripped nor `\s`,
+    # so both are genuine content. The hand-derived set rejected both.
+    "plain-toHaveText-zwnj": (f'await expect({SUBJ}).toHaveText("\\u200c");', True),
+    "plain-toHaveText-word-joiner": (f'await expect({SUBJ}).toHaveText("\\u2060");', True),
+    # -- plain toHaveText: template literals ---------------------------------
+    "plain-toHaveText-tpl-word": (f"await expect({SUBJ}).toHaveText(`x`);", True),
+    "plain-toHaveText-tpl-empty": (f"await expect({SUBJ}).toHaveText(``);", False),
+    "plain-toHaveText-tpl-blank": (f"await expect({SUBJ}).toHaveText(`   `);", False),
+    # `${v}` contributes NO text knowable at parse time.
+    "plain-toHaveText-tpl-interp-only": (f"await expect({SUBJ}).toHaveText(`${{v}}`);", False),
+    # ...but a non-blank static part is present whatever `v` turns out to be.
+    "plain-toHaveText-tpl-interp-prefixed": (
+        f"await expect({SUBJ}).toHaveText(`ok ${{v}}`);",
+        True,
+    ),
+    "plain-toHaveText-tpl-interp-blank-prefix": (
+        f"await expect({SUBJ}).toHaveText(` ${{v}} `);",
+        False,
+    ),
+    # -- plain toHaveText: regexes -------------------------------------------
+    "plain-toHaveText-regex-word": (f"await expect({SUBJ}).toHaveText(/x/);", True),
+    "plain-toHaveText-regex-plus": (f"await expect({SUBJ}).toHaveText(/.+/);", True),
+    # Every one of these matches the empty string, so an empty element satisfies it.
+    "plain-toHaveText-regex-empty": (f"await expect({SUBJ}).toHaveText(/(?:)/);", False),
+    "plain-toHaveText-regex-anchored-empty": (f"await expect({SUBJ}).toHaveText(/^$/);", False),
+    "plain-toHaveText-regex-optional": (f"await expect({SUBJ}).toHaveText(/a?/);", False),
+    "plain-toHaveText-regex-star": (f"await expect({SUBJ}).toHaveText(/x*/);", False),
+    "plain-toHaveText-regex-alt-empty": (f"await expect({SUBJ}).toHaveText(/x|/);", False),
+    # -- plain toHaveText: arrays and everything else ------------------------
+    "plain-toHaveText-array-empty": (f"await expect({SUBJ}).toHaveText([]);", False),
+    "plain-toHaveText-array-word": (f'await expect({SUBJ}).toHaveText(["a"]);', False),
+    "plain-toHaveText-number": (f"await expect({SUBJ}).toHaveText(1);", False),
+    "plain-toHaveText-object": (f"await expect({SUBJ}).toHaveText({{}});", False),
+    "plain-toHaveText-identifier": (f"await expect({SUBJ}).toHaveText(someVar);", False),
+    "plain-toHaveText-call": (f"await expect({SUBJ}).toHaveText(makeText());", False),
+    "plain-toHaveText-new-regexp": (f'await expect({SUBJ}).toHaveText(new RegExp("x"));', False),
+    "plain-toHaveText-null": (f"await expect({SUBJ}).toHaveText(null);", False),
+    "plain-toHaveText-no-args": (f"await expect({SUBJ}).toHaveText();", False),
+    # -- plain toContainText / toContain -------------------------------------
+    "plain-toContainText-word": (f'await expect({SUBJ}).toContainText("hello");', True),
+    "plain-toContainText-empty": (f'await expect({SUBJ}).toContainText("");', False),
+    "plain-toContainText-blank": (f'await expect({SUBJ}).toContainText("   ");', False),
+    "plain-toContainText-regex-empty": (f"await expect({SUBJ}).toContainText(/(?:)/);", False),
+    "plain-toContainText-array-word": (f'await expect({SUBJ}).toContainText(["a"]);', False),
+    "plain-toContain-word": ('await expect(names).toContain("hello");', True),
+    "plain-toContain-empty": ('await expect(names).toContain("");', False),
+    # -- plain numeric / presence matchers ------------------------------------
+    "plain-toHaveCount-1": (f"await expect({SUBJ}).toHaveCount(1);", True),
+    "plain-toHaveCount-0": (f"await expect({SUBJ}).toHaveCount(0);", False),
+    "plain-toHaveLength-3": ("await expect(items).toHaveLength(3);", True),
+    "plain-toHaveLength-0": ("await expect(items).toHaveLength(0);", False),
+    "plain-toBeGreaterThan-0": ("await expect(n).toBeGreaterThan(0);", True),
+    "plain-toBeGreaterThanOrEqual-1": ("await expect(n).toBeGreaterThanOrEqual(1);", True),
+    "plain-toBeGreaterThanOrEqual-0": ("await expect(n).toBeGreaterThanOrEqual(0);", False),
+    "plain-toBeVisible": (f"await expect({SUBJ}).toBeVisible();", True),
+    "plain-toBeAttached": (f"await expect({SUBJ}).toBeAttached();", True),
+    "plain-toBeEnabled": (f"await expect({SUBJ}).toBeEnabled();", False),
+    "plain-toBeHidden": (f"await expect({SUBJ}).toBeHidden();", False),
+    "plain-toBeEmpty": (f"await expect({SUBJ}).toBeEmpty();", False),
+    "plain-toBeNull": ("await expect(v).toBeNull();", False),
+    "plain-toEqual-empty-array": ("await expect(v).toEqual([]);", False),
+    "plain-toEqual-empty-string": ('await expect(v).toEqual("");', False),
+    # -- tautological subjects, plain direction --------------------------------
+    "taut-plain-string-toBeVisible": ('await expect("lit").toBeVisible();', False),
+    "taut-plain-template-toHaveText": ('await expect(`lit`).toHaveText("x");', False),
+    "taut-plain-array-toBeTruthy": ("await expect([1]).toBeTruthy();", False),
+    "taut-plain-object-toBeTruthy": ("await expect({ a: 1 }).toBeTruthy();", False),
+    # A blocklist of dead node types is defeated by four characters. These are
+    # the same dead literal wearing a TypeScript wrapper, and the shipped
+    # comment claimed to close exactly the first one.
+    "taut-plain-as-string-toBeTruthy": ('await expect("lit" as string).toBeTruthy();', False),
+    "taut-plain-nonnull-literal-toBeTruthy": ('await expect("lit"!).toBeTruthy();', False),
+    # Reached FROM a literal, so still nothing about the code under test.
+    "taut-plain-member-of-literal": ('await expect("lit".length).toBeGreaterThan(0);', False),
+    "taut-plain-call-on-literal": ('await expect("lit".split("")).toHaveLength(3);', False),
+    # THE DEFAULT-DENY PROOF. Neither node type here is named anywhere in
+    # `isLiveSubject`; each must be rejected BECAUSE it is unrecognised.
+    #
+    # MEASURED, and NOT what an earlier draft of this comment claimed: DELETING
+    # the `default: return false` arm changes nothing at all — control falls out
+    # of the `switch` and the function returns `undefined`, which is falsy, so
+    # the suite stays fully green (46 passed). That arm is documentation of a
+    # fall-through that is already safe. The mutation that BITES is flipping it
+    # to `default: return true`, which gives 2 failed: this test and
+    # `test_a_tautological_partner_does_not_count`.
+    "subject-unenumerated-sequence": ("await expect((0, flag)).toBeTruthy();", False),
+    "subject-unenumerated-conditional": ("await expect(a ? b : c).toBeTruthy();", False),
+    # `NewExpression` IS enumerated, and argument-driven: live only if some
+    # argument can reach live state. Both directions are pinned, because an
+    # arm that returned a bare `true` would accept `new Date()` and an arm
+    # deleted entirely would reject `new Set(live)`.
+    "subject-dead-new-expression-no-args": ("await expect(new Date()).toBeTruthy();", False),
+    "subject-dead-new-expression-literal-arg": (
+        'await expect(new Set(["a"]).size).toBeGreaterThan(0);',
+        False,
+    ),
+    "subject-live-new-expression-live-arg": (
+        "await expect(new Set(backgrounds).size).toBeGreaterThan(0);",
+        True,
+    ),
+    # ...and the positive partner for that arm: default-deny must not become
+    # "deny everything". Each of these IS a live subject and must still count.
+    "subject-live-as-expression": (f"await expect({SUBJ} as Locator).toBeVisible();", True),
+    "subject-live-optional-chain": ('await expect(page?.locator("#a")).toBeVisible();', True),
+    "subject-live-logical": ("await expect(first || second).toBeTruthy();", True),
+    "subject-live-binary": ("await expect(items.length + 1).toBeGreaterThan(0);", True),
+    "subject-live-awaited-call": ('await expect(await page.title()).toContain("Q");', True),
+    # -- the .not direction ----------------------------------------------------
+    "not-toHaveText-word": (f'await expect({SUBJ}).not.toHaveText("—");', True),
+    "not-toHaveText-regex-word": (f"await expect({SUBJ}).not.toHaveText(/x/);", True),
+    "not-toHaveText-tpl-word": (f"await expect({SUBJ}).not.toHaveText(`x`);", True),
+    "not-toHaveText-empty": (f'await expect({SUBJ}).not.toHaveText("");', False),
+    "not-toHaveText-blank": (f'await expect({SUBJ}).not.toHaveText("   ");', False),
+    "not-toHaveText-tpl-empty": (f"await expect({SUBJ}).not.toHaveText(``);", False),
+    "not-toHaveText-tpl-interp-only": (f"await expect({SUBJ}).not.toHaveText(`${{v}}`);", False),
+    "not-toHaveText-regex-empty": (f"await expect({SUBJ}).not.toHaveText(/(?:)/);", False),
+    # `regexRejectsEmptyString` asks the ENGINE, so a pattern the TypeScript
+    # parser accepts but `new RegExp` rejects lands in its `catch`. That arm
+    # fails CLOSED — unevaluable is not proof. Pinned in both directions:
+    # flip the `catch` to `return true` and the first row turns accepted,
+    # delete the whole predicate and the second row turns rejected.
+    "not-toHaveText-regex-uncompilable": (
+        f"await expect({SUBJ}).not.toHaveText(/(?<x>a)(?<x>b)/);",
+        False,
+    ),
+    "not-toHaveText-regex-compilable-nonempty": (
+        f"await expect({SUBJ}).not.toHaveText(/ab/);",
+        True,
+    ),
+    # THE FATAL CLASS. `.not.toHaveText(["a"])` PASSES against a locator
+    # matching zero elements, so it is vacuous. A rejected earlier `.some()`
+    # widening accepted all of these.
+    "not-toHaveText-array-word": (f'await expect({SUBJ}).not.toHaveText(["a"]);', False),
+    "not-toHaveText-array-nested": (f'await expect({SUBJ}).not.toHaveText([[], "a"]);', False),
+    "not-toHaveText-array-tpl": (f"await expect({SUBJ}).not.toHaveText([`x`]);", False),
+    "not-toHaveText-array-empty": (f"await expect({SUBJ}).not.toHaveText([]);", False),
+    "not-toHaveText-identifier": (f"await expect({SUBJ}).not.toHaveText(someVar);", False),
+    "not-toHaveCount-0": (f"await expect({SUBJ}).not.toHaveCount(0);", True),
+    "not-toHaveCount-1": (f"await expect({SUBJ}).not.toHaveCount(1);", False),
+    "not-toBeNull": ("await expect(v).not.toBeNull();", True),
+    "not-toBeVisible": (f"await expect({SUBJ}).not.toBeVisible();", False),
+    "not-toBeEmpty": (f"await expect({SUBJ}).not.toBeEmpty();", False),
+    "not-toHaveClass-regex": (f"await expect({SUBJ}).not.toHaveClass(/x/);", False),
+    "not-toContainText-word": (f'await expect({SUBJ}).not.toContainText("x");', False),
+    "not-toBeInViewport": (f"await expect({SUBJ}).not.toBeInViewport();", False),
+    # -- tautological subjects, .not direction ---------------------------------
+    "taut-not-string-toHaveText": ('await expect("lit").not.toHaveText("x");', False),
+    "taut-not-string-toBeNull": ('await expect("lit").not.toBeNull();', False),
+    "taut-not-array-toHaveCount-0": ("await expect([1]).not.toHaveCount(0);", False),
+    "taut-not-as-string-toHaveText": (
+        'await expect("lit" as string).not.toHaveText("x");',
+        False,
+    ),
+    "taut-not-member-of-literal-toBeNull": ('await expect("lit".length).not.toBeNull();', False),
+    "subject-not-unenumerated-new-expression": (
+        "await expect(new Date()).not.toBeNull();",
+        False,
+    ),
+}
+
+
+def _spec_from_shapes(shapes: dict[str, tuple[str, bool]]) -> str:
+    """One `test()` per shape: the candidate partner plus one fixed negative.
+
+    If the guard reports the test, the candidate was NOT accepted as a partner.
+    """
+    parts = [_HEADER.rstrip("\n")]
+    for label, (candidate, _) in shapes.items():
+        parts += [
+            "",
+            f'test("{label}", async ({{ page }}) => {{',
+            f"  {candidate}",
+            f"  {FIXED_NEGATIVE}",
+            "});",
+        ]
+    return "\n".join(parts) + "\n"
+
+
+def test_no_vacuous_argument_shape_is_accepted_as_a_positive_partner(tmp_path: Path) -> None:
+    """#226: the acceptance predicate, asserted over the whole shape space.
+
+    Every argument spelling the matchers this predicate governs can take —
+    string, blank string, non-breaking and zero-width space, template literal
+    with and without interpolation, empty-matching and non-empty-matching
+    regex, array, number, object, identifier, call, `new RegExp`, `null`, and
+    no argument at all — plus every subject shape, is driven through the guard
+    in BOTH directions. The reported set must equal the reject set EXACTLY.
+
+    Both directions are asserted in one place on purpose. A predicate that
+    accepts everything makes the reported set too small; one that accepts
+    nothing makes it too large. Neither degenerate implementation survives.
+
+    Turns red if: `provesNonEmptyContent` reverts to the old
+    "any template literal, any regex, any non-empty string" predicate (the
+    `soft-hyphen`, `tpl-empty` and `regex-empty` rows), or `isLiveSubject`
+    loses its `default: return false` arm (the `subject-unenumerated-*` rows)
+    or an accept arm (the `subject-live-*` rows).
+    """
+    found = _violations(_spec_from_shapes(PARTNER_SHAPES), tmp_path)
+    reported = _titles(found)
+    expected_rejects = {label for label, (_, accept) in PARTNER_SHAPES.items() if not accept}
+    expected_accepts = set(PARTNER_SHAPES) - expected_rejects
+
+    # FLOORS: neither half of the table may be empty, or the equality below is
+    # trivially satisfiable by a guard that reports everything or nothing.
+    assert expected_rejects, "the reject half of the shape table is empty"
+    assert expected_accepts, "the accept half of the shape table is empty"
+
+    wrongly_accepted = sorted(expected_rejects - reported)
+    wrongly_rejected = sorted(reported - expected_rejects)
+    assert not wrongly_accepted, (
+        "these shapes prove nothing about the subject yet were accepted as a "
+        f"positive partner: {wrongly_accepted}"
+    )
+    assert not wrongly_rejected, (
+        f"these shapes are genuine liveness proofs yet were rejected: {wrongly_rejected}"
+    )
+
+
+# ---------------------------------------------------------------------------
+# THE STANDING CORPUS SWEEP.
+#
+# Everything above runs on synthetic fixtures. Nothing ran the classifier over
+# the specs the repository actually ships, so a change that made the predicate
+# stricter would flag real specs and no required gate would notice: the e2e
+# workflow runs this guard in `--base` (changed-specs) mode, gated on
+# `github.event_name == 'pull_request'`, so a pull request that edits only the
+# CHECKER checks zero spec files. Measured on this pull request's own CI run:
+# the guard step printed "no changed spec files vs origin/main — nothing to
+# check" and exited 0.
+#
+# This test closes that gap in the required `pytest (Python 3.12)` lane. It is
+# offline and needs only the node tooling that lane already installs.
+# ---------------------------------------------------------------------------
+
+_CORPUS_DRIVER = """
+import {{ readFileSync }} from "node:fs";
+import {{ checkSource }} from "{checker}";
+const files = JSON.parse(readFileSync(process.argv[2], "utf8"));
+const out = [];
+for (const file of files) out.push(...checkSource(readFileSync(file, "utf8"), file));
+process.stdout.write(JSON.stringify(out));
+"""
+
+
+def _tracked_specs() -> list[str]:
+    """Every spec file git tracks under `e2e/`.
+
+    TRACKED-ONLY, deliberately: `git ls-files` cannot see the gitignored scratch
+    specs under `e2e/tests/review/`, exactly as the checker's own `--all` mode
+    cannot. Read every number derived from this list as tracked-only.
+    """
+    listed = subprocess.run(
+        ["git", "-C", str(REPO_ROOT), "ls-files", "e2e/**/*.spec.ts"],
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+    return [line for line in listed.stdout.splitlines() if line.strip()]
+
+
+def _sweep(files: list[str], tmp_path: Path) -> list[dict[str, Any]]:
+    manifest = tmp_path / "files.json"
+    manifest.write_text(
+        json.dumps([str(REPO_ROOT / f) if not Path(f).is_absolute() else f for f in files]),
+        encoding="utf-8",
+    )
+    driver = tmp_path / "corpus_driver.mjs"
+    driver.write_text(_CORPUS_DRIVER.format(checker=CHECKER.as_uri()), encoding="utf-8")
+    result = subprocess.run(
+        ["node", str(driver), str(manifest)],
+        cwd=E2E,
+        capture_output=True,
+        text=True,
+        timeout=NODE_TIMEOUT_SECONDS,
+    )
+    assert result.returncode == 0, f"the corpus driver failed:\n{result.stdout}\n{result.stderr}"
+    swept: list[dict[str, Any]] = json.loads(result.stdout)
+    return swept
+
+
+def test_no_tracked_spec_is_reported_by_the_classifier(tmp_path: Path) -> None:
+    """Every spec this repository ships must still pass its own guard.
+
+    The false-positive direction has no other standing check. A predicate that
+    grew stricter would be caught here on the change that made it strict,
+    rather than months later when somebody happened to edit an affected spec.
+
+    Turns red if: a subject or argument shape a committed spec genuinely uses
+    stops being accepted as a positive partner. Measured — `isLiveSubject` with
+    its `MemberExpression` arm changed to `return false` reports assertions
+    across many tracked specs rather than none.
+
+    No spec-file count is quoted here on purpose. An earlier draft said "17
+    tracked specs" and the real figure is 15; a count of the corpus goes stale
+    the moment a spec is added, and nothing compares the sentence to the tree
+    (AGENTS.md rule 1a). The assertion this docstring describes reads the
+    counts at runtime, so the test stays correct as the corpus grows.
+
+    NOT red on every stricter change, and the limit is worth stating: dropping
+    the `NewExpression` arm demotes
+    `e2e/tests/ui-parity/parity-behavior.spec.ts:1412` from partner to
+    non-partner and this test stays GREEN, because that test carries two other
+    partners. A classification change only surfaces here once it removes a
+    test's LAST partner. This sweep is a floor under the false-positive
+    direction, not a proof that classification is unchanged.
+    """
+    specs = _tracked_specs()
+    # FLOOR: a sweep over nothing reports nothing. The repository has held far
+    # more than this for months; the bound is a floor, not the real count, so
+    # adding or removing a spec does not touch this test.
+    assert len(specs) >= 20, f"the tracked-spec sweep found almost nothing to check: {specs}"
+
+    reported = _sweep(specs, tmp_path)
+    assert reported == [], (
+        "the classifier reports a spec this repository ships. Either the spec is "
+        "genuinely vacuous and needs a partner, or the classifier regressed in "
+        f"the false-positive direction: {reported}"
+    )
+
+
+def test_the_corpus_sweep_reports_a_vacuous_spec(tmp_path: Path) -> None:
+    """The positive partner for the sweep above (AGENTS.md rule 7).
+
+    `reported == []` is trivially true for a sweep that parses nothing, opens
+    no file, or classifies every assertion as `other`. This drives the SAME
+    machinery over a real tracked spec with one vacuous test appended, and the
+    appended test must come back.
+
+    Turns red if: `_sweep` stops reading the files it is handed, or the
+    classifier stops recognising `toBeHidden` as a negative.
+    """
+    specs = _tracked_specs()
+    assert specs, "no tracked specs to build the positive partner from"
+
+    real = (REPO_ROOT / specs[0]).read_text(encoding="utf-8")
+    poisoned = tmp_path / "poisoned.spec.ts"
+    poisoned.write_text(
+        real + '\ntest("sweep-floor-probe", async ({ page }) => {\n'
+        '  await expect(page.locator("#definitely-gone")).toBeHidden();\n'
+        "});\n",
+        encoding="utf-8",
+    )
+
+    reported = _sweep([str(poisoned)], tmp_path)
+    assert [v["test"] for v in reported] == ["sweep-floor-probe"], (
+        "the sweep machinery did not report an unmistakably vacuous test, so a "
+        f"clean sweep proves nothing: {reported}"
     )
