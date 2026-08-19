@@ -243,9 +243,21 @@ demotion above had to be caught by hand.
    here.**
 
 5. **Take the parked branch's `toHaveClass`/`toHaveAttribute` changes and its
-   spec edit.** Rejected on scope (rule 17) and on measurement: the guard
-   already reports zero violations over the tracked corpus without them, so the
-   waiver that edit removes is not load-bearing either way.
+   spec edit.** Rejected on scope (rule 17): both are independent widenings of
+   the partner definition.
+
+   An earlier revision justified this partly on the claim that "the waiver that
+   edit removes is not load-bearing either way". That is FALSE and was measured
+   after the fact. Driving `checkSource` over
+   `e2e/tests/ui-parity/parity-behavior.spec.ts` with the
+   `// no-positive-partner:` line at 536 deleted reports
+   `not.toHaveClass @536`; with it present, zero. The waiver IS load-bearing,
+   because its real partner is a plain-direction `toHaveClass`, which
+   `classify` still does not accept — precisely the widening this ADR declines
+   to make. So the spec edit is correctly not taken here, and the waiver's own
+   comment ("fix deferred to the #226 classifier PR") is still accurate about a
+   future pull request, not this one. The scope decision stands; only the
+   reason given for it was wrong.
 
 6. **Fail closed on an unresolvable TEST MODIFIER too**, so `test[k](...)`
    demands partners the way an unresolvable matcher does. Rejected: the
