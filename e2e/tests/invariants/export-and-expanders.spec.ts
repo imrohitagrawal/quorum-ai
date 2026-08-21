@@ -44,7 +44,16 @@ test.describe("F-12 — export completeness and section expanders", () => {
     expect(md).toContain(
       "What are the key metrics for measuring SaaS customer retention?"
     );
-    expect(md).toMatch(/aligned/i);
+    // The tally line, captioned as what it MEASURES. It read
+    // "**Agreement:** 3 of 4 models aligned" — a claim that three models agreed
+    // with each other, when the number counts openings the final answer carries.
+    // Asserted on the exported FILE, not only on app.js's source text: the #128
+    // defect was the file a user keeps disagreeing with the screen they
+    // exported it from, so the export needs its own behavioural check.
+    expect(md).toContain("**Opening positions carried into the final answer:** 3 of 4");
+    expect(md, "the export must not re-caption the tally as models agreeing").not.toMatch(
+      /models aligned/,
+    );
 
     // Every synthesis section the view renders.
     for (const heading of ["Consensus", "Disagreement", "Uncertainty", "Recommendation"]) {

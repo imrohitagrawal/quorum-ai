@@ -2313,7 +2313,8 @@
 
     const center = mkEl("div", "result-ring-center");
     center.appendChild(mkEl("span", "result-ring-count", `${aligned}/${total}`));
-    center.appendChild(mkEl("span", "result-ring-label", "agree"));
+    // "agree" was the ring's own two-word version of the miscaption above.
+    center.appendChild(mkEl("span", "result-ring-label", "carried"));
 
     wrap.append(svg, center);
     return wrap;
@@ -2599,6 +2600,25 @@
     return !ctx.isConsensus && !ctx.noLiveAnswers;
   }
 
+  // WHAT THE TALLY MEASURES, in the words the reader gets.
+  //
+  // ``agreement.aligned`` answers "is this model's opening position represented
+  // in the final answer?" — for a minority opener that is literally a 4-gram
+  // containment test of its opening against the model-written final synthesis
+  // (``_opening_reflected_in_final``). It was captioned "N of M models aligned",
+  // which is a claim about the models agreeing WITH EACH OTHER. A production run
+  // served "0 of 4 models aligned — the rest are preserved as disagreement
+  // below." directly above a Consensus section reading "All four define the two
+  // models oppositely… All agree seat-based is the more predictable revenue
+  // model." Both sentences were true of what they measured; only one of them was
+  // captioned honestly.
+  //
+  // ONE constant, five surfaces (band headline, ring, Agreement card, Copy
+  // summary, Markdown export). #128 was those surfaces each wording the same
+  // fact for themselves, and the file a user kept disagreeing with the screen
+  // they exported it from.
+  const CARRIED_INTO_FINAL = "carried into the final answer";
+
   function renderResultDegraded(result) {
     const banner = el("result-degraded");
     if (!banner) return;
@@ -2755,8 +2775,8 @@
     }
     summaryLines.push(
       mayClaimDisagreement({ isConsensus, noLiveAnswers })
-        ? `Agreement: ${aligned} of ${total} models aligned; the rest are preserved as disagreement.`
-        : `Agreement: ${aligned} of ${total} models aligned.`,
+        ? `Opening positions ${CARRIED_INTO_FINAL}: ${aligned} of ${total}; the rest are preserved as disagreement.`
+        : `Opening positions ${CARRIED_INTO_FINAL}: ${aligned} of ${total}.`,
     );
     if (result.correlation_id) summaryLines.push(`Run: ${result.correlation_id}`);
     state.lastResultSummary = summaryLines.join("\n");
@@ -3004,8 +3024,8 @@
     );
     push(
       mayClaimDisagreement(ctx)
-        ? `**Agreement:** ${ctx.aligned} of ${ctx.total} models aligned; the rest are preserved as disagreement.`
-        : `**Agreement:** ${ctx.aligned} of ${ctx.total} models aligned.`,
+        ? `**Opening positions ${CARRIED_INTO_FINAL}:** ${ctx.aligned} of ${ctx.total}; the rest are preserved as disagreement.`
+        : `**Opening positions ${CARRIED_INTO_FINAL}:** ${ctx.aligned} of ${ctx.total}.`,
       "",
     );
 
@@ -3607,7 +3627,7 @@
     // follows as supporting detail.
     let summary;
     if (isConsensus) {
-      summary = `${aligned} of ${total} models aligned`;
+      summary = `${aligned} of ${total} opening positions ${CARRIED_INTO_FINAL}`;
       if (revisedCount > 0) {
         summary += ` · ${revisedCount} revised their position`;
       }
@@ -3619,9 +3639,9 @@
       // telling the reader four models disagreed when four models were never
       // asked. The count itself stays — 0 aligned is true — and the degraded
       // banner directly above already says why.
-      summary = `${aligned} of ${total} models aligned`;
+      summary = `${aligned} of ${total} opening positions ${CARRIED_INTO_FINAL}`;
     } else {
-      summary = `${aligned} of ${total} models aligned — the rest are preserved as disagreement below.`;
+      summary = `${aligned} of ${total} opening positions ${CARRIED_INTO_FINAL} — the rest are preserved as disagreement below.`;
     }
     content.appendChild(mkEl("span", "result-verdict-agreement", summary));
 
@@ -3722,14 +3742,20 @@
       buildTrustCard({
         accent: "agreement",
         consensus: agreementConsensus,
-        kicker: "Agreement",
+        kicker: "Positions carried",
         value: `${aligned} of ${total}`,
-        valueSub: "aligned",
+        valueSub: "carried",
+        // One caption for both the consensus and the divided case. The divided
+        // one used to end "...the panel did not fully align, so the disagreement
+        // is preserved below" — a FOURTH surface making the preserved-as-
+        // disagreement claim, and the only one not gated by
+        // ``mayClaimDisagreement``, so on a fully simulated run this card
+        // claimed a disagreement the band had already withheld (the #247 hole,
+        // in the card). The band makes that claim, gated; the card now sticks to
+        // what it measures.
         caption: suppressed
           ? "Disagreement was flattened in the synthesis."
-          : isConsensus
-            ? "How many models the final synthesis places in agreement — inferred, not a tallied vote."
-            : "How many models the final synthesis places in agreement — inferred, not a tallied vote; the panel did not fully align, so the disagreement is preserved below.",
+          : `How many opening positions were ${CARRIED_INTO_FINAL} — inferred from the text, not a tallied vote.`,
       }),
     );
 

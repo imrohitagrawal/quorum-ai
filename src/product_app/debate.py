@@ -842,10 +842,24 @@ class ModelAlignment:
 
 class AgreementSummary(BaseModel):
     """Verdict-ring numerator/denominator for screen 05 (``aligned`` of
-    ``total``). ``total`` is the number of initial answers on the run —
-    INCLUDING failed/empty ones (matching :func:`summarize_agreement`, which
-    uses ``len(initial_answers)``); ``aligned`` is how many land in the final
-    consensus (a failed answer can never align).
+    ``total``).
+
+    ``total`` is the number of initial answers on the run — INCLUDING
+    failed/empty ones (matching :func:`summarize_agreement`, which uses
+    ``len(initial_answers)``).
+
+    ``aligned`` counts the models whose OPENING POSITION IS CARRIED INTO THE
+    FINAL ANSWER. It is NOT a count of models that agree with each other, and
+    the served captions no longer say that it is: for a minority opener the
+    test is a 4-gram containment of its own opening against the model-written
+    final synthesis (``synthesis_consensus._opening_reflected_in_final``). A
+    run served "0 of 4 models aligned" above a consensus section reading "All
+    agree seat-based is the more predictable revenue model" — both true of what
+    they measured, only one captioned honestly. ADR-0062.
+
+    A failed answer can never be counted. Neither can any model when there is
+    no final answer at all: nothing was produced for a position to be carried
+    into.
     """
 
     aligned: int = Field(ge=0)
