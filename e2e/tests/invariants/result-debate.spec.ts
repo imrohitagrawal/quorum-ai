@@ -198,6 +198,16 @@ test.describe("the result view carries the panel's reasoning", () => {
     await expect(caption).toBeVisible();
     const text = ((await caption.textContent()) || "").trim();
     expect(text.length, "the caption is empty").toBeGreaterThan(0);
+    // The HEADING is its own element and needs its own assertion. A round-2
+    // review lens emptied it and every check here stayed green, because the
+    // only other test reading this region asserts on the head's COMBINED text,
+    // which the caption alone satisfies.
+    const title = page.locator("#result-debate .result-debate-title");
+    await expect(title).toBeVisible();
+    expect(
+      ((await title.textContent()) || "").trim().length,
+      "the debate section heading is empty",
+    ).toBeGreaterThan(0);
     // The head must name the section for a screen reader too.
     await expect(page.locator("#result-debate")).toHaveAttribute("role", "region");
   });

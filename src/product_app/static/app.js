@@ -3725,7 +3725,7 @@
         mkEl(
           "span",
           "result-verdict-caption",
-          "Revision counts are inferred from the opening answers, not quoted.",
+          "Revision counts compare each opening with the final answer — inferred, not quoted.",
         ),
       );
     }
@@ -4468,7 +4468,7 @@
     initInfoIcons();
   }
 
-  // "What the panel argued" — the ROUND-LEVEL debate critique, on the completed
+  // "The debate rounds" — the ROUND-LEVEL debate critique, on the completed
   // result view.
   //
   // WHY THIS EXISTS. `debate_outputs` carries the most decision-useful prose the

@@ -241,17 +241,46 @@ DEBATE_COPY_CLASSES = (
 def _extract_mkel_literals(app_js: str, class_name: str) -> str:
     """Return the concatenated string literals ``mkEl`` is given for *class_name*.
 
-    Matches ``mkEl("span", "<class_name>", <args...>)`` and pulls every
-    double-quoted literal from the argument list, so a caption built by
+    Finds ``mkEl("span", "<class_name>", <args...>)`` and pulls every
+    double-quoted literal from THAT call's argument list, so a caption built by
     concatenating two literals across lines is read as one string.
+
+    The argument list is delimited by scanning to the matching close paren,
+    counting depth and skipping string contents. An earlier version ended the
+    window with a regex, and that regex was not anchored to the call: for a
+    single-line ``mkEl(...)`` whose ``)`` is followed by ``);`` rather than
+    ``),`` + newline, the scan ran on into the NEXT ``mkEl`` call. Measured on
+    this file's own subject — the extraction for ``result-debate-title``
+    returned the title PLUS the caption. So the "could not locate" partner below
+    was satisfied by the wrong element, emptying the section heading shipped
+    green through every check, and a banned phrase planted in the caption was
+    reported against the title.
     """
-    match = re.search(
-        r'mkEl\(\s*"[a-z]+"\s*,\s*"' + re.escape(class_name) + r'"\s*,([\s\S]*?)\)\s*,?\s*\n',
+    start = re.search(
+        r'mkEl\(\s*"[a-z]+"\s*,\s*"' + re.escape(class_name) + r'"\s*,',
         app_js,
     )
-    if not match:
+    if not start:
         return ""
-    return " ".join(re.findall(r'"((?:[^"\\]|\\.)*)"', match.group(1)))
+    depth = 1
+    i = start.end()
+    quote: str | None = None
+    while i < len(app_js) and depth:
+        ch = app_js[i]
+        if quote is not None:
+            if ch == "\\":
+                i += 1
+            elif ch == quote:
+                quote = None
+        elif ch in "\"'`":
+            quote = ch
+        elif ch == "(":
+            depth += 1
+        elif ch == ")":
+            depth -= 1
+        i += 1
+    args = app_js[start.end() : i - 1]
+    return " ".join(re.findall(r'"((?:[^"\\]|\\.)*)"', args))
 
 
 def test_the_debate_section_copy_does_not_claim_the_models_answered_each_other() -> None:
@@ -282,6 +311,22 @@ def test_the_debate_section_copy_does_not_claim_the_models_answered_each_other()
             f"could not locate the {class_name!r} copy in app.js; the negatives "
             "below would pass vacuously. Fix the extractor, do not delete this."
         )
+    # The extractions must be DISJOINT and each must look like what it is. If
+    # one call's window runs into the next, every negative below is asserted
+    # against the wrong element while still looking non-empty — which is exactly
+    # how an earlier version of this test failed to notice an EMPTIED section
+    # heading shipping green through all sixteen checks.
+    title = found["result-debate-title"]
+    caption = found["result-debate-caption"]
+    assert title != caption, "the title and caption extractions are identical"
+    assert caption not in title, (
+        "the result-debate-title extraction ran on into the caption, so the "
+        f"checks below judge the wrong element. Got: {title!r}"
+    )
+    assert 0 < len(title.split()) <= 6, (
+        "the title extraction is empty or longer than a heading — the window is "
+        f"probably bleeding into a neighbouring call. Got: {title!r}"
+    )
     assert "per round" in found["result-debate-caption"].lower(), (
         "the caption no longer states the ROUND-LEVEL shape, which is the one "
         "thing it exists to say"

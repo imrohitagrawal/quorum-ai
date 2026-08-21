@@ -230,8 +230,12 @@ the same top finding, and it was a real regression in honesty, not a nitpick.
 "written by the moderator across all four answers". Driven in Chromium with
 `debate_mode: "fallback"` on both rounds and live answers elsewhere, a reviewer
 measured **zero** lines anywhere on the result view mentioning simulation, demo,
-local or fallback — while 910 × 547 px of Quorum's own template sat under a
-caption saying a model wrote it. The `#result-degraded` banner covers the fully
+local or fallback — while a full-width block of Quorum's own template sat under
+a caption saying a model wrote it. (The first report of this carried a pixel
+height of 547; a second lens measured 496 in four configurations on the same
+tree and could not reproduce 547. The height is not load-bearing and the
+unreproducible figure is dropped rather than repeated — the measured facts are
+the zero disclosure lines and the displayed template text.) The `#result-degraded` banner covers the fully
 simulated case; it does **not** cover live answers plus a fallen-back moderator.
 `debate_mode` already recorded the truth and the UI read it in exactly zero
 places. Decision items 3 and 4 above are the fix. Note the same view already
@@ -288,3 +292,57 @@ spec in a hand-rolled harness with no `webServer`, never in CI's shape. It could
 not be attributed to the diff and did not reproduce here. Given the zero-retry
 policy on the blocking lane, a `flake-scan` pass is cheap insurance and is
 recommended before this merges.
+
+## Round two: what the fix itself broke
+
+AGENTS.md rule 12 says to expect your own fix to introduce a defect and to budget
+a round for it. It did, twice, and both were found by a lens reviewing only the
+fix commit.
+
+**The fix traded one false provenance claim for another.** Removing the position
+table left `renderVerdictBand`'s caption pointing at a deleted surface
+("inferred from the panel's position movements"), so round one rewrote it to
+"inferred from the opening answers". That is wrong on both halves.
+`revisedCount` reads `position_movements[].revised` (`app.js:2726-2730`, whose
+own comment says so), and the backend defines `revised` as `opening_majority`
+differing from `final_aligned` (`synthesis_consensus.py:510`) — a comparison of
+the opening against the FINAL SYNTHESIS. Proved by control experiment in the
+browser: emptying `position_movements` while leaving `model_answers`
+byte-identical made the count and the caption vanish; emptying `model_answers`
+while leaving `position_movements` intact changed neither. The caption now reads
+"Revision counts compare each opening with the final answer — inferred, not
+quoted." The lesson is narrow and worth keeping: **a sentence written to fix a
+provenance claim is itself a provenance claim, and needs the same control
+experiment.**
+
+**The new unit gate's own vacuity guard did not fire.** `_extract_mkel_literals`
+ended its window with a regex that was not anchored to the `mkEl` call. The
+section title is written on ONE line, so its `)` is followed by `);` rather than
+`),`+newline, and the scan ran on into the caption's call. The extraction for
+`result-debate-title` therefore returned the title PLUS the caption — non-empty,
+so the "could not locate … would pass vacuously" assertion was satisfied by the
+wrong element. Measured consequence: **emptying the section heading kept all 3
+new unit tests and all 13 e2e specs green.** A banned phrase planted in the
+caption was also reported against the title. The window now scans to the
+matching close paren, the extractions are asserted DISJOINT and heading-shaped,
+and the e2e spec asserts `.result-debate-title` on its own rather than relying
+on the head's combined text. Both proven: the emptied heading is now red in both
+lanes.
+
+Two smaller corrections from the same round: a docstring claimed a mutation
+fails on `"read the other"` when it actually trips the `"per round"` guard first
+and never reaches the banned-phrase loop; and a code comment still named
+`"What the panel argued"`, the heading this ADR removed as a false exchange
+claim.
+
+**Refuted in round two, and worth recording.** The fail-closed marker holds: a
+fully simulated run emits `debate_mode: "fallback"` on every round (driven end
+to end through the served API, no paid calls), and `openapi.yaml` declares
+`default: fallback` with no enum, so unknown values get the marker too. The
+marker reaches both the result view and the transcript, and the transcript's own
+caption does not contradict it. `showFocus` cannot be inverted by `{}` or
+`undefined`. The marker's contrast is 5.63:1 light and 7.93:1 dark against the
+card surface — both clear AA — and it IS within the axe gate's scope, because
+that fixture carries no `debate_mode` and therefore renders the marker in four
+scans across both themes. The Linux visual baseline stays valid: the masked
+full-page diff is 6738 of 4,838,400 pixels (0.14%) against a 1% threshold.
