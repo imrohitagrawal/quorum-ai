@@ -190,14 +190,24 @@ def test_strong_consensus_marks_all_completed_models_aligned() -> None:
     assert all(p.revision_note is None for p in positions)
 
 
-def test_minority_that_aligns_is_marked_revised_with_an_inference_note() -> None:
-    # FALLBACK path (no final synthesis supplied — e.g. synthesis failed):
-    # three agree, one opens elsewhere; the debate critique signals convergence
-    # → "strong" panel → with no final answer to compare against we fall back to
-    # the panel-strength inference, so the minority is inferred to have landed
-    # aligned and is flagged ``revised``. The note describes that OBSERVABLE
-    # INFERENCE, not a claimed mid-debate action (the round-scoped transcript
-    # can't observe one). The synthesis-aware path is pinned separately below.
+def test_no_row_is_marked_revised_when_there_is_no_final_answer() -> None:
+    """The no-final-answer path (the synthesis failed, or none was produced).
+
+    This test USED to pin the opposite: three agree, one opens elsewhere, the
+    debate critique signals convergence, so the panel classified "strong" and the
+    minority was INFERRED to have landed in the consensus — served as 4 of 4 with
+    the outlier marked "revised", on a run with no final answer at all.
+
+    That inference is gone. It inverted the tally on a panel split down the
+    middle: measured on ``origin/main`` at f858a65, two "we recommend" answers
+    and two "we advise you avoid" were served ``absent -> 4/4`` while the SAME
+    panel with a templated or live synthesis was served 0/4. The same fallback
+    lifted THIS panel from 3 to 4. See ADR-0062 and
+    ``tests/unit/test_agreement_tally_means_its_caption.py``.
+
+    What turns it red: restore ``final_aligned = strength == "strong"`` as the
+    no-final-answer branch of ``classify_model_alignment``.
+    """
     answers = [
         _answer(1, _AGREE_TEXT),
         _answer(2, _AGREE_TEXT),
@@ -210,31 +220,22 @@ def test_minority_that_aligns_is_marked_revised_with_an_inference_note() -> None
         initial_answers=answers, debate_outputs=debate
     )
 
-    revised = [p for p in positions if p.revised]
-    assert len(revised) == 1
-    assert revised[0].slot_number == 4
-    # Observable-inference wording — opening-vs-final, no mid-debate action.
-    #
-    # These two strings USED to name "the final synthesis" as the thing that
-    # reflected the consensus, on this very run — which supplies no final
-    # synthesis at all. #176 replaced them; the note still describes the same
-    # observable inference, it just no longer names an object that does not
-    # exist. ``test_no_stance_row_names_a_final_synthesis_no_model_wrote`` is
-    # the assertion that keeps them honest; these two pin the exact wording so
-    # a copy edit is a deliberate act.
-    assert revised[0].revision_note == (
-        "Opened as a minority view and is counted inside the group consensus. That "
-        "placement reads the panel's own answers; no model-written final answer was "
-        "used to make it."
-    )
-    assert revised[0].final == (
-        "Opened in the minority, and is counted inside the group consensus. That "
-        "placement reads the panel's own answers; no model-written final answer was "
-        "used to make it."
-    )
-    # A revised model still lands aligned, so aligned counts it.
-    assert agreement.aligned == 4
+    assert [p for p in positions if p.revised] == []
+    # The three that agree are still counted; only the invented fourth is gone.
+    # Asserted as a value, not as "< 4", so restoring the fallback cannot satisfy it.
+    assert agreement.aligned == 3
     assert agreement.total == 4
+
+    # The outlier's row takes the honest no-model-authored copy, rather than
+    # claiming a placement against a final answer that was never produced.
+    # Positive partner for the empty ``revised`` list: the row still SAYS
+    # something.
+    outlier = next(p for p in positions if p.slot_number == 4)
+    assert outlier.final == (
+        "Opened in the minority, and is counted outside the group consensus. No "
+        "model-written final answer was used to make that placement."
+    )
+    assert outlier.revision_note is None
 
 
 def test_unrelated_minority_absent_from_final_is_not_counted_aligned() -> None:
@@ -467,14 +468,23 @@ def test_a_templated_synthesis_does_not_align_a_minority_on_a_strong_panel() -> 
       screen and this product wrote it. Whether the model's position landed in
       it is unobservable, so it is not counted.
 
-    The strength assertion is the precondition that makes this test mean
-    something: on a NON-strong panel both branches already agree, so the test
-    would pass without measuring anything.
+    The strength assertion is kept as a SHAPE pin, not as a precondition. It
+    was the precondition — before ADR-0062 the templated branch and the
+    panel-strength fallback only disagreed on a "strong" panel. They now agree
+    on every panel, so the assertion no longer guards the test's meaning; it
+    pins that this fixture is still the strong-panel shape the test was written
+    against, so a future change to the fixture is a deliberate act.
 
-    What turns it red: delete the ``elif final_answer_was_templated`` branch
-    from ``classify_model_alignment`` and the templated run falls through to
-    ``strength == "strong"``, so ``aligned`` reads 4 and ``revised`` reads [4].
+    What turns it red: set ``final_aligned = True`` in the
+    ``elif final_answer_was_templated`` branch of ``classify_model_alignment``.
+
+    NOT "delete the branch", which this line said until ADR-0062 removed the
+    panel-strength fallback the branch existed to stop. Deleting it is now a
+    silent no-op — measured, the suite stays green — because the ``else`` below
+    reaches the same answer. The mutation above still bites: 5 failed, 37
+    passed.
     """
+
     answers = [
         _answer(1, _AGREE_TEXT),
         _answer(2, _AGREE_TEXT),
@@ -483,8 +493,8 @@ def test_a_templated_synthesis_does_not_align_a_minority_on_a_strong_panel() -> 
     ]
     debate = _debate("After round 2 the models converged on the load-limit reading.")
     assert compute_consensus_strength(answers, debate) == "strong", (
-        "this test exists for the strong panel; on any other the fallback and "
-        "the refusal already agree and nothing is being measured"
+        "this fixture is meant to be the strong-panel shape (a SHAPE pin since "
+        "ADR-0062, not a precondition — see the docstring)"
     )
     # A final answer that is the majority reading — the zebra opening is not in it.
     templated, positions = build_agreement_and_positions(
@@ -734,32 +744,42 @@ def test_stance_copy_covers_every_provenance_and_alignment_state() -> None:
     assert len(_STANCE_COPY) == 10
 
 
-def test_a_revised_row_still_carries_a_note_when_no_model_wrote_the_final_answer() -> None:
+def test_a_revised_row_still_carries_a_note() -> None:
     """The honest rewording must not empty the chip's tooltip.
 
     ``PositionMovement.revised`` drives a "✓ Revised" chip in the result view
     whose title and caption are ``revision_note``; a rewrite that dropped the
-    note would silently ship a chip with no explanation. Positive partner to
-    the count assertion above: the row must still SAY something, it just may
-    not say it about a synthesis that does not exist.
+    note would silently ship a chip with no explanation.
+
+    Driven on the LIVE path. It used to be driven on the no-final-answer path,
+    which can no longer produce a revised row at all — a minority opener is only
+    counted when its own opening is found in a MODEL-WRITTEN final answer, and
+    that implies ``FinalAnswerProvenance.MODEL_AUTHORED``. This is the positive
+    partner proving ``revised`` is still reachable, so
+    ``test_no_row_is_marked_revised_when_there_is_no_final_answer`` is not
+    asserting over a flag that has become dead.
 
     What turns it red: set ``revision_note=None`` on the
-    ``(NOT_MODEL_AUTHORED, MOVED_TO_CONSENSUS)`` row of ``_STANCE_COPY``.
+    ``(MODEL_AUTHORED, MOVED_TO_CONSENSUS)`` row of ``_STANCE_COPY``.
     """
+    minority = "A separate proposal is to stage the rollout behind a manual review gate."
     answers = [
         _answer(1, _AGREE_TEXT),
         _answer(2, _AGREE_TEXT),
         _answer(3, _AGREE_TEXT),
-        _answer(4, "An unrelated claim about zebra migration patterns in autumn."),
+        _answer(4, minority),
     ]
     debate = _debate("After round 2 the models converged on the load-limit reading.")
 
     _, positions = build_agreement_and_positions(
-        initial_answers=answers, debate_outputs=debate, final_synthesis=None
+        initial_answers=answers,
+        debate_outputs=debate,
+        final_synthesis=_synthesis(f"{_AGREE_TEXT} {minority}", synthesis_mode=SYNTHESIS_MODE_LIVE),
     )
 
     revised = [p for p in positions if p.revised]
-    assert len(revised) == 1, "the no-synthesis strong-panel run flags exactly one row"
+    assert len(revised) == 1, "the minority whose opening the final answer carries"
+    assert revised[0].slot_number == 4
     assert revised[0].revision_note, "the chip's tooltip may not be emptied by the rewording"
     assert revised[0].final, "the Final cell may not be emptied by the rewording"
 

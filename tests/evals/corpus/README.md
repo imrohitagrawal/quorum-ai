@@ -73,7 +73,7 @@ to 4 of them, `simulated` = none, so the text is this product's own template.
 It is required rather than defaulted because since #171 finding 5 per-model
 alignment refuses to compare a model's opening against a synthesis this product
 wrote. `FinalSynthesis.synthesis_mode` defaults to `simulated`, so a case that
-omitted the key would silently drop to the panel-strength inference and change
+omitted the key would silently stop counting any minority opener and change
 the `agreement` figure the case feeds — quietly, with every gate still green.
 Cases 01-04 declare `live` (their answers take the default `openrouter_search`
 path and their synthesis prose is hand-authored to read as model output); case

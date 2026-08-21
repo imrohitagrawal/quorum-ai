@@ -690,3 +690,87 @@ test.describe("WP-B — verdict band regressions (F-04, F-18, F-21, F-22)", () =
     await expect(page.locator(".result-verdict-coverage")).toContainText("0%");
   });
 });
+
+/**
+ * The tally must be captioned as what it MEASURES.
+ *
+ * `agreement.aligned` answers "is this model's opening position represented in
+ * the final answer?" — for a minority opener, a 4-gram containment test of its
+ * opening against the model-written final synthesis. It was captioned
+ * "N of M models aligned", a claim that the models agree WITH EACH OTHER. A
+ * production run served "0 of 4 models aligned — the rest are preserved as
+ * disagreement below." directly above a Consensus section reading "All four
+ * define the two models oppositely… All agree seat-based is the more
+ * predictable revenue model." Both sentences were true of what they measured;
+ * only one was captioned honestly.
+ *
+ * Driven on `goldenCompletedResp()` (3 of 4), so each "must not say" assertion
+ * sits beside the positive assertion of what the surface DOES say — the count
+ * is still rendered on every one of them (#131).
+ */
+test.describe("verdict band — the tally is captioned as what it measures", () => {
+  test("the band headline and its ring name the measurement", async ({ page }) => {
+    await driveWith(page, goldenCompletedResp());
+
+    const line = page.locator(".result-verdict-agreement");
+    await expect(line).toContainText(
+      "3 of 4 opening positions carried into the final answer",
+    );
+    expect(
+      (await line.textContent()) ?? "",
+      "the band must not caption the tally as models agreeing",
+    ).not.toMatch(/models aligned/);
+
+    // The ring is the same number in two words; it said "agree".
+    const ring = page.locator("#result-verdict .result-ring");
+    await expect(ring.locator(".result-ring-count")).toHaveText("3/4");
+    await expect(ring.locator(".result-ring-label")).toHaveText("carried");
+  });
+
+  test("the trust card names the measurement", async ({ page }) => {
+    await driveWith(page, goldenCompletedResp());
+
+    const card = page.locator('#result-trust .result-trust-card[data-accent="agreement"]');
+    await expect(card.locator(".result-trust-kicker")).toHaveText("Positions carried");
+    await expect(card.locator(".result-trust-value")).toHaveText("3 of 4 carried");
+    await expect(card.locator(".result-trust-value-sub")).toHaveText("carried");
+    await expect(card.locator(".result-trust-caption")).toContainText(
+      "How many opening positions were carried into the final answer",
+    );
+    expect(
+      (await card.textContent()) ?? "",
+      "the card must not caption the tally as models aligning",
+    ).not.toMatch(/aligned/);
+  });
+
+  test("the Copy summary carries the same caption as the screen", async ({ page }) => {
+    // #128: the artefact a user keeps must not disagree with the screen they
+    // took it from. Read what Copy actually writes by stubbing the clipboard,
+    // the same way export-and-expanders.spec.ts stubs URL.createObjectURL —
+    // asserting on app.js's source text alone would not catch a neutralised
+    // branch.
+    await driveWith(page, goldenCompletedResp());
+    await page.evaluate(() => {
+      const w = window as unknown as { __copied?: string };
+      Object.defineProperty(navigator, "clipboard", {
+        configurable: true,
+        value: {
+          writeText: (text: string) => {
+            w.__copied = text;
+            return Promise.resolve();
+          },
+        },
+      });
+    });
+    await page.locator("#result-copy").click();
+    const copied = await page.evaluate(
+      () => (window as unknown as { __copied?: string }).__copied ?? "",
+    );
+
+    expect(copied, "Copy wrote nothing").not.toEqual("");
+    expect(copied).toContain("Opening positions carried into the final answer: 3 of 4");
+    expect(copied, "the copied summary must not re-caption the tally").not.toMatch(
+      /models aligned/,
+    );
+  });
+});

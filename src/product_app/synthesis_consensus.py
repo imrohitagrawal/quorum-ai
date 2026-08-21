@@ -450,9 +450,8 @@ def classify_model_alignment(
     answer clustered against the others and the panel's final synthesis — the
     same in demo and live runs.
 
-    The classification reuses :func:`compute_consensus_strength` (the same
-    honest three-way signal the synthesis uses) plus a per-model
-    majority/minority split on the opening stance:
+    The classification is a per-model majority/minority split on the opening
+    stance, resolved against the final answer:
 
     * ``opening_majority`` — the model's opening answer clusters with the
       others (shares a polar side, or shares 4-gram overlap with at least one
@@ -470,21 +469,31 @@ def classify_model_alignment(
       - When the final answer is TEMPLATED — a completed synthesis exists and
         this product wrote it (``final_answer_was_templated``) — the minority
         is NOT aligned. Whether its position landed in that text is
-        unobservable, and the panel-strength fallback below would align it on
-        any ``"strong"`` panel, inventing both the alignment and a "revised its
-        position" claim about a synthesis no model wrote.
+        unobservable, so we do not claim it. This branch used to be the ONLY
+        thing standing between a templated run and a panel-strength fallback
+        that aligned every minority opener on any ``"strong"`` panel; that
+        fallback is gone, so it now reaches the same answer as the ``else``
+        below it (measured: deleting this branch leaves the suite green).
       - When there is no final answer at ALL (missing, or the synthesis
-        failed), falls back to the panel-strength inference — a ``"strong"``
-        panel aligns the minority too. Unchanged, pre-existing behaviour.
+        failed), the minority is NOT aligned either. There is nothing for a
+        position to have been carried into.
 
-    The last two are deliberately NOT the same branch, and the difference is
-    not cosmetic. Both mean "no model-authored text to check against", but a
-    failed synthesis puts no final answer on the screen, while a templated one
-    puts a confident-looking final answer there that this product wrote — the
-    case where an unearned alignment does the most damage. Collapsing the
-    templated case into the panel-strength inference was measured, on the
-    ordinary three-of-four-agree panel, to take the served ring from 3 of 4 to
-    4 of 4 and to mark the outlier "revised".
+    The last two reach the same answer by the same reasoning — no text a model
+    wrote, so no claim that a position landed in one — and they stay separate
+    branches only because the templated case is worth naming: it puts a
+    confident-looking final answer on the screen that this product wrote, which
+    is where an unearned alignment does the most damage.
+
+    The no-final-answer branch used to infer alignment from panel strength (a
+    ``"strong"`` panel aligned every minority opener too). That inverted the
+    tally on a panel split down the middle, because
+    :func:`compute_consensus_strength` tests 4-gram overlap BEFORE the polar
+    check and four opposed answers to one question are worded alike. Measured on
+    ``origin/main`` at f858a65, two "we recommend" and two "we advise you
+    avoid": ``absent -> 4/4``, ``templated -> 0/4``, ``live -> 0/4``. It also
+    lifted the ordinary three-overlap-one-outlier panel from 3 to 4 and marked
+    the outlier "revised". See ADR-0062 and
+    ``tests/unit/test_agreement_tally_means_its_caption.py``.
 
     The argument is named ``model_authored_final_text``, not
     ``final_synthesis_text``, and the name is the contract: it must carry text
@@ -510,7 +519,14 @@ def classify_model_alignment(
     population, is never aligned, is never ``revised``, and narrates through
     ``AlignmentState.NOT_INVOKED`` rather than borrowing the failed slot's copy.
     """
-    strength = compute_consensus_strength(initial_answers, debate_outputs)
+    # ``debate_outputs`` is no longer consulted. It fed the panel-strength
+    # fallback this function used to apply when there was no final answer, and
+    # that inference is gone (see the docstring). The argument is kept in the
+    # signature — every caller already passes it and the round-scoped critique is
+    # the obvious input to any future revision of this classification — so this
+    # follows ``synthesis._is_false_consensus_preserved``, which keeps its
+    # ``disagreement`` argument the same way rather than churning every caller.
+    del debate_outputs
     # The SCORED population — the same predicate ``compute_consensus_strength``
     # filters on, so the per-model ring and the panel strength can never be
     # computed over different sets of answers.
@@ -554,17 +570,37 @@ def classify_model_alignment(
             # Minority opener, and the final answer on the screen is one THIS
             # PRODUCT wrote. We cannot observe whether this model's position
             # landed in it, so we do not claim that it did. Falling through to
-            # the panel-strength branch below would align every minority on a
-            # "strong" panel — the ordinary three-of-four-agree shape — and
-            # ``revised`` would then flip to True, reporting that a model moved
-            # to a consensus no model authored.
+            # this used to be the only guard against the panel-strength branch
+            # below aligning every minority on a "strong" panel — the ordinary
+            # three-of-four-agree shape — with ``revised`` flipping to True and
+            # reporting that a model moved to a consensus no model authored.
             final_aligned = False
         else:
-            # Minority opener, no final synthesis to compare against at all —
-            # fall back to the panel-strength inference (a "strong" panel aligns
-            # it too). This makes the no-synthesis path identical to the pre-fix
-            # behaviour, and is deliberately NOT the templated case above.
-            final_aligned = strength == "strong"
+            # Minority opener and NO final answer at all — nothing was produced
+            # for a position to be carried into, so nothing is counted.
+            #
+            # This branch used to read ``final_aligned = strength == "strong"``,
+            # inferring alignment from panel-wide 4-gram overlap. That inverted
+            # the tally on a panel split down the middle. Measured on
+            # ``origin/main`` at f858a65, two "we recommend" answers and two "we
+            # advise you avoid":
+            #
+            #     synthesis ABSENT / FAILED  -> aligned=4/4
+            #     synthesis TEMPLATED        -> aligned=0/4
+            #     synthesis LIVE             -> aligned=0/4
+            #
+            # ``compute_consensus_strength`` tests ``_has_strong_overlap`` BEFORE
+            # the polar check, and four opposed answers to one question are
+            # worded alike, so the panel classified "strong" and every minority
+            # opener was aligned to a final answer that did not exist. The same
+            # fallback lifted the ordinary three-overlap-one-outlier panel from 3
+            # to 4. All three shapes now agree, on every panel in
+            # ``tests/unit/test_agreement_tally_means_its_caption.py``.
+            #
+            # A MAJORITY opener is untouched and still counts here: that is the
+            # ``elif opening_majority`` branch above, and it is what keeps a
+            # genuinely unanimous panel at 4 of 4.
+            final_aligned = False
         # Keyed on ``scored`` rather than ``completed``. DEFENSIVE, not a
         # behavioural correction, and adversarial review was right to challenge an
         # earlier version of this comment that implied otherwise: an unscored row
