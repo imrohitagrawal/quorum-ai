@@ -470,14 +470,22 @@ export const HEADING_LED_ANSWER =
 /**
  * The golden completed run with the three #257 shapes seeded onto the surfaces
  * they actually leaked from: a table and a `<br>` on a BLOCK surface
- * (`setProse`), and a heading-led answer on the INLINE one (`setInlineProse` —
- * the "How positions moved" OPENING cell, which is where it was seen).
+ * (`setProse`), and a heading-led answer on the INLINE one (`setInlineProse`).
+ *
+ * The inline target was `position_movements[0].opening` — the "How positions
+ * moved" OPENING cell, which is where #257 was seen. That table is gone (see
+ * docs/adr/0063), so the inline target moved to the synthesis high-stakes
+ * notice, which `renderVerdictBand` renders through the SAME `setInlineProse`
+ * into a `<span class="result-verdict-caveat">`. It is a span, so the
+ * "an inline surface may not gain block children" assertion still means what it
+ * meant. Deliberately re-pointed rather than deleted: dropping it would have
+ * left the inline path with no result-view coverage at all.
  */
 export const goldenRespWithMarkdownShapes = () => {
   const resp = goldenCompletedResp() as Record<string, any>;
   resp.result.final_synthesis.recommendation =
     PRODUCTION_TABLE + "\n\n" + TABLE_WITH_LITERAL_BR;
-  resp.result.position_movements[0].opening = HEADING_LED_ANSWER;
+  resp.result.final_synthesis.high_stakes_notice = HEADING_LED_ANSWER;
   return resp;
 };
 
@@ -486,8 +494,9 @@ export const goldenRespWithMarkdownShapes = () => {
  * corpus of inputs without a bespoke builder per case.
  *
  * `surface: "block"` targets the synthesis recommendation (`setProse`);
- * `surface: "inline"` targets the first position-movement opening cell
- * (`setInlineProse`). Both render inside `#main-content` on the result view.
+ * `surface: "inline"` targets the synthesis high-stakes notice, rendered by
+ * `renderVerdictBand` through `setInlineProse` into `.result-verdict-caveat`.
+ * Both render inside `#main-content` on the result view.
  */
 export const goldenRespWithProviderText = (
   text: string,
@@ -495,7 +504,7 @@ export const goldenRespWithProviderText = (
 ) => {
   const resp = goldenCompletedResp() as Record<string, any>;
   if (surface === "block") resp.result.final_synthesis.recommendation = text;
-  else resp.result.position_movements[0].opening = text;
+  else resp.result.final_synthesis.high_stakes_notice = text;
   return resp;
 };
 

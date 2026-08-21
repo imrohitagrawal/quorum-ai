@@ -199,6 +199,7 @@ jobs:
           tests/invariants/source-support-denominator.spec.ts
           tests/invariants/markdown-corpus.spec.ts
           tests/invariants/landing-cta-reachable.spec.ts
+          tests/invariants/result-debate.spec.ts
           --project=chromium
           --retries=0
 
@@ -273,7 +274,14 @@ jobs:
         # floor of 233 — eight tests of headroom banked by PRs that added tests
         # without re-measuring, which is exactly the headroom the comment above
         # warns about. Moving to the measured number rather than to 236 closes it.
-        run: python3 scripts/check_e2e_executed.py --report e2e/results.xml --min 244 --lane "invariants lane"
+        #
+        # 244 -> 253 with the nine result-debate.spec.ts tests. MEASURED, not
+        # added: the lane run exactly as this step runs it reported
+        # "253 passed (4.7m)" on 2026-08-22, and result-debate.spec.ts alone
+        # reports 9. The two happen to agree this time; the lane run is still
+        # what the number comes from, because every previous attempt to add
+        # rather than measure was wrong.
+        run: python3 scripts/check_e2e_executed.py --report e2e/results.xml --min 253 --lane "invariants lane"
 
       - name: Clear the previous lane's JUnit report
         run: rm -f e2e/results.xml

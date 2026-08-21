@@ -2765,7 +2765,7 @@
     });
     renderTrustTriangle(result, res, fs, { isConsensus, aligned, total });
     renderTrustScore(result);
-    renderResultPositions(res);
+    renderResultDebate(res);
     renderResultSynthesis(fs, res);
 
     // Build the plain-text Copy/Export summary ONCE (textContent-safe).
@@ -3080,17 +3080,26 @@
       push("");
     }
 
+    // The OPENING each model gave, and only that.
+    //
+    // This block used to be headed "Where each model stood" and carried four
+    // lines per model: Opening, After round 1, Final, Revision note. Exactly one
+    // of those is observed. `opening` is `_opening_synopsis(answer_text)` — the
+    // model's own first sentence. The other three come from `_stance_texts`
+    // (`debate.py`), a pure dict lookup on the model's FINAL alignment state:
+    // it never reads a round-1 output, and three of the five strings it can
+    // return literally begin with the word "Opening". A record that files those
+    // under a heading claiming movement is a record that mislabels a
+    // classification as a chronology, so the heading and the three inferred
+    // lines are gone and the observation stays. See docs/adr/0063.
     const movements = Array.isArray(ctx.movements) ? ctx.movements : [];
     if (movements.length) {
-      push("## Where each model stood", "");
+      push("## Opening positions", "");
       for (const m of movements) {
         if (!m) continue;
         const name = mdEscapeInline(String(m.display_name || m.model_id || "Model"));
         push(`### ${name}`, "");
         if (m.opening) push(`- **Opening:** ${mdUntrustedInline(m.opening)}`);
-        if (m.after_round_1) push(`- **After round 1:** ${mdUntrustedInline(m.after_round_1)}`);
-        if (m.final) push(`- **Final:** ${mdUntrustedInline(m.final)}`);
-        if (m.revision_note) push(`- **Revision note:** ${mdUntrustedInline(m.revision_note)}`);
         push("");
       }
     }
@@ -4459,108 +4468,61 @@
     initInfoIcons();
   }
 
-  // One position <td>. ``data-label`` carries the column name so the mobile
-  // stacked layout can re-label each cell via CSS ``::before``.
-  function mkPositionsCell(label, text) {
-    const cell = mkEl("td", "result-positions-cell");
-    cell.dataset.label = label;
-    if (text) cell.appendChild(setInlineProse(mkEl("span", "result-pos-text"), String(text)));
-    return cell;
-  }
-
-  // "How positions moved" table. The caption is ALWAYS rendered (not demo-gated)
-  // because the per-model movement is INFERRED from opening answers + panel
-  // consensus in both demo and live modes. Empty movements → hide the section.
+  // "What the panel argued" — the ROUND-LEVEL debate critique, on the completed
+  // result view.
   //
-  // Fix 4: rendered as a NATIVE <table> so screen readers associate each model
-  // with its cells. The model is a ``<th scope="row">``; each phase is a
-  // ``<td>``; the column headers are ``<th scope="col">``. The table is
-  // labelled (the "Inferred from…" caption stays a separate visible element in
-  // the head) and wrapped in an ``overflow-x:auto`` scroller so it never pushes
-  // the page body sideways.
-  function renderResultPositions(res) {
-    const container = el("result-positions");
+  // WHY THIS EXISTS. `debate_outputs` carries the most decision-useful prose the
+  // system produces (a real round 2: "A practitioner following Claude would
+  // budget for ISR infrastructure from day one; following Nemotron would defer
+  // ISR until a freshness problem surfaces."). It was rendered on every poll by
+  // `renderDebateAndSynthesis` into `#debate-output`, which sits inside
+  // `.panel.panel-section` — a container `app.css` sets to `display: none` with
+  // NO view qualifier. Measured in Chromium on 568dd10: that subtree held the
+  // rendered critique and a 0 x 0 box on BOTH the live-run and result views, so
+  // no user has ever seen it there. The reader's only route was the transcript
+  // link. This puts it on the page the run lands on.
+  //
+  // HONESTY (non-negotiable, same rule as the transcript view): the backend
+  // records ONE `critique_text` per round with NO per-model attribution — there
+  // is no "who challenged whom". So this renders one card per ROUND, captions
+  // itself as such, and must never grow per-model exchange cards. That is #290,
+  // which is NOT built.
+  //
+  // The cards are `buildTranscriptRound` verbatim — the same builder the
+  // transcript uses. Shared deliberately: one treatment for one kind of content
+  // means one place to change it, and that builder already routes critique prose
+  // through `setProse` (the Markdown renderer) rather than `textContent`.
+  function renderResultDebate(res) {
+    const container = el("result-debate");
     if (!container) return;
     container.textContent = "";
-    const movements = Array.isArray(res.position_movements)
-      ? res.position_movements
-      : [];
-    if (movements.length === 0) {
+    const rounds = Array.isArray(res && res.debate_outputs) ? res.debate_outputs : [];
+    // No rounds -> no section. An empty card with a caption promising critique
+    // would be worse than the absence.
+    if (rounds.length === 0) {
       container.hidden = true;
       return;
     }
     container.hidden = false;
 
-    const head = mkEl("div", "result-positions-head");
-    head.appendChild(mkEl("span", "result-positions-title", "How positions moved"));
+    const head = mkEl("div", "result-debate-head");
+    head.appendChild(mkEl("span", "result-debate-title", "What the panel argued"));
     head.appendChild(
       mkEl(
         "span",
-        "result-positions-caption",
-        "Inferred from opening answers and panel consensus — not a quoted transcript.",
+        "result-debate-caption",
+        "One critique per round, written by the moderator across all four answers — " +
+          "Quorum does not record which model said which line.",
       ),
     );
     container.appendChild(head);
 
-    const scroller = mkEl("div", "result-positions-scroll");
-    const table = mkEl("table", "result-positions-table");
-    table.setAttribute("aria-label", "How positions moved");
-
-    const thead = document.createElement("thead");
-    const headRow = document.createElement("tr");
-    for (const text of ["Model", "Opening", "After round 1", "Final"]) {
-      const th = mkEl("th", "result-positions-colhead", text);
-      th.setAttribute("scope", "col");
-      headRow.appendChild(th);
+    const list = mkEl("div", "result-debate-rounds");
+    for (const round of rounds) {
+      if (!round) continue;
+      list.appendChild(buildTranscriptRound(round));
     }
-    thead.appendChild(headRow);
-    table.appendChild(thead);
-
-    const tbody = document.createElement("tbody");
-    for (const m of movements) {
-      if (!m) continue;
-      const row = mkEl("tr", "result-positions-row");
-
-      const name = String(m.display_name || m.model_id || "Model");
-      const modelCell = mkEl("th", "result-positions-cell result-pos-model");
-      modelCell.setAttribute("scope", "row");
-      const avatar = mkEl("span", "result-pos-avatar", name.trim().charAt(0).toUpperCase() || "?");
-      avatar.setAttribute("aria-hidden", "true");
-      // Carry the SAME per-vendor tint the composer slots and transcript openings
-      // use, so a model keeps its colour identity across every surface (two "G"
-      // initials — GPT and Gemini — are otherwise indistinguishable here).
-      if (m.model_id) avatar.dataset.vendor = vendorForModel(m.model_id);
-      modelCell.append(avatar, mkEl("span", "result-pos-name", name));
-      row.appendChild(modelCell);
-
-      row.appendChild(mkPositionsCell("Opening", m.opening));
-      row.appendChild(mkPositionsCell("After round 1", m.after_round_1));
-
-      const finalCell = mkEl("td", "result-positions-cell");
-      finalCell.dataset.label = "Final";
-      if (m.final) finalCell.appendChild(setInlineProse(mkEl("span", "result-pos-text"), String(m.final)));
-      if (m.revised === true) {
-        // Fix 12: this "✓ Revised" chip is GREEN ON PURPOSE — it is the
-        // sanctioned agreement/revision semantic (the model changed its
-        // position) and is pixel-mandated by the mock. Do NOT retint it to a
-        // neutral tone; unlike the done glyph / copied-state, green here maps
-        // to a real, verified signal.
-        const chip = mkEl("span", "result-pos-chip", "✓ Revised");
-        const note = m.revision_note ? String(m.revision_note) : "";
-        if (note) {
-          chip.title = note;
-          finalCell.appendChild(chip);
-          finalCell.appendChild(mkEl("span", "result-pos-note", note));
-        } else {
-          finalCell.appendChild(chip);
-        }
-      }
-      row.appendChild(finalCell);
-      tbody.appendChild(row);
-    }
-    table.appendChild(tbody);
-    scroller.appendChild(table);
-    container.appendChild(scroller);
+    container.appendChild(list);
   }
 
   function focusResultHeading() {

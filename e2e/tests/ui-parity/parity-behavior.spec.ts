@@ -1392,15 +1392,23 @@ test.describe("UI parity — behaviour", () => {
 
   // ---- Reported issues follow-up: hand-off focus, positions colour, retention ----
 
-  test("item 3.2 — 'How positions moved' avatars carry the SAME per-vendor tint as the composer slots, not a flat grey", async ({ page }) => {
-    // The composer's four model slots each get a per-vendor tint (openai teal /
-    // anthropic amber / google blue / nvidia green). The "How positions moved"
-    // avatars used to render a single flat grey (no data-vendor), losing that
-    // colour identity — so a model that is teal in the composer went grey here.
+  // Was "item 3.2 — 'How positions moved' avatars...". That table is gone (see
+  // docs/adr/0063), so the SAME contract is asserted on the surviving surface
+  // that carries per-vendor avatars: the transcript's opening cards. Re-pointed
+  // rather than deleted — nothing else in the suite covered `.transcript-
+  // opening-avatar`, so deleting it would have dropped the cross-surface tint
+  // invariant entirely instead of moving it.
+  //
+  // (The companion "item 3.3", asserting the avatar was inset from the card's
+  // left border, is NOT re-pointed: it existed for a `border-collapse: collapse`
+  // padding no-op specific to that <table>, and the transcript openings are not
+  // a table. It has no subject left.)
+  test("transcript opening avatars carry the SAME per-vendor tint as the composer slots, not a flat grey", async ({ page }) => {
     await driveToResult(page, completedResp());
-    const pos = page.locator("#result-positions");
-    await expect(pos).toBeVisible();
-    const avatars = pos.locator(".result-pos-avatar");
+    await page.locator("#result-transcript-link").click();
+    const openings = page.locator("#transcript-openings");
+    await expect(openings).toBeVisible();
+    const avatars = openings.locator(".transcript-opening-avatar");
     await expect(avatars).toHaveCount(4);
     // Each avatar is tagged with its model's vendor, matching the SLOTS order.
     const vendors = await avatars.evaluateAll((els) =>
@@ -1410,7 +1418,7 @@ test.describe("UI parity — behaviour", () => {
     const bgs = await avatars.evaluateAll((els) =>
       els.map((e) => getComputedStyle(e as HTMLElement).backgroundColor));
     expect(new Set(bgs).size, `expected 4 distinct vendor tints, got ${JSON.stringify(bgs)}`).toBe(4);
-    // Cross-check: the positions tint for each vendor equals the composer slot
+    // Cross-check: the transcript tint for each vendor equals the composer slot
     // tint for the same vendor (the colour is retained across the two surfaces).
     const slotBgByVendor: Record<string, string> = await page
       .locator("#model-inputs .model-slot-avatar")
@@ -1421,32 +1429,14 @@ test.describe("UI parity — behaviour", () => {
             getComputedStyle(e as HTMLElement).backgroundColor,
           ]),
         ));
-    const posPairs: [string, string][] = await avatars.evaluateAll((els) =>
+    const pairs: [string, string][] = await avatars.evaluateAll((els) =>
       els.map((e) => [
         (e as HTMLElement).dataset.vendor || "",
         getComputedStyle(e as HTMLElement).backgroundColor,
       ]));
-    for (const [vendor, bg] of posPairs) {
-      expect(slotBgByVendor[vendor], `positions tint for ${vendor} must match the composer slot tint`).toBe(bg);
+    for (const [vendor, bg] of pairs) {
+      expect(slotBgByVendor[vendor], `transcript tint for ${vendor} must match the composer slot tint`).toBe(bg);
     }
-  });
-
-  test("item 3.3 — 'How positions moved' avatars are inset from the card's left border, not flush against it", async ({ page }) => {
-    // The model column set ``padding-left: 0`` and the table's own side padding
-    // was a no-op under ``border-collapse: collapse`` — so the tinted avatars
-    // sat only a few px from the card's left border, reading as if touching it
-    // (and mis-aligned with the section title, which is inset 24px). The first
-    // avatar's left edge must sit a real inset in from the card border.
-    await driveToResult(page, completedResp());
-    const card = page.locator("#result-positions");
-    await expect(card).toBeVisible();
-    const firstAvatar = card.locator(".result-pos-avatar").first();
-    const cardBox = await card.boundingBox();
-    const avatarBox = await firstAvatar.boundingBox();
-    expect(cardBox).not.toBeNull();
-    expect(avatarBox).not.toBeNull();
-    const inset = avatarBox!.x - cardBox!.x;
-    expect(inset, `avatar left inset from card border was ${inset}px`).toBeGreaterThanOrEqual(16);
   });
 
   test("item 2.4 — clicking a composer example chip fills the question AND scrolls it into view (focus not left off-screen)", async ({ page }) => {
