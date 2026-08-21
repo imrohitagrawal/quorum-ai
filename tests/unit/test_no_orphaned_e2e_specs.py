@@ -46,6 +46,28 @@ from pathlib import Path
 
 import pytest
 
+#: Deselected from the mutant run (#337).
+#:
+#: This module enumerates the repository itself — it ``rglob``s ``e2e/tests``
+#: and reads every ``.github/workflows/*.yml`` — so inside mutmut's ``./mutants/``
+#: copy it measures the COPY, which is meaningless by construction.
+#:
+#: Measured 2026-08-20 on a real 3-function scope: ``also_copy`` includes
+#: ``e2e/tests``, which carries the **gitignored** ``e2e/tests/review/`` scratch
+#: specs into the copy. No workflow references them, so this module failed there
+#: and, with ``-x`` in force, killed stats collection:
+#:
+#:     FAILED tests/unit/test_no_orphaned_e2e_specs.py::...[review/layout-review.spec.ts]
+#:     !!!!!! stopping after 1 failures !!!!!!
+#:     failed to collect stats. runner returned 1
+#:
+#: The gate died 83 seconds in having scored ZERO mutants — not on the
+#: 1440-second deadline #337 attributes it to. It imports only ``re``,
+#: ``pathlib`` and ``pytest`` and names ``product_app`` nowhere, so it can kill
+#: no ``src/`` mutant and deselecting it removes no oracle. It still runs
+#: BLOCKING in the ordinary pytest lane.
+pytestmark = pytest.mark.repo_introspection
+
 REPO_ROOT = Path(__file__).resolve().parents[2]
 E2E_TESTS_DIR = REPO_ROOT / "e2e" / "tests"
 WORKFLOW_DIR = REPO_ROOT / ".github" / "workflows"
