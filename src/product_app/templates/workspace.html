@@ -585,11 +585,24 @@
                 hidden
               ></section>
 
+              <!-- The panel's actual reasoning, on the page the run lands on.
+                   Populated by ``renderResultDebate`` from ``debate_outputs``.
+                   ROUND-LEVEL only: the backend records ONE ``critique_text``
+                   per round with NO per-model attribution, so this renders one
+                   card per round and says so in its caption. It must never grow
+                   per-model exchange cards — that is #290, which is not built.
+                   Each card also discloses whether a MODEL wrote that round
+                   (``debate_mode == "live"``) or Quorum's own template did.
+
+                   This replaced ``#result-positions`` ("How positions moved"),
+                   whose "After round 1" column was a dict lookup on the FINAL
+                   alignment state that never read a round-1 output. See
+                   docs/adr/0063. -->
               <div
-                id="result-positions"
-                class="result-positions"
+                id="result-debate"
+                class="result-debate"
                 role="region"
-                aria-label="How positions moved"
+                aria-label="The debate rounds"
                 hidden
               ></div>
 

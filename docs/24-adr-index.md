@@ -66,6 +66,7 @@ ways, so the record shows what was believed on a date and what replaced it.
 | [ADR-0060](adr/0060-live-execution-is-switched-on-only-to-collect-a-sample.md) | Live execution is switched on only to collect a sample, and switched back off | Architecture | Accepted — 2026-08-19 |
 | [ADR-0061](adr/0061-apt-dependent-ci-steps-bound-their-own-time.md) | apt bounds each request, and every apt-dependent step bounds its own time | Architecture | Accepted — 2026-08-19 |
 | [ADR-0062](adr/0062-the-agreement-tally-is-captioned-as-what-it-measures.md) | The agreement tally is captioned as what it measures, and never inverts on a split panel | Architecture | Accepted — 2026-08-21 |
+| [ADR-0063](adr/0063-the-result-view-carries-the-panels-reasoning.md) | The result view carries the panel's reasoning; the inferred position table goes | Architecture | Accepted — 2026-08-22 |
 
 **This index was itself stale** until 2026-07-30: ADR-0002 had existed since
 2026-07-19 and was never listed here. A hand-maintained index is a derived fact

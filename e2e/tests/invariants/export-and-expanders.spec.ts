@@ -67,8 +67,8 @@ test.describe("F-12 — export completeness and section expanders", () => {
     expect(md).toContain("https://example.com/a");
     expect(md).toContain("https://example.com/e");
 
-    // Where each model stood, and the debate that moved them.
-    expect(md, "the export omits the per-model positions").toMatch(/GPT-4o-mini/);
+    // The opening each model gave, and the debate rounds.
+    expect(md, "the export omits the per-model openings").toMatch(/GPT-4o-mini/);
     expect(md, "the export omits the debate rounds").toMatch(/Round 2/);
     expect(md).toContain("residual disagreement on sequencing");
 
@@ -353,7 +353,7 @@ test.describe("F-12 — export completeness and section expanders", () => {
     "Source support",
     "High-stakes notice",
     "Sources",
-    "Where each model stood",
+    "What each model opened with",
     "Debate rounds",
     // Written by the export itself, one per model and per debate round.
     ...SLOTS.map((slot) => slot.display_label),

@@ -123,7 +123,8 @@ def test_setInlineProse_routes_through_inlineListMarkers(app_js_text: str) -> No
     ``renderInline`` runs the INLINE chain only, so a line-start "1. " or "# "
     is not a marker to it — it is text, and it reaches the surface verbatim.
     That is how a raw "1. " landed in ``.result-trust-caption`` (#120) and how a
-    raw "# " landed in the "How positions moved" opening cell (#257 §2).
+    raw "# " landed in the per-model opening cell (#257 §2) — a surface removed
+    in ADR-0063, though the inline stripper it exercised is unchanged.
 
     Positive partner for the stripped-source read: the stripper must actually
     strip, or this test would be satisfied by a COMMENT mentioning the call.

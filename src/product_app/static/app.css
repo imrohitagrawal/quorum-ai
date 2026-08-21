@@ -3106,144 +3106,54 @@ html[data-theme="dark"] .landing-preview-caption {
   color: var(--muted);
 }
 
-/* ----- Slice 4b: How positions moved ------------------------------------ */
+/* ----- The panel's reasoning, on the result view ------------------------ */
+/* Replaced "How positions moved" (`.result-positions*` / `.result-pos-*`).
+   The round CARDS reuse `.transcript-round*` verbatim — one treatment for one
+   kind of content — so only the section chrome lives here. */
 
-.result-positions {
+.result-debate {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-4);
   border: 1px solid var(--line-2);
   border-radius: var(--radius-md);
   background: var(--surface);
-  overflow: hidden;
+  padding: 18px 24px 20px;
 }
 
-.result-positions-head {
+/* An author `display` BEATS the UA stylesheet's `[hidden] { display: none }`,
+   so the rule above would make `container.hidden = true` inert and paint an
+   empty bordered card on a run with no debate rounds. The table this section
+   replaced set no `display`, so it never needed this and never had the bug.
+   Found by mutation: flipping `container.hidden` to `true` left all eight
+   specs green until this rule existed. */
+.result-debate[hidden] {
+  display: none;
+}
+
+.result-debate-head {
   display: flex;
   flex-direction: column;
   gap: 3px;
-  padding: 18px 24px 4px;
 }
 
-.result-positions-title {
+.result-debate-title {
   font-size: 1rem;
   font-weight: 700;
   letter-spacing: -0.01em;
   color: var(--ink);
 }
 
-.result-positions-caption {
+.result-debate-caption {
   font-size: 0.8rem;
   line-height: 1.5;
   color: var(--text-secondary);
 }
 
-/* Fix 4: native <table>. Wrapped in an overflow-x:auto scroller so a wide
-   table scrolls inside its own box and never pushes the page body sideways. */
-.result-positions-scroll {
-  overflow-x: auto;
-}
-
-.result-positions-table {
-  width: 100%;
-  border-collapse: collapse;
-  table-layout: fixed;
-  padding: 14px 24px 20px;
-}
-
-.result-positions-table thead th:first-child {
-  width: 190px;
-}
-
-.result-positions-colhead {
-  text-align: left;
-  vertical-align: bottom;
-  font-size: 0.72rem;
-  font-weight: 700;
-  letter-spacing: 0.06em;
-  text-transform: uppercase;
-  color: var(--text-secondary);
-  padding: 8px 10px;
-}
-
-.result-positions-cell {
-  vertical-align: middle;
-  text-align: left;
-  padding: 10px;
-  border-top: 1px solid var(--line);
-  font-size: 0.78rem;
-  font-weight: 400;
-  color: var(--muted);
-}
-
-.result-pos-model {
-  /* 24px matches the card header's horizontal inset so the avatar aligns under
-     the "How positions moved" title. The table's own ``padding`` is a no-op
-     under ``border-collapse: collapse``, so the side inset must live on the
-     edge cells — otherwise the avatar renders ~1px from the card border and
-     reads as touching it. See the ``:first-child`` / ``:last-child`` rules. */
-  padding-left: 24px;
-  color: var(--ink);
-}
-
-/* Restore the symmetric 24px side inset the collapsed table drops, on the
-   edge cells of both the header row and the body rows. */
-.result-positions-colhead:first-child {
-  padding-left: 24px;
-}
-.result-positions-colhead:last-child,
-.result-positions-cell:last-child {
-  padding-right: 24px;
-}
-
-.result-pos-avatar {
-  display: inline-grid;
-  place-items: center;
-  flex-shrink: 0;
-  width: 26px;
-  height: 26px;
-  border-radius: var(--radius-xl);
-  background: var(--line);
-  color: var(--ink);
-  font-size: 0.7rem;
-  font-weight: 700;
-  margin-right: 9px;
-  vertical-align: middle;
-}
-
-.result-pos-name {
-  font-size: 0.84rem;
-  font-weight: 650;
-  color: var(--ink);
-  vertical-align: middle;
-}
-
-.result-pos-text {
-  display: block;
-  line-height: 1.45;
-}
-
-/* Fix 12: this "✓ Revised" chip is GREEN ON PURPOSE — the sanctioned
-   agreement/revision semantic (the model changed its position) and pixel-
-   mandated by the mock. Do NOT retint it to neutral; unlike the completion
-   glyph and the copied-state cue, green here maps to a real, verified signal. */
-.result-pos-chip {
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  margin-top: 5px;
-  padding: 4px 10px;
-  border-radius: var(--radius-xl);
-  background: var(--success-soft);
-  border: 1.5px solid var(--success-border);
-  color: var(--success);
-  font-size: 0.75rem;
-  font-weight: 650;
-}
-
-.result-pos-note {
-  display: block;
-  margin-top: 5px;
-  font-size: 0.72rem;
-  line-height: 1.45;
-  color: var(--text-secondary);
+.result-debate-rounds {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-4);
 }
 
 @media (max-width: 760px) {
@@ -3256,49 +3166,6 @@ html[data-theme="dark"] .landing-preview-caption {
     padding-left: 0;
     border-top: 1px solid var(--line);
     padding-top: var(--space-4);
-  }
-  /* Fix 4: stacked layout on mobile. The <thead> column headers are visually
-     hidden (NOT display:none — they stay in the a11y tree), and each <td> is
-     re-labeled from its data-label so every cell keeps a visible phase name. */
-  .result-positions-table,
-  .result-positions-table thead,
-  .result-positions-table tbody,
-  .result-positions-table tr,
-  .result-positions-table th,
-  .result-positions-table td {
-    display: block;
-  }
-  .result-positions-table thead {
-    position: absolute;
-    width: 1px;
-    height: 1px;
-    overflow: hidden;
-    clip: rect(0, 0, 0, 0);
-    white-space: nowrap;
-  }
-  .result-positions-table thead th:first-child {
-    width: auto;
-  }
-  .result-positions-row {
-    padding: 4px 0 8px;
-  }
-  .result-pos-model {
-    border-top: 1px solid var(--line-2);
-    padding-top: var(--space-3);
-  }
-  .result-positions-cell:not(.result-pos-model) {
-    border-top: none;
-    padding-top: 2px;
-  }
-  .result-positions-cell:not(.result-pos-model)::before {
-    content: attr(data-label);
-    display: block;
-    font-size: 0.66rem;
-    font-weight: 700;
-    letter-spacing: 0.06em;
-    text-transform: uppercase;
-    color: var(--text-secondary);
-    margin-bottom: 2px;
   }
 }
 
@@ -3905,6 +3772,21 @@ a.result-source-chip:hover { border-color: var(--info); color: var(--info); }
 .transcript-round-focus {
   font-size: 0.75rem;
   color: var(--text-secondary);
+}
+
+/* "Written by Quorum, not by a model" — the round's provenance marker, shown
+   whenever `debate_mode` is not "live". Warning-toned rather than decorative:
+   it is a correction to the reader's default assumption that a model wrote the
+   critique, so it must not read as a neutral tag. */
+.transcript-round-templated {
+  font-size: 0.68rem;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  padding: 2px var(--space-2);
+  border-radius: var(--radius-pill);
+  border: 1px solid var(--warning);
+  color: var(--warning);
 }
 
 .transcript-round-body {
@@ -5100,22 +4982,17 @@ main:focus { outline: none; }
    slots read as four distinct minds at a glance. Values lifted verbatim from the
    comp. The soft-bg/ink pair is self-contained (light pill + dark glyph), so it
    holds its own contrast in dark mode without a separate override. Shared by the
-   composer slots, transcript openings, and the positions-moved avatars. */
+   composer slots and the transcript openings. */
 .model-slot-avatar[data-vendor="openai"],
-.transcript-opening-avatar[data-vendor="openai"],
-.result-pos-avatar[data-vendor="openai"] { background: var(--vendor-openai-soft); color: var(--vendor-openai-ink); }
+.transcript-opening-avatar[data-vendor="openai"] { background: var(--vendor-openai-soft); color: var(--vendor-openai-ink); }
 .model-slot-avatar[data-vendor="anthropic"],
-.transcript-opening-avatar[data-vendor="anthropic"],
-.result-pos-avatar[data-vendor="anthropic"] { background: var(--vendor-anthropic-soft); color: var(--vendor-anthropic-ink); }
+.transcript-opening-avatar[data-vendor="anthropic"] { background: var(--vendor-anthropic-soft); color: var(--vendor-anthropic-ink); }
 .model-slot-avatar[data-vendor="google"],
-.transcript-opening-avatar[data-vendor="google"],
-.result-pos-avatar[data-vendor="google"] { background: var(--vendor-google-soft); color: var(--vendor-google-ink); }
+.transcript-opening-avatar[data-vendor="google"] { background: var(--vendor-google-soft); color: var(--vendor-google-ink); }
 .model-slot-avatar[data-vendor="deepseek"],
-.transcript-opening-avatar[data-vendor="deepseek"],
-.result-pos-avatar[data-vendor="deepseek"] { background: var(--vendor-deepseek-soft); color: var(--vendor-deepseek-ink); }
+.transcript-opening-avatar[data-vendor="deepseek"] { background: var(--vendor-deepseek-soft); color: var(--vendor-deepseek-ink); }
 .model-slot-avatar[data-vendor="nvidia"],
-.transcript-opening-avatar[data-vendor="nvidia"],
-.result-pos-avatar[data-vendor="nvidia"] { background: var(--vendor-nvidia-soft); color: var(--vendor-nvidia-ink); }
+.transcript-opening-avatar[data-vendor="nvidia"] { background: var(--vendor-nvidia-soft); color: var(--vendor-nvidia-ink); }
 .model-slot-info { flex: 1; min-width: 0; }
 .model-slot-name {
   display: flex;
