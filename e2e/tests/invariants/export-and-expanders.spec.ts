@@ -353,7 +353,7 @@ test.describe("F-12 — export completeness and section expanders", () => {
     "Source support",
     "High-stakes notice",
     "Sources",
-    "Opening positions",
+    "What each model opened with",
     "Debate rounds",
     // Written by the export itself, one per model and per debate round.
     ...SLOTS.map((slot) => slot.display_label),

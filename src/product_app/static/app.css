@@ -3774,6 +3774,21 @@ a.result-source-chip:hover { border-color: var(--info); color: var(--info); }
   color: var(--text-secondary);
 }
 
+/* "Written by Quorum, not by a model" — the round's provenance marker, shown
+   whenever `debate_mode` is not "live". Warning-toned rather than decorative:
+   it is a correction to the reader's default assumption that a model wrote the
+   critique, so it must not read as a neutral tag. */
+.transcript-round-templated {
+  font-size: 0.68rem;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  padding: 2px var(--space-2);
+  border-radius: var(--radius-pill);
+  border: 1px solid var(--warning);
+  color: var(--warning);
+}
+
 .transcript-round-body {
   margin: 0;
   font-size: 0.85rem;

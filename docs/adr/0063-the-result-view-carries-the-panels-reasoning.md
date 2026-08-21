@@ -113,16 +113,33 @@ position table from the screen.**
    critique prose through `setProse` (the Markdown renderer) instead of
    `textContent`, and one treatment for one kind of content means one place to
    change it.
-3. The section is captioned "One critique per round, written by the moderator
-   across all four answers — Quorum does not record which model said which
-   line." **The honesty rule is unchanged**: the backend records one
-   `critique_text` per round with no per-model attribution, so the surface is
-   round-level and says so. It must never grow per-model exchange cards; that is
-   #290, which is not built.
-4. The transcript link stays. The transcript still adds the per-model **opening
+3. The section is headed "The debate rounds" and captioned "One critique per
+   round, covering all four answers together — Quorum does not record a
+   per-model, line-by-line exchange." **The honesty rule is unchanged**: the
+   backend records one `critique_text` per round with no per-model attribution,
+   so the surface is round-level and says so. It must never grow per-model
+   exchange cards; that is #290, which is not built.
+4. **Each card discloses who wrote it.** `debate_mode` is `"live"` only when the
+   configured moderator model's own response supplied the critique; on
+   `"fallback"` the moderator was unconfigured, unreachable or returned nothing
+   usable, and `critique_text` is Quorum's own template
+   (`debate.py::_build_round_one_text`). A round that is not `"live"` carries a
+   "Written by Quorum, not by a model" marker. It **fails closed** — an absent
+   `debate_mode` gets the marker, matching the API schema, whose default for
+   that field is `"fallback"`.
+5. **The `Focus:` line is not shown on the result view.** `debate.py` passes the
+   module constant `FOCUS_AREAS` to both rounds, so it is byte-identical on
+   every card of every run; under a "Round N" header it reads as per-round
+   metadata. That is the same "constant dressed as an observation" defect this
+   ADR removes the table for. The transcript still shows it — pre-existing
+   behaviour on a drill-down the reader chose to open, and a separate concern.
+6. The transcript link stays. The transcript still adds the per-model **opening
    answers**, which the result view does not carry.
-5. In the Markdown export, `## Where each model stood` becomes
-   `## Opening positions` and keeps only the `- **Opening:**` line. The three
+7. In the Markdown export, `## Where each model stood` becomes
+   `## What each model opened with` and keeps only the `- **Opening:**` line.
+   (Not `## Opening positions`: the same document already carries
+   `**Opening positions carried into the final answer:** X of Y`, a tally, and
+   one phrase meaning two things in one decision record is its own defect.) The three
    inferred lines (After round 1, Final, Revision note) are dropped for the same
    reason the columns were.
 
@@ -202,3 +219,72 @@ application confirmed by md5 before the run:
 | a second body added inside each round card | 2 |
 | `.result-debate[hidden]` rule removed | 1 |
 | an "After round 1" `<th>` reintroduced | 1 |
+
+
+## What adversarial review changed
+
+Two independent read-only lenses ran against `f6939bf`. Both independently found
+the same top finding, and it was a real regression in honesty, not a nitpick.
+
+**The caption asserted authorship the data contradicts.** The first draft read
+"written by the moderator across all four answers". Driven in Chromium with
+`debate_mode: "fallback"` on both rounds and live answers elsewhere, a reviewer
+measured **zero** lines anywhere on the result view mentioning simulation, demo,
+local or fallback — while 910 × 547 px of Quorum's own template sat under a
+caption saying a model wrote it. The `#result-degraded` banner covers the fully
+simulated case; it does **not** cover live answers plus a fallen-back moderator.
+`debate_mode` already recorded the truth and the UI read it in exactly zero
+places. Decision items 3 and 4 above are the fix. Note the same view already
+handled the analogous synthesis case correctly (`synthesis_mode !== "live"` →
+`badge-summary`), so this was an inconsistency as much as an omission.
+
+**The test named for the honesty rule could not enforce it.** The caption spec
+asserted only `text.length > 0`. A reviewer replaced the caption with "Each
+model read the other three answers and replied in turn — Round 2 is their
+rebuttal to Round 1." and all nine specs stayed **green**. Dropping the caption
+was caught; falsifying it was not. Now pinned in two places, both proven by
+mutation: an e2e test on the rendered DOM, and
+`tests/unit/test_ui_honesty.py::test_the_debate_section_copy_does_not_claim_the_models_answered_each_other`,
+which extends the pattern already used for the OpenAPI description. That unit
+gate reads the `mkEl` string literals rather than scanning the file, because
+`app.js`'s comments here deliberately spell out the banned phrases to explain
+the rule — the prose-matches-instead-of-code trap `tests/code_text.py` exists
+for, and `code_without_comments` cannot help because it strips `#` comments, not
+JavaScript `//` ones.
+
+**Two specs were satisfiable by wrong implementations.** "Exactly one critique
+body" passed a card that also carried four per-model paragraphs under any other
+class; it now pins the card's child shape. "The positions table is gone" passed
+a table restored under a different id or built from `role="columnheader"`; it now
+asserts the movement DATA is unrendered, quoting the fixture's own values.
+
+**The fixture omitted `debate_mode` entirely**, so by the schema's default the
+golden "good run" was two template-written rounds and no gate could tell the
+provenances apart. It now seeds `"live"` explicitly, with
+`goldenRespWithTemplatedDebate()` as the contrast.
+
+Also fixed from review: the `docs/32-ui-state-matrix.md` line filed
+`#result-debate` inside the "Run details" disclosure (it is a top-level sibling,
+visible with nothing clicked — the mis-file was inherited from the
+`#result-positions` sentence and re-asserted rather than checked); the
+"Revision counts are inferred from the panel's position movements" caption
+pointed at a deleted surface; and two test docstrings still named the removed
+cell as their subject.
+
+**Refuted, and worth recording so it is not re-litigated:** the caption IS in the
+accessible tree (`ariaSnapshot` confirms), and the removed table had the
+identical `aria-label`-plus-visible-caption structure, so there is no
+accessibility regression. The `[hidden]` sweep found no other element with the
+author-`display` bug. `renderResultDebate` leaks no state between runs. The
+export rename does not weaken the forgery gate — model text is demoted to level
+5 before the allow-list is consulted. Both re-pointed test surfaces
+(`.result-verdict-caveat`, `.transcript-opening-avatar`) were mutation-proven to
+still bite. And every number in the original ADR and commit body was verified,
+with one row marked UNVERIFIED by the reviewer: the `#debate-output` **live-run**
+0 × 0 measurement was re-driven by me but not independently by them.
+
+One item is left open by choice: a reviewer saw 2 failures in ~19 runs of this
+spec in a hand-rolled harness with no `webServer`, never in CI's shape. It could
+not be attributed to the diff and did not reproduce here. Given the zero-retry
+policy on the blocking lane, a `flake-scan` pass is cheap insurance and is
+recommended before this merges.

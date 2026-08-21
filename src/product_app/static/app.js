@@ -3094,7 +3094,7 @@
     // lines are gone and the observation stays. See docs/adr/0063.
     const movements = Array.isArray(ctx.movements) ? ctx.movements : [];
     if (movements.length) {
-      push("## Opening positions", "");
+      push("## What each model opened with", "");
       for (const m of movements) {
         if (!m) continue;
         const name = mdEscapeInline(String(m.display_name || m.model_id || "Model"));
@@ -3725,7 +3725,7 @@
         mkEl(
           "span",
           "result-verdict-caption",
-          "Revision counts are inferred from the panel's position movements, not quoted.",
+          "Revision counts are inferred from the opening answers, not quoted.",
         ),
       );
     }
@@ -4506,21 +4506,29 @@
     container.hidden = false;
 
     const head = mkEl("div", "result-debate-head");
-    head.appendChild(mkEl("span", "result-debate-title", "What the panel argued"));
+    // "The debate rounds", matching the export's `## Debate rounds` heading and
+    // the transcript's section title. An earlier draft read "What the panel
+    // argued", which attributes the text to the four models — the panel — and
+    // implies they argued WITH EACH OTHER. They never read each other (#290 is
+    // not built), and the critique is one moderator-or-template summary per
+    // round. A heading is a claim; this one now makes none.
+    head.appendChild(mkEl("span", "result-debate-title", "The debate rounds"));
     head.appendChild(
       mkEl(
         "span",
         "result-debate-caption",
-        "One critique per round, written by the moderator across all four answers — " +
-          "Quorum does not record which model said which line.",
+        "One critique per round, covering all four answers together — " +
+          "Quorum does not record a per-model, line-by-line exchange.",
       ),
     );
     container.appendChild(head);
 
+    // `showFocus: false` — `focus_areas` is a module constant, identical on
+    // every round of every run. See `buildTranscriptRound`.
     const list = mkEl("div", "result-debate-rounds");
     for (const round of rounds) {
       if (!round) continue;
-      list.appendChild(buildTranscriptRound(round));
+      list.appendChild(buildTranscriptRound(round, { showFocus: false }));
     }
     container.appendChild(list);
   }
@@ -4662,7 +4670,21 @@
 
   // A round-level critique block. Header = "Round N" + focus areas; body = the
   // round's ``critique_text``. NO per-model cards/attribution are invented.
-  function buildTranscriptRound(round) {
+  // One round card. Shared by the transcript drill-down and the result view's
+  // `#result-debate`, so the two can never describe the same content
+  // differently.
+  //
+  // `showFocus` exists because `focus_areas` is NOT per-round data. The backend
+  // passes the module constant `FOCUS_AREAS`
+  // ("disagreement, weak_support, missing_reasoning") to BOTH rounds
+  // (`debate.py:320` and `:387`), so the line is byte-identical on every card of
+  // every run. Under a "Round 1"/"Round 2" header it reads as "this round
+  // focused on X" — a constant dressed as an observation, which is the exact
+  // defect the position table was removed for (ADR-0063). The result view
+  // therefore does not show it. The transcript still does: that is pre-existing
+  // behaviour on a drill-down the reader chose to open, and changing it is a
+  // separate concern.
+  function buildTranscriptRound(round, { showFocus = true } = {}) {
     const card = mkEl("article", "transcript-round");
     const head = mkEl("div", "transcript-round-head");
     head.appendChild(
@@ -4671,9 +4693,30 @@
     const focusAreas = Array.isArray(round.focus_areas)
       ? round.focus_areas.filter(Boolean)
       : [];
-    if (focusAreas.length) {
+    if (showFocus && focusAreas.length) {
       head.appendChild(
         mkEl("span", "transcript-round-focus", `Focus: ${focusAreas.join(", ")}`),
+      );
+    }
+    // WHO WROTE THIS ROUND. `debate_mode` is "live" only when the configured
+    // moderator model's own response supplied the critique. On "fallback" the
+    // moderator was not configured, or its call returned nothing usable, and
+    // `critique_text` is Quorum's OWN template
+    // (`debate.py::_build_round_one_text`). Attributing that to a model is a
+    // false authorship claim, and until this the UI read the field in exactly
+    // zero places — so a run with live ANSWERS but a fallen-back moderator
+    // showed no disclosure anywhere on the page.
+    //
+    // FAILS CLOSED: anything that is not exactly "live" — including the field
+    // being absent — gets the marker. That matches the API schema, whose
+    // `debate_mode` default is "fallback" (openapi.yaml).
+    if (round.debate_mode !== "live") {
+      head.appendChild(
+        mkEl(
+          "span",
+          "transcript-round-templated",
+          "Written by Quorum, not by a model",
+        ),
       );
     }
     card.appendChild(head);

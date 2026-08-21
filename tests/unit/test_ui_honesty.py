@@ -191,3 +191,147 @@ def test_api_description_does_not_claim_the_models_debate_each_other() -> None:
             f"the served API description claims {banned!r}; the four answer "
             "models are called once each and never read each other (ADR-0032)"
         )
+
+
+# --- the debate section's copy (ADR-0063) -----------------------------------
+#
+# `#result-debate` puts the round critiques on the page a completed run lands
+# on. That is the first time this copy is visible to anyone: the same content
+# was previously rendered only into `.panel.panel-section`, which app.css hides
+# with `display: none` on every view.
+#
+# The honesty rule it must not break: the four answer models are called ONCE
+# EACH, IN PARALLEL, and never read one another. Real peer critique is #290 and
+# is NOT built. The backend records ONE `critique_text` per round with NO
+# per-model attribution.
+#
+# WHY THIS SCANS STRING LITERALS AND NOT THE FILE. `app.js`'s comments around
+# this code deliberately spell out the banned phrases in order to explain the
+# rule ("they never read each other", "implies they argued WITH EACH OTHER").
+# A substring scan over the file would match the prose that EXPLAINS the thing
+# rather than the thing — the exact trap `tests/code_text.py` was written for,
+# and `code_without_comments` cannot help here because it strips `#` comments,
+# not JavaScript `//` ones. So this locates the specific `mkEl(...)` copy sites
+# and reads their literal arguments.
+
+#: Phrases that assert the four models exchanged views with each other.
+#: Lowercased; matched against the debate section's user-facing copy only.
+BANNED_EXCHANGE_CLAIMS = (
+    "each other",
+    "one another",
+    "read the other",
+    "rebuttal",
+    "replied",
+    "reply to",
+    "responded to",
+    "in turn",
+    "back and forth",
+    "argued with",
+    "peer critique",
+)
+
+#: Copy sites in the debate section, by the class name passed to ``mkEl``.
+DEBATE_COPY_CLASSES = (
+    "result-debate-title",
+    "result-debate-caption",
+    "transcript-round-templated",
+)
+
+
+def _extract_mkel_literals(app_js: str, class_name: str) -> str:
+    """Return the concatenated string literals ``mkEl`` is given for *class_name*.
+
+    Matches ``mkEl("span", "<class_name>", <args...>)`` and pulls every
+    double-quoted literal from the argument list, so a caption built by
+    concatenating two literals across lines is read as one string.
+    """
+    match = re.search(
+        r'mkEl\(\s*"[a-z]+"\s*,\s*"' + re.escape(class_name) + r'"\s*,([\s\S]*?)\)\s*,?\s*\n',
+        app_js,
+    )
+    if not match:
+        return ""
+    return " ".join(re.findall(r'"((?:[^"\\]|\\.)*)"', match.group(1)))
+
+
+def test_the_debate_section_copy_does_not_claim_the_models_answered_each_other() -> None:
+    """RED IF: the result view's debate copy starts describing #290.
+
+    Mutation that reddens this: change the ``result-debate-caption`` literal in
+    ``renderResultDebate`` to "Each model read the other three answers and
+    replied in turn." — measured, and it fails on "read the other".
+
+    This is the unit-level partner to
+    ``e2e/tests/invariants/result-debate.spec.ts``'s
+    "neither the heading nor the caption claims the models answered each other",
+    which asserts the same rule against the RENDERED DOM. Both exist because the
+    e2e one cannot run in the pytest lane and this one cannot see what actually
+    reaches the screen.
+    """
+    app_js = _read(USER_FACING_SURFACES[0])
+
+    found: dict[str, str] = {}
+    for class_name in DEBATE_COPY_CLASSES:
+        found[class_name] = _extract_mkel_literals(app_js, class_name)
+
+    # POSITIVE PARTNER FIRST (rule 7). Every negative below is trivially true
+    # over copy the regex failed to locate — which is how this test would rot
+    # silently if the call shape changed.
+    for class_name, copy in found.items():
+        assert copy, (
+            f"could not locate the {class_name!r} copy in app.js; the negatives "
+            "below would pass vacuously. Fix the extractor, do not delete this."
+        )
+    assert "per round" in found["result-debate-caption"].lower(), (
+        "the caption no longer states the ROUND-LEVEL shape, which is the one "
+        "thing it exists to say"
+    )
+
+    for class_name, copy in found.items():
+        lowered = copy.lower()
+        for banned in BANNED_EXCHANGE_CLAIMS:
+            assert banned not in lowered, (
+                f"{class_name} says {banned!r} — the four answer models are "
+                "called once each and never read each other (#290 is not built, "
+                "ADR-0032, ADR-0063). Copy was: {copy!r}".format(copy=copy)
+            )
+
+
+def test_the_debate_caption_makes_no_unconditional_authorship_claim() -> None:
+    """RED IF: the debate caption attributes the critique to a model outright.
+
+    ``debate_mode`` is ``"live"`` only when the configured moderator's own
+    response supplied the text; on ``"fallback"`` ``critique_text`` is Quorum's
+    own template (``debate.py::_build_round_one_text``). A caption reading
+    "written by the moderator" is therefore false on every fallback round, and
+    the API schema's default for that field is ``"fallback"``.
+
+    Authorship may only be stated per-round, conditioned on ``debate_mode`` —
+    which ``buildTranscriptRound`` does. So the section-level caption must make
+    no authorship claim at all.
+
+    Mutation that reddens this: restore "written by the moderator across all
+    four answers" to the ``result-debate-caption`` literal.
+    """
+    app_js = _read(USER_FACING_SURFACES[0])
+    caption = _extract_mkel_literals(app_js, "result-debate-caption")
+    assert caption, "could not locate the debate caption; the negatives would be vacuous"
+
+    for banned in ("written by the moderator", "written by a model", "the moderator wrote"):
+        assert banned not in caption.lower(), (
+            f"the debate caption claims {banned!r} unconditionally, but "
+            "debate_mode can be 'fallback', in which case Quorum's own template "
+            "wrote the critique (ADR-0063)"
+        )
+
+    # POSITIVE PARTNER: the per-round marker that IS allowed to speak about
+    # authorship must still exist, or this test would be satisfied by a UI that
+    # simply never discloses provenance at all.
+    assert 'round.debate_mode !== "live"' in app_js, (
+        "the per-round provenance guard is gone; dropping the caption's "
+        "authorship claim is only honest if the per-round marker replaces it"
+    )
+    marker = _extract_mkel_literals(app_js, "transcript-round-templated")
+    assert "quorum" in marker.lower() and "not by a model" in marker.lower(), (
+        f"the fallback marker no longer says Quorum wrote it; got {marker!r}"
+    )
