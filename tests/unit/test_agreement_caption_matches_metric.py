@@ -57,8 +57,13 @@ def test_no_served_string_captions_the_tally_as_models_agreeing() -> None:
     # POSITIVE PARTNER 1 — the comments that explain the change still quote the
     # old caption, which proves ``_code_only`` removed something and that the
     # zeros above are not measuring an empty or unreadable file.
-    assert raw.count("models aligned") == 5
-    assert raw.count('"agree"') == 1
+    #
+    # Compared against the stripped count rather than pinned to an exact number:
+    # an exact raw count reds this test on a COMMENT-ONLY edit, which would
+    # train the next reader to adjust the number instead of reading the test.
+    # The inequality still fails if ``_code_only`` ever stops stripping.
+    assert raw.count("models aligned") > code.count("models aligned")
+    assert raw.count('"agree"') > code.count('"agree"')
 
     # POSITIVE PARTNER 2 — the tally is still RENDERED. Without this, deleting
     # every agreement surface would satisfy the negative above.

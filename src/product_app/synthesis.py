@@ -1265,9 +1265,10 @@ def _final_synthesis_alignment_text(final_synthesis: FinalSynthesis | None) -> s
     a model wrote them.**
 
     Returns ``None`` when there is nothing model-authored to compare against, in
-    which case alignment falls back to the panel-strength inference (derived
-    from the models' own openings and the debate critiques) rather than
-    comparing openings to text this product wrote. Three cases return ``None``:
+    which case a minority opener is not counted at all — there is no
+    model-written text its position could have been carried into (ADR-0062).
+    This used to fall back to a panel-strength inference; that inference is
+    gone. Three cases return ``None``:
     a missing synthesis, one whose ``status != COMPLETED``, and — since #171
     finding 5 — one whose sections are Quorum's own template.
 
@@ -1332,11 +1333,17 @@ def _final_synthesis_was_templated(final_synthesis: FinalSynthesis | None) -> bo
     """Is there a COMPLETED final answer on the screen that a model did NOT write?
 
     Distinct from ``_final_synthesis_alignment_text(...) is None``, which is
-    also true when there is no final answer at all. ``classify_model_alignment``
-    needs the two apart: a failed synthesis keeps the pre-existing
-    panel-strength inference, while a templated one must not align a minority,
-    because the inference says yes to every minority on a ``"strong"`` panel and
-    would report a model as having moved to a consensus no model authored.
+    also true when there is no final answer at all.
+
+    ``classify_model_alignment`` branches on the two separately, but since
+    ADR-0062 removed the panel-strength inference the two branches reach the
+    SAME answer — a minority opener is counted in neither. Measured: deleting
+    the ``elif final_answer_was_templated`` branch entirely leaves the suite
+    green. The branch is kept because the two cases are different situations
+    (a templated synthesis puts a confident-looking final answer on the screen;
+    a failed one puts nothing there) and because it is the branch that must not
+    drift if the ``else`` ever changes — not because it currently computes
+    something different.
     """
     if final_synthesis is None or final_synthesis.status is not SynthesisStatus.COMPLETED:
         return False
@@ -1357,8 +1364,8 @@ def build_agreement_and_positions(
     that shared classification so the ring and the table can never disagree.
     When ``final_synthesis`` is supplied, per-model alignment is derived by
     comparing each opening against the actual final-answer content rather than
-    blanket-aligning the whole panel; without it, alignment falls back to the
-    panel-strength inference. Pure and deterministic: same inputs → same
+    blanket-aligning the whole panel; without it, no minority opener is counted
+    at all (ADR-0062). Pure and deterministic: same inputs → same
     output, no randomness, no wall-clock. Whether the underlying content is
     live or simulated is already surfaced by
     ``QueryRunResultResponse.demo_mode``.

@@ -125,9 +125,13 @@ synthesis says. Only the *opening-majority* classification ignores the texts.
 
 ### On a tie, fall back to the 4-gram overlap clustering
 
-Measured and rejected: on the pricing panel `_overlap_partner_counts` returns
-`[0, 0, 0, 0]` (it changes nothing), and on a two-yes/two-no panel `[3, 3, 3, 3]`,
-which would flag all four as majority openers on a panel split down the middle.
+Measured and rejected. On a two-yes/two-no panel `_overlap_partner_counts`
+returns `[3, 3, 3, 3]`, which would flag all four as majority openers on a panel
+split down the middle. On the reported production panel it returned
+`[0, 0, 0, 0]` — it would have changed nothing there either. **That second
+figure is not reproducible from this repository**: the production answer texts
+were never archived, and the panel in the test module is a reconstruction, not
+the original. Treat it as measured on unarchived text.
 
 ### Retune `_POLAR_PAIRS` or the polar heuristic
 
@@ -136,13 +140,62 @@ Out of scope by instruction, and the right call: it drives
 signal `polar_disagreement_detected`, and there is no measurement here that
 would justify a new boundary.
 
+## Considered and deliberately not done
+
+* **`src/product_app/templates/workspace.html`** carries landing copy reading
+  "4 of 4 models agree — with one real disagreement worth your attention". It is
+  illustrative marketing copy inside `role="note" aria-label="Example preview"`,
+  captioned "Illustrative — a product example, not a run you started", and it
+  never reads `agreement.aligned`. Recaptioning it is a marketing-copy concern
+  and rule 17 (one concern per PR) binds, so it is left. Recorded because it is
+  now the only place in the product that says "N of N models agree", and a
+  reader who greps `models agree` should be able to tell a decision from a miss.
+  `test_no_served_string_captions_the_tally_as_models_agreeing` reads `app.js`
+  only, so nothing mechanically stops a caption regression landing in a
+  template.
+* **The band headline now wraps to two lines at 1440px.** Measured: the
+  `.result-verdict-agreement` box goes from 30.16px to 60.31px, and the
+  full-page render from 3385px to 3396px. That is why the Linux visual
+  baselines are re-seeded in this branch. Narrower viewports will wrap further.
+  No gate judges the wrap; shortening the sentence was not attempted because the
+  length is carried by the "preserved as disagreement below" clause, which is
+  the residual below.
+
+## What this does not fix
+
+The tally's caption is now honest, but `mayClaimDisagreement` is untouched, so
+the band can still append "— the rest are preserved as disagreement below" to a
+run whose four answers agree. On the reported production run it renders:
+
+```
+0 of 4 opening positions carried into the final answer — the rest are preserved as disagreement below.
+```
+
+directly above a Consensus section reading "All agree seat-based is the more
+predictable revenue model". The count line no longer overclaims; **the clause
+still does**. Gating that clause is a separate change and is not made here.
+
 ## Consequences
 
 * The captions no longer make a claim the tally cannot support, so the headline
   and the Consensus prose can no longer contradict each other under the word
   "agree".
-* A panel split down the middle can no longer reach `aligned == total`, and so
-  can no longer paint the green consensus surface.
+* A panel split down the middle can no longer reach `aligned == total` **on the
+  absent/failed or templated shapes**. It still can on the LIVE shape, which is
+  production: a synthesis that quotes one side lifts every opener to aligned.
+  Measured on this branch, on the split panel in
+  `tests/unit/test_agreement_tally_means_its_caption.py`:
+
+  ```
+  live synthesis QUOTING one side    -> aligned=4/4  aligned==total -> True
+  live synthesis quoting neither     -> aligned=0/4  aligned==total -> False
+  ```
+
+  That is unchanged from `origin/main` — this change neither introduces nor
+  fixes it — and it is stated here narrowly rather than as an absolute because
+  an earlier draft of this ADR claimed the green surface was closed outright,
+  and it is not. The residual: a genuinely split panel whose synthesis quotes
+  one side still paints green. See "What this does not fix".
 * The ordinary three-overlap-one-outlier panel reads 3 of 4 on a run whose
   synthesis failed, where it used to read 4 of 4.
 * **`revised` is now unreachable on the no-model-authored path.** A minority

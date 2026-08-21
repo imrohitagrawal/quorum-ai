@@ -469,9 +469,11 @@ def classify_model_alignment(
       - When the final answer is TEMPLATED — a completed synthesis exists and
         this product wrote it (``final_answer_was_templated``) — the minority
         is NOT aligned. Whether its position landed in that text is
-        unobservable, and the panel-strength fallback below would align it on
-        any ``"strong"`` panel, inventing both the alignment and a "revised its
-        position" claim about a synthesis no model wrote.
+        unobservable, so we do not claim it. This branch used to be the ONLY
+        thing standing between a templated run and a panel-strength fallback
+        that aligned every minority opener on any ``"strong"`` panel; that
+        fallback is gone, so it now reaches the same answer as the ``else``
+        below it (measured: deleting this branch leaves the suite green).
       - When there is no final answer at ALL (missing, or the synthesis
         failed), the minority is NOT aligned either. There is nothing for a
         position to have been carried into.
@@ -568,10 +570,10 @@ def classify_model_alignment(
             # Minority opener, and the final answer on the screen is one THIS
             # PRODUCT wrote. We cannot observe whether this model's position
             # landed in it, so we do not claim that it did. Falling through to
-            # the panel-strength branch below would align every minority on a
-            # "strong" panel — the ordinary three-of-four-agree shape — and
-            # ``revised`` would then flip to True, reporting that a model moved
-            # to a consensus no model authored.
+            # this used to be the only guard against the panel-strength branch
+            # below aligning every minority on a "strong" panel — the ordinary
+            # three-of-four-agree shape — with ``revised`` flipping to True and
+            # reporting that a model moved to a consensus no model authored.
             final_aligned = False
         else:
             # Minority opener and NO final answer at all — nothing was produced

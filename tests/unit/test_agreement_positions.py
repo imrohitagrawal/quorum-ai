@@ -468,14 +468,23 @@ def test_a_templated_synthesis_does_not_align_a_minority_on_a_strong_panel() -> 
       screen and this product wrote it. Whether the model's position landed in
       it is unobservable, so it is not counted.
 
-    The strength assertion is the precondition that makes this test mean
-    something: on a NON-strong panel both branches already agree, so the test
-    would pass without measuring anything.
+    The strength assertion is kept as a SHAPE pin, not as a precondition. It
+    was the precondition — before ADR-0062 the templated branch and the
+    panel-strength fallback only disagreed on a "strong" panel. They now agree
+    on every panel, so the assertion no longer guards the test's meaning; it
+    pins that this fixture is still the strong-panel shape the test was written
+    against, so a future change to the fixture is a deliberate act.
 
-    What turns it red: delete the ``elif final_answer_was_templated`` branch
-    from ``classify_model_alignment`` and the templated run falls through to
-    ``strength == "strong"``, so ``aligned`` reads 4 and ``revised`` reads [4].
+    What turns it red: set ``final_aligned = True`` in the
+    ``elif final_answer_was_templated`` branch of ``classify_model_alignment``.
+
+    NOT "delete the branch", which this line said until ADR-0062 removed the
+    panel-strength fallback the branch existed to stop. Deleting it is now a
+    silent no-op — measured, the suite stays green — because the ``else`` below
+    reaches the same answer. The mutation above still bites: 5 failed, 37
+    passed.
     """
+
     answers = [
         _answer(1, _AGREE_TEXT),
         _answer(2, _AGREE_TEXT),
@@ -484,8 +493,8 @@ def test_a_templated_synthesis_does_not_align_a_minority_on_a_strong_panel() -> 
     ]
     debate = _debate("After round 2 the models converged on the load-limit reading.")
     assert compute_consensus_strength(answers, debate) == "strong", (
-        "this test exists for the strong panel; on any other the fallback and "
-        "the refusal already agree and nothing is being measured"
+        "this fixture is meant to be the strong-panel shape (a SHAPE pin since "
+        "ADR-0062, not a precondition — see the docstring)"
     )
     # A final answer that is the majority reading — the zebra opening is not in it.
     templated, positions = build_agreement_and_positions(

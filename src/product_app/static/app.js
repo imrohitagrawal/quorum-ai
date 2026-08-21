@@ -2613,10 +2613,15 @@
   // model." Both sentences were true of what they measured; only one of them was
   // captioned honestly.
   //
-  // ONE constant, five surfaces (band headline, ring, Agreement card, Copy
-  // summary, Markdown export). #128 was those surfaces each wording the same
-  // fact for themselves, and the file a user kept disagreeing with the screen
-  // they exported it from.
+  // This constant carries the SENTENCE, and it is used by four surfaces: the
+  // band headline, the Copy summary, the Markdown export and the Agreement
+  // card's caption. The card's kicker ("Positions carried"), its value-sub
+  // ("carried") and the ring's label ("carried") are SEPARATE literals below —
+  // they are one or two words, not this sentence, and no interpolation of this
+  // constant produces them. Editing this constant alone therefore leaves those
+  // three out of step, which is the #128 failure mode; the counts in
+  // ``tests/unit/test_agreement_caption_matches_metric.py`` pin all of them
+  // together so the drift is caught rather than described.
   const CARRIED_INTO_FINAL = "carried into the final answer";
 
   function renderResultDegraded(result) {
