@@ -267,7 +267,17 @@ class CostLineByModel(BaseModel):
     #: Discriminator so consumers distinguish the pseudo "Debate + synthesis"
     #: row from a real model row without matching the magic ``model_id``.
     #: ``"model"`` for the four model rows, ``"synthesis"`` for the writer,
-    #: ``"judge"`` for a fired-and-priced Layer-B judge call (issue #110).
+    #: ``"judge"`` for a Layer-B judge call — priced in an ESTIMATE when one is
+    #: configured (ADR-0064) and measured in an ACTUAL when one fired and
+    #: reported usage (issue #110). Both sides use the same ``kind`` and the
+    #: same ``model_id`` on purpose: ``app.js`` pairs an estimate row to its
+    #: actual row on that composite key (issue #217).
+    #:
+    #: CONSUMERS MUST FILTER BY ALLOWLIST, not by excluding ``"synthesis"``.
+    #: ``by_model`` is no longer "four slots plus a writer row": an estimate
+    #: with a judge configured has SIX rows, and code that maps
+    #: "everything that is not the writer" onto the four slot cards by position
+    #: would run off the end. See ``app.js`` ``state.perModelEstimates``.
     kind: str = "model"
 
 
@@ -277,10 +287,16 @@ class CostLineByStage(BaseModel):
     #: ``query_runs._initial_progress``) so a UI can join the two directly —
     #: PLUS an optional ``"judge"`` row (issue #110) that has no progress-stage
     #: counterpart: the Layer-B judge is a request-path advisory call, never a
-    #: pipeline stage. Present only in a MEASURED breakdown, only when a
-    #: configured judge fired and reported usage. A UI that joins ``by_stage``
-    #: against ``progress.stages`` by key simply has no match for it; it must
-    #: not be dropped from ``total``.
+    #: pipeline stage. A UI that joins ``by_stage`` against ``progress.stages``
+    #: by key simply has no match for it; it must not be dropped from
+    #: ``total``.
+    #:
+    #: Present in a MEASURED breakdown when a configured judge fired and
+    #: reported usage, AND — since ADR-0064 — in an ESTIMATE whenever
+    #: ``judge_configured()`` is true. This said "Present only in a MEASURED
+    #: breakdown" until ADR-0064, which is precisely the defect that ADR fixes:
+    #: the judge was billed but never estimated, so the user approved a figure
+    #: that excluded it.
     stage: str
     usd: Decimal = Field(ge=Decimal("0"))
 
@@ -1333,11 +1349,26 @@ class CostEstimationService:
                 context_tokens += Decimal(len(prior_q)) / CHARS_PER_TOKEN
             if prior_s:
                 context_tokens += Decimal(len(prior_s)) / CHARS_PER_TOKEN
+        # Issue #265 left this HALF done, and #110's follow-on is the other
+        # half. ``judge_configured()`` is THE predicate — the same one
+        # ``query_runs._request_path_judge`` gates the paid call on and
+        # ``/status.judge_enabled`` reports — so the figure the user APPROVES
+        # cannot drift from whether the call actually happens. It was already
+        # applied to the fail-safe bound (:meth:`_estimate_bound_usd`); until
+        # ADR-0064 it was NOT applied here, so ``estimated_cost_usd`` excluded
+        # a call the run was then billed for. MEASURED on a real production
+        # run: estimate $0.0550, actual $0.0745, judge $0.0031 charged and
+        # $0.0000 estimated. Local import to avoid a cycle
+        # (evaluation -> debate -> costs).
+        from product_app.evaluation import judge_configured
+
+        price_judge = judge_configured()
         (
             initial_per_model,
             initial_total,
             debate_round_cost,
             synthesis_cost,
+            judge_cost,
             raw_total,
         ) = self._cost_components(
             query_text=query_text,
@@ -1355,6 +1386,7 @@ class CostEstimationService:
             # stays strictly <= the ``_estimate_bound_usd`` ceiling.
             synthesis_sections=Decimal(settings.cost_synthesis_sections),
             context_tokens=context_tokens,
+            price_judge=price_judge,
         )
         total = raw_total.quantize(COST_DISPLAY_QUANTUM, rounding=ROUND_HALF_UP)
 
@@ -1368,10 +1400,30 @@ class CostEstimationService:
         # subset against a derived sub-total could leak the debate-round
         # rounding slack into a residual larger than the subset can absorb,
         # silently short-summing the partition.)
-        stage_names = ("initial_answers", "debate_round_1", "debate_round_2", "synthesis")
-        stage_usd = self._reconcile_usd_lines(
-            [initial_total, debate_round_cost, debate_round_cost, synthesis_cost], total
-        )
+        #
+        # ADR-0064 appends a FIFTH line, ``judge``, when a judge is configured.
+        # It is reconciled in the SAME call as the other four, never appended
+        # afterwards: ``_reconcile_usd_lines`` apportions the whole rounding
+        # residual across the lines it is given, so a line added after the fact
+        # would make the partition over-sum ``total`` by its own value. The key
+        # matches the one ``build_measured_breakdown`` already emits, so the
+        # receipt pairs the estimate row to the actual row by stage key.
+        stage_names: list[str] = [
+            "initial_answers",
+            "debate_round_1",
+            "debate_round_2",
+            "synthesis",
+        ]
+        stage_raw: list[Decimal] = [
+            initial_total,
+            debate_round_cost,
+            debate_round_cost,
+            synthesis_cost,
+        ]
+        if price_judge:
+            stage_names.append("judge")
+            stage_raw.append(judge_cost)
+        stage_usd = self._reconcile_usd_lines(stage_raw, total)
         # The two debate rounds share one token model and must display equal,
         # but the largest-remainder tie-break can award the residual quantum to
         # ``debate_round_1`` (lower index) and not ``debate_round_2``. Equal raws
@@ -1402,6 +1454,29 @@ class CostEstimationService:
             )
             raw_model.append(("model", slot.model_id, display_name, initial_i))
         raw_model.append(("synthesis", "synthesis", "Debate + synthesis", inner_call_cost))
+        # ADR-0064. The judge is not one of the four slots and it does not run
+        # on the debate/synthesis writer models either, so folding it into the
+        # writer row would label spend on a THIRD model as synthesis spend.
+        # ``kind``/``model_id``/``display_name`` deliberately match what
+        # ``build_measured_breakdown`` emits for a fired judge (issue #110),
+        # because ``app.js`` pairs an estimate row to its actual row on the
+        # composite key ``"{kind} {model_id}"`` (issue #217) — disagree on
+        # either field and the receipt renders two unpaired half-rows.
+        #
+        # APPENDED LAST, and that position is load-bearing, not cosmetic:
+        # ``app.js`` builds ``state.perModelEstimates`` by mapping the
+        # non-writer rows onto slot cards BY POSITION. Any judge row emitted
+        # before the four slot rows would print the judge's price on a slot
+        # card. The client-side filter is an allowlist for the same reason.
+        if price_judge:
+            raw_model.append(
+                (
+                    "judge",
+                    settings.quorum_eval_judge_model_id,
+                    "Layer-B judge",
+                    judge_cost,
+                )
+            )
         model_usd = self._reconcile_usd_lines([v for *_, v in raw_model], total)
         by_model = [
             CostLineByModel(model_id=mid, display_name=name, usd=usd, kind=kind)
@@ -1421,12 +1496,16 @@ class CostEstimationService:
         context_tokens: Decimal = Decimal(0),
         price_round_two_prior_critique: bool = False,
         price_judge: bool = False,
-    ) -> tuple[list[Decimal], Decimal, Decimal, Decimal, Decimal]:
+    ) -> tuple[list[Decimal], Decimal, Decimal, Decimal, Decimal, Decimal]:
         """The shared per-call token model, parameterised by the initial-answer
         output token count and the synthesis section count.
 
         Returns ``(initial_per_model, initial_total, debate_round_cost,
-        synthesis_cost, raw_total)``. Used with the realistic output floor + all
+        synthesis_cost, judge_cost, raw_total)``. ``judge_cost`` is returned
+        SEPARATELY, not merely folded into ``raw_total``, because
+        :meth:`_estimate_breakdown` has to place it on its own displayed line
+        in both partitions (ADR-0064) — it is zero unless ``price_judge``.
+        Used with the realistic output floor + all
         ``cost_synthesis_sections`` sections for the displayed estimate
         (:meth:`_estimate_breakdown`) and with the enforced ``max_tokens`` cap +
         the same section count for the fail-safe guardrail bound
@@ -1694,7 +1773,14 @@ class CostEstimationService:
             + synthesis_cost
             + judge_cost
         )
-        return initial_per_model, initial_total, debate_round_cost, synthesis_cost, raw_total
+        return (
+            initial_per_model,
+            initial_total,
+            debate_round_cost,
+            synthesis_cost,
+            judge_cost,
+            raw_total,
+        )
 
     def _estimate_bound_usd(
         self,
@@ -1746,7 +1832,17 @@ class CostEstimationService:
             debate_output_override=Decimal(settings.cost_debate_output_tokens_cap),
             context_tokens=context_tokens,
             # The bound is the only caller that must be a true CEILING, and the
-            # only one with no breakdown to reconcile.
+            # only one with no breakdown to reconcile — which is why
+            # ``price_round_two_prior_critique`` is still exclusive to it: that
+            # term belongs to no single displayed stage, so the point path
+            # cannot carry it without breaking the partition.
+            #
+            # ``price_judge`` used to be exclusive to it for the same reason,
+            # and that was the #265 half-fix ADR-0064 completes: the judge DOES
+            # map cleanly onto one displayed line, so it is now priced on both
+            # paths and reconciled into a ``"judge"`` row by
+            # :meth:`_estimate_breakdown`. Both paths call ``judge_configured()``
+            # so the two figures cannot disagree about whether a judge will run.
             price_round_two_prior_critique=True,
             price_judge=judge_configured(),
         )

@@ -433,15 +433,21 @@ test.describe("UI parity — behaviour", () => {
     expect(overflows, `receipt values overflow their column: ${JSON.stringify(overflows)}`).toEqual([]);
   });
 
-  test("Run details receipt: an ACTUAL-only cost row (e.g. a fired Layer-B judge call, absent from the pre-run estimate) still gets its own line in both itemized columns", async ({ page }) => {
+  test("Run details receipt: an ACTUAL-only cost row that the pre-run estimate does not carry still gets its own line in both itemized columns", async ({ page }) => {
     // Issue #217: the "Cost by model"/"Cost by stage" columns iterate the
     // PRE-RUN ESTIMATE's rows and backfill an actual figure only for a
-    // matching key. A judge call is realized post-hoc (issue #110) and never
-    // appears in the estimate, so its actual-only row used to be dropped
-    // entirely from BOTH columns even though the receipt's Total (read
-    // straight from actual.total) already included it — the itemized rows
-    // silently summed to less than the displayed Total, hiding that a paid
-    // judge call happened at all.
+    // matching key. An actual-only row used to be dropped entirely from BOTH
+    // columns even though the receipt's Total (read straight from
+    // actual.total) already included it — the itemized rows silently summed to
+    // less than the displayed Total, hiding that a paid call happened at all.
+    //
+    // THE MOCK BELOW IS THE POINT, not a claim about production. Its estimate
+    // deliberately carries NO advisory row, which is what drives the backfill
+    // path this test exists to pin. Do not read it as "the estimate never has
+    // one": since ADR-0064 the server prices a configured Layer-B judge INTO
+    // the estimate, so in production that row normally PAIRS est -> actual.
+    // The backfill still has to work for any row the actual has and the
+    // estimate does not.
     const judgeModelRow = { model_id: "openai/gpt-4o", display_name: "Layer-B judge", usd: "0.006", kind: "judge" };
     const judgeStageRow = { stage: "judge", usd: "0.006" };
     const resp = completedResp();

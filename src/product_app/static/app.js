@@ -245,12 +245,16 @@
     highStakesAck: false,
     // Per-SLOT USD estimate keyed by slot position (array index),
     // populated from the estimate response's
-    // ``cost_estimate.breakdown.by_model`` (the ``kind === "synthesis"``
-    // writer row is excluded — it is not a slot). ``by_model`` is emitted
-    // one row per slot in slot order (costs.py loops ``model_slots``), so
-    // keying by position — NOT by model_id — keeps duplicate models in
-    // different slots from collapsing/misattributing. Consumed by
-    // ``renderModelInputs`` to label each slot card.
+    // ``cost_estimate.breakdown.by_model``, which emits the four slot rows
+    // FIRST and in slot order (costs.py loops ``model_slots``), so keying by
+    // position — NOT by model_id — keeps duplicate models in different slots
+    // from collapsing/misattributing. Consumed by ``renderModelInputs`` to
+    // label each slot card.
+    //
+    // Only ``kind === "model"`` rows land here. ``by_model`` also carries the
+    // ``"synthesis"`` writer row and, since ADR-0064, a priced advisory row
+    // when one is configured — neither is a slot, and both are filtered out
+    // by an allowlist rather than by naming the rows to exclude.
     perModelEstimates: [],
     // PR8 — Conversation trail. A capped list of completed/terminal runs
     // the user can click to revisit. Each entry carries the displayed
@@ -4333,12 +4337,19 @@
           ),
         );
       });
-      // Issue #217: a row present ONLY in the actual breakdown (e.g. a fired
-      // Layer-B judge call — issue #110 — which is realized post-hoc and never
-      // appears in the pre-run estimate) still needs its own line, or the
-      // itemized rows silently under-sum the Total below. No "est" figure to
-      // pair it with, so the est side renders "—", same as any other missing
-      // pairing.
+      // Issue #217: a row present ONLY in the actual breakdown still needs its
+      // own line, or the itemized rows silently under-sum the Total below. No
+      // "est" figure to pair it with, so the est side renders "—", same as any
+      // other missing pairing.
+      //
+      // The worked example here USED to be the Layer-B advisory row, on the
+      // grounds that it was realized post-hoc and never appeared in the
+      // pre-run estimate. Half of that stopped being true with ADR-0064: the
+      // estimate now carries a priced advisory row whenever one is configured,
+      // so the common case is a normal est -> actual PAIRING, not a backfill.
+      // The backfill below is still required — it covers any row the actual
+      // breakdown has and the estimate does not, including a run whose
+      // configuration changed between the estimate and the result.
       if (actualByModel) {
         const estModelKeys = new Set(est.by_model.filter(Boolean).map(modelLineKey));
         actualByModel.forEach((line) => {
@@ -6784,18 +6795,31 @@
       state.currentEstimate = estimate;
       // Slice 1: fan the itemized ``by_model`` breakdown out onto the
       // slot cards and surface the grand total in the composer footer.
-      // ``by_model`` is emitted one row per slot in slot order, so we map
-      // the (non-synthesis) rows to slots BY POSITION — keying by
-      // model_id would collapse two slots that pick the same model. The
-      // ``kind === "synthesis"`` writer row is NOT a slot, so it is
-      // excluded before the positional mapping.
+      // ``by_model`` emits the four slot rows first, in slot order, so we map
+      // them to slots BY POSITION — keying by model_id would collapse two
+      // slots that pick the same model.
+      //
+      // ALLOWLIST, NOT DENYLIST, and the difference is load-bearing. This
+      // used to read ``kind !== "synthesis"`` — "everything that is not the
+      // writer row is a slot". That stopped being true when the estimate
+      // gained a priced Layer-B advisory row (ADR-0064): the server now emits
+      // SIX rows when one is configured, and the denylist let the sixth into
+      // an array that is indexed by slot position. It is benign only while
+      // that row is emitted last, which is a property of the server that this
+      // code should not have to depend on. Naming the kinds that ARE slots
+      // cannot rot the same way.
+      //
+      // MEASURED: against a five-row breakdown (no advisory row — the
+      // configuration CI runs) the two filters return byte-identical arrays,
+      // so this changes no rendering the test suite or the visual baselines
+      // can see. They differ only on the six-row shape, which is production.
       state.perModelEstimates = [];
       const byModel =
         estimate.cost_estimate.breakdown &&
         estimate.cost_estimate.breakdown.by_model;
       if (Array.isArray(byModel)) {
         state.perModelEstimates = byModel
-          .filter((row) => row.kind !== "synthesis")
+          .filter((row) => row.kind === "model")
           .map((row) => row.usd);
       }
       renderModelInputs(getModelIds());

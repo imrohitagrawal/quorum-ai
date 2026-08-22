@@ -280,13 +280,25 @@ def test_the_displayed_breakdown_still_reconciles_to_its_total(
     """The judge term must not disturb the displayed partition.
 
     ``by_stage`` and ``by_model`` are each required to re-sum to
-    ``breakdown.total`` EXACTLY. The judge term is priced into the BOUND only —
-    the same treatment ``price_round_two_prior_critique`` already gets, and for
-    the same recorded reason: a term belonging to no single displayed stage
-    breaks the reconciliation when added to the point path.
+    ``breakdown.total`` EXACTLY.
+
+    THIS DOCSTRING USED TO SAY "the judge term is priced into the BOUND only",
+    and that was true until ADR-0064. It is no longer: the point path prices
+    the judge too, and gives it its own reconciled ``"judge"`` row in both
+    partitions. ``price_round_two_prior_critique`` remains bound-only, because
+    THAT term maps onto no single displayed stage; the judge does.
+
+    NOTE WHAT THIS TEST CANNOT SEE, because it is the trap this whole area
+    keeps falling into: the two assertions below were GREEN for the entire
+    lifetime of the defect ADR-0064 fixes. "Both partitions sum to ``total``"
+    is trivially true of an implementation with NO judge row at all. This test
+    is a regression guard on the reconciliation invariant and nothing more —
+    the cardinality and value assertions that actually pin the judge row live
+    in ``tests/unit/test_estimate_prices_the_judge.py``.
 
     WHAT TURNS THIS RED: adding the judge cost into the point-path
-    ``raw_total`` without giving it a displayed stage line.
+    ``raw_total`` without giving it a displayed stage line — i.e. appending the
+    judge row after ``_reconcile_usd_lines`` instead of inside it.
     """
     with monkeypatch.context() as mp:
         _enable_judge(mp)
