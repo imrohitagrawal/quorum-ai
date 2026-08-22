@@ -4049,8 +4049,12 @@
 
   // --- Slice 4b: run receipt + cost reconciliation -----------------------
   //
-  // Friendly labels for the four pipeline stages. Keys mirror the backend
-  // ``progress.stages[].stage`` vocabulary and ``CostLineByStage.stage``.
+  // Friendly labels for the four PIPELINE stages. Their keys mirror the
+  // backend ``progress.stages[].stage`` vocabulary. They are NOT the whole of
+  // ``CostLineByStage.stage``, which this comment claimed until ADR-0064: a
+  // breakdown can also carry an advisory stage row that has no pipeline
+  // counterpart and therefore no friendly label. Every reader below falls back
+  // to the raw key, so an unlabelled row renders rather than disappearing.
   const RECEIPT_STAGE_LABELS = {
     initial_answers: "Initial answers",
     debate_round_1: "Debate round 1",
@@ -4062,11 +4066,14 @@
     debate_round_1: "Round 1",
     debate_round_2: "Round 2",
     synthesis: "Synthesis",
-    // Deliberately NO entry for a Layer-B judge's advisory cost-stage row
+    // Deliberately NO entry for the Layer-B advisory cost-stage row
     // (issue #110/#217): the frontend must contain no `judge` identifier at
     // all (D-5, tests/unit/test_evaluation_projection_has_no_judge.py), so
-    // an actual-only stage row for it falls through to its own raw label via
-    // the `|| line.stage` fallback below rather than a friendly mapping here.
+    // that row falls through to its own raw label via the `|| line.stage`
+    // fallback below rather than a friendly mapping here. Since ADR-0064 it
+    // appears on the ESTIMATE too, not only in a post-hoc actual breakdown —
+    // so this fallback now renders on the pre-run cost gate as well. Adding a
+    // friendly label here would trip the D-5 guard and is a separate decision.
   };
   const RECEIPT_PIPELINE_ORDER = [
     "initial_answers",
@@ -4405,7 +4412,10 @@
         );
       });
       // Issue #217: same actual-only-row gap as the "by model" column above,
-      // for the stage partition (e.g. the judge's "judge" stage row).
+      // for the stage partition. The worked example here used to be the
+      // advisory stage row; since ADR-0064 the estimate normally carries that
+      // row too, so it pairs rather than being backfilled. The backfill still
+      // covers any stage the actual has and the estimate does not.
       if (actualByStage) {
         const estStageKeys = new Set(
           est.by_stage.filter(Boolean).map((line) => line.stage),

@@ -1463,11 +1463,13 @@ class CostEstimationService:
         # composite key ``"{kind} {model_id}"`` (issue #217) — disagree on
         # either field and the receipt renders two unpaired half-rows.
         #
-        # APPENDED LAST, and that position is load-bearing, not cosmetic:
-        # ``app.js`` builds ``state.perModelEstimates`` by mapping the
-        # non-writer rows onto slot cards BY POSITION. Any judge row emitted
-        # before the four slot rows would print the judge's price on a slot
-        # card. The client-side filter is an allowlist for the same reason.
+        # APPENDED LAST — defence in depth, not a contract. ``app.js`` maps
+        # ``by_model`` rows onto slot cards BY POSITION, so a judge row emitted
+        # before the four slot rows used to print the judge's price on a slot
+        # card. That consumer now filters by an ALLOWLIST (``kind === "model"``)
+        # and is immune to the ordering, so the two mitigations overlap on
+        # purpose: the allowlist is the real fix, and keeping the slot rows at
+        # indices 0-3 protects any consumer that has not been audited yet.
         if price_judge:
             raw_model.append(
                 (

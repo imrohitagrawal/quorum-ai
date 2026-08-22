@@ -62,7 +62,12 @@ the point estimate only.
   user on the live site sees an understated figure today.
 - The understated figure is also **metered**. A run is booked to the durable
   spend ledger at `estimated_cost_usd` on the create path
-  (`query_run_orchestration.py:928`), unconditionally.
+  (`query_run_orchestration.py:928`). Not *unconditionally* — the first draft
+  of this ADR said that and it is false: `try_record_run_charge` books nothing
+  when the global ceiling is reached or the ledger cannot be metered, and
+  `_void_run_billing` takes the charge back if the worker never starts. The
+  point that survives is the one that matters here: nothing on that path
+  consults `live_execution`.
 - The qualification: with `live_execution = false` the judge does not actually
   fire. `_request_path_judge` returns `None` when no answer ran on a live
   provider path (`query_run_orchestration.py:2268`). So while live execution is
@@ -98,8 +103,15 @@ folding it into `raw_total`, because the breakdown has to place it.
 
 `_reconcile_usd_lines` apportions the whole rounding residual across the lines
 it is handed. A line appended afterwards would make the partition over-sum
-`total` by its own value. Appending last is also load-bearing on the client:
-`app.js` maps non-writer `by_model` rows onto slot cards **by position**.
+`total` by its own value. That part is load-bearing.
+
+Appending it LAST is defence in depth, not a contract. The first draft of this
+ADR called the position "load-bearing on the client" because `app.js` maps
+`by_model` rows onto slot cards by position — but decision 5 replaces that
+consumer's denylist with an allowlist, which makes the client immune to the
+ordering. The two claims cancelled each other out and review caught it.
+Appending last is still the right default: it keeps the four slot rows at
+indices 0-3 for any consumer that has not yet been audited.
 
 Measured, production-shaped, judge configured — both partitions re-sum exactly:
 
@@ -131,15 +143,25 @@ test or visual baseline can see.
 
 **Zero. Structurally, not statistically.**
 
-The bands are not evaluated against `estimated_cost_usd`. `costs.py:638` reads
+The bands are not evaluated against `estimated_cost_usd`. `estimate()` reads
 `threshold_action, reasons = self._threshold_for(bound)`, and `_threshold_for`
-is called from exactly one place:
+has exactly one production call site. Run it yourself rather than trusting a
+pasted line number — this ADR's first draft quoted the numbers from *before*
+the diff and presented them as command output:
 
 ```console
 $ grep -n "_threshold_for" src/product_app/costs.py
-638:        threshold_action, reasons = self._threshold_for(bound)
-1832:    def _threshold_for(self, bound: Decimal) -> tuple[...]
+654:        threshold_action, reasons = self._threshold_for(bound)
+1930:    def _threshold_for(self, bound: Decimal) -> tuple[CostThresholdAction, list[str]]:
 ```
+
+Those line numbers are as of this commit and will rot — the ADR's first draft
+carried the pre-diff ones for exactly that reason. The claim to check is
+"`_threshold_for` takes `bound`", which the `def` line above settles whatever
+line it sits on.
+
+(There is also one test call site, `tests/unit/test_estimate_token_model.py:222`,
+which passes `est.estimated_cost_usd` deliberately.)
 
 `bound` is `max_cost_usd`, which has priced the judge since #265 and which this
 diff leaves byte-identical (see the table above). No run changes band. The probe
@@ -158,11 +180,14 @@ $0.0547 → $0.0638:
 
 | rail | before | after | moves? |
 |---|---|---|---|
-| daily cap $0.20 — runs admitted (`costs.py:822`) | 2 | 2 | no |
-| cumulative $0.25 — runs admitted (`costs.py:664`) | 4 | 3 | **yes** |
+| daily cap $0.20 — runs admitted (`costs.py:838`) | 2 | 2 | no |
+| cumulative $0.25 — runs admitted (`costs.py:680`) | 4 | 3 | **yes** |
 
-The daily cap meters a ledger of measured actuals and only the pending run's
-addend changes, so it does not move at these figures. The cumulative in-memory
+The daily cap meters a ledger that books each run at the point ESTIMATE and
+then corrects it to the measured actual once the run ends (#255/ADR-0016), so
+it is a mix, not pure actuals. Only the pending run's addend changes here.
+Derived both ways to be safe: metering actuals it is 2 -> 2, metering estimates
+3 -> 3. It does not move either way. The cumulative in-memory
 rail sums recorded point estimates, so raising the estimate tightens it by one
 run. That is the rail working correctly: it was under-counting spend before.
 
@@ -170,7 +195,8 @@ run. That is the rail working correctly: it was under-counting spend before.
 
 The reserve is **not** a typical-case model, and it over-estimates. On the one
 production run we have measured, the judge charged $0.0031 against a $0.0091
-reserve — **2.9x**. The reserve is dominated by terms that stay at their caps:
+reserve — the reserve is **2.9x the actual**, i.e. 1.9x *above* it. It is
+dominated by terms that stay at their caps:
 of its 28,232 input tokens, 15,000 (53%) are the five synthesis sections at
 `SYNTHESIS_SECTION_MAX_TOKENS` and 8,000 (28%) are the four answers at
 `initial_answer_max_tokens`.
@@ -187,9 +213,12 @@ check that would settle the real ratio is a handful of live runs with
 answer-tokens term could follow the same typical-vs-cap parameterisation the
 rest of `_cost_components` uses — `init_output_tokens` rather than
 `initial_answer_max_tokens`. Measured: this moves the term $0.0091 → $0.0078, a
-$0.0013 improvement, and still leaves it 2.5x above the one measured actual,
-because it only touches 28% of the reserve while the 53% synthesis-section term
-stays capped. Rejected: it buys little accuracy, it makes the point-path and
+$0.0013 improvement, and still leaves it 2.5x the one measured actual, because
+it only touches the answers term while the synthesis-section term stays capped.
+By DOLLAR share of the reserve — not the token share quoted above, which is a
+different denominator and the first draft conflated the two — the answers term
+is $0.00200 (22.0%) and the synthesis-section term $0.00375 (41.2%); the output
+cap is the balance. Rejected: it buys little accuracy, it makes the point-path and
 bound-path judge terms differ (a second formula to keep in step), and it shades
 a figure that is already documented as not a true ceiling.
 
@@ -232,28 +261,77 @@ behaviour on the actual side. Opening that guard is a separate decision.
 - The cumulative in-memory spend rail admits one fewer run per window.
 - `CostBreakdown` from an estimate may now carry five `by_stage` rows and six
   `by_model` rows. **Consumers must filter by allowlist, not by excluding
-  `"synthesis"`.** The client-side filter was fixed in this PR; any future
-  consumer has the same obligation.
+  `"synthesis"`.** TWO consumers had that denylist, not one, and the first
+  draft of this ADR claimed only the client did. The second was the unmocked
+  server cross-check in `e2e/tests/ui-parity/parity-behavior.spec.ts`, which
+  compares the four slot cards against the real `/estimate` response. It stayed
+  green in CI only because CI configures no judge — the guard was blind in
+  exactly the configuration it exists to protect. Measured by running that spec
+  against a server with `QUORUM_EVAL_JUDGE_API_KEY` and
+  `QUORUM_EVAL_JUDGE_MODEL_ID` set (live execution off, so no judge call and no
+  spend), with the denylist restored:
+
+  ```
+  Expected length: 5
+  Received length: 4
+  Received array:  ["~$0.001", "~$0.006", "~$0.003", "<$0.001"]
+  ```
+
+  With the allowlist it passes in the same configuration. Both consumers are
+  fixed here. Any future consumer has the same obligation.
 - While `live_execution` is false, the estimate reserves for a judge call that
   will not fire.
-- The reserve runs ~2.9x above the single measured actual.
+- The reserve runs at ~2.9x the single measured actual.
 
 ## What turns the tests red
 
 `tests/unit/test_estimate_prices_the_judge.py` and two additions to
 `tests/integration/test_cost_gate_js.py`. Each was proved by mutation — file
-copied aside, mutated, restored from the copy, verified with `diff -q`:
+copied aside, mutated, restored from the copy, verified with `diff -q`.
+
+**Scope for every row below** (baseline `24 passed`), stated because a count
+without a scope is not reproducible:
+
+```
+pytest tests/unit/test_estimate_prices_the_judge.py \
+       tests/unit/test_bound_covers_the_judge.py \
+       tests/integration/test_cost_gate_js.py -q --no-cov -p no:randomly
+```
 
 | mutation | result |
 |---|---|
 | drop `price_judge=price_judge` from the `_estimate_breakdown` call | 3 failed |
 | never append the judge `by_stage` row | 4 failed (incl. the pre-existing reconciliation test) |
 | `price_judge = judge_configured()` → `True` | 2 failed |
-| emit the judge `by_model` row first instead of last | 9 failed |
+| emit the judge `by_model` row first instead of last (`append` → `insert(0, …)`) | 1 failed |
+| emit the judge `by_model` row TWICE, once first and once last | 15 failed |
+| delete the debate-round equalisation fixup | 1 failed |
 | `app.js` allowlist → the old denylist | 1 failed |
-| gate render drops an unknown stage row | 1 failed |
+| gate render drops a stage row it has no label for | 2 failed (incl. one pre-existing) |
+
+**Two of these numbers were wrong in the first draft of this ADR, and review
+caught both.** The row now reading "1 failed" for the reorder was published as
+"9 failed": the mutation that produced 9 had *inserted* a judge row while
+leaving the original `append` in place, so it measured a DOUBLE-ADD and was
+labelled a reorder. Both are now listed separately, with the double-add
+re-measured in the stated scope. The gate-render row said "1 failed" because
+the mutation used was narrower than the one described.
+
+The honest consequence of the corrected reorder row: **row order is guarded by
+exactly one assertion**, the `kinds == [...]` list. Nothing else catches it,
+because the allowlist in decision 5 makes the client immune to the ordering —
+which is the point of an allowlist, but it means "appended last" is defence in
+depth, not a load-bearing contract.
 
 The vacuity trap this file is built around: "both partitions sum to `total`" is
 true of an implementation with **no judge row at all**, and that assertion
 already existed and stayed green for the whole lifetime of this defect. Every
 reconciliation assertion is therefore paired with a cardinality assertion.
+
+**One test shipped in the first draft was itself vacuous**, which is the same
+trap one level up. `test_the_two_debate_rounds_still_display_equal_with_a_judge_row`
+was written against the module's 33-character query, at which the two rounds
+reconcile equal on their own — so deleting the equalisation fixup entirely left
+it green. Measured with the fixup deleted, the rounds come out unequal at **237
+of the first 1,199 query lengths**; the test now uses a 1-character query, which
+is one of them, and deleting the fixup turns that test and only that test red.

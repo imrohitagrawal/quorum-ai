@@ -148,6 +148,12 @@ and setting one to mean the other would put a false reason on screen. A separate
 - **The reconciliation is the measurement instrument for the UNVERIFIED row
   above.** Once real runs land, `cost_reconciled` rows carry estimate and actual
   side by side, so the ratio becomes a query instead of a guess.
+- **SUPERSEDED 2026-08-22 by ADR-0064 — the judge is no longer absent from
+  the estimate.** `max_cost_usd` gained a judge term in #265 and
+  `estimated_cost_usd` gained one in ADR-0064, so both figures now price it
+  and `by_stage` can carry a fifth `judge` row. The `no judge` cell in the
+  table above is stale for the same reason. The bullet is kept as written
+  below because it records what was true when the decision was made.
 - **The judge is absent from the estimate, and #216 stays open — but for a
   narrower reason than this ADR first gave.**
   - `max_cost_usd` prices four stages and has no judge term, so the figure this

@@ -1288,8 +1288,17 @@ test.describe("UI parity — behaviour", () => {
         body: JSON.stringify({ query_text: q, model_slots: ids }),
       });
       const j = await resp.json();
+      // ALLOWLIST, matching the client's own filter. This mirror used to read
+      // `kind !== "synthesis"`, which asked "is this row not the writer?" and
+      // called everything else a slot. Since ADR-0064 the server also emits a
+      // priced `kind: "judge"` row when one is configured, so the denylist
+      // returned FIVE rows against the four slot cards `client` collects and
+      // the length assertion below failed — against a judge-configured
+      // deployment only, which is production. It passed in CI because CI
+      // configures no judge, i.e. the guard was blind in exactly the
+      // configuration it exists to protect.
       const server = (j.cost_estimate.breakdown.by_model || [])
-        .filter((r: { kind: string }) => r.kind !== "synthesis")
+        .filter((r: { kind: string }) => r.kind === "model")
         .map((r: { usd: string }) => Number(r.usd));
       return { client, server };
     }, longQ);

@@ -349,20 +349,39 @@ def test_the_two_debate_rounds_still_display_equal_with_a_judge_row(
     changes which lines win the residual, so the fixup is re-exercised here
     rather than assumed.
 
-    WHAT TURNS THIS RED: appending the judge line AFTER the equalisation fixup
-    in a way that re-introduces the imbalance, or reconciling the judge line in
-    a second, separate ``_reconcile_usd_lines`` call.
+    THE QUERY LENGTH IS THE WHOLE TEST, and the first version of this test got
+    it wrong. Written against the module's 33-character ``QUERY``, it was
+    VACUOUS: at that length the two rounds reconcile equal on their own, so
+    deleting the equalisation fixup **entirely** left this test green — it
+    asserted that two already-equal numbers were equal. Adversarial review
+    caught it. Measured with the fixup deleted, the rounds come out unequal at
+    **237 of the first 1,199 query lengths**, and a 1-character query is one of
+    them (``d1=0.0052`` vs ``d2=0.0051``). That is the fixture used below.
+
+    WHAT TURNS THIS RED: deleting or weakening the equalisation fixup in
+    ``_estimate_breakdown`` — proved by deleting all four of its lines and
+    watching this test, and only this test, go red.
     """
     with monkeypatch.context() as mp:
-        _, bd = _breakdown(mp, judge=True)
+        _pin_catalog(mp)
+        mp.setattr(settings, "quorum_eval_judge_api_key", "sk-not-a-real-key")
+        mp.setattr(settings, "quorum_eval_judge_model_id", JUDGE_MODEL)
+        est = cost_estimation_service.estimate(query_text="x", model_slots=_slots())
+    assert est.breakdown is not None
+    bd = est.breakdown
     stages = {line.stage: line.usd for line in bd.by_stage}
-    # POSITIVE PARTNER: the rounds are a real non-zero cost, so "equal" is not
-    # two zeroes agreeing with each other.
+
+    # POSITIVE PARTNERS: the judge row really is present (so this is the
+    # five-line partition, not the old four-line one), and the rounds are a
+    # real non-zero cost — "equal" is not two zeroes agreeing.
+    assert len(_judge_stage_rows(bd)) == 1, "no judge row; wrong partition under test"
     assert stages["debate_round_1"] > 0
     assert stages["debate_round_1"] == stages["debate_round_2"], (
         f"the debate rounds display unequal with a judge row: "
         f"{stages['debate_round_1']} vs {stages['debate_round_2']}"
     )
+    # And the transfer is sum-neutral: the partition still re-sums to total.
+    assert sum(line.usd for line in bd.by_stage) == bd.total
 
 
 def test_the_estimate_stays_at_or_below_the_bound_across_query_lengths(
