@@ -161,6 +161,89 @@ including **writing a new false provenance claim while removing one**. Its own
 words are worth keeping: *"A sentence written to correct a provenance claim is
 itself a provenance claim and needs the same control experiment."*
 
+## How work packages are run here — the protocol, corrected mid-session
+
+Recorded because it is an operator decision, not a repo fact, and it would
+otherwise have to be restated by hand every session.
+
+**A work-package orchestrator has NO merge authority.**
+
+1. One orchestrator subagent per work package. It fans out subagents for
+   development and review.
+2. **Reviewers are READ-ONLY and refute by default.** Tell them so IN CAPITALS.
+   A reviewer that must mutate source takes its own copy
+   (`git archive HEAD | tar -x -C <dir>`). One builder writes at a time —
+   subagents share the working tree.
+3. Every reviewer prompt carries, verbatim: *"For every number, superlative, and
+   causal claim in the diff's comments, commit body and PR description, name the
+   command that produces it — or mark it UNVERIFIED."*
+4. The orchestrator's package ENDS when the PR is open and CI is green. It stops
+   and hands back the diff, the gate numbers, and everything unresolved.
+5. **The main orchestrator verifies independently and performs the merge itself**
+   — re-deriving the required contexts from branch protection rather than
+   trusting a list — then owns close-out: deploy verification, branch deletion
+   (local and remote), worktree removal.
+
+**Circuit breaker, enforced by the orchestrator:** max 2 review rounds, 2
+reviewers per round, 1 builder writing at any moment, 12 subagents total, and
+merges **0** (it has none). Two defective fixes in a row is a STOP, and the
+approach change is the main orchestrator's call.
+
+**Why the correction was made.** The first package pre-authorised the merge
+("merge once CI is green"). The orchestrator then judged for itself whether the
+condition held and merged. That delegates the judgement the review layer exists
+to apply, and from outside it is indistinguishable from a subagent merging on
+its own authority — a safety classifier flagged it, correctly, on the mechanics.
+A go-ahead is an ACT, not a standing permission.
+
+**It paid for itself immediately.** Under the corrected protocol the second
+package handed back rather than merging, and its own round-2 review caught two
+defects its round-1 fix had introduced — including writing a NEW false
+provenance claim while removing one. Its summary is worth keeping verbatim:
+*"A sentence written to correct a provenance claim is itself a provenance claim
+and needs the same control experiment."*
+
+## Stale branches — analysed and deleted, so nobody re-litigates them
+
+Four unmerged branches dated 2026-08-18/19 were audited before deletion, because
+"unmerged" is not the same as "abandoned" and the work looked substantial (859 to
+1519 insertions each against their merge-base).
+
+**Method that settled it.** `git diff main...<branch>` is misleading here — every
+one of these was SQUASH-merged, so the old merge-base inflates the diff. Compare
+TIPS instead (`git diff main <branch>`), and ask the decisive question: **does the
+branch hold any file that main does not?**
+
+| Branch | Tip | Files unique to it | Verdict |
+|---|---|---|---|
+| `worktree-wf_3da3170f-0e4-8` | `d744b64` | **0** (main has 14 more) | superseded |
+| `worktree-wf_a8374a31-4ae-8` | `4a507f2` | **0** (main has 13 more) | superseded |
+| `worktree-wf_e213e967-3fe-10` | `bf26805` | **0** (main has 14 more) | superseded |
+| `fix/mutation-gate-measures-nothing` | `390ad00` | **2** | both superseded — see below |
+
+Every branch showed thousands of DELETIONS against main (5690 / 4167 / 5798 /
+10419), i.e. moving to any of them would REMOVE work. The three `worktree-wf_*`
+branches are parallel agent attempts from a prior workflow run; the winning
+attempt merged and these are the losing siblings.
+
+**The two genuinely unique files, and why neither is lost work:**
+
+- `test_key_probe_refusal_shape.py` (473 lines, under tests/unit, issue #203) —
+  superseded by a DELIBERATE REMOVAL. Main's `21d8358` removed the 403
+  shape-capture outright and **ADR-0054 closes #203** on the measured finding
+  that no network intermediary is configured on this deployment. The test was
+  built, then review concluded the whole capture was unnecessary.
+- ADR-0052, "the mutation gate must say what it measured" — the same
+  decision landed as **ADR-0057** ("The mutation gate is kept as a regression
+  detector, and its root resolution must reach the real tree").
+
+**Consequence worth knowing:** `docs/adr/` therefore skips **0052 and 0053** —
+a harmless artifact of abandoned branches, not a missing decision. Do not
+"repair" the sequence; ADR numbers are identifiers, not a census.
+
+All four deleted (local and remote). Tips recorded above and recoverable via
+`git reflog` or `git fsck --lost-found` per rule 16c.
+
 ## Next actions, in the order I would take them
 
 1. **P4 — price the judge into `estimated_cost_usd`.** Small, bounded, fully
