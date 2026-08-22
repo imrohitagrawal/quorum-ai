@@ -1,12 +1,30 @@
 """Cost estimation and threshold guardrails.
 
-Three thresholds:
+Three per-call bands. They key on ``max_cost_usd`` — the fail-safe "up to $Y"
+bound — and NOT on ``estimated_cost_usd``, so a run can never bill past a limit
+it was waved through under. ``_threshold_for`` takes that bound as its only
+argument, and ``estimate()`` is its only production caller:
 
-* ``estimated_cost_usd <= 0.15``  → ``ALLOW`` (submit freely).
-* ``0.15 < estimated_cost_usd <= 0.25``  → ``REQUIRE_CONFIRMATION`` (caller
-  must echo back the ``confirmation_token`` from the estimate response).
-* ``estimated_cost_usd > 0.25``  → ``BLOCK`` (cannot run, regardless of
+* ``max_cost_usd <= 0.15``  (``SOFT_THRESHOLD_USD``) → ``ALLOW`` (submit
+  freely).
+* ``0.15 < max_cost_usd <= 0.25``  (``HARD_LIMIT_USD``) →
+  ``REQUIRE_CONFIRMATION`` (caller must echo back the ``confirmation_token``
+  from the estimate response).
+* ``max_cost_usd > 0.25``  → ``BLOCK`` (cannot run, regardless of
   confirmation).
+
+CORRECTED 2026-08-22 (ADR-0064). These three lines named ``estimated_cost_usd``,
+which was true before the fail-safe bound existed and false afterwards; nothing
+ever compared the sentence to ``_threshold_for``. The error mattered because
+ADR-0064 turns on exactly this distinction — it prices the Layer-B judge into
+``estimated_cost_usd`` and shows that no run changes band as a result, a finding
+this docstring flatly contradicted.
+
+Narrow scope, deliberately: the bands above are the only thing these bullets
+describe. ``estimated_cost_usd`` still drives the separate ACCUMULATION rails in
+``estimate()``, and those can return ``BLOCK`` on their own — the cumulative
+hard limit and the 24h ``DAILY_CAP_USD`` both add the POINT estimate to a
+ledger. So ``BLOCK`` is reachable without the bound exceeding anything.
 
 Confirmation tokens are bound to the ``account_id`` that requested them
 and carry an explicit expiry. Replay across accounts is rejected; replay
