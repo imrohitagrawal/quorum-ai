@@ -354,12 +354,19 @@ class CostEstimate(BaseModel):
     #: are ASSUMPTIONS no code enforces (the search context is injected upstream
     #: by the provider). So "real cost never exceeds it" is not a guarantee this
     #: figure can make, and the shipped UI copy deliberately says "the worst
-    #: case this run is priced at" instead. The cost guardrail (BLOCK /
-    #: REQUIRE_CONFIRMATION / daily cap)
-    #: is evaluated against THIS value, not the point estimate, so the rail
-    #: fails safe (issue #16 rec #2/#3). Optional with a ``None`` default so
-    #: pre-existing ``CostEstimate(...)`` constructions keep working; always >=
-    #: ``estimated_cost_usd`` when ``estimate()`` sets it.
+    #: case this run is priced at" instead. The per-call BAND (BLOCK /
+    #: REQUIRE_CONFIRMATION) is evaluated against THIS value, not the point
+    #: estimate, so that rail fails safe (issue #16 rec #2/#3). The two
+    #: ACCUMULATION rails are NOT: the cumulative guard compares
+    #: ``cumulative + estimated > HARD_LIMIT_USD`` and the 24h cap compares
+    #: ``already_spent + estimated > DAILY_CAP_USD`` — both add the POINT
+    #: estimate to a ledger of measured actuals (#255/ADR-0016), because the
+    #: addend for a run that has not happened is the only figure that exists
+    #: before the run does. This comment listed "daily cap" among the things
+    #: evaluated against the bound until 2026-08-22; that was wrong. Optional
+    #: with a ``None`` default so pre-existing ``CostEstimate(...)``
+    #: constructions keep working; always >= ``estimated_cost_usd`` when
+    #: ``estimate()`` sets it.
     max_cost_usd: Decimal | None = Field(default=None, ge=Decimal("0"))
     #: Itemized cost partition (by model AND by stage). Optional with a
     #: ``None`` default so pre-existing ``CostEstimate(...)`` constructions
