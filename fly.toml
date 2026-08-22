@@ -24,15 +24,21 @@ kill_timeout = "5s"
   SESSION_COOKIE_SECURE = "true"
   ACCOUNT_LEGACY_HEADER_ENABLED = "false"
   OPENROUTER_APP_URL = "https://quorum.stackclimb.com"
-  # TEMPORARILY "true" to collect the #268 / #105 measurement sample. This is
-  # the ONLY switch that lets real money be spent: providers.py:670 is
+  # OFF. This is the ONLY switch that lets real money be spent: providers.py:670 is
   # `openrouter_live_execution_enabled and openrouter_key`, and the key is
-  # already a deployed secret. While this reads "true", EVERY visitor to /ui
-  # spends real money against GLOBAL_DAILY_CEILING_USD ($5.00/day).
-  # It is meant to go back to "false" as soon as the sample is collected —
-  # see ADR-0060, which states the revert condition. Nothing in the product
-  # needs this on continuously.
-  OPENROUTER_LIVE_EXECUTION_ENABLED = "true"
+  # already a deployed secret. Whenever this reads "true", EVERY visitor to /ui
+  # spends real money against GLOBAL_DAILY_CEILING_USD ($5.00/day) — not just
+  # the operator.
+  #
+  # It read "true" from 15d822c (2026-08-19) to this commit, to collect the
+  # #268/#105 sample. Measured over that window: $0.1768 total spend, THREE
+  # runs, all three ours. One /ui load. ZERO 5xx events, so #105 gathered
+  # nothing at all. ADR-0060 records what the sample did and did not settle.
+  #
+  # Nothing in the product needs this on continuously, and the failure mode is
+  # silent: an unattended visitor spends money for no measurement. Turn it on
+  # only against a written traffic plan, and revert in the same session.
+  OPENROUTER_LIVE_EXECUTION_ENABLED = "false"
   # issue #27: keep the feedback-event SQLite trail on the persistent volume
   # (mounted at /data below), NOT the ephemeral rootfs default (.data/…) which
   # is wiped on every deploy — that erased the self-improving-loop history.
