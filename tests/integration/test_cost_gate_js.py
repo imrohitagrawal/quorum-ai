@@ -10,9 +10,15 @@ Pinned contract:
 
 * by_model uses each row's ``display_name``, EXCEPT the
   ``kind === "synthesis"`` row, which renders as "Debate + synthesis".
-* by_stage maps the server stage enum (``initial_answers`` /
-  ``debate_round_1`` / ``debate_round_2`` / ``synthesis``) to the friendly
-  labels, and an unknown stage falls back to its raw key.
+* by_stage maps the four PIPELINE stage keys (``initial_answers`` /
+  ``debate_round_1`` / ``debate_round_2`` / ``synthesis``) to friendly labels,
+  and any other stage falls back to its raw key. Those four are no longer the
+  whole server enum: since ADR-0064 an estimate also carries a ``"judge"`` row
+  when a Layer-B judge is configured, which is exactly the fallback case, and
+  it must RENDER rather than be dropped — a dropped row makes the itemized
+  lines under-sum the Total shown beside them.
+* the slot-card fan-out takes only ``kind === "model"`` rows, so a breakdown
+  carrying rows that are not slots cannot shift a price onto a slot card.
 * Both partitions carry the SAME ``total`` (the reconciliation invariant),
   so each column's Total row shows the same figure.
 
@@ -60,7 +66,7 @@ def _extract_function(name: str) -> str:
 
 # Canonical mock numbers from docs/design-handoff/SLICE_STATE.md §"Canonical
 # numbers from the mock (screen 03 / 05)".
-_BREAKDOWN = {
+_BREAKDOWN: dict[str, Any] = {
     "by_model": [
         {
             "model_id": "openai/gpt-4o-mini",
@@ -169,3 +175,132 @@ def test_cost_gate_unknown_stage_falls_back_to_raw_key() -> None:
         {"by_model": [], "by_stage": [{"stage": "mystery_stage", "usd": 0.01}], "total": 0.01}
     )
     assert out["byStage"][0]["label"] == "mystery_stage"
+
+
+# --- ADR-0064: a breakdown that carries a priced advisory row ---------------
+
+#: ``_BREAKDOWN`` plus the sixth ``by_model`` row and fifth ``by_stage`` row an
+#: estimate carries when a Layer-B judge is configured. Deliberately a SEPARATE
+#: fixture rather than a change to ``_BREAKDOWN``: the tests above pin the
+#: canonical five-row mock and must keep seeing exactly that shape.
+_BREAKDOWN_WITH_ADVISORY: dict[str, Any] = {
+    "by_model": [
+        *_BREAKDOWN["by_model"],
+        {
+            "model_id": "openai/gpt-5-mini",
+            "display_name": "Layer-B judge",
+            "usd": 0.033,
+            "kind": "judge",
+        },
+    ],
+    "by_stage": [*_BREAKDOWN["by_stage"], {"stage": "judge", "usd": 0.033}],
+    "total": 0.223,
+}
+
+
+def _extract_per_model_estimate_chain() -> str:
+    """Pull the REAL slot fan-out filter/map chain out of ``app.js``.
+
+    Executing the shipped expression, rather than re-typing it here, is what
+    makes this test structural instead of a substring check (rule 8): rewriting
+    the predicate in ``app.js`` changes what runs below.
+    """
+    text = APP_JS.read_text(encoding="utf-8")
+    match = re.search(
+        r"state\.perModelEstimates = byModel\s*(\.filter\(.*?\.map\(.*?\));",
+        text,
+        re.DOTALL,
+    )
+    assert match is not None, (
+        "the `state.perModelEstimates = byModel...` chain was not found in "
+        "app.js — was the slot fan-out renamed or restructured?"
+    )
+    return match.group(1)
+
+
+@pytest.mark.skipif(shutil.which("node") is None, reason="node not available")
+def test_the_slot_fan_out_ignores_rows_that_are_not_slots() -> None:
+    """A non-slot ``by_model`` row must never reach the slot-indexed array.
+
+    ``state.perModelEstimates`` is consumed BY POSITION — index *i* labels slot
+    card *i*. The filter used to be a denylist (``kind !== "synthesis"``), i.e.
+    "anything that is not the writer row is a slot". ADR-0064 adds a sixth row
+    that is also not a slot, so the denylist would let it through; it is
+    harmless only while the server happens to emit it last, which is a property
+    this code should not depend on.
+
+    WHAT TURNS THIS RED: restoring the denylist ``row.kind !== "synthesis"`` in
+    ``app.js`` — the array below then has FIVE entries, one of them the
+    advisory row's $0.033, sitting in the slot-indexed array.
+    """
+    chain = _extract_per_model_estimate_chain()
+    script = (
+        f"const byModel = {json.dumps(_BREAKDOWN_WITH_ADVISORY['by_model'])};\n"
+        f"process.stdout.write(JSON.stringify(byModel{chain}));\n"
+    )
+    result = subprocess.run(
+        ["node", "-e", script], check=True, capture_output=True, text=True, timeout=10
+    )
+    per_slot = json.loads(result.stdout)
+
+    # POSITIVE PARTNER: the four real slot prices ARE present and in slot
+    # order, so this is not "the filter returned nothing" passing vacuously.
+    assert per_slot == [0.034, 0.062, 0.031, 0.039], (
+        f"the slot fan-out produced {per_slot}; expected exactly the four "
+        "kind=='model' rows, in slot order"
+    )
+    assert len(per_slot) == 4
+    assert 0.033 not in per_slot, (
+        "the advisory row's price reached the slot-indexed array; a slot card "
+        "would show a price that is not that slot's"
+    )
+    # And the control: with no advisory row present the same chain is unchanged,
+    # which is why this fix moves no rendering in the configuration CI runs.
+    control_script = (
+        f"const byModel = {json.dumps(_BREAKDOWN['by_model'])};\n"
+        f"process.stdout.write(JSON.stringify(byModel{chain}));\n"
+    )
+    control = json.loads(
+        subprocess.run(
+            ["node", "-e", control_script],
+            check=True,
+            capture_output=True,
+            text=True,
+            timeout=10,
+        ).stdout
+    )
+    assert control == [0.034, 0.062, 0.031, 0.039]
+
+
+@pytest.mark.skipif(shutil.which("node") is None, reason="node not available")
+def test_an_unknown_stage_row_still_renders_with_its_raw_key() -> None:
+    """The gate must not DROP a stage row it has no friendly label for.
+
+    Both partitions are guaranteed to re-sum to ``total``, and the gate prints
+    ``total`` beside the itemized rows. Dropping a row it does not recognise
+    would show the user lines that visibly do not add up to the figure they are
+    approving.
+
+    WHAT TURNS THIS RED: rendering ``by_stage`` from a fixed list of known
+    stage keys instead of from the response rows — the fifth row vanishes and
+    the four remaining labels no longer account for ``total``.
+    """
+    out = _run(_BREAKDOWN_WITH_ADVISORY)
+    labels = [row["label"] for row in out["byStage"]]
+    # POSITIVE PARTNER: the four known stages still map to friendly labels, so
+    # a fallback that swallowed everything would not pass this.
+    assert labels[:4] == [
+        "Initial answers × 4",
+        "Debate round 1",
+        "Debate round 2",
+        "Synthesis",
+    ]
+    assert len(labels) == 5, f"a stage row was dropped: {labels}"
+    assert labels[4] == "judge", (
+        f"the unlabelled stage row rendered as {labels[4]!r}; it must fall back "
+        "to its raw server key rather than disappear"
+    )
+    # The rows still account for the total the gate prints next to them.
+    assert sum(row["usd"] for row in out["byStage"]) == pytest.approx(
+        _BREAKDOWN_WITH_ADVISORY["total"]
+    )
