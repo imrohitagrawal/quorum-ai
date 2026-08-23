@@ -6,6 +6,15 @@ on:
   # deploy gate — so it can force a fresh deploy + live verification.
   workflow_dispatch:
   pull_request:
+    # `edited` is NOT a default activity type — GitHub runs a workflow on
+    # `opened`, `synchronize` and `reopened` only. Without it the BLOCKING
+    # close-keyword check below would vet a body that no longer exists at merge
+    # time. Measured over the last 60 merged pull requests: 12 had title/body
+    # edits and 7 of those landed the last edit AFTER the last commit push —
+    # including PR #289, whose body was the one carrying a negated close. It was
+    # edited 25 minutes after the final push and merged 15 minutes after that,
+    # with no CI run in between.
+    types: [opened, synchronize, reopened, edited]
   push:
     branches: [ main ]
 
@@ -29,6 +38,38 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: '3.12'
+      # Issue-close guard, pull-request lane. GitHub closes an issue whenever a
+      # close keyword sits next to `#N`, and its parser has no concept of
+      # negation: four issues in this repo were closed by sentences written to
+      # say they were NOT being closed, across six such texts (see ADR-0066).
+      # BLOCKING here is
+      # legitimate — the author can edit the title or body and go green.
+      # Placed before `uv sync` so the answer arrives in seconds, and it needs
+      # only the runner's own python3.
+      #
+      # The text arrives through `env:` and NEVER through a GitHub expression
+      # inside `run:`. A pull-request body is attacker-controlled; interpolating
+      # it into the script would execute backticks and `$( )` on the runner.
+      - name: Guard against a negated issue close (pull request title + body)
+        if: github.event_name == 'pull_request'
+        env:
+          PR_TITLE: ${{ github.event.pull_request.title }}
+          PR_BODY: ${{ github.event.pull_request.body }}
+        run: python3 scripts/check_close_keywords.py --env PR_TITLE PR_BODY --require-nonempty
+
+      # Post-merge backstop, main only. ADVISORY BY CONSTRUCTION, and it cannot
+      # be anything else: a commit message is immutable, this job produces the
+      # REQUIRED `validate-and-test` context, and deploy.yml gates on that being
+      # green. A blocking version would strand production permanently, with no
+      # edit that could ever turn it green. It reports into the job summary so
+      # the damage is visible the moment it lands.
+      - name: Report a negated issue close on main (advisory)
+        if: github.event_name == 'push'
+        run: |
+          set -o pipefail
+          python3 scripts/check_close_keywords.py --commit HEAD --advisory \
+            | tee -a "${GITHUB_STEP_SUMMARY:-/dev/null}"
+
       - uses: astral-sh/setup-uv@v5
       - name: Install dependencies
         run: uv sync --all-extras
