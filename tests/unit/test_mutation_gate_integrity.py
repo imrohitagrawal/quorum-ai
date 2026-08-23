@@ -20,14 +20,16 @@ so a regression in the real recipe fails here rather than in a prose assertion.
 from __future__ import annotations
 
 import ast
+import fnmatch
 import importlib.util
 import json
 import os
 import re
 import subprocess
 import sys
+import types
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
 import pytest
 
@@ -47,12 +49,27 @@ def scope_script(tmp_path_factory: pytest.TempPathFactory) -> Path:
     return script
 
 
-def _run(script: Path, cwd: Path, *args: str) -> subprocess.CompletedProcess[str]:
+def _run(
+    script: Path, cwd: Path, *args: str, env: dict[str, str] | None = None
+) -> subprocess.CompletedProcess[str]:
+    """Run the extracted scope script, hermetically w.r.t. the truncation marker.
+
+    ``RUN_WITH_DEADLINE_MARKER`` is CLEARED unless a test sets it, deliberately.
+    `make mutation-baseline` exports that variable to everything it runs, and
+    this module is collected inside mutmut's own ``./mutants/`` copy under that
+    very gate — so an inherited value would leak into every report-mode run
+    here. It did: the positive partner of the truncation test below created
+    ``build/mutation/truncated`` under its own tmp_path, and the inherited
+    RELATIVE path then resolved to that same file, so the run that was supposed
+    to be complete read as truncated and the whole gate aborted with
+    "failed to collect stats". Found by running the real recipe, not by reading.
+    """
     return subprocess.run(
         [sys.executable, str(script), *args],
         cwd=cwd,
         capture_output=True,
         text=True,
+        env={**os.environ, "RUN_WITH_DEADLINE_MARKER": "", **(env or {})},
     )
 
 
@@ -1407,3 +1424,479 @@ def test_a_tokenize_failure_fails_closed_instead_of_crashing(
     assert isinstance(node, ast.JoinedStr)
 
     assert module._joined_str_has_a_real_string_literal(node, 'f"x"') is True
+
+
+# ---------------------------------------------------------------------------
+# #337: the scope has to name the ORACLE tests, not only the mutants.
+#
+# `mutmut run` reads its mutant-name arguments TWICE, and the two readers match
+# them against differently-spelled names:
+#
+#   * ``collect_source_file_mutation_data()`` globs them against concrete
+#     mutant keys, which carry the ``__mutmut_<n>`` suffix; and
+#   * ``tests_for_mutant_names()`` globs them against the MANGLED function
+#     names recorded during stats collection, which do NOT.
+#
+# The scope emitted only the suffixed spelling, so the second lookup returned
+# the empty set -- and mutmut reads an empty test set as "no selection given"
+# and runs the WHOLE suite in its clean-test phase, before it scores a single
+# mutant. Measured 2026-08-22 against the real stats file for the three
+# ``costs`` functions of PR #359: 0 mangled names matched, so the clean phase
+# ran all 2929 tests; the genuine association set is 258.
+# ---------------------------------------------------------------------------
+
+ORACLE_BEFORE = """\
+class C:
+    def value(self):
+        return 1
+
+    def value_extra(self):
+        return 10
+
+
+def other():
+    return 100
+"""
+ORACLE_AFTER = ORACLE_BEFORE.replace("return 1\n", "return 2\n", 1)
+
+CHANGED_MANGLED_NAME = "pkg.thing.xǁCǁvalue"
+
+
+def _scope_patterns(scope_script: Path, tmp_path: Path) -> list[str]:
+    """The mutant-name arguments the shipped scope() hands to `mutmut run`.
+
+    Exactly one function changes (`C.value`); `C.value_extra` and `other` are
+    present and untouched, so an over-selecting pattern has something to catch.
+    """
+    repo = _repo_with(tmp_path, ORACLE_BEFORE, ORACLE_AFTER)
+    result = _run(scope_script, repo, "scope", "HEAD", "80")
+    assert result.returncode == 0, result.stdout + result.stderr
+    patterns = result.stdout.split()
+    assert patterns, (
+        "scope() emitted nothing for a changed method, so neither assertion "
+        f"below is measuring anything:\n{result.stdout}{result.stderr}"
+    )
+    return patterns
+
+
+SYNTHETIC_ASSOCIATIONS = {
+    CHANGED_MANGLED_NAME: {"pkg_tests/test_value.py::test_one"},
+    "pkg.thing.xǁCǁvalue_extra": {"pkg_tests/test_extra.py::test_two"},
+    "pkg.thing.x_other": {"pkg_tests/test_other.py::test_three"},
+}
+
+
+def test_the_scope_names_the_tests_that_will_be_the_oracles(
+    scope_script: Path, tmp_path: Path
+) -> None:
+    """Driven through mutmut's OWN lookup, not through a local model of it.
+
+    Asserts equality, not merely non-emptiness: the companion pattern must find
+    the changed function's tests and must not drag in a neighbour's.
+
+    The three `pkg.thing.*` keys are ADDED to mutmut's association map and
+    removed again, rather than the map being swapped out wholesale. This module
+    runs inside mutmut's own `./mutants/` copy during stats collection, where
+    that map is the live recorder of trampoline hits — replacing it, even for
+    one test, drops whatever the collector writes during that window.
+
+    Turns red if: scope() stops emitting the unsuffixed `*<module>.<name>`
+    companion pattern. Verified by deleting that `globs.append` line —
+    `assert set() == {'pkg_tests/test_value.py::test_one'}`.
+    """
+    import mutmut
+    from mutmut.__main__ import tests_for_mutant_names
+
+    patterns = _scope_patterns(scope_script, tmp_path)
+    associations = mutmut.tests_by_mangled_function_name
+    assert not set(SYNTHETIC_ASSOCIATIONS) & set(associations), (
+        "a synthetic key collides with a real recorded one; the assertion "
+        "below would be measuring mutmut's own stats, not this scope"
+    )
+    associations.update(SYNTHETIC_ASSOCIATIONS)
+    try:
+        found = tests_for_mutant_names(patterns)
+    finally:
+        for key in SYNTHETIC_ASSOCIATIONS:
+            associations.pop(key, None)
+
+    assert set(found) == {"pkg_tests/test_value.py::test_one"}
+
+
+def test_the_scope_still_selects_exactly_the_changed_functions_mutants(
+    scope_script: Path, tmp_path: Path
+) -> None:
+    """Positive partner: the mutant selection must be unchanged and precise.
+
+    The lookup mirrored here is `collect_source_file_mutation_data()`'s filter
+    (`mutmut/__main__.py`: `fnmatch.fnmatch(key, mutant_name)`). It is the half
+    of the contract the companion pattern must not disturb: a pattern that
+    matched the mangled name by trailing-globbing the function name instead
+    (`<name>*`) would also select `value_extra`'s mutants and silently mutate a
+    function the diff never touched.
+
+    Turns red if: the `__mutmut_*` glob is dropped (nothing is selected), or
+    the companion pattern is spelled `<name>*` instead of `*<name>`
+    (`value_extra__mutmut_1` joins the selection).
+    """
+    patterns = _scope_patterns(scope_script, tmp_path)
+    keys = [
+        "pkg.thing.xǁCǁvalue__mutmut_1",
+        "pkg.thing.xǁCǁvalue__mutmut_2",
+        "pkg.thing.xǁCǁvalue_extra__mutmut_1",
+        "pkg.thing.x_other__mutmut_1",
+    ]
+
+    selected = [k for k in keys if any(fnmatch.fnmatch(k, p) for p in patterns)]
+
+    assert selected == ["pkg.thing.xǁCǁvalue__mutmut_1", "pkg.thing.xǁCǁvalue__mutmut_2"]
+
+
+def test_an_empty_oracle_set_makes_mutmut_run_the_whole_suite() -> None:
+    """Why the test above matters, pinned against mutmut rather than in prose.
+
+    The cost of an unmatched pattern is not "mutmut runs no tests" — it is
+    "mutmut runs every test". `_pytest_args_regular_run` treats a falsy test
+    set as "no selection given" and falls back to the configured test
+    selection, which here is empty, i.e. pytest's own `testpaths`.
+
+    Turns red if: a mutmut upgrade makes an empty test set mean something else,
+    at which point the companion pattern above is solving a different problem
+    and this whole section needs re-deriving.
+    """
+    from mutmut.__main__ import PytestRunner
+
+    # A duck-typed stand-in: the method reads exactly one attribute, and
+    # constructing a real PytestRunner would require mutmut's Config to be
+    # loaded from a pyproject in the current working directory.
+    stub = cast(
+        "PytestRunner", types.SimpleNamespace(_pytest_add_cli_args_test_selection=["tests"])
+    )
+
+    args_for_none = PytestRunner._pytest_args_regular_run(stub, set())
+    args_for_one = PytestRunner._pytest_args_regular_run(
+        stub, {"pkg_tests/test_value.py::test_one"}
+    )
+
+    assert "pkg_tests/test_value.py::test_one" in args_for_one
+    assert "tests" not in args_for_one, (
+        "a non-empty test set must NARROW the run; mutmut is still adding the "
+        f"whole-suite selection: {args_for_one}"
+    )
+    assert "tests" in args_for_none, (
+        "an empty test set no longer falls back to the whole suite — the "
+        f"defect this section exists for has changed shape: {args_for_none}"
+    )
+
+
+# ---------------------------------------------------------------------------
+# #337: a run the deadline cut short is not a score.
+#
+# `scripts/run_with_deadline.py` exits 0 when it kills the run, deliberately, so
+# that report() still gets to score what landed on disk. mutmut fills in one
+# .meta entry per FINISHED mutant and leaves the rest `None`, and report() skips
+# `None`. Demonstrated on a synthetic .meta of 3 killed and 289 unfilled — the
+# shape a mid-run kill leaves — report() printed "mutation score = 100.0%" and
+# exited 0. The wrapper now drops a marker file when it kills the run, and
+# report() reads the same path.
+# ---------------------------------------------------------------------------
+
+TRUNCATION_MARKER = "build/mutation/truncated"
+
+
+#: The literal `scripts/run_with_deadline.py` writes, read from the script so a
+#: rename on either side turns these tests red rather than quietly unwiring them.
+def _sentinel() -> str:
+    source = (REPO_ROOT / "scripts" / "run_with_deadline.py").read_text(encoding="utf-8")
+    tree = ast.parse(source)
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Assign) and any(
+            isinstance(t, ast.Name) and t.id == "TRUNCATION_SENTINEL" for t in node.targets
+        ):
+            assert isinstance(node.value, ast.Constant)
+            assert isinstance(node.value.value, str)
+            return node.value.value
+    raise AssertionError("TRUNCATION_SENTINEL is gone from scripts/run_with_deadline.py")
+
+
+def _mark_truncated(cwd: Path) -> dict[str, str]:
+    """Write the marker the deadline wrapper writes, and point report() at it."""
+    marker = cwd / TRUNCATION_MARKER
+    marker.parent.mkdir(parents=True, exist_ok=True)
+    marker.write_text(f"{_sentinel()}1440s\n", encoding="utf-8")
+    return {"RUN_WITH_DEADLINE_MARKER": TRUNCATION_MARKER}
+
+
+def test_a_truncated_run_reports_no_percentage_however_good_the_prefix_looks(
+    scope_script: Path, tmp_path: Path
+) -> None:
+    """The whole defect, asserted on CARDINALITY rather than on a clean path.
+
+    Three mutants finished and all three were killed; the rest of the scope was
+    never reached. Reporting 100% off that prefix is the quietest false pass
+    this gate has: the run looks perfect precisely because it stopped early.
+
+    Turns red if: the `if truncated:` branch before the score arithmetic is
+    removed from `report()`. Verified — the run then prints
+    `mutation score (killed / (killed+survived)) = 100.0% (threshold 90%)`.
+    """
+    metas = {
+        "x_a__mutmut_1": 1,
+        "x_a__mutmut_2": 1,
+        "x_a__mutmut_3": 1,
+        "x_a__mutmut_4": None,
+        "x_a__mutmut_5": None,
+    }
+    _write_meta(tmp_path, "costs", metas)
+
+    truncated = _run(
+        scope_script, tmp_path, "report", "origin/main", "90", env=_mark_truncated(tmp_path)
+    )
+    output = truncated.stdout + truncated.stderr
+
+    assert "mutation score" not in output, (
+        "a run the deadline cut short still printed a percentage; the mutants "
+        f"it never reached are unmeasured, not killed:\n{output}"
+    )
+    assert "UNMEASURED" in output, f"a truncated run must say so in words:\n{output}"
+    assert "3 of the scope's mutants" in output, (
+        f"the truncated verdict must report HOW MANY it managed to score:\n{output}"
+    )
+    assert truncated.returncode == 0, (
+        "a truncated run that found NO survivor is a budget event, not a "
+        f"verdict on the diff; it must not fail the gate:\n{output}"
+    )
+
+    # POSITIVE PARTNER: the same metadata, no marker. Without this, the
+    # assertions above are equally satisfied by a report() that has stopped
+    # scoring anything at all.
+    complete = _run(scope_script, tmp_path, "report", "origin/main", "90")
+    assert "mutation score (killed / (killed+survived)) = 100.0%" in complete.stdout, (
+        "the identical metadata scores nothing when the run was NOT truncated — "
+        f"the marker is not what is being measured:\n{complete.stdout}"
+    )
+
+
+def test_a_truncated_run_still_reports_the_survivors_it_did_find(
+    scope_script: Path, tmp_path: Path
+) -> None:
+    """A survivor found before the deadline is a real finding, not noise.
+
+    Suppressing the whole report on truncation would throw away the one part of
+    a partial run that IS evidence. Only the percentage is withheld.
+
+    Turns red if: the truncated branch is moved above the `SURVIVED` loop, or
+    the loop is dropped from it.
+    """
+    _write_meta(tmp_path, "costs", {"x_a__mutmut_1": 1, "x_a__mutmut_2": 0, "x_a__mutmut_3": None})
+
+    result = _run(
+        scope_script, tmp_path, "report", "origin/main", "90", env=_mark_truncated(tmp_path)
+    )
+    output = result.stdout + result.stderr
+
+    assert "SURVIVED x_a__mutmut_2" in output, (
+        f"a survivor found before the deadline was swallowed by the cut-off:\n{output}"
+    )
+    assert "mutation score" not in output, output
+    assert result.returncode != 0, (
+        "a truncated run that DEMONSTRATED a survivor passed. Adversarial "
+        "review found exactly this: the identical metadata exits 1 without the "
+        f"marker, so the marker turned a red gate green:\n{output}"
+    )
+
+
+def test_a_truncated_run_that_scored_nothing_names_the_deadline(
+    scope_script: Path, tmp_path: Path
+) -> None:
+    """#337's actual CI symptom, and the message it used to print.
+
+    `mutants/` was present and fully generated; the deadline simply fired inside
+    mutmut's clean-test phase, before the mutant phase began. The shipped
+    message for that state was "the run did not happen (empty or absent
+    mutants/)", which is false and sent three sessions reading `also_copy`.
+
+    Turns red if: the `if truncated:` branch inside `if not checked:` is
+    removed — the wrong "empty or absent mutants/" message comes back.
+    """
+    _write_meta(tmp_path, "costs", {"x_a__mutmut_1": None, "x_a__mutmut_2": None})
+
+    result = _run(
+        scope_script, tmp_path, "report", "origin/main", "90", env=_mark_truncated(tmp_path)
+    )
+    output = result.stdout + result.stderr
+
+    assert result.returncode != 0, f"a run that scored nothing at all must not pass:\n{output}"
+    assert "deadline" in output, (
+        f"the message must name the deadline, which is the actual cause:\n{output}"
+    )
+    assert "empty or absent" not in output, (
+        "the truncated run is still being blamed on a missing mutants/ tree — "
+        f"the wrong cause, and the one that cost the most time:\n{output}"
+    )
+
+    # POSITIVE PARTNER: with no marker the "absent mutants/" diagnosis is the
+    # right one and must survive.
+    untruncated = _run(scope_script, tmp_path, "report", "origin/main", "90")
+    assert "empty or absent" in untruncated.stdout + untruncated.stderr
+
+
+def test_an_unset_marker_variable_is_not_read_as_a_truncated_run(
+    scope_script: Path, tmp_path: Path
+) -> None:
+    """The harness Makefile that runs the recipe verbatim leaves the marker
+    variable EMPTY, and `os.path.exists("")` is False — but so is
+    `os.path.exists` of any path under a directory that happens to exist. Pin
+    the empty-string case explicitly rather than relying on that.
+
+    Turns red if: `truncated` drops its `bool(marker)` guard and an empty
+    variable starts resolving to some existing path.
+    """
+    _write_meta(tmp_path, "costs", {"x_a__mutmut_1": 1, "x_a__mutmut_2": 0})
+
+    result = _run(
+        scope_script,
+        tmp_path,
+        "report",
+        "origin/main",
+        "90",
+        env={"RUN_WITH_DEADLINE_MARKER": ""},
+    )
+
+    assert "mutation score (killed / (killed+survived)) = 50.0%" in result.stdout, result.stdout
+
+
+def test_a_truncated_run_that_found_a_survivor_cannot_be_greener_than_the_same_run_untruncated(
+    scope_script: Path, tmp_path: Path
+) -> None:
+    """The finding that nearly shipped: truncation must never RELAX the gate.
+
+    Three killed and seven survived is 30%, below any threshold this repo uses,
+    and the untruncated gate exits 1 on it. The first version of the truncated
+    branch returned before the threshold check, so dropping one marker file
+    into the workspace turned that exit 1 into an exit 0 — a visibly red job
+    made green by the very mechanism added to make the gate more honest.
+
+    Turns red if: the `counts["survived"]` check is removed from the truncated
+    branch. Verified — the truncated run then exits 0 while the untruncated one
+    exits 1, and the two assertions below disagree.
+    """
+    metas: dict[str, int | None] = {f"x_a__mutmut_{i}": 1 for i in range(1, 4)}
+    metas.update({f"x_b__mutmut_{i}": 0 for i in range(1, 8)})
+    metas.update({f"x_c__mutmut_{i}": None for i in range(1, 290)})
+    _write_meta(tmp_path, "costs", metas)
+
+    untruncated = _run(scope_script, tmp_path, "report", "origin/main", "80")
+    truncated = _run(
+        scope_script, tmp_path, "report", "origin/main", "80", env=_mark_truncated(tmp_path)
+    )
+
+    assert untruncated.returncode != 0, (
+        "the control run passed at 30%; this test is not measuring a "
+        f"relaxation because there is nothing to relax:\n{untruncated.stdout}"
+    )
+    assert "BELOW THRESHOLD" in untruncated.stdout, untruncated.stdout
+    assert truncated.returncode != 0, (
+        "adding the truncation marker turned a failing gate into a passing "
+        f"one:\n{truncated.stdout}"
+    )
+    assert "7 mutant(s) SURVIVED before the cut-off" in truncated.stdout, truncated.stdout
+
+
+def test_only_the_deadline_wrappers_own_marker_counts_as_truncation(
+    scope_script: Path, tmp_path: Path
+) -> None:
+    """Detection is by CONTENT, so a pointed-at file cannot mute the gate.
+
+    `RUN_WITH_DEADLINE_MARKER` comes from the environment. With an
+    existence-only test, `MUTATION_TRUNCATION_MARKER=/dev/null make
+    mutation-baseline` made a completed, below-threshold run report UNMEASURED
+    and exit 0 — demonstrated by adversarial review. /dev/null cannot even be
+    unlinked, so the wrapper's clear-on-entry could not undo it.
+
+    Turns red if: the sentinel comparison in `report()` is replaced by
+    `os.path.exists(marker)`. Verified — the first two cases then report
+    UNMEASURED instead of a score.
+    """
+    _write_meta(tmp_path, "costs", {"x_a__mutmut_1": 1, "x_a__mutmut_2": 0})
+    decoy = tmp_path / "decoy"
+    decoy.write_text("an ordinary file that is not a truncation marker\n", encoding="utf-8")
+
+    for label, value in (("a file with the wrong content", "decoy"), ("an empty setting", "")):
+        result = _run(
+            scope_script,
+            tmp_path,
+            "report",
+            "origin/main",
+            "90",
+            env={"RUN_WITH_DEADLINE_MARKER": value},
+        )
+        assert "mutation score (killed / (killed+survived)) = 50.0%" in result.stdout, (
+            f"{label} muted the score line:\n{result.stdout}"
+        )
+
+    # POSITIVE PARTNER: the wrapper's real sentinel IS recognised, so the two
+    # negatives above are about the content and not about a dead code path.
+    real = _run(
+        scope_script, tmp_path, "report", "origin/main", "90", env=_mark_truncated(tmp_path)
+    )
+    assert "UNMEASURED" in real.stdout, real.stdout
+
+
+def test_every_truncated_diagnosis_says_the_run_was_truncated(
+    scope_script: Path, tmp_path: Path
+) -> None:
+    """mutmut runs its cheapest mutants first, and a no-tests mutant costs zero.
+
+    So "the few mutants we reached were all no-tests" is a LIKELY shape for a
+    real truncation, and that branch used to tell the author to add a test
+    without ever mentioning that the budget had run out. The notice is printed
+    once, above every diagnosis, so whichever one fires carries the context.
+
+    Turns red if: the `if truncated:` notice after the counts line is removed —
+    the no-tests diagnosis then names only a missing test.
+    """
+    _write_meta(tmp_path, "costs", {"x_a__mutmut_1": 33, "x_a__mutmut_2": 33})
+
+    result = _run(
+        scope_script, tmp_path, "report", "origin/main", "90", env=_mark_truncated(tmp_path)
+    )
+    output = result.stdout + result.stderr
+
+    assert "TRUNCATED" in output, (
+        f"a truncated run diagnosed as a pure no-tests gap, silently:\n{output}"
+    )
+    assert "NO covering test" in output, (
+        f"the no-tests diagnosis was lost; it is still the right one:\n{output}"
+    )
+    assert result.returncode != 0, output
+
+
+def test_an_all_timeout_truncated_run_keeps_the_all_timeout_diagnosis(
+    scope_script: Path, tmp_path: Path
+) -> None:
+    """Both are true; "every mutant timed out" is the more specific one.
+
+    A scope slow enough to time every mutant out is a scope slow enough to hit
+    the wall clock, so this co-occurrence is realistic — `mutation-baseline.md`
+    §5 measured a 24-33% timeout rate on this app. The first version of the fix
+    put the truncated branch first and printed "before a single mutant was
+    scored" over a run in which 66 mutants had timed out on the line above.
+
+    Turns red if: the truncated branch is moved back above the timeout branch.
+    """
+    _write_meta(tmp_path, "costs", {f"x_a__mutmut_{i}": -24 for i in range(1, 67)})
+
+    result = _run(
+        scope_script, tmp_path, "report", "origin/main", "90", env=_mark_truncated(tmp_path)
+    )
+    output = result.stdout + result.stderr
+
+    assert "every mutant 66 timed out" in output, (
+        f"the truncation notice swallowed the true, more specific cause:\n{output}"
+    )
+    assert "before any mutant produced a kill-or-survive verdict" not in output, (
+        f"66 mutants produced a verdict; the message says none did:\n{output}"
+    )
+    assert "TRUNCATED" in output, f"the truncation is still worth saying:\n{output}"
+    assert result.returncode == 0, output

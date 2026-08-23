@@ -328,3 +328,52 @@ def test_the_doc_honesty_artifact_tier_skips_off_the_recorded_hardware(
     assert module._skip_unless_comparable(artifact) == "", (
         "the artifact tier skips even on macOS, so it compares nothing anywhere"
     )
+
+
+def test_the_scope_expansion_is_not_subject_to_pathname_expansion(tmp_path: Path) -> None:
+    """#337: the scope now emits leading-`*` oracle patterns.
+
+    The recipe expands `$(tr '\\n' ' ' < scope.txt)` unquoted, because each line
+    has to become its own argument — which also exposes it to globbing. A file
+    in the repo root whose name ended in a mutant name would silently replace
+    the pattern with that filename, and mutmut would run against a scope nobody
+    wrote. `set -f` closes it.
+
+    The first assertion is the POSITIVE PARTNER: it demonstrates, in a real
+    shell, that the hazard exists at all. Without it, the second assertion
+    would be equally satisfied by a shell that never globbed.
+
+    Turns red if: `set -f` is dropped from the recipe's work branch.
+    """
+    (tmp_path / "notes-pkg.thing.x_f").write_text("bait", encoding="utf-8")
+    (tmp_path / "scope.txt").write_text("*pkg.thing.x_f\npkg.thing.x_f__mutmut_*\n")
+    show = 'printf "%s\\n" $(tr "\\n" " " < scope.txt)'
+
+    unguarded = subprocess.run(
+        ["/bin/sh", "-c", show], cwd=tmp_path, capture_output=True, text=True
+    )
+    assert "notes-pkg.thing.x_f" in unguarded.stdout, (
+        "the shell did not glob the pattern, so this test cannot show that "
+        f"`set -f` prevents anything:\n{unguarded.stdout}"
+    )
+
+    guarded = subprocess.run(
+        ["/bin/sh", "-c", f"set -f; {show}"], cwd=tmp_path, capture_output=True, text=True
+    )
+    assert guarded.stdout.split() == ["*pkg.thing.x_f", "pkg.thing.x_f__mutmut_*"], guarded.stdout
+
+    # COMMENT LINES STRIPPED FIRST. Written without this, the assertion below
+    # stayed green after `set -f` was deleted from the recipe, because the
+    # recipe's own explanatory `@#` comment names the flag — AGENTS.md rule 8's
+    # substring trap, reproduced inside the test written to close it.
+    body = "\n".join(
+        line
+        for line in recipe_lines(MAKEFILE.read_text(encoding="utf-8"))
+        if not line.lstrip("\t").lstrip("@-").startswith("#")
+    )
+    guard_at = body.find("set -f")
+    expansion_at = body.find("build/mutation/scope.txt)")
+    assert 0 <= guard_at < expansion_at, (
+        "the recipe expands the scope file without `set -f` in force first, so "
+        f"a leading-`*` oracle pattern can be replaced by a filename:\n{body}"
+    )

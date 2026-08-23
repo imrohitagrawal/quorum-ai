@@ -26,6 +26,18 @@ still leaves a genuine, if partial, count on disk instead of silence.
 The wrapped command's own exit code is returned UNCHANGED when it finishes
 within the deadline, so a real mutmut failure (not a timeout) still fails the
 calling recipe's existing error-handling exactly as before.
+
+Issue #337: exiting 0 on our own deadline hides WHICH of the two happened from
+whatever runs next. `make mutation-baseline`'s report() scores the per-mutant
+metadata mutmut leaves on disk and skips the entries mutmut never filled in.
+Demonstrated on a synthetic .meta holding 3 killed mutants and 289 unfilled
+ones, which is the shape a mid-run kill leaves: report() printed
+"mutation score = 100.0%" and exited 0. (No CI run has reached that state --
+until the fix in the same commit, the gate died before its mutant phase began.)
+When RUN_WITH_DEADLINE_MARKER names a
+path, this script creates that file if and only if it killed the run, and
+deletes any stale one otherwise, so the next step can tell a complete run from
+a truncated one. Unset, nothing is written and behaviour is exactly as before.
 """
 
 from __future__ import annotations
@@ -36,10 +48,73 @@ import signal
 import subprocess
 import sys
 
+#: The first bytes of the marker file. The reader (`report()` in the Makefile's
+#: MUTMUT_SCOPE_PY) matches on this rather than on the file merely existing, so
+#: an unrelated file at the configured path cannot declare a completed run
+#: truncated.
+TRUNCATION_SENTINEL = "run_with_deadline killed this run at "
+
+
+def _truncation_marker() -> str:
+    """Path to create when we kill the run; empty when the caller wants none."""
+    return os.environ.get("RUN_WITH_DEADLINE_MARKER", "")
+
+
+def _clear_truncation_marker() -> bool:
+    """Remove a marker left by an EARLIER run. False if one survives.
+
+    Without this, one truncated run would make every later run in the same
+    workspace read as truncated -- the mirror image of the bug this exists to
+    fix, and just as silent.
+
+    Adversarial review: suppressing the error and carrying on made that
+    *silent* again -- a read-only directory, a permissions problem, or a
+    directory sitting at the marker path left the stale marker in place while
+    this returned success. It is safe to fail loudly HERE, before anything has
+    been started, which is exactly why the write path (below) does not.
+    """
+    marker = _truncation_marker()
+    if not marker:
+        return True
+    with contextlib.suppress(OSError):
+        os.unlink(marker)
+    return not os.path.exists(marker)
+
+
+def _write_truncation_marker(deadline_seconds: float) -> None:
+    """Record that WE killed this run. Never raises.
+
+    Adversarial review: this runs immediately before the process-group kill,
+    and an `IsADirectoryError` (or ENOSPC, or a read-only filesystem)
+    propagating out of here skipped the kill entirely and left mutmut's whole
+    worker group orphaned -- reopening issue #182, the exact failure this
+    script exists to prevent. Reproduced: the child outlived its deadline and
+    wrote its "I survived" file. A missing marker degrades to the pre-#337
+    behaviour; a missing kill does not degrade to anything.
+    """
+    marker = _truncation_marker()
+    if not marker:
+        return
+    with contextlib.suppress(OSError):
+        parent = os.path.dirname(marker)
+        if parent:
+            os.makedirs(parent, exist_ok=True)
+        with open(marker, "w", encoding="utf-8") as handle:
+            handle.write(f"{TRUNCATION_SENTINEL}{deadline_seconds:.0f}s\n")
+
 
 def run_with_deadline(deadline_seconds: float, command: list[str]) -> int:
     if not command:
         print("run_with_deadline: no command given", file=sys.stderr)
+        return 2
+
+    if not _clear_truncation_marker():
+        print(
+            "run_with_deadline: could not remove the stale truncation marker "
+            f"{_truncation_marker()!r}; refusing to run, because every result "
+            "from here on would read as truncated",
+            file=sys.stderr,
+        )
         return 2
 
     # New session == new process group whose id equals this child's pid, so
@@ -52,6 +127,11 @@ def run_with_deadline(deadline_seconds: float, command: list[str]) -> int:
         return proc.wait(timeout=deadline_seconds)
     except subprocess.TimeoutExpired:
         pass
+
+    # Written BEFORE the kill, not after: the killing path below can give up
+    # on reaping (see the bounded waits) and an exception on the way out must
+    # not be the reason a truncated run reads as a complete one.
+    _write_truncation_marker(deadline_seconds)
 
     pgid = os.getpgid(proc.pid)
     print(

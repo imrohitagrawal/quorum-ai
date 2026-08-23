@@ -93,6 +93,16 @@ DESELECTED_FROM_THE_MUTANT_RUN = (
     "tests/unit/test_guard_suite_is_not_skipped.py",
     "tests/unit/test_replay_mutation_scope.py",
     "tests/unit/test_replay_scope_matches_makefile_scope.py",
+    # ``rglob``s ``e2e/tests`` and reads every ``.github/workflows/*.yml``, so
+    # inside ``./mutants/`` it measures the COPY. ``[tool.mutmut].also_copy``
+    # includes ``e2e/tests``, which carries the GITIGNORED ``e2e/tests/review/``
+    # scratch specs (AGENTS.md rule 13a) into that copy; no workflow references
+    # them, so this module failed there and ``-x`` killed stats collection —
+    # "failed to collect stats. runner returned 1", 83 seconds in, ZERO mutants
+    # scored (measured 2026-08-20 on a real 3-function scope, #337). It imports
+    # only ``re``/``pathlib``/``pytest`` and names ``product_app`` nowhere, so it
+    # can kill no ``src/`` mutant.
+    "tests/unit/test_no_orphaned_e2e_specs.py",
 )
 
 MARKER = "repo_introspection"
