@@ -949,13 +949,21 @@ security-scan: check-python
 # never sees the merge text. It is a loaded gun pointed at your own foot and
 # this target is the safety catch you have to remember to use.
 #
-#   make close-guard PR=361 \
-#     SUBJECT="fix: the thing" \
-#     BODY="$$(cat /tmp/merge-body.md)"
+# THE TEXT TRAVELS IN THE ENVIRONMENT, NEVER IN A MAKE VARIABLE. A merge body
+# is full of backticks and quotes. The first version of this recipe expanded
+# the body straight into /bin/sh, which (a) executed whatever the body said and
+# (b) could not parse PR #360's real merge body at all — the one text this
+# target exists for. A reviewer demonstrated both. There is no $(SUBJECT) or
+# $(BODY) in the recipe on purpose; do not add one back, and see
+# tests/unit/test_close_keyword_guard.py for the test that refuses it.
+#
+#   PR=361 \
+#   MERGE_SUBJECT="fix: the thing" \
+#   MERGE_BODY="$$(cat /tmp/merge-body.md)" \
+#   make close-guard
 close-guard: check-python
-	@MERGE_SUBJECT="$(SUBJECT)" MERGE_BODY="$(BODY)" $(PYTHON) \
-		scripts/check_close_keywords.py --env MERGE_SUBJECT MERGE_BODY \
-		--require-nonempty --premerge-pr $(PR)
+	@$(PYTHON) scripts/check_close_keywords.py --env MERGE_SUBJECT MERGE_BODY \
+		--require-nonempty --premerge-pr "$${PR:?set PR=<pull request number>}"
 
 ci-evidence: test-report security-scan
 

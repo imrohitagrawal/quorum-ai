@@ -15,17 +15,24 @@ GitHub closes an issue when a close keyword (`close`/`closes`/`closed`,
 #337" contains "close #337", so the issue closes — saying the exact opposite of
 what the author wrote.
 
-That has happened five times here. Every row was re-verified from the GitHub API
-on 2026-08-24 with `gh api repos/:owner/:repo/issues/<n>/timeline`, reading the
-`closed` event's `commit_id`:
+**Six such texts have named five issues here, and four of those issues actually
+closed.** Every row was re-verified from the GitHub API on 2026-08-24 with
+`gh api repos/:owner/:repo/issues/<n>/timeline`, reading the `closed` event:
 
-| Issue | Text that did it | Surface | Evidence |
-|---|---|---|---|
-| #175 | `Filed, not fixed: #175 (whitespace ...` | commit `e6c84ea` (PR #174) | close event `commit_id: e6c84ea` |
-| #185 | `not fixed: #185, #171, #178, #180, #182` | commit `0ace31e` | close event `commit_id: 0ace31e` |
-| #268 | `This does **not** close #268.` | PR #282 body | `closingIssuesReferences: [268]`, close event `commit_id: null` |
-| #105 | `does not close #105, #268 or #203` | PR #289 body | caught by a manual grep before merge; the body was reworded and no close event exists |
-| #337 | `**This does NOT close #337.**` | `gh pr merge --body` (PR #360) | close event `commit_id: 4ea57ba` |
+| Issue | Text that did it | Surface | Closed? | Evidence |
+|---|---|---|---|---|
+| #175 | `Filed, not fixed: #175 (whitespace ...` | commit `e6c84ea` (PR #174) | yes | close event `commit_id: e6c84ea` |
+| #185 | `not fixed: #185, #171, #178, #180, #182` | commit `0ace31e` | yes | close event `commit_id: 0ace31e` |
+| #268 | `This does **not** close #268.` | PR #282 body | yes | `closingIssuesReferences: [268]`, close event `commit_id: null` |
+| #268 | `This does NOT close #268: the ...` | commit `8ca6a98` (the same PR's merge) | — | the same issue, on the other surface |
+| #337 | `**This does NOT close #337.**` | `gh pr merge --body` (PR #360) | yes | close event `commit_id: 4ea57ba` |
+| #105 | `does not close #105, #268 or #203` | PR #289 body | **NO** | caught by a manual grep before merge; `gh issue view 105` still reports `state=OPEN, closedAt=null` |
+
+**Say "four issues closed", not "five".** The first draft of this record said
+five in four different files while its own evidence column said #105 never
+closed; a reviewer caught it, and `CLOSED_BY_A_NEGATED_SENTENCE` in
+`tests/unit/test_close_keyword_guard.py` now pins the set so the sentence and
+the corpus cannot drift apart again.
 
 The #185 case was **not** in the brief for this work. It was found by running the
 classifier over all of history, which is the argument for building the
@@ -79,9 +86,12 @@ damage**. The bracket form is deliberately not flagged.
 `.github/workflows/deploy.yml` gates deployment on the "CI" workflow concluding
 successfully for that SHA. A commit message is **immutable** — no edit can turn a
 failing message check green. A blocking check on the merged message would
-therefore strand production permanently over a cosmetic error, with no path to
-green. This is why layer 3 below reports and does not block, and it is a
-structural fact, not a preference.
+therefore strand the deploy over a cosmetic error, with no way to fix that SHA —
+until some later commit supersedes it (`scripts/deploy_gate.py` only treats a
+SHA as stranded while it is `main`'s tip) or an operator reaches for
+`deploy.yml`'s `workflow_dispatch` escape hatch. Neither is a remedy anyone
+should need for a typo. This is why layer 3 below reports and does not block,
+and it is a structural fact, not a preference.
 
 ## Decision
 
@@ -90,7 +100,7 @@ enforcement and which is discipline.
 
 | # | Surface | Runs | Kind | Blocking |
 |---|---|---|---|---|
-| 1 | PR title + body | `validate-and-test`, `pull_request` only | **Enforcement** | **Yes** |
+| 1 | PR title + body | `validate-and-test`, `pull_request` only (incl. `edited`) | **Enforcement** | **Yes** |
 | 2 | the exact `gh pr merge --subject`/`--body`, plus GitHub's parse of the PR | `make close-guard`, by hand before merging | **Discipline** | No — and it cannot be |
 | 3 | the tip commit message on `main` | `validate-and-test`, `push` only | Backstop | No — see above |
 
@@ -100,9 +110,27 @@ job rather than as a new job, so it inherits that job's required-context status
 with **no branch-protection change**, and it runs before `uv sync` so the answer
 arrives in seconds.
 
+`ci.yml`'s `pull_request` trigger now names its activity types explicitly,
+**including `edited`**, which is not a default — GitHub runs a workflow on
+`opened`, `synchronize` and `reopened` only. Without it, a body edited after the
+last push is never inspected while GitHub still parses it at merge time.
+Measured over the last 60 merged pull requests: 12 had title or body edits (33
+edits in total) and **7 landed their last edit after the last commit push** —
+including **PR #289 itself**, edited 25 minutes after its final push and merged
+15 minutes later with no CI run in between. The cost is roughly half an extra
+CI run per pull request, on a public repository where Actions minutes are free.
+
 **Layer 2 is the only layer that can stop the PR #360 class before the damage**,
 and nothing can force it to run. CI never sees the merge text. Calling it a gate
 would be a lie; it is a safety catch that has to be remembered.
+
+Its `make` recipe passes the subject and body **through the environment and
+never through a make variable**. The first version expanded them into `/bin/sh`,
+which a reviewer used to execute a command from a crafted body — and which could
+not parse PR #360's *real* merge body at all, the single text the layer exists
+for, because that body contains 30 backticks and 6 double quotes. A layer that
+cannot read its own motivating case is worse than absent, since it reports an
+error that looks like a tooling problem rather than a finding.
 
 **Layer 3 cannot block** for the reason given above. It writes into the job
 summary so that damage is visible the moment it lands, instead of being
@@ -115,6 +143,16 @@ word within three words before the keyword, stopping at a clause boundary
 (`.!?;:` a newline, **or a comma**), with markdown emphasis (`*`, `_`, `` ` ``)
 ignored because GitHub ignores it too — the live PR #282 body is
 `This does **not** close #268`.
+
+A **single newline is not a boundary; a blank line is.** git wraps a commit body
+at about 72 characters, so `does NOT\nclose #337` is the ordinary shape of the
+sentence this exists to catch — treating every newline as a boundary disarmed
+the guard on it entirely. Treating no newline as a boundary is equally wrong: it
+let the walk reach out of `Closes #258.` into the subject line above and find
+the `nothing` in *"a judge that produced nothing"*, producing two false
+positives on real commits (`b904ce6`, `9cfda0e`). A blank line separates a
+commit subject from its body and one paragraph from the next; a line wrap
+separates nothing.
 
 A bare `Fixes #123` is the correct and common way to close an issue and is left
 alone. The comma boundary is what keeps `With no regressions, closes #123` clean
@@ -141,13 +179,31 @@ examined 344 commit message(s) on origin/main; 4 flagged
 | Legitimate closes left alone | 64 |
 | Negated closes flagged | 4 commits — every one a real defect |
 | False positives over all of history | **0** |
-| Real cases flagged (the five above, incl. the two PR bodies) | 5 of 5 |
-| Clean-corpus items wrongly flagged | 0 of 10 |
-| Mutations applied to the checker and its wiring | 11, **all RED**, 0 survivors |
+| Real texts flagged | 6 of 6 |
+| Clean-corpus items wrongly flagged | 0 of 13 |
+| Mutations applied to the checker and its wiring | 25, **all RED**, 0 survivors |
 
-The fifth case is a pull-request body and so does not appear in the commit scan;
-the two PR-body texts are pinned as literals in
-`tests/unit/test_close_keyword_guard.py`.
+And on the **other** surface layer 1 actually gates, which the first draft did
+not measure at all:
+
+| Measure | Value |
+|---|---|
+| Pull requests examined (title + body) | 242 |
+| Closing references found | 67, across 59 PRs |
+| Flagged | **1** — PR #282, the true positive |
+| False positives | **0** |
+
+The two pull-request-body texts (#282's and #289's) do not appear in the commit
+scan and are pinned as literals in `tests/unit/test_close_keyword_guard.py`.
+
+**Two of those 25 mutations survived on first attempt** and are recorded because
+the fix is the interesting part: widening the keyword set to the gerund
+`closing` (which GitHub does not honour) went undetected because the suite only
+asserted such text was not *flagged*, never that it was not a *reference*; and
+flipping the pull-request step's `if:` from `==` to `!=` survived because the
+test matched a substring of the expression rather than the whole of it. That
+second one is not cosmetic — it would run the blocking step on every push to
+`main` with the variables unset, exit 2, and redden a required context.
 
 ## Rejected alternatives
 
@@ -161,8 +217,13 @@ the two PR-body texts are pinned as literals in
    for the pull request and blind to the merge text. It returned `[]` for PR
    #360 while that merge closed #337. Kept in layer 2 as a *supplement*, where it
    covers forms the regex does not (`GH-123`, `owner/repo#123`, issue URLs).
-4. **Make layer 3 blocking.** Strands production permanently; the message cannot
-   be edited. Pinned by a test.
+4. **Make layer 3 blocking.** The message cannot be edited, so that SHA can
+   never go green. Precisely: `scripts/deploy_gate.py` treats a failed SHA as a
+   stranding only while it is still `main`'s tip, so the block lasts until the
+   next commit lands rather than forever, and `deploy.yml` keeps
+   `workflow_dispatch` as an explicit ungated escape hatch. It is still an
+   outage of the deploy path caused by a typo, with no in-place remedy. Pinned
+   by a test.
 5. **A local `commit-msg` git hook.** The damaging text is composed by
    `gh pr merge`, not by a local `git commit`, so the hook never sees it. Also
    local-only, absent in CI, and skippable at will.
@@ -197,6 +258,18 @@ its evidence:
 * **A negation further than three words before the keyword**, or separated from
   it by a comma or a sentence end. That boundary is what buys the zero false
   positives, and it is a deliberate trade.
+* **Negation expressed without a negation word.** An adversarial reviewer found
+  these unflagged, every one of which GitHub would act on: *"This fails to close
+  #337"*, *"This declines to close #337"*, *"This only partially fixes #337"*,
+  *"This hardly closes #337"*, *"This does not, in any way, close #337"* (the
+  commas stop the walk), *"Deliberately not: closes #337"*. **Zero instances of
+  any of them exist** in 344 commit messages or 242 pull requests, so they were
+  left out rather than widening the matcher on speculation and paying in false
+  positives. If one ever lands, add it to the corpus — do not guess ahead of it.
+* **`without`, `unfixed`, `unresolved`** were in the negation set and were
+  removed: no natural sentence puts them directly before `close #N`, so nothing
+  could exercise them, and a test now refuses a negation word that no corpus
+  text reaches.
 * **The opposite error** — a pull request that *should* close an issue and
   silently does not. `scripts/check_issue_closure.py` (issue #139) is the check
   for that direction; this one does not duplicate it.

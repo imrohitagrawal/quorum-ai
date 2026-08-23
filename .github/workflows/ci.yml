@@ -6,6 +6,15 @@ on:
   # deploy gate — so it can force a fresh deploy + live verification.
   workflow_dispatch:
   pull_request:
+    # `edited` is NOT a default activity type — GitHub runs a workflow on
+    # `opened`, `synchronize` and `reopened` only. Without it the BLOCKING
+    # close-keyword check below would vet a body that no longer exists at merge
+    # time. Measured over the last 60 merged pull requests: 12 had title/body
+    # edits and 7 of those landed the last edit AFTER the last commit push —
+    # including PR #289, whose body was the one carrying a negated close. It was
+    # edited 25 minutes after the final push and merged 15 minutes after that,
+    # with no CI run in between.
+    types: [opened, synchronize, reopened, edited]
   push:
     branches: [ main ]
 
@@ -31,8 +40,9 @@ jobs:
           python-version: '3.12'
       # Issue-close guard, pull-request lane. GitHub closes an issue whenever a
       # close keyword sits next to `#N`, and its parser has no concept of
-      # negation: five issues in this repo were closed by sentences written to
-      # say they were NOT being closed (see ADR-0066). BLOCKING here is
+      # negation: four issues in this repo were closed by sentences written to
+      # say they were NOT being closed, across five such texts (see ADR-0066).
+      # BLOCKING here is
       # legitimate — the author can edit the title or body and go green.
       # Placed before `uv sync` so the answer arrives in seconds, and it needs
       # only the runner's own python3.
@@ -58,7 +68,7 @@ jobs:
         run: |
           set -o pipefail
           python3 scripts/check_close_keywords.py --commit HEAD --advisory \
-            | tee -a "$GITHUB_STEP_SUMMARY"
+            | tee -a "${GITHUB_STEP_SUMMARY:-/dev/null}"
 
       - uses: astral-sh/setup-uv@v5
       - name: Install dependencies

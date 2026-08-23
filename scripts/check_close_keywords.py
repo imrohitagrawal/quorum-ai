@@ -6,16 +6,26 @@ resolve/resolves/resolved) immediately before ``#<number>``. **Its parser has no
 concept of negation.** "This does NOT close #337" contains "close #337", so the
 issue closes — saying the opposite of what the author wrote.
 
-Four occurrences in this repository, all re-verified from the API on 2026-08-24:
+FIVE such texts, FOUR of which actually closed an issue. Re-verified from the
+API on 2026-08-24 by reading each issue's ``closed`` timeline event:
 
-======  ===============================================  ==========================
-Issue   Text that did it                                 Surface
-======  ===============================================  ==========================
-#175    ``Filed, not fixed: #175 (whitespace ...``       commit e6c84ea (PR #174)
-#268    ``This does **not** close #268.``                PR #282 body
-#105    ``does not close #105, #268 or #203``            PR #289 body, caught by hand
-#337    ``**This does NOT close #337.**``                commit 4ea57ba (PR #360)
-======  ===============================================  ==========================
+======  ==============================================  ========================  ======
+Issue   Text that did it                                Surface                   Closed
+======  ==============================================  ========================  ======
+#175    ``Filed, not fixed: #175 (whitespace ...``      commit e6c84ea (PR #174)  yes
+#185    ``not fixed: #185, #171, #178, #180, #182``     commit 0ace31e            yes
+#268    ``This does **not** close #268.``               PR #282 body              yes
+#337    ``**This does NOT close #337.**``               commit 4ea57ba (PR #360)  yes
+#105    ``does not close #105, #268 or #203``           PR #289 body              NO
+======  ==============================================  ========================  ======
+
+#105 escaped the defect rather than the guard: a manual grep caught it before
+the merge and the body was reworded. Its TEXT is a real occurrence and stays in
+the corpus, but ``gh issue view 105`` still reports ``state=OPEN``. Say "four
+issues closed, five texts" — not "five closed".
+
+#185 was found by running ``--scan-history`` over all of main rather than from
+any report, which is the argument for measuring before mitigating.
 
 TWO SURFACES, AND NEITHER CHECK COVERS THE OTHER. For #282 GitHub's own
 ``closingIssuesReferences`` reported ``[268]`` before the merge and nobody
@@ -36,8 +46,9 @@ vector that closed #337. It is not:
 
 * ``fix(#N)`` appears in 10 commit subjects on main.
 * Three of them (68d8b69 ``fix(#148)``, 5bbe616 and 15c365c ``fix(#226)``)
-  contain NO other reference to that issue anywhere in the message, and in none
-  of the three did the commit close the issue.
+  carry no other CLOSE-SHAPED reference to that issue — 15c365c does mention it
+  once more, as ``#226 stays OPEN for PR 2.``, which closes nothing — and in
+  none of the three did the commit close the issue.
 * #148 was closed on 2026-08-02 with ``commit_id: null``; its ``fix(#148)``
   commit landed 2026-08-19, seventeen days LATER.
 
@@ -73,6 +84,13 @@ CLOSE_REFERENCE = re.compile(rf"\b({_KEYWORD})\b[ \t]*:?[ \t]*#(\d+)\b", re.IGNO
 
 #: Words that turn a close into its opposite. ``n't`` is handled by suffix so
 #: that doesn't/won't/can't need no enumeration.
+#: Trimmed to words that can actually sit immediately before a close VERB.
+#: `without`, `unfixed`, `unresolved` and `un-fixed` were here first and were
+#: removed rather than given contrived tests: no natural sentence puts them
+#: directly before `close #N`, so nothing could exercise them and a reviewer
+#: showed the whole set could be reduced to `not` with the suite staying green.
+#: Every word below is now exercised by a corpus entry, and a test refuses a
+#: member that is not.
 NEGATIONS = frozenset(
     {
         "not",
@@ -83,10 +101,6 @@ NEGATIONS = frozenset(
         "neither",
         "nor",
         "cannot",
-        "without",
-        "unfixed",
-        "unresolved",
-        "un-fixed",
     }
 )
 
@@ -95,15 +109,27 @@ NEGATIONS = frozenset(
 #: "With no regressions, closes #123" is a legitimate close and must stay clean,
 #: while "Filed, not fixed: #175" still trips because ``not`` is found before the
 #: scan reaches the comma.
-_CLAUSE_BOUNDARY = frozenset(".!?;:\n\r,")
+#:
+#: A NEWLINE IS DELIBERATELY ABSENT. It was here in the first version, and a
+#: reviewer disarmed the whole guard with it: git wraps a commit body at ~72
+#: characters, so "does NOT\nclose #337" is the ordinary shape of the very
+#: sentence this exists to catch, and it went unflagged while
+#: ``close_references`` still agreed GitHub would close #337. A line wrap is not
+#: a clause break; punctuation is — but a BLANK line is (see below). Measured
+#: over 344 commit messages: 4 flagged before the change and 4 after, so the fix
+#: cost no precision. Dropping the newline rule entirely instead gave 6, the two
+#: extra being real legitimate closes (b904ce6, 9cfda0e).
+_CLAUSE_BOUNDARY = frozenset(".!?;:,")
 
 #: Markdown emphasis is invisible to GitHub's parser and must be invisible here
 #: too — the real #282 text was ``This does **not** close #268``.
 _EMPHASIS = frozenset("*_`~")
 
 #: How many words back from the keyword a negation may sit. Two intervening
-#: words covers "does not yet close" and "will not, however, close" without
-#: reaching into an unrelated earlier phrase.
+#: words covers "does not yet close" without reaching into an unrelated earlier
+#: phrase. It does NOT cover "will not, however, close" — an earlier version of
+#: this comment claimed it did, and the comma boundary above stops the walk
+#: first. Both bounds are pinned by tests rather than by this sentence.
 _LOOKBACK_WORDS = 3
 
 
@@ -142,11 +168,25 @@ def _preceding_negation(text: str, keyword_start: int) -> str | None:
     words: list[str] = []
     letters: list[str] = []
     index = keyword_start - 1
+    newlines = 0
 
     while index >= 0 and len(words) < _LOOKBACK_WORDS:
         char = text[index]
         if char in _CLAUSE_BOUNDARY:
             break
+        if char == "\n":
+            # ONE newline is a line wrap and means nothing; TWO is a blank line,
+            # which separates a commit subject from its body and one paragraph
+            # from the next. Treating every newline as a boundary disarmed the
+            # guard on any hard-wrapped body; treating none as a boundary let
+            # the walk reach out of `Closes #258.` into the subject above it and
+            # find the `nothing` in `a judge that produced nothing` (9cfda0e8).
+            # Both were measured against real history.
+            newlines += 1
+            if newlines >= 2:
+                break
+        elif not char.isspace():
+            newlines = 0
         if char.isspace():
             if letters:
                 words.append("".join(reversed(letters)))
@@ -294,7 +334,7 @@ def main(argv: Sequence[str]) -> int:
     parser.add_argument(
         "--require-nonempty",
         action="store_true",
-        help="fail if the input text is empty — a silently unwired gate is not a pass",
+        help="fail if any named variable is unset, or the text is empty",
     )
     args = parser.parse_args(list(argv[1:]))
 
@@ -308,13 +348,29 @@ def main(argv: Sequence[str]) -> int:
         text = _commit_message(args.commit)
         label = f"commit {args.commit}"
 
-    if args.require_nonempty and not text.strip():
-        print(
-            f"close-keyword guard [{label}]: input is EMPTY.\n"
-            "Refusing to pass: this gate cannot vet text it was never given.\n"
-            "Check the workflow wiring that should have supplied it."
-        )
-        return 2
+    if args.require_nonempty:
+        # PER-VARIABLE, not over the concatenation. A pull-request TITLE is never
+        # empty, so a floor on the joined text is satisfied by the title alone
+        # and a typo in the BODY variable's name passes silently — and the body
+        # is the half that carried both pull-request-surface cases (#268, #105).
+        # Presence, not content: a genuinely empty body is legitimate and must
+        # not block, but a name nothing ever set is a broken wiring.
+        missing = [name for name in args.env or () if name not in os.environ]
+        if missing:
+            print(
+                f"close-keyword guard [{label}]: {', '.join(missing)} not set in the "
+                "environment.\n"
+                "Refusing to pass: this gate cannot vet text it was never given.\n"
+                "Check the workflow wiring that should have supplied it."
+            )
+            return 2
+        if not text.strip():
+            print(
+                f"close-keyword guard [{label}]: input is EMPTY.\n"
+                "Refusing to pass: this gate cannot vet text it was never given.\n"
+                "Check the workflow wiring that should have supplied it."
+            )
+            return 2
 
     status = _report(label, text, advisory=args.advisory)
 
