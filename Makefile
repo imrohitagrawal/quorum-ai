@@ -59,7 +59,7 @@ DIFF_BASE ?= origin/main
 # disagrees with the real pathspec is a lie waiting to be believed; the banner
 # now states the pathspec the code actually uses.
 
-.PHONY: check-python publishing-check skill-onboarding-check skill-discover handoff check-breaking apply-orbi-profile skill-route start next capture-idea validate validate-strict fr-completeness openapi-export openapi-check adr-index-check quality format format-check lint type-check test evals test-report gate-min-collected gate-min-executed perf-gate api-contract mutation-baseline diff-cover security-scan ci-evidence run docker-build feedback-audit
+.PHONY: check-python publishing-check skill-onboarding-check skill-discover handoff check-breaking apply-orbi-profile skill-route start next capture-idea validate validate-strict fr-completeness openapi-export openapi-check adr-index-check quality format format-check lint type-check test evals test-report gate-min-collected gate-min-executed perf-gate api-contract mutation-baseline diff-cover security-scan close-guard ci-evidence run docker-build feedback-audit
 
 check-python:
 	@if [ -z "$(PYTHON)" ]; then 		echo "ERROR: Python 3 is required. Install python3, or set PYTHON=/path/to/python3."; 		exit 127; 	fi
@@ -938,6 +938,24 @@ diff-cover:
 
 security-scan: check-python
 	$(PYTHON) scripts/security_scan.py
+
+# Layer 2 of the close-keyword guard (ADR-0066). Vets the EXACT text you are
+# about to hand to `gh pr merge`, and asks GitHub what it thinks the pull
+# request closes. This is the ONLY layer that can stop the PR #360 class, where
+# the damaging sentence lived in the merge body and was therefore invisible both
+# to the pull-request lane and to GitHub's own `closingIssuesReferences`.
+#
+# DISCIPLINE, NOT ENFORCEMENT. Nothing can make this run before a merge; CI
+# never sees the merge text. It is a loaded gun pointed at your own foot and
+# this target is the safety catch you have to remember to use.
+#
+#   make close-guard PR=361 \
+#     SUBJECT="fix: the thing" \
+#     BODY="$$(cat /tmp/merge-body.md)"
+close-guard: check-python
+	@MERGE_SUBJECT="$(SUBJECT)" MERGE_BODY="$(BODY)" $(PYTHON) \
+		scripts/check_close_keywords.py --env MERGE_SUBJECT MERGE_BODY \
+		--require-nonempty --premerge-pr $(PR)
 
 ci-evidence: test-report security-scan
 

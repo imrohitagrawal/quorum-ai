@@ -316,6 +316,14 @@ is the rule only.
     EVERY commit body onto `main`, so superseded figures from intermediate
     commits land there. (Violated on PR #172, merged 2026-07-29 — both bodies
     landed.)
+    **Vet that text before you run the command:**
+    `make close-guard PR=<n> SUBJECT="..." BODY="$(cat body.md)"`.
+    A close keyword next to `#N` closes that issue, and GitHub cannot read
+    negation: `**This does NOT close #337.**` in PR #360's merge body closed
+    #337. **Five** issues have been closed by sentences saying they were not
+    being closed. CI checks the pull request's title and body mechanically; it
+    never sees the MERGE text, so this command is the only thing that does.
+    ADR-0066 has the measurements and the blind spots.
 17d. **The head branch must be up to date with base.** A second stacked pull
     request merges `main` in first, then **re-gates the merged tree locally**
     (diff-cover included). A clean auto-merge is not a correct merge.

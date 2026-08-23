@@ -69,6 +69,7 @@ ways, so the record shows what was believed on a date and what replaced it.
 | [ADR-0063](adr/0063-the-result-view-carries-the-panels-reasoning.md) | The result view carries the panel's reasoning; the inferred position table goes | Architecture | Accepted — 2026-08-22 |
 | [ADR-0064](adr/0064-the-displayed-estimate-prices-the-judge.md) | The displayed estimate prices the Layer-B judge | Architecture | Accepted — 2026-08-22 |
 | [ADR-0065](adr/0065-the-mutation-scope-names-its-oracle-tests-and-a-truncated-run-is-not-a-score.md) | The mutation scope names its oracle tests, and a truncated run is not a score | Architecture | Accepted — 2026-08-23 |
+| [ADR-0066](adr/0066-a-negated-issue-close-is-caught-in-the-two-places-it-can-happen.md) | A negated issue close is caught in the two places it can happen | Architecture | Accepted — 2026-08-24 |
 
 **This index was itself stale** until 2026-07-30: ADR-0002 had existed since
 2026-07-19 and was never listed here. A hand-maintained index is a derived fact
