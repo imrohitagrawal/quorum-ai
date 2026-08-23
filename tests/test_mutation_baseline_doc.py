@@ -58,11 +58,16 @@ def _skip_unless_comparable(artifact: Path) -> str:
             "numbers (§2) — the killed/timeout split is hardware-dependent"
         )
     if "UNMEASURED" in artifact.read_text(encoding="utf-8"):
-        # An all-timeout run records no score by design (§5), so there is
-        # nothing for the doc to match. Skipping is right; falling through
-        # would report the file "unparseable" and send the reader after a
-        # corruption that does not exist.
-        return "the local artifact is an UNMEASURED all-timeout run — no score to compare"
+        # An UNMEASURED run records no score by design, so there is nothing for
+        # the doc to match. Skipping is right; falling through would report the
+        # file "unparseable" and send the reader after a corruption that does
+        # not exist. TWO runs reach this verdict: an all-timeout scope (§5), and
+        # since #337 a run its own wall-clock deadline cut short. This reason
+        # named only the first until the second existed.
+        return (
+            "the local artifact records UNMEASURED (all-timeout, or "
+            "truncated) — no score to compare"
+        )
     return ""
 
 
