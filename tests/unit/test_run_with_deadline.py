@@ -18,6 +18,8 @@ real multi-minute mutation run.
 
 from __future__ import annotations
 
+import os
+import re
 import subprocess
 import sys
 import time
@@ -29,7 +31,7 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 SCRIPT = REPO_ROOT / "scripts" / "run_with_deadline.py"
 
 
-def _run(*args: str) -> subprocess.CompletedProcess[str]:
+def _run(*args: str, env: dict[str, str] | None = None) -> subprocess.CompletedProcess[str]:
     # A bounded outer timeout, separate from the deadline under test: if the
     # wrapper's own group-kill is broken, a surviving orphan can keep this
     # test's stdout/stderr PIPE open (capture_output waits for EOF on both,
@@ -43,6 +45,7 @@ def _run(*args: str) -> subprocess.CompletedProcess[str]:
         capture_output=True,
         text=True,
         timeout=15,
+        env=None if env is None else {**os.environ, **env},
     )
 
 
@@ -83,7 +86,6 @@ def test_the_whole_process_group_is_killed_not_just_the_direct_child() -> None:
     marker file below survive past the wrapper's own return, which is
     exactly the "orphan process" failure mode issue #182's own CI log
     named (`Terminate orphan process: pid (10698) (mutmut: ...)`)."""
-    import os
     import tempfile
 
     with tempfile.TemporaryDirectory() as tmp:
@@ -170,3 +172,129 @@ def test_the_final_wait_after_sigkill_is_also_bounded() -> None:
     assert all(t is not None for t in wait_timeouts), (
         f"a wait() call had no timeout, meaning it could block forever: {wait_timeouts}"
     )
+
+
+# ---------------------------------------------------------------------------
+# #337 — say WHICH of the two happened.
+#
+# Exiting 0 on our own deadline (above) is what lets `make mutation-baseline`
+# reach its reporting step at all. The cost was that the reporting step could
+# not tell a complete run from a truncated one: mutmut fills in one .meta entry
+# per FINISHED mutant, report() skips the unfilled ones, and a run killed after
+# 2 of 359 mutants — both killed — printed "mutation score = 100.0%" and passed.
+# The marker file below is how the next step tells them apart.
+# ---------------------------------------------------------------------------
+
+MAKEFILE = REPO_ROOT / "Makefile"
+
+
+def _marker_variable_name() -> str:
+    """The env var the shipped Makefile hands this script, read from the Makefile.
+
+    Taken from the recipe rather than hardcoded here, so renaming it in one
+    place and not the other turns these tests red instead of silently
+    disconnecting the writer from the reader.
+    """
+    text = MAKEFILE.read_text(encoding="utf-8")
+    names = set(re.findall(r"(\w+)=\$\(MUTATION_TRUNCATION_MARKER\)", text))
+    assert len(names) == 1, (
+        "the Makefile no longer hands exactly one env var the truncation "
+        f"marker path, so these tests are not testing the shipped wiring: {names}"
+    )
+    name: str = names.pop()
+    return name
+
+
+def test_the_makefile_hands_the_marker_to_both_the_writer_and_the_reader() -> None:
+    """Positive partner for the wrapper tests below: they prove the script
+    honours the variable, this proves the recipe actually sets it — on the run
+    step that writes it AND on the report step that reads it.
+
+    Turns red if: either use of `$(MUTATION_TRUNCATION_MARKER)` is dropped from
+    the recipe, leaving one half of the wiring talking to nobody.
+    """
+    text = MAKEFILE.read_text(encoding="utf-8")
+    name = _marker_variable_name()
+
+    # The command each use introduces can continue onto the next line, so read
+    # a window past the match rather than the matched line alone.
+    windows = [
+        text[m.end() : m.end() + 200]
+        for m in re.finditer(rf"{name}=\$\(MUTATION_TRUNCATION_MARKER\)", text)
+    ]
+    assert len(windows) == 2, (
+        f"expected the run step and the report step to set it, got {len(windows)}"
+    )
+    assert any("run_with_deadline.py" in w for w in windows), (
+        f"nothing WRITES the marker; the wrapper never learns the path: {windows}"
+    )
+    assert any("- report " in w for w in windows), (
+        f"nothing READS the marker; report() cannot see a truncated run: {windows}"
+    )
+
+
+def test_killing_the_run_leaves_a_marker_the_next_step_can_read() -> None:
+    """Turns red if: `_write_truncation_marker` is not called on the timeout
+    path. Verified by deleting that call — `assert marker.is_file()` fails and
+    the report step goes back to scoring a truncated run as a complete one."""
+    import tempfile
+
+    with tempfile.TemporaryDirectory() as tmp:
+        marker = Path(tmp) / "nested" / "truncated"
+        result = _run(
+            "1",
+            sys.executable,
+            "-c",
+            "import time; time.sleep(30)",
+            env={_marker_variable_name(): str(marker)},
+        )
+
+        assert result.returncode == 0, result.stderr
+        assert marker.is_file(), (
+            "the wrapper killed the run and left no marker, so the reporting "
+            f"step cannot tell this from a completed run:\n{result.stderr}"
+        )
+
+
+def test_a_run_that_finishes_in_time_leaves_no_marker_and_clears_a_stale_one() -> None:
+    """The mirror-image bug, and the reason the marker is cleared on the way in.
+
+    One truncated run would otherwise make every later run in the same
+    workspace read as truncated — a gate that can never report a score again,
+    which is exactly the state #337 is about.
+
+    Turns red if: `_clear_truncation_marker()` is dropped from the top of
+    `run_with_deadline` — the stale marker survives and this fails on
+    `marker.exists()`.
+    """
+    import tempfile
+
+    with tempfile.TemporaryDirectory() as tmp:
+        marker = Path(tmp) / "truncated"
+        marker.write_text("left over from an earlier run\n", encoding="utf-8")
+
+        result = _run(
+            "30",
+            sys.executable,
+            "-c",
+            "import sys; sys.exit(0)",
+            env={_marker_variable_name(): str(marker)},
+        )
+
+        assert result.returncode == 0, result.stderr
+        assert not marker.exists(), (
+            "a stale marker from an earlier truncated run survived a run that "
+            "finished well inside its deadline; every later report would read "
+            "as truncated"
+        )
+
+
+def test_an_unset_marker_variable_changes_nothing() -> None:
+    """The wrapper is generic; only `mutation-baseline` asks for a marker.
+
+    Turns red if: the marker path stops being optional and the script raises
+    (or writes to a hardcoded path) when the variable is absent.
+    """
+    result = _run("1", sys.executable, "-c", "import time; time.sleep(30)")
+    assert result.returncode == 0, result.stderr
+    assert "deadline exceeded" in result.stderr

@@ -110,7 +110,7 @@ def test_a_change_inside_a_function_is_measured(repo: Path) -> None:
     """The gate runs. Turns red if scope() stops matching function bodies."""
     module = _load(repo)
     globs, _ = _scope_for(module, "in-function change")
-    assert globs == ["pkg.thing.x_f__mutmut_*"], globs
+    assert sorted(globs) == ["*pkg.thing.x_f", "pkg.thing.x_f__mutmut_*"], globs
 
 
 def test_a_module_level_constant_change_produces_an_empty_scope(repo: Path) -> None:
@@ -191,7 +191,7 @@ def test_a_bare_call_to_deepcopy_is_not_excluded_from_scope(tmp_path: Path) -> N
 
     mod = _load(root)
     globs, _reasons = mod.scope("HEAD^", "HEAD")
-    assert globs == ["pkg.thing.x_snapshot__mutmut_*"], (
+    assert sorted(globs) == ["*pkg.thing.x_snapshot", "pkg.thing.x_snapshot__mutmut_*"], (
         f"a bare no-arg deepcopy() call was wrongly excluded from scope: {globs}"
     )
 

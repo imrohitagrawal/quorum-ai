@@ -285,12 +285,15 @@ def _strip_decorator_mirroring(source: str) -> str:
         "                        else:\n"
         '                            name = f"xǁ{cls}ǁ{child.name}" if cls else f"x_{child.name}"\n'
         '                            globs.append(f"{mod}.{name}__mutmut_*")\n'
+        "                            # #337: and the ORACLE pattern; mirrors the Makefile.\n"
+        '                            globs.append(f"*{mod}.{name}")\n'
     )
     replacement = (
         "                    if changed & span:\n"
         "                        hits += 1\n"
         '                        name = f"xǁ{cls}ǁ{child.name}" if cls else f"x_{child.name}"\n'
         '                        globs.append(f"{mod}.{name}__mutmut_*")\n'
+        '                        globs.append(f"*{mod}.{name}")\n'
     )
     assert unconditional_glob in stripped, (
         "the exclusion block this helper strips no longer matches the real "

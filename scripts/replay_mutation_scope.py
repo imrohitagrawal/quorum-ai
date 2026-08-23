@@ -331,6 +331,8 @@ def scope(base: str, head: str) -> tuple[list[str], dict[str, int]]:
                         else:
                             name = f"xǁ{cls}ǁ{child.name}" if cls else f"x_{child.name}"
                             globs.append(f"{mod}.{name}__mutmut_*")
+                            # #337: and the ORACLE pattern; mirrors the Makefile.
+                            globs.append(f"*{mod}.{name}")
                     # Do NOT recurse into a FunctionDef's body looking for
                     # further FunctionDefs: mutmut attributes EVERY mutation
                     # inside a nested `def` - at any depth - to this SAME

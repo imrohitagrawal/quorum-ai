@@ -26,6 +26,15 @@ still leaves a genuine, if partial, count on disk instead of silence.
 The wrapped command's own exit code is returned UNCHANGED when it finishes
 within the deadline, so a real mutmut failure (not a timeout) still fails the
 calling recipe's existing error-handling exactly as before.
+
+Issue #337: exiting 0 on our own deadline hides WHICH of the two happened from
+whatever runs next. `make mutation-baseline`'s report() scores the per-mutant
+metadata mutmut leaves on disk and skips the entries mutmut never filled in --
+so a run killed after 2 of 359 mutants, both killed, printed
+"mutation score = 100.0%" and passed. When RUN_WITH_DEADLINE_MARKER names a
+path, this script creates that file if and only if it killed the run, and
+deletes any stale one otherwise, so the next step can tell a complete run from
+a truncated one. Unset, nothing is written and behaviour is exactly as before.
 """
 
 from __future__ import annotations
@@ -37,10 +46,41 @@ import subprocess
 import sys
 
 
+def _truncation_marker() -> str:
+    """Path to create when we kill the run; empty when the caller wants none."""
+    return os.environ.get("RUN_WITH_DEADLINE_MARKER", "")
+
+
+def _clear_truncation_marker() -> None:
+    """Remove a marker left by an EARLIER run before this one starts.
+
+    Without this, one truncated run would make every later run in the same
+    workspace read as truncated -- the mirror image of the bug this exists to
+    fix, and just as silent.
+    """
+    marker = _truncation_marker()
+    if marker:
+        with contextlib.suppress(OSError):
+            os.unlink(marker)
+
+
+def _write_truncation_marker(deadline_seconds: float) -> None:
+    marker = _truncation_marker()
+    if not marker:
+        return
+    parent = os.path.dirname(marker)
+    if parent:
+        os.makedirs(parent, exist_ok=True)
+    with open(marker, "w", encoding="utf-8") as handle:
+        handle.write(f"run_with_deadline killed this run at {deadline_seconds:.0f}s\n")
+
+
 def run_with_deadline(deadline_seconds: float, command: list[str]) -> int:
     if not command:
         print("run_with_deadline: no command given", file=sys.stderr)
         return 2
+
+    _clear_truncation_marker()
 
     # New session == new process group whose id equals this child's pid, so
     # os.killpg below reaches it and every descendant it forks (mutmut forks
@@ -52,6 +92,11 @@ def run_with_deadline(deadline_seconds: float, command: list[str]) -> int:
         return proc.wait(timeout=deadline_seconds)
     except subprocess.TimeoutExpired:
         pass
+
+    # Written BEFORE the kill, not after: the killing path below can give up
+    # on reaping (see the bounded waits) and an exception on the way out must
+    # not be the reason a truncated run reads as a complete one.
+    _write_truncation_marker(deadline_seconds)
 
     pgid = os.getpgid(proc.pid)
     print(
