@@ -52,12 +52,24 @@ def scope_script(tmp_path_factory: pytest.TempPathFactory) -> Path:
 def _run(
     script: Path, cwd: Path, *args: str, env: dict[str, str] | None = None
 ) -> subprocess.CompletedProcess[str]:
+    """Run the extracted scope script, hermetically w.r.t. the truncation marker.
+
+    ``RUN_WITH_DEADLINE_MARKER`` is CLEARED unless a test sets it, deliberately.
+    `make mutation-baseline` exports that variable to everything it runs, and
+    this module is collected inside mutmut's own ``./mutants/`` copy under that
+    very gate — so an inherited value would leak into every report-mode run
+    here. It did: the positive partner of the truncation test below created
+    ``build/mutation/truncated`` under its own tmp_path, and the inherited
+    RELATIVE path then resolved to that same file, so the run that was supposed
+    to be complete read as truncated and the whole gate aborted with
+    "failed to collect stats". Found by running the real recipe, not by reading.
+    """
     return subprocess.run(
         [sys.executable, str(script), *args],
         cwd=cwd,
         capture_output=True,
         text=True,
-        env=None if env is None else {**os.environ, **env},
+        env={**os.environ, "RUN_WITH_DEADLINE_MARKER": "", **(env or {})},
     )
 
 
@@ -1583,19 +1595,35 @@ def test_an_empty_oracle_set_makes_mutmut_run_the_whole_suite() -> None:
 # `scripts/run_with_deadline.py` exits 0 when it kills the run, deliberately, so
 # that report() still gets to score what landed on disk. mutmut fills in one
 # .meta entry per FINISHED mutant and leaves the rest `None`, and report() skips
-# `None` — so before this, a run killed after 2 of 359 mutants, both killed,
-# printed "mutation score = 100.0%" and exited 0. The wrapper now drops a marker
-# file when it kills the run, and report() reads the same path.
+# `None`. Demonstrated on a synthetic .meta of 3 killed and 289 unfilled — the
+# shape a mid-run kill leaves — report() printed "mutation score = 100.0%" and
+# exited 0. The wrapper now drops a marker file when it kills the run, and
+# report() reads the same path.
 # ---------------------------------------------------------------------------
 
 TRUNCATION_MARKER = "build/mutation/truncated"
 
 
+#: The literal `scripts/run_with_deadline.py` writes, read from the script so a
+#: rename on either side turns these tests red rather than quietly unwiring them.
+def _sentinel() -> str:
+    source = (REPO_ROOT / "scripts" / "run_with_deadline.py").read_text(encoding="utf-8")
+    tree = ast.parse(source)
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Assign) and any(
+            isinstance(t, ast.Name) and t.id == "TRUNCATION_SENTINEL" for t in node.targets
+        ):
+            assert isinstance(node.value, ast.Constant)
+            assert isinstance(node.value.value, str)
+            return node.value.value
+    raise AssertionError("TRUNCATION_SENTINEL is gone from scripts/run_with_deadline.py")
+
+
 def _mark_truncated(cwd: Path) -> dict[str, str]:
-    """Create the marker the deadline wrapper writes, and point report() at it."""
+    """Write the marker the deadline wrapper writes, and point report() at it."""
     marker = cwd / TRUNCATION_MARKER
     marker.parent.mkdir(parents=True, exist_ok=True)
-    marker.write_text("killed at 1440s\n", encoding="utf-8")
+    marker.write_text(f"{_sentinel()}1440s\n", encoding="utf-8")
     return {"RUN_WITH_DEADLINE_MARKER": TRUNCATION_MARKER}
 
 
@@ -1634,6 +1662,10 @@ def test_a_truncated_run_reports_no_percentage_however_good_the_prefix_looks(
     assert "3 of the scope's mutants" in output, (
         f"the truncated verdict must report HOW MANY it managed to score:\n{output}"
     )
+    assert truncated.returncode == 0, (
+        "a truncated run that found NO survivor is a budget event, not a "
+        f"verdict on the diff; it must not fail the gate:\n{output}"
+    )
 
     # POSITIVE PARTNER: the same metadata, no marker. Without this, the
     # assertions above are equally satisfied by a report() that has stopped
@@ -1667,6 +1699,11 @@ def test_a_truncated_run_still_reports_the_survivors_it_did_find(
         f"a survivor found before the deadline was swallowed by the cut-off:\n{output}"
     )
     assert "mutation score" not in output, output
+    assert result.returncode != 0, (
+        "a truncated run that DEMONSTRATED a survivor passed. Adversarial "
+        "review found exactly this: the identical metadata exits 1 without the "
+        f"marker, so the marker turned a red gate green:\n{output}"
+    )
 
 
 def test_a_truncated_run_that_scored_nothing_names_the_deadline(
@@ -1727,3 +1764,139 @@ def test_an_unset_marker_variable_is_not_read_as_a_truncated_run(
     )
 
     assert "mutation score (killed / (killed+survived)) = 50.0%" in result.stdout, result.stdout
+
+
+def test_a_truncated_run_that_found_a_survivor_cannot_be_greener_than_the_same_run_untruncated(
+    scope_script: Path, tmp_path: Path
+) -> None:
+    """The finding that nearly shipped: truncation must never RELAX the gate.
+
+    Three killed and seven survived is 30%, below any threshold this repo uses,
+    and the untruncated gate exits 1 on it. The first version of the truncated
+    branch returned before the threshold check, so dropping one marker file
+    into the workspace turned that exit 1 into an exit 0 — a visibly red job
+    made green by the very mechanism added to make the gate more honest.
+
+    Turns red if: the `counts["survived"]` check is removed from the truncated
+    branch. Verified — the truncated run then exits 0 while the untruncated one
+    exits 1, and the two assertions below disagree.
+    """
+    metas: dict[str, int | None] = {f"x_a__mutmut_{i}": 1 for i in range(1, 4)}
+    metas.update({f"x_b__mutmut_{i}": 0 for i in range(1, 8)})
+    metas.update({f"x_c__mutmut_{i}": None for i in range(1, 290)})
+    _write_meta(tmp_path, "costs", metas)
+
+    untruncated = _run(scope_script, tmp_path, "report", "origin/main", "80")
+    truncated = _run(
+        scope_script, tmp_path, "report", "origin/main", "80", env=_mark_truncated(tmp_path)
+    )
+
+    assert untruncated.returncode != 0, (
+        "the control run passed at 30%; this test is not measuring a "
+        f"relaxation because there is nothing to relax:\n{untruncated.stdout}"
+    )
+    assert "BELOW THRESHOLD" in untruncated.stdout, untruncated.stdout
+    assert truncated.returncode != 0, (
+        "adding the truncation marker turned a failing gate into a passing "
+        f"one:\n{truncated.stdout}"
+    )
+    assert "7 mutant(s) SURVIVED before the cut-off" in truncated.stdout, truncated.stdout
+
+
+def test_only_the_deadline_wrappers_own_marker_counts_as_truncation(
+    scope_script: Path, tmp_path: Path
+) -> None:
+    """Detection is by CONTENT, so a pointed-at file cannot mute the gate.
+
+    `RUN_WITH_DEADLINE_MARKER` comes from the environment. With an
+    existence-only test, `MUTATION_TRUNCATION_MARKER=/dev/null make
+    mutation-baseline` made a completed, below-threshold run report UNMEASURED
+    and exit 0 — demonstrated by adversarial review. /dev/null cannot even be
+    unlinked, so the wrapper's clear-on-entry could not undo it.
+
+    Turns red if: the sentinel comparison in `report()` is replaced by
+    `os.path.exists(marker)`. Verified — the first two cases then report
+    UNMEASURED instead of a score.
+    """
+    _write_meta(tmp_path, "costs", {"x_a__mutmut_1": 1, "x_a__mutmut_2": 0})
+    decoy = tmp_path / "decoy"
+    decoy.write_text("an ordinary file that is not a truncation marker\n", encoding="utf-8")
+
+    for label, value in (("a file with the wrong content", "decoy"), ("an empty setting", "")):
+        result = _run(
+            scope_script,
+            tmp_path,
+            "report",
+            "origin/main",
+            "90",
+            env={"RUN_WITH_DEADLINE_MARKER": value},
+        )
+        assert "mutation score (killed / (killed+survived)) = 50.0%" in result.stdout, (
+            f"{label} muted the score line:\n{result.stdout}"
+        )
+
+    # POSITIVE PARTNER: the wrapper's real sentinel IS recognised, so the two
+    # negatives above are about the content and not about a dead code path.
+    real = _run(
+        scope_script, tmp_path, "report", "origin/main", "90", env=_mark_truncated(tmp_path)
+    )
+    assert "UNMEASURED" in real.stdout, real.stdout
+
+
+def test_every_truncated_diagnosis_says_the_run_was_truncated(
+    scope_script: Path, tmp_path: Path
+) -> None:
+    """mutmut runs its cheapest mutants first, and a no-tests mutant costs zero.
+
+    So "the few mutants we reached were all no-tests" is a LIKELY shape for a
+    real truncation, and that branch used to tell the author to add a test
+    without ever mentioning that the budget had run out. The notice is printed
+    once, above every diagnosis, so whichever one fires carries the context.
+
+    Turns red if: the `if truncated:` notice after the counts line is removed —
+    the no-tests diagnosis then names only a missing test.
+    """
+    _write_meta(tmp_path, "costs", {"x_a__mutmut_1": 33, "x_a__mutmut_2": 33})
+
+    result = _run(
+        scope_script, tmp_path, "report", "origin/main", "90", env=_mark_truncated(tmp_path)
+    )
+    output = result.stdout + result.stderr
+
+    assert "TRUNCATED" in output, (
+        f"a truncated run diagnosed as a pure no-tests gap, silently:\n{output}"
+    )
+    assert "NO covering test" in output, (
+        f"the no-tests diagnosis was lost; it is still the right one:\n{output}"
+    )
+    assert result.returncode != 0, output
+
+
+def test_an_all_timeout_truncated_run_keeps_the_all_timeout_diagnosis(
+    scope_script: Path, tmp_path: Path
+) -> None:
+    """Both are true; "every mutant timed out" is the more specific one.
+
+    A scope slow enough to time every mutant out is a scope slow enough to hit
+    the wall clock, so this co-occurrence is realistic — `mutation-baseline.md`
+    §5 measured a 24-33% timeout rate on this app. The first version of the fix
+    put the truncated branch first and printed "before a single mutant was
+    scored" over a run in which 66 mutants had timed out on the line above.
+
+    Turns red if: the truncated branch is moved back above the timeout branch.
+    """
+    _write_meta(tmp_path, "costs", {f"x_a__mutmut_{i}": -24 for i in range(1, 67)})
+
+    result = _run(
+        scope_script, tmp_path, "report", "origin/main", "90", env=_mark_truncated(tmp_path)
+    )
+    output = result.stdout + result.stderr
+
+    assert "every mutant 66 timed out" in output, (
+        f"the truncation notice swallowed the true, more specific cause:\n{output}"
+    )
+    assert "before any mutant produced a kill-or-survive verdict" not in output, (
+        f"66 mutants produced a verdict; the message says none did:\n{output}"
+    )
+    assert "TRUNCATED" in output, f"the truncation is still worth saying:\n{output}"
+    assert result.returncode == 0, output

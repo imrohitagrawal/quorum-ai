@@ -127,17 +127,27 @@ filled in (`if code is None: continue`). It has no way to tell a complete run
 from a truncated one.
 
 While the gate died in the clean-test phase this never mattered: nothing was
-scored, and the anti-vacuity floor failed the job. The moment the gate starts
-reaching the mutant phase, a run killed after 2 of 359 mutants — both killed —
-prints `mutation score (killed / (killed+survived)) = 100.0%` and exits 0.
-Fixing the speed without fixing this would have shipped a new silent-pass path.
+scored, and the anti-vacuity floor failed the job. **No CI run has ever been in
+this state** — it becomes reachable only once the gate gets past its clean-test
+phase, which is what the first half of this record does. Fixing the speed
+without fixing this would have shipped a new silent-pass path.
 
-Reproduced, on the shipped `report()` with the truncated branch removed:
+Demonstrated on a synthetic `.meta` holding 3 killed mutants and 289 unfilled
+ones — the shape a mid-run kill leaves — against `report()` with the truncated
+branch removed:
 
 ```
 mutants scored: 3 killed, 0 survived, 0 timeout (excluded), 0 no-tests
 mutation score (killed / (killed+survived)) = 100.0% (threshold 90%)
 ```
+
+Worse, and found only by adversarial review: the first version of the fix
+returned 0 for **every** truncated run. Over a synthetic prefix of 3 killed and
+7 survived, the shipped gate exits 1 (`30.0%`, `BELOW THRESHOLD`) and that first
+version exited 0 — turning a visibly red job green. A survivor is a
+*demonstrated* test gap; truncating the run afterwards does not take it back.
+The shipped branch therefore fails when any survivor was found, and returns 0
+only when the truncated prefix found none.
 
 ## Decision
 
@@ -162,27 +172,55 @@ So the companion pattern narrows the clean-test phase and adds nothing to what
 gets mutated. `<name>*` — the obvious one-character fix — would silently mutate
 functions the diff never touched; it is rejected below.
 
-**2. A run its own deadline cut short reports UNMEASURED, never a percentage.**
+**2. A run its own deadline cut short reports UNMEASURED, never a percentage —
+and can never be greener than the same run untruncated.**
 `scripts/run_with_deadline.py` creates the file named by
 `RUN_WITH_DEADLINE_MARKER` when, and only when, it kills the run, and deletes a
 stale one on the way in. `report()` reads the same path — one Makefile variable,
-`MUTATION_TRUNCATION_MARKER`, handed to both — and:
+`MUTATION_TRUNCATION_MARKER`, handed to both. The rules, each one shaped by a
+demonstrated failure in review:
 
-* prints the survivors it did find (a survivor found before the cut-off is a
-  real finding; only the percentage is withheld);
-* prints `UNMEASURED … after scoring N of the scope's mutants` and returns,
-  matching the posture the all-timeout branch already had — not failed, because
-  the cause is the gate's budget rather than the diff, and emphatically not a
-  pass;
-* and, when nothing at all was scored, names the deadline and exits 1 instead of
-  printing `the run did not happen (empty or absent mutants/)` — which was false,
-  and which sent three sessions reading `also_copy`.
+* **Detection is by CONTENT, not existence.** The marker must begin with the
+  wrapper's own sentinel, `run_with_deadline killed this run at `. With an
+  existence test, `MUTATION_TRUNCATION_MARKER=/dev/null make mutation-baseline`
+  made a completed, below-threshold run report UNMEASURED and exit 0 — and
+  `/dev/null` cannot be unlinked, so clear-on-entry could not undo it. The
+  variable is also `override :=`, not `?=`, so the environment cannot move it.
+* **A truncation notice is printed once, above every diagnosis.** mutmut runs
+  its cheapest mutants first and a no-tests mutant costs zero, so "the few we
+  reached were all no-tests" is a likely shape for a real truncation — and that
+  branch used to tell the author to add a test without ever saying the budget
+  had run out.
+* **No percentage.** A prefix of the scope has no honest denominator.
+* **But a SURVIVOR still fails the gate.** A survivor is a mutant that ran and
+  that no test caught; truncating afterwards does not un-demonstrate it. The
+  first version of this branch returned 0 unconditionally, and over a prefix of
+  3 killed and 7 survived it turned an `exit 1` (`30.0%`, `BELOW THRESHOLD`)
+  into an `exit 0` — a visibly red job made green by the mechanism added to make
+  the gate more honest. This is deliberately stricter than the complete-run
+  rule, which tolerates survivors up to the threshold.
+* **A truncation that scored nothing names the deadline and exits 1**, instead
+  of `the run did not happen (empty or absent mutants/)` — which was false, and
+  which sent three sessions reading `also_copy`. That branch sits *after* the
+  all-timeout branch: a scope slow enough to time every mutant out is a scope
+  slow enough to hit the wall clock, and "every mutant timed out" is the more
+  specific true statement when both hold.
+* **The marker write can never cost the kill.** It runs immediately before
+  `os.killpg`, and in the first version an `IsADirectoryError` there propagated
+  out and the kill never happened — the child outlived its deadline, which is
+  issue #182 reopened. The write is suppressed; a missing marker degrades to the
+  pre-#337 behaviour, a missing kill degrades to an orphaned worker group.
+  Clearing a stale marker, by contrast, fails **loudly** (exit 2) — nothing has
+  been started yet, so there is nothing to orphan, and failing open there would
+  make every later run in the workspace read as truncated.
 
 ## Measurements
 
-All local figures on 10-core Apple silicon, CPython 3.12.13, mutmut 3.6.0,
-`--max-children 8`, hermetic, $0. All CI figures from run `32556128813`
-(2026-08-22), job `96990425891` unless stated.
+All local figures are from a **single run on one machine** — 10-core Apple
+silicon, CPython 3.12.13, mutmut 3.6.0, `--max-children 8`, hermetic, $0 — and
+none of them survives a fresh checkout, because `mutants/` is generated and
+gitignored. Re-deriving any of them means re-running the gate. All CI figures
+are from run `32556128813` (2026-08-22), job `96990425891` unless stated.
 
 | What | Value | Command |
 |---|---|---|
@@ -197,8 +235,10 @@ All local figures on 10-core Apple silicon, CPython 3.12.13, mutmut 3.6.0,
 | Whole suite, CI, uninstrumented | 352.61s (3110 passed, 68 skipped) | `validate-and-test` / `Unit tests` |
 | Clean-test phase, local, after | 18.6s | phase probe |
 | Whole run, local, after | 165.5s | phase probe |
+| Whole `make mutation-baseline`, real scope, end to end | ~3 min, `5 killed, 0 survived`, `100.0%`, exit 0 | `make mutation-baseline DIFF_BASE=origin/main` with one comment line added inside `_is_variation_selector` |
+| The same, `MUTATION_RUN_DEADLINE_SECONDS=25` | `TRUNCATED` + `UNMEASURED … before any mutant produced a kill-or-survive verdict`, exit 2 | same, with the deadline lowered |
 | Mutants scored, local, after | 287 killed, 0 survived, 72 crash | `report` mode of `MUTMUT_SCOPE_PY` |
-| PR runs that produced a score, last 11 before this | 0 | issue #337 |
+| Recent PR mutation runs producing a score | **0 of 6** — five died on `deadline exceeded` + `no mutants were scored`, one had an empty scope | `gh run view <id> --log` over `32558988310 32557863001 32554511351 32529064663 32490462765 32556128813` |
 
 `MUTATION_RUN_DEADLINE_SECONDS` is deliberately **not changed**. At 165.5s local
 for a 359-mutant scope, the 1440s budget has roughly 8× of headroom on this
@@ -262,6 +302,20 @@ satisfied honestly. The one case that still exits 1 is a truncation that scored
   before.
 
 ### Open, and deliberately not closed here
+
+* **A function defined in a package `__init__.py` gets two patterns that both
+  match nothing.** mutmut strips `.__init__.` from a mutant name before the
+  association lookup, so for a function `f` defined in a package's own
+  `__init__` module the real key is `pkg.x_f`, while the scope emits
+  `pkg.__init__.x_f…`. The *suffixed* half of that miss is
+  pre-existing and fails loudly (`assert filtered_mutants`); the companion
+  inherits it. Unreachable today — no `src/**/__init__.py` defines a function —
+  and a one-line `removesuffix(".__init__")` would close it, but it is a
+  separate behaviour change and belongs in its own record.
+* **A scope whose changed functions have no recorded test association at all
+  still triggers the whole-suite clean phase**, because the association set is
+  genuinely empty rather than merely unmatched. The `no_tests > 0` failure catches
+  the outcome; the cost is paid first.
 
 * **The CI-runner cost of the mutant phase is unmeasured.** No per-mutant CI
   time has ever been recorded in this repo; `docs/metrics/mutation-gate-study.md`

@@ -276,7 +276,12 @@ MUTATION_RUN_DEADLINE_SECONDS ?= 1440
 # report() reads it and refuses to print a percentage for a truncated run.
 # ONE definition, passed to both readers below as RUN_WITH_DEADLINE_MARKER, so
 # the writer's path and the reader's path cannot drift apart.
-MUTATION_TRUNCATION_MARKER ?= build/mutation/truncated
+#
+# `override :=`, NOT `?=`: `?=` yields to the environment, and adversarial
+# review demonstrated `MUTATION_TRUNCATION_MARKER=/dev/null make
+# mutation-baseline` making a completed, below-threshold run report UNMEASURED
+# and exit 0. There is no legitimate reason to point this anywhere else.
+override MUTATION_TRUNCATION_MARKER := build/mutation/truncated
 
 define MUTMUT_SCOPE_PY
 import ast, collections, glob, io, json, os, re, subprocess, sys, tokenize
@@ -657,15 +662,27 @@ def report():
     # #337: was the run cut short by its own wall-clock deadline?
     # scripts/run_with_deadline.py exits 0 when it kills the run, deliberately,
     # so that this function still gets to score whatever landed on disk. The
-    # cost of that choice was invisible until the run started reaching the
-    # mutant phase at all: mutmut writes one .meta entry per FINISHED mutant
-    # and leaves the rest at `None`, and the `code is None: continue` below
-    # skips exactly those - so a run killed after 2 of 359 mutants, both
-    # killed, printed "mutation score = 100.0%" and exited 0. The wrapper drops
-    # this marker file when it kills the run and removes it when it does not,
-    # so a truncated run can no longer be read as a complete one.
+    # cost of that choice is invisible until the run reaches the mutant phase
+    # at all: mutmut writes one .meta entry per FINISHED mutant and leaves the
+    # rest at `None`, and the `code is None: continue` below skips exactly
+    # those. Demonstrated on a synthetic .meta with 3 killed and 289 unfilled:
+    # this function printed "mutation score = 100.0%" and exited 0.
+    #
+    # The wrapper drops a marker file when it kills the run and removes it when
+    # it does not. Detection is by CONTENT, not by existence: the marker path
+    # comes from the environment, and `os.path.exists` alone would let
+    # `RUN_WITH_DEADLINE_MARKER=/dev/null` (or any pre-existing file) declare
+    # every completed run truncated and skip the threshold check. Found by
+    # adversarial review, demonstrated with /dev/null.
+    TRUNCATION_SENTINEL = "run_with_deadline killed this run at "
     marker = os.environ.get("RUN_WITH_DEADLINE_MARKER", "")
-    truncated = bool(marker) and os.path.exists(marker)
+    try:
+        with open(marker) as handle:
+            truncated = handle.read(len(TRUNCATION_SENTINEL)) == TRUNCATION_SENTINEL
+    except OSError:
+        # Unset, absent, or a directory: all mean "no wrapper said it killed
+        # this run", which is the only thing this flag is allowed to assert.
+        truncated = False
     counts = collections.Counter()
     survivors = []
     for meta in glob.glob("mutants/src/**/*.py.meta", recursive=True):
@@ -684,6 +701,17 @@ def report():
     checked = counts["killed"] + counts["survived"]
     print("mutants scored: %d killed, %d survived, %d timeout (excluded), %d no-tests" % (
         counts["killed"], counts["survived"], counts["timeout"], counts["no_tests"]))
+    if truncated:
+        # Printed here, before every diagnosis below, so that whichever branch
+        # fires carries the context. Found by adversarial review: mutmut sorts
+        # its mutants by estimated cost ascending and a no-tests mutant costs
+        # zero, so "all of the few mutants we reached were no-tests" is the
+        # LIKELY shape of a real truncation - and that branch used to tell the
+        # author to add a test without ever mentioning the budget.
+        print("TRUNCATED: this run was cut short by its own wall-clock "
+              "deadline. Every count below is a PREFIX of the scope, not the "
+              "whole of it; the mutants the deadline never reached are "
+              "unmeasured, not killed.")
     if (counts["skipped"] or counts["crash"] or counts["error"] or counts["suspicious"]
             or counts["type_check"] or counts["interrupted"]):
         # Found by adversarial review of the fix above: type_check (37, a
@@ -741,19 +769,6 @@ def report():
         # Two very different states used to share one message, and the message
         # was only true of the first. Now the gate blocks, telling an author to
         # go hunting for a crashed run that did not crash costs real time.
-        if truncated:
-            # #337's actual CI symptom, named correctly. The shipped message
-            # for this state was "the run did not happen (empty or absent
-            # mutants/)", which is false and sent three sessions looking at
-            # also_copy: mutants/ was present and fully generated, the deadline
-            # simply fired before the mutant phase started.
-            print("UNMEASURED: the run was cut short by its own wall-clock "
-                  "deadline before a single mutant was scored. mutants/ is "
-                  "present and complete - this is the gate running out of "
-                  "budget, not a broken copy and not a statement about the "
-                  "diff. Widen MUTATION_RUN_DEADLINE_SECONDS or narrow the "
-                  "scope.")
-            raise SystemExit(1)
         if counts["timeout"] or counts["crash"]:
             # Every mutant timed out or crashed. Measured (baseline §5): 66/66
             # mutants of _persist_terminal_run time out under mutmut's
@@ -776,6 +791,27 @@ def report():
                   "artifact, not a test failure. No mutation evidence for "
                   "this change." % " and ".join(parts))
             return
+        if truncated:
+            # #337's actual CI symptom, named correctly - and placed AFTER the
+            # timeout/crash branch above, because a scope slow enough to time
+            # every mutant out is a scope slow enough to hit the wall clock,
+            # and "every mutant timed out" is the more specific true statement
+            # when both hold. Adversarial review demonstrated this branch
+            # printing "before a single mutant was scored" over a run in which
+            # 66 mutants had timed out on the line above.
+            #
+            # The message this replaces was "the run did not happen (empty or
+            # absent mutants/)" - false, and it sent three sessions reading
+            # also_copy. It deliberately does NOT claim mutants/ is intact:
+            # this function never looks at mutants/ beyond globbing for .meta
+            # files, so that would be a second unverified claim in place of the
+            # first (also an adversarial-review finding).
+            print("UNMEASURED: the run was cut short by its own wall-clock "
+                  "deadline before any mutant produced a kill-or-survive "
+                  "verdict. This is the gate running out of budget, not a "
+                  "statement about the diff. Widen "
+                  "MUTATION_RUN_DEADLINE_SECONDS or narrow the scope.")
+            raise SystemExit(1)
         # Fail closed: absent/crashed run == no measurement, not a perfect score.
         print("no mutants were scored — the run did not happen (empty or absent mutants/)")
         raise SystemExit(1)
@@ -785,15 +821,29 @@ def report():
         # A partial run is NOT a score. The mutants the deadline never reached
         # are unmeasured, not killed, and dividing over only the ones that
         # finished reports a percentage of an arbitrary prefix of the scope.
-        # Same posture as the all-timeout branch above: not failed (the cause
-        # is the gate's budget, not the diff) and emphatically not a pass. Any
-        # SURVIVED line printed above IS a real finding; the absence of one is
-        # not evidence of anything.
         print("UNMEASURED: the run was cut short by its own wall-clock "
               "deadline after scoring %d of the scope's mutants. A partial "
               "run is not a score - no percentage is reported, because the "
               "mutants the deadline never reached are unmeasured, not "
               "killed." % checked)
+        if counts["survived"]:
+            # ... but a SURVIVOR is not a percentage. It is a mutant that ran
+            # and that no test caught, and truncating the run afterwards does
+            # not un-demonstrate it. Adversarial review found the first version
+            # of this branch returning 0 over 7 survivors that had made the
+            # same gate exit 1 the moment before the marker appeared - turning
+            # a visibly RED job GREEN, which is the exact class of defect this
+            # whole record exists to remove.
+            #
+            # This is deliberately STRICTER than the complete-run rule, which
+            # tolerates survivors up to the threshold: over a prefix there is
+            # no honest denominator to compare a threshold against, so the only
+            # sound rule is that a demonstrated survivor fails.
+            print("%d mutant(s) SURVIVED before the cut-off. A survivor is a "
+                  "test gap that was DEMONSTRATED - it needs no denominator "
+                  "and the rest of the run cannot take it back - so this "
+                  "fails even though no score was produced." % counts["survived"])
+            raise SystemExit(1)
         return
     score = 100.0 * counts["killed"] / checked
     print("mutation score (killed / (killed+survived)) = %.1f%% (threshold %.0f%%)" % (score, threshold))
@@ -811,7 +861,15 @@ mutation-baseline:
 	@mkdir -p build/mutation
 	@printf '%s' "$$MUTMUT_SCOPE_PY" | $(PYTHON) - scope $(DIFF_BASE) $(MUTATION_MIN_SCORE) > build/mutation/scope.txt
 	@echo "changed functions in scope:"; sed 's/^/  /' build/mutation/scope.txt
+	@# #337: the scope expansion below is deliberately UNQUOTED, because each
+	@# line has to become its own argument -- and now that the scope also emits
+	@# leading-asterisk oracle patterns, that expansion is subject to PATHNAME
+	@# expansion as well. A repo-root file whose name happened to end in a
+	@# mutant name would silently replace the pattern with that filename. The
+	@# "set -f" below turns globbing off for this recipe; word-splitting is IFS
+	@# and is unaffected, and nothing else on this branch relies on a glob.
 	@if [ -s build/mutation/scope.txt ]; then \
+		set -f; \
 		rm -rf mutants; \
 		SENTRY_DSN= OPENROUTER_LIVE_EXECUTION_ENABLED=false QUORUM_RUNTIME_ENVIRONMENT=ci QUORUM_TOKEN_SECRET=mutation-baseline UV_CACHE_DIR=$(UV_CACHE_DIR) \
 			RUN_WITH_DEADLINE_MARKER=$(MUTATION_TRUNCATION_MARKER) \
