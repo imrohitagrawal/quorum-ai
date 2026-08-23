@@ -16,7 +16,7 @@ GitHub closes an issue when a close keyword (`close`/`closes`/`closed`,
 what the author wrote.
 
 **Six such texts have named five issues here, and four of those issues actually
-closed.** Every row was re-verified from the GitHub API on 2026-08-24 with
+closed.** (`tests/unit/test_close_keyword_guard.py` pins all three numbers.) Every row was re-verified from the GitHub API on 2026-08-24 with
 `gh api repos/:owner/:repo/issues/<n>/timeline`, reading the `closed` event:
 
 | Issue | Text that did it | Surface | Closed? | Evidence |
@@ -66,8 +66,9 @@ that the bracket form is therefore a never-legitimate shape worth flagging.
 * `fix(#N)` appears in **10** commit subjects on `main`
   (`git log origin/main --format='%s' | grep -E '^fix\(#[0-9]+\)'`).
 * Three of them — `68d8b69` `fix(#148)`, `5bbe616` and `15c365c` `fix(#226)` —
-  contain **no other reference to that issue anywhere in the message**, and in
-  none of the three did the commit close the issue.
+  carry **no other close-shaped reference** to that issue; `15c365c` does mention
+  it once more, as `#226 stays OPEN for PR 2.`, which closes nothing. In none of
+  the three did the commit close the issue.
 * The decisive one: issue #148 was closed on **2026-08-02** with
   `commit_id: null`; its `fix(#148)` commit landed **2026-08-19**, seventeen days
   *later*. The bracket form cannot have closed it.
@@ -140,9 +141,17 @@ discovered weeks later by an issue that is mysteriously closed.
 
 Only a close reference whose own clause **negates** it. Concretely: a negation
 word within three words before the keyword, stopping at a clause boundary
-(`.!?;:` a newline, **or a comma**), with markdown emphasis (`*`, `_`, `` ` ``)
-ignored because GitHub ignores it too — the live PR #282 body is
-`This does **not** close #268`.
+(`.`, `!`, `?`, `;`, `:` **or a comma** — see below for newlines), with markdown
+emphasis (`*`, `_`, `` ` ``) ignored because GitHub ignores it too — the live
+PR #282 body is `This does **not** close #268`.
+
+**References inside markdown code are skipped entirely**, because GitHub skips
+them. Measured rather than assumed, on 2026-08-24: PR #361's own body was edited
+to carry `` `Closes #148` `` inside an inline span and inside a fenced block, and
+`gh pr view 361 --json closingIssuesReferences` returned `[]`; the positive
+control, the identical text as plain prose, returned `[148]`. Without this the
+guard blocks any pull request that documents it — this very ADR quotes the
+corpus and carries 13 references that GitHub would never act on.
 
 A **single newline is not a boundary; a blank line is.** git wraps a commit body
 at about 72 characters, so `does NOT\nclose #337` is the ordinary shape of the
@@ -181,7 +190,7 @@ examined 344 commit message(s) on origin/main; 4 flagged
 | False positives over all of history | **0** |
 | Real texts flagged | 6 of 6 |
 | Clean-corpus items wrongly flagged | 0 of 13 |
-| Mutations applied to the checker and its wiring | 25, **all RED**, 0 survivors |
+| Mutations applied to the checker and its wiring | 40, **all RED**, 0 survivors |
 
 And on the **other** surface layer 1 actually gates, which the first draft did
 not measure at all:
@@ -196,14 +205,35 @@ not measure at all:
 The two pull-request-body texts (#282's and #289's) do not appear in the commit
 scan and are pinned as literals in `tests/unit/test_close_keyword_guard.py`.
 
-**Two of those 25 mutations survived on first attempt** and are recorded because
-the fix is the interesting part: widening the keyword set to the gerund
-`closing` (which GitHub does not honour) went undetected because the suite only
-asserted such text was not *flagged*, never that it was not a *reference*; and
-flipping the pull-request step's `if:` from `==` to `!=` survived because the
-test matched a substring of the expression rather than the whole of it. That
-second one is not cosmetic — it would run the blocking step on every push to
-`main` with the variables unset, exit 2, and redden a required context.
+**Method, so the figure is reproducible rather than asserted:** each mutation
+edits one named line (a constant, a regex, a boundary character, a workflow
+`if:`, a Makefile recipe), then `uv run pytest
+tests/unit/test_close_keyword_guard.py` runs and the file is restored from a
+`cp` taken beforehand, with `diff -q` confirming the restore. `__pycache__` is
+cleared between runs — without that, a restored file keeps its original mtime
+and Python silently reuses the mutant's bytecode, which produced a wrong table
+the first time this was measured.
+
+**Seventeen of those 40 survived on first attempt**, across two review rounds,
+and they are recorded because the fixes are the interesting part:
+
+* Ten mutations of the negation and boundary logic survived because every real
+  text happens to use plain `not`: the negation set could be reduced to one
+  word, the emphasis set to one character, and `:`/`;`/`!`/`?` could each be
+  deleted from the clause boundary. The corpus now carries a synthetic entry per
+  member, and a test refuses any member no text exercises.
+* `_LOOKBACK_WORDS` could be set to 1, 4, 5 or 1000 undetected. Both bounds are
+  now pinned with literals on either side.
+* Widening the keyword set to the gerund `closing` — which GitHub does not
+  honour — went undetected because the suite asserted only that such text was
+  not *flagged*, never that it was not a *reference*.
+* Flipping the pull-request step's `if:` from `==` to `!=` survived a substring
+  assertion. Not cosmetic: it would run the blocking step on every push to
+  `main` with the variables unset, exit 2, and redden a required context.
+* The blocking lane could be silently downgraded by adding `continue-on-error:
+  true` or appending `--advisory`, and the Makefile's `$(BODY)` denylist was
+  walked past with the identical `${BODY}` spelling, restoring both the
+  injection and the silent text loss. The recipe test is now an allowlist.
 
 ## Rejected alternatives
 
@@ -238,8 +268,10 @@ second one is not cosmetic — it would run the blocking step on every push to
   close issue 337", or "#337 stays open". Both read the same and neither closes
   anything.
 * One new step on every PR run, before dependency install, costing seconds.
-* `make close-guard PR=<n> SUBJECT=... BODY=...` exists but is only as good as
-  the habit of running it. If the #360 class recurs despite this record, that is
+* `PR=<n> MERGE_SUBJECT=... MERGE_BODY=... make close-guard` exists but is only
+  as good as the habit of running it. The text travels in the environment: an
+  earlier form passed it as make variables, which expanded a crafted body into
+  `/bin/sh` and could not parse PR #360's real merge body at all. If the #360 class recurs despite this record, that is
   the evidence that layer 2 needs to become mechanical — most plausibly by having
   the merge go through a script rather than a remembered command.
 
@@ -275,3 +307,30 @@ its evidence:
   for that direction; this one does not duplicate it.
 * **Anything on a branch that never reaches `main`.** The history scan reads
   `origin/main` only.
+
+### Open, and deliberately not closed here
+
+Found by review, reproduced, and left for a separate change rather than fixed
+past the two-round cap:
+
+* **Markdown block structure is not a boundary, only a blank line is.** So
+  `- no regressions` on one line and `- closes #123` on the next is flagged, as
+  is a `## Nothing regressed` heading above a `Closes #123`. **Zero occurrences
+  in 344 commit messages and 242 pull requests**, so this is forward-looking
+  risk rather than a live defect — but it is on the BLOCKING lane and this
+  repository writes bullet-heavy pull-request bodies. The fix is to treat a
+  newline into or out of a line beginning with a markdown block marker as a
+  boundary; it needs its own review round.
+* **Whether GitHub Actions sets `PR_BODY` at all for a pull request with a null
+  body is UNVERIFIED.** If it omits the variable rather than setting it empty,
+  the per-variable floor exits 2 on every body-less pull request. The check is
+  one throwaway pull request with an empty body. Every pull request in this
+  repository's history has a body, so it has not been reachable here.
+* **`ci.yml` has no `concurrency` group**, so `edited` adds runs rather than
+  superseding in-flight ones — measured at 33 edits over 60 pull requests.
+  Cost, not correctness, and adding one touches every job in the workflow.
+* **A zero-width space defeats the walk** (`does not\u200bclose #123` is a
+  reference GitHub honours and the guard does not flag). This is a guard against
+  accident, not against a deliberate actor.
+* **Negation more than three words back, or across a comma**, remains
+  undetectable by construction — see the list above.

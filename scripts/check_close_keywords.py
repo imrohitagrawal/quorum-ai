@@ -6,8 +6,9 @@ resolve/resolves/resolved) immediately before ``#<number>``. **Its parser has no
 concept of negation.** "This does NOT close #337" contains "close #337", so the
 issue closes — saying the opposite of what the author wrote.
 
-FIVE such texts, FOUR of which actually closed an issue. Re-verified from the
-API on 2026-08-24 by reading each issue's ``closed`` timeline event:
+SIX such texts have named FIVE issues, and FOUR of those issues actually
+closed. Re-verified from the API on 2026-08-24 by reading each issue's
+``closed`` timeline event:
 
 ======  ==============================================  ========================  ======
 Issue   Text that did it                                Surface                   Closed
@@ -15,6 +16,7 @@ Issue   Text that did it                                Surface                 
 #175    ``Filed, not fixed: #175 (whitespace ...``      commit e6c84ea (PR #174)  yes
 #185    ``not fixed: #185, #171, #178, #180, #182``     commit 0ace31e            yes
 #268    ``This does **not** close #268.``               PR #282 body              yes
+#268    ``This does NOT close #268: the ...``           commit 8ca6a98            same
 #337    ``**This does NOT close #337.**``               commit 4ea57ba (PR #360)  yes
 #105    ``does not close #105, #268 or #203``           PR #289 body              NO
 ======  ==============================================  ========================  ======
@@ -81,6 +83,37 @@ _KEYWORD = r"(?:close[sd]?|fix(?:es|ed)?|resolve[sd]?)"
 #: spaces, then ``#<digits>``. A newline between the two does NOT count, which
 #: is why only spaces and tabs appear here.
 CLOSE_REFERENCE = re.compile(rf"\b({_KEYWORD})\b[ \t]*:?[ \t]*#(\d+)\b", re.IGNORECASE)
+
+#: Markdown code, which GitHub does NOT read closing references out of.
+#: MEASURED, not assumed (AGENTS.md rule 8c — go and look at the upstream).
+#: On 2026-08-24 PR #361's own body was edited to carry `Closes #148` inside an
+#: inline span and inside a fenced block: `gh pr view 361 --json
+#: closingIssuesReferences` returned `[]`. The POSITIVE CONTROL — the identical
+#: text as plain prose — returned `[148]`, and removing it returned `[]` again.
+#:
+#: Without this, the guard blocks every pull request that DOCUMENTS it: ADR-0066
+#: quotes the corpus and carries 13 such references, all inside backticks.
+#: A blocking gate that fires on its own documentation is one that gets deleted.
+_FENCED_CODE = re.compile(r"^([`~]{3,})[^\n]*\n[\s\S]*?(?:^\1[`~]*[ \t]*$|\Z)", re.MULTILINE)
+_INLINE_CODE = re.compile(r"(`+)[\s\S]*?\1")
+
+
+def _code_spans(text: str) -> list[tuple[int, int]]:
+    """Character ranges GitHub treats as code, fenced blocks first.
+
+    Fences are blanked (newlines preserved, so offsets and line structure hold)
+    before inline spans are matched, or a stray backtick inside a fence would
+    pair with one outside it.
+    """
+    spans = [match.span() for match in _FENCED_CODE.finditer(text)]
+    masked = list(text)
+    for start, end in spans:
+        for index in range(start, end):
+            if masked[index] != "\n":
+                masked[index] = " "
+    spans.extend(match.span() for match in _INLINE_CODE.finditer("".join(masked)))
+    return spans
+
 
 #: Words that turn a close into its opposite. ``n't`` is handled by suffix so
 #: that doesn't/won't/can't need no enumeration.
@@ -156,7 +189,12 @@ def close_references(text: str) -> list[tuple[str, int, int]]:
     close references at all cannot have a negated one, and the two counts are
     reported separately so an empty measurement is visible rather than green.
     """
-    return [(m.group(1), int(m.group(2)), m.start()) for m in CLOSE_REFERENCE.finditer(text)]
+    spans = _code_spans(text)
+    return [
+        (m.group(1), int(m.group(2)), m.start())
+        for m in CLOSE_REFERENCE.finditer(text)
+        if not any(start <= m.start() < end for start, end in spans)
+    ]
 
 
 def _preceding_negation(text: str, keyword_start: int) -> str | None:

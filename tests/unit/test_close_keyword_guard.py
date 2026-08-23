@@ -24,6 +24,7 @@ from typing import Any
 
 import yaml
 from scripts.check_close_keywords import (
+    _EMPHASIS,
     NEGATIONS,
     close_references,
     main,
@@ -127,6 +128,28 @@ MUST_NOT_FLAG: tuple[tuple[str, str], ...] = (
         "the gerund, which GitHub does not treat as a close keyword",
         "Work closing #123 is tracked separately.",
     ),
+    # One per clause-boundary character. Each was unpinned until a reviewer
+    # deleted it from _CLAUSE_BOUNDARY with the whole suite staying green.
+    ("a colon boundary", "No blockers remain: closes #123."),
+    ("a semicolon boundary", "No regressions; closes #123."),
+    ("an exclamation boundary", "No more flakes! Closes #123."),
+    ("a question-mark boundary", "Any regressions? None. Closes #123."),
+    (
+        # The look-back's UPPER bound. The negation is four words back, so this
+        # must stay clean; it is the partner to the two-word case below.
+        "a negation four words before the keyword",
+        "This does not on its own close #337.",
+    ),
+    (
+        # MEASURED: GitHub returns closingIssuesReferences [] for a reference
+        # inside a code span, and [148] for the same text as prose.
+        "a closing reference inside an inline code span",
+        "The bad shape is `Closes #123` written in prose.",
+    ),
+    (
+        "a closing reference inside a fenced block",
+        "Example output:\n\n```\nCloses #123\n```\n\nThat is all.",
+    ),
 )
 
 #: Negation words that are NOT exercised by the real corpus above (every real
@@ -143,6 +166,16 @@ SYNTHETIC_NEGATIONS: tuple[tuple[str, list[int]], ...] = (
     ("This cannot close #123.", [123]),
     ("This doesn't close #123.", [123]),
     ("This won't fix #123.", [123]),
+    # The look-back's LOWER bound: two intervening words must still reach.
+    ("This does not yet close #123.", [123]),
+    # The `newlines = 0` reset — without it a wrapped negation stops counting.
+    ("This does not\nyet\nclose #123.", [123]),
+    # The bracket/quote strip around a negation word.
+    ("This does (not) close #123.", [123]),
+    # One per markdown emphasis character, none of which were exercised.
+    ("This does _not_ close #123.", [123]),
+    ("This does `not` close #123.", [123]),
+    ("This does ~not~ close #123.", [123]),
 )
 
 
@@ -242,6 +275,58 @@ def test_legitimate_closes_are_never_flagged() -> None:
         assert negated_closes(text) == [], f"{label}: wrongly flagged {text!r}"
 
 
+def test_markdown_code_is_not_a_closing_reference_but_prose_is() -> None:
+    """MEASURED against the live API, not assumed (AGENTS.md rule 8c).
+
+    On 2026-08-24 PR #361's body was edited to carry `Closes #148` inside an
+    inline span and inside a fenced block: closingIssuesReferences returned [].
+    The positive control, the same text as prose, returned [148].
+
+    Turns red if the code-span filter is removed. Without it this repository's
+    own ADR yields 13 findings and the blocking lane rejects any pull request
+    that documents the guard.
+    """
+    assert close_references("See `Closes #123` in the docs.") == []
+    assert close_references("```\nCloses #123\n```") == []
+    # The positive partner: the identical text outside code IS a reference.
+    assert [issue for _, issue, _ in close_references("See Closes #123 in the docs.")] == [123]
+    # And a negation inside code still counts, because the reference is outside
+    # it — GitHub would close this one.
+    assert [f.issue for f in negated_closes("This does `not` close #123.")] == [123]
+
+
+def test_every_emphasis_character_is_exercised_by_the_corpus() -> None:
+    """No dead weight in _EMPHASIS either.
+
+    Turns red if a character is added to _EMPHASIS without a text that needs it.
+    A reviewer reduced the set to a single character with the suite green.
+    """
+    corpus = [text for _, text, _ in REAL_NEGATED_CLOSES]
+    corpus += [text for text, expected in SYNTHETIC_NEGATIONS if expected]
+    for char in _EMPHASIS:
+        assert any(char in text and negated_closes(text) for text in corpus), (
+            f"no corpus text needs the emphasis character {char!r}"
+        )
+
+
+def test_a_negation_in_the_title_cannot_reach_a_close_in_the_body() -> None:
+    """The blank line `main()` inserts between the variables is load-bearing.
+
+    Turns red if the "\n\n" join is weakened to a single newline or a space:
+    an ordinary title such as `fix(judge): a run that produced nothing` would
+    then negate a perfectly legitimate `Closes #258` in the body and block the
+    pull request.
+    """
+    import os
+
+    os.environ["CG_T"] = "fix(judge): a run that produced nothing"
+    os.environ["CG_B"] = "Closes #258."
+    try:
+        assert main(["prog", "--env", "CG_T", "CG_B", "--require-nonempty"]) == 0
+    finally:
+        del os.environ["CG_T"], os.environ["CG_B"]
+
+
 def test_the_clean_corpus_really_contains_closing_references() -> None:
     """The positive partner for the assertion above (AGENTS.md rule 7).
 
@@ -260,6 +345,9 @@ def test_the_clean_corpus_really_contains_closing_references() -> None:
     assert close_references("fix(#337): the mutation scope") == []
     assert close_references("Work closing #123 is tracked separately.") == []
     assert close_references("This is a fixture for #123.") == []
+    # The LEADING word boundary: without it, `Hotfixes` ends in `fixes` and the
+    # whole sentence becomes a closing reference.
+    assert close_references("Hotfixes #123 land on release branches.") == []
 
 
 def test_the_corpora_reject_a_degenerate_checker() -> None:
@@ -423,8 +511,15 @@ def test_the_close_guard_recipe_never_interpolates_merge_text_into_a_shell() -> 
     """
     recipe = _close_guard_recipe()
     assert "--env MERGE_SUBJECT MERGE_BODY" in recipe
-    for forbidden in ("$(SUBJECT)", "$(BODY)", "$(MERGE_SUBJECT)", "$(MERGE_BODY)"):
-        assert forbidden not in recipe, f"{forbidden} re-parses untrusted text in a shell"
+    assert "--require-nonempty" in recipe, "layer 2 needs its vacuity floor too"
+
+    # An ALLOWLIST, not a denylist. The first version banned four spellings and
+    # a reviewer walked straight past it with ${BODY}, which make expands
+    # identically to $(BODY) — the injection and the silent text loss both came
+    # back with the suite green. Strip the two expansions that are meant to be
+    # here and assert nothing else survives.
+    residue = recipe.replace("$(PYTHON)", "").replace('"$${PR:?set PR=<pull request number>}"', "")
+    assert "$" not in residue, f"unexpected shell/make expansion in the recipe: {residue!r}"
 
 
 def test_the_pull_request_lane_is_wired_into_a_required_context() -> None:
@@ -440,6 +535,10 @@ def test_the_pull_request_lane_is_wired_into_a_required_context() -> None:
     step = guard[0]
     assert "pull_request" in str(step.get("if", "")), "the guard must be gated to pull requests"
     assert "--require-nonempty" in str(step["run"]), "the vacuity floor must stay wired"
+    # The two one-line downgrades that turn a blocking gate advisory. Both
+    # survived the first version of this suite.
+    assert "continue-on-error" not in step, "that silently downgrades the blocking lane"
+    assert "--advisory" not in str(step["run"]), "the pull-request lane must be able to fail"
 
 
 def test_the_pull_request_text_reaches_the_script_through_the_environment() -> None:

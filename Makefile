@@ -959,7 +959,7 @@ security-scan: check-python
 #
 #   PR=361 \
 #   MERGE_SUBJECT="fix: the thing" \
-#   MERGE_BODY="$$(cat /tmp/merge-body.md)" \
+#   MERGE_BODY="$(cat /tmp/merge-body.md)" \
 #   make close-guard
 close-guard: check-python
 	@$(PYTHON) scripts/check_close_keywords.py --env MERGE_SUBJECT MERGE_BODY \

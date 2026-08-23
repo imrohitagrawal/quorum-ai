@@ -41,7 +41,7 @@ jobs:
       # Issue-close guard, pull-request lane. GitHub closes an issue whenever a
       # close keyword sits next to `#N`, and its parser has no concept of
       # negation: four issues in this repo were closed by sentences written to
-      # say they were NOT being closed, across five such texts (see ADR-0066).
+      # say they were NOT being closed, across six such texts (see ADR-0066).
       # BLOCKING here is
       # legitimate — the author can edit the title or body and go green.
       # Placed before `uv sync` so the answer arrives in seconds, and it needs
