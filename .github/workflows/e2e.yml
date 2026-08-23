@@ -199,6 +199,7 @@ jobs:
           tests/invariants/source-support-denominator.spec.ts
           tests/invariants/markdown-corpus.spec.ts
           tests/invariants/landing-cta-reachable.spec.ts
+          tests/invariants/result-debate.spec.ts
           --project=chromium
           --retries=0
 
@@ -264,7 +265,24 @@ jobs:
         #     ADR-0015). Measured, JUnit records it as a normal pass — 32 tests,
         #     0 failures, 0 skipped — so it counts toward this floor and does
         #     not trip the no-skips policy above.
-        run: python3 scripts/check_e2e_executed.py --report e2e/results.xml --min 233 --lane "invariants lane"
+        #
+        # 233 -> 244 with the three tally-caption tests in verdict-band.spec.ts.
+        # MEASURED, not added: the lane run exactly as this step runs it reported
+        # "244 passed (5.8m)" on 2026-08-21. Three of those 244 are new here
+        # (`git diff origin/main -- e2e/tests/invariants/verdict-band.spec.ts |
+        # grep -cE '^\+  test\('` -> 3), so the lane was already at 241 against a
+        # floor of 233 — eight tests of headroom banked by PRs that added tests
+        # without re-measuring, which is exactly the headroom the comment above
+        # warns about. Moving to the measured number rather than to 236 closes it.
+        #
+        # 244 -> 253 -> 257 with result-debate.spec.ts. MEASURED at each step,
+        # never added: the lane reported "253 passed (4.7m)" when the spec held
+        # 9 tests, and "257 passed (4.7m)" after adversarial review added four
+        # more (the caption-meaning pin, the two debate_mode provenance cases,
+        # and the constant-focus-line check). Re-running the lane rather than
+        # adding 4 is the same discipline the notes above record every previous
+        # arithmetic guess failing.
+        run: python3 scripts/check_e2e_executed.py --report e2e/results.xml --min 257 --lane "invariants lane"
 
       - name: Clear the previous lane's JUnit report
         run: rm -f e2e/results.xml

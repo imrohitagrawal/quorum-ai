@@ -1180,11 +1180,16 @@ def test_a_templated_synthesis_on_a_strong_panel_invents_no_alignment(
       simulated, no failed step — so the number was not bought by degrading
       the run.
 
-    What turns it red: delete the ``elif final_answer_was_templated`` branch
-    from ``classify_model_alignment``; the minority falls through to
-    ``strength == "strong"``, ``aligned`` reads 4 and one slot reads
-    ``revised``.
+    What turns it red: set ``final_aligned = True`` in the
+    ``elif final_answer_was_templated`` branch of ``classify_model_alignment``.
+
+    NOT "delete the branch", which this line said until ADR-0062 removed the
+    panel-strength fallback the branch existed to stop. Deleting it is now a
+    silent no-op — measured, the suite stays green — because the ``else`` below
+    reaches the same answer. The mutation above still bites: 5 failed, 37
+    passed.
     """
+
     monkeypatch.setitem(
         _OPENING_BY_PARTICIPANT, _MODERATOR_FREE_PARTICIPANTS[2], _PANEL_MAJORITY_TEXT
     )
@@ -1195,8 +1200,8 @@ def test_a_templated_synthesis_on_a_strong_panel_invents_no_alignment(
 
     run = query_run_repository.get(UUID(body["query_run_id"]))
     assert compute_consensus_strength(run.initial_answers, run.debate_outputs) == "strong", (
-        "this test exists for the strong panel; on any other the panel-strength "
-        "fallback and the templated refusal already agree"
+        "this fixture is meant to be the strong-panel shape (a SHAPE pin since "
+        "ADR-0062, not a precondition — see the docstring)"
     )
 
     assert body["result"]["agreement"] == {"aligned": 3, "total": 4}

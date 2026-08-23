@@ -381,7 +381,7 @@ test.describe("content the parser would otherwise swallow (review round 1)", () 
     page,
   }) => {
     await driveToResult(page, goldenRespWithProviderText("### - alpha bravo", "inline"));
-    const cell = page.locator(".result-pos-text").first();
+    const cell = page.locator(".result-verdict-caveat").first();
     await expect(cell).toBeVisible();
     const text = (await cell.textContent()) || "";
     expect(text, "the heading marker must not reach a text node").not.toContain("#");
@@ -564,12 +564,12 @@ test.describe("#257 production shapes, seeded into the fixture", () => {
     expect(raw, "raw table or <br> syntax reached a text node").toEqual([]);
   });
 
-  // #257 §2: the "How positions moved" OPENING cell showed a raw `# ` because
+  // #257 §2: an INLINE surface showed a raw `# ` because
   // the answer was flattened onto an INLINE surface, which has no heading rule
   // (an <h*> has no inline equivalent).
   test("a heading-led answer on the INLINE surface leaks no # or *", async ({ page }) => {
     await driveToResult(page, goldenRespWithMarkdownShapes());
-    const cell = page.locator(".result-pos-text").first();
+    const cell = page.locator(".result-verdict-caveat").first();
     await expect(cell).toBeVisible();
     const shape = await cell.evaluate((el) => ({
       text: el.textContent || "",

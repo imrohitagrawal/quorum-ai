@@ -433,15 +433,21 @@ test.describe("UI parity — behaviour", () => {
     expect(overflows, `receipt values overflow their column: ${JSON.stringify(overflows)}`).toEqual([]);
   });
 
-  test("Run details receipt: an ACTUAL-only cost row (e.g. a fired Layer-B judge call, absent from the pre-run estimate) still gets its own line in both itemized columns", async ({ page }) => {
+  test("Run details receipt: an ACTUAL-only cost row that the pre-run estimate does not carry still gets its own line in both itemized columns", async ({ page }) => {
     // Issue #217: the "Cost by model"/"Cost by stage" columns iterate the
     // PRE-RUN ESTIMATE's rows and backfill an actual figure only for a
-    // matching key. A judge call is realized post-hoc (issue #110) and never
-    // appears in the estimate, so its actual-only row used to be dropped
-    // entirely from BOTH columns even though the receipt's Total (read
-    // straight from actual.total) already included it — the itemized rows
-    // silently summed to less than the displayed Total, hiding that a paid
-    // judge call happened at all.
+    // matching key. An actual-only row used to be dropped entirely from BOTH
+    // columns even though the receipt's Total (read straight from
+    // actual.total) already included it — the itemized rows silently summed to
+    // less than the displayed Total, hiding that a paid call happened at all.
+    //
+    // THE MOCK BELOW IS THE POINT, not a claim about production. Its estimate
+    // deliberately carries NO advisory row, which is what drives the backfill
+    // path this test exists to pin. Do not read it as "the estimate never has
+    // one": since ADR-0064 the server prices a configured Layer-B judge INTO
+    // the estimate, so in production that row normally PAIRS est -> actual.
+    // The backfill still has to work for any row the actual has and the
+    // estimate does not.
     const judgeModelRow = { model_id: "openai/gpt-4o", display_name: "Layer-B judge", usd: "0.006", kind: "judge" };
     const judgeStageRow = { stage: "judge", usd: "0.006" };
     const resp = completedResp();
@@ -1282,8 +1288,17 @@ test.describe("UI parity — behaviour", () => {
         body: JSON.stringify({ query_text: q, model_slots: ids }),
       });
       const j = await resp.json();
+      // ALLOWLIST, matching the client's own filter. This mirror used to read
+      // `kind !== "synthesis"`, which asked "is this row not the writer?" and
+      // called everything else a slot. Since ADR-0064 the server also emits a
+      // priced `kind: "judge"` row when one is configured, so the denylist
+      // returned FIVE rows against the four slot cards `client` collects and
+      // the length assertion below failed — against a judge-configured
+      // deployment only, which is production. It passed in CI because CI
+      // configures no judge, i.e. the guard was blind in exactly the
+      // configuration it exists to protect.
       const server = (j.cost_estimate.breakdown.by_model || [])
-        .filter((r: { kind: string }) => r.kind !== "synthesis")
+        .filter((r: { kind: string }) => r.kind === "model")
         .map((r: { usd: string }) => Number(r.usd));
       return { client, server };
     }, longQ);
@@ -1392,15 +1407,23 @@ test.describe("UI parity — behaviour", () => {
 
   // ---- Reported issues follow-up: hand-off focus, positions colour, retention ----
 
-  test("item 3.2 — 'How positions moved' avatars carry the SAME per-vendor tint as the composer slots, not a flat grey", async ({ page }) => {
-    // The composer's four model slots each get a per-vendor tint (openai teal /
-    // anthropic amber / google blue / nvidia green). The "How positions moved"
-    // avatars used to render a single flat grey (no data-vendor), losing that
-    // colour identity — so a model that is teal in the composer went grey here.
+  // Was "item 3.2 — 'How positions moved' avatars...". That table is gone (see
+  // docs/adr/0063), so the SAME contract is asserted on the surviving surface
+  // that carries per-vendor avatars: the transcript's opening cards. Re-pointed
+  // rather than deleted — nothing else in the suite covered `.transcript-
+  // opening-avatar`, so deleting it would have dropped the cross-surface tint
+  // invariant entirely instead of moving it.
+  //
+  // (The companion "item 3.3", asserting the avatar was inset from the card's
+  // left border, is NOT re-pointed: it existed for a `border-collapse: collapse`
+  // padding no-op specific to that <table>, and the transcript openings are not
+  // a table. It has no subject left.)
+  test("transcript opening avatars carry the SAME per-vendor tint as the composer slots, not a flat grey", async ({ page }) => {
     await driveToResult(page, completedResp());
-    const pos = page.locator("#result-positions");
-    await expect(pos).toBeVisible();
-    const avatars = pos.locator(".result-pos-avatar");
+    await page.locator("#result-transcript-link").click();
+    const openings = page.locator("#transcript-openings");
+    await expect(openings).toBeVisible();
+    const avatars = openings.locator(".transcript-opening-avatar");
     await expect(avatars).toHaveCount(4);
     // Each avatar is tagged with its model's vendor, matching the SLOTS order.
     const vendors = await avatars.evaluateAll((els) =>
@@ -1410,7 +1433,7 @@ test.describe("UI parity — behaviour", () => {
     const bgs = await avatars.evaluateAll((els) =>
       els.map((e) => getComputedStyle(e as HTMLElement).backgroundColor));
     expect(new Set(bgs).size, `expected 4 distinct vendor tints, got ${JSON.stringify(bgs)}`).toBe(4);
-    // Cross-check: the positions tint for each vendor equals the composer slot
+    // Cross-check: the transcript tint for each vendor equals the composer slot
     // tint for the same vendor (the colour is retained across the two surfaces).
     const slotBgByVendor: Record<string, string> = await page
       .locator("#model-inputs .model-slot-avatar")
@@ -1421,32 +1444,14 @@ test.describe("UI parity — behaviour", () => {
             getComputedStyle(e as HTMLElement).backgroundColor,
           ]),
         ));
-    const posPairs: [string, string][] = await avatars.evaluateAll((els) =>
+    const pairs: [string, string][] = await avatars.evaluateAll((els) =>
       els.map((e) => [
         (e as HTMLElement).dataset.vendor || "",
         getComputedStyle(e as HTMLElement).backgroundColor,
       ]));
-    for (const [vendor, bg] of posPairs) {
-      expect(slotBgByVendor[vendor], `positions tint for ${vendor} must match the composer slot tint`).toBe(bg);
+    for (const [vendor, bg] of pairs) {
+      expect(slotBgByVendor[vendor], `transcript tint for ${vendor} must match the composer slot tint`).toBe(bg);
     }
-  });
-
-  test("item 3.3 — 'How positions moved' avatars are inset from the card's left border, not flush against it", async ({ page }) => {
-    // The model column set ``padding-left: 0`` and the table's own side padding
-    // was a no-op under ``border-collapse: collapse`` — so the tinted avatars
-    // sat only a few px from the card's left border, reading as if touching it
-    // (and mis-aligned with the section title, which is inset 24px). The first
-    // avatar's left edge must sit a real inset in from the card border.
-    await driveToResult(page, completedResp());
-    const card = page.locator("#result-positions");
-    await expect(card).toBeVisible();
-    const firstAvatar = card.locator(".result-pos-avatar").first();
-    const cardBox = await card.boundingBox();
-    const avatarBox = await firstAvatar.boundingBox();
-    expect(cardBox).not.toBeNull();
-    expect(avatarBox).not.toBeNull();
-    const inset = avatarBox!.x - cardBox!.x;
-    expect(inset, `avatar left inset from card border was ${inset}px`).toBeGreaterThanOrEqual(16);
   });
 
   test("item 2.4 — clicking a composer example chip fills the question AND scrolls it into view (focus not left off-screen)", async ({ page }) => {

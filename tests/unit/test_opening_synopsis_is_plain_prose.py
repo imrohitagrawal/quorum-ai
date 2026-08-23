@@ -1,4 +1,8 @@
-"""The "How positions moved" OPENING cell must never show Markdown syntax.
+"""A model's OPENING synopsis must never show Markdown syntax.
+
+The surface this was written for was the "How positions moved" opening cell,
+removed in ADR-0063. The synopsis itself still ships — in the Markdown export's
+"What each model opened with" section — so the contract below still binds.
 
 WHY THIS EXISTS
 ---------------

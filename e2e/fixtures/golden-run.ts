@@ -324,9 +324,17 @@ const goldenAnswer = (i: number) => ({
   fallback_used: false, status: "completed", latency_ms: 2200 + i * 100,
   citation_coverage: i === 2 ? CC_EMPTY : CC,
 });
+// `debate_mode: "live"` is what a real run emits when the configured moderator
+// model actually produced the critique. The fixture carried NO `debate_mode` at
+// all until now, and the API schema's default for that field is **"fallback"**
+// (openapi.yaml) — so the golden "good run" was, by the schema's own reading,
+// two template-written rounds, and no gate could tell the two provenances
+// apart. Seeded explicitly so the live case is the one the blocking lanes drive
+// and `goldenRespWithTemplatedDebate()` below is a real contrast, not the same
+// shape twice.
 const goldenDebate = () => [
-  { round_number: 1, status: "completed", critique_text: MESSY_CRITIQUE_1, focus_areas: ["scope", "evidence"], contributing_models: SLOTS.map((s) => s.model_id), latency_ms: 3100 },
-  { round_number: 2, status: "completed", critique_text: MESSY_CRITIQUE_2, focus_areas: ["citations"], contributing_models: SLOTS.map((s) => s.model_id), latency_ms: 2800 },
+  { round_number: 1, status: "completed", debate_mode: "live", critique_text: MESSY_CRITIQUE_1, focus_areas: ["scope", "evidence"], contributing_models: SLOTS.map((s) => s.model_id), latency_ms: 3100 },
+  { round_number: 2, status: "completed", debate_mode: "live", critique_text: MESSY_CRITIQUE_2, focus_areas: ["citations"], contributing_models: SLOTS.map((s) => s.model_id), latency_ms: 2800 },
 ];
 const goldenMovements = (revised: number) => SLOTS.map((s, i) => ({
   slot_number: s.slot_number, model_id: s.model_id, display_name: s.display_label,
@@ -470,14 +478,22 @@ export const HEADING_LED_ANSWER =
 /**
  * The golden completed run with the three #257 shapes seeded onto the surfaces
  * they actually leaked from: a table and a `<br>` on a BLOCK surface
- * (`setProse`), and a heading-led answer on the INLINE one (`setInlineProse` —
- * the "How positions moved" OPENING cell, which is where it was seen).
+ * (`setProse`), and a heading-led answer on the INLINE one (`setInlineProse`).
+ *
+ * The inline target was `position_movements[0].opening` — the "How positions
+ * moved" OPENING cell, which is where #257 was seen. That table is gone (see
+ * docs/adr/0063), so the inline target moved to the synthesis high-stakes
+ * notice, which `renderVerdictBand` renders through the SAME `setInlineProse`
+ * into a `<span class="result-verdict-caveat">`. It is a span, so the
+ * "an inline surface may not gain block children" assertion still means what it
+ * meant. Deliberately re-pointed rather than deleted: dropping it would have
+ * left the inline path with no result-view coverage at all.
  */
 export const goldenRespWithMarkdownShapes = () => {
   const resp = goldenCompletedResp() as Record<string, any>;
   resp.result.final_synthesis.recommendation =
     PRODUCTION_TABLE + "\n\n" + TABLE_WITH_LITERAL_BR;
-  resp.result.position_movements[0].opening = HEADING_LED_ANSWER;
+  resp.result.final_synthesis.high_stakes_notice = HEADING_LED_ANSWER;
   return resp;
 };
 
@@ -486,8 +502,9 @@ export const goldenRespWithMarkdownShapes = () => {
  * corpus of inputs without a bespoke builder per case.
  *
  * `surface: "block"` targets the synthesis recommendation (`setProse`);
- * `surface: "inline"` targets the first position-movement opening cell
- * (`setInlineProse`). Both render inside `#main-content` on the result view.
+ * `surface: "inline"` targets the synthesis high-stakes notice, rendered by
+ * `renderVerdictBand` through `setInlineProse` into `.result-verdict-caveat`.
+ * Both render inside `#main-content` on the result view.
  */
 export const goldenRespWithProviderText = (
   text: string,
@@ -495,7 +512,25 @@ export const goldenRespWithProviderText = (
 ) => {
   const resp = goldenCompletedResp() as Record<string, any>;
   if (surface === "block") resp.result.final_synthesis.recommendation = text;
-  else resp.result.position_movements[0].opening = text;
+  else resp.result.final_synthesis.high_stakes_notice = text;
+  return resp;
+};
+
+/**
+ * A completed run whose DEBATE fell back to Quorum's own template while the
+ * ANSWERS stayed live — `debate_mode: "fallback"` on every round.
+ *
+ * WHY THIS SHAPE: it is the one that carries no other disclosure. A fully
+ * simulated run is covered by `#result-degraded` ("the answers, the debate, and
+ * the synthesis — comes from Quorum's local simulation"), but a run with live
+ * answers and a moderator that was unconfigured, rate-limited or returned blank
+ * text produces `critique_text` from `debate.py::_build_round_one_text` with
+ * nothing anywhere on the page saying so. Measured before the fix: zero lines on
+ * the result view mentioned simulation, demo, local or fallback.
+ */
+export const goldenRespWithTemplatedDebate = () => {
+  const resp = goldenCompletedResp() as Record<string, any>;
+  for (const round of resp.result.debate_outputs) round.debate_mode = "fallback";
   return resp;
 };
 

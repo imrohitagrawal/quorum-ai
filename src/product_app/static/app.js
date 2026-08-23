@@ -245,12 +245,16 @@
     highStakesAck: false,
     // Per-SLOT USD estimate keyed by slot position (array index),
     // populated from the estimate response's
-    // ``cost_estimate.breakdown.by_model`` (the ``kind === "synthesis"``
-    // writer row is excluded — it is not a slot). ``by_model`` is emitted
-    // one row per slot in slot order (costs.py loops ``model_slots``), so
-    // keying by position — NOT by model_id — keeps duplicate models in
-    // different slots from collapsing/misattributing. Consumed by
-    // ``renderModelInputs`` to label each slot card.
+    // ``cost_estimate.breakdown.by_model``, which emits the four slot rows
+    // FIRST and in slot order (costs.py loops ``model_slots``), so keying by
+    // position — NOT by model_id — keeps duplicate models in different slots
+    // from collapsing/misattributing. Consumed by ``renderModelInputs`` to
+    // label each slot card.
+    //
+    // Only ``kind === "model"`` rows land here. ``by_model`` also carries the
+    // ``"synthesis"`` writer row and, since ADR-0064, a priced advisory row
+    // when one is configured — neither is a slot, and both are filtered out
+    // by an allowlist rather than by naming the rows to exclude.
     perModelEstimates: [],
     // PR8 — Conversation trail. A capped list of completed/terminal runs
     // the user can click to revisit. Each entry carries the displayed
@@ -2313,7 +2317,8 @@
 
     const center = mkEl("div", "result-ring-center");
     center.appendChild(mkEl("span", "result-ring-count", `${aligned}/${total}`));
-    center.appendChild(mkEl("span", "result-ring-label", "agree"));
+    // "agree" was the ring's own two-word version of the miscaption above.
+    center.appendChild(mkEl("span", "result-ring-label", "carried"));
 
     wrap.append(svg, center);
     return wrap;
@@ -2599,6 +2604,30 @@
     return !ctx.isConsensus && !ctx.noLiveAnswers;
   }
 
+  // WHAT THE TALLY MEASURES, in the words the reader gets.
+  //
+  // ``agreement.aligned`` answers "is this model's opening position represented
+  // in the final answer?" — for a minority opener that is literally a 4-gram
+  // containment test of its opening against the model-written final synthesis
+  // (``_opening_reflected_in_final``). It was captioned "N of M models aligned",
+  // which is a claim about the models agreeing WITH EACH OTHER. A production run
+  // served "0 of 4 models aligned — the rest are preserved as disagreement
+  // below." directly above a Consensus section reading "All four define the two
+  // models oppositely… All agree seat-based is the more predictable revenue
+  // model." Both sentences were true of what they measured; only one of them was
+  // captioned honestly.
+  //
+  // This constant carries the SENTENCE, and it is used by four surfaces: the
+  // band headline, the Copy summary, the Markdown export and the Agreement
+  // card's caption. The card's kicker ("Positions carried"), its value-sub
+  // ("carried") and the ring's label ("carried") are SEPARATE literals below —
+  // they are one or two words, not this sentence, and no interpolation of this
+  // constant produces them. Editing this constant alone therefore leaves those
+  // three out of step, which is the #128 failure mode; the counts in
+  // ``tests/unit/test_agreement_caption_matches_metric.py`` pin all of them
+  // together so the drift is caught rather than described.
+  const CARRIED_INTO_FINAL = "carried into the final answer";
+
   function renderResultDegraded(result) {
     const banner = el("result-degraded");
     if (!banner) return;
@@ -2740,7 +2769,7 @@
     });
     renderTrustTriangle(result, res, fs, { isConsensus, aligned, total });
     renderTrustScore(result);
-    renderResultPositions(res);
+    renderResultDebate(res);
     renderResultSynthesis(fs, res);
 
     // Build the plain-text Copy/Export summary ONCE (textContent-safe).
@@ -2755,8 +2784,8 @@
     }
     summaryLines.push(
       mayClaimDisagreement({ isConsensus, noLiveAnswers })
-        ? `Agreement: ${aligned} of ${total} models aligned; the rest are preserved as disagreement.`
-        : `Agreement: ${aligned} of ${total} models aligned.`,
+        ? `Opening positions ${CARRIED_INTO_FINAL}: ${aligned} of ${total}; the rest are preserved as disagreement.`
+        : `Opening positions ${CARRIED_INTO_FINAL}: ${aligned} of ${total}.`,
     );
     if (result.correlation_id) summaryLines.push(`Run: ${result.correlation_id}`);
     state.lastResultSummary = summaryLines.join("\n");
@@ -3004,8 +3033,8 @@
     );
     push(
       mayClaimDisagreement(ctx)
-        ? `**Agreement:** ${ctx.aligned} of ${ctx.total} models aligned; the rest are preserved as disagreement.`
-        : `**Agreement:** ${ctx.aligned} of ${ctx.total} models aligned.`,
+        ? `**Opening positions ${CARRIED_INTO_FINAL}:** ${ctx.aligned} of ${ctx.total}; the rest are preserved as disagreement.`
+        : `**Opening positions ${CARRIED_INTO_FINAL}:** ${ctx.aligned} of ${ctx.total}.`,
       "",
     );
 
@@ -3055,17 +3084,26 @@
       push("");
     }
 
+    // The OPENING each model gave, and only that.
+    //
+    // This block used to be headed "Where each model stood" and carried four
+    // lines per model: Opening, After round 1, Final, Revision note. Exactly one
+    // of those is observed. `opening` is `_opening_synopsis(answer_text)` — the
+    // model's own first sentence. The other three come from `_stance_texts`
+    // (`debate.py`), a pure dict lookup on the model's FINAL alignment state:
+    // it never reads a round-1 output, and three of the five strings it can
+    // return literally begin with the word "Opening". A record that files those
+    // under a heading claiming movement is a record that mislabels a
+    // classification as a chronology, so the heading and the three inferred
+    // lines are gone and the observation stays. See docs/adr/0063.
     const movements = Array.isArray(ctx.movements) ? ctx.movements : [];
     if (movements.length) {
-      push("## Where each model stood", "");
+      push("## What each model opened with", "");
       for (const m of movements) {
         if (!m) continue;
         const name = mdEscapeInline(String(m.display_name || m.model_id || "Model"));
         push(`### ${name}`, "");
         if (m.opening) push(`- **Opening:** ${mdUntrustedInline(m.opening)}`);
-        if (m.after_round_1) push(`- **After round 1:** ${mdUntrustedInline(m.after_round_1)}`);
-        if (m.final) push(`- **Final:** ${mdUntrustedInline(m.final)}`);
-        if (m.revision_note) push(`- **Revision note:** ${mdUntrustedInline(m.revision_note)}`);
         push("");
       }
     }
@@ -3607,7 +3645,7 @@
     // follows as supporting detail.
     let summary;
     if (isConsensus) {
-      summary = `${aligned} of ${total} models aligned`;
+      summary = `${aligned} of ${total} opening positions ${CARRIED_INTO_FINAL}`;
       if (revisedCount > 0) {
         summary += ` · ${revisedCount} revised their position`;
       }
@@ -3619,9 +3657,9 @@
       // telling the reader four models disagreed when four models were never
       // asked. The count itself stays — 0 aligned is true — and the degraded
       // banner directly above already says why.
-      summary = `${aligned} of ${total} models aligned`;
+      summary = `${aligned} of ${total} opening positions ${CARRIED_INTO_FINAL}`;
     } else {
-      summary = `${aligned} of ${total} models aligned — the rest are preserved as disagreement below.`;
+      summary = `${aligned} of ${total} opening positions ${CARRIED_INTO_FINAL} — the rest are preserved as disagreement below.`;
     }
     content.appendChild(mkEl("span", "result-verdict-agreement", summary));
 
@@ -3691,7 +3729,7 @@
         mkEl(
           "span",
           "result-verdict-caption",
-          "Revision counts are inferred from the panel's position movements, not quoted.",
+          "Revision counts compare each opening with the final answer — inferred, not quoted.",
         ),
       );
     }
@@ -3722,14 +3760,20 @@
       buildTrustCard({
         accent: "agreement",
         consensus: agreementConsensus,
-        kicker: "Agreement",
+        kicker: "Positions carried",
         value: `${aligned} of ${total}`,
-        valueSub: "aligned",
+        valueSub: "carried",
+        // One caption for both the consensus and the divided case. The divided
+        // one used to end "...the panel did not fully align, so the disagreement
+        // is preserved below" — a FOURTH surface making the preserved-as-
+        // disagreement claim, and the only one not gated by
+        // ``mayClaimDisagreement``, so on a fully simulated run this card
+        // claimed a disagreement the band had already withheld (the #247 hole,
+        // in the card). The band makes that claim, gated; the card now sticks to
+        // what it measures.
         caption: suppressed
           ? "Disagreement was flattened in the synthesis."
-          : isConsensus
-            ? "How many models the final synthesis places in agreement — inferred, not a tallied vote."
-            : "How many models the final synthesis places in agreement — inferred, not a tallied vote; the panel did not fully align, so the disagreement is preserved below.",
+          : `How many opening positions were ${CARRIED_INTO_FINAL} — inferred from the text, not a tallied vote.`,
       }),
     );
 
@@ -4005,8 +4049,12 @@
 
   // --- Slice 4b: run receipt + cost reconciliation -----------------------
   //
-  // Friendly labels for the four pipeline stages. Keys mirror the backend
-  // ``progress.stages[].stage`` vocabulary and ``CostLineByStage.stage``.
+  // Friendly labels for the four PIPELINE stages. Their keys mirror the
+  // backend ``progress.stages[].stage`` vocabulary. They are NOT the whole of
+  // ``CostLineByStage.stage``, which this comment claimed until ADR-0064: a
+  // breakdown can also carry an advisory stage row that has no pipeline
+  // counterpart and therefore no friendly label. Every reader below falls back
+  // to the raw key, so an unlabelled row renders rather than disappearing.
   const RECEIPT_STAGE_LABELS = {
     initial_answers: "Initial answers",
     debate_round_1: "Debate round 1",
@@ -4018,11 +4066,14 @@
     debate_round_1: "Round 1",
     debate_round_2: "Round 2",
     synthesis: "Synthesis",
-    // Deliberately NO entry for a Layer-B judge's advisory cost-stage row
+    // Deliberately NO entry for the Layer-B advisory cost-stage row
     // (issue #110/#217): the frontend must contain no `judge` identifier at
     // all (D-5, tests/unit/test_evaluation_projection_has_no_judge.py), so
-    // an actual-only stage row for it falls through to its own raw label via
-    // the `|| line.stage` fallback below rather than a friendly mapping here.
+    // that row falls through to its own raw label via the `|| line.stage`
+    // fallback below rather than a friendly mapping here. Since ADR-0064 it
+    // appears on the ESTIMATE too, not only in a post-hoc actual breakdown —
+    // so this fallback now renders on the pre-run cost gate as well. Adding a
+    // friendly label here would trip the D-5 guard and is a separate decision.
   };
   const RECEIPT_PIPELINE_ORDER = [
     "initial_answers",
@@ -4293,12 +4344,19 @@
           ),
         );
       });
-      // Issue #217: a row present ONLY in the actual breakdown (e.g. a fired
-      // Layer-B judge call — issue #110 — which is realized post-hoc and never
-      // appears in the pre-run estimate) still needs its own line, or the
-      // itemized rows silently under-sum the Total below. No "est" figure to
-      // pair it with, so the est side renders "—", same as any other missing
-      // pairing.
+      // Issue #217: a row present ONLY in the actual breakdown still needs its
+      // own line, or the itemized rows silently under-sum the Total below. No
+      // "est" figure to pair it with, so the est side renders "—", same as any
+      // other missing pairing.
+      //
+      // The worked example here USED to be the Layer-B advisory row, on the
+      // grounds that it was realized post-hoc and never appeared in the
+      // pre-run estimate. Half of that stopped being true with ADR-0064: the
+      // estimate now carries a priced advisory row whenever one is configured,
+      // so the common case is a normal est -> actual PAIRING, not a backfill.
+      // The backfill below is still required — it covers any row the actual
+      // breakdown has and the estimate does not, including a run whose
+      // configuration changed between the estimate and the result.
       if (actualByModel) {
         const estModelKeys = new Set(est.by_model.filter(Boolean).map(modelLineKey));
         actualByModel.forEach((line) => {
@@ -4354,7 +4412,10 @@
         );
       });
       // Issue #217: same actual-only-row gap as the "by model" column above,
-      // for the stage partition (e.g. the judge's "judge" stage row).
+      // for the stage partition. The worked example here used to be the
+      // advisory stage row; since ADR-0064 the estimate normally carries that
+      // row too, so it pairs rather than being backfilled. The backfill still
+      // covers any stage the actual has and the estimate does not.
       if (actualByStage) {
         const estStageKeys = new Set(
           est.by_stage.filter(Boolean).map((line) => line.stage),
@@ -4428,108 +4489,69 @@
     initInfoIcons();
   }
 
-  // One position <td>. ``data-label`` carries the column name so the mobile
-  // stacked layout can re-label each cell via CSS ``::before``.
-  function mkPositionsCell(label, text) {
-    const cell = mkEl("td", "result-positions-cell");
-    cell.dataset.label = label;
-    if (text) cell.appendChild(setInlineProse(mkEl("span", "result-pos-text"), String(text)));
-    return cell;
-  }
-
-  // "How positions moved" table. The caption is ALWAYS rendered (not demo-gated)
-  // because the per-model movement is INFERRED from opening answers + panel
-  // consensus in both demo and live modes. Empty movements → hide the section.
+  // "The debate rounds" — the ROUND-LEVEL debate critique, on the completed
+  // result view.
   //
-  // Fix 4: rendered as a NATIVE <table> so screen readers associate each model
-  // with its cells. The model is a ``<th scope="row">``; each phase is a
-  // ``<td>``; the column headers are ``<th scope="col">``. The table is
-  // labelled (the "Inferred from…" caption stays a separate visible element in
-  // the head) and wrapped in an ``overflow-x:auto`` scroller so it never pushes
-  // the page body sideways.
-  function renderResultPositions(res) {
-    const container = el("result-positions");
+  // WHY THIS EXISTS. `debate_outputs` carries the most decision-useful prose the
+  // system produces (a real round 2: "A practitioner following Claude would
+  // budget for ISR infrastructure from day one; following Nemotron would defer
+  // ISR until a freshness problem surfaces."). It was rendered on every poll by
+  // `renderDebateAndSynthesis` into `#debate-output`, which sits inside
+  // `.panel.panel-section` — a container `app.css` sets to `display: none` with
+  // NO view qualifier. Measured in Chromium on 568dd10: that subtree held the
+  // rendered critique and a 0 x 0 box on BOTH the live-run and result views, so
+  // no user has ever seen it there. The reader's only route was the transcript
+  // link. This puts it on the page the run lands on.
+  //
+  // HONESTY (non-negotiable, same rule as the transcript view): the backend
+  // records ONE `critique_text` per round with NO per-model attribution — there
+  // is no "who challenged whom". So this renders one card per ROUND, captions
+  // itself as such, and must never grow per-model exchange cards. That is #290,
+  // which is NOT built.
+  //
+  // The cards are `buildTranscriptRound` verbatim — the same builder the
+  // transcript uses. Shared deliberately: one treatment for one kind of content
+  // means one place to change it, and that builder already routes critique prose
+  // through `setProse` (the Markdown renderer) rather than `textContent`.
+  function renderResultDebate(res) {
+    const container = el("result-debate");
     if (!container) return;
     container.textContent = "";
-    const movements = Array.isArray(res.position_movements)
-      ? res.position_movements
-      : [];
-    if (movements.length === 0) {
+    const rounds = Array.isArray(res && res.debate_outputs) ? res.debate_outputs : [];
+    // No rounds -> no section. An empty card with a caption promising critique
+    // would be worse than the absence.
+    if (rounds.length === 0) {
       container.hidden = true;
       return;
     }
     container.hidden = false;
 
-    const head = mkEl("div", "result-positions-head");
-    head.appendChild(mkEl("span", "result-positions-title", "How positions moved"));
+    const head = mkEl("div", "result-debate-head");
+    // "The debate rounds", matching the export's `## Debate rounds` heading and
+    // the transcript's section title. An earlier draft read "What the panel
+    // argued", which attributes the text to the four models — the panel — and
+    // implies they argued WITH EACH OTHER. They never read each other (#290 is
+    // not built), and the critique is one moderator-or-template summary per
+    // round. A heading is a claim; this one now makes none.
+    head.appendChild(mkEl("span", "result-debate-title", "The debate rounds"));
     head.appendChild(
       mkEl(
         "span",
-        "result-positions-caption",
-        "Inferred from opening answers and panel consensus — not a quoted transcript.",
+        "result-debate-caption",
+        "One critique per round, covering all four answers together — " +
+          "Quorum does not record a per-model, line-by-line exchange.",
       ),
     );
     container.appendChild(head);
 
-    const scroller = mkEl("div", "result-positions-scroll");
-    const table = mkEl("table", "result-positions-table");
-    table.setAttribute("aria-label", "How positions moved");
-
-    const thead = document.createElement("thead");
-    const headRow = document.createElement("tr");
-    for (const text of ["Model", "Opening", "After round 1", "Final"]) {
-      const th = mkEl("th", "result-positions-colhead", text);
-      th.setAttribute("scope", "col");
-      headRow.appendChild(th);
+    // `showFocus: false` — `focus_areas` is a module constant, identical on
+    // every round of every run. See `buildTranscriptRound`.
+    const list = mkEl("div", "result-debate-rounds");
+    for (const round of rounds) {
+      if (!round) continue;
+      list.appendChild(buildTranscriptRound(round, { showFocus: false }));
     }
-    thead.appendChild(headRow);
-    table.appendChild(thead);
-
-    const tbody = document.createElement("tbody");
-    for (const m of movements) {
-      if (!m) continue;
-      const row = mkEl("tr", "result-positions-row");
-
-      const name = String(m.display_name || m.model_id || "Model");
-      const modelCell = mkEl("th", "result-positions-cell result-pos-model");
-      modelCell.setAttribute("scope", "row");
-      const avatar = mkEl("span", "result-pos-avatar", name.trim().charAt(0).toUpperCase() || "?");
-      avatar.setAttribute("aria-hidden", "true");
-      // Carry the SAME per-vendor tint the composer slots and transcript openings
-      // use, so a model keeps its colour identity across every surface (two "G"
-      // initials — GPT and Gemini — are otherwise indistinguishable here).
-      if (m.model_id) avatar.dataset.vendor = vendorForModel(m.model_id);
-      modelCell.append(avatar, mkEl("span", "result-pos-name", name));
-      row.appendChild(modelCell);
-
-      row.appendChild(mkPositionsCell("Opening", m.opening));
-      row.appendChild(mkPositionsCell("After round 1", m.after_round_1));
-
-      const finalCell = mkEl("td", "result-positions-cell");
-      finalCell.dataset.label = "Final";
-      if (m.final) finalCell.appendChild(setInlineProse(mkEl("span", "result-pos-text"), String(m.final)));
-      if (m.revised === true) {
-        // Fix 12: this "✓ Revised" chip is GREEN ON PURPOSE — it is the
-        // sanctioned agreement/revision semantic (the model changed its
-        // position) and is pixel-mandated by the mock. Do NOT retint it to a
-        // neutral tone; unlike the done glyph / copied-state, green here maps
-        // to a real, verified signal.
-        const chip = mkEl("span", "result-pos-chip", "✓ Revised");
-        const note = m.revision_note ? String(m.revision_note) : "";
-        if (note) {
-          chip.title = note;
-          finalCell.appendChild(chip);
-          finalCell.appendChild(mkEl("span", "result-pos-note", note));
-        } else {
-          finalCell.appendChild(chip);
-        }
-      }
-      row.appendChild(finalCell);
-      tbody.appendChild(row);
-    }
-    table.appendChild(tbody);
-    scroller.appendChild(table);
-    container.appendChild(scroller);
+    container.appendChild(list);
   }
 
   function focusResultHeading() {
@@ -4669,7 +4691,21 @@
 
   // A round-level critique block. Header = "Round N" + focus areas; body = the
   // round's ``critique_text``. NO per-model cards/attribution are invented.
-  function buildTranscriptRound(round) {
+  // One round card. Shared by the transcript drill-down and the result view's
+  // `#result-debate`, so the two can never describe the same content
+  // differently.
+  //
+  // `showFocus` exists because `focus_areas` is NOT per-round data. The backend
+  // passes the module constant `FOCUS_AREAS`
+  // ("disagreement, weak_support, missing_reasoning") to BOTH rounds
+  // (`debate.py:320` and `:387`), so the line is byte-identical on every card of
+  // every run. Under a "Round 1"/"Round 2" header it reads as "this round
+  // focused on X" — a constant dressed as an observation, which is the exact
+  // defect the position table was removed for (ADR-0063). The result view
+  // therefore does not show it. The transcript still does: that is pre-existing
+  // behaviour on a drill-down the reader chose to open, and changing it is a
+  // separate concern.
+  function buildTranscriptRound(round, { showFocus = true } = {}) {
     const card = mkEl("article", "transcript-round");
     const head = mkEl("div", "transcript-round-head");
     head.appendChild(
@@ -4678,9 +4714,30 @@
     const focusAreas = Array.isArray(round.focus_areas)
       ? round.focus_areas.filter(Boolean)
       : [];
-    if (focusAreas.length) {
+    if (showFocus && focusAreas.length) {
       head.appendChild(
         mkEl("span", "transcript-round-focus", `Focus: ${focusAreas.join(", ")}`),
+      );
+    }
+    // WHO WROTE THIS ROUND. `debate_mode` is "live" only when the configured
+    // moderator model's own response supplied the critique. On "fallback" the
+    // moderator was not configured, or its call returned nothing usable, and
+    // `critique_text` is Quorum's OWN template
+    // (`debate.py::_build_round_one_text`). Attributing that to a model is a
+    // false authorship claim, and until this the UI read the field in exactly
+    // zero places — so a run with live ANSWERS but a fallen-back moderator
+    // showed no disclosure anywhere on the page.
+    //
+    // FAILS CLOSED: anything that is not exactly "live" — including the field
+    // being absent — gets the marker. That matches the API schema, whose
+    // `debate_mode` default is "fallback" (openapi.yaml).
+    if (round.debate_mode !== "live") {
+      head.appendChild(
+        mkEl(
+          "span",
+          "transcript-round-templated",
+          "Written by Quorum, not by a model",
+        ),
       );
     }
     card.appendChild(head);
@@ -6748,18 +6805,31 @@
       state.currentEstimate = estimate;
       // Slice 1: fan the itemized ``by_model`` breakdown out onto the
       // slot cards and surface the grand total in the composer footer.
-      // ``by_model`` is emitted one row per slot in slot order, so we map
-      // the (non-synthesis) rows to slots BY POSITION — keying by
-      // model_id would collapse two slots that pick the same model. The
-      // ``kind === "synthesis"`` writer row is NOT a slot, so it is
-      // excluded before the positional mapping.
+      // ``by_model`` emits the four slot rows first, in slot order, so we map
+      // them to slots BY POSITION — keying by model_id would collapse two
+      // slots that pick the same model.
+      //
+      // ALLOWLIST, NOT DENYLIST, and the difference is load-bearing. This
+      // used to read ``kind !== "synthesis"`` — "everything that is not the
+      // writer row is a slot". That stopped being true when the estimate
+      // gained a priced Layer-B advisory row (ADR-0064): the server now emits
+      // SIX rows when one is configured, and the denylist let the sixth into
+      // an array that is indexed by slot position. It is benign only while
+      // that row is emitted last, which is a property of the server that this
+      // code should not have to depend on. Naming the kinds that ARE slots
+      // cannot rot the same way.
+      //
+      // MEASURED: against a five-row breakdown (no advisory row — the
+      // configuration CI runs) the two filters return byte-identical arrays,
+      // so this changes no rendering the test suite or the visual baselines
+      // can see. They differ only on the six-row shape, which is production.
       state.perModelEstimates = [];
       const byModel =
         estimate.cost_estimate.breakdown &&
         estimate.cost_estimate.breakdown.by_model;
       if (Array.isArray(byModel)) {
         state.perModelEstimates = byModel
-          .filter((row) => row.kind !== "synthesis")
+          .filter((row) => row.kind === "model")
           .map((row) => row.usd);
       }
       renderModelInputs(getModelIds());

@@ -842,10 +842,24 @@ class ModelAlignment:
 
 class AgreementSummary(BaseModel):
     """Verdict-ring numerator/denominator for screen 05 (``aligned`` of
-    ``total``). ``total`` is the number of initial answers on the run —
-    INCLUDING failed/empty ones (matching :func:`summarize_agreement`, which
-    uses ``len(initial_answers)``); ``aligned`` is how many land in the final
-    consensus (a failed answer can never align).
+    ``total``).
+
+    ``total`` is the number of initial answers on the run — INCLUDING
+    failed/empty ones (matching :func:`summarize_agreement`, which uses
+    ``len(initial_answers)``).
+
+    ``aligned`` counts the models whose OPENING POSITION IS CARRIED INTO THE
+    FINAL ANSWER. It is NOT a count of models that agree with each other, and
+    the served captions no longer say that it is: for a minority opener the
+    test is a 4-gram containment of its own opening against the model-written
+    final synthesis (``synthesis_consensus._opening_reflected_in_final``). A
+    run served "0 of 4 models aligned" above a consensus section reading "All
+    agree seat-based is the more predictable revenue model" — both true of what
+    they measured, only one captioned honestly. ADR-0062.
+
+    A failed answer can never be counted. Neither can any model when there is
+    no final answer at all: nothing was produced for a position to be carried
+    into.
     """
 
     aligned: int = Field(ge=0)
@@ -1155,13 +1169,16 @@ _NOT_INVOKED_COPY = _StanceCopy(
 #: sentence about the synthesis's authorship would itself be false.
 #:
 #: All ten rows exist (eight, plus the two #247 ``NOT_INVOKED`` rows).
-#: ``(NOT_MODEL_AUTHORED, MOVED_TO_CONSENSUS)`` is
-#: reachable — the no-synthesis strong panel reaches it, and
-#: ``test_a_revised_row_still_carries_a_note_when_no_model_wrote_the_final_answer``
-#: exercises it. What is unreachable, measured 2026-07-30 by enumerating the
-#: provenance x alignment grid, is that row via a TEMPLATED or MIXED synthesis
-#: specifically: refusing the final text sends a minority to
-#: ``final_aligned = False``, so it can never be ``revised``. An earlier draft
+#: ``(NOT_MODEL_AUTHORED, MOVED_TO_CONSENSUS)`` is NO LONGER REACHABLE, and the
+#: row is kept deliberately. Until ADR-0062 the no-synthesis strong panel
+#: reached it via the panel-strength inference; that inference is gone, so a
+#: minority opener is only counted when its opening is found in a MODEL-WRITTEN
+#: final answer — which implies ``MODEL_AUTHORED``. The row stays because
+#: ``_stance_texts`` looks copy up by key and
+#: ``test_stance_copy_covers_every_provenance_and_alignment_state`` asserts this
+#: table is the complete cartesian product, so a total function is the safe
+#: shape. ``test_a_revised_row_still_carries_a_note`` exercises the reachable
+#: ``MODEL_AUTHORED`` row instead. An earlier draft
 #: of this comment called the row itself "measured unreachable", which its own
 #: parenthesis contradicted — a reachability claim is a measurement and this
 #: one was written from memory.
