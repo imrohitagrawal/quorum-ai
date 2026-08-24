@@ -71,6 +71,7 @@ ways, so the record shows what was believed on a date and what replaced it.
 | [ADR-0065](adr/0065-the-mutation-scope-names-its-oracle-tests-and-a-truncated-run-is-not-a-score.md) | The mutation scope names its oracle tests, and a truncated run is not a score | Architecture | Accepted — 2026-08-23 |
 | [ADR-0066](adr/0066-a-negated-issue-close-is-caught-in-the-two-places-it-can-happen.md) | A negated issue close is caught in the two places it can happen | Architecture | Accepted — 2026-08-24 |
 | [ADR-0067](adr/0067-consensus-is-claimed-on-evidence-not-on-a-failure-to-detect-disagreement.md) | Consensus is claimed on evidence, not on a failure to detect disagreement | Architecture | Accepted — 2026-08-24 |
+| [ADR-0068](adr/0068-session-residue-is-eight-named-categories-each-with-one-verb.md) | Session residue is eight named categories, each with one verb | Architecture | Accepted — 2026-08-25 |
 
 **This index was itself stale** until 2026-07-30: ADR-0002 had existed since
 2026-07-19 and was never listed here. A hand-maintained index is a derived fact
