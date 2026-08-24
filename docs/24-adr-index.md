@@ -73,6 +73,7 @@ ways, so the record shows what was believed on a date and what replaced it.
 | [ADR-0067](adr/0067-consensus-is-claimed-on-evidence-not-on-a-failure-to-detect-disagreement.md) | Consensus is claimed on evidence, not on a failure to detect disagreement | Architecture | Accepted — 2026-08-24 |
 | [ADR-0068](adr/0068-session-residue-is-eight-named-categories-each-with-one-verb.md) | Session residue is eight named categories, each with one verb | Architecture | Accepted — 2026-08-25 |
 | [ADR-0069](adr/0069-an-equivalent-mutant-is-removed-not-recorded.md) | An equivalent mutant is removed from the code, not recorded in a list | Architecture | Accepted — 2026-08-25 |
+| [ADR-0070](adr/0070-a-money-spending-posture-is-declared-before-it-is-switched-on.md) | A money-spending posture is declared before it is switched on | Architecture | Accepted — 2026-08-25 |
 
 **This index was itself stale** until 2026-07-30: ADR-0002 had existed since
 2026-07-19 and was never listed here. A hand-maintained index is a derived fact

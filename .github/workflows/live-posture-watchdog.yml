@@ -1,0 +1,143 @@
+name: Live-execution posture watchdog
+
+# COST-FREE watchdog for the one switch that lets any /ui visitor spend real
+# money (Actions is free on this public repo; /ready is free per AGENTS.md
+# rule 18). It closes #357: ADR-0060 turned live execution on for "one attended
+# session" and it ran for three days, while every automated check stayed green
+# and every one of them was right to be — none of them asks this question.
+#
+# WHAT IT CHECKS. Does production report a live-execution posture that no
+# declared window in `configs/live-execution-windows.json` covers? The decision
+# lives in `scripts/live_posture_check.py` — tested Python, per ADR-0024, not an
+# inline shell block — and its docstring carries the full rationale: why it reads
+# `/ready.live_readiness.state` rather than `/status.live_execution` (the latter
+# is derived and reads `false` when the flag is ON with a refused key), and why
+# it reads production rather than `fly.toml` (DEPLOY.md tells operators to set
+# the flag with `fly secrets set`, which touches no tracked file).
+#
+# THE SIGNAL IS "ON WITHOUT A DECLARATION", NOT "ON AT ALL". Live execution is
+# legitimately switched on sometimes. A check that fires during every sanctioned
+# window gets muted, and a muted alert is worse than none, so the sanctioned
+# window is declared in a committed file and this watchdog is quiet inside it.
+#
+# CADENCE IS NOT DETECTION LATENCY. The cron below declares `*/30`, but GitHub
+# throttles scheduled workflows. Measured 2026-08-25 over the last 100 scheduled
+# runs of the sibling `*/30` lane (deploy-drift-watchdog, 2026-08-21T07:25Z ->
+# 2026-08-24T22:33Z, 87.1h): gaps min 21.7 / median 53.4 / max 129.4 minutes.
+# Budget ~1h typical and ~2h worst case. Against a three-day exposure that is
+# ample; a window that opens and closes inside one gap is never seen at all.
+#
+# ALERT VOLUME. On an alerting decision this opens ONE labelled issue if none is
+# open, and thereafter says nothing further — the job going red every cycle is
+# the recurring signal, and the open issue is the standing one. The sibling
+# drift watchdog comments every cycle and produced 11 comments in 10h14m on
+# issue #351; over a three-day posture that shape would produce roughly seventy,
+# which is how an alert gets muted. The issue is closed only by an OBSERVED
+# non-alerting reading, never by a deploy or a merge.
+
+on:
+  schedule:
+    - cron: "*/30 * * * *" # every 30 minutes; see the latency note above
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  issues: write # open/close the posture alert
+
+concurrency:
+  group: live-posture-watchdog
+  cancel-in-progress: false
+
+jobs:
+  posture:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      # `continue-on-error` so the alerting step below still runs; the job is
+      # failed explicitly at the end, so an undeclared posture is RED and not
+      # merely noted.
+      - name: Check production's money-spending posture against declared windows
+        id: posture
+        continue-on-error: true
+        run: python3 scripts/live_posture_check.py
+
+      - name: Alert on an undeclared live-execution posture
+        # `outcome == 'failure'` covers the case where the script died before
+        # writing its verdict: outputs are then EMPTY, so branching on
+        # should_alert alone would skip this step and — the step being
+        # continue-on-error — leave the job green while production spends.
+        if: >-
+          always() && (steps.posture.outputs.should_alert == 'true' ||
+          steps.posture.outcome == 'failure')
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          DECISION: ${{ steps.posture.outputs.decision }}
+        run: |
+          set -euo pipefail
+          BODY=$(printf '%s\n' \
+            "Automated **live-execution posture** alert (decision: \`${DECISION:-crashed-before-reporting}\`)." \
+            "" \
+            "Production reports a money-spending posture that no declared window covers," \
+            "or the check could not determine the posture at all." \
+            "" \
+            "**Every visitor to \`/ui\` can spend real money while this stands.** The bound" \
+            "is \`GLOBAL_DAILY_CEILING_USD\` (\$5.00/day) and that ceiling RESETS DAILY, so" \
+            "unnoticed the exposure renews indefinitely." \
+            "" \
+            "What to do, in order:" \
+            "1. Open the \`Check production's money-spending posture\` step above. It prints" \
+            "   every host it probed, the \`live_readiness.state\` each returned, how many" \
+            "   windows are declared, and which instant is uncovered." \
+            "2. If this was NOT intended: set \`OPENROUTER_LIVE_EXECUTION_ENABLED = \"false\"\`" \
+            "   in \`fly.toml\` and deploy. Check \`fly secrets list\` too — DEPLOY.md tells" \
+            "   operators to set the flag as a secret, which no file in this repo can see." \
+            "3. If it WAS intended: declare it in \`configs/live-execution-windows.json\`" \
+            "   with an owner, a reason and the instant you will switch it back off." \
+            "" \
+            "This issue is closed automatically by an OBSERVED non-alerting reading — a" \
+            "deploy or a merge will not close it. Background: #357 and ADR-0060.")
+          NUM=$(gh issue list --repo "$REPO" --state open --label live-posture --json number -q '.[0].number // ""' 2>/dev/null || true)
+          if [ -n "$NUM" ]; then
+            echo "posture alert #$NUM is already open; not commenting again (see the alert-volume note in this file)."
+          else
+            gh label create live-posture --repo "$REPO" --color B60205 --description "Automated live-execution posture alerts" 2>/dev/null || true
+            gh issue create --repo "$REPO" --title "Live execution is on and no declared window covers it" --label live-posture --body "$BODY"
+          fi
+
+      - name: Resolve the posture alert on an observed safe reading
+        # Only a reading the check actually took may close this. Note the
+        # `outcome == 'success'` term: a crashed step writes no outputs, and
+        # `should_alert != 'true'` would then be true of an empty string.
+        if: >-
+          always() && steps.posture.outcome == 'success' &&
+          steps.posture.outputs.should_alert == 'false'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          DECISION: ${{ steps.posture.outputs.decision }}
+        run: |
+          set -euo pipefail
+          NUM=$(gh issue list --repo "$REPO" --state open --label live-posture --json number -q '.[0].number // ""' 2>/dev/null || true)
+          if [ -n "$NUM" ]; then
+            gh issue close "$NUM" --repo "$REPO" -c "Resolved — an observed reading reports \`${DECISION}\`."
+          else
+            echo "No open posture alert to close (decision: ${DECISION})."
+          fi
+
+      # Fail LOUD. Without this the workflow reports success having found an
+      # undeclared money posture, which is the exact shape #357 is about.
+      - name: Fail the job on an undeclared posture
+        if: >-
+          always() && (steps.posture.outputs.should_alert == 'true' ||
+          steps.posture.outcome == 'failure')
+        env:
+          DECISION: ${{ steps.posture.outputs.decision }}
+          OUTCOME: ${{ steps.posture.outcome }}
+        run: |
+          echo "undeclared live-execution posture (decision=${DECISION:-<none>}, step=${OUTCOME}) — failing the watchdog."
+          exit 1

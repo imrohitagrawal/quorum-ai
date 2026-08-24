@@ -38,6 +38,15 @@ kill_timeout = "5s"
   # Nothing in the product needs this on continuously, and the failure mode is
   # silent: an unattended visitor spends money for no measurement. Turn it on
   # only against a written traffic plan, and revert in the same session.
+  #
+  # #357 / ADR-0070: "revert in the same session" is now executed, not merely
+  # written. Setting this to "true" REQUIRES a covering entry in
+  # configs/live-execution-windows.json in the SAME pull request, or
+  # tests/unit/test_live_execution_posture_declaration.py refuses the merge in a
+  # blocking lane. And whatever route the flag takes into production — including
+  # `fly secrets set`, which no file here can see —
+  # .github/workflows/live-posture-watchdog.yml reads /ready every 30 minutes
+  # and opens an issue if the live posture outlives its declared window.
   OPENROUTER_LIVE_EXECUTION_ENABLED = "false"
   # issue #27: keep the feedback-event SQLite trail on the persistent volume
   # (mounted at /data below), NOT the ephemeral rootfs default (.data/…) which

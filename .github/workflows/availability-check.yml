@@ -88,6 +88,13 @@ jobs:
             # every run. A monitor that is permanently red is not a monitor —
             # a real outage becomes indistinguishable from the expected state,
             # and the failure email that IS the alert stops meaning anything.
+            #
+            # #357: this check's "good" state and the live-execution posture
+            # watchdog's are DELIBERATELY OPPOSED, not accidentally overlapping.
+            # Here `live` passes and `offline_by_config` is a note; in
+            # live-posture-watchdog.yml `offline_by_config` is the safe state and
+            # `live` is what gets investigated. Neither is wrong — availability
+            # and money exposure are different questions. Do not "reconcile" them.
             if [ "$STATE" = "offline_by_config" ]; then
               echo "NOTE: $URL is deliberately offline (offline_by_config)."
               echo "      Serving local simulation by operator choice — not an availability event."
