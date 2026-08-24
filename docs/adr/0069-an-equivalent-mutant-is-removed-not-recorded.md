@@ -165,6 +165,15 @@ a raising mutant is killed by any test that calls the function.
 | Counter rewrite vs the pre-#365 implementation | **0 / 5460**, raises 0 |
 | each of the Counter shape's 11 mutants vs it | 2016–5460, or raises; never both zero |
 
+Three shapes the 5,460-case enumeration does not reach were checked separately,
+because "0 differences over my chosen inputs" is exactly the narrow-sample trap:
+an **empty** `stance` raises `ValueError: max() iterable argument is empty` from
+*both* shapes, identically; **20,000 random panels** of size 1–8 over 8 labels —
+wider than the enumeration on both axes — give 0 differences; and non-string
+labels (`int`, `None`, `tuple`) agree. Iteration order cannot matter either:
+`winners[0]` is reached only after `len(winners) != 1` has returned, so the list
+has exactly one element whenever it is indexed.
+
 The control line is why the zeros mean anything: a harness that reports 0 for
 everything proves nothing. In the shipped test the partner is stronger than one
 control — all eleven mutants are individually shown detectable, and the
@@ -174,6 +183,34 @@ unkillable" claim rests on twelve positive results rather than on an absence.
 Of the 18 mutants the old shape generated, the two equivalent ones were the only
 pair that was both silent and non-raising; the other sixteen either differed
 (2016–5460 cases) or raised.
+
+### Seven mutants disappeared. None of them carried decision logic.
+
+"18 becomes 11" is only good news if the seven that vanished were noise, so they
+were enumerated and matched one for one rather than assumed. Every mutant of
+both shapes, by the line it mutates:
+
+| Line mutated | Old shape | New shape |
+|---|---:|---:|
+| the tally (`sizes = …`) | **9** (old 1–9) | **2** (new 1–2) |
+| `largest = max(sizes.values())` | 2 (old 10–11) | 2 (new 3–4) |
+| `winners = [...]` | 2 (old 12–13) | 2 (new 5–6) |
+| `if len(winners) != 1:` | 2 (old 14–15) | 2 (new 7–8) |
+| the two `return`s | 3 (old 16–18) | 3 (new 9–11) |
+
+**All nine downstream mutants survive the refactor one for one** — `largest =
+None`, `max(None)`, `winners = None`, `size != largest`, `len(winners) == 1`,
+`!= 2`, the tie branch returning `True`, `label != winners[0]`, and
+`winners[1]`. Those are every mutation that touches what this function
+*decides*: the arg-max, the tie posture, and the winner comparison. Not one is
+lost.
+
+The seven that go are all mutations of `sizes[label] = sizes.get(label, 0) + 1`,
+a line that no longer exists: two were the unkillable pair, and five were
+killable mutations of hand-rolled counting (`- 1`, `get(None, 0)`,
+`get(label, None)`, `get(0)`, `get(label, )`). Their test signal was "does this
+repo's hand-rolled tally count correctly", and the answer is now "there is no
+hand-rolled tally". `Counter` is stdlib and is not this repository's to test.
 
 ### #337, the truncation half
 
