@@ -182,6 +182,12 @@ Every row run by me in this worktree on 2026-08-25 unless marked.
 | Does it reproduce #357's shape? | same, with a window that expired 72h ago | `decision=live_past_declared_window`, exit **1**, "expired ..., 72.0h ago" |
 | Does it stay quiet inside a declared window? | same, with a covering window | `decision=live_within_declared_window`, exit **0**, "3.0h remaining. Sanctioned; no alert." |
 | Baseline suite before this change | `make quality` | `3292 passed, 67 skipped`, coverage 95.28% |
+| ...and after it | `make quality` | `3390 passed, 66 skipped`, coverage **95.28%** — unchanged, because nothing under `src/` was touched |
+| Changed-lines coverage | `make diff-cover DIFF_BASE=origin/main` | exit 0, and **green having measured nothing**: "No lines with coverage information in this diff", because `--cov=src` sees no `scripts/`, `tests/`, `.github/` or `docs/` change. The floor script says so in those words rather than reporting a pass. Recorded here because a gate that measured nothing is not evidence, and review pointed out that no post-change gate run had been written down at all. |
+| API contract | `make api-contract` | 51 executed (floor 22), 0 skipped |
+| OpenAPI | `make openapi-check` | passed (`openapi.yaml == app.openapi()`) |
+| Security | `make security-scan` | passed, 1139 files scanned, 0 findings |
+| Workflow syntax | `actionlint .github/workflows/live-posture-watchdog.yml` | clean |
 
 **The flag was never switched on to test any of this.** Every firing path is
 driven by a `file:` fixture. No paid provider call was made.
