@@ -59,7 +59,7 @@ DIFF_BASE ?= origin/main
 # disagrees with the real pathspec is a lie waiting to be believed; the banner
 # now states the pathspec the code actually uses.
 
-.PHONY: check-python publishing-check skill-onboarding-check skill-discover handoff check-breaking apply-orbi-profile skill-route start next capture-idea validate validate-strict fr-completeness openapi-export openapi-check adr-index-check quality format format-check lint type-check test evals test-report gate-min-collected gate-min-executed perf-gate api-contract mutation-baseline diff-cover security-scan close-guard ci-evidence run docker-build feedback-audit
+.PHONY: check-python publishing-check skill-onboarding-check skill-discover handoff check-breaking apply-orbi-profile skill-route start next capture-idea validate validate-strict fr-completeness openapi-export openapi-check adr-index-check quality format format-check lint type-check test evals test-report gate-min-collected gate-min-executed perf-gate api-contract mutation-baseline diff-cover security-scan close-guard ci-evidence run docker-build feedback-audit session-clean
 
 check-python:
 	@if [ -z "$(PYTHON)" ]; then 		echo "ERROR: Python 3 is required. Install python3, or set PYTHON=/path/to/python3."; 		exit 127; 	fi
@@ -977,6 +977,23 @@ feedback-audit:
 	@if [ -z "$$OPENROUTER_API_KEY" ]; then 		echo "OPENROUTER_API_KEY is required for the audit LLM call."; 		echo "Without it, the audit runs in local-only mode (statistics only)."; 		echo "Set OPENROUTER_LIVE_EXECUTION_ENABLED=true and OPENROUTER_API_KEY to enable findings."; 	fi
 	mkdir -p feedback
 	UV_CACHE_DIR=$(UV_CACHE_DIR) PYTHONPATH=src uv run python -m product_app.feedback_audit --output-dir feedback/
+
+# Report what this working session left behind, in eight named categories.
+# REPORTS: it touches no file, ref, index or working tree -- run it, read it,
+# then act. (Not literally inert: answering "is this branch merged?" writes one
+# unreferenced tree object that garbage collection reclaims. ADR-0068 §
+# Consequences.)
+#
+# It does NOT clean, despite the name. Cleanup is two jobs with OPPOSITE verbs:
+# residue this session created is DELETED by name, documents the project
+# accrued are ARCHIVED and never deleted. A target that guessed which one you
+# meant is the exact conflation that destroys an untracked handoff, so the
+# acting flags stay explicit and separate:
+#   python3 scripts/session_hygiene.py --residue   delete residue, by name
+#   python3 scripts/session_hygiene.py --archive   stage documents for the archive
+# Stdlib-only, so it runs without a uv environment.
+session-clean: check-python
+	$(PYTHON) scripts/session_hygiene.py
 
 skill-route: check-python
 	$(PYTHON) scripts/skill_router.py
