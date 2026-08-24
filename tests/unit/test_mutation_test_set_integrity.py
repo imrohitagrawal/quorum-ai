@@ -103,6 +103,26 @@ DESELECTED_FROM_THE_MUTANT_RUN = (
     # only ``re``/``pathlib``/``pytest`` and names ``product_app`` nowhere, so it
     # can kill no ``src/`` mutant.
     "tests/unit/test_no_orphaned_e2e_specs.py",
+    # #365. Reads the repository's own `src/` as TEXT and re-runs mutmut's
+    # mutator over it. It imports nothing from `product_app` (grepped: neither
+    # module below names it in an import), and it reaches the function it is
+    # about by `exec`ing the file's source into a FRESH namespace — which is
+    # what settles it. mutmut's trampoline replaces the function ON THE MODULE
+    # OBJECT, and an `exec`'d copy does not see that replacement. Demonstrated
+    # 2026-08-25: with `synthesis_consensus._stance_majority_flags` swapped for
+    # a stand-in, the `exec`'d copy still ran the ORIGINAL body and was `is not`
+    # the module attribute. So this module cannot register a kill for the very
+    # function it guards, and deselecting it removes no kill from the score.
+    # Left selected it would also re-mutate a 391-mutant file every time mutmut
+    # used it as an oracle, against a 1440-second deadline.
+    "tests/unit/test_stance_majority_flags_has_no_equivalent_mutants.py",
+    # #365. Tokenises every file under the real `src/` looking for
+    # `# pragma: no mutate`, and parses `pyproject.toml`. Inside `./mutants/`
+    # that tree carries one generated `x_<name>__mutmut_N` variant per mutant,
+    # so a census of it measures the copy — the #158 shape exactly. It calls no
+    # `product_app` function at all (it only ever reads file text), so it can
+    # kill no `src/` mutant.
+    "tests/unit/test_no_mutation_pragma_silences_a_survivor.py",
 )
 
 MARKER = "repo_introspection"

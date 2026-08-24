@@ -284,7 +284,7 @@ MUTATION_RUN_DEADLINE_SECONDS ?= 1440
 override MUTATION_TRUNCATION_MARKER := build/mutation/truncated
 
 define MUTMUT_SCOPE_PY
-import ast, collections, glob, io, json, os, re, subprocess, sys, tokenize
+import ast, collections, fnmatch, glob, io, json, os, re, subprocess, sys, tokenize
 
 mode, base, threshold = sys.argv[1], sys.argv[2], float(sys.argv[3])
 
@@ -685,10 +685,45 @@ def report():
         truncated = False
     counts = collections.Counter()
     survivors = []
+    in_scope = in_scope_reached = 0
+    # #337. THE DENOMINATOR. Until now a truncated run said it had scored "N of
+    # the scope's mutants" and never said how many that was out of, so the one
+    # question a reader has - did we measure most of this diff or almost none
+    # of it? - had no answer anywhere in the log or the artifact. mutmut writes
+    # one .meta entry per mutant of every file it mutated (27 files on a recent
+    # run), leaving `None` for the ones it never reached, so the scope's own
+    # total is not simply "all the keys": it is the keys matching the globs
+    # this recipe passed to `mutmut run`, which are on disk in scope.txt.
+    #
+    # ONLY the suffixed globs count. scope() emits two patterns per function -
+    # `<mod>.<name>__mutmut_*`, which matches concrete mutant keys, and
+    # `*<mod>.<name>`, the companion that ADR-0065 added to narrow the
+    # clean-test phase and which matches no mutant key at all. Counting both
+    # would not double-count (the companion matches nothing here) but filtering
+    # to the suffixed form says what is meant.
+    #
+    # FAILS SOFT, deliberately: an unreadable or absent scope.txt leaves the
+    # total at 0 and the messages below fall back to their pre-#337 wording.
+    # This function is also driven directly by ~40 tests that never create a
+    # scope.txt, and a denominator is a reporting improvement - it must not
+    # become a new way for the gate to die.
+    scope_globs = []
+    try:
+        with open("build/mutation/scope.txt") as handle:
+            scope_globs = [
+                line.strip() for line in handle
+                if line.strip() and not line.startswith("*")
+            ]
+    except OSError:
+        pass
     for meta in glob.glob("mutants/src/**/*.py.meta", recursive=True):
         with open(meta) as handle:
             data = json.load(handle)
         for key, code in data["exit_code_by_key"].items():
+            if any(fnmatch.fnmatch(key, pattern) for pattern in scope_globs):
+                in_scope += 1
+                if code is not None:
+                    in_scope_reached += 1
             if code is None:
                 continue
             # Any code this map does not recognize fails closed as
@@ -821,11 +856,27 @@ def report():
         # A partial run is NOT a score. The mutants the deadline never reached
         # are unmeasured, not killed, and dividing over only the ones that
         # finished reports a percentage of an arbitrary prefix of the scope.
-        print("UNMEASURED: the run was cut short by its own wall-clock "
-              "deadline after scoring %d of the scope's mutants. A partial "
-              "run is not a score - no percentage is reported, because the "
-              "mutants the deadline never reached are unmeasured, not "
-              "killed." % checked)
+        # #337: say the DENOMINATOR. "252 of the scope's mutants" left the one
+        # question a reader acts on - is this most of the diff, or almost none
+        # of it? - unanswered in the log and in the artifact alike. With the
+        # total, a truncation stops being an apology and becomes a bounded
+        # measurement: 252 of 337 is a mostly-measured diff, 252 of 4000 is not.
+        if in_scope:
+            print("UNMEASURED: the run was cut short by its own wall-clock "
+                  "deadline. It reached %d of the scope's %d mutants (%.0f%% "
+                  "of the scope) and scored %d of those. A partial run is not "
+                  "a score - no percentage is reported, because the mutants "
+                  "the deadline never reached are unmeasured, not killed."
+                  % (in_scope_reached, in_scope,
+                     100.0 * in_scope_reached / in_scope, checked))
+        else:
+            # No readable scope.txt - the ~40 tests that drive report() directly
+            # never write one. Same sentence as before the denominator existed.
+            print("UNMEASURED: the run was cut short by its own wall-clock "
+                  "deadline after scoring %d of the scope's mutants. A partial "
+                  "run is not a score - no percentage is reported, because the "
+                  "mutants the deadline never reached are unmeasured, not "
+                  "killed." % checked)
         if counts["survived"]:
             # ... but a SURVIVOR is not a percentage. It is a mutant that ran
             # and that no test caught, and truncating the run afterwards does
@@ -839,10 +890,26 @@ def report():
             # tolerates survivors up to the threshold: over a prefix there is
             # no honest denominator to compare a threshold against, so the only
             # sound rule is that a demonstrated survivor fails.
-            print("%d mutant(s) SURVIVED before the cut-off. A survivor is a "
-                  "test gap that was DEMONSTRATED - it needs no denominator "
-                  "and the rest of the run cannot take it back - so this "
-                  "fails even though no score was produced." % counts["survived"])
+            # #365. This used to read "a survivor is a test gap that was
+            # DEMONSTRATED". That is a UNIVERSAL claim and it is FALSE for an
+            # EQUIVALENT mutant - one whose behaviour cannot differ from the
+            # original for any input, which therefore no test can kill. Two of
+            # them existed in _stance_majority_flags and the gate called them
+            # demonstrated gaps, leaving an author no action that turned the
+            # job green. This gate reads a .meta file of exit codes; it never
+            # sees source, so it CANNOT tell the two apart, and it now says so
+            # instead of asserting the half that suited it. It still fails -
+            # both cases need a human - but it names both, and it names the
+            # right fix for each. ADR-0069.
+            print("%d mutant(s) SURVIVED before the cut-off. A survivor ran "
+                  "and no test caught it. Either a test is missing, or the "
+                  "mutant is EQUIVALENT - it cannot change behaviour for any "
+                  "input, so no test can kill it. This gate reads exit codes, "
+                  "not source, and cannot tell those apart, so it fails and "
+                  "asks you to look. Missing test: add one. Equivalent: change "
+                  "the code so the mutant is not GENERATED (ADR-0069 has the "
+                  "worked example) - do not record an exception for it."
+                  % counts["survived"])
             raise SystemExit(1)
         return
     score = 100.0 * counts["killed"] / checked

@@ -1900,3 +1900,175 @@ def test_an_all_timeout_truncated_run_keeps_the_all_timeout_diagnosis(
     )
     assert "TRUNCATED" in output, f"the truncation is still worth saying:\n{output}"
     assert result.returncode == 0, output
+
+
+# --------------------------------------------------------------------------
+# #337 — a truncated run states its DENOMINATOR, and #365 — the survivor
+# verdict stops making a claim the gate cannot support.
+# --------------------------------------------------------------------------
+
+
+def _write_scope(cwd: Path, *globs: str) -> None:
+    """The scope file the recipe writes before `mutmut run`, as `scope()` emits it.
+
+    `scope()` emits TWO patterns per changed function: the suffixed
+    `<mod>.<name>__mutmut_*`, which matches concrete mutant keys, and the
+    companion `*<mod>.<name>` that ADR-0065 added to narrow mutmut's clean-test
+    phase and which matches no mutant key at all. Both are written here so the
+    denominator is exercised against the real file shape, not a tidied one.
+    """
+    scope = cwd / "build" / "mutation" / "scope.txt"
+    scope.parent.mkdir(parents=True, exist_ok=True)
+    lines = []
+    for pattern in globs:
+        lines.append(f"{pattern}__mutmut_*")
+        lines.append(f"*{pattern}")
+    scope.write_text("\n".join(lines) + "\n", encoding="utf-8")
+
+
+def test_a_truncated_run_says_how_much_of_the_scope_it_reached(
+    scope_script: Path, tmp_path: Path
+) -> None:
+    """#337. "252 of the scope's mutants" never said out of how many.
+
+    That is the one number a reader acts on: 252 of 337 means the diff is
+    mostly measured, 252 of 4000 means it is barely measured, and the gate
+    printed the same sentence for both. The scope's total is on disk — the
+    globs in `build/mutation/scope.txt` are exactly what was handed to
+    `mutmut run` — so the denominator is derivable and was simply not derived.
+
+    Ten mutants in scope, four of them reached (2 killed, 1 survived, 1
+    timeout), six never started. The assertion pins all three numbers as
+    literals so a percentage computed over the wrong base cannot pass.
+
+    Turns red if: `in_scope`/`in_scope_reached` stop being counted, the
+    `if in_scope:` branch is dropped, or the denominator is computed over ALL
+    meta keys instead of the scope's — the last would report 4 of 12, since
+    the out-of-scope module below contributes two more.
+    """
+    _write_scope(tmp_path, "product_app.costs.x_a")
+    metas: dict[str, int | None] = {
+        "product_app.costs.x_a__mutmut_1": 1,
+        "product_app.costs.x_a__mutmut_2": 1,
+        "product_app.costs.x_a__mutmut_3": 0,
+        "product_app.costs.x_a__mutmut_4": -24,
+    }
+    metas.update({f"product_app.costs.x_a__mutmut_{i}": None for i in range(5, 11)})
+    _write_meta(tmp_path, "costs", metas)
+    # A module the diff never touched. Its mutants are NOT in scope and must not
+    # move the denominator — without this the test cannot tell a scope-filtered
+    # count from a count of every key on disk.
+    _write_meta(
+        tmp_path,
+        "query_runs",
+        {
+            "product_app.query_runs.x_z__mutmut_1": None,
+            "product_app.query_runs.x_z__mutmut_2": None,
+        },
+    )
+
+    result = _run(
+        scope_script, tmp_path, "report", "origin/main", "90", env=_mark_truncated(tmp_path)
+    )
+    output = result.stdout + result.stderr
+
+    assert "reached 4 of the scope's 10 mutants (40% of the scope)" in output, (
+        f"the truncated run did not state its denominator:\n{output}"
+    )
+    assert "scored 3 of those" in output, (
+        f"killed + survived is 3; the scored count is wrong:\n{output}"
+    )
+    assert "mutation score" not in output, f"a prefix must not print a percentage:\n{output}"
+    assert result.returncode != 0, f"the survivor must still fail the gate:\n{output}"
+
+    # POSITIVE PARTNER. Without a scope file there is no denominator to state,
+    # and the pre-#337 sentence must come back rather than a "0 of 0" or a
+    # crash. Also proves the assertions above are measuring the scope file and
+    # not simply the presence of a truncation marker.
+    (tmp_path / "build" / "mutation" / "scope.txt").unlink()
+    fallback = _run(
+        scope_script, tmp_path, "report", "origin/main", "90", env=_mark_truncated(tmp_path)
+    )
+    fallback_output = fallback.stdout + fallback.stderr
+    assert "after scoring 3 of the scope's mutants" in fallback_output, (
+        "with no scope file the gate must fall back to its pre-#337 wording, "
+        f"not invent a denominator:\n{fallback_output}"
+    )
+    assert "of the scope)" not in fallback_output, (
+        f"a percentage was reported with no scope to compute it over:\n{fallback_output}"
+    )
+
+
+def test_an_unreadable_scope_file_cannot_stop_the_gate_reporting(
+    scope_script: Path, tmp_path: Path
+) -> None:
+    """The denominator is a REPORTING improvement and must never become a new
+    way for the gate to die.
+
+    A directory where `scope.txt` should be is the cheapest way to make the
+    read raise something other than "missing file" — `open()` on it raises
+    `IsADirectoryError`, a subclass of `OSError`. This is the same failure mode
+    ADR-0065 records for the truncation marker, where an unhandled write turned
+    a kill into an orphaned worker group.
+
+    Turns red if: the `try/except OSError` around the scope read is removed —
+    the script then dies with a traceback and prints no counts at all.
+    """
+    scope = tmp_path / "build" / "mutation" / "scope.txt"
+    scope.mkdir(parents=True)
+    _write_meta(tmp_path, "costs", {"x_a__mutmut_1": 1, "x_a__mutmut_2": 0})
+
+    result = _run(scope_script, tmp_path, "report", "origin/main", "90")
+    output = result.stdout + result.stderr
+
+    assert "mutants scored: 1 killed, 1 survived" in output, (
+        f"an unreadable scope file stopped the gate reporting at all:\n{output}"
+    )
+    assert "Traceback" not in output, f"the scope read was not fail-soft:\n{output}"
+    assert "mutation score (killed / (killed+survived)) = 50.0%" in output, (
+        f"the complete-run path must still score normally:\n{output}"
+    )
+
+
+def test_the_survivor_verdict_does_not_claim_every_survivor_is_a_test_gap(
+    scope_script: Path, tmp_path: Path
+) -> None:
+    """#365. The message used to assert something it cannot know.
+
+    It read "a survivor is a test gap that was DEMONSTRATED". That is universal
+    and it is false for an EQUIVALENT mutant, which no test can kill — two
+    existed in `_stance_majority_flags` and left the job with no path to green.
+    The gate reads a `.meta` file of exit codes and never sees source, so it
+    cannot tell a missing test from an equivalent mutant; it now names both and
+    still fails, because both need a human.
+
+    **This test pins PROSE and cannot see whether the prose is true.** It is a
+    substring assertion of the kind AGENTS.md rule 8 warns about, kept because
+    the change here IS the wording — the exit status is deliberately unchanged,
+    so there is no structural difference to assert on. Its whole value is
+    stopping the universal claim coming back by accident.
+
+    Turns red if: the verdict goes back to asserting every survivor is a
+    demonstrated test gap.
+    """
+    _write_meta(tmp_path, "costs", {"x_a__mutmut_1": 1, "x_a__mutmut_2": 0})
+
+    result = _run(
+        scope_script, tmp_path, "report", "origin/main", "90", env=_mark_truncated(tmp_path)
+    )
+    output = result.stdout + result.stderr
+
+    # The behaviour that must NOT change: a survivor still fails the gate.
+    assert result.returncode != 0, f"softening the wording must not soften the verdict:\n{output}"
+    assert "1 mutant(s) SURVIVED before the cut-off" in output, output
+
+    assert "test gap that was DEMONSTRATED" not in output, (
+        "the gate is again asserting that every survivor is a demonstrated "
+        f"test gap, which is false for an equivalent mutant:\n{output}"
+    )
+    # POSITIVE PARTNER for that negative: the replacement text must actually be
+    # present. Without this the assertion above passes over any rewording at
+    # all, including one that deletes the guidance entirely.
+    assert "EQUIVALENT" in output and "no test can kill it" in output, (
+        f"the verdict no longer names the equivalent-mutant case:\n{output}"
+    )
