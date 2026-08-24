@@ -25,6 +25,7 @@ out to be a "weak" case rather than a "divided" case.
 from __future__ import annotations
 
 import re
+from collections import Counter
 from typing import Literal
 
 from product_app.debate import (
@@ -212,10 +213,23 @@ def _stance_majority_flags(stance: dict[int, str]) -> dict[int, bool]:
     takes, and the reason the 2-vs-2 panel in #354 counts nobody rather than
     counting both sides. A single group makes every slot majority, which is what
     keeps a genuinely unanimous panel at its full count.
+
+    The tally is a :class:`~collections.Counter` on purpose (#365, ADR-0069).
+    Hand-rolling it as ``sizes[label] = sizes.get(label, 0) + 1`` is behaviour-
+    identical — measured, 0 differences over all 5,460 label assignments — but
+    it hands mutmut two *equivalent* mutants: ``get(label, 0)`` -> ``get(label,
+    1)`` and ``+ 1`` -> ``+ 2``. Both are strictly increasing in the count, the
+    count feeds only ``max()`` and equality with that max, so neither can move
+    the arg-max set and no test can kill either. The mutation gate then called
+    two unkillable survivors DEMONSTRATED test gaps, which they were not. The
+    Counter form deletes the lines those mutants live on: 18 mutants become 11,
+    and none of the 11 is equivalent.
+
+    Do not "simplify" this back to a hand-rolled dict tally.
+    ``tests/unit/test_stance_majority_flags_has_no_equivalent_mutants.py``
+    goes red if you do.
     """
-    sizes: dict[str, int] = {}
-    for label in stance.values():
-        sizes[label] = sizes.get(label, 0) + 1
+    sizes = Counter(stance.values())
     largest = max(sizes.values())
     winners = [label for label, size in sizes.items() if size == largest]
     if len(winners) != 1:
