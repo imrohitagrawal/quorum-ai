@@ -93,7 +93,13 @@ const completedResp = (sourcesForSlot0?: unknown[]) => ({
   partial_failure_notice: null, provider_failure_notices: [],
   result: {
     model_answers: [answer(0, sourcesForSlot0), answer(1), answer(2), answer(3)], debate_outputs: debateOutputs(),
-    final_synthesis: finalSynthesis(), agreement: { aligned: 4, total: 4 }, position_movements: positionMovements(),
+    final_synthesis: finalSynthesis(),
+    // #354: `aligned === total` alone no longer paints the green surface —
+    // the server must also say a live moderator established one position.
+    // Without this every `[data-consensus="true"]` assertion in this file
+    // stops measuring anything (22 of them went red when the field landed).
+    agreement: { aligned: 4, total: 4, panel_agreement: "agreed" },
+    position_movements: positionMovements(),
   },
   result_generated_at_utc: "2026-07-10T12:00:00Z", demo_mode: false, live_count: 4, local_count: 0, material_claim_count: 12,
   actual_cost_usd: "0.188", actual_breakdown: breakdown("0.188"),

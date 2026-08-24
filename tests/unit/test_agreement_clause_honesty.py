@@ -19,6 +19,7 @@ SERVED source rather than a Python re-implementation of it.
 from __future__ import annotations
 
 import json
+import re
 import shutil
 import subprocess
 from pathlib import Path
@@ -164,13 +165,67 @@ def test_all_three_surfaces_route_through_the_one_predicate() -> None:
     # helper's failure would be invisible.
     assert APP_JS.read_text(encoding="utf-8").count("preserved as disagreement") > 3
 
-    # BOTH context objects must be handed the field — the verdict band's and the
-    # Markdown export's. An export that is not given it evaluates ``undefined``,
-    # keeps the sentence the screen has just dropped, and reintroduces the #128
-    # screen-vs-file drift.
+    # EVERY context object must be handed the field — the verdict band's, the
+    # Markdown export's, and (since #354) the Copy summary's inline literal. One
+    # that is not given it evaluates ``undefined``, keeps the sentence the screen
+    # has just dropped, and reintroduces the #128 screen-vs-file drift.
     #
     # Counted, not tested with ``in``: the first draft asserted
     # ``"noLiveAnswers," in code``, which two occurrences satisfy, so deleting
     # either one left it green. The mutation that removed the export's copy was
     # what exposed it.
-    assert code.count("noLiveAnswers,") == 2, "both ctx objects must carry it"
+    #
+    # This count was 2 until #354. The Copy summary used to pass a literal
+    # ``{ isConsensus, noLiveAnswers }``; it now passes the counts too, because
+    # the predicate reads them.
+    assert code.count("noLiveAnswers,") == 3, "every ctx object must carry it"
+
+    # #354: the predicate now also reads ``aligned`` and ``total``, so the same
+    # drift is possible on those. Asserted on the ARGUMENT LIST of the one call
+    # site that builds its object inline — the two ``mayClaimDisagreement(ctx)``
+    # sites share the ctx the band already destructures ``aligned``/``total``
+    # from, so they cannot drift from it.
+    inline = re.search(r"mayClaimDisagreement\(\{([^}]*)\}\)", code)
+    assert inline is not None, "the inline call site is gone"
+    passed_fields = {name.strip() for name in inline.group(1).split(",") if name.strip()}
+    assert passed_fields == {"isConsensus", "noLiveAnswers", "aligned", "total"}, passed_fields
+
+
+def test_the_clause_is_withheld_when_there_is_no_rest_to_preserve(harness: str) -> None:
+    """#354, the second face. "the rest are preserved as disagreement below"
+    asserts there IS a rest. When every opening was counted there is not, and the
+    sentence describes nothing.
+
+    This became ordinary rather than exotic when #354 stopped ``aligned == total``
+    from being sufficient for a consensus result: a 4-of-4 run whose panel verdict
+    is "undetermined" now falls through to this clause.
+
+    What turns it red: drop the ``knownFull`` term from ``mayClaimDisagreement``;
+    row 1 goes back to ``True`` and the band renders "4 of 4 opening positions
+    carried into the final answer — the rest are preserved as disagreement below."
+    """
+    cases = [
+        # THE #354 CASE: every opening counted, so there is no rest.
+        {"isConsensus": False, "noLiveAnswers": False, "aligned": 4, "total": 4},
+        # POSITIVE PARTNER (rule 7): a genuine remainder keeps the clause, so the
+        # withholding above is not this build's answer to every payload.
+        {"isConsensus": False, "noLiveAnswers": False, "aligned": 3, "total": 4},
+        {"isConsensus": False, "noLiveAnswers": False, "aligned": 0, "total": 4},
+    ]
+    assert _run(harness, cases) == [False, True, True]
+
+
+def test_a_payload_without_the_counts_keeps_the_clause(harness: str) -> None:
+    """Same convention ``noLiveAnswers`` already follows: a MISSING number must
+    not silently remove the clause. ``Number.isInteger(undefined)`` is ``false``,
+    so the guard cannot fire on a payload that never carried the counts.
+
+    What turns it red: write the guard as ``ctx.aligned >= ctx.total`` without the
+    ``Number.isInteger`` tests — ``undefined >= undefined`` is ``false`` so row 1
+    survives, but ``null >= null`` is ``TRUE`` and row 2 flips to ``False``.
+    """
+    cases: list[dict[str, Any]] = [
+        {"isConsensus": False, "noLiveAnswers": False},
+        {"isConsensus": False, "noLiveAnswers": False, "aligned": None, "total": None},
+    ]
+    assert _run(harness, cases) == [True, True]

@@ -1029,7 +1029,12 @@ def test_result_projection_serializes_agreement_and_positions() -> None:
         position_movements=positions,
     )
     dumped = projection.model_dump(mode="json")
-    assert set(dumped["agreement"]) == {"aligned", "total"}
+    # #354: the served verdict rides beside the count. ``undetermined`` here
+    # because ``_debate`` builds templated rounds with no moderator stance —
+    # which is the fail-closed answer, and is asserted rather than merely
+    # tolerated.
+    assert set(dumped["agreement"]) == {"aligned", "total", "panel_agreement"}
+    assert dumped["agreement"]["panel_agreement"] == "undetermined"
     assert len(dumped["position_movements"]) == 4
     first = dumped["position_movements"][0]
     assert set(first) == {
@@ -1054,5 +1059,8 @@ def test_result_response_json_exposes_new_fields() -> None:
     assert "actual_cost_usd" in dumped
     assert "actual_breakdown" in dumped
     assert dumped["result_generated_at_utc"]  # finished-at UTC is populated
-    assert set(dumped["result"]["agreement"]) == {"aligned", "total"}
+    assert set(dumped["result"]["agreement"]) == {"aligned", "total", "panel_agreement"}
+    # #354: a seeded run carries no live moderator, so the served verdict claims
+    # nothing.
+    assert dumped["result"]["agreement"]["panel_agreement"] == "undetermined"
     assert len(dumped["result"]["position_movements"]) == 4

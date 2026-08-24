@@ -1095,7 +1095,14 @@ def test_a_templated_synthesis_does_not_decide_the_served_verdict_ring(
         "fallback, and this test would pass without measuring the synthesis"
     )
 
-    assert body["result"]["agreement"] == {"aligned": 2, "total": 4}
+    assert body["result"]["agreement"] == {
+        "aligned": 2,
+        "total": 4,
+        # #354: no live moderator on this lane, so the panel verdict claims
+        # nothing. The COUNT is unchanged by that change, which is the point
+        # — the stance gate is inert without stance evidence.
+        "panel_agreement": "undetermined",
+    }
     revised = [m for m in body["result"]["position_movements"] if m["revised"]]
     assert len(revised) == 0, f"no model may be counted as moved by a template: {revised}"
 
@@ -1136,7 +1143,14 @@ def test_a_live_synthesis_still_carries_a_minority_into_the_verdict_ring(
     run = query_run_repository.get(UUID(body["query_run_id"]))
     assert compute_consensus_strength(run.initial_answers, run.debate_outputs) != "strong"
 
-    assert body["result"]["agreement"] == {"aligned": 3, "total": 4}  # PIN
+    assert body["result"]["agreement"] == {
+        "aligned": 3,
+        "total": 4,
+        # #354: no live moderator on this lane, so the panel verdict claims
+        # nothing. The COUNT is unchanged by that change, which is the point
+        # — the stance gate is inert without stance evidence.
+        "panel_agreement": "undetermined",
+    }  # PIN
     revised = [m["slot_number"] for m in body["result"]["position_movements"] if m["revised"]]
     assert revised == [4], "the model whose position the synthesis actually carried"
 
@@ -1204,7 +1218,14 @@ def test_a_templated_synthesis_on_a_strong_panel_invents_no_alignment(
         "ADR-0062, not a precondition — see the docstring)"
     )
 
-    assert body["result"]["agreement"] == {"aligned": 3, "total": 4}
+    assert body["result"]["agreement"] == {
+        "aligned": 3,
+        "total": 4,
+        # #354: no live moderator on this lane, so the panel verdict claims
+        # nothing. The COUNT is unchanged by that change, which is the point
+        # — the stance gate is inert without stance evidence.
+        "panel_agreement": "undetermined",
+    }
     revised = [m["slot_number"] for m in body["result"]["position_movements"] if m["revised"]]
     assert revised == [], f"no model moved to a consensus this product wrote: {revised}"
 

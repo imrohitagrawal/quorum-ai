@@ -2601,7 +2601,26 @@
   // it under Node. A pure function with no DOM access, like
   // ``describePanelShortfall``.
   function mayClaimDisagreement(ctx) {
-    return !ctx.isConsensus && !ctx.noLiveAnswers;
+    // #354, the second face. The clause this gates says "the rest are preserved
+    // as disagreement below", which asserts BOTH that there is a rest and that
+    // it disagreed. The count settles the first half on its own: when every
+    // opening was counted there is no rest, and the sentence describes nothing.
+    //
+    // This state was already reachable before #354 (aligned === total with, say,
+    // a non-empty failed_steps), but #354 made it ordinary: a 4-of-4 run whose
+    // panel verdict is "undetermined" is no longer a consensus result, so it
+    // falls through to this clause and rendered
+    //   "4 of 4 opening positions carried into the final answer — the rest are
+    //    preserved as disagreement below."
+    // Measured under Node on this file before the guard below existed.
+    //
+    // Withheld ONLY when we can see there is no rest. A payload missing either
+    // number leaves the clause in place, matching how ``noLiveAnswers`` already
+    // treats a missing ``live_count`` — losing the clause on every historical
+    // run would be its own silent change.
+    const knownFull =
+      Number.isInteger(ctx.aligned) && Number.isInteger(ctx.total) && ctx.aligned >= ctx.total;
+    return !ctx.isConsensus && !ctx.noLiveAnswers && !knownFull;
   }
 
   // WHAT THE TALLY MEASURES, in the words the reader gets.
@@ -2783,7 +2802,11 @@
       summaryLines.push("Verdict: No synthesis was produced for this run.");
     }
     summaryLines.push(
-      mayClaimDisagreement({ isConsensus, noLiveAnswers })
+      // #354: ``aligned``/``total`` join ``noLiveAnswers`` here for the reason
+      // that comment already gives — the Copy summary must reach the SAME
+      // verdict as the screen, and omitting a term makes it read ``undefined``
+      // and keep a sentence the band dropped.
+      mayClaimDisagreement({ isConsensus, noLiveAnswers, aligned, total })
         ? `Opening positions ${CARRIED_INTO_FINAL}: ${aligned} of ${total}; the rest are preserved as disagreement.`
         : `Opening positions ${CARRIED_INTO_FINAL}: ${aligned} of ${total}.`,
     );
@@ -4598,10 +4621,22 @@
     const failedSteps = Array.isArray(result && result.failed_steps)
       ? result.failed_steps
       : [];
+    // #354. ``aligned === total`` is a NUMBER, and it is reachable by a
+    // detector failing to fire — a panel split two against two scored 4 of 4
+    // because both sides shared their phrasing ("we recommend adopting
+    // usage-based pricing…" vs "we advise you avoid usage-based pricing…").
+    // This conjunct is the EVIDENCE: the server sets it to "agreed" only when a
+    // live moderator that read all four answers placed every scored model in
+    // one position. "split" and "undetermined" both withhold the green surface,
+    // and "undetermined" is what every run without a usable moderator reading
+    // gets — no debate, a templated round, a cancelled run, an unparseable
+    // reply, or a model that answered 400 to the JSON request.
+    const panelAgreement = String((agreement && agreement.panel_agreement) || "undetermined");
     return Boolean(
       agreement &&
         total > 0 &&
         aligned === total &&
+        panelAgreement === "agreed" &&
         fs &&
         fs.quality_checks &&
         fs.quality_checks.false_consensus_preserved === false &&

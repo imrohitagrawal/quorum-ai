@@ -333,6 +333,14 @@ components:
           type: integer
           minimum: 0.0
           title: Total
+        panel_agreement:
+          type: string
+          enum:
+          - agreed
+          - split
+          - undetermined
+          title: Panel Agreement
+          default: undetermined
       type: object
       required:
       - aligned
@@ -595,6 +603,10 @@ components:
           type: string
           title: Debate Mode
           default: fallback
+        panel_stance:
+          anyOf:
+          - $ref: '#/components/schemas/PanelStance'
+          - type: 'null'
       type: object
       required:
       - round_number
@@ -871,6 +883,61 @@ components:
       - slot_number
       - model_id
       title: ModelSlot
+    PanelStance:
+      properties:
+        author_model_id:
+          type: string
+          maxLength: 256
+          minLength: 1
+          title: Author Model Id
+        round_number:
+          type: integer
+          maximum: 2.0
+          minimum: 1.0
+          title: Round Number
+        positions:
+          items:
+            $ref: '#/components/schemas/SlotPosition'
+          type: array
+          title: Positions
+      type: object
+      required:
+      - author_model_id
+      - round_number
+      - positions
+      title: PanelStance
+      description: 'POSITIVE evidence about where every scored model stands.
+
+
+        This is the thing #354 was missing. Before it, "the panel agrees" was
+
+        inferred from 4-gram overlap between the openings and a hardcoded antonym
+
+        list — both of which read VOCABULARY, so two answers that shared their
+
+        phrasing and reached opposite recommendations scored as one position.
+
+
+        ``author_model_id`` is carried per record rather than assumed, and consumers
+
+        read a LIST of rounds rather than a single object, so #290 (four models
+
+        critiquing each other, each with its own reading of the panel) adds authors
+
+        without reshaping anything here. Today there is exactly one author per round
+
+        — the configured moderator — and this field says so explicitly instead of
+
+        leaving it implied by there being nowhere else it could have come from.
+
+
+        A stance is only ever evidence when its round is LIVE. A templated round''s
+
+        words are this product''s own, and reading a stance off them would be the
+
+        product agreeing with itself — the same trap #185 closed for
+
+        ``_debate_signals_convergence``.'
     PositionMovement:
       properties:
         slot_number:
@@ -1407,6 +1474,31 @@ components:
       - version
       - message
       title: SafetyWarning
+    SlotPosition:
+      properties:
+        slot:
+          type: integer
+          maximum: 4.0
+          minimum: 1.0
+          title: Slot
+        group:
+          type: string
+          maxLength: 64
+          minLength: 1
+          title: Group
+      type: object
+      required:
+      - slot
+      - group
+      title: SlotPosition
+      description: 'One model''s position, as the moderator read it.
+
+
+        ``group`` is an opaque label; only equality between two labels carries
+
+        meaning (see :data:`MODERATOR_STANCE_INSTRUCTION`). It is never rendered.
+
+        Bounded in length because it arrives from a model and is persisted.'
     SourceReference:
       properties:
         title:

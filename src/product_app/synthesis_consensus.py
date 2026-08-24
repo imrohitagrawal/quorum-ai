@@ -27,7 +27,12 @@ from __future__ import annotations
 import re
 from typing import Literal
 
-from product_app.debate import DEBATE_MODE_LIVE, DebateOutput, ModelAlignment
+from product_app.debate import (
+    DEBATE_MODE_LIVE,
+    DebateOutput,
+    ModelAlignment,
+    PanelAgreement,
+)
 from product_app.providers import InitialAnswerStatus, InitialModelAnswer, model_was_invoked
 from product_app.safety import strip_own_caveat
 from product_app.visible_text import is_visible
@@ -90,6 +95,158 @@ _POLAR_PAIRS: tuple[frozenset[str], ...] = (
 )
 
 
+def _scored_slot_numbers(initial_answers: list[InitialModelAnswer]) -> set[int]:
+    """The slot numbers whose text may be read as EVIDENCE about the panel.
+
+    The SAME predicate every other primitive here filters on
+    (:func:`counts_as_evidence`), so the stance's coverage check and the tally
+    are measured over one population. Filtering separately is what #180 and #247
+    both had to undo.
+    """
+    return {a.slot_number for a in initial_answers if counts_as_evidence(a)}
+
+
+def _usable_stance(
+    initial_answers: list[InitialModelAnswer],
+    debate_outputs: list[DebateOutput],
+) -> dict[int, str] | None:
+    """``{slot number: normalised position label}``, or ``None`` for NO EVIDENCE.
+
+    This is the single seam through which a moderator's reading reaches the
+    consensus machinery, and every way that reading can be missing or unusable
+    collapses to the same ``None``. Enumerated before the code was written
+    (AGENTS rule 16e), because this decides whether the product paints a green
+    unanimous verdict:
+
+    1. **No debate round at all** — nothing to read.
+    2. **Every round is TEMPLATED** (``debate_mode != DEBATE_MODE_LIVE``). Its
+       words are this product's own; reading a stance off them is the product
+       agreeing with itself. Same guard #185 put on
+       :func:`_debate_signals_convergence`.
+    3. **The round is live but carries no stance** — the moderator was
+       cancelled, refused (HTTP 400 on ``response_format``), returned a blank
+       body, or its reply did not parse. ``debate.parse_moderator_output``
+       already collapsed all of those to ``panel_stance=None``.
+    4. **A label is blank** after normalising. Two blank labels would otherwise
+       "agree" with each other.
+    5. **The stance does not cover every scored slot.** A reading that is silent
+       about a model is not a reading of this panel, so ``scored`` must be a
+       SUBSET of what the stance names.
+
+       Not a COUNT: a stance covering ``{1,2,3}`` against a scored set of
+       ``{1,2,4}`` has the right size and the wrong members, and before this was
+       a subset test it raised ``KeyError: 4`` out of
+       :func:`classify_model_alignment` — an unhandled 500. Found by adversarial
+       review; the test is ``test_a_stance_of_the_right_size_but_the_wrong_slots``.
+
+       Not EQUALITY either, and that was the first version. A slot that failed or
+       was simulated is still shown to the moderator (it belongs in the prose
+       critique) but is excluded from the scored population by
+       :func:`counts_as_evidence`. A moderator obeying "include every slot exactly
+       once" therefore returns four positions against three scored slots, and
+       equality read every such run as ``undetermined`` — the gate would have been
+       dead on any run with a failed slot. Extra slots are dropped rather than
+       rejected: an opinion about text this product wrote is noise, not a reason
+       to discard a reading of the answers a model did write.
+
+    Nothing here falls back to the vocabulary heuristics. A caller that gets
+    ``None`` is being told "no evidence", and it is the caller's job to refuse
+    the claim rather than to guess.
+
+    The LATEST live round wins, because round 2 refines round 1 — that is the
+    channel by which a panel that genuinely converges during the debate can be
+    recorded as having converged.
+    """
+    scored = _scored_slot_numbers(initial_answers)
+    if not scored:
+        return None
+    live_rounds = [
+        output
+        for output in debate_outputs
+        if output.debate_mode == DEBATE_MODE_LIVE and output.panel_stance is not None
+    ]
+    if not live_rounds:
+        return None
+    latest = max(live_rounds, key=lambda output: output.round_number)
+    stance = latest.panel_stance
+    assert stance is not None  # noqa: S101 - narrowed by the filter above
+    mapping: dict[int, str] = {}
+    for position in stance.positions:
+        # Case and surrounding space are not a difference of POSITION. A
+        # moderator writing "Adopt" for one model and "adopt" for another means
+        # one position; reading two would call a unanimous panel split.
+        #
+        # The blank-label guard below is REACHABLE, and the comment that once
+        # stood here saying otherwise is why it is worth spelling out what was
+        # measured rather than asserting an absolute.
+        #
+        # ``SlotPosition`` sets ``str_strip_whitespace``, so most blanks are
+        # rejected at construction. But pydantic strips on the Rust side using
+        # ``char::is_whitespace``, and Python's ``str.strip()`` uses
+        # ``str.isspace()`` — and the two disagree. Measured on pydantic 2.13.4:
+        #
+        #   U+001C U+001D U+001E U+001F  CONSTRUCT, then strip to ""   <-- here
+        #   U+00A0 TAB SPACE U+000B U+2028 U+0085   rejected
+        #
+        # Two labels that both strip to "" would compare EQUAL, so a moderator
+        # that correctly reported a 2-vs-2 split with two distinct separator
+        # characters as its labels would be read as one position — measured
+        # end to end at ``agreed``, ``4/4``, green surface painted. That is
+        # fail-OPEN on the exact defect this module exists to close, so the
+        # guard stays and the whole reading is refused.
+        label = position.group.strip().casefold()
+        if not label:
+            return None
+        mapping[position.slot] = label
+    if not scored.issubset(mapping):
+        return None
+    # Drop anything outside the scored population, so the flags below are built
+    # from exactly the slots the rest of this module scores.
+    return {slot: label for slot, label in mapping.items() if slot in scored}
+
+
+def _stance_majority_flags(stance: dict[int, str]) -> dict[int, bool]:
+    """Per slot, is it in the STRICTLY largest position group?
+
+    On a tie nobody is majority — the same posture :func:`_polar_split` already
+    takes, and the reason the 2-vs-2 panel in #354 counts nobody rather than
+    counting both sides. A single group makes every slot majority, which is what
+    keeps a genuinely unanimous panel at its full count.
+    """
+    sizes: dict[str, int] = {}
+    for label in stance.values():
+        sizes[label] = sizes.get(label, 0) + 1
+    largest = max(sizes.values())
+    winners = [label for label, size in sizes.items() if size == largest]
+    if len(winners) != 1:
+        return {slot: False for slot in stance}
+    return {slot: label == winners[0] for slot, label in stance.items()}
+
+
+def panel_agreement(
+    initial_answers: list[InitialModelAnswer],
+    debate_outputs: list[DebateOutput],
+) -> PanelAgreement:
+    """Did the panel agree — and do we actually KNOW?
+
+    The point of #354. The old gate fired when nothing had DETECTED a
+    disagreement, which is trivially true when detection is broken; this one
+    fires only when a moderator that read all four answers positively said they
+    hold one position.
+
+    * ``"agreed"`` — a live moderator placed every scored model in ONE position
+      group.
+    * ``"split"`` — a live moderator placed them in more than one.
+    * ``"undetermined"`` — there is no usable reading. Never a claim about the
+      panel; only a statement about what we know. See :func:`_usable_stance` for
+      the five ways this happens.
+    """
+    stance = _usable_stance(initial_answers, debate_outputs)
+    if stance is None:
+        return "undetermined"
+    return "agreed" if len(set(stance.values())) == 1 else "split"
+
+
 def compute_consensus_strength(
     initial_answers: list[InitialModelAnswer],
     debate_outputs: list[DebateOutput],
@@ -132,6 +289,25 @@ def compute_consensus_strength(
     # disagreement section's templated text.
     if not completed:
         return _classify_divided_or_weak(completed_texts=[])
+
+    # #354. A moderator's reading of the panel, when we have one, is the
+    # authority — it beats every path below it because those paths all read
+    # VOCABULARY. This is the branch that stops the 2-vs-2 pricing panel from
+    # classifying "strong": ``_has_strong_overlap`` runs BEFORE the polar check
+    # and four opposed answers to one question are worded alike, so overlap
+    # alone said "strong" on a panel split down the middle.
+    #
+    # The 3-of-4 bar is the SAME bar this function already applied through
+    # ``_has_strong_overlap`` ("≥3 of 4 substantively agree"); only the evidence
+    # it is measured on changes. A single group is strong at any panel size.
+    stance = _usable_stance(initial_answers, debate_outputs)
+    if stance is not None:
+        sizes: dict[str, int] = {}
+        for label in stance.values():
+            sizes[label] = sizes.get(label, 0) + 1
+        if len(sizes) == 1 or max(sizes.values()) >= 3:
+            return "strong"
+        return "divided"
 
     completed_texts = [_scoring_text(a) for a in completed]
 
@@ -519,14 +695,13 @@ def classify_model_alignment(
     population, is never aligned, is never ``revised``, and narrates through
     ``AlignmentState.NOT_INVOKED`` rather than borrowing the failed slot's copy.
     """
-    # ``debate_outputs`` is no longer consulted. It fed the panel-strength
-    # fallback this function used to apply when there was no final answer, and
-    # that inference is gone (see the docstring). The argument is kept in the
-    # signature — every caller already passes it and the round-scoped critique is
-    # the obvious input to any future revision of this classification — so this
-    # follows ``synthesis._is_false_consensus_preserved``, which keeps its
-    # ``disagreement`` argument the same way rather than churning every caller.
-    del debate_outputs
+    # #354: ``debate_outputs`` IS consulted again, and for the opposite reason it
+    # used to be. It previously fed a panel-STRENGTH fallback — an inference from
+    # 4-gram overlap — which is exactly what ADR-0062 removed. What it carries
+    # now is the moderator's own reading of where each model stands
+    # (``DebateOutput.panel_stance``), which is an OBSERVATION rather than an
+    # inference, and which is refused entirely when it is not usable.
+    stance = _usable_stance(initial_answers, debate_outputs)
     # The SCORED population — the same predicate ``compute_consensus_strength``
     # filters on, so the per-model ring and the panel strength can never be
     # computed over different sets of answers.
@@ -534,7 +709,17 @@ def classify_model_alignment(
         index for index, answer in enumerate(initial_answers) if counts_as_evidence(answer)
     ]
     completed_texts = [_scoring_text(initial_answers[index]) for index in scored_indices]
-    majority_flags = _opening_majority_flags(completed_texts)
+    if stance is None:
+        majority_flags = _opening_majority_flags(completed_texts)
+    else:
+        # The moderator read POSITIONS; the fallback reads WORDS. When we have
+        # the former we do not consult the latter at all — mixing them would let
+        # shared phrasing re-admit a model the moderator placed in opposition,
+        # which is the defect.
+        stance_flags = _stance_majority_flags(stance)
+        majority_flags = [
+            stance_flags[initial_answers[index].slot_number] for index in scored_indices
+        ]
     majority_by_index = dict(zip(scored_indices, majority_flags, strict=True))
     text_by_index = dict(zip(scored_indices, completed_texts, strict=True))
     final_text = (model_authored_final_text or "").strip()
@@ -561,10 +746,33 @@ def classify_model_alignment(
             # inflation bug, and keeping it True preserves the honest 4-state
             # narration (a majority opener is never "moved to consensus").
             final_aligned = True
+        elif stance is not None:
+            # #354, and the branch that closes the reproduction. A live moderator
+            # positively placed this model OUTSIDE the panel's leading position.
+            # The containment test below is 4-gram overlap against the final
+            # synthesis, and on the issue's panel every opening cleared it —
+            # "we recommend adopting usage-based pricing…" and "we advise you
+            # avoid usage-based pricing…" share ``usage-based pricing for this``
+            # and ``for this product line``. Letting words overrule the
+            # moderator's reading is precisely how a 2-vs-2 split was served as
+            # 4 of 4. Measured on 3ddc313 with a live synthesis quoting only the
+            # "recommend" side: aligned 4/4, ``aligned == total`` True.
+            #
+            # The cost of this branch is stated plainly: with stance evidence,
+            # ``final_aligned`` equals ``opening_majority``, so ``revised`` is
+            # always False and the "Revised" chip never renders. That is the
+            # honest position. The moderator observes OPENINGS — it runs before
+            # the synthesis exists — so nothing here observes a model's final
+            # position at all, and inferring one from shared phrasing is the
+            # error being removed. ADR-0067.
+            final_aligned = False
         elif final_text_visible:
-            # Minority opener with a final answer to check against: aligned ONLY
-            # if its OWN opening survives into the final synthesis. A panel-level
-            # convergence keyword no longer aligns an unrelated minority.
+            # Minority opener with a final answer to check against, and NO stance
+            # evidence: aligned ONLY if its OWN opening survives into the final
+            # synthesis. A panel-level convergence keyword no longer aligns an
+            # unrelated minority. Retained unchanged for every run that has no
+            # moderator reading — which, while ``openrouter_live_execution_enabled``
+            # is false, is every production run.
             final_aligned = _opening_reflected_in_final(text_by_index[index], final_text)
         elif final_answer_was_templated:
             # Minority opener, and the final answer on the screen is one THIS
