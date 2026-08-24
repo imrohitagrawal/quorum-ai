@@ -59,6 +59,17 @@ def _fake_post_messages_tracking_calls(
         model_id: str,
         messages: list[dict[str, str]],
         max_tokens: int | None = None,
+        # #354: the debate stage now asks its moderator for JSON, so this seam
+        # sees ``response_format``. Accepted as ``**_extra`` rather than a named
+        # parameter because this double exists to count MODEL IDS, and enumerating
+        # every optional transport parameter here would make it go red on each
+        # new one without measuring anything more.
+        #
+        # What that deliberately stops catching: a future parameter that changes
+        # what the call COSTS would be absorbed here in silence. This double is
+        # not the guard for that — ``tests/unit/test_judge_call_asks_for_a_parseable_verdict``
+        # watches the transport, and the cost gates watch the bill.
+        **_extra: object,
     ) -> LiveProviderResult:
         calls.append(model_id)
         return LiveProviderResult(

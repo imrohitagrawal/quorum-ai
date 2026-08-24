@@ -497,9 +497,21 @@ test.describe("misleading-output gate (OC-5)", () => {
 
   test("a suppressed disagreement loses the green Agreement treatment (with a paired positive)", async ({ page }) => {
     const base = goldenCompletedResp();
-    // 4/4 aligned + false_consensus_preserved:false ⇒ isConsensus true, so the
-    // ONLY thing that can flip the green treatment is disagreement_suppressed.
-    const fourFour = { ...base, result: { ...base.result, agreement: { aligned: 4, total: 4 } } };
+    // 4/4 aligned + panel_agreement "agreed" + false_consensus_preserved:false
+    // ⇒ isConsensus true, so the ONLY thing left that can flip the green
+    // treatment is disagreement_suppressed.
+    //
+    // `panel_agreement` joined that list in #354. The count alone used to be
+    // enough, and that was the defect: a panel split two against two scored 4 of
+    // 4 on shared phrasing. Omitting it here leaves the paired positive unable
+    // to reach green, which is what this test measured when the field was added.
+    const fourFour = {
+      ...base,
+      result: {
+        ...base.result,
+        agreement: { aligned: 4, total: 4, panel_agreement: "agreed" },
+      },
+    };
     const agreementCard = page.locator('#result-trust [data-accent="agreement"]');
     const chip = agreementCard.locator(".result-trust-chip");
 

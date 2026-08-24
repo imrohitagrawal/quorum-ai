@@ -114,7 +114,12 @@ const completedResp = (consensus: boolean) => ({
   partial_failure_notice: null, provider_failure_notices: [],
   result: {
     model_answers: [answer(0), answer(1), answer(2), answer(3)], debate_outputs: debateOutputs(),
-    final_synthesis: finalSynthesis(!consensus), agreement: consensus ? { aligned: 4, total: 4 } : { aligned: 2, total: 4 },
+    final_synthesis: finalSynthesis(!consensus), // #354: the consensus branch must also carry the panel verdict, or the
+    // "result — consensus" scan renders the DIVIDED band and silently stops
+    // scanning the green surface it exists to check.
+    agreement: consensus
+      ? { aligned: 4, total: 4, panel_agreement: "agreed" }
+      : { aligned: 2, total: 4, panel_agreement: "split" },
     position_movements: positionMovements(consensus ? 2 : 3),
   },
   result_generated_at_utc: "2026-07-10T12:00:00Z", demo_mode: false, live_count: 4, local_count: 0, material_claim_count: 12,

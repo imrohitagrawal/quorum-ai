@@ -1182,11 +1182,23 @@ class ProviderExecutionService:
         #     misspelling a key there passes ``mypy`` and is caught only by the
         #     tests. Two literal keys, so the blast radius is small, but the
         #     named parameters do not buy STATIC safety all the way down; and
-        #   * defaulting to ``None`` keeps the debate and synthesis payloads
-        #     BYTE-IDENTICAL. Those stages feed the visual-baseline lane, whose
-        #     Linux snapshots can only be re-seeded in CI (AGENTS 13d/13e), so a
-        #     payload change there is expensive in a way a judge change is not.
-        #     Pinned by ``test_a_non_judge_call_sends_neither_parameter``.
+        #   * defaulting to ``None`` means a caller that wants neither gets a
+        #     BYTE-IDENTICAL payload and, more importantly, an unchanged CALL —
+        #     ``_post_messages`` is doubled by several tests whose fakes take a
+        #     fixed keyword signature. Pinned by
+        #     ``test_a_non_judge_call_sends_neither_parameter``, which asserts on
+        #     a ``call_with_prompt`` that passes neither.
+        #
+        #     This paragraph used to say the default kept "the debate and
+        #     synthesis payloads BYTE-IDENTICAL" because those stages "feed the
+        #     visual-baseline lane". Both halves are now wrong and the correction
+        #     is worth stating rather than deleting. #354 gives the DEBATE call a
+        #     ``response_format``, so its payload has moved. And the visual lane
+        #     never saw these payloads in the first place: ``e2e.yml`` runs
+        #     Playwright against route-mocked fixtures, so no provider request is
+        #     made on that lane at all. What the default really protects is the
+        #     fixed-signature test doubles — which is a real cost (one went red
+        #     on #354 and had to be widened) but not a pixel one.
         payload: dict[str, object] = {
             "model": model_id,
             "messages": messages,

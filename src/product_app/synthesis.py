@@ -67,6 +67,7 @@ from product_app.synthesis_consensus import (
     classify_model_alignment,
     compute_consensus_strength,
     counts_as_evidence,
+    panel_agreement,
 )
 from product_app.synthesis_length import (
     truncate_recommendation,
@@ -1394,7 +1395,14 @@ def build_agreement_and_positions(
         model_authored_final_text=model_authored_final_text,
         final_answer_was_templated=_final_synthesis_was_templated(final_synthesis),
     )
-    agreement = summarize_agreement(initial_answers=initial_answers, alignments=alignments)
+    agreement = summarize_agreement(
+        initial_answers=initial_answers,
+        alignments=alignments,
+        # #354. The verdict travels beside the count instead of being read out of
+        # it. ``aligned == total`` is reachable by a detector failing to fire;
+        # this is only ever ``"agreed"`` when a live moderator said so.
+        panel_agreement=panel_agreement(initial_answers, debate_outputs),
+    )
     positions = build_position_movements(
         initial_answers=initial_answers,
         debate_outputs=debate_outputs,

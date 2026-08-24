@@ -111,6 +111,10 @@ def test_debate_output_fields_are_current() -> None:
         "critique_text",
         "status",
         "debate_mode",
+        # #354: the moderator's structured reading of where each model stands.
+        # Carries a default (``None``) so it stays out of ``required``, same as
+        # ``debate_mode``.
+        "panel_stance",
     }
     for phantom in ("contributing_models", "latency_ms", "provider_notice"):
         assert phantom not in debate["properties"], (

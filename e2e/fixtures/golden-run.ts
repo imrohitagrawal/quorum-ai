@@ -552,7 +552,12 @@ export const goldenRespWithTemplatedDebate = () => {
  */
 export const goldenConsensusResp = () => {
   const resp = goldenCompletedResp() as Record<string, any>;
-  resp.result.agreement = { aligned: 4, total: 4 };
+  // #354: `aligned === total` alone no longer paints the green surface — the
+  // server must also say a live moderator positively established one position.
+  // This builder represents a genuine consensus run, so it carries the verdict
+  // that goes with 4 of 4. Without it `isConsensusResult` returns false and
+  // every `[data-consensus="true"]` assertion below stops measuring anything.
+  resp.result.agreement = { aligned: 4, total: 4, panel_agreement: "agreed" };
   resp.result.final_synthesis = {
     ...resp.result.final_synthesis,
     citation_coverage: CC_BELOW,

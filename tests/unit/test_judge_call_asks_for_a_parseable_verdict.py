@@ -169,12 +169,29 @@ def test_the_judge_still_sends_what_it_always_did(monkeypatch: pytest.MonkeyPatc
 
 
 def test_a_non_judge_call_sends_neither_parameter(monkeypatch: pytest.MonkeyPatch) -> None:
-    """The debate and synthesis stages feed the VISUAL BASELINE lane, whose
-    Linux snapshots can only be re-seeded in CI (AGENTS rules 13d/13e). Their
-    request payloads must not move at all.
+    """A caller that asks for neither parameter must send neither.
 
     Red if the parameters are added to ``_post_messages`` unconditionally
     rather than passed per-call.
+
+    This docstring used to say the debate and synthesis stages "feed the VISUAL
+    BASELINE lane" and that their payloads "must not move at all". Both halves
+    were wrong and #354 is what surfaced it. The visual lane drives Playwright
+    against route-mocked responses (``e2e/fixtures/golden-run.ts`` fulfils
+    ``/v1/query-runs/...`` itself), so no provider request is made on it and no
+    payload of any kind reaches a pixel. And the debate payload has now moved on
+    purpose: it carries ``response_format`` so the moderator answers in a shape
+    the consensus gate can read. What this test actually pins is narrower and
+    still worth pinning — the forwarding is PER-CALL, so a caller that wants
+    neither parameter gets neither, which keeps the fixed-signature
+    ``_post_messages`` doubles working.
+
+    Scope, stated so the next reader does not inherit more assurance than exists:
+    this watches TWO NAMED KEYS on the transport, not the full key set. No test
+    anywhere asserts the complete set of keys on an outbound provider body, so a
+    future cost-bearing key would be caught by nothing here. Pre-existing, and
+    deliberately not fixed in this change (AGENTS rule 17, one concern per pull
+    request).
     """
     bodies = _capture(monkeypatch)
     result = provider_execution_service.call_with_prompt(
