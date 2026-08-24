@@ -685,7 +685,7 @@ def report():
         truncated = False
     counts = collections.Counter()
     survivors = []
-    in_scope = in_scope_reached = 0
+    in_scope = in_scope_reached = in_scope_checked = 0
     # #337. THE DENOMINATOR. Until now a truncated run said it had scored "N of
     # the scope's mutants" and never said how many that was out of, so the one
     # question a reader has - did we measure most of this diff or almost none
@@ -712,7 +712,7 @@ def report():
         with open("build/mutation/scope.txt") as handle:
             scope_globs = [
                 line.strip() for line in handle
-                if line.strip() and not line.startswith("*")
+                if line.strip() and not line.strip().startswith("*")
             ]
     except OSError:
         pass
@@ -720,10 +720,20 @@ def report():
         with open(meta) as handle:
             data = json.load(handle)
         for key, code in data["exit_code_by_key"].items():
-            if any(fnmatch.fnmatch(key, pattern) for pattern in scope_globs):
+            matched = any(fnmatch.fnmatch(key, pattern) for pattern in scope_globs)
+            if matched:
                 in_scope += 1
                 if code is not None:
                     in_scope_reached += 1
+                    if EXIT_STATUS.get(code) in ("killed", "survived"):
+                        # Scope-filtered too. Adversarial review built a state
+                        # printing "reached 0 ... and scored 2 of those" by
+                        # mixing a scope-filtered numerator with the unfiltered
+                        # `checked`. Unreachable through the recipe (it needs a
+                        # stale mutants/ tree against a different scope.txt),
+                        # but a self-contradicting number is the exact thing
+                        # this denominator exists to stop printing.
+                        in_scope_checked += 1
             if code is None:
                 continue
             # Any code this map does not recognize fails closed as
@@ -868,7 +878,7 @@ def report():
                   "a score - no percentage is reported, because the mutants "
                   "the deadline never reached are unmeasured, not killed."
                   % (in_scope_reached, in_scope,
-                     100.0 * in_scope_reached / in_scope, checked))
+                     100.0 * in_scope_reached / in_scope, in_scope_checked))
         else:
             # No readable scope.txt - the ~40 tests that drive report() directly
             # never write one. Same sentence as before the denominator existed.

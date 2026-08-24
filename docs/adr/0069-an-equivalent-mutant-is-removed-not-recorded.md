@@ -47,8 +47,12 @@ then exit 2.
 
 **The hard survivor rule lives in the truncated branch only.** The
 `SystemExit(1)` quoted above sits inside `if truncated:`. A *complete* run
-scoping only this function is 16 killed / 2 survived = **88.9%** against
-`MUTATION_MIN_SCORE ?= 80` and is green today. So the observed red job was
+scoping only this function would be 16 killed / 2 survived = **88.9%** against
+`MUTATION_MIN_SCORE ?= 80` and green today. **That 16 is ASSUMED, not
+measured**: enumeration shows all 16 non-equivalent mutants are *killable*, and
+whether this suite actually kills them needs a real `mutmut run` scoped to this
+function, which was not performed. The 2 survivors are measured (CI job
+97435532376); the 16 is not. So the observed red job was
 truncation *plus* a survivor. At the 90% threshold the gate's own tests use,
 88.9% would be permanently red. #365's "no action turns that job green" is true
 of the run it observed; the general form arrives via a threshold raise.
@@ -69,8 +73,11 @@ never exists**. Nothing reaches `.meta`, so the report counts nothing, prints
 nothing, and the denominator silently shrinks.
 
 Measured 2026-08-25 on the refactored `_stance_majority_flags`: one comment on
-one line took it from **11 mutants to 9**. `grep -rn "no mutate" src/ tests/
-Makefile pyproject.toml` found **zero** uses, and no check anywhere.
+one line took it from **11 mutants to 9**. `grep -rn "no mutate" src/` found
+**zero** uses, and no check anywhere. (An earlier draft quoted that grep over
+`src/ tests/ Makefile pyproject.toml`. It returned zero *before* this change and
+returns 14 after it, because the new guard and its tests necessarily name the
+pragma. Scoped to `src/`, which is what the claim is about, it is still zero.)
 
 This is decisive for the choice below. Any proof-carrying exclusion ledger would
 have sat beside a one-line, proof-free alternative. Under deadline, an author
@@ -119,12 +126,26 @@ fix for each, and still fails — because both need a human.
 `pytest (Python 3.12)` context, unlike the mutation job itself, which is
 advisory. Detection is on COMMENT tokens and on parsed TOML, never on raw text.
 
+**The first version of this guard was evadable in one line, and adversarial
+review broke it before it shipped.** mutmut's predicate is two INDEPENDENT
+membership tests — `if "# pragma:" not in text or "no mutate" not in text` —
+so it is order-independent. The guard required `no mutate` to follow `pragma:`,
+which left `# no mutate  # pragma: no cover` honoured by mutmut and invisible to
+the guard. In its `block` form at module level that evasion took
+`synthesis_consensus.py` from **384 mutants to 0** with the guard still green.
+The fix is to mirror mutmut's predicate exactly and assert every honoured
+spelling, including the three that evaded it. Recorded because it is the whole
+lesson of this ADR turned on its author: a guard against silencing is worth
+exactly as much as its measurement of the tool it guards.
+
 **5. (#337) A truncated run states its denominator.** It reported "N of the
 scope's mutants" and never said out of how many, so the one question a reader
 acts on — is this most of the diff or almost none of it? — had no answer in the
 log or the artifact. The total is derivable: the globs the recipe handed to
 `mutmut run` are on disk in `build/mutation/scope.txt`. It now reads
-`reached 252 of the scope's 337 mutants (75% of the scope)`. The read fails
+`reached N of the scope's M mutants (X% of the scope) and scored K of those`.
+(No worked example from a real run is quoted here on purpose: on the only CI run
+that got this far, M was never recorded — see Open.) The read fails
 soft; a denominator is a reporting improvement and must never become a new way
 for the gate to die.
 
@@ -205,12 +226,33 @@ None`, `max(None)`, `winners = None`, `size != largest`, `len(winners) == 1`,
 *decides*: the arg-max, the tie posture, and the winner comparison. Not one is
 lost.
 
-The seven that go are all mutations of `sizes[label] = sizes.get(label, 0) + 1`,
-a line that no longer exists: two were the unkillable pair, and five were
-killable mutations of hand-rolled counting (`- 1`, `get(None, 0)`,
-`get(label, None)`, `get(0)`, `get(label, )`). Their test signal was "does this
-repo's hand-rolled tally count correctly", and the answer is now "there is no
-hand-rolled tally". `Counter` is stdlib and is not this repository's to test.
+The net −7 is **8 removed and 1 added**, and the removed eight are all mutations
+of `sizes[label] = sizes.get(label, 0) + 1`, a line that no longer exists:
+
+| removed | mutation | differs / raises | |
+|---|---|---:|---|
+| old 2 | `sizes[label] = None` | 0 / 5436 | killable |
+| old 3 | `get(label, 0) - 1` | **3780** / 0 | killable **by behaviour** |
+| old 4 | `get(None, 0) + 1` | **3420** / 0 | killable **by behaviour** |
+| old 5 | `get(label, None) + 1` | 0 / 5460 | killable |
+| old 6 | `get(0) + 1` | 0 / 5460 | killable |
+| old 7 | `get(label, ) + 1` | 0 / 5460 | killable |
+| old 8 | `get(label, 1) + 1` | **0 / 0** | EQUIVALENT (the target) |
+| old 9 | `+ 2` | **0 / 0** | EQUIVALENT (the target) |
+
+The one added is `Counter(None)` (0 / 5460 — `Counter(None)` returns an empty
+`Counter`, and `max()` of it raises one line later).
+
+**Say this plainly rather than only counting: six of the eight removed were
+killable, and two of those six — old 3 and old 4 — changed the answer rather
+than merely raising.** Their test signal was "does some test distinguish
+counting up from counting down, and keying by the right label from keying by
+`None`". That signal is genuinely gone. It is gone because the code that could
+carry those bugs is gone: tally correctness is now delegated to
+`collections.Counter`, which is stdlib and not this repository's to test. An
+earlier draft of this section said "five were killable" and did not mention that
+two differed behaviourally; adversarial review re-derived the table and both
+were wrong.
 
 ### #337, the truncation half
 
@@ -309,14 +351,18 @@ changes the answer on **2304 of 5460** panels — including the 3-vs-1 shape
 "gratuitously non-monotonic" outcome #365 names, and it is a behaviour change,
 not a refactor.
 
-**`Counter(...).most_common()`.** 15 mutants instead of 11, because it
-introduces integer index literals (`ranked[0][1]`) whose mutations are less
-obviously killable. Strictly worse on the only metric that matters here.
+**`Counter(...).most_common()`.** **12** mutants instead of 11, because it
+introduces an integer index literal (`ranked[0][1]`) whose mutation is less
+obviously killable. Worse on the only metric that matters, though by one mutant
+rather than four: an earlier draft carried **15** from a planning pass, and
+re-running `mutate_file_contents` on the exact variant gives 12. The 15 could
+not be reproduced and is withdrawn.
 
 **(#337) Raise `MUTATION_RUN_DEADLINE_SECONDS`.** There is real headroom — 1454s
 of an 1800s job ceiling, so ~1680s is available — and at the derived ~3.1s per
-mutant that buys roughly +77 mutants, about +17% of what the truncated run
-measured. Rejected as a first move for the reason ADR-0065 already gave and
+mutant that buys roughly +77 mutants — about **+23%** of the 337 verdicts the
+truncated run produced. (An earlier draft said +17%. That is `240/1440`, the
+increase in the *deadline*, attached to the wrong quantity: `77/337 = 22.8%`.) Rejected as a first move for the reason ADR-0065 already gave and
 which still holds: it buys time for phases that are the actual cost, and the
 rate it is derived from comes from two *floors*, not a measurement. The two real
 levers are the ~300s full-suite stats phase and the 25% timeout rate, and either
@@ -379,6 +425,21 @@ measurement that would set its value.
 * **The 25% mutant timeout rate is unexplained and unaddressed.** It is the
   largest single lever on this gate's throughput and is engineering work, not a
   decision.
+* **A DECORATOR is now the cheapest way to silence a mutant, and nothing here
+  closes it.** Stated plainly because decision 4 must not be read as "the hatch
+  is closed" — it closes the *pragma* route only. mutmut skips a decorated
+  function entirely (`scope()`'s own `unmutatable()` documents this, and it is
+  why #136 exists). Measured 2026-08-25: adding one `@functools.cache` to
+  `_stance_majority_flags` took it from **11 mutants to 0**, and the whole file
+  from 384 to 373. Decorate every changed function and `scope.txt` is empty, the
+  recipe prints *"no MUTATABLE changed functions … nothing to mutate"* and exits
+  0. It is not perfectly silent — `scope()` writes a `[decorated]` note per
+  function to stderr, which lands in the run log — but **no gate reads that
+  note**, and the job is advisory. This is a bigger hole than the one just
+  closed and it is deliberately NOT fixed here: refusing decorators under `src/`
+  is absurd, so the honest fix is to make the existing `[decorated]` count a
+  reported, floored number, which is its own change with its own measurement.
+  Filing it is the follow-on this record hands over.
 * **Decision 3 is prose with no structural test.** The exit status is
   deliberately unchanged, so there is nothing but the wording to assert on. The
   shipped test pins the string and says in its own docstring that it cannot see

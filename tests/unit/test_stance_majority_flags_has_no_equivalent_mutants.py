@@ -29,9 +29,15 @@ mutant becomes unkillable. Proven by mutation, twice, each restored
 byte-identical afterwards (`cp` aside, mutate, restore, `diff -q`):
 
 * Reverting `Counter(stance.values())` to the `sizes.get(label, 0) + 1` form
-  takes the mutant count from 11 back to 18 and
-  `test_no_mutant_of_this_function_is_unkillable` fails naming
-  ``x__stance_majority_flags__mutmut_8`` and ``__mutmut_9``.
+  takes the mutant count from 11 back to 18, and
+  `test_no_mutant_of_this_function_is_unkillable` fails on its COUNT assertion
+  first: ``mutmut now generates 18 mutants for _stance_majority_flags, not 11``.
+  Re-pin `EXPECTED_MUTANT_COUNT` to 18 and it then fails on the assertion that
+  matters, naming ``x__stance_majority_flags__mutmut_8`` and ``__mutmut_9``.
+  (This sentence said it failed naming those two directly. Adversarial review
+  ran the revert and it did not — the count guard fires first. Recorded rather
+  than quietly corrected, because it is exactly the class of claim AGENTS.md
+  rule 11a says ships false.)
 * Rewriting `largest = max(...)` as `largest = min(...)` leaves property 1
   intact — monotonicity works just as well under `min` — but collapses the
   hand-written control onto the mutated original, and

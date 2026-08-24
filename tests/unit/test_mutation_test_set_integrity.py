@@ -58,8 +58,9 @@ PYPROJECT = REPO_ROOT / "pyproject.toml"
 #: Every module deselected from the mutant run by `repo_introspection`, pinned.
 #:
 #: Each one drives `git`, `make` or `pytest` against the real ``REPO_ROOT``,
-#: which does not exist inside mutmut's ``./mutants/`` copy — measured: with
-#: these 8 present the suite failed 41 times in the copy and mutmut aborted at
+#: which does not exist inside mutmut's ``./mutants/`` copy — measured when the
+#: list held 8 entries: with those 8 present the suite failed 41 times in the
+#: copy and mutmut aborted at
 #: "failed to collect stats" before scoring a single mutant; with them
 #: deselected the copy runs 1660 passed / 0 failed and the gate completes.
 #:
@@ -104,10 +105,14 @@ DESELECTED_FROM_THE_MUTANT_RUN = (
     # can kill no ``src/`` mutant.
     "tests/unit/test_no_orphaned_e2e_specs.py",
     # #365. Reads the repository's own `src/` as TEXT and re-runs mutmut's
-    # mutator over it. It imports nothing from `product_app` (grepped: neither
-    # module below names it in an import), and it reaches the function it is
-    # about by `exec`ing the file's source into a FRESH namespace — which is
-    # what settles it. mutmut's trampoline replaces the function ON THE MODULE
+    # mutator over it. It names no `product_app` import of its own, but that is
+    # NOT the reason it is safe and an earlier version of this comment wrongly
+    # said it imported nothing: `exec`ing the file's source runs that file's own
+    # module-level imports, which adversarial review traced to 15 `product_app`
+    # modules and 8 mutatable functions called at import time. What actually
+    # settles it is that it reaches the function it guards by `exec`ing the
+    # source into a FRESH namespace. mutmut's trampoline replaces the function
+    # ON THE MODULE
     # OBJECT, and an `exec`'d copy does not see that replacement. Demonstrated
     # 2026-08-25: with `synthesis_consensus._stance_majority_flags` swapped for
     # a stand-in, the `exec`'d copy still ran the ORIGINAL body and was `is not`
@@ -119,9 +124,11 @@ DESELECTED_FROM_THE_MUTANT_RUN = (
     # #365. Tokenises every file under the real `src/` looking for
     # `# pragma: no mutate`, and parses `pyproject.toml`. Inside `./mutants/`
     # that tree carries one generated `x_<name>__mutmut_N` variant per mutant,
-    # so a census of it measures the copy — the #158 shape exactly. It calls no
-    # `product_app` function at all (it only ever reads file text), so it can
-    # kill no `src/` mutant.
+    # so a census of it measures the copy — the #158 shape exactly. Its own body
+    # only ever reads file text; the 12 `product_app` calls adversarial review
+    # traced under it all come from conftest AUTOUSE fixtures (store setup and
+    # teardown), which every module in the suite pays and which no module kills
+    # a mutant with. So it can register no `src/` kill of its own.
     "tests/unit/test_no_mutation_pragma_silences_a_survivor.py",
 )
 

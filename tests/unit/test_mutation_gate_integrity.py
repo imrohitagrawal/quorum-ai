@@ -2072,3 +2072,56 @@ def test_the_survivor_verdict_does_not_claim_every_survivor_is_a_test_gap(
     assert "EQUIVALENT" in output and "no test can kill it" in output, (
         f"the verdict no longer names the equivalent-mutant case:\n{output}"
     )
+
+
+def test_the_two_numbers_in_the_truncation_line_come_from_one_population(
+    scope_script: Path, tmp_path: Path
+) -> None:
+    """Found by adversarial review of the #337 denominator, before it shipped.
+
+    The first version mixed populations: the "reached N of M" half was
+    scope-filtered and the "scored K" half was `checked`, which counts every
+    scored key on disk. Over a `mutants/` tree holding a scored key that matches
+    no scope glob, that printed the self-contradiction ``reached 0 of the
+    scope's 10 mutants (0% of the scope) and scored 2 of those`` — a number a
+    reader would act wrongly on, which is the exact defect this denominator was
+    added to remove.
+
+    Ten mutants in scope, NONE of them reached. A different module contributes
+    one killed and one survived. The scoped line must therefore say 0 and 0.
+
+    Turns red if: the `scored` half goes back to `checked` — it then reads
+    ``scored 2 of those`` after ``reached 0``.
+    """
+    _write_scope(tmp_path, "product_app.costs.x_a")
+    _write_meta(
+        tmp_path,
+        "costs",
+        {f"product_app.costs.x_a__mutmut_{i}": None for i in range(1, 11)},
+    )
+    _write_meta(
+        tmp_path,
+        "query_runs",
+        {
+            "product_app.query_runs.x_z__mutmut_1": 1,
+            "product_app.query_runs.x_z__mutmut_2": 0,
+        },
+    )
+
+    result = _run(
+        scope_script, tmp_path, "report", "origin/main", "90", env=_mark_truncated(tmp_path)
+    )
+    output = result.stdout + result.stderr
+
+    assert "reached 0 of the scope's 10 mutants (0% of the scope)" in output, output
+    assert "scored 0 of those" in output, (
+        "the 'scored' half is counting mutants from outside the scope, so the "
+        f"sentence contradicts itself:\n{output}"
+    )
+    # POSITIVE PARTNER: the out-of-scope survivor is still a survivor and must
+    # still fail the gate. Without this, "scored 0" would also be satisfied by a
+    # report() that had stopped counting survivors at all.
+    assert result.returncode != 0, (
+        f"a survivor stopped failing the gate once it fell outside the scope:\n{output}"
+    )
+    assert "SURVIVED product_app.query_runs.x_z__mutmut_2" in output, output

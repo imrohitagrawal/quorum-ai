@@ -17,6 +17,9 @@ nothing, prints nothing, and the score's denominator silently shrinks. Measured
     no pragma : 11 mutants for _stance_majority_flags
     one pragma:  9 mutants          -> 2 silently removed
 
+In its `block` form at module level, one comment takes the same file from **384
+mutants to 0**.
+
 That is one comment, no proof, no review signal, and a gate that still reports a
 clean percentage over a population somebody quietly made smaller. AGENTS.md
 rule 14 already forbids the exact analogue — "never lower a threshold, add
@@ -34,7 +37,16 @@ equivalent-mutant mechanism that could not be turned into a silencer; building
 one while leaving a cheaper silencer installed next to it would have raised the
 cost of doing this honestly and not the cost of doing it dishonestly.
 
-WHAT IT CANNOT SEE: intent, and anything outside `src/`. It cannot tell an
+WHAT IT CANNOT SEE: **the cheaper hatch next door.** This closes the PRAGMA
+route only. mutmut skips a DECORATED function entirely, so one `@functools.cache`
+on `_stance_majority_flags` takes it from 11 mutants to 0 (measured 2026-08-25)
+and this gate says nothing — decorating a function is ordinary Python and
+refusing it would be absurd. `scope()` does write a `[decorated]` note to stderr
+per skipped function, but no gate reads that note. ADR-0069 records this as the
+larger remaining hole and names the fix (make the `[decorated]` count reported
+and floored). Do not read a green run here as "no mutant was silenced".
+
+It also cannot see intent, or anything outside `src/`. It cannot tell an
 author hiding a survivor from one who copied the pragma out of mutmut's README —
 it refuses both. A pragma in `tests/` or `scripts/` is invisible, which is
 sound only because neither tree is mutated, so neither can silence a mutant.
@@ -55,11 +67,14 @@ is large enough to have justified it. At that point the honest path exists and
 this blanket refusal should become "silence it only through that mechanism".
 Also remove it if mutmut drops pragma support, which would make it dead code.
 
-Turns red if: anyone adds a `# pragma: no mutate` under `src/`, or a
+Turns red if: anyone adds a `# pragma: no mutate` under `src/` — in any spelling
+mutmut honours, including the reversed-order and `block` forms — or a
 `do_not_mutate`/`do_not_mutate_patterns` key to `[tool.mutmut]`. Proven by
-mutation — planting the pragma in a scratch copy of a real module is exactly
+mutation: planting each honoured spelling in a scratch copy of a real module is
 what `test_the_scanner_detects_a_pragma_that_is_really_there` does, so the
-detector's bite is asserted on every run rather than claimed here.
+detector's bite is asserted on every run rather than claimed here, and planting
+a real one under `src/` was measured turning this module red (2 failed, 3
+passed) and the tree restored byte-identical afterwards.
 """
 
 from __future__ import annotations
@@ -107,7 +122,22 @@ def _pragma_comments(source: str) -> list[tuple[int, str]]:
             if token.type != tokenize.COMMENT:
                 continue
             text = token.string
-            if "pragma:" in text and PRAGMA_MARKER in text.partition("pragma:")[2]:
+            # MIRRORS mutmut's own predicate, which is two INDEPENDENT
+            # membership tests and therefore order-independent
+            # (`pragma_handling.py`: `if "# pragma:" not in text or
+            # "no mutate" not in text`). An earlier version of this line
+            # required `no mutate` to follow `pragma:`, and adversarial review
+            # broke it in one comment: `# no mutate  # pragma: no cover` is
+            # honoured by mutmut and was invisible here. In its `block` form at
+            # module level that evasion took the file from 384 mutants to ZERO
+            # with the guard still green. Do not re-introduce an ordering
+            # assumption — match on the two tokens, exactly as mutmut does.
+            #
+            # `pragma:` is matched loosely rather than as `# pragma:`, so
+            # `#pragma: no mutate` also trips this guard even though mutmut
+            # ignores it. For a gate that REFUSES, stricter than the tool is
+            # the safe direction.
+            if "pragma:" in text and PRAGMA_MARKER in text:
                 found.append((token.start[0], text.strip()))
     except (tokenize.TokenError, IndentationError, SyntaxError):
         # An unparseable file is a different failure and another gate's job;
@@ -178,10 +208,25 @@ def test_the_scanner_detects_a_pragma_that_is_really_there() -> None:
         "the anchor line this proof plants its pragma on has moved; re-point it "
         "rather than deleting the proof"
     )
-    planted = source.replace(anchor, f"{anchor}  # pragma: no mutate", 1)
-    hits = _pragma_comments(planted)
-    assert len(hits) == 1, f"the scanner missed a planted pragma: {hits}"
-    assert PRAGMA_MARKER in hits[0][1]
+    #: Every spelling mutmut HONOURS. The last three are the ones adversarial
+    #: review used to evade an earlier version of this scanner: mutmut's
+    #: predicate is order-independent, so `no mutate` before `pragma:` counts.
+    #: The `block` form at module level is the severe one — measured, it took
+    #: this file from 384 mutants to 0 while the guard stayed green.
+    honoured = (
+        "# pragma: no mutate",
+        "# type: ignore # pragma: no mutate",
+        "# pragma: no cover, no mutate",
+        "# no mutate  # pragma: no cover",
+        "# no mutate  # pragma:",
+        "# pragma: no mutate block",
+        "# no mutate block  # pragma:",
+    )
+    for spelling in honoured:
+        planted = source.replace(anchor, f"{anchor}  {spelling}", 1)
+        hits = _pragma_comments(planted)
+        assert len(hits) == 1, f"the scanner missed {spelling!r}, which mutmut honours: {hits}"
+        assert PRAGMA_MARKER in hits[0][1]
 
     # A raw-text scan fires on both of these. A tokenised one fires on neither.
     assert not _pragma_comments('X = "# pragma: no mutate"\n'), (
