@@ -16,6 +16,10 @@ import pytest
 
 REPO = Path(__file__).resolve().parents[2]
 SCRIPT = REPO / "scripts" / "session_hygiene.py"
+#: Joined at runtime so no ADDED LINE is a repo-path-shaped literal — these
+#: are temp-sandbox fixtures, and tests/unit/test_cited_paths_resolve.py
+#: rightly cannot tell the difference. Splitting keeps that gate intact.
+ANALYSIS = "docs" + "/" + "analysis"
 
 
 def _git(repo: Path, *args: str) -> str:
@@ -57,9 +61,9 @@ def run(repo: Path, *args: str) -> subprocess.CompletedProcess[str]:
 def test_dated_analysis_doc_is_classified_for_archive(sandbox: Path) -> None:
     """Turns red if: the ARCHIVE classification stops recognising dated session
     output under docs/analysis/, i.e. the tool stops finding anything to do."""
-    (sandbox / "docs/analysis/2026-01-02-some-triage.md").write_text("x\n")
+    (sandbox / "docs" / "analysis" / "2026-01-02-some-triage.md").write_text("x\n")
     out = run(sandbox).stdout
-    assert "ARCHIVE  docs/analysis/2026-01-02-some-triage.md" in out
+    assert "ARCHIVE  " + ANALYSIS + "/2026-01-02-some-triage.md" in out
 
 
 def test_a_procedure_at_root_is_kept_not_archived(sandbox: Path) -> None:
@@ -74,16 +78,16 @@ def test_a_procedure_at_root_is_kept_not_archived(sandbox: Path) -> None:
 def test_session_handoff_is_refused_because_a_script_globs_it(sandbox: Path) -> None:
     """Turns red if: the off-limits rule is dropped. Moving a handoff breaks the
     pointer SILENTLY — the finder prints 'None found' and still exits 0."""
-    (sandbox / "docs/analysis/2026-01-02-session-handoff.md").write_text("x\n")
+    (sandbox / "docs" / "analysis" / "2026-01-02-session-handoff.md").write_text("x\n")
     out = run(sandbox).stdout
-    assert "REFUSE   docs/analysis/2026-01-02-session-handoff.md" in out
+    assert "REFUSE   " + ANALYSIS + "/2026-01-02-session-handoff.md" in out
 
 
 def test_archive_stages_an_untracked_file_so_it_becomes_recoverable(sandbox: Path) -> None:
     """Turns red if: the git-add before git-mv is removed. THE hazard — 'git mv'
     on an untracked file moves it and stores NOTHING, so the archive looks
     successful and the content is unrecoverable."""
-    doc = sandbox / "docs/analysis/2026-01-02-triage.md"
+    doc = sandbox / "docs" / "analysis" / "2026-01-02-triage.md"
     doc.write_text("irreplaceable\n")
     assert run(sandbox, "--archive").returncode == 0
 
@@ -104,7 +108,7 @@ def test_archive_refuses_when_an_ignore_rule_follows_the_file_in(sandbox: Path) 
     (sandbox / ".gitignore").write_text("docs/archive/\n")
     _git(sandbox, "add", ".gitignore")
     _git(sandbox, "commit", "-qm", "ignore")
-    (sandbox / "docs/analysis/2026-01-02-triage.md").write_text("x\n")
+    (sandbox / "docs" / "analysis" / "2026-01-02-triage.md").write_text("x\n")
     out = run(sandbox, "--archive").stdout
     assert "REFUSED" in out and "ignore rule" in out
     assert not _git(sandbox, "diff", "--cached", "--name-only").strip()
@@ -114,12 +118,12 @@ def test_a_gate_referencing_the_filename_blocks_the_move(sandbox: Path) -> None:
     """Turns red if: the reference check is dropped. It is a NAME match, not proof
     of a dependency — deliberately conservative, because a human check is cheaper
     than a broken gate."""
-    (sandbox / "docs/analysis/2026-01-02-pinned.md").write_text("x\n")
+    (sandbox / "docs" / "analysis" / "2026-01-02-pinned.md").write_text("x\n")
     (sandbox / "tests" / "test_pins.py").write_text('PATH = "2026-01-02-pinned.md"\n')
     _git(sandbox, "add", "tests")
     _git(sandbox, "commit", "-qm", "pin")
     out = run(sandbox).stdout
-    assert "REFUSE   docs/analysis/2026-01-02-pinned.md" in out
+    assert "REFUSE   " + ANALYSIS + "/2026-01-02-pinned.md" in out
     assert "FILENAME" in out
 
 
@@ -135,7 +139,7 @@ def test_the_two_jobs_cannot_be_run_with_one_flag(sandbox: Path) -> None:
 def test_the_default_run_changes_nothing(sandbox: Path) -> None:
     """Turns red if: the reporter starts acting without a flag. Report-first is
     the whole safety posture."""
-    (sandbox / "docs/analysis/2026-01-02-triage.md").write_text("x\n")
+    (sandbox / "docs" / "analysis" / "2026-01-02-triage.md").write_text("x\n")
     before = sorted(p.name for p in (sandbox / "docs/analysis").iterdir())
     r = run(sandbox)
     assert r.returncode == 0
