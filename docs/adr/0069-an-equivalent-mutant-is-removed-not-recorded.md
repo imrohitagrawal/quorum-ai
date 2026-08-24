@@ -48,11 +48,11 @@ then exit 2.
 **The hard survivor rule lives in the truncated branch only.** The
 `SystemExit(1)` quoted above sits inside `if truncated:`. A *complete* run
 scoping only this function would be 16 killed / 2 survived = **88.9%** against
-`MUTATION_MIN_SCORE ?= 80` and green today. **That 16 is ASSUMED, not
-measured**: enumeration shows all 16 non-equivalent mutants are *killable*, and
-whether this suite actually kills them needs a real `mutmut run` scoped to this
-function, which was not performed. The 2 survivors are measured (CI job
-97435532376); the 16 is not. So the observed red job was
+`MUTATION_MIN_SCORE ?= 80` and green today. That 16 was ASSUMED when this record
+was drafted — enumeration shows the 16 non-equivalent mutants are *killable*,
+which is not the same as this suite killing them. **It is now measured for the
+shape that shipped**: see "The first run" below. The 2 survivors of the old
+shape are measured (CI job 97435532376). So the observed red job was
 truncation *plus* a survivor. At the 90% threshold the gate's own tests use,
 88.9% would be permanently red. #365's "no action turns that job green" is true
 of the run it observed; the general form arrives via a threshold raise.
@@ -253,6 +253,37 @@ carry those bugs is gone: tally correctness is now delegated to
 earlier draft of this section said "five were killable" and did not mention that
 two differed behaviourally; adversarial review re-derived the table and both
 were wrong.
+
+### The first run — the measurement this record said would settle it
+
+CI job **97606765828** (run 32782293773, this pull request, 2026-08-24). The
+diff touches exactly one mutatable function, so the scope is exactly it:
+
+```
+changed functions in scope:
+  *product_app.synthesis_consensus.x__stance_majority_flags
+  product_app.synthesis_consensus.x__stance_majority_flags__mutmut_*
+
+mutants scored: 11 killed, 0 survived, 0 timeout (excluded), 0 no-tests
+mutation score (killed / (killed+survived)) = 100.0% (threshold 80%)
+```
+
+Job wall clock 21:58:19 → 22:02:36 = **257 seconds** against the 1440-second
+deadline, with **no truncation**. Three things this settles, none of them by
+argument:
+
+* **All 11 mutants of the Counter shape are killed by the suite as it stands.**
+  Enumeration had shown them *killable*; this shows them *killed*. That is what
+  replaces the "ASSUMED" caveat above, for the shape that shipped.
+* **The gate produced a real `mutation score … = N%` line.** Measured over the
+  20 `pull_request` runs before this one: **zero** did. That is #337's close
+  condition — a real score for a real changed function, inside the deadline —
+  met by a run rather than by an assertion.
+* **The truncation branch did not fire**, which is why no `reached N of M` line
+  appears above. A one-function scope is nowhere near the budget; that path
+  stays exercised by `test_a_truncated_run_says_how_much_of_the_scope_it_reached`.
+  What scope size *does* exhaust the budget is still unmeasured, and the
+  denominator is the instrument that will say.
 
 ### #337, the truncation half
 
