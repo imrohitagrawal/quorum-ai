@@ -2,7 +2,7 @@
 
 ## Status
 
-Accepted — 2026-08-25. Closes the gap #357 records; ADR-0060 is its history.
+Accepted — 2026-08-25. Answers the gap #357 records; ADR-0060 is its history.
 
 ## Context
 
@@ -21,10 +21,14 @@ automated check was green throughout, and every one of them was **right** to be:
 | `availability-check.yml` | is `/ready` 200 and `live`? | `live` IS the money-spending posture, and this check treats it as the good state |
 | `error-rate-check.yml` | is the 5xx share inside the SLO? | a money-spending posture is neither unavailable nor erroring |
 
-Measured in this worktree on 2026-08-25: `grep -rn 'live_execution' .github/`
-matched **nothing**. Positive partner, so the grep is known to work and the
-directory is known not to be empty: `build_sha` matches 5 lines of
-`deploy-drift-watchdog.yml`.
+Measured 2026-08-25, scoped to `main` at `b5d6224` — i.e. BEFORE this ADR's
+workflow existed: `git grep -n 'live_execution' b5d6224 -- .github/` matched
+**nothing** (exit 1). The scoping is deliberate and was a review finding: an
+earlier draft wrote this as `grep -rn ... .github/` over the working tree, where
+it now matches the very workflow this ADR adds. A claim that refutes itself the
+moment it ships is worse than no claim. Positive partner, so the grep is known
+to work and the directory is known not to be empty: `git grep -c build_sha
+b5d6224 -- .github/workflows/deploy-drift-watchdog.yml` returns **5**.
 
 ADR-0060's own "revert condition, stated so it is not a judgement call" is prose
 in a document. Nothing executed it. Spend over the window was $0.1768 — which is
@@ -44,7 +48,7 @@ answerable to it row by row.
 | 1 | **Watching a derived field instead of the posture.** `/status.live_execution` is `report.state in ("live",)` (`main.py:984`), and `"live"` needs the flag AND a key AND a probe verdict (`readiness.py:429-446`). Flag-on-with-a-refused-key serves `live_execution: false` while `providers.py:670` — which has no probe term — returns True. | `main.py:984` vs `readiness.py:437-445` | reads `/ready.live_readiness.state`. `readiness.py:445` is the `else` of a four-way, so `offline_by_config` ⟺ the flag is off, exactly. A test walks all four states. |
 | 2 | **A Fly secret overriding `fly.toml`, invisible to any repo-reading check.** | `DEPLOY.md:61`, `:175`, `:230` instruct the operator to use `fly secrets set OPENROUTER_LIVE_EXECUTION_ENABLED="true"` — a path touching no tracked file. Precedence itself is UNVERIFIED (below). | the primary check reads what the running process serves, never the repository. |
 | 3 | **A gate green having measured nothing.** Its normal verdict is "found nothing", the trivially-true shape; 13 of 21 CI jobs here could once reach a terminal status having measured nothing. | AGENTS.md, `docs/analysis/03-enforcement-machinery.md` | every decision names how many hosts were read of how many probed and how many windows are declared, asserted by `test_the_detail_names_how_many_hosts_and_windows_it_read`; no readable host is `UNKNOWN`, which alerts. |
-| 4 | **An unreadable input read as fine.** A missing key defaulting to the off-state is permanently, silently green. | `deploy_drift_check.py`'s docstring: "printing a blank and exiting 0 is the silent wrong-number failure this script exists to prevent" | every fetch returns `None`, never a default; `None` routes to `UNKNOWN`, which alerts. Ten malformed-body rows and eight malformed-declaration rows pin it. |
+| 4 | **An unreadable input read as fine.** A missing key defaulting to the off-state is permanently, silently green. | `deploy_drift_check.py`'s docstring: "printing a blank and exiting 0 is the silent wrong-number failure this script exists to prevent" | every fetch returns `None`, never a default; `None` routes to `UNKNOWN`, which alerts. **10** malformed-body rows and **12** malformed-declaration rows pin it (`pytest --collect-only \| grep -c`). |
 | 5 | **A cold machine read as "off".** `fly.toml` sets `min_machines_running = 0`. | `deploy_drift_check.py:72-78` | the same measured retry shape: 10s timeout, 3 attempts, 5s sleep — then alert, never silently pass. |
 | 6 | **Declared cadence is not detection latency.** | re-measured for this ADR, below | the workflow header and this ADR both state the measured latency, not the cron. |
 | 7 | **The scheduled check auto-disabled after repository inactivity** — it dies exactly during the unattended stretch it covers. | `availability-check.yml:22-23`; ~60 days is INHERITED, not verified here | not solved. Stated as a blind spot. The pre-merge layer keeps working regardless of schedules. |
@@ -113,6 +117,43 @@ The escape valve is real and intended: an already-firing alert can be resolved b
 declaring the window retrospectively. That is a commit saying "yes, this was
 meant", which is precisely the record ADR-0060 lacked.
 
+**That valve did not work in the first draft, and review is what found it.** A
+test asserted the shipped declaration file was EMPTY (`parsed == []`). Doing the
+sanctioned thing — one covering window plus `fly.toml` `"true"` — turned the
+blocking `pytest (Python 3.12)` lane red, so the sanctioned window could never
+merge; and because the file's own README asks that expired entries stay as the
+record, there was no state after the first declaration in which it was empty
+again. A guard that goes red on the path it exists to permit is a guard somebody
+deletes, which is failure mode 9 arriving through the front door. The assertion
+is now that the file PARSES, plus a separate one that no window covers the
+present *while the flag is off* — which an expired historical entry satisfies.
+Both directions are proven: with a covering window and the flag `"true"` the
+suite is green (95 passed), and with that window expired and the flag still
+`"true"` it is red on
+`test_the_committed_flag_is_off_or_covered_by_a_declared_window`.
+
+### A partial read may be acted on, but it may not retire an alert
+
+Review found the first draft returning `OFF_AS_DECLARED` when one host answered
+`offline_by_config` and the other could not be read at all — with a detail line
+that said "**Every** host reports `offline_by_config`" over a host it never
+read, directly above its own printed "read 1 of 2". Worse, that reading
+satisfied the resolve step, so a half-blind cycle could close a standing money
+alert.
+
+The verdict itself is still taken from the hosts that answered — both URLs are
+the same Fly app, so one answer settles the posture, and demanding both would
+turn an ordinary DNS blip into a money alert. What changed is that the result
+now carries `complete`, published on the wire alongside `decision` and
+`should_alert`, and the resolve step requires `complete == 'true'`. Retiring an
+alert on a partial view is the one thing a half-blind cycle must not do.
+
+The cost, stated: if a host is permanently retired without being removed from
+`DEFAULT_READY_URLS`, no cycle is ever complete and an open alert can never
+auto-close. The job log names the count on every run ("read 1 of 2 host(s)"), so
+that is visible rather than silent — but it is a real consequence, not a
+hypothetical.
+
 ### Where the alert goes
 
 A GitHub issue labelled `live-posture`, opened once and closed only by an
@@ -152,26 +193,71 @@ question would be the wrong trade.
 
 ## The bite table
 
-Eleven mutations, each `cp` aside, applied, run, restored from the copy and
-confirmed with `diff -q` (never `git checkout`). Baseline **78 passed** before
-and after every one.
+Twenty-one mutations, each `cp` aside, applied, run, restored from the copy and
+confirmed with `diff -q` (never `git checkout`). **All were re-run against the
+final tree**, so every count below shares one baseline: **97 passed**.
+An earlier draft quoted 78, which was the baseline when the first eleven were
+run and was stale by the time the file shipped — review caught it, and re-running
+was cheaper than explaining the discrepancy. The harness refuses a mutation that
+changes nothing (`MUTATION-NOOP`), because a `perl` expression that silently
+matches nothing proves nothing.
+
+A trap worth recording: the first attempt at this re-run passed the two test
+paths as an unquoted `$T` shell variable. **zsh does not word-split**, so pytest
+received one bogus path and printed `no tests ran in 0.00s` — for the baseline
+AND for every mutation. Every row would have "passed" having measured nothing.
+The baseline row is what caught it. Quote the baseline, always.
 
 | # | Mutation | Result |
 |---|---|---|
-| M1 | delete `_write_outputs(result)` from `main()` | **3 failed** — the three wire tests |
-| M2 | rename the `should_alert=` output key | **4 failed** — the three wire tests plus `test_the_workflow_branches_on_the_key_this_script_writes` |
-| M3 | live-host filter stops reading the state (`if False`) | **12 failed** |
-| M4 | `covers()` drops its expiry bound | **3 failed**, incl. `test_live_execution_past_a_declared_window_alerts` |
-| M5 | a missing `live_readiness.state` defaults to `offline_by_config` | **2 failed** — the two well-formed-envelope-no-state rows |
+| M1 | delete `_write_outputs(result)` from `main()` | **4 failed** |
+| M2 | rename the `should_alert=` output key | **4 failed** |
+| M3 | live-host filter ignores the state (`if False`) | **12 failed** |
+| M4 | `covers()` drops its expiry bound | **4 failed** |
+| M5 | a missing `live_readiness.state` defaults to `offline_by_config` | **2 failed** |
 | M6 | an unreadable declaration treated as "nothing declared" | **1 failed** |
 | M7 | `refuse_undeclared_flag` never refuses | **9 failed** |
 | M8 | the alert step drops its crashed-step disjunct | **1 failed** |
 | M9 | the workflow no longer `exit 1`s | **1 failed** |
-| M10 | the resolve step no longer requires an observed reading | **1 failed** |
-| M11 | `fly.toml` commits `"true"` with no declaration | **1 failed** — `test_the_committed_flag_is_off_or_covered_by_a_declared_window` |
+| M10 | the resolve step drops its observed-reading terms | **2 failed** |
+| M11 | `fly.toml` commits `"true"` with no declaration | **1 failed** |
+| M12 | the alert step files a new issue every cycle | **1 failed** |
+| M13 | the resolve step closes with an empty issue number | **1 failed** |
+| M14 | the alert step no longer runs `gh issue create` | **1 failed** |
+| M15 | the fail step's condition typo'd — `shouldAlert` / `faliure` | **1 failed** |
+| M16 | the alert step gated on `github.event_name == 'workflow_dispatch'` | **1 failed** |
+| M17 | `complete` hardcoded True | **1 failed** |
+| M18 | declared offsets no longer normalised to UTC | **1 failed** |
+| M19 | the readiness vocabulary drifts from `readiness.py` | **1 failed** |
+| M20 | the active window is picked by file order again | **1 failed** |
+| M21 | the alert title asserts "Live execution is on" again | **1 failed** |
 
-M1, M2, M9 and M10 are the ones no decision-only test could see: each leaves the
-watchdog permanently GREEN while production spends.
+M1, M2, M9, M15 and M16 are the ones no decision-only test could see: each
+leaves the watchdog permanently GREEN while production spends.
+
+**M15 and M16 are review's, not the author's**, and they are the reason sections
+A-E of the test file are not enough on their own. The original condition tests
+asserted that two substrings appeared *somewhere* in a step's `if:`, which is
+blind to what else was ANDed to them — AGENTS.md rule 8 reappearing inside the
+new gate. Both mutations left the whole suite green while making the watchdog
+silent or permanently OK. Every step condition is now asserted by **equality**
+against its full normalised text, and the fail step — which had no assertion at
+all — has one.
+
+M20 and M21 are review's second lens: with two overlapping windows the verdict
+was right but the operator-facing "0.1h remaining" was taken from whichever was
+listed first rather than from when cover actually ends; and the alert issue's
+TITLE hard-coded "Live execution is on and no declared window covers it", which
+is false for the `unknown` verdict — an unparseable declaration file would have
+filed that title every thirty minutes while the flag was off. Both are the
+repo's own "never report a value that was never read" rule pointed the wrong
+way, and both are exactly how a real alert learns to be ignored.
+
+M12-M14 come from a gap the author found separately: sections A-E assert the
+workflow's *structure*, and structure cannot see whether a `set -euo pipefail`
+block actually runs. The alert and resolve steps are therefore also EXECUTED
+against a stubbed `gh`, asserting on the exit code and on the commands the stub
+was asked to run.
 
 ## Rejected alternatives
 
@@ -213,6 +299,25 @@ watchdog permanently GREEN while production spends.
   opens and closes inside one throttled cron gap (up to 129.4 minutes, measured)
   is never observed at all.
 - `judge_enabled` is `true` in production today and remains unwatched.
+- `DEPLOY.md` step 4 — the one document that actually turns this flag on — now
+  names the declaration file and the watchdog, and `docs/80-observability.md`
+  lists the monitor. Review found both unchanged in the first draft, which would
+  have left the quiet path undiscoverable from the runbook: an operator
+  following it would trip the alert every sanctioned time, which is exactly the
+  crying-wolf failure the declaration exists to prevent.
+  `test_deploy_md_tells_the_operator_to_declare_the_window` keeps that true.
+- **Once a declared window expires with `fly.toml` still `"true"`, the required
+  `pytest (Python 3.12)` context goes red — on `main` and on every open pull
+  request** — until someone sets the flag back or extends the declaration. That
+  is the intended pressure, and it is the mechanical form of ADR-0060's revert
+  condition; it is also the sharpest edge in this design, and it should be
+  stated rather than discovered. The pre-merge gate is wall-clock dependent by
+  construction: that is what makes it a deadline rather than a note.
+- An alert opened by a transient `UNKNOWN` keeps that decision in its body even
+  if a genuine live posture follows in the next cycle, because the alert step
+  deliberately does not re-comment. The window is one cycle and the job log
+  carries the current decision, but the design has no way to say "the reason
+  changed". Accepted in exchange for not producing ~70 comments over three days.
 
 ## Open decisions for a human — numbers I refuse to guess
 

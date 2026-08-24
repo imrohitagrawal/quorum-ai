@@ -18,10 +18,13 @@ WHAT THIS IS FOR (#357)
       * ``error-rate-check.yml`` watches 5xx. A money-spending posture is neither
         unavailable nor erroring.
 
-    Verified 2026-08-25 in this worktree: ``grep -rn 'live_execution' .github/``
-    matched NOTHING. (Positive partner, so the grep is known to work and the
-    directory is known not to be empty: ``build_sha`` matches 5 lines of
-    ``deploy-drift-watchdog.yml``.)
+    Measured 2026-08-25, BEFORE this file existed:
+    ``git grep -n 'live_execution' b5d6224 -- .github/`` matched NOTHING (exit 1).
+    Scoped to that commit deliberately — run against the working tree it now
+    matches this very workflow, and a claim that refutes itself the moment it
+    ships is worse than no claim. Positive partner, so the grep is known to work
+    and the directory is known not to be empty: ``build_sha`` matches 5 lines of
+    ``deploy-drift-watchdog.yml``.
 
 WHY IT READS PRODUCTION AND NOT ``fly.toml``
     ``DEPLOY.md:61``, ``:175`` and ``:230`` instruct the operator to turn live
@@ -101,9 +104,14 @@ from dataclasses import dataclass
 from enum import Enum
 from pathlib import Path
 
-#: The two hosts production is served on, matching ``availability-check.yml:60``.
+#: The two hosts production is served on, matching ``availability-check.yml:61``.
 #: Both are read; a posture is live if EITHER reports one, which fails closed if
-#: the two ever diverge.
+#: two READABLE hosts diverge. A host that could not be read is a different
+#: matter: the verdict is still taken from the hosts that answered (they are the
+#: same app, so one answer settles the posture), but ``PostureResult.complete``
+#: goes False and the workflow refuses to CLOSE a standing alert on that reading.
+#: Retiring an alert on a partial view is the one thing a half-blind cycle must
+#: not be allowed to do.
 DEFAULT_READY_URLS = (
     "https://quorum-ai.fly.dev/ready",
     "https://quorum.stackclimb.com/ready",
@@ -168,6 +176,10 @@ class DeclaredWindow:
 class PostureResult:
     decision: PostureDecision
     detail: str
+    #: True when every host probed actually answered. A verdict taken over a
+    #: partial view may be acted on, but it may not RETIRE a standing alert —
+    #: see the workflow's resolve step, which requires this.
+    complete: bool = True
 
     @property
     def should_alert(self) -> bool:
@@ -226,7 +238,13 @@ def _parse_instant(value: object) -> dt.datetime | None:
         # and it is genuinely ambiguous: "17:00" in whose day? Refuse it rather
         # than guess a zone that could widen a window by hours.
         return None
-    return parsed
+    # Normalise to UTC. Any offset is ACCEPTED — the comparison is correct
+    # either way — but everything this script prints, including the alert body,
+    # is then in one zone. Review's point: the whole "a far-future expiry is
+    # visible in a diff" argument rests on a reader computing the instant
+    # correctly, and `2026-08-26T00:00:00-12:00` ends twelve hours later than it
+    # looks. Echoing it back in UTC is the cheapest way to stop that misreading.
+    return parsed.astimezone(dt.UTC)
 
 
 def evaluate_posture(
@@ -245,12 +263,16 @@ def evaluate_posture(
     """
     readable = {url: state for url, state in readiness_states.items() if state is not None}
     probed = len(readiness_states)
+    #: Did every host probed actually answer? A verdict taken over a partial
+    #: view may be acted on, but it may not RETIRE a standing alert.
+    complete = len(readable) == probed
 
     if not readable:
         return PostureResult(
             PostureDecision.UNKNOWN,
             f"read live_readiness.state from 0 of {probed} host(s) — refusing to "
             "report a money posture from a value that was never read",
+            complete=False,
         )
 
     unknown_states = sorted(
@@ -263,6 +285,7 @@ def evaluate_posture(
             f"{unknown_states} are outside the known vocabulary "
             f"{sorted(KNOWN_READINESS_STATES)} — a state this check has never "
             "heard of is not evidence that live execution is off",
+            complete=complete,
         )
 
     if windows is None:
@@ -272,24 +295,40 @@ def evaluate_posture(
             f"{sorted(set(readable.values()))}, but the declared-window file could "
             "not be read or did not parse — a declaration that cannot be parsed "
             "must never be mistaken for one that permits something",
+            complete=complete,
         )
 
     live_hosts = sorted(url for url, state in readable.items() if state != FLAG_OFF_STATE)
+    unread = probed - len(readable)
     counted = (
         f"read {len(readable)} of {probed} host(s); {len(live_hosts)} report a "
         f"live-execution posture; {len(windows)} window(s) declared"
+    )
+    partial = (
+        ""
+        if complete
+        else (
+            f" {unread} host(s) did not answer, so this verdict is taken over a "
+            "partial view and may not close a standing alert."
+        )
     )
 
     if not live_hosts:
         return PostureResult(
             PostureDecision.OFF_AS_DECLARED,
-            f"{counted}. Every host reports {FLAG_OFF_STATE!r}: the money switch "
-            "is off and no visitor can spend.",
+            f"{counted}. Every host that ANSWERED reports {FLAG_OFF_STATE!r}: the "
+            f"money switch is off and no visitor can spend.{partial}",
+            complete=complete,
         )
 
     active = [window for window in windows if window.covers(now)]
     if active:
-        window = active[0]
+        # The LATEST expiry, not file order. With two overlapping windows the
+        # verdict is the same either way, but the operator-facing "Nh remaining"
+        # is not: review measured a 24-hour window reported as "0.1h remaining"
+        # because a shorter sibling happened to be listed first. The number an
+        # operator plans around must be when cover actually ends.
+        window = max(active, key=lambda candidate: candidate.expires_at)
         remaining = (window.expires_at - now).total_seconds() / 3600.0
         return PostureResult(
             PostureDecision.LIVE_WITHIN_DECLARED_WINDOW,
@@ -297,7 +336,8 @@ def evaluate_posture(
             f"declared by {window.owner!r} for {window.reason!r}, opened "
             f"{window.opened_at.isoformat()} and expiring "
             f"{window.expires_at.isoformat()} — {remaining:.1f}h remaining. "
-            "Sanctioned; no alert.",
+            f"Sanctioned; no alert.{partial}",
+            complete=complete,
         )
 
     expired = [window for window in windows if window.expires_at <= now]
@@ -310,14 +350,16 @@ def evaluate_posture(
             f"declared window — {latest.owner!r}, {latest.reason!r} — expired "
             f"{latest.expires_at.isoformat()}, {overrun:.1f}h ago. Every visitor "
             "to /ui is spending real money past the instant somebody wrote down "
-            "as the end of it.",
+            f"as the end of it.{partial}",
+            complete=complete,
         )
 
     return PostureResult(
         PostureDecision.LIVE_UNDECLARED,
         f"{counted}. {live_hosts} report a live posture and NO declared window "
         f"covers {now.isoformat()}. Every visitor to /ui can spend real money "
-        "and nobody wrote down that this was intended.",
+        f"and nobody wrote down that this was intended.{partial}",
+        complete=complete,
     )
 
 
@@ -431,6 +473,7 @@ def _write_outputs(result: PostureResult) -> None:
         with open(path, "a", encoding="utf-8") as handle:
             handle.write(f"decision={result.decision.value}\n")
             handle.write(f"should_alert={'true' if result.should_alert else 'false'}\n")
+            handle.write(f"complete={'true' if result.complete else 'false'}\n")
     except OSError as exc:
         print(f"could not write $GITHUB_OUTPUT: {exc!r}")
 

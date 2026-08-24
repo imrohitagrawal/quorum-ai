@@ -332,17 +332,51 @@ def test_a_wellformed_declaration_parses(posture: ModuleType) -> None:
     assert parsed[0].covers(dt.datetime(2026, 8, 19, 12, 0, tzinfo=dt.UTC))
 
 
-def test_the_shipped_declaration_file_parses_and_declares_nothing(posture: ModuleType) -> None:
-    """The file this repository actually ships must be readable, and empty.
+def test_the_shipped_declaration_file_parses(posture: ModuleType) -> None:
+    """The file this repository ships must be READABLE.
 
-    Empty is the safe default: with no window declared, ANY live posture alerts.
+    It deliberately does NOT assert the list is empty. Review found that doing
+    so made the mechanism's own escape valve unmergeable: declaring a window is
+    exactly what the file, the refusal message and ADR-0070 all instruct, and
+    the file's README says expired entries stay as the record — so after the
+    first window ever declared there is no state in which it is empty again. A
+    guard that goes red on the sanctioned path is a guard somebody deletes.
 
-    RED IF: the shipped file is edited into something unparseable (which would
-    make the watchdog alert on every run and get it muted), or a window is left
-    declared in it after its work is done.
+    Whether the flag and the windows AGREE is a different question, and it is
+    asked by test_live_execution_posture_declaration.py against fly.toml.
+
+    RED IF: the shipped file is edited into something unparseable — which would
+    make the watchdog alert UNKNOWN on every run and get it muted.
     """
     parsed = posture.parse_windows(json.loads(SHIPPED_WINDOWS.read_text(encoding="utf-8")))
-    assert parsed == []
+    assert parsed is not None, "the shipped declaration file no longer parses"
+    assert isinstance(parsed, list)
+
+
+def test_the_shipped_declaration_file_declares_no_window_right_now(
+    posture: ModuleType,
+) -> None:
+    """No window may be OPEN in the tree unless the flag is on to match it.
+
+    This is the pair to the test above: parsing is not enough, because a window
+    left open sanctions a live posture nobody is attending. It is scoped to
+    "covers now", not "is empty", so an expired historical entry is fine — which
+    is what the file's README asks for.
+
+    RED IF: a window covering the present is committed while fly.toml has the
+    flag off, i.e. a declaration outlives the work it sanctioned.
+    """
+    parsed = posture.parse_windows(json.loads(SHIPPED_WINDOWS.read_text(encoding="utf-8")))
+    assert parsed is not None
+    now = dt.datetime.now(dt.UTC)
+    fly = (REPO_ROOT / "fly.toml").read_text(encoding="utf-8")
+    flag_on = 'OPENROUTER_LIVE_EXECUTION_ENABLED = "false"' not in fly
+    open_now = [w for w in parsed if w.covers(now)]
+    assert flag_on or not open_now, (
+        f"{len(open_now)} declared window(s) cover {now.isoformat()} while "
+        "fly.toml has live execution off — close the declaration, or the next "
+        "accidental 'true' is silently sanctioned."
+    )
 
 
 # --- The I/O layer, with a REAL body ---------------------------------------
@@ -429,7 +463,7 @@ def test_the_shipped_declaration_path_loads(posture: ModuleType) -> None:
 
     RED IF: ``DEFAULT_WINDOWS_PATH`` stops pointing at a real file.
     """
-    assert posture.load_windows(posture.DEFAULT_WINDOWS_PATH) == []
+    assert posture.load_windows(posture.DEFAULT_WINDOWS_PATH) is not None
 
 
 # --- C. It reports what it counted -----------------------------------------
@@ -674,36 +708,70 @@ def test_the_workflow_branches_on_the_key_this_script_writes() -> None:
     assert "exit 1" in _run_bodies()
 
 
-def test_the_alert_step_also_fires_when_the_check_step_crashed() -> None:
-    """A crash writes no outputs, so branching on ``should_alert`` alone would
-    skip the alert and leave a continue-on-error job green.
+#: Every step condition, in full. Asserted by EQUALITY, not by substring.
+#:
+#: Review broke the substring version two ways, each leaving the whole suite
+#: green: typo the fail step's terms (``outputs.shouldAlert`` /
+#: ``outcome == 'faliure'``) and the job is GREEN forever on a live posture; or
+#: AND an extra ``github.event_name == 'workflow_dispatch'`` into the alert
+#: step's condition and no scheduled run ever opens an issue. A substring
+#: assertion sees the terms it was told to look for and is blind to what else
+#: was joined to them — AGENTS.md rule 8, reappearing inside the new gate.
+_ALERT_CONDITION = (
+    "always() && (steps.posture.outputs.should_alert == 'true' || "
+    "steps.posture.outcome == 'failure')"
+)
+_RESOLVE_CONDITION = (
+    "always() && steps.posture.outcome == 'success' && "
+    "steps.posture.outputs.should_alert == 'false' && "
+    "steps.posture.outputs.complete == 'true'"
+)
 
-    RED IF: the ``outcome == 'failure'`` disjunct is dropped from the alert
-    step's ``if:``. Asserted against the PARSED step, not the file's raw text.
+
+def _condition(name: str) -> str:
+    step = [s for s in _steps() if name in str(s.get("name", ""))]
+    assert len(step) == 1, f"no unique step named like {name!r}"
+    return " ".join(str(step[0]["if"]).split())
+
+
+def test_the_alert_step_fires_on_exactly_these_conditions() -> None:
+    """The alert must fire on an alerting verdict AND on a crashed check — a
+    crash writes no outputs, so branching on ``should_alert`` alone would skip
+    the alert and leave a continue-on-error job green.
+
+    RED IF: either disjunct is dropped, OR any further term is ANDed in (which
+    is how a scheduled-run-only condition would silently disarm this).
     """
-    alert = [s for s in _steps() if "Alert on an undeclared" in str(s.get("name", ""))]
-    assert len(alert) == 1
-    condition = alert[0]["if"]
-    assert "steps.posture.outputs.should_alert == 'true'" in condition
-    assert "steps.posture.outcome == 'failure'" in condition
+    assert _condition("Alert on an undeclared") == _ALERT_CONDITION
 
 
-def test_the_resolve_step_requires_an_observed_reading() -> None:
-    """The posture alert closes only on a reading the check actually took.
+def test_the_fail_step_fires_on_exactly_the_same_conditions() -> None:
+    """The red job is the RECURRING signal — ADR-0070 deliberately does not
+    re-comment on the issue, so this is the only thing that repeats.
+
+    Nothing asserted this step's condition until review typo'd it two ways and
+    watched the whole suite stay green while the watchdog went permanently OK.
+
+    RED IF: the fail step's condition drifts from the alert step's by so much as
+    a character, so the watchdog can alert once and then report success forever.
+    """
+    assert _condition("Fail the job on an undeclared") == _ALERT_CONDITION
+
+
+def test_the_resolve_step_fires_on_exactly_these_conditions() -> None:
+    """The posture alert closes only on a reading the check actually took, that
+    is actually safe, and that saw every host.
 
     The sibling drift watchdog closes its issue as soon as a deploy succeeds,
-    which is precisely why it reported #357's drift RESOLVED at the moment the
-    money posture went live.
+    which is why it reported #357's drift RESOLVED at the moment the money
+    posture went live.
 
-    RED IF: the ``outcome == 'success'`` term is dropped — a crashed step writes
-    no outputs, and ``should_alert != 'true'`` is true of an empty string, so the
-    alert would be closed by a check that measured nothing.
+    RED IF: ``outcome == 'success'`` is dropped (a crashed step writes no
+    outputs, and ``should_alert != 'true'`` is true of an empty string); or
+    ``complete == 'true'`` is dropped, letting a cycle that read only some hosts
+    retire a standing money alert.
     """
-    resolve = [s for s in _steps() if "Resolve the posture alert" in str(s.get("name", ""))]
-    assert len(resolve) == 1
-    condition = resolve[0]["if"]
-    assert "steps.posture.outcome == 'success'" in condition
-    assert "steps.posture.outputs.should_alert == 'false'" in condition
+    assert _condition("Resolve the posture alert") == _RESOLVE_CONDITION
 
 
 def test_the_workflow_declares_the_permissions_it_uses() -> None:
@@ -718,3 +786,287 @@ def test_not_in_the_deploy_gate_required_set() -> None:
     gate = (REPO_ROOT / "scripts" / "deploy_gate.py").read_text(encoding="utf-8")
     assert "live-posture" not in gate
     assert "Live-execution posture" not in gate
+
+
+# --- F. The alert and resolve steps EXECUTED, with `gh` stubbed ------------
+#
+# Everything in section E is a structural assertion over parsed YAML. It cannot
+# see whether the shell in those steps actually RUNS — a `set -euo pipefail`
+# block with an unquoted expansion or a bad `printf` fails at runtime while
+# every structural test stays green, and the job is `continue-on-error` right up
+# until the fail step, so a broken alert step would lose the alert silently.
+# These extract the step bodies and execute them against a stub `gh`, asserting
+# on the exit code and on the commands the stub was asked to run.
+
+
+def _exec_step(name: str, tmp_path: Path, *, open_issue: str = "") -> tuple[int, str]:
+    step = [s for s in _steps() if name in str(s.get("name", ""))]
+    assert len(step) == 1, f"no unique step named like {name!r}"
+    log = tmp_path / "gh.log"
+    stub = tmp_path / "gh"
+    stub.write_text(
+        "#!/bin/sh\n"
+        f'printf "%s\\n" "$*" >> {log}\n'
+        'if [ "$1 $2" = "issue list" ]; then printf "%s" ' + f'"{open_issue}"' + "; fi\n",
+        encoding="utf-8",
+    )
+    stub.chmod(0o755)
+    import subprocess
+
+    proc = subprocess.run(  # noqa: S603 - fixed argv, no shell interpolation of input
+        ["/bin/bash", "-c", step[0]["run"]],
+        env={
+            "PATH": f"{tmp_path}:/usr/bin:/bin",
+            "GH_TOKEN": "stub",
+            "REPO": "owner/repo",
+            "DECISION": "live_undeclared",
+        },
+        capture_output=True,
+        text=True,
+        timeout=60,
+    )
+    return proc.returncode, log.read_text(encoding="utf-8") if log.exists() else ""
+
+
+def test_the_alert_step_opens_an_issue_when_none_is_open(tmp_path: Path) -> None:
+    """RED IF: the alert step's shell stops running clean, or stops calling
+    ``gh issue create`` — either loses the alert while the structural tests
+    above stay green."""
+    code, calls = _exec_step("Alert on an undeclared", tmp_path, open_issue="")
+    assert code == 0, calls
+    assert "issue create" in calls
+    assert "--label live-posture" in calls
+    # It must say what to do about the money, not merely that something is wrong.
+    assert "OPENROUTER_LIVE_EXECUTION_ENABLED" in calls
+    assert "live-execution-windows.json" in calls
+
+
+def test_the_alert_step_does_not_open_a_second_issue(tmp_path: Path) -> None:
+    """PARTNER: proves the create above is conditional, not unconditional.
+
+    RED IF: the already-open branch is dropped, so every 30-minute cycle files
+    another issue — which over a three-day posture is ~70 of them, and that is
+    how an alert gets muted.
+    """
+    code, calls = _exec_step("Alert on an undeclared", tmp_path, open_issue="4242")
+    assert code == 0, calls
+    assert "issue create" not in calls
+
+
+def test_the_resolve_step_closes_an_open_alert(tmp_path: Path) -> None:
+    """RED IF: the resolve step's shell breaks, so a posture alert stays open
+    after production is safe again and the signal decays into noise."""
+    code, calls = _exec_step("Resolve the posture alert", tmp_path, open_issue="4242")
+    assert code == 0, calls
+    assert "issue close 4242" in calls
+
+
+def test_the_resolve_step_is_a_no_op_with_nothing_open(tmp_path: Path) -> None:
+    """PARTNER: proves the close above is conditional.
+
+    RED IF: the guard is dropped and the step calls ``gh issue close`` with an
+    empty issue number on every quiet cycle.
+    """
+    code, calls = _exec_step("Resolve the posture alert", tmp_path, open_issue="")
+    assert code == 0, calls
+    assert "issue close" not in calls
+
+
+# --- G. The vocabulary, and the completeness signal ------------------------
+
+
+def test_the_known_states_match_the_app_exactly(posture: ModuleType) -> None:
+    """The script hardcodes the readiness vocabulary; the app defines it.
+
+    Nothing tied the two together until review pointed out the consequence: a
+    rename in ``readiness.py`` makes every reading UNKNOWN, so the watchdog goes
+    permanently RED and gets muted — failure mode 9 arriving through a rename.
+
+    RED IF: a state is added, removed or renamed in
+    ``src/product_app/readiness.py`` without the script following.
+    """
+    from typing import get_args
+
+    from product_app.readiness import ReadinessState
+
+    app_states = set(get_args(ReadinessState))
+    assert app_states, "ReadinessState has no members — this gate refuses to pass over nothing"
+    assert app_states == posture.KNOWN_READINESS_STATES
+    assert posture.FLAG_OFF_STATE in app_states
+
+
+def test_a_full_read_is_complete(posture: ModuleType) -> None:
+    """POSITIVE PARTNER: without it, ``complete`` could be hardcoded False and
+    the resolve step would never close anything.
+
+    RED IF: ``complete`` stops being computed from the reads.
+    """
+    result = posture.evaluate_posture(
+        readiness_states={_HOST_A: "offline_by_config", _HOST_B: "offline_by_config"},
+        windows=[],
+        now=_NOW,
+    )
+    assert result.complete is True
+    assert result.should_alert is False
+
+
+def test_a_partial_read_is_not_complete_and_says_so(posture: ModuleType) -> None:
+    """A cycle that read one host of two may be acted on, but must not RETIRE a
+    standing money alert.
+
+    Review found the original code returning OFF_AS_DECLARED here with a detail
+    line asserting "Every host reports offline_by_config" over a host it never
+    read — reporting health from a value that was never read, which is the
+    failure this script exists to prevent.
+
+    RED IF: ``complete`` stops tracking the unread hosts, or the detail goes back
+    to claiming something about a host that did not answer.
+    """
+    result = posture.evaluate_posture(
+        readiness_states={_HOST_A: "offline_by_config", _HOST_B: None},
+        windows=[],
+        now=_NOW,
+    )
+    assert result.decision is posture.PostureDecision.OFF_AS_DECLARED
+    assert result.complete is False
+    assert "did not answer" in result.detail
+    assert "may not close a standing alert" in result.detail
+
+
+def test_main_publishes_completeness_on_the_wire(
+    posture: ModuleType, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """RED IF: the ``complete=`` write is deleted or renamed — the resolve step
+    branches on it, and an absent output would make it permanently unable to
+    close a resolved alert (or, if the condition were inverted, able to close one
+    it never verified)."""
+    code, written = _run_main(
+        posture,
+        tmp_path,
+        monkeypatch,
+        body={"live_readiness": {"state": "offline_by_config"}},
+        windows_payload={"windows": []},
+    )
+    assert code == 0
+    assert "complete=true" in written
+
+
+def test_the_workflow_branches_on_the_completeness_key_this_script_writes() -> None:
+    """Both sides of the second wire, pinned together.
+
+    RED IF: the key is renamed on either side.
+    """
+    assert 'write(f"complete=' in SCRIPT.read_text(encoding="utf-8")
+    assert "steps.posture.outputs.complete" in WORKFLOW.read_text(encoding="utf-8")
+
+
+def test_a_non_utc_offset_is_normalised_for_display(posture: ModuleType) -> None:
+    """Any offset is accepted, and echoed back in UTC.
+
+    RED IF: the normalisation is removed, so an alert body prints an instant in
+    a zone the reader has to convert — the misreading that undermines the "a
+    far-future expiry is visible in a diff" argument.
+    """
+    parsed = posture.parse_windows(
+        {
+            "windows": [
+                {
+                    "owner": "rohit",
+                    "reason": "y",
+                    "opened_at": "2026-08-25T00:00:00+05:30",
+                    "expires_at": "2026-08-26T00:00:00-12:00",
+                }
+            ]
+        }
+    )
+    assert parsed is not None
+    assert parsed[0].expires_at.isoformat() == "2026-08-26T12:00:00+00:00"
+    assert parsed[0].opened_at.isoformat() == "2026-08-24T18:30:00+00:00"
+
+
+def test_deploy_md_tells_the_operator_to_declare_the_window() -> None:
+    """The runbook is the ONE document that turns this flag on.
+
+    Review found it unchanged: an operator following it would trip the watchdog
+    every sanctioned time, which is exactly the crying-wolf failure the
+    declaration exists to prevent. The quiet path has to be discoverable from
+    where the flag is actually set.
+
+    RED IF: the declaration step is dropped from DEPLOY.md, or the file it names
+    is renamed without the runbook following.
+    """
+    deploy = (REPO_ROOT / "DEPLOY.md").read_text(encoding="utf-8")
+    assert "configs/live-execution-windows.json" in deploy
+    assert "live-posture-watchdog.yml" in deploy
+    # The observability monitor table must list it too, or nothing outside
+    # ADR-0070 records that this monitor is supposed to be running.
+    observability = (REPO_ROOT / "docs" / "80-observability.md").read_text(encoding="utf-8")
+    assert "live-posture-watchdog.yml" in observability
+
+
+def test_overlapping_windows_report_when_cover_actually_ends(posture: ModuleType) -> None:
+    """With two active windows, the remaining time is the LATEST expiry.
+
+    Review measured a 24-hour window reported as "0.1h remaining" because a
+    shorter sibling was listed first. The verdict was right; the number an
+    operator would plan around was not.
+
+    RED IF: the active window is picked by file order again.
+    """
+    short = posture.DeclaredWindow(
+        owner="a",
+        reason="short",
+        opened_at=dt.datetime(2026, 8, 25, 11, 0, tzinfo=dt.UTC),
+        expires_at=dt.datetime(2026, 8, 25, 12, 6, tzinfo=dt.UTC),
+    )
+    long = posture.DeclaredWindow(
+        owner="b",
+        reason="long",
+        opened_at=dt.datetime(2026, 8, 25, 11, 0, tzinfo=dt.UTC),
+        expires_at=dt.datetime(2026, 8, 26, 12, 0, tzinfo=dt.UTC),
+    )
+    result = posture.evaluate_posture(
+        readiness_states={_HOST_A: "live"}, windows=[short, long], now=_NOW
+    )
+    assert result.decision is posture.PostureDecision.LIVE_WITHIN_DECLARED_WINDOW
+    assert "'b'" in result.detail
+    assert "24.0h remaining" in result.detail
+
+
+def test_the_alert_title_names_the_decision_and_asserts_no_posture(
+    tmp_path: Path,
+) -> None:
+    """``unknown`` alerts too, and an unparseable declaration file would file an
+    issue every 30 minutes titled "Live execution is on" while the flag was OFF.
+    That is the repo's own "never report a value that was never read" rule
+    pointed the wrong way, and it is how a real alert learns to be ignored.
+
+    RED IF: the title goes back to asserting a posture the check may not have
+    established, or stops naming the decision.
+    """
+    import subprocess
+
+    log = tmp_path / "gh.log"
+    stub = tmp_path / "gh"
+    stub.write_text(f'#!/bin/sh\nprintf "%s\\n" "$*" >> {log}\n', encoding="utf-8")
+    stub.chmod(0o755)
+    step = [s for s in _steps() if "Alert on an undeclared" in str(s.get("name", ""))]
+    assert len(step) == 1
+    proc = subprocess.run(  # noqa: S603 - fixed argv, no shell interpolation of input
+        ["/bin/bash", "-c", step[0]["run"]],
+        env={
+            "PATH": f"{tmp_path}:/usr/bin:/bin",
+            "GH_TOKEN": "stub",
+            "REPO": "owner/repo",
+            "DECISION": "unknown",
+        },
+        capture_output=True,
+        text=True,
+        timeout=60,
+    )
+    assert proc.returncode == 0, proc.stderr
+    calls = log.read_text(encoding="utf-8")
+    title = [line for line in calls.splitlines() if "issue create" in line]
+    assert title, calls
+    assert "--title Live-execution posture needs attention: unknown" in title[0]
+    assert "Live execution is on" not in title[0]

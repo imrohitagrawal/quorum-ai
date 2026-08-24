@@ -51,6 +51,10 @@ concurrency:
 jobs:
   posture:
     runs-on: ubuntu-latest
+    # The script's own budget is ~60s (2 hosts x 3 attempts x 10s, plus sleeps).
+    # This is the outer bound so a hung runner cannot hold the concurrency group
+    # — `cancel-in-progress: false` means a stuck run blocks every later cycle.
+    timeout-minutes: 10
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -80,12 +84,16 @@ jobs:
         run: |
           set -euo pipefail
           BODY=$(printf '%s\n' \
-            "Automated **live-execution posture** alert (decision: \`${DECISION:-crashed-before-reporting}\`)." \
+            "Automated **live-execution posture** alert." \
             "" \
-            "Production reports a money-spending posture that no declared window covers," \
-            "or the check could not determine the posture at all." \
+            "The check's verdict is \`${DECISION:-crashed-before-reporting}\`. Two alerting verdicts" \
+            "(\`live_undeclared\`, \`live_past_declared_window\`) mean production IS in a" \
+            "money-spending posture nobody declared. The third (\`unknown\`) means the check" \
+            "could not establish the posture at all — a host was unreachable, a state was" \
+            "unrecognised, or the declaration file did not parse. That is treated as equally" \
+            "urgent on purpose: a check that cannot tell must not read as healthy." \
             "" \
-            "**Every visitor to \`/ui\` can spend real money while this stands.** The bound" \
+            "**While a live posture stands, every visitor to \`/ui\` spends real money.** The bound" \
             "is \`GLOBAL_DAILY_CEILING_USD\` (\$5.00/day) and that ceiling RESETS DAILY, so" \
             "unnoticed the exposure renews indefinitely." \
             "" \
@@ -106,16 +114,27 @@ jobs:
             echo "posture alert #$NUM is already open; not commenting again (see the alert-volume note in this file)."
           else
             gh label create live-posture --repo "$REPO" --color B60205 --description "Automated live-execution posture alerts" 2>/dev/null || true
-            gh issue create --repo "$REPO" --title "Live execution is on and no declared window covers it" --label live-posture --body "$BODY"
+            # The title carries the DECISION rather than asserting a posture the
+            # check may not have established. `unknown` alerts too — an
+            # unparseable declaration file would otherwise file an issue titled
+            # "Live execution is on" while the flag was off, every 30 minutes,
+            # which is how a real alert learns to be ignored.
+            gh issue create --repo "$REPO" --title "Live-execution posture needs attention: ${DECISION:-crashed-before-reporting}" --label live-posture --body "$BODY"
           fi
 
       - name: Resolve the posture alert on an observed safe reading
-        # Only a reading the check actually took may close this. Note the
-        # `outcome == 'success'` term: a crashed step writes no outputs, and
-        # `should_alert != 'true'` would then be true of an empty string.
+        # Only a reading the check actually took may close this, and only a
+        # COMPLETE one. Three terms, each load-bearing:
+        #   * `outcome == 'success'` — a crashed step writes no outputs, and
+        #     `should_alert != 'true'` would then be true of an empty string.
+        #   * `should_alert == 'false'` — the posture must actually be safe.
+        #   * `complete == 'true'` — a cycle that read only some of the hosts
+        #     may be acted on but must not RETIRE a standing money alert. That
+        #     is the one thing a half-blind cycle must never do.
         if: >-
           always() && steps.posture.outcome == 'success' &&
-          steps.posture.outputs.should_alert == 'false'
+          steps.posture.outputs.should_alert == 'false' &&
+          steps.posture.outputs.complete == 'true'
         env:
           GH_TOKEN: ${{ github.token }}
           REPO: ${{ github.repository }}
