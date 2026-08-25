@@ -48,3 +48,19 @@ advisory mutation job (`scope.txt` empty). Not silent; honest-empty by design.
 - Rule 10's tooling has a measured blind spot: a **non-negated** closing keyword the author did not intend
   passes both `make close-guard` and the CI body check, because both only refuse negation. `close-guard`
   does print the issue it will close; the protection is the human reading that line.
+
+## Outcome, after the audit
+
+PR #371 was **closed unmerged** at 11:21 UTC on 2026-08-25, on the human's decision taken in a second
+session: the defect stands, but an 867-line inventory guard is disproportionate to a hole in an
+**advisory** gate that has produced one real score in its history and, per
+`docs/metrics/defect-discovery-audit.md`, has caught 0 of 16 `src/` defects. #369 was re-scoped to
+printing the `[decorated]` note the scope step already emits (roughly ten lines). The branch and
+worktree were removed by that session; the work remains reachable at `refs/pull/371/head`.
+
+This does not change the row: Phase F audits whether the protocol was followed, and it was, 12 of 14.
+What it exposes is a gap the fourteen rules do not cover — **none of them asks whether the fix is
+proportionate to the gate's measured yield**, which is the rule the repository's own "before adding a
+gate" paragraph states and which this package's three planners and five reviewers did not raise. The
+protocol was followed and still produced a pull request the human would not merge; proportionality is
+a candidate fifteenth rule, for the human to decide.
