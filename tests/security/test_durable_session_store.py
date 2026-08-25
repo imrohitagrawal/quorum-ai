@@ -435,3 +435,38 @@ def test_the_repository_works_with_no_durable_store_at_all() -> None:
     assert repository.purge_expired() == (0, 0)
     repository.revoke(session.session_id)
     repository.clear()
+
+
+def test_a_boot_that_cannot_open_the_sink_still_serves_sessions(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    """RED IF a failed boot-time open raises, or falls back silently.
+
+    This is the branch the whole design rests on: the app must come up with
+    in-process sessions rather than not come up. It is also the branch an
+    operator has to be told about, because the symptom — visitors quietly
+    losing their session on every restart — looks exactly like the bug
+    ADR-0073 fixed rather than like a volume fault.
+    """
+    from product_app import main
+
+    unopenable = tmp_path / "not-a-directory" / "sessions.sqlite3"
+    unopenable.parent.write_text("this is a file, so it cannot hold a database")
+    monkeypatch.setenv("SESSION_DB_PATH", str(unopenable))
+    session_store.configure(None)
+
+    with caplog.at_level("ERROR", logger="product_app.main"):
+        main._configure_session_store()  # must NOT raise
+
+    assert session_store.get_store() is None, (
+        "positive partner: the open really did fail, so the assertions below "
+        "are not passing over a healthy store"
+    )
+    messages = [r.getMessage() for r in caplog.records if r.levelname == "ERROR"]
+    assert any("could not open" in m and "will NOT survive a restart" in m for m in messages), (
+        f"the operator must be told what the degradation costs; got {messages}"
+    )
+
+    repository = auth.SessionRepository()
+    session = repository.create(account_id=ACCOUNT)
+    assert repository.get(session.session_id) is not None, "sessions still work"
