@@ -1839,6 +1839,8 @@ def _adr_dir(tmp_path: Path, records: dict[str, str]) -> Path:
     return directory
 
 
+_MARKER = "**Authorises:** OPENROUTER_LIVE_EXECUTION_ENABLED"
+
 _AUTHORISING = (
     "# ADR-0099: We are permanently live\n\n## Status\n\nAccepted — 2026-09-01.\n\n"
     "**Authorises:** OPENROUTER_LIVE_EXECUTION_ENABLED\n"
@@ -2604,27 +2606,55 @@ def test_a_short_fresh_window_cannot_hide_a_long_stale_one(
     assert "'rohit'" in result.detail
 
 
-def test_the_governing_window_is_the_one_that_must_declare_the_judge(
-    posture: ModuleType,
-) -> None:
-    """The same evasion, judge half: setting `judge: true` on a short unrelated
-    window silenced the judge check for a long window that omitted it.
+def test_any_covering_window_may_declare_the_judge(posture: ModuleType) -> None:
+    """The judge question is EXISTENTIAL, and getting this wrong cost two rounds.
 
-    RED IF: the judge comparison is decided by `any()` over covering windows.
+    Round 1: `any()` over covering windows — a decoy could satisfy it.
+    Round 2: narrowed to the governing window — which then ALERTED while a
+    covering window DID declare the judge, a manufactured false red one check
+    away from the defect the narrowing was meant to fix.
+
+    The resolution is that the two questions have different shapes. "Is anybody
+    still watching?" is universal — EVERY covering window must be attended, so
+    no decoy helps. "Did somebody declare the judge?" is existential: a window
+    saying `"judge": true` IS the record, written by a named owner in a
+    reviewable commit, and that is the whole point of the field.
+
+    RED IF: the judge check narrows to one window again.
     """
-    decoy = _window(posture, opened=_NOW_OPEN, expires=_NOW_SHUT, owner="bob", judge=True)
+    short = _window(posture, opened=_NOW_OPEN, expires=_NOW_SHUT, owner="bob", judge=True)
     long_no_judge = _window(
         posture, opened=_NOW_OPEN, expires=_FUTURE_SHUT, owner="rohit", judge=False, issue=105
     )
     result = posture.evaluate_posture(
         readiness_states={_HOST_A: "live"},
-        windows=[decoy, long_no_judge],
+        windows=[short, long_no_judge],
+        now=_NOW,
+        judge_states={_HOST_B: True},
+        reaffirmations=_reaffirmed(posture, window=long_no_judge, hours_ago=1, now=_NOW),
+    )
+    assert result.decision is posture.PostureDecision.LIVE_WITHIN_DECLARED_WINDOW
+    assert result.should_alert is False
+
+
+def test_no_covering_window_declaring_the_judge_alerts(posture: ModuleType) -> None:
+    """POSITIVE PARTNER: flip the ONE boolean and it must alert.
+
+    RED IF: the judge comparison stops depending on the declarations at all.
+    """
+    short = _window(posture, opened=_NOW_OPEN, expires=_NOW_SHUT, owner="bob", judge=False)
+    long_no_judge = _window(
+        posture, opened=_NOW_OPEN, expires=_FUTURE_SHUT, owner="rohit", judge=False, issue=105
+    )
+    result = posture.evaluate_posture(
+        readiness_states={_HOST_A: "live"},
+        windows=[short, long_no_judge],
         now=_NOW,
         judge_states={_HOST_B: True},
         reaffirmations=_reaffirmed(posture, window=long_no_judge, hours_ago=1, now=_NOW),
     )
     assert result.decision is posture.PostureDecision.LIVE_JUDGE_UNDECLARED
-    assert "'rohit'" in result.detail
+    assert result.should_alert is True
 
 
 def test_a_secondary_windows_unreadable_issue_does_not_fire_an_alert(
@@ -2897,3 +2927,299 @@ def test_the_posture_step_is_given_a_github_token() -> None:
     assert "GH_TOKEN" in (step[0].get("env") or {})
     # ...and the job must still not be able to WRITE the declaration it polices.
     assert _load_workflow()["permissions"]["contents"] == "read"
+
+
+# --- M. What ROUND TWO broke in round one's fixes -------------------------
+#
+# The rulebook says "expect your own fix to introduce a defect — budget a round
+# for it". It did. Every test below pins a defect that round one's fix either
+# introduced or failed to close.
+
+
+def test_an_expires_at_tie_cannot_re_arm_the_decoy(posture: ModuleType) -> None:
+    """ROUND-1 FIX RE-ARMED. Round one picked `max(active, key=_cover_ends)` as
+    the governing window, and `max` returns the FIRST maximal element — so
+    giving a decoy the IDENTICAL `expires_at` put it first and silenced an
+    eight-day-stale window again. Reordering two objects in a JSON file flipped
+    a money alert with nothing else changing.
+
+    Fixed by removing the tie entirely: EVERY covering window must be attended.
+
+    RED IF: attention narrows to one representative window again.
+    """
+    stale = _window(posture, opened=_OLD_OPEN, expires=_FUTURE_SHUT, owner="rohit", issue=105)
+    decoy = _window(posture, opened=_NOW_OPEN, expires=_FUTURE_SHUT, owner="bob")
+    for order in ([decoy, stale], [stale, decoy]):
+        result = posture.evaluate_posture(
+            readiness_states={_HOST_A: "live"},
+            windows=order,
+            now=_NOW,
+            reaffirmations={105: []},
+        )
+        assert result.decision is posture.PostureDecision.LIVE_REAFFIRMATION_LAPSED, order
+        assert result.should_alert is True
+
+
+def test_two_standing_windows_cannot_shadow_each_other(posture: ModuleType) -> None:
+    """The same defect in its worst form: `_cover_ends` is the same sentinel for
+    EVERY standing window, so two of them always tied and file order decided
+    unconditionally.
+
+    RED IF: a stale standing window can be hidden behind a fresh one.
+    """
+    stale = _standing(posture, opened=_OLD_OPEN, adr="ADR-0099", issue=105)
+    fresh = _standing(posture, opened=_NOW_OPEN, adr="ADR-0099", issue=400)
+    for order in ([fresh, stale], [stale, fresh]):
+        result = posture.evaluate_posture(
+            readiness_states={_HOST_A: "live"},
+            windows=order,
+            now=_NOW,
+            reaffirmations={105: [], **_reaffirmed(posture, window=fresh, hours_ago=1, now=_NOW)},
+        )
+        assert result.decision is posture.PostureDecision.LIVE_REAFFIRMATION_LAPSED, order
+
+
+def test_the_verdict_does_not_depend_on_declaration_order(posture: ModuleType) -> None:
+    """POSITIVE PARTNER for the two above: when everything IS attended, the
+    verdict must be quiet in either order — otherwise "order never matters"
+    would be satisfied by a check that always alerts.
+
+    RED IF: the decision becomes order-sensitive in the quiet direction.
+    """
+    a = _window(posture, opened=_NOW_OPEN, expires=_FUTURE_SHUT, owner="rohit", issue=105)
+    b = _window(posture, opened=_NOW_OPEN, expires=_FUTURE_SHUT, owner="bob", issue=400)
+    reaff = {
+        **_reaffirmed(posture, window=a, hours_ago=1, now=_NOW),
+        **_reaffirmed(posture, window=b, hours_ago=1, now=_NOW),
+    }
+    # _reaffirmed keys by issue, and both windows share an opened_at, so patch
+    # the owner on b's entry.
+    reaff[400] = [
+        posture.Reaffirmation(
+            at=_NOW - dt.timedelta(hours=1), by="bob", window_opened_at=b.opened_at
+        )
+    ]
+    for order in ([a, b], [b, a]):
+        result = posture.evaluate_posture(
+            readiness_states={_HOST_A: "live"}, windows=order, now=_NOW, reaffirmations=reaff
+        )
+        assert result.should_alert is False, order
+
+
+@pytest.mark.parametrize(
+    "status",
+    [
+        # The one that made this mechanism refuse ITS OWN record: "pending" is
+        # inside "money-spending", which is this package's house vocabulary.
+        "Accepted — 2026-08-25. Follows the money-spending posture ADR.",
+        "Accepted. Governs live spending.",
+        "Accepted — depending on nothing.",
+        "Accepted. Replaced nothing.",
+        "Accepted — 2026-09-01. Suspending the old rule.",
+    ],
+)
+def test_an_innocent_word_containing_a_revoked_marker_still_authorises(
+    posture: ModuleType, tmp_path: Path, status: str
+) -> None:
+    """A gate that refuses a LEGITIMATE authorisation is a gate somebody deletes.
+
+    Round one matched the revoked-status markers as substrings, so `"pending"`
+    inside `"money-spending"` refused ADR-0071 itself — exactly the documents
+    that would ever authorise a live posture. AGENTS.md rule 8, inside the gate
+    written to enforce it.
+
+    RED IF: the markers go back to substring matching.
+    """
+    text = f"# ADR-0099: x\n\n## Status\n\n{status}\n\n{_MARKER}\n"
+    assert posture.authorising_adrs(_adr_dir(tmp_path, {"0099-x.md": text})) == frozenset(
+        {"ADR-0099"}
+    ), status
+
+
+def test_only_the_three_genuinely_revoked_adrs_in_this_tree_are_refused(
+    posture: ModuleType,
+) -> None:
+    """The false-positive floor, measured against the REAL corpus.
+
+    Every ADR here is Accepted except three, and a status check that refuses
+    more than those three is refusing legitimate records.
+
+    RED IF: a revoked marker starts matching an ordinary Accepted status — or a
+    genuinely revoked one stops being caught.
+    """
+    import re as _re
+
+    adr_dir = REPO_ROOT / "docs" / "adr"
+    records = sorted(adr_dir.glob("[0-9]*.md"))
+    assert len(records) >= 40, "this gate refuses to pass over nothing"
+    refused = []
+    for path in records:
+        status = _re.search(r"^## Status\s*\n+([^\n]+)", path.read_text(encoding="utf-8"), _re.M)
+        if status and not posture._adr_status_is_live(status.group(1)):
+            refused.append(path.name.split("-")[0])
+    assert sorted(refused) == ["0001", "0014", "0060"], (
+        f"expected exactly ADR-0001 (Superseded), ADR-0014 (Proposed) and "
+        f"ADR-0060 (Reverted) to be refused; got {sorted(refused)}"
+    )
+
+
+@pytest.mark.parametrize(
+    ("label", "body"),
+    [
+        # The round-1 HTML-comment evasion, reopened: the flag was set on "<!--"
+        # and cleared by ANY "-->" on the same line, so a second comment opened
+        # on that line left it clear.
+        ("a reopened HTML comment", "<!-- a --> <!-- note\n{marker}\n-->"),
+        # A plain tilde fence — the other standard fence marker.
+        ("a tilde-fenced block", "~~~\n{marker}\n~~~"),
+        # A ``` block "closed" by a stray ~~~ line, or the reverse.
+        ("a fence closed by the other marker", "~~~\nx\n```\n{marker}\n```"),
+        # The other standard way Markdown quotes a line — and the one that
+        # happens by accident.
+        ("a four-space indented code block", "    {marker}"),
+        ("a tab-indented code block", "\t{marker}"),
+        ("a <pre> block", "<pre>\n{marker}\n</pre>"),
+    ],
+)
+def test_the_marker_does_not_authorise_from_a_quoted_region(
+    posture: ModuleType, tmp_path: Path, label: str, body: str
+) -> None:
+    """Five more ways to put the marker's exact bytes in a file while committing
+    to nothing. Round one closed two of these shapes and left these five open,
+    including the HTML-comment evasion through a different door.
+
+    RED IF: any branch of `_strip_uncommitted_prose` is removed.
+    """
+    text = f"# ADR-0099: x\n\n## Status\n\nAccepted.\n\n{body.format(marker=_MARKER)}\n"
+    assert posture.authorising_adrs(_adr_dir(tmp_path, {"0099-x.md": text})) == frozenset(), label
+
+
+def test_a_genuine_marker_beside_a_quoted_one_still_authorises(
+    posture: ModuleType, tmp_path: Path
+) -> None:
+    """POSITIVE PARTNER for all five rows above — without it, a stripper that
+    deleted the whole file would satisfy every one of them.
+
+    RED IF: the stripper starts swallowing content after a quoted region.
+    """
+    text = (
+        "# ADR-0099: x\n\n## Status\n\nAccepted.\n\n"
+        f"Here is what the line looks like:\n\n```\n{_MARKER}\n```\n\n"
+        f"And here it is meant:\n\n{_MARKER}\n"
+    )
+    assert posture.authorising_adrs(_adr_dir(tmp_path, {"0099-x.md": text})) == frozenset(
+        {"ADR-0099"}
+    )
+
+
+def test_a_status_that_merely_mentions_acceptance_does_not_authorise(
+    posture: ModuleType, tmp_path: Path
+) -> None:
+    """SURVIVED MUTATION: `startswith("accepted")` relaxed to `"accepted" in
+    lowered` left the whole suite green, and the real corpus does not catch it
+    because ADR-0014's `Proposed` line contains no "accepted".
+
+    RED IF: the status check stops requiring the line to OPEN with Accepted.
+    """
+    for status in (
+        "Proposed — 2026-09-01. To be accepted after review.",
+        "Rejected — 2026-09-01; ADR-0099 was accepted instead.",
+    ):
+        text = f"# ADR-0098: x\n\n## Status\n\n{status}\n\n{_MARKER}\n"
+        assert posture.authorising_adrs(_adr_dir(tmp_path, {"0098-x.md": text})) == frozenset(), (
+            status
+        )
+
+
+def test_the_token_must_start_the_line_proven_against_a_real_substring_search(
+    posture: ModuleType,
+) -> None:
+    """SURVIVED MUTATION, AND THE ROUND-1 TEST FOR IT PASSED FOR THE WRONG REASON.
+
+    The earlier test used a body where a substring implementation would slice
+    from offset 0 and produce garbage, so it went green against an implementation
+    that did exactly what it claimed to forbid. This body is built so a real
+    substring search (slice from the token's POSITION) WOULD extract a valid
+    instant — so only a genuine "must start the line" rule refuses it.
+
+    RED IF: the token match is loosened to a substring search.
+    """
+    body = "x" * 23 + " 2026-08-20T12:00:00+00:00 and by the way REAFFIRM live-execution"
+    assert posture._reaffirmed_instant(body) is None
+    # POSITIVE PARTNER: the same instant, at the start of the line, IS read.
+    assert posture._reaffirmed_instant(
+        "REAFFIRM live-execution 2026-08-20T12:00:00+00:00"
+    ) == dt.datetime(2026, 8, 20, 12, 0, tzinfo=dt.UTC)
+
+
+@pytest.mark.parametrize(
+    ("owner", "accepted"),
+    [
+        ("rohit", True),
+        ("@rohit", True),
+        ("some-user-99", True),
+        # A DISPLAY NAME. It parsed, covered, and then lapsed forever: the
+        # operator commented exactly as the alert instructed and nothing
+        # changed, with no message saying why.
+        ("Rohit Agrawal", False),
+        ("rohit agrawal", False),
+        ("rohit@example.com", False),
+        ("-leading-hyphen", False),
+        ("trailing-hyphen-", False),
+        ("a" * 40, False),
+    ],
+)
+def test_the_owner_must_be_something_a_comment_author_could_match(
+    posture: ModuleType, owner: str, accepted: bool
+) -> None:
+    """`owner` is compared against a GitHub `user.login`, so it has to BE one.
+
+    RED IF: the login shape stops being validated, so a window can be declared
+    that no comment can ever re-affirm.
+    """
+    entry = {
+        "owner": owner,
+        "reason": "r",
+        "mode": "time_boxed",
+        "judge": False,
+        "opened_at": _NOW_OPEN,
+        "expires_at": _NOW_SHUT,
+    }
+    parsed = posture.parse_windows({"windows": [entry]})
+    assert (parsed is not None) is accepted, owner
+
+
+def test_the_span_that_needs_an_issue_is_pinned_at_the_exact_boundary(
+    posture: ModuleType,
+) -> None:
+    """Rule 7a: literals on both sides, never against the constant.
+
+    The ATTENDANCE boundary was pinned in round one; its twin — the SPAN
+    boundary that decides whether a window must name an issue — was not, and
+    `>` → `>=` survived.
+
+    RED IF: the span comparison flips its strictness.
+    """
+    base = {
+        "owner": "rohit",
+        "reason": "r",
+        "mode": "time_boxed",
+        "judge": False,
+        "opened_at": "2026-08-25T00:00:00+00:00",
+    }
+    # Exactly 24 hours: no issue needed.
+    assert (
+        posture.parse_windows({"windows": [base | {"expires_at": "2026-08-26T00:00:00+00:00"}]})
+        is not None
+    )
+    # One second past 24 hours: an issue is required.
+    assert (
+        posture.parse_windows({"windows": [base | {"expires_at": "2026-08-26T00:00:01+00:00"}]})
+        is None
+    )
+    assert (
+        posture.parse_windows(
+            {"windows": [base | {"expires_at": "2026-08-26T00:00:01+00:00", "reaffirm_issue": 105}]}
+        )
+        is not None
+    )

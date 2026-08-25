@@ -303,7 +303,7 @@ Every row run by me in this worktree on 2026-08-25 unless marked INHERITED.
 | ADR-0070's eight-row truth table, before | the real script over `file:` fixtures | all 8 rows as ADR-0070 records |
 | ...and after | same harness | **all 8 unchanged**, and now pinned by `test_the_adr_0070_truth_table_still_holds` so nothing can silently move them again |
 | Do the NEW behaviours fire? | 14 fixture-driven demonstrations of the real script | **14 of 14** — lapse alerts, fresh is silent, a Bot comment does not re-affirm, a forward-dated one does not, `standing` reports, `standing` still lapses, three bad ADR citations refused, judge-undeclared alerts, judge-declared is silent, judge-on-live-off reports, judge unreadable fails closed while live and stays quiet while off |
-| Is any commit signed? | `git log --all --format='%G?' \| sort \| uniq -c` | **371 N** on this branch — none. `gpg` is not installed on this box, which is part of why; the branch-protection row below is the independent check |
+| Is any commit signed? | `git log --all --format='%G?' \| sort -u` | **`N`, and only `N`** — a single distinct value over every commit. Stated as the distinct SET rather than a count on purpose: the earlier draft said "371 N", which counted the commit that wrote the number and so self-invalidated on the next one. (`gpg` is not installed on this box, which is part of why the value is `N`; the branch-protection row below is the independent check) |
 | Who commits? | `git log --all --format='%ce' \| sort \| uniq -c` | **234** are `noreply@github.com` — the squash-merge path |
 | Are reviews or signatures required? | `gh api repos/:owner/:repo/branches/main/protection` | `required_approving_review_count: 0`, `required_signatures.enabled: false` |
 | Is a comment's author type forgeable? | `gh api repos/:owner/:repo/issues/351/comments` | **11 of 11** `"type": "Bot"` — server-set |
@@ -313,9 +313,11 @@ Every row run by me in this worktree on 2026-08-25 unless marked INHERITED.
 | Does `/ready` carry anything about the judge? | `curl -s https://quorum-ai.fly.dev/ready` | **three** top-level keys — `status`, `environment`, `live_readiness` — none judge-bearing, which is why the judge is read from `/status` |
 | What does production report? | `curl -s https://quorum-ai.fly.dev/status` | `live_execution: false`, `judge_enabled: **true**` |
 | Judge config in `fly.toml`? | `git grep -i judge origin/main -- fly.toml` — **scoped on purpose**: this diff added the word "judge" to that file's comments, so the unscoped form now matches and refutes itself | **exit 1** — no judge configuration, so no pre-merge gate can see it |
-| Does `direction=desc` order the comments read? | `gh api '.../issues/351/comments?per_page=100&sort=created&direction=desc'` | **IGNORED** — byte-identical to the unsorted call, both oldest-first. The obvious fix does NOT work; `since` does (11 comments → 5 with a mid-thread cutoff, → 0 with a future one) |
+| Does `direction=desc` order the comments read? | `gh api '.../issues/351/comments?per_page=100&sort=created&direction=desc'` | **IGNORED** — byte-identical to the unsorted call, both oldest-first. The obvious fix does NOT work |
+| Does `since` work? | `gh api '.../issues/351/comments?per_page=100&since=2026-08-19T15:00:00Z'` | **11 → 5**. With `since=2027-01-01T00:00:00Z`, **0**. The cutoff is named because the earlier draft said "a mid-thread cutoff" and review could not re-derive the figure |
 | Does a workflow-token comment carry an app? | `gh api '.../issues/351/comments?per_page=1'` | `performed_via_github_app` is the **whole GitHub Actions app object** — a second CI signal that `user.type` alone does not give |
-| Demonstrated evasions, re-run against the fix | scratch harness driving the real script | **20 of 20 BLOCKED**; the 21st (`opened_at` bumped by commit) is NOT blocked and is row 15a |
+| Demonstrated evasions, re-run against the fix | a session harness driving the real script over `file:` fixtures | every one blocked EXCEPT `opened_at` bumped by commit (row 15a). **The harness is not in the tree, so treat that as a session measurement, not a reproducible claim** — the durable evidence is that each evasion now has a named test in `tests/unit/test_live_posture_check.py` sections L and M, and a mutation row proving that test bites |
+| Mutations, across BOTH review rounds | `cp` aside → mutate → run → restore → `diff -q` | **46 of 46 killed** — 34 after round one, 12 more after round two |
 | Judge inertness pinned? | `uv run pytest tests/integration/test_judge_never_spends_on_a_run_that_must_not_spend.py` | **9 passed** |
 | Are the tests hermetic? | the suite's wall clock | an early revision defaulted `main`'s `/status` probe to production and the suite took **103s**; with every URL a `file:` fixture it is **2.8s**. No test touches production |
 
@@ -430,6 +432,24 @@ correct, which would be a lie and would teach the next reader nothing.
 | `main`'s re-affirmation fetch | SURVIVED; severing it flipped quiet → money alert with 204 passing. The whole feature was untested at the wire | FIXED — wire test plus partner |
 | `opened_at` resets the clock | see row 15a | **NOT FIXED.** Bounded and reported |
 
+### Round two — because round one's fixes introduced defects of their own
+
+The rulebook says "expect your own fix to introduce a defect — budget a round
+for it." That is exactly what happened, and two round-one findings turned out
+not to be closed at all.
+
+| Found in round two | Status |
+|---|---|
+| **The decoy evasion was RE-ARMED by an `expires_at` tie.** Round one picked `max(active, key=_cover_ends)`, and `max` returns the FIRST maximal element — so giving the decoy an identical expiry put it first and silenced the stale window again. Two STANDING windows always tie (`_cover_ends` is the same sentinel), so reordering two objects in a JSON file flipped a money alert | FIXED by removing the tie: **every** covering window must be attended |
+| **The judge fix manufactured a false alert.** Narrowing the judge to the governing window made the check fire while a covering window DID declare the judge | FIXED: attention is universal, the judge declaration is existential. Two different questions, two different quantifiers |
+| **`"pending"` is a substring of `"money-spending"`, so the status check refused ADR-0071 ITSELF** — and would refuse any ADR using this package's house vocabulary. Rule 8's substring trap, inside the gate written to enforce rule 8 | FIXED: word-boundary matching, pinned against the real 69-record corpus so exactly ADR-0001, ADR-0014 and ADR-0060 are refused and nothing else |
+| **Four fail-OPEN holes remained in the prose stripper**, including the HTML-comment evasion reopened through `<!-- a --> <!-- note` — a second comment opened on a line whose first comment closed. Plus a `~~~` fence, a four-space indented block and `<pre>` | FIXED, all four, each with a test and a mutation |
+| **A display-name `owner` made a window permanently un-re-affirmable, silently.** The operator would comment exactly as the alert instructed and nothing would change, with no message saying why — which is how an alarm gets muted | FIXED: `owner` must match GitHub's login shape, refused loudly if not |
+| **`test_the_token_must_START_the_line` passed for the WRONG REASON.** Its body was one where a substring implementation slices from offset 0 and produces garbage, so it went green against exactly the implementation it claimed to forbid | FIXED with a body a real substring search WOULD parse |
+| Three more mutants survived: the status `startswith`, the span boundary (rule 7a, the twin of a boundary round one had already pinned), and the token match above | all three now bite |
+
+
+
 ## The bite table
 
 Each mutation `cp` aside, applied, RUN, restored from the copy, and confirmed
@@ -442,7 +462,11 @@ initially read as survivors. Baseline for every row: **241 passed** on
 `tests/unit/test_live_posture_check.py` and
 `tests/unit/test_live_execution_posture_declaration.py`.
 
-**34 of 34 killed.**
+**46 of 46 killed across two rounds** — the 34 below after round one, plus 12
+more against round two's fixes (word-boundary status markers, the `startswith`
+status check, universal attention, existential judge, the four stripper holes,
+the login-shaped `owner`, the span boundary, a real substring search for the
+token, and the reported-window selection).
 
 | # | Mutation | Result |
 |---|---|---|

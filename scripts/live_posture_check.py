@@ -396,6 +396,9 @@ _READY_RETRY_SLEEP_SECONDS = 5.0
 
 _ADR_NAME = re.compile(r"^ADR-\d{4}$")
 
+#: GitHub's own login rule: alphanumerics and single hyphens, 1-39 characters.
+_GITHUB_LOGIN = re.compile(r"^[A-Za-z0-9](?:[A-Za-z0-9]|-(?=[A-Za-z0-9])){0,38}$")
+
 
 class PostureDecision(Enum):
     """Every terminal state. Pinned exhaustively by the test suite."""
@@ -542,16 +545,35 @@ class PostureResult:
 #: 2026-08-22.**" and passed a bare ``startswith``. An ADR that was reverted
 #: authorising a permanent live posture is the worst possible failure of this
 #: check, and it was one review round away from shipping.
+#: Matched on WORD BOUNDARIES, never as substrings. The first version of this
+#: list matched substrings and therefore refused ADR-0071 — this mechanism's own
+#: record — because "pending" is inside "money-s*pending* posture", which is this
+#: package's house vocabulary. So exactly the ADRs that would ever authorise a
+#: live posture were the ones it rejected. AGENTS.md rule 8 (assert structure,
+#: not substrings) reappearing inside the gate written to enforce it.
 _ADR_REVOKED_MARKERS = (
     "reverted",
+    "reversed",
+    "revoked",
     "superseded",
+    "supersedes",
     "withdrawn",
     "rescinded",
     "retired",
+    "deprecated",
+    "obsolete",
+    "cancelled",
+    "canceled",
+    "provisionally",
     "replaced by",
+    "rolled back",
     "not accepted",
+    "no longer",
     "pending",
     "in principle",
+)
+_ADR_REVOKED_PATTERN = re.compile(
+    r"\b(?:" + "|".join(re.escape(marker) for marker in _ADR_REVOKED_MARKERS) + r")\b"
 )
 
 
@@ -565,20 +587,56 @@ def _strip_uncommitted_prose(text: str) -> str:
     authorisation, and before this both were accepted.
     """
     out: list[str] = []
-    fenced = False
+    fence: str | None = None
     in_comment = False
+    in_pre = False
     for line in text.splitlines():
         stripped = line.strip()
-        if stripped.startswith("```") or stripped.startswith("~~~"):
-            fenced = not fenced
-            continue
-        if fenced:
-            continue
-        if "<!--" in line:
-            in_comment = True
+
+        # HTML comments FIRST, and character-wise rather than line-wise. The
+        # first version set a flag on "<!--" and cleared it on any "-->" in the
+        # same line, so `<!-- a --> <!-- start of a note` left the flag CLEAR
+        # while a second comment was genuinely still open — the round-1
+        # HTML-comment evasion, reopened through a different door.
         if in_comment:
-            if "-->" in line:
-                in_comment = False
+            if "-->" not in line:
+                continue
+            line = line.split("-->", 1)[1]
+            in_comment = False
+        while "<!--" in line:
+            before, _, rest = line.partition("<!--")
+            if "-->" in rest:
+                line = before + rest.split("-->", 1)[1]
+                continue
+            line = before
+            in_comment = True
+            break
+        stripped = line.strip()
+
+        # Fenced blocks, matched by their OWN marker. Toggling on either marker
+        # let a ``` block be "closed" by a stray ~~~ line, or the reverse.
+        if fence is not None:
+            if stripped.startswith(fence):
+                fence = None
+            continue
+        if stripped.startswith("```"):
+            fence = "```"
+            continue
+        if stripped.startswith("~~~"):
+            fence = "~~~"
+            continue
+
+        # An INDENTED code block is the other standard way Markdown quotes a
+        # line, and it is the one that happens by accident.
+        if line.startswith("    ") or line.startswith("\t"):
+            continue
+
+        low = stripped.lower()
+        if low.startswith("<pre"):
+            in_pre = True
+        if in_pre:
+            if "</pre>" in low:
+                in_pre = False
             continue
         out.append(line)
     return "\n".join(out)
@@ -594,7 +652,7 @@ def _adr_status_is_live(status_line: str) -> bool:
     tail = lowered[len("accepted") :]
     if tail and (tail[0].isalnum() or tail[0] in "-_"):
         return False
-    return not any(marker in lowered for marker in _ADR_REVOKED_MARKERS)
+    return _ADR_REVOKED_PATTERN.search(lowered) is None
 
 
 def authorising_adrs(adr_dir: Path) -> frozenset[str]:
@@ -669,6 +727,14 @@ def _parse_window(entry: object, authorised: frozenset[str]) -> DeclaredWindow |
     owner = entry.get("owner")
     reason = entry.get("reason")
     if not isinstance(owner, str) or not owner.strip():
+        return None
+    # `owner` is compared against a GitHub comment's `user.login`, so it has to
+    # BE a login. Nothing checked that, and the field's own documentation said
+    # "a real person" — which invites a display name. A window owned by
+    # "Rohit Agrawal" parsed, covered, and then lapsed forever: the operator
+    # commented exactly as the alert instructed, nothing changed, and no message
+    # said why. That is how an alarm gets muted. Refuse it loudly instead.
+    if not _GITHUB_LOGIN.match(owner.strip().lstrip("@")):
         return None
     if not isinstance(reason, str) or not reason.strip():
         return None
@@ -1057,23 +1123,38 @@ def evaluate_posture(
             complete=complete,
         )
 
-    # THE GOVERNING WINDOW is the one whose cover ends LAST — a standing
-    # declaration never ends, so it governs whenever one is active. Everything
-    # below is decided about IT ALONE, and that is the second review finding.
+    # ATTENTION IS UNIVERSAL; THE JUDGE DECLARATION IS EXISTENTIAL. Two review
+    # rounds to get this right, and both intermediate answers were wrong:
     #
-    # An earlier draft asked "is ANY covering window attended?" and "does ANY
-    # covering window declare the judge?". Both are satisfied by a decoy: a
-    # five-minute smoke-test window, freshly opened, silenced a window that ran
-    # to 2099 and had been unattended for eight days — and the operator-facing
-    # detail named only the decoy, reporting "2.0h remaining". The longest cover
-    # is the one actually granting the exposure, so it is the one that has to be
-    # attended and the one that has to declare the judge.
-    governing = max(active, key=_cover_ends)
-    entries = (
-        reaffirmations.get(governing.reaffirm_issue) or []
-        if governing.reaffirm_issue is not None
-        else []
-    )
+    #   * "is ANY covering window attended?" — satisfied by a decoy. A
+    #     five-minute smoke-test window, freshly opened, silenced one that ran to
+    #     2099 and had been unattended for eight days.
+    #   * "is the GOVERNING window attended?" — where governing was
+    #     `max(active, key=_cover_ends)`. `max` returns the FIRST maximal
+    #     element, so giving the decoy an identical `expires_at` re-armed the
+    #     same evasion, and TWO STANDING windows always tie (`_cover_ends` is
+    #     `_FOREVER` for both) — reordering two objects in a JSON file flipped a
+    #     money alert.
+    #
+    # So EVERY covering window must be attended. There is no tie to break and no
+    # representative to pick: a stale window is stale whatever sits beside it,
+    # and a window shorter than the cadence is attended by its own `opened_at`,
+    # so this adds no friction to the ordinary short session.
+    #
+    # The judge is the opposite shape. "Is the judge declared?" is existential —
+    # if any covering window says `judge: true` then somebody wrote it down, by
+    # name, in a reviewable commit, which is the whole point. Narrowing it to one
+    # window made the check alert while a covering window DID declare the judge:
+    # a manufactured false red, one check away from the defect the governing rule
+    # was introduced to fix.
+    governing = min(active, key=lambda w: (-_cover_ends(w).timestamp(), w.opened_at, w.owner))
+
+    def _entries(window: DeclaredWindow) -> list[Reaffirmation]:
+        if window.reaffirm_issue is None:
+            return []
+        return reaffirmations.get(window.reaffirm_issue) or []
+
+    entries = _entries(governing)
 
     if (
         governing.reaffirm_issue is not None
@@ -1106,7 +1187,12 @@ def evaluate_posture(
         )
 
     attended_ago = governing.hours_unattended(now, entries)
-    if not governing.is_attended(now, entries):
+    # EVERY covering window, and the message names the stalest of them.
+    unattended_windows = [w for w in active if not w.is_attended(now, _entries(w))]
+    if unattended_windows:
+        stalest = max(unattended_windows, key=lambda w: w.hours_unattended(now, _entries(w)))
+        governing = stalest
+        attended_ago = stalest.hours_unattended(now, _entries(stalest))
         issue = governing.reaffirm_issue if governing.reaffirm_issue else "<none declared>"
         return PostureResult(
             PostureDecision.LIVE_REAFFIRMATION_LAPSED,
@@ -1122,7 +1208,7 @@ def evaluate_posture(
             complete=complete,
         )
 
-    if judge_on and not governing.judge:
+    if judge_on and not any(window.judge for window in active):
         return PostureResult(
             PostureDecision.LIVE_JUDGE_UNDECLARED,
             f"{counted}. {live_hosts} report a live posture inside "
