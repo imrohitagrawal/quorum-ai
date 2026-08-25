@@ -60,22 +60,57 @@ to `/ui` spends real money, bounded only by `GLOBAL_DAILY_CEILING_USD` ($5.00/da
 session" and it ran for three days because nothing executed the revert; issue
 357 is that gap and ADR-0070 is the mechanism that closes it.
 
-Add an entry to `configs/live-execution-windows.json` naming an owner, a reason,
-and the instant you intend to switch it back off:
+Add an entry to `configs/live-execution-windows.json`. Every entry needs an
+owner, a reason, a `mode`, whether the `judge` is part of it, and `opened_at`:
 
 ```json
 {"windows": [
-  {"owner": "you", "reason": "why", "opened_at": "2026-08-25T09:00:00Z",
-   "expires_at": "2026-08-25T17:00:00Z"}
+  {"owner": "you", "reason": "why", "mode": "time_boxed", "judge": false,
+   "opened_at": "2026-08-25T09:00:00Z", "expires_at": "2026-08-25T17:00:00Z",
+   "reaffirm_issue": 105}
 ]}
 ```
 
-`.github/workflows/live-posture-watchdog.yml` reads `/ready` every 30 minutes and
-opens a `live-posture` issue — and fails its job — whenever production reports a
-live posture that no declared window covers. **This is true whichever route the
-flag takes**, including the `fly secrets set` below, which changes no tracked
-file. Declaring the window is what keeps the watchdog quiet through legitimate
-work; skip it and the alert fires within the hour, on purpose.
+`.github/workflows/live-posture-watchdog.yml` reads `/ready` and `/status` every
+30 minutes and opens a `live-posture` issue — and fails its job — whenever
+production reports a live posture that no declared window covers. **This is true
+whichever route the flag takes**, including the `fly secrets set` below, which
+changes no tracked file. Declaring the window is what keeps the watchdog quiet
+through legitimate work; skip it and the alert fires within the hour, on purpose.
+
+**Three things about the declaration are easy to get wrong. See ADR-0071.**
+
+1. **`judge` is required and has no default.** The LLM judge is a second paid
+   subsystem. It cannot spend while live execution is off, but the moment this
+   flag goes on it can — and its GET-path spend reaches no ledger (ADR-0013), so
+   `/status.global_daily_spend_usd` under-reports by exactly its cost. If
+   `/status` reports `judge_enabled: true` during your window and the window says
+   `"judge": false`, the watchdog alerts. Check `/status` before you open the
+   window and say what you find.
+2. **A window longer than 24 hours must be RE-AFFIRMED.** There is no maximum
+   window length — issue #105 legitimately needs about a week of production logs
+   — but a window nobody has confirmed in 24 hours stops sanctioning anything and
+   the watchdog alerts. To re-affirm, comment on the issue the window names:
+
+   ```text
+   REAFFIRM live-execution 2026-08-25T09:00:00+00:00
+   ```
+
+   quoting the window's own `opened_at`, **from the GitHub account the window
+   names as its `owner`**. A comment posted by any workflow token — including the
+   watchdog's own — is typed `Bot` by GitHub and refused, as is anything posted
+   through a GitHub App. So no ordinary automation can do it for you.
+
+   Stated precisely rather than reassuringly: this does **not** prove a human
+   acted. `user.type` is the type of the account, so a personal access token
+   would pass. It proves that no DEFAULT automation did, and that whoever did it
+   used the owner's identity. ADR-0071 records the residual.
+3. **`"mode": "standing"`** is for the permanent steady state and has no expiry.
+   It removes the deadline and nothing else: it still needs re-affirming every
+   24 hours, and it must cite an ADR that exists, is Accepted, and carries the
+   line `**Authorises:** OPENROUTER_LIVE_EXECUTION_ENABLED` — and that ADR may
+   not be ADR-0070 or ADR-0071, because a mechanism may not authorise its own
+   use. Going permanently live costs the record that says so.
 
 ```bash
 # This requires OPENROUTER_API_KEY to be set (see step 3).
@@ -89,6 +124,10 @@ fly secrets set OPENROUTER_LIVE_EXECUTION_ENABLED="true"
 declaration in the file — an expired entry sanctions nothing and is the record
 of what was authorised. Confirm with
 `curl -s https://quorum-ai.fly.dev/ready` reporting `offline_by_config`.
+
+If you also turned the judge on for the window, decide about it separately —
+turning live execution off makes the judge inert, but it stays configured, and
+`/status.judge_enabled` will keep reporting `true`.
 
 ### 5. Deploy
 
@@ -201,7 +240,7 @@ fly releases rollback <version>
 | `SESSION_COOKIE_SECURE` | **Yes** | `fly.toml` (env) | `true` in production. App refuses to start if `false` in prod. |
 | `ACCOUNT_LEGACY_HEADER_ENABLED` | No | `fly.toml` (env) | `false` (default). Allows old clients to send `X-Account-Id` header. Disabled by default for security. |
 | `OPENROUTER_API_KEY` | For live mode | `fly secrets set` | Without this, the app runs offline (uses fallback responses). |
-| `OPENROUTER_LIVE_EXECUTION_ENABLED` | For live mode | `fly secrets set`, or `fly.toml` (env) | Must be `true` AND `OPENROUTER_API_KEY` set, otherwise app refuses to start. **Spends real money for every `/ui` visitor.** Declare a window in `configs/live-execution-windows.json` first — see step 4 and ADR-0070. |
+| `OPENROUTER_LIVE_EXECUTION_ENABLED` | For live mode | `fly secrets set`, or `fly.toml` (env) | Must be `true` AND `OPENROUTER_API_KEY` set, otherwise app refuses to start. **Spends real money for every `/ui` visitor.** Declare a window in `configs/live-execution-windows.json` first — with a `mode` and a `judge` boolean, and re-affirmed every 24h if it runs longer. See step 4, ADR-0070 and ADR-0071. |
 | `SENTRY_DSN` | No | `fly secrets set` | Optional. If set, exceptions are reported to Sentry. |
 | `LOG_LEVEL` | No | `fly.toml` (env) | Default `INFO`. Use `WARNING` for less noise. |
 | `OPENROUTER_APP_URL` | No | `fly.toml` (env) | Public URL of this deployment. Used for `Referer` header. |

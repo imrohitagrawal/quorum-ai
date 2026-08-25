@@ -47,6 +47,13 @@ kill_timeout = "5s"
   # `fly secrets set`, which no file here can see —
   # .github/workflows/live-posture-watchdog.yml reads /ready every 30 minutes
   # and opens an issue if the live posture outlives its declared window.
+  #
+  # ADR-0071: the declaration entry needs a `mode` ("time_boxed" or "standing")
+  # and a `judge` boolean, and a window running longer than 24h needs a HUMAN
+  # re-affirmation — a GitHub issue comment, because anything a workflow token
+  # posts is typed "Bot" and refused. There is deliberately still no maximum
+  # window length: #357 ran ~3 days and issue #105 needs ~7, so no number
+  # separates them; "is anybody still watching" does.
   OPENROUTER_LIVE_EXECUTION_ENABLED = "false"
   # issue #27: keep the feedback-event SQLite trail on the persistent volume
   # (mounted at /data below), NOT the ephemeral rootfs default (.data/…) which
