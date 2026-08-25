@@ -143,8 +143,10 @@ two siblings under ADR-0002: one connection, one `RLock`, autocommit, no WAL.
 
 It exists because the per-IP session **mint cap** is durable and the sessions
 it counts were not, so a restart erased the visitor and kept the evidence that
-they had already spent their mints. `fly.toml` sets `min_machines_running = 0`,
-so that restart is the ordinary idle path.
+they had already spent their mints. Every merge redeploys — no workflow has a
+paths filter — so that restart happens daily; `fly.toml` also sets
+`min_machines_running = 0`, which should stop an idle machine too (inferred
+from the config, not observed).
 
 ```sql
 CREATE TABLE IF NOT EXISTS sessions (

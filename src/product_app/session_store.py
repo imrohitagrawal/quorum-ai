@@ -11,9 +11,11 @@ counts were not durable, so the two halves of one identity had opposite
 lifetimes. On a restart the visitor's session vanished and the evidence that
 they had already spent their two mints survived, which is a permanent lockout:
 the cookie in their browser resolved to nothing and could not be replaced.
-That is not a deploy-only event — ``fly.toml`` sets ``min_machines_running =
-0`` with ``auto_stop_machines = "stop"``, so an idle machine stops and the
-next visitor arrives at a brand-new process.
+A deploy is not the only way to get there, and a deploy alone is
+already enough: every merge redeploys, because no workflow has a paths
+filter. ``fly.toml`` also sets ``min_machines_running = 0`` with
+``auto_stop_machines = "stop"``, which should stop an idle machine as well —
+inferred from the config, not observed.
 
 Design, and how it differs from its two siblings:
 

@@ -31,11 +31,22 @@ RETURNING VISITOR /ui         -> 429
   "This IP has reached today's limit on new sessions. ..."   (149 bytes, no HTML)
 ```
 
-**This is not a deploy-only event.** `fly.toml` sets `min_machines_running = 0`
-with `auto_stop_machines = "stop"`, so the machine stops whenever the app goes
-idle and the next visitor arrives at a brand-new process. A live probe of
-production during this work read `uptime_seconds` ≈ 15,615 (about 4.3 hours),
-so the restart interval is hours, not weeks.
+**A deploy is not the only way to reach it, and a deploy alone is already
+enough.** Two claims, kept apart because only one of them is measured:
+
+* **MEASURED.** Every merge redeploys — no workflow has a paths filter, so even
+  a docs-only merge restarts the process. This repo merges several times a day,
+  so the lockout is reachable daily without anything unusual happening.
+* **INFERRED, NOT OBSERVED.** `fly.toml` sets `min_machines_running = 0` with
+  `auto_stop_machines = "stop"`, which means an idle machine stops and the next
+  visitor arrives at a fresh process. I did **not** observe that happening. A
+  free probe of production at 2026-08-26 03:54 IST read `uptime_seconds`
+  `20011.0` (5.56 h) against a deployed `build_sha` of `34bbc64`, whose commit
+  is 5.78 h old — so the process had been up since its deploy and had **not**
+  restarted while idle in that window. An earlier draft of this ADR read "the
+  restart interval is hours, not weeks" off that same uptime figure, which the
+  number does not support; settling it needs `fly logs` or a longer
+  observation, and the merge-redeploy path above makes it unnecessary to.
 
 ### Failure modes enumerated before the design (rule 16e)
 

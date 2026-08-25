@@ -20,9 +20,11 @@ longer erases the visitor's identity. It used to: the per-IP MINT cap is
 deliberately durable (see ``SESSION_MINT_CAP_PER_IP`` below), the sessions
 it counts were not, and a returning visitor therefore presented a cookie
 the new process had never heard of while the evidence that they had
-already spent their two mints survived — a permanent lockout. ``fly.toml``
-sets ``min_machines_running = 0``, so that restart is the ordinary idle
-path, not a deploy-only event. ADR-0073.
+already spent their two mints survived — a permanent lockout. Every merge
+redeploys (no workflow has a paths filter), so this is reachable daily;
+``fly.toml`` additionally sets ``min_machines_running = 0``, which should
+make an idle machine stop too, though that has not been observed directly.
+ADR-0073.
 
 The dict remains the authority while the process lives; the durable rows
 are read only when it misses. When the sink is absent or unwritable the
