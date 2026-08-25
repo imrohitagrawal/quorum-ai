@@ -389,22 +389,33 @@ session_repository = SessionRepository()
 # is short enough to bound memory in long-running processes and
 # cheap enough (one O(n) pass on a typically-small dict) to run
 # constantly.
+#: How often the daemon below purges. Seconds.
+SESSION_GC_INTERVAL_S = 60.0
+
+
+def _gc_tick() -> None:
+    """One purge pass. Extracted from the loop so it can be tested.
+
+    Nothing may escape: this runs in a daemon thread with no supervisor, and
+    a single escaped exception ends the thread permanently — after which
+    expired sessions accumulate for the life of the process with nothing to
+    notice. The failure is LOGGED rather than suppressed silently: on an
+    unwritable volume the durable half fails on every tick, and a bare
+    ``suppress`` would hide 1,440 of those a day.
+    """
+    try:
+        session_repository.purge_expired()
+    except Exception:  # noqa: BLE001 - the daemon must not die
+        logging.getLogger(__name__).warning("session-gc: purge tick failed", exc_info=True)
+
+
 def _start_gc_thread() -> threading.Thread:
     """Start a daemon thread that periodically purges expired sessions."""
 
     def _gc_loop() -> None:
         while True:
-            # Use a private method that runs the purge
-            # without taking a write lock if possible.
-            # Don't crash the daemon on GC errors.
-            try:
-                session_repository.purge_expired()
-            except Exception:  # noqa: BLE001 - the daemon must not die
-                # Logged, not swallowed silently. On an unwritable volume the
-                # durable half of the purge fails every tick, and a bare
-                # ``suppress`` would hide 1,440 of those a day.
-                logging.getLogger(__name__).warning("session-gc: purge tick failed", exc_info=True)
-            _time_module.sleep(60.0)
+            _gc_tick()
+            _time_module.sleep(SESSION_GC_INTERVAL_S)
 
     t = threading.Thread(target=_gc_loop, daemon=True, name="session-gc")
     t.start()
