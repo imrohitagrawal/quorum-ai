@@ -1258,7 +1258,7 @@ class FeedbackStore:
             refuse — nothing was written).
         """
         when = now or datetime.now(UTC)
-        cutoff = when - timedelta(hours=24)
+        cutoff = when - self.SESSION_MINT_WINDOW
         with self._lock:
             cursor = self._conn.execute(
                 "SELECT payload FROM events "
@@ -1279,11 +1279,28 @@ class FeedbackStore:
             )
             return True
 
-    #: Rolling length of the mint window. The ONE definition — before this
-    #: constant existed the same ``timedelta(hours=24)`` was written out at
-    #: each call site, and the user-facing copy said "today's limit" and "the
-    #: daily window resets", which describes a CALENDAR boundary this code has
-    #: never implemented.
+    #: Rolling length of the SESSION-MINT window, and the one definition of
+    #: it: all three mint-window call sites read this
+    #: (:meth:`try_record_session_mint`, which ENFORCES the cap,
+    #: :meth:`session_mint_count_for_ip`, and
+    #: :meth:`seconds_until_a_session_mint_frees`, which advertises the wait).
+    #:
+    #: It was introduced alongside only the third of those, and a review found
+    #: the comment claiming "the ONE definition" while the two that actually
+    #: enforce the cap still wrote ``timedelta(hours=24)`` out by hand — so the
+    #: literal pin on this constant passed while the enforcement window was
+    #: mutated to one hour. Both now read the constant, which is what makes the
+    #: pin guard the thing it names.
+    #:
+    #: Deliberately NOT shared with the 24h SPEND windows elsewhere in this
+    #: file (``daily_spend_for``, ``global_daily_spend``, the charge rails).
+    #: Those are a different control that happens to use the same number
+    #: today; folding them together would mean a change to one silently moved
+    #: the other.
+    #:
+    #: ROLLING, not calendar. The user-facing copy used to say "today's limit"
+    #: and "the daily window resets", which describes a boundary this code has
+    #: never had.
     SESSION_MINT_WINDOW = timedelta(hours=24)
 
     def seconds_until_a_session_mint_frees(
@@ -1377,7 +1394,7 @@ class FeedbackStore:
         Returns:
             Number of session-mint events recorded for ``ip`` in the window.
         """
-        cutoff = (now or datetime.now(UTC)) - timedelta(hours=24)
+        cutoff = (now or datetime.now(UTC)) - self.SESSION_MINT_WINDOW
         count = 0
         with self._lock:
             cursor = self._conn.execute(

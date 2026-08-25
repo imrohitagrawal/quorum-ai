@@ -13,6 +13,8 @@ import sqlite3
 from datetime import UTC, datetime, timedelta
 from uuid import uuid4
 
+import pytest
+
 from product_app.feedback_store import FeedbackStore
 from product_app.main import _describe_retry_wait, _retry_after_header
 
@@ -122,3 +124,67 @@ def test_a_known_wait_produces_both() -> None:
     assert _retry_after_header(7200) == {"Retry-After": "7200"}
     assert "2 hours" in _describe_retry_wait(7200)
     assert "1 hour" in _describe_retry_wait(60)
+
+
+def test_the_enforcement_window_is_driven_by_the_constant(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """RED IF any mint-window call site goes back to a hardcoded 24 hours.
+
+    A literal pin on ``SESSION_MINT_WINDOW`` is not enough on its own, and
+    adversarial review proved it: when ``try_record_session_mint`` still wrote
+    ``timedelta(hours=24)`` by hand, mutating THAT line moved the enforcement
+    window while the pin stayed green — the pin guarded a constant nothing
+    enforced. This asserts the BEHAVIOUR instead: shrink the window and the cap
+    must forget a mint that is now outside it.
+
+    The positive partner is the first block: with the real window, the same two
+    mints DO still fill the cap, so "the third mint was allowed" is not passing
+    over a cap that never refused anything.
+    """
+    store = _store()
+    try:
+        for _ in range(2):
+            store.record(
+                recorder="session",
+                event_type="session_minted",
+                account_id=uuid4(),
+                query_run_id=None,
+                recorded_at=datetime.now(UTC) - timedelta(hours=2),
+                payload={"ip": "1.2.3.4"},
+            )
+        assert store.try_record_session_mint(ip="1.2.3.4", account_id=uuid4(), cap=2) is False
+        assert store.session_mint_count_for_ip("1.2.3.4") == 2
+
+        monkeypatch.setattr(FeedbackStore, "SESSION_MINT_WINDOW", timedelta(hours=1))
+
+        assert store.session_mint_count_for_ip("1.2.3.4") == 0
+        assert store.try_record_session_mint(ip="1.2.3.4", account_id=uuid4(), cap=2) is True
+    finally:
+        store.close()
+
+
+def test_the_header_is_rounded_to_the_hour_and_never_early() -> None:
+    """RED IF ``Retry-After`` goes back to second precision.
+
+    The value is derived from a mint that may belong to a STRANGER behind the
+    same NAT. At second precision adversarial review recovered the exact moment
+    that stranger last started a session, to 0.0s. An hour of resolution keeps
+    the RFC-9110 benefit and drops the oracle.
+
+    It also has to agree with the page, which renders whole hours: a client
+    honouring a finer header would return while the page it was just shown
+    still said to wait. Both are asserted here, against literals on both sides
+    (rule 7a) rather than against the rounding expression.
+    """
+    for seconds, expected_header, expected_words in [
+        (1, 3600, "about 1 hour"),
+        (3599, 3600, "about 1 hour"),
+        (3600, 3600, "about 1 hour"),
+        (3601, 7200, "about 2 hours"),
+        (82800, 82800, "about 23 hours"),
+    ]:
+        header = int(_retry_after_header(seconds)["Retry-After"])
+        assert header == expected_header, f"{seconds}s -> {header}"
+        assert expected_words in _describe_retry_wait(seconds)
+        assert header >= seconds, "rounding must never send a client back early"

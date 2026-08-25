@@ -134,7 +134,28 @@ AND query_run_id IS NULL
 
 **Why it is marker-guarded rather than run on every boot.** The `WHERE` clause is a *policy* ("an accepted cost event with no run id is not a charge") and nothing enforces that policy on the write side. Run unguarded on every open, it would silently zero any *future* row of that shape. That is a **fail-open spend guard**: the direction it fails in is "the account is under-metered" — free money. Applying it exactly once, over the rows that exist the first time the fixed code opens the database (pre-fix rows by construction), bounds the blast radius to the migration it is, and needs no assumption about what any later writer does.
 
-**Rollback note** (required by `## `sessions.sqlite3` — the durable session sink (ADR-0073)
+**Rollback note** (required by `## Migration Strategy` below). The migration ships **no inverse and one is not safe to add**. `POST /v1/query-runs/estimate` passes `query_run_id=None, preview=True` (`query_runs.py`), which `costs.py` maps to `cost_estimate_previewed` — the exact shape the migration produces. A relabelled row and a natively-written post-fix preview are therefore **indistinguishable by content** — same `event_type`, same payload shape.
+
+`recorded_at < applied_at` is a **probable** signal that a row was touched by the migration, not a **sound** one — it is only guaranteed correct if the migration is guaranteed to run on the very first open of the fixed code, and it is not: the runner is best-effort (see the runbook's locked-database failure modes), so a transient failure can skip it on one boot while leaving the store fully able to write. Concretely: if an earlier boot hits the RESERVED-lock case and skips the migration, the app keeps writing *native* `cost_estimate_previewed` rows with `recorded_at` timestamps before the migration eventually succeeds on a later boot and stamps `applied_at` — and those native rows then satisfy `recorded_at < applied_at` despite never having been touched by the migration. The tell that this signal might be unreliable for a given database is the same one the runbook keys off: a `feedback_store: F-01 preview backfill did not run` `WARNING` in that instance's boot history means at least one boot skipped the migration, and the timestamp test cannot be trusted for rows recorded in that window. Absent any such warning across the database's whole history, the signal holds.
+
+An inverse would have to re-bill both the genuinely-relabelled rows and any native rows the timestamp test wrongly catches, restoring exactly the over-metering the migration exists to remove. The remedy for a bad relabel is a volume-snapshot restore, not an inverse migration.
+
+### Boot behaviour and operator signals
+
+The runner is invoked from `FeedbackStore.__init__`, so it runs on *every* store open. In production that is one open: the app process at startup. It is not retried inside a running process.
+
+Log lines, verbatim (`%s` are the runtime substitutions):
+
+| Level | Message | When |
+|---|---|---|
+| `INFO` | `feedback_store: relabelled %s pre-F-01 estimate-preview rows from cost_guardrail_accepted to cost_estimate_previewed` | Only when at least one row was repaired |
+| `WARNING` | `feedback_store: F-01 preview backfill did not run: %s` | The repair was attempted and failed (e.g. read-only volume) |
+
+> **Operator trap.** The `INFO` line is behind an `if relabelled:` guard. **Absence of the log line does not mean the migration did not run** — a successful migration that matched zero rows still writes its marker and logs nothing. The marker row in `schema_migrations` is the only reliable evidence.
+
+For what a read-only or locked volume means for the operator, and for the read-only checks that confirm the migration landed, see [`docs/runbooks/feedback-store-schema-migration.md`](runbooks/feedback-store-schema-migration.md).
+
+## `sessions.sqlite3` — the durable session sink (ADR-0073)
 
 A third SQLite file on the same volume, path from `SESSION_DB_PATH`
 (`fly.toml` pins it to `/data/sessions.sqlite3`; `tests/conftest.py` pins it to
@@ -193,27 +214,6 @@ a restart — the behaviour of every release before ADR-0073. A failed WRITE on 
 open store is swallowed and logged at WARNING, with the same consequence. The
 direction is deliberate: sessions are the only credential, so a storage fault
 must never stop one being issued.
-
-## Migration Strategy` below). The migration ships **no inverse and one is not safe to add**. `POST /v1/query-runs/estimate` passes `query_run_id=None, preview=True` (`query_runs.py`), which `costs.py` maps to `cost_estimate_previewed` — the exact shape the migration produces. A relabelled row and a natively-written post-fix preview are therefore **indistinguishable by content** — same `event_type`, same payload shape.
-
-`recorded_at < applied_at` is a **probable** signal that a row was touched by the migration, not a **sound** one — it is only guaranteed correct if the migration is guaranteed to run on the very first open of the fixed code, and it is not: the runner is best-effort (see the runbook's locked-database failure modes), so a transient failure can skip it on one boot while leaving the store fully able to write. Concretely: if an earlier boot hits the RESERVED-lock case and skips the migration, the app keeps writing *native* `cost_estimate_previewed` rows with `recorded_at` timestamps before the migration eventually succeeds on a later boot and stamps `applied_at` — and those native rows then satisfy `recorded_at < applied_at` despite never having been touched by the migration. The tell that this signal might be unreliable for a given database is the same one the runbook keys off: a `feedback_store: F-01 preview backfill did not run` `WARNING` in that instance's boot history means at least one boot skipped the migration, and the timestamp test cannot be trusted for rows recorded in that window. Absent any such warning across the database's whole history, the signal holds.
-
-An inverse would have to re-bill both the genuinely-relabelled rows and any native rows the timestamp test wrongly catches, restoring exactly the over-metering the migration exists to remove. The remedy for a bad relabel is a volume-snapshot restore, not an inverse migration.
-
-### Boot behaviour and operator signals
-
-The runner is invoked from `FeedbackStore.__init__`, so it runs on *every* store open. In production that is one open: the app process at startup. It is not retried inside a running process.
-
-Log lines, verbatim (`%s` are the runtime substitutions):
-
-| Level | Message | When |
-|---|---|---|
-| `INFO` | `feedback_store: relabelled %s pre-F-01 estimate-preview rows from cost_guardrail_accepted to cost_estimate_previewed` | Only when at least one row was repaired |
-| `WARNING` | `feedback_store: F-01 preview backfill did not run: %s` | The repair was attempted and failed (e.g. read-only volume) |
-
-> **Operator trap.** The `INFO` line is behind an `if relabelled:` guard. **Absence of the log line does not mean the migration did not run** — a successful migration that matched zero rows still writes its marker and logs nothing. The marker row in `schema_migrations` is the only reliable evidence.
-
-For what a read-only or locked volume means for the operator, and for the read-only checks that confirm the migration landed, see [`docs/runbooks/feedback-store-schema-migration.md`](runbooks/feedback-store-schema-migration.md).
 
 ## Migration Strategy
 

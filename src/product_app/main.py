@@ -1078,10 +1078,29 @@ def _retry_after_header(seconds: int | None) -> dict[str, str]:
     RFC 9110 §10.2.3 says a 429 SHOULD carry one and this endpoint carried
     none. Omitted rather than guessed when the wait is unknown: a fabricated
     ``Retry-After`` teaches a client to come back at a time nothing computed.
+
+    ROUNDED UP TO THE HOUR, for two reasons that happen to want the same thing.
+
+    The mint cap is per-IP, so the value is derived from a mint that may belong
+    to somebody ELSE behind the same NAT. Adversarial review demonstrated that
+    at second precision it is an exact oracle: it recovered the moment a
+    stranger on the shared address last started a session, to 0.0s, over a 24h
+    window. The page already tells the visitor that someone else on their
+    address may have used the allowance — the existence of that person is
+    deliberately disclosed — but the timestamp is not, and an hour of
+    resolution keeps the RFC benefit while dropping the precision.
+
+    It also makes the header agree with the page, which renders
+    ``math.ceil(seconds / 3600)`` hours. Before this they could disagree by up
+    to an hour, so a client honouring the header could return while the page it
+    had just been shown still said to wait.
+
+    Rounding UP is the safe direction: it never sends a client back before a
+    slot has actually freed.
     """
     if seconds is None:
         return {}
-    return {"Retry-After": str(seconds)}
+    return {"Retry-After": str(math.ceil(seconds / 3600) * 3600)}
 
 
 @app.get("/v1/session", tags=["session"])

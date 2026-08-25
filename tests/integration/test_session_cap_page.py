@@ -112,7 +112,7 @@ def test_the_page_explains_the_cap_without_inventing_a_calendar_boundary(
     assert "midnight" not in body
 
 
-def test_the_page_states_a_wait_derived_from_the_oldest_mint(
+def test_the_page_states_a_wait_derived_from_the_real_mint_times(
     capped: FeedbackStore,
 ) -> None:
     """RED IF the wait is hard-coded or fabricated.
@@ -130,14 +130,14 @@ def test_the_page_states_a_wait_derived_from_the_oldest_mint(
     # exactly 3600 failed on 3599. Two minutes is loose enough to survive that
     # and far too tight for any hard-coded constant to slip through — the
     # second window below is 22 hours away from this one.
-    assert int(soon.headers["Retry-After"]) == pytest.approx(60 * 60, abs=120)
+    assert int(soon.headers["Retry-After"]) == 60 * 60
 
     capped.delete_all_session_mints_for_tests()
     _spend_the_cap(capped, age=timedelta(hours=1))
     later = TestClient(app).get("/ui")
     assert later.status_code == 429
     assert "about 23 hours" in later.text
-    assert int(later.headers["Retry-After"]) == pytest.approx(23 * 60 * 60, abs=120)
+    assert int(later.headers["Retry-After"]) == 23 * 60 * 60
 
 
 def test_the_json_endpoint_keeps_its_contract_and_gains_retry_after(
@@ -154,7 +154,7 @@ def test_the_json_endpoint_keeps_its_contract_and_gains_retry_after(
 
     assert response.status_code == 429
     assert response.json()["detail"]["code"] == "SESSION_MINT_CAP_EXCEEDED"
-    assert int(response.headers["Retry-After"]) == pytest.approx(4 * 60 * 60, abs=120)
+    assert int(response.headers["Retry-After"]) == 4 * 60 * 60
 
 
 def test_a_visitor_under_the_cap_still_gets_the_workspace(capped: FeedbackStore) -> None:

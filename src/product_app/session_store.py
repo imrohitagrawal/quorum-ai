@@ -45,7 +45,7 @@ import threading
 import weakref
 from contextlib import suppress
 from dataclasses import dataclass
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from uuid import UUID
 
@@ -73,9 +73,12 @@ _CLOSE_LOCK_TIMEOUT_S = 5.0
 #: unthrottled touch would put a write on the hot path of every authenticated
 #: call, which is new load that ADR's headroom never measured.
 #:
-#: Why 300 seconds: it is the largest value that keeps the loss below 5% of
-#: ``auth.SESSION_TTL`` (2h), and it bounds the durable write rate for one
-#: session at 1 per 5 minutes regardless of how hard that session is used.
+#: Why 300 seconds: it keeps the loss to 4.17% of ``auth.SESSION_TTL`` (2h) and
+#: bounds the durable write rate for one session at 1 per 5 minutes regardless
+#: of how hard that session is used. An earlier version of this comment called
+#: it "the largest value that keeps the loss below 5%", which is false — 5% of
+#: 7200s is 360s, so 359 would be. Nothing turns on being maximal, so the
+#: superlative is dropped rather than corrected.
 SESSION_TOUCH_PERSIST_INTERVAL_S = 300.0
 
 
@@ -114,6 +117,60 @@ def _digest(session_id: str) -> str:
     what this digest withholds.
     """
     return hashlib.sha256(session_id.encode("utf-8")).hexdigest()
+
+
+def _require_aware(value: str) -> datetime:
+    """Parse an ISO timestamp, REFUSING a naive one.
+
+    ``datetime.fromisoformat`` accepts a string with no offset perfectly
+    happily, and a naive value would then flow into a cached ``_Session``
+    whose ``last_used_at`` cannot be subtracted from an aware ``now``. That
+    does not fail on the row that carries it: it raises ``TypeError: can't
+    subtract offset-naive and offset-aware datetimes`` inside
+    ``SessionRepository._purge_expired_locked``, which runs on EVERY
+    ``create`` and ``get`` — so one bad row turns into a 500 on every
+    authenticated request and every ``/ui`` boot, and the GC daemon raises on
+    every tick, until the process restarts.
+
+    Every write in this module normalises through ``.astimezone(UTC)``, so
+    this store never produces such a row itself. It is here because the whole
+    premise of the module is that these rows OUTLIVE the process that wrote
+    them: an operator's `sqlite3` session, a restore from a dump, or a future
+    writer can all put one there. Found by adversarial review, which is also
+    how "a row that will not parse is treated as absent" turned out to be
+    true only for a non-UUID account id.
+    """
+    parsed = datetime.fromisoformat(value)
+    if parsed.tzinfo is None:
+        raise ValueError(f"session row timestamp {value!r} has no timezone offset")
+    return parsed
+
+
+def _is_implausibly_future(when: datetime, *, now: datetime, tolerance: timedelta) -> bool:
+    """True if ``when`` is so far ahead of ``now`` that it cannot be a real stamp.
+
+    A row dated in the future is an IMMORTAL session: it passes every expiry
+    predicate here (``last_used_at >= cutoff``) and
+    ``auth._Session.is_expired`` computes a negative age, so nothing ever
+    retires it. Adversarial review demonstrated one dated 2999 surviving
+    ``purge_expired`` and resolving through ``get``.
+
+    Like the naive-timestamp case, nothing in this module can WRITE such a row
+    — every write goes through ``.astimezone(UTC)`` off the system clock. It is
+    reachable the way any durable row is: an operator's ``sqlite3`` session, a
+    restore from a dump, or a clock that jumped backwards after the row was
+    written.
+
+    ``tolerance`` is DERIVED from the window the caller already passed in —
+    ``now - not_used_before``, i.e. the session TTL — rather than being a new
+    number invented for this check. Three reasons: it is already the scale on
+    which this system reasons about session time; it is generous enough that no
+    ordinary clock skew or write-ordering race trips it; and deriving it means
+    this module never has to import ``auth`` for ``SESSION_TTL`` (``auth``
+    imports THIS module, so that would be a cycle) and there is no second copy
+    of the value to keep in step with the first.
+    """
+    return when - now > tolerance
 
 
 class SessionStore:
@@ -212,9 +269,17 @@ class SessionStore:
             if self._closed:
                 return 0
             try:
+                # Both ends. A row from the FUTURE is never reached by the
+                # cutoff and would otherwise sit on the volume forever, so the
+                # purge that exists to bound this table has to be able to
+                # remove it -- see :func:`_is_implausibly_future`.
+                now = datetime.now(UTC)
                 cursor = self._conn.execute(
-                    "DELETE FROM sessions WHERE last_used_at < ?",
-                    (cutoff.astimezone(UTC).isoformat(),),
+                    "DELETE FROM sessions WHERE last_used_at < ? OR last_used_at > ?",
+                    (
+                        cutoff.astimezone(UTC).isoformat(),
+                        (now + (now - cutoff.astimezone(UTC))).isoformat(),
+                    ),
                 )
             except sqlite3.Error as exc:
                 self._warn("purge expired sessions", exc)
@@ -270,13 +335,26 @@ class SessionStore:
                 return None
         if row is None:
             return None
+        now = datetime.now(UTC)
+        try:
+            if _is_implausibly_future(
+                _require_aware(row["last_used_at"]),
+                now=now,
+                tolerance=now - not_used_before,
+            ):
+                raise ValueError(
+                    f"session row last_used_at {row['last_used_at']!r} is in the future"
+                )
+        except (TypeError, ValueError) as exc:
+            _log.warning("session_store: discarding an unusable session row: %s", exc)
+            return None
         try:
             return StoredSession(
                 session_id=session_id,
                 account_id=UUID(row["account_id"]),
                 csrf_token=row["csrf_token"],
-                created_at=datetime.fromisoformat(row["created_at"]),
-                last_used_at=datetime.fromisoformat(row["last_used_at"]),
+                created_at=_require_aware(row["created_at"]),
+                last_used_at=_require_aware(row["last_used_at"]),
             )
         except (TypeError, ValueError) as exc:
             _log.warning("session_store: discarding an unreadable session row: %s", exc)

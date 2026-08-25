@@ -189,11 +189,19 @@ class _Session:
     csrf_token: str
     created_at: datetime
     last_used_at: datetime
-    #: ``last_used_at`` as it was the last time this session was written
-    #: through to the durable sink, or ``None`` if it never has been. Purely
-    #: local bookkeeping for the write throttle in
-    #: :meth:`SessionRepository._persist_touch`; never read from the sink and
-    #: never part of the session's identity.
+    #: ``last_used_at`` as of the last time a durable write was ATTEMPTED for
+    #: this session — landed or not — or ``None`` if none ever has been.
+    #:
+    #: Attempted, not succeeded, and that distinction is the whole point.
+    #: Stamping it only on success meant the throttle never engaged on an
+    #: unwritable volume: adversarial review measured 1,000 touches producing
+    #: 1,000 doomed INSERTs, each taking the store lock and emitting an
+    #: unrate-limited WARNING, in exactly the degraded state this module is
+    #: designed around. A failed write costs the same lock and the same syscall
+    #: as a successful one, so the rate limit has to count both.
+    #:
+    #: Purely local bookkeeping for :meth:`SessionRepository._persist_touch`;
+    #: never read from the sink and never part of the session's identity.
     persisted_last_used_at: datetime | None = None
 
     def is_expired(self, *, now: datetime) -> bool:
@@ -285,11 +293,17 @@ class SessionRepository:
         return session
 
     def revoke(self, session_id: str) -> None:
+        """Drop the session from both halves.
+
+        The durable delete happens while still holding ``self._lock``, so a
+        concurrent ``_persist`` cannot slip between the two and write the row
+        back — see :meth:`_persist`.
+        """
+        store = session_store.get_store()
         with self._lock:
             self._sessions.pop(session_id, None)
-        store = session_store.get_store()
-        if store is not None:
-            store.delete(session_id)
+            if store is not None:
+                store.delete(session_id)
 
     def purge_expired(self) -> tuple[int, int]:
         """Drop expired sessions from both halves; return ``(cached, durable)``.
@@ -330,23 +344,53 @@ class SessionRepository:
             return self._sessions.setdefault(session_id, session)
 
     def _persist(self, session: _Session) -> None:
+        """Mirror ``session`` to the durable sink, if it is still the live one.
+
+        The whole body runs under ``self._lock``, and re-checks that the
+        cached object for this id IS this object before writing. Both halves
+        matter, and adversarial review demonstrated why:
+
+        * ``rotate_csrf`` used to release the lock before persisting, so a
+          ``revoke()`` or ``clear()`` landing in that window deleted the row
+          and the in-flight write then put it back — a revoked cookie
+          resolving again in the next process. ``clear()`` is not theoretical:
+          ``tests/conftest.py`` calls it between every test.
+        * ``persisted_last_used_at`` was stamped by RE-READING
+          ``session.last_used_at`` after the save, so a ``touch`` in between
+          made the throttle believe the disk was fresher than it was. The
+          value written is captured once, before the write, and that is the
+          value stamped.
+        """
         store = session_store.get_store()
         if store is None:
             return
-        if store.save(_to_stored(session)):
-            session.persisted_last_used_at = session.last_used_at
+        with self._lock:
+            if self._sessions.get(session.session_id) is not session:
+                # Revoked or cleared while this write was in flight. Writing
+                # now would resurrect it.
+                return
+            written_at = session.last_used_at
+            # Stamped whether or not the write LANDS. See the field's comment:
+            # a failed write costs the same lock and the same syscall, so the
+            # throttle must count attempts or it stops throttling precisely
+            # when the volume is unwritable.
+            session.persisted_last_used_at = written_at
+            store.save(_to_stored(session))
 
     def _persist_touch(self, session: _Session) -> None:
         """Write ``last_used_at`` through, but no more than once per
         ``SESSION_TOUCH_PERSIST_INTERVAL_S``.
 
-        ``require_session`` touches on EVERY authenticated request. ADR-0002
-        pinned this app's single-writer SQLite design against roughly sixteen
-        writes per RUN, not one per REQUEST, so an unthrottled write-through
-        would be new hot-path load that decision never measured. The cost of
-        the throttle is bounded and one-directional: after a restart a
-        restored session's remaining life is understated by at most the
-        interval, never overstated.
+        ``require_session`` touches on EVERY authenticated request, where
+        ADR-0002's measurements were taken against roughly sixteen writes per
+        RUN. Its measured ceiling (~4,500 writes/s) would in fact absorb an
+        unthrottled touch at this app's traffic, so the honest justification is
+        not headroom: it is lock contention with the spend rails, and log
+        volume when the volume is unwritable.
+
+        The cost of the throttle is bounded and one-directional: after a
+        restart a restored session's remaining life is understated by at most
+        the interval, never overstated.
         """
         persisted = session.persisted_last_used_at
         if persisted is not None:
@@ -374,11 +418,11 @@ class SessionRepository:
         leave durable rows behind and let one test's session resolve inside
         the next, so the durable half is not optional here.
         """
+        store = session_store.get_store()
         with self._lock:
             self._sessions.clear()
-        store = session_store.get_store()
-        if store is not None:
-            store.delete_all()
+            if store is not None:
+                store.delete_all()
 
 
 session_repository = SessionRepository()

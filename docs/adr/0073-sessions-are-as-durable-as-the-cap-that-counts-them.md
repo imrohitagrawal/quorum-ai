@@ -78,9 +78,20 @@ measurement nobody has taken. And it would route a *user-facing availability*
 fault through `/status.feedback_db`, the operator's *money* signal.
 
 **2. The process dict stays the authority while the process lives.** The
-durable rows are a write-through mirror, read only when the cache misses —
-which is the restart case and nothing else. A warm session never touches SQLite
-on read.
+durable rows are a write-through mirror, read only when the cache misses. A
+warm session therefore never touches SQLite on read — measured at 0 SELECTs
+across 500 warm lookups.
+
+The miss path is **not** only the restart case, and an earlier draft of this
+ADR said it was. Any unknown, expired or forged cookie also misses, and
+`require_session` runs on every authenticated route — measured at 500 SELECTs
+for 500 forged cookies. Before this change an unknown cookie cost a dict
+lookup; it now costs one indexed SELECT under the store lock, and it is
+reachable unauthenticated. What bounds it is the pre-existing per-IP burst
+limiter (`query_runs._InMemoryIpRateLimiter`, 10/min in production), which caps
+how fast one address can drive that path at all. Flagged here rather than left
+implicit because it is exactly the load characteristic ADR-0002's headroom
+argument turns on.
 
 **3. Every durable write is best-effort.** When the sink is absent or refuses,
 every method behaves exactly as it did before the sink existed. This app has no
@@ -104,14 +115,22 @@ the other.
 **5. `touch` writes through at most once per `SESSION_TOUCH_PERSIST_INTERVAL_S`
 (300s).** `require_session` touches on every authenticated request. ADR-0002
 pinned this design against roughly sixteen writes per RUN, not one per REQUEST.
-300s is the largest value keeping the loss under 5% of the 2h `SESSION_TTL`,
-and it bounds one session's durable write rate at 1 per 5 minutes however hard
-it is used. The error is one-directional: a restored session's remaining life
+300s keeps the loss to 4.17% of the 2h `SESSION_TTL` and bounds one session's
+durable write rate at 1 per 5 minutes however hard it is used. (An earlier
+draft called it "the largest value keeping the loss under 5%". It is not —
+5% of 7200s is 360s, so 359 would be. The bound is right; the superlative
+was not, and it is dropped rather than corrected because nothing turns on
+being maximal.) The error is one-directional: a restored session's remaining life
 is understated by at most the interval, never overstated.
 
 **6. The 429 becomes a rendered page** (`templates/session-capped.html`) with a
-`Retry-After` header derived from the oldest mint still inside the window, on
-both `/ui` and `/v1/session`. The JSON `detail.code` is unchanged — `app.js`
+`Retry-After` header derived from the DECIDING mint still inside the window —
+the `count - cap`-th oldest, which equals the oldest only when `count == cap`.
+Taking the oldest would under-report the wait whenever more mints are in the
+window than the cap allows, and the page would then tell a visitor to come
+back while the cap is still refusing them. Applies to both `/ui` and
+`/v1/session`. The sentence rounds UP to whole hours, so it never advertises a
+return time earlier than the header does. The JSON `detail.code` is unchanged — `app.js`
 reads it.
 
 **7. The copy stops claiming a calendar boundary.** `try_record_session_mint`
@@ -163,28 +182,47 @@ session_minted rows: 2                the resume consumed no mint
 | `Retry-After` on a fresh cap | `86399` | — |
 
 **Mutation proofs.** Each defect below was injected, the suite run, and the
-file restored from a copy — never `git checkout` — with `diff -q` confirming
-the restore was byte-identical every time. Baseline and final both **36
-passed**, across `tests/integration/test_durable_sessions.py`,
+file restored from a copy — never `git checkout` — with `diff -q` confirming a
+byte-identical restore every time. Baseline and final both **40 passed**,
+across `tests/integration/test_durable_sessions.py`,
 `tests/integration/test_session_cap_page.py`,
 `tests/security/test_durable_session_store.py` and
 `tests/unit/test_session_cap_retry_hint.py`:
 
 | Mutant | Result |
 |---|---|
-| `get()` stops restoring from the durable store | 3 failed, 33 passed |
-| `fetch()` stops enforcing expiry on the read | 2 failed, 34 passed |
-| `_digest()` returns the raw session id | 1 failed, 35 passed |
-| `clear()` stops emptying the durable half | 1 failed, 35 passed |
-| The per-request write throttle is removed | 1 failed, 35 passed |
-| The wait uses the oldest mint, not the deciding one | 1 failed, 35 passed |
-| `revoke()` leaves the durable row behind | 1 failed, 35 passed |
+| `get()` stops restoring from the durable store | 3 failed, 37 passed |
+| `fetch()` stops enforcing expiry on the read | 2 failed, 38 passed |
+| `_digest()` returns the raw session id | 1 failed, 39 passed |
+| `clear()` stops emptying the durable half | 1 failed, 39 passed |
+| The per-request write throttle is removed | 2 failed, 38 passed |
+| `frees_at` uses `stamps[0]` instead of `stamps[index]` | 1 failed, 39 passed |
+| `revoke()` leaves the durable row behind | 1 failed, 39 passed |
+| The throttle counts successes instead of attempts | 1 failed, 35 passed |
+| The purge stops removing future-dated rows | 1 failed, 35 passed |
+| `Retry-After` returns to second precision | 3 failed, 33 passed |
+| `_require_aware` stops checking `tzinfo` | 1 failed, 23 passed |
 | `/ui` 429 reverts to the bare sentence | 4 failed, 32 passed |
 
+The last four rows were measured on the sub-suites that own them rather than
+the full four-file set, so their totals are smaller; the failure counts are
+what matter. The `frees_at` row is stated as the exact mutation used, because
+an adversarial reviewer trying two other natural formulations of "use the
+oldest" got 2 failed rather than 1 — the row is a measurement of one specific
+mutant, not a general property.
+
 Two pins outside that suite were proved the same way: halving
-`SESSION_MINT_WINDOW` to 12h reds `test_the_session_mint_window_is_pinned`,
-and making a failed sink open raise reds
+`SESSION_MINT_WINDOW` reds `test_the_session_mint_window_is_pinned`, and making
+a failed sink open raise reds
 `test_a_boot_that_cannot_open_the_sink_still_serves_sessions`.
+
+**One mutant that did NOT die, and what it cost.** Disabling `_require_aware`'s
+`tzinfo` check left the entire suite green, because `_is_implausibly_future`
+then raises `TypeError` subtracting a naive value from an aware one and the
+same `except` swallows it. Two independent guards is a fine position; a guard
+nothing can observe is not, because the day the future check is simplified away
+the naive path reopens silently. `test_require_aware_refuses_a_naive_timestamp_on_its_own`
+now asserts that function's own contract, and reds under the mutant.
 
 ## Consequences
 
@@ -199,10 +237,54 @@ and making a failed sink open raise reds
   saying so requires editing the `/status` docstring, which is embedded verbatim
   in `openapi.yaml` — owned by another work package in this batch. Filed as
   follow-up rather than smuggled in. The boot failure logs at ERROR meanwhile.
+- **This sink gets no `store_reconnect`.** `store_reconnect.py` opens with
+  "Background reconnect for the **two** durable SQLite sinks" and defines
+  `maybe_reconnect_feedback_store` / `maybe_reconnect_run_history_store` only.
+  So if the boot open fails, or the handle dies mid-life, durability stays off
+  until the process restarts — unlike its two siblings. That is survivable
+  precisely because losing durability is the pre-ADR-0073 behaviour rather than
+  an outage, and because the fault self-heals on the next restart, which is the
+  event this whole ADR is about. Stated here rather than left for the next
+  reader to discover; `session_store.get_store`'s docstring cites
+  `store_reconnect` as the reason to resolve the store at call time, which is
+  true of the mechanism but must not be read as "this sink reconnects".
 - **Test isolation now depends on `clear()` emptying the durable half.**
   `tests/conftest.py` calls it before and after every test; a clear that
   emptied only the dict would cross-contaminate the suite and fail somewhere
   unrelated. Pinned by a test with a positive partner.
+
+### Found by adversarial review, and left open on purpose
+
+**The mint cap fails fully OPEN when the feedback database is unwritable.**
+`try_record_session_mint` ignores `record()`'s return value, so on a read-only
+volume it admits every request while writing nothing. Measured across the 2x2
+of (session sink healthy/broken) x (feedback store healthy/broken), cap 2, ten
+attempts:
+
+| feedback store | session sink | minted | refused | rows on disk |
+|---|---|---|---|---|
+| healthy | healthy | 2 | 8 | 2 |
+| healthy | read-only | 2 | 8 | 2 |
+| read-only | healthy | **10** | 0 | 0 |
+| read-only | read-only | **10** | 0 | 0 |
+
+**Pre-existing, and unchanged by this ADR** — the identical script against
+`origin/main` also gives 10. It is a separate concern (rule 17) and belongs in
+its own PR; `try_record_cost_charge` on the same class already does check
+`landed` and degrade, which is the shape the fix should take. What this change
+DOES alter is the correlation: the session sink is now a second file on the
+same volume, so one read-only volume degrades both halves at once.
+
+**The refusal path scans the events table twice under the money lock.**
+`try_record_session_mint` scans and returns `False`, then
+`seconds_until_a_session_mint_frees` scans again, both holding
+`FeedbackStore._lock` — the lock the spend rails use. Measured: 4 rows 0.01 ms,
+1,000 rows 0.83 ms, 10,000 rows 8.09 ms, 50,000 rows 40.36 ms. Mint rows accrue
+at 2 per IP per day, so 1,000 rows is roughly 500 distinct addresses in a day.
+Accepted at this app's traffic, and recorded rather than left silent because it
+is a NEW read on a path an unauthenticated caller can trigger. Folding the two
+into one lock hold would change `try_record_session_mint`'s signature on a
+money path, which is not worth it for the measured cost.
 
 ## Rejected alternatives
 

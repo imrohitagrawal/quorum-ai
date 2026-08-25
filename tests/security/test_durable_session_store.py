@@ -21,7 +21,12 @@ import pytest
 
 from product_app import auth, session_store
 from product_app.auth import SESSION_TTL
-from product_app.session_store import SessionStore, StoredSession, _digest
+from product_app.session_store import (
+    SessionStore,
+    StoredSession,
+    _digest,
+    _require_aware,
+)
 
 ACCOUNT = UUID("11111111-2222-3333-4444-555555555555")
 
@@ -386,6 +391,7 @@ def test_the_gc_daemon_actually_ticks(store: SessionStore) -> None:
     """POSITIVE PARTNER for the test above (rule 7). RED IF ``_gc_tick`` stops
     being wired to a real purge — without this, "nothing escaped" is
     satisfiable by a tick that does nothing at all."""
+    original = auth.session_repository
     repository = auth.SessionRepository()
     auth.session_repository = repository
     try:
@@ -398,7 +404,12 @@ def test_the_gc_daemon_actually_ticks(store: SessionStore) -> None:
 
         assert store.count() == 0
     finally:
-        auth.session_repository = repository
+        # ORIGINAL, not ``repository``: an earlier draft restored the local one,
+        # which left the module global pointing at an object ``conftest``'s
+        # ``_reset_state`` no longer holds a reference to, so its ``clear()``
+        # cleaned a repository nothing used and sessions leaked into the next
+        # test. Found by adversarial review with a leak probe.
+        auth.session_repository = original
 
 
 def test_touching_or_rotating_an_unknown_session_returns_nothing(store: SessionStore) -> None:
@@ -507,3 +518,153 @@ def test_the_expiry_boundary_agrees_with_the_in_process_half(store: SessionStore
     )
     assert at_boundary.is_expired(now=boundary + SESSION_TTL) is False
     assert at_boundary.is_expired(now=boundary + SESSION_TTL + timedelta(microseconds=1)) is True
+
+
+def test_the_throttle_still_bounds_writes_when_the_sink_is_unwritable(
+    store: SessionStore,
+) -> None:
+    """CARDINALITY (rule 6b). RED IF the throttle counts successes instead of
+    attempts.
+
+    Adversarial review measured 1,000 touches producing 1,000 doomed INSERTs
+    against a broken sink — each taking the store lock and emitting an
+    unrate-limited WARNING — because ``persisted_last_used_at`` was stamped
+    only when the write LANDED. That is the degraded state this whole module is
+    designed around, so it is exactly where the bound must hold.
+
+    The healthy half is the positive partner: without it, "few writes" is
+    satisfiable by a repository that never persists at all.
+    """
+    attempts: list[str] = []
+    real_save = store.save
+
+    def counting_save(session: StoredSession) -> bool:
+        attempts.append(session.session_id)
+        return real_save(session)
+
+    monkeypatched = auth.SessionRepository()
+    store.save = counting_save  # type: ignore[method-assign]
+
+    healthy = monkeypatched.create(account_id=ACCOUNT)
+    assert len(attempts) == 1, "positive partner: creating really does write once"
+    for _ in range(50):
+        monkeypatched.touch(healthy.session_id)
+    assert len(attempts) == 1, "50 touches on a healthy sink: still one write"
+
+    store._conn.close()  # the volume goes away
+    broken = monkeypatched.create(account_id=ACCOUNT)
+    before = len(attempts)
+    for _ in range(50):
+        monkeypatched.touch(broken.session_id)
+
+    assert len(attempts) - before == 0, (
+        "50 touches against a BROKEN sink must attempt no further writes; "
+        f"attempted {len(attempts) - before}"
+    )
+
+
+def test_a_row_dated_in_the_future_is_neither_immortal_nor_resolvable(
+    store: SessionStore,
+) -> None:
+    """RED IF a future-dated row can resolve, or can survive the purge.
+
+    Such a row passes every expiry predicate — ``last_used_at >= cutoff`` here,
+    and a NEGATIVE age in ``auth._Session.is_expired`` — so nothing retires it.
+    Adversarial review demonstrated one dated 2999 resolving through ``get``
+    and surviving ``purge_expired``. Nothing in this module can write one; it
+    is reachable the way any durable row is, which is the module's own premise.
+
+    The live row is the positive partner: the purge must remove the impossible
+    row WITHOUT taking a good one with it.
+    """
+    live = "ordinary-session"
+    store.save(_session(live))
+    store.save(_session("from-the-year-2999", last_used=datetime(2999, 1, 1, tzinfo=UTC)))
+    assert store.count() == 2, "positive partner: both rows are really on disk"
+
+    horizon = datetime.now(UTC) - SESSION_TTL
+    assert store.fetch("from-the-year-2999", not_used_before=horizon) is None
+    assert store.fetch(live, not_used_before=horizon) is not None
+
+    assert store.purge_expired(cutoff=horizon) == 1
+    assert store.count() == 1
+    assert store.fetch(live, not_used_before=horizon) is not None
+
+
+def test_a_timestamp_with_no_timezone_is_refused_rather_than_cached(
+    store: SessionStore,
+) -> None:
+    """RED IF ``fetch`` accepts a naive timestamp.
+
+    This one was missing. The guard was written from an adversarial finding and
+    a fresh mutation sweep showed the whole suite still GREEN with the check
+    disabled — a defensive fix with nothing holding it in place, which is worth
+    no more than the comment above it.
+
+    What the guard prevents is not a bad answer for the bad row. It is that a
+    naive ``last_used_at`` reaches ``auth.SessionRepository._purge_expired_locked``,
+    which subtracts it from an aware ``now`` on EVERY ``create`` and ``get`` --
+    so one unusable row turns into ``TypeError`` on every authenticated request
+    and every ``/ui`` boot until the process restarts. The second half of this
+    test is what pins that, and it is the half the mutant escaped.
+    """
+    connection = sqlite3.connect(store._db_path)
+    try:
+        connection.execute(
+            "INSERT INTO sessions "
+            "(session_digest, account_id, csrf_token, created_at, last_used_at) "
+            "VALUES (?, ?, 'csrf', ?, ?)",
+            (
+                _digest("naive-row"),
+                str(ACCOUNT),
+                "2026-08-26T00:00:00",  # no offset
+                "2026-08-26T00:00:00",  # no offset
+            ),
+        )
+        connection.commit()
+    finally:
+        connection.close()
+
+    horizon = datetime.now(UTC) - SESSION_TTL
+    assert store.fetch("naive-row", not_used_before=horizon) is None
+
+    repository = auth.SessionRepository()
+    assert repository.get("naive-row") is None
+
+    # The half that matters: the bad row must not have poisoned the repository
+    # for everything that comes after it.
+    good = repository.create(account_id=ACCOUNT)
+    assert repository.get(good.session_id) is not None
+    assert repository.touch(good.session_id) is not None
+    assert repository.purge_expired() is not None
+
+    store.save(_session("healthy"))
+    assert store.fetch("healthy", not_used_before=horizon) is not None, (
+        "positive partner: a well-formed row still resolves, so the refusal "
+        "above is not a store that rejects everything"
+    )
+
+
+def test_require_aware_refuses_a_naive_timestamp_on_its_own() -> None:
+    """RED IF ``_require_aware`` stops checking ``tzinfo``.
+
+    The integration test above pins the OUTCOME — a naive row never resolves —
+    but it cannot see WHICH guard produced it, and a mutation sweep proved that:
+    disabling this check left the whole suite green, because
+    ``_is_implausibly_future`` then raises ``TypeError`` subtracting a naive
+    value from an aware one and the same ``except`` swallows it.
+
+    Two independent guards is a good position to be in, not a bad one. What is
+    bad is a guard nothing can observe, because the day someone simplifies the
+    future check away, the naive path reopens silently. So this asserts this
+    function's own contract directly.
+
+    The aware case is the positive partner: without it, "it raises" is
+    satisfiable by a function that rejects everything.
+    """
+    with pytest.raises(ValueError, match="no timezone offset"):
+        _require_aware("2026-08-26T00:00:00")
+
+    parsed = _require_aware("2026-08-26T00:00:00+00:00")
+    assert parsed.tzinfo is not None
+    assert parsed == datetime(2026, 8, 26, tzinfo=UTC)
