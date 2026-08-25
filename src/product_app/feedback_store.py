@@ -1258,7 +1258,7 @@ class FeedbackStore:
             refuse — nothing was written).
         """
         when = now or datetime.now(UTC)
-        cutoff = when - timedelta(hours=24)
+        cutoff = when - self.SESSION_MINT_WINDOW
         with self._lock:
             cursor = self._conn.execute(
                 "SELECT payload FROM events "
@@ -1278,6 +1278,94 @@ class FeedbackStore:
                 payload={"ip": ip},
             )
             return True
+
+    #: Rolling length of the SESSION-MINT window, and the one definition of
+    #: it: all three mint-window call sites read this
+    #: (:meth:`try_record_session_mint`, which ENFORCES the cap,
+    #: :meth:`session_mint_count_for_ip`, and
+    #: :meth:`seconds_until_a_session_mint_frees`, which advertises the wait).
+    #:
+    #: It was introduced alongside only the third of those, and a review found
+    #: the comment claiming "the ONE definition" while the two that actually
+    #: enforce the cap still wrote ``timedelta(hours=24)`` out by hand — so the
+    #: literal pin on this constant passed while the enforcement window was
+    #: mutated to one hour. Both now read the constant, which is what makes the
+    #: pin guard the thing it names.
+    #:
+    #: Deliberately NOT shared with the 24h SPEND windows elsewhere in this
+    #: file (``daily_spend_for``, ``global_daily_spend``, the charge rails).
+    #: Those are a different control that happens to use the same number
+    #: today; folding them together would mean a change to one silently moved
+    #: the other.
+    #:
+    #: ROLLING, not calendar. The user-facing copy used to say "today's limit"
+    #: and "the daily window resets", which describes a boundary this code has
+    #: never had.
+    SESSION_MINT_WINDOW = timedelta(hours=24)
+
+    def seconds_until_a_session_mint_frees(
+        self,
+        *,
+        ip: str,
+        cap: int,
+        now: datetime | None = None,
+    ) -> int | None:
+        """How long until ``ip`` is back under ``cap``, or ``None`` if unknown.
+
+        Read on the REFUSAL path only, never on the hot path: it is what lets
+        the 429 page tell a visitor when to come back instead of guessing.
+        Before this existed the refusal carried nothing but the IP, so the
+        page could not have named a time without fabricating one.
+
+        The window is ROLLING, so a slot frees when an old mint ages out of
+        it, not at any wall-clock boundary. With ``count`` mints inside the
+        window, ``count - cap + 1`` of them must age out before another is
+        allowed, so the deciding row is the ``count - cap``-th oldest — not
+        simply the oldest, which would be right only in the exact case
+        ``count == cap`` and would under-report the wait after a cap was
+        lowered or an override withdrawn.
+
+        Returns ``None`` when the answer is not knowable — no rows, or a read
+        that failed. The caller must then say nothing about timing rather
+        than round ``None`` down to "try again now".
+        """
+        when = now or datetime.now(UTC)
+        cutoff = when - self.SESSION_MINT_WINDOW
+        with self._lock:
+            try:
+                cursor = self._conn.execute(
+                    "SELECT recorded_at, payload FROM events "
+                    "WHERE recorder = 'session' AND event_type = 'session_minted' "
+                    "AND recorded_at >= ? ORDER BY recorded_at ASC",
+                    (cutoff.isoformat(),),
+                )
+                stamps = [
+                    datetime.fromisoformat(row["recorded_at"])
+                    for row in cursor
+                    if json.loads(row["payload"]).get("ip") == ip
+                ]
+            except (sqlite3.Error, ValueError, TypeError):
+                return None
+        index = len(stamps) - cap
+        if index < 0 or index >= len(stamps):
+            return None
+        frees_at = stamps[index] + self.SESSION_MINT_WINDOW
+        return max(int((frees_at - when).total_seconds()), 1)
+
+    def delete_all_session_mints_for_tests(self) -> int:
+        """Erase every recorded mint. TEST SUPPORT ONLY; returns the count.
+
+        Named ``_for_tests`` because it exists so one test can drive two
+        DIFFERENT mint windows against one store and prove the advertised
+        wait is derived rather than constant. Nothing in ``src/`` calls it,
+        and it must not: erasing mints in production would hand back the
+        spend control the cap exists to be.
+        """
+        with self._lock:
+            cursor = self._conn.execute(
+                "DELETE FROM events WHERE recorder = 'session' AND event_type = 'session_minted'"
+            )
+            return int(cursor.rowcount or 0)
 
     def session_mint_count_for_ip(
         self,
@@ -1306,7 +1394,7 @@ class FeedbackStore:
         Returns:
             Number of session-mint events recorded for ``ip`` in the window.
         """
-        cutoff = (now or datetime.now(UTC)) - timedelta(hours=24)
+        cutoff = (now or datetime.now(UTC)) - self.SESSION_MINT_WINDOW
         count = 0
         with self._lock:
             cursor = self._conn.execute(

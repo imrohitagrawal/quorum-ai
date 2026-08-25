@@ -1,0 +1,705 @@
+"""What a durable session store must not become.
+
+Sessions are the only credential this app has — there is no login, so the
+cookie IS the identity (``test_session_cookie_prefix_binding`` says so
+outright). Moving them from a process dict onto a mounted volume therefore
+creates security properties that did not exist before, and this suite pins
+the ones ADR-0073 committed to.
+"""
+
+from __future__ import annotations
+
+import os
+import sqlite3
+import stat
+from collections.abc import Iterator
+from datetime import UTC, datetime, timedelta
+from pathlib import Path
+from uuid import UUID
+
+import pytest
+
+from product_app import auth, session_store
+from product_app.auth import SESSION_TTL
+from product_app.session_store import (
+    SessionStore,
+    StoredSession,
+    _digest,
+    _require_aware,
+)
+
+ACCOUNT = UUID("11111111-2222-3333-4444-555555555555")
+
+
+@pytest.fixture
+def store(tmp_path: Path) -> Iterator[SessionStore]:
+    live = SessionStore(str(tmp_path / "sessions.sqlite3"))
+    session_store.configure(live)
+    try:
+        yield live
+    finally:
+        live.close()
+        session_store.configure(None)
+
+
+def _session(session_id: str, *, last_used: datetime | None = None) -> StoredSession:
+    now = datetime.now(UTC)
+    return StoredSession(
+        session_id=session_id,
+        account_id=ACCOUNT,
+        # Deliberately NOT derived from ``session_id``: the CSRF token is
+        # stored in CLEAR, so a token that embedded the session id would put
+        # the id on disk by the back door — which is exactly what an earlier
+        # draft of this helper did, and the test below caught it.
+        csrf_token="an-independent-csrf-token",
+        created_at=now,
+        last_used_at=last_used or now,
+    )
+
+
+def test_the_session_id_is_never_written_to_disk(tmp_path: Path) -> None:
+    """RED IF the store starts persisting the raw id: read access to the Fly
+    volume would then be equivalent to holding every live visitor's cookie.
+
+    The digest assertion is the positive partner (rule 7) — without it, "the
+    token is absent" is trivially true of a database with no rows in it.
+    """
+    path = tmp_path / "sessions.sqlite3"
+    live = SessionStore(str(path))
+    try:
+        live.save(_session("Sup3r-Secret-Cookie-Value"))
+    finally:
+        live.close()
+
+    raw = path.read_bytes()
+    assert b"Sup3r-Secret-Cookie-Value" not in raw
+    assert _digest("Sup3r-Secret-Cookie-Value").encode() in raw
+
+
+def test_the_csrf_token_cannot_smuggle_the_session_id_onto_disk() -> None:
+    """PARTNER to the check above, on the real minting code rather than a
+    fixture. RED IF the two secrets ever become derived from one another.
+
+    The CSRF token is stored in clear — defensibly, because it is useless
+    without the cookie it is bound to. That argument only holds while the
+    token reveals nothing ABOUT the cookie.
+    """
+    repository = auth.SessionRepository()
+    session = repository.create(account_id=ACCOUNT)
+
+    assert session.csrf_token != session.session_id
+    assert session.session_id not in session.csrf_token
+    assert session.csrf_token not in session.session_id
+
+
+def test_an_expired_row_never_resolves_even_if_the_purge_never_ran(
+    store: SessionStore,
+) -> None:
+    """RED IF expiry is enforced only by the purge.
+
+    A durable row outlives the process that would have purged it — an
+    unwritable volume, or a machine that stopped before the next 60s tick.
+    Expiry must therefore be a condition of the READ.
+    """
+    fresh, stale = "fresh-id", "stale-id"
+    store.save(_session(fresh))
+    store.save(_session(stale, last_used=datetime.now(UTC) - SESSION_TTL - timedelta(minutes=1)))
+    horizon = datetime.now(UTC) - SESSION_TTL
+
+    assert store.count() == 2, "positive partner: both rows really are on disk"
+    assert store.fetch(fresh, not_used_before=horizon) is not None
+    assert store.fetch(stale, not_used_before=horizon) is None
+
+
+def test_a_presented_session_id_is_never_adopted(store: SessionStore) -> None:
+    """RED IF a lookup ever upserts the id it was handed.
+
+    Session fixation: an attacker who can plant a cookie must not be able to
+    make the server bless the value they chose. Today no code path writes a
+    row for a caller-supplied id — this pins that, because a durable store is
+    exactly where "upsert on read" starts to look natural.
+    """
+    repository = auth.SessionRepository()
+
+    assert repository.get("attacker-chosen-id") is None
+    assert store.count() == 0
+
+    minted = repository.create(account_id=ACCOUNT)
+    assert store.count() == 1, "positive partner: the store does record real mints"
+    assert minted.session_id != "attacker-chosen-id"
+
+
+def test_a_corrupt_row_yields_no_session_rather_than_a_fabricated_one(
+    store: SessionStore,
+) -> None:
+    """RED IF an unreadable row is allowed to become a ``SessionContext``.
+
+    A NULL or non-UUID account id must fail CLOSED — the caller then mints a
+    fresh session. Failing open would hand out an identity assembled from a
+    row nobody can vouch for.
+    """
+    store.save(_session("good-id"))
+    connection = sqlite3.connect(store._db_path)
+    try:
+        connection.execute(
+            "INSERT INTO sessions "
+            "(session_digest, account_id, csrf_token, created_at, last_used_at) "
+            "VALUES (?, 'not-a-uuid', 'c', ?, ?)",
+            (
+                _digest("corrupt-id"),
+                datetime.now(UTC).isoformat(),
+                datetime.now(UTC).isoformat(),
+            ),
+        )
+        connection.commit()
+    finally:
+        connection.close()
+
+    horizon = datetime.now(UTC) - SESSION_TTL
+    assert store.fetch("corrupt-id", not_used_before=horizon) is None
+    assert store.fetch("good-id", not_used_before=horizon) is not None
+
+
+def test_clear_empties_the_durable_half_too(store: SessionStore) -> None:
+    """RED IF ``clear()`` only empties the dict.
+
+    ``tests/conftest.py`` calls this before and after EVERY test. A clear that
+    left rows behind would let one test's session resolve inside the next, and
+    the failure would surface somewhere unrelated.
+    """
+    repository = auth.SessionRepository()
+    session = repository.create(account_id=ACCOUNT)
+    assert store.count() == 1, "positive partner: there was something to clear"
+
+    repository.clear()
+
+    assert store.count() == 0
+    assert repository.get(session.session_id) is None
+
+
+def test_the_gc_purge_reports_what_it_deleted(store: SessionStore) -> None:
+    """RED IF the purge stops touching the durable half, or stops counting.
+
+    The 60-second daemon is the ONLY caller that deletes durable rows, and it
+    runs inside a broad ``except``. A purge that silently did nothing would be
+    indistinguishable from one that worked.
+    """
+    repository = auth.SessionRepository()
+    live = repository.create(account_id=ACCOUNT)
+    store.save(_session("old", last_used=datetime.now(UTC) - SESSION_TTL - timedelta(hours=1)))
+    assert store.count() == 2
+
+    _, durable = repository.purge_expired()
+
+    assert durable == 1
+    assert store.count() == 1
+    assert repository.get(live.session_id) is not None
+
+
+@pytest.mark.skipif(
+    os.geteuid() == 0,
+    reason="root ignores the read-only bit, so this test would pass vacuously",
+)
+def test_an_unwritable_volume_degrades_instead_of_locking_everyone_out(
+    tmp_path: Path,
+) -> None:
+    """RED IF an unwritable volume can stop a session being issued.
+
+    Measured shapes (CPython 3.12.13 / SQLite 3.50.4): an EXISTING file whose
+    table is already present opens fine on a read-only volume and fails only
+    on write, which is the production shape once this store has ever run. The
+    required behaviour is the behaviour this app had before the store
+    existed: sessions work, and they do not survive a restart.
+    """
+    path = tmp_path / "sessions.sqlite3"
+    SessionStore(str(path)).close()
+    os.chmod(path, stat.S_IRUSR)
+    os.chmod(tmp_path, stat.S_IRUSR | stat.S_IXUSR)
+    try:
+        live = SessionStore(str(path))  # must NOT raise
+        session_store.configure(live)
+        repository = auth.SessionRepository()
+        session = repository.create(account_id=ACCOUNT)
+
+        assert repository.get(session.session_id) is not None, "sessions still work"
+        assert live.save(_session("anything")) is False, (
+            "positive partner: the volume really is unwritable, so the "
+            "assertion above is not passing over a healthy store"
+        )
+        assert auth.SessionRepository().get(session.session_id) is None, (
+            "nothing was persisted, so a restart loses it — the documented "
+            "degradation, not a silent success"
+        )
+    finally:
+        os.chmod(tmp_path, stat.S_IRWXU)
+        os.chmod(path, stat.S_IRUSR | stat.S_IWUSR)
+        session_store.configure(None)
+
+
+def test_a_touch_does_not_write_through_on_every_request(store: SessionStore) -> None:
+    """CARDINALITY (rule 6b). RED IF the throttle is removed: ``require_session``
+    touches on EVERY authenticated request, and ADR-0002 pinned this app's
+    single-writer SQLite design against ~16 writes per RUN, not one per
+    REQUEST.
+
+    The positive partner is the second half: a touch far enough past the
+    interval MUST write, or the throttle would be indistinguishable from
+    never persisting at all.
+    """
+    repository = auth.SessionRepository()
+    session = repository.create(account_id=ACCOUNT)
+    stamped = session.persisted_last_used_at
+
+    for _ in range(20):
+        repository.touch(session.session_id)
+    assert session.persisted_last_used_at == stamped, "20 touches, no extra write"
+
+    session.persisted_last_used_at = datetime.now(UTC) - timedelta(hours=1)
+    repository.touch(session.session_id)
+    assert session.persisted_last_used_at != stamped
+
+
+# ---------------------------------------------------------------------------
+# Degradation paths. Every one of these is a branch whose whole job is to fail
+# quietly, which is exactly the kind that ships untested and then turns out to
+# raise. They are asserted on OUTCOME (the app still works), never on a log
+# line.
+# ---------------------------------------------------------------------------
+
+
+def test_a_closed_store_answers_everything_without_raising(tmp_path: Path) -> None:
+    """RED IF any method raises after ``close()``.
+
+    ``atexit`` closes every open store, and the 60s GC daemon keeps running
+    through interpreter shutdown. A method that raised here would surface as a
+    noisy, unactionable traceback at every process exit.
+    """
+    live = SessionStore(str(tmp_path / "sessions.sqlite3"))
+    live.save(_session("before-close"))
+    assert live.count() == 1, "positive partner: the store worked while open"
+    live.close()
+
+    assert live.save(_session("after-close")) is False
+    assert live.delete("after-close") is False
+    assert live.delete_all() is False
+    assert live.fetch("before-close", not_used_before=datetime.now(UTC)) is None
+    assert live.purge_expired(cutoff=datetime.now(UTC)) == 0
+    assert live.count() == 0
+    live.close()  # idempotent
+
+
+def test_a_broken_connection_degrades_instead_of_raising(store: SessionStore) -> None:
+    """RED IF a mid-flight SQLite fault escapes to the caller.
+
+    Distinct from the closed-store case above: here the store believes it is
+    open, so the ``sqlite3.Error`` handlers are what stand between a disk fault
+    and a 500 on every authenticated request.
+    """
+    store.save(_session("live-id"))
+    assert store.count() == 1, "positive partner: the store was healthy first"
+    store._conn.close()  # the handle dies underneath the store
+
+    assert store.save(_session("another")) is False
+    assert store.delete("live-id") is False
+    assert store.delete_all() is False
+    assert store.fetch("live-id", not_used_before=datetime.now(UTC)) is None
+    assert store.purge_expired(cutoff=datetime.now(UTC)) == 0
+    assert store.count() == 0
+
+
+def test_the_repository_still_works_with_a_broken_store(store: SessionStore) -> None:
+    """RED IF a storage fault can stop a session being ISSUED.
+
+    This is the one-way door ADR-0073 turns on: sessions are the only
+    credential, so the failure must land on "does not survive a restart",
+    never on "nobody can start one".
+    """
+    repository = auth.SessionRepository()
+    store._conn.close()
+
+    session = repository.create(account_id=ACCOUNT)
+    assert repository.get(session.session_id) is not None
+    assert repository.touch(session.session_id) is not None
+    assert repository.rotate_csrf(session.session_id) is not None
+    repository.revoke(session.session_id)
+    repository.clear()
+    assert repository.purge_expired() == (0, 0)
+
+
+def test_revoke_removes_the_durable_row(store: SessionStore) -> None:
+    """RED IF ``revoke`` forgets the durable half.
+
+    It has no caller in ``src/`` today. That is precisely why it needs a test:
+    a revoke that dropped only the cached copy would let the revoked cookie
+    resolve again after the next restart — a revocation that silently expires
+    instead of revoking.
+    """
+    repository = auth.SessionRepository()
+    session = repository.create(account_id=ACCOUNT)
+    assert store.count() == 1, "positive partner: there was a row to revoke"
+
+    repository.revoke(session.session_id)
+
+    assert store.count() == 0
+    assert auth.SessionRepository().get(session.session_id) is None
+
+
+def test_from_env_creates_the_parent_directory(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """RED IF ``from_env`` stops creating the directory: the first boot on a
+    fresh volume would fail to open and silently fall back to non-durable
+    sessions — the bug, shipped behind the fix."""
+    target = tmp_path / "nested" / "deeper" / "sessions.sqlite3"
+    assert not target.parent.exists(), "positive partner: the directory is genuinely missing"
+    monkeypatch.setenv("SESSION_DB_PATH", str(target))
+
+    live = SessionStore.from_env()
+    try:
+        assert target.parent.is_dir()
+        assert live.save(_session("works")) is True
+    finally:
+        live.close()
+
+
+def test_the_gc_daemon_survives_a_purge_that_raises(monkeypatch: pytest.MonkeyPatch) -> None:
+    """RED IF a raising purge kills the session-gc thread.
+
+    The loop runs forever in a daemon thread; one escaped exception would end
+    it permanently and expired sessions would then accumulate for the life of
+    the process, with nothing to notice.
+    """
+    calls: list[str] = []
+
+    class _Exploding:
+        def purge_expired(self) -> tuple[int, int]:
+            calls.append("tick")
+            raise RuntimeError("the volume went away")
+
+    monkeypatch.setattr(auth, "session_repository", _Exploding())
+
+    auth._gc_tick()  # must not raise
+    auth._gc_tick()
+
+    assert calls == ["tick", "tick"], (
+        "positive partner: the tick really did reach the purge both times, so "
+        "'it did not raise' is not passing over a tick that never ran"
+    )
+
+
+def test_the_gc_daemon_actually_ticks(store: SessionStore) -> None:
+    """POSITIVE PARTNER for the test above (rule 7). RED IF ``_gc_tick`` stops
+    being wired to a real purge — without this, "nothing escaped" is
+    satisfiable by a tick that does nothing at all."""
+    original = auth.session_repository
+    repository = auth.SessionRepository()
+    auth.session_repository = repository
+    try:
+        store.save(
+            _session("ancient", last_used=datetime.now(UTC) - SESSION_TTL - timedelta(days=1))
+        )
+        assert store.count() == 1
+
+        auth._gc_tick()
+
+        assert store.count() == 0
+    finally:
+        # ORIGINAL, not ``repository``: an earlier draft restored the local one,
+        # which left the module global pointing at an object ``conftest``'s
+        # ``_reset_state`` no longer holds a reference to, so its ``clear()``
+        # cleaned a repository nothing used and sessions leaked into the next
+        # test. Found by adversarial review with a leak probe.
+        auth.session_repository = original
+
+
+def test_touching_or_rotating_an_unknown_session_returns_nothing(store: SessionStore) -> None:
+    """RED IF ``touch``/``rotate_csrf`` start inventing a session for an id
+    they cannot resolve.
+
+    Both now resolve through ``get``, which reads durable rows. An unknown id
+    must stay unknown — inventing one here would be the fixation hole in
+    another doorway.
+    """
+    repository = auth.SessionRepository()
+
+    assert repository.touch("no-such-session") is None
+    assert repository.rotate_csrf("no-such-session") is None
+    assert store.count() == 0
+
+    real = repository.create(account_id=ACCOUNT)
+    assert repository.touch(real.session_id) is not None, "positive partner"
+    assert repository.rotate_csrf(real.session_id) is not None
+
+
+def test_the_repository_works_with_no_durable_store_at_all() -> None:
+    """RED IF an unconfigured sink breaks the repository.
+
+    This is the shape every release before ADR-0073 shipped, and the one the
+    boot fallback lands on. It must behave exactly as it always did.
+    """
+    session_store.configure(None)
+    repository = auth.SessionRepository()
+
+    session = repository.create(account_id=ACCOUNT)
+    assert repository.get(session.session_id) is not None
+    assert repository.get("unknown") is None
+    assert repository.purge_expired() == (0, 0)
+    repository.revoke(session.session_id)
+    repository.clear()
+
+
+def test_a_boot_that_cannot_open_the_sink_still_serves_sessions(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    """RED IF a failed boot-time open raises, or falls back silently.
+
+    This is the branch the whole design rests on: the app must come up with
+    in-process sessions rather than not come up. It is also the branch an
+    operator has to be told about, because the symptom — visitors quietly
+    losing their session on every restart — looks exactly like the bug
+    ADR-0073 fixed rather than like a volume fault.
+    """
+    from product_app import main
+
+    unopenable = tmp_path / "not-a-directory" / "sessions.sqlite3"
+    unopenable.parent.write_text("this is a file, so it cannot hold a database")
+    monkeypatch.setenv("SESSION_DB_PATH", str(unopenable))
+    session_store.configure(None)
+
+    with caplog.at_level("ERROR", logger="product_app.main"):
+        main._configure_session_store()  # must NOT raise
+
+    assert session_store.get_store() is None, (
+        "positive partner: the open really did fail, so the assertions below "
+        "are not passing over a healthy store"
+    )
+    messages = [r.getMessage() for r in caplog.records if r.levelname == "ERROR"]
+    assert any("could not open" in m and "will NOT survive a restart" in m for m in messages), (
+        f"the operator must be told what the degradation costs; got {messages}"
+    )
+
+    repository = auth.SessionRepository()
+    session = repository.create(account_id=ACCOUNT)
+    assert repository.get(session.session_id) is not None, "sessions still work"
+
+
+def test_the_expiry_boundary_agrees_with_the_in_process_half(store: SessionStore) -> None:
+    """RED IF ``fetch`` and ``purge_expired`` stop being exact complements of
+    ``auth._Session.is_expired``.
+
+    ``is_expired`` is ``(now - last_used_at) > SESSION_TTL``, so an age of
+    EXACTLY the TTL is still alive. An exclusive comparison in the store would
+    disagree at that one instant — the cached session alive, its durable row
+    already gone — and a restart landing there would lose a session the running
+    process still considered valid.
+
+    Both directions are asserted: the boundary instant survives, and one
+    microsecond past it does not. A single-sided check would pass against a
+    store that kept everything forever.
+    """
+    boundary = datetime.now(UTC) - SESSION_TTL
+    store.save(_session("exactly-at-the-boundary", last_used=boundary))
+    store.save(_session("one-tick-older", last_used=boundary - timedelta(microseconds=1)))
+
+    assert store.fetch("exactly-at-the-boundary", not_used_before=boundary) is not None
+    assert store.fetch("one-tick-older", not_used_before=boundary) is None
+
+    # ...and the purge agrees with the read, rather than deleting what the read
+    # just said was alive.
+    assert store.purge_expired(cutoff=boundary) == 1
+    assert store.fetch("exactly-at-the-boundary", not_used_before=boundary) is not None
+
+    at_boundary = auth._Session(
+        session_id="x",
+        account_id=ACCOUNT,
+        csrf_token="c",
+        created_at=boundary,
+        last_used_at=boundary,
+    )
+    assert at_boundary.is_expired(now=boundary + SESSION_TTL) is False
+    assert at_boundary.is_expired(now=boundary + SESSION_TTL + timedelta(microseconds=1)) is True
+
+
+def test_the_throttle_still_bounds_writes_when_the_sink_is_unwritable(
+    store: SessionStore,
+) -> None:
+    """CARDINALITY (rule 6b). RED IF the throttle counts successes instead of
+    attempts.
+
+    Adversarial review measured 1,000 touches producing 1,000 doomed INSERTs
+    against a broken sink — each taking the store lock and emitting an
+    unrate-limited WARNING — because ``persisted_last_used_at`` was stamped
+    only when the write LANDED. That is the degraded state this whole module is
+    designed around, so it is exactly where the bound must hold.
+
+    The healthy half is the positive partner: without it, "few writes" is
+    satisfiable by a repository that never persists at all.
+    """
+    attempts: list[str] = []
+    real_save = store.save
+
+    def counting_save(session: StoredSession) -> bool:
+        attempts.append(session.session_id)
+        return real_save(session)
+
+    monkeypatched = auth.SessionRepository()
+    store.save = counting_save  # type: ignore[method-assign]
+
+    healthy = monkeypatched.create(account_id=ACCOUNT)
+    assert len(attempts) == 1, "positive partner: creating really does write once"
+    for _ in range(50):
+        monkeypatched.touch(healthy.session_id)
+    assert len(attempts) == 1, "50 touches on a healthy sink: still one write"
+
+    store._conn.close()  # the volume goes away
+    broken = monkeypatched.create(account_id=ACCOUNT)
+    before = len(attempts)
+    for _ in range(50):
+        monkeypatched.touch(broken.session_id)
+
+    assert len(attempts) - before == 0, (
+        "50 touches against a BROKEN sink must attempt no further writes; "
+        f"attempted {len(attempts) - before}"
+    )
+
+
+def test_a_row_dated_in_the_future_is_neither_immortal_nor_resolvable(
+    store: SessionStore,
+) -> None:
+    """RED IF a future-dated row can resolve, or can survive the purge.
+
+    Such a row passes every expiry predicate — ``last_used_at >= cutoff`` here,
+    and a NEGATIVE age in ``auth._Session.is_expired`` — so nothing retires it.
+    Adversarial review demonstrated one dated 2999 resolving through ``get``
+    and surviving ``purge_expired``. Nothing in this module can write one; it
+    is reachable the way any durable row is, which is the module's own premise.
+
+    The live row is the positive partner: the purge must remove the impossible
+    row WITHOUT taking a good one with it.
+    """
+    live = "ordinary-session"
+    store.save(_session(live))
+    store.save(_session("from-the-year-2999", last_used=datetime(2999, 1, 1, tzinfo=UTC)))
+    assert store.count() == 2, "positive partner: both rows are really on disk"
+
+    horizon = datetime.now(UTC) - SESSION_TTL
+    assert store.fetch("from-the-year-2999", not_used_before=horizon) is None
+    assert store.fetch(live, not_used_before=horizon) is not None
+
+    assert store.purge_expired(cutoff=horizon) == 1
+    assert store.count() == 1
+    assert store.fetch(live, not_used_before=horizon) is not None
+
+
+def test_a_timestamp_with_no_timezone_is_refused_rather_than_cached(
+    store: SessionStore,
+) -> None:
+    """RED IF ``fetch`` accepts a naive timestamp.
+
+    This one was missing. The guard was written from an adversarial finding and
+    a fresh mutation sweep showed the whole suite still GREEN with the check
+    disabled — a defensive fix with nothing holding it in place, which is worth
+    no more than the comment above it.
+
+    What the guard prevents is not a bad answer for the bad row. It is that a
+    naive ``last_used_at`` reaches ``auth.SessionRepository._purge_expired_locked``,
+    which subtracts it from an aware ``now`` on EVERY ``create`` and ``get`` --
+    so one unusable row turns into ``TypeError`` on every authenticated request
+    and every ``/ui`` boot until the process restarts. The second half of this
+    test is what pins that, and it is the half the mutant escaped.
+    """
+    connection = sqlite3.connect(store._db_path)
+    try:
+        connection.execute(
+            "INSERT INTO sessions "
+            "(session_digest, account_id, csrf_token, created_at, last_used_at) "
+            "VALUES (?, ?, 'csrf', ?, ?)",
+            (
+                _digest("naive-row"),
+                str(ACCOUNT),
+                "2026-08-26T00:00:00",  # no offset
+                "2026-08-26T00:00:00",  # no offset
+            ),
+        )
+        connection.commit()
+    finally:
+        connection.close()
+
+    horizon = datetime.now(UTC) - SESSION_TTL
+    assert store.fetch("naive-row", not_used_before=horizon) is None
+
+    repository = auth.SessionRepository()
+    assert repository.get("naive-row") is None
+
+    # The half that matters: the bad row must not have poisoned the repository
+    # for everything that comes after it.
+    good = repository.create(account_id=ACCOUNT)
+    assert repository.get(good.session_id) is not None
+    assert repository.touch(good.session_id) is not None
+    assert repository.purge_expired() is not None
+
+    store.save(_session("healthy"))
+    assert store.fetch("healthy", not_used_before=horizon) is not None, (
+        "positive partner: a well-formed row still resolves, so the refusal "
+        "above is not a store that rejects everything"
+    )
+
+
+def test_require_aware_refuses_a_naive_timestamp_on_its_own() -> None:
+    """RED IF ``_require_aware`` stops checking ``tzinfo``.
+
+    The integration test above pins the OUTCOME — a naive row never resolves —
+    but it cannot see WHICH guard produced it, and a mutation sweep proved that:
+    disabling this check left the whole suite green, because
+    ``_is_implausibly_future`` then raises ``TypeError`` subtracting a naive
+    value from an aware one and the same ``except`` swallows it.
+
+    Two independent guards is a good position to be in, not a bad one. What is
+    bad is a guard nothing can observe, because the day someone simplifies the
+    future check away, the naive path reopens silently. So this asserts this
+    function's own contract directly.
+
+    The aware case is the positive partner: without it, "it raises" is
+    satisfiable by a function that rejects everything.
+    """
+    with pytest.raises(ValueError, match="no timezone offset"):
+        _require_aware("2026-08-26T00:00:00")
+
+    parsed = _require_aware("2026-08-26T00:00:00+00:00")
+    assert parsed.tzinfo is not None
+    assert parsed == datetime(2026, 8, 26, tzinfo=UTC)
+
+
+def test_a_write_in_flight_cannot_resurrect_a_revoked_session(store: SessionStore) -> None:
+    """RED IF ``_persist`` stops checking that the session is still the live one.
+
+    The race adversarial review demonstrated: ``rotate_csrf`` released the lock
+    before persisting, so a ``revoke()`` -- or a ``clear()``, which
+    ``tests/conftest.py`` runs between every test -- landing in that window
+    deleted the durable row and the in-flight write put it straight back. The
+    revoked cookie then resolved again in the next process, which is a
+    revocation that silently expires instead of revoking.
+
+    Driven directly rather than by thread timing: a genuine interleaving is
+    what the guard exists for, but a test that depends on hitting a microsecond
+    window is a flake, not a proof. Calling ``_persist`` with a session the
+    repository no longer holds IS the state the race produces.
+    """
+    repository = auth.SessionRepository()
+    session = repository.create(account_id=ACCOUNT)
+    assert store.count() == 1, "positive partner: the row was really written"
+
+    repository.revoke(session.session_id)
+    assert store.count() == 0
+
+    # The write that was already in flight when revoke() landed.
+    repository._persist(session)
+
+    assert store.count() == 0, "a revoked session was resurrected by an in-flight write"
+    assert auth.SessionRepository().get(session.session_id) is None
+
+    # ...and a session that IS still live still persists, or the guard would be
+    # indistinguishable from never writing at all.
+    live = repository.create(account_id=ACCOUNT)
+    repository._persist(live)
+    assert store.count() == 1

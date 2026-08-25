@@ -155,6 +155,66 @@ Log lines, verbatim (`%s` are the runtime substitutions):
 
 For what a read-only or locked volume means for the operator, and for the read-only checks that confirm the migration landed, see [`docs/runbooks/feedback-store-schema-migration.md`](runbooks/feedback-store-schema-migration.md).
 
+## `sessions.sqlite3` — the durable session sink (ADR-0073)
+
+A third SQLite file on the same volume, path from `SESSION_DB_PATH`
+(`fly.toml` pins it to `/data/sessions.sqlite3`; `tests/conftest.py` pins it to
+`:memory:`; unset it defaults to `.data/sessions.sqlite3`). Same shape as its
+two siblings under ADR-0002: one connection, one `RLock`, autocommit, no WAL.
+
+It exists because the per-IP session **mint cap** is durable and the sessions
+it counts were not, so a restart erased the visitor and kept the evidence that
+they had already spent their mints. Every merge redeploys — no workflow has a
+paths filter — so that restart happens daily; `fly.toml` also sets
+`min_machines_running = 0`, which should stop an idle machine too (inferred
+from the config, not observed).
+
+```sql
+CREATE TABLE IF NOT EXISTS sessions (
+    session_digest TEXT PRIMARY KEY,
+    account_id TEXT NOT NULL,
+    csrf_token TEXT NOT NULL,
+    created_at TEXT NOT NULL,
+    last_used_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS sessions_last_used_idx
+    ON sessions (last_used_at);
+```
+
+**`session_digest` is `sha256(session_id)`, and the session id itself is never
+written.** The cookie is the whole credential — this app has no login — so
+storing it would make read access to the volume equivalent to holding every
+live visitor's cookie. `csrf_token` IS stored in clear, because it is useless
+without the cookie the digest withholds; a test pins that the two secrets stay
+independent, since that argument fails if either reveals the other.
+
+**Classification.** `account_id` is a pseudonymous identifier, as elsewhere in
+this document. `csrf_token` is a secret at rest. No query text, no personal
+data, no IP address — the IP lives only in the `events` mint rows.
+
+**Retention.** Rows are deleted by the 60-second `session-gc` daemon once
+`last_used_at` is older than `SESSION_TTL` (2h). Expiry is ALSO a condition of
+every read, so a row that outlives the process that would have purged it still
+does not resolve.
+
+**Unguarded `_SCHEMA`, unlike `feedback_store`'s new DDL, and safe here only
+because this store owns its own file** — the script is that file's initial
+creation rather than a new table added to an existing database. Measured on
+CPython 3.12.13 / SQLite 3.50.4: an existing file whose table is already
+present opens on a read-only volume without writing; a missing table on a
+read-only file, and a new file in a read-only directory, both raise out of
+`__init__`, where `main._configure_session_store` catches them and the app runs
+on in-process sessions. **A later schema change must NOT extend `_SCHEMA`** —
+it would reintroduce the second shape on an existing read-only volume. Use a
+guarded `schema_migrations` block then, exactly as `feedback_store` does.
+
+**Boot behaviour.** A failed open logs at ERROR (`session_store: could not open
+the SQLite sink`) and the app serves normally with sessions that do not survive
+a restart — the behaviour of every release before ADR-0073. A failed WRITE on an
+open store is swallowed and logged at WARNING, with the same consequence. The
+direction is deliberate: sessions are the only credential, so a storage fault
+must never stop one being issued.
+
 ## Migration Strategy
 
 - Use forward-only migrations once implementation begins.

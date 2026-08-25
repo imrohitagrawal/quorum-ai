@@ -14,15 +14,28 @@ Two paths are supported:
   legacy path, CSRF is still required for mutating requests; the legacy
   path is *not* a CSRF bypass.
 
-Sessions live in memory for the MVP. Production deployments would swap
-the in-memory store for a real database; the public surface here is
-unchanged.
+Sessions are held in a process-local dict AND mirrored to a durable
+SQLite sink (:mod:`product_app.session_store`), so a machine restart no
+longer erases the visitor's identity. It used to: the per-IP MINT cap is
+deliberately durable (see ``SESSION_MINT_CAP_PER_IP`` below), the sessions
+it counts were not, and a returning visitor therefore presented a cookie
+the new process had never heard of while the evidence that they had
+already spent their two mints survived — a permanent lockout. Every merge
+redeploys (no workflow has a paths filter), so this is reachable daily;
+``fly.toml`` additionally sets ``min_machines_running = 0``, which should
+make an idle machine stop too, though that has not been observed directly.
+ADR-0073.
+
+The dict remains the authority while the process lives; the durable rows
+are read only when it misses. When the sink is absent or unwritable the
+behaviour degrades to exactly what it was before — working sessions that
+do not survive a restart — never to "nobody can obtain a session".
 """
 
 from __future__ import annotations
 
-import contextlib
 import hashlib
+import logging
 import secrets
 import threading
 import time as _time_module
@@ -36,7 +49,12 @@ from uuid import UUID, uuid4
 from fastapi import Depends, HTTPException, Request, status
 from pydantic import BaseModel
 
+from product_app import session_store
 from product_app.config import RuntimeEnvironment, settings
+from product_app.session_store import (
+    SESSION_TOUCH_PERSIST_INTERVAL_S,
+    StoredSession,
+)
 
 #: Session lifetime. Renewed on every successful ``/v1/session`` call.
 SESSION_TTL = timedelta(hours=2)
@@ -132,7 +150,19 @@ class SessionMintCapExceeded(Exception):
     agnostic (see the module docstring), so the route layer (``main.
     browser_session``) is the one place that translates this into a 429,
     matching how the existing per-minute burst limiter is handled there.
+
+    ``retry_after_seconds`` is how long until the rolling window frees a
+    slot, or ``None`` when that is not knowable (no store, or the read
+    failed). It is carried on the exception because the refusal is the only
+    moment the answer is cheap to compute, and because a page that cannot
+    name a time must say nothing rather than round an unknown down to
+    "try again now".
     """
+
+    def __init__(self, client_ip: str, *, retry_after_seconds: int | None = None) -> None:
+        super().__init__(client_ip)
+        self.client_ip = client_ip
+        self.retry_after_seconds = retry_after_seconds
 
 
 class AuthError(StrEnum):
@@ -159,12 +189,51 @@ class _Session:
     csrf_token: str
     created_at: datetime
     last_used_at: datetime
+    #: ``last_used_at`` as of the last time a durable write was ATTEMPTED for
+    #: this session — landed or not — or ``None`` if none ever has been.
+    #:
+    #: Attempted, not succeeded, and that distinction is the whole point.
+    #: Stamping it only on success meant the throttle never engaged on an
+    #: unwritable volume: adversarial review measured 1,000 touches producing
+    #: 1,000 doomed INSERTs, each taking the store lock and emitting an
+    #: unrate-limited WARNING, in exactly the degraded state this module is
+    #: designed around. A failed write costs the same lock and the same syscall
+    #: as a successful one, so the rate limit has to count both.
+    #:
+    #: Purely local bookkeeping for :meth:`SessionRepository._persist_touch`;
+    #: never read from the sink and never part of the session's identity.
+    persisted_last_used_at: datetime | None = None
 
     def is_expired(self, *, now: datetime) -> bool:
         return (now - self.last_used_at) > SESSION_TTL
 
 
-class InMemorySessionRepository:
+def _to_stored(session: _Session) -> StoredSession:
+    return StoredSession(
+        session_id=session.session_id,
+        account_id=session.account_id,
+        csrf_token=session.csrf_token,
+        created_at=session.created_at,
+        last_used_at=session.last_used_at,
+    )
+
+
+class SessionRepository:
+    """A process-local session cache mirrored to a durable sink.
+
+    Was ``InMemorySessionRepository``, and the rename is the point: the dict
+    is now a CACHE, not the whole store. Reads fall through to
+    :mod:`product_app.session_store` on a miss, which is what lets a visitor
+    who was minted by a previous process still resolve.
+
+    Every durable write is best-effort. When the sink is ``None`` or refuses
+    the write, every method below behaves exactly as it did before the sink
+    existed. That direction is deliberate: this app has no login, so the
+    session IS the identity, and a storage fault that stopped sessions being
+    issued would be a total outage — strictly worse than the lockout this
+    module is fixing.
+    """
+
     def __init__(self) -> None:
         self._sessions: dict[str, _Session] = {}
         self._lock = RLock()
@@ -172,43 +241,165 @@ class InMemorySessionRepository:
     def create(self, *, account_id: UUID) -> _Session:
         with self._lock:
             self._purge_expired_locked()
+            now = datetime.now(UTC)
             session = _Session(
                 session_id=secrets.token_urlsafe(24),
                 account_id=account_id,
                 csrf_token=secrets.token_urlsafe(24),
-                created_at=datetime.now(UTC),
-                last_used_at=datetime.now(UTC),
+                created_at=now,
+                last_used_at=now,
             )
             self._sessions[session.session_id] = session
-            return session
+        self._persist(session)
+        return session
 
     def get(self, session_id: str) -> _Session | None:
+        """Return the session for ``session_id``, restoring it if need be.
+
+        A presented id is only ever LOOKED UP, never adopted. There is no
+        path here that writes a row for an id the caller supplied, so a
+        visitor cannot pin a session id of their own choosing and have the
+        server bless it — the fixation hazard a durable store makes tempting.
+        """
         with self._lock:
             self._purge_expired_locked()
-            return self._sessions.get(session_id)
+            cached = self._sessions.get(session_id)
+        if cached is not None:
+            return cached
+        return self._restore(session_id)
 
     def touch(self, session_id: str) -> _Session | None:
+        session = self.get(session_id)
+        if session is None:
+            return None
         with self._lock:
-            session = self._sessions.get(session_id)
-            if session is None:
-                return None
             session.last_used_at = datetime.now(UTC)
-            return session
+        self._persist_touch(session)
+        return session
 
     def rotate_csrf(self, session_id: str) -> _Session | None:
+        session = self.get(session_id)
+        if session is None:
+            return None
         with self._lock:
-            session = self._sessions.get(session_id)
-            if session is None:
-                return None
             session.csrf_token = secrets.token_urlsafe(24)
             session.last_used_at = datetime.now(UTC)
-            return session
+        # UNCONDITIONAL, not throttled like :meth:`touch`. The token the
+        # client is about to be handed must be the one on disk: a restart
+        # that restored a superseded CSRF token would 403 every mutating
+        # request the visitor makes, which is the lockout in a different
+        # costume.
+        self._persist(session)
+        return session
 
     def revoke(self, session_id: str) -> None:
+        """Drop the session from both halves.
+
+        The durable delete happens while still holding ``self._lock``, so a
+        concurrent ``_persist`` cannot slip between the two and write the row
+        back — see :meth:`_persist`.
+        """
+        store = session_store.get_store()
         with self._lock:
             self._sessions.pop(session_id, None)
+            if store is not None:
+                store.delete(session_id)
 
-    def _purge_expired_locked(self) -> None:
+    def purge_expired(self) -> tuple[int, int]:
+        """Drop expired sessions from both halves; return ``(cached, durable)``.
+
+        Reports what it counted rather than succeeding silently. Called by the
+        GC daemon, which is the ONLY caller that touches the durable half:
+        ``_purge_expired_locked`` runs on every ``create``/``get`` and must
+        stay free of writes, or an app with warm traffic issues a ``DELETE``
+        on the hot path of every authenticated request.
+        """
+        with self._lock:
+            cached = self._purge_expired_locked()
+        store = session_store.get_store()
+        if store is None:
+            return cached, 0
+        return cached, store.purge_expired(cutoff=datetime.now(UTC) - SESSION_TTL)
+
+    def _restore(self, session_id: str) -> _Session | None:
+        store = session_store.get_store()
+        if store is None:
+            return None
+        stored = store.fetch(session_id, not_used_before=datetime.now(UTC) - SESSION_TTL)
+        if stored is None:
+            return None
+        session = _Session(
+            session_id=stored.session_id,
+            account_id=stored.account_id,
+            csrf_token=stored.csrf_token,
+            created_at=stored.created_at,
+            last_used_at=stored.last_used_at,
+            persisted_last_used_at=stored.last_used_at,
+        )
+        with self._lock:
+            # ``setdefault``, not assignment: two requests arriving together on
+            # a cold process both restore, and the loser must return the SAME
+            # object the winner cached or one of them mutates a copy nobody
+            # else can see.
+            return self._sessions.setdefault(session_id, session)
+
+    def _persist(self, session: _Session) -> None:
+        """Mirror ``session`` to the durable sink, if it is still the live one.
+
+        The whole body runs under ``self._lock``, and re-checks that the
+        cached object for this id IS this object before writing. Both halves
+        matter, and adversarial review demonstrated why:
+
+        * ``rotate_csrf`` used to release the lock before persisting, so a
+          ``revoke()`` or ``clear()`` landing in that window deleted the row
+          and the in-flight write then put it back — a revoked cookie
+          resolving again in the next process. ``clear()`` is not theoretical:
+          ``tests/conftest.py`` calls it between every test.
+        * ``persisted_last_used_at`` was stamped by RE-READING
+          ``session.last_used_at`` after the save, so a ``touch`` in between
+          made the throttle believe the disk was fresher than it was. The
+          value written is captured once, before the write, and that is the
+          value stamped.
+        """
+        store = session_store.get_store()
+        if store is None:
+            return
+        with self._lock:
+            if self._sessions.get(session.session_id) is not session:
+                # Revoked or cleared while this write was in flight. Writing
+                # now would resurrect it.
+                return
+            written_at = session.last_used_at
+            # Stamped whether or not the write LANDS. See the field's comment:
+            # a failed write costs the same lock and the same syscall, so the
+            # throttle must count attempts or it stops throttling precisely
+            # when the volume is unwritable.
+            session.persisted_last_used_at = written_at
+            store.save(_to_stored(session))
+
+    def _persist_touch(self, session: _Session) -> None:
+        """Write ``last_used_at`` through, but no more than once per
+        ``SESSION_TOUCH_PERSIST_INTERVAL_S``.
+
+        ``require_session`` touches on EVERY authenticated request, where
+        ADR-0002's measurements were taken against roughly sixteen writes per
+        RUN. Its measured ceiling (~4,500 writes/s) would in fact absorb an
+        unthrottled touch at this app's traffic, so the honest justification is
+        not headroom: it is lock contention with the spend rails, and log
+        volume when the volume is unwritable.
+
+        The cost of the throttle is bounded and one-directional: after a
+        restart a restored session's remaining life is understated by at most
+        the interval, never overstated.
+        """
+        persisted = session.persisted_last_used_at
+        if persisted is not None:
+            elapsed = (session.last_used_at - persisted).total_seconds()
+            if elapsed < SESSION_TOUCH_PERSIST_INTERVAL_S:
+                return
+        self._persist(session)
+
+    def _purge_expired_locked(self) -> int:
         now = datetime.now(UTC)
         expired = [
             session_id
@@ -217,13 +408,24 @@ class InMemorySessionRepository:
         ]
         for session_id in expired:
             self._sessions.pop(session_id, None)
+        return len(expired)
 
     def clear(self) -> None:
+        """Empty BOTH halves.
+
+        Test isolation rests on this (``tests/conftest.py`` calls it before
+        and after every test). A ``clear()`` that emptied only the dict would
+        leave durable rows behind and let one test's session resolve inside
+        the next, so the durable half is not optional here.
+        """
+        store = session_store.get_store()
         with self._lock:
             self._sessions.clear()
+            if store is not None:
+                store.delete_all()
 
 
-session_repository = InMemorySessionRepository()
+session_repository = SessionRepository()
 
 
 # SEC-H3: background GC thread for in-memory state. The previous
@@ -233,17 +435,33 @@ session_repository = InMemorySessionRepository()
 # is short enough to bound memory in long-running processes and
 # cheap enough (one O(n) pass on a typically-small dict) to run
 # constantly.
+#: How often the daemon below purges. Seconds.
+SESSION_GC_INTERVAL_S = 60.0
+
+
+def _gc_tick() -> None:
+    """One purge pass. Extracted from the loop so it can be tested.
+
+    Nothing may escape: this runs in a daemon thread with no supervisor, and
+    a single escaped exception ends the thread permanently — after which
+    expired sessions accumulate for the life of the process with nothing to
+    notice. The failure is LOGGED rather than suppressed silently: on an
+    unwritable volume the durable half fails on every tick, and a bare
+    ``suppress`` would hide 1,440 of those a day.
+    """
+    try:
+        session_repository.purge_expired()
+    except Exception:  # noqa: BLE001 - the daemon must not die
+        logging.getLogger(__name__).warning("session-gc: purge tick failed", exc_info=True)
+
+
 def _start_gc_thread() -> threading.Thread:
     """Start a daemon thread that periodically purges expired sessions."""
 
     def _gc_loop() -> None:
         while True:
-            # Use a private method that runs the purge
-            # without taking a write lock if possible.
-            # Don't crash the daemon on GC errors.
-            with contextlib.suppress(Exception):
-                session_repository._purge_expired_locked()
-            _time_module.sleep(60.0)
+            _gc_tick()
+            _time_module.sleep(SESSION_GC_INTERVAL_S)
 
     t = threading.Thread(target=_gc_loop, daemon=True, name="session-gc")
     t.start()
@@ -327,7 +545,12 @@ def issue_session(
                 cap=_effective_session_mint_cap(),
             )
             if not allowed:
-                raise SessionMintCapExceeded(client_ip)
+                raise SessionMintCapExceeded(
+                    client_ip,
+                    retry_after_seconds=store.seconds_until_a_session_mint_frees(
+                        ip=client_ip, cap=_effective_session_mint_cap()
+                    ),
+                )
     session = session_repository.create(account_id=account_id)
     return SessionIssueResponse(
         account_id=session.account_id,
@@ -536,7 +759,7 @@ def issue_or_resume_session(
         if existing is not None and not existing.is_expired(now=datetime.now(UTC)):
             # C10: rotate CSRF on resume. The fresh token replaces
             # the one previously issued for this session. See
-            # ``InMemorySessionRepository.rotate_csrf``.
+            # ``SessionRepository.rotate_csrf``.
             rotated = session_repository.rotate_csrf(presented_session_id)
             if rotated is None:
                 # Race: the session expired between ``get`` and

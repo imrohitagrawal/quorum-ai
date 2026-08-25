@@ -4,10 +4,13 @@
 # Secrets: `fly secrets set OPENROUTER_API_KEY=... QUORUM_TOKEN_SECRET=...`
 #
 # This config assumes a single-instance deployment (no scaling).
-# The in-memory state (sessions, query runs) is documented as MVP
-# design and is intentional. When you need multiple instances,
-# add Fly Postgres + Upstash Redis and refactor the repositories
-# in src/product_app/auth.py and src/product_app/query_runs.py.
+# Query runs are in-process state and are documented as MVP design.
+# SESSIONS ARE NOT, since ADR-0073: they are mirrored to SQLite on the
+# volume below, because the per-IP mint cap that counts them is durable
+# and the two lifetimes disagreeing locked returning visitors out. When
+# you need multiple instances, add Fly Postgres + Upstash Redis and
+# refactor src/product_app/query_runs.py; sessions need the shared-volume
+# question answered first (see ADR-0002 on single-writer SQLite).
 
 app = "quorum-ai"
 primary_region = "iad"  # US East (Virginia) - adjust to nearest region
@@ -59,6 +62,14 @@ kill_timeout = "5s"
   # (mounted at /data below), NOT the ephemeral rootfs default (.data/…) which
   # is wiped on every deploy — that erased the self-improving-loop history.
   FEEDBACK_DB_PATH = "/data/feedback_events.sqlite3"
+
+  # ADR-0073: durable browser sessions, on the same persistent volume and for
+  # the same reason. Unset, this defaults to ``.data/sessions.sqlite3`` on the
+  # ephemeral rootfs, which is wiped whenever the machine stops — and with
+  # ``min_machines_running = 0`` below it stops whenever the app goes idle.
+  # That is precisely the lockout ADR-0073 exists to fix, so leaving this
+  # unset in production would ship the fix with its effect switched off.
+  SESSION_DB_PATH = "/data/sessions.sqlite3"
   # R2 S1 (FR-014): durable terminal run-history sink, same persistent volume.
   # Sibling of the feedback trail; wiped-on-deploy would defeat evaluation and
   # (later) operability trends, so it lives on /data too.
@@ -75,7 +86,8 @@ kill_timeout = "5s"
 
 [experimental]
   # Required for single-instance state to be stable across deploys.
-  # Without this, restart wipes in-memory sessions.
+  # Sessions themselves survive a restart since ADR-0073; the remaining
+  # in-process state (query runs) does not.
   auto_rollback = true
 
 [[services]]
@@ -119,7 +131,10 @@ kill_timeout = "5s"
   memory = "512mb"
 
 [deploy]
-  release_command = "echo 'Release deploy complete - no migrations needed (in-memory state)'"
+  # The two SQLite sinks create their own schema on first open, so there is
+  # still no release-time migration step. ADR-0073 added a third; it does the
+  # same, and a read-only volume degrades rather than blocking the boot.
+  release_command = "echo 'Release deploy complete - schemas are self-creating; no migration step'"
   strategy = "rolling"
 
 # NOTE: no `[metrics]` block. The app exposes /health, /ready, /status but no

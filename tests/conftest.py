@@ -52,6 +52,14 @@ os.environ.setdefault("RUN_HISTORY_DB_PATH", ":memory:")
 # ceiling's much larger margin — collides across unrelated tests without it).
 os.environ.setdefault("FEEDBACK_DB_PATH", ":memory:")
 
+# ADR-0073's durable session sink, pinned for the same reason as the two
+# above: unpinned it defaults to ``.data/sessions.sqlite3``, which survives
+# BETWEEN pytest invocations, so one run's sessions would resolve inside the
+# next. ``session_repository.clear()`` in ``_reset_state`` empties this store
+# between tests within a run; this line is what stops it existing on disk at
+# all.
+os.environ.setdefault("SESSION_DB_PATH", ":memory:")
+
 # Egress guard (Stage B): the working-tree ``.env`` sets
 # ``OPENROUTER_LIVE_EXECUTION_ENABLED=true`` with a real key, and ``Settings``
 # reads ``.env`` on every local pytest run. Force live execution OFF before any
@@ -136,7 +144,7 @@ from typing import Any
 
 import pytest
 
-from product_app import feedback_store, store_reconnect
+from product_app import feedback_store, session_store, store_reconnect
 from product_app.auth import session_repository
 from product_app.query_runs import (
     _account_rate_limiter,
@@ -257,6 +265,31 @@ def reset_state() -> Iterator[None]:
     _reset_state()
     yield
     _reset_state()
+
+
+@pytest.fixture(autouse=True)
+def _isolated_session_store() -> Iterator[None]:
+    """Give every test the durable session sink back, whatever it did to it.
+
+    ADR-0073's sink is a module singleton like the feedback store's, and the
+    tests that exercise it swap in their own file-backed store — a restart is
+    not simulable against ``:memory:``, which dies with its connection. Before
+    this fixture they ended by calling ``session_store.configure(None)``, which
+    does not restore the boot-configured store, it DISABLES durability.
+
+    Adversarial review measured the consequence: ``tests/integration/`` collects
+    early, so from the first such test onward the sink was ``None`` for the rest
+    of the run, and roughly 3,600 later tests exercised the NON-durable path
+    while ``conftest``'s own comment claimed ``clear()`` was emptying a store
+    that no longer existed. Save-and-restore, the same shape as
+    ``_isolated_feedback_store`` below; a test that swaps in its own store now
+    layers on top and is restored on exit.
+    """
+    saved = session_store.get_store()
+    try:
+        yield
+    finally:
+        session_store.configure(saved)
 
 
 @pytest.fixture(autouse=True)

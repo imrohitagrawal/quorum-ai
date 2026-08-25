@@ -97,7 +97,15 @@ import re
 from datetime import timedelta
 from decimal import Decimal
 
-from product_app import auth, catalog_fetcher, costs, main, model_slots, query_runs
+from product_app import (
+    auth,
+    catalog_fetcher,
+    costs,
+    feedback_store,
+    main,
+    model_slots,
+    query_runs,
+)
 
 REPO_ROOT = pathlib.Path(__file__).resolve().parents[2]
 SRC = REPO_ROOT / "src" / "product_app"
@@ -128,6 +136,12 @@ RISK_TIER_MODULES = (
     # exists to force a decision about, and neither was triaged because
     # neither module was listed here.
     "feedback_store.py",
+    # Added 2026-08-26 with ADR-0073. It holds a CREDENTIAL at rest (the
+    # session digest) and the interval that bounds how much of a session's
+    # remaining life a restart loses. It was not listed when it was written,
+    # so none of its constants was triaged -- exactly the "covered by
+    # omission" shape the RISK_TIER_MODULES comment above warns about.
+    "session_store.py",
     "readiness.py",
     "query_runs.py",
     # #303: the run state machine, repository and pipeline constants that used
@@ -152,6 +166,13 @@ BUCKET_A_LITERAL_PIN = (
     "costs.CONFIRMATION_TOKEN_TTL",
     "auth.SESSION_TTL",
     "auth.SESSION_MINT_CAP_PER_IP",
+    # The rolling window the cap is counted over. A LITERAL pin for the same
+    # reason the cap itself is one: cap and window are one control, and
+    # widening the window silently tightens the cap while narrowing it
+    # silently loosens a spend guard -- in the fail-open direction, and with
+    # no other value in the code constraining it. It is also now user-facing:
+    # the 429 page derives its advertised wait from this number.
+    "feedback_store.FeedbackStore.SESSION_MINT_WINDOW",
     "auth._SESSION_COOKIE_NAME_PREFIXED",
     "auth.CSRF_HEADER_NAME",
     "main._HSTS_HEADER",
@@ -185,6 +206,18 @@ BUCKET_A_LITERAL_PIN = (
 #: Pin the BEHAVIOUR, not the literal — these legitimately change, and a literal
 #: pin would teach people to edit the test alongside the code.
 BUCKET_B_PIN_BEHAVIOUR = {
+    # --- Added 2026-08-26 with session_store.py (ADR-0073) ---
+    "session_store.SESSION_TOUCH_PERSIST_INTERVAL_S": (
+        "a write-amplification throttle, not a guard. Its error is bounded and "
+        "one-directional in BOTH directions -- too small costs SQLite writes on "
+        "the authenticated hot path, too large understates a restored session's "
+        "remaining life by at most the interval -- so it legitimately moves with "
+        "measurement. What must not move is that a burst of touches does NOT "
+        "produce a burst of writes, and that a touch past the interval DOES "
+        "write; both are asserted by "
+        "tests/security/test_durable_session_store.py::"
+        "test_a_touch_does_not_write_through_on_every_request"
+    ),
     # --- Added 2026-08-07 with the Sentry redaction fix (ADR-0023) ---
     "main._USER_TEXT_FIELDS": (
         "assert that a payload carrying any of these fields comes back with the user's "
@@ -421,6 +454,27 @@ BUCKET_C_NO_PIN = {
     "feedback_store.FeedbackStore._MIGRATIONS_DDL": (
         "SQL DDL, not a value; malformed SQL fails loudly at open, exercised "
         "by every migration test"
+    ),
+    # --- Added 2026-08-26 with session_store.py (ADR-0073) ---
+    "auth.SESSION_GC_INTERVAL_S": (
+        "how often the session-gc daemon purges. A wrong value costs memory "
+        "headroom or idle wakeups, never correctness: expiry is enforced on "
+        "every READ as well (session_store.fetch's last_used_at predicate), so "
+        "a purge that ran late -- or never -- cannot make an expired session "
+        "resolvable. That read-side enforcement is what tests/security/"
+        "test_durable_session_store.py::"
+        "test_an_expired_row_never_resolves_even_if_the_purge_never_ran pins, "
+        "and it is what makes this interval a tuning knob rather than a guard"
+    ),
+    "session_store.DEFAULT_DB_PATH": (
+        "filesystem path, overridden by SESSION_DB_PATH everywhere it matters"
+    ),
+    "session_store._CLOSE_LOCK_TIMEOUT_S": (
+        "teardown-only bound; a wrong value delays process exit, nothing else"
+    ),
+    "session_store.SessionStore._SCHEMA": (
+        "SQL DDL, not a value; malformed SQL fails loudly at the first CREATE "
+        "TABLE and every SessionStore test opens a real database with it"
     ),
     "feedback_store.FeedbackStore._SPEND_RAIL_INDEX": (
         "best-effort covering index; its own docstring measures the cost of "
@@ -985,6 +1039,22 @@ def test_auth_and_transport_constants_are_pinned() -> None:
     assert auth._SESSION_COOKIE_NAME_PREFIXED == "__Host-quorum_session"
     assert auth.CSRF_HEADER_NAME == "X-CSRF-Token"
     assert main._HSTS_HEADER == "max-age=31536000; includeSubDomains"
+
+
+def test_the_session_mint_window_is_pinned() -> None:
+    """Turns red if: the rolling window the per-IP mint cap is counted over
+    moves off 24 hours.
+
+    Cap and window are ONE control, and only the cap half was pinned. Widening
+    the window silently tightens the cap; narrowing it silently loosens a spend
+    guard, which is the fail-open direction. Since ADR-0073 the number is also
+    user-facing -- the 429 page derives its advertised wait from it -- so a
+    change here would quietly make that page lie.
+
+    A literal on both sides deliberately (rule 7a): asserting against
+    `SESSION_MINT_WINDOW` itself would move with the code and pin nothing.
+    """
+    assert timedelta(hours=24) == feedback_store.FeedbackStore.SESSION_MINT_WINDOW
 
 
 def test_the_rate_limiter_eviction_windows_are_pinned() -> None:

@@ -1,0 +1,111 @@
+<!doctype html>
+<html lang="en" data-theme="light">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Quorum-AI — session limit reached</title>
+    <link rel="stylesheet" href="/static/tokens.css">
+    <link rel="icon" type="image/png" sizes="32x32" href="/static/favicon-32.png">
+    <link rel="icon" type="image/svg+xml" href="/static/favicon.svg">
+    <script>
+      // Same pre-paint theme gate as workspace.html, copied rather than shared
+      // because this page must render with no app.js and no data islands. A
+      // visitor who has chosen dark should not be handed a white page at the
+      // one moment the app is refusing them.
+      try {
+        var stored = window.localStorage.getItem("quorum.theme");
+        if (stored === "dark" || stored === "light") {
+          document.documentElement.setAttribute("data-theme", stored);
+        } else if (window.matchMedia && window.matchMedia("(prefers-color-scheme: dark)").matches) {
+          document.documentElement.setAttribute("data-theme", "dark");
+        }
+      } catch (e) {
+        /* storage disabled: keep the light default from the markup. */
+      }
+    </script>
+    <style>
+      /* Inline, not a fourth stylesheet: this page is a dead end reached at
+         the moment the app is refusing to serve, so it should cost one
+         request for tokens and nothing else. Every colour below is a token
+         from tokens.css, so light and dark both come for free. */
+      * { box-sizing: border-box; }
+      body {
+        margin: 0;
+        min-height: 100vh;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        padding: 2rem 1.25rem;
+        background: var(--bg, #FFFFFF);
+        color: var(--ink, #14171C);
+        font-family: Geist, ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
+        line-height: 1.6;
+      }
+      main {
+        width: 100%;
+        max-width: 34rem;
+        background: var(--surface, #FFFFFF);
+        border: 1px solid var(--line, rgba(20, 23, 28, 0.14));
+        border-radius: 14px;
+        padding: 2rem;
+      }
+      .brand {
+        display: inline-flex;
+        align-items: center;
+        gap: 0.5rem;
+        margin-bottom: 1.25rem;
+        font-weight: 600;
+        letter-spacing: 0.01em;
+      }
+      .brand-tile {
+        display: inline-grid;
+        place-items: center;
+        width: 1.75rem;
+        height: 1.75rem;
+        border-radius: 7px;
+        background: var(--brand-tile-bg, #0E6B50);
+        color: #FFFFFF;
+        font-weight: 700;
+      }
+      h1 { margin: 0 0 0.75rem; font-size: 1.5rem; line-height: 1.25; }
+      p { margin: 0 0 1rem; }
+      p:last-child { margin-bottom: 0; }
+      .lede { font-size: 1.0625rem; }
+      .detail { color: var(--text-secondary, #5F6570); font-size: 0.9375rem; }
+      ul { margin: 0 0 1rem; padding-left: 1.25rem; }
+      li { margin-bottom: 0.5rem; }
+      a { color: inherit; }
+      a:focus-visible, :focus-visible { outline: 3px solid var(--focus-ring, #14171C); outline-offset: 3px; }
+      @media (max-width: 30rem) { main { padding: 1.5rem 1.25rem; } }
+    </style>
+  </head>
+  <body>
+    <main id="main-content">
+      <p class="brand"><span class="brand-tile" aria-hidden="true">Q</span>Quorum-AI</p>
+      <h1>This network has reached its session limit</h1>
+      <p class="lede">
+        Quorum-AI runs real models and pays for every answer, so it allows a
+        small number of new sessions per IP address in any rolling 24-hour
+        period. Your IP address has used all of them.
+      </p>
+      <p class="lede">__RETRY_SENTENCE__</p>
+      <ul>
+        <li>
+          <strong>If you already had Quorum-AI open</strong>, that session
+          still works — return to the tab you were using, or reopen this page
+          in the same browser. Continuing an existing session does not need a
+          new one.
+        </li>
+        <li>
+          <strong>If you are on shared office or VPN internet</strong>, the
+          limit counts the whole network, not you. Someone else on the same
+          address may have used it.
+        </li>
+      </ul>
+      <p class="detail">
+        Nothing is wrong with your account and nothing has been deleted. The
+        limit is a spending control, not a ban, and it clears itself.
+      </p>
+    </main>
+  </body>
+</html>
