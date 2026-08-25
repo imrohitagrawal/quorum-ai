@@ -1,35 +1,36 @@
 # Session Handoff
 
 ## Date/time
-2026-08-22T10:09:53+05:30
+2026-08-25T20:24:51+05:30
 
 ## Latest narrative handoff
-`docs/analysis/2026-08-22-session-handoff.md` — read this for full context before editing. (today)
+`docs/analysis/2026-08-25-session-handoff-2.md` — read this for full context before editing. (today)
 
 This file is a mechanical snapshot (branch/git-status/skill-route/live state) —
 regenerated fresh every `make handoff`. The narrative above (what happened,
 what's next, the traps) lives in the dated doc it points to, not here.
 
 ## Current branch/worktree
-docs/handoff-pointer
+docs/protocol-compliance-ledger
 
 ## Live state (measured fresh by this run, not hand-carried)
 Run `make handoff` again for current numbers instead of trusting this file
 once it ages -- every value below is read from git/gh/`/status` at
 generation time, per #134.
 
-- **`origin/main` tip:** `79b5222bb66c`
-- **Last commit touching `src/`:** `ef633d5ba63f`
-- **Production vs. last `src/` commit:** unavailable: could not reach https://quorum-ai.fly.dev/status (last src/ commit is ef633d5)
-- **pytest collected (no execution):** 3166
+- **`origin/main` tip:** `6f0ed3a256e7`
+- **Last commit touching `src/`:** `b5d6224b23fe`
+- **Production vs. last `src/` commit:** unavailable: could not reach https://quorum-ai.fly.dev/status (last src/ commit is b5d6224)
+- **pytest collected (no execution):** 3668
 - **e2e lane spec counts:** invariants: 18, ops: 2, degraded: 1
-- **Open issues:** 6
+- **Open issues:** 4
 - **Changed-lines coverage:** not computed here -- `make diff-cover` shares
   coverage data with every pytest-invoking target and races with them if run
   concurrently (AGENTS.md rule 15), so this file does not run it. Run
   `make quality && make diff-cover DIFF_BASE=origin/main` for a current number.
 - **Remote branches not merged into `origin/main`:**
-- `docs/handoff-pointer`
+- `docs/protocol-compliance-ledger`
+- `fix/374-close-guard-expected-closes`
 
 ## Current phase
 Operate, learn, and improve
@@ -86,13 +87,12 @@ Operate, learn, and improve
 
 ## Git status
 ```text
-M docs/analysis/2026-08-22-session-handoff.md
+clean
 ```
 
 ## Diff stat
 ```text
-docs/analysis/2026-08-22-session-handoff.md | 4 ++--
- 1 file changed, 2 insertions(+), 2 deletions(-)
+no unstaged diff
 ```
 
 ## Completed in this session
