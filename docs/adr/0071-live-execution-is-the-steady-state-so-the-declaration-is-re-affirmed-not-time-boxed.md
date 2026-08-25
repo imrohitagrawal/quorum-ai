@@ -67,9 +67,14 @@ all. Measured, by reading the gate and by driving the real producer:
   is `COMPLETED` **and** its `provider_path` is outside
   `NOT_INVOKED_PATHS = {LOCAL_SIMULATION, FALLBACK_SEARCH}` (`providers.py:122`).
 * The only site that produces such an answer is inside `produce_initial_answer`'s
-  `_live_execution_enabled` branch (`providers.py:512`, `:571`). The three other
-  sites that set `OPENROUTER_SEARCH` (`providers.py:783`, `:853`, `:910`) all set
-  status `FAILED`.
+  `_live_execution_enabled` branch (`providers.py:512` is the branch, `:571` the
+  assignment; `:669-670` is the predicate, `openrouter_live_execution_enabled and
+  openrouter_key`). Every other builder that sets `OPENROUTER_SEARCH` sets status
+  `FAILED`, so none can satisfy the gate: `_failed_answer` (`providers.py:734`,
+  status at `:798`), `cancelled_answer` (`:815`, status at `:868`) and
+  `deadline_exceeded_answer` (`:878`, status at `:925`). That conjunct is
+  load-bearing and easy to miss — those three DO carry an invoked provider path,
+  and only their status keeps the judge shut.
 * `tests/integration/test_judge_never_spends_on_a_run_that_must_not_spend.py`
   pins the gate: 9 passed.
 
