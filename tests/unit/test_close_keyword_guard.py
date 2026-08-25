@@ -614,6 +614,9 @@ def test_a_close_nobody_expected_is_refused_and_an_expected_one_passes(
     assert _premerge(monkeypatch, UNMEANT_CLOSE, "369", []) == 0
     assert _premerge(monkeypatch, "Refs #369 only.", "369", []) == 1
     assert "expected but will NOT close: #369" in capsys.readouterr().out
+    # A close quoted in backticks is one GitHub does not act on (ADR-0066), so
+    # the comparison must count it as nothing rather than refuse the merge.
+    assert _premerge(monkeypatch, "The ADR quotes `Closes #148` in backticks.", "", []) == 0
 
 
 def test_githubs_own_parse_of_the_pull_request_counts_as_a_close(
