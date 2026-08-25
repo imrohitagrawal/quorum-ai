@@ -162,19 +162,29 @@ session_minted rows: 2                the resume consumed no mint
 | Theme resolved before paint | `light` | `dark` |
 | `Retry-After` on a fresh cap | `86399` | — |
 
-**Mutation proofs.** Every test in this change was shown to fail against a
-deliberate defect and pass after restoring the file from a copy
-(`diff -q` clean each time), on a 19-test suite:
+**Mutation proofs.** Each defect below was injected, the suite run, and the
+file restored from a copy — never `git checkout` — with `diff -q` confirming
+the restore was byte-identical every time. Baseline and final both **36
+passed**, across `tests/integration/test_durable_sessions.py`,
+`tests/integration/test_session_cap_page.py`,
+`tests/security/test_durable_session_store.py` and
+`tests/unit/test_session_cap_retry_hint.py`:
 
 | Mutant | Result |
 |---|---|
-| `get()` stops restoring from the durable store | 3 failed |
-| `fetch()` stops enforcing expiry on the read | 1 failed |
-| `_digest()` returns the raw session id | 1 failed |
-| `clear()` stops emptying the durable half | 1 failed |
-| The per-request write throttle is removed | 1 failed |
-| The advertised wait is hard-coded to one hour | 2 failed |
-| `/ui` 429 reverts to the bare sentence | 4 failed |
+| `get()` stops restoring from the durable store | 3 failed, 33 passed |
+| `fetch()` stops enforcing expiry on the read | 2 failed, 34 passed |
+| `_digest()` returns the raw session id | 1 failed, 35 passed |
+| `clear()` stops emptying the durable half | 1 failed, 35 passed |
+| The per-request write throttle is removed | 1 failed, 35 passed |
+| The wait uses the oldest mint, not the deciding one | 1 failed, 35 passed |
+| `revoke()` leaves the durable row behind | 1 failed, 35 passed |
+| `/ui` 429 reverts to the bare sentence | 4 failed, 32 passed |
+
+Two pins outside that suite were proved the same way: halving
+`SESSION_MINT_WINDOW` to 12h reds `test_the_session_mint_window_is_pinned`,
+and making a failed sink open raise reds
+`test_a_boot_that_cannot_open_the_sink_still_serves_sessions`.
 
 ## Consequences
 
