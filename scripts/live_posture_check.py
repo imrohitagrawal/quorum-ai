@@ -86,9 +86,10 @@ RE-AFFIRMATION: what separates a sanctioned week from a forgotten one
     REPOSITORY, and that is forced by measurement rather than taste. A committed
     ``reaffirmed_at:`` would be satisfiable by automation HERE:
 
-      * 366 of 366 commits carry NO signature (``git log --all --format='%G?'``
-        -> ``366 N``) and ``required_signatures`` is disabled on ``main``.
-      * 234 of 366 commits already have committer ``noreply@github.com`` — the
+      * every commit carries NO signature (``git log --all --format='%G?'`` ->
+        ``371 N`` on this branch) and ``required_signatures`` is disabled on
+        ``main``.
+      * 234 of those commits already have committer ``noreply@github.com`` — the
         ordinary squash-merge path — so "the committer must not be a bot"
         rejects this repository's normal workflow.
       * ``seed-visual-baselines.yml`` already holds ``contents: write``, already
@@ -100,22 +101,38 @@ RE-AFFIRMATION: what separates a sanctioned week from a forgotten one
         and is reviewed" — ADR-0070's stated safeguard — has no mechanical
         backing at all.
 
-    A comment does not have those problems, because GitHub sets the two fields
-    that matter and the commenter cannot:
+    A comment is better on the two fields GitHub sets and the commenter cannot:
 
-      * ``user.type`` is ``"Bot"`` for anything posted with a workflow token.
-        Measured on this repository's own alert issue: all 11 machine comments
-        on #351 are ``{"login": "github-actions[bot]", "type": "Bot"}``. THIS
-        WATCHDOG CANNOT RE-AFFIRM ITSELF — everything it posts is typed ``Bot``,
-        by GitHub, and ``parse_reaffirmations`` refuses ``Bot`` comments.
+      * ``user.type`` is ``"Bot"`` for anything posted with a workflow token, and
+        ``performed_via_github_app`` carries the app object. Measured on this
+        repository's own alert issue: all 11 machine comments on #351 are
+        ``{"login": "github-actions[bot]", "type": "Bot"}`` and carry the GitHub
+        Actions app. THIS WATCHDOG CANNOT RE-AFFIRM ITSELF, and neither can any
+        GitHub App.
       * ``created_at`` is server-set, so a re-affirmation cannot be
         FORWARD-DATED to never lapse. With a committed field both the actor and
         the instant are self-declared; with a comment neither is.
+      * the comment must come from the login the window declares as its
+        ``owner``, so "some account said something" is not enough.
 
-    What this does NOT prove, stated plainly: that the human THOUGHT about it. A
-    person can paste the token every morning without reading a thing. The
-    mechanism establishes that a human acted inside the cadence, never that
-    judgement was exercised. That residual is accepted, not solved.
+    WHAT THIS DOES NOT PROVE, and the wording here is deliberately narrow because
+    an earlier draft of this file overstated it and adversarial review refuted
+    the overstatement:
+
+      * NOT that a human acted. ``user.type`` is the type of the ACCOUNT, not of
+        the actor: a personal access token belonging to a user account posts as
+        ``"User"``. A PAT deliberately provisioned into a scheduled workflow
+        WOULD re-affirm. What is established mechanically is narrower and still
+        worth having — **no DEFAULT automation can re-affirm**: not this
+        watchdog, not any workflow using ``github.token``, not any GitHub App.
+        Automating it costs a deliberate, attributable act of provisioning a
+        human credential.
+      * NOT that the person THOUGHT about it. Somebody can paste the token every
+        morning without reading a thing.
+      * NOT that the declaration itself is honest. ``opened_at`` is a committed,
+        self-declared field and moving it forward resets this clock without any
+        comment at all — see the residual note under THE ATTENTION CLOCK'S
+        ORIGIN below.
 
 ``standing`` IS AN ABUSE SURFACE AND IS BUILT AS ONE
     A mode with no expiry is the same shape as the proven-equivalent exclusion
@@ -147,12 +164,34 @@ RE-AFFIRMATION: what separates a sanctioned week from a forgotten one
         it and prints the ADR, the owner, how long it has stood and how long
         since it was last re-affirmed. A standing posture that produced silence
         would be indistinguishable from a dead watchdog.
-      * A ``standing`` window closes the far-future-expiry hole rather than
-        widening it. ADR-0070 named ``expires_at: 9999-...`` as the one way to
-        silence this indefinitely and defended it only by diff review, which is
-        unenforced here. Re-affirmation closes it for every window length at
-        once: an unattended window lapses in a day whether its expiry is
-        tomorrow or the year 9999.
+      * A ``standing`` window does not widen the far-future-expiry hole
+        ADR-0070 named. Re-affirmation bounds an UNATTENDED window at a day
+        whatever its declared expiry — but see the residual immediately below,
+        because "unattended" is measured partly from a field the declaration
+        itself supplies.
+
+THE ATTENTION CLOCK'S ORIGIN — a residual, stated rather than claimed away
+    The clock is ``max(opened_at, newest owner re-affirmation)``. ``opened_at``
+    is a committed field, so **moving it forward resets the clock with no comment
+    anywhere**, and an automation that can write this file can do that daily.
+    Adversarial review demonstrated exactly this, and an earlier draft of this
+    docstring claimed the opposite.
+
+    It is not closed. It is bounded, and the bounds are worth stating:
+
+      * a window whose declared cover can outlive the cadence MUST name a
+        ``reaffirm_issue`` (``_parse_window`` refuses one that does not), so the
+        long-running case has a comment channel by construction;
+      * every verdict prints the governing window's ``opened_at``, so a value
+        that keeps moving is visible in each cycle's log rather than silent;
+      * the naive automated form — a workflow that writes this file — is refused
+        by ``test_no_workflow_that_touches_the_declaration_may_write_the_repository``,
+        and the watchdog's own ``contents: read`` is asserted by equality.
+
+    What remains is a person, or a credential a person provisioned, committing a
+    fresh ``opened_at`` every day. That is an attributable act in the git history
+    rather than a silent one, which is the honest limit of what a stateless check
+    reading a writable file can achieve.
 
 WHY IT READS PRODUCTION AND NOT ``fly.toml``
     ``DEPLOY.md:61``, ``:175`` and ``:230`` instruct the operator to turn live
@@ -197,11 +236,13 @@ WHAT THIS CANNOT SEE — stated per AGENTS.md's "before adding a gate" rule
       spending, so this script is correctly silent. That case is covered by the
       SECOND layer, ``tests/unit/test_live_execution_posture_declaration.py``,
       which runs pre-merge in a blocking lane.
-    * THE JUDGE, PRE-MERGE. There is no judge configuration in ``fly.toml`` at
-      all (measured: ``grep -i judge fly.toml`` exits 1). The judge is governed
-      purely by Fly secrets, so NO pre-merge gate can ever see it, and this
-      runtime check is the only place the judge dimension can bite. That
-      asymmetry with the live flag is recorded rather than discovered later.
+    * THE JUDGE, PRE-MERGE. There is no judge CONFIGURATION in ``fly.toml`` at
+      all. Measured, and SCOPED to ``origin/main`` because this very diff added
+      the word "judge" to that file's comment block, so the unscoped form now
+      refutes itself: ``git grep -i judge origin/main -- fly.toml`` exits 1.
+      The judge is governed purely by Fly secrets, so NO pre-merge gate can ever
+      see it, and this runtime check is the only place the judge dimension can
+      bite. That asymmetry with the live flag is recorded, not discovered later.
     * RE-AFFIRMATION FRESHNESS, PRE-MERGE, for the same reason: attention is a
       runtime fact read from GitHub, and the pre-merge gate is offline.
     * Whether a declaration is HONEST, or whether a re-affirmation was THOUGHT
@@ -331,8 +372,18 @@ REAFFIRM_TOKEN = "REAFFIRM live-execution"
 #: Where re-affirmations are read from. ``{repo}`` and ``{issue}`` are filled in.
 #: Overridable so every test drives a ``file:`` fixture and no test touches
 #: GitHub — the discipline the ``/ready`` tests already follow.
+#: ``since`` is load-bearing, not decoration. MEASURED 2026-08-25 against the
+#: real API on this repo's own issue #351: the endpoint returns comments
+#: OLDEST-FIRST, and ``sort=created&direction=desc`` is silently IGNORED (both
+#: orderings returned ``["2026-08-19T09:40:42Z", "2026-08-19T19:01:25Z"]``). So
+#: on a busy issue the newest re-affirmation would fall off page 1 and the
+#: window would lapse no matter what anybody did — a permanent false alert that
+#: no human action could clear, which is how an alarm gets muted. ``since``
+#: DOES work (11 comments -> 5 with a mid-thread cutoff, -> 0 with a future
+#: one), and bounding the read to the cadence makes pagination irrelevant: only
+#: comments inside the attention window can matter anyway.
 DEFAULT_REAFFIRMATION_URL_TEMPLATE = (
-    "https://api.github.com/repos/{repo}/issues/{issue}/comments?per_page=100"
+    "https://api.github.com/repos/{repo}/issues/{issue}/comments?per_page=100&since={since}"
 )
 
 #: Bound the probes. Lifted verbatim from ``deploy_drift_check.py:71,77,78``,
@@ -427,10 +478,22 @@ class DeclaredWindow:
         re-affirmation at all. Deliberate: the cheap, common, short window costs
         nothing extra, and only a window that outlives a day earns the rest of
         its life.
+
+        A re-affirmation counts only if it names THIS window's ``opened_at`` AND
+        comes from the login this window declares as its ``owner``. The owner
+        match is the difference between "somebody with an account said something"
+        and "the person who took this on says it is still wanted": without it,
+        any account in the world that can comment on a public repository's issue
+        could hold a money-spending posture open.
         """
         latest = self.opened_at
+        owner = self.owner.strip().lower().lstrip("@")
         for entry in reaffirmations:
-            if entry.window_opened_at == self.opened_at and entry.at > latest:
+            if entry.window_opened_at != self.opened_at:
+                continue
+            if entry.by.strip().lower() != owner:
+                continue
+            if entry.at > latest:
                 latest = entry.at
         return latest
 
@@ -471,14 +534,77 @@ class PostureResult:
 # --------------------------------------------------------------------------
 
 
+#: Words that mean an ADR's decision no longer stands, even though its status
+#: line opens with "Accepted". THE HOUSE STYLE MAKES THIS NECESSARY: this
+#: repository writes ``## Status`` as "Accepted — <date>. <later history>", so
+#: ``startswith("Accepted")`` is not a status check at all. Measured: ADR-0060 —
+#: the record that CAUSED #357 — reads "Accepted — 2026-08-19. **Reverted —
+#: 2026-08-22.**" and passed a bare ``startswith``. An ADR that was reverted
+#: authorising a permanent live posture is the worst possible failure of this
+#: check, and it was one review round away from shipping.
+_ADR_REVOKED_MARKERS = (
+    "reverted",
+    "superseded",
+    "withdrawn",
+    "rescinded",
+    "retired",
+    "replaced by",
+    "not accepted",
+    "pending",
+    "in principle",
+)
+
+
+def _strip_uncommitted_prose(text: str) -> str:
+    """Remove fenced code blocks and HTML comments before looking for the marker.
+
+    Both are ways to put the marker's exact bytes in a file while committing to
+    nothing. A fenced block is how a document QUOTES the required line — this
+    very file's own docs do it — and an HTML comment is invisible in rendered
+    Markdown, so a reviewer scrolling a diff sees nothing at all. Neither is an
+    authorisation, and before this both were accepted.
+    """
+    out: list[str] = []
+    fenced = False
+    in_comment = False
+    for line in text.splitlines():
+        stripped = line.strip()
+        if stripped.startswith("```") or stripped.startswith("~~~"):
+            fenced = not fenced
+            continue
+        if fenced:
+            continue
+        if "<!--" in line:
+            in_comment = True
+        if in_comment:
+            if "-->" in line:
+                in_comment = False
+            continue
+        out.append(line)
+    return "\n".join(out)
+
+
+def _adr_status_is_live(status_line: str) -> bool:
+    """Whether an ADR's status line means "accepted, and still standing"."""
+    lowered = status_line.strip().lower()
+    if not lowered.startswith("accepted"):
+        return False
+    # "Accepted-in-principle-pending-review" starts with "accepted" and means the
+    # opposite. Require a word boundary rather than a prefix match.
+    tail = lowered[len("accepted") :]
+    if tail and (tail[0].isalnum() or tail[0] in "-_"):
+        return False
+    return not any(marker in lowered for marker in _ADR_REVOKED_MARKERS)
+
+
 def authorising_adrs(adr_dir: Path) -> frozenset[str]:
     """Which ADRs on disk positively authorise a standing live-execution posture.
 
-    An ADR qualifies only if it is ACCEPTED and carries
-    ``ADR_AUTHORISATION_MARKER`` on a line of its own. Returning a SET rather
-    than answering a yes/no keeps the decision below pure: the caller resolves
-    the citations once, and ``parse_windows`` compares against what it was
-    handed.
+    An ADR qualifies only if its decision still STANDS and it carries
+    ``ADR_AUTHORISATION_MARKER`` on a line of its own, outside any fenced block
+    or HTML comment. Returning a SET rather than answering a yes/no keeps the
+    decision below pure: the caller resolves the citations once, and
+    ``parse_windows`` compares against what it was handed.
     """
     found: set[str] = set()
     try:
@@ -492,13 +618,14 @@ def authorising_adrs(adr_dir: Path) -> frozenset[str]:
         except OSError as exc:  # noqa: BLE001
             print(f"could not read {path}: {exc!r}")
             continue
-        if not any(line.strip() == ADR_AUTHORISATION_MARKER for line in text.splitlines()):
+        visible = _strip_uncommitted_prose(text)
+        if not any(line.strip() == ADR_AUTHORISATION_MARKER for line in visible.splitlines()):
             continue
         heading = re.search(r"^# (ADR-\d{4}):", text, re.M)
         status = re.search(r"^## Status\s*\n+([^\n]+)", text, re.M)
         if heading is None or status is None:
             continue
-        if not status.group(1).strip().startswith("Accepted"):
+        if not _adr_status_is_live(status.group(1)):
             continue
         found.add(heading.group(1))
     return frozenset(found)
@@ -576,6 +703,17 @@ def _parse_window(entry: object, authorised: frozenset[str]) -> DeclaredWindow |
     adr = entry.get("adr")
     expires = entry.get("expires_at")
 
+    def _needs_an_issue(span_hours: float | None) -> bool:
+        """A window that can outlive the cadence must say where to re-affirm it.
+
+        Without this a long window is declarable with no re-affirmation channel
+        at all, so it lapses after a day and the ONLY way to clear the alert is
+        to edit the file — which is the commit path this design is trying not to
+        depend on. Note this is NOT a maximum window length: any length is
+        allowed, it just has to name an issue once it outlives a day.
+        """
+        return span_hours is None or span_hours > REAFFIRMATION_CADENCE_HOURS
+
     if mode == MODE_STANDING:
         # No expiry: that is what `standing` MEANS, and an expiry alongside it
         # would leave a reader unable to say which one governs.
@@ -587,6 +725,8 @@ def _parse_window(entry: object, authorised: frozenset[str]) -> DeclaredWindow |
         if adr in MECHANISM_OWN_ADRS:
             return None
         if adr not in authorised:
+            return None
+        if reaffirm_issue is None and _needs_an_issue(None):
             return None
         return DeclaredWindow(
             owner=owner,
@@ -610,6 +750,9 @@ def _parse_window(entry: object, authorised: frozenset[str]) -> DeclaredWindow |
         # A window that ends before it starts covers no instant at all, so
         # accepting it would silently produce a declaration that can never
         # sanction anything while looking to a reader like one that does.
+        return None
+    span_hours = (expires_at - opened).total_seconds() / 3600.0
+    if reaffirm_issue is None and _needs_an_issue(span_hours):
         return None
     return DeclaredWindow(
         owner=owner,
@@ -649,13 +792,28 @@ def parse_reaffirmations(payload: object, *, now: dt.datetime) -> list[Reaffirma
     Two filters, and BOTH rest on fields GitHub sets rather than on anything the
     commenter supplies:
 
-      * ``user.type == "Bot"`` is dropped. This is what makes the mechanism
-        satisfiable only by a person: a comment posted with a workflow token —
-        including this watchdog's own — is typed ``Bot`` by GitHub. Measured on
-        issue #351: 11 of 11 machine comments carry ``"type": "Bot"``.
+      * ``user.type == "Bot"`` is dropped. A comment posted with a WORKFLOW
+        TOKEN — including this watchdog's own — is typed ``Bot`` by GitHub, so
+        this check cannot re-affirm the posture it polices. Measured on issue
+        #351: 11 of 11 machine comments carry ``"type": "Bot"``.
+      * ``performed_via_github_app`` non-null is dropped. Measured on the same
+        issue: a workflow-token comment carries the whole GitHub Actions app
+        object here (``"slug": "github-actions"``). This closes EVERY GitHub App,
+        including one installed with ``issues: write`` under a human-looking
+        name — which ``user.type`` alone would not.
       * ``created_at`` in the FUTURE is dropped. GitHub cannot produce one, so
         its only source is a hand-built payload, and honouring it would restore
         exactly the forward-dating cheat a committed timestamp would have had.
+
+    WHAT THIS STILL DOES NOT PROVE, and it must not be overstated: that a HUMAN
+    acted. ``user.type`` is the type of the ACCOUNT, not of the actor, so a
+    personal access token belonging to a user account posts as ``"User"``. A
+    deliberately provisioned PAT in a scheduled workflow WOULD re-affirm. That
+    residual is irreducible in this repository — no commit here is signed and
+    nothing distinguishes a person's token from a person — and it is recorded in
+    ADR-0071 rather than papered over. What IS established mechanically: no
+    DEFAULT automation can re-affirm, and automating it costs a deliberate,
+    attributable act of provisioning a credential.
 
     A comment counts only if it carries ``REAFFIRM_TOKEN`` followed by the
     ``opened_at`` instant of the window it re-affirms, so one comment attends
@@ -681,7 +839,12 @@ def parse_reaffirmations(payload: object, *, now: dt.datetime) -> list[Reaffirma
             return None
         if not isinstance(body, str) or created is None:
             return None
-        if kind == "Bot":
+        if kind.strip().lower() == "bot":
+            # Case-folded on purpose: an exact-case compare would let "bot" or
+            # "BOT" through, and the cost of being wrong here is a machine
+            # holding a money posture open.
+            continue
+        if comment.get("performed_via_github_app") is not None:
             continue
         if created > now:
             continue
@@ -692,16 +855,30 @@ def parse_reaffirmations(payload: object, *, now: dt.datetime) -> list[Reaffirma
     return found
 
 
+#: Markdown a person will inevitably put in front of the token. The alert body
+#: renders the instruction in backticks, so somebody who copies it verbatim, or
+#: quotes the alert with "> ", or bullets it, would otherwise fail to re-affirm
+#: while believing they had — and the alert would keep firing with no
+#: explanation, which is precisely how an alarm gets ignored.
+_TOKEN_LEADERS = " \t`>*-+#\u2022"
+
+
 def _reaffirmed_instant(body: str) -> dt.datetime | None:
-    """The window instant a comment body re-affirms, or None if it is not one."""
+    """The window instant a comment body re-affirms, or None if it is not one.
+
+    The token must START the line (after ordinary Markdown decoration). It is
+    deliberately not matched anywhere in the line: "I have NOT re-affirmed
+    REAFFIRM live-execution ..." must not count, and neither must a quotation of
+    somebody else's instruction inside a sentence.
+    """
     for line in body.splitlines():
-        stripped = line.strip()
+        stripped = line.strip().lstrip(_TOKEN_LEADERS).strip()
         if not stripped.startswith(REAFFIRM_TOKEN):
             continue
         remainder = stripped[len(REAFFIRM_TOKEN) :].strip()
         if not remainder:
             continue
-        return _parse_instant(remainder.split()[0])
+        return _parse_instant(remainder.split()[0].strip("`*_"))
     return None
 
 
@@ -726,11 +903,11 @@ def _judge_note(judge_states: Mapping[str, bool | None], *, live: bool) -> str:
     if not probed:
         return "judge_enabled was not probed."
     judge_on, judge_known = _judge_verdict(judge_states)
-    readable = len([state for state in judge_states.values() if state is not None])
+    readable_count = len([state for state in judge_states.values() if state is not None])
     if not judge_known:
         return f"judge_enabled was unreadable on all {probed} /status host(s)."
     state = "true" if judge_on else "false"
-    note = f"judge_enabled={state} (read {readable} of {probed} /status host(s))."
+    note = f"judge_enabled={state} (read {readable_count} of {probed} /status host(s))."
     if judge_on and not live:
         note += (
             " The judge cannot spend while live execution is off — the run-path "
@@ -763,16 +940,17 @@ def evaluate_posture(
     read.
 
     ORDER OF PRECEDENCE once the posture is live, and each step's reason:
-      1. the declaration file did not parse       -> UNKNOWN (cannot rely on it)
-      2. judge state unreadable                   -> UNKNOWN (it can spend now)
-      3. no window covers now                     -> PAST_WINDOW / UNDECLARED
-      4. a covering window's issue unreadable     -> UNKNOWN (attention unknown)
-      5. every covering window's attention lapsed -> REAFFIRMATION_LAPSED
-      6. judge on, no attended window declares it -> JUDGE_UNDECLARED
-      7. otherwise                                -> WITHIN (standing or not)
+      1. no window covers now                     -> PAST_WINDOW / UNDECLARED
+      2. the governing window's issue unreadable  -> UNKNOWN (attention unknown)
+      3. judge state unreadable                   -> UNKNOWN (it can spend now)
+      4. the governing window is unattended       -> REAFFIRMATION_LAPSED
+      5. judge on, governing window omits it      -> JUDGE_UNDECLARED
+      6. otherwise                                -> WITHIN (standing or not)
 
-    Attention outranks the judge because a lapsed window means nobody is watching
-    AT ALL, which is the larger fact; the judge question presumes somebody is.
+    Step 1 comes first because a live posture with NO declaration is undeclared
+    whatever the judge is doing; putting the judge read above it made an
+    unreadable ``/status`` file an alert saying "the check could not establish
+    the posture" when it had established it perfectly well.
     """
     judge_states = {} if judge_states is None else judge_states
     reaffirmations = {} if reaffirmations is None else reaffirmations
@@ -818,7 +996,7 @@ def evaluate_posture(
 
     judge_on, judge_known = _judge_verdict(judge_states)
     live_hosts = sorted(url for url, state in readable.items() if state != FLAG_OFF_STATE)
-    unread = probed - len(readable)
+    unread = (probed - len(readable)) + (judge_probed - judge_readable)
     counted = (
         f"read {len(readable)} of {probed} host(s); {len(live_hosts)} report a "
         f"live-execution posture; {len(windows)} window(s) declared"
@@ -828,8 +1006,8 @@ def evaluate_posture(
         ""
         if complete
         else (
-            f" {unread} host(s) did not answer, so this verdict is taken over a "
-            "partial view and may not close a standing alert."
+            f" {unread} endpoint(s) did not answer, so this verdict is taken over "
+            "a partial view and may not close a standing alert."
         )
     )
 
@@ -841,19 +1019,14 @@ def evaluate_posture(
             complete=complete,
         )
 
-    # From here the posture IS live, so the judge dimension becomes load-bearing
-    # and an unreadable one is a refusal to guess rather than an assumption.
-    if judge_probed and not judge_known:
-        return PostureResult(
-            PostureDecision.UNKNOWN,
-            f"{counted}. {live_hosts} report a live posture, but judge_enabled "
-            f"could not be read from any of {judge_probed} /status host(s). While "
-            "live execution is ON the judge CAN spend, and its GET-path spend "
-            "reaches no ledger (ADR-0013) — so this check refuses to call a live "
-            f"posture sanctioned without knowing it.{partial}",
-            complete=False,
-        )
-
+    # The posture IS live from here.
+    #
+    # ORDER MATTERS, and this order is a review finding rather than a taste.
+    # The covering-window question comes FIRST: a live posture with no
+    # declaration at all is LIVE_UNDECLARED whatever the judge is doing, and an
+    # earlier draft let an unreadable /status turn that into UNKNOWN — filing an
+    # alert whose body says "the check could not establish the posture" when it
+    # had established it perfectly well and real money was spendable.
     active = [window for window in windows if window.covers(now)]
     if not active:
         expired = [
@@ -884,93 +1057,110 @@ def evaluate_posture(
             complete=complete,
         )
 
-    # A window whose re-affirmation issue could not be read is a window whose
-    # attention this check cannot establish. Refusing to guess is the posture
-    # every other unreadable input gets.
-    unreadable_issues = sorted(
-        {
-            window.reaffirm_issue
-            for window in active
-            if window.reaffirm_issue is not None
-            and window.reaffirm_issue in reaffirmations
-            and reaffirmations.get(window.reaffirm_issue) is None
-        }
+    # THE GOVERNING WINDOW is the one whose cover ends LAST — a standing
+    # declaration never ends, so it governs whenever one is active. Everything
+    # below is decided about IT ALONE, and that is the second review finding.
+    #
+    # An earlier draft asked "is ANY covering window attended?" and "does ANY
+    # covering window declare the judge?". Both are satisfied by a decoy: a
+    # five-minute smoke-test window, freshly opened, silenced a window that ran
+    # to 2099 and had been unattended for eight days — and the operator-facing
+    # detail named only the decoy, reporting "2.0h remaining". The longest cover
+    # is the one actually granting the exposure, so it is the one that has to be
+    # attended and the one that has to declare the judge.
+    governing = max(active, key=_cover_ends)
+    entries = (
+        reaffirmations.get(governing.reaffirm_issue) or []
+        if governing.reaffirm_issue is not None
+        else []
     )
-    if unreadable_issues:
+
+    if (
+        governing.reaffirm_issue is not None
+        and governing.reaffirm_issue in reaffirmations
+        and reaffirmations.get(governing.reaffirm_issue) is None
+    ):
+        # Scoped to the GOVERNING window: an earlier draft checked every covering
+        # window, so a GitHub blip on a secondary window's issue fired a money
+        # alert on a posture another window fully sanctioned — manufacturing the
+        # false red this file's own prose warns gets muted.
         return PostureResult(
             PostureDecision.UNKNOWN,
-            f"{counted}. {live_hosts} report a live posture inside a declared "
-            f"window, but re-affirmation issue(s) {unreadable_issues} could not be "
-            "read, so this check cannot establish whether anybody is still "
-            f"attending it.{partial}",
+            f"{counted}. {live_hosts} report a live posture inside "
+            f"{governing.describe()}, but its re-affirmation issue "
+            f"{governing.reaffirm_issue} could not be read, so this check cannot "
+            f"establish whether anybody is still attending it.{partial}",
             complete=False,
         )
 
-    def _entries(window: DeclaredWindow) -> list[Reaffirmation]:
-        if window.reaffirm_issue is None:
-            return []
-        return reaffirmations.get(window.reaffirm_issue) or []
+    if judge_probed and not judge_known:
+        return PostureResult(
+            PostureDecision.UNKNOWN,
+            f"{counted}. {live_hosts} report a live posture inside "
+            f"{governing.describe()}, but judge_enabled could not be read from "
+            f"any of {judge_probed} /status host(s). While live execution is ON "
+            "the judge CAN spend, and its GET-path spend reaches no ledger "
+            "(ADR-0013) — so this check refuses to call a live posture "
+            f"sanctioned without knowing it.{partial}",
+            complete=False,
+        )
 
-    attended = [window for window in active if window.is_attended(now, _entries(window))]
-    if not attended:
-        stalest = max(active, key=lambda w: w.hours_unattended(now, _entries(w)))
-        unattended = stalest.hours_unattended(now, _entries(stalest))
-        issue = stalest.reaffirm_issue if stalest.reaffirm_issue else "<none declared>"
+    attended_ago = governing.hours_unattended(now, entries)
+    if not governing.is_attended(now, entries):
+        issue = governing.reaffirm_issue if governing.reaffirm_issue else "<none declared>"
         return PostureResult(
             PostureDecision.LIVE_REAFFIRMATION_LAPSED,
             f"{counted}. {live_hosts} report a live posture inside "
-            f"{stalest.describe()}, but nobody has re-affirmed it for "
-            f"{unattended:.1f}h against a {REAFFIRMATION_CADENCE_HOURS:.0f}h "
+            f"{governing.describe()}, opened {governing.opened_at.isoformat()}, "
+            f"but its owner {governing.owner!r} has not re-affirmed it for "
+            f"{attended_ago:.1f}h against a {REAFFIRMATION_CADENCE_HOURS:.0f}h "
             "cadence. A declaration nobody is still attending is a declaration in "
             "name only — this is what three unattended days looked like in #357. "
             f"To re-affirm, comment '{REAFFIRM_TOKEN} "
-            f"{stalest.opened_at.isoformat()}' on issue {issue}; or switch live "
+            f"{governing.opened_at.isoformat()}' on issue {issue}; or switch live "
             f"execution off. {judge_note}{partial}",
             complete=complete,
         )
 
-    if judge_on and not any(window.judge for window in attended):
+    if judge_on and not governing.judge:
         return PostureResult(
             PostureDecision.LIVE_JUDGE_UNDECLARED,
             f"{counted}. {live_hosts} report a live posture inside "
-            f"{attended[0].describe()} — but /status reports judge_enabled=true "
-            "and NO attended window declares the judge. The judge is a second "
-            "paid subsystem whose GET-path spend reaches no ledger (ADR-0013), so "
+            f"{governing.describe()} — but /status reports judge_enabled=true and "
+            "that window does NOT declare the judge. The judge is a second paid "
+            "subsystem whose GET-path spend reaches no ledger (ADR-0013), so "
             "global_daily_spend_usd under-reports by exactly its cost while this "
             'stands. Set "judge": true in the window if it was meant, or turn the '
             f"judge off.{partial}",
             complete=complete,
         )
 
-    # The governing window is the one whose cover ends LAST — a standing
-    # declaration never ends, so it governs whenever one is attended. Review
-    # measured a 24-hour window reported as "0.1h remaining" because a shorter
-    # sibling happened to be listed first; the number an operator plans around
-    # must be when cover actually ends.
-    window = max(attended, key=_cover_ends)
-    attended_ago = window.hours_unattended(now, _entries(window))
-    if window.is_standing:
-        standing_for = (now - window.opened_at).total_seconds() / 3600.0
+    if governing.is_standing:
+        standing_for = (now - governing.opened_at).total_seconds() / 3600.0
         return PostureResult(
             PostureDecision.LIVE_WITHIN_STANDING_DECLARATION,
             f"{counted}. {live_hosts} report a live posture under "
-            f"{window.describe()}, standing for {standing_for:.1f}h, last "
-            f"re-affirmed {attended_ago:.1f}h ago against a "
+            f"{governing.describe()}, opened {governing.opened_at.isoformat()}, "
+            f"standing for {standing_for:.1f}h, last re-affirmed "
+            f"{attended_ago:.1f}h ago against a "
             f"{REAFFIRMATION_CADENCE_HOURS:.0f}h cadence, judge declared="
-            f"{str(window.judge).lower()}. Sanctioned; no alert — and REPORTED "
+            f"{str(governing.judge).lower()}. Sanctioned; no alert — and REPORTED "
             "every cycle on purpose, because a standing posture that produced "
             f"silence would look exactly like a dead watchdog. {judge_note}{partial}",
             complete=complete,
         )
-    remaining = (window.expires_at - now).total_seconds() / 3600.0 if window.expires_at else 0.0
-    expiry = window.expires_at.isoformat() if window.expires_at else "?"
+
+    remaining = (
+        (governing.expires_at - now).total_seconds() / 3600.0 if governing.expires_at else 0.0
+    )
+    expiry = governing.expires_at.isoformat() if governing.expires_at else "?"
     return PostureResult(
         PostureDecision.LIVE_WITHIN_DECLARED_WINDOW,
         f"{counted}. {live_hosts} report a live posture, inside a window declared "
-        f"by {window.owner!r} for {window.reason!r}, opened "
-        f"{window.opened_at.isoformat()} and expiring {expiry} — "
+        f"by {governing.owner!r} for {governing.reason!r}, opened "
+        f"{governing.opened_at.isoformat()} and expiring {expiry} — "
         f"{remaining:.1f}h remaining, last re-affirmed {attended_ago:.1f}h ago, "
-        f"judge declared={str(window.judge).lower()}. Sanctioned; no alert. "
+        f"judge declared={str(governing.judge).lower()}. Sanctioned; no alert. "
         f"{judge_note}{partial}",
         complete=complete,
     )
@@ -1015,9 +1205,10 @@ def refuse_undeclared_flag(
         this gate is offline and hermetic, and reaching the network to decide a
         merge would be a worse trade than the blind spot. A window that goes
         stale in production is caught by the watchdog within the hour.
-      * THE JUDGE, at all. ``fly.toml`` carries no judge configuration
-        (measured: ``grep -i judge fly.toml`` exits 1) — the judge is governed
-        purely by Fly secrets, so no pre-merge gate can ever see it.
+      * THE JUDGE, at all. ``fly.toml`` carries no judge configuration —
+        measured as ``git grep -i judge origin/main -- fly.toml``, exit 1, scoped
+        because this diff added the word to that file's comments. The judge is
+        governed purely by Fly secrets, so no pre-merge gate can ever see it.
 
     A ``standing`` window therefore makes this gate permanently quiet, and that
     is the intended trade rather than an oversight: ADR-0070's expiry deadline
@@ -1080,7 +1271,8 @@ def _fetch_json(url: str, *, attempts: int) -> object | None:
         try:
             request = urllib.request.Request(url, headers=_request_headers(url))  # noqa: S310
             with urllib.request.urlopen(request, timeout=_READY_TIMEOUT_SECONDS) as response:  # noqa: S310
-                return json.loads(response.read().decode("utf-8"))
+                parsed: object = json.loads(response.read().decode("utf-8"))
+                return parsed
         except Exception as exc:  # noqa: BLE001 — any failure means "unknown"
             print(f"attempt {attempt}/{attempts}: could not read {url}: {exc!r}")
             if attempt < attempts:
@@ -1140,6 +1332,24 @@ def fetch_reaffirmations(
     return parse_reaffirmations(payload, now=now)
 
 
+def _no_duplicate_keys(pairs: list[tuple[str, object]]) -> dict[str, object]:
+    """``object_pairs_hook`` that refuses a duplicated key instead of taking the last.
+
+    ``json.loads`` silently keeps the LAST duplicate, so a declaration reading
+    ``"judge": false, ... "judge": true`` shows a reviewer one value and hands the
+    parser the other. That defeats every field-level control in this file without
+    breaking any of them, and it is invisible in a diff unless you are looking for
+    it. Refusing makes the whole file untrusted, which is the posture every other
+    malformed declaration gets.
+    """
+    seen: dict[str, object] = {}
+    for key, value in pairs:
+        if key in seen:
+            raise ValueError(f"duplicate key {key!r} in the declaration")
+        seen[key] = value
+    return seen
+
+
 def load_windows(path: Path, *, adr_dir: Path | None = None) -> list[DeclaredWindow] | None:
     """Read and parse the declaration file. None if it cannot be trusted.
 
@@ -1149,7 +1359,7 @@ def load_windows(path: Path, *, adr_dir: Path | None = None) -> list[DeclaredWin
     authority behind it.
     """
     try:
-        payload = json.loads(path.read_text(encoding="utf-8"))
+        payload = json.loads(path.read_text(encoding="utf-8"), object_pairs_hook=_no_duplicate_keys)
     except Exception as exc:  # noqa: BLE001
         print(f"could not read {path}: {exc!r}")
         return None
@@ -1172,12 +1382,24 @@ def _write_outputs(result: PostureResult) -> None:
 
 
 def _reaffirmation_urls(
-    windows: Iterable[DeclaredWindow], *, template: str, repo: str
+    windows: Iterable[DeclaredWindow], *, template: str, repo: str, since: dt.datetime
 ) -> dict[int, str]:
+    """One URL per issue a window names, bounded to the attention window.
+
+    ``since`` is why pagination is not a problem: only comments inside the
+    cadence can reset the clock, so a page-1-only read cannot miss one no matter
+    how long the thread gets. Measured against the real API — the endpoint
+    returns oldest-first and ignores ``direction=desc``, so WITHOUT this bound a
+    thread past 100 comments would lapse permanently and no human action could
+    clear it.
+    """
+    stamp = since.astimezone(dt.UTC).strftime("%Y-%m-%dT%H:%M:%SZ")
     urls: dict[int, str] = {}
     for window in windows:
         if window.reaffirm_issue is not None:
-            urls[window.reaffirm_issue] = template.format(repo=repo, issue=window.reaffirm_issue)
+            urls[window.reaffirm_issue] = template.format(
+                repo=repo, issue=window.reaffirm_issue, since=stamp
+            )
     return urls
 
 
@@ -1221,8 +1443,11 @@ def main(argv: list[str] | None = None) -> int:
     if live_now and windows:
         repo = os.environ.get("GITHUB_REPOSITORY", "imrohitagrawal/quorum-ai")
         active = [window for window in windows if window.covers(now)]
+        # Bounded to the cadence, with a margin so a clock skew or a slow cycle
+        # cannot drop the very comment that would have cleared the alert.
+        since = now - dt.timedelta(hours=REAFFIRMATION_CADENCE_HOURS * 2)
         for issue, url in _reaffirmation_urls(
-            active, template=args.reaffirmations_url, repo=repo
+            active, template=args.reaffirmations_url, repo=repo, since=since
         ).items():
             entries = fetch_reaffirmations(url, now=now)
             reaffirmations[issue] = entries

@@ -22,6 +22,7 @@ from __future__ import annotations
 import datetime as dt
 import importlib.util
 import json
+import re
 import sys
 import tomllib
 from collections.abc import Sequence
@@ -423,6 +424,7 @@ def test_a_standing_window_may_not_also_carry_an_expiry(posture: ModuleType) -> 
         "judge": True,
         "opened_at": _NOW_OPEN,
         "adr": "ADR-0099",
+        "reaffirm_issue": 400,
         "expires_at": _NOW_SHUT,
     }
     assert (
@@ -816,6 +818,7 @@ def test_main_stays_quiet_through_a_declared_window(
                     "judge": False,
                     "opened_at": far_past,
                     "expires_at": far_future,
+                    "reaffirm_issue": 105,
                 }
             ]
         },
@@ -1189,6 +1192,7 @@ def test_a_non_utc_offset_is_normalised_for_display(posture: ModuleType) -> None
                     "judge": False,
                     "opened_at": "2026-08-25T00:00:00+05:30",
                     "expires_at": "2026-08-26T00:00:00-12:00",
+                    "reaffirm_issue": 105,
                 }
             ]
         }
@@ -1421,7 +1425,7 @@ def test_the_lapse_detail_names_the_hours_the_cadence_and_where_to_re_affirm(
         now=_NOW,
         reaffirmations={105: []},
     )
-    assert "nobody has re-affirmed it for 72.0h" in one.detail
+    assert "its owner 'rohit' has not re-affirmed it for 72.0h" in one.detail
     assert "24h cadence" in one.detail
     assert "on issue 105" in one.detail
     assert f"{posture.REAFFIRM_TOKEN} {_LONG_OPEN}" in one.detail
@@ -1433,7 +1437,7 @@ def test_the_lapse_detail_names_the_hours_the_cadence_and_where_to_re_affirm(
         now=_NOW,
         reaffirmations={268: []},
     )
-    assert "nobody has re-affirmed it for 147.0h" in two.detail
+    assert "has not re-affirmed it for 147.0h" in two.detail
     assert "on issue 268" in two.detail
 
 
@@ -1636,9 +1640,10 @@ def test_an_unreadable_reaffirmation_url_reads_as_none(posture: ModuleType, tmp_
 
 def _workflow_texts() -> dict[str, str]:
     directory = REPO_ROOT / ".github" / "workflows"
-    texts = {
-        path.name: path.read_text(encoding="utf-8") for path in sorted(directory.glob("*.yml"))
-    }
+    # BOTH extensions. GitHub accepts `.yaml` as readily as `.yml`, and a gate
+    # that globs only one of them is a gate you rename a file to escape.
+    paths = sorted([*directory.glob("*.yml"), *directory.glob("*.yaml")])
+    texts = {path.name: path.read_text(encoding="utf-8") for path in paths}
     # Empty-input floor: every assertion below is "no workflow does X", which is
     # trivially true over zero workflows.
     assert len(texts) >= 10, (
@@ -1666,11 +1671,27 @@ def test_no_workflow_that_touches_the_declaration_may_write_the_repository() -> 
     # POSITIVE PARTNER and floor: the grep string must actually match something,
     # or "no such workflow can write" is true because no such workflow exists.
     assert naming, "no workflow names the declaration file — this gate is watching nothing"
-    writers = sorted(name for name, text in naming.items() if "contents: write" in text)
-    assert writers == [], (
-        f"{writers} both name configs/live-execution-windows.json and hold "
-        "contents: write — a workflow that can rewrite a window's opened_at can "
-        "reset the attention clock this mechanism exists to measure."
+    # STRUCTURE, NOT SUBSTRING (rule 8). The first version of this gate grepped
+    # for the literal "contents: write" and went red the moment the watchdog's
+    # own header comment EXPLAINED why that permission is dangerous — a gate
+    # tripped by the prose describing it. Parse the permissions instead, at both
+    # the workflow and the job level, because either can grant it.
+    writers: list[str] = []
+    for name in sorted(naming):
+        data = yaml.safe_load(texts[name])
+        if not isinstance(data, dict):
+            continue
+        scopes: list[Any] = [data.get("permissions")]
+        scopes += [(job or {}).get("permissions") for job in (data.get("jobs") or {}).values()]
+        for scope in scopes:
+            if scope == "write-all" or (
+                isinstance(scope, dict) and scope.get("contents") == "write"
+            ):
+                writers.append(name)
+    assert sorted(set(writers)) == [], (
+        f"{sorted(set(writers))} both name configs/live-execution-windows.json and "
+        "grant contents: write — a workflow that can rewrite a window's opened_at "
+        "can reset the attention clock this mechanism exists to measure."
     )
 
 
@@ -1772,6 +1793,28 @@ def test_the_operator_facing_token_is_the_one_the_parser_reads() -> None:
     token = posture_token()
     assert token in _condition_free_alert_body()
     assert token in SHIPPED_WINDOWS.read_text(encoding="utf-8")
+
+
+def test_the_permission_gate_detects_a_real_writer() -> None:
+    """POSITIVE PARTNER for the gate above — without it, a permissions parser
+    that found nothing would pass over a workflow that really could write.
+
+    Three inputs, three outcomes: the watchdog's own shape (read, must not
+    trip), a workflow-level `contents: write` (must trip), and a JOB-level one
+    (must trip — either scope can grant it).
+
+    RED IF: the parser stops seeing either scope.
+    """
+
+    def grants_write(doc: str) -> bool:
+        data = yaml.safe_load(doc)
+        scopes: list[Any] = [data.get("permissions")]
+        scopes += [(job or {}).get("permissions") for job in (data.get("jobs") or {}).values()]
+        return any(isinstance(s, dict) and s.get("contents") == "write" for s in scopes)
+
+    assert grants_write("permissions:\n  contents: write\njobs: {}\n") is True
+    assert grants_write("jobs:\n  a:\n    permissions:\n      contents: write\n") is True
+    assert grants_write("permissions:\n  contents: read\n  issues: write\njobs: {}\n") is False
 
 
 def test_the_watchdog_workflow_still_declares_only_the_permissions_it_needs() -> None:
@@ -1903,6 +1946,7 @@ def test_a_standing_window_needs_a_citation_that_resolves(
         "judge": True,
         "opened_at": _NOW_OPEN,
         "adr": "ADR-0099",
+        "reaffirm_issue": 400,
     }
     assert posture.parse_windows({"windows": [entry]}, authorised_adrs=frozenset()) is None
     parsed = posture.parse_windows({"windows": [entry]}, authorised_adrs=frozenset({"ADR-0099"}))
@@ -1927,6 +1971,7 @@ def test_the_mechanisms_own_records_cannot_authorise_it(posture: ModuleType, adr
         "judge": True,
         "opened_at": _NOW_OPEN,
         "adr": adr,
+        "reaffirm_issue": 400,
     }
     # Even when the citation IS in the authorised set, it is refused.
     assert posture.parse_windows({"windows": [entry]}, authorised_adrs=frozenset({adr})) is None
@@ -2095,9 +2140,10 @@ def test_an_unreadable_judge_state_while_live_is_unknown_and_alerts(
     RED IF: an unreadable judge state defaults to False, which would be a claim
     that a second paid subsystem is off made from a value that was never read.
     """
+    window = _window(posture, opened=_NOW_OPEN, expires=_NOW_SHUT)
     result = posture.evaluate_posture(
         readiness_states={_HOST_A: "live"},
-        windows=[],
+        windows=[window],
         now=_NOW,
         judge_states={_HOST_B: None},
     )
@@ -2299,3 +2345,555 @@ def test_the_adr_0070_truth_table_still_holds(
     assert result.decision is getattr(posture.PostureDecision, expected), label
     assert result.should_alert is alerts, label
     assert result.complete is complete, label
+
+
+# --- L. What adversarial review broke, and what now stops it ---------------
+#
+# Every test below exists because a reviewer DEMONSTRATED the failure it pins.
+# Three of them (L-cadence, L-token, L-wire) are mutants that survived the suite
+# as first written: the checks they describe did not exist until a mutation said
+# so, which is the whole argument for the mutation step.
+
+
+def test_the_cadence_boundary_is_exact_at_the_instant_itself(
+    posture: ModuleType,
+) -> None:
+    """SURVIVED MUTATION: `is_attended`'s `<` flipped to `<=` and the suite stayed
+    green (204 passed), while `test_the_cadence_boundary_is_exact`'s own docstring
+    claimed "RED IF: the comparison flips its strictness". It tested 23.9h and
+    24.1h and never the boundary itself.
+
+    RED IF: `<` becomes `<=`, i.e. a window is treated as attended at the exact
+    instant its cadence runs out.
+    """
+    window = _window(posture, opened=_LONG_OPEN, expires=_LONG_SHUT, issue=105)
+    exactly = _reaffirmed(posture, window=window, hours_ago=24.0, now=_NOW)
+    a_hair_inside = _reaffirmed(posture, window=window, hours_ago=23.999, now=_NOW)
+    assert window.is_attended(_NOW, exactly[105]) is False
+    assert window.is_attended(_NOW, a_hair_inside[105]) is True
+
+
+@pytest.mark.parametrize(
+    "prefix",
+    ["", "`", "> ", "- ", "* ", "  ", "• ", "#"],
+)
+def test_ordinary_markdown_in_front_of_the_token_still_re_affirms(
+    posture: ModuleType, prefix: str
+) -> None:
+    """The alert body renders the instruction in BACKTICKS. A person who copies it
+    verbatim, quotes the alert with "> ", or bullets it would otherwise fail to
+    re-affirm while believing they had — and the alert would keep firing with no
+    explanation, which is exactly how an alarm gets ignored.
+
+    RED IF: the leading-markup strip is removed.
+    """
+    parsed = posture.parse_reaffirmations(
+        [
+            _comment(
+                hours_ago=1,
+                window_opened=_LONG_OPEN,
+                body=f"{prefix}REAFFIRM live-execution {_LONG_OPEN}",
+            )
+        ],
+        now=_NOW,
+    )
+    assert parsed is not None and len(parsed) == 1, prefix
+
+
+def test_the_token_must_START_the_line(posture: ModuleType) -> None:
+    """SURVIVED MUTATION: `startswith(REAFFIRM_TOKEN)` relaxed to
+    `REAFFIRM_TOKEN in stripped` and the suite stayed green.
+
+    The negated sentence is the point. Somebody writing "I have NOT re-affirmed
+    this" and quoting the token must not thereby re-affirm it — the same shape as
+    the merge-body close-keyword trap this repository has been bitten by four
+    times.
+
+    RED IF: the match is loosened to a substring search.
+    """
+    parsed = posture.parse_reaffirmations(
+        [
+            _comment(
+                hours_ago=1,
+                window_opened=_LONG_OPEN,
+                body=f"I am NOT re-affirming: REAFFIRM live-execution {_LONG_OPEN}",
+            )
+        ],
+        now=_NOW,
+    )
+    assert parsed == []
+
+
+def test_main_reads_re_affirmations_and_they_change_the_verdict(
+    posture: ModuleType, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """THE WIRE. SURVIVED MUTATION: `if live_now and windows:` in `main` neutered
+    to `if False and ...` and the suite stayed green (204 passed) while the
+    verdict flipped from quiet to a money alert. The whole attention feature could
+    be severed at the fetch and nothing went red.
+
+    RED IF: `main` stops fetching re-affirmations, or stops passing them to
+    `evaluate_posture`.
+    """
+    opened = (dt.datetime.now(dt.UTC) - dt.timedelta(days=3)).isoformat()
+    expires = (dt.datetime.now(dt.UTC) + dt.timedelta(days=4)).isoformat()
+    window = {
+        "owner": "rohit",
+        "reason": "collect #105 production logs",
+        "mode": "time_boxed",
+        "judge": False,
+        "opened_at": opened,
+        "expires_at": expires,
+        "reaffirm_issue": 105,
+    }
+    fresh = {
+        "user": {"login": "rohit", "type": "User"},
+        "created_at": (dt.datetime.now(dt.UTC) - dt.timedelta(hours=2)).isoformat(),
+        "body": f"REAFFIRM live-execution {opened}",
+    }
+    code, written = _run_main(
+        posture,
+        tmp_path,
+        monkeypatch,
+        body={"live_readiness": {"state": "live"}},
+        windows_payload={"windows": [window]},
+        comments=[fresh],
+    )
+    assert code == 0, written
+    assert "decision=live_within_declared_window" in written
+
+
+def test_main_without_that_re_affirmation_opens_a_money_alert(
+    posture: ModuleType, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """POSITIVE PARTNER for the wire test: the SAME window, the SAME everything,
+    an empty comment list. Without this pair, a `main` that ignored the fetch
+    entirely would satisfy one of the two.
+
+    RED IF: the attention verdict stops depending on what was fetched.
+    """
+    opened = (dt.datetime.now(dt.UTC) - dt.timedelta(days=3)).isoformat()
+    expires = (dt.datetime.now(dt.UTC) + dt.timedelta(days=4)).isoformat()
+    window = {
+        "owner": "rohit",
+        "reason": "collect #105 production logs",
+        "mode": "time_boxed",
+        "judge": False,
+        "opened_at": opened,
+        "expires_at": expires,
+        "reaffirm_issue": 105,
+    }
+    code, written = _run_main(
+        posture,
+        tmp_path,
+        monkeypatch,
+        body={"live_readiness": {"state": "live"}},
+        windows_payload={"windows": [window]},
+        comments=[],
+    )
+    assert code == 1, written
+    assert "decision=live_reaffirmation_lapsed" in written
+
+
+# --- L2. Who may re-affirm: the owner, and no GitHub App -------------------
+
+
+def test_only_the_windows_declared_owner_may_re_affirm(posture: ModuleType) -> None:
+    """A public repository's issues can be commented on by anyone with an account.
+
+    Without an owner match, "a human re-affirmed it" means "some account in the
+    world said something", which is not a control over a money posture.
+
+    RED IF: the owner comparison is dropped from `attended_since`.
+    """
+    window = _window(posture, opened=_LONG_OPEN, expires=_LONG_SHUT, owner="rohit", issue=105)
+    stranger = posture.parse_reaffirmations(
+        [_comment(hours_ago=1, window_opened=_LONG_OPEN, login="passer-by")], now=_NOW
+    )
+    assert stranger is not None and len(stranger) == 1, "the comment itself must parse"
+    assert window.is_attended(_NOW, stranger) is False
+
+
+def test_the_declared_owner_may_re_affirm(posture: ModuleType) -> None:
+    """POSITIVE PARTNER: byte-identical to the row above bar the login. Without
+    it, an owner check that matched nobody would satisfy that test while making
+    every long window un-affirmable.
+
+    RED IF: the owner comparison stops matching the declared owner — including
+    for an ordinary "@rohit" or a differently-cased login.
+    """
+    window = _window(posture, opened=_LONG_OPEN, expires=_LONG_SHUT, owner="rohit", issue=105)
+    for login in ("rohit", "Rohit", "ROHIT"):
+        entries = posture.parse_reaffirmations(
+            [_comment(hours_ago=1, window_opened=_LONG_OPEN, login=login)], now=_NOW
+        )
+        assert entries is not None
+        assert window.is_attended(_NOW, entries) is True, login
+
+
+def test_a_comment_posted_through_a_github_app_is_not_a_re_affirmation(
+    posture: ModuleType,
+) -> None:
+    """`user.type` is the type of the ACCOUNT, not of the actor — so it does not
+    catch an App acting under a human-looking identity.
+
+    Measured on this repository's own alert issue: a workflow-token comment
+    carries the whole GitHub Actions app object in `performed_via_github_app`
+    (`"slug": "github-actions"`). Refusing any non-null value closes every App,
+    including one installed with `issues: write` under any name.
+
+    RED IF: the `performed_via_github_app` refusal is removed.
+    """
+    parsed = posture.parse_reaffirmations(
+        [
+            _comment(
+                hours_ago=1,
+                window_opened=_LONG_OPEN,
+                login="rohit",
+                kind="User",
+            )
+            | {"performed_via_github_app": {"slug": "some-app"}}
+        ],
+        now=_NOW,
+    )
+    assert parsed == []
+
+
+@pytest.mark.parametrize("kind", ["Bot", "bot", "BOT", "bOt"])
+def test_the_bot_refusal_is_case_folded(posture: ModuleType, kind: str) -> None:
+    """An exact-case compare let `"bot"` and `"BOT"` through — demonstrated by
+    review. The cost of being wrong here is a machine holding a money posture
+    open, so the compare is case-folded.
+
+    RED IF: the comparison goes back to `kind == "Bot"`.
+    """
+    parsed = posture.parse_reaffirmations(
+        [_comment(hours_ago=1, window_opened=_LONG_OPEN, kind=kind, login="rohit")],
+        now=_NOW,
+    )
+    assert parsed == []
+
+
+# --- L3. The governing window decides. A decoy cannot hide it -------------
+
+
+def test_a_short_fresh_window_cannot_hide_a_long_stale_one(
+    posture: ModuleType,
+) -> None:
+    """DEMONSTRATED EVASION. A five-minute smoke-test window, freshly opened,
+    silenced a window running to 2099 that nobody had attended for eight days —
+    and the operator-facing detail named only the decoy, reporting "2.0h
+    remaining".
+
+    The longest cover is what actually grants the exposure, so it is what must be
+    attended.
+
+    RED IF: attention is decided by `any()` over covering windows again.
+    """
+    decoy = _window(posture, opened=_NOW_OPEN, expires=_NOW_SHUT, owner="bob")
+    long_stale = _window(posture, opened=_OLD_OPEN, expires=_FUTURE_SHUT, owner="rohit", issue=105)
+    result = posture.evaluate_posture(
+        readiness_states={_HOST_A: "live"},
+        windows=[decoy, long_stale],
+        now=_NOW,
+        reaffirmations={105: []},
+    )
+    assert result.decision is posture.PostureDecision.LIVE_REAFFIRMATION_LAPSED
+    assert result.should_alert is True
+    # ...and the detail must name the window that actually governs, not the decoy.
+    assert "'rohit'" in result.detail
+
+
+def test_the_governing_window_is_the_one_that_must_declare_the_judge(
+    posture: ModuleType,
+) -> None:
+    """The same evasion, judge half: setting `judge: true` on a short unrelated
+    window silenced the judge check for a long window that omitted it.
+
+    RED IF: the judge comparison is decided by `any()` over covering windows.
+    """
+    decoy = _window(posture, opened=_NOW_OPEN, expires=_NOW_SHUT, owner="bob", judge=True)
+    long_no_judge = _window(
+        posture, opened=_NOW_OPEN, expires=_FUTURE_SHUT, owner="rohit", judge=False, issue=105
+    )
+    result = posture.evaluate_posture(
+        readiness_states={_HOST_A: "live"},
+        windows=[decoy, long_no_judge],
+        now=_NOW,
+        judge_states={_HOST_B: True},
+        reaffirmations=_reaffirmed(posture, window=long_no_judge, hours_ago=1, now=_NOW),
+    )
+    assert result.decision is posture.PostureDecision.LIVE_JUDGE_UNDECLARED
+    assert "'rohit'" in result.detail
+
+
+def test_a_secondary_windows_unreadable_issue_does_not_fire_an_alert(
+    posture: ModuleType,
+) -> None:
+    """PARTNER to the two above, and the reason the governing rule is not simply
+    "fail closed on everything".
+
+    An earlier draft checked EVERY covering window's issue before deciding, so a
+    GitHub blip on a secondary window's issue opened a money alert on a posture
+    the governing window fully sanctioned — manufacturing exactly the false red
+    this file's prose says gets muted.
+
+    RED IF: the unreadable-issue check widens back to every covering window.
+    """
+    governing = _window(posture, opened=_NOW_OPEN, expires=_FUTURE_SHUT, owner="rohit", issue=105)
+    secondary = _window(posture, opened=_NOW_OPEN, expires=_NOW_SHUT, owner="bob", issue=111)
+    result = posture.evaluate_posture(
+        readiness_states={_HOST_A: "live"},
+        windows=[governing, secondary],
+        now=_NOW,
+        reaffirmations={
+            111: None,
+            **_reaffirmed(posture, window=governing, hours_ago=1, now=_NOW),
+        },
+    )
+    assert result.decision is posture.PostureDecision.LIVE_WITHIN_DECLARED_WINDOW
+    assert result.should_alert is False
+
+
+def test_an_undeclared_live_posture_is_not_masked_by_an_unreadable_judge(
+    posture: ModuleType,
+) -> None:
+    """The judge read used to sit ABOVE the covering-window check, so an
+    unreadable `/status` turned a genuine `live_undeclared` into `unknown` — and
+    the alert body then told the operator "the check could not establish the
+    posture" when it had established it perfectly well and real money was
+    spendable.
+
+    RED IF: the judge-readability gate moves back above the window check.
+    """
+    result = posture.evaluate_posture(
+        readiness_states={_HOST_A: "live"},
+        windows=[],
+        now=_NOW,
+        judge_states={_HOST_B: None},
+    )
+    assert result.decision is posture.PostureDecision.LIVE_UNDECLARED
+    assert result.should_alert is True
+
+
+# --- L4. Reading the declaration and the ADRs -----------------------------
+
+
+def test_a_duplicate_key_makes_the_declaration_untrusted(
+    posture: ModuleType, tmp_path: Path
+) -> None:
+    """DEMONSTRATED EVASION. `json.loads` silently keeps the LAST duplicate, so a
+    declaration reading `"judge": false, ... "judge": true` shows a reviewer one
+    value and hands the parser the other — defeating every field-level control
+    without breaking any of them.
+
+    RED IF: the `object_pairs_hook` is removed.
+    """
+    path = tmp_path / "dup.json"
+    path.write_text(
+        '{"windows":[{"owner":"ops","reason":"r","mode":"time_boxed",'
+        '"judge": false,"opened_at":"2026-08-25T09:00:00Z",'
+        '"expires_at":"2026-08-25T17:00:00Z","judge": true}]}',
+        encoding="utf-8",
+    )
+    assert posture.load_windows(path, adr_dir=tmp_path) is None
+
+
+def test_the_same_declaration_without_the_duplicate_loads(
+    posture: ModuleType, tmp_path: Path
+) -> None:
+    """POSITIVE PARTNER: without it, a loader that refused every file would
+    satisfy the row above.
+
+    RED IF: `load_windows` starts rejecting a well-formed declaration.
+    """
+    path = tmp_path / "ok.json"
+    path.write_text(
+        '{"windows":[{"owner":"ops","reason":"r","mode":"time_boxed",'
+        '"opened_at":"2026-08-25T09:00:00Z",'
+        '"expires_at":"2026-08-25T17:00:00Z","judge": true}]}',
+        encoding="utf-8",
+    )
+    parsed = posture.load_windows(path, adr_dir=tmp_path)
+    assert parsed is not None and len(parsed) == 1 and parsed[0].judge is True
+
+
+@pytest.mark.parametrize(
+    ("name", "text", "why"),
+    [
+        (
+            "0095-reverted.md",
+            "# ADR-0095: Turned on, then off\n\n## Status\n\nAccepted — 2026-08-19. "
+            "**Reverted — 2026-08-22.**\n\n**Authorises:** OPENROUTER_LIVE_EXECUTION_ENABLED\n",
+            "a REVERTED ADR — this repo's own ADR-0060 has exactly this status shape",
+        ),
+        (
+            "0094-fenced.md",
+            "# ADR-0094: Quoting the marker\n\n## Status\n\nAccepted.\n\n"
+            "This ADR authorises nothing; it merely quotes the required line:\n\n"
+            "```\n**Authorises:** OPENROUTER_LIVE_EXECUTION_ENABLED\n```\n",
+            "the marker inside a fenced block — how a document QUOTES it",
+        ),
+        (
+            "0093-html-comment.md",
+            "# ADR-0093: Invisible\n\n## Status\n\nAccepted.\n\n"
+            "<!--\n**Authorises:** OPENROUTER_LIVE_EXECUTION_ENABLED\n-->\n",
+            "the marker in an HTML comment — invisible in rendered Markdown",
+        ),
+        (
+            "0092-acceptedish.md",
+            "# ADR-0092: Not really\n\n## Status\n\n"
+            "Accepted-in-principle-pending-security-review (NOT accepted).\n\n"
+            "**Authorises:** OPENROUTER_LIVE_EXECUTION_ENABLED\n",
+            "'Accepted' as a prefix of a word meaning the opposite",
+        ),
+        (
+            "0090-acceptedish.md",
+            "# ADR-0090: Almost\n\n## Status\n\nAcceptedish.\n\n"
+            "**Authorises:** OPENROUTER_LIVE_EXECUTION_ENABLED\n",
+            "'Acceptedish' — caught ONLY by the word-boundary rule, since it "
+            "carries none of the revoked markers. Without this row, deleting the "
+            "boundary check leaves the whole suite green",
+        ),
+        (
+            "0091-later-superseded.md",
+            "# ADR-0091: Overtaken\n\n## Status\n\n"
+            "Accepted 2026-01-01, Superseded by ADR-0100 — DO NOT RELY ON THIS.\n\n"
+            "**Authorises:** OPENROUTER_LIVE_EXECUTION_ENABLED\n",
+            "superseded in its own status line, after the word Accepted",
+        ),
+    ],
+)
+def test_these_documents_do_not_authorise_a_standing_posture(
+    posture: ModuleType, tmp_path: Path, name: str, text: str, why: str
+) -> None:
+    """DEMONSTRATED EVASIONS — every row here authorised a permanent
+    money-spending posture before review.
+
+    The first is the sharpest: this repository writes `## Status` as
+    "Accepted — <date>. <later history>", so `startswith("Accepted")` is not a
+    status check at all, and ADR-0060 — the record that CAUSED #357 — passed it.
+
+    RED IF: any of the revoked-status markers, the fenced-block strip or the
+    HTML-comment strip is removed.
+    """
+    assert posture.authorising_adrs(_adr_dir(tmp_path, {name: text})) == frozenset(), why
+
+
+def test_a_window_that_can_outlive_the_cadence_must_name_an_issue(
+    posture: ModuleType,
+) -> None:
+    """Otherwise a long window has no re-affirmation channel at all: it lapses
+    after a day and the ONLY way to clear the alert is to edit the declaration,
+    which is the commit path this design deliberately does not want to depend on.
+
+    NOT a maximum window length — any length is allowed, it just has to say where
+    it will be re-affirmed once it outlives a day.
+
+    RED IF: the requirement is dropped.
+    """
+    long_no_issue = {
+        "owner": "rohit",
+        "reason": "a week of logs",
+        "mode": "time_boxed",
+        "judge": False,
+        "opened_at": "2026-08-22T12:00:00Z",
+        "expires_at": "2026-08-29T12:00:00Z",
+    }
+    assert posture.parse_windows({"windows": [long_no_issue]}) is None
+    # POSITIVE PARTNER 1: the same window WITH an issue parses.
+    assert posture.parse_windows({"windows": [long_no_issue | {"reaffirm_issue": 105}]}) is not None
+    # POSITIVE PARTNER 2: a SHORT window still needs nothing, or the common case
+    # acquires friction it does not need.
+    short = long_no_issue | {"expires_at": "2026-08-22T20:00:00Z"}
+    assert posture.parse_windows({"windows": [short]}) is not None
+
+
+def test_the_comment_read_is_bounded_to_the_attention_window(
+    posture: ModuleType,
+) -> None:
+    """MEASURED against the real API: the issue-comments endpoint returns
+    OLDEST-FIRST and ignores `direction=desc`, so a page-1-only read on a thread
+    past 100 comments would never see the newest re-affirmation — a permanent
+    false alert no human action could clear.
+
+    `since` DOES work (11 comments -> 5 with a mid-thread cutoff), and bounding
+    the read to the cadence makes pagination irrelevant.
+
+    RED IF: `since` is dropped from the URL, or stops tracking the clock.
+    """
+    window = _window(posture, opened=_LONG_OPEN, expires=_LONG_SHUT, issue=105)
+    urls = posture._reaffirmation_urls(
+        [window],
+        template=posture.DEFAULT_REAFFIRMATION_URL_TEMPLATE,
+        repo="owner/repo",
+        since=dt.datetime(2026, 8, 24, 12, 0, tzinfo=dt.UTC),
+    )
+    assert urls[105].endswith("since=2026-08-24T12:00:00Z")
+    assert "/issues/105/comments" in urls[105]
+
+
+def test_the_partial_sentence_counts_every_endpoint_it_probed(
+    posture: ModuleType,
+) -> None:
+    """`complete` was widened to include `/status`, but the sentence explaining it
+    counted only `/ready` — so today's most likely flake (both `/ready` answer,
+    one `/status` does not) printed "0 host(s) did not answer" directly above a
+    claim that the view was partial.
+
+    RED IF: the count stops covering both maps.
+    """
+    result = posture.evaluate_posture(
+        readiness_states={_HOST_A: "offline_by_config", _HOST_B: "offline_by_config"},
+        windows=[],
+        now=_NOW,
+        judge_states={_HOST_A: True, _HOST_B: None},
+    )
+    assert result.complete is False
+    assert "1 endpoint(s) did not answer" in result.detail
+
+
+def test_the_alert_body_names_every_verdict_that_alerts() -> None:
+    """The body said "Two alerting verdicts … The third" while `_ALERTING` had
+    FIVE members, and then explained the two it had just said did not exist.
+
+    RED IF: a decision is added to `_ALERTING` without the operator-facing body
+    learning about it.
+    """
+    spec = importlib.util.spec_from_file_location("live_posture_alerting_probe", SCRIPT)
+    assert spec is not None and spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    sys.modules[spec.name] = module
+    spec.loader.exec_module(module)
+    alerting = {
+        d.value for d in module.PostureDecision if module.PostureResult(d, "x").should_alert
+    }
+    assert len(alerting) >= 5, "this gate refuses to pass over an empty alerting set"
+    body = _condition_free_alert_body()
+    # WHOLE-TOKEN, not substring. `live_judge_undeclared` is a prefix of
+    # `live_judge_undeclaredX`, so a plain `in` check stays green while the body
+    # names a verdict that no longer exists — rule 8 reappearing inside the gate
+    # that exists to stop the body drifting from the code.
+    # `[A-Za-z0-9_]`, not `[a-z_]`: a lowercase-only class stops at the capital
+    # in `live_judge_undeclaredX`, so the renamed verdict still matched and the
+    # mutation survived. Measured — this exact fix took M32 from SURVIVED to red.
+    tokens = set(re.findall(r"[A-Za-z0-9_]+", body))
+    missing = sorted(v for v in alerting if v not in tokens)
+    assert missing == [], f"the alert body never mentions {missing} as a whole word"
+
+
+def test_the_posture_step_is_given_a_github_token() -> None:
+    """It is the only step in the repository that reads `api.github.com` from
+    Python, and it had no token at all while the two `gh` steps beside it both
+    did. Unauthenticated `api.github.com` is 60 requests/hour per IP and Actions
+    runner IPs are shared, so the re-affirmation read would have failed exactly
+    where it is load-bearing — returning UNKNOWN and opening a money alert that
+    could never auto-close.
+
+    RED IF: the token is removed from the posture step.
+    """
+    step = [s for s in _steps() if "money-spending posture" in str(s.get("name", ""))]
+    assert len(step) == 1
+    assert "GH_TOKEN" in (step[0].get("env") or {})
+    # ...and the job must still not be able to WRITE the declaration it polices.
+    assert _load_workflow()["permissions"]["contents"] == "read"

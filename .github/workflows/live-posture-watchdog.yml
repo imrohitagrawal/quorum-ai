@@ -23,13 +23,16 @@ name: Live-execution posture watchdog
 # inside it. Since ADR-0071 it asks three questions, not one:
 #
 #   1. is the live posture covered by a declared window?
-#   2. has a HUMAN re-affirmed that window within the last 24 hours? A
-#      re-affirmation is a comment on a GitHub issue, and this workflow CANNOT
+#   2. has the window's declared OWNER re-affirmed it within the last 24 hours?
+#      A re-affirmation is a comment on a GitHub issue, and THIS WORKFLOW CANNOT
 #      SUPPLY ONE: everything posted with a workflow token is typed "Bot" by
-#      GitHub and the check refuses Bot comments. That is why re-affirmation is
-#      not a field in the repository — no commit here is signed, most commits
-#      already carry a bot-shaped committer, and a workflow with `contents:
-#      write` already exists and has pushed.
+#      GitHub and carries `performed_via_github_app`, and the check refuses both.
+#      That is why re-affirmation is not a field in the repository — no commit
+#      here is signed, most commits already carry a bot-shaped committer, and a
+#      workflow with `contents: write` already exists and has pushed.
+#      Stated precisely: this refuses DEFAULT automation, not a deliberately
+#      provisioned personal access token, which posts as `"User"`. ADR-0071
+#      records that residual rather than claiming more than is true.
 #   3. is the LLM judge — a SECOND paid subsystem whose GET-path spend reaches
 #      no ledger (ADR-0013) — declared by the window that covers it? The judge
 #      cannot spend while live execution is off, so with the flag off its state
@@ -91,6 +94,15 @@ jobs:
       - name: Check production's money-spending posture against declared windows
         id: posture
         continue-on-error: true
+        # THIS STEP READS api.github.com and had no token, which nothing caught:
+        # the alert and resolve steps below both set GH_TOKEN, and this one — the
+        # only place in the repository that calls the API from Python — did not.
+        # Unauthenticated api.github.com is 60 requests/hour PER IP and Actions
+        # runner IPs are shared, so the re-affirmation read would have failed
+        # exactly where it is load-bearing, returning UNKNOWN and opening a money
+        # alert that could never auto-close. Read-only scope: it never writes.
+        env:
+          GH_TOKEN: ${{ github.token }}
         run: python3 scripts/live_posture_check.py
 
       - name: Alert on an undeclared live-execution posture
@@ -110,12 +122,16 @@ jobs:
           BODY=$(printf '%s\n' \
             "Automated **live-execution posture** alert." \
             "" \
-            "The check's verdict is \`${DECISION:-crashed-before-reporting}\`. Two alerting verdicts" \
-            "(\`live_undeclared\`, \`live_past_declared_window\`) mean production IS in a" \
-            "money-spending posture nobody declared. The third (\`unknown\`) means the check" \
-            "could not establish the posture at all — a host was unreachable, a state was" \
-            "unrecognised, or the declaration file did not parse. That is treated as equally" \
-            "urgent on purpose: a check that cannot tell must not read as healthy." \
+            "The check's verdict is \`${DECISION:-crashed-before-reporting}\`. FIVE verdicts alert." \
+            "Four mean production IS in a money-spending posture that is not fully sanctioned:" \
+            "\`live_undeclared\` (nobody declared it), \`live_past_declared_window\` (the" \
+            "declaration expired), \`live_reaffirmation_lapsed\` (declared, but nobody has" \
+            "confirmed in 24h that it is still wanted) and \`live_judge_undeclared\` (the LLM" \
+            "judge is running inside a window that does not declare it). The fifth," \
+            "\`unknown\`, means the check could not establish the posture at all — a host was" \
+            "unreachable, a state was unrecognised, the declaration file did not parse, or a" \
+            "re-affirmation issue could not be read. That is treated as equally urgent on" \
+            "purpose: a check that cannot tell must not read as healthy." \
             "" \
             "**While a live posture stands, every visitor to \`/ui\` spends real money.** The bound" \
             "is \`GLOBAL_DAILY_CEILING_USD\` (\$5.00/day) and that ceiling RESETS DAILY, so" \

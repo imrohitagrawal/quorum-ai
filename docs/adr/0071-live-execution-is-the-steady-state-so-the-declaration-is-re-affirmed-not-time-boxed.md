@@ -128,9 +128,9 @@ stamp"*. The list below was written first and the design answers it row by row.
 |---|---|---|---|
 | 1 | `standing` set to quiet a noisy alert, with no intent to go live | ADR-0069 measured the same reflex on the adjacent hatch (`# pragma: no mutate`, 2 of 11 mutants deleted per comment); ADR-0070 makes an expired window turn the **required** `pytest (Python 3.12)` context red on `main` and on every open pull request, which is the strongest possible incentive to reach for a silencer | `standing` removes the DEADLINE and nothing else. It still lapses without re-affirmation, so it buys 24 hours, never silence |
 | 2 | `standing` added during an incident and never removed | ADR-0070's escape valve is designed for retrospective declaration; under `time_boxed` it self-closes, under `standing` it would not | same as 1, plus the decision value names it in the job log every cycle |
-| 3 | The ADR citation points at an ADR that authorises nothing | measured, scoped to `origin/main` so the claim does not count this very record: `git grep -l 'OPENROUTER_LIVE_EXECUTION_ENABLED' origin/main -- docs/adr/` returns **6** of that commit's **68** records, and 2 of the 6 (ADR-0022's credential removal, ADR-0054's 403 capture) authorise nothing at all. **A prose grep is measurably not a discriminator** | the cited ADR must carry an explicit authorisation marker on a line of its own — a deliberate act that cannot be satisfied by accident |
+| 3 | The ADR citation points at an ADR that authorises nothing (marker present but not a decision) | measured, scoped to `origin/main` so the claim does not count this very record: `git grep -l 'OPENROUTER_LIVE_EXECUTION_ENABLED' origin/main -- docs/adr/` returns **6** of that commit's **68** records, and 2 of the 6 (ADR-0022's credential removal, ADR-0054's 403 capture) authorise nothing at all. **A prose grep is measurably not a discriminator** | the cited ADR must carry the marker on a line of its own, OUTSIDE any fenced code block or HTML comment. Review demonstrated both: a fenced quote of the required line is how a document QUOTES it, and an HTML comment is invisible in rendered Markdown, so a reviewer scrolling a diff sees nothing. Both authorised a permanent posture before the strip was added |
 | 4 | The citation points at a non-existent ADR | nothing in the repo resolves an ADR citation made anywhere else | resolved against `docs/adr/` on disk; a miss makes the whole file untrusted |
-| 5 | The citation points at a **Proposed** or **Superseded** ADR | ADR-0014 is Proposed and ADR-0001 Superseded — both exist on disk and would pass a file-exists check | `## Status` must begin `Accepted`, parsed structurally |
+| 5 | The citation points at an ADR whose decision no longer stands | ADR-0014 is Proposed, ADR-0001 Superseded. **And `startswith("Accepted")` is not a status check in this repository at all**: the house style is "Accepted — \<date\>. \<later history\>", so review found **ADR-0060 — the record that CAUSED #357** — reading "Accepted — 2026-08-19. **Reverted — 2026-08-22.**" and passing it. A reverted ADR authorising a permanent live posture was one round from shipping | the status must open with the word `Accepted` on a word boundary (killing `Accepted-in-principle-pending-review`) AND carry none of `reverted / superseded / withdrawn / rescinded / retired / replaced by / not accepted / pending / in principle` |
 | 6 | Circular citation — `standing` cites the ADR that invented `standing` | ADR-0070 is one of the 6 that name the flag, so any flag-name grep accepts it | `MECHANISM_OWN_ADRS` refuses ADR-0070 and ADR-0071 even when they are in the authorised set. Going permanently live costs a NEW record that says so |
 | 7 | "It appears in a diff and is reviewed" — ADR-0070's stated safeguard | measured: `required_approving_review_count` on `main` is **0**, `require_code_owner_reviews` false, `.github/CODEOWNERS` is the unedited template `* @<github-org-or-username>`, `required_signatures` disabled | **that safeguard does not exist here.** Every property in this design is mechanical or it is not claimed. This ADR does not write "reviewed in a diff" anywhere as a control |
 | 8 | `standing` silently covers the judge | prose reading "the GA steady state" would be read as covering both | `judge` is REQUIRED on every window, in both modes, with no default |
@@ -138,9 +138,10 @@ stamp"*. The list below was written first and the design answers it row by row.
 | 10 | A re-affirmation supplied by a scheduled workflow | not hypothetical: `seed-visual-baselines.yml` holds `contents: write`, sets `git config user.name "github-actions[bot]"` by hand, pushes, and has already produced a commit | the re-affirmation is not a repository file. See the Decision |
 | 11 | A human-authored commit whose COMMITTER is a bot | measured: **234 of 366** commits already have committer `noreply@github.com` — the ordinary squash-merge path | committer-based detection is unusable here, measured rather than assumed |
 | 12 | Git author fields forged | measured: **366 of 366** commits carry no signature (`git log --all --format='%G?'` → `366 N`), and `seed-visual-baselines.yml` literally sets the author strings | `%an`/`%ae` carry zero evidence of humanity. Any design reading them is theatre by construction |
-| 13 | A bot comments the affirmation on the alert issue | the watchdog holds `issues: write` and a workflow token, and already comments elsewhere | `user.type` is refused when it is `"Bot"`. Measured on this repo's own alert issue: `gh api repos/:owner/:repo/issues/351/comments` → **11 of 11 are `"type": "Bot"`**. GitHub sets that field; the commenter cannot |
+| 13 | A bot comments the affirmation on the alert issue | the watchdog holds `issues: write` and a workflow token, and already comments elsewhere | THREE refusals, because review showed one was not enough: `user.type == "bot"` **case-folded** (an exact-case compare let `"bot"` and `"BOT"` through); `performed_via_github_app` non-null, which closes every GitHub App including one under a human-looking name; and the comment must come from the window's declared `owner`. Measured on this repo's own alert issue: **11 of 11 machine comments are `"type": "Bot"` and carry the GitHub Actions app object**. See the corrected claim in Consequences — this stops DEFAULT automation, not a provisioned credential |
 | 14 | A re-affirmation FORWARD-DATED so it never lapses | measured on the pre-change code: `expires_at: 9999-12-31T23:59:59Z` parses and `refuse_undeclared_flag` returns `None` — **the far-future silencer works today** | `created_at` is GitHub's, not the commenter's. A future-dated comment is refused, and there is no field anybody types |
-| 15 | A far-future `expires_at` used instead of `standing` | same measurement; ADR-0070 named it as the one indefinite silencer and defended it only by row 7's non-existent review | **re-affirmation closes it for every length at once**: an unattended window lapses in a day whether its expiry is tomorrow or the year 9999 |
+| 15 | A far-future `expires_at` used instead of `standing` | same measurement; ADR-0070 named it as the one indefinite silencer and defended it only by row 7's non-existent review | **PARTLY. An earlier draft of this row claimed re-affirmation "closes it for every length at once" and adversarial review refuted that** — see row 15a. Re-affirmation does bound an UNATTENDED window at a day whatever its expiry, which is real; it does not make the declaration honest |
+| 15a | **The attention clock's own origin is a committed field.** `opened_at` seeds the clock, so moving it forward resets it with NO comment anywhere — the far-future silencer with one extra field to touch, and the alert's own remediation text ("declare it in the file") invites it | demonstrated by review: the same window, `opened_at` bumped, went from `live_reaffirmation_lapsed` exit 1 to `live_within_declared_window` exit 0 | **NOT CLOSED. Bounded and reported instead**: a window whose cover can outlive the cadence must name a `reaffirm_issue`; every verdict prints the governing `opened_at` so a value that keeps moving is visible each cycle; and the naive automated form is refused by the workflow gate. What remains is a daily commit by a person or a credential they provisioned — attributable in git history rather than silent. Recorded in Consequences as an open weakness, not as a solved one |
 | 16 | One affirmation covering every open window | the batch rubber-stamp ADR-0069 rejected | the token quotes the window's own `opened_at`, so one comment attends exactly one window |
 | 17 | Genuine human rubber-stamping | unfalsifiable mechanically; ADR-0069 says so of its own ledger | **not solved, and not claimed.** See Consequences |
 | 18 | The self-defeating gradient: the lapse fires at 03:00 and the cheap fix is to make it permanent | a 24h cadence lands the deadline at every hour of the day in rotation | `standing` does not exempt re-affirmation, so the gradient does not exist: making it permanent does not make it quiet |
@@ -148,7 +149,11 @@ stamp"*. The list below was written first and the design answers it row by row.
 | 20 | Cron throttling against a 24h cadence | INHERITED from ADR-0070: gaps min 21.7 / median 53.4 / max 129.4 minutes | the worst measured gap is **9%** of the cadence, so lapse detection is comfortable. The alert INSTANT is unpredictable within ~2.2h, which is row 18's mechanism, not a defect |
 | 21 | `standing` produces silence indistinguishable from a dead watchdog | the brief's own requirement | `standing` has its own decision value and reports mode, ADR, owner, age and last re-affirmation EVERY cycle |
 | 22 | Reading a second endpoint adds a new UNKNOWN alert path in today's steady state | ADR-0070 row 3; every new check is trivially green against `offline_by_config` | judge state is load-bearing ONLY when the posture is live. With the flag off an unreadable `/status` is reported, never alerted — **zero new alerting paths on today's production**, pinned by a test |
-| 23 | A new gate that passes with the mechanism absent | rules 6b, 7, 8 | every new behaviour ships a fixture-driven POSITIVE partner; 14 demonstrations, and the mutation table below |
+| 23 | A new gate that passes with the mechanism absent | rules 6b, 7, 8 | every new behaviour ships a fixture-driven POSITIVE partner, plus the mutation table below — which is where three of these checks were found MISSING rather than confirmed |
+| 24 | A decoy window hides the one that matters | review demonstrated a five-minute smoke-test window silencing a window that ran to 2099 and had been unattended for eight days, while the log reported "2.0h remaining" | attention and the judge are decided about the GOVERNING window — the one whose cover ends last — never by `any()` over covering windows |
+| 25 | A duplicated JSON key shows a reviewer one value and the parser another | `json.loads` silently keeps the last duplicate; review built a declaration reading `"judge": false … "judge": true` that ran quiet with the judge on | an `object_pairs_hook` refuses a duplicate key, making the whole file untrusted |
+| 26 | The comment read silently loses the newest re-affirmation | measured against the real API: the endpoint returns comments OLDEST-first and **ignores `direction=desc`**, so past 100 comments a page-1-only read would lapse permanently and no human action could clear it | the read is bounded with `since` (measured working: 11 comments → 5 with a mid-thread cutoff), so only comments inside the cadence are fetched and pagination cannot matter |
+| 27 | The one step that calls the GitHub API has no token | review found the posture step with no `env:` at all while both `gh` steps beside it set `GH_TOKEN`; unauthenticated `api.github.com` is 60 req/hour per shared runner IP | `GH_TOKEN: ${{ github.token }}` on the posture step, asserted by a test, with `contents: read` still asserted by equality |
 
 ## Decision
 
@@ -214,13 +219,28 @@ signed, most commits already carry a bot-shaped committer, and a workflow that
 can push already exists and has pushed. Both fields a file-based affirmation
 would rest on are self-declared.
 
-A comment rests on two fields GitHub sets and the commenter cannot:
+A comment rests on fields GitHub sets and the commenter cannot:
 
-* `user.type` is `"Bot"` for anything posted with a workflow token — **this
-  watchdog cannot re-affirm itself**, and 11 of 11 machine comments on issue
-  #351 measure it;
+* `user.type` is `"Bot"` for anything posted with a workflow token, and
+  `performed_via_github_app` carries the app object — **this watchdog cannot
+  re-affirm itself, and neither can any GitHub App**. 11 of 11 machine comments
+  on issue #351 measure both;
 * `created_at` is server-set, so there is no timestamp for anybody to
-  forward-date.
+  forward-date;
+* and the comment must come from the login the window declares as its `owner`,
+  so "some account on a public repository said something" is not enough.
+
+**The honest limit, because an earlier draft of this record overstated it and
+adversarial review refuted the overstatement.** `user.type` is the type of the
+ACCOUNT, not of the actor: a personal access token belonging to a user account
+posts as `"User"`, so a PAT deliberately provisioned into a scheduled workflow
+WOULD re-affirm. A "positive human act that neither the watchdog, CI, nor a bot
+can satisfy" **is not achievable in this repository** — nothing here
+distinguishes a person from that person's token, and no commit is signed. What
+IS achievable, and is what shipped: **no DEFAULT automation can re-affirm** —
+not this watchdog, not any workflow using `github.token`, not any GitHub App —
+and automating it costs a deliberate, attributable act of provisioning a
+credential. Wherever the operator-facing text says "a person", it means that.
 
 The window names its `reaffirm_issue`. A comment counts only if it carries
 `REAFFIRM live-execution` followed by that window's own `opened_at`.
@@ -279,12 +299,12 @@ Every row run by me in this worktree on 2026-08-25 unless marked INHERITED.
 |---|---|---|
 | Base | `git rev-parse origin/main` | `57be5a8`, and production serves the same `build_sha` |
 | Baseline of the two posture test files | `uv run pytest tests/unit/test_live_posture_check.py tests/unit/test_live_execution_posture_declaration.py -q --no-cov` | **97 passed** |
-| ...after this change | same | **198 passed** |
+| ...after this change | same | **239 passed** |
 | ADR-0070's eight-row truth table, before | the real script over `file:` fixtures | all 8 rows as ADR-0070 records |
 | ...and after | same harness | **all 8 unchanged**, and now pinned by `test_the_adr_0070_truth_table_still_holds` so nothing can silently move them again |
 | Do the NEW behaviours fire? | 14 fixture-driven demonstrations of the real script | **14 of 14** — lapse alerts, fresh is silent, a Bot comment does not re-affirm, a forward-dated one does not, `standing` reports, `standing` still lapses, three bad ADR citations refused, judge-undeclared alerts, judge-declared is silent, judge-on-live-off reports, judge unreadable fails closed while live and stays quiet while off |
-| Is any commit signed? | `git log --all --format='%G?' \| sort \| uniq -c` | **366 N** — none |
-| Who commits? | `git log --all --format='%ce' \| sort \| uniq -c` | **234 of 366** are `noreply@github.com` |
+| Is any commit signed? | `git log --all --format='%G?' \| sort \| uniq -c` | **371 N** on this branch — none. `gpg` is not installed on this box, which is part of why; the branch-protection row below is the independent check |
+| Who commits? | `git log --all --format='%ce' \| sort \| uniq -c` | **234** are `noreply@github.com` — the squash-merge path |
 | Are reviews or signatures required? | `gh api repos/:owner/:repo/branches/main/protection` | `required_approving_review_count: 0`, `required_signatures.enabled: false` |
 | Is a comment's author type forgeable? | `gh api repos/:owner/:repo/issues/351/comments` | **11 of 11** `"type": "Bot"` — server-set |
 | Workflows, and which can write | `ls .github/workflows/*.yml \| wc -l`; `grep -ln "contents: write"` | **14** total, **1** with `contents: write` (`seed-visual-baselines.yml`), **1** naming the declaration file (the watchdog, `contents: read`) — and they are not the same file |
@@ -292,7 +312,10 @@ Every row run by me in this worktree on 2026-08-25 unless marked INHERITED.
 | Does any ADR carry the authorisation marker? | `authorising_adrs(docs/adr)` over the real tree, AFTER this change | **empty**, over **69** records — pinned by a test with a >=40 floor, and with a fixture partner proving the same function DOES find a marked record |
 | Does `/ready` carry anything about the judge? | `curl -s https://quorum-ai.fly.dev/ready` | **three** top-level keys — `status`, `environment`, `live_readiness` — none judge-bearing, which is why the judge is read from `/status` |
 | What does production report? | `curl -s https://quorum-ai.fly.dev/status` | `live_execution: false`, `judge_enabled: **true**` |
-| Judge config in `fly.toml`? | `grep -i judge fly.toml` | **exit 1** — none, so no pre-merge gate can see it |
+| Judge config in `fly.toml`? | `git grep -i judge origin/main -- fly.toml` — **scoped on purpose**: this diff added the word "judge" to that file's comments, so the unscoped form now matches and refutes itself | **exit 1** — no judge configuration, so no pre-merge gate can see it |
+| Does `direction=desc` order the comments read? | `gh api '.../issues/351/comments?per_page=100&sort=created&direction=desc'` | **IGNORED** — byte-identical to the unsorted call, both oldest-first. The obvious fix does NOT work; `since` does (11 comments → 5 with a mid-thread cutoff, → 0 with a future one) |
+| Does a workflow-token comment carry an app? | `gh api '.../issues/351/comments?per_page=1'` | `performed_via_github_app` is the **whole GitHub Actions app object** — a second CI signal that `user.type` alone does not give |
+| Demonstrated evasions, re-run against the fix | scratch harness driving the real script | **20 of 20 BLOCKED**; the 21st (`opened_at` bumped by commit) is NOT blocked and is row 15a |
 | Judge inertness pinned? | `uv run pytest tests/integration/test_judge_never_spends_on_a_run_that_must_not_spend.py` | **9 passed** |
 | Are the tests hermetic? | the suite's wall clock | an early revision defaulted `main`'s `/status` probe to production and the suite took **103s**; with every URL a `file:` fixture it is **2.8s**. No test touches production |
 
@@ -343,10 +366,25 @@ reads `OPENROUTER_LIVE_EXECUTION_ENABLED = "false"`.**
 - **Issue #105's seven-day log collection is now possible without either
   silencing the watchdog or picking a number that permits #357.** It costs six
   re-affirmations.
-- **The far-future-expiry silencer is closed.** ADR-0070 named it as the only way
-  to silence the mechanism indefinitely and defended it by diff review, which
-  this record measures as non-existent here. An unattended window now lapses in a
-  day at any declared length.
+- **The far-future-expiry silencer is bounded, NOT closed.** An UNATTENDED window
+  now lapses in a day at any declared length, which is real. But the attention
+  clock starts at `opened_at`, a committed field, so **moving it forward resets
+  the clock with no comment anywhere** — the same silencer with one extra field
+  to touch. This is failure-mode row 15a, it was found by adversarial review
+  after an earlier draft of this record claimed the opposite, and it is the
+  single biggest open weakness in the design. It is bounded three ways (a window
+  that can outlive the cadence must name a `reaffirm_issue`; every verdict prints
+  the governing `opened_at`; the naive automated form is refused by the workflow
+  gate) and what remains is a daily commit by a person or their credential —
+  attributable in git history rather than silent.
+- **"Only a human can re-affirm" is NOT what this establishes, and the earlier
+  draft of this record said it did.** `user.type` is the type of the ACCOUNT, so
+  a personal access token posts as `"User"`. What is established: no DEFAULT
+  automation can re-affirm — not the watchdog, not `github.token`, not any
+  GitHub App — and automating it costs a deliberate act of provisioning a
+  credential. **The work package asked for a re-affirmation "that neither the
+  watchdog, CI, nor a bot can satisfy". That is not achievable here** and is
+  handed back as an open question rather than papered over.
 - **A `standing` window makes the pre-merge gate permanently quiet.** That is the
   intended trade (Decision 3) and it is the sharpest edge in this record. The
   runtime attention check replaces the pressure; if the watchdog's schedule is
@@ -368,62 +406,103 @@ reads `OPENROUTER_LIVE_EXECUTION_ENABLED = "false"`.**
   written down rather than cited as a pass. This change's correctness rests on
   the `pytest (Python 3.12)` lane and on the mutation table below.
 
+## What adversarial review broke, and what it cost
+
+Two lenses, per rule 10. The correctness lens found three mutants that SURVIVED
+the suite as first written; the adversarial lens found **four working evasions**
+that left production live, judge-on, and the watchdog silent at exit 0. Recorded
+because the alternative is a record that reads as though the design arrived
+correct, which would be a lie and would teach the next reader nothing.
+
+| Found | What it was | Status |
+|---|---|---|
+| `startswith("Accepted")` is not a status check | this repo writes "Accepted — \<date\>. \<later history\>", so **reverted ADR-0060 — the record that caused #357** — authorised a permanent live posture | FIXED, plus four more status shapes |
+| the marker in a fenced block or an HTML comment | the first is how a document QUOTES it; the second is invisible when rendered | FIXED — both stripped before the scan |
+| a decoy window | a five-minute smoke test silenced a window running to 2099, unattended for eight days, while the log read "2.0h remaining" | FIXED — the GOVERNING window decides |
+| a duplicated JSON key | `json.loads` keeps the last; a reviewer reads `"judge": false` and the parser sees `true` | FIXED — `object_pairs_hook` refuses |
+| `user.type` case | `"bot"` and `"BOT"` passed an exact-case compare | FIXED — case-folded, plus a GitHub-App refusal and an owner match |
+| the comments read | the endpoint is oldest-first and **ignores `direction=desc`** (measured), so past 100 comments the window would lapse permanently | FIXED — bounded with `since` |
+| the posture step had no `GH_TOKEN` | the only step in the repo that calls `api.github.com` from Python, unauthenticated at 60 req/hour on a shared IP | FIXED |
+| the judge read sat above the window check | an unreadable `/status` turned a genuine `live_undeclared` into `unknown`, whose alert body says the check "could not establish the posture" | FIXED — reordered |
+| one unreadable issue killed every window | a blip on a SECONDARY window's issue opened a money alert on a posture the governing window fully sanctioned | FIXED — scoped to the governing window |
+| `is_attended`'s `<` → `<=` | SURVIVED; the test claimed "RED IF the comparison flips its strictness" and tested 23.9h and 24.1h, never 24.0h | FIXED — the exact instant is pinned |
+| `startswith(token)` → `in` | SURVIVED; "I am NOT re-affirming: REAFFIRM live-execution …" would have counted | FIXED, and ordinary Markdown prefixes now parse |
+| `main`'s re-affirmation fetch | SURVIVED; severing it flipped quiet → money alert with 204 passing. The whole feature was untested at the wire | FIXED — wire test plus partner |
+| `opened_at` resets the clock | see row 15a | **NOT FIXED.** Bounded and reported |
+
 ## The bite table
 
 Each mutation `cp` aside, applied, RUN, restored from the copy, and confirmed
 byte-identical with `diff -q` — never `git checkout`. The harness refuses a
 mutation that changes nothing (`MUTATION-NOOP`), because a `perl` expression
-that silently matches nothing proves nothing. Baseline for every row below:
-**204 passed** on `tests/unit/test_live_posture_check.py` and
+that silently matches nothing proves nothing, and that guard earned its keep
+here: three expressions in the first battery matched nothing and one used a
+non-`/g` substitution that left a second occurrence intact, all of which
+initially read as survivors. Baseline for every row: **241 passed** on
+`tests/unit/test_live_posture_check.py` and
 `tests/unit/test_live_execution_posture_declaration.py`.
+
+**34 of 34 killed.**
 
 | # | Mutation | Result |
 |---|---|---|
-| N1 | the `Bot` filter is removed, so a workflow can re-affirm | **2 failed** |
-| N2 | a forward-dated re-affirmation is honoured | **1 failed** |
-| N3 | `standing` is exempted from the attention check | **1 failed** |
-| N4 | the attention check is removed entirely | **4 failed** |
-| N5 | an absent or unrecognised `mode` is tolerated | **1 failed** |
-| N6 | `judge` acquires a default of `False` | **1 failed** |
-| N7 | `judge` stops having to be a real boolean | **3 failed** |
-| N8 | the judge comparison is deleted | **3 failed** |
-| N9 | an unreadable judge state stops failing closed while live | **1 failed** |
-| N10 | `MECHANISM_OWN_ADRS` is emptied, so the mechanism authorises itself | **2 failed** |
-| N11 | a Proposed ADR may authorise a standing posture | **2 failed** |
-| N12 | the authorisation marker is matched anywhere, not on its own line | **3 failed** |
-| N13 | an unreadable re-affirmation issue reads as "nobody re-affirmed" | **1 failed** |
-| N14 | the attention clock stops starting at `opened_at` | **14 failed** |
-| N15 | the watchdog is granted `contents: write` | **2 failed** |
-| N16 | the re-affirmation cadence is raised tenfold (24h → 240h) | **6 failed** |
-| N17 | a standing citation need not resolve to a real ADR | **2 failed** |
-| N18 | one comment re-affirms every open window at once | **1 failed** |
-| N19 | a standing window may also carry an `expires_at` | **1 failed** |
-| N20 | the live-off judge report is dropped from the detail | **1 failed** |
-| N21 | `mode` acquires a default of `time_boxed` | **1 failed** |
+| M01 | the `Bot` filter is removed, so a workflow can re-affirm | **6 failed** |
+| M02 | the `Bot` filter stops case-folding (`"bot"`, `"BOT"` pass) | **3 failed** |
+| M03 | a comment posted through a GitHub App may re-affirm | **1 failed** |
+| M04 | a forward-dated re-affirmation is honoured | **1 failed** |
+| M05 | any account may re-affirm, not only the window's declared owner | **1 failed** |
+| M06 | one comment re-affirms every open window at once | **1 failed** |
+| M07 | the attention clock stops starting at `opened_at` | **14 failed** |
+| M08 | the cadence boundary flips strictness (`<` → `<=`) | **1 failed** |
+| M09 | the cadence is raised tenfold (24h → 240h) | **11 failed** |
+| M10 | the re-affirmation token may appear anywhere in the line | **1 failed** |
+| M11 | ordinary Markdown in front of the token stops it parsing | **6 failed** |
+| M12 | `main` stops fetching re-affirmations at all | **1 failed** |
+| M13 | the governing window is picked by file order again | **4 failed** |
+| M14 | the judge is satisfied by ANY covering window | **1 failed** |
+| M15 | attention is satisfied by ANY covering window | **1 failed** |
+| M16 | a REVOKED ADR may authorise a standing posture | **2 failed** |
+| M17 | a fenced or commented-out marker authorises | **2 failed** |
+| M18 | `"Acceptedish"` counts as Accepted | **1 failed** |
+| M19 | `MECHANISM_OWN_ADRS` is emptied, so the mechanism authorises itself | **2 failed** |
+| M20 | a standing citation need not resolve to a real ADR | **1 failed** |
+| M21 | duplicate JSON keys are accepted | **1 failed** |
+| M22 | a window that can outlive the cadence need not name an issue | **1 failed** |
+| M23 | the comment read is unbounded again (`since` dropped) | **1 failed** |
+| M24 | an absent or unrecognised `mode` is tolerated | **2 failed** |
+| M25 | `judge` acquires a default of `False` | **1 failed** |
+| M26 | a standing window may also carry an `expires_at` | **1 failed** |
+| M27 | the partial-view sentence miscounts endpoints | **1 failed** |
+| M28 | an unreadable judge state stops failing closed while live | **1 failed** |
+| M29 | the live-off judge report is dropped from the detail | **1 failed** |
+| M30 | the verdict is never published to `$GITHUB_OUTPUT` | **6 failed** |
+| M31 | the watchdog is granted `contents: write` | **3 failed** |
+| M32 | the posture step loses its GitHub token | **1 failed** |
+| M33 | the alert body stops naming an alerting verdict | **1 failed** |
+| M34 | the step conditions are typo'd (`shouldAlert`) | **4 failed** |
 
-**N6, N19 and N21 are the honest part of this table: on the first run, N6 and
-N19 SURVIVED.** Both were real gaps rather than equivalent mutants:
+**What the mutation step actually found, which is the reason it is not
+optional.** Across three batteries, FIVE checks this record would otherwise have
+claimed did not exist:
 
-* N6 survived because every malformed-`judge` row set the key to a wrong VALUE
-  (`None`, `"true"`, `1`) and none DELETED it, so `entry.get("judge", False)`
-  never reached its default. A required money field could have acquired a
-  default with the whole suite green.
-* N19 survived because nothing asserted that a `standing` window must not also
-  carry an expiry — so a window could have been declared `standing`, with no
-  deadline and no pre-merge pressure, while LOOKING in the diff like a bounded
-  one.
+* `judge` acquiring a default (M25) — every malformed-`judge` row set the key to
+  a wrong VALUE, none DELETED it, so `entry.get("judge", False)` never reached
+  its default;
+* a standing window also carrying an `expires_at` (M26) — nothing asserted it,
+  so a window could be `standing`, with no deadline and no pre-merge pressure,
+  while LOOKING in a diff like a bounded one;
+* the cadence boundary (M08) — the test claimed "RED IF the comparison flips its
+  strictness" and tested 23.9h and 24.1h, never 24.0h. **Its own docstring was
+  false**;
+* the token's `startswith` (M10) — "I am NOT re-affirming: REAFFIRM
+  live-execution …" would have counted;
+* `main`'s re-affirmation fetch (M12) — severing the whole feature at the wire
+  flipped a quiet verdict into a money alert with the suite still green.
 
-`test_a_declaration_missing_a_required_field_refuses_to_parse` (a row per
-required field, with the key deleted) and
-`test_a_standing_window_may_not_also_carry_an_expiry` (with a positive partner,
-so it cannot be satisfied by a parser that refuses every standing window) close
-them, and N21 was added afterwards to prove the first of those generalises to
-`mode`. All three fail on re-run. This is why the mutation step is not optional:
-two of the twenty-one checks this record claims did not exist until a mutation
-said so.
-
-N1, N2, N15 and N16 are the ones no ordinary decision test could see: each
-leaves the mechanism looking healthy while making the human act optional.
+Two more were found by the gate's own mutation rather than by review: M33 stayed
+green because the assertion tokenised with `[a-z_]`, which stops at the capital
+in `live_judge_undeclaredX` — rule 8's substring trap, inside the gate written to
+stop the alert body drifting from the code.
 
 ## Related
 

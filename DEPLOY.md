@@ -96,10 +96,15 @@ through legitimate work; skip it and the alert fires within the hour, on purpose
    REAFFIRM live-execution 2026-08-25T09:00:00+00:00
    ```
 
-   quoting the window's own `opened_at`. **A person has to do this.** A comment
-   posted by any workflow token — including the watchdog's own — is typed `Bot`
-   by GitHub and is refused. That is the point: a re-affirmation any automation
-   can supply would be theatre.
+   quoting the window's own `opened_at`, **from the GitHub account the window
+   names as its `owner`**. A comment posted by any workflow token — including the
+   watchdog's own — is typed `Bot` by GitHub and refused, as is anything posted
+   through a GitHub App. So no ordinary automation can do it for you.
+
+   Stated precisely rather than reassuringly: this does **not** prove a human
+   acted. `user.type` is the type of the account, so a personal access token
+   would pass. It proves that no DEFAULT automation did, and that whoever did it
+   used the owner's identity. ADR-0071 records the residual.
 3. **`"mode": "standing"`** is for the permanent steady state and has no expiry.
    It removes the deadline and nothing else: it still needs re-affirming every
    24 hours, and it must cite an ADR that exists, is Accepted, and carries the
