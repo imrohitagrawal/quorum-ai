@@ -74,6 +74,7 @@ import ast
 import fnmatch
 import sys
 import tomllib
+import uuid
 from collections.abc import Iterable
 from pathlib import Path
 
@@ -273,7 +274,13 @@ def test_the_scan_reads_the_population_mutmut_mutates() -> None:
         "scope moved or the pattern is wrong; this gate refuses to pass over "
         "an empty population"
     )
-    assert all(path.stat().st_size > 0 for path in files)
+    # Counted, not `all(...)`: an EMPTY `__init__.py` in a future subpackage is
+    # legitimate and must not turn this floor red (round-2 review planted one).
+    non_empty = sum(1 for path in files if path.stat().st_size > 0)
+    assert non_empty >= 20, (
+        f"only {non_empty} of the {len(files)} matched file(s) hold any source; "
+        "the population is not what this gate thinks it is"
+    )
 
 
 def test_the_population_rule_is_mutmut_s_rule_not_a_shell_glob() -> None:
@@ -290,9 +297,17 @@ def test_the_population_rule_is_mutmut_s_rule_not_a_shell_glob() -> None:
 
 def test_an_unparseable_source_file_fails_loudly_rather_than_shrinking_the_census() -> None:
     """Turns red if: `unmutatable_functions` starts swallowing `SyntaxError`,
-    which would drop the file from the census and let the gate pass over it."""
-    with pytest.raises(SyntaxError):
-        unmutatable_functions("def (:\n")
+    which would drop the file from the census and let the gate pass over it.
+
+    Two unrelated shapes, so a scanner that special-cases one literal does not
+    pass. Review also broke a real `only_mutate` file in a copy and watched the
+    gate go red with `SyntaxError: invalid syntax` (3 failed) — that route is
+    not automated here because `tests/conftest.py` imports most of the app, and
+    breaking an imported module fails collection, which proves nothing.
+    """
+    for broken in ("def (:\n", "x = = 1\n"):
+        with pytest.raises(SyntaxError):
+            unmutatable_functions(broken)
 
 
 def test_the_inventory_and_the_scanner_both_name_a_function_known_to_be_skipped() -> None:
@@ -417,7 +432,10 @@ def test_the_gate_itself_fails_against_an_inventory_that_disagrees_with_the_tree
     real_lines = INVENTORY.read_text(encoding="utf-8").splitlines()
     assert "product_app.main:health" in real_lines
     doctored = [line for line in real_lines if line != "product_app.main:health"]
-    doctored.append("product_app.main:this_function_does_not_exist")
+    # Random, so a gate that re-raises a canned message naming a fixed ghost
+    # cannot satisfy the STALE half (round-2 review demonstrated that evasion).
+    ghost = f"product_app.main:ghost_{uuid.uuid4().hex}"
+    doctored.append(ghost)
     fake = tmp_path / INVENTORY.name
     fake.write_text("\n".join(doctored) + "\n", encoding="utf-8")
     monkeypatch.setattr(sys.modules[__name__], "INVENTORY", fake)
@@ -426,9 +444,7 @@ def test_the_gate_itself_fails_against_an_inventory_that_disagrees_with_the_tree
         test_no_function_lost_its_mutation_surface_unrecorded()
     message = str(caught.value)
     assert "NEW" in message and "product_app.main:health" in message, message
-    assert "STALE" in message and "product_app.main:this_function_does_not_exist" in message, (
-        message
-    )
+    assert "STALE" in message and ghost in message, message
 
 
 # --------------------------------------------------------------------------
