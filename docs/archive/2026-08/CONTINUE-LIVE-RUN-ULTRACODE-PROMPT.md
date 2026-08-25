@@ -480,7 +480,7 @@ Then `gh issue close <n>` citing the merge SHA and the verification.
 - **`tests/unit/test_cited_paths_resolve.py` reads the COMMITTED diff, not the
   working tree.** A cited path that does not exist goes red only AFTER you
   commit — `make quality` is green before it. It caught a placeholder
-  `tests/integration/THIS_FILE.py` this way.
+  `<the integration spec file>` this way.
 - **Rule 15 is not theoretical.** A `make diff-cover` run racing a still-finishing
   `make quality` reported `Total coverage: 53.09%` with `TOTAL 10276` statements
   against a real 5731 — the gate was measuring garbage. Never run two

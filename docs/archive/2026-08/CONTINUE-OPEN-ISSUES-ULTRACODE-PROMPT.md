@@ -108,7 +108,7 @@ low-risk change before you bet #216 on that machinery.
 
 ```
 docs/24-adr-index.md   -> True
-docs/adr/0047-foo.md   -> False
+<an ADR file>   -> False
 ```
 
 With two `0047` files present, `make validate` exited **0** and the index carried
