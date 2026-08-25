@@ -61,6 +61,14 @@ damage. Re-derive with ``--scan-history`` if GitHub's parser ever changes.
 The classification is a pure function over text, so it is tested hermetically
 (``tests/unit/test_close_keyword_guard.py``) with no network and no ``gh``.
 Only ``--premerge-pr`` touches GitHub.
+
+THE PRE-MERGE MODE ALSO COMPARES INTENT. A closer nobody meant, written
+without negation — PR #371's body said ``If that is enough to close #369,
+close it on merge`` — is invisible to the negation check by design. So
+``--premerge-pr`` takes ``--expect-close VAR``, the issues the merge is MEANT
+to close, and refuses unless the union of the merge text and GitHub's parse of
+the pull request equals that set (see ``_premerge``). CI mode cannot know
+intent and is unchanged.
 """
 
 from __future__ import annotations
@@ -315,6 +323,54 @@ def _gh_closing_issues(pr: int) -> list[int]:
     return [row["number"] for row in json.loads(raw)["closingIssuesReferences"]]
 
 
+#: One issue number as a human types it into EXPECT_CLOSE. ASCII digits only:
+#: ``int()`` also accepts ``3_69``, ``+369`` and non-ASCII digits, and a typo
+#: here must be a wiring error, never a silently different expectation.
+_ISSUE_TOKEN = re.compile(r"#?[0-9]+")
+
+
+def _expected_closes(raw: str) -> set[int] | None:
+    """``"369, 374"``, ``"#374,369,"`` and ``""`` all parse; ``None`` means garbage."""
+    tokens = [token.strip() for token in raw.split(",")]
+    tokens = [token for token in tokens if token]
+    if not all(_ISSUE_TOKEN.fullmatch(token) for token in tokens):
+        return None
+    return {int(token.lstrip("#")) for token in tokens}
+
+
+def _premerge(pr: int, text: str, expected: set[int]) -> int:
+    """Refuse unless the merge closes EXACTLY the issues the operator named.
+
+    What WILL close is the UNION of two surfaces: the merge text (GitHub reads
+    the squash commit once it lands) and the pull request itself (GitHub's own
+    parse, which sees forms the regex does not). Measured over the last 40
+    merges on 2026-08-25, the two sets differ on 6 — five closes lived only in
+    the merge body (PR #360's shape), one only in the pull request — so
+    demanding each surface match on its own would refuse legitimate merges.
+    The union is compared in BOTH directions: an unlisted close is the #371
+    defect, and a listed close nothing carries is a mistake too.
+    """
+    in_text = {issue for _, issue, _ in close_references(text)}
+    linked = set(_gh_closing_issues(pr))
+    will_close = in_text | linked
+    print(
+        f"\npre-merge check for PR #{pr}: expected {len(expected)} issue(s) to close, "
+        f"merge text closes {len(in_text)}, GitHub reports {len(linked)}"
+    )
+    if will_close == expected:
+        print(f"  closes exactly the expected set: {sorted(expected) or 'nothing'}. OK.")
+        return 0
+    unlisted = ", ".join(f"#{n}" for n in sorted(will_close - expected)) or "none"
+    absent = ", ".join(f"#{n}" for n in sorted(expected - will_close)) or "none"
+    print(
+        f"  NOT expected but WILL close: {unlisted}\n"
+        f"  expected but will NOT close: {absent}\n"
+        "Refusing: name every intended close in EXPECT_CLOSE (comma-separated), or\n"
+        "move the keyword away from the number so GitHub does not act on it."
+    )
+    return 1
+
+
 def _commit_message(ref: str) -> str:
     return subprocess.run(
         ["git", "log", "-1", "--format=%B", ref],
@@ -368,6 +424,12 @@ def main(argv: Sequence[str]) -> int:
         metavar="PR",
         help="also ask GitHub what it thinks this pull request closes",
     )
+    parser.add_argument(
+        "--expect-close",
+        metavar="VAR",
+        help="env var naming the issues this merge is MEANT to close, comma-separated; "
+        "unset or empty means none (with --premerge-pr only)",
+    )
     parser.add_argument("--advisory", action="store_true", help="report but always exit 0")
     parser.add_argument(
         "--require-nonempty",
@@ -375,6 +437,8 @@ def main(argv: Sequence[str]) -> int:
         help="fail if any named variable is unset, or the text is empty",
     )
     args = parser.parse_args(list(argv[1:]))
+    if args.expect_close and args.premerge_pr is None:
+        parser.error("--expect-close only means something with --premerge-pr")
 
     if args.scan_history:
         return _scan_history(args.scan_history)
@@ -410,18 +474,20 @@ def main(argv: Sequence[str]) -> int:
             )
             return 2
 
+    expected = _expected_closes(os.environ.get(args.expect_close or "", ""))
+    if expected is None:
+        print(
+            f"close-keyword guard [{label}]: {args.expect_close} is not a comma-separated "
+            "list of issue numbers.\nRefusing to pass: a mistyped expectation is not an "
+            "empty one."
+        )
+        return 2
+
     status = _report(label, text, advisory=args.advisory)
 
     if args.premerge_pr is not None:
-        linked = _gh_closing_issues(args.premerge_pr)
-        print(f"\nGitHub's own parse of PR #{args.premerge_pr}: closes {linked or 'nothing'}")
-        if linked:
-            print(
-                "  Confirm every one of those SHOULD close. GitHub sees only the\n"
-                "  pull request — the merge subject and body above are checked\n"
-                "  separately, and for PR #360 this list was empty while the merge\n"
-                "  body closed #337."
-            )
+        mismatch = _premerge(args.premerge_pr, text, expected)
+        status = max(status, 0 if args.advisory else mismatch)
     return status
 
 

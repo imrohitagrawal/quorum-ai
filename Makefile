@@ -1034,13 +1034,20 @@ security-scan: check-python
 # $(BODY) in the recipe on purpose; do not add one back, and see
 # tests/unit/test_close_keyword_guard.py for the test that refuses it.
 #
-#   PR=361 \
+# EXPECT_CLOSE names every issue this merge is MEANT to close (comma-separated;
+# unset or empty means none). The guard refuses when what WILL close -- the
+# merge text plus GitHub's own parse of the pull request -- differs from that
+# list in either direction. Before this, an unintended `close #N` was announced
+# and passed (issue #374).
+#
+#   PR=361 EXPECT_CLOSE="337" \
 #   MERGE_SUBJECT="fix: the thing" \
 #   MERGE_BODY="$(cat /tmp/merge-body.md)" \
 #   make close-guard
 close-guard: check-python
 	@$(PYTHON) scripts/check_close_keywords.py --env MERGE_SUBJECT MERGE_BODY \
-		--require-nonempty --premerge-pr "$${PR:?set PR=<pull request number>}"
+		--require-nonempty --premerge-pr "$${PR:?set PR=<pull request number>}" \
+		--expect-close EXPECT_CLOSE
 
 ci-evidence: test-report security-scan
 

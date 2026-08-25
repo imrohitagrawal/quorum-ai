@@ -318,10 +318,16 @@ is the rule only.
     landed.)
     **Vet that text before you run the command:**
     ```bash
-    PR=<n> MERGE_SUBJECT="..." MERGE_BODY="$(cat body.md)" make close-guard
+    PR=<n> EXPECT_CLOSE="<issues this merge closes, comma-separated, or empty>" \
+      MERGE_SUBJECT="..." MERGE_BODY="$(cat body.md)" make close-guard
     ```
     (the text goes in the ENVIRONMENT — a merge body full of backticks and
-    quotes must never be re-parsed by a shell). A close keyword next to `#N`
+    quotes must never be re-parsed by a shell). The guard refuses unless what
+    WILL close — the merge text plus GitHub's parse of the pull request —
+    equals `EXPECT_CLOSE` in both directions; before 2026-08-25 it announced
+    an unintended close and passed (#374). When it refuses: if the named
+    issue SHOULD close, add it to `EXPECT_CLOSE`; if not, move the keyword
+    away from the number and run again. A close keyword next to `#N`
     closes that issue, and GitHub cannot read negation:
     `**This does NOT close #337.**` in PR #360's merge body closed #337.
     **Four** issues have been closed this way; a fifth was caught by hand just
