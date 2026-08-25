@@ -668,3 +668,38 @@ def test_require_aware_refuses_a_naive_timestamp_on_its_own() -> None:
     parsed = _require_aware("2026-08-26T00:00:00+00:00")
     assert parsed.tzinfo is not None
     assert parsed == datetime(2026, 8, 26, tzinfo=UTC)
+
+
+def test_a_write_in_flight_cannot_resurrect_a_revoked_session(store: SessionStore) -> None:
+    """RED IF ``_persist`` stops checking that the session is still the live one.
+
+    The race adversarial review demonstrated: ``rotate_csrf`` released the lock
+    before persisting, so a ``revoke()`` -- or a ``clear()``, which
+    ``tests/conftest.py`` runs between every test -- landing in that window
+    deleted the durable row and the in-flight write put it straight back. The
+    revoked cookie then resolved again in the next process, which is a
+    revocation that silently expires instead of revoking.
+
+    Driven directly rather than by thread timing: a genuine interleaving is
+    what the guard exists for, but a test that depends on hitting a microsecond
+    window is a flake, not a proof. Calling ``_persist`` with a session the
+    repository no longer holds IS the state the race produces.
+    """
+    repository = auth.SessionRepository()
+    session = repository.create(account_id=ACCOUNT)
+    assert store.count() == 1, "positive partner: the row was really written"
+
+    repository.revoke(session.session_id)
+    assert store.count() == 0
+
+    # The write that was already in flight when revoke() landed.
+    repository._persist(session)
+
+    assert store.count() == 0, "a revoked session was resurrected by an in-flight write"
+    assert auth.SessionRepository().get(session.session_id) is None
+
+    # ...and a session that IS still live still persists, or the guard would be
+    # indistinguishable from never writing at all.
+    live = repository.create(account_id=ACCOUNT)
+    repository._persist(live)
+    assert store.count() == 1
