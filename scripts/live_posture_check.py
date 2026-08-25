@@ -133,10 +133,15 @@ RE-AFFIRMATION: what separates a sanctioned week from a forgotten one
         begin ``Accepted``, it must carry ``ADR_AUTHORISATION_MARKER`` on a line
         of its own, and it may NOT be one of this mechanism's own records
         (``MECHANISM_OWN_ADRS``) — a mechanism cannot authorise its own use.
-        Measured 2026-08-25: matching ADR PROSE is not a discriminator — 6 of 68
-        ADRs name the flag and 2 of those 6 (ADR-0022's credential removal,
-        ADR-0054's 403 capture) authorise nothing — which is why an explicit
-        marker is required instead of a grep for the flag name.
+        Measured 2026-08-25 and SCOPED TO ``origin/main`` — the tree BEFORE this
+        revision, because run against the working tree the same grep now counts
+        ADR-0071 itself, and a claim that refutes itself the moment it ships is
+        worse than no claim:
+        ``git grep -l 'OPENROUTER_LIVE_EXECUTION_ENABLED' origin/main -- docs/adr/``
+        returns **6** of that commit's **68** records, and 2 of the 6
+        (ADR-0022's credential removal, ADR-0054's 403 capture) authorise nothing
+        at all. Matching ADR PROSE is therefore not a discriminator, which is why
+        an explicit marker is required instead.
       * A ``standing`` DECLARATION DOES NOT MAKE THIS CHECK GO QUIET. It gets its
         own decision, ``LIVE_WITHIN_STANDING_DECLARATION``, so every cycle names
         it and prints the ADR, the owner, how long it has stood and how long
@@ -171,8 +176,9 @@ WHY IT READS ``/ready`` AND NOT ``/status.live_execution``
     flag is off. Every other state in the vocabulary implies the flag is ON.
 
     ``judge_enabled`` is read from ``/status`` because it appears NOWHERE on
-    ``/ready`` (measured: the whole ``/ready`` payload is four keys, none of them
-    judge-bearing). It does NOT carry ``live_execution``'s defect:
+    ``/ready``. Measured 2026-08-25: ``curl -s https://quorum-ai.fly.dev/ready``
+    returns exactly THREE top-level keys — ``status``, ``environment`` and
+    ``live_readiness`` — and none is judge-bearing. It does NOT carry ``live_execution``'s defect:
     ``main.py:1032`` is a direct ``judge_configured()`` call
     (``evaluation.py:1814-1827`` — a key AND a model id, no probe term), and it
     is the SAME predicate the run-path gate uses, so the reported state cannot
@@ -260,8 +266,8 @@ DEFAULT_READY_URLS = (
     "https://quorum.stackclimb.com/ready",
 )
 
-#: ``judge_enabled`` lives on ``/status`` and nowhere else — measured, the whole
-#: ``/ready`` payload is four keys and none is judge-bearing. Same two hosts;
+#: ``judge_enabled`` lives on ``/status`` and nowhere else — measured, ``/ready``
+#: returns three top-level keys and none is judge-bearing. Same two hosts;
 #: measured 2026-08-25 they return byte-identical JSON apart from
 #: ``uptime_seconds``, so this is one app read twice, exactly as ``/ready`` is.
 DEFAULT_STATUS_URLS = (
@@ -305,8 +311,9 @@ WINDOW_MODES = frozenset({MODE_TIME_BOXED, MODE_STANDING})
 
 #: The exact line a ``standing`` window's cited ADR must carry to authorise it.
 #: An explicit marker rather than a grep of the ADR's prose, because prose is
-#: measurably not a discriminator: 6 of 68 ADRs name the flag and 2 of those
-#: authorise nothing at all. A deliberate marker cannot be satisfied by accident.
+#: measurably not a discriminator: on ``origin/main`` 6 of 68 ADRs name the flag
+#: and 2 of those authorise nothing at all — the module docstring carries the
+#: scoped command. A deliberate marker cannot be satisfied by accident.
 ADR_AUTHORISATION_MARKER = "**Authorises:** OPENROUTER_LIVE_EXECUTION_ENABLED"
 
 #: A mechanism may not authorise its own use. ADR-0070 and ADR-0071 BUILD the
