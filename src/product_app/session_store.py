@@ -201,17 +201,19 @@ class SessionStore:
         return self._write("DELETE FROM sessions", ())
 
     def purge_expired(self, *, cutoff: datetime) -> int:
-        """Delete rows last used at or before ``cutoff``; return how many.
+        """Delete rows last used STRICTLY before ``cutoff``; return how many.
 
-        Returns the count rather than nothing so the caller can say what it
-        counted instead of asserting a silent success.
+        The exact complement of :meth:`fetch`'s ``>=`` -- see the note there on
+        why the boundary instant counts as alive. Returns the count rather than
+        nothing so the caller can say what it counted instead of asserting a
+        silent success.
         """
         with self._lock:
             if self._closed:
                 return 0
             try:
                 cursor = self._conn.execute(
-                    "DELETE FROM sessions WHERE last_used_at <= ?",
+                    "DELETE FROM sessions WHERE last_used_at < ?",
                     (cutoff.astimezone(UTC).isoformat(),),
                 )
             except sqlite3.Error as exc:
@@ -244,13 +246,23 @@ class SessionStore:
         A row that will not parse is treated as absent: the caller then mints
         a fresh session, which is the closed direction. Returning a
         half-populated identity would be the open one.
+
+        ``>=``, INCLUSIVE, and :meth:`purge_expired` is the exact complement
+        (``<``). Not arbitrary: the in-process half decides expiry with
+        ``auth._Session.is_expired``, ``(now - last_used_at) > SESSION_TTL``,
+        which treats an age of EXACTLY the TTL as still alive. An exclusive
+        ``>`` here would make the two halves disagree at that one instant --
+        the cached session alive and its durable row already deleted -- so a
+        restart landing on that microsecond would lose a session the running
+        process still considered valid. Pinned by test in both directions
+        rather than left to whichever comparison was typed first.
         """
         with self._lock:
             if self._closed:
                 return None
             try:
                 row = self._conn.execute(
-                    "SELECT * FROM sessions WHERE session_digest = ? AND last_used_at > ?",
+                    "SELECT * FROM sessions WHERE session_digest = ? AND last_used_at >= ?",
                     (_digest(session_id), not_used_before.astimezone(UTC).isoformat()),
                 ).fetchone()
             except sqlite3.Error as exc:

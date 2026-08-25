@@ -470,3 +470,40 @@ def test_a_boot_that_cannot_open_the_sink_still_serves_sessions(
     repository = auth.SessionRepository()
     session = repository.create(account_id=ACCOUNT)
     assert repository.get(session.session_id) is not None, "sessions still work"
+
+
+def test_the_expiry_boundary_agrees_with_the_in_process_half(store: SessionStore) -> None:
+    """RED IF ``fetch`` and ``purge_expired`` stop being exact complements of
+    ``auth._Session.is_expired``.
+
+    ``is_expired`` is ``(now - last_used_at) > SESSION_TTL``, so an age of
+    EXACTLY the TTL is still alive. An exclusive comparison in the store would
+    disagree at that one instant — the cached session alive, its durable row
+    already gone — and a restart landing there would lose a session the running
+    process still considered valid.
+
+    Both directions are asserted: the boundary instant survives, and one
+    microsecond past it does not. A single-sided check would pass against a
+    store that kept everything forever.
+    """
+    boundary = datetime.now(UTC) - SESSION_TTL
+    store.save(_session("exactly-at-the-boundary", last_used=boundary))
+    store.save(_session("one-tick-older", last_used=boundary - timedelta(microseconds=1)))
+
+    assert store.fetch("exactly-at-the-boundary", not_used_before=boundary) is not None
+    assert store.fetch("one-tick-older", not_used_before=boundary) is None
+
+    # ...and the purge agrees with the read, rather than deleting what the read
+    # just said was alive.
+    assert store.purge_expired(cutoff=boundary) == 1
+    assert store.fetch("exactly-at-the-boundary", not_used_before=boundary) is not None
+
+    at_boundary = auth._Session(
+        session_id="x",
+        account_id=ACCOUNT,
+        csrf_token="c",
+        created_at=boundary,
+        last_used_at=boundary,
+    )
+    assert at_boundary.is_expired(now=boundary + SESSION_TTL) is False
+    assert at_boundary.is_expired(now=boundary + SESSION_TTL + timedelta(microseconds=1)) is True
