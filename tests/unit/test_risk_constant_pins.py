@@ -456,6 +456,16 @@ BUCKET_C_NO_PIN = {
         "by every migration test"
     ),
     # --- Added 2026-08-26 with session_store.py (ADR-0073) ---
+    "auth.SESSION_GC_INTERVAL_S": (
+        "how often the session-gc daemon purges. A wrong value costs memory "
+        "headroom or idle wakeups, never correctness: expiry is enforced on "
+        "every READ as well (session_store.fetch's last_used_at predicate), so "
+        "a purge that ran late -- or never -- cannot make an expired session "
+        "resolvable. That read-side enforcement is what tests/security/"
+        "test_durable_session_store.py::"
+        "test_an_expired_row_never_resolves_even_if_the_purge_never_ran pins, "
+        "and it is what makes this interval a tuning knob rather than a guard"
+    ),
     "session_store.DEFAULT_DB_PATH": (
         "filesystem path, overridden by SESSION_DB_PATH everywhere it matters"
     ),

@@ -339,7 +339,9 @@ def test_revoke_removes_the_durable_row(store: SessionStore) -> None:
     assert auth.SessionRepository().get(session.session_id) is None
 
 
-def test_from_env_creates_the_parent_directory(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_from_env_creates_the_parent_directory(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     """RED IF ``from_env`` stops creating the directory: the first boot on a
     fresh volume would fail to open and silently fall back to non-durable
     sessions — the bug, shipped behind the fix."""
