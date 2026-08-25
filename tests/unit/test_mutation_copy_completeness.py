@@ -26,7 +26,6 @@ mirror that names the offending path.
 from __future__ import annotations
 
 import ast
-import os
 import re
 import shutil
 import subprocess
@@ -37,6 +36,7 @@ from pathlib import Path
 from typing import Any
 
 import pytest
+from tests.subprocess_env import env_without_coverage
 
 # Deselected under mutmut: this module drives git/make/pytest against the real
 # REPO_ROOT, which does not exist inside mutmut's ./mutants/ copy. It still runs
@@ -206,11 +206,9 @@ def test_the_real_copy_runs_the_root_reading_specs(tmp_path: Path) -> None:
         # Strip pytest-cov's subprocess hooks: the child would otherwise measure
         # the *copied* src/ and its data would be combined into the parent run,
         # dropping total coverage from 88% to 63% and failing --cov-fail-under.
-        env={
-            key: value
-            for key, value in os.environ.items()
-            if not key.startswith(("COV_CORE", "COVERAGE"))
-        },
+        # The strip lives in ONE place now (#368) -- it was hand-copied to two
+        # call sites and missing from five others.
+        env=env_without_coverage(),
     )
     assert result.returncode == 0, (
         "the suite fails inside a mutmut-shaped copy of the tree, so "

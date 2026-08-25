@@ -94,6 +94,13 @@ DESELECTED_FROM_THE_MUTANT_RUN = (
     "tests/unit/test_guard_suite_is_not_skipped.py",
     "tests/unit/test_replay_mutation_scope.py",
     "tests/unit/test_replay_scope_matches_makefile_scope.py",
+    # #368. Parses every file under the real `tests/` and shells out to TWO
+    # nested `pytest --cov=src` runs over the real `src/`. Inside
+    # `./mutants/` it would parse the COPY, and the nested runs would be
+    # paid once per MUTANT. It imports nothing from the application — the
+    # only non-stdlib names it binds are `pytest`, `tests.repo_root` and
+    # `tests.subprocess_env` — so it can kill no `src/` mutant.
+    "tests/unit/test_subprocess_env_hygiene.py",
     # ``rglob``s ``e2e/tests`` and reads every ``.github/workflows/*.yml``, so
     # inside ``./mutants/`` it measures the COPY. ``[tool.mutmut].also_copy``
     # includes ``e2e/tests``, which carries the GITIGNORED ``e2e/tests/review/``

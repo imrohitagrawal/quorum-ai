@@ -21,6 +21,7 @@ from pathlib import Path
 from typing import Any
 
 import pytest
+from tests.subprocess_env import env_without_coverage
 
 REPO = Path(__file__).resolve().parents[2]
 SCRIPT = REPO / "scripts" / "session_hygiene.py"
@@ -162,7 +163,10 @@ def run(
         capture_output=True,
         text=True,
         check=False,
-        env=env,
+        # #368: `cwd` is a sandbox repository outside this one, so the child must
+        # not inherit pytest-cov's hooks -- it would resolve the RELATIVE
+        # `--cov=src` against the sandbox and combine that tree into this run.
+        env=env_without_coverage(env),
     )
 
 

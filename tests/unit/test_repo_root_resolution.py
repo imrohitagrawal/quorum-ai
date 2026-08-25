@@ -16,7 +16,6 @@ are meant to detect.
 
 from __future__ import annotations
 
-import os
 import shutil
 import subprocess
 import sys
@@ -24,6 +23,7 @@ from pathlib import Path
 
 import pytest
 from tests.repo_root import find_repo_root
+from tests.subprocess_env import env_without_coverage
 
 
 def _tree(root: Path, *, inside_a_copy: bool) -> Path:
@@ -158,7 +158,8 @@ def test_the_guard_module_resolves_out_of_a_copied_tree_FOR_REAL(tmp_path: Path)
             f"from tests.unit.{guard_name} import REPO_ROOT; print(REPO_ROOT)",
         ],
         cwd=copy,
-        env={**os.environ, "PYTHONPATH": str(copy)},
+        # #368: the copy carries its own src/product_app/__init__.py.
+        env=env_without_coverage(PYTHONPATH=str(copy)),
         capture_output=True,
         text=True,
     )

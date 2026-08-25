@@ -26,6 +26,7 @@ import time
 from pathlib import Path
 
 import pytest
+from tests.subprocess_env import env_without_coverage
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 SCRIPT = REPO_ROOT / "scripts" / "run_with_deadline.py"
@@ -486,7 +487,8 @@ def test_the_marker_the_wrapper_writes_is_the_one_report_recognises() -> None:
             cwd=root,
             capture_output=True,
             text=True,
-            env={**os.environ, "RUN_WITH_DEADLINE_MARKER": str(marker)},
+            # #368: `cwd` is a throwaway tree outside the repository.
+            env=env_without_coverage(RUN_WITH_DEADLINE_MARKER=str(marker)),
         )
 
     assert "UNMEASURED" in report.stdout, (

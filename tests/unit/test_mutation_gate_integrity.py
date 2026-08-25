@@ -32,6 +32,7 @@ from pathlib import Path
 from typing import Any, cast
 
 import pytest
+from tests.subprocess_env import env_without_coverage
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 MAKEFILE = REPO_ROOT / "Makefile"
@@ -69,7 +70,9 @@ def _run(
         cwd=cwd,
         capture_output=True,
         text=True,
-        env={**os.environ, "RUN_WITH_DEADLINE_MARKER": "", **(env or {})},
+        # #368: `cwd` is a throwaway tree, so the coverage environment is
+        # stripped from the base mapping before it reaches the child.
+        env=env_without_coverage({**os.environ, "RUN_WITH_DEADLINE_MARKER": "", **(env or {})}),
     )
 
 
