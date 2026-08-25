@@ -305,6 +305,9 @@ was asked to run.
   opens and closes inside one throttled cron gap (up to 129.4 minutes, measured)
   is never observed at all.
 - `judge_enabled` is `true` in production today and remains unwatched.
+  **Superseded by ADR-0071**: it is watched now, through the declaration. The
+  reason it was never urgent is that it cannot spend while live execution is
+  off — which also refutes open decision 2 below.
 - `DEPLOY.md` step 4 — the one document that actually turns this flag on — now
   names the declaration file and the watchdog, and `docs/80-observability.md`
   lists the monitor. Review found both unchanged in the first draft, which would
@@ -326,6 +329,30 @@ was asked to run.
   changed". Accepted in exchange for not producing ~70 comments over three days.
 
 ## Open decisions for a human — numbers I refuse to guess
+
+**ALL THREE ARE ANSWERED BY
+[ADR-0071](0071-live-execution-is-the-steady-state-so-the-declaration-is-re-affirmed-not-time-boxed.md),
+2026-08-25 — two resolved and one CORRECTED. The originals are left below
+unedited, because a record of what was asked is worth more than a tidy one.**
+
+* **Decision 1 — RESOLVED, by finding that it cannot be answered.** There is no
+  maximum window length, and there should not be: the #357 failure ran ~3 days
+  and issue #105 legitimately needs ~7, so no single number separates them.
+  ADR-0071 replaces the length question with a 24-hour re-affirmation cadence,
+  which bounds an UNATTENDED window at any declared length — and closes this
+  ADR's own far-future-`expires_at` hole as a side effect.
+* **Decision 2 — CORRECTED. Its premise is false.** It presumes the judge is a
+  second, independent money exposure running unwatched. It is not: the run-path
+  gate (`query_run_orchestration.py:2256-2278`) requires a COMPLETED answer on a
+  provider path that only live execution produces, so **the judge cannot spend
+  while live execution is off**. It is a MULTIPLIER on this exposure, not a
+  sibling of it — and the dangerous state is the conjunction that rows 18 and 19
+  below each describe half of. ADR-0071 folds the judge into the declaration
+  rather than inventing the judge policy this decision asked for.
+* **Decision 3 — WITHDRAWN, not deferred.** Nothing prompted it: no incident, no
+  measured basis for the duration it needs, and the issue channel it would
+  escalate from has never fired. Recorded as withdrawn with its reason so it is
+  not rediscovered as a gap.
 
 Rule: a money guardrail never moves on weak evidence. Three numbers here can only
 be justified by a decision or a measurement I do not have, so the mechanism ships

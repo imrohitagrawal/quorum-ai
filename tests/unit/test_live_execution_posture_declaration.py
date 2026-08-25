@@ -72,6 +72,20 @@ def _window(posture: ModuleType, *, opened: str, expires: str) -> Any:
         reason="collect the ADR-0060 sample",
         opened_at=dt.datetime.fromisoformat(opened),
         expires_at=dt.datetime.fromisoformat(expires),
+        mode=posture.MODE_TIME_BOXED,
+        judge=False,
+    )
+
+
+def _standing(posture: ModuleType, *, opened: str) -> Any:
+    return posture.DeclaredWindow(
+        owner="rohit",
+        reason="the GA steady state",
+        opened_at=dt.datetime.fromisoformat(opened),
+        expires_at=None,
+        mode=posture.MODE_STANDING,
+        judge=True,
+        adr="ADR-0099",
     )
 
 
@@ -192,3 +206,93 @@ def test_an_unreadable_declaration_is_refused_even_with_the_flag_off(
     refusal = posture.refuse_undeclared_flag(flag_value="false", windows=None, now=_NOW)
     assert refusal is not None
     assert "live-execution-windows.json" in refusal
+
+
+# --- ADR-0071: what `standing` does to this layer, stated rather than found --
+
+
+def test_a_standing_window_makes_this_gate_quiet_and_that_is_the_trade(
+    posture: ModuleType,
+) -> None:
+    """The consequence of `mode: standing`, pinned so it is a DECISION and not a
+    discovery.
+
+    ADR-0070 made the expiry a deadline: once a declared window expired with the
+    flag still committed ``"true"``, the required ``pytest (Python 3.12)``
+    context went red on main and on every open pull request until somebody
+    acted. That was "the mechanical form of ADR-0060's revert condition".
+
+    A ``standing`` window has no expiry, so that pressure is gone — deliberately.
+    At GA there is nothing to revert TO; the steady state is the destination.
+    The pressure moves to the runtime attention check, which is the only layer
+    that can see whether anybody is still watching, and which alerts within the
+    hour once a re-affirmation lapses.
+
+    This test exists so that trade is visible in the suite. It is not a claim
+    that the trade is free.
+
+    RED IF: someone re-adds a deadline to `standing` here without recording the
+    decision, or `standing` stops sanctioning a committed flag at all — which
+    would make GA unmergeable and get the mode deleted.
+    """
+    window = _standing(posture, opened=_OLD_OPEN)
+    assert posture.refuse_undeclared_flag(flag_value="true", windows=[window], now=_NOW) is None
+
+
+def test_this_gate_still_refuses_a_true_with_only_an_expired_time_boxed_window(
+    posture: ModuleType,
+) -> None:
+    """POSITIVE PARTNER for the row above: the deadline is removed for
+    ``standing`` ONLY. A time-boxed window that has expired must still refuse,
+    or ADR-0070's whole pre-merge layer would have been deleted by the addition
+    of a second mode.
+
+    RED IF: the expiry stops binding time-boxed windows.
+    """
+    window = _window(posture, opened=_OLD_OPEN, expires=_OLD_SHUT)
+    assert posture.refuse_undeclared_flag(flag_value="true", windows=[window], now=_NOW) is not None
+
+
+def test_the_refusal_names_every_field_the_operator_must_now_write(
+    posture: ModuleType,
+) -> None:
+    """The refusal is the only instruction most operators will read, and the
+    declaration gained two required fields. A refusal naming the old shape sends
+    somebody to write a window that will not parse.
+
+    RED IF: a required field is added to the declaration without the refusal
+    message following it.
+    """
+    refusal = posture.refuse_undeclared_flag(flag_value="true", windows=[], now=_NOW)
+    assert refusal is not None
+    for field in ("owner", "reason", "mode", "judge", "opened_at", "expires_at"):
+        assert field in refusal, f"the refusal does not tell the operator about {field!r}"
+
+
+def test_the_shipped_declaration_resolves_every_standing_citation(
+    posture: ModuleType,
+) -> None:
+    """A `standing` window in the shipped file must cite an ADR that RESOLVES.
+
+    ``load_windows`` returns None when it does not, so this asserts on the
+    resolved load rather than on the raw text — a citation naming a missing,
+    un-Accepted, unmarked or self-referential record makes the whole file
+    untrusted, and that must never be the state ``main`` ships in.
+
+    POSITIVE PARTNER, because "every standing window resolves" is trivially true
+    over zero standing windows: the file must still parse, and the parse must
+    still be a list.
+
+    RED IF: a standing window is committed whose ADR citation does not resolve —
+    which would take the watchdog to UNKNOWN on every cycle and get it muted.
+    """
+    parsed = posture.load_windows(posture.DEFAULT_WINDOWS_PATH)
+    assert parsed is not None, (
+        "the shipped declaration no longer loads — if a standing window was "
+        "added, its ADR citation does not resolve"
+    )
+    assert isinstance(parsed, list)
+    standing = [window for window in parsed if window.is_standing]
+    for window in standing:
+        assert window.adr is not None
+        assert window.adr not in posture.MECHANISM_OWN_ADRS

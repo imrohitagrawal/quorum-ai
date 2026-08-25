@@ -86,6 +86,24 @@ Every row proven RED-then-GREEN in `tests/unit/test_gate_liveness_wp166.py`
 the real workflow file, the corresponding test confirmed red, the file
 restored from the copy (never `git checkout`), the test confirmed green again.
 
+**Update, 2026-08-25 (ADR-0071, the live-execution posture declaration).** Three
+of the new checks are negative in the trivially-true way this document is about
+— "no workflow writes the declaration", "no workflow step posts a
+re-affirmation", "no ADR authorises a standing posture" — and all three are true
+today over an input that could just as easily be empty. Their floors:
+
+| Gate | Floor | Proven RED by |
+|---|---|---|
+| `test_no_workflow_that_touches_the_declaration_may_write_the_repository` | ≥10 workflow files parsed, AND at least one must actually name `configs/live-execution-windows.json` | the naming set is the positive partner: if the declaration file is renamed and the watchdog follows, this asserts over zero workflows and reds rather than passing. Measured 2026-08-25: **14** workflows, **1** naming the file, **1** holding `contents: write` — different files |
+| `test_no_workflow_step_posts_a_reaffirmation` | ≥20 `run:` steps parsed across all workflows | `test_the_reaffirmation_detector_actually_detects` is the partner, and it is the load-bearing half: it drives the detector over the alert step's REAL guidance text (must not trip), a comment-posting step without the token (must not trip), and the combination (must trip). Without it a detector returning False for everything would pass |
+| `test_no_adr_in_this_repository_authorises_a_standing_posture_yet` | ≥40 ADR records globbed | `test_an_accepted_marked_adr_authorises` is the partner: the same function must FIND a marked record in a fixture directory, so "empty over the real tree" is a finding and not a broken matcher |
+
+The same shape applies inside the check itself rather than only in its tests:
+`evaluate_posture`'s detail line names how many hosts of how many answered, how
+many `/status` hosts reported the judge, and how many windows are declared —
+pinned by two cases that differ in every number, so a hardcoded string fails one.
+
+
 **What none of these floors can see:** whether the tests that ran assert anything
 worth asserting. A lane of 138 vacuous specs satisfies its floor completely. These
 close "the gate stopped running", not "the gate never bit".

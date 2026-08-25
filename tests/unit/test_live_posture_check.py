@@ -23,6 +23,7 @@ import datetime as dt
 import importlib.util
 import json
 import sys
+import tomllib
 from pathlib import Path
 from types import ModuleType
 from typing import Any
@@ -58,13 +59,58 @@ def posture() -> ModuleType:
     return module
 
 
-def _window(posture: ModuleType, *, opened: str, expires: str, owner: str = "rohit") -> Any:
+def _window(
+    posture: ModuleType,
+    *,
+    opened: str,
+    expires: str,
+    owner: str = "rohit",
+    judge: bool = False,
+    issue: int | None = None,
+) -> Any:
     return posture.DeclaredWindow(
         owner=owner,
         reason="collect the ADR-0060 sample",
         opened_at=dt.datetime.fromisoformat(opened),
         expires_at=dt.datetime.fromisoformat(expires),
+        mode=posture.MODE_TIME_BOXED,
+        judge=judge,
+        reaffirm_issue=issue,
     )
+
+
+def _standing(
+    posture: ModuleType,
+    *,
+    opened: str,
+    adr: str = "ADR-0099",
+    judge: bool = False,
+    issue: int | None = None,
+) -> Any:
+    return posture.DeclaredWindow(
+        owner="rohit",
+        reason="the GA steady state",
+        opened_at=dt.datetime.fromisoformat(opened),
+        expires_at=None,
+        mode=posture.MODE_STANDING,
+        judge=judge,
+        adr=adr,
+        reaffirm_issue=issue,
+    )
+
+
+def _reaffirmed(posture: ModuleType, *, window: Any, hours_ago: float, now: Any) -> dict:
+    """A re-affirmation map putting ONE human affirmation `hours_ago` on `window`."""
+    assert window.reaffirm_issue is not None, "a re-affirmed window must name its issue"
+    return {
+        window.reaffirm_issue: [
+            posture.Reaffirmation(
+                at=now - dt.timedelta(hours=hours_ago),
+                by="rohit",
+                window_opened_at=window.opened_at,
+            )
+        ]
+    }
 
 
 # --- A. The pure decision --------------------------------------------------
@@ -269,6 +315,8 @@ def _entry(**overrides: object) -> dict[str, object]:
     entry: dict[str, object] = {
         "owner": "x",
         "reason": "y",
+        "mode": "time_boxed",
+        "judge": False,
         "opened_at": "2026-01-01T00:00:00+00:00",
         "expires_at": "2026-01-02T00:00:00+00:00",
     }
@@ -294,6 +342,35 @@ def _entry(**overrides: object) -> dict[str, object]:
         # naive timestamps: "00:00" in whose day?
         {"windows": [_entry(opened_at="2026-01-01T00:00:00")]},
         {"windows": [_entry(expires_at="2026-01-02T00:00:00")]},
+        # --- ADR-0071 rows. Before it, an unknown key was SILENTLY IGNORED,
+        # so `{"mode": "standng"}` parsed and meant nothing. A field that a typo
+        # quietly disables is the silently-green shape this package abolishes.
+        {"windows": [_entry(mode=None)]},
+        {"windows": [_entry(mode="standng")]},
+        {"windows": [_entry(mode="Standing")]},
+        {"windows": [_entry(mode="time-boxed")]},
+        {"windows": [_entry(mode=7)]},
+        # `judge` is REQUIRED and must be a real bool. `isinstance(True, int)` is
+        # True in Python, so the string and the integer are both near-misses that
+        # a lenient parser would accept as "yes".
+        {"windows": [_entry(judge=None)]},
+        {"windows": [_entry(judge="true")]},
+        {"windows": [_entry(judge=1)]},
+        # a time_boxed window may not carry an ADR citation it does not need
+        {"windows": [_entry(adr="ADR-0099")]},
+        # a standing window must not carry an expiry, must cite an ADR, and the
+        # citation must resolve — with no authorised set supplied, none does.
+        {"windows": [_entry(mode="standing")]},
+        {"windows": [_entry(mode="standing", expires_at=None, adr=None)]},
+        {"windows": [_entry(mode="standing", expires_at=None, adr="")]},
+        {"windows": [_entry(mode="standing", expires_at=None, adr="ADR-99")]},
+        {"windows": [_entry(mode="standing", expires_at=None, adr="see ADR-0099")]},
+        {"windows": [_entry(mode="standing", expires_at=None, adr="ADR-0099")]},
+        # reaffirm_issue must be a positive integer, and `True` is not one
+        {"windows": [_entry(reaffirm_issue="105")]},
+        {"windows": [_entry(reaffirm_issue=0)]},
+        {"windows": [_entry(reaffirm_issue=-1)]},
+        {"windows": [_entry(reaffirm_issue=True)]},
     ],
 )
 def test_a_malformed_declaration_refuses_to_parse(posture: ModuleType, payload: object) -> None:
@@ -320,6 +397,8 @@ def test_a_wellformed_declaration_parses(posture: ModuleType) -> None:
                 {
                     "owner": "rohit",
                     "reason": "ADR-0060 sample",
+                    "mode": "time_boxed",
+                    "judge": False,
                     "opened_at": "2026-08-19T09:00:00Z",
                     "expires_at": "2026-08-19T17:00:00Z",
                 }
@@ -366,16 +445,40 @@ def test_the_shipped_declaration_file_declares_no_window_right_now(
     RED IF: a window covering the present is committed while fly.toml has the
     flag off, i.e. a declaration outlives the work it sanctioned.
     """
-    parsed = posture.parse_windows(json.loads(SHIPPED_WINDOWS.read_text(encoding="utf-8")))
+    parsed = posture.load_windows(posture.DEFAULT_WINDOWS_PATH)
     assert parsed is not None
     now = dt.datetime.now(dt.UTC)
-    fly = (REPO_ROOT / "fly.toml").read_text(encoding="utf-8")
-    flag_on = 'OPENROUTER_LIVE_EXECUTION_ENABLED = "false"' not in fly
-    open_now = [w for w in parsed if w.covers(now)]
+    # PARSE the TOML rather than substring-matching it. The original read
+    # `'OPENROUTER_LIVE_EXECUTION_ENABLED = "false"' not in fly`, which a
+    # reformat of fly.toml (single quotes, or no spaces around the `=`) would
+    # turn True — making this whole assertion vacuously pass over an open
+    # window. `_fly_env`-style parsing cannot drift that way.
+    env = tomllib.loads((REPO_ROOT / "fly.toml").read_text(encoding="utf-8")).get("env", {})
+    assert isinstance(env, dict) and env, (
+        "fly.toml has no [env] block — this gate refuses to pass over nothing"
+    )
+    assert "OPENROUTER_LIVE_EXECUTION_ENABLED" in env, (
+        "the flag is no longer in fly.toml [env]; repoint this gate, do not delete it"
+    )
+    flag_on = str(env["OPENROUTER_LIVE_EXECUTION_ENABLED"]).strip().lower() not in {
+        "false",
+        "0",
+        "no",
+        "off",
+        "",
+    }
+    # Scoped to TIME-BOXED windows. A `standing` window covers every instant
+    # from the moment it opens — that is what the mode means — so including it
+    # here would make the first standing declaration turn this gate red and
+    # invite somebody to loosen the assertion, which is how a real gate gets
+    # deleted disguised as a fixture update. Standing windows have their own
+    # obligations (a resolving ADR citation, and re-affirmation at runtime);
+    # they are checked in test_live_execution_posture_declaration.py.
+    open_now = [w for w in parsed if w.covers(now) and not w.is_standing]
     assert flag_on or not open_now, (
-        f"{len(open_now)} declared window(s) cover {now.isoformat()} while "
-        "fly.toml has live execution off — close the declaration, or the next "
-        "accidental 'true' is silently sanctioned."
+        f"{len(open_now)} declared time-boxed window(s) cover {now.isoformat()} "
+        "while fly.toml has live execution off — close the declaration, or the "
+        "next accidental 'true' is silently sanctioned."
     )
 
 
@@ -477,21 +580,34 @@ def test_every_decision_reports_what_it_observed(posture: ModuleType) -> None:
     """
     window_now = _window(posture, opened=_NOW_OPEN, expires=_NOW_SHUT)
     window_past = _window(posture, opened=_OLD_OPEN, expires=_OLD_SHUT)
+    # Opened well over the cadence ago and never re-affirmed: the lapse branch.
+    window_stale = _window(posture, opened=_OLD_OPEN, expires=_FUTURE_SHUT)
+    # Attended, but the judge is on and this window does not declare it.
+    window_fresh = _window(posture, opened=_NOW_OPEN, expires=_NOW_SHUT, judge=False)
+    window_standing = _standing(posture, opened=_NOW_OPEN)
     cases = [
-        ({_HOST_A: "offline_by_config"}, [], None),
-        ({_HOST_A: "live"}, [window_now], None),
-        ({_HOST_A: "live"}, [], None),
-        ({_HOST_A: "live"}, [window_past], None),
-        ({_HOST_A: None}, [], None),
-        ({_HOST_A: "live"}, None, "malformed"),
+        ({_HOST_A: "offline_by_config"}, [], None, {}),
+        ({_HOST_A: "live"}, [window_now], None, {}),
+        ({_HOST_A: "live"}, [], None, {}),
+        ({_HOST_A: "live"}, [window_past], None, {}),
+        ({_HOST_A: None}, [], None, {}),
+        ({_HOST_A: "live"}, None, "malformed", {}),
+        ({_HOST_A: "live"}, [window_stale], None, {}),
+        ({_HOST_A: "live"}, [window_fresh], None, {_HOST_B: True}),
+        ({_HOST_A: "live"}, [window_standing], None, {}),
     ]
     seen = set()
-    for states, windows, _ in cases:
-        result = posture.evaluate_posture(readiness_states=states, windows=windows, now=_NOW)
+    for states, windows, _, judge in cases:
+        result = posture.evaluate_posture(
+            readiness_states=states, windows=windows, now=_NOW, judge_states=judge
+        )
         assert result.detail.strip()
         assert len(result.detail) > 40, result.detail
         seen.add(result.decision)
-    assert seen == set(posture.PostureDecision)
+    assert seen == set(posture.PostureDecision), (
+        "a PostureDecision is unreachable from this case list — add a case that "
+        f"reaches it. Missing: {set(posture.PostureDecision) - seen}"
+    )
 
 
 def test_the_detail_names_how_many_hosts_and_windows_it_read(posture: ModuleType) -> None:
@@ -523,10 +639,17 @@ def test_main_prints_every_url_it_probed(
     """RED IF: ``main`` stops naming its sources, so a reader of a red job
     cannot tell which host reported what."""
     url = _ready_stub(tmp_path, {"live_readiness": {"state": "offline_by_config"}})
-    posture.main(["--ready-url", url, "--windows-file", str(SHIPPED_WINDOWS)])
+    status = _ready_stub(tmp_path, {"judge_enabled": True}, name="probe-status.json")
+    posture.main(
+        ["--ready-url", url, "--status-url", status, "--windows-file", str(SHIPPED_WINDOWS)]
+    )
     printed = capsys.readouterr().out
     assert url in printed
     assert "offline_by_config" in printed
+    # It must name the /status source too, and what it read there — the judge is
+    # a second paid subsystem and a reader of a green job needs both numbers.
+    assert status in printed
+    assert "judge_enabled=True" in printed
 
 
 # --- D. THE WIRE. Deleting the $GITHUB_OUTPUT write must go red ------------
@@ -539,14 +662,40 @@ def _run_main(
     *,
     body: object,
     windows_payload: object,
+    judge: object = False,
+    comments: object = (),
+    adr_dir: Path | None = None,
 ) -> tuple[int, str]:
+    """Drive ``main`` end to end over ``file:`` fixtures ONLY.
+
+    Every URL is passed explicitly, including ``--status-url``. That is not
+    tidiness: ``main``'s defaults are the real production hosts, so a test that
+    omitted one would silently reach ``quorum-ai.fly.dev`` — measured, an early
+    revision of this file did exactly that and the suite took 103s. No test here
+    touches production.
+    """
     ready = _ready_stub(tmp_path, body, name="wire-ready.json")
+    status = _ready_stub(tmp_path, {"judge_enabled": judge}, name="wire-status.json")
+    reaff = _ready_stub(tmp_path, list(comments), name="wire-comments.json")
     windows = tmp_path / "windows.json"
     windows.write_text(json.dumps(windows_payload), encoding="utf-8")
     outputs = tmp_path / "outputs.txt"
     outputs.write_text("", encoding="utf-8")
     monkeypatch.setenv("GITHUB_OUTPUT", str(outputs))
-    code = posture.main(["--ready-url", ready, "--windows-file", str(windows)])
+    code = posture.main(
+        [
+            "--ready-url",
+            ready,
+            "--status-url",
+            status,
+            "--windows-file",
+            str(windows),
+            "--adr-dir",
+            str(adr_dir if adr_dir is not None else REPO_ROOT / "docs" / "adr"),
+            "--reaffirmations-url",
+            reaff,
+        ]
+    )
     return code, outputs.read_text(encoding="utf-8")
 
 
@@ -612,6 +761,8 @@ def test_main_stays_quiet_through_a_declared_window(
                 {
                     "owner": "rohit",
                     "reason": "declared sample",
+                    "mode": "time_boxed",
+                    "judge": False,
                     "opened_at": far_past,
                     "expires_at": far_future,
                 }
@@ -637,8 +788,18 @@ def test_main_survives_a_fetcher_that_raises(
     outputs = tmp_path / "outputs.txt"
     outputs.write_text("", encoding="utf-8")
     monkeypatch.setenv("GITHUB_OUTPUT", str(outputs))
+    status = _ready_stub(tmp_path, {"judge_enabled": False}, name="boom-status.json")
     with pytest.raises(RuntimeError):
-        posture.main(["--ready-url", _HOST_A, "--windows-file", str(SHIPPED_WINDOWS)])
+        posture.main(
+            [
+                "--ready-url",
+                _HOST_A,
+                "--status-url",
+                status,
+                "--windows-file",
+                str(SHIPPED_WINDOWS),
+            ]
+        )
     # The module-level __main__ net is what converts this into an UNKNOWN
     # verdict plus exit 1; that net is asserted structurally below.
     assert "BaseException" in SCRIPT.read_text(encoding="utf-8")
@@ -973,6 +1134,8 @@ def test_a_non_utc_offset_is_normalised_for_display(posture: ModuleType) -> None
                 {
                     "owner": "rohit",
                     "reason": "y",
+                    "mode": "time_boxed",
+                    "judge": False,
                     "opened_at": "2026-08-25T00:00:00+05:30",
                     "expires_at": "2026-08-26T00:00:00-12:00",
                 }
@@ -1070,3 +1233,1018 @@ def test_the_alert_title_names_the_decision_and_asserts_no_posture(
     assert title, calls
     assert "--title Live-execution posture needs attention: unknown" in title[0]
     assert "Live execution is on" not in title[0]
+
+
+# --- H. RE-AFFIRMATION: the attention clock --------------------------------
+#
+# THE VACUITY PROBLEM, RESTATED FOR THIS SECTION. Production reports
+# `offline_by_config`, so nothing below is reachable from the real world today.
+# Every alerting assertion here is therefore driven by a fixture AND paired with
+# a partner proving the quiet path is still quiet with the same inputs bar one.
+
+
+def _comment(
+    *,
+    hours_ago: float,
+    window_opened: str,
+    kind: str = "User",
+    login: str = "rohit",
+    body: str | None = None,
+    now: dt.datetime | None = None,
+) -> dict[str, Any]:
+    """One GitHub issue comment, in the shape the API returns it."""
+    at = (now or _NOW) - dt.timedelta(hours=hours_ago)
+    return {
+        "user": {"login": login, "type": kind},
+        "created_at": at.isoformat(),
+        "body": body if body is not None else f"REAFFIRM live-execution {window_opened}",
+    }
+
+
+#: A window opened three days ago and running for seven — #105's shape, and the
+#: shape #357 actually ran. It is the SAME window in both directions below; only
+#: whether anybody re-affirmed it changes.
+_LONG_OPEN = "2026-08-22T12:00:00+00:00"
+_LONG_SHUT = "2026-08-29T12:00:00+00:00"
+
+
+def test_a_window_running_past_the_cadence_with_no_reaffirmation_alerts(
+    posture: ModuleType,
+) -> None:
+    """#357 in one line, and the whole reason a maximum LENGTH was rejected.
+
+    This window has three days to run. Nothing has expired. Under ADR-0070 this
+    was silent, which is exactly what three unattended days looked like.
+
+    RED IF: the attention check is removed, so a declaration once opened
+    sanctions the posture for as long as its expiry allows with nobody watching.
+    """
+    window = _window(posture, opened=_LONG_OPEN, expires=_LONG_SHUT, issue=105)
+    result = posture.evaluate_posture(
+        readiness_states={_HOST_A: "live"},
+        windows=[window],
+        now=_NOW,
+        reaffirmations={105: []},
+    )
+    assert result.decision is posture.PostureDecision.LIVE_REAFFIRMATION_LAPSED
+    assert result.should_alert is True
+
+
+def test_the_same_window_reaffirmed_inside_the_cadence_is_quiet(
+    posture: ModuleType,
+) -> None:
+    """POSITIVE PARTNER, and #105's seven days made possible.
+
+    Byte-for-byte the same window as the test above. The ONLY difference is one
+    human comment. Without this partner, a check that alerted on every long
+    window would satisfy the test above while making the legitimate work
+    impossible — which is how an alert gets muted.
+
+    RED IF: a re-affirmation stops resetting the clock, so no long window can
+    ever be sanctioned.
+    """
+    window = _window(posture, opened=_LONG_OPEN, expires=_LONG_SHUT, issue=105)
+    result = posture.evaluate_posture(
+        readiness_states={_HOST_A: "live"},
+        windows=[window],
+        now=_NOW,
+        reaffirmations=_reaffirmed(posture, window=window, hours_ago=2, now=_NOW),
+    )
+    assert result.decision is posture.PostureDecision.LIVE_WITHIN_DECLARED_WINDOW
+    assert result.should_alert is False
+
+
+def test_the_cadence_boundary_is_exact(posture: ModuleType) -> None:
+    """Literals on both sides (rule 7a) — never parametrized over the constant.
+
+    Pinning "attended if hours < REAFFIRMATION_CADENCE_HOURS" against the
+    constant itself would let the constant be raised from 24 to 240 with this
+    test still green. The two instants below are written out, so moving the
+    cadence moves this test.
+
+    RED IF: the comparison flips its strictness, or the cadence changes without
+    this test and the documents changing with it.
+    """
+    window = _window(posture, opened=_LONG_OPEN, expires=_LONG_SHUT, issue=105)
+    assert posture.REAFFIRMATION_CADENCE_HOURS == 24.0
+    just_inside = _reaffirmed(posture, window=window, hours_ago=23.9, now=_NOW)
+    just_outside = _reaffirmed(posture, window=window, hours_ago=24.1, now=_NOW)
+    assert window.is_attended(_NOW, just_inside[105]) is True
+    assert window.is_attended(_NOW, just_outside[105]) is False
+
+
+def test_a_window_shorter_than_the_cadence_needs_no_reaffirmation(
+    posture: ModuleType,
+) -> None:
+    """Opening a window IS the first act of attention.
+
+    The common case — a short attended session — must cost nothing extra, or the
+    mechanism becomes friction on exactly the work it exists to permit.
+
+    RED IF: the attention clock stops starting at ``opened_at``, so every window
+    alerts the moment it is declared.
+    """
+    window = _window(posture, opened=_NOW_OPEN, expires=_NOW_SHUT)
+    result = posture.evaluate_posture(
+        readiness_states={_HOST_A: "live"}, windows=[window], now=_NOW
+    )
+    assert result.decision is posture.PostureDecision.LIVE_WITHIN_DECLARED_WINDOW
+    assert result.should_alert is False
+
+
+def test_the_lapse_detail_names_the_hours_the_cadence_and_where_to_re_affirm(
+    posture: ModuleType,
+) -> None:
+    """A gate must report what it counted, and an alert must be actionable.
+
+    Two windows differing in BOTH the elapsed hours and the issue number, so a
+    hardcoded detail string fails one of them.
+
+    RED IF: the detail stops interpolating the real numbers, or stops telling
+    the reader the exact comment that would resolve it.
+    """
+    stale = _window(posture, opened=_LONG_OPEN, expires=_LONG_SHUT, issue=105)
+    one = posture.evaluate_posture(
+        readiness_states={_HOST_A: "live"},
+        windows=[stale],
+        now=_NOW,
+        reaffirmations={105: []},
+    )
+    assert "nobody has re-affirmed it for 72.0h" in one.detail
+    assert "24h cadence" in one.detail
+    assert "on issue 105" in one.detail
+    assert f"{posture.REAFFIRM_TOKEN} {_LONG_OPEN}" in one.detail
+
+    older = _window(posture, opened=_OLD_OPEN, expires=_FUTURE_SHUT, issue=268)
+    two = posture.evaluate_posture(
+        readiness_states={_HOST_A: "live"},
+        windows=[older],
+        now=_NOW,
+        reaffirmations={268: []},
+    )
+    assert "nobody has re-affirmed it for 147.0h" in two.detail
+    assert "on issue 268" in two.detail
+
+
+# --- H2. Who may re-affirm. The two fields GitHub sets and the caller cannot.
+
+
+def test_a_bot_comment_is_not_a_reaffirmation(posture: ModuleType) -> None:
+    """THE load-bearing property of this whole mechanism.
+
+    A re-affirmation any automation can supply is theatre. The watchdog itself
+    holds ``issues: write`` and a workflow token, so it could comment on its own
+    alert — and everything posted with a workflow token is typed ``Bot`` by
+    GitHub, which is server-set and not forgeable by the commenter. Measured:
+    all 11 machine comments on issue #351 are ``"type": "Bot"``.
+
+    RED IF: the ``Bot`` filter is removed, so this watchdog — or any workflow —
+    can re-affirm the very posture it exists to police.
+    """
+    parsed = posture.parse_reaffirmations(
+        [_comment(hours_ago=1, window_opened=_LONG_OPEN, kind="Bot", login="github-actions[bot]")],
+        now=_NOW,
+    )
+    assert parsed == []
+
+
+def test_a_human_comment_is_a_reaffirmation(posture: ModuleType) -> None:
+    """POSITIVE PARTNER for the row above, and it is not optional: a parser that
+    returned ``[]`` for everything would satisfy that test while making every
+    long window permanently un-affirmable.
+
+    The payload is byte-identical to the bot one bar ``user.type``.
+
+    RED IF: ``parse_reaffirmations`` stops recognising a real re-affirmation.
+    """
+    parsed = posture.parse_reaffirmations(
+        [_comment(hours_ago=1, window_opened=_LONG_OPEN, kind="User", login="rohit")],
+        now=_NOW,
+    )
+    assert len(parsed) == 1
+    assert parsed[0].by == "rohit"
+    assert parsed[0].at == _NOW - dt.timedelta(hours=1)
+    assert parsed[0].window_opened_at == dt.datetime.fromisoformat(_LONG_OPEN)
+
+
+def test_a_forward_dated_comment_is_not_a_reaffirmation(posture: ModuleType) -> None:
+    """The set-and-forget cheat, closed.
+
+    ADR-0070's one acknowledged silencer was a far-future ``expires_at``,
+    defended only by "it appears in a diff" — which has no mechanical backing
+    here (``required_approving_review_count`` on ``main`` is 0). A
+    re-affirmation is a record of a PAST act; a future-dated one is a
+    contradiction. GitHub cannot produce one, so its only source is a hand-built
+    payload.
+
+    RED IF: the future check is removed, so one comment dated 2099 sanctions the
+    posture forever.
+    """
+    parsed = posture.parse_reaffirmations(
+        [_comment(hours_ago=-48, window_opened=_LONG_OPEN)], now=_NOW
+    )
+    assert parsed == []
+
+
+def test_a_comment_naming_a_different_window_does_not_reaffirm_this_one(
+    posture: ModuleType,
+) -> None:
+    """One comment attends exactly one window.
+
+    Otherwise a single "still fine" covers every open window at once, which is
+    the batch rubber-stamp ADR-0069 rejected in the exclusion ledger.
+
+    RED IF: the token stops carrying the window's own ``opened_at``, or the
+    match is dropped.
+    """
+    window = _window(posture, opened=_LONG_OPEN, expires=_LONG_SHUT, issue=105)
+    parsed = posture.parse_reaffirmations(
+        [_comment(hours_ago=1, window_opened=_OLD_OPEN)], now=_NOW
+    )
+    assert len(parsed) == 1, "the comment itself must still parse — see the partner above"
+    assert window.is_attended(_NOW, parsed) is False
+
+
+@pytest.mark.parametrize(
+    "body",
+    [
+        "looks fine to me",
+        "REAFFIRM live-execution",
+        "REAFFIRM live-execution not-a-timestamp",
+        "REAFFIRM live-execution 2026-08-22T12:00:00",
+        "reaffirm live-execution 2026-08-22T12:00:00+00:00",
+        "",
+    ],
+)
+def test_a_comment_without_a_usable_token_does_not_reaffirm(posture: ModuleType, body: str) -> None:
+    """Each row is a near-miss. The naive-timestamp row matters most: "12:00" in
+    whose day? — the same refusal every other instant in this file gets.
+
+    RED IF: the token parser gets lenient, so an ordinary conversational comment
+    silently resets a money posture's attention clock.
+    """
+    parsed = posture.parse_reaffirmations(
+        [_comment(hours_ago=1, window_opened=_LONG_OPEN, body=body)], now=_NOW
+    )
+    assert parsed == []
+
+
+@pytest.mark.parametrize(
+    "payload",
+    [
+        {"not": "a list"},
+        "a string",
+        None,
+        [{"user": "not an object", "created_at": "2026-08-25T11:00:00+00:00", "body": "x"}],
+        [{"user": {"login": "rohit"}, "created_at": "2026-08-25T11:00:00+00:00", "body": "x"}],
+        [{"user": {"type": "User"}, "created_at": "2026-08-25T11:00:00+00:00", "body": "x"}],
+        [{"user": {"login": "rohit", "type": "User"}, "body": "x"}],
+        [{"user": {"login": "rohit", "type": "User"}, "created_at": "2026-08-25T11:00:00+00:00"}],
+        ["not an object"],
+    ],
+)
+def test_a_malformed_comment_payload_refuses_to_parse(posture: ModuleType, payload: object) -> None:
+    """None means "I could not tell", which the caller turns into an alert —
+    never into "nobody has re-affirmed", which would route a broken read through
+    the LAPSE branch and look like a real finding.
+
+    RED IF: any validation branch in ``parse_reaffirmations`` is deleted.
+    """
+    assert posture.parse_reaffirmations(payload, now=_NOW) is None
+
+
+def test_an_empty_comment_list_parses_as_no_reaffirmations(posture: ModuleType) -> None:
+    """POSITIVE PARTNER for the rows above: an issue with no comments yet is a
+    legitimate, readable state and must be distinguishable from an unreadable
+    one. ``[]`` is not ``None``.
+
+    RED IF: the empty list starts returning None, so every freshly-declared
+    window alerts UNKNOWN instead of using its own ``opened_at``.
+    """
+    assert posture.parse_reaffirmations([], now=_NOW) == []
+
+
+def test_an_unreadable_reaffirmation_issue_is_unknown_and_alerts(
+    posture: ModuleType,
+) -> None:
+    """A window whose attention cannot be established is not a window known to
+    be attended. Same posture every other unreadable input in this file gets.
+
+    RED IF: an unreadable issue is coerced to "no re-affirmations" (which would
+    report a LAPSE that was never observed) or to "attended" (which would let a
+    GitHub outage sanction an unwatched money posture).
+    """
+    window = _window(posture, opened=_LONG_OPEN, expires=_LONG_SHUT, issue=105)
+    result = posture.evaluate_posture(
+        readiness_states={_HOST_A: "live"},
+        windows=[window],
+        now=_NOW,
+        reaffirmations={105: None},
+    )
+    assert result.decision is posture.PostureDecision.UNKNOWN
+    assert result.should_alert is True
+    assert result.complete is False, "a half-blind cycle must not retire a standing alert"
+    assert "105" in result.detail
+
+
+def test_reaffirmations_are_read_over_a_real_body(posture: ModuleType, tmp_path: Path) -> None:
+    """The I/O layer, with a REAL body (rule 8a).
+
+    Two rows, one bot and one human, in ONE payload — so an implementation that
+    returned everything, or nothing, fails.
+
+    RED IF: ``fetch_reaffirmations`` stops filtering, or stops parsing.
+    """
+    url = _ready_stub(
+        tmp_path,
+        [
+            _comment(
+                hours_ago=1, window_opened=_LONG_OPEN, kind="Bot", login="github-actions[bot]"
+            ),
+            _comment(hours_ago=3, window_opened=_LONG_OPEN, kind="User", login="rohit"),
+        ],
+        name="comments.json",
+    )
+    parsed = posture.fetch_reaffirmations(url, now=_NOW, attempts=1)
+    assert parsed is not None
+    assert [entry.by for entry in parsed] == ["rohit"]
+
+
+def test_an_unreadable_reaffirmation_url_reads_as_none(posture: ModuleType, tmp_path: Path) -> None:
+    """RED IF: ``fetch_reaffirmations`` stops catching, so a GitHub outage kills
+    the process before ``$GITHUB_OUTPUT`` is written and the job reports
+    success."""
+    assert (
+        posture.fetch_reaffirmations((tmp_path / "nope.json").as_uri(), now=_NOW, attempts=1)
+        is None
+    )
+
+
+# --- H3. Nothing automated may supply a re-affirmation ---------------------
+
+
+def _workflow_texts() -> dict[str, str]:
+    directory = REPO_ROOT / ".github" / "workflows"
+    texts = {
+        path.name: path.read_text(encoding="utf-8") for path in sorted(directory.glob("*.yml"))
+    }
+    # Empty-input floor: every assertion below is "no workflow does X", which is
+    # trivially true over zero workflows.
+    assert len(texts) >= 10, (
+        f"only {len(texts)} workflow(s) found — this gate refuses to pass over nothing"
+    )
+    return texts
+
+
+def test_no_workflow_that_touches_the_declaration_may_write_the_repository() -> None:
+    """The mechanical half of "no automation may re-affirm".
+
+    A re-affirmation lives on a GitHub issue precisely because a committed field
+    would be forgeable here — but the DECLARATION itself is still a repository
+    file, and a workflow holding ``contents: write`` could rewrite a window's
+    ``opened_at`` and reset the attention clock that way. Measured 2026-08-25:
+    of 14 workflows exactly one holds ``contents: write``
+    (``seed-visual-baselines.yml``) and exactly one names the declaration file
+    (the watchdog) — and they are not the same file.
+
+    RED IF: the watchdog is granted ``contents: write``, or any workflow that
+    can write the repository starts touching the declaration file.
+    """
+    texts = _workflow_texts()
+    naming = {name: text for name, text in texts.items() if "live-execution-windows" in text}
+    # POSITIVE PARTNER and floor: the grep string must actually match something,
+    # or "no such workflow can write" is true because no such workflow exists.
+    assert naming, "no workflow names the declaration file — this gate is watching nothing"
+    writers = sorted(name for name, text in naming.items() if "contents: write" in text)
+    assert writers == [], (
+        f"{writers} both name configs/live-execution-windows.json and hold "
+        "contents: write — a workflow that can rewrite a window's opened_at can "
+        "reset the attention clock this mechanism exists to measure."
+    )
+
+
+def posture_token() -> str:
+    """The re-affirmation token, READ FROM THE SCRIPT rather than restated here.
+
+    A gate that hardcoded the string would keep passing after a rename while
+    searching for something that no longer exists — the "no X found" shape that
+    is trivially true over nothing.
+    """
+    spec = importlib.util.spec_from_file_location("live_posture_token_probe", SCRIPT)
+    assert spec is not None and spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    sys.modules[spec.name] = module
+    spec.loader.exec_module(module)
+    token = str(module.REAFFIRM_TOKEN)
+    assert token.strip(), "REAFFIRM_TOKEN is empty — this gate refuses to search for nothing"
+    return token
+
+
+#: Ways a workflow step could POST a comment. The alert step legitimately
+#: MENTIONS the re-affirmation token — it tells the operator what to type — so a
+#: gate keyed on the token alone would refuse the guidance while permitting the
+#: forgery. What must never happen is one step doing BOTH.
+_COMMENT_POSTING = ("gh issue comment", "gh pr comment", "/comments")
+
+
+def _posts_a_reaffirmation(body: str) -> bool:
+    return posture_token() in body and any(verb in body for verb in _COMMENT_POSTING)
+
+
+def test_no_workflow_step_posts_a_reaffirmation() -> None:
+    """No automation may supply the human act. Keyed on the STEP, not the file.
+
+    The mechanism's real defence is that GitHub types every workflow-token
+    comment ``Bot`` and the parser refuses those — proven by
+    ``test_a_bot_comment_is_not_a_reaffirmation``. This is the second layer: an
+    intent check, so a step that tried would be caught in review rather than
+    relied upon to fail at runtime.
+
+    RED IF: any workflow step both names the token and posts a comment.
+    """
+    offenders = []
+    steps_seen = 0
+    for name, text in _workflow_texts().items():
+        data = yaml.safe_load(text)
+        if not isinstance(data, dict):
+            continue
+        for job in (data.get("jobs") or {}).values():
+            for step in (job or {}).get("steps", []) or []:
+                body = str(step.get("run", ""))
+                if not body:
+                    continue
+                steps_seen += 1
+                if _posts_a_reaffirmation(body):
+                    offenders.append(f"{name}:{step.get('name')}")
+    # Empty-input floor: "no step does X" is trivially true over zero steps.
+    assert steps_seen >= 20, (
+        f"only {steps_seen} run-step(s) parsed — this gate refuses to pass over nothing"
+    )
+    assert offenders == [], f"{offenders} post a re-affirmation from CI"
+
+
+def test_the_reaffirmation_detector_actually_detects() -> None:
+    """POSITIVE PARTNER for the gate above — without it, a detector that
+    returned False for everything would pass over a workflow that did exactly
+    the forbidden thing.
+
+    Three inputs, three outcomes: the guidance text the alert step really
+    contains must NOT trip it, a comment-posting step without the token must NOT
+    trip it, and the combination MUST.
+
+    RED IF: ``_posts_a_reaffirmation`` stops discriminating.
+    """
+    token = posture_token()
+    guidance = _condition_free_alert_body()
+    assert token in guidance, "the alert step no longer tells the operator how to re-affirm"
+    assert _posts_a_reaffirmation(guidance) is False
+    assert _posts_a_reaffirmation('gh issue comment 1 -b "all fine"') is False
+    assert _posts_a_reaffirmation(f'gh issue comment 1 -b "{token} 2026-08-25T09:00:00+00:00"')
+
+
+def _condition_free_alert_body() -> str:
+    step = [s for s in _steps() if "Alert on an undeclared" in str(s.get("name", ""))]
+    assert len(step) == 1
+    return str(step[0]["run"])
+
+
+def test_the_operator_facing_token_is_the_one_the_parser_reads() -> None:
+    """The instruction and the parser must not drift.
+
+    The alert body and the declaration file both tell a human what to type; the
+    script decides what counts. If those diverge, an operator does the ritual
+    and the window lapses anyway.
+
+    RED IF: ``REAFFIRM_TOKEN`` is renamed without the alert body and the
+    declaration file following.
+    """
+    token = posture_token()
+    assert token in _condition_free_alert_body()
+    assert token in SHIPPED_WINDOWS.read_text(encoding="utf-8")
+
+
+def test_the_watchdog_workflow_still_declares_only_the_permissions_it_needs() -> None:
+    """``contents: read`` is load-bearing, not incidental: it is what stops this
+    watchdog from editing the declaration it polices.
+
+    RED IF: the watchdog's ``contents`` permission is widened.
+    """
+    permissions = _load_workflow()["permissions"]
+    assert permissions["contents"] == "read"
+    assert permissions["issues"] == "write"
+
+
+# --- I. `standing`: the abuse surface -------------------------------------
+
+
+def _adr_dir(tmp_path: Path, records: dict[str, str]) -> Path:
+    directory = tmp_path / "adr"
+    directory.mkdir(exist_ok=True)
+    for name, text in records.items():
+        (directory / name).write_text(text, encoding="utf-8")
+    return directory
+
+
+_AUTHORISING = (
+    "# ADR-0099: We are permanently live\n\n## Status\n\nAccepted — 2026-09-01.\n\n"
+    "**Authorises:** OPENROUTER_LIVE_EXECUTION_ENABLED\n"
+)
+
+
+def test_an_accepted_marked_adr_authorises(posture: ModuleType, tmp_path: Path) -> None:
+    """POSITIVE PARTNER and empty-input floor for every refusal below.
+
+    Without it, ``authorising_adrs`` returning the empty set for everything
+    would satisfy all of them while making ``standing`` unusable.
+
+    RED IF: the marker or the Accepted check stops recognising a valid
+    authorisation, so the sanctioned path cannot be taken and the mode gets
+    deleted for being unusable.
+    """
+    found = posture.authorising_adrs(_adr_dir(tmp_path, {"0099-live.md": _AUTHORISING}))
+    assert found == frozenset({"ADR-0099"})
+
+
+@pytest.mark.parametrize(
+    ("name", "text"),
+    [
+        # Proposed, not Accepted — it exists on disk and would pass a
+        # file-exists check.
+        (
+            "0098-proposed.md",
+            "# ADR-0098: Proposed\n\n## Status\n\nProposed.\n\n"
+            "**Authorises:** OPENROUTER_LIVE_EXECUTION_ENABLED\n",
+        ),
+        # Superseded.
+        (
+            "0097-superseded.md",
+            "# ADR-0097: Old\n\n## Status\n\nSuperseded by ADR-0099.\n\n"
+            "**Authorises:** OPENROUTER_LIVE_EXECUTION_ENABLED\n",
+        ),
+        # Accepted, and it NAMES the flag — but it authorises nothing. Measured:
+        # 6 of 68 ADRs name this flag and 2 of them (ADR-0022, ADR-0054)
+        # authorise nothing at all, which is why a prose grep is not a
+        # discriminator and an explicit marker is required.
+        (
+            "0096-mentions.md",
+            "# ADR-0096: Credential removal\n\n## Status\n\nAccepted.\n\n"
+            "We removed a key; OPENROUTER_LIVE_EXECUTION_ENABLED is named here.\n",
+        ),
+        # The marker, but buried in a sentence rather than on a line of its own.
+        (
+            "0095-inline.md",
+            "# ADR-0095: Chatty\n\n## Status\n\nAccepted.\n\n"
+            "Something something **Authorises:** OPENROUTER_LIVE_EXECUTION_ENABLED maybe.\n",
+        ),
+        # No Status section at all.
+        (
+            "0094-no-status.md",
+            "# ADR-0094: Headless\n\n**Authorises:** OPENROUTER_LIVE_EXECUTION_ENABLED\n",
+        ),
+    ],
+)
+def test_these_adrs_do_not_authorise_a_standing_posture(
+    posture: ModuleType, tmp_path: Path, name: str, text: str
+) -> None:
+    """Each row is a way a citation could look right and mean nothing.
+
+    RED IF: any branch of ``authorising_adrs`` is dropped, so a Proposed draft
+    or an ADR that merely mentions the flag can authorise a permanent
+    money-spending posture.
+    """
+    assert posture.authorising_adrs(_adr_dir(tmp_path, {name: text})) == frozenset()
+
+
+def test_no_adr_in_this_repository_authorises_a_standing_posture_yet(
+    posture: ModuleType,
+) -> None:
+    """The marker must not be satisfiable by an ADR that already exists.
+
+    If any current record carried it, the first ``standing`` window could cite a
+    document written for another purpose and the citation would carry no
+    information. This is a negative check, so it ships with two partners: the
+    directory is non-empty, and the same function DOES find a marked record in
+    the fixture test above.
+
+    RED IF: an ADR gains the marker without somebody deciding to go permanently
+    live — or the marker string drifts, which would make this pass over nothing.
+    """
+    adr_dir = REPO_ROOT / "docs" / "adr"
+    records = sorted(adr_dir.glob("[0-9]*.md"))
+    assert len(records) >= 40, (
+        f"only {len(records)} ADR(s) found — this gate refuses to pass over nothing"
+    )
+    assert posture.authorising_adrs(adr_dir) == frozenset()
+
+
+def test_a_standing_window_needs_a_citation_that_resolves(
+    posture: ModuleType,
+) -> None:
+    """The declaration side of the same property.
+
+    RED IF: ``parse_windows`` stops comparing the citation against the resolved
+    set, so ``"adr": "ADR-9999"`` sanctions a permanent posture.
+    """
+    entry = {
+        "owner": "rohit",
+        "reason": "GA",
+        "mode": "standing",
+        "judge": True,
+        "opened_at": _NOW_OPEN,
+        "adr": "ADR-0099",
+    }
+    assert posture.parse_windows({"windows": [entry]}, authorised_adrs=frozenset()) is None
+    parsed = posture.parse_windows({"windows": [entry]}, authorised_adrs=frozenset({"ADR-0099"}))
+    assert parsed is not None and parsed[0].is_standing and parsed[0].adr == "ADR-0099"
+
+
+@pytest.mark.parametrize("adr", sorted({"ADR-0070", "ADR-0071"}))
+def test_the_mechanisms_own_records_cannot_authorise_it(posture: ModuleType, adr: str) -> None:
+    """A mechanism may not authorise its own use.
+
+    Without this the first standing window would cite the ADR that INVENTED
+    standing mode, and the citation would say nothing at all. Requiring a
+    different, future record is the point: going permanently live costs the
+    document that says so.
+
+    RED IF: ``MECHANISM_OWN_ADRS`` is emptied or the check is dropped.
+    """
+    entry = {
+        "owner": "rohit",
+        "reason": "GA",
+        "mode": "standing",
+        "judge": True,
+        "opened_at": _NOW_OPEN,
+        "adr": adr,
+    }
+    # Even when the citation IS in the authorised set, it is refused.
+    assert posture.parse_windows({"windows": [entry]}, authorised_adrs=frozenset({adr})) is None
+
+
+def test_a_standing_window_is_quiet_but_reports_itself_every_cycle(
+    posture: ModuleType,
+) -> None:
+    """A standing posture that produced SILENCE would be indistinguishable from
+    a dead watchdog, so ``standing`` gets its own decision value and a detail
+    line naming the ADR, the age and the last re-affirmation.
+
+    RED IF: a standing window collapses into ``LIVE_WITHIN_DECLARED_WINDOW`` or
+    into ``OFF_AS_DECLARED``, so the job log stops saying a permanent
+    money-spending posture is in force.
+    """
+    window = _standing(posture, opened=_LONG_OPEN, adr="ADR-0099", issue=400)
+    result = posture.evaluate_posture(
+        readiness_states={_HOST_A: "live"},
+        windows=[window],
+        now=_NOW,
+        reaffirmations=_reaffirmed(posture, window=window, hours_ago=3, now=_NOW),
+    )
+    assert result.decision is posture.PostureDecision.LIVE_WITHIN_STANDING_DECLARATION
+    assert result.should_alert is False
+    assert "STANDING declaration" in result.detail
+    assert "ADR-0099" in result.detail
+    assert "standing for 72.0h" in result.detail
+    assert "last re-affirmed 3.0h ago" in result.detail
+
+
+def test_a_standing_window_still_lapses_without_reaffirmation(
+    posture: ModuleType,
+) -> None:
+    """THE anti-abuse property, and the reason ``standing`` is not a silencer.
+
+    ``standing`` removes the DEADLINE. It does not remove the ATTENTION. So
+    reaching for it to quiet a noisy alert buys 24 hours and no more — which is
+    what stops the self-defeating gradient where the cheapest way to stop an
+    alarm at 03:00 is to make it permanent.
+
+    RED IF: ``standing`` is exempted from the attention check, at which point it
+    becomes exactly the permanent-silence mechanism ADR-0069 rejected.
+    """
+    window = _standing(posture, opened=_LONG_OPEN, adr="ADR-0099", issue=400)
+    result = posture.evaluate_posture(
+        readiness_states={_HOST_A: "live"},
+        windows=[window],
+        now=_NOW,
+        reaffirmations={400: []},
+    )
+    assert result.decision is posture.PostureDecision.LIVE_REAFFIRMATION_LAPSED
+    assert result.should_alert is True
+
+
+def test_a_standing_window_covers_the_far_future(posture: ModuleType) -> None:
+    """It has no expiry — that is what the mode MEANS.
+
+    RED IF: ``covers`` starts bounding a standing window, which would make the
+    mode indistinguishable from a time-boxed one and quietly break GA.
+    """
+    window = _standing(posture, opened=_NOW_OPEN)
+    assert window.expires_at is None
+    assert window.covers(dt.datetime(2099, 1, 1, tzinfo=dt.UTC)) is True
+    # ...but it still does not cover the past, before it was opened.
+    assert window.covers(dt.datetime(2026, 8, 25, 8, 59, 59, tzinfo=dt.UTC)) is False
+
+
+def test_a_standing_window_governs_over_a_time_boxed_sibling(
+    posture: ModuleType,
+) -> None:
+    """With both active, the reported window is the one whose cover ends LAST —
+    and a standing declaration never ends.
+
+    RED IF: the governing window is picked by file order again, so an operator
+    reads "0.1h remaining" while a permanent declaration is in force.
+    """
+    short = _window(posture, opened=_NOW_OPEN, expires=_NOW_SHUT)
+    standing = _standing(posture, opened=_NOW_OPEN, adr="ADR-0099")
+    result = posture.evaluate_posture(
+        readiness_states={_HOST_A: "live"}, windows=[short, standing], now=_NOW
+    )
+    assert result.decision is posture.PostureDecision.LIVE_WITHIN_STANDING_DECLARATION
+
+
+# --- J. THE JUDGE: the second paid subsystem ------------------------------
+
+
+def test_the_judge_running_outside_the_declaration_alerts(posture: ModuleType) -> None:
+    """The cell ADR-0070's design got wrong, and the one that actually spends.
+
+    A declared, attended live window plus ``judge_enabled: true`` plus a window
+    that says ``judge: false``. The judge's GET-path spend reaches no ledger
+    (ADR-0013), so ``global_daily_spend_usd`` under-reports by exactly its cost
+    precisely while this stands.
+
+    RED IF: the judge comparison is removed, so a live window silently sanctions
+    a second paid subsystem nobody declared.
+    """
+    window = _window(posture, opened=_NOW_OPEN, expires=_NOW_SHUT, judge=False)
+    result = posture.evaluate_posture(
+        readiness_states={_HOST_A: "live"},
+        windows=[window],
+        now=_NOW,
+        judge_states={_HOST_B: True},
+    )
+    assert result.decision is posture.PostureDecision.LIVE_JUDGE_UNDECLARED
+    assert result.should_alert is True
+    assert "no ledger" in result.detail
+
+
+def test_the_same_posture_with_the_judge_declared_is_quiet(posture: ModuleType) -> None:
+    """POSITIVE PARTNER: the same inputs bar one boolean.
+
+    Without it, a check that alerted whenever the judge was on would satisfy the
+    test above while making every sanctioned judge-bearing window fire — the
+    crying-wolf failure the declaration exists to prevent.
+
+    RED IF: declaring the judge stops sanctioning it.
+    """
+    window = _window(posture, opened=_NOW_OPEN, expires=_NOW_SHUT, judge=True)
+    result = posture.evaluate_posture(
+        readiness_states={_HOST_A: "live"},
+        windows=[window],
+        now=_NOW,
+        judge_states={_HOST_B: True},
+    )
+    assert result.decision is posture.PostureDecision.LIVE_WITHIN_DECLARED_WINDOW
+    assert result.should_alert is False
+    assert "judge declared=true" in result.detail
+
+
+def test_the_judge_on_while_live_is_off_is_reported_and_not_alerted(
+    posture: ModuleType,
+) -> None:
+    """TODAY'S PRODUCTION, exactly: ``live_execution: false``, ``judge_enabled:
+    true`` (measured by ``curl`` on 2026-08-25, build 57be5a8).
+
+    The judge cannot spend here — the run-path gate needs a COMPLETED answer on
+    an invoked provider path and live-off produces none — so alerting would be
+    crying wolf. But ``/status.judge_enabled: true`` READS like activity, so the
+    operator is told.
+
+    RED IF: this starts alerting (the watchdog goes permanently red on today's
+    production and gets muted), or stops reporting (the operator loses the one
+    signal that a second paid subsystem is armed).
+    """
+    result = posture.evaluate_posture(
+        readiness_states={_HOST_A: "offline_by_config"},
+        windows=[],
+        now=_NOW,
+        judge_states={_HOST_B: True},
+    )
+    assert result.decision is posture.PostureDecision.OFF_AS_DECLARED
+    assert result.should_alert is False
+    assert "judge_enabled=true" in result.detail
+    assert "cannot spend while live execution is off" in result.detail
+
+
+def test_an_unreadable_judge_state_while_live_is_unknown_and_alerts(
+    posture: ModuleType,
+) -> None:
+    """While live execution is ON the judge CAN spend, so "I could not tell" is
+    not a clean bill of health.
+
+    RED IF: an unreadable judge state defaults to False, which would be a claim
+    that a second paid subsystem is off made from a value that was never read.
+    """
+    result = posture.evaluate_posture(
+        readiness_states={_HOST_A: "live"},
+        windows=[],
+        now=_NOW,
+        judge_states={_HOST_B: None},
+    )
+    assert result.decision is posture.PostureDecision.UNKNOWN
+    assert result.should_alert is True
+    assert result.complete is False
+
+
+def test_an_unreadable_judge_state_while_off_stays_quiet(posture: ModuleType) -> None:
+    """PARTNER, and the proof that this revision adds NO new alerting path to
+    today's production posture.
+
+    With live execution off the judge is inert, so an unreadable ``/status`` must
+    not wake anybody. If this went the other way, a ``/status`` blip would open a
+    money alert on a system that cannot spend — and that is how an alert gets
+    muted before it ever fires for a real reason.
+
+    RED IF: the judge read becomes load-bearing while the flag is off.
+    """
+    result = posture.evaluate_posture(
+        readiness_states={_HOST_A: "offline_by_config"},
+        windows=[],
+        now=_NOW,
+        judge_states={_HOST_B: None},
+    )
+    assert result.decision is posture.PostureDecision.OFF_AS_DECLARED
+    assert result.should_alert is False
+    # ...but it still may not RETIRE a standing alert on a partial view.
+    assert result.complete is False
+    assert "unreadable" in result.detail
+
+
+@pytest.mark.parametrize(
+    ("live", "judge", "declared_judge", "expected", "alerts"),
+    [
+        # The four-way matrix, plus the undeclared row. `declared_judge` is None
+        # where no window is declared at all.
+        ("offline_by_config", False, None, "OFF_AS_DECLARED", False),
+        ("offline_by_config", True, None, "OFF_AS_DECLARED", False),
+        ("live", False, False, "LIVE_WITHIN_DECLARED_WINDOW", False),
+        ("live", True, False, "LIVE_JUDGE_UNDECLARED", True),
+        ("live", True, True, "LIVE_WITHIN_DECLARED_WINDOW", False),
+        ("live", False, True, "LIVE_WITHIN_DECLARED_WINDOW", False),
+        ("live", True, None, "LIVE_UNDECLARED", True),
+        ("live", False, None, "LIVE_UNDECLARED", True),
+    ],
+)
+def test_the_live_by_judge_matrix(
+    posture: ModuleType,
+    live: str,
+    judge: bool,
+    declared_judge: bool | None,
+    expected: str,
+    alerts: bool,
+) -> None:
+    """Every cell of {live on/off} x {judge on/off} x {declared/not}, pinned.
+
+    Eight rows with six distinct outcomes: no implementation that ignores one of
+    the three inputs passes them all. The row that matters is
+    ``("live", True, False)`` — quiet under ADR-0070, alerting now.
+
+    RED IF: any cell's verdict changes without this table changing with it.
+    """
+    windows = (
+        []
+        if declared_judge is None
+        else [_window(posture, opened=_NOW_OPEN, expires=_NOW_SHUT, judge=declared_judge)]
+    )
+    result = posture.evaluate_posture(
+        readiness_states={_HOST_A: live},
+        windows=windows,
+        now=_NOW,
+        judge_states={_HOST_B: judge},
+    )
+    assert result.decision is getattr(posture.PostureDecision, expected)
+    assert result.should_alert is alerts
+
+
+def test_a_status_body_reporting_the_judge_on_is_read(posture: ModuleType, tmp_path: Path) -> None:
+    """RED IF: ``fetch_judge_enabled`` stops reading the field, or hardcodes it."""
+    url = _ready_stub(tmp_path, {"app": "Quorum-AI", "judge_enabled": True}, name="j-on.json")
+    assert posture.fetch_judge_enabled(url, attempts=1) is True
+
+
+def test_a_status_body_reporting_the_judge_off_is_read(posture: ModuleType, tmp_path: Path) -> None:
+    """PARTNER to the row above: two distinct values, both asserted, so an
+    implementation returning a constant fails one.
+
+    RED IF: the parser returns a constant.
+    """
+    url = _ready_stub(tmp_path, {"app": "Quorum-AI", "judge_enabled": False}, name="j-off.json")
+    assert posture.fetch_judge_enabled(url, attempts=1) is False
+
+
+@pytest.mark.parametrize(
+    "payload",
+    [
+        '{"app":"Quorum-AI"}',
+        '{"app":"Quorum-AI","judge_enabled":"true"}',
+        '{"app":"Quorum-AI","judge_enabled":1}',
+        '{"app":"Quorum-AI","judge_enabled":null}',
+        "[]",
+        "null",
+        "not json at all",
+    ],
+)
+def test_an_unusable_status_body_reads_as_none(
+    posture: ModuleType, tmp_path: Path, payload: str
+) -> None:
+    """None means "unknown". The ``"true"`` and ``1`` rows are the dangerous
+    ones: a truthiness check would read both as "the judge is on" and a
+    ``.get("judge_enabled", False)`` default would turn the first row into a
+    permanent, silent all-clear on a second paid subsystem.
+
+    RED IF: any guard in ``fetch_judge_enabled`` is removed, or the missing key
+    acquires a False default.
+    """
+    url = _ready_stub(tmp_path, payload, name=f"st{abs(hash(payload))}.json")
+    assert posture.fetch_judge_enabled(url, attempts=1) is None
+
+
+def test_the_judge_note_never_reports_a_value_it_did_not_read(
+    posture: ModuleType,
+) -> None:
+    """Three distinct inputs, three distinct sentences.
+
+    RED IF: the note hardcodes a state, or claims one over hosts it never read.
+    """
+    on = posture.evaluate_posture(
+        readiness_states={_HOST_A: "offline_by_config"},
+        windows=[],
+        now=_NOW,
+        judge_states={_HOST_A: True, _HOST_B: True},
+    )
+    off = posture.evaluate_posture(
+        readiness_states={_HOST_A: "offline_by_config"},
+        windows=[],
+        now=_NOW,
+        judge_states={_HOST_A: False, _HOST_B: False},
+    )
+    none = posture.evaluate_posture(
+        readiness_states={_HOST_A: "offline_by_config"},
+        windows=[],
+        now=_NOW,
+        judge_states={},
+    )
+    assert "judge_enabled=true (read 2 of 2 /status host(s))" in on.detail
+    assert "judge_enabled=false (read 2 of 2 /status host(s))" in off.detail
+    assert "judge_enabled was not probed." in none.detail
+
+
+# --- K. The ADR-0070 truth table, pinned so it cannot silently regress -----
+
+
+@pytest.mark.parametrize(
+    ("label", "state", "windows_kind", "hosts", "expected", "alerts", "complete"),
+    [
+        ("live | none", "live", "none", 1, "LIVE_UNDECLARED", True, True),
+        ("off | none", "offline_by_config", "none", 1, "OFF_AS_DECLARED", False, True),
+        ("live | inside", "live", "open", 1, "LIVE_WITHIN_DECLARED_WINDOW", False, True),
+        ("live | expired", "live", "expired", 1, "LIVE_PAST_DECLARED_WINDOW", True, True),
+        ("off | window open", "offline_by_config", "open", 1, "OFF_AS_DECLARED", False, True),
+        ("live | unparseable", "live", "unparseable", 1, "UNKNOWN", True, True),
+        ("off | unparseable", "offline_by_config", "unparseable", 1, "UNKNOWN", True, True),
+        ("off | one host unread", "offline_by_config", "none", 2, "OFF_AS_DECLARED", False, False),
+    ],
+)
+def test_the_adr_0070_truth_table_still_holds(
+    posture: ModuleType,
+    label: str,
+    state: str,
+    windows_kind: str,
+    hosts: int,
+    expected: str,
+    alerts: bool,
+    complete: bool,
+) -> None:
+    """The eight rows ADR-0070 shipped, pinned as a regression gate.
+
+    They were verified by hand on #367 and lived only in that ADR's prose, so
+    nothing would have gone red if ADR-0071's rework had changed one. Eight rows
+    with four distinct decisions and both values of ``complete``, so no
+    implementation ignoring its inputs passes them all.
+
+    RED IF: any of ADR-0070's eight documented outcomes changes.
+    """
+    windows = {
+        "none": [],
+        "open": [_window(posture, opened=_NOW_OPEN, expires=_NOW_SHUT)],
+        "expired": [_window(posture, opened=_OLD_OPEN, expires=_OLD_SHUT)],
+        "unparseable": None,
+    }[windows_kind]
+    states: dict[str, str | None] = {_HOST_A: state}
+    if hosts == 2:
+        states[_HOST_B] = None
+    result = posture.evaluate_posture(
+        readiness_states=states, windows=windows, now=_NOW, judge_states={_HOST_A: False}
+    )
+    assert result.decision is getattr(posture.PostureDecision, expected), label
+    assert result.should_alert is alerts, label
+    assert result.complete is complete, label
