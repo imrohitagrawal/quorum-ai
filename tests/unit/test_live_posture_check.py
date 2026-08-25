@@ -384,6 +384,54 @@ def test_a_malformed_declaration_refuses_to_parse(posture: ModuleType, payload: 
     assert posture.parse_windows(payload) is None
 
 
+@pytest.mark.parametrize("missing", ["mode", "judge", "owner", "reason", "opened_at"])
+def test_a_declaration_missing_a_required_field_refuses_to_parse(
+    posture: ModuleType, missing: str
+) -> None:
+    """The key is ABSENT, not present-and-wrong — a different mutation entirely.
+
+    ``_entry(judge=None)`` still puts the key in the dict, so it survives
+    ``entry.get("judge", False)``. Only a genuinely missing key exercises the
+    default. Measured: mutating ``entry.get("judge")`` to
+    ``entry.get("judge", False)`` left the whole suite GREEN until this row
+    existed — a required money field silently acquiring a default, which is the
+    decision-nobody-made shape.
+
+    RED IF: any required field acquires a default in ``_parse_window``.
+    """
+    entry = _entry()
+    del entry[missing]
+    assert posture.parse_windows({"windows": [entry]}) is None
+
+
+def test_a_standing_window_may_not_also_carry_an_expiry(posture: ModuleType) -> None:
+    """Both would leave a reader unable to say which one governs.
+
+    Measured: without this, deleting the ``expires is not None`` refusal left the
+    suite green, so a window could be declared ``standing`` — no deadline, no
+    pre-merge pressure — while LOOKING in the diff like a bounded one.
+
+    RED IF: the refusal is removed.
+    """
+    entry = {
+        "owner": "rohit",
+        "reason": "GA",
+        "mode": "standing",
+        "judge": True,
+        "opened_at": _NOW_OPEN,
+        "adr": "ADR-0099",
+        "expires_at": _NOW_SHUT,
+    }
+    assert (
+        posture.parse_windows({"windows": [entry]}, authorised_adrs=frozenset({"ADR-0099"})) is None
+    )
+    # POSITIVE PARTNER: the identical entry WITHOUT the expiry must parse, or
+    # this test would pass against a parser that refuses every standing window.
+    del entry["expires_at"]
+    parsed = posture.parse_windows({"windows": [entry]}, authorised_adrs=frozenset({"ADR-0099"}))
+    assert parsed is not None and parsed[0].is_standing
+
+
 def test_a_wellformed_declaration_parses(posture: ModuleType) -> None:
     """POSITIVE PARTNER for the row above: the negative check is worthless if
     ``parse_windows`` returns None for everything.

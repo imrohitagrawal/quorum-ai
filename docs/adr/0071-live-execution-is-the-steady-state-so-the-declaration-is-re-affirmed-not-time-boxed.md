@@ -364,26 +364,60 @@ reads `OPENROUTER_LIVE_EXECUTION_ENABLED = "false"`.**
 
 ## The bite table
 
-Each mutation `cp` aside, applied, run, restored from the copy and confirmed with
-`diff -q` — never `git checkout`. Baseline for every row: **198 passed**.
+Each mutation `cp` aside, applied, RUN, restored from the copy, and confirmed
+byte-identical with `diff -q` — never `git checkout`. The harness refuses a
+mutation that changes nothing (`MUTATION-NOOP`), because a `perl` expression
+that silently matches nothing proves nothing. Baseline for every row below:
+**204 passed** on `tests/unit/test_live_posture_check.py` and
+`tests/unit/test_live_execution_posture_declaration.py`.
 
 | # | Mutation | Result |
 |---|---|---|
-| N1 | the `Bot` filter in `parse_reaffirmations` is removed | see the table produced by the run recorded in the pull request |
-| N2 | a future `created_at` is honoured | as above |
-| N3 | `standing` is exempted from the attention check | as above |
-| N4 | the attention check is removed entirely | as above |
-| N5 | an unrecognised `mode` is ignored rather than refused | as above |
-| N6 | `judge` acquires a default of False | as above |
-| N7 | the judge comparison is deleted | as above |
-| N8 | judge-on-while-live-off starts alerting | as above |
-| N9 | an unreadable judge state defaults to False | as above |
-| N10 | `MECHANISM_OWN_ADRS` is emptied | as above |
-| N11 | the `Accepted` requirement on a cited ADR is dropped | as above |
-| N12 | the authorisation marker is matched anywhere rather than on its own line | as above |
-| N13 | an unreadable re-affirmation issue is read as "no re-affirmations" | as above |
-| N14 | the attention clock stops starting at `opened_at` | as above |
-| N15 | the watchdog is granted `contents: write` | as above |
+| N1 | the `Bot` filter is removed, so a workflow can re-affirm | **2 failed** |
+| N2 | a forward-dated re-affirmation is honoured | **1 failed** |
+| N3 | `standing` is exempted from the attention check | **1 failed** |
+| N4 | the attention check is removed entirely | **4 failed** |
+| N5 | an absent or unrecognised `mode` is tolerated | **1 failed** |
+| N6 | `judge` acquires a default of `False` | **1 failed** |
+| N7 | `judge` stops having to be a real boolean | **3 failed** |
+| N8 | the judge comparison is deleted | **3 failed** |
+| N9 | an unreadable judge state stops failing closed while live | **1 failed** |
+| N10 | `MECHANISM_OWN_ADRS` is emptied, so the mechanism authorises itself | **2 failed** |
+| N11 | a Proposed ADR may authorise a standing posture | **2 failed** |
+| N12 | the authorisation marker is matched anywhere, not on its own line | **3 failed** |
+| N13 | an unreadable re-affirmation issue reads as "nobody re-affirmed" | **1 failed** |
+| N14 | the attention clock stops starting at `opened_at` | **14 failed** |
+| N15 | the watchdog is granted `contents: write` | **2 failed** |
+| N16 | the re-affirmation cadence is raised tenfold (24h → 240h) | **6 failed** |
+| N17 | a standing citation need not resolve to a real ADR | **2 failed** |
+| N18 | one comment re-affirms every open window at once | **1 failed** |
+| N19 | a standing window may also carry an `expires_at` | **1 failed** |
+| N20 | the live-off judge report is dropped from the detail | **1 failed** |
+| N21 | `mode` acquires a default of `time_boxed` | **1 failed** |
+
+**N6, N19 and N21 are the honest part of this table: on the first run, N6 and
+N19 SURVIVED.** Both were real gaps rather than equivalent mutants:
+
+* N6 survived because every malformed-`judge` row set the key to a wrong VALUE
+  (`None`, `"true"`, `1`) and none DELETED it, so `entry.get("judge", False)`
+  never reached its default. A required money field could have acquired a
+  default with the whole suite green.
+* N19 survived because nothing asserted that a `standing` window must not also
+  carry an expiry — so a window could have been declared `standing`, with no
+  deadline and no pre-merge pressure, while LOOKING in the diff like a bounded
+  one.
+
+`test_a_declaration_missing_a_required_field_refuses_to_parse` (a row per
+required field, with the key deleted) and
+`test_a_standing_window_may_not_also_carry_an_expiry` (with a positive partner,
+so it cannot be satisfied by a parser that refuses every standing window) close
+them, and N21 was added afterwards to prove the first of those generalises to
+`mode`. All three fail on re-run. This is why the mutation step is not optional:
+two of the twenty-one checks this record claims did not exist until a mutation
+said so.
+
+N1, N2, N15 and N16 are the ones no ordinary decision test could see: each
+leaves the mechanism looking healthy while making the human act optional.
 
 ## Related
 
