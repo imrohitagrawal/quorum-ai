@@ -15,7 +15,7 @@ import stat
 from collections.abc import Iterator
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
-from uuid import UUID, uuid4
+from uuid import UUID
 
 import pytest
 
@@ -191,7 +191,10 @@ def test_the_gc_purge_reports_what_it_deleted(store: SessionStore) -> None:
     assert repository.get(live.session_id) is not None
 
 
-@pytest.mark.skipif(os.geteuid() == 0, reason="root ignores the read-only bit, so the test would pass vacuously")
+@pytest.mark.skipif(
+    os.geteuid() == 0,
+    reason="root ignores the read-only bit, so this test would pass vacuously",
+)
 def test_an_unwritable_volume_degrades_instead_of_locking_everyone_out(
     tmp_path: Path,
 ) -> None:

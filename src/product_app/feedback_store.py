@@ -1346,8 +1346,7 @@ class FeedbackStore:
         """
         with self._lock:
             cursor = self._conn.execute(
-                "DELETE FROM events "
-                "WHERE recorder = 'session' AND event_type = 'session_minted'"
+                "DELETE FROM events WHERE recorder = 'session' AND event_type = 'session_minted'"
             )
             return int(cursor.rowcount or 0)
 

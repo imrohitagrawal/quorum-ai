@@ -57,8 +57,6 @@ from product_app.costs import (
 from product_app.evaluation import judge_configured
 from product_app.feedback_store import FeedbackStore, get_store
 from product_app.feedback_store import configure as configure_feedback_store
-from product_app.session_store import SessionStore
-from product_app.session_store import configure as configure_session_store
 from product_app.logging_config import setup_json_logging
 from product_app.model_slots import (
     ModelDefaultsResponse,
@@ -75,6 +73,8 @@ from product_app.readiness import (
 from product_app.request_id import RequestIdMiddleware
 from product_app.run_history_store import RunHistoryStore
 from product_app.run_history_store import configure as configure_run_history_store
+from product_app.session_store import SessionStore
+from product_app.session_store import configure as configure_session_store
 from product_app.telemetry_sink import install_telemetry_sinks
 
 # Structured JSON logging for production log aggregators.
@@ -1155,8 +1155,7 @@ def _describe_retry_wait(seconds: int | None) -> str:
     """
     if seconds is None:
         return (
-            "A slot frees up automatically as your earlier sessions age out "
-            "of the 24-hour window."
+            "A slot frees up automatically as your earlier sessions age out of the 24-hour window."
         )
     hours = math.ceil(seconds / 3600)
     if hours <= 1:

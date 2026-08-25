@@ -162,7 +162,9 @@ def test_the_ui_serves_the_returning_visitor_after_a_restart(
     first = TestClient(app)
     assert first.get("/ui").status_code == 200
     held = first.cookies[cookie]
-    account_before = auth.session_repository.get(held).account_id
+    minted = auth.session_repository.get(held)
+    assert minted is not None, "positive partner: the first boot really did mint"
+    account_before = minted.account_id
 
     second = TestClient(app)
     assert second.get("/ui").status_code == 200  # spends the last mint
@@ -173,4 +175,6 @@ def test_the_ui_serves_the_returning_visitor_after_a_restart(
     returning.cookies.set(cookie, held)
     response = returning.get("/ui")
     assert response.status_code == 200
-    assert auth.session_repository.get(held).account_id == account_before
+    restored = auth.session_repository.get(held)
+    assert restored is not None, "the held cookie must resolve after the restart"
+    assert restored.account_id == account_before

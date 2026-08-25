@@ -192,9 +192,7 @@ class SessionStore:
         )
 
     def delete(self, session_id: str) -> bool:
-        return self._write(
-            "DELETE FROM sessions WHERE session_digest = ?", (_digest(session_id),)
-        )
+        return self._write("DELETE FROM sessions WHERE session_digest = ?", (_digest(session_id),))
 
     def delete_all(self) -> bool:
         """Empty the table. Test isolation depends on this actually working."""
@@ -250,8 +248,7 @@ class SessionStore:
                 return None
             try:
                 row = self._conn.execute(
-                    "SELECT * FROM sessions "
-                    "WHERE session_digest = ? AND last_used_at > ?",
+                    "SELECT * FROM sessions WHERE session_digest = ? AND last_used_at > ?",
                     (_digest(session_id), not_used_before.astimezone(UTC).isoformat()),
                 ).fetchone()
             except sqlite3.Error as exc:
@@ -268,9 +265,7 @@ class SessionStore:
                 last_used_at=datetime.fromisoformat(row["last_used_at"]),
             )
         except (TypeError, ValueError) as exc:
-            _log.warning(
-                "session_store: discarding an unreadable session row: %s", exc
-            )
+            _log.warning("session_store: discarding an unreadable session row: %s", exc)
             return None
 
     def count(self) -> int:

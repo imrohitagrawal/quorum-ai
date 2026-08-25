@@ -309,9 +309,7 @@ class SessionRepository:
         store = session_store.get_store()
         if store is None:
             return None
-        stored = store.fetch(
-            session_id, not_used_before=datetime.now(UTC) - SESSION_TTL
-        )
+        stored = store.fetch(session_id, not_used_before=datetime.now(UTC) - SESSION_TTL)
         if stored is None:
             return None
         session = _Session(
@@ -405,9 +403,7 @@ def _start_gc_thread() -> threading.Thread:
                 # Logged, not swallowed silently. On an unwritable volume the
                 # durable half of the purge fails every tick, and a bare
                 # ``suppress`` would hide 1,440 of those a day.
-                logging.getLogger(__name__).warning(
-                    "session-gc: purge tick failed", exc_info=True
-                )
+                logging.getLogger(__name__).warning("session-gc: purge tick failed", exc_info=True)
             _time_module.sleep(60.0)
 
     t = threading.Thread(target=_gc_loop, daemon=True, name="session-gc")
