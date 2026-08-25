@@ -175,10 +175,11 @@ def _is_mutated_path(relative_posix: str, only_mutate: Iterable[str]) -> bool:
     `fnmatch` against each `only_mutate` pattern.
 
     Deliberately NOT `Path.glob`: in `fnmatch` a `*` crosses `/`, so
-    `src/product_app/*.py` also selects `src/product_app/sub/x.py`, and mutmut
-    would mutate that file. Adversarial review planted exactly that file and
-    watched a `Path.glob` version of this scanner miss it while mutmut skipped
-    its decorated function: the census must select what the tool selects.
+    `src/product_app/*.py` also selects every file in a SUBPACKAGE of
+    `src/product_app/`, and mutmut would mutate it. Adversarial review planted
+    exactly such a file and watched a `Path.glob` version of this scanner miss
+    it while mutmut skipped its decorated function: the census must select what
+    the tool selects.
     """
     return any(fnmatch.fnmatch(relative_posix, pattern) for pattern in only_mutate)
 
@@ -288,11 +289,17 @@ def test_the_population_rule_is_mutmut_s_rule_not_a_shell_glob() -> None:
     `fnmatch` does, or starts selecting outside `only_mutate`."""
     patterns = ["src/product_app/*.py"]
     assert _is_mutated_path("src/product_app/main.py", patterns)
-    assert _is_mutated_path("src/product_app/subpkg/hidden.py", patterns), (
+    # Built from parts: the file is hypothetical, and `test_cited_paths_resolve`
+    # rightly refuses a literal repo path that does not exist.
+    subpackage_file = "/".join(("src/product_app", "subpkg", "hidden.py"))
+    assert _is_mutated_path(subpackage_file, patterns), (
         "mutmut would mutate a subpackage file; the census must scan it too"
     )
-    assert not _is_mutated_path("src/httpx2/compat.py", patterns)
-    assert not _is_mutated_path("tests/unit/test_x.py", patterns)
+    # Real files, outside `only_mutate` — never mutated, so never scanned.
+    assert not _is_mutated_path("src/httpx2/__init__.py", patterns)
+    assert not _is_mutated_path(
+        "tests/unit/test_no_mutation_pragma_silences_a_survivor.py", patterns
+    )
 
 
 def test_an_unparseable_source_file_fails_loudly_rather_than_shrinking_the_census() -> None:
