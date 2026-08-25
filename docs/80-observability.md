@@ -20,6 +20,7 @@ doc); this file never freezes a "current" value into prose.
 | CI perf samples | `perf-sample.yml` artifacts | Recurring hermetic latency samples; feed the (advisory) perf gate. |
 | Flake scans | `flake-scan.yml` runs | E2E stability measurement — latest full scan: 0 failures in 960 executions, run [`29911231157`](https://github.com/imrohitagrawal/quorum-ai/actions/runs/29911231157) (2026-07-22), pinned in `docs/metrics/flake-rate.md`. |
 | Deploy drift | `deploy-drift-watchdog.yml` | Detects prod not matching `main` head. |
+| Live-execution posture | `live-posture-watchdog.yml` | Detects production reporting a money-spending posture (`/ready.live_readiness.state` other than `offline_by_config`) that no window in `configs/live-execution-windows.json` covers. Opens/closes a `live-posture` issue and fails the job. Deliberately the COMPLEMENT of the availability check, which treats `live` as the good state. Detection latency is the throttled cron, not the declared `*/30` — measured on the sibling lane over 87.1h: median 53.4 min, max 129.4. See ADR-0070 and issue 357. |
 
 ## SLOs (declared targets — measurement source stated per row)
 

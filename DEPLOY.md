@@ -54,12 +54,41 @@ fly secrets set RUNTIME_ENVIRONMENT="production"
 
 ### 4. Enable live execution (after the first deploy verifies the app boots)
 
+**Declare the window FIRST.** From the moment this is `"true"`, *every* visitor
+to `/ui` spends real money, bounded only by `GLOBAL_DAILY_CEILING_USD` ($5.00/day)
+— and that ceiling resets daily. ADR-0060 turned this on for "one attended
+session" and it ran for three days because nothing executed the revert; issue
+357 is that gap and ADR-0070 is the mechanism that closes it.
+
+Add an entry to `configs/live-execution-windows.json` naming an owner, a reason,
+and the instant you intend to switch it back off:
+
+```json
+{"windows": [
+  {"owner": "you", "reason": "why", "opened_at": "2026-08-25T09:00:00Z",
+   "expires_at": "2026-08-25T17:00:00Z"}
+]}
+```
+
+`.github/workflows/live-posture-watchdog.yml` reads `/ready` every 30 minutes and
+opens a `live-posture` issue — and fails its job — whenever production reports a
+live posture that no declared window covers. **This is true whichever route the
+flag takes**, including the `fly secrets set` below, which changes no tracked
+file. Declaring the window is what keeps the watchdog quiet through legitimate
+work; skip it and the alert fires within the hour, on purpose.
+
 ```bash
 # This requires OPENROUTER_API_KEY to be set (see step 3).
 # The app refuses to start in production if this is "true" but the key
 # is missing, so set the key FIRST, then enable this.
 fly secrets set OPENROUTER_LIVE_EXECUTION_ENABLED="true"
 ```
+
+**When the window closes**, set it back to `"false"` (or
+`fly secrets unset OPENROUTER_LIVE_EXECUTION_ENABLED`) and redeploy. Leave the
+declaration in the file — an expired entry sanctions nothing and is the record
+of what was authorised. Confirm with
+`curl -s https://quorum-ai.fly.dev/ready` reporting `offline_by_config`.
 
 ### 5. Deploy
 
@@ -172,7 +201,7 @@ fly releases rollback <version>
 | `SESSION_COOKIE_SECURE` | **Yes** | `fly.toml` (env) | `true` in production. App refuses to start if `false` in prod. |
 | `ACCOUNT_LEGACY_HEADER_ENABLED` | No | `fly.toml` (env) | `false` (default). Allows old clients to send `X-Account-Id` header. Disabled by default for security. |
 | `OPENROUTER_API_KEY` | For live mode | `fly secrets set` | Without this, the app runs offline (uses fallback responses). |
-| `OPENROUTER_LIVE_EXECUTION_ENABLED` | For live mode | `fly secrets set` | Must be `true` AND `OPENROUTER_API_KEY` set, otherwise app refuses to start. |
+| `OPENROUTER_LIVE_EXECUTION_ENABLED` | For live mode | `fly secrets set`, or `fly.toml` (env) | Must be `true` AND `OPENROUTER_API_KEY` set, otherwise app refuses to start. **Spends real money for every `/ui` visitor.** Declare a window in `configs/live-execution-windows.json` first — see step 4 and ADR-0070. |
 | `SENTRY_DSN` | No | `fly secrets set` | Optional. If set, exceptions are reported to Sentry. |
 | `LOG_LEVEL` | No | `fly.toml` (env) | Default `INFO`. Use `WARNING` for less noise. |
 | `OPENROUTER_APP_URL` | No | `fly.toml` (env) | Public URL of this deployment. Used for `Referer` header. |
@@ -225,7 +254,7 @@ fly config show -a quorum-ai  # Should show RUNTIME_ENVIRONMENT and SESSION_COOK
 `OPENROUTER_API_KEY` is not set, or `OPENROUTER_LIVE_EXECUTION_ENABLED` is not `"true"`. Either:
 
 ```bash
-# Option A: Go live (requires  key)
+# Option A: Go live (requires a key AND a declared window - see step 4)
 fly secrets set OPENROUTER_API_KEY="sk-or-v1-..."
 fly secrets set OPENROUTER_LIVE_EXECUTION_ENABLED="true"
 
