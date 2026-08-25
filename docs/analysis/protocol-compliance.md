@@ -14,3 +14,4 @@ Rules (numbers match the prompt's Phase F table):
 | date | package | 1 | 2 | 3 | 4 | 5 | 6 | 7 | 8 | 9 | 10 | 11 | 12 | 13 | 14 | 15 | followed/broken/n-a | audit note |
 |---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|
 | 2026-08-25 | #369 → PR #371 (decorator mutation-surface inventory guard) | F | F | F | F | B | F | F | F | F | N | F | F | F | F | — (not yet a rule; the outcome says it would have been B) | 12 / 1 / 1 | `docs/analysis/2026-08-25-protocol-compliance-audit-369.md` |
+| 2026-08-25 | #369 re-scoped (print `[decorated]` exclusions) — stopped at D1, premise refuted, nothing built | N | N | N | N | N | N | F | F | F | N | F | F | N | N | F | 6 / 0 / 9 | `docs/analysis/2026-08-25-protocol-compliance-audit-369b.md` |
