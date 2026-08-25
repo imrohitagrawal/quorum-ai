@@ -28,8 +28,9 @@ stderr).
 
 ## What this row says
 
-This is the fourth issue premise refuted by command on 2026-08-25 (the #368 title, #369's original
-scope by the human's proportionality ruling, and now #369's re-scope), and the first time the protocol's
+This is the third issue premise refuted by command on 2026-08-25 (the #368 title, the loop prompt's
+"start with #368" — already claimed by a live session — and now #369's re-scope; #369's original scope fell
+to the human's proportionality ruling, not to a command), and the first time the protocol's
 D1 rule stopped a package before any cost was spent. The rule earned its place: the re-scope comment was
 written by an agent that had just measured the mutant counts and still asserted "nothing reads it"
 without running the scope step. A claim about what a tool prints is a claim; the command is the check.

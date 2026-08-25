@@ -11,7 +11,7 @@
 ---
 
 ultracode: Continue the autonomous backlog run in this repo
-(`im<user>/quorum-ai`), in the phase order below, and then take the
+(`imrohitagrawal/quorum-ai`), in the phase order below, and then take the
 product live with the judge on.
 
 ## The one thing you must ask for, once, in chat

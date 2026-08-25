@@ -9,7 +9,7 @@
 ---
 
 ultracode: Continue the autonomous backlog-closing run in this repo
-(`im<user>/quorum-ai`). Work the open GitHub issues in the phase order
+(`imrohitagrawal/quorum-ai`). Work the open GitHub issues in the phase order
 below: **every item that can be closed without spending money first, then a
 single deliberate paid session last.**
 

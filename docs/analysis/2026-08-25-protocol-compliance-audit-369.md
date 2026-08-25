@@ -1,6 +1,6 @@
 # Protocol compliance audit — package #369 (PR #371), 2026-08-25
 
-Phase F of the autonomous work-loop prompt (root-level, untracked): an auditor that did not do the work reads the
+Phase F of the autonomous work-loop prompt (root-level; tracked since this pull request): an auditor that did not do the work reads the
 package's contemporaneous log, the sub-orchestrator's transcript and the diff, and decides per rule
 whether the protocol was FOLLOWED, not whether it is good. Verdicts and evidence below are the auditor's;
 the main orchestrator re-ran the two highest-consequence claims itself (mutation proof, CI log number)
@@ -10,7 +10,7 @@ before this note was written.
 
 | # | Rule | Verdict | Evidence (auditor's, condensed) |
 |---|---|---|---|
-| 1 | One writer during build | FOLLOWED | Sub-orchestrator transcript: 74 Bash calls, 8 Agent spawns, 0 Edit/Write; every worktree edit is in that one transcript. All 8 planners/reviewers worked in their own `git archive` copies; no subagent wrote into the worktree. |
+| 1 | One writer during build | FOLLOWED | Sub-orchestrator transcript at audit time: 74 Bash calls, 8 Agent spawns, 0 Edit/Write (82 Bash after the later merge-and-renumber step); every worktree edit is in that one transcript. All 8 planners/reviewers worked in their own `git archive` copies; no subagent wrote into the worktree. |
 | 2 | Every lens executed, none only read | FOLLOWED | Bash calls per agent: planners 12 / 25 / 19; round-1 reviewers 16 / 14 / 15; round-2 reviewers 12 / 15. Every report ends with a commands-run section. |
 | 3 | Lenses diverse, 3 not 5 | FOLLOWED | Planners: approaches / failure modes / test design. Reviewers: execution / prose / vacuity, then execution / vacuity-of-the-fix. 3 → 3 → 2. Gap noted: the rule-11a prose instruction was in the prose lens only. |
 | 4 | Test proven to bite | FOLLOWED | Six D4 mutations, each with verbatim `E` output and a `diff -q` restore; auditor re-ran three on its own archive copy: plant `@functools.cache` → `2 failed, 7 passed` naming `product_app.synthesis_consensus:_stance_majority_flags [decorated]`; empty population → `assert 0 >= 20`; empty inventory → `3 failed, 6 passed`; restores proven. |
@@ -53,7 +53,7 @@ advisory mutation job (`scope.txt` empty). Not silent; honest-empty by design.
 
 PR #371 was **closed unmerged** at 11:21 UTC on 2026-08-25, on the human's decision taken in a second
 session: the defect stands, but an 867-line inventory guard is disproportionate to a hole in an
-**advisory** gate that has produced one real score in its history and, per
+**advisory** gate that had, per that comment, produced one real score (job 97606765828) and, per
 `docs/metrics/defect-discovery-audit.md`, has caught 0 of 16 `src/` defects. #369 was re-scoped to
 printing the `[decorated]` note the scope step already emits (roughly ten lines). The branch and
 worktree were removed by that session; the work remains reachable at `refs/pull/371/head`.

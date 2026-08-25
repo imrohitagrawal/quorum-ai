@@ -12,7 +12,7 @@
 ---
 
 ultracode: Continue the autonomous backlog run in this repo
-(`im<user>/quorum-ai`), in the phase order below.
+(`imrohitagrawal/quorum-ai`), in the phase order below.
 
 You have my full, standing authorization to push branches, open pull requests,
 merge to `main`, and deploy — without asking me at any point. Do not pause for

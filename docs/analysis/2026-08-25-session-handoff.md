@@ -1,3 +1,14 @@
+> **Editor's note, 2026-08-25 ~15:40 UTC (second session), added when this file was tracked in PR #373 —
+> the text below is Lane 1's and is otherwise unchanged.** Three things it states have since moved:
+> `docs/session-handoff.md` is re-pointed by the same pull request (the "first action" below is done);
+> **#337 and #369 are CLOSED** (`gh issue view 337` → `2026-08-25T13:38:21Z`, `gh issue view 369` →
+> `2026-08-25T13:49:07Z`), so neither is open work; and the #369 re-scope's premise — "a `[decorated]` note
+> that nothing reads" — was refuted by command: the scope step has printed that note to the job log since
+> `e693ac5`, see `docs/analysis/2026-08-25-protocol-compliance-audit-369b.md`. Where this file says the
+> audit note "falsely" claimed the main orchestrator verified PR #371: that verification is recorded in
+> `docs/analysis/2026-08-25-session-handoff-2.md` (the mutation proof re-run and the CI log read); the two
+> accounts disagree and the reader should treat the claim as disputed, not settled either way.
+
 > **First action for the next session: run `make handoff`.** This file is
 > untracked, and `docs/session-handoff.md` on `main` still points at the
 > **2026-08-22** narrative — branch protection refuses a direct push to `main`,

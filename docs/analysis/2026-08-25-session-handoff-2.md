@@ -5,24 +5,23 @@ the autonomous work-loop session that ran beside it and after it. Read both; thi
 
 ## State at hand-off (re-derive before trusting)
 
-- `origin/main` = `6f0ed3a` (#372). Production `build_sha` was `3f5d335` at the last free probe; the #372
-  deploy was Lane 1's to verify. Live execution off, spend $0, no paid call made this session.
+- `origin/main` = `6f0ed3a` (#372). Production `build_sha` = `6f0ed3a` (`curl -s https://quorum.stackclimb.com/status`, 2026-08-25 ~15:30 UTC). Live execution off, spend $0, no paid call made this session.
 - Two pull requests open, both green and vetted, both waiting on a human merge: **#373** (docs — this
   ledger, three audit rows, the archived session prompts and analyses, this handoff) and **#375**
   (`make close-guard` refuses an unlisted close; fixes #374).
 - Issues closed this session with evidence: #337 (score line in job 97606765828), #369 (the re-scoped
-  ask already existed since `e693ac5`). Retitled: #368 (the "blocking gate flakes" claim was refuted —
-  0 SHAs with two outcomes in 60 runs). Filed: #374. Open backlog after merges: #105, #268, #290
-  (all "stop and ask" items, untouched), #368 (Lane 1 merged one call site as #372; the issue stays
-  open on its own terms).
+  ask already existed since `e693ac5`). Retitled: #368 (the "blocking gate flakes" claim was refuted — `gh run list --workflow test.yml --limit 60`
+  at 09:52 UTC: 56 success / 1 failure / 3 cancelled, 0 SHAs with two outcomes); Lane 1 then closed it at 11:23 UTC. Filed: #374. Open backlog after merges: #105, #268, #290
+  (all "stop and ask" items, untouched). `gh issue list --state open` at hand-off: #105, #268, #290, #374 —
+  #374 closes when #375 merges.
 
 ## What the loop measured — the point of the session
 
 `docs/analysis/protocol-compliance.md` has three audited rows: 12/1/1, 6/0/9, 11/3/1
-(followed / broken / not applicable). No rule broken twice running. Four issue premises were refuted by
-command in one day (#368's title; #369's original scope, by the human's proportionality ruling; #369's
-re-scope, already on main; and the loop prompt's own "start with #368" — already claimed by another live
-session). The rule that paid for itself is D1: verify the premise by command before spending anything.
+(followed / broken / not applicable). No rule broken twice running. Three issue premises were refuted by
+command in one day (#368's title; #369's re-scope, already on main; the loop prompt's own "start with #368",
+already claimed by another live session) and a fourth — #369's original scope — fell to the human's
+proportionality ruling rather than to a command. The rule that paid for itself is D1: verify the premise by command before spending anything.
 
 Two things the fourteen rules did not cover, now recorded: **proportionality** (rule 15 — an 867-line
 fully reviewed, all-green PR #371 was closed unmerged as disproportionate to an advisory gate) and the
@@ -39,7 +38,12 @@ tripped it in one day, one of them while documenting the other — #374, fixed i
 3. Verify each deploy per AGENTS.md rule 18 (the deploy JOB, `build_sha`, the thing firing — for #375,
    `make close-guard` on main with an unlisted closer must refuse).
 4. Remove worktree `quorum-ai-wt-374` and branch `fix/374-close-guard-expected-closes` (local + remote)
-   after #375 merges; the docs branch after #373. `git merge --ff-only origin/main` in the main checkout.
+   after #375 merges; the docs branch after #373.
+5. **Before `git merge --ff-only origin/main` in the main checkout:** it holds untracked originals of the 13
+   files #373 tracks (the six `*-ULTRACODE-PROMPT.md` at root and seven under `docs/analysis/`), and git
+   refuses to fast-forward over an untracked file at a path the merge adds, even when the content is
+   identical. Compare each to `git show origin/main:<path>` (six are byte-identical, seven were scrubbed),
+   then delete the 13 by name — never `git clean`. Then fast-forward.
 
 ## Traps met this session
 

@@ -51,7 +51,7 @@ Re-verify anything you depend on.**
 ## THE PROTOCOL — use the skill, and treat that as an experiment
 
 Both lanes run under **`stackclimb:work-package-protocol`**
-(https://github.com/im<user>/stackclimb-skills, installed at
+(https://github.com/imrohitagrawal/stackclimb-skills, installed at
 `~/.claude/skills/work-package-protocol`).
 
 Main orchestrator verifies and merges; one sub-orchestrator per package; it fans
@@ -130,7 +130,8 @@ The approved plan specified eight; the script implements two:
 agent's own instructions say to use it instead of `/tmp`:
 
 ```
-<scratch>```
+<tmp>/claude-501/<project-slug>/<session-id>/scratchpad/
+```
 
 **Everything in it is that session's by construction**, so cleanup is deleting
 that one directory — no manifest, no pattern matching, no guessing which file
@@ -281,7 +282,7 @@ defects caught by an automated check — and against the fact that cleanup is a
 see.
 
 **Destination:** `stackclimb-skills`
-(https://github.com/im<user>/stackclimb-skills). Its
+(https://github.com/imrohitagrawal/stackclimb-skills). Its
 `shared/project-profile.md` **already carries `archive_dir` and `keep_caches`**,
 so the parameterisation is half designed. Its `verify.py` gate will require a
 per-skill changelog and forbid project facts in skill text.
