@@ -58,6 +58,7 @@ from pathlib import Path
 
 import pytest
 from tests.repo_root import find_repo_root
+from tests.subprocess_env import env_without_coverage
 
 # Deselected under mutmut: this module drives git and pytest against the real
 # repository, and copies it. It kills no mutant of `src/` and cannot: it
@@ -545,12 +546,9 @@ def _run_in_copy(mutants: Path, argv: list[str]) -> subprocess.CompletedProcess[
         capture_output=True,
         text=True,
         # Strip pytest-cov's subprocess hooks: the child would otherwise measure
-        # the COPIED src/ and combine that into the parent run's data.
-        env={
-            key: value
-            for key, value in os.environ.items()
-            if not key.startswith(("COV_CORE", "COVERAGE"))
-        },
+        # the COPIED src/ and combine that into the parent run's data. The strip
+        # lives in ONE place now (#368).
+        env=env_without_coverage(),
     )
 
 
