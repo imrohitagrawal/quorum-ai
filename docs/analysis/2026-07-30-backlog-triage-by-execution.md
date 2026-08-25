@@ -58,12 +58,12 @@ them as filed would have been mis-sequencing, not wasted work.
 | #100 | No deployment-wide spend ceiling — the $0.20 cap is per-account, and accounts  | **REAL** | `PYTHONDONTWRITEBYTECODE=1 uv run python .../p100.py` | DAILY_CAP_USD = 0.20 |
 | #103 | The nightly feedback-audit job has never audited production — it opens an empt | **PARTIALLY-REAL** | `gh run list --workflow=feedback-audit.yml --limit 60 --json conclusion --jq '[.[].conclusion]\\|group_by(.)\\|map({c:.[0],n:` | [{"c":"failure","n":37}] <- 37 of 37 runs listed, back to 2026-06-23, ALL failure |
 | #104 | Two measured test flakes: provider_event_recorder unfiltered, and a non-hermet | **REAL** | `grep -n 'def list_events' -A 4 src/product_app/providers.py` | 344: def list_events(self) -> list[ProviderCallEvent]: |
-| #105 | E1: 5xx is classified as possibly-billed on a premise with no evidence | **REAL** | `PYTHONDONTWRITEBYTECODE=1 uv run python <tmp>/claude-501/-Users-<user>-Projects-quorum-ai/d2f4a11f-597d-4b8` | IMPORTING FROM: <repo>/src/product_app/providers.py |
+| #105 | E1: 5xx is classified as possibly-billed on a premise with no evidence | **REAL** | `PYTHONDONTWRITEBYTECODE=1 uv run python <scratch>` | IMPORTING FROM: <repo>/src/product_app/providers.py |
 | #106 | F-05 Layer 2: stop the spend inside debate/synthesis after a cancel | **REAL** | `grep -c "cancel\\\|should_stop" src/product_app/debate.py src/product_app/synthesis.py` | src/product_app/debate.py:0 |
 | #110 | A BILLED Layer-B judge call is dispatched by the response that serves the run' | **REAL** | `PYTHONDONTWRITEBYTECODE=1 uv run python .../p110.py` | query_runs file: <repo>/src/product_app/query_runs.py |
 | #112 | Credential probe runs once per process — a key drained or revoked mid-life kee | **REAL** | `PYTHONDONTWRITEBYTECODE=1 uv run python .../p112b.py # transport returns 200 once, then HTTPError 401` | probe calls after startup: 1 \\| verdict: ok |
 | #113 | test_makefile_gate_integrity races on a fixed shared path — two concurrent pyt | **REAL** | `grep -n 'guard-good-xml\\|tmp_path\\|REPO_ROOT' tests/unit/test_makefile_gate_integrity.py` | 35:REPO_ROOT = Path(__file__).resolve().parents[2] |
-| #115 | #demo-mode-banner is dead markup, and a blocking gate certifies it while invis | **PARTIALLY-REAL** | `PYTHONDONTWRITEBYTECODE=1 uv run python <tmp>/claude-501/-Users-<user>-Projects-quorum-ai/d2f4a11f-597d-4b8` | GET /ui -> 200 107771 bytes |
+| #115 | #demo-mode-banner is dead markup, and a blocking gate certifies it while invis | **PARTIALLY-REAL** | `PYTHONDONTWRITEBYTECODE=1 uv run python <scratch>` | GET /ui -> 200 107771 bytes |
 | #116 | Readiness banner takes 48% of a mobile viewport and pushes the landing hero be | **PARTIALLY-REAL** | `PYTHONDONTWRITEBYTECODE=1 python3 <tmp>/.../ui-surfaces/banner_height.py` | viewport = 390x664 |
 | #117 | Readiness banner flashes and shifts layout when the page-load seed disagrees w | **REAL** | `node <tmp>/.../ui-surfaces/flash.js` | extracted app.js lines 553-669 verbatim (117 lines) |
 | #120 | Blockquote and inline-prose paths have no list handling (ordered-marker gate i | **PARTIALLY-REAL** | `node <tmp>/.../ui-surfaces/fmt.js` | ### formatAnswerText("> Steps:\n> 1. do this") |
@@ -94,7 +94,7 @@ them as filed would have been mis-sequencing, not wasted work.
 | #165 | Leftovers at the 2-round review cap on PR #164 (gate liveness floors) | **REAL** | `python3 scripts/check_diff_cover_measured.py --base base # with the json report absent / {} / null / malformed / {"tot` | --- case A: json report MISSING --- |
 | #166 | WORK PACKAGE: finish gate liveness — 6 gates can still report a status having  | **REAL** | `uv run python -c "import sys; sys.path.insert(0,'scripts'); from error_rate_probe import exit_code_for; [print(o, exit_c` | alert -> exit 1 |
 | #167 | Nothing proves a GUARD test bites — and mutating tests/ is measured to be the  | **REAL** | `python3 <scratch>/scope.py scope 024af24 80 # negative case: base..HEAD changed only tests/ + docs/ + app.js` | --- run scope: base=024af24 (tests/docs only) --- |
-| #171 | Simulated answers are substituted per model and fed to debate, synthesis, agre | **REAL** | `PYTHONDONTWRITEBYTECODE=1 uv run python <tmp>/claude-501/-Users-<user>-Projects-quorum-ai/d2f4a11f-597d-4b8` | IMPORTING FROM: <repo>/src/product_app/providers.py |
+| #171 | Simulated answers are substituted per model and fed to debate, synthesis, agre | **REAL** | `PYTHONDONTWRITEBYTECODE=1 uv run python <scratch>` | IMPORTING FROM: <repo>/src/product_app/providers.py |
 
 ## 3. The close list — REVISED after a third pass. Nothing here is safe to close outright.
 

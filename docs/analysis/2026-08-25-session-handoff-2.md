@@ -42,7 +42,7 @@ tripped it in one day, one of them while documenting the other — #374, fixed i
 5. **Before `git merge --ff-only origin/main` in the main checkout:** it holds untracked originals of the 13
    files #373 tracks (the six `*-ULTRACODE-PROMPT.md` at root and seven under `docs/analysis/`), and git
    refuses to fast-forward over an untracked file at a path the merge adds, even when the content is
-   identical. Compare each to `git show origin/main:<path>` (six are byte-identical, seven were scrubbed),
+   identical. Compare each to `git show origin/main:<path>` (five are byte-identical; eight differ — seven scrubbed, one carrying an editor's note),
    then delete the 13 by name — never `git clean`. Then fast-forward.
 
 ## Traps met this session

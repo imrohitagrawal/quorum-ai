@@ -130,7 +130,7 @@ The approved plan specified eight; the script implements two:
 agent's own instructions say to use it instead of `/tmp`:
 
 ```
-<tmp>/claude-501/<project-slug>/<session-id>/scratchpad/
+<scratch>
 ```
 
 **Everything in it is that session's by construction**, so cleanup is deleting
