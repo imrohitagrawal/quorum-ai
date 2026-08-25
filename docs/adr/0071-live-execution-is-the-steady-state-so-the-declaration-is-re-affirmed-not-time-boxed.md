@@ -18,12 +18,13 @@ owner, a reason and an end somebody writes down. Every property follows from
 that — the expiry is a deadline, the pre-merge gate is a revert condition, the
 quiet state is "off".
 
-The project's own plan says the opposite.
-`docs/analysis/2026-08-06-go-live-triage-and-plan.md:34-35`:
-
-> The phrase "go-live" appears exactly once in the entire tree — `DEPLOY.md:219`,
-> where "Go live" means *set the OpenRouter key and turn live execution on*.
-> **That is already done.**
+**The operator's decision, taken 2026-08-25, is that live execution is the
+intended steady state, and this ADR is the record of it.** Cited that way
+deliberately: the working note it was taken from is an untracked file in the
+author's checkout, not a tracked document, so it is not a citation a reader can
+follow. What IS in the tree corroborates it — `DEPLOY.md:291` offers "Go live"
+as a standing option rather than an event, and step 4 exists to turn the flag on
+— but the decision itself is a decision, and the honest place for it is here.
 
 A mechanism whose only quiet state is a time-boxed exception is the wrong shape
 for a steady state. Left alone it would have produced a red required context and
@@ -42,9 +43,8 @@ deferral:
 | The #357 failure | ~3 days | the thing the mechanism exists to catch |
 | Issue #105's need | ~7 days | legitimate, and blocked by anything shorter |
 
-`docs/analysis/2026-08-06-go-live-triage-and-plan.md:208` on #105: *"Remaining
-work is a week of production logs, not code."* So the failure is SHORTER than
-the legitimate need. **No single number separates them**, and any number chosen
+Issue #105's own remediation step 2 is, verbatim, *"Read a week of production
+logs."* So the failure is SHORTER than the legitimate need. **No single number separates them**, and any number chosen
 would either permit #357 or forbid #105.
 
 What does separate them is whether anybody was still watching. Nobody attended

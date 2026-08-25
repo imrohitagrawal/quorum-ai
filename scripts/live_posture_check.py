@@ -27,13 +27,11 @@ WHAT THIS IS FOR (#357)
     ``deploy-drift-watchdog.yml``.
 
 WHAT ADR-0071 CHANGED, AND WHY — this file's second revision
-    ADR-0070 built this mechanism on an assumption the project's own plan
-    contradicts: that a live posture is EXCEPTIONAL. It is the intended steady
-    state. ``docs/analysis/2026-08-06-go-live-triage-and-plan.md:34-35``: "'Go
-    live' means set the OpenRouter key and turn live execution on. That is
-    already done." A mechanism whose only quiet state is a time-boxed exception
-    is the wrong shape for a steady state, and the pressure to silence it would
-    have grown every week.
+    ADR-0070 built this mechanism on an assumption that is wrong: that a live
+    posture is EXCEPTIONAL. It is the intended steady state — the operator's
+    decision of 2026-08-25, recorded in ADR-0071. A mechanism whose only quiet
+    state is a time-boxed exception is the wrong shape for a steady state, and
+    the pressure to silence it would have grown every week.
 
     Three things follow, and they are the whole of this revision:
 
@@ -78,11 +76,10 @@ RE-AFFIRMATION: what separates a sanctioned week from a forgotten one
     starts at ``opened_at`` and is reset by a human RE-AFFIRMATION. Past
     ``REAFFIRMATION_CADENCE_HOURS`` with no reset, the window stops sanctioning
     anything and this check alerts — at ANY window length. That is what lets
-    issue #105's seven-day log collection proceed
-    (``docs/analysis/2026-08-06-go-live-triage-and-plan.md:208``: "Remaining work
-    is a week of production logs, not code") while still catching #357's three
-    unattended days on their first day. No MAXIMUM LENGTH can do both: 3 days is
-    the failure and 7 days is a legitimate need, so no number separates them.
+    issue #105's log collection proceed — its own remediation step 2 is "Read a
+    week of production logs" — while still catching #357's three unattended days
+    on their first day. No MAXIMUM LENGTH can do both: 3 days is the failure and
+    7 days is a legitimate need, so no number separates them.
     "Is anybody still watching?" separates them at every length.
 
     THE RE-AFFIRMATION IS A COMMENT ON A GITHUB ISSUE, NOT A FIELD IN THIS

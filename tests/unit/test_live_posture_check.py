@@ -24,6 +24,7 @@ import importlib.util
 import json
 import sys
 import tomllib
+from collections.abc import Sequence
 from pathlib import Path
 from types import ModuleType
 from typing import Any
@@ -99,7 +100,9 @@ def _standing(
     )
 
 
-def _reaffirmed(posture: ModuleType, *, window: Any, hours_ago: float, now: Any) -> dict:
+def _reaffirmed(
+    posture: ModuleType, *, window: Any, hours_ago: float, now: dt.datetime
+) -> dict[int, list[Any]]:
     """A re-affirmation map putting ONE human affirmation `hours_ago` on `window`."""
     assert window.reaffirm_issue is not None, "a re-affirmed window must name its issue"
     return {
@@ -711,7 +714,7 @@ def _run_main(
     body: object,
     windows_payload: object,
     judge: object = False,
-    comments: object = (),
+    comments: Sequence[object] = (),
     adr_dir: Path | None = None,
 ) -> tuple[int, str]:
     """Drive ``main`` end to end over ``file:`` fixtures ONLY.
