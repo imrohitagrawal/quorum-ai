@@ -471,6 +471,10 @@ measurement that would set its value.
   is absurd, so the honest fix is to make the existing `[decorated]` count a
   reported, floored number, which is its own change with its own measurement.
   Filing it is the follow-on this record hands over.
+  **Filed as #369 and closed by [ADR-0072](0072-a-decorator-that-removes-a-function-from-the-mutation-surface-is-recorded-in-a-committed-inventory.md)**
+  — not by flooring the `[decorated]` note (diff-scoped, advisory, unread) but
+  by a merge-blocking inventory of decorator-skipped functions that the tree is
+  compared against.
 * **Decision 3 is prose with no structural test.** The exit status is
   deliberately unchanged, so there is nothing but the wording to assert on. The
   shipped test pins the string and says in its own docstring that it cannot see

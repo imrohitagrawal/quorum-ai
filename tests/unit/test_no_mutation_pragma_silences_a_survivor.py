@@ -42,9 +42,12 @@ route only. mutmut skips a DECORATED function entirely, so one `@functools.cache
 on `_stance_majority_flags` takes it from 11 mutants to 0 (measured 2026-08-25)
 and this gate says nothing — decorating a function is ordinary Python and
 refusing it would be absurd. `scope()` does write a `[decorated]` note to stderr
-per skipped function, but no gate reads that note. ADR-0069 records this as the
-larger remaining hole and names the fix (make the `[decorated]` count reported
-and floored). Do not read a green run here as "no mutant was silenced".
+per skipped function, but no gate reads that note. ADR-0069 recorded this as
+the larger remaining hole; #369 / ADR-0072 closed it with a sibling of this
+module, `test_no_decorator_silences_a_mutation_surface.py`, which keeps a
+committed inventory of every decorator-skipped function and fails when the tree
+and the inventory disagree. Read the two together: neither alone means "no
+mutant was silenced".
 
 It also cannot see intent, or anything outside `src/`. It cannot tell an
 author hiding a survivor from one who copied the pragma out of mutmut's README —

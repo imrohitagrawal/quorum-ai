@@ -1,0 +1,58 @@
+# Functions mutmut 3.x will NOT mutate because of a decorator, ADR-0072.
+#
+# One `module:qualname` per line. This file is a RECORD, not a permission list:
+# `tests/unit/test_no_decorator_silences_a_mutation_surface.py` scans every
+# file [tool.mutmut] mutates and fails if the tree and this file disagree in
+# EITHER direction. A function is listed when it carries any decorator other
+# than a lone bare @staticmethod/@classmethod, when it is a method of a
+# decorated class (every @dataclass), or when it is a decorated def nested in a
+# plain function. Adding a decorator therefore shows up in review as an edit
+# here — that visibility is the whole point (#369). If your decorator is
+# legitimate, add the line; if you are decorating to make a survivor go away,
+# write the test instead.
+#
+# Regenerate: ./.venv/bin/python -m tests.unit.test_no_decorator_silences_a_mutation_surface
+
+product_app.auth:_Session.is_expired
+product_app.config:Settings._blank_expose_api_docs_is_unset
+product_app.config:Settings._blank_mint_cap_override_is_unset
+product_app.config:Settings._blank_session_rate_is_unset
+product_app.config:Settings._mint_cap_override_within_bounds
+product_app.config:Settings._run_deadline_within_bounds
+product_app.config:Settings._session_rate_within_bounds
+product_app.config:Settings.api_docs_enabled
+product_app.debate:ModelAlignment.state
+product_app.evaluation:EvalJudge.verifies_support
+product_app.evaluation:MarkerCensus.resolvable
+product_app.evaluation:RunEvaluationResult.eval_json
+product_app.evaluation:RunEvaluationResult.trust_json
+product_app.evaluation:_cached_span_pattern
+product_app.feedback_audit:Finding.to_markdown
+product_app.feedback_store:configure_for_tests
+product_app.main:_lifespan
+product_app.main:_register_docs_routes.swagger_ui_html
+product_app.main:_security_headers_middleware
+product_app.main:browser_session
+product_app.main:browser_ui
+product_app.main:health
+product_app.main:latest_feedback_audit
+product_app.main:model_defaults
+product_app.main:ops_dashboard
+product_app.main:ready
+product_app.main:root
+product_app.main:status_snapshot
+product_app.main:validation_exception_handler
+product_app.model_slots:OpenRouterModelCatalogService.last_drift_diagnostic
+product_app.providers:CitationCoverage._numerator_cannot_outrun_denominator
+product_app.query_run_orchestration:QueryRun.is_terminal
+product_app.query_run_orchestration:_MemoisedRunJudge.served_without_verdict
+product_app.query_run_orchestration:_MemoisedRunJudge.verifies_support
+product_app.query_runs:QueryRunWarningsRequest._validate_context
+product_app.query_runs:_QueryRunRequestBase._validate_context
+product_app.query_runs:cancel_query_run
+product_app.query_runs:create_query_run
+product_app.query_runs:estimate_query_run
+product_app.query_runs:get_active_query_run
+product_app.query_runs:get_query_run_result
+product_app.query_runs:get_query_run_warnings
+product_app.run_history_store:configure_for_tests
