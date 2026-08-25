@@ -303,8 +303,10 @@ its evidence:
   could exercise them, and a test now refuses a negation word that no corpus
   text reaches.
 * **The opposite error** — a pull request that *should* close an issue and
-  silently does not. `scripts/check_issue_closure.py` (issue #139) is the check
-  for that direction; this one does not duplicate it.
+  silently does not. Since the 2026-08-25 amendment below, layer 2 catches
+  this at merge time when the issue is named in `EXPECT_CLOSE`;
+  `scripts/check_issue_closure.py` (issue #139) remains the check after the
+  fact.
 * **Anything on a branch that never reaches `main`.** The history scan reads
   `origin/main` only.
 
@@ -334,3 +336,66 @@ past the two-round cap:
   accident, not against a deliberate actor.
 * **Negation more than three words back, or across a comma**, remains
   undetectable by construction — see the list above.
+
+## Amended 2026-08-25 — layer 2 compares intent, not only negation (#374)
+
+**The gap.** Both checks refused only a *negated* close. A closer nobody
+meant, written without negation, passed both, and GitHub would have acted on
+it: PR #371's body said `If that is enough to close #369, close it on merge`, GitHub's
+parse read `[369]`, and `make close-guard` printed
+`will close: #369 — none of them negated. OK.` and exited 0. PR #373's first
+body quoted the phrase and did the same. Both were caught by someone reading
+the body, not by a check (PR #371 was then closed unmerged, and #369 was
+closed by hand — `gh api repos/:owner/:repo/issues/369/timeline` shows the
+`closed` event with `commit_id: null`). Layer 2 named the issue it was about
+to shut and called it OK; the protection was a reader noticing.
+
+**Decision.** `make close-guard` takes `EXPECT_CLOSE`, the comma-separated
+issues the merge is MEANT to close (unset or empty means none — the default
+refuses, it does not skip). The script's `--premerge-pr` mode refuses unless
+what WILL close equals that set in both directions: an unlisted close is the
+#371 defect, and a listed close that nothing carries is a mistake too. A
+mistyped list (`369a`, `3_69`, a space-separated pair) is a wiring error, exit
+2, never read as "expect nothing". Layer 1 (CI, the pull-request title and
+body) is unchanged: it cannot know intent, and the merge command is where
+intent is stated.
+
+**What "will close" means, measured.** GitHub acts on two surfaces at a squash
+merge — the pull request's own references and the squash commit's message —
+so what closes is their UNION. Over the last 40 merged pull requests the two
+surfaces disagree on 6 (`gh pr list --state merged --limit 40 --json
+number,mergeCommit,closingIssuesReferences`, each merge commit's message run
+through `close_references`; 34 same, 6 differ):
+
+| PR | merge text | GitHub's parse |
+|---|---|---|
+| #360 | [337] | [] |
+| #347 | [338] | [] |
+| #324 | [242] | [] |
+| #321 | [145] | [] |
+| #320 | [146] | [] |
+| #318 | [] | [134] |
+
+Rejected: **requiring each surface to equal the list on its own.** It would
+refuse 6 of those 40 legitimate merges (15%), which is the routed-around-in-a-
+week failure this record already names.
+
+**Proved by mutation** (`tests/unit/test_close_keyword_guard.py`, 30 tests, 5
+new), six mutants each red on a distinct set: never-refuse; always-refuse;
+the `--premerge-pr` gate dropped (two pre-existing CI-mode tests plus a
+tripwire that forbids any subprocess); GitHub's parse dropped from the union;
+the negated-close exit masked; garbage read as an empty list.
+
+**Still cannot see**, in addition to the list above: a close written as a full
+issue URL or `GH-N` in the MERGE body (the regex misses it, GitHub's pull-
+request parse never sees the merge body, so the union is empty and the guard
+reports a match while GitHub closes it from the commit); a wrong `PR=`; and a
+human typing the wrong number into `EXPECT_CLOSE`. Same class as the existing
+zero-width-space entry: a guard against accident, not intent. Two more,
+found by review and left as they were because they predate this change and
+sit in the shared regexes: the code-span mask pairs lone backticks across
+paragraphs and accepts a fence whose info string holds a backtick, both of
+which CommonMark renders as prose; and whether GitHub applies the code-span
+rule to a COMMIT message at all is UNVERIFIED (it was measured on a pull-
+request body; 0 of 352 commits on `main` carry a close inside a code span,
+so history cannot settle it).

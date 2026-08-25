@@ -19,10 +19,13 @@ No network and no ``gh``: these drive the pure functions over fixture text.
 
 from __future__ import annotations
 
+import subprocess
 from pathlib import Path
 from typing import Any
 
+import pytest
 import yaml
+from scripts import check_close_keywords
 from scripts.check_close_keywords import (
     _EMPHASIS,
     NEGATIONS,
@@ -568,3 +571,111 @@ def test_the_post_merge_backstop_runs_on_a_push_and_cannot_block() -> None:
     assert len(backstop) == 1, "expected exactly one post-merge backstop step"
     assert "--advisory" in str(backstop[0]["run"]), "the backstop must not be able to block"
     assert "push" in str(backstop[0].get("if", "")), "the backstop belongs on the push lane"
+
+
+def _no_subprocess(*args: Any, **kwargs: Any) -> None:
+    raise AssertionError(f"the guard reached for a subprocess in a hermetic test: {args[0]}")
+
+
+def _premerge(monkeypatch: Any, body: str, expected: str, github: list[int], *flags: str) -> int:
+    """Drive the pre-merge lane with GitHub's answer faked and every subprocess forbidden.
+
+    `main` looks `_gh_closing_issues` up by module-global name, so the setattr
+    is the seam. The expected list travels in an environment variable NAMED on
+    the command line, as the Makefile recipe does — under a different name
+    here, so a hard-coded `EXPECT_CLOSE` in the script would go red.
+    """
+    monkeypatch.setenv("CG_SUBJECT", "fix: an ordinary subject")
+    monkeypatch.setenv("CG_BODY", body)
+    monkeypatch.setenv("CG_EXPECT", expected)
+    monkeypatch.setattr(check_close_keywords, "_gh_closing_issues", lambda pr: list(github))
+    monkeypatch.setattr(subprocess, "run", _no_subprocess)
+    argv = ["prog", "--env", "CG_SUBJECT", "CG_BODY", "--require-nonempty", *flags]
+    return main([*argv, "--premerge-pr", "373", "--expect-close", "CG_EXPECT"])
+
+
+#: The 2026-08-25 text, verbatim (PR #371's body). Not negated, so the negation
+#: guard is right to pass it; it would have closed #369 because nothing said
+#: what the merge was MEANT to close.
+UNMEANT_CLOSE = "If that is enough to close #369, close it on merge"
+
+
+def test_a_close_nobody_expected_is_refused_and_an_expected_one_passes(
+    capsys: Any, monkeypatch: Any
+) -> None:
+    """Turns red if the pre-merge lane stops comparing the text against EXPECT_CLOSE.
+
+    Both directions: an unlisted close is refused and NAMED; the same text with
+    the issue listed passes; a listed issue nothing will close is refused too,
+    so a subset test cannot stand in for equality.
+    """
+    assert _premerge(monkeypatch, UNMEANT_CLOSE, "", []) == 1
+    assert "NOT expected but WILL close: #369" in capsys.readouterr().out
+    assert _premerge(monkeypatch, UNMEANT_CLOSE, "369", []) == 0
+    assert _premerge(monkeypatch, "Refs #369 only.", "369", []) == 1
+    assert "expected but will NOT close: #369" in capsys.readouterr().out
+
+
+def test_githubs_own_parse_of_the_pull_request_counts_as_a_close(
+    capsys: Any, monkeypatch: Any
+) -> None:
+    """What will close is the UNION of the merge text and GitHub's parse of the PR.
+
+    Turns red if GitHub's answer is dropped from the comparison (the PR #282
+    shape), or if a close carried by the pull request alone is refused even
+    when expected (6 of the last 40 merges carried it on one surface only).
+    The counts are asserted (AGENTS.md rule 6b).
+    """
+    assert _premerge(monkeypatch, "No close keyword here.", "", [369]) == 1
+    assert "NOT expected but WILL close: #369" in capsys.readouterr().out
+    assert _premerge(monkeypatch, "No close keyword here.", "369", [369]) == 0
+    out = capsys.readouterr().out
+    assert "expected 1 issue(s) to close, merge text closes 0, GitHub reports 1" in out
+
+
+def test_the_ci_lane_does_not_compare_and_never_calls_gh(monkeypatch: Any) -> None:
+    """Turns red if the comparison escapes the `--premerge-pr` gate.
+
+    CI has no expectation to compare against: every legitimate `Fixes #N` in a
+    pull request would be refused. The negated close must still fail there.
+    """
+    monkeypatch.setenv("CG_SUBJECT", "fix: an ordinary subject")
+    monkeypatch.setenv("CG_BODY", UNMEANT_CLOSE)
+    monkeypatch.setenv("EXPECT_CLOSE", "garbage")
+    monkeypatch.setattr(subprocess, "run", _no_subprocess)
+    assert main(["prog", "--env", "CG_SUBJECT", "CG_BODY", "--require-nonempty"]) == 0
+    monkeypatch.setenv("CG_BODY", "This does NOT close #337.")
+    assert main(["prog", "--env", "CG_SUBJECT", "CG_BODY", "--require-nonempty"]) == 1
+    # Naming an expectation without a pull request to compare it with is a
+    # wiring error, not a silent no-op: argparse exits 2.
+    with pytest.raises(SystemExit) as refused:
+        main(["prog", "--env", "CG_SUBJECT", "CG_BODY", "--expect-close", "EXPECT_CLOSE"])
+    assert refused.value.code == 2
+
+
+def test_the_expected_list_is_a_comma_list_of_numbers(monkeypatch: Any) -> None:
+    """Turns red if spaces stop being stripped, duplicates or a leading `#` stop
+    being tolerated, or garbage is read as "expect nothing" instead of a wiring
+    error (exit 2). Each passing case is exact under equality: the text closes
+    #369 and GitHub reports #374, so 0 means the parsed set is {369, 374}.
+    """
+    assert _premerge(monkeypatch, UNMEANT_CLOSE, "369, 374", [374]) == 0
+    assert _premerge(monkeypatch, UNMEANT_CLOSE, "#374,369,369,", [374]) == 0
+    assert _premerge(monkeypatch, UNMEANT_CLOSE, "369 374", [374]) == 2
+    assert _premerge(monkeypatch, UNMEANT_CLOSE, "3_69,374", [374]) == 2
+    assert _premerge(monkeypatch, UNMEANT_CLOSE, "\uff13\uff16\uff19,374", [374]) == 2
+
+
+def test_an_expected_close_that_is_negated_is_still_refused(capsys: Any, monkeypatch: Any) -> None:
+    """Turns red if the comparison's 0 masks the negation guard's 1.
+
+    `This does NOT close #337.` WILL close #337, so it matches EXPECT_CLOSE=337
+    and must still be refused, with the negated block still printed.
+    """
+    assert _premerge(monkeypatch, "This does NOT close #337.", "337", []) == 1
+    assert "GitHub will CLOSE #337" in capsys.readouterr().out
+    # `--advisory` keeps its documented contract — report, never block — so a
+    # mismatch under it still prints and exits 0. Nothing wires the two
+    # together; this pins the branch rather than leaving it unmeasured.
+    assert _premerge(monkeypatch, UNMEANT_CLOSE, "", [], "--advisory") == 0
+    assert "NOT expected but WILL close: #369" in capsys.readouterr().out
