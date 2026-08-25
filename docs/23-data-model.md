@@ -134,7 +134,65 @@ AND query_run_id IS NULL
 
 **Why it is marker-guarded rather than run on every boot.** The `WHERE` clause is a *policy* ("an accepted cost event with no run id is not a charge") and nothing enforces that policy on the write side. Run unguarded on every open, it would silently zero any *future* row of that shape. That is a **fail-open spend guard**: the direction it fails in is "the account is under-metered" — free money. Applying it exactly once, over the rows that exist the first time the fixed code opens the database (pre-fix rows by construction), bounds the blast radius to the migration it is, and needs no assumption about what any later writer does.
 
-**Rollback note** (required by `## Migration Strategy` below). The migration ships **no inverse and one is not safe to add**. `POST /v1/query-runs/estimate` passes `query_run_id=None, preview=True` (`query_runs.py`), which `costs.py` maps to `cost_estimate_previewed` — the exact shape the migration produces. A relabelled row and a natively-written post-fix preview are therefore **indistinguishable by content** — same `event_type`, same payload shape.
+**Rollback note** (required by `## `sessions.sqlite3` — the durable session sink (ADR-0073)
+
+A third SQLite file on the same volume, path from `SESSION_DB_PATH`
+(`fly.toml` pins it to `/data/sessions.sqlite3`; `tests/conftest.py` pins it to
+`:memory:`; unset it defaults to `.data/sessions.sqlite3`). Same shape as its
+two siblings under ADR-0002: one connection, one `RLock`, autocommit, no WAL.
+
+It exists because the per-IP session **mint cap** is durable and the sessions
+it counts were not, so a restart erased the visitor and kept the evidence that
+they had already spent their mints. `fly.toml` sets `min_machines_running = 0`,
+so that restart is the ordinary idle path.
+
+```sql
+CREATE TABLE IF NOT EXISTS sessions (
+    session_digest TEXT PRIMARY KEY,
+    account_id TEXT NOT NULL,
+    csrf_token TEXT NOT NULL,
+    created_at TEXT NOT NULL,
+    last_used_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS sessions_last_used_idx
+    ON sessions (last_used_at);
+```
+
+**`session_digest` is `sha256(session_id)`, and the session id itself is never
+written.** The cookie is the whole credential — this app has no login — so
+storing it would make read access to the volume equivalent to holding every
+live visitor's cookie. `csrf_token` IS stored in clear, because it is useless
+without the cookie the digest withholds; a test pins that the two secrets stay
+independent, since that argument fails if either reveals the other.
+
+**Classification.** `account_id` is a pseudonymous identifier, as elsewhere in
+this document. `csrf_token` is a secret at rest. No query text, no personal
+data, no IP address — the IP lives only in the `events` mint rows.
+
+**Retention.** Rows are deleted by the 60-second `session-gc` daemon once
+`last_used_at` is older than `SESSION_TTL` (2h). Expiry is ALSO a condition of
+every read, so a row that outlives the process that would have purged it still
+does not resolve.
+
+**Unguarded `_SCHEMA`, unlike `feedback_store`'s new DDL, and safe here only
+because this store owns its own file** — the script is that file's initial
+creation rather than a new table added to an existing database. Measured on
+CPython 3.12.13 / SQLite 3.50.4: an existing file whose table is already
+present opens on a read-only volume without writing; a missing table on a
+read-only file, and a new file in a read-only directory, both raise out of
+`__init__`, where `main._configure_session_store` catches them and the app runs
+on in-process sessions. **A later schema change must NOT extend `_SCHEMA`** —
+it would reintroduce the second shape on an existing read-only volume. Use a
+guarded `schema_migrations` block then, exactly as `feedback_store` does.
+
+**Boot behaviour.** A failed open logs at ERROR (`session_store: could not open
+the SQLite sink`) and the app serves normally with sessions that do not survive
+a restart — the behaviour of every release before ADR-0073. A failed WRITE on an
+open store is swallowed and logged at WARNING, with the same consequence. The
+direction is deliberate: sessions are the only credential, so a storage fault
+must never stop one being issued.
+
+## Migration Strategy` below). The migration ships **no inverse and one is not safe to add**. `POST /v1/query-runs/estimate` passes `query_run_id=None, preview=True` (`query_runs.py`), which `costs.py` maps to `cost_estimate_previewed` — the exact shape the migration produces. A relabelled row and a natively-written post-fix preview are therefore **indistinguishable by content** — same `event_type`, same payload shape.
 
 `recorded_at < applied_at` is a **probable** signal that a row was touched by the migration, not a **sound** one — it is only guaranteed correct if the migration is guaranteed to run on the very first open of the fixed code, and it is not: the runner is best-effort (see the runbook's locked-database failure modes), so a transient failure can skip it on one boot while leaving the store fully able to write. Concretely: if an earlier boot hits the RESERVED-lock case and skips the migration, the app keeps writing *native* `cost_estimate_previewed` rows with `recorded_at` timestamps before the migration eventually succeeds on a later boot and stamps `applied_at` — and those native rows then satisfy `recorded_at < applied_at` despite never having been touched by the migration. The tell that this signal might be unreliable for a given database is the same one the runbook keys off: a `feedback_store: F-01 preview backfill did not run` `WARNING` in that instance's boot history means at least one boot skipped the migration, and the timestamp test cannot be trusted for rows recorded in that window. Absent any such warning across the database's whole history, the signal holds.
 

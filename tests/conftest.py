@@ -52,6 +52,14 @@ os.environ.setdefault("RUN_HISTORY_DB_PATH", ":memory:")
 # ceiling's much larger margin — collides across unrelated tests without it).
 os.environ.setdefault("FEEDBACK_DB_PATH", ":memory:")
 
+# ADR-0073's durable session sink, pinned for the same reason as the two
+# above: unpinned it defaults to ``.data/sessions.sqlite3``, which survives
+# BETWEEN pytest invocations, so one run's sessions would resolve inside the
+# next. ``session_repository.clear()`` in ``_reset_state`` empties this store
+# between tests within a run; this line is what stops it existing on disk at
+# all.
+os.environ.setdefault("SESSION_DB_PATH", ":memory:")
+
 # Egress guard (Stage B): the working-tree ``.env`` sets
 # ``OPENROUTER_LIVE_EXECUTION_ENABLED=true`` with a real key, and ``Settings``
 # reads ``.env`` on every local pytest run. Force live execution OFF before any

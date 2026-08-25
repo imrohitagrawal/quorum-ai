@@ -195,7 +195,7 @@ fly scale memory 1024
 fly scale vm shared-cpu-2x
 ```
 
-**Don't scale to multiple machines yet** — the in-memory state (sessions, query runs) is per-process. Multi-instance requires Redis (sessions) and Postgres (query runs) — see "When you outgrow single-instance" below.
+**Don't scale to multiple machines yet.** Query runs are per-process in-memory state. Sessions are durable since ADR-0073, but on a SQLite file on a single mounted volume, and ADR-0002 is explicit that two machines sharing that volume would break the single-writer design. Multi-instance therefore still requires Redis (sessions) and Postgres (query runs) — see "When you outgrow single-instance" below.
 
 ### Rotate the token secret
 
@@ -265,15 +265,15 @@ The app itself has:
 
 ## When you outgrow single-instance
 
-The in-memory state (sessions, query runs) is the first thing to break when you scale. Order of operations:
+Per-process state is the first thing to break when you scale. Sessions are durable since ADR-0073 but not SHARED — the SQLite file lives on one volume — so they still need moving. Order of operations:
 
-1. **Sessions in Redis** — add Upstash Redis (free tier), update `InMemorySessionRepository` in `src/product_app/auth.py` to use a Redis-backed store
+1. **Sessions in Redis** — add Upstash Redis (free tier) and give `SessionRepository` in `src/product_app/auth.py` a Redis backend in place of `src/product_app/session_store.py`. The repository already reads through to a durable sink on a cache miss, so this is a backend swap, not a redesign.
 2. **Query runs in Postgres** — add Fly Postgres (free tier available), update `query_runs.py` repository
 3. **Catalog cache in Redis** — once sessions are in Redis, also cache the  catalog there (5-minute TTL is fine)
 4. **Sticky sessions** — when you have 2+ instances, configure Fly's load balancer with sticky sessions (`fly.toml` `[services.concurrency]` + `sticky_sessions = true`)
 5. **Observability** — add OpenTelemetry exporter to a backend (Datadog, Honeycomb, Grafana Cloud)
 
-These are not needed for launch. The app's README documents the in-memory state as MVP design.
+These are not needed for launch.
 
 ---
 
@@ -363,10 +363,19 @@ decision and what to re-add if that day comes.
 
 ### Users get logged out every deploy
 
-Expected with in-memory state. Two options:
+**Fixed by ADR-0073** — sessions are mirrored to `SESSION_DB_PATH` on the
+persistent volume and survive a restart. If it is still happening, check in
+this order:
 
-- Document this in the UI (there's already a "session expires on deploy" disclaimer planned)
-- Move sessions to Redis (see "When you outgrow single-instance")
+- `SESSION_DB_PATH` is set in `fly.toml` and points at the mounted volume. Unset,
+  it defaults to `.data/sessions.sqlite3` on the ephemeral rootfs, which is wiped
+  whenever the machine stops — and `min_machines_running = 0` means it stops
+  whenever the app goes idle.
+- The boot log for `session_store: could not open the SQLite sink`. That ERROR
+  means the app fell back to in-process sessions, which is the pre-ADR-0073
+  behaviour.
+- The session genuinely expired: `SESSION_TTL` is 2 hours of inactivity, and
+  that is unchanged.
 
 ### High memory usage
 

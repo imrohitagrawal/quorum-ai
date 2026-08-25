@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import json
 import logging
+import math
 import os
 import time
 from collections.abc import AsyncIterator
@@ -56,6 +57,8 @@ from product_app.costs import (
 from product_app.evaluation import judge_configured
 from product_app.feedback_store import FeedbackStore, get_store
 from product_app.feedback_store import configure as configure_feedback_store
+from product_app.session_store import SessionStore
+from product_app.session_store import configure as configure_session_store
 from product_app.logging_config import setup_json_logging
 from product_app.model_slots import (
     ModelDefaultsResponse,
@@ -467,6 +470,36 @@ def _configure_feedback_store() -> None:
 
 
 _configure_feedback_store()
+
+
+def _configure_session_store() -> None:
+    """Open the durable session sink at boot; on failure log and continue.
+
+    Sessions are the only credential this app has — there is no login — so a
+    storage fault must never stop one being issued. When this open fails the
+    repository runs on its in-process dict alone, which is exactly the
+    behaviour every release before ADR-0073 had: sessions work, and they do
+    not survive a restart. That is a degradation, not an outage, and it is the
+    only direction this failure is allowed to take.
+
+    ERROR rather than WARNING because the consequence is user-visible and
+    self-inflicted-looking: with ``fly.toml``'s ``min_machines_running = 0``
+    the machine stops when idle, and every returning visitor whose two per-IP
+    mints are already spent is then locked out until the 24h window rolls.
+    """
+    try:
+        configure_session_store(SessionStore.from_env())
+    except Exception as exc:  # noqa: BLE001 - durability is optional
+        logging.getLogger(__name__).error(
+            "session_store: could not open the SQLite sink — sessions will "
+            "work but will NOT survive a restart, so a returning visitor who "
+            "has already spent this IP's daily session mints will be refused "
+            "until the 24h window rolls. Fix the volume and restart: %s",
+            exc,
+        )
+
+
+_configure_session_store()
 
 # Durable terminal run-history sink (S1 / FR-014). Sibling of the feedback
 # store on the same Fly volume, path from ``RUN_HISTORY_DB_PATH``. As with the
@@ -1039,6 +1072,18 @@ def status_snapshot() -> dict[str, object]:
     }
 
 
+def _retry_after_header(seconds: int | None) -> dict[str, str]:
+    """``Retry-After`` for a mint-cap refusal, or no header at all.
+
+    RFC 9110 §10.2.3 says a 429 SHOULD carry one and this endpoint carried
+    none. Omitted rather than guessed when the wait is unknown: a fabricated
+    ``Retry-After`` teaches a client to come back at a time nothing computed.
+    """
+    if seconds is None:
+        return {}
+    return {"Retry-After": str(seconds)}
+
+
 @app.get("/v1/session", tags=["session"])
 def browser_session(
     request: Request,
@@ -1062,7 +1107,7 @@ def browser_session(
     session_id = get_session_cookie_from_request(request)
     try:
         session = issue_or_resume_session(session_id, client_ip=client_ip)
-    except SessionMintCapExceeded:
+    except SessionMintCapExceeded as exc:
         # Issue #100 §2.3: this IP has already minted
         # ``auth.SESSION_MINT_CAP_PER_IP`` new sessions in the last 24h.
         # A DIFFERENT 429 code from the burst limiter above — that one is
@@ -1073,14 +1118,21 @@ def browser_session(
             status_code=status.HTTP_429_TOO_MANY_REQUESTS,
             content={
                 "detail": {
+                    # The CODE is the contract ``app.js`` reads; only the
+                    # prose changed. It used to say "today's limit" and "the
+                    # daily window resets", describing a calendar boundary
+                    # ``try_record_session_mint`` does not implement — its
+                    # cutoff is ``now - 24h``, a rolling window.
                     "code": "SESSION_MINT_CAP_EXCEEDED",
                     "message": (
-                        "This IP has reached today's limit on new sessions. "
-                        "An already-open session can still be used; retry "
-                        "starting a new one after the daily window resets."
+                        "This IP address has opened its allowance of new "
+                        "sessions for the last 24 hours. An already-open "
+                        "session still works; a slot frees up as an earlier "
+                        "one ages out of the rolling window."
                     ),
                 },
             },
+            headers=_retry_after_header(exc.retry_after_seconds),
         )
     response = JSONResponse(
         {
@@ -1090,6 +1142,34 @@ def browser_session(
     )
     attach_session_cookie(response, session)
     return response
+
+
+def _describe_retry_wait(seconds: int | None) -> str:
+    """Turn a wait in seconds into a sentence, or say nothing about timing.
+
+    ``None`` means the store could not tell us, and the honest answer then is
+    silence: rounding an unknown down to "try again shortly" is a claim the
+    code cannot back. The window is rolling, so this never names a clock time
+    or a calendar day — the previous copy said "today's limit" and "the daily
+    window resets", and neither was true of a ``now - 24h`` cutoff.
+    """
+    if seconds is None:
+        return (
+            "A slot frees up automatically as your earlier sessions age out "
+            "of the 24-hour window."
+        )
+    hours = math.ceil(seconds / 3600)
+    if hours <= 1:
+        return "A slot frees up in about 1 hour, and you can start again then."
+    return f"A slot frees up in about {hours} hours, and you can start again then."
+
+
+def _render_session_capped_html(retry_after_seconds: int | None) -> str:
+    """Render the 429 page. One substitution, so no escaping is needed: the
+    only interpolated value is a sentence this module built from an integer.
+    """
+    template = (TEMPLATES_DIR / "session-capped.html").read_text(encoding="utf-8")
+    return template.replace("__RETRY_SENTENCE__", _describe_retry_wait(retry_after_seconds))
 
 
 @app.get("/ui/ops", response_class=HTMLResponse, include_in_schema=False)
@@ -1116,12 +1196,16 @@ def browser_ui(request: Request) -> HTMLResponse:
     session_id = get_session_cookie_from_request(request)
     try:
         session = issue_or_resume_session(session_id, client_ip=client_ip)
-    except SessionMintCapExceeded:
+    except SessionMintCapExceeded as exc:
+        # A rendered page, not a bare sentence. This is the only 429 a real
+        # visitor ever sees in their address bar, and it is the last thing
+        # they see before giving up, so it explains the mechanism, says an
+        # existing session still works, and names a wait it can actually
+        # derive. See ADR-0073.
         return HTMLResponse(
-            "This IP has reached today's limit on new sessions. "
-            "An already-open session can still be used; retry starting a "
-            "new one after the daily window resets.",
+            _render_session_capped_html(exc.retry_after_seconds),
             status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+            headers=_retry_after_header(exc.retry_after_seconds),
         )
     response = HTMLResponse(_render_workspace_html())
     attach_session_cookie(response, session)
