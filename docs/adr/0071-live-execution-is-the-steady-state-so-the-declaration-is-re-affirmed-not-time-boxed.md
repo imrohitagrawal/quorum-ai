@@ -392,6 +392,14 @@ reads `OPENROUTER_LIVE_EXECUTION_ENABLED = "false"`.**
   runtime attention check replaces the pressure; if the watchdog's schedule is
   disabled (ADR-0070 failure mode 7, still UNVERIFIED) a standing posture has no
   layer watching it at all.
+- **A `judge: true` on ANY covering window satisfies the judge check**, including
+  a short one opened beside a long one that omits it. That is deliberate and it
+  is a trade: narrowing it to a single window made the check alert while a
+  covering window genuinely did declare the judge. The judge question is
+  existential — a window saying `judge: true` IS the record, written by a named
+  owner in a reviewable commit, which is the whole purpose of the field. What a
+  short window CANNOT do is hide an unattended one, because attention is
+  universal.
 - **Rubber-stamping is not solved.** A person can paste the token every morning
   without reading anything. The mechanism establishes that a human acted inside
   the cadence, never that judgement was exercised. Accepted, not fixed.
