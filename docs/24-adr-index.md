@@ -75,6 +75,7 @@ ways, so the record shows what was believed on a date and what replaced it.
 | [ADR-0069](adr/0069-an-equivalent-mutant-is-removed-not-recorded.md) | An equivalent mutant is removed from the code, not recorded in a list | Architecture | Accepted — 2026-08-25 |
 | [ADR-0070](adr/0070-a-money-spending-posture-is-declared-before-it-is-switched-on.md) | A money-spending posture is declared before it is switched on | Architecture | Accepted — 2026-08-25 |
 | [ADR-0071](adr/0071-live-execution-is-the-steady-state-so-the-declaration-is-re-affirmed-not-time-boxed.md) | Live execution is the steady state, so the declaration is re-affirmed rather than time-boxed | Architecture | Accepted — 2026-08-25 |
+| [ADR-0072](adr/0072-a-child-process-is-denied-the-parents-coverage-environment.md) | A child process is denied the parent's coverage environment, in one place, and a gate keeps it that way | Architecture | Accepted — 2026-08-25 |
 
 **This index was itself stale** until 2026-07-30: ADR-0002 had existed since
 2026-07-19 and was never listed here. A hand-maintained index is a derived fact

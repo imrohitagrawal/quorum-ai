@@ -42,6 +42,7 @@ from typing import Any
 
 import pytest
 from tests.guard_bite import assert_guard_bites
+from tests.subprocess_env import env_without_coverage
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 MAKEFILE = REPO_ROOT / "Makefile"
@@ -71,6 +72,11 @@ def _makefile_globs(script: Path, cwd: Path, base: str) -> set[str]:
         cwd=cwd,
         capture_output=True,
         text=True,
+        # #368: `cwd` is a CLONE of this repository. Without this the child
+        # inherits pytest-cov's hooks, resolves the RELATIVE `--cov=src`
+        # against the clone, and combines the clone's src/ into the parent
+        # run's data -- this file's isolated TOTAL goes 5847 -> 10426.
+        env=env_without_coverage(),
     )
     assert result.returncode == 0, (
         f"the real Makefile scope script exited non-zero: {result.stdout}{result.stderr}"
