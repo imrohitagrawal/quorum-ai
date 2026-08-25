@@ -4,7 +4,7 @@
 
 Accepted — 2026-08-25. Addresses issue #369, the follow-on that
 [ADR-0069](0069-an-equivalent-mutant-is-removed-not-recorded.md) handed over
-from its Open section. Nothing in ADR-0069 is superseded; its decision 4 closed
+from its "Open, and deliberately not closed here" list under Consequences. Nothing in ADR-0069 is superseded; its decision 4 closed
 the pragma route and this record closes the decorator route next to it.
 
 ## Context
@@ -72,13 +72,14 @@ unless stated.
 | What | Result |
 |---|---|
 | File as-is | 384 mutants, 11 for `_stance_majority_flags` |
-| `+ @functools.cache` (also `@functools.wraps(dict)`, `@some.custom.decorator`, `@property`, `@(functools.cache)`) | 373 mutants, 0 for the function |
+| `+ @functools.cache` (also `@functools.wraps(dict)`, `@some.custom.decorator`, `@property`, `@(functools.cache)`); the `functools` cases also need `import functools` after the `__future__` line, or the app fails to import and the run proves nothing | 373 mutants, 0 for the function |
 | `+ @staticmethod`, `@classmethod`, `@(staticmethod)`, `@(classmethod)` | 384 mutants, 11 — mutmut's tolerated exception, parentheses included |
 | Pragma guard with `@functools.cache` planted | `5 passed` |
-| Whole `only_mutate` population through mutmut, 27 files | 11,680 mutants, 19.0 s; all 43 of the scanner's entries received zero mutants (0 exceptions). 26 other top-level functions also received zero, every one for the #146 inert-body reason (`clear`, `lost_billed_writes`, …), which no decorator causes and this guard does not cover |
+| Whole `only_mutate` population through mutmut, 27 files | 11,680 mutants, 19.0 s. Attributing mutants to their owning function by name: the 42 top-level entries all received zero (0 exceptions); the 43rd, the nested `_register_docs_routes.swagger_ui_html`, cannot be observed by name because mutmut attributes nested mutants to the enclosing function (which received 5) — the strip-and-grow half of the binding test covers that shape. 26 other top-level functions also received zero, every one for the #146 inert-body reason (`clear`, `lost_billed_writes`, …), which no decorator causes and this guard does not cover |
 | Same population through the AST scanner | 43 entries in 59 ms — 37 decorated (one of them nested), 6 methods inside `@dataclass` classes |
 | Synthetic module in the binding test | 12 mutants in 15.7 ms |
 | Plain `outer` with nested `inner`; then `@cache` on `inner` | 5 mutants → 3, all attributed to `x_outer` — the outer count never reaches zero, so a "went to zero" check cannot see the nested case |
+| Adversarial review, round 1 (three lenses; vacuity lens in its own copy) | Three mutations left every test green: an inventory reader returning the scanner's own output, a gate comparing the tree with itself, a gate body reduced to `pass` — `_check_inventory` was proven on literal sets and its wiring was not. A fourth (swallow `SyntaxError`) left an untested docstring claim. A fifth was a population gap: mutmut selects `only_mutate` with `fnmatch`, where `*` crosses `/`; the scanner used `Path.glob`, so a planted `src/product_app/subpkg/hidden.py` was mutated by mutmut and unseen by the census (latent: the tree has no subpackage). All five now have a test that goes red on exactly that mutation (`1 failed, 8 passed` each), and the population is selected with `fnmatch` over `source_paths`, as mutmut does |
 | Guard under mutation, each restored byte-identical (`cp` aside, `diff -q`) | plant `@functools.cache` in `src/`: `2 failed, 4 passed`, gate names `product_app.synthesis_consensus:_stance_majority_flags [decorated]` as NEW; remove `@app.get` from `/health`: STALE `product_app.main:health`; invert the predicate: `4 failed`; `only_mutate` pointed at nothing: population floor red on `0 >= 20`; empty inventory: `2 failed`; scanner stops freezing classes: `3 failed`, binding test names `Frozen.method`/`Frozen.static` |
 
 The planners' census before the build: 46 functions under `src/` carry a
@@ -90,8 +91,10 @@ the inventory is the current list and the test keeps it current.
 ## Consequences
 
 * A decorator added under `only_mutate` costs one inventory line in the same
-  diff. 43 entries accumulated over the repository's whole life, so the
-  expected cost is well under one line per pull request.
+  diff. Historically: 43 entries over 244 merged pull requests, and 27 of the
+  139 commits on `main` that touch `src/product_app/*.py` added a decorator
+  line (`git log -p`, counted 2026-08-25). That the future rate is similar is
+  an assumption, not a measurement.
 * Adding a method to a `@dataclass` costs the same line, and that is
   deliberate: the method has zero mutants, and the author should know.
 * Renames and moves of decorated functions change the inventory. That churn is
@@ -99,7 +102,7 @@ the inventory is the current list and the test keeps it current.
 * The guard runs in the merge-blocking `pytest (Python 3.12)` context. The
   binding test is marked `repo_introspection` (it imports mutmut and reads the
   working directory's `pyproject.toml`), so it is deselected inside mutmut's
-  own copy; the other five tests are not, and read the real tree through
+  own copy; the other eight tests are not, and read the real tree through
   `find_repo_root`.
 * When mutmut starts mutating decorated functions, the binding test goes red,
   and the right response is to delete this module and the inventory: the
@@ -108,12 +111,14 @@ the inventory is the current list and the test keeps it current.
 ## Rejected alternatives
 
 * **Floor the `[decorated]` count the Makefile's scope step already emits.**
-  Named as the fix in ADR-0069's Open section, and rejected on measurement of
+  Named as the fix in ADR-0069's open list, and rejected on measurement of
   what it can see: the note covers only functions whose lines changed in the
-  `origin/main...HEAD` diff, so it is empty on `main` itself (a `count > 0`
-  floor there fails by construction, ADR-0065's lesson), it lives in an
-  advisory job, and it is blind to a decorator added in the same pull request
-  that deletes the function's changed lines from scope. Kept as a log line.
+  `origin/main...HEAD` diff, so it is empty on `main` itself, where a
+  `count > 0` floor fails by construction (no ADR records that lesson; it is
+  stated here); it lives in an advisory job (`ci.yml`, `continue-on-error:
+  true`, not among the six required contexts); and it is blind to a decorator
+  added in the same pull request that deletes the function's changed lines
+  from scope. Kept as a log line.
 * **Per-function mutant-count baseline, compared against the previous count.**
   Would also catch a body edit that shrinks the count, which the issue floated.
   Rejected: every legitimate edit to any function changes its count, so the
@@ -132,7 +137,8 @@ the inventory is the current list and the test keeps it current.
 
 ## Related
 
-* Issue #369; ADR-0069 decision 4 (the pragma route) and its Open section.
+* Issue #369; ADR-0069 decision 4 (the pragma route) and its "Open, and
+  deliberately not closed here" list.
 * `tests/unit/test_no_decorator_silences_a_mutation_surface.py`,
   `tests/unit/mutation_surface_inventory.txt`, registered in
   `tests/unit/test_gates_carry_a_charter.py`.

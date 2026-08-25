@@ -71,6 +71,7 @@ in-memory partner asserts the same detection on every run.
 from __future__ import annotations
 
 import ast
+import fnmatch
 import sys
 import tomllib
 from collections.abc import Iterable
@@ -163,12 +164,40 @@ def unmutatable_functions(source: str) -> dict[str, str]:
     return found
 
 
-def _mutated_files() -> list[Path]:
-    """Every file `[tool.mutmut] only_mutate` selects — PARSED from pyproject,
-    never assumed to be `src/`, so a widened or moved scope is followed."""
+def _mutmut_table() -> dict[str, object]:
     with (REPO_ROOT / "pyproject.toml").open("rb") as handle:
-        patterns = tomllib.load(handle)["tool"]["mutmut"]["only_mutate"]
-    return sorted({path for pattern in patterns for path in REPO_ROOT.glob(pattern)})
+        return dict(tomllib.load(handle)["tool"]["mutmut"])
+
+
+def _is_mutated_path(relative_posix: str, only_mutate: Iterable[str]) -> bool:
+    """mutmut's own selection rule (`configuration.py`, `_should_include_for_mutation`):
+    `fnmatch` against each `only_mutate` pattern.
+
+    Deliberately NOT `Path.glob`: in `fnmatch` a `*` crosses `/`, so
+    `src/product_app/*.py` also selects `src/product_app/sub/x.py`, and mutmut
+    would mutate that file. Adversarial review planted exactly that file and
+    watched a `Path.glob` version of this scanner miss it while mutmut skipped
+    its decorated function: the census must select what the tool selects.
+    """
+    return any(fnmatch.fnmatch(relative_posix, pattern) for pattern in only_mutate)
+
+
+def _mutated_files() -> list[Path]:
+    """Every file `[tool.mutmut]` mutates — `source_paths` walked, `only_mutate`
+    applied — PARSED from pyproject, never assumed to be `src/`, so a widened
+    or moved scope is followed."""
+    table = _mutmut_table()
+    only_mutate = [str(pattern) for pattern in table["only_mutate"]]  # type: ignore[attr-defined]
+    candidates = (
+        path
+        for source_path in table["source_paths"]  # type: ignore[attr-defined]
+        for path in (REPO_ROOT / str(source_path)).rglob("*.py")
+    )
+    return sorted(
+        path
+        for path in candidates
+        if _is_mutated_path(path.relative_to(REPO_ROOT).as_posix(), only_mutate)
+    )
 
 
 def _module_name(path: Path) -> str:
@@ -245,6 +274,25 @@ def test_the_scan_reads_the_population_mutmut_mutates() -> None:
         "an empty population"
     )
     assert all(path.stat().st_size > 0 for path in files)
+
+
+def test_the_population_rule_is_mutmut_s_rule_not_a_shell_glob() -> None:
+    """Turns red if: `_is_mutated_path` stops crossing `/` the way mutmut's
+    `fnmatch` does, or starts selecting outside `only_mutate`."""
+    patterns = ["src/product_app/*.py"]
+    assert _is_mutated_path("src/product_app/main.py", patterns)
+    assert _is_mutated_path("src/product_app/subpkg/hidden.py", patterns), (
+        "mutmut would mutate a subpackage file; the census must scan it too"
+    )
+    assert not _is_mutated_path("src/httpx2/compat.py", patterns)
+    assert not _is_mutated_path("tests/unit/test_x.py", patterns)
+
+
+def test_an_unparseable_source_file_fails_loudly_rather_than_shrinking_the_census() -> None:
+    """Turns red if: `unmutatable_functions` starts swallowing `SyntaxError`,
+    which would drop the file from the census and let the gate pass over it."""
+    with pytest.raises(SyntaxError):
+        unmutatable_functions("def (:\n")
 
 
 def test_the_inventory_and_the_scanner_both_name_a_function_known_to_be_skipped() -> None:
@@ -347,6 +395,39 @@ def test_the_inventory_comparison_fails_in_both_directions() -> None:
         _check_inventory({}, {"m:f"})
     assert (
         "STALE" in str(stale.value) and "m:f" in str(stale.value) and "NEW" not in str(stale.value)
+    )
+
+
+def test_the_gate_itself_fails_against_an_inventory_that_disagrees_with_the_tree(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """Drive THE GATE FUNCTION, through its real file reader, against a
+    disagreeing inventory: the real one with `product_app.main:health` removed
+    (so the tree has it and the file does not — NEW) and one made-up entry
+    added (STALE).
+
+    Adversarial review found that without this, three mutations left every
+    test green: an inventory reader that returned the scanner's own output, a
+    gate that compared the tree with itself, and a gate whose body was `pass`.
+    `_check_inventory` was proven on literal sets; the wiring to it was not.
+
+    Turns red if: the gate stops reading the inventory file, stops comparing
+    it with the tree, or stops failing on either direction.
+    """
+    real_lines = INVENTORY.read_text(encoding="utf-8").splitlines()
+    assert "product_app.main:health" in real_lines
+    doctored = [line for line in real_lines if line != "product_app.main:health"]
+    doctored.append("product_app.main:this_function_does_not_exist")
+    fake = tmp_path / INVENTORY.name
+    fake.write_text("\n".join(doctored) + "\n", encoding="utf-8")
+    monkeypatch.setattr(sys.modules[__name__], "INVENTORY", fake)
+
+    with pytest.raises(AssertionError) as caught:
+        test_no_function_lost_its_mutation_surface_unrecorded()
+    message = str(caught.value)
+    assert "NEW" in message and "product_app.main:health" in message, message
+    assert "STALE" in message and "product_app.main:this_function_does_not_exist" in message, (
+        message
     )
 
 
