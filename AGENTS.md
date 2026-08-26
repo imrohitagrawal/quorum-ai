@@ -107,8 +107,46 @@ is the rule only.
 9. **Fan out for review, never for building.** Subagents share one working tree.
    Tell every reviewer **IN CAPITALS** not to write, edit, `git checkout`,
    `git stash` or `sed -i` anything.
-10. **Two lenses, not five.** Two reviewers ≈ four; one is worse (Porter et al.,
-    *IEEE TSE* 1997). Spend the difference on verification, not more finders.
+9a. **Never move the tree under a running reader.** Rule 9 stops the *reviewers*
+   writing. Nothing stopped the *orchestrator* writing while they read, and that
+   produced two false signals in one session (2026-08-26):
+   - committing while a read-only planner was mid-measurement split its baseline
+     across two different trees;
+   - editing `synthesis_consensus.py` (+15 lines) during a backgrounded
+     `make diff-cover` turned
+     `tests/unit/test_not_invoked_is_not_evidence.py::test_classify_model_alignment_always_sets_invoked_explicitly`
+     RED with `assert 'invoked=invoked' in 'def _opening_reflected_in_final(...)'`.
+     That test calls `inspect.getsource(classify_model_alignment)`, which
+     resolves by LINE NUMBER against the file **on disk**, not against the
+     module already imported. The
+     same suite on a stable tree passed in full, that file included.
+   Three things follow. **Extend rule 12b from mutators to READERS** — a
+   read-only agent that runs the suite gets its own
+   `git archive HEAD | tar -x -C <dir>` copy. **Either the gate runs or you
+   edit**, never both. And **a full-suite failure in a file your diff never
+   touched is a phantom until you re-run it on a stable tree** — investigate the
+   tree before you investigate the diff.
+10. **Spend on verification, not on more finders — but the finder cap itself is
+    UNMEASURED for agents.** This rule used to read "two lenses, not five;
+    two reviewers ≈ four" on the strength of Porter, Siy, Toman & Votta,
+    *IEEE TSE* 1997. That is row 1.1 of
+    `docs/evidence/2026-07-30-engineering-practice.md`, and this repo **already
+    downgraded it to `ASSERTION`** — the paper is paywalled, nobody here has
+    read it, and *"an author list that wrong is proof the primary source was not
+    read"*. It measured **human** inspection teams in **meetings** on 1997 C++,
+    and the same row records that no modern replication exists. Carrying its
+    team-size number over to LLM agents transfers a result across populations,
+    which is what rule 11 forbids.
+    What IS graded `WELL-EVIDENCED` is row 2.1: LLM review at **precision 16.65%,
+    recall 23.18%** (SWRBench, arXiv:2509.01494v2 — a preprint). Read the two
+    numbers separately. Recall 23% means one lens misses roughly 77%, so **two is
+    a floor, not a ceiling**. Precision 17% means roughly 83% of what any finder
+    reports is noise, so **verification is the bottleneck** — which is the half
+    of the old rule that survives. Session evidence, recorded 2026-08-26 and
+    inherited here rather than re-measured (n=1): four agents on one diff
+    produced four **disjoint** finding sets.
+    **So: keep spending the marginal effort on verifying findings. Do not treat
+    "two" as a measured ceiling on finders.**
 11. **Verify every reviewer claim before acting.** **Check the fix, not just the
     finding.** The often-quoted "roughly a fifth do not survive" has **no source
     document in this repo** — treat it as assumed, not measured.
@@ -197,6 +235,28 @@ is the rule only.
     and still not have tested what CI tests. To show a rendering change is SAFE
     for the Linux baselines, dump the relevant `outerHTML` on
     `goldenCompletedResp()` before and after and prove it byte-identical.
+
+13f. **Never read a gate's exit status through a pipe.** A pipeline's status is
+    the LAST command's, so `make quality 2>&1 | tail -30` reports **tail's**.
+    Measured 2026-08-26 on this repo's own target, with one file deliberately
+    misformatted and then restored from a `cp` copy:
+    `( make format-check 2>&1 | tail -3 )` printed
+    `make: *** [format-check] Error 1` and then **exited 0**; the same target
+    redirected to a log file exited **2**. The prior session records this biting
+    four times in one sitting — that count is inherited, the behaviour above is
+    measured. Write it as two steps instead:
+    ```bash
+    make <target> > /tmp/gate.log 2>&1; echo "EXIT=$?"; tail -30 /tmp/gate.log
+    ```
+    Two neighbours of the same trap, both measured on this box:
+    - **`ruff format` does not reflow docstring prose.** A 204-character prose
+      line inside a docstring gets `1 file already formatted` (exit 0) from
+      `ruff format --check` and `E501 Line too long (204 > 100)` (exit 1) from
+      `ruff check`. Green `format-check` says nothing about `lint`.
+    - **`ruff check` printing `All checks passed!` does not mean the target
+      passed.** `make quality` is `format-check lint type-check test`; mypy runs
+      *after* ruff, so the last cheerful line on screen is routinely not the one
+      that set the exit code.
 
 14. **`make quality` and `make validate` do NOT cover the merge gates.** Six
     contexts are required by branch protection. Passing both targets locally
