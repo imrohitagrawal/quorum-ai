@@ -99,9 +99,9 @@ every slot — initial answers, debate and synthesis alike. The classification c
 therefore be wrong only in the over-metering direction: flag on, no key, run
 books as live and spends nothing.
 
-The flag is **not** sufficient for "this run cost $0" full stop, and the section
-below says which calls it does not cover. It is sufficient for the claim the
-meter makes, which is about the run's own priced model calls.
+The flag is **not** sufficient for "this run cost $0" full stop — other paid
+subsystems exist and are gated separately. It is sufficient for the claim the
+meter makes, which is only about the run's own model calls.
 `settings` is one module-level instance (`config.py:527`), built from the
 environment at import and never reassigned in `src/`, so there is no window in
 which it can change between the charge and the run it describes. ADR-0016 moved
@@ -130,59 +130,48 @@ entirely — worse than the defect being fixed. Three things bound it:
    `charge_event_type` to return the simulated type unconditionally fails both
    its tests.
 
-## What this figure still does NOT include
+## What this figure is, and the claim this ADR got wrong twice
 
-This ADR must not be read as "the meter now reports real spend". Three things
-are outside it, none of them new and none of them changed here:
+**What it is:** the total of LIVE run charges booked through
+`try_record_cost_charge` in the window, corrected by reconciliations and voids.
+It is not a total of everything the deployment spends. It never was, and #376
+removed nothing from it.
 
-* **A paid Tavily search.** `_tavily_enabled()` gates on
-  `bool(settings.tavily_api_key)` alone, and `_fallback_sources` — the branch
-  that calls it — is reached precisely when a slot did *not* go live. So a run
-  booked as simulated can still send one paid Tavily request.
-* **The nightly audit job's own model call** (`feedback_audit` POSTs to
-  `/chat/completions`), likewise ungated.
-* **Judge dollars on the memo-eviction GET path**, which no reconciliation books
-  (#216 / ADR-0013).
+**What this ADR no longer attempts:** a list of the other paid subsystems and
+when they fire. Two attempts shipped false money claims onto a public operator
+surface, the second while correcting the first:
 
-### The claim this section got wrong, and what refuted it
+* **Round 1 claim:** "production's posture (`live_execution: false`,
+  `judge_enabled: true`) is one where a judge call is still dispatched and
+  billed." False. `_request_path_judge` refuses to build a judge unless some
+  answer's `provider_path` is outside `NOT_INVOKED_PATHS`, and with the flag off
+  no answer has one. Reviewers measured 0 dispatches in that posture.
+* **Round 2 claim, written while fixing round 1:** "`live_execution: false` DOES
+  mean no judge call is being made." Also false. `/status.live_execution` is
+  `report.state in ("live",)` — DERIVED from a cached readiness probe against
+  `{base}/key`, not the config flag and not the endpoint that spends. A key that
+  the probe called unauthorized can succeed at `/chat/completions` (an unfunded
+  key that gets topped up; a proxy answering the probe by policy), and the
+  verdict is cached for `key_auth_reprobe_interval_seconds`. A reviewer drove a
+  slot to `completed` on `openrouter_search` while `/status.live_execution` read
+  `false`, and got 1 judge dispatch.
+* Also wrong in round 1, and corrected rather than defended: the feedback-audit
+  model call is **not** ungated — `feedback_audit._audit_enabled()` requires
+  `OPENROUTER_LIVE_EXECUTION_ENABLED == "true"`. There is also no nightly job;
+  `make feedback-audit` is a manual target and no workflow crons it.
 
-An earlier revision of this ADR said production's posture
-(`live_execution: false`, `judge_enabled: true`) is one where "a judge call is
-still dispatched and billed", reasoning from `providers.call_with_prompt`
-(`providers.py:1441`) not consulting the live flag.
+**Both times the refutation was already written down in this repository.**
+`scripts/live_posture_check.py` says "The judge CANNOT spend while live execution
+is off", and — for the second error — explains at length why it reads `/ready`
+rather than `/status.live_execution`, in the exact words that refute the claim.
 
-**That is false, and the refutation was already in this repository before the
-claim was written.** `scripts/live_posture_check.py` states it outright — *"The
-judge CANNOT spend while live execution is off"* — and
-`tests/unit/test_live_posture_check.py::test_the_judge_on_while_live_is_off_is_reported_and_not_alerted`
-pins the *absence* of an alert. The ADR cited that same test file as evidence
-*for* the claim.
-
-The mechanism: `_request_path_judge` refuses to construct a judge unless some
-answer's `provider_path` is outside `NOT_INVOKED_PATHS`, and only
-`produce_initial_answer`'s `_live_execution_enabled` branch produces such a path.
-Flag off ⇒ every answer lands on `LOCAL_SIMULATION` **or** `FALLBACK_SEARCH` ⇒
-no judge object, no dispatch. Both, not just the first: the fallback branch is
-reachable with the flag off (`providers.py`, the `_fallback_sources` /
-`ProviderPath.FALLBACK_SEARCH` return), and `NOT_INVOKED_PATHS` is
-`frozenset({LOCAL_SIMULATION, FALLBACK_SEARCH})` — so the conclusion holds
-either way. Stated precisely because the imprecise version ("every answer is
-`LOCAL_SIMULATION`") hides the very branch that can still make a paid Tavily
-call, which the section below has to name.
-Both review lenses drove it independently and counted **0** dispatches in
-production's posture, against **8** on the same probe with the flag on.
-
-The error is worth recording because of its shape: the reasoning stopped one
-level below the gate and never checked the caller, and a citation was offered
-where a command was needed. That is the failure mode the rulebook names, made
-inside the diff that quotes it.
-
-**And when the judge does fire**, on a run with at least one live answer, its
-cost is priced into the measured total by `_actual_cost` (`judge_line` →
-`build_measured_breakdown`) and reaches this ledger through `cost_reconciled`.
-So "judge spend has never reached this ledger" — the other half of the old
-claim — was also wrong. Only the memo-eviction dispatch escapes, which is what
-#216/ADR-0013 is about.
+**The approach changed after the second one** (AGENTS.md rule 12: if two fixes in
+a row add defects, change the approach). This ADR and the ledger's docstrings now
+state only what the ledger can prove about itself, and point at the surfaces that
+own the other questions — `/ready`, `judge_enabled`, `scripts/live_posture_check.py`
+and ADR-0013 — rather than restating them a third time. The pattern in both
+errors was identical: reason from a gate one level away from the one that
+decides, and offer a citation where a command was needed.
 
 ## Rejected alternatives
 
@@ -273,18 +262,35 @@ groups: the headline (a simulated run leaves the global meter at exactly
 `Decimal("0")`, with a live-dollar partner that does degrade the deployment), the
 mirror image, the unchanged per-account rails, `last_live_charge_at`, the
 surrounding machinery (`_METERED_WRITES`, reconciliation, the audit census), and
-`/status`. Fifteen mutations were run against them (`cp` aside, mutate, run,
-restore from the copy, `diff -q` — never `git checkout`) and every one turned
-the suite red: the discriminator forced to live and to simulated, each meter
-swapped for the other's event-type set, the ring reverted to the single literal,
-the `_METERED_WRITES` entry removed, the wire from `costs.py` hardcoded, the
-`/status` key dropped, `ORDER BY id` reverted to `ORDER BY recorded_at`, the
-malformed-row scan stopped at the first row, the two timestamp-parsing branches
-deleted, and the empty-meter guard removed.
+`/status`. Mutations were run against them one at a time (`cp` the file aside,
+mutate, run, restore from the copy, `diff -q` — never `git checkout`), labelled
+M1-M17 in the session record. Rather than a headline count, which a reviewer
+correctly pointed out disagreed with the list beside it, here is the list:
 
-**One mutation survived the first round and is recorded rather than tidied
-away.** A reviewer widened `try_record_cost_reconciliation`'s
-`COST_ACCEPTED_EVENT not in seen` guard to accept the simulated type; all tests
-stayed green, because the `seen` SELECT one line above never puts that type in
-`seen`, so the guard change alone is a no-op. The test's stated bite line named
-one edit where the real defect needs two. Fixed by naming both.
+| # | mutation | result |
+|---|---|---|
+| M1 | `charge_event_type` always LIVE | 2 failed |
+| M2 | `global_daily_spend` counts both types | 3 failed |
+| M3 | `daily_spend_for` counts live only | 2 failed |
+| M4 | simulated type dropped from `_METERED_WRITES` | 1 failed |
+| M5 | ring reverted to the single literal | 1 failed |
+| M6 | `last_live_charge_at` drops `ORDER BY ... DESC` | 1 failed |
+| M7 | `charge_event_type` always SIMULATED (the mirror image) | 2 failed |
+| M8 | `/status` drops `last_live_charge_at` | 2 failed |
+| M9 | `last_live_charge_at` reads both charge types | 1 failed |
+| M10 | `costs.py` hardcodes `live_execution=True` | 1 failed |
+| M11 | the `ValueError` timestamp guard deleted | 1 failed |
+| M12 | the naive→UTC fallback deleted | 1 failed |
+| M13 | `ORDER BY id` reverted to `ORDER BY recorded_at` | 2 failed |
+| M14 | the malformed-row scan stopped at the first row | 1 failed |
+| M15 | the empty-meter guard removed | 1 failed |
+| M16 | reconciliation guard widened, SELECT untouched | **23 passed — SURVIVOR** |
+| M17 | reconciliation guard AND its SELECT widened | 1 failed |
+
+**M16 is the one that survived, and it is recorded rather than tidied away.** A
+reviewer widened `try_record_cost_reconciliation`'s `COST_ACCEPTED_EVENT not in
+seen` guard to accept the simulated type and everything stayed green, because
+the `seen` SELECT one line above never puts that type in `seen` — so the guard
+change alone is a no-op. The defect the test exists to catch needs BOTH edits
+(M17), and the test's stated bite line named only one. The bite line now names
+both, and M16/M17 are the evidence for each half.

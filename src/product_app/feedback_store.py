@@ -136,40 +136,20 @@ COST_ACCEPTED_EVENT = "cost_guardrail_accepted"
 #: (``costs.record_guardrail_event``), which exists precisely so the global
 #: meter cannot count a run that was degraded to simulation.
 #:
-#: WHAT THIS TYPE DOES **NOT** CLAIM. It says the run's own MODEL calls — initial
-#: answers, debate, synthesis — cannot reach a paid provider. It does NOT say the
-#: process spent nothing, and two paths are outside the flag entirely:
+#: WHAT THIS TYPE CLAIMS, AND ONLY THIS. The run's own model calls — initial
+#: answers, debate, synthesis — could not reach a paid provider, because
+#: ``ProviderExecutionService._live_execution_enabled`` is
+#: ``settings.openrouter_live_execution_enabled and openrouter_key`` and the
+#: first conjunct was false.
 #:
-#:   * ``ProviderExecutionService._tavily_search`` gates on
-#:     ``bool(settings.tavily_api_key)`` alone, and the ``_fallback_sources``
-#:     branch that calls it is reached precisely when a slot did NOT go live. So
-#:     a run booked under THIS event type can still send one paid Tavily request.
-#:   * ``feedback_audit`` POSTs to ``/chat/completions`` from the nightly audit
-#:     job, which never consults the flag either.
-#:
-#: Neither has ever been in this ledger, and neither is changed here.
-#:
-#: THE JUDGE IS **NOT** ON THAT LIST, and an earlier revision of this comment
-#: wrongly put it there — claiming a judge call "is dispatched and billed while
-#: live execution is off". That is false, and the refutation was already written
-#: down in this repository before the claim was made
-#: (``scripts/live_posture_check.py``: "The judge CANNOT spend while live
-#: execution is off"). The reasoning stopped one level too low: yes,
-#: ``providers.call_with_prompt`` gates only on ``if not openrouter_key or not
-#: model_id``, but its CALLER ``query_run_orchestration._request_path_judge``
-#: refuses to build a judge at all unless some answer's ``provider_path`` is
-#: outside ``NOT_INVOKED_PATHS``, and only the ``_live_execution_enabled`` branch
-#: of ``produce_initial_answer`` ever produces such a path. Flag off ⇒ every
-#: answer lands on ``LOCAL_SIMULATION`` or ``FALLBACK_SEARCH``, and
-#: ``NOT_INVOKED_PATHS`` holds BOTH ⇒ no judge, no dispatch, no bill. Both are
-#: named because the ``FALLBACK_SEARCH`` branch is the one that can still make
-#: the paid Tavily call listed above.
-#:
-#: When the judge DOES fire — on a run with at least one live answer — its cost
-#: is priced into the measured total by ``_actual_cost`` and reaches this ledger
-#: through ``cost_reconciled``. What still escapes is the memo-eviction GET path
-#: (#216/ADR-0013), which pays for a second dispatch that no reconciliation
-#: books. That was true before this change and is unaffected by it.
+#: IT CLAIMS NOTHING ABOUT WHAT ELSE THE PROCESS SPENDS, and this comment
+#: deliberately does not enumerate the other paid subsystems or say when they
+#: fire. Two attempts at that list shipped false money claims — the second while
+#: correcting the first — each by reasoning from a gate one level away from the
+#: one that decides. Both times the refutation was already written down in this
+#: repository. So: this store meters charges; it is not the place that knows
+#: what every subsystem does. ``scripts/live_posture_check.py`` and ADR-0013 own
+#: that question and answer it correctly.
 COST_ACCEPTED_SIMULATED_EVENT = "cost_guardrail_accepted_simulated"
 
 #: The event types that OPEN a charge, in the order a reader should think about
@@ -1051,9 +1031,14 @@ class FeedbackStore:
         #     (0,)
         # So without this line a caller who passed an empty tuple would get
         # ``Decimal("0")`` from a ledger full of charges — every rail reading
-        # "nothing spent" while money moved. Unreachable today (both call sites
-        # pass non-empty module constants), which is exactly why it needs to be
-        # a raise rather than a comment: nothing else would ever notice.
+        # "nothing spent" while money moved. Unreachable today —
+        # ``grep -c "charge_event_types=" feedback_store.py`` returns 5 and every
+        # one passes a non-empty tuple (module constants, plus one inline
+        # ``(COST_ACCEPTED_SIMULATED_EVENT,)``). That is exactly why this must be
+        # a raise and not a comment: nothing else would ever notice. If it ever
+        # DOES fire it surfaces as a 500 on ``POST /v1/query-runs``, because
+        # ``costs.py`` does not wrap its ``global_daily_spend()`` call — loud,
+        # which is the point.
         if not charge_event_types:
             raise ValueError("charge_event_types must not be empty: an empty meter is not a meter")
         charge_placeholders = ", ".join("?" for _ in charge_event_types)
@@ -1190,14 +1175,13 @@ class FeedbackStore:
         decision — so $5.00 of purely simulated traffic could have degraded
         every run deployment-wide without a cent being spent.
 
-        WHAT THIS FIGURE STILL DOES NOT INCLUDE, stated because #376 must not be
-        read as "this number is now real spend": a paid Tavily search (gated on
-        its own key, not the live flag), the nightly audit job's own model call,
-        and the judge dollars spent on the memo-eviction GET path that no
-        reconciliation books (#216/ADR-0013). None of the three has ever been in
-        this figure and none is changed here. See
-        ``COST_ACCEPTED_SIMULATED_EVENT`` for why the judge as a whole is NOT on
-        that list.
+        WHAT THIS FIGURE IS, stated because #376 must not be read as "this number
+        is now real spend": the total of LIVE run charges booked through
+        :meth:`try_record_cost_charge` in the window, corrected by
+        reconciliations and voids. It is not a total of everything the
+        deployment spends, it never was, and #376 removed nothing from it — see
+        ``COST_ACCEPTED_SIMULATED_EVENT`` for why this docstring does not try to
+        enumerate the other paid subsystems.
 
         A run that gets degraded to simulation by the ceiling this method
         enforces must NOT be counted here — see

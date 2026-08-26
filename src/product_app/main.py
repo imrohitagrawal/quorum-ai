@@ -849,10 +849,13 @@ def status_snapshot() -> dict[str, object]:
 
     ``feedback_lost_billed_writes`` is the MONEY signal, and the only one of
     these fields that cannot be masked. It counts, for this process only, the
-    billed ``cost`` writes that were attempted and lost — exactly the rows
-    ``daily_spend_for`` sums, which since #376 means BOTH opening-charge types
-    (``cost_guardrail_accepted`` and ``cost_guardrail_accepted_simulated``) plus
-    ``cost_reconciled``. On a deployment running with live execution off, a lost
+    billed ``cost`` writes that were attempted and lost — the ``(recorder,
+    event_type)`` pairs in ``feedback_store._METERED_WRITES``, which since #376
+    are both opening-charge types (``cost_guardrail_accepted`` and
+    ``cost_guardrail_accepted_simulated``) plus ``cost_reconciled``. Those are
+    the rows ``daily_spend_for`` READS; note it does not simply add them up —
+    a reconciliation REPLACES a charge's estimate rather than adding to it, and
+    a void zeroes it. On a deployment running with live execution off a lost
     charge will almost always be the simulated one; it is counted here because
     the per-account cap still meters it, so losing it under-meters that cap. It
     only ever increases; no later success clears it and nothing resets it short
@@ -921,39 +924,24 @@ def status_snapshot() -> dict[str, object]:
     difference. The three are read independently, so one failing read does not
     null the others.
 
-    WHAT THESE FIGURES STILL EXCLUDE, stated so nobody reads
-    ``global_daily_spend_usd: "0"`` as "this deployment spent nothing":
+    WHAT THESE FIGURES ARE, EXACTLY, AND WHAT THEY ARE NOT. They total the
+    charges this ledger booked through the run charge path, split by whether the
+    run's own model calls could reach a paid provider. They are NOT a total of
+    everything this deployment spends: other paid subsystems exist, they are
+    keyed and gated separately, and none of them has ever been in this figure.
+    So ``global_daily_spend_usd: "0"`` means "no live run charge was booked in
+    the last 24 h", never "this deployment spent nothing".
 
-    * a paid Tavily web search, which is gated on ``TAVILY_API_KEY`` alone and
-      not on live execution;
-    * the nightly feedback-audit job's own model call, likewise ungated;
-    * Layer-B judge dollars spent on the memo-eviction GET path, which no
-      reconciliation books (#216 / ADR-0013).
-
-    None of the three has ever been in this figure, and #376 changed none of
-    them. ``judge_enabled`` below says whether the judge is configured at all.
-
-    ``live_execution: false`` DOES, however, mean no judge call is being made —
-    but check the reasoning, because this field is DERIVED from the readiness
-    probe (``report.state in ("live",)``) and not from the config flag, so three
-    different postures produce it and only one of them is "the flag is off":
-
-    * ``offline_by_config`` — the flag is off. Every answer lands on
-      ``LOCAL_SIMULATION`` or ``FALLBACK_SEARCH``, both of which are in
-      ``NOT_INVOKED_PATHS``.
-    * ``offline_by_no_key`` — flag on, no key. The run is FAILED outright before
-      any stage runs, so there is no COMPLETED answer.
-    * ``offline_by_bad_key`` — flag on, key present but refused. Live calls ARE
-      attempted and every one is refused, so the slots come back FAILED, not
-      COMPLETED.
-
-    ``_request_path_judge`` needs a COMPLETED answer whose ``provider_path`` is
-    outside ``NOT_INVOKED_PATHS``. All three postures fail that test, so the
-    conclusion holds in each — for three different reasons, which is why they are
-    written out rather than collapsed into "live execution is off".
-
-    A judge that is configured but cannot fire still shows
-    ``judge_enabled: true``: that field reports configuration, not dispatch.
+    Deliberately no list here of what those other subsystems are or when they
+    fire. Two attempts at one shipped a false money claim onto this public
+    surface — the second while fixing the first — because each reasoned from a
+    gate one level away from the one that decides. The surfaces that own those
+    questions answer them correctly: ``/ready`` for whether live execution can
+    actually happen (``/status.live_execution`` is DERIVED from the readiness
+    probe and is not the config flag — ``scripts/live_posture_check.py`` explains
+    at length why it declines to read this field), ``judge_enabled`` below for
+    whether the paid judge is configured, and ADR-0013 for the judge spend that
+    reaches no ledger.
 
     ``error_tracking`` is likewise a generic ``active``/``inactive``
     health value: the concrete vendor (and anything else useful for
